@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SoulConfig } from './config';
 import type { Logger } from './logger';
@@ -14,7 +14,7 @@ export class SoulLoader {
   }
 
   /**
-   * Create soul directory and empty MEMORY.md if missing
+   * Create soul directory, memory/ subdirectory, and migrate MEMORY.md → legacy.md
    */
   async initialize(): Promise<void> {
     if (!existsSync(this.dir)) {
@@ -22,11 +22,44 @@ export class SoulLoader {
       this.logger.info({ dir: this.dir }, 'Created soul directory');
     }
 
-    const memoryPath = join(this.dir, 'MEMORY.md');
-    if (!existsSync(memoryPath)) {
-      writeFileSync(memoryPath, '', 'utf-8');
-      this.logger.debug('Created empty MEMORY.md');
+    // Create daily memory logs directory
+    const memoryDir = join(this.dir, 'memory');
+    if (!existsSync(memoryDir)) {
+      mkdirSync(memoryDir, { recursive: true });
+      this.logger.debug('Created memory/ directory for daily logs');
     }
+
+    // One-time migration: MEMORY.md → memory/legacy.md
+    this.migrateMemoryToLegacy();
+  }
+
+  /**
+   * Migrate MEMORY.md content to memory/legacy.md (one-time, idempotent).
+   * After migration, MEMORY.md is cleared. legacy.md gets auto-indexed by the file watcher.
+   */
+  private migrateMemoryToLegacy(): void {
+    const memoryPath = join(this.dir, 'MEMORY.md');
+    const legacyPath = join(this.dir, 'memory', 'legacy.md');
+
+    // Skip if legacy.md already exists (migration already done)
+    if (existsSync(legacyPath)) {
+      return;
+    }
+
+    // Skip if MEMORY.md doesn't exist or is empty
+    if (!existsSync(memoryPath)) {
+      return;
+    }
+
+    const content = readFileSync(memoryPath, 'utf-8').trim();
+    if (!content) {
+      return;
+    }
+
+    // Copy content to legacy.md and clear MEMORY.md
+    writeFileSync(legacyPath, content, 'utf-8');
+    writeFileSync(memoryPath, '', 'utf-8');
+    this.logger.info('Migrated MEMORY.md → memory/legacy.md');
   }
 
   /**
@@ -44,10 +77,11 @@ export class SoulLoader {
 
   /**
    * Compose layered system prompt from soul files.
-   * When searchEnabled is true, MEMORY.md is omitted (the LLM searches via tools instead).
+   * Daily logs (today + yesterday) are always included.
+   * Older daily logs and legacy.md are surfaced via memory_search.
    * Returns null if no soul files were loaded (caller should fall back).
    */
-  composeSystemPrompt(searchEnabled = false): string | null {
+  composeSystemPrompt(): string | null {
     if (!this.config.enabled) {
       return null;
     }
@@ -69,15 +103,10 @@ export class SoulLoader {
       sections.push(soul);
     }
 
-    // 3. Memory — only stuff into prompt when search is disabled (backward compat)
-    if (!searchEnabled) {
-      const memory = this.readFile('MEMORY.md');
-      if (memory) {
-        const truncated = memory.length > this.config.memoryMaxChars
-          ? '...\n' + memory.slice(-this.config.memoryMaxChars)
-          : memory;
-        sections.push(`## Memory\n\nThings you should remember:\n${truncated}`);
-      }
+    // 3. Daily memory logs (today + yesterday)
+    const dailyLogs = this.readRecentDailyLogs();
+    if (dailyLogs) {
+      sections.push(dailyLogs);
     }
 
     if (sections.length === 0) {
@@ -118,34 +147,85 @@ export class SoulLoader {
   }
 
   /**
-   * Append a fact to MEMORY.md
+   * Append a fact to the daily memory log (config/soul/memory/YYYY-MM-DD.md)
    */
-  appendMemory(fact: string): void {
-    const memoryPath = join(this.dir, 'MEMORY.md');
-    const existing = this.readFile('MEMORY.md') ?? '';
-    let newContent = existing ? `${existing}\n- ${fact}` : `- ${fact}`;
-
-    // Prune oldest lines when memory exceeds the limit
-    if (newContent.length > this.config.memoryMaxChars) {
-      const lines = newContent.split('\n');
-      while (lines.length > 1 && lines.join('\n').length > this.config.memoryMaxChars) {
-        lines.shift();
-      }
-      newContent = lines.join('\n');
-      this.logger.info('Memory pruned: removed oldest entries to stay within limit');
-    }
-
-    writeFileSync(memoryPath, newContent, 'utf-8');
-    this.logger.info({ fact }, 'Memory appended');
+  appendDailyMemory(fact: string): void {
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    const timeStr = now.toTimeString().slice(0, 5);  // HH:MM
+    const logPath = join(this.dir, 'memory', `${dateStr}.md`);
+    appendFileSync(logPath, `- [${timeStr}] ${fact}\n`, 'utf-8');
+    this.logger.info({ date: dateStr, fact: fact.slice(0, 80) }, 'Daily memory appended');
   }
 
   /**
-   * Clear all memory
+   * Read today's and yesterday's daily log files for inclusion in the system prompt
    */
-  clearMemory(): void {
-    const memoryPath = join(this.dir, 'MEMORY.md');
-    writeFileSync(memoryPath, '', 'utf-8');
-    this.logger.info('Memory cleared');
+  readRecentDailyLogs(): string {
+    const memoryDir = join(this.dir, 'memory');
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+
+    const sections: string[] = [];
+
+    for (const dateStr of [yesterday, today]) {
+      const logPath = join(memoryDir, `${dateStr}.md`);
+      try {
+        const content = readFileSync(logPath, 'utf-8').trim();
+        if (content) {
+          sections.push(`### ${dateStr}\n${content}`);
+        }
+      } catch {
+        // File doesn't exist — skip
+      }
+    }
+
+    if (sections.length === 0) {
+      return '';
+    }
+
+    return `## Recent Memory\n\n${sections.join('\n\n')}`;
+  }
+
+  /**
+   * Dump all memory contents ordered newest-first.
+   * Returns: daily logs (newest date first) + legacy.md if present
+   */
+  dumpMemory(): string {
+    const parts: string[] = [];
+
+    // Daily logs — sorted newest first (exclude legacy.md, shown separately)
+    const memoryDir = join(this.dir, 'memory');
+    try {
+      const files = readdirSync(memoryDir)
+        .filter((f) => f.endsWith('.md') && f !== 'legacy.md')
+        .sort()
+        .reverse(); // newest date first
+
+      for (const file of files) {
+        const content = readFileSync(join(memoryDir, file), 'utf-8').trim();
+        if (content) {
+          const date = file.replace('.md', '');
+          parts.push(`📅 ${date}\n${content}`);
+        }
+      }
+    } catch {
+      // No memory dir yet
+    }
+
+    // Legacy memory (migrated from old MEMORY.md)
+    const legacyPath = join(this.dir, 'memory', 'legacy.md');
+    try {
+      const legacy = readFileSync(legacyPath, 'utf-8').trim();
+      if (legacy) {
+        parts.push(`📜 Legacy\n${legacy}`);
+      }
+    } catch {
+      // No legacy file
+    }
+
+    return parts.length > 0 ? parts.join('\n\n---\n\n') : 'No hay nada en memoria.';
   }
 
   /**

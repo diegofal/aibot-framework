@@ -31,6 +31,7 @@ export function discoverFiles(soulDir: string): string[] {
 
 /**
  * Index a single file. Returns the number of chunks indexed (0 if unchanged).
+ * sourceType defaults to 'memory' for soul files; pass 'session' for transcript files.
  */
 export async function indexFile(
   db: Database,
@@ -39,6 +40,7 @@ export async function indexFile(
   embeddingService: EmbeddingService,
   config: MemorySearchConfig,
   logger: Logger,
+  sourceType: string = 'memory',
 ): Promise<number> {
   const fullPath = join(soulDir, relPath);
 
@@ -89,9 +91,9 @@ export async function indexFile(
 
   // Insert file record
   const insertFile = db.prepare(
-    'INSERT INTO files (path, content_hash, last_indexed_at, chunk_count) VALUES (?, ?, datetime(\'now\'), ?)'
+    'INSERT INTO files (path, content_hash, last_indexed_at, chunk_count, source_type) VALUES (?, ?, datetime(\'now\'), ?, ?)'
   );
-  insertFile.run(relPath, hash, chunks.length);
+  insertFile.run(relPath, hash, chunks.length, sourceType);
 
   const fileRow = db.prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?').get(relPath);
   if (!fileRow) {

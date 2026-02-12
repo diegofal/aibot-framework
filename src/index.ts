@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { BotManager } from './bot';
 import { loadConfig } from './config';
 import { SkillRegistry } from './core/skill-registry';
@@ -59,14 +60,25 @@ async function main() {
     let memoryManager: MemoryManager | undefined;
     if (config.soul.search?.enabled) {
       logger.info('Initializing semantic memory search...');
+      const transcriptsDir = config.soul.sessionMemory?.enabled
+        ? join(config.session.dataDir, 'transcripts')
+        : undefined;
       memoryManager = new MemoryManager(
         config.soul.dir,
         config.soul.search,
         skillRegistry.getOllamaClient(),
-        logger
+        logger,
+        transcriptsDir,
       );
       await memoryManager.initialize();
       logger.info('Semantic memory search initialized');
+
+      // Index session transcripts on startup if configured
+      if (config.soul.sessionMemory?.enabled && config.soul.sessionMemory.indexOnStartup) {
+        logger.info('Indexing session transcripts...');
+        await memoryManager.indexSessions();
+        logger.info('Session transcript indexing complete');
+      }
     }
 
     // Initialize session manager

@@ -10,6 +10,7 @@ import { initializeMemoryDb } from './schema';
 import { createEmbeddingService, type EmbeddingService } from './embeddings';
 import { fullReindex, indexFile } from './indexer';
 import { hybridSearch } from './search';
+import { indexAllSessions } from './session-indexer';
 
 export class MemoryManager {
   private db: Database | null = null;
@@ -23,6 +24,7 @@ export class MemoryManager {
     private config: MemorySearchConfig,
     private ollama: OllamaClient,
     private logger: Logger,
+    private transcriptsDir?: string,
   ) {}
 
   async initialize(): Promise<void> {
@@ -77,6 +79,15 @@ export class MemoryManager {
   async reindexFile(relPath: string): Promise<void> {
     if (!this.db || !this.embeddingService) return;
     await indexFile(this.db, this.soulDir, relPath, this.embeddingService, this.config, this.logger);
+  }
+
+  /**
+   * Index all session transcripts from the transcripts directory.
+   * Only works when transcriptsDir was provided at construction time.
+   */
+  async indexSessions(): Promise<void> {
+    if (!this.db || !this.embeddingService || !this.transcriptsDir) return;
+    await indexAllSessions(this.db, this.transcriptsDir, this.embeddingService, this.config, this.logger);
   }
 
   dispose(): void {

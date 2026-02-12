@@ -11,6 +11,8 @@ interface SessionMeta {
   createdAt: string;
   lastActivityAt: string;
   messageCount: number;
+  compactionCount: number;
+  lastFlushCompactionIndex?: number;
 }
 
 interface SessionKey {
@@ -250,6 +252,8 @@ export class SessionManager {
       createdAt: existing?.createdAt ?? now,
       lastActivityAt: now,
       messageCount: (existing?.messageCount ?? 0) + messages.length,
+      compactionCount: existing?.compactionCount ?? 0,
+      lastFlushCompactionIndex: existing?.lastFlushCompactionIndex,
     };
     this.metadata.set(serializedKey, meta);
     this.dirty = true;
@@ -461,10 +465,11 @@ export class SessionManager {
         const kept = lines.slice(-maxHistory);
         writeFileSync(filePath, kept.join('\n') + '\n', 'utf-8');
 
-        // Update metadata message count
+        // Update metadata message count and compaction counter
         const meta = this.metadata.get(serializedKey);
         if (meta) {
           meta.messageCount = kept.length;
+          meta.compactionCount = (meta.compactionCount ?? 0) + 1;
           this.dirty = true;
         }
 
@@ -475,6 +480,26 @@ export class SessionManager {
       }
     } catch (err) {
       this.logger.warn({ err, key: serializedKey }, 'Failed to compact transcript');
+    }
+  }
+
+  /**
+   * Get session metadata for a serialized key (or undefined if not found)
+   */
+  getSessionMeta(serializedKey: string): SessionMeta | undefined {
+    return this.metadata.get(serializedKey);
+  }
+
+  /**
+   * Mark that a memory flush has been performed for this session,
+   * recording the current compactionCount so we don't flush again
+   * until the next compaction.
+   */
+  markMemoryFlushed(serializedKey: string): void {
+    const meta = this.metadata.get(serializedKey);
+    if (meta) {
+      meta.lastFlushCompactionIndex = meta.compactionCount;
+      this.dirty = true;
     }
   }
 

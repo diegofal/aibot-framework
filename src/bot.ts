@@ -100,7 +100,7 @@ export class BotManager {
     // Soul tools — let the LLM modify its own personality/memory
     if (this.config.soul.enabled) {
       this.tools.push(
-        createSaveMemoryTool(this.soulLoader, this.memoryManager),
+        createSaveMemoryTool(this.soulLoader),
         createUpdateSoulTool(this.soulLoader),
         createUpdateIdentityTool(this.soulLoader)
       );
@@ -212,12 +212,11 @@ export class BotManager {
   }
 
   /**
-   * Summarize a conversation and append the summary to MEMORY.md.
-   * Called before any session clear (expiry or /clear) so key facts survive.
+   * Summarize a conversation and write to the daily memory log.
+   * Used by both session-expiry flush and proactive flush.
    */
-  private async flushSessionToMemory(history: ChatMessage[]): Promise<void> {
+  private async flushToDaily(history: ChatMessage[]): Promise<void> {
     try {
-      // Format conversation as readable text
       const transcript = history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => `${m.role}: ${m.content}`)
@@ -240,21 +239,21 @@ export class BotManager {
       });
 
       if (summary.trim()) {
-        const date = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        this.soulLoader.appendMemory(`[Conversation summary – ${date}] ${summary.trim()}`);
-
-        // Re-index MEMORY.md after flush (fire-and-forget)
-        if (this.memoryManager) {
-          this.memoryManager.reindexFile('MEMORY.md').catch((err) => {
-            this.logger.warn({ err }, 'Failed to reindex MEMORY.md after session flush');
-          });
-        }
-
-        this.logger.info('Session flushed to memory before clear');
+        this.soulLoader.appendDailyMemory(summary.trim());
+        this.logger.info('Conversation flushed to daily memory log');
       }
     } catch (err) {
-      this.logger.warn({ err }, 'Failed to flush session to memory — clearing anyway');
+      this.logger.warn({ err }, 'Failed to flush to daily memory log');
     }
+  }
+
+  /**
+   * Summarize a conversation and append to memory.
+   * Called before any session clear (expiry or /clear) so key facts survive.
+   * Writes to daily log (which is auto-indexed by the file watcher).
+   */
+  private async flushSessionToMemory(history: ChatMessage[]): Promise<void> {
+    await this.flushToDaily(history);
   }
 
   /**
@@ -371,6 +370,38 @@ export class BotManager {
           });
 
         await ctx.reply(`👥 Usuarios vistos en este chat:\n\n${lines.join('\n')}`);
+      });
+
+      // Register /memory command — dump all memory contents
+      bot.command('memory', async (ctx) => {
+        if (!this.isAuthorized(ctx.from?.id, config)) {
+          await ctx.reply('⛔ Unauthorized');
+          return;
+        }
+
+        const dump = this.soulLoader.dumpMemory();
+
+        // Telegram has a 4096 char limit per message — split if needed
+        if (dump.length <= 4096) {
+          await ctx.reply(dump);
+        } else {
+          const chunks: string[] = [];
+          let remaining = dump;
+          while (remaining.length > 0) {
+            if (remaining.length <= 4096) {
+              chunks.push(remaining);
+              break;
+            }
+            // Split at last newline before 4096
+            const cutAt = remaining.lastIndexOf('\n', 4096);
+            const splitPos = cutAt > 0 ? cutAt : 4096;
+            chunks.push(remaining.slice(0, splitPos));
+            remaining = remaining.slice(splitPos + 1);
+          }
+          for (const chunk of chunks) {
+            await ctx.reply(chunk);
+          }
+        }
       });
 
       // Register native conversation handler (must be last to not override commands)
@@ -634,6 +665,21 @@ export class BotManager {
         this.sessionManager.clearSession(serializedKey);
       }
 
+      // Proactive memory flush — capture context before compaction (fire-and-forget)
+      const flushConfig = this.config.soul.memoryFlush;
+      if (sessionConfig.enabled && flushConfig?.enabled) {
+        const meta = this.sessionManager.getSessionMeta(serializedKey);
+        if (meta && meta.messageCount >= flushConfig.messageThreshold
+            && meta.lastFlushCompactionIndex !== (meta.compactionCount ?? 0)) {
+          this.logger.info({ key: serializedKey, msgs: meta.messageCount }, 'Proactive memory flush');
+          const recentHistory = this.sessionManager.getFullHistory(serializedKey);
+          this.sessionManager.markMemoryFlushed(serializedKey);
+          this.flushToDaily(recentHistory).catch((err) => {
+            this.logger.warn({ err }, 'Proactive memory flush failed');
+          });
+        }
+      }
+
       // Get history from session (returns last N messages)
       const history = sessionConfig.enabled
         ? this.sessionManager.getHistory(serializedKey, convConfig.maxHistory)
@@ -641,7 +687,7 @@ export class BotManager {
 
       // Build system prompt — use soul if available, otherwise fall back to config
       let systemPrompt =
-        this.soulLoader.composeSystemPrompt(this.searchEnabled) ?? convConfig.systemPrompt;
+        this.soulLoader.composeSystemPrompt() ?? convConfig.systemPrompt;
       if (hasTools) {
         const webToolNames = this.toolDefinitions
           .filter((d) => d.function.name.startsWith('web_'))
@@ -705,9 +751,12 @@ export class BotManager {
         if (hasMemoryTools) {
           systemPrompt +=
             '\n\n## Memory Search\n\n' +
-            'You have a searchable memory system. Before answering about prior conversations, people, ' +
-            'preferences, or decisions, ALWAYS run `memory_search` first. ' +
-            'Use `memory_get` to read more context around a search result if needed.';
+            'You have a searchable long-term memory (daily logs, legacy notes, session history).\n' +
+            'Before answering ANYTHING about prior conversations, people, preferences, facts you were told, ' +
+            'dates, decisions, or todos: ALWAYS run `memory_search` first.\n' +
+            'Use `memory_get` to read more context around a search result if needed.\n' +
+            'If you searched and found nothing, say you checked but found nothing — ' +
+            'NEVER say "no tengo guardado" or "no recuerdo" without searching first.';
         }
 
         // Datetime tool instruction
@@ -747,6 +796,13 @@ export class BotManager {
         systemPrompt +=
           '\n\nThis is a group chat. Each user message is prefixed with [Name]: to identify the sender. ' +
           'Always be aware of who you are talking to. Address people by name when relevant.';
+      }
+
+      // Reinforce memory search at the end of system prompt (recency bias)
+      if (hasTools && this.toolDefinitions.some((d) => d.function.name === 'memory_search')) {
+        systemPrompt +=
+          '\n\nIMPORTANT REMINDER: When asked about people, facts, events, or anything that might be in your memory, ' +
+          'you MUST call `memory_search` BEFORE responding. Do NOT answer from assumption.';
       }
 
       // Build messages: system prompt + history + new user message
@@ -1183,7 +1239,8 @@ Use /help to see available commands.`;
       '/help - Show this help message',
       '/clear - Clear conversation history',
       '/model - Show or change the active AI model',
-      '/who - Show users seen in this chat\n',
+      '/who - Show users seen in this chat',
+      '/memory - Show all stored memory (newest first)\n',
     ];
 
     // List commands from enabled skills

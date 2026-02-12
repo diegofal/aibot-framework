@@ -1,12 +1,11 @@
 import type { Tool, ToolResult } from './types';
 import type { SoulLoader } from '../soul';
-import type { MemoryManager } from '../memory/manager';
 import type { Logger } from '../logger';
 
 /**
- * Tool that lets the LLM persist facts to MEMORY.md
+ * Tool that lets the LLM persist facts to the daily memory log
  */
-export function createSaveMemoryTool(soulLoader: SoulLoader, memoryManager?: MemoryManager): Tool {
+export function createSaveMemoryTool(soulLoader: SoulLoader): Tool {
   return {
     definition: {
       type: 'function',
@@ -38,15 +37,7 @@ export function createSaveMemoryTool(soulLoader: SoulLoader, memoryManager?: Mem
       }
 
       try {
-        soulLoader.appendMemory(fact);
-
-        // Trigger re-index of MEMORY.md (fire-and-forget)
-        if (memoryManager) {
-          memoryManager.reindexFile('MEMORY.md').catch((err) => {
-            logger.warn({ err }, 'Failed to reindex MEMORY.md after save_memory');
-          });
-        }
-
+        soulLoader.appendDailyMemory(fact);
         logger.info({ fact }, 'save_memory executed');
         return { success: true, content: `Saved to memory: ${fact}` };
       } catch (error) {

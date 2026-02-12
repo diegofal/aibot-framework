@@ -51,6 +51,20 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
 END;
 `;
 
+/**
+ * Run schema migrations on existing databases (idempotent)
+ */
+function migrateSchema(db: Database, logger: Logger): void {
+  // Add source_type column to files table if missing
+  const columns = db.prepare("PRAGMA table_info(files)").all() as { name: string }[];
+  const hasSourceType = columns.some((c) => c.name === 'source_type');
+  if (!hasSourceType) {
+    db.exec("ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'memory'");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_files_source_type ON files(source_type)");
+    logger.info('Migration: added source_type column to files table');
+  }
+}
+
 export function initializeMemoryDb(dbPath: string, logger: Logger): Database {
   mkdirSync(dirname(dbPath), { recursive: true });
 
@@ -60,6 +74,9 @@ export function initializeMemoryDb(dbPath: string, logger: Logger): Database {
 
   // Execute full schema (bun:sqlite exec handles multiple statements natively)
   db.exec(SCHEMA_SQL);
+
+  // Run migrations for existing databases
+  migrateSchema(db, logger);
 
   logger.info({ dbPath }, 'Memory database initialized');
   return db;

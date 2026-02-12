@@ -30,6 +30,7 @@ interface ChunkRow {
   end_line: number;
   embedding: Buffer | null;
   file_path: string;
+  source_type: string;
 }
 
 interface FtsRow {
@@ -60,7 +61,7 @@ export async function hybridSearch(
     );
 
     const allChunks = db.prepare<ChunkRow, []>(
-      `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path
+      `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
        FROM chunks c JOIN files f ON c.file_id = f.id
        WHERE c.embedding IS NOT NULL`
     ).all();
@@ -128,7 +129,7 @@ export async function hybridSearch(
   // Fetch chunk data for results
   const results: MemorySearchResult[] = [];
   const getChunk = db.prepare<ChunkRow, [number]>(
-    `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path
+    `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
      FROM chunks c JOIN files f ON c.file_id = f.id
      WHERE c.id = ?`
   );
@@ -144,6 +145,7 @@ export async function hybridSearch(
       content: chunk.content,
       score: Math.round(item.score * 1000) / 1000,
       source: item.source,
+      sourceType: (chunk.source_type as 'memory' | 'session') ?? 'memory',
     });
   }
 

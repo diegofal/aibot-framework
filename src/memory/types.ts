@@ -25,6 +25,7 @@ export interface MemorySearchResult {
   content: string;
   score: number;
   source: 'vector' | 'keyword' | 'both';
+  sourceType?: 'memory' | 'session';
 }
 
 export interface RawChunk {

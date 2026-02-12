@@ -52,7 +52,8 @@ export function createMemorySearchTool(memoryManager: MemoryManager): Tool {
         }
 
         const formatted = results.map((r, i) => {
-          const header = `[${i + 1}] ${r.filePath} (lines ${r.startLine}-${r.endLine}, score: ${r.score}, via: ${r.source})`;
+          const typeLabel = r.sourceType ?? 'memory';
+          const header = `[${i + 1}] ${r.filePath} (${typeLabel}, lines ${r.startLine}-${r.endLine}, score: ${r.score}, via: ${r.source})`;
           return `${header}\n${r.content}`;
         }).join('\n\n---\n\n');
 

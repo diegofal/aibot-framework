@@ -108,11 +108,22 @@ const MemorySearchConfigSchema = z.object({
   watchEnabled: z.boolean().default(true),
 });
 
+const MemoryFlushConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  messageThreshold: z.number().int().positive().default(30),
+}).default({});
+
+const SessionMemoryConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  indexOnStartup: z.boolean().default(false),
+}).default({});
+
 const SoulConfigSchema = z.object({
   enabled: z.boolean().default(true),
   dir: z.string().default('./config/soul'),
-  memoryMaxChars: z.number().int().positive().default(8000),
   search: MemorySearchConfigSchema.default({}),
+  memoryFlush: MemoryFlushConfigSchema,
+  sessionMemory: SessionMemoryConfigSchema,
 });
 
 const WhisperConfigSchema = z.object({
@@ -203,6 +214,8 @@ export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 export type DatetimeToolConfig = z.infer<typeof DatetimeToolConfigSchema>;
 export type CronConfig = z.infer<typeof CronConfigSchema>;
 export type BufferConfig = z.infer<typeof BufferConfigSchema>;
+export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
+export type SessionMemoryConfig = z.infer<typeof SessionMemoryConfigSchema>;
 
 /**
  * Substitute environment variables in strings
