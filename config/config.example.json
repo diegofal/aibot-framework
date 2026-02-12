@@ -1,0 +1,78 @@
+{
+  "bots": [
+    {
+      "id": "default",
+      "name": "AIBot",
+      "token": "${TELEGRAM_BOT_TOKEN}",
+      "enabled": true,
+      "allowedUsers": [],
+      "skills": ["example", "intel-gatherer"],
+      "mentionPatterns": ["finny", "bot"]
+    },
+    {
+      "id": "intel-bot",
+      "name": "Intel Bot",
+      "token": "${TELEGRAM_BOT_TOKEN_INTEL}",
+      "enabled": false,
+      "allowedUsers": [796164002],
+      "skills": ["intel-gatherer"]
+    }
+  ],
+
+  "ollama": {
+    "baseUrl": "http://127.0.0.1:11434",
+    "models": {
+      "primary": "llama3.3",
+      "fallbacks": ["mistral", "qwen2.5-coder:32b"]
+    }
+  },
+
+  "skills": {
+    "enabled": ["example", "intel-gatherer"],
+    "config": {
+      "intel-gatherer": {
+        "telegramChatId": 796164002,
+        "sourcesFile": "./src/skills/intel-gatherer/sources.yml",
+        "dataDir": "./data/intel"
+      }
+    }
+  },
+
+  "exec": {
+    "enabled": false,
+    "timeout": 30000,
+    "maxOutputLength": 10000,
+    "deniedPatterns": [],
+    "allowedPatterns": []
+  },
+
+  "fileTools": {
+    "enabled": false,
+    "basePath": "./",
+    "maxFileSizeBytes": 1048576,
+    "deniedPatterns": []
+  },
+
+  "processTools": {
+    "enabled": false,
+    "maxSessions": 10,
+    "finishedTtlMs": 600000,
+    "maxOutputChars": 200000
+  },
+
+  "buffer": {
+    "inboundDebounceMs": 1500,
+    "queueDebounceMs": 1000,
+    "queueCap": 10
+  },
+  "logging": {
+    "level": "info",
+    "file": "./data/logs/aibot.log"
+  },
+
+  "paths": {
+    "data": "./data",
+    "logs": "./data/logs",
+    "skills": "./src/skills"
+  }
+}

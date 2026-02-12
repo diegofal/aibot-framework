@@ -1,0 +1,30 @@
+{
+  "name": "aibot-framework",
+  "version": "1.0.0",
+  "description": "AI-powered skills framework with Telegram integration",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "setup": "bun run scripts/setup.ts",
+    "add-skill": "bun run scripts/add-skill.ts",
+    "test": "bun test",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "croner": "^10.0.1",
+    "grammy": "^1.31.0",
+    "js-yaml": "^4.1.0",
+    "pdf-parse": "^1.1.1",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "latest",
+    "@types/js-yaml": "^4.0.9",
+    "typescript": "^5.9.3"
+  }
+}

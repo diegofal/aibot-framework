@@ -1,0 +1,8 @@
+{
+  "id": "example",
+  "name": "Example Skill",
+  "version": "1.0.0",
+  "description": "A simple example skill demonstrating the framework",
+  "author": "AIBot Framework",
+  "main": "./index.ts"
+}

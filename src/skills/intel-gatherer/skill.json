@@ -1,0 +1,27 @@
+{
+  "id": "intel-gatherer",
+  "name": "Intelligence Gatherer",
+  "version": "3.0.0",
+  "description": "Collects and analyzes intelligence from multiple sources (Reddit, HN, GitHub)",
+  "author": "Diego Falciola",
+  "main": "./index.ts",
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "telegramChatId": {
+          "type": "number",
+          "description": "Telegram chat ID for daily reports"
+        },
+        "sourcesFile": {
+          "type": "string",
+          "description": "Path to sources.yml configuration"
+        },
+        "dataDir": {
+          "type": "string",
+          "description": "Directory for storing collected data"
+        }
+      }
+    }
+  }
+}
