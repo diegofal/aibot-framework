@@ -1,0 +1,22 @@
+{
+  "id": "phone-call",
+  "name": "Phone Call",
+  "version": "1.0.0",
+  "description": "Make phone calls via Twilio with /mayday and /call commands",
+  "author": "Diego Falciola",
+  "main": "./index.ts",
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "accountSid": { "type": "string" },
+        "authToken": { "type": "string" },
+        "fromNumber": { "type": "string" },
+        "toNumber": { "type": "string" },
+        "maydayMessage": { "type": "string" },
+        "language": { "type": "string" },
+        "voice": { "type": "string" }
+      }
+    }
+  }
+}
