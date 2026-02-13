@@ -15,6 +15,7 @@ import { createDatetimeTool } from './tools/datetime';
 import { createExecTool } from './tools/exec';
 import { createFileEditTool, createFileReadTool, createFileWriteTool } from './tools/file';
 import { createMemoryGetTool } from './tools/memory-get';
+import { createPhoneCallTool } from './tools/phone-call';
 import { createMemorySearchTool } from './tools/memory-search';
 import { createProcessTool } from './tools/process';
 import { createSaveMemoryTool, createUpdateIdentityTool, createUpdateSoulTool } from './tools/soul';
@@ -173,6 +174,22 @@ export class BotManager {
         })
       );
       this.logger.info('Datetime tool initialized');
+    }
+
+    // Phone call tool — let the LLM make phone calls and manage contacts
+    if (this.config.phoneCall?.enabled) {
+      this.tools.push(
+        createPhoneCallTool({
+          accountSid: this.config.phoneCall.accountSid,
+          authToken: this.config.phoneCall.authToken,
+          fromNumber: this.config.phoneCall.fromNumber,
+          defaultNumber: this.config.phoneCall.defaultNumber,
+          language: this.config.phoneCall.language,
+          voice: this.config.phoneCall.voice,
+          contactsFile: this.config.phoneCall.contactsFile,
+        })
+      );
+      this.logger.info('Phone call tool initialized');
     }
 
     // Cron tool — let the LLM manage scheduled jobs and reminders
@@ -770,6 +787,22 @@ export class BotManager {
             "NEVER guess the date or say you don't have access — always call the tool.";
         }
 
+        // Phone call tool instruction
+        const hasPhoneCallTool = this.toolDefinitions.some(
+          (d) => d.function.name === 'phone_call'
+        );
+        if (hasPhoneCallTool) {
+          systemPrompt +=
+            '\n\n## Phone Calls\n\n' +
+            'You can make phone calls using the `phone_call` tool.\n' +
+            '- Use action "call" with a contact name and message to call someone.\n' +
+            '- Use action "add_contact" to save a new contact (name + phone number in E.164 format like +5491112345678).\n' +
+            '- Use action "list_contacts" to see all saved contacts.\n' +
+            '- Use action "remove_contact" to delete a contact.\n' +
+            '- If a contact is not found, ask the user for the phone number, save it with add_contact, then make the call.\n' +
+            '- For emergencies (mayday), use loop=3 to repeat the message 3 times.';
+        }
+
         // Cron tool instruction
         const hasCronTool = this.toolDefinitions.some((d) => d.function.name === 'cron');
         if (hasCronTool) {
@@ -904,6 +937,67 @@ export class BotManager {
   }
 
   /**
+   * Ask the LLM whether a reply-window message is actually directed at the bot.
+   * Returns true (respond) or false (skip). Fail-open: errors/timeouts return true.
+   */
+  private async checkLlmRelevance(
+    ctx: Context,
+    botName: string,
+    serializedKey: string
+  ): Promise<boolean> {
+    const rlc = this.config.session.llmRelevanceCheck;
+    try {
+      const recentHistory = this.sessionManager.getHistory(serializedKey, rlc.contextMessages);
+
+      const contextBlock = recentHistory
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => `${m.role}: ${m.content}`)
+        .join('\n');
+
+      const userText = ctx.message?.text ?? '';
+
+      const prompt = [
+        `You are a classifier. The bot's name is "${botName}".`,
+        'Given the recent conversation and the new message, determine if the new message is directed at the bot or at someone else in the group.',
+        '',
+        contextBlock ? `Recent conversation:\n${contextBlock}\n` : '',
+        `New message: ${userText}`,
+        '',
+        'Is this message intended for the bot? Answer ONLY "yes" or "no".',
+      ].join('\n');
+
+      const result = await Promise.race([
+        this.ollamaClient.generate(prompt, {
+          model: this.activeModel,
+          temperature: rlc.temperature,
+        }),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error('LLM relevance check timeout')), rlc.timeout)
+        ),
+      ]);
+
+      const answer = result.trim().toLowerCase();
+      const isRelevant = answer.startsWith('yes');
+
+      this.logger.info(
+        {
+          chatId: ctx.chat!.id,
+          userId: ctx.from?.id,
+          answer,
+          isRelevant,
+          textPreview: userText.substring(0, 80),
+        },
+        'LLM relevance check result'
+      );
+
+      return isRelevant;
+    } catch (err) {
+      this.logger.warn({ err, chatId: ctx.chat?.id }, 'LLM relevance check failed, fail-open');
+      return true;
+    }
+  }
+
+  /**
    * Build the Telegram download URL for a file
    */
   private buildFileUrl(config: BotConfig, filePath: string): string {
@@ -954,14 +1048,13 @@ export class BotManager {
 
       // Group activation gate
       if (isGroup && sessionConfig.enabled) {
-        if (
-          !this.sessionManager.shouldRespondInGroup(
-            ctx,
-            botUsername,
-            config.id,
-            config.mentionPatterns
-          )
-        ) {
+        const groupReason = this.sessionManager.shouldRespondInGroup(
+          ctx,
+          botUsername,
+          config.id,
+          config.mentionPatterns
+        );
+        if (!groupReason) {
           this.logger.info(
             {
               chatId: ctx.chat.id,
@@ -976,8 +1069,29 @@ export class BotManager {
           );
           return;
         }
+
+        // For reply-window messages, run LLM relevance check
+        if (groupReason === 'replyWindow' && sessionConfig.llmRelevanceCheck.enabled) {
+          const sessionKey = this.sessionManager.deriveKey(config.id, ctx);
+          const serializedKey = this.sessionManager.serializeKey(sessionKey);
+          const isRelevant = await this.checkLlmRelevance(ctx, config.name, serializedKey);
+          if (!isRelevant) {
+            this.logger.info(
+              {
+                chatId: ctx.chat.id,
+                chatTitle,
+                userId: ctx.from?.id,
+                firstName: ctx.from?.first_name,
+                text: ctx.message.text.substring(0, 80),
+              },
+              'Skipping group message: LLM relevance check said no'
+            );
+            return;
+          }
+        }
+
         this.logger.info(
-          { chatId: ctx.chat.id, chatTitle, firstName: ctx.from?.first_name },
+          { chatId: ctx.chat.id, chatTitle, firstName: ctx.from?.first_name, reason: groupReason },
           'Group activation gate passed'
         );
       }

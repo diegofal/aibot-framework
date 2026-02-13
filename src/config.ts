@@ -145,11 +145,31 @@ const CronConfigSchema = z.object({
   storePath: z.string().default('./data/cron'),
 });
 
+const PhoneCallConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  accountSid: z.string(),
+  authToken: z.string(),
+  fromNumber: z.string(),
+  defaultNumber: z.string().default(''),
+  language: z.string().default('es-MX'),
+  voice: z.string().default('Polly.Mia'),
+  contactsFile: z.string().default('./data/contacts.json'),
+});
+
 const BufferConfigSchema = z
   .object({
     inboundDebounceMs: z.number().int().min(0).default(1500),
     queueDebounceMs: z.number().int().min(0).default(1000),
     queueCap: z.number().int().min(1).default(10),
+  })
+  .default({});
+
+const LlmRelevanceCheckSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    temperature: z.number().min(0).max(2).default(0.1),
+    timeout: z.number().int().positive().default(5000),
+    contextMessages: z.number().int().min(0).default(4),
   })
   .default({});
 
@@ -175,6 +195,7 @@ const SessionConfigSchema = z.object({
   groupActivation: z.enum(['mention', 'always']).default('mention'),
   replyWindow: z.number().int().min(0).default(0), // minutes; 0 = unlimited (never expires), >0 = expires after N minutes
   forumTopicIsolation: z.boolean().default(true),
+  llmRelevanceCheck: LlmRelevanceCheckSchema,
 });
 
 const ConfigSchema = z.object({
@@ -191,6 +212,7 @@ const ConfigSchema = z.object({
   session: SessionConfigSchema.default({}),
   datetime: DatetimeToolConfigSchema.default({}),
   cron: CronConfigSchema.default({}),
+  phoneCall: PhoneCallConfigSchema.optional(),
   buffer: BufferConfigSchema,
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
@@ -213,9 +235,11 @@ export type MediaConfig = z.infer<typeof MediaConfigSchema>;
 export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 export type DatetimeToolConfig = z.infer<typeof DatetimeToolConfigSchema>;
 export type CronConfig = z.infer<typeof CronConfigSchema>;
+export type PhoneCallConfig = z.infer<typeof PhoneCallConfigSchema>;
 export type BufferConfig = z.infer<typeof BufferConfigSchema>;
 export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
 export type SessionMemoryConfig = z.infer<typeof SessionMemoryConfigSchema>;
+export type LlmRelevanceCheckConfig = z.infer<typeof LlmRelevanceCheckSchema>;
 
 /**
  * Substitute environment variables in strings

@@ -6,6 +6,8 @@ import type { ChatMessage } from './ollama';
 import type { SessionInfo } from './core/types';
 import type { Logger } from './logger';
 
+export type GroupResponseReason = false | 'always' | 'replyToBot' | 'mention' | 'mentionPattern' | 'replyWindow';
+
 interface SessionMeta {
   key: string;
   createdAt: string;
@@ -370,16 +372,17 @@ export class SessionManager {
   }
 
   /**
-   * Check if the bot should respond to a message in a group
+   * Check if the bot should respond to a message in a group.
+   * Returns the reason string (truthy) or false (falsy).
    */
   shouldRespondInGroup(
     ctx: Context,
     botUsername?: string,
     botId?: string,
     mentionPatterns?: string[],
-  ): boolean {
+  ): GroupResponseReason {
     if (this.config.groupActivation === 'always') {
-      return true;
+      return 'always';
     }
 
     // Mention mode: check for @botusername mention, reply-to-bot, or active window
@@ -390,7 +393,7 @@ export class SessionManager {
     if (message.reply_to_message?.from?.is_bot) {
       const replyBotId = message.reply_to_message.from.id;
       if (ctx.me?.id && replyBotId === ctx.me.id) {
-        return true;
+        return 'replyToBot';
       }
     }
 
@@ -404,7 +407,7 @@ export class SessionManager {
         if (entity.type === 'mention') {
           const mentionText = text.substring(entity.offset, entity.offset + entity.length);
           if (mentionText.toLowerCase() === `@${botUsername.toLowerCase()}`) {
-            return true;
+            return 'mention';
           }
         }
       }
@@ -415,14 +418,14 @@ export class SessionManager {
       for (const pattern of mentionPatterns) {
         const regex = new RegExp(`\\b${this.escapeRegex(pattern)}\\b`, 'i');
         if (regex.test(text)) {
-          return true;
+          return 'mentionPattern';
         }
       }
     }
 
     // Check active reply window for this user
     if (this.isActive(ctx.chat!.id, ctx.from?.id)) {
-      return true;
+      return 'replyWindow';
     }
 
     return false;
