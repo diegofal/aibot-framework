@@ -1,4 +1,77 @@
-// Type definitions for intel-gatherer
+// Type definitions for intel-gatherer v4.1
+
+// ── Trigger info (who invoked the collection) ──
+
+export interface TriggerInfo {
+  source: 'telegram' | 'cron' | 'api';
+  chatId?: number;
+  userId?: number;
+}
+
+// ── Skill config (from config.json) ──
+
+export interface IntelConfig {
+  telegramChatId?: number;
+  sourcesFile?: string;
+  dataDir?: string;
+  githubToken?: string;
+}
+
+// ── Source definitions (from sources.yml categories) ──
+
+export interface RedditSource {
+  type: 'reddit';
+  name: string;
+  url: string;
+  min_score: number;
+  min_comments: number;
+  keywords?: string[];
+}
+
+export interface HNSource {
+  type: 'hn';
+  name: string;
+  url: string;
+}
+
+export interface GitHubSource {
+  type: 'github';
+  repo: string;
+}
+
+export type SourceDefinition = RedditSource | HNSource | GitHubSource;
+
+export interface CategoryConfig {
+  id: string;
+  name: string;
+  emoji: string;
+  sources: SourceDefinition[];
+}
+
+// ── sources.yml root ──
+
+export interface AnalysisConfig {
+  keywords: Record<string, string[]>;
+  llm_summary?: {
+    enabled: boolean;
+    temperature: number;
+  };
+}
+
+export interface SourcesSettings {
+  github_token?: string;
+  reddit_delay_ms: number;
+  hn_story_limit: number;
+  hn_concurrency: number;
+}
+
+export interface SourcesConfig {
+  settings: SourcesSettings;
+  categories: CategoryConfig[];
+  analysis: AnalysisConfig;
+}
+
+// ── Collected data items ──
 
 export interface RedditPost {
   id: string;
@@ -33,36 +106,20 @@ export interface GitHubRelease {
   isRecent: boolean;
 }
 
-export interface IntelData {
-  reddit: Record<string, RedditPost[]>;
+// ── Aggregated data per category ──
+
+export interface CategoryData {
+  reddit: RedditPost[];
   hn: HNStory[];
   github: GitHubRelease[];
+}
+
+export interface IntelData {
+  categories: Record<string, CategoryData>;
   date: string;
 }
 
-export interface SourcesConfig {
-  reddit?: {
-    communities: Array<{
-      name: string;
-      url: string;
-      category: string;
-      filter_min_score: number;
-      filter_min_comments: number;
-    }>;
-  };
-  hackernews?: {
-    direct_endpoints: Array<{
-      name: string;
-      url: string;
-    }>;
-  };
-  github?: {
-    release_tracking: Array<{
-      repo: string;
-      url: string;
-    }>;
-  };
-}
+// ── Analysis ──
 
 export interface TrendData {
   keyword: string;
@@ -84,9 +141,7 @@ export interface AnalysisResult {
     priority: string;
     message: string;
   }>;
-  trends: {
-    technology: TrendData[];
-    tools: TrendData[];
-    crypto: TrendData[];
-  };
+  trends: Record<string, TrendData[]>;
+  sectionSummaries?: Record<string, string>;
+  llmDigest?: string;
 }

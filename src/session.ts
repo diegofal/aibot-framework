@@ -119,6 +119,7 @@ export class SessionManager {
       botId,
       chatType,
       chatId: chat.id,
+      userId: ctx.from?.id,
     };
 
     // Forum topic isolation

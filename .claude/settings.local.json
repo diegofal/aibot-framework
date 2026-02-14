@@ -55,7 +55,13 @@
       "Bash(clawhub search:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm i:*)",
-      "Bash(clawhub install:*)"
+      "Bash(clawhub install:*)",
+      "Bash(lsof:*)",
+      "Bash(ss:*)",
+      "Bash(test:*)",
+      "Bash(pkill:*)",
+      "Bash(pgrep:*)",
+      "Bash(chmod:*)"
     ]
   }
 }

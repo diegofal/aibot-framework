@@ -1,8 +1,8 @@
 {
   "id": "intel-gatherer",
   "name": "Intelligence Gatherer",
-  "version": "3.0.0",
-  "description": "Collects and analyzes intelligence from multiple sources (Reddit, HN, GitHub)",
+  "version": "4.1.0",
+  "description": "Collects and analyzes intelligence from multiple sources (Reddit, HN, GitHub) with category-based collection and LLM summaries",
   "author": "Diego Falciola",
   "main": "./index.ts",
   "config": {
@@ -20,6 +20,10 @@
         "dataDir": {
           "type": "string",
           "description": "Directory for storing collected data"
+        },
+        "githubToken": {
+          "type": "string",
+          "description": "GitHub API token for authenticated requests (higher rate limits)"
         }
       }
     }

@@ -1,7 +1,7 @@
-import { Bot, type Context } from 'grammy';
+import { Bot, InputFile, type Context } from 'grammy';
 import type { BotConfig, Config } from './config';
 import type { SkillRegistry } from './core/skill-registry';
-import type { Skill, SkillContext, TelegramClient } from './core/types';
+import type { CallbackQueryData, Skill, SkillContext, TelegramClient } from './core/types';
 import type { CronService } from './cron';
 import type { Logger } from './logger';
 import { MediaError, MediaHandler } from './media';
@@ -41,6 +41,8 @@ export class BotManager {
   private searchEnabled: boolean;
   /** chatId → userId → SeenUser */
   private seenUsers: Map<number, Map<number, SeenUser>> = new Map();
+  /** Message IDs consumed by skill onMessage handlers (skip conversation handler) */
+  private handledMessageIds: Set<number> = new Set();
 
   constructor(
     private skillRegistry: SkillRegistry,
@@ -308,6 +310,9 @@ export class BotManager {
         }
       }
 
+      // Register callback query handler for inline keyboards
+      this.registerCallbackQueryHandler(bot, config);
+
       // Register help command
       bot.command('start', async (ctx) => {
         await this.handleStart(ctx, config);
@@ -512,8 +517,10 @@ export class BotManager {
           // Execute command handler
           const result = await handler.handler(args, skillContext);
 
-          // Send response
-          await ctx.reply(result);
+          // Send response (suppress if empty — skill handled it directly)
+          if (result) {
+            await ctx.reply(result);
+          }
 
           this.logger.debug(
             { userId: ctx.from?.id, command, skillId: skill.id },
@@ -535,14 +542,16 @@ export class BotManager {
   private registerMessageHandler(bot: Bot, skill: Skill, config: BotConfig): void {
     if (!skill.onMessage) return;
 
-    bot.on('message:text', async (ctx) => {
+    bot.on('message:text', async (ctx, next) => {
       // Skip if it's a command
       if (ctx.message.text.startsWith('/')) {
+        await next();
         return;
       }
 
       // Check authorization
       if (!this.isAuthorized(ctx.from?.id, config)) {
+        await next();
         return;
       }
 
@@ -561,9 +570,62 @@ export class BotManager {
         };
 
         const skillContext = this.createSkillContext(skill.id, ctx, config);
-        await skill.onMessage!(message, skillContext);
+        const consumed = await skill.onMessage!(message, skillContext);
+        if (consumed === true) {
+          this.handledMessageIds.add(ctx.message.message_id);
+        }
       } catch (error) {
         this.logger.error({ error, skillId: skill.id }, 'Message handler failed');
+      }
+
+      await next();
+    });
+  }
+
+  /**
+   * Register a single callback_query:data handler that routes to skills by data prefix.
+   * Callback data format: `skillId:rest` — the skill receives `rest`.
+   */
+  private registerCallbackQueryHandler(bot: Bot, config: BotConfig): void {
+    bot.on('callback_query:data', async (ctx) => {
+      this.logger.info({ data: ctx.callbackQuery.data, userId: ctx.from?.id }, 'Callback query received');
+
+      if (!this.isAuthorized(ctx.from?.id, config)) {
+        await ctx.answerCallbackQuery({ text: '⛔ Unauthorized' });
+        return;
+      }
+
+      const raw = ctx.callbackQuery.data;
+      const colonIdx = raw.indexOf(':');
+      if (colonIdx === -1) {
+        this.logger.warn({ data: raw }, 'Callback query missing colon separator');
+        await ctx.answerCallbackQuery();
+        return;
+      }
+
+      const skillId = raw.slice(0, colonIdx);
+      const rest = raw.slice(colonIdx + 1);
+
+      const skill = this.skillRegistry.get(skillId);
+      if (!skill?.onCallbackQuery) {
+        this.logger.warn({ skillId, data: raw }, 'No callback handler for skill');
+        await ctx.answerCallbackQuery();
+        return;
+      }
+
+      try {
+        const query: CallbackQueryData = {
+          id: ctx.callbackQuery.id,
+          chatId: ctx.callbackQuery.message?.chat.id ?? 0,
+          messageId: ctx.callbackQuery.message?.message_id ?? 0,
+          userId: ctx.from.id,
+          data: rest,
+        };
+        const skillContext = this.createSkillContext(skillId, ctx, config);
+        await skill.onCallbackQuery(query, skillContext);
+      } catch (error) {
+        this.logger.error({ error, skillId, data: raw }, 'Callback query handler failed');
+        await ctx.answerCallbackQuery({ text: '❌ Error' });
       }
     });
   }
@@ -617,10 +679,28 @@ export class BotManager {
         );
       },
       async sendDocument(chatId: number, document: string | Buffer, options?: unknown) {
+        const opts = (options || {}) as Record<string, unknown>;
+        const file = Buffer.isBuffer(document)
+          ? new InputFile(new Uint8Array(document), opts.filename as string | undefined)
+          : document;
         await ctx.api.sendDocument(
           chatId,
-          document as Parameters<typeof ctx.api.sendDocument>[1],
-          options as Parameters<typeof ctx.api.sendDocument>[2]
+          file as Parameters<typeof ctx.api.sendDocument>[1],
+          opts as Parameters<typeof ctx.api.sendDocument>[2]
+        );
+      },
+      async answerCallbackQuery(callbackQueryId: string, options?: unknown) {
+        await ctx.api.answerCallbackQuery(
+          callbackQueryId,
+          options as Parameters<typeof ctx.api.answerCallbackQuery>[1]
+        );
+      },
+      async editMessageText(chatId: number, messageId: number, text: string, options?: unknown) {
+        await ctx.api.editMessageText(
+          chatId,
+          messageId,
+          text,
+          options as Parameters<typeof ctx.api.editMessageText>[3]
         );
       },
     };
@@ -1047,6 +1127,12 @@ export class BotManager {
 
       if (ctx.message.text.startsWith('/')) {
         this.logger.debug({ text: ctx.message.text }, 'Skipping: command message');
+        return;
+      }
+
+      // Skip messages already consumed by skill onMessage handlers
+      if (this.handledMessageIds.delete(ctx.message.message_id)) {
+        this.logger.debug({ messageId: ctx.message.message_id }, 'Skipping: consumed by skill');
         return;
       }
 

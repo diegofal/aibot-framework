@@ -1,5 +1,7 @@
+import { watch } from 'fs';
 import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
+import type { ServerWebSocket } from 'bun';
 import type { BotManager } from '../bot';
 import type { Config } from '../config';
 import type { SkillRegistry } from '../core/skill-registry';
@@ -41,10 +43,114 @@ export function startWebServer(deps: WebServerDeps): void {
   // Fallback: serve index.html for SPA routing
   app.get('*', serveStatic({ root: './web', path: '/index.html' }));
 
+  // --- WebSocket log streaming ---
+  const logFile = config.logging?.file || './data/logs/aibot.log';
+  const wsClients = new Set<ServerWebSocket<unknown>>();
+  let fileOffset = 0;
+
+  function readLastLines(path: string, maxLines: number): string[] {
+    try {
+      const text = require('fs').readFileSync(path, 'utf-8') as string;
+      const lines = text.trimEnd().split('\n');
+      return lines.slice(-maxLines);
+    } catch {
+      return [];
+    }
+  }
+
+  function getFileSize(path: string): number {
+    try {
+      return require('fs').statSync(path).size;
+    } catch {
+      return 0;
+    }
+  }
+
+  function broadcast(data: string) {
+    for (const ws of wsClients) {
+      try {
+        ws.send(data);
+      } catch {
+        wsClients.delete(ws);
+      }
+    }
+  }
+
+  // Initialize offset to current file size
+  fileOffset = getFileSize(logFile);
+
+  // Watch log file for changes
+  try {
+    watch(logFile, () => {
+      try {
+        const fd = require('fs').openSync(logFile, 'r');
+        const stat = require('fs').fstatSync(fd);
+        const newSize = stat.size;
+
+        if (newSize <= fileOffset) {
+          // File was truncated/rotated — reset
+          fileOffset = 0;
+        }
+
+        if (newSize > fileOffset) {
+          const buf = Buffer.alloc(newSize - fileOffset);
+          require('fs').readSync(fd, buf, 0, buf.length, fileOffset);
+          fileOffset = newSize;
+          require('fs').closeSync(fd);
+
+          const chunk = buf.toString('utf-8');
+          const rawLines = chunk.trimEnd().split('\n');
+          const parsed: unknown[] = [];
+          for (const line of rawLines) {
+            if (!line) continue;
+            try {
+              parsed.push(JSON.parse(line));
+            } catch { /* skip malformed */ }
+          }
+          if (parsed.length > 0) {
+            broadcast(JSON.stringify({ type: 'logs', lines: parsed }));
+          }
+        } else {
+          require('fs').closeSync(fd);
+        }
+      } catch { /* ignore read errors */ }
+    });
+  } catch {
+    logger.warn('Could not watch log file for live streaming');
+  }
+
   Bun.serve({
-    fetch: app.fetch,
+    fetch(req, server) {
+      const url = new URL(req.url);
+      if (url.pathname === '/ws/logs') {
+        const ok = server.upgrade(req);
+        if (ok) return undefined;
+        return new Response('WebSocket upgrade failed', { status: 400 });
+      }
+      return app.fetch(req, server);
+    },
     port,
     hostname: host,
+    websocket: {
+      open(ws) {
+        wsClients.add(ws);
+        // Send last 100 lines as history
+        const historyLines = readLastLines(logFile, 100);
+        const parsed: unknown[] = [];
+        for (const line of historyLines) {
+          try {
+            parsed.push(JSON.parse(line));
+          } catch { /* skip */ }
+        }
+        ws.send(JSON.stringify({ type: 'history', lines: parsed }));
+      },
+      message() {
+        // No client->server messages needed
+      },
+      close(ws) {
+        wsClients.delete(ws);
+      },
+    },
   });
 
   logger.info({ port, host }, `Web UI available at http://${host}:${port}`);

@@ -174,6 +174,12 @@ export class SkillRegistry {
       async sendDocument() {
         logger.warn('Telegram client not available in this context');
       },
+      async answerCallbackQuery() {
+        logger.warn('Telegram client not available in this context');
+      },
+      async editMessageText() {
+        logger.warn('Telegram client not available in this context');
+      },
     };
   }
 }

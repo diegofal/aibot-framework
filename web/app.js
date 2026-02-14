@@ -1,6 +1,7 @@
 import { renderAgents, renderAgentDetail, renderAgentEdit } from './pages/agents.js';
 import { renderSessions, renderSessionTranscript } from './pages/sessions.js';
 import { renderCron, renderCronDetail, renderCronCreate } from './pages/cron.js';
+import { renderLogs, destroyLogs } from './pages/logs.js';
 
 const content = document.getElementById('content');
 
@@ -13,9 +14,11 @@ const routes = [
   { pattern: /^#\/cron\/new$/,               handler: () => renderCronCreate(content) },
   { pattern: /^#\/cron\/([^/]+)$/,           handler: (m) => renderCronDetail(content, m[1]) },
   { pattern: /^#\/cron$/,                    handler: () => renderCron(content) },
+  { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },
 ];
 
 function navigate() {
+  destroyLogs();
   const hash = location.hash || '#/agents';
   if (hash === '#/' || hash === '#') { location.hash = '#/agents'; return; }
 

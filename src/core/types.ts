@@ -40,6 +40,8 @@ export interface TelegramMessage {
 export interface TelegramClient {
   sendMessage(chatId: number, text: string, options?: unknown): Promise<void>;
   sendDocument(chatId: number, document: string | Buffer, options?: unknown): Promise<void>;
+  answerCallbackQuery(callbackQueryId: string, options?: unknown): Promise<void>;
+  editMessageText(chatId: number, messageId: number, text: string, options?: unknown): Promise<void>;
 }
 
 export interface DataStore {
@@ -67,6 +69,14 @@ export interface SkillContext {
   session?: SessionInfo;
 }
 
+export interface CallbackQueryData {
+  id: string;
+  chatId: number;
+  messageId: number;
+  userId: number;
+  data: string;
+}
+
 export interface Skill {
   id: string;
   name: string;
@@ -84,5 +94,9 @@ export interface Skill {
   jobs?: JobDefinition[];
 
   // Message handlers (for non-command messages)
-  onMessage?(message: TelegramMessage, context: SkillContext): Promise<void>;
+  // Return true to indicate the message was consumed (skip conversation handler)
+  onMessage?(message: TelegramMessage, context: SkillContext): Promise<boolean | void>;
+
+  // Callback query handler for inline keyboard buttons
+  onCallbackQuery?(query: CallbackQueryData, context: SkillContext): Promise<void>;
 }

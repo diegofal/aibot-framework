@@ -1,0 +1,27 @@
+{
+  "id": "calibrate",
+  "name": "Soul Calibration",
+  "version": "1.0.0",
+  "description": "Interactive review and correction of soul memory claims",
+  "author": "Diego Falciola",
+  "main": "./index.ts",
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "soulDir": {
+          "type": "string",
+          "description": "Path to soul directory"
+        },
+        "maxBatches": {
+          "type": "number",
+          "description": "Maximum number of claim batches to present"
+        },
+        "sessionTimeoutMs": {
+          "type": "number",
+          "description": "Calibration session timeout in milliseconds"
+        }
+      }
+    }
+  }
+}

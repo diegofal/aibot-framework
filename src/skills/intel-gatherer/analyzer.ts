@@ -1,8 +1,19 @@
 import type { Logger } from '../../logger';
-import type { TrendData, AnalysisResult } from './types';
+import type { OllamaClient } from '../../ollama';
+import type {
+  TrendData,
+  AnalysisResult,
+  AnalysisConfig,
+  IntelData,
+  CategoryData,
+  CategoryConfig,
+} from './types';
 
 export class IntelAnalyzer {
-  constructor(private logger: Logger) {}
+  constructor(
+    private logger: Logger,
+    private ollama?: OllamaClient
+  ) {}
 
   /**
    * Extract all text content from markdown
@@ -22,11 +33,11 @@ export class IntelAnalyzer {
    */
   private countKeywords(text: string, keywords: string[]): Record<string, number> {
     const counts: Record<string, number> = {};
-    keywords.forEach((kw) => {
+    for (const kw of keywords) {
       const regex = new RegExp(`\\b${kw.toLowerCase()}\\b`, 'g');
       const matches = text.match(regex);
       counts[kw] = matches ? matches.length : 0;
-    });
+    }
     return counts;
   }
 
@@ -39,36 +50,32 @@ export class IntelAnalyzer {
     keywords: string[]
   ): TrendData[] {
     const trends: TrendData[] = [];
-
-    // Current counts
     const currentCounts = this.countKeywords(currentText, keywords);
 
     // Historical average (last 7 days)
     const historicalCounts: Record<string, number> = {};
-    keywords.forEach((kw) => (historicalCounts[kw] = 0));
+    for (const kw of keywords) historicalCounts[kw] = 0;
 
-    history.forEach((h) => {
+    for (const h of history) {
       const text = this.extractTextFromMarkdown(h.content);
       const counts = this.countKeywords(text, keywords);
-      keywords.forEach((kw) => {
+      for (const kw of keywords) {
         historicalCounts[kw] += counts[kw];
-      });
-    });
+      }
+    }
 
-    // Calculate averages
     const daysCount = Math.max(history.length, 1);
-    keywords.forEach((kw) => {
+    for (const kw of keywords) {
       historicalCounts[kw] = historicalCounts[kw] / daysCount;
-    });
+    }
 
-    // Detect significant changes (>100% increase or new appearances)
-    keywords.forEach((kw) => {
+    // Detect significant changes
+    for (const kw of keywords) {
       const current = currentCounts[kw];
       const historical = historicalCounts[kw];
 
       if (current > 0) {
         if (historical === 0) {
-          // New appearance
           trends.push({
             keyword: kw,
             type: 'new',
@@ -78,7 +85,6 @@ export class IntelAnalyzer {
             significance: 'high',
           });
         } else if (current > historical * 2) {
-          // Significant increase
           const change = Math.round(((current - historical) / historical) * 100);
           trends.push({
             keyword: kw,
@@ -90,7 +96,7 @@ export class IntelAnalyzer {
           });
         }
       }
-    });
+    }
 
     return trends.sort((a, b) => {
       const sigOrder = { high: 3, medium: 2, low: 1 };
@@ -99,82 +105,129 @@ export class IntelAnalyzer {
   }
 
   /**
-   * Analyze collected intelligence
+   * Convert a category's data into plain text for LLM consumption
+   */
+  private categoryToText(catId: string, data: CategoryData): string {
+    const lines: string[] = [`Category: ${catId}`];
+
+    for (const post of data.reddit) {
+      lines.push(`[Reddit r/${post.source}] ${post.title} (score: ${post.score})`);
+    }
+    for (const story of data.hn) {
+      lines.push(`[HN] ${story.title} (points: ${story.score})`);
+    }
+    for (const rel of data.github) {
+      lines.push(`[GitHub] ${rel.repo} ${rel.version}`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Generate LLM summaries per category + global digest
+   */
+  async generateLLMSummaries(
+    data: IntelData,
+    categories: CategoryConfig[],
+    analysisConfig: AnalysisConfig
+  ): Promise<{ sectionSummaries: Record<string, string>; llmDigest?: string }> {
+    const sectionSummaries: Record<string, string> = {};
+
+    if (!this.ollama || !analysisConfig.llm_summary?.enabled) {
+      return { sectionSummaries };
+    }
+
+    const temperature = analysisConfig.llm_summary.temperature;
+
+    // Per-category summaries
+    for (const cat of categories) {
+      const catData = data.categories[cat.id];
+      if (!catData) continue;
+
+      const itemCount = catData.reddit.length + catData.hn.length + catData.github.length;
+      if (itemCount === 0) continue;
+
+      const text = this.categoryToText(cat.id, catData);
+
+      try {
+        const summary = await this.ollama.generate(
+          `Summarize these ${cat.name} items in 2-3 sentences. Focus on the most notable stories and themes. Be concise.\n\n${text}`,
+          {
+            temperature,
+            maxTokens: 300,
+            system: 'You are a concise tech news analyst. Output only the summary, no preamble.',
+          }
+        );
+        sectionSummaries[cat.id] = summary.trim();
+      } catch (err: any) {
+        this.logger.warn({ error: err.message, category: cat.id }, 'LLM summary failed for category');
+      }
+    }
+
+    // Global digest
+    let llmDigest: string | undefined;
+    const allSummaries = Object.entries(sectionSummaries)
+      .map(([id, s]) => `${id}: ${s}`)
+      .join('\n\n');
+
+    if (allSummaries.length > 0) {
+      try {
+        llmDigest = (
+          await this.ollama.generate(
+            `Based on these category summaries, write a brief executive digest (4-6 sentences) highlighting the most important developments across all categories.\n\n${allSummaries}`,
+            {
+              temperature,
+              maxTokens: 800,
+              system: 'You are a concise tech intelligence analyst. Output only the digest, no preamble.',
+            }
+          )
+        ).trim();
+      } catch (err: any) {
+        this.logger.warn({ error: err.message }, 'LLM global digest failed');
+      }
+    }
+
+    return { sectionSummaries, llmDigest };
+  }
+
+  /**
+   * Analyze collected intelligence with configurable keywords
    */
   analyze(
     currentMarkdown: string,
-    history: Array<{ date: string; content: string }>
+    history: Array<{ date: string; content: string }>,
+    analysisConfig: AnalysisConfig
   ): AnalysisResult {
     const currentText = this.extractTextFromMarkdown(currentMarkdown);
 
-    // Keywords to track
-    const techKeywords = [
-      'openclaw',
-      'langchain',
-      'langgraph',
-      'n8n',
-      'dify',
-      'autogpt',
-      'agent',
-      'local llm',
-      'swarm',
-      'multi-agent',
-      'workflow',
-    ];
+    // Build trends from all keyword groups dynamically
+    const trends: Record<string, TrendData[]> = {};
+    let totalTrends = 0;
 
-    const toolKeywords = [
-      'claude',
-      'gpt-4',
-      'gpt-5',
-      'ollama',
-      'llama',
-      'mistral',
-      'fastapi',
-      'nextjs',
-      'react',
-      'docker',
-    ];
+    for (const [group, keywords] of Object.entries(analysisConfig.keywords)) {
+      const groupTrends = this.detectTrends(currentText, history, keywords);
+      trends[group] = groupTrends;
+      totalTrends += groupTrends.length;
+    }
 
-    const cryptoKeywords = [
-      'bitcoin',
-      'ethereum',
-      'solana',
-      'crypto',
-      'blockchain',
-      'trading',
-      'defi',
-    ];
-
-    // Detect trends
-    const techTrends = this.detectTrends(currentText, history, techKeywords);
-    const toolTrends = this.detectTrends(currentText, history, toolKeywords);
-    const cryptoTrends = this.detectTrends(currentText, history, cryptoKeywords);
-
-    const totalTrends = techTrends.length + toolTrends.length + cryptoTrends.length;
-
-    // Build analysis result
     const result: AnalysisResult = {
       date: new Date().toISOString().split('T')[0],
       generatedAt: new Date().toISOString(),
-      summary: {
-        totalTrends,
-      },
+      summary: { totalTrends },
       alerts: [],
-      trends: {
-        technology: techTrends,
-        tools: toolTrends,
-        crypto: cryptoTrends,
-      },
+      trends,
     };
 
-    // Generate alerts
-    const majorTrends = techTrends.filter((t) => t.significance === 'high');
-    if (majorTrends.length > 0) {
-      result.alerts.push({
-        type: 'trend',
-        priority: 'medium',
-        message: `📈 ${majorTrends.length} major trend(s) detected`,
-      });
+    // Generate alerts from all groups
+    for (const [group, groupTrends] of Object.entries(trends)) {
+      const major = groupTrends.filter((t) => t.significance === 'high');
+      if (major.length > 0) {
+        result.alerts.push({
+          type: 'trend',
+          priority: 'medium',
+          message: `${major.length} major trend(s) in ${group}`,
+        });
+      }
     }
 
     this.logger.info({ totalTrends, alerts: result.alerts.length }, 'Analysis complete');

@@ -13,10 +13,12 @@
     "format": "biome format --write ."
   },
   "dependencies": {
+    "@types/marked": "^6.0.0",
     "croner": "^10.0.1",
     "grammy": "^1.31.0",
     "hono": "^4.11.9",
     "js-yaml": "^4.1.0",
+    "marked": "^17.0.2",
     "pdf-parse": "^1.1.1",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",

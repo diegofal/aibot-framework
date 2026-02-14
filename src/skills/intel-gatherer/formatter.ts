@@ -1,117 +1,129 @@
-import type { IntelData } from './types';
+import type { IntelData, AnalysisResult, CategoryConfig } from './types';
 
 export class IntelFormatter {
-  /**
-   * Format date nicely
-   */
   private formatDate(dateStr: string): string {
     const date = new Date(dateStr);
-    const options: Intl.DateTimeFormatOptions = {
+    return date.toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric',
-    };
-    return date.toLocaleDateString('en-US', options);
+    });
   }
 
   /**
-   * Generate Markdown report from collected data
+   * Generate Markdown report from collected data, dynamically iterating categories
    */
-  generateMarkdown(data: IntelData): string {
-    const { reddit, hn, github, date } = data;
+  generateMarkdown(
+    data: IntelData,
+    categories: CategoryConfig[],
+    analysis?: AnalysisResult
+  ): string {
+    const { date } = data;
 
-    const totalRedditPosts = Object.values(reddit).reduce((sum, posts) => sum + posts.length, 0);
+    // Count totals
+    let totalReddit = 0;
+    let totalHN = 0;
+    let totalGitHub = 0;
+    for (const catData of Object.values(data.categories)) {
+      totalReddit += catData.reddit.length;
+      totalHN += catData.hn.length;
+      totalGitHub += catData.github.length;
+    }
 
     let md = `# Intel Report — ${date}
 
 **Collection Date:** ${this.formatDate(date)}
 **Timezone:** America/Buenos_Aires
-**Collection Method:** Direct API fetch (Reddit JSON, HN Firebase, GitHub API)
-**Sources:** ${totalRedditPosts} Reddit posts, ${hn.length} HN stories, ${github.length} GitHub releases
+**Sources:** ${totalReddit} Reddit posts, ${totalHN} HN stories, ${totalGitHub} GitHub releases
 
 ---
 
 `;
 
-    // Technology Section
-    md += `## 🚀 Technology
+    // LLM digest at the top if available
+    if (analysis?.llmDigest) {
+      md += `## Executive Digest
+
+> ${analysis.llmDigest.replace(/\n/g, '\n> ')}
+
+---
 
 `;
+    }
 
-    const techSubs = ['LocalLLaMA', 'ClaudeAI'];
-    for (const sub of techSubs) {
-      const posts = reddit[sub] || [];
-      if (posts.length === 0) continue;
+    // Dynamic category sections
+    for (const cat of categories) {
+      const catData = data.categories[cat.id];
+      if (!catData) continue;
 
-      md += `### r/${sub}
+      const itemCount = catData.reddit.length + catData.hn.length + catData.github.length;
+      if (itemCount === 0) continue;
 
-`;
-      for (const post of posts.slice(0, 5)) {
+      md += `## ${cat.emoji} ${cat.name}\n\n`;
+
+      // LLM section summary as blockquote
+      if (analysis?.sectionSummaries?.[cat.id]) {
+        md += `> ${analysis.sectionSummaries[cat.id].replace(/\n/g, '\n> ')}\n\n`;
+      }
+
+      // Reddit posts
+      for (const post of catData.reddit.slice(0, 5)) {
         md += `#### [${post.title}](${post.url})
-- **Score:** ${post.score} upvotes / ${post.comments} comments
+- **Score:** ${post.score} upvotes / ${post.comments} comments — ${post.source}
 - **Summary:** ${post.summary}
 
 `;
       }
-    }
 
-    // Hacker News Section
-    if (hn.length > 0) {
-      md += `## 🟠 Hacker News
-
-`;
-      for (const story of hn.slice(0, 8)) {
+      // HN stories
+      for (const story of catData.hn.slice(0, 8)) {
         md += `#### [${story.title}](${story.url})
 - **Points:** ${story.score} | **Comments:** ${story.comments}
 
 `;
       }
-    }
 
-    // GitHub Releases Section
-    if (github.length > 0) {
-      md += `## 🔧 GitHub Releases (Last 7 Days)
-
-| Repository | Version | Published | Key Changes |
+      // GitHub releases as table
+      if (catData.github.length > 0) {
+        md += `| Repository | Version | Published | Key Changes |
 |------------|---------|-----------|-------------|
 `;
-
-      for (const rel of github) {
-        const isNew = rel.isRecent ? ' 🆕' : '';
-        const shortDate = rel.published.split('T')[0];
-        const shortBody = rel.body.substring(0, 80).replace(/\|/g, ',') + '...';
-        md += `| ${rel.repo} | [${rel.version}${isNew}](${rel.url}) | ${shortDate} | ${shortBody} |
-`;
+        for (const rel of catData.github) {
+          const isNew = rel.isRecent ? ' new' : '';
+          const shortDate = rel.published.split('T')[0];
+          const shortBody = rel.body.substring(0, 80).replace(/\|/g, ',') + '...';
+          md += `| ${rel.repo} | [${rel.version}${isNew}](${rel.url}) | ${shortDate} | ${shortBody} |\n`;
+        }
+        md += '\n';
       }
-
-      md += `
-`;
     }
 
-    // Summary Section
-    md += `## 📊 Collection Summary
+    // Summary table
+    md += `## Collection Summary
 
-| Source | Posts | Top Score |
-|--------|-------|-----------|
+| Category | Items | Top Score |
+|----------|-------|-----------|
 `;
 
-    for (const [subName, posts] of Object.entries(reddit)) {
-      const maxScore = posts.length > 0 ? Math.max(...posts.map((p) => p.score)) : 0;
-      md += `| r/${subName} | ${posts.length} | ${maxScore > 0 ? '🔥 ' + maxScore : '-'} |
-`;
+    for (const cat of categories) {
+      const catData = data.categories[cat.id];
+      if (!catData) continue;
+
+      const allScores = [
+        ...catData.reddit.map((p) => p.score),
+        ...catData.hn.map((s) => s.score),
+      ];
+      const count = catData.reddit.length + catData.hn.length + catData.github.length;
+      const maxScore = allScores.length > 0 ? Math.max(...allScores) : 0;
+
+      md += `| ${cat.emoji} ${cat.name} | ${count} | ${maxScore > 0 ? maxScore : '-'} |\n`;
     }
 
-    md += `| Hacker News | ${hn.length} | ${hn.length > 0 ? '🔥 ' + Math.max(...hn.map((h) => h.score)) : '-'} |
-`;
-    md += `| GitHub Releases | ${github.length} | - |
-`;
-
-    // Footer
     md += `
 ---
 
-*Generated by intel-gatherer v3.0.0 (TypeScript/Bun)*
+*Generated by intel-gatherer v4.1.0 (TypeScript/Bun)*
 *Collection timestamp: ${new Date().toISOString()}*
 `;
 
@@ -119,39 +131,538 @@ export class IntelFormatter {
   }
 
   /**
-   * Generate simple HTML report
+   * Escape HTML entities
    */
-  generateHTML(markdown: string, date: string): string {
-    // Simple markdown to HTML conversion
-    let html = markdown
-      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-      .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
-      .replace(/^- (.+)$/gm, '<li>$1</li>')
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/^---$/gm, '<hr>');
+  private esc(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
 
-    const template = `<!DOCTYPE html>
+  /**
+   * Score badge with color coding
+   */
+  private scoreBadge(score: number): string {
+    let cls = 'badge-low';
+    if (score >= 500) cls = 'badge-high';
+    else if (score >= 100) cls = 'badge-mid';
+    return `<span class="score-badge ${cls}">${score.toLocaleString()}</span>`;
+  }
+
+  /**
+   * Generate self-contained HTML report with professional dark theme
+   */
+  generateHTML(
+    data: IntelData,
+    categories: CategoryConfig[],
+    analysis?: AnalysisResult
+  ): string {
+    const { date } = data;
+
+    // Count totals
+    let totalReddit = 0;
+    let totalHN = 0;
+    let totalGitHub = 0;
+    let totalItems = 0;
+    for (const catData of Object.values(data.categories)) {
+      totalReddit += catData.reddit.length;
+      totalHN += catData.hn.length;
+      totalGitHub += catData.github.length;
+    }
+    totalItems = totalReddit + totalHN + totalGitHub;
+
+    // Category color map for left borders
+    const categoryColors = [
+      '#6c8cff', '#34d399', '#fbbf24', '#f87171',
+      '#a78bfa', '#f472b6', '#38bdf8', '#fb923c',
+    ];
+
+    let html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Intel Report — ${date}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>Intel Report — ${this.esc(date)}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --bg-card: #181a20;
+      --bg-hover: #1e2028;
+      --border: #2a2d36;
+      --text: #e0e0e6;
+      --text-dim: #8b8d97;
+      --accent: #6c8cff;
+      --accent-hover: #8da8ff;
+      --green: #34d399;
+      --red: #f87171;
+      --orange: #fbbf24;
+      --radius: 8px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      padding: 0;
+      margin: 0;
+    }
+
+    a { color: var(--accent); text-decoration: none; transition: color 0.15s; }
+    a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+
+    /* ── Header ── */
+    .report-header {
+      background: linear-gradient(135deg, #181a20 0%, #1a1e2e 50%, #181a20 100%);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px 36px;
+      margin-bottom: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+    .report-header::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--green), var(--orange));
+    }
+    .report-header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+    .report-header .subtitle {
+      color: var(--text-dim);
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    .stats-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .stat-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      background: rgba(108, 140, 255, 0.08);
+      border: 1px solid rgba(108, 140, 255, 0.2);
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--accent);
+    }
+    .stat-badge.green { color: var(--green); background: rgba(52, 211, 153, 0.08); border-color: rgba(52, 211, 153, 0.2); }
+    .stat-badge.orange { color: var(--orange); background: rgba(251, 191, 36, 0.08); border-color: rgba(251, 191, 36, 0.2); }
+
+    /* ── Digest ── */
+    .digest {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 0 var(--radius) var(--radius) 0;
+      padding: 24px 28px;
+      margin-bottom: 28px;
+    }
+    .digest h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .digest p {
+      color: var(--text);
+      line-height: 1.7;
+      white-space: pre-line;
+    }
+
+    /* ── Category cards ── */
+    .category-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+    .category-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .category-emoji {
+      font-size: 22px;
+      line-height: 1;
+    }
+    .category-name {
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .category-count {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--text-dim);
+      background: var(--bg);
+      padding: 3px 10px;
+      border-radius: 10px;
+    }
+    .category-summary {
+      padding: 16px 24px;
+      background: rgba(108, 140, 255, 0.03);
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 14px;
+      line-height: 1.6;
+      font-style: italic;
+      white-space: pre-line;
+    }
+    .category-body { padding: 8px 0; }
+
+    /* ── Post items ── */
+    .post-item {
+      padding: 14px 24px;
+      border-bottom: 1px solid rgba(42, 45, 54, 0.5);
+      transition: background 0.1s;
+    }
+    .post-item:last-child { border-bottom: none; }
+    .post-item:hover { background: var(--bg-hover); }
+    .post-title {
+      font-size: 15px;
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+    .post-title a { color: var(--text); }
+    .post-title a:hover { color: var(--accent); }
+    .post-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--text-dim);
+      flex-wrap: wrap;
+    }
+    .post-meta .sep { color: var(--border); }
+    .post-summary {
+      margin-top: 6px;
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.5;
+    }
+
+    /* ── Score badges ── */
+    .score-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-high { background: rgba(52, 211, 153, 0.15); color: var(--green); }
+    .badge-mid { background: rgba(251, 191, 36, 0.12); color: var(--orange); }
+    .badge-low { background: rgba(139, 141, 151, 0.12); color: var(--text-dim); }
+
+    /* ── GitHub releases table ── */
+    .releases-section { padding: 0 24px 16px; }
+    .releases-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+      padding-top: 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th {
+      text-align: left;
+      padding: 10px 12px;
+      font-weight: 500;
+      color: var(--text-dim);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(42, 45, 54, 0.5);
+      vertical-align: top;
+    }
+    tr:hover td { background: var(--bg-hover); }
+    .tag-new {
+      display: inline-block;
+      padding: 1px 6px;
+      background: rgba(52, 211, 153, 0.15);
+      color: var(--green);
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 6px;
+      text-transform: uppercase;
+    }
+    .release-body {
+      font-size: 12px;
+      color: var(--text-dim);
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ── Summary table ── */
+    .summary-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 28px;
+      overflow: hidden;
+    }
+    .summary-card h2 {
+      font-size: 16px;
+      font-weight: 600;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border);
+      color: #fff;
+    }
+    .summary-card table { margin: 0; }
+    .summary-card th { background: transparent; }
+
+    /* ── Footer ── */
+    .report-footer {
+      text-align: center;
+      padding: 24px;
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+    .report-footer span { opacity: 0.6; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .container { padding: 16px 12px; }
+      .report-header { padding: 28px 20px; }
+      .report-header h1 { font-size: 22px; }
+      .stats-row { gap: 8px; }
+      .stat-badge { font-size: 12px; padding: 4px 10px; }
+      .category-header { padding: 14px 16px; }
+      .post-item { padding: 12px 16px; }
+      .releases-section { padding: 0 16px 12px; }
+      .post-meta { gap: 8px; }
+      .digest { padding: 18px 20px; }
+      .summary-card h2 { padding: 14px 16px; }
+      td, th { padding: 8px 10px; font-size: 13px; }
+      .release-body { max-width: 150px; }
+    }
+
+    /* ── Print ── */
+    @media print {
+      :root {
+        --bg: #fff;
+        --bg-card: #fff;
+        --bg-hover: #f8f9fa;
+        --border: #dee2e6;
+        --text: #212529;
+        --text-dim: #6c757d;
+        --accent: #0d6efd;
+      }
+      body { background: #fff; color: #212529; font-size: 12px; }
+      .report-header { background: #f8f9fa; }
+      .report-header::before { background: #0d6efd; }
+      .report-header h1 { color: #212529; }
+      .category-name { color: #212529; }
+      .post-title a { color: #212529; }
+      .summary-card h2 { color: #212529; }
+      a { color: #0d6efd; }
+      .score-badge { border: 1px solid #dee2e6; }
+      .badge-high { background: #d1fae5; color: #065f46; }
+      .badge-mid { background: #fef3c7; color: #92400e; }
+    }
+  </style>
 </head>
-<body class="bg-slate-50 text-slate-900">
-  <div class="container mx-auto px-4 py-8 max-w-6xl">
-    <div class="bg-white rounded-lg shadow-lg p-8">
-      ${html}
-    </div>
+<body>
+  <div class="container">
+`;
+
+    // ── Header section ──
+    html += `    <header class="report-header">
+      <h1>Intel Report</h1>
+      <div class="subtitle">${this.esc(this.formatDate(date))} &middot; America/Buenos_Aires</div>
+      <div class="stats-row">
+        <span class="stat-badge">${totalItems} items collected</span>
+        <span class="stat-badge green">${totalReddit} Reddit</span>
+        <span class="stat-badge green">${totalHN} Hacker News</span>
+        <span class="stat-badge orange">${totalGitHub} GitHub</span>
+      </div>
+    </header>
+
+`;
+
+    // ── Executive digest ──
+    if (analysis?.llmDigest) {
+      html += `    <section class="digest">
+      <h2>Executive Digest</h2>
+      <p>${this.esc(analysis.llmDigest)}</p>
+    </section>
+
+`;
+    }
+
+    // ── Category sections ──
+    for (let i = 0; i < categories.length; i++) {
+      const cat = categories[i];
+      const catData = data.categories[cat.id];
+      if (!catData) continue;
+
+      const itemCount = catData.reddit.length + catData.hn.length + catData.github.length;
+      if (itemCount === 0) continue;
+
+      const borderColor = categoryColors[i % categoryColors.length];
+
+      html += `    <section class="category-card" style="border-left: 3px solid ${borderColor};">
+      <div class="category-header">
+        <span class="category-emoji">${cat.emoji}</span>
+        <span class="category-name">${this.esc(cat.name)}</span>
+        <span class="category-count">${itemCount} items</span>
+      </div>
+`;
+
+      // Section summary
+      if (analysis?.sectionSummaries?.[cat.id]) {
+        html += `      <div class="category-summary">${this.esc(analysis.sectionSummaries[cat.id])}</div>
+`;
+      }
+
+      html += `      <div class="category-body">
+`;
+
+      // Reddit posts
+      for (const post of catData.reddit.slice(0, 5)) {
+        html += `        <div class="post-item">
+          <div class="post-title"><a href="${this.esc(post.url)}">${this.esc(post.title)}</a></div>
+          <div class="post-meta">
+            ${this.scoreBadge(post.score)} <span class="sep">|</span>
+            ${post.comments} comments <span class="sep">|</span>
+            ${this.esc(post.source)}
+          </div>
+          ${post.summary ? `<div class="post-summary">${this.esc(post.summary)}</div>` : ''}
+        </div>
+`;
+      }
+
+      // HN stories
+      for (const story of catData.hn.slice(0, 8)) {
+        html += `        <div class="post-item">
+          <div class="post-title"><a href="${this.esc(story.url)}">${this.esc(story.title)}</a></div>
+          <div class="post-meta">
+            ${this.scoreBadge(story.score)} <span class="sep">|</span>
+            ${story.comments} comments
+          </div>
+        </div>
+`;
+      }
+
+      // GitHub releases as table
+      if (catData.github.length > 0) {
+        html += `        <div class="releases-section">
+          <div class="releases-label">GitHub Releases</div>
+          <table>
+            <thead>
+              <tr><th>Repository</th><th>Version</th><th>Published</th><th>Changes</th></tr>
+            </thead>
+            <tbody>
+`;
+        for (const rel of catData.github) {
+          const shortDate = rel.published.split('T')[0];
+          const shortBody = rel.body.substring(0, 100);
+          html += `              <tr>
+                <td>${this.esc(rel.repo)}</td>
+                <td><a href="${this.esc(rel.url)}">${this.esc(rel.version)}</a>${rel.isRecent ? '<span class="tag-new">new</span>' : ''}</td>
+                <td>${shortDate}</td>
+                <td><span class="release-body">${this.esc(shortBody)}</span></td>
+              </tr>
+`;
+        }
+        html += `            </tbody>
+          </table>
+        </div>
+`;
+      }
+
+      html += `      </div>
+    </section>
+
+`;
+    }
+
+    // ── Summary table ──
+    html += `    <section class="summary-card">
+      <h2>Collection Summary</h2>
+      <table>
+        <thead>
+          <tr><th>Category</th><th>Items</th><th>Top Score</th></tr>
+        </thead>
+        <tbody>
+`;
+
+    for (const cat of categories) {
+      const catData = data.categories[cat.id];
+      if (!catData) continue;
+
+      const allScores = [
+        ...catData.reddit.map((p) => p.score),
+        ...catData.hn.map((s) => s.score),
+      ];
+      const count = catData.reddit.length + catData.hn.length + catData.github.length;
+      const maxScore = allScores.length > 0 ? Math.max(...allScores) : 0;
+
+      html += `          <tr>
+            <td>${cat.emoji} ${this.esc(cat.name)}</td>
+            <td>${count}</td>
+            <td>${maxScore > 0 ? this.scoreBadge(maxScore) : '<span class="text-dim">—</span>'}</td>
+          </tr>
+`;
+    }
+
+    html += `        </tbody>
+      </table>
+    </section>
+
+`;
+
+    // ── Footer ──
+    html += `    <footer class="report-footer">
+      <span>Generated by intel-gatherer v4.1.0 (TypeScript/Bun) &middot; ${new Date().toISOString()}</span>
+    </footer>
   </div>
 </body>
 </html>`;
 
-    return template;
+    return html;
   }
 }

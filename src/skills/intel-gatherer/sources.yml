@@ -1,527 +1,150 @@
-# Intel Collection Sources Configuration
-# Updated: 2026-02-04
+# Intel Collection Sources Configuration v4.0
+# Category-based unified format
 
-reddit:
-  collection_method: web_fetch  # PRIMARY: web_fetch | FALLBACK: browser if web_fetch fails
-  communities:
-    - name: LocalLLaMA
-      url: "https://www.reddit.com/r/LocalLLaMA/hot.json?limit=10"
-      category: ai_models
-      filter_min_score: 50
-      filter_min_comments: 20
+settings:
+  github_token: "${GITHUB_TOKEN}"
+  reddit_delay_ms: 800
+  hn_story_limit: 15
+  hn_concurrency: 5
 
-    - name: ClaudeAI
-      url: "https://www.reddit.com/r/ClaudeAI/hot.json?limit=10"
-      category: ai_applications
-      filter_min_score: 50
-      filter_min_comments: 20
+categories:
+  - id: ai_models
+    name: "AI Models & Local LLMs"
+    emoji: "\U0001F680"
+    sources:
+      - type: reddit
+        name: LocalLLaMA
+        url: "https://www.reddit.com/r/LocalLLaMA/hot.json?limit=10"
+        min_score: 50
+        min_comments: 20
 
-    - name: Bitcoin
-      url: "https://www.reddit.com/r/Bitcoin/hot.json?limit=10"
-      category: crypto
-      filter_min_score: 50
-      filter_min_comments: 20
+      - type: reddit
+        name: ClaudeAI
+        url: "https://www.reddit.com/r/ClaudeAI/hot.json?limit=10"
+        min_score: 50
+        min_comments: 20
 
-    - name: ethereum
-      url: "https://www.reddit.com/r/ethereum/hot.json?limit=10"
-      category: crypto
-      filter_min_score: 50
-      filter_min_comments: 20
+  - id: crypto
+    name: "Crypto & Blockchain"
+    emoji: "\U0001FA99"
+    sources:
+      - type: reddit
+        name: Bitcoin
+        url: "https://www.reddit.com/r/Bitcoin/hot.json?limit=10"
+        min_score: 50
+        min_comments: 20
 
-    - name: algotrading
-      url: "https://www.reddit.com/r/algotrading/hot.json?limit=10"
-      category: finance
-      filter_min_score: 50
-      filter_min_comments: 20
+      - type: reddit
+        name: ethereum
+        url: "https://www.reddit.com/r/ethereum/hot.json?limit=10"
+        min_score: 50
+        min_comments: 20
 
-movies_series:
-  collection_method: web_fetch
-  description: "Movies & Series coverage from Reddit communities"
-  schedule: "0 9 * * *"  # Daily at 09:00 GMT-3
+  - id: finance
+    name: "Finance & Trading"
+    emoji: "\U0001F4C8"
+    sources:
+      - type: reddit
+        name: algotrading
+        url: "https://www.reddit.com/r/algotrading/hot.json?limit=10"
+        min_score: 50
+        min_comments: 20
 
-  reddit_communities:
-    - name: movies
-      url: "https://www.reddit.com/r/movies/hot.json?limit=10"
-      category: general_movies
-      filter_min_score: 50
+  - id: self_hosted
+    name: "Self-Hosted & Homelab"
+    emoji: "\U0001F3E0"
+    sources:
+      - type: reddit
+        name: selfhosted
+        url: "https://www.reddit.com/r/selfhosted/hot.json?limit=10"
+        min_score: 30
+        min_comments: 10
 
-    - name: television
-      url: "https://www.reddit.com/r/television/hot.json?limit=10"
-      category: tv_shows
-      filter_min_score: 30
+      - type: reddit
+        name: homelab
+        url: "https://www.reddit.com/r/homelab/hot.json?limit=10"
+        min_score: 40
+        min_comments: 10
 
-    - name: NetflixBestOf
-      url: "https://www.reddit.com/r/NetflixBestOf/hot.json?limit=10"
-      category: netflix
-      filter_min_score: 20
+  - id: entertainment
+    name: "Movies & Series"
+    emoji: "\U0001F3AC"
+    sources:
+      - type: reddit
+        name: movies
+        url: "https://www.reddit.com/r/movies/hot.json?limit=10"
+        min_score: 50
+        min_comments: 20
 
-    - name: boxoffice
-      url: "https://www.reddit.com/r/boxoffice/hot.json?limit=10"
-      category: box_office
-      filter_min_score: 20
+      - type: reddit
+        name: television
+        url: "https://www.reddit.com/r/television/hot.json?limit=10"
+        min_score: 30
+        min_comments: 15
 
-    - name: HBO
-      url: "https://www.reddit.com/r/HBO/hot.json?limit=10"
-      category: hbo_max
-      filter_min_score: 20
+  - id: hackernews
+    name: "Hacker News"
+    emoji: "\U0001F7E0"
+    sources:
+      - type: hn
+        name: frontpage
+        url: "https://hacker-news.firebaseio.com/v0/topstories.json"
 
-    - name: PrimeVideo
-      url: "https://www.reddit.com/r/PrimeVideo/hot.json?limit=10"
-      category: amazon
-      filter_min_score: 20
+  - id: releases
+    name: "GitHub Releases"
+    emoji: "\U0001F527"
+    sources:
+      - type: github
+        repo: langchain-ai/langchain
 
-  news_sources:
-    - name: NetflixTudum
-      type: web_fetch
-      url: "https://www.netflix.com/tudum/articles/new-on-netflix"
+      - type: github
+        repo: langchain-ai/langgraph
 
-    - name: FirstShowing
-      type: web_fetch
-      url: "https://www.firstshowing.net/schedule2026/"
+      - type: github
+        repo: fastapi/fastapi
 
-    - name: RottenTomatoes
-      type: web_fetch
-      url: "https://editorial.rottentomatoes.com/article/tv-premiere-dates-2026/"
+      - type: github
+        repo: pydantic/pydantic
 
-hackernews:
-  search_queries:
-    - query: "site:news.ycombinator.com Show HN OR LLM"
-      count: 8
-      freshness: "past_week"
+      - type: github
+        repo: vercel/next.js
 
-  direct_endpoints:
-    - name: frontpage
-      url: "https://hacker-news.firebaseio.com/v0/topstories.json"
+      - type: github
+        repo: dotnet/aspnetcore
 
-    - name: new_stories
-      url: "https://hacker-news.firebaseio.com/v0/newstories.json"
-
-github:
-  release_tracking:
-    - repo: langchain-ai/langchain
-      url: "https://api.github.com/repos/langchain-ai/langchain/releases/latest"
-
-    - repo: langchain-ai/langgraph
-      url: "https://api.github.com/repos/langchain-ai/langgraph/releases/latest"
-
-    - repo: fastapi/fastapi
-      url: "https://api.github.com/repos/fastapi/fastapi/releases/latest"
-
-    - repo: pydantic/pydantic
-      url: "https://api.github.com/repos/pydantic/pydantic/releases/latest"
-
-    - repo: vercel/next.js
-      url: "https://api.github.com/repos/vercel/next.js/releases/latest"
-
-    - repo: dotnet/aspnetcore
-      url: "https://api.github.com/repos/dotnet/aspnetcore/releases/latest"
-
-# Search budget tracking (5 searches per day)
-search_budget:
-  daily_limit: 5
-  used_today: 1
-  remaining_today: 4
-  last_reset: "2026-02-04"
-
-# ═══════════════════════════════════════════════════════════
-# OPENCLAW ECOSYSTEM RESEARCH (v2.6.0)
-# Track: OpenClaw usage patterns, alternatives, related tools
-# ═══════════════════════════════════════════════════════════
-
-openclaw_research:
-  description: "Research OpenClaw usage, alternatives, and related AI agent tools"
-  enabled: true
-  priority: high
-
-  reddit_searches:
-    # DEPRECATED: Direct "openclaw" search rarely returns results
-    # Replaced with broader pattern-based searches below
-
-    # ═══════════════════════════════════════════════════════════
-    # NEW v2.6.0: Broader Pattern-Based Searches for Use Cases
-    # ═══════════════════════════════════════════════════════════
-
-    - name: "ai_assistant_setups"
-      query: "personal AI assistant"
-      description: "Self-hosted AI assistant setups"
-      url: "https://www.reddit.com/r/selfhosted/search.json?q=personal+AI+assistant&sort=new&limit=10"
-      alt_urls:
-        - "https://www.reddit.com/r/homelab/search.json?q=personal+AI+assistant&sort=new&limit=10"
-        - "https://www.reddit.com/r/LocalLLaMA/search.json?q=personal+AI+setup&sort=new&limit=10"
-      category: "ai_assistant"
-      min_score: 5
-      use_cases: ["home_automation", "personal_ai", "self_hosted"]
-
-    - name: "messaging_automation"
-      query: "whatsapp automation AI OR telegram bot claude"
-      description: "AI bots for messaging platforms"
-      url: "https://www.reddit.com/r/selfhosted/search.json?q=whatsapp+automation+AI&sort=new&limit=10"
-      alt_urls:
-        - "https://www.reddit.com/r/TelegramBots/search.json?q=claude+ai+bot&sort=new&limit=10"
-        - "https://www.reddit.com/r/Chatbots/search.json?q=claude+api&sort=new&limit=10"
-      category: "messaging_bots"
-      min_score: 3
-      use_cases: ["whatsapp_bot", "telegram_bot", "messaging_ai"]
-
-    - name: "mcp_servers"
-      query: "MCP server OR Model Context Protocol"
-      description: "Model Context Protocol implementations"
-      url: "https://www.reddit.com/r/LocalLLaMA/search.json?q=MCP+server&sort=new&limit=10"
-      alt_urls:
-        - "https://www.reddit.com/r/ClaudeAI/search.json?q=Model+Context+Protocol&sort=new&limit=10"
-      category: "mcp"
-      min_score: 5
-      use_cases: ["mcp_protocol", "api_gateway", "tool_integration"]
-
-    - name: "ai_gateway_pattern"
-      query: "AI gateway OR agent gateway"
-      description: "AI gateway patterns and tools"
-      url: "https://www.reddit.com/r/LocalLLaMA/search.json?q=AI+gateway&sort=new&limit=10"
-      alt_urls:
-        - "https://www.reddit.com/r/hackernews/search.json?q=AI+gateway+agent&sort=new&limit=10"
-      category: "ai_gateway"
-      min_score: 10
-      use_cases: ["api_gateway", "agent_orchestration"]
-
-    - name: "home_ai_automation"
-      query: "home assistant AI OR smart home LLM"
-      description: "AI in home automation"
-      url: "https://www.reddit.com/r/homeassistant/search.json?q=LLM+AI&sort=new&limit=10"
-      alt_urls:
-        - "https://www.reddit.com/r/smarthome/search.json?q=AI+assistant&sort=new&limit=10"
-      category: "home_automation"
-      min_score: 5
-      use_cases: ["home_automation", "smart_home", "voice_ai"]
-
-    - name: "self_hosted_llm_tools"
-      query: "self-hosted LLM tools OR local AI infrastructure"
-      description: "Self-hosted LLM infrastructure"
-      url: "https://www.reddit.com/r/selfhosted/search.json?q=self-hosted+LLM&sort=new&limit=10"
-      category: "self_hosted"
-      min_score: 5
-      use_cases: ["self_hosted", "local_llm", "infrastructure"]
-
-    - name: "vibe_coding_agents"
-      query: "vibe coding AI OR AI coding assistant setup"
-      description: "AI coding assistant setups"
-      url: "https://www.reddit.com/r/LocalLLaMA/search.json?q=vibe+coding&sort=new&limit=10"
-      category: "coding_agents"
-      min_score: 10
-      use_cases: ["coding_assistant", "dev_tools", "ai_ide"]
-
-    # ═══════════════════════════════════════════════════════════
-    # Competitor/Alternative Tool Tracking (kept from v2.5.0)
-    # ═══════════════════════════════════════════════════════════
-
-    - name: "n8n_workflows"
-      query: "n8n AI workflow automation"
-      description: "n8n automation patterns"
-      url: "https://www.reddit.com/r/n8n/search.json?q=AI+automation&sort=new&limit=10"
-      category: "n8n"
-      min_score: 5
-      use_cases: ["workflow_automation", "n8n_alternative"]
-
-    - name: "autogpt_agents"
-      query: "AutoGPT autonomous agents"
-      description: "AutoGPT usage patterns"
-      url: "https://www.reddit.com/r/AutoGPT/search.json?q=autonomous+agent&sort=new&limit=10"
-      category: "autogpt"
-      min_score: 5
-      use_cases: ["autonomous_agents", "agent_framework"]
-
-    - name: "dify_ai"
-      query: "Dify AI platform"
-      description: "Dify usage patterns"
-      url: "https://www.reddit.com/r/LocalLLaMA/search.json?q=Dify&sort=new&limit=10"
-      category: "dify"
-      min_score: 5
-      use_cases: ["ai_platform", "dify_alternative"]
-
-    - name: "langgraph_agents"
-      query: "LangGraph multi-agent"
-      description: "LangGraph usage"
-      url: "https://www.reddit.com/r/LangChain/search.json?q=LangGraph+multi-agent&sort=new&limit=10"
-      category: "langgraph"
-      min_score: 10
-      use_cases: ["multi_agent", "langchain"]
-
-    - name: "crewai_multi_agent"
-      query: "CrewAI multi-agent"
-      description: "CrewAI usage"
-      url: "https://www.reddit.com/r/LocalLLaMA/search.json?q=CrewAI&sort=new&limit=10"
-      category: "crewai"
-      min_score: 5
-      use_cases: ["multi_agent", "crew_framework"]
-
-    - name: "agno_agents"
-      query: "Agno AI OR Phidata agents"
-      description: "Agno (formerly Phidata) usage"
-      url: "https://www.reddit.com/r/LocalLLaMA/search.json?q=Agno+AI&sort=new&limit=10"
-      category: "agno"
-      min_score: 5
-      use_cases: ["agent_framework", "phidata"]
-
-  # ═══════════════════════════════════════════════════════════
-  # NEW v2.6.0: GitHub Code Search for Real Configs  
-  # ═══════════════════════════════════════════════════════════
-  github_code_search:
-    enabled: true
-    description: "Search for OpenClaw usage in public GitHub repos"
-    # GitHub Code Search API requires authentication
-    # Set GITHUB_CODE_SEARCH_TOKEN in .env
-    token: "${GITHUB_CODE_SEARCH_TOKEN}"
-    queries:
-      - name: "openclaw_configs"
-        query: "openclaw filename:json"
-        category: "configs"
-        use_case: "Configuration examples"
-
-      - name: "claw_md_files"
-        query: "Clawy OR OpenClaw extension:md"
-        category: "documentation"
-        use_case: "AGENTS.md, SOUL.md examples"
-
-      - name: "telegram_claude_bots"
-        query: "TELEGRAM_BOT_TOKEN claude"
-        category: "telegram_bots"
-        use_case: "Telegram bot setups"
-
-      - name: "whatsapp_ai_bots"
-        query: "whatsapp-web.js OR whatsapp-chatbot AI"
-        category: "whatsapp_bots"
-        use_case: "WhatsApp automation"
-
-      - name: "mcp_implementations"
-        query: "Model Context Protocol MCP server"
-        category: "mcp"
-        use_case: "MCP protocol usage"
-
-      - name: "clawhub_skills"
-        query: "SKILL.md openclaw"
-        category: "skills"
-        use_case: "Custom skills development"
-
-  similar_tools_tracklist:
-    # Known alternatives to monitor
+analysis:
+  keywords:
+    technology:
+      - openclaw
+      - langchain
+      - langgraph
+      - n8n
+      - dify
+      - autogpt
+      - agent
+      - local llm
+      - swarm
+      - multi-agent
+      - workflow
     tools:
-      - name: "n8n"
-        category: "workflow_automation"
-        github: "n8n-io/n8n"
-
-      - name: "Dify"
-        category: "ai_platform"
-        github: "langgenius/dify"
-
-      - name: "AutoGPT"
-        category: "autonomous_agent"
-        github: "Significant-Gravitas/AutoGPT"
-
-      - name: "LangFlow"
-        category: "langchain_ui"
-        github: "langflow-ai/langflow"
-
-      - name: "Flowise"
-        category: "flow_builder"
-        github: "FlowiseAI/Flowise"
-
-      - name: "Superagent"
-        category: "agent_framework"
-        github: "superagent-ai/superagent"
-
-      - name: "CrewAI"
-        category: "multi_agent"
-        github: "joaomdmoura/crewAI"
-
-      - name: "Agno (Phidata)"
-        category: "agent_framework"
-        github: "agno-agi/agno"
-
-  # ═══════════════════════════════════════════════════════════
-  # NEW v2.6.0: Hacker News Show HN Tracking
-  # ═══════════════════════════════════════════════════════════
-  hackernews_show_hn:
+      - claude
+      - gpt-4
+      - gpt-5
+      - ollama
+      - llama
+      - mistral
+      - fastapi
+      - nextjs
+      - react
+      - docker
+    crypto:
+      - bitcoin
+      - ethereum
+      - solana
+      - crypto
+      - blockchain
+      - trading
+      - defi
+  llm_summary:
     enabled: true
-    queries:
-      - "Show HN AI agent personal assistant"
-      - "Show HN Claude bot"
-      - "Show HN AI messaging automation"
-      - "Show HN home automation AI"
-      - "Show HN AI gateway"
-
-  # ═══════════════════════════════════════════════════════════
-  # NEW v2.6.0: Additional Reddit Communities
-  # ═══════════════════════════════════════════════════════════
-  additional_communities:
-    - name: selfhosted
-      url: "https://www.reddit.com/r/selfhosted/hot.json?limit=10"
-      category: self_hosted
-      filter_min_score: 30
-      monitor_keywords: ["AI", "agent", "bot", "Claude", "GPT", "automation", "LLM", "self-host"]
-
-    - name: homelab
-      url: "https://www.reddit.com/r/homelab/hot.json?limit=10"
-      category: infrastructure
-      filter_min_score: 40
-      monitor_keywords: ["AI", "GPU", "server", "LLM", "inference", "local"]
-
-    - name: Chatbots
-      url: "https://www.reddit.com/r/Chatbots/hot.json?limit=10"
-      category: chatbots
-      filter_min_score: 5
-      monitor_keywords: ["Claude", "API", "bot", "integration"]
-
-    - name: TelegramBots
-      url: "https://www.reddit.com/r/TelegramBots/hot.json?limit=10"
-      category: telegram
-      filter_min_score: 5
-      monitor_keywords: ["Claude", "AI", "bot", "automation"]
-
-    - name: homeassistant
-      url: "https://www.reddit.com/r/homeassistant/hot.json?limit=10"
-      category: home_automation
-      filter_min_score: 30
-      monitor_keywords: ["AI", "LLM", "Claude", "voice", "GPT", "integration"]
-
-    - name: smarthome
-      url: "https://www.reddit.com/r/smarthome/hot.json?limit=10"
-      category: smart_home
-      filter_min_score: 20
-      monitor_keywords: ["AI", "assistant", "voice", "automation"]
-
-    - name: sideproject
-      url: "https://www.reddit.com/r/sideproject/hot.json?limit=10"
-      category: projects
-      filter_min_score: 20
-      monitor_keywords: ["AI", "Claude", "bot", "automation", "API"]
-
-    - name: coding
-      url: "https://www.reddit.com/r/coding/hot.json?limit=10"
-      category: development
-      filter_min_score: 40
-      monitor_keywords: ["Claude", "AI", "automation", "vibe coding"]
-
-# ═══════════════════════════════════════════════════════════
-# DEV.TO WEEKLY DIGEST (Sundays)
-# ═══════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════
-# ARGENTINA TRADE / PIPE FITTINGS DUMPING TRACKING + NEWS
-# ═══════════════════════════════════════════════════════════
-
-argentina_trade:
-  description: "Track pipe fittings steel trade, dumping issues, and import alternatives for Argentina + Monitor Milei/Rocca/Techint conflicts (v2.3.0 enhancement)"
-  schedule: "0 9 * * *"  # Daily at 09:00 GMT-3
-
-  sources:
-    - name: "reddit_argentina"
-      type: web_fetch
-      url: "https://www.reddit.com/r/argentina/hot.json?limit=15"  # Increased limit for keyword filtering
-      keywords: ["Milei", "Rocca", "Techint", "Tenaris", "Vaca Muerta", "economía", "acero", "tubos", "gasoducto", "licitación"]
-      min_score: 30
-      priority: high
-
-    - name: "reddit_republicaargentina"
-      type: web_fetch
-      url: "https://www.reddit.com/r/RepublicaArgentina/hot.json?limit=15"
-      keywords: ["Milei", "Rocca", "Techint", "Tenaris", "Vaca Muerta", "economía", "acero", "comercio"]
-      min_score: 20
-      priority: high
-
-  news_sources:
-    - name: "infobae_economia"
-      type: web_fetch
-      url: "https://www.infobae.com/economia/"
-      keywords: ["Techint", "Tenaris", "Rocca", "tubos", "acero", "dumping", "importacion", "Milei"]
-
-    - name: "eleconomista_argentina"
-      type: web_fetch
-      url: "https://eleconomista.com.ar/"
-      keywords: ["Techint", "Tenaris", "acero", "tubos", "Vaca Muerta", "Milei", "Rocca"]
-
-    - name: "ambito"
-      type: web_fetch
-      url: "https://www.ambito.com/"
-      keywords: ["acero", "importaciones", "dumping", "comercio exterior", "Techint", "Tenaris"]
-
-    - name: "clarin_politica"
-      type: web_fetch
-      url: "https://www.clarin.com/politica/"
-      keywords: ["Milei", "Rocca", "Techint", "conflicto", "Vaca Muerta", "economía"]
-      priority: high
-
-    - name: "tn_economia"
-      type: web_fetch
-      url: "https://tn.com.ar/economia/"
-      keywords: ["Techint", "Tenaris", "Milei", "Rocca", "gasoducto", "Vaca Muerta"]
-
-  import_alternatives_tracking:
-    countries: ["Turkey", "Brazil", "Mexico", "India", "China", "Italy", "Spain"]
-    search_terms:
-      - "pipe fittings manufacturers Turkey"
-      - "tubos conexiones acero Brasil exportacion"
-      - "API 5L pipe suppliers export"
-
-  alert_keywords:
-    - "dumping"
-    - "aranceles"
-    - "cuota"
-    - "licitacion"
-    - "SESa"
-    - "Welspun"
-    - "importacion desleal"
-    - "sobrecapacidad siderurgica"
-    - "Rocca"
-    - "Milei"
-    - "Techint"
-    - "conflicto"
-    - "Vaca Muerta"
-    - "gasoducto Néstor Kirchner"
-
-# ═══════════════════════════════════════════════════════════
-# DEV.TO WEEKLY DIGEST (Sundays)
-# ═══════════════════════════════════════════════════════════
-devto:
-  collection_mode: weekly_digest
-  schedule: "0 10 * * 0"  # Sundays at 10:00 GMT-3 (Sunday morning reading)
-
-  description: "Educational deep-dive from Dev.to tutorials and practical guides"
-
-  tags:
-    - name: "ai"
-      priority: high
-      url: "https://dev.to/feed/tag/ai"
-      focus: "practical_ml_patterns"
-
-    - name: "python"
-      priority: high
-      url: "https://dev.to/feed/tag/python"
-      focus: "fastapi_async_patterns"
-
-    - name: "fastapi"
-      priority: high
-      url: "https://dev.to/feed/tag/fastapi"
-      focus: "production_deployment"
-
-    - name: "langchain"
-      priority: medium
-      url: "https://dev.to/feed/tag/langchain"
-      focus: "agent_patterns"
-
-    - name: "docker"
-      priority: medium
-      url: "https://dev.to/feed/tag/docker"
-      focus: "containerization_best_practices"
-
-    - name: "nextjs"
-      priority: medium
-      url: "https://dev.to/feed/tag/nextjs"
-      focus: "app_router_patterns"
-
-  digest_config:
-    articles_per_tag: 3
-    max_total_articles: 15
-    min_engagement: 10
-    output_path: "memory/intel/devto-digest/"
-    format: markdown
-    include_summaries: true
-    include_code_snippets: false
+    temperature: 0.4

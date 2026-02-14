@@ -147,7 +147,8 @@ export class OllamaClient {
         const assistantMsg = data.message;
 
         // If the model returned tool calls, execute them and continue the loop
-        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0 && options.toolExecutor) {
+        // On the last round, ignore tool calls to force a text response
+        if (!isLastRound && assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0 && options.toolExecutor) {
           this.logger.info(
             { round, toolCalls: assistantMsg.tool_calls.map((tc) => tc.function.name) },
             'LLM requested tool calls'
