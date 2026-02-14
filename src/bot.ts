@@ -22,6 +22,7 @@ import { createSaveMemoryTool, createUpdateIdentityTool, createUpdateSoulTool } 
 import type { Tool, ToolDefinition, ToolResult } from './tools/types';
 import { createWebFetchTool } from './tools/web-fetch';
 import { createWebSearchTool } from './tools/web-search';
+import { HUMANIZER_PROMPT } from './humanizer-prompt';
 
 interface SeenUser {
   id: number;
@@ -466,6 +467,14 @@ export class BotManager {
   /**
    * Stop all bots
    */
+  isRunning(botId: string): boolean {
+    return this.bots.has(botId);
+  }
+
+  getBotIds(): string[] {
+    return Array.from(this.bots.keys());
+  }
+
   async stopAll(): Promise<void> {
     this.messageBuffer.dispose();
     for (const [botId, bot] of this.bots.entries()) {
@@ -705,6 +714,12 @@ export class BotManager {
       // Build system prompt — use soul if available, otherwise fall back to config
       let systemPrompt =
         this.soulLoader.composeSystemPrompt() ?? convConfig.systemPrompt;
+
+      // Inject humanizer writing guidelines if enabled
+      if (this.config.humanizer.enabled) {
+        systemPrompt += HUMANIZER_PROMPT;
+      }
+
       if (hasTools) {
         const webToolNames = this.toolDefinitions
           .filter((d) => d.function.name.startsWith('web_'))

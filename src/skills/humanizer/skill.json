@@ -1,0 +1,8 @@
+{
+  "id": "humanizer",
+  "name": "Humanizer",
+  "version": "1.0.0",
+  "description": "Remove signs of AI-generated writing from text, based on Wikipedia's Signs of AI writing guide",
+  "author": "BioStart Technology (adapted)",
+  "main": "./index.ts"
+}

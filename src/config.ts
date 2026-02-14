@@ -145,6 +145,12 @@ const CronConfigSchema = z.object({
   storePath: z.string().default('./data/cron'),
 });
 
+const WebConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  port: z.number().int().positive().default(3000),
+  host: z.string().default('127.0.0.1'),
+});
+
 const PhoneCallConfigSchema = z.object({
   enabled: z.boolean().default(false),
   accountSid: z.string(),
@@ -154,6 +160,10 @@ const PhoneCallConfigSchema = z.object({
   language: z.string().default('es-MX'),
   voice: z.string().default('Polly.Mia'),
   contactsFile: z.string().default('./data/contacts.json'),
+});
+
+const HumanizerConfigSchema = z.object({
+  enabled: z.boolean().default(false),
 });
 
 const BufferConfigSchema = z
@@ -213,7 +223,9 @@ const ConfigSchema = z.object({
   datetime: DatetimeToolConfigSchema.default({}),
   cron: CronConfigSchema.default({}),
   phoneCall: PhoneCallConfigSchema.optional(),
+  humanizer: HumanizerConfigSchema.default({}),
   buffer: BufferConfigSchema,
+  web: WebConfigSchema.default({}),
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
 });
@@ -236,7 +248,9 @@ export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 export type DatetimeToolConfig = z.infer<typeof DatetimeToolConfigSchema>;
 export type CronConfig = z.infer<typeof CronConfigSchema>;
 export type PhoneCallConfig = z.infer<typeof PhoneCallConfigSchema>;
+export type HumanizerConfig = z.infer<typeof HumanizerConfigSchema>;
 export type BufferConfig = z.infer<typeof BufferConfigSchema>;
+export type WebConfig = z.infer<typeof WebConfigSchema>;
 export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
 export type SessionMemoryConfig = z.infer<typeof SessionMemoryConfigSchema>;
 export type LlmRelevanceCheckConfig = z.infer<typeof LlmRelevanceCheckSchema>;

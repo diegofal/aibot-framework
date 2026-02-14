@@ -493,6 +493,10 @@ export class SessionManager {
     return this.metadata.get(serializedKey);
   }
 
+  listSessions(): SessionMeta[] {
+    return Array.from(this.metadata.values());
+  }
+
   /**
    * Mark that a memory flush has been performed for this session,
    * recording the current compactionCount so we don't flush again

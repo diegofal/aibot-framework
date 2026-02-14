@@ -48,7 +48,14 @@
       "Bash(git commit:*)",
       "Bash(sqlite3:*)",
       "Bash(git status:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(git stash pop:*)",
+      "Bash(git stash drop:*)",
+      "WebFetch(domain:clawhub.ai)",
+      "Bash(clawhub search:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm i:*)",
+      "Bash(clawhub install:*)"
     ]
   }
 }

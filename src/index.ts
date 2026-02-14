@@ -7,6 +7,7 @@ import { createLogger } from './logger';
 import { MemoryManager } from './memory/manager';
 import { SessionManager } from './session';
 import { SoulLoader } from './soul';
+import { startWebServer } from './web/server';
 
 async function main() {
   // Parse command line arguments
@@ -158,6 +159,19 @@ async function main() {
     for (const botConfig of config.bots.filter((b) => b.enabled)) {
       await botManager.startBot(botConfig);
       logger.info({ botId: botConfig.id, name: botConfig.name }, 'Bot started');
+    }
+
+    // Start web server if enabled
+    if (config.web.enabled) {
+      startWebServer({
+        config,
+        configPath: './config/config.json',
+        logger,
+        botManager,
+        sessionManager,
+        skillRegistry,
+        cronService,
+      });
     }
 
     logger.info('All systems operational');

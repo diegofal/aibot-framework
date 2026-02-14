@@ -1,0 +1,31 @@
+{
+  "id": "reflection",
+  "name": "Self-Reflection",
+  "version": "1.0.0",
+  "description": "Nightly self-reflection and evolving motivations system",
+  "author": "Diego Falciola",
+  "main": "./index.ts",
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "soulDir": {
+          "type": "string",
+          "description": "Path to soul directory"
+        },
+        "telegramChatId": {
+          "type": "number",
+          "description": "Telegram chat ID for reflection notifications"
+        },
+        "notifyOnReflection": {
+          "type": "boolean",
+          "description": "Send Telegram notification after cron reflection"
+        },
+        "cronSchedule": {
+          "type": "string",
+          "description": "Cron expression for nightly reflection"
+        }
+      }
+    }
+  }
+}

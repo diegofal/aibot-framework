@@ -103,7 +103,13 @@ export class SoulLoader {
       sections.push(soul);
     }
 
-    // 3. Daily memory logs (today + yesterday)
+    // 3. Motivations / inner drives
+    const motivations = this.readFile('MOTIVATIONS.md');
+    if (motivations) {
+      sections.push(`## Your Inner Motivations\n\n${motivations}`);
+    }
+
+    // 4. Daily memory logs (today + yesterday)
     const dailyLogs = this.readRecentDailyLogs();
     if (dailyLogs) {
       sections.push(dailyLogs);
@@ -226,6 +232,65 @@ export class SoulLoader {
     }
 
     return parts.length > 0 ? parts.join('\n\n---\n\n') : 'No hay nada en memoria.';
+  }
+
+  /**
+   * Read MOTIVATIONS.md content
+   */
+  readMotivations(): string | null {
+    return this.readFile('MOTIVATIONS.md');
+  }
+
+  /**
+   * Write MOTIVATIONS.md content
+   */
+  writeMotivations(content: string): void {
+    const motivationsPath = join(this.dir, 'MOTIVATIONS.md');
+    writeFileSync(motivationsPath, content, 'utf-8');
+    this.logger.info('Motivations updated');
+  }
+
+  /**
+   * Read SOUL.md content (public accessor)
+   */
+  readSoul(): string | null {
+    return this.readFile('SOUL.md');
+  }
+
+  /**
+   * Read IDENTITY.md content (public accessor)
+   */
+  readIdentity(): string | null {
+    return this.readFile('IDENTITY.md');
+  }
+
+  /**
+   * Read all daily memory logs from sinceDate onwards (YYYY-MM-DD).
+   * Returns concatenated log content, newest first.
+   */
+  readDailyLogsSince(sinceDate: string): string {
+    const memoryDir = join(this.dir, 'memory');
+    const parts: string[] = [];
+
+    try {
+      const files = readdirSync(memoryDir)
+        .filter((f) => f.endsWith('.md') && f !== 'legacy.md')
+        .filter((f) => f.replace('.md', '') >= sinceDate)
+        .sort()
+        .reverse();
+
+      for (const file of files) {
+        const content = readFileSync(join(memoryDir, file), 'utf-8').trim();
+        if (content) {
+          const date = file.replace('.md', '');
+          parts.push(`### ${date}\n${content}`);
+        }
+      }
+    } catch {
+      // No memory dir yet
+    }
+
+    return parts.join('\n\n');
   }
 
   /**
