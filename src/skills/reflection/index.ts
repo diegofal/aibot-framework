@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Skill, SkillContext } from '../../core/types';
-import { buildAnalysisPrompt, buildExplorationPrompt, buildImprovementPrompt, buildJsonFixPrompt } from './prompts';
+import { buildAnalysisPrompt, buildExplorationPrompt, buildImprovementPrompt, buildJsonFixPrompt, buildCompactionPrompt } from './prompts';
 import { createWebSearchTool } from '../../tools/web-search';
 import { createWebFetchTool } from '../../tools/web-fetch';
 import type { ChatMessage } from '../../ollama';
@@ -18,6 +18,10 @@ interface ReflectionConfig {
     maxResults?: number;
     maxToolRounds?: number;
     maxDiscoveryChars?: number;
+  };
+  compaction?: {
+    enabled?: boolean;
+    lineThreshold?: number;
   };
 }
 
@@ -250,6 +254,41 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     const logPath = join(soulDir, 'memory', `${dateStr}.md`);
     appendFileSync(logPath, `- [${timeStr}] [reflection] ${improvement.journal_entry}\n`, 'utf-8');
     ctx.logger.info('Journal entry appended to daily log');
+  }
+
+  // Step 4.5 — Compact yesterday's log (if enabled and over threshold)
+  const compactionConfig = config.compaction;
+  const compactionEnabled = compactionConfig?.enabled !== false; // default: enabled
+  const lineThreshold = compactionConfig?.lineThreshold ?? 15;
+
+  if (compactionEnabled) {
+    try {
+      const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const yesterdayPath = join(soulDir, 'memory', `${yesterday}.md`);
+
+      if (existsSync(yesterdayPath)) {
+        const yesterdayContent = readFileSync(yesterdayPath, 'utf-8');
+        const lineCount = yesterdayContent.split('\n').filter((l) => l.trim()).length;
+
+        if (lineCount > lineThreshold) {
+          ctx.logger.info({ yesterday, lineCount, lineThreshold }, 'Reflection: compacting yesterday\'s log');
+          const compactionInput = buildCompactionPrompt(yesterdayContent);
+          const compacted = await ctx.ollama.generate(compactionInput.prompt, {
+            system: compactionInput.system,
+            temperature: 0.2,
+          });
+
+          if (compacted && compacted.trim()) {
+            writeFileSync(yesterdayPath, compacted.trim() + '\n', 'utf-8');
+            ctx.logger.info({ yesterday, before: lineCount, after: compacted.split('\n').length }, 'Yesterday\'s log compacted');
+          }
+        } else {
+          ctx.logger.debug({ yesterday, lineCount }, 'Reflection: yesterday\'s log below threshold, skipping compaction');
+        }
+      }
+    } catch (err) {
+      ctx.logger.warn({ err }, 'Reflection: compaction failed, continuing');
+    }
   }
 
   // Build summary

@@ -13,7 +13,8 @@ export function createSaveMemoryTool(soulLoader: SoulLoader): Tool {
         name: 'save_memory',
         description:
           'Save a fact, preference, or piece of context to your persistent memory. ' +
-          'Use this when you learn something worth remembering for future conversations.',
+          'Use this when you learn something NEW worth remembering. ' +
+          'Do NOT save: credentials/API keys/tokens, phone numbers, or facts already in your Recent Memory section.',
         parameters: {
           type: 'object',
           properties: {

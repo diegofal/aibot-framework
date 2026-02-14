@@ -1,6 +1,6 @@
 **IDENTIDADES**
 - Diego (@ikrain): 42 años (3/1/1984, Capricornio), Senior Full Stack Dev en Agility IO (Buenos Aires), stack .NET/Python/React, metido en AI/LLMs, humor sarcástico/nerd, tiene casa con más espacio, perro Otto
-- Pri (Priscila/Pipi/Pipuna): 41 años (18/12, Sagitario), "mamá del cole", trabaja con su viejo en negocio familiar, vive en depto, tiene llave de casa de Diego
+- Pri (Priscila/Pipi/Pipuna): 42 años (18/12, Sagitario), "mamá del cole", trabaja con su viejo en negocio familiar, vive en depto, tiene llave de casa de Diego
 
 **HIJOS** (4 total)
 - Emma: 9 años cumple 10 en marzo (21/3/2016, Aries) - hija de Diego

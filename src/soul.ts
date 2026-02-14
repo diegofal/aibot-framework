@@ -3,6 +3,34 @@ import { join } from 'node:path';
 import type { SoulConfig } from './config';
 import type { Logger } from './logger';
 
+// Patterns to redact from memory facts before writing
+const SENSITIVE_PATTERNS = [
+  /\bapi[_-]?key\s*[=:]\s*\S+/gi,
+  /\bmm_[a-f0-9]{40,}/gi,
+  /\bagent[_-]?id\s*[=:]\s*[a-f0-9-]{36}/gi,
+  /\bMOLT-[A-F0-9]{16,}/gi,
+  /\b(?:auth[_-]?token|secret|password)\s*[=:]\s*\S+/gi,
+  /\+\d{10,15}/g,
+];
+
+/**
+ * Redact sensitive patterns from a memory fact.
+ * Returns the sanitized string, or null if the entire fact was credential content.
+ */
+function sanitizeFact(fact: string): string | null {
+  let sanitized = fact;
+  for (const pattern of SENSITIVE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, '[REDACTED]');
+  }
+  // If the fact is mostly redacted (more than half the non-whitespace content), skip it entirely
+  const originalChars = fact.replace(/\s/g, '').length;
+  const redactedChars = (sanitized.match(/\[REDACTED\]/g) || []).length * 10; // rough estimate
+  if (originalChars > 0 && redactedChars > originalChars / 2) {
+    return null;
+  }
+  return sanitized;
+}
+
 export class SoulLoader {
   private dir: string;
 
@@ -156,12 +184,18 @@ export class SoulLoader {
    * Append a fact to the daily memory log (config/soul/memory/YYYY-MM-DD.md)
    */
   appendDailyMemory(fact: string): void {
+    const sanitized = sanitizeFact(fact);
+    if (!sanitized) {
+      this.logger.warn({ fact: fact.slice(0, 80) }, 'Daily memory skipped: credential content detected');
+      return;
+    }
+
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
     const timeStr = now.toTimeString().slice(0, 5);  // HH:MM
     const logPath = join(this.dir, 'memory', `${dateStr}.md`);
-    appendFileSync(logPath, `- [${timeStr}] ${fact}\n`, 'utf-8');
-    this.logger.info({ date: dateStr, fact: fact.slice(0, 80) }, 'Daily memory appended');
+    appendFileSync(logPath, `- [${timeStr}] ${sanitized}\n`, 'utf-8');
+    this.logger.info({ date: dateStr, fact: sanitized.slice(0, 80) }, 'Daily memory appended');
   }
 
   /**

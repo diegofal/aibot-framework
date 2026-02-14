@@ -181,6 +181,25 @@ Respond with this exact JSON structure:
 }
 
 /**
+ * Step 4.5 — Memory Compaction: Deduplicate and consolidate a daily memory log.
+ */
+export function buildCompactionPrompt(dailyLog: string): { system: string; prompt: string } {
+  const system = `You are a memory compaction engine. Deduplicate and consolidate the following daily memory log.
+
+Rules:
+1. Remove duplicate facts — keep the most complete version.
+2. Remove credentials, API keys, tokens, phone numbers entirely.
+3. Preserve timestamps for unique events.
+4. Merge related entries into single comprehensive entries.
+5. Keep reflection entries ([reflection] tag) as-is.
+6. Output ONLY the compacted log — no commentary, no explanations, no markdown fences.`;
+
+  const prompt = `Compact this daily memory log:\n\n${dailyLog}`;
+
+  return { system, prompt };
+}
+
+/**
  * Prompt to fix malformed JSON from a previous LLM call.
  */
 export function buildJsonFixPrompt(brokenJson: string): string {
