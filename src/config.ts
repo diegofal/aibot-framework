@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 
 // Zod schemas for type-safe configuration
+const BotConversationOverrideSchema = z.object({
+  systemPrompt: z.string().optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  maxHistory: z.number().int().positive().optional(),
+}).optional();
+
 const BotConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -10,6 +16,9 @@ const BotConfigSchema = z.object({
   allowedUsers: z.array(z.number()).optional(),
   skills: z.array(z.string()),
   mentionPatterns: z.array(z.string()).optional(),
+  model: z.string().optional(),
+  soulDir: z.string().optional(),
+  conversation: BotConversationOverrideSchema,
 });
 
 const OllamaConfigSchema = z.object({
@@ -180,6 +189,7 @@ const LlmRelevanceCheckSchema = z
     temperature: z.number().min(0).max(2).default(0.1),
     timeout: z.number().int().positive().default(5000),
     contextMessages: z.number().int().min(0).default(4),
+    broadcastCheck: z.boolean().default(false),
   })
   .default({});
 
@@ -254,6 +264,7 @@ export type WebConfig = z.infer<typeof WebConfigSchema>;
 export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
 export type SessionMemoryConfig = z.infer<typeof SessionMemoryConfigSchema>;
 export type LlmRelevanceCheckConfig = z.infer<typeof LlmRelevanceCheckSchema>;
+export type BotConversationOverride = z.infer<typeof BotConversationOverrideSchema>;
 
 /**
  * Substitute environment variables in strings
@@ -317,4 +328,30 @@ export async function loadConfig(configPath: string): Promise<Config> {
  */
 export function getSkillConfig<T = unknown>(config: Config, skillId: string): T {
   return (config.skills.config[skillId] ?? {}) as T;
+}
+
+/**
+ * Flat resolved configuration for a single agent, after merging global defaults
+ * with per-agent overrides.
+ */
+export interface ResolvedAgentConfig {
+  model: string;
+  soulDir: string;
+  systemPrompt: string;
+  temperature: number;
+  maxHistory: number;
+}
+
+/**
+ * Merge global defaults with per-agent overrides to produce a flat config.
+ * All new fields are optional in BotConfig, so existing configs work unchanged.
+ */
+export function resolveAgentConfig(globalConfig: Config, botConfig: BotConfig): ResolvedAgentConfig {
+  return {
+    model: botConfig.model ?? globalConfig.ollama.models.primary,
+    soulDir: botConfig.soulDir ?? globalConfig.soul.dir,
+    systemPrompt: botConfig.conversation?.systemPrompt ?? globalConfig.conversation.systemPrompt,
+    temperature: botConfig.conversation?.temperature ?? globalConfig.conversation.temperature,
+    maxHistory: botConfig.conversation?.maxHistory ?? globalConfig.conversation.maxHistory,
+  };
 }

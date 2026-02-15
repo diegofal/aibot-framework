@@ -54,12 +54,14 @@ export async function renderAgents(el) {
     if (action === 'start') {
       btn.disabled = true;
       btn.textContent = 'Starting...';
-      await api(`/api/agents/${id}/start`, { method: 'POST' });
+      const res = await api(`/api/agents/${id}/start`, { method: 'POST' });
+      if (res.error) alert(`Failed to start: ${res.error}`);
       renderAgents(el);
     } else if (action === 'stop') {
       btn.disabled = true;
       btn.textContent = 'Stopping...';
-      await api(`/api/agents/${id}/stop`, { method: 'POST' });
+      const res = await api(`/api/agents/${id}/stop`, { method: 'POST' });
+      if (res.error) alert(`Failed to stop: ${res.error}`);
       renderAgents(el);
     } else if (action === 'edit') {
       location.hash = `#/agents/${id}/edit`;
@@ -79,9 +81,10 @@ export async function renderAgents(el) {
 }
 
 export async function renderAgentDetail(el, id) {
-  const [agent, skills] = await Promise.all([
+  const [agent, skills, defaults] = await Promise.all([
     api(`/api/agents/${id}`),
     api('/api/skills'),
+    api('/api/agents/defaults'),
   ]);
 
   if (agent.error) {
@@ -93,6 +96,26 @@ export async function renderAgentDetail(el, id) {
     ? '<span class="badge badge-running">Running</span>'
     : '<span class="badge badge-stopped">Stopped</span>';
 
+  const modelDisplay = agent.model
+    ? escapeHtml(agent.model)
+    : `<span class="text-dim">${escapeHtml(defaults.model)} (global)</span>`;
+
+  const soulDirDisplay = agent.soulDir
+    ? escapeHtml(agent.soulDir)
+    : `<span class="text-dim">${escapeHtml(defaults.soulDir)} (global)</span>`;
+
+  const systemPromptDisplay = agent.conversation?.systemPrompt
+    ? escapeHtml(agent.conversation.systemPrompt).substring(0, 120) + (agent.conversation.systemPrompt.length > 120 ? '...' : '')
+    : `<span class="text-dim">Global default</span>`;
+
+  const tempDisplay = agent.conversation?.temperature !== undefined
+    ? agent.conversation.temperature
+    : `<span class="text-dim">${defaults.temperature} (global)</span>`;
+
+  const maxHistDisplay = agent.conversation?.maxHistory !== undefined
+    ? agent.conversation.maxHistory
+    : `<span class="text-dim">${defaults.maxHistory} (global)</span>`;
+
   el.innerHTML = `
     <div class="detail-header">
       <a href="#/agents" class="back">&larr;</a>
@@ -103,6 +126,11 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim" style="width:140px">ID</td><td>${escapeHtml(agent.id)}</td></tr>
         <tr><td class="text-dim">Token</td><td><code>${escapeHtml(agent.token)}</code></td></tr>
         <tr><td class="text-dim">Enabled</td><td>${agent.enabled ? 'Yes' : 'No'}</td></tr>
+        <tr><td class="text-dim">Model</td><td>${modelDisplay}</td></tr>
+        <tr><td class="text-dim">Soul Dir</td><td>${soulDirDisplay}</td></tr>
+        <tr><td class="text-dim">System Prompt</td><td>${systemPromptDisplay}</td></tr>
+        <tr><td class="text-dim">Temperature</td><td>${tempDisplay}</td></tr>
+        <tr><td class="text-dim">Max History</td><td>${maxHistDisplay}</td></tr>
         <tr><td class="text-dim">Skills</td><td>${agent.skills.map((s) => `<span class="badge">${escapeHtml(s)}</span>`).join(' ')}</td></tr>
         <tr><td class="text-dim">Allowed Users</td><td>${agent.allowedUsers?.length ? agent.allowedUsers.join(', ') : '<span class="text-dim">All</span>'}</td></tr>
         <tr><td class="text-dim">Mention Patterns</td><td>${agent.mentionPatterns?.length ? agent.mentionPatterns.join(', ') : '<span class="text-dim">None</span>'}</td></tr>
@@ -120,11 +148,10 @@ export async function renderAgentDetail(el, id) {
 
   document.getElementById('btn-toggle').addEventListener('click', async (e) => {
     e.target.disabled = true;
-    if (agent.running) {
-      await api(`/api/agents/${id}/stop`, { method: 'POST' });
-    } else {
-      await api(`/api/agents/${id}/start`, { method: 'POST' });
-    }
+    const res = agent.running
+      ? await api(`/api/agents/${id}/stop`, { method: 'POST' })
+      : await api(`/api/agents/${id}/start`, { method: 'POST' });
+    if (res.error) alert(res.error);
     renderAgentDetail(el, id);
   });
 
@@ -134,9 +161,10 @@ export async function renderAgentDetail(el, id) {
 }
 
 export async function renderAgentEdit(el, id) {
-  const [agent, skills] = await Promise.all([
+  const [agent, skills, defaults] = await Promise.all([
     api(`/api/agents/${id}`),
     api('/api/skills'),
+    api('/api/agents/defaults'),
   ]);
 
   if (agent.error) {
@@ -180,6 +208,36 @@ export async function renderAgentEdit(el, id) {
         <label>Mention Patterns (comma-separated)</label>
         <input type="text" name="mentionPatterns" value="${(agent.mentionPatterns || []).join(', ')}">
       </div>
+
+      <div class="form-separator"></div>
+      <div class="form-section-title">Agent Overrides <span class="text-dim text-sm">(empty = use global default)</span></div>
+
+      <div class="form-group">
+        <label>Model</label>
+        <input type="text" name="model" value="${escapeHtml(agent.model || '')}" placeholder="${escapeHtml(defaults.model)}">
+      </div>
+      <div class="form-group">
+        <label>System Prompt</label>
+        <textarea name="systemPrompt" rows="4" placeholder="${escapeHtml(defaults.systemPrompt)}">${escapeHtml(agent.conversation?.systemPrompt || '')}</textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Temperature</label>
+          <input type="number" name="temperature" min="0" max="2" step="0.1" value="${agent.conversation?.temperature ?? ''}" placeholder="${defaults.temperature}">
+        </div>
+        <div class="form-group">
+          <label>Max History</label>
+          <input type="number" name="maxHistory" min="1" step="1" value="${agent.conversation?.maxHistory ?? ''}" placeholder="${defaults.maxHistory}">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Soul Directory</label>
+        <div class="input-with-btn">
+          <input type="text" name="soulDir" value="${escapeHtml(agent.soulDir || '')}" placeholder="${escapeHtml(defaults.soulDir)}">
+          <button type="button" class="btn btn-sm" id="btn-init-soul">Init Custom Soul</button>
+        </div>
+      </div>
+
       <div class="actions">
         <button type="submit" class="btn btn-primary">Save</button>
         <a href="#/agents/${id}" class="btn">Cancel</a>
@@ -194,6 +252,22 @@ export async function renderAgentEdit(el, id) {
     });
   });
 
+  // Init custom soul button
+  document.getElementById('btn-init-soul').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Initializing...';
+    const result = await api(`/api/agents/${id}/init-soul`, { method: 'POST' });
+    if (result.soulDir) {
+      const soulDirInput = document.querySelector('input[name="soulDir"]');
+      soulDirInput.value = result.soulDir;
+    }
+    e.target.textContent = 'Done';
+    setTimeout(() => {
+      e.target.disabled = false;
+      e.target.textContent = 'Init Custom Soul';
+    }, 2000);
+  });
+
   document.getElementById('edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -203,6 +277,21 @@ export async function renderAgentEdit(el, id) {
 
     patch.skills = Array.from(form.querySelectorAll('input[name="skills"]:checked')).map((i) => i.value);
     patch.mentionPatterns = form.mentionPatterns.value.split(',').map((s) => s.trim()).filter(Boolean);
+
+    // Per-agent overrides (empty string = clear override)
+    patch.model = form.model.value.trim() || undefined;
+    patch.soulDir = form.soulDir.value.trim() || undefined;
+
+    // Build conversation overrides
+    const systemPrompt = form.systemPrompt.value.trim() || undefined;
+    const temperature = form.temperature.value !== '' ? parseFloat(form.temperature.value) : undefined;
+    const maxHistory = form.maxHistory.value !== '' ? parseInt(form.maxHistory.value, 10) : undefined;
+
+    if (systemPrompt !== undefined || temperature !== undefined || maxHistory !== undefined) {
+      patch.conversation = { systemPrompt, temperature, maxHistory };
+    } else {
+      patch.conversation = undefined;
+    }
 
     await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
     location.hash = `#/agents/${id}`;

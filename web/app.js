@@ -2,6 +2,7 @@ import { renderAgents, renderAgentDetail, renderAgentEdit } from './pages/agents
 import { renderSessions, renderSessionTranscript } from './pages/sessions.js';
 import { renderCron, renderCronDetail, renderCronCreate } from './pages/cron.js';
 import { renderLogs, destroyLogs } from './pages/logs.js';
+import { renderSettings } from './pages/settings.js';
 
 const content = document.getElementById('content');
 
@@ -15,6 +16,7 @@ const routes = [
   { pattern: /^#\/cron\/([^/]+)$/,           handler: (m) => renderCronDetail(content, m[1]) },
   { pattern: /^#\/cron$/,                    handler: () => renderCron(content) },
   { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },
+  { pattern: /^#\/settings$/,               handler: () => renderSettings(content) },
 ];
 
 function navigate() {

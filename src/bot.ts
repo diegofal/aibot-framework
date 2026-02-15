@@ -1,5 +1,6 @@
 import { Bot, InputFile, type Context } from 'grammy';
 import type { BotConfig, Config } from './config';
+import { resolveAgentConfig } from './config';
 import type { SkillRegistry } from './core/skill-registry';
 import type { CallbackQueryData, Skill, SkillContext, TelegramClient } from './core/types';
 import type { CronService } from './cron';
@@ -9,9 +10,10 @@ import type { MemoryManager } from './memory/manager';
 import { MessageBuffer } from './message-buffer';
 import type { ChatMessage, OllamaClient } from './ollama';
 import type { SessionManager } from './session';
-import type { SoulLoader } from './soul';
+import { SoulLoader } from './soul';
 import { createCronTool } from './tools/cron';
 import { createDatetimeTool } from './tools/datetime';
+import { createDelegationTool } from './tools/delegate';
 import { createExecTool } from './tools/exec';
 import { createFileEditTool, createFileReadTool, createFileWriteTool } from './tools/file';
 import { createMemoryGetTool } from './tools/memory-get';
@@ -33,7 +35,7 @@ interface SeenUser {
 
 export class BotManager {
   private bots: Map<string, Bot> = new Map();
-  private activeModel: string;
+  private activeModels: Map<string, string> = new Map();
   private tools: Tool[] = [];
   private toolDefinitions: ToolDefinition[] = [];
   private mediaHandler: MediaHandler | null = null;
@@ -42,7 +44,10 @@ export class BotManager {
   /** chatId → userId → SeenUser */
   private seenUsers: Map<number, Map<number, SeenUser>> = new Map();
   /** Message IDs consumed by skill onMessage handlers (skip conversation handler) */
-  private handledMessageIds: Set<number> = new Set();
+  private handledMessageIds: Set<string> = new Set();
+  private defaultSoulLoader: SoulLoader;
+  private soulLoaders: Map<string, SoulLoader> = new Map();
+  private botLoggers: Map<string, Logger> = new Map();
 
   constructor(
     private skillRegistry: SkillRegistry,
@@ -50,12 +55,12 @@ export class BotManager {
     private ollamaClient: OllamaClient,
     private config: Config,
     private sessionManager: SessionManager,
-    private soulLoader: SoulLoader,
+    soulLoader: SoulLoader,
     private cronService: CronService,
     private memoryManager?: MemoryManager
   ) {
     this.searchEnabled = config.soul.search?.enabled ?? false;
-    this.activeModel = config.ollama.models.primary;
+    this.defaultSoulLoader = soulLoader;
     this.initializeTools();
     this.messageBuffer = new MessageBuffer(
       config.buffer,
@@ -68,6 +73,32 @@ export class BotManager {
       this.mediaHandler = new MediaHandler(config.media, logger);
       this.logger.info('Media handler initialized');
     }
+  }
+
+  /**
+   * Get the active model for a specific bot, falling back to global default
+   */
+  getActiveModel(botId: string): string {
+    return this.activeModels.get(botId) ?? this.config.ollama.models.primary;
+  }
+
+  /**
+   * Get the SoulLoader for a specific bot, falling back to the default
+   */
+  getSoulLoader(botId: string): SoulLoader {
+    return this.soulLoaders.get(botId) ?? this.defaultSoulLoader;
+  }
+
+  /**
+   * Get or create a child logger tagged with botId
+   */
+  private getBotLogger(botId: string): Logger {
+    let botLogger = this.botLoggers.get(botId);
+    if (!botLogger) {
+      botLogger = this.logger.child({ botId });
+      this.botLoggers.set(botId, botLogger);
+    }
+    return botLogger;
   }
 
   /**
@@ -103,10 +134,11 @@ export class BotManager {
 
     // Soul tools — let the LLM modify its own personality/memory
     if (this.config.soul.enabled) {
+      const soulResolver = (botId: string) => this.getSoulLoader(botId);
       this.tools.push(
-        createSaveMemoryTool(this.soulLoader),
-        createUpdateSoulTool(this.soulLoader),
-        createUpdateIdentityTool(this.soulLoader)
+        createSaveMemoryTool(soulResolver),
+        createUpdateSoulTool(soulResolver),
+        createUpdateIdentityTool(soulResolver)
       );
       this.logger.info('Soul tools initialized');
     }
@@ -201,6 +233,12 @@ export class BotManager {
       this.logger.info('Cron tool initialized');
     }
 
+    // Delegation tool — let bots delegate to each other (only when multiple bots configured)
+    if (this.config.bots.length > 1) {
+      this.tools.push(createDelegationTool(() => this));
+      this.logger.info('Delegation tool initialized');
+    }
+
     this.toolDefinitions = this.tools.map((t) => t.definition);
     if (this.tools.length > 0) {
       this.logger.info(
@@ -225,8 +263,8 @@ export class BotManager {
         this.logger.warn({ tool: name }, 'Unknown tool requested by LLM');
         return { success: false, content: `Unknown tool: ${name}` };
       }
-      // Inject chat context into cron tool
-      const effectiveArgs = name === 'cron' ? { ...args, _chatId: chatId, _botId: botId } : args;
+      // Inject chat context into tool calls
+      const effectiveArgs = { ...args, _chatId: chatId, _botId: botId };
       return tool.execute(effectiveArgs, this.logger);
     };
   }
@@ -235,7 +273,7 @@ export class BotManager {
    * Summarize a conversation and write to the daily memory log.
    * Used by both session-expiry flush and proactive flush.
    */
-  private async flushToDaily(history: ChatMessage[]): Promise<void> {
+  private async flushToDaily(history: ChatMessage[], botId?: string): Promise<void> {
     try {
       const transcript = history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -253,13 +291,16 @@ export class BotManager {
         { role: 'user', content: transcript },
       ];
 
+      const model = botId ? this.getActiveModel(botId) : this.config.ollama.models.primary;
+      const soulLoader = botId ? this.getSoulLoader(botId) : this.defaultSoulLoader;
+
       const summary = await this.ollamaClient.chat(messages, {
-        model: this.activeModel,
+        model,
         temperature: 0.3,
       });
 
       if (summary.trim()) {
-        this.soulLoader.appendDailyMemory(summary.trim());
+        soulLoader.appendDailyMemory(summary.trim());
         this.logger.info('Conversation flushed to daily memory log');
       }
     } catch (err) {
@@ -272,8 +313,8 @@ export class BotManager {
    * Called before any session clear (expiry or /clear) so key facts survive.
    * Writes to daily log (which is auto-indexed by the file watcher).
    */
-  private async flushSessionToMemory(history: ChatMessage[]): Promise<void> {
-    await this.flushToDaily(history);
+  private async flushSessionToMemory(history: ChatMessage[], botId?: string): Promise<void> {
+    await this.flushToDaily(history, botId);
   }
 
   /**
@@ -287,10 +328,26 @@ export class BotManager {
 
     try {
       const bot = new Bot(config.token);
+      const botLogger = this.getBotLogger(config.id);
+
+      // Initialize per-bot model from resolved config
+      const resolved = resolveAgentConfig(this.config, config);
+      this.activeModels.set(config.id, resolved.model);
+
+      // Initialize per-bot soul loader if soulDir override is set
+      if (config.soulDir) {
+        const perBotSoulLoader = new SoulLoader(
+          { ...this.config.soul, dir: config.soulDir },
+          botLogger
+        );
+        await perBotSoulLoader.initialize();
+        this.soulLoaders.set(config.id, perBotSoulLoader);
+        botLogger.info({ soulDir: config.soulDir }, 'Per-agent soul loader initialized');
+      }
 
       // Register error handler
       bot.catch((error) => {
-        this.logger.error({ error, botId: config.id }, 'Bot error');
+        botLogger.error({ error, botId: config.id }, 'Bot error');
       });
 
       // Register commands from enabled skills
@@ -335,7 +392,7 @@ export class BotManager {
         if (this.config.soul.enabled) {
           const history = this.sessionManager.getFullHistory(serializedKey);
           if (history.length > 0) {
-            await this.flushSessionToMemory(history);
+            await this.flushSessionToMemory(history, config.id);
           }
         }
 
@@ -358,11 +415,11 @@ export class BotManager {
         const args = ctx.message?.text?.split(' ').slice(1) || [];
         if (args.length > 0) {
           const newModel = args.join(' ');
-          this.activeModel = newModel;
-          this.logger.info({ model: newModel }, 'Active model changed');
+          this.activeModels.set(config.id, newModel);
+          this.logger.info({ model: newModel, botId: config.id }, 'Active model changed');
           await ctx.reply(`🔄 Model changed to: ${newModel}`);
         } else {
-          await ctx.reply(`🤖 Current model: ${this.activeModel}`);
+          await ctx.reply(`🤖 Current model: ${this.getActiveModel(config.id)}`);
         }
       });
 
@@ -402,7 +459,7 @@ export class BotManager {
           return;
         }
 
-        const dump = this.soulLoader.dumpMemory();
+        const dump = this.getSoulLoader(config.id).dumpMemory();
 
         // Telegram has a 4096 char limit per message — split if needed
         if (dump.length <= 4096) {
@@ -454,6 +511,9 @@ export class BotManager {
 
     await bot.stop();
     this.bots.delete(botId);
+    this.activeModels.delete(botId);
+    this.soulLoaders.delete(botId);
+    this.botLoggers.delete(botId);
     this.logger.info({ botId }, 'Bot stopped');
   }
 
@@ -467,6 +527,66 @@ export class BotManager {
       throw new Error(`Bot not found: ${botId}`);
     }
     await bot.api.sendMessage(chatId, text);
+  }
+
+  /**
+   * Handle a delegation request from one bot to another.
+   * Runs the target bot's LLM WITHOUT tools to prevent loops.
+   */
+  async handleDelegation(
+    targetBotId: string,
+    chatId: number,
+    message: string,
+    sourceBotId: string
+  ): Promise<string> {
+    const targetBot = this.bots.get(targetBotId);
+    if (!targetBot) {
+      throw new Error(`Target bot not running: ${targetBotId}`);
+    }
+
+    const targetConfig = this.config.bots.find((b) => b.id === targetBotId);
+    if (!targetConfig) {
+      throw new Error(`Target bot config not found: ${targetBotId}`);
+    }
+
+    const resolved = resolveAgentConfig(this.config, targetConfig);
+    const targetSoulLoader = this.getSoulLoader(targetBotId);
+    const botLogger = this.getBotLogger(targetBotId);
+
+    // Build system prompt from target bot's soul
+    let systemPrompt = targetSoulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
+
+    const sourceConfig = this.config.bots.find((b) => b.id === sourceBotId);
+    const sourceName = sourceConfig?.name ?? sourceBotId;
+    systemPrompt += `\n\n${sourceName} has delegated a message to you. Respond as yourself.`;
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: message },
+    ];
+
+    botLogger.info(
+      { targetBotId, sourceBotId, chatId, messagePreview: message.substring(0, 120) },
+      'Handling delegation'
+    );
+
+    // Call LLM WITHOUT tools to prevent delegation loops
+    const response = await this.ollamaClient.chat(messages, {
+      model: this.getActiveModel(targetBotId),
+      temperature: resolved.temperature,
+    });
+
+    // Send via target bot's API
+    if (response.trim()) {
+      await targetBot.api.sendMessage(chatId, response);
+    }
+
+    botLogger.info(
+      { targetBotId, chatId, responseLength: response.length },
+      'Delegation response sent'
+    );
+
+    return response;
   }
 
   /**
@@ -572,7 +692,7 @@ export class BotManager {
         const skillContext = this.createSkillContext(skill.id, ctx, config);
         const consumed = await skill.onMessage!(message, skillContext);
         if (consumed === true) {
-          this.handledMessageIds.add(ctx.message.message_id);
+          this.handledMessageIds.add(`${config.id}:${ctx.message.message_id}`);
         }
       } catch (error) {
         this.logger.error({ error, skillId: skill.id }, 'Message handler failed');
@@ -737,15 +857,16 @@ export class BotManager {
     images?: string[],
     sessionText?: string
   ): Promise<void> {
-    const convConfig = this.config.conversation;
+    const resolved = resolveAgentConfig(this.config, config);
     const sessionConfig = this.config.session;
     const webToolsConfig = this.config.webTools;
     const hasTools = this.tools.length > 0;
     const chatId = ctx.chat!.id;
     const isGroup = ctx.chat!.type === 'group' || ctx.chat!.type === 'supergroup';
+    const botLogger = this.getBotLogger(config.id);
 
     const senderName = isGroup ? (ctx.from?.first_name ?? 'Unknown') : undefined;
-    this.logger.info(
+    botLogger.info(
       {
         chatId,
         sessionKey: serializedKey,
@@ -761,11 +882,11 @@ export class BotManager {
     try {
       // Memory flush on session expiry — summarize before clearing
       if (sessionConfig.enabled && this.sessionManager.isExpired(serializedKey)) {
-        this.logger.info({ key: serializedKey }, 'Session expired, flushing to memory');
+        botLogger.info({ key: serializedKey }, 'Session expired, flushing to memory');
         if (this.config.soul.enabled) {
           const expiredHistory = this.sessionManager.getFullHistory(serializedKey);
           if (expiredHistory.length > 0) {
-            await this.flushSessionToMemory(expiredHistory);
+            await this.flushSessionToMemory(expiredHistory, config.id);
           }
         }
         this.sessionManager.clearSession(serializedKey);
@@ -777,23 +898,24 @@ export class BotManager {
         const meta = this.sessionManager.getSessionMeta(serializedKey);
         if (meta && meta.messageCount >= flushConfig.messageThreshold
             && meta.lastFlushCompactionIndex !== (meta.compactionCount ?? 0)) {
-          this.logger.info({ key: serializedKey, msgs: meta.messageCount }, 'Proactive memory flush');
+          botLogger.info({ key: serializedKey, msgs: meta.messageCount }, 'Proactive memory flush');
           const recentHistory = this.sessionManager.getFullHistory(serializedKey);
           this.sessionManager.markMemoryFlushed(serializedKey);
-          this.flushToDaily(recentHistory).catch((err) => {
-            this.logger.warn({ err }, 'Proactive memory flush failed');
+          this.flushToDaily(recentHistory, config.id).catch((err) => {
+            botLogger.warn({ err }, 'Proactive memory flush failed');
           });
         }
       }
 
       // Get history from session (returns last N messages)
       const history = sessionConfig.enabled
-        ? this.sessionManager.getHistory(serializedKey, convConfig.maxHistory)
+        ? this.sessionManager.getHistory(serializedKey, resolved.maxHistory)
         : [];
 
       // Build system prompt — use soul if available, otherwise fall back to config
+      const agentSoulLoader = this.getSoulLoader(config.id);
       let systemPrompt =
-        this.soulLoader.composeSystemPrompt() ?? convConfig.systemPrompt;
+        agentSoulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
 
       // Inject humanizer writing guidelines if enabled
       if (this.config.humanizer.enabled) {
@@ -915,6 +1037,24 @@ export class BotManager {
             '- For "todos los días a las 9am": use "cron" with expr: "0 9 * * *".\n' +
             '- Use action "list" to show active reminders, "remove" to cancel one.';
         }
+
+        // Delegation tool instruction
+        const hasDelegationTool = this.toolDefinitions.some(
+          (d) => d.function.name === 'delegate_to_bot'
+        );
+        if (hasDelegationTool) {
+          const otherBots = this.config.bots
+            .filter((b) => b.id !== config.id && b.enabled !== false && this.bots.has(b.id))
+            .map((b) => `- ${b.id} (${b.name})`)
+            .join('\n');
+          if (otherBots) {
+            systemPrompt +=
+              '\n\n## Bot Delegation\n\n' +
+              'You can delegate messages to other bots using `delegate_to_bot`.\n' +
+              'Use it when the user\'s request is better handled by another bot.\n\n' +
+              'Available bots:\n' + otherBots;
+          }
+        }
       }
 
       // In groups, prefix messages with sender name so the LLM can tell who's talking
@@ -956,10 +1096,11 @@ export class BotManager {
       }, 4000);
 
       try {
-        this.logger.info(
+        const activeModel = this.getActiveModel(config.id);
+        botLogger.info(
           {
             chatId,
-            model: this.activeModel,
+            model: activeModel,
             historyLength: history.length,
             toolCount: hasTools ? this.toolDefinitions.length : 0,
             promptToLLM: prefixedText.substring(0, 200),
@@ -968,14 +1109,14 @@ export class BotManager {
         );
 
         const response = await this.ollamaClient.chat(messages, {
-          model: this.activeModel,
-          temperature: convConfig.temperature,
+          model: activeModel,
+          temperature: resolved.temperature,
           tools: hasTools ? this.toolDefinitions : undefined,
           toolExecutor: hasTools ? this.createToolExecutor(chatId, config.id) : undefined,
           maxToolRounds: webToolsConfig?.maxToolRounds,
         });
 
-        this.logger.info(
+        botLogger.info(
           {
             chatId,
             responseLength: response.length,
@@ -995,18 +1136,18 @@ export class BotManager {
               { role: 'user', content: prefixedPersist },
               { role: 'assistant', content: response },
             ],
-            convConfig.maxHistory
+            resolved.maxHistory
           );
         }
 
         if (response.trim()) {
           await ctx.reply(response);
         } else {
-          this.logger.debug({ chatId }, 'LLM returned empty response, sending ack');
+          botLogger.debug({ chatId }, 'LLM returned empty response, sending ack');
           await ctx.reply('✅');
         }
 
-        this.logger.info(
+        botLogger.info(
           {
             chatId,
             userId: ctx.from?.id,
@@ -1019,14 +1160,14 @@ export class BotManager {
 
         // Keep the reply window open for this user in groups
         if (isGroup && ctx.from?.id) {
-          this.sessionManager.markActive(chatId, ctx.from.id);
-          this.logger.debug({ chatId, userId: ctx.from.id }, 'Reply window refreshed');
+          this.sessionManager.markActive(config.id, chatId, ctx.from.id);
+          botLogger.debug({ chatId, userId: ctx.from.id }, 'Reply window refreshed');
         }
       } finally {
         clearInterval(typingInterval);
       }
     } catch (error) {
-      this.logger.error({ error, chatId }, 'Conversation handler failed');
+      botLogger.error({ error, chatId }, 'Conversation handler failed');
       await ctx.reply('❌ Failed to generate response. Please try again later.');
     }
   }
@@ -1038,7 +1179,8 @@ export class BotManager {
   private async checkLlmRelevance(
     ctx: Context,
     botName: string,
-    serializedKey: string
+    serializedKey: string,
+    botId?: string
   ): Promise<boolean> {
     const rlc = this.config.session.llmRelevanceCheck;
     try {
@@ -1061,9 +1203,10 @@ export class BotManager {
         'Is this message intended for the bot? Answer ONLY "yes" or "no".',
       ].join('\n');
 
+      const model = botId ? this.getActiveModel(botId) : this.config.ollama.models.primary;
       const result = await Promise.race([
         this.ollamaClient.generate(prompt, {
-          model: this.activeModel,
+          model,
           temperature: rlc.temperature,
         }),
         new Promise<string>((_, reject) =>
@@ -1078,6 +1221,7 @@ export class BotManager {
         {
           chatId: ctx.chat!.id,
           userId: ctx.from?.id,
+          botId,
           answer,
           isRelevant,
           textPreview: userText.substring(0, 80),
@@ -1087,8 +1231,66 @@ export class BotManager {
 
       return isRelevant;
     } catch (err) {
-      this.logger.warn({ err, chatId: ctx.chat?.id }, 'LLM relevance check failed, fail-open');
+      this.logger.warn({ err, chatId: ctx.chat?.id, botId }, 'LLM relevance check failed, fail-open');
       return true;
+    }
+  }
+
+  /**
+   * Ask the LLM whether a message with no prior activation context is directed
+   * at this bot or at ALL bots (broadcast). Fail-closed: errors return false.
+   */
+  private async checkBroadcastRelevance(
+    ctx: Context,
+    botName: string,
+    botId: string
+  ): Promise<boolean> {
+    const rlc = this.config.session.llmRelevanceCheck;
+    try {
+      const userText = ctx.message?.text ?? '';
+
+      const prompt = [
+        `You are a classifier. The bot's name is "${botName}".`,
+        'There are multiple bots in this group. Determine if this message is:',
+        '- Directed specifically at this bot',
+        '- Directed at ALL bots (e.g., "presentense", "bots", general questions to everyone)',
+        '- Directed at someone else or not at any bot',
+        '',
+        `Message: ${userText}`,
+        '',
+        'Answer "yes" only if the message is for this bot or for all bots. Answer "no" otherwise.',
+      ].join('\n');
+
+      const model = this.getActiveModel(botId);
+      const result = await Promise.race([
+        this.ollamaClient.generate(prompt, {
+          model,
+          temperature: rlc.temperature,
+        }),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error('Broadcast relevance check timeout')), rlc.timeout)
+        ),
+      ]);
+
+      const answer = result.trim().toLowerCase();
+      const isRelevant = answer.startsWith('yes');
+
+      this.logger.info(
+        {
+          chatId: ctx.chat!.id,
+          userId: ctx.from?.id,
+          botId,
+          answer,
+          isRelevant,
+          textPreview: userText.substring(0, 80),
+        },
+        'Broadcast relevance check result'
+      );
+
+      return isRelevant;
+    } catch (err) {
+      this.logger.warn({ err, chatId: ctx.chat?.id, botId }, 'Broadcast relevance check failed, fail-closed');
+      return false;
     }
   }
 
@@ -1105,11 +1307,12 @@ export class BotManager {
   private registerConversationHandler(bot: Bot, config: BotConfig): void {
     const sessionConfig = this.config.session;
     const hasTools = this.tools.length > 0;
+    const botLogger = this.getBotLogger(config.id);
 
     // Text message handler
     bot.on('message:text', async (ctx) => {
       const chatTitle = 'title' in ctx.chat ? (ctx.chat as { title?: string }).title : undefined;
-      this.logger.info(
+      botLogger.info(
         {
           chatId: ctx.chat.id,
           chatType: ctx.chat.type,
@@ -1126,18 +1329,18 @@ export class BotManager {
       this.trackUser(ctx);
 
       if (ctx.message.text.startsWith('/')) {
-        this.logger.debug({ text: ctx.message.text }, 'Skipping: command message');
+        botLogger.debug({ text: ctx.message.text }, 'Skipping: command message');
         return;
       }
 
       // Skip messages already consumed by skill onMessage handlers
-      if (this.handledMessageIds.delete(ctx.message.message_id)) {
-        this.logger.debug({ messageId: ctx.message.message_id }, 'Skipping: consumed by skill');
+      if (this.handledMessageIds.delete(`${config.id}:${ctx.message.message_id}`)) {
+        botLogger.debug({ messageId: ctx.message.message_id }, 'Skipping: consumed by skill');
         return;
       }
 
       if (!this.isAuthorized(ctx.from?.id, config)) {
-        this.logger.info(
+        botLogger.info(
           { userId: ctx.from?.id, username: ctx.from?.username },
           'Skipping: unauthorized user'
         );
@@ -1149,14 +1352,47 @@ export class BotManager {
 
       // Group activation gate
       if (isGroup && sessionConfig.enabled) {
-        const groupReason = this.sessionManager.shouldRespondInGroup(
+        let groupReason = this.sessionManager.shouldRespondInGroup(
           ctx,
           botUsername,
           config.id,
           config.mentionPatterns
         );
+
+        // For reply-window messages, run LLM relevance check
+        if (groupReason === 'replyWindow' && sessionConfig.llmRelevanceCheck.enabled) {
+          const sessionKey = this.sessionManager.deriveKey(config.id, ctx);
+          const serializedKey = this.sessionManager.serializeKey(sessionKey);
+          const isRelevant = await this.checkLlmRelevance(ctx, config.name, serializedKey, config.id);
+          if (!isRelevant) {
+            botLogger.info(
+              {
+                chatId: ctx.chat.id,
+                chatTitle,
+                userId: ctx.from?.id,
+                firstName: ctx.from?.first_name,
+                text: ctx.message.text.substring(0, 80),
+              },
+              'Skipping group message: LLM relevance check said no'
+            );
+            return;
+          }
+        }
+
+        // Broadcast check: if no activation reason yet, run LLM check as fallback
+        if (
+          !groupReason &&
+          sessionConfig.llmRelevanceCheck.enabled &&
+          sessionConfig.llmRelevanceCheck.broadcastCheck
+        ) {
+          const shouldRespond = await this.checkBroadcastRelevance(ctx, config.name, config.id);
+          if (shouldRespond) {
+            groupReason = 'broadcast';
+          }
+        }
+
         if (!groupReason) {
-          this.logger.info(
+          botLogger.info(
             {
               chatId: ctx.chat.id,
               chatTitle,
@@ -1171,27 +1407,7 @@ export class BotManager {
           return;
         }
 
-        // For reply-window messages, run LLM relevance check
-        if (groupReason === 'replyWindow' && sessionConfig.llmRelevanceCheck.enabled) {
-          const sessionKey = this.sessionManager.deriveKey(config.id, ctx);
-          const serializedKey = this.sessionManager.serializeKey(sessionKey);
-          const isRelevant = await this.checkLlmRelevance(ctx, config.name, serializedKey);
-          if (!isRelevant) {
-            this.logger.info(
-              {
-                chatId: ctx.chat.id,
-                chatTitle,
-                userId: ctx.from?.id,
-                firstName: ctx.from?.first_name,
-                text: ctx.message.text.substring(0, 80),
-              },
-              'Skipping group message: LLM relevance check said no'
-            );
-            return;
-          }
-        }
-
-        this.logger.info(
+        botLogger.info(
           { chatId: ctx.chat.id, chatTitle, firstName: ctx.from?.first_name, reason: groupReason },
           'Group activation gate passed'
         );
@@ -1225,7 +1441,7 @@ export class BotManager {
       this.registerMediaHandlers(bot, config);
     }
 
-    this.logger.info(
+    botLogger.info(
       {
         toolsEnabled: hasTools,
         mediaEnabled: !!this.mediaHandler,
@@ -1241,6 +1457,7 @@ export class BotManager {
   private registerMediaHandlers(bot: Bot, config: BotConfig): void {
     const sessionConfig = this.config.session;
     const mediaHandler = this.mediaHandler!;
+    const botLogger = this.getBotLogger(config.id);
 
     // Photo handler
     bot.on('message:photo', async (ctx) => {
@@ -1303,7 +1520,7 @@ export class BotManager {
         if (error instanceof MediaError) {
           await ctx.reply(error.message);
         } else {
-          this.logger.error({ error, chatId: ctx.chat.id }, 'Failed to process photo');
+          botLogger.error({ error, chatId: ctx.chat.id }, 'Failed to process photo');
           await ctx.reply('❌ Failed to process image. Please try again later.');
         }
       }
@@ -1370,7 +1587,7 @@ export class BotManager {
         if (error instanceof MediaError) {
           await ctx.reply(error.message);
         } else {
-          this.logger.error({ error, chatId: ctx.chat.id }, 'Failed to process document');
+          botLogger.error({ error, chatId: ctx.chat.id }, 'Failed to process document');
           await ctx.reply('❌ Failed to process document. Please try again later.');
         }
       }
@@ -1421,13 +1638,13 @@ export class BotManager {
         if (error instanceof MediaError) {
           await ctx.reply(error.message);
         } else {
-          this.logger.error({ error, chatId: ctx.chat.id }, 'Failed to process voice message');
+          botLogger.error({ error, chatId: ctx.chat.id }, 'Failed to process voice message');
           await ctx.reply('❌ Failed to process voice message. Please try again later.');
         }
       }
     });
 
-    this.logger.info('Media handlers registered (photo, document, voice)');
+    botLogger.info('Media handlers registered (photo, document, voice)');
   }
 
   /**

@@ -1,4 +1,4 @@
-import { escapeHtml } from './shared.js';
+import { api, escapeHtml } from './shared.js';
 
 const LEVEL_MAP = { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' };
 const LEVEL_LABELS = { trace: 'TRC', debug: 'DBG', info: 'INF', warn: 'WRN', error: 'ERR', fatal: 'FTL' };
@@ -11,6 +11,7 @@ let autoScroll = true;
 let lineCount = 0;
 let activeLevels = new Set(['debug', 'info', 'warn', 'error', 'fatal', 'trace']);
 let searchTerm = '';
+let activeAgent = ''; // empty = all agents
 
 // DOM references (set in render)
 let container = null;
@@ -28,6 +29,7 @@ function levelName(num) {
 function matchesFilter(entry) {
   const lvl = levelName(entry.level);
   if (!activeLevels.has(lvl)) return false;
+  if (activeAgent && (entry.botId || '') !== activeAgent) return false;
   if (searchTerm) {
     const text = (entry.msg || '') + ' ' + JSON.stringify(entry);
     if (!text.toLowerCase().includes(searchTerm)) return false;
@@ -36,7 +38,7 @@ function matchesFilter(entry) {
 }
 
 function extraProps(entry) {
-  const skip = new Set(['level', 'time', 'pid', 'hostname', 'msg']);
+  const skip = new Set(['level', 'time', 'pid', 'hostname', 'msg', 'botId']);
   const parts = [];
   for (const [k, v] of Object.entries(entry)) {
     if (skip.has(k)) continue;
@@ -50,9 +52,18 @@ function createLineEl(entry) {
   const lvl = levelName(entry.level);
   const div = document.createElement('div');
   div.className = `log-line log-level-${lvl}`;
+  if (entry.botId) {
+    div.dataset.botid = entry.botId;
+  }
+
+  const botTag = entry.botId
+    ? `<span class="log-agent-tag">${escapeHtml(entry.botId)}</span>`
+    : '';
+
   div.innerHTML =
     `<span class="log-time">${formatTime(entry.time)}</span>` +
     `<span class="log-badge log-badge-${lvl}">${LEVEL_LABELS[lvl] || 'LOG'}</span>` +
+    botTag +
     `<span class="log-msg">${escapeHtml(entry.msg || '')}</span>` +
     `<span class="log-extra">${extraProps(entry)}</span>`;
   return div;
@@ -87,6 +98,10 @@ function refilterAll() {
     const lvlMatch = classes.match(/log-level-(\w+)/);
     const lvl = lvlMatch ? lvlMatch[1] : 'info';
     let visible = activeLevels.has(lvl);
+    if (visible && activeAgent) {
+      const entryBot = child.dataset.botid || '';
+      visible = entryBot === activeAgent;
+    }
     if (visible && searchTerm) {
       const text = child.textContent.toLowerCase();
       visible = text.includes(searchTerm);
@@ -122,13 +137,24 @@ function connectWS() {
   };
 }
 
-export function renderLogs(el) {
+export async function renderLogs(el) {
   paused = false;
   pauseBuffer = [];
   autoScroll = true;
   lineCount = 0;
   searchTerm = '';
+  activeAgent = '';
   activeLevels = new Set(['debug', 'info', 'warn', 'error', 'fatal', 'trace']);
+
+  // Fetch agents for the filter dropdown
+  let agents = [];
+  try {
+    agents = await api('/api/agents');
+  } catch { /* ignore — dropdown just won't have options */ }
+
+  const agentOptions = agents.map(
+    (a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.id)})</option>`
+  ).join('');
 
   el.innerHTML = `
     <div class="flex-between mb-16">
@@ -151,6 +177,10 @@ export function renderLogs(el) {
       <label class="log-filter-label">
         <input type="checkbox" data-level="error" checked> <span class="log-badge log-badge-error">ERR</span>
       </label>
+      <select class="log-agent-filter" id="log-agent-filter">
+        <option value="">All Agents</option>
+        ${agentOptions}
+      </select>
       <input type="text" class="log-search" id="log-search" placeholder="Search logs...">
     </div>
     <div class="log-container" id="log-container"></div>
@@ -186,6 +216,12 @@ export function renderLogs(el) {
       else activeLevels.delete(lvl);
       refilterAll();
     });
+  });
+
+  // Agent filter
+  document.getElementById('log-agent-filter').addEventListener('change', (e) => {
+    activeAgent = e.target.value;
+    refilterAll();
   });
 
   // Search

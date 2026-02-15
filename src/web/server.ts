@@ -11,6 +11,7 @@ import type { SessionManager } from '../session';
 import { agentsRoutes } from './routes/agents';
 import { cronRoutes } from './routes/cron';
 import { sessionsRoutes } from './routes/sessions';
+import { settingsRoutes } from './routes/settings';
 import { skillsRoutes } from './routes/skills';
 import { statusRoutes } from './routes/status';
 
@@ -33,9 +34,10 @@ export function startWebServer(deps: WebServerDeps): void {
   // API routes
   app.route('/api/status', statusRoutes({ config, botManager: deps.botManager }));
   app.route('/api/skills', skillsRoutes({ skillRegistry: deps.skillRegistry }));
-  app.route('/api/agents', agentsRoutes({ config, botManager: deps.botManager, configPath: deps.configPath }));
+  app.route('/api/agents', agentsRoutes({ config, botManager: deps.botManager, configPath: deps.configPath, logger }));
   app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager }));
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
+  app.route('/api/settings', settingsRoutes({ config, configPath: deps.configPath, logger }));
 
   // Static files from web/ directory
   app.use('/*', serveStatic({ root: './web' }));

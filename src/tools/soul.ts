@@ -2,10 +2,12 @@ import type { Tool, ToolResult } from './types';
 import type { SoulLoader } from '../soul';
 import type { Logger } from '../logger';
 
+type SoulLoaderResolver = (botId: string) => SoulLoader;
+
 /**
  * Tool that lets the LLM persist facts to the daily memory log
  */
-export function createSaveMemoryTool(soulLoader: SoulLoader): Tool {
+export function createSaveMemoryTool(getSoulLoader: SoulLoaderResolver): Tool {
   return {
     definition: {
       type: 'function',
@@ -38,6 +40,8 @@ export function createSaveMemoryTool(soulLoader: SoulLoader): Tool {
       }
 
       try {
+        const botId = String(args._botId ?? '');
+        const soulLoader = getSoulLoader(botId);
         soulLoader.appendDailyMemory(fact);
         logger.info({ fact }, 'save_memory executed');
         return { success: true, content: `Saved to memory: ${fact}` };
@@ -53,7 +57,7 @@ export function createSaveMemoryTool(soulLoader: SoulLoader): Tool {
 /**
  * Tool that lets the LLM rewrite SOUL.md (personality/tone/rules)
  */
-export function createUpdateSoulTool(soulLoader: SoulLoader): Tool {
+export function createUpdateSoulTool(getSoulLoader: SoulLoaderResolver): Tool {
   return {
     definition: {
       type: 'function',
@@ -87,6 +91,8 @@ export function createUpdateSoulTool(soulLoader: SoulLoader): Tool {
       }
 
       try {
+        const botId = String(args._botId ?? '');
+        const soulLoader = getSoulLoader(botId);
         soulLoader.writeSoul(content);
         logger.info('update_soul executed');
         return { success: true, content: 'Soul updated.' };
@@ -102,7 +108,7 @@ export function createUpdateSoulTool(soulLoader: SoulLoader): Tool {
 /**
  * Tool that lets the LLM change identity fields in IDENTITY.md
  */
-export function createUpdateIdentityTool(soulLoader: SoulLoader): Tool {
+export function createUpdateIdentityTool(getSoulLoader: SoulLoaderResolver): Tool {
   return {
     definition: {
       type: 'function',
@@ -148,6 +154,8 @@ export function createUpdateIdentityTool(soulLoader: SoulLoader): Tool {
       }
 
       try {
+        const botId = String(args._botId ?? '');
+        const soulLoader = getSoulLoader(botId);
         soulLoader.writeIdentity(fields);
         const changed = Object.entries(fields)
           .map(([k, v]) => `${k}=${v}`)

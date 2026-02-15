@@ -6,7 +6,7 @@ import type { ChatMessage } from './ollama';
 import type { SessionInfo } from './core/types';
 import type { Logger } from './logger';
 
-export type GroupResponseReason = false | 'always' | 'replyToBot' | 'mention' | 'mentionPattern' | 'replyWindow';
+export type GroupResponseReason = false | 'always' | 'replyToBot' | 'mention' | 'mentionPattern' | 'replyWindow' | 'broadcast';
 
 interface SessionMeta {
   key: string;
@@ -30,7 +30,7 @@ export class SessionManager {
   private metadataPath: string;
   private transcriptsDir: string;
   private dirty = false;
-  /** In-memory map of active group conversations: "chatId:userId" → timestamp ms */
+  /** In-memory map of active group conversations: "botId:chatId:userId" → timestamp ms */
   private activeConversations: Map<string, number> = new Map();
   private activeConvPath: string;
   private activeConvDirty = false;
@@ -320,8 +320,8 @@ export class SessionManager {
   /**
    * Mark a user's conversation as active in a group (for reply window)
    */
-  markActive(chatId: number, userId: number): void {
-    this.activeConversations.set(`${chatId}:${userId}`, Date.now());
+  markActive(botId: string, chatId: number, userId: number): void {
+    this.activeConversations.set(`${botId}:${chatId}:${userId}`, Date.now());
     this.activeConvDirty = true;
     this.scheduleActiveConvFlush();
   }
@@ -359,9 +359,9 @@ export class SessionManager {
   /**
    * Check if a user has an active conversation in a group (within reply window)
    */
-  private isActive(chatId: number, userId?: number): boolean {
+  private isActive(botId: string, chatId: number, userId?: number): boolean {
     if (!userId) return false;
-    const key = `${chatId}:${userId}`;
+    const key = `${botId}:${chatId}:${userId}`;
     const ts = this.activeConversations.get(key);
     if (!ts) return false;
     // replyWindow === 0 means unlimited (never expires)
@@ -425,7 +425,7 @@ export class SessionManager {
     }
 
     // Check active reply window for this user
-    if (this.isActive(ctx.chat!.id, ctx.from?.id)) {
+    if (botId && this.isActive(botId, ctx.chat!.id, ctx.from?.id)) {
       return 'replyWindow';
     }
 

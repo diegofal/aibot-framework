@@ -161,6 +161,27 @@ textarea{resize:vertical;min-height:60px}
 .log-extra{color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 .log-prop-key{color:var(--accent);opacity:.7}
 
+/* Form extras */
+.form-separator{border-top:1px solid var(--border);margin:20px 0 16px}
+.form-section-title{font-size:14px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.form-row{display:flex;gap:16px}
+.form-row .form-group{flex:1}
+.input-with-btn{display:flex;gap:8px;align-items:flex-start}
+.input-with-btn input{flex:1}
+
+/* Agent tag in log lines */
+.log-agent-tag{
+  display:inline-block;padding:0 5px;border-radius:3px;font-size:10px;font-weight:600;
+  background:rgba(108,140,255,.15);color:var(--accent);flex-shrink:0;letter-spacing:.3px;
+}
+
+/* Agent filter dropdown in log toolbar */
+.log-agent-filter{
+  padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text);font-size:13px;font-family:inherit;min-width:140px;
+}
+.log-agent-filter:focus{outline:none;border-color:var(--accent)}
+
 /* Responsive */
 @media(max-width:768px){
   #sidebar{width:60px;min-width:60px}

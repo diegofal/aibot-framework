@@ -1,12 +1,15 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync } from 'node:fs';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import type { BotConfig, Config } from '../../config';
+import type { Logger } from '../../logger';
 
 export function agentsRoutes(deps: {
   config: Config;
   botManager: BotManager;
   configPath: string;
+  logger: Logger;
 }) {
   const app = new Hono();
 
@@ -18,6 +21,17 @@ export function agentsRoutes(deps: {
       running: deps.botManager.isRunning(bot.id),
     }));
     return c.json(agents);
+  });
+
+  // Get global defaults for placeholder display
+  app.get('/defaults', (c) => {
+    return c.json({
+      model: deps.config.ollama.models.primary,
+      systemPrompt: deps.config.conversation.systemPrompt,
+      temperature: deps.config.conversation.temperature,
+      maxHistory: deps.config.conversation.maxHistory,
+      soulDir: deps.config.soul.dir,
+    });
   });
 
   // Get single agent
@@ -49,6 +63,9 @@ export function agentsRoutes(deps: {
       skills: body.skills ?? [],
       allowedUsers: body.allowedUsers,
       mentionPatterns: body.mentionPatterns,
+      model: body.model,
+      soulDir: body.soulDir,
+      conversation: body.conversation,
     };
 
     deps.config.bots.push(newBot);
@@ -71,6 +88,17 @@ export function agentsRoutes(deps: {
     if (body.skills !== undefined) bot.skills = body.skills;
     if (body.allowedUsers !== undefined) bot.allowedUsers = body.allowedUsers;
     if (body.mentionPatterns !== undefined) bot.mentionPatterns = body.mentionPatterns;
+
+    // Per-agent override fields (undefined = clear override, use global default)
+    if ('model' in body) bot.model = body.model || undefined;
+    if ('soulDir' in body) bot.soulDir = body.soulDir || undefined;
+    if ('conversation' in body) {
+      if (body.conversation && Object.values(body.conversation).some((v) => v !== undefined)) {
+        bot.conversation = body.conversation;
+      } else {
+        bot.conversation = undefined;
+      }
+    }
 
     persistBots(deps.configPath, deps.config.bots);
 
@@ -96,14 +124,25 @@ export function agentsRoutes(deps: {
   app.post('/:id/start', async (c) => {
     const id = c.req.param('id');
     const bot = deps.config.bots.find((b) => b.id === id);
-    if (!bot) return c.json({ error: 'Agent not found' }, 404);
-    if (!bot.token) return c.json({ error: 'Agent has no token configured' }, 400);
-    if (deps.botManager.isRunning(id)) return c.json({ error: 'Agent already running' }, 400);
+    if (!bot) {
+      deps.logger.warn({ botId: id }, 'Start failed: agent not found');
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+    if (!bot.token) {
+      deps.logger.warn({ botId: id }, 'Start failed: no token configured');
+      return c.json({ error: 'Agent has no token configured' }, 400);
+    }
+    if (deps.botManager.isRunning(id)) {
+      deps.logger.warn({ botId: id }, 'Start failed: already running');
+      return c.json({ error: 'Agent already running' }, 400);
+    }
 
     try {
       await deps.botManager.startBot(bot);
+      deps.logger.info({ botId: id }, 'Agent started via API');
       return c.json({ ok: true, running: true });
     } catch (err: any) {
+      deps.logger.error({ botId: id, error: err.message }, 'Start failed');
       return c.json({ error: err.message ?? 'Failed to start agent' }, 500);
     }
   });
@@ -111,9 +150,13 @@ export function agentsRoutes(deps: {
   // Stop agent
   app.post('/:id/stop', async (c) => {
     const id = c.req.param('id');
-    if (!deps.botManager.isRunning(id)) return c.json({ error: 'Agent not running' }, 400);
+    if (!deps.botManager.isRunning(id)) {
+      deps.logger.warn({ botId: id }, 'Stop failed: agent not running');
+      return c.json({ error: 'Agent not running' }, 400);
+    }
 
     await deps.botManager.stopBot(id);
+    deps.logger.info({ botId: id }, 'Agent stopped via API');
     return c.json({ ok: true, running: false });
   });
 
@@ -139,10 +182,42 @@ export function agentsRoutes(deps: {
       enabled: false,
     };
 
+    // If source has a custom soulDir, copy soul files to a new dir for the clone
+    if (source.soulDir && existsSync(source.soulDir)) {
+      const cloneSoulDir = `./config/soul/${body.id}`;
+      mkdirSync(cloneSoulDir, { recursive: true });
+      cpSync(source.soulDir, cloneSoulDir, { recursive: true });
+      clone.soulDir = cloneSoulDir;
+    }
+
     deps.config.bots.push(clone);
     persistBots(deps.configPath, deps.config.bots);
 
     return c.json({ ...clone, token: '', running: false }, 201);
+  });
+
+  // Initialize per-agent soul directory
+  app.post('/:id/init-soul', async (c) => {
+    const id = c.req.param('id');
+    const bot = deps.config.bots.find((b) => b.id === id);
+    if (!bot) return c.json({ error: 'Agent not found' }, 404);
+
+    const agentSoulDir = `./config/soul/${id}`;
+
+    if (!existsSync(agentSoulDir)) {
+      mkdirSync(agentSoulDir, { recursive: true });
+
+      // Copy files from global soul dir if it exists
+      const globalSoulDir = deps.config.soul.dir;
+      if (existsSync(globalSoulDir)) {
+        cpSync(globalSoulDir, agentSoulDir, { recursive: true });
+      }
+    }
+
+    bot.soulDir = agentSoulDir;
+    persistBots(deps.configPath, deps.config.bots);
+
+    return c.json({ ok: true, soulDir: agentSoulDir });
   });
 
   return app;
