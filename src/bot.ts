@@ -1,6 +1,8 @@
 import { Bot, InputFile, type Context } from 'grammy';
+import { AgentRegistry, type AgentInfo } from './agent-registry';
 import type { BotConfig, Config } from './config';
 import { resolveAgentConfig } from './config';
+import { CollaborationTracker } from './collaboration-tracker';
 import type { SkillRegistry } from './core/skill-registry';
 import type { CallbackQueryData, Skill, SkillContext, TelegramClient } from './core/types';
 import type { CronService } from './cron';
@@ -11,6 +13,8 @@ import { MessageBuffer } from './message-buffer';
 import type { ChatMessage, OllamaClient } from './ollama';
 import type { SessionManager } from './session';
 import { SoulLoader } from './soul';
+import { CollaborationSessionManager } from './collaboration-session';
+import { createCollaborateTool } from './tools/collaborate';
 import { createCronTool } from './tools/cron';
 import { createDatetimeTool } from './tools/datetime';
 import { createDelegationTool } from './tools/delegate';
@@ -48,6 +52,9 @@ export class BotManager {
   private defaultSoulLoader: SoulLoader;
   private soulLoaders: Map<string, SoulLoader> = new Map();
   private botLoggers: Map<string, Logger> = new Map();
+  readonly agentRegistry: AgentRegistry;
+  private collaborationTracker: CollaborationTracker;
+  private collaborationSessions: CollaborationSessionManager;
 
   constructor(
     private skillRegistry: SkillRegistry,
@@ -61,6 +68,13 @@ export class BotManager {
   ) {
     this.searchEnabled = config.soul.search?.enabled ?? false;
     this.defaultSoulLoader = soulLoader;
+    this.agentRegistry = new AgentRegistry();
+    const collabConfig = config.collaboration;
+    this.collaborationTracker = new CollaborationTracker(
+      collabConfig.maxRounds,
+      collabConfig.cooldownMs,
+    );
+    this.collaborationSessions = new CollaborationSessionManager(collabConfig.sessionTtlMs);
     this.initializeTools();
     this.messageBuffer = new MessageBuffer(
       config.buffer,
@@ -99,6 +113,65 @@ export class BotManager {
       this.botLoggers.set(botId, botLogger);
     }
     return botLogger;
+  }
+
+  /**
+   * Check if the message explicitly @mentions another registered bot
+   * and does NOT @mention this bot. Used for deterministic deference.
+   */
+  private messageTargetsAnotherBot(ctx: Context, thisBotId: string): boolean {
+    const entities = ctx.message?.entities ?? ctx.message?.caption_entities;
+    const text = ctx.message?.text ?? ctx.message?.caption;
+    if (!entities || !text) return false;
+
+    for (const entity of entities) {
+      if (entity.type === 'mention') {
+        const mentionText = text.substring(entity.offset, entity.offset + entity.length);
+        const username = mentionText.replace(/^@/, '');
+        const agent = this.agentRegistry.getByTelegramUsername(username);
+        if (agent && agent.botId !== thisBotId) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Build a context string listing other bots for multi-bot aware LLM checks.
+   * Returns empty string if multiBotAware is disabled or no other agents exist.
+   */
+  private getOtherBotsContext(thisBotId: string): string {
+    if (!this.config.session.llmRelevanceCheck.multiBotAware) return '';
+    const others = this.agentRegistry.listOtherAgents(thisBotId);
+    if (others.length === 0) return '';
+    const list = others
+      .map((a) => `- ${a.name} (@${a.telegramUsername})${a.description ? ': ' + a.description : ''}`)
+      .join('\n');
+    return `\nOther bots in this group:\n${list}\n`;
+  }
+
+  /**
+   * Resolve a targetBotId that may be a config ID, Telegram username, or bot name.
+   * Returns the canonical config bot ID, or undefined if not found.
+   */
+  private resolveBotId(targetBotId: string): string | undefined {
+    // Direct match by config ID
+    if (this.bots.has(targetBotId)) {
+      return targetBotId;
+    }
+    // Fallback: match by Telegram username (with or without @)
+    const byUsername = this.agentRegistry.getByTelegramUsername(targetBotId);
+    if (byUsername && this.bots.has(byUsername.botId)) {
+      return byUsername.botId;
+    }
+    // Fallback: match by bot name (case-insensitive)
+    for (const botCfg of this.config.bots) {
+      if (botCfg.name.toLowerCase() === targetBotId.toLowerCase() && this.bots.has(botCfg.id)) {
+        return botCfg.id;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -237,6 +310,19 @@ export class BotManager {
     if (this.config.bots.length > 1) {
       this.tools.push(createDelegationTool(() => this));
       this.logger.info('Delegation tool initialized');
+    }
+
+    // Collaborate tool — agent-to-agent conversations (when collaboration enabled + multiple bots)
+    if (this.config.collaboration.enabled && this.config.bots.length > 1) {
+      this.tools.push(createCollaborateTool(() => ({
+        discoverAgents: (excludeBotId: string) => this.discoverAgents(excludeBotId),
+        collaborationStep: (sessionId, targetBotId, message, sourceBotId) =>
+          this.collaborationStep(sessionId, targetBotId, message, sourceBotId),
+        endSession: (sessionId: string) => this.collaborationSessions.end(sessionId),
+        sendVisibleMessage: (chatId, sourceBotId, targetBotId, message) =>
+          this.sendVisibleMessage(chatId, sourceBotId, targetBotId, message),
+      })));
+      this.logger.info('Collaborate tool initialized');
     }
 
     this.toolDefinitions = this.tools.map((t) => t.definition);
@@ -385,23 +471,30 @@ export class BotManager {
           await ctx.reply('⛔ Unauthorized');
           return;
         }
-        const sessionKey = this.sessionManager.deriveKey(config.id, ctx);
-        const serializedKey = this.sessionManager.serializeKey(sessionKey);
 
-        // Flush conversation to memory before clearing
-        if (this.config.soul.enabled) {
-          const history = this.sessionManager.getFullHistory(serializedKey);
-          if (history.length > 0) {
-            await this.flushSessionToMemory(history, config.id);
+        // Clear sessions for ALL running bots in this chat
+        const clearedBots: string[] = [];
+        for (const botId of this.bots.keys()) {
+          const sessionKey = this.sessionManager.deriveKey(botId, ctx);
+          const serializedKey = this.sessionManager.serializeKey(sessionKey);
+
+          // Flush conversation to memory before clearing
+          if (this.config.soul.enabled) {
+            const history = this.sessionManager.getFullHistory(serializedKey);
+            if (history.length > 0) {
+              await this.flushSessionToMemory(history, botId);
+            }
           }
+
+          this.sessionManager.clearSession(serializedKey);
+          clearedBots.push(botId);
         }
 
-        this.sessionManager.clearSession(serializedKey);
-        this.logger.info({ chatId: ctx.chat.id, sessionKey: serializedKey }, 'Session cleared');
+        this.logger.info({ chatId: ctx.chat.id, clearedBots }, 'Sessions cleared for all bots');
         await ctx.reply(
           this.config.soul.enabled
-            ? '🗑️ Conversation history cleared. Key facts saved to memory.'
-            : '🗑️ Conversation history cleared.'
+            ? '🗑️ Conversation history cleared for all bots. Key facts saved to memory.'
+            : '🗑️ Conversation history cleared for all bots.'
         );
       });
 
@@ -493,6 +586,26 @@ export class BotManager {
       bot.start();
       this.bots.set(config.id, bot);
 
+      // Register in agent registry for collaboration
+      try {
+        const me = await bot.api.getMe();
+        this.agentRegistry.register({
+          botId: config.id,
+          name: config.name,
+          telegramUserId: me.id,
+          telegramUsername: me.username ?? config.id,
+          skills: config.skills,
+          description: config.description,
+          tools: this.toolDefinitions.map((d) => d.function.name),
+        });
+        botLogger.info(
+          { telegramUserId: me.id, username: me.username },
+          'Registered in agent registry'
+        );
+      } catch (err) {
+        botLogger.warn({ err }, 'Failed to register in agent registry (non-fatal)');
+      }
+
       this.logger.info({ botId: config.id, name: config.name }, 'Bot started successfully');
     } catch (error) {
       this.logger.error({ error, botId: config.id }, 'Failed to start bot');
@@ -514,7 +627,196 @@ export class BotManager {
     this.activeModels.delete(botId);
     this.soulLoaders.delete(botId);
     this.botLoggers.delete(botId);
+    this.agentRegistry.unregister(botId);
     this.logger.info({ botId }, 'Bot stopped');
+  }
+
+  /**
+   * Send a visible collaboration message in a group chat, mentioning the target bot.
+   * After sending, internally triggers the target bot's response since Telegram
+   * does not deliver bot-to-bot messages.
+   */
+  async sendVisibleMessage(chatId: number, sourceBotId: string, targetBotId: string, message: string): Promise<void> {
+    const bot = this.bots.get(sourceBotId);
+    if (!bot) throw new Error(`Source bot not running: ${sourceBotId}`);
+
+    // Resolve target agent (by botId, username, or name)
+    let agent = this.agentRegistry.getByBotId(targetBotId);
+    const resolvedTargetId = agent ? targetBotId : this.resolveBotId(targetBotId);
+    if (!agent && resolvedTargetId) {
+      agent = this.agentRegistry.getByBotId(resolvedTargetId);
+    }
+    if (!agent || !resolvedTargetId) throw new Error(`Target agent not found: ${targetBotId}`);
+
+    const visibleText = `@${agent.telegramUsername} ${message}`;
+    await bot.api.sendMessage(chatId, visibleText);
+
+    const sourceLogger = this.getBotLogger(sourceBotId);
+    sourceLogger.info(
+      { chatId, sourceBotId, targetBotId: resolvedTargetId, targetUsername: agent.telegramUsername },
+      'Visible collaboration message sent'
+    );
+
+    // Telegram doesn't deliver bot-to-bot messages, so internally route to the target bot
+    this.processVisibleResponse(chatId, resolvedTargetId, sourceBotId, message).catch((err) => {
+      sourceLogger.error({ err, chatId, targetBotId: resolvedTargetId }, 'Failed to process visible collaboration response');
+    });
+  }
+
+  /**
+   * Run a single visible-discussion turn: generate one response from a bot.
+   * Builds the responding bot's system prompt, maps the transcript to
+   * user/assistant messages from its perspective, and runs the LLM with
+   * collaboration-safe tools.
+   */
+  private async runVisibleTurn(
+    chatId: number,
+    respondingBotId: string,
+    transcript: Array<{ botId: string; text: string }>,
+  ): Promise<string> {
+    const respondingConfig = this.config.bots.find((b) => b.id === respondingBotId);
+    if (!respondingConfig) throw new Error(`Bot config not found: ${respondingBotId}`);
+
+    const resolved = resolveAgentConfig(this.config, respondingConfig);
+    const soulLoader = this.getSoulLoader(respondingBotId);
+
+    // Build system prompt (same enrichment as the old processVisibleResponse)
+    let systemPrompt = soulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
+
+    if (this.config.humanizer.enabled) {
+      systemPrompt += HUMANIZER_PROMPT;
+    }
+
+    const hasMemorySearch = this.toolDefinitions.some((d) => d.function.name === 'memory_search');
+    if (hasMemorySearch) {
+      systemPrompt +=
+        '\n\n## Memory Search\n\n' +
+        'You have a searchable long-term memory (daily logs, legacy notes, session history).\n' +
+        'Before answering ANYTHING about prior conversations, people, preferences, facts you were told, ' +
+        'dates, decisions, or todos: ALWAYS run `memory_search` first.\n' +
+        'Use `memory_get` to read more context around a search result if needed.';
+    }
+
+    const hasSoulTools = this.toolDefinitions.some((d) => d.function.name === 'save_memory');
+    if (hasSoulTools) {
+      systemPrompt +=
+        '\n\nYou have persistent files that define who you are. ' +
+        'They ARE your memory — update them to persist across conversations.\n' +
+        "- save_memory: When you learn a preference, fact, or context worth remembering, save it. Don't ask — just do it.";
+    }
+
+    systemPrompt +=
+      '\n\nThis is a group chat. Each user message is prefixed with [Name]: to identify the sender. ' +
+      'Always be aware of who you are talking to. Address people by name when relevant.';
+
+    if (hasMemorySearch) {
+      systemPrompt +=
+        '\n\nIMPORTANT REMINDER: When asked about people, facts, events, or anything that might be in your memory, ' +
+        'you MUST call `memory_search` BEFORE responding. Do NOT answer from assumption.';
+    }
+
+    // Get the responding bot's regular group session history
+    const serializedKey = `bot:${respondingBotId}:group:${chatId}`;
+    const history = this.config.session.enabled
+      ? this.sessionManager.getHistory(serializedKey, resolved.maxHistory)
+      : [];
+
+    // Map transcript to user/assistant messages from this bot's perspective
+    const transcriptMessages: ChatMessage[] = transcript.map((entry) => {
+      if (entry.botId === respondingBotId) {
+        return { role: 'assistant' as const, content: entry.text };
+      }
+      const otherConfig = this.config.bots.find((b) => b.id === entry.botId);
+      const otherName = otherConfig?.name ?? entry.botId;
+      return { role: 'user' as const, content: `[${otherName}]: ${entry.text}` };
+    });
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      ...transcriptMessages,
+    ];
+
+    // Use tools excluding collaborate and delegate_to_bot to prevent loops
+    const { tools: collabTools, definitions: collabDefs } = this.getCollaborationTools();
+    const hasTools = collabDefs.length > 0;
+
+    const toolExecutor = hasTools
+      ? async (name: string, args: Record<string, unknown>) => {
+          const tool = collabTools.find((t) => t.definition.function.name === name);
+          if (!tool) return { success: false, content: `Unknown tool: ${name}` };
+          return tool.execute({ ...args, _chatId: chatId, _botId: respondingBotId }, this.logger);
+        }
+      : undefined;
+
+    return this.ollamaClient.chat(messages, {
+      model: this.getActiveModel(respondingBotId),
+      temperature: resolved.temperature,
+      tools: hasTools ? collabDefs : undefined,
+      toolExecutor,
+      maxToolRounds: this.config.webTools?.maxToolRounds,
+    });
+  }
+
+  /**
+   * Drive a multi-turn visible discussion between two bots in a group chat.
+   * The loop alternates between target and source for `visibleMaxTurns` iterations.
+   * Each turn's response is sent visibly and persisted to the responding bot's session.
+   */
+  private async processVisibleResponse(
+    chatId: number,
+    targetBotId: string,
+    sourceBotId: string,
+    message: string,
+  ): Promise<void> {
+    const visibleMaxTurns = this.config.collaboration.visibleMaxTurns;
+    const botLogger = this.getBotLogger(targetBotId);
+    const transcript: Array<{ botId: string; text: string }> = [];
+
+    // The initial message from the source bot is already sent visibly
+    transcript.push({ botId: sourceBotId, text: message });
+
+    // Turn 0 = target responds, Turn 1 = source responds, Turn 2 = target, ...
+    for (let turn = 0; turn < visibleMaxTurns; turn++) {
+      const respondingBotId = turn % 2 === 0 ? targetBotId : sourceBotId;
+      const respondingBot = this.bots.get(respondingBotId);
+      if (!respondingBot) break;
+
+      // Typing indicator
+      try { await respondingBot.api.sendChatAction(chatId, 'typing'); } catch { /* ignore */ }
+
+      const response = await this.runVisibleTurn(chatId, respondingBotId, transcript);
+      transcript.push({ botId: respondingBotId, text: response });
+
+      // Persist to responding bot's group session
+      const prevEntry = transcript[transcript.length - 2];
+      const prevBotConfig = this.config.bots.find((b) => b.id === prevEntry.botId);
+      const prevName = prevBotConfig?.name ?? prevEntry.botId;
+      const serializedKey = `bot:${respondingBotId}:group:${chatId}`;
+      const respondingConfig = this.config.bots.find((b) => b.id === respondingBotId)!;
+      const resolved = resolveAgentConfig(this.config, respondingConfig);
+      if (this.config.session.enabled) {
+        this.sessionManager.appendMessages(serializedKey, [
+          { role: 'user', content: `[${prevName}]: ${prevEntry.text}` },
+          { role: 'assistant', content: response },
+        ], resolved.maxHistory);
+      }
+
+      // Send response visibly
+      if (response.trim()) {
+        await respondingBot.api.sendMessage(chatId, response);
+      }
+
+      botLogger.info(
+        { chatId, respondingBotId, turn, totalTurns: visibleMaxTurns, responseLength: response.length },
+        'Visible discussion turn'
+      );
+    }
+
+    botLogger.info(
+      { chatId, sourceBotId, targetBotId, turns: transcript.length - 1 },
+      'Visible discussion completed'
+    );
   }
 
   /**
@@ -539,11 +841,13 @@ export class BotManager {
     message: string,
     sourceBotId: string
   ): Promise<string> {
-    const targetBot = this.bots.get(targetBotId);
-    if (!targetBot) {
+    const resolvedId = this.resolveBotId(targetBotId);
+    if (!resolvedId) {
       throw new Error(`Target bot not running: ${targetBotId}`);
     }
+    targetBotId = resolvedId;
 
+    const targetBot = this.bots.get(targetBotId)!;
     const targetConfig = this.config.bots.find((b) => b.id === targetBotId);
     if (!targetConfig) {
       throw new Error(`Target bot config not found: ${targetBotId}`);
@@ -590,6 +894,232 @@ export class BotManager {
   }
 
   /**
+   * Get tools available to collaboration targets (excludes collaborate and delegate_to_bot).
+   */
+  private getCollaborationTools(): { tools: Tool[]; definitions: ToolDefinition[] } {
+    const excluded = new Set(['collaborate', 'delegate_to_bot']);
+    const tools = this.tools.filter((t) => !excluded.has(t.definition.function.name));
+    const definitions = tools.map((t) => t.definition);
+    return { tools, definitions };
+  }
+
+  /**
+   * Discover agents with their full capabilities (tools, model, skills).
+   */
+  discoverAgents(excludeBotId: string): Array<AgentInfo & { model?: string }> {
+    const agents = this.agentRegistry.listOtherAgents(excludeBotId);
+    return agents.map((a) => ({
+      ...a,
+      model: this.activeModels.get(a.botId),
+    }));
+  }
+
+  /**
+   * Run a single collaboration step: send a message to a target bot's LLM
+   * with session history and (optionally) tools enabled.
+   * Returns the sessionId and the target's response.
+   */
+  async collaborationStep(
+    sessionId: string | undefined,
+    targetBotId: string,
+    message: string,
+    sourceBotId: string,
+  ): Promise<{ sessionId: string; response: string }> {
+    const resolvedId = this.resolveBotId(targetBotId);
+    if (!resolvedId) {
+      throw new Error(`Target bot not running: ${targetBotId}`);
+    }
+    targetBotId = resolvedId;
+
+    const targetConfig = this.config.bots.find((b) => b.id === targetBotId);
+    if (!targetConfig) {
+      throw new Error(`Target bot config not found: ${targetBotId}`);
+    }
+
+    // Loop check (chatId=0 for internal collaborations)
+    const check = this.collaborationTracker.checkAndRecord(sourceBotId, targetBotId, 0);
+    if (!check.allowed) {
+      throw new Error(`Collaboration blocked: ${check.reason}`);
+    }
+
+    const collabConfig = this.config.collaboration;
+    const resolved = resolveAgentConfig(this.config, targetConfig);
+    const targetSoulLoader = this.getSoulLoader(targetBotId);
+    const botLogger = this.getBotLogger(targetBotId);
+
+    // Get or create session
+    let session = sessionId ? this.collaborationSessions.get(sessionId) : undefined;
+    if (!session) {
+      session = this.collaborationSessions.create(sourceBotId, targetBotId);
+    }
+
+    // Build system prompt
+    let systemPrompt = targetSoulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
+    const sourceConfig = this.config.bots.find((b) => b.id === sourceBotId);
+    const sourceName = sourceConfig?.name ?? sourceBotId;
+    systemPrompt += `\n\nAnother agent ("${sourceName}") is collaborating with you internally. Answer concisely and helpfully.`;
+
+    // Build messages: system + session history + new message
+    const userMessage: ChatMessage = { role: 'user', content: message };
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...session.messages,
+      userMessage,
+    ];
+
+    // Prepare tools for target (if enabled)
+    const useTools = collabConfig.enableTargetTools;
+    const collabTools = useTools ? this.getCollaborationTools() : { tools: [], definitions: [] };
+    const hasTools = collabTools.definitions.length > 0;
+
+    // Build tool executor for the target bot's context (chatId=0 for internal)
+    const toolExecutor = hasTools
+      ? async (name: string, args: Record<string, unknown>) => {
+          const tool = collabTools.tools.find((t) => t.definition.function.name === name);
+          if (!tool) {
+            return { success: false, content: `Unknown tool: ${name}` };
+          }
+          return tool.execute({ ...args, _chatId: 0, _botId: targetBotId }, this.logger);
+        }
+      : undefined;
+
+    botLogger.info(
+      {
+        sessionId: session.id,
+        targetBotId,
+        sourceBotId,
+        historyLength: session.messages.length,
+        toolsEnabled: hasTools,
+        messagePreview: message.substring(0, 120),
+      },
+      'Collaboration step'
+    );
+
+    const timeout = collabConfig.internalQueryTimeout;
+    const response = await Promise.race([
+      this.ollamaClient.chat(messages, {
+        model: this.getActiveModel(targetBotId),
+        temperature: resolved.temperature,
+        tools: hasTools ? collabTools.definitions : undefined,
+        toolExecutor,
+        maxToolRounds: this.config.webTools?.maxToolRounds,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Collaboration step timeout')), timeout)
+      ),
+    ]);
+
+    // Append the exchange to the session history
+    this.collaborationSessions.appendMessages(session.id, [
+      userMessage,
+      { role: 'assistant', content: response },
+    ]);
+
+    botLogger.info(
+      { sessionId: session.id, targetBotId, responseLength: response.length },
+      'Collaboration step completed'
+    );
+
+    return { sessionId: session.id, response };
+  }
+
+  /**
+   * Programmatic API: run an autonomous multi-turn collaboration between two bots.
+   * The source bot evaluates responses and decides when to stop (by saying [DONE]).
+   * Returns the full transcript.
+   */
+  async initiateCollaboration(
+    sourceBotId: string,
+    targetBotId: string,
+    topic: string,
+    maxTurns?: number,
+  ): Promise<{ sessionId: string; transcript: string; turns: number }> {
+    const collabConfig = this.config.collaboration;
+    const turns = maxTurns ?? collabConfig.maxConverseTurns;
+    const botLogger = this.getBotLogger(sourceBotId);
+
+    const sourceConfig = this.config.bots.find((b) => b.id === sourceBotId);
+    if (!sourceConfig) throw new Error(`Source bot config not found: ${sourceBotId}`);
+    if (!this.bots.has(sourceBotId)) throw new Error(`Source bot not running: ${sourceBotId}`);
+
+    const resolved = resolveAgentConfig(this.config, sourceConfig);
+    const sourceSoulLoader = this.getSoulLoader(sourceBotId);
+
+    let sourceSystemPrompt = sourceSoulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
+    const targetConfig = this.config.bots.find((b) => b.id === targetBotId);
+    const targetName = targetConfig?.name ?? targetBotId;
+    sourceSystemPrompt +=
+      `\n\nYou are collaborating with "${targetName}" on a topic. ` +
+      'Evaluate their responses and continue the conversation until you are satisfied. ' +
+      'When you have enough information or the task is complete, include [DONE] in your response.';
+
+    let sessionId: string | undefined;
+    let currentMessage = topic;
+    const transcriptLines: string[] = [];
+    let turnCount = 0;
+
+    for (let i = 0; i < turns; i++) {
+      // Target responds
+      const step = await this.collaborationStep(sessionId, targetBotId, currentMessage, sourceBotId);
+      sessionId = step.sessionId;
+      transcriptLines.push(`[${sourceBotId}]: ${currentMessage}`);
+      transcriptLines.push(`[${targetBotId}]: ${step.response}`);
+      turnCount = i + 1;
+
+      // Check if source should evaluate (not the last turn)
+      if (i < turns - 1) {
+        // Source evaluates the response
+        const evalMessages: ChatMessage[] = [
+          { role: 'system', content: sourceSystemPrompt },
+          ...transcriptLines.map((line) => {
+            const isSource = line.startsWith(`[${sourceBotId}]`);
+            return {
+              role: (isSource ? 'assistant' : 'user') as ChatMessage['role'],
+              content: line.replace(/^\[[^\]]+\]: /, ''),
+            };
+          }),
+        ];
+
+        const timeout = collabConfig.internalQueryTimeout;
+        const sourceResponse = await Promise.race([
+          this.ollamaClient.chat(evalMessages, {
+            model: this.getActiveModel(sourceBotId),
+            temperature: resolved.temperature,
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Collaboration source timeout')), timeout)
+          ),
+        ]);
+
+        transcriptLines.push(`[${sourceBotId}]: ${sourceResponse}`);
+
+        if (sourceResponse.includes('[DONE]')) {
+          botLogger.info({ sessionId, turns: turnCount }, 'Collaboration ended by source ([DONE])');
+          break;
+        }
+
+        currentMessage = sourceResponse;
+      }
+    }
+
+    botLogger.info(
+      { sessionId, sourceBotId, targetBotId, turns: turnCount },
+      'Collaboration completed'
+    );
+
+    // Clean up session
+    if (sessionId) {
+      this.collaborationSessions.end(sessionId);
+    }
+
+    return {
+      sessionId: sessionId!,
+      transcript: transcriptLines.join('\n'),
+      turns: turnCount,
+    };
+  }
+
+  /**
    * Stop all bots
    */
   isRunning(botId: string): boolean {
@@ -602,7 +1132,10 @@ export class BotManager {
 
   async stopAll(): Promise<void> {
     this.messageBuffer.dispose();
+    this.collaborationTracker.dispose();
+    this.collaborationSessions.dispose();
     for (const [botId, bot] of this.bots.entries()) {
+      this.agentRegistry.unregister(botId);
       await bot.stop();
       this.logger.info({ botId }, 'Bot stopped');
     }
@@ -1055,6 +1588,37 @@ export class BotManager {
               'Available bots:\n' + otherBots;
           }
         }
+
+        // Agent collaboration instruction
+        const hasCollaborateTool = this.toolDefinitions.some(
+          (d) => d.function.name === 'collaborate'
+        );
+        if (hasCollaborateTool) {
+          const otherAgents = this.agentRegistry.listOtherAgents(config.id);
+          if (otherAgents.length > 0) {
+            const agentList = otherAgents
+              .map((a) => {
+                const desc = a.description ? `: ${a.description}` : '';
+                const tools = a.tools && a.tools.length > 0 ? ` [tools: ${a.tools.join(', ')}]` : '';
+                return `- @${a.telegramUsername} (${a.name})${desc}${tools}`;
+              })
+              .join('\n');
+            systemPrompt +=
+              '\n\n## Agent Collaboration\n\n' +
+              'You are part of a multi-agent system. Other agents:\n' +
+              agentList + '\n\n' +
+              'You can collaborate in two ways:\n' +
+              '1. **Visible** (`collaborate` tool with `visible: true`): sends a message in the group chat mentioning the target bot. ' +
+              'They will respond publicly and you may have a back-and-forth discussion visible in the chat.\n' +
+              '2. **Internal** (`collaborate` tool with `visible: false` or omitted): invisible to the chat, multi-turn. ' +
+              'Use this for behind-the-scenes queries where you want to process the answer before sharing.\n\n' +
+              'When the user says "preguntale a X", "que opine X", or similar — prefer **visible** mode so the conversation is transparent.\n' +
+              'When you need to internally verify or gather info before responding — use **internal** mode.\n\n' +
+              'Tool actions: `discover` (list agents), `send` (message an agent), `end_session` (close a session).\n' +
+              'For internal mode, pass `sessionId` to continue multi-turn conversations.\n' +
+              'The target agent has access to their tools (memory, web search, etc.) during internal collaboration.';
+          }
+        }
       }
 
       // In groups, prefix messages with sender name so the LLM can tell who's talking
@@ -1192,16 +1756,19 @@ export class BotManager {
         .join('\n');
 
       const userText = ctx.message?.text ?? '';
+      const otherBots = this.getOtherBotsContext(botId ?? '');
 
       const prompt = [
         `You are a classifier. The bot's name is "${botName}".`,
-        'Given the recent conversation and the new message, determine if the new message is directed at the bot or at someone else in the group.',
+        otherBots,
+        'Given the recent conversation and the new message, determine if the new message is directed at this bot or at someone else in the group.',
+        'If the message mentions another bot by name or asks someone to talk to another bot, answer "no".',
         '',
         contextBlock ? `Recent conversation:\n${contextBlock}\n` : '',
         `New message: ${userText}`,
         '',
-        'Is this message intended for the bot? Answer ONLY "yes" or "no".',
-      ].join('\n');
+        'Is this message intended for this bot? Answer ONLY "yes" or "no".',
+      ].filter(Boolean).join('\n');
 
       const model = botId ? this.getActiveModel(botId) : this.config.ollama.models.primary;
       const result = await Promise.race([
@@ -1248,18 +1815,20 @@ export class BotManager {
     const rlc = this.config.session.llmRelevanceCheck;
     try {
       const userText = ctx.message?.text ?? '';
+      const otherBots = this.getOtherBotsContext(botId);
 
       const prompt = [
         `You are a classifier. The bot's name is "${botName}".`,
+        otherBots,
         'There are multiple bots in this group. Determine if this message is:',
         '- Directed specifically at this bot',
         '- Directed at ALL bots (e.g., "presentense", "bots", general questions to everyone)',
-        '- Directed at someone else or not at any bot',
+        '- Directed at someone else or at another bot',
         '',
         `Message: ${userText}`,
         '',
         'Answer "yes" only if the message is for this bot or for all bots. Answer "no" otherwise.',
-      ].join('\n');
+      ].filter(Boolean).join('\n');
 
       const model = this.getActiveModel(botId);
       const result = await Promise.race([
@@ -1339,7 +1908,46 @@ export class BotManager {
         return;
       }
 
-      if (!this.isAuthorized(ctx.from?.id, config)) {
+      // --- Bot-to-bot collaboration gate ---
+      const collabConfig = this.config.collaboration;
+      const senderAgent = ctx.from?.id ? this.agentRegistry.getByTelegramUserId(ctx.from.id) : undefined;
+      let isPeerBotMessage = false;
+      if (senderAgent) {
+        // Message is from another registered bot
+        if (!collabConfig.enabled) {
+          botLogger.debug({ fromBot: senderAgent.botId }, 'Skipping: collaboration disabled');
+          return;
+        }
+
+        // Require direct @mention of this bot
+        const botUsername = ctx.me?.username;
+        if (botUsername && !ctx.message.text.toLowerCase().includes(`@${botUsername.toLowerCase()}`)) {
+          botLogger.debug(
+            { fromBot: senderAgent.botId, text: ctx.message.text.substring(0, 80) },
+            'Skipping bot message: no @mention of this bot'
+          );
+          return;
+        }
+
+        // Atomic check + record for collaboration limits
+        const check = this.collaborationTracker.checkAndRecord(
+          senderAgent.botId, config.id, ctx.chat.id
+        );
+        if (!check.allowed) {
+          botLogger.info(
+            { fromBot: senderAgent.botId, chatId: ctx.chat.id, reason: check.reason },
+            'Skipping bot message: collaboration limit'
+          );
+          return;
+        }
+
+        isPeerBotMessage = true;
+        botLogger.info(
+          { fromBot: senderAgent.botId, chatId: ctx.chat.id },
+          'Processing bot-to-bot message (collaboration)'
+        );
+        // Fall through to normal processing — skip isAuthorized check
+      } else if (!this.isAuthorized(ctx.from?.id, config)) {
         botLogger.info(
           { userId: ctx.from?.id, username: ctx.from?.username },
           'Skipping: unauthorized user'
@@ -1350,14 +1958,26 @@ export class BotManager {
       const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
       const botUsername = ctx.me?.username;
 
-      // Group activation gate
-      if (isGroup && sessionConfig.enabled) {
+      // Group activation gate (skip for peer bot messages — already verified via collaboration gate)
+      if (isGroup && sessionConfig.enabled && !isPeerBotMessage) {
         let groupReason = this.sessionManager.shouldRespondInGroup(
           ctx,
           botUsername,
           config.id,
           config.mentionPatterns
         );
+
+        // Deterministic @mention deference: if another registered bot is explicitly
+        // @mentioned and this bot is NOT directly mentioned/replied-to, defer.
+        if (groupReason && groupReason !== 'mention' && groupReason !== 'replyToBot') {
+          if (this.messageTargetsAnotherBot(ctx, config.id)) {
+            botLogger.info(
+              { chatId: ctx.chat.id, chatTitle, firstName: ctx.from?.first_name, reason: groupReason },
+              'Deferring to @mentioned bot'
+            );
+            return;
+          }
+        }
 
         // For reply-window messages, run LLM relevance check
         if (groupReason === 'replyWindow' && sessionConfig.llmRelevanceCheck.enabled) {

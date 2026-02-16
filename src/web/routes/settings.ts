@@ -58,11 +58,43 @@ export function settingsRoutes(deps: {
     return c.json(session);
   });
 
+  // Get collaboration settings
+  app.get('/collaboration', (c) => {
+    return c.json(deps.config.collaboration);
+  });
+
+  // Update collaboration settings
+  app.patch('/collaboration', async (c) => {
+    const body = await c.req.json();
+
+    const collab = deps.config.collaboration;
+
+    if (body.enabled !== undefined) collab.enabled = body.enabled;
+    if (body.maxRounds !== undefined) collab.maxRounds = body.maxRounds;
+    if (body.cooldownMs !== undefined) collab.cooldownMs = body.cooldownMs;
+    if (body.internalQueryTimeout !== undefined) collab.internalQueryTimeout = body.internalQueryTimeout;
+    if (body.enableTargetTools !== undefined) collab.enableTargetTools = body.enableTargetTools;
+    if (body.maxConverseTurns !== undefined) collab.maxConverseTurns = body.maxConverseTurns;
+    if (body.sessionTtlMs !== undefined) collab.sessionTtlMs = body.sessionTtlMs;
+    if (body.visibleMaxTurns !== undefined) collab.visibleMaxTurns = body.visibleMaxTurns;
+
+    persistCollaboration(deps.configPath, collab);
+    deps.logger.info('Collaboration settings updated via API');
+
+    return c.json(collab);
+  });
+
   return app;
 }
 
 function persistSession(configPath: string, session: Config['session']): void {
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   raw.session = session;
+  writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
+}
+
+function persistCollaboration(configPath: string, collaboration: Config['collaboration']): void {
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+  raw.collaboration = collaboration;
   writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
 }

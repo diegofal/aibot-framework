@@ -3,8 +3,11 @@ import { api } from './shared.js';
 export async function renderSettings(el) {
   el.innerHTML = '<div class="page-title">Settings</div><p class="text-dim">Loading...</p>';
 
-  const session = await api('/api/settings/session');
-  if (session.error) {
+  const [session, collab] = await Promise.all([
+    api('/api/settings/session'),
+    api('/api/settings/collaboration'),
+  ]);
+  if (session.error || collab.error) {
     el.innerHTML = '<div class="page-title">Settings</div><p>Failed to load settings.</p>';
     return;
   }
@@ -110,6 +113,66 @@ export async function renderSettings(el) {
         </div>
       </div>
 
+      <div class="detail-card">
+        <div class="form-section-title">Agent Collaboration</div>
+
+        <div class="form-group">
+          <label>Enabled</label>
+          <label class="toggle">
+            <input type="checkbox" name="collabEnabled" ${collab.enabled ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="text-dim text-sm mt-8">Allow bots to collaborate with each other via the collaborate tool.</p>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Max Rounds</label>
+            <input type="number" name="collabMaxRounds" min="1" max="20" step="1" value="${collab.maxRounds}">
+            <p class="text-dim text-sm mt-8">Max collaboration exchanges per cooldown window.</p>
+          </div>
+          <div class="form-group">
+            <label>Cooldown (ms)</label>
+            <input type="number" name="collabCooldownMs" min="0" step="1000" value="${collab.cooldownMs}">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Internal Query Timeout (ms)</label>
+            <input type="number" name="collabInternalQueryTimeout" min="1000" step="1000" value="${collab.internalQueryTimeout}">
+          </div>
+          <div class="form-group">
+            <label>Session TTL (ms)</label>
+            <input type="number" name="collabSessionTtlMs" min="1000" step="1000" value="${collab.sessionTtlMs}">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Enable Target Tools</label>
+          <label class="toggle">
+            <input type="checkbox" name="collabEnableTargetTools" ${collab.enableTargetTools ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="text-dim text-sm mt-8">Allow the target bot to use tools (memory, web search, etc.) during collaboration.</p>
+        </div>
+
+        <div class="form-separator"></div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Internal Max Turns</label>
+            <input type="number" name="collabMaxConverseTurns" min="1" max="10" step="1" value="${collab.maxConverseTurns}">
+            <p class="text-dim text-sm mt-8">Max turns for internal (invisible) multi-turn conversations.</p>
+          </div>
+          <div class="form-group">
+            <label>Visible Max Turns</label>
+            <input type="number" name="collabVisibleMaxTurns" min="1" max="10" step="1" value="${collab.visibleMaxTurns}">
+            <p class="text-dim text-sm mt-8">Max turns for visible back-and-forth discussions in group chat.</p>
+          </div>
+        </div>
+      </div>
+
       <div class="actions">
         <button type="submit" class="btn btn-primary" id="btn-save">Save</button>
         <span class="text-dim text-sm" id="save-status"></span>
@@ -126,7 +189,7 @@ export async function renderSettings(el) {
     btn.disabled = true;
     btn.textContent = 'Saving...';
 
-    const patch = {
+    const sessionPatch = {
       groupActivation: form.groupActivation.value,
       replyWindow: parseInt(form.replyWindow.value, 10),
       forumTopicIsolation: form.forumTopicIsolation.checked,
@@ -149,12 +212,26 @@ export async function renderSettings(el) {
       },
     };
 
-    const result = await api('/api/settings/session', { method: 'PATCH', body: patch });
+    const collabPatch = {
+      enabled: form.collabEnabled.checked,
+      maxRounds: parseInt(form.collabMaxRounds.value, 10),
+      cooldownMs: parseInt(form.collabCooldownMs.value, 10),
+      internalQueryTimeout: parseInt(form.collabInternalQueryTimeout.value, 10),
+      enableTargetTools: form.collabEnableTargetTools.checked,
+      maxConverseTurns: parseInt(form.collabMaxConverseTurns.value, 10),
+      sessionTtlMs: parseInt(form.collabSessionTtlMs.value, 10),
+      visibleMaxTurns: parseInt(form.collabVisibleMaxTurns.value, 10),
+    };
+
+    const [result, collabResult] = await Promise.all([
+      api('/api/settings/session', { method: 'PATCH', body: sessionPatch }),
+      api('/api/settings/collaboration', { method: 'PATCH', body: collabPatch }),
+    ]);
 
     btn.disabled = false;
     btn.textContent = 'Save';
 
-    if (result.error) {
+    if (result.error || collabResult.error) {
       status.textContent = 'Failed to save';
       status.style.color = 'var(--red)';
     } else {

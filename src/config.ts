@@ -18,6 +18,7 @@ const BotConfigSchema = z.object({
   mentionPatterns: z.array(z.string()).optional(),
   model: z.string().optional(),
   soulDir: z.string().optional(),
+  description: z.string().optional(),
   conversation: BotConversationOverrideSchema,
 });
 
@@ -175,6 +176,17 @@ const HumanizerConfigSchema = z.object({
   enabled: z.boolean().default(false),
 });
 
+const CollaborationConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  maxRounds: z.number().int().min(1).max(20).default(5),
+  cooldownMs: z.number().int().min(0).default(30000),
+  internalQueryTimeout: z.number().int().positive().default(60000),
+  enableTargetTools: z.boolean().default(true),
+  maxConverseTurns: z.number().int().min(1).max(10).default(3),
+  sessionTtlMs: z.number().int().positive().default(600000),
+  visibleMaxTurns: z.number().int().min(1).max(10).default(3),
+}).default({});
+
 const BufferConfigSchema = z
   .object({
     inboundDebounceMs: z.number().int().min(0).default(1500),
@@ -190,6 +202,7 @@ const LlmRelevanceCheckSchema = z
     timeout: z.number().int().positive().default(5000),
     contextMessages: z.number().int().min(0).default(4),
     broadcastCheck: z.boolean().default(false),
+    multiBotAware: z.boolean().default(false),
   })
   .default({});
 
@@ -234,6 +247,7 @@ const ConfigSchema = z.object({
   cron: CronConfigSchema.default({}),
   phoneCall: PhoneCallConfigSchema.optional(),
   humanizer: HumanizerConfigSchema.default({}),
+  collaboration: CollaborationConfigSchema,
   buffer: BufferConfigSchema,
   web: WebConfigSchema.default({}),
   logging: LoggingConfigSchema,
@@ -259,6 +273,7 @@ export type DatetimeToolConfig = z.infer<typeof DatetimeToolConfigSchema>;
 export type CronConfig = z.infer<typeof CronConfigSchema>;
 export type PhoneCallConfig = z.infer<typeof PhoneCallConfigSchema>;
 export type HumanizerConfig = z.infer<typeof HumanizerConfigSchema>;
+export type CollaborationConfig = z.infer<typeof CollaborationConfigSchema>;
 export type BufferConfig = z.infer<typeof BufferConfigSchema>;
 export type WebConfig = z.infer<typeof WebConfigSchema>;
 export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
