@@ -1,5 +1,5 @@
 import type { Logger } from '../../logger';
-import type { OllamaClient } from '../../ollama';
+import type { LLMClient } from '../../core/llm-client';
 import type {
   TrendData,
   AnalysisResult,
@@ -12,7 +12,7 @@ import type {
 export class IntelAnalyzer {
   constructor(
     private logger: Logger,
-    private ollama?: OllamaClient
+    private llm?: LLMClient
   ) {}
 
   /**
@@ -133,7 +133,7 @@ export class IntelAnalyzer {
   ): Promise<{ sectionSummaries: Record<string, string>; llmDigest?: string }> {
     const sectionSummaries: Record<string, string> = {};
 
-    if (!this.ollama || !analysisConfig.llm_summary?.enabled) {
+    if (!this.llm || !analysisConfig.llm_summary?.enabled) {
       return { sectionSummaries };
     }
 
@@ -150,7 +150,7 @@ export class IntelAnalyzer {
       const text = this.categoryToText(cat.id, catData);
 
       try {
-        const summary = await this.ollama.generate(
+        const summary = await this.llm.generate(
           `Summarize these ${cat.name} items in 2-3 sentences. Focus on the most notable stories and themes. Be concise.\n\n${text}`,
           {
             temperature,
@@ -173,7 +173,7 @@ export class IntelAnalyzer {
     if (allSummaries.length > 0) {
       try {
         llmDigest = (
-          await this.ollama.generate(
+          await this.llm.generate(
             `Based on these category summaries, write a brief executive digest (4-6 sentences) highlighting the most important developments across all categories.\n\n${allSummaries}`,
             {
               temperature,

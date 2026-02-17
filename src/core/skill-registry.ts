@@ -2,6 +2,7 @@ import type { Config } from '../config';
 import type { Logger } from '../logger';
 import { OllamaClient } from '../ollama';
 import { SkillLoader } from './skill-loader';
+import { createLLMClient } from './llm-client';
 import type {
   DataStore,
   Skill,
@@ -129,12 +130,25 @@ export class SkillRegistry {
   createContext(skillId: string, telegramClient?: TelegramClient): SkillContext {
     const skillConfig = this.config.skills.config[skillId] ?? {};
     const dataStore = this.createDataStore(skillId);
+    const skillLogger = this.logger.child({ skill: skillId });
+
+    const cfg = skillConfig as Record<string, unknown>;
+    const llm = createLLMClient(
+      {
+        llmBackend: cfg.llmBackend as 'ollama' | 'claude-cli' | undefined,
+        claudePath: cfg.claudePath as string | undefined,
+        claudeTimeout: cfg.claudeTimeout as number | undefined,
+      },
+      this.ollamaClient,
+      skillLogger,
+    );
 
     return {
       skillId,
       config: skillConfig,
-      logger: this.logger.child({ skill: skillId }),
+      logger: skillLogger,
       ollama: this.ollamaClient,
+      llm,
       telegram: telegramClient || this.createDummyTelegramClient(),
       data: dataStore,
     };

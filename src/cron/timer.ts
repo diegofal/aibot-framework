@@ -156,18 +156,18 @@ function findDueJobs(state: CronServiceState): CronJob[] {
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob
-): Promise<{ status: 'ok' | 'error' | 'skipped'; error?: string }> {
+): Promise<{ status: 'ok' | 'error' | 'skipped'; error?: string; output?: string }> {
   if (job.payload.kind === 'message') {
     try {
       await state.deps.sendMessage(job.payload.chatId, job.payload.text, job.payload.botId);
-      return { status: 'ok' };
+      return { status: 'ok', output: 'Message sent' };
     } catch (err) {
       return { status: 'error', error: String(err) };
     }
   }
 
   if (job.payload.kind === 'skillJob') {
-    const handler = state.deps.resolveSkillHandler(job.payload.skillId, job.payload.jobId);
+    const handler = state.deps.resolveSkillHandler(job.payload);
     if (!handler) {
       return {
         status: 'skipped',
@@ -175,8 +175,8 @@ async function executeJobCore(
       };
     }
     try {
-      await handler();
-      return { status: 'ok' };
+      const result = await handler();
+      return { status: 'ok', output: result || undefined };
     } catch (err) {
       return { status: 'error', error: String(err) };
     }
@@ -217,6 +217,7 @@ async function onTimer(state: CronServiceState) {
       jobId: string;
       status: 'ok' | 'error' | 'skipped';
       error?: string;
+      output?: string;
       startedAt: number;
       endedAt: number;
     }> = [];
@@ -290,6 +291,7 @@ async function onTimer(state: CronServiceState) {
             action: 'finished',
             status: result.status,
             error: result.error,
+            output: result.output,
             runAtMs: result.startedAt,
             durationMs: job.state.lastDurationMs,
             nextRunAtMs: job.state.nextRunAtMs,
@@ -324,7 +326,7 @@ export async function executeJob(
   job.state.lastError = undefined;
   emit(state, { jobId: job.id, action: 'started', runAtMs: startedAt });
 
-  let coreResult: { status: 'ok' | 'error' | 'skipped'; error?: string };
+  let coreResult: { status: 'ok' | 'error' | 'skipped'; error?: string; output?: string };
   try {
     coreResult = await executeJobCore(state, job);
   } catch (err) {
@@ -357,6 +359,7 @@ export async function executeJob(
     action: 'finished',
     status: coreResult.status,
     error: coreResult.error,
+    output: coreResult.output,
     runAtMs: startedAt,
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,

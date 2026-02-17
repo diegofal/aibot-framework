@@ -90,7 +90,7 @@ async function runCollection(ctx: SkillContext, trigger?: TriggerInfo): Promise<
 
     // 3. Analyze trends
     const history = loadHistory(dataDir);
-    const analyzer = new IntelAnalyzer(ctx.logger, ctx.ollama);
+    const analyzer = new IntelAnalyzer(ctx.logger, ctx.llm);
     const analysis = analyzer.analyze(markdown, history, sources.analysis);
 
     // 4. Generate LLM summaries
@@ -178,7 +178,7 @@ async function runAnalysis(ctx: SkillContext): Promise<string> {
     const history = loadHistory(dataDir);
     const sources = loadSourcesConfig(ctx);
 
-    const analyzer = new IntelAnalyzer(ctx.logger, ctx.ollama);
+    const analyzer = new IntelAnalyzer(ctx.logger, ctx.llm);
     const analysis = analyzer.analyze(currentMarkdown, history, sources.analysis);
 
     const analysisPath = join(dataDir, 'trends', `${date}.json`);
@@ -317,6 +317,8 @@ Features: Category-based collection, LLM summaries, trend analysis`;
               });
             }
           }
+
+          return result;
         } catch (error: any) {
           ctx.logger.error({ error: error.message }, 'Scheduled collection failed');
         }

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { BotManager } from './bot';
 import { loadConfig } from './config';
+import { createLLMClient } from './core/llm-client';
 import { SkillRegistry } from './core/skill-registry';
 import { CronService } from './cron';
 import { createLogger } from './logger';
@@ -97,15 +98,30 @@ async function main() {
       sendMessage: async (chatId: number, text: string, botId: string) => {
         await botManager.sendMessage(chatId, text, botId);
       },
-      resolveSkillHandler: (skillId: string, jobId: string) => {
-        const skill = skillRegistry.get(skillId);
+      resolveSkillHandler: (payload) => {
+        const skill = skillRegistry.get(payload.skillId);
         if (!skill?.jobs) return undefined;
-        const job = skill.jobs.find((j) => j.id === jobId);
+        const job = skill.jobs.find((j) => j.id === payload.jobId);
         if (!job) return undefined;
-        const context = skillRegistry.getContext(skillId);
+        let context = skillRegistry.getContext(payload.skillId);
         if (!context) return undefined;
+
+        // Per-job LLM backend override
+        if (payload.llmBackend) {
+          const llm = createLLMClient(
+            {
+              llmBackend: payload.llmBackend,
+              claudePath: payload.claudePath,
+              claudeTimeout: payload.claudeTimeout,
+            },
+            skillRegistry.getOllamaClient(),
+            context.logger,
+          );
+          context = { ...context, llm };
+        }
+
         return async () => {
-          await job.handler(context);
+          return await job.handler(context);
         };
       },
       onEvent: (evt) => {

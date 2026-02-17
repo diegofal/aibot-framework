@@ -12,14 +12,14 @@ import { locked } from './locked';
 import { clearCronRunLog, deleteCronRunLogEntries, readCronRunLogEntries, resolveCronRunLogPath } from './run-log';
 import { loadCronStore, saveCronStore } from './store';
 import { armTimer, executeJob, isJobDue, stopTimer } from './timer';
-import type { CronEvent, CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from './types';
+import type { CronEvent, CronJob, CronJobCreate, CronJobPatch, CronPayload, CronStoreFile } from './types';
 
 export type CronServiceDeps = {
   logger: Logger;
   storePath: string;
   cronEnabled: boolean;
   sendMessage: (chatId: number, text: string, botId: string) => Promise<void>;
-  resolveSkillHandler: (skillId: string, jobId: string) => (() => Promise<string | void>) | undefined;
+  resolveSkillHandler: (payload: Extract<CronPayload, { kind: 'skillJob' }>) => (() => Promise<string | void>) | undefined;
   onEvent?: (evt: CronEvent) => void;
 };
 

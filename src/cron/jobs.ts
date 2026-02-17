@@ -183,6 +183,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
       kind: 'skillJob',
       skillId: typeof patch.skillId === 'string' ? patch.skillId : existing.skillId,
       jobId: typeof patch.jobId === 'string' ? patch.jobId : existing.jobId,
+      llmBackend: 'llmBackend' in patch ? (patch.llmBackend ?? undefined) : existing.llmBackend,
+      claudePath: 'claudePath' in patch ? (patch.claudePath ?? undefined) : existing.claudePath,
+      claudeTimeout: 'claudeTimeout' in patch ? (patch.claudeTimeout ?? undefined) : existing.claudeTimeout,
     };
   }
 
@@ -209,5 +212,9 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   if (typeof patch.jobId !== 'string' || !patch.jobId) {
     throw new Error('cron: skillJob payload requires jobId');
   }
-  return { kind: 'skillJob', skillId: patch.skillId, jobId: patch.jobId };
+  const result: CronPayload & { kind: 'skillJob' } = { kind: 'skillJob', skillId: patch.skillId, jobId: patch.jobId };
+  if (patch.llmBackend) result.llmBackend = patch.llmBackend;
+  if (patch.claudePath) result.claudePath = patch.claudePath;
+  if (patch.claudeTimeout) result.claudeTimeout = patch.claudeTimeout;
+  return result;
 }

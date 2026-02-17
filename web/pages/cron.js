@@ -3,7 +3,7 @@ import { showModal, closeModal, api, escapeHtml, timeAgo } from './shared.js';
 export async function renderCron(el) {
   el.innerHTML = '<div class="page-title">Cron Jobs</div><p class="text-dim">Loading...</p>';
 
-  const jobs = await api('/api/cron');
+  const [jobs, skills] = await Promise.all([api('/api/cron'), api('/api/skills')]);
 
   el.innerHTML = `
     <div class="flex-between mb-16">
@@ -51,6 +51,7 @@ export async function renderCron(el) {
       <td>${lastRunHtml}</td>
       <td class="actions">
         <button class="btn btn-sm" data-action="run" data-id="${job.id}">Run</button>
+        <button class="btn btn-sm" data-action="edit" data-id="${job.id}">Edit</button>
         <button class="btn btn-sm" data-action="logs" data-id="${job.id}">Logs</button>
         <a href="#/cron/${job.id}" class="btn btn-sm">View</a>
         <button class="btn btn-sm btn-danger" data-action="delete" data-id="${job.id}">Delete</button>
@@ -81,6 +82,13 @@ export async function renderCron(el) {
       return;
     }
 
+    const editBtn = e.target.closest('button[data-action="edit"]');
+    if (editBtn) {
+      const job = jobs.find((j) => j.id === editBtn.dataset.id);
+      if (job) showCronEditModal(job, el, null, skills, () => renderCron(el));
+      return;
+    }
+
     const logsBtn = e.target.closest('button[data-action="logs"]');
     if (logsBtn) {
       logsBtn.disabled = true;
@@ -99,19 +107,27 @@ export async function renderCron(el) {
 }
 
 export async function renderCronDetail(el, id) {
-  const job = await api(`/api/cron/${id}`);
+  const [job, skills] = await Promise.all([api(`/api/cron/${id}`), api('/api/skills')]);
   if (job.error) {
     el.innerHTML = '<p>Cron job not found.</p>';
     return;
   }
 
   const scheduleText = formatSchedule(job.schedule);
-  const payloadHtml = job.payload.kind === 'message'
-    ? `<tr><td class="text-dim">Bot ID</td><td>${escapeHtml(job.payload.botId)}</td></tr>
+  let payloadHtml;
+  if (job.payload.kind === 'message') {
+    payloadHtml = `<tr><td class="text-dim">Bot ID</td><td>${escapeHtml(job.payload.botId)}</td></tr>
        <tr><td class="text-dim">Chat ID</td><td>${job.payload.chatId}</td></tr>
-       <tr><td class="text-dim">Text</td><td>${escapeHtml(job.payload.text)}</td></tr>`
-    : `<tr><td class="text-dim">Skill ID</td><td>${escapeHtml(job.payload.skillId)}</td></tr>
-       <tr><td class="text-dim">Job ID</td><td>${escapeHtml(job.payload.jobId)}</td></tr>`;
+       <tr><td class="text-dim">Text</td><td>${escapeHtml(job.payload.text)}</td></tr>`;
+  } else {
+    const skillDefault = resolveSkillDefault(skills, job.payload.skillId);
+    const backendDisplay = job.payload.llmBackend
+      ? `${job.payload.llmBackend} (override)`
+      : `${skillDefault} (skill default)`;
+    payloadHtml = `<tr><td class="text-dim">Skill ID</td><td>${escapeHtml(job.payload.skillId)}</td></tr>
+       <tr><td class="text-dim">Job ID</td><td>${escapeHtml(job.payload.jobId)}</td></tr>
+       <tr><td class="text-dim">LLM Backend</td><td>${escapeHtml(backendDisplay)}</td></tr>`;
+  }
 
   el.innerHTML = `
     <div class="detail-header">
@@ -190,7 +206,7 @@ export async function renderCronDetail(el, id) {
   });
 
   document.getElementById('btn-edit').addEventListener('click', () => {
-    showCronEditModal(job, el, id);
+    showCronEditModal(job, el, id, skills, () => renderCronDetail(el, id));
   });
 
   const clearLogsBtn = document.getElementById('btn-clear-logs');
@@ -270,6 +286,7 @@ export async function renderCronCreate(el) {
         </div>
       `;
     } else {
+      const firstSkillDefault = resolveSkillDefault(skills, skills[0]?.id);
       payloadFields.innerHTML = `
         <div class="form-group">
           <label>Skill</label>
@@ -281,7 +298,33 @@ export async function renderCronCreate(el) {
           <label>Job ID</label>
           <input type="text" name="jobId" required placeholder="e.g. daily-report">
         </div>
+        <div class="form-separator"></div>
+        <div class="form-group">
+          <label>LLM Backend</label>
+          <select name="llmBackend" id="create-llmBackend">
+            <option value="" id="create-llmBackend-default">Skill default (${firstSkillDefault})</option>
+            <option value="ollama">Ollama</option>
+            <option value="claude-cli">Claude CLI</option>
+          </select>
+        </div>
+        <div id="create-claude-fields" style="display:none">
+          <div class="form-group">
+            <label>Claude Path</label>
+            <input type="text" name="claudePath" placeholder="claude">
+          </div>
+          <div class="form-group">
+            <label>Claude Timeout (ms)</label>
+            <input type="number" name="claudeTimeout" placeholder="90000">
+          </div>
+        </div>
       `;
+      document.getElementById('skill-select').addEventListener('change', (e) => {
+        const def = resolveSkillDefault(skills, e.target.value);
+        document.getElementById('create-llmBackend-default').textContent = `Skill default (${def})`;
+      });
+      document.getElementById('create-llmBackend').addEventListener('change', (e) => {
+        document.getElementById('create-claude-fields').style.display = e.target.value === 'claude-cli' ? 'block' : 'none';
+      });
     }
   }
 
@@ -293,9 +336,20 @@ export async function renderCronCreate(el) {
     const form = e.target;
     const kind = form.kind.value;
 
-    const payload = kind === 'message'
-      ? { kind: 'message', text: form.text.value, chatId: Number(form.chatId.value), botId: form.botId.value }
-      : { kind: 'skillJob', skillId: form.skillId.value, jobId: form.jobId.value };
+    let payload;
+    if (kind === 'message') {
+      payload = { kind: 'message', text: form.text.value, chatId: Number(form.chatId.value), botId: form.botId.value };
+    } else {
+      payload = { kind: 'skillJob', skillId: form.skillId.value, jobId: form.jobId.value };
+      const backend = form.llmBackend?.value;
+      if (backend) {
+        payload.llmBackend = backend;
+        if (backend === 'claude-cli') {
+          if (form.claudePath?.value) payload.claudePath = form.claudePath.value;
+          if (form.claudeTimeout?.value) payload.claudeTimeout = Number(form.claudeTimeout.value);
+        }
+      }
+    }
 
     await api('/api/cron', {
       method: 'POST',
@@ -311,11 +365,18 @@ export async function renderCronCreate(el) {
   });
 }
 
-function showCronEditModal(job, el, id) {
+function showCronEditModal(job, el, id, skills, onSaved) {
   const isMessage = job.payload.kind === 'message';
+  const isSkillJob = job.payload.kind === 'skillJob';
+  const jobId = id || job.id;
   const scheduleExpr = job.schedule.kind === 'cron' ? job.schedule.expr
     : job.schedule.kind === 'every' ? `every ${job.schedule.everyMs}ms`
     : job.schedule.at || '';
+
+  const currentBackend = isSkillJob ? (job.payload.llmBackend || '') : '';
+  const currentClaudePath = isSkillJob ? (job.payload.claudePath || '') : '';
+  const currentClaudeTimeout = isSkillJob ? (job.payload.claudeTimeout || '') : '';
+  const skillDefault = isSkillJob ? resolveSkillDefault(skills, job.payload.skillId) : 'ollama';
 
   showModal(`
     <div class="modal-title">Edit Cron Job</div>
@@ -337,11 +398,41 @@ function showCronEditModal(job, el, id) {
         <input type="number" id="edit-chatId" value="${job.payload.chatId}">
       </div>
     ` : ''}
+    ${isSkillJob ? `
+      <div class="form-separator"></div>
+      <div class="form-group">
+        <label>LLM Backend</label>
+        <select id="edit-llmBackend">
+          <option value=""${currentBackend === '' ? ' selected' : ''}>Skill default (${skillDefault})</option>
+          <option value="ollama"${currentBackend === 'ollama' ? ' selected' : ''}>Ollama</option>
+          <option value="claude-cli"${currentBackend === 'claude-cli' ? ' selected' : ''}>Claude CLI</option>
+        </select>
+      </div>
+      <div id="edit-claude-fields" style="display:${currentBackend === 'claude-cli' ? 'block' : 'none'}">
+        <div class="form-group">
+          <label>Claude Path</label>
+          <input type="text" id="edit-claudePath" value="${escapeHtml(currentClaudePath)}" placeholder="claude">
+        </div>
+        <div class="form-group">
+          <label>Claude Timeout (ms)</label>
+          <input type="number" id="edit-claudeTimeout" value="${currentClaudeTimeout}" placeholder="90000">
+        </div>
+      </div>
+    ` : ''}
     <div class="modal-actions">
       <button class="btn" id="edit-cancel">Cancel</button>
       <button class="btn btn-primary" id="edit-save">Save</button>
     </div>
   `);
+
+  // Toggle claude fields visibility
+  const backendSelect = document.getElementById('edit-llmBackend');
+  if (backendSelect) {
+    backendSelect.addEventListener('change', () => {
+      const claudeFields = document.getElementById('edit-claude-fields');
+      if (claudeFields) claudeFields.style.display = backendSelect.value === 'claude-cli' ? 'block' : 'none';
+    });
+  }
 
   document.getElementById('edit-cancel').addEventListener('click', closeModal);
   document.getElementById('edit-save').addEventListener('click', async () => {
@@ -360,9 +451,25 @@ function showCronEditModal(job, el, id) {
       };
     }
 
-    await api(`/api/cron/${id}`, { method: 'PATCH', body: patch });
+    if (isSkillJob) {
+      const backend = document.getElementById('edit-llmBackend').value;
+      const payloadPatch = { kind: 'skillJob' };
+      payloadPatch.llmBackend = backend || null;
+      if (backend === 'claude-cli') {
+        const cp = document.getElementById('edit-claudePath').value.trim();
+        const ct = document.getElementById('edit-claudeTimeout').value.trim();
+        payloadPatch.claudePath = cp || null;
+        payloadPatch.claudeTimeout = ct ? Number(ct) : null;
+      } else {
+        payloadPatch.claudePath = null;
+        payloadPatch.claudeTimeout = null;
+      }
+      patch.payload = payloadPatch;
+    }
+
+    await api(`/api/cron/${jobId}`, { method: 'PATCH', body: patch });
     closeModal();
-    renderCronDetail(el, id);
+    if (onSaved) onSaved();
   });
 }
 
@@ -416,6 +523,11 @@ function showRunLogsModal(job) {
     const row = btn.closest('tr');
     if (row) row.remove();
   });
+}
+
+function resolveSkillDefault(skills, skillId) {
+  const skill = (skills || []).find((s) => s.id === skillId);
+  return skill?.llmBackend || 'ollama';
 }
 
 function formatSchedule(schedule) {

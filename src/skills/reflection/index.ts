@@ -4,14 +4,12 @@ import type { Skill, SkillContext } from '../../core/types';
 import { buildAnalysisPrompt, buildExplorationPrompt, buildImprovementPrompt, buildJsonFixPrompt, buildCompactionPrompt } from './prompts';
 import { createWebSearchTool } from '../../tools/web-search';
 import { createWebFetchTool } from '../../tools/web-fetch';
-import { claudeGenerate } from '../../claude-cli';
 import { backupSoulFile } from '../../soul';
 import type { ChatMessage } from '../../ollama';
 import type { Tool, ToolResult } from '../../tools/types';
 
 interface ReflectionConfig {
   soulDir?: string;
-  claudePath?: string;
   telegramChatId?: number;
   notifyOnReflection?: boolean;
   cronSchedule?: string;
@@ -101,34 +99,12 @@ const skill: Skill = {
             ctx.logger.warn({ err }, 'Failed to send reflection notification');
           }
         }
+
+        return result;
       },
     },
   ],
 };
-
-/**
- * Generate text via Claude CLI with Ollama fallback.
- */
-async function generateWithClaude(
-  ctx: SkillContext,
-  system: string,
-  prompt: string,
-  config: ReflectionConfig,
-  temperature: number,
-): Promise<string> {
-  if (config.claudePath) {
-    try {
-      return await claudeGenerate(`${system}\n\n${prompt}`, {
-        claudePath: config.claudePath,
-        timeout: 90_000,
-        logger: ctx.logger,
-      });
-    } catch (err) {
-      ctx.logger.warn({ err }, 'Claude CLI failed, falling back to Ollama');
-    }
-  }
-  return ctx.ollama.generate(prompt, { system, temperature });
-}
 
 /**
  * Main reflection pipeline.
@@ -176,9 +152,10 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     recentLogs: cappedLogs,
   });
 
-  const analysisRaw = await generateWithClaude(
-    ctx, analysisInput.system, analysisInput.prompt, config, 0.4,
-  );
+  const analysisRaw = await ctx.llm.generate(analysisInput.prompt, {
+    system: analysisInput.system,
+    temperature: 0.4,
+  });
 
   const analysis = await parseJsonResponse<AnalysisResult>(ctx, analysisRaw);
   if (!analysis) {
@@ -230,9 +207,10 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     originalMotivations: getInitialMotivations(),
   });
 
-  const improvementRaw = await generateWithClaude(
-    ctx, improvementInput.system, improvementInput.prompt, config, 0.5,
-  );
+  const improvementRaw = await ctx.llm.generate(improvementInput.prompt, {
+    system: improvementInput.system,
+    temperature: 0.5,
+  });
 
   const improvement = await parseJsonResponse<ImprovementResult>(ctx, improvementRaw);
   if (!improvement) {
@@ -300,9 +278,10 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
         if (lineCount > lineThreshold) {
           ctx.logger.info({ yesterday, lineCount, lineThreshold }, 'Reflection: compacting yesterday\'s log');
           const compactionInput = buildCompactionPrompt(yesterdayContent);
-          const compacted = await generateWithClaude(
-            ctx, compactionInput.system, compactionInput.prompt, config, 0.2,
-          );
+          const compacted = await ctx.llm.generate(compactionInput.prompt, {
+            system: compactionInput.system,
+            temperature: 0.2,
+          });
 
           if (compacted && compacted.trim()) {
             writeFileSync(yesterdayPath, compacted.trim() + '\n', 'utf-8');
@@ -398,9 +377,9 @@ async function parseJsonResponse<T>(ctx: SkillContext, raw: string): Promise<T |
   // Retry: ask LLM to fix the JSON
   try {
     const fixPrompt = buildJsonFixPrompt(cleaned);
-    const fixed = await generateWithClaude(
-      ctx, '', fixPrompt, ctx.config as ReflectionConfig, 0.1,
-    );
+    const fixed = await ctx.llm.generate(fixPrompt, {
+      temperature: 0.1,
+    });
 
     let fixedCleaned = fixed.trim();
     if (fixedCleaned.startsWith('```')) {
@@ -537,7 +516,7 @@ async function runExploration(
     { role: 'user', content: prompt },
   ];
 
-  const response = await ctx.ollama.chat(messages, {
+  const response = await ctx.llm.chat(messages, {
     temperature: 0.4,
     tools: [searchTool.definition, fetchTool.definition],
     toolExecutor,

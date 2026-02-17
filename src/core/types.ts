@@ -1,5 +1,6 @@
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
+import type { LLMClient } from './llm-client';
 
 export interface SkillManifest {
   id: string;
@@ -21,7 +22,7 @@ export interface CommandHandler {
 export interface JobDefinition {
   id: string;
   schedule: string; // Cron expression
-  handler: (context: SkillContext) => Promise<void>;
+  handler: (context: SkillContext) => Promise<string | void>;
 }
 
 export interface TelegramMessage {
@@ -63,6 +64,7 @@ export interface SkillContext {
   config: unknown; // Skill-specific configuration
   logger: Logger;
   ollama: OllamaClient;
+  llm: LLMClient; // Preferred LLM access — backend configured per skill
   telegram: TelegramClient;
   data: DataStore;
   skillId: string;

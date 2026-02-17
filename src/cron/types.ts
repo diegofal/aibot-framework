@@ -5,11 +5,11 @@ export type CronSchedule =
 
 export type CronPayload =
   | { kind: 'message'; text: string; chatId: number; botId: string }
-  | { kind: 'skillJob'; skillId: string; jobId: string };
+  | { kind: 'skillJob'; skillId: string; jobId: string; llmBackend?: 'ollama' | 'claude-cli'; claudePath?: string; claudeTimeout?: number };
 
 export type CronPayloadPatch =
   | { kind: 'message'; text?: string; chatId?: number; botId?: string }
-  | { kind: 'skillJob'; skillId?: string; jobId?: string };
+  | { kind: 'skillJob'; skillId?: string; jobId?: string; llmBackend?: 'ollama' | 'claude-cli' | null; claudePath?: string | null; claudeTimeout?: number | null };
 
 export type CronJobState = {
   nextRunAtMs?: number;
