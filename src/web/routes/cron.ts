@@ -50,6 +50,41 @@ export function cronRoutes(deps: { cronService: CronService }) {
     }
   });
 
+  // Rerun a cron job immediately
+  app.post('/:id/run', async (c) => {
+    const id = c.req.param('id');
+    try {
+      const result = await deps.cronService.run(id, 'force');
+      if (!result.ran) {
+        return c.json({ ok: false, reason: result.reason ?? 'unknown' }, 409);
+      }
+      return c.json({ ok: true });
+    } catch (err: any) {
+      if (err.message?.includes('not found') || err.message?.includes('Unknown cron job')) {
+        return c.json({ ok: false, reason: 'not-found' }, 404);
+      }
+      return c.json({ ok: false, reason: String(err.message ?? err) }, 500);
+    }
+  });
+
+  // Clear all run logs for a job
+  app.delete('/:id/runs', async (c) => {
+    const id = c.req.param('id');
+    await deps.cronService.clearRuns(id);
+    return c.json({ ok: true });
+  });
+
+  // Delete specific run log entries by timestamp
+  app.post('/:id/runs/delete', async (c) => {
+    const id = c.req.param('id');
+    const body = await c.req.json<{ timestamps?: number[] }>();
+    if (!Array.isArray(body.timestamps) || body.timestamps.length === 0) {
+      return c.json({ error: 'timestamps array is required' }, 400);
+    }
+    const deleted = await deps.cronService.deleteRuns(id, body.timestamps);
+    return c.json({ ok: true, deleted });
+  });
+
   // Delete cron job
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');

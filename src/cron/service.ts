@@ -9,7 +9,7 @@ import {
   recomputeNextRuns,
 } from './jobs';
 import { locked } from './locked';
-import { readCronRunLogEntries, resolveCronRunLogPath } from './run-log';
+import { clearCronRunLog, deleteCronRunLogEntries, readCronRunLogEntries, resolveCronRunLogPath } from './run-log';
 import { loadCronStore, saveCronStore } from './store';
 import { armTimer, executeJob, isJobDue, stopTimer } from './timer';
 import type { CronEvent, CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from './types';
@@ -19,7 +19,7 @@ export type CronServiceDeps = {
   storePath: string;
   cronEnabled: boolean;
   sendMessage: (chatId: number, text: string, botId: string) => Promise<void>;
-  resolveSkillHandler: (skillId: string, jobId: string) => (() => Promise<void>) | undefined;
+  resolveSkillHandler: (skillId: string, jobId: string) => (() => Promise<string | void>) | undefined;
   onEvent?: (evt: CronEvent) => void;
 };
 
@@ -287,9 +287,25 @@ export class CronService {
 
   async runs(jobId: string, opts?: { limit?: number }): Promise<unknown[]> {
     const logPath = resolveCronRunLogPath({
-      storePath: path.join(this.state.deps.storePath, 'jobs.json'),
+      storePath: this.state.deps.storePath,
       jobId,
     });
     return await readCronRunLogEntries(logPath, { limit: opts?.limit, jobId });
+  }
+
+  async clearRuns(jobId: string): Promise<void> {
+    const logPath = resolveCronRunLogPath({
+      storePath: this.state.deps.storePath,
+      jobId,
+    });
+    await clearCronRunLog(logPath);
+  }
+
+  async deleteRuns(jobId: string, timestamps: number[]): Promise<number> {
+    const logPath = resolveCronRunLogPath({
+      storePath: this.state.deps.storePath,
+      jobId,
+    });
+    return await deleteCronRunLogEntries(logPath, timestamps);
   }
 }

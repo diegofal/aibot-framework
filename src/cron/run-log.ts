@@ -7,6 +7,7 @@ export type CronRunLogEntry = {
   action: 'finished';
   status?: 'ok' | 'error' | 'skipped';
   error?: string;
+  output?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
@@ -57,6 +58,55 @@ export async function appendCronRunLog(
   await next;
 }
 
+export async function clearCronRunLog(filePath: string): Promise<void> {
+  const resolved = path.resolve(filePath);
+  const prev = writesByPath.get(resolved) ?? Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(async () => {
+      await fs.writeFile(resolved, '', 'utf-8');
+    });
+  writesByPath.set(resolved, next);
+  await next;
+}
+
+export async function deleteCronRunLogEntries(
+  filePath: string,
+  timestamps: number[]
+): Promise<number> {
+  const resolved = path.resolve(filePath);
+  const toDelete = new Set(timestamps);
+  const prev = writesByPath.get(resolved) ?? Promise.resolve();
+  let deleted = 0;
+  const next = prev
+    .catch(() => undefined)
+    .then(async () => {
+      const raw = await fs.readFile(resolved, 'utf-8').catch(() => '');
+      const lines = raw.split('\n');
+      const kept: string[] = [];
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const obj = JSON.parse(trimmed);
+          if (obj && typeof obj.ts === 'number' && toDelete.has(obj.ts)) {
+            deleted++;
+            continue;
+          }
+        } catch {
+          // keep unparseable lines
+        }
+        kept.push(trimmed);
+      }
+      const tmp = `${resolved}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+      await fs.writeFile(tmp, kept.length > 0 ? `${kept.join('\n')}\n` : '', 'utf-8');
+      await fs.rename(tmp, resolved);
+    });
+  writesByPath.set(resolved, next);
+  await next;
+  return deleted;
+}
+
 export async function readCronRunLogEntries(
   filePath: string,
   opts?: { limit?: number; jobId?: string }
@@ -97,6 +147,7 @@ export async function readCronRunLogEntries(
         action: 'finished',
         status: obj.status,
         error: obj.error,
+        output: (obj as Record<string, unknown>).output as string | undefined,
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
         nextRunAtMs: obj.nextRunAtMs,

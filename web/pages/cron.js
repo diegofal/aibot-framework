@@ -13,7 +13,7 @@ export async function renderCron(el) {
     ${jobs.length === 0
       ? '<p class="text-dim">No cron jobs configured.</p>'
       : `<table>
-          <thead><tr><th>Name</th><th>Schedule</th><th>Type</th><th>Enabled</th><th>Next Run</th><th>Last Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Name</th><th>Schedule</th><th>Enabled</th><th>Next Run</th><th>Last Run</th><th>Actions</th></tr></thead>
           <tbody id="cron-tbody"></tbody>
         </table>`
     }
@@ -24,21 +24,23 @@ export async function renderCron(el) {
   const tbody = document.getElementById('cron-tbody');
   for (const job of jobs) {
     const scheduleText = formatSchedule(job.schedule);
-    const typeBadge = job.payload.kind === 'message'
-      ? '<span class="badge">message</span>'
-      : '<span class="badge">skill</span>';
-    const lastStatus = job.state.lastStatus
-      ? `<span class="badge badge-${job.state.lastStatus}">${job.state.lastStatus}</span>`
-      : '<span class="text-dim">--</span>';
     const nextRun = job.state.nextRunAtMs
       ? timeAgo(new Date(job.state.nextRunAtMs).toISOString(), true)
       : '<span class="text-dim">--</span>';
+
+    let lastRunHtml = '<span class="text-dim">--</span>';
+    if (job.state.lastStatus) {
+      const badge = `<span class="badge badge-${job.state.lastStatus}">${job.state.lastStatus}</span>`;
+      const ago = job.state.lastRunAtMs ? ` <span class="text-dim text-sm">${timeAgo(new Date(job.state.lastRunAtMs).toISOString())}</span>` : '';
+      const dur = job.state.lastDurationMs != null ? ` <span class="text-dim text-sm">(${formatDuration(job.state.lastDurationMs)})</span>` : '';
+      const err = job.state.lastError ? `<div class="text-sm" style="color:var(--red);margin-top:2px">${escapeHtml(truncate(job.state.lastError, 80))}</div>` : '';
+      lastRunHtml = `${badge}${ago}${dur}${err}`;
+    }
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><a href="#/cron/${job.id}">${escapeHtml(job.name)}</a></td>
       <td class="text-dim text-sm">${escapeHtml(scheduleText)}</td>
-      <td>${typeBadge}</td>
       <td>
         <label class="toggle">
           <input type="checkbox" ${job.enabled ? 'checked' : ''} data-action="toggle" data-id="${job.id}">
@@ -46,8 +48,10 @@ export async function renderCron(el) {
         </label>
       </td>
       <td class="text-dim text-sm">${nextRun}</td>
-      <td>${lastStatus}</td>
+      <td>${lastRunHtml}</td>
       <td class="actions">
+        <button class="btn btn-sm" data-action="run" data-id="${job.id}">Run</button>
+        <button class="btn btn-sm" data-action="logs" data-id="${job.id}">Logs</button>
         <a href="#/cron/${job.id}" class="btn btn-sm">View</a>
         <button class="btn btn-sm btn-danger" data-action="delete" data-id="${job.id}">Delete</button>
       </td>
@@ -63,10 +67,33 @@ export async function renderCron(el) {
   });
 
   tbody.addEventListener('click', async (e) => {
-    const btn = e.target.closest('button[data-action="delete"]');
-    if (!btn) return;
+    const runBtn = e.target.closest('button[data-action="run"]');
+    if (runBtn) {
+      runBtn.disabled = true;
+      runBtn.textContent = 'Running…';
+      try {
+        const res = await api(`/api/cron/${runBtn.dataset.id}/run`, { method: 'POST' });
+        runBtn.textContent = res.ok ? 'Done' : `Failed: ${res.reason || 'error'}`;
+      } catch {
+        runBtn.textContent = 'Error';
+      }
+      setTimeout(() => renderCron(el), 1500);
+      return;
+    }
+
+    const logsBtn = e.target.closest('button[data-action="logs"]');
+    if (logsBtn) {
+      logsBtn.disabled = true;
+      const job = await api(`/api/cron/${logsBtn.dataset.id}`);
+      logsBtn.disabled = false;
+      showRunLogsModal(job);
+      return;
+    }
+
+    const delBtn = e.target.closest('button[data-action="delete"]');
+    if (!delBtn) return;
     if (!confirm('Delete this cron job?')) return;
-    await api(`/api/cron/${btn.dataset.id}`, { method: 'DELETE' });
+    await api(`/api/cron/${delBtn.dataset.id}`, { method: 'DELETE' });
     renderCron(el);
   });
 }
@@ -109,28 +136,47 @@ export async function renderCronDetail(el, id) {
     </div>
 
     <div class="actions mb-16">
+      <button class="btn btn-primary" id="btn-run">Run Now</button>
       <button class="btn" id="btn-edit">Edit</button>
       <button class="btn ${job.enabled ? 'btn-danger' : 'btn-primary'}" id="btn-toggle">${job.enabled ? 'Disable' : 'Enable'}</button>
       <button class="btn btn-danger" id="btn-delete">Delete</button>
     </div>
 
     ${job.runs?.length ? `
-      <h3 class="mb-16">Recent Runs</h3>
+      <div class="flex-between mb-16">
+        <h3>Recent Runs</h3>
+        <button class="btn btn-sm btn-danger" id="btn-clear-logs">Clear Logs</button>
+      </div>
       <table>
-        <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Error</th></tr></thead>
+        <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Output</th><th>Error</th><th></th></tr></thead>
         <tbody>
           ${job.runs.map((r) => `
             <tr>
               <td class="text-sm">${r.runAtMs ? new Date(r.runAtMs).toLocaleString() : '--'}</td>
               <td><span class="badge badge-${r.status || 'disabled'}">${r.status || '--'}</span></td>
               <td class="text-dim">${r.durationMs != null ? r.durationMs + 'ms' : '--'}</td>
+              <td class="text-sm">${r.output ? formatOutput(r.output) : ''}</td>
               <td class="text-sm" style="color:var(--red)">${r.error ? escapeHtml(r.error) : ''}</td>
+              <td><button class="btn btn-sm btn-icon" data-action="delete-run" data-ts="${r.ts}" title="Delete">&times;</button></td>
             </tr>
           `).join('')}
         </tbody>
       </table>
     ` : ''}
   `;
+
+  document.getElementById('btn-run').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-run');
+    btn.disabled = true;
+    btn.textContent = 'Running…';
+    try {
+      const res = await api(`/api/cron/${id}/run`, { method: 'POST' });
+      btn.textContent = res.ok ? 'Done' : `Failed: ${res.reason || 'error'}`;
+    } catch {
+      btn.textContent = 'Error';
+    }
+    setTimeout(() => renderCronDetail(el, id), 1500);
+  });
 
   document.getElementById('btn-toggle').addEventListener('click', async () => {
     await api(`/api/cron/${id}`, { method: 'PATCH', body: { enabled: !job.enabled } });
@@ -145,6 +191,24 @@ export async function renderCronDetail(el, id) {
 
   document.getElementById('btn-edit').addEventListener('click', () => {
     showCronEditModal(job, el, id);
+  });
+
+  const clearLogsBtn = document.getElementById('btn-clear-logs');
+  if (clearLogsBtn) {
+    clearLogsBtn.addEventListener('click', async () => {
+      if (!confirm('Clear all run logs for this job?')) return;
+      await api(`/api/cron/${id}/runs`, { method: 'DELETE' });
+      renderCronDetail(el, id);
+    });
+  }
+
+  el.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action="delete-run"]');
+    if (!btn) return;
+    const ts = Number(btn.dataset.ts);
+    if (!ts) return;
+    await api(`/api/cron/${id}/runs/delete`, { method: 'POST', body: { timestamps: [ts] } });
+    renderCronDetail(el, id);
   });
 }
 
@@ -302,6 +366,58 @@ function showCronEditModal(job, el, id) {
   });
 }
 
+function showRunLogsModal(job) {
+  const runs = job.runs || [];
+  const hasRuns = runs.length > 0;
+  const rows = !hasRuns
+    ? '<tr><td colspan="6" class="text-dim">No run logs yet.</td></tr>'
+    : runs.map((r) => `
+        <tr>
+          <td class="text-sm">${r.runAtMs ? new Date(r.runAtMs).toLocaleString() : '--'}</td>
+          <td><span class="badge badge-${r.status || 'disabled'}">${r.status || '--'}</span></td>
+          <td class="text-dim text-sm">${r.durationMs != null ? formatDuration(r.durationMs) : '--'}</td>
+          <td class="text-sm">${r.output ? formatOutput(r.output) : ''}</td>
+          <td class="text-sm" style="color:var(--red)">${r.error ? escapeHtml(r.error) : ''}</td>
+          <td><button class="btn btn-sm btn-icon" data-action="modal-delete-run" data-ts="${r.ts}" title="Delete">&times;</button></td>
+        </tr>
+      `).join('');
+
+  showModal(`
+    <div class="modal-title">${escapeHtml(job.name)} — Run Logs</div>
+    <div style="max-height:400px;overflow:auto">
+      <table>
+        <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Output</th><th>Error</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      ${hasRuns ? '<button class="btn btn-danger" id="logs-clear-all">Clear All</button>' : ''}
+      <button class="btn" id="logs-close">Close</button>
+    </div>
+  `);
+
+  document.getElementById('logs-close').addEventListener('click', closeModal);
+
+  const clearAllBtn = document.getElementById('logs-clear-all');
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener('click', async () => {
+      if (!confirm('Clear all run logs for this job?')) return;
+      await api(`/api/cron/${job.id}/runs`, { method: 'DELETE' });
+      closeModal();
+    });
+  }
+
+  document.querySelector('.modal')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action="modal-delete-run"]');
+    if (!btn) return;
+    const ts = Number(btn.dataset.ts);
+    if (!ts) return;
+    await api(`/api/cron/${job.id}/runs/delete`, { method: 'POST', body: { timestamps: [ts] } });
+    const row = btn.closest('tr');
+    if (row) row.remove();
+  });
+}
+
 function formatSchedule(schedule) {
   if (schedule.kind === 'cron') return schedule.expr + (schedule.tz ? ` (${schedule.tz})` : '');
   if (schedule.kind === 'at') return `once at ${schedule.at}`;
@@ -312,4 +428,26 @@ function formatSchedule(schedule) {
     return `every ${ms / 1000}s`;
   }
   return '?';
+}
+
+function formatDuration(ms) {
+  if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
+  if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
+  return `${ms}ms`;
+}
+
+function truncate(str, max) {
+  if (!str || str.length <= max) return str;
+  return str.slice(0, max) + '…';
+}
+
+function formatOutput(output) {
+  if (!output) return '';
+  const escaped = escapeHtml(output);
+  if (output.length <= 200) {
+    return `<span class="text-dim">${escaped}</span>`;
+  }
+  const id = 'out-' + Math.random().toString(36).slice(2, 8);
+  const short = escapeHtml(output.slice(0, 200));
+  return `<span class="text-dim"><span id="${id}-short">${short}… <a href="#" onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline';return false">more</a></span><span id="${id}-full" style="display:none">${escaped}</span></span>`;
 }
