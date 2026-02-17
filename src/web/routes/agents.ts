@@ -65,6 +65,7 @@ export function agentsRoutes(deps: {
       mentionPatterns: body.mentionPatterns,
       model: body.model,
       soulDir: body.soulDir,
+      disabledTools: body.disabledTools,
       conversation: body.conversation,
     };
 
@@ -88,6 +89,7 @@ export function agentsRoutes(deps: {
     if (body.skills !== undefined) bot.skills = body.skills;
     if (body.allowedUsers !== undefined) bot.allowedUsers = body.allowedUsers;
     if (body.mentionPatterns !== undefined) bot.mentionPatterns = body.mentionPatterns;
+    if (body.disabledTools !== undefined) bot.disabledTools = body.disabledTools;
 
     // Per-agent override fields (undefined = clear override, use global default)
     if ('model' in body) bot.model = body.model || undefined;

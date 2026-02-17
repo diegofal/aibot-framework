@@ -19,6 +19,7 @@ const BotConfigSchema = z.object({
   model: z.string().optional(),
   soulDir: z.string().optional(),
   description: z.string().optional(),
+  disabledTools: z.array(z.string()).optional(),
   conversation: BotConversationOverrideSchema,
 });
 
@@ -142,6 +143,10 @@ const SoulConfigSchema = z.object({
   search: MemorySearchConfigSchema.default({}),
   memoryFlush: MemoryFlushConfigSchema,
   sessionMemory: SessionMemoryConfigSchema,
+  versioning: z.object({
+    enabled: z.boolean().default(true),
+    maxVersionsPerFile: z.number().int().positive().default(10),
+  }).default({}),
 });
 
 const WhisperConfigSchema = z.object({

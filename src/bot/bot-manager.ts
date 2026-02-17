@@ -121,7 +121,7 @@ export class BotManager {
       ctx, this.systemPromptBuilder, this.toolRegistry
     );
     this.handlerRegistrar = new HandlerRegistrar(
-      ctx, this.conversationPipeline, this.groupActivation, this.memoryFlusher
+      ctx, this.conversationPipeline, this.groupActivation, this.memoryFlusher, this.toolRegistry
     );
 
     // Initialize tools (with lazy callbacks for circular deps)
@@ -223,7 +223,7 @@ export class BotManager {
           telegramUsername: me.username ?? config.id,
           skills: config.skills,
           description: config.description,
-          tools: this.toolDefinitions.map((d) => d.function.name),
+          tools: this.toolRegistry.getDefinitionsForBot(config.id).map((d) => d.function.name),
         });
         botLogger.info(
           { telegramUserId: me.id, username: me.username },

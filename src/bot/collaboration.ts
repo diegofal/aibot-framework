@@ -84,8 +84,8 @@ export class CollaborationManager {
       ...transcriptMessages,
     ];
 
-    // Use collaboration-safe tools
-    const { tools: collabTools, definitions: collabDefs } = this.toolRegistry.getCollaborationTools();
+    // Use collaboration-safe tools (filtered per bot)
+    const { tools: collabTools, definitions: collabDefs } = this.toolRegistry.getCollaborationToolsForBot(respondingBotId);
     const hasTools = collabDefs.length > 0;
 
     const toolExecutor = hasTools
@@ -279,7 +279,7 @@ export class CollaborationManager {
     ];
 
     const useTools = collabConfig.enableTargetTools;
-    const collabTools = useTools ? this.toolRegistry.getCollaborationTools() : { tools: [], definitions: [] };
+    const collabTools = useTools ? this.toolRegistry.getCollaborationToolsForBot(targetBotId) : { tools: [], definitions: [] };
     const hasTools = collabTools.definitions.length > 0;
 
     const toolExecutor = hasTools

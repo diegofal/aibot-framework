@@ -120,7 +120,8 @@ export class ConversationPipeline {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
     const webToolsConfig = this.ctx.config.webTools;
-    const hasTools = this.ctx.tools.length > 0;
+    const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id);
+    const hasTools = botToolDefs.length > 0;
     const chatId = ctx.chat!.id;
     const isGroup = ctx.chat!.type === 'group' || ctx.chat!.type === 'supergroup';
     const botLogger = this.ctx.getBotLogger(config.id);
@@ -219,7 +220,7 @@ export class ConversationPipeline {
             chatId,
             model: activeModel,
             historyLength: history.length,
-            toolCount: hasTools ? this.ctx.toolDefinitions.length : 0,
+            toolCount: hasTools ? botToolDefs.length : 0,
             promptToLLM: prefixedText.substring(0, 200),
           },
           '🤖 Sending to LLM'
@@ -228,7 +229,7 @@ export class ConversationPipeline {
         const response = await this.ctx.ollamaClient.chat(messages, {
           model: activeModel,
           temperature: resolved.temperature,
-          tools: hasTools ? this.ctx.toolDefinitions : undefined,
+          tools: hasTools ? botToolDefs : undefined,
           toolExecutor: hasTools ? this.toolRegistry.createExecutor(chatId, config.id) : undefined,
           maxToolRounds: webToolsConfig?.maxToolRounds,
         });

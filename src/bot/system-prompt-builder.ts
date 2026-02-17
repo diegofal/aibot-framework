@@ -27,7 +27,7 @@ export class SystemPromptBuilder {
     const { mode, botId, botConfig, isGroup, ragContext } = options;
     const resolved = resolveAgentConfig(this.ctx.config, botConfig);
     const soulLoader = this.ctx.getSoulLoader(botId);
-    const defs = this.toolRegistry.getDefinitions();
+    const defs = this.toolRegistry.getDefinitionsForBot(botId);
 
     let prompt = soulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
 
@@ -58,7 +58,7 @@ export class SystemPromptBuilder {
     // Memory search reinforcement (always when memory tools exist)
     if (
       mode === 'conversation' &&
-      this.ctx.tools.length > 0 &&
+      defs.length > 0 &&
       defs.some((d) => d.function.name === 'memory_search')
     ) {
       prompt +=
@@ -82,7 +82,7 @@ export class SystemPromptBuilder {
     botConfig: BotConfig,
     ragContext?: string | null,
   ): string {
-    if (this.ctx.tools.length === 0) return prompt;
+    if (defs.length === 0) return prompt;
 
     // Web tools
     const webToolNames = defs

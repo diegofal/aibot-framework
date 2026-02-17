@@ -5,6 +5,7 @@ import { buildAnalysisPrompt, buildExplorationPrompt, buildImprovementPrompt, bu
 import { createWebSearchTool } from '../../tools/web-search';
 import { createWebFetchTool } from '../../tools/web-fetch';
 import { claudeGenerate } from '../../claude-cli';
+import { backupSoulFile } from '../../soul';
 import type { ChatMessage } from '../../ollama';
 import type { Tool, ToolResult } from '../../tools/types';
 
@@ -250,6 +251,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
 
   // Always update MOTIVATIONS.md
   const motivationsPath = join(soulDir, 'MOTIVATIONS.md');
+  backupSoulFile(motivationsPath, ctx.logger);
   writeFileSync(motivationsPath, improvement.motivations, 'utf-8');
   ctx.logger.info('MOTIVATIONS.md updated');
 
@@ -259,6 +261,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     const patchLen = improvement.soul_patch.length;
     if (patchLen >= MIN_SOUL_LENGTH && patchLen <= MAX_SOUL_LENGTH) {
       const soulPath = join(soulDir, 'SOUL.md');
+      backupSoulFile(soulPath, ctx.logger);
       writeFileSync(soulPath, improvement.soul_patch, 'utf-8');
       soulUpdated = true;
       ctx.logger.info('SOUL.md updated by reflection');

@@ -194,14 +194,61 @@ export class ToolRegistry {
   }
 
   /**
+   * Get the set of disabled tool names for a bot (from config.bots[].disabledTools).
+   */
+  getDisabledSet(botId: string): Set<string> {
+    const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+    return new Set(botConfig?.disabledTools ?? []);
+  }
+
+  /**
+   * Get tool definitions filtered for a specific bot (respects disabledTools).
+   */
+  getDefinitionsForBot(botId: string): ToolDefinition[] {
+    const disabled = this.getDisabledSet(botId);
+    if (disabled.size === 0) return this.ctx.toolDefinitions;
+    return this.ctx.toolDefinitions.filter((d) => !disabled.has(d.function.name));
+  }
+
+  /**
+   * Get tool instances filtered for a specific bot (respects disabledTools).
+   */
+  getToolsForBot(botId: string): Tool[] {
+    const disabled = this.getDisabledSet(botId);
+    if (disabled.size === 0) return this.ctx.tools;
+    return this.ctx.tools.filter((t) => !disabled.has(t.definition.function.name));
+  }
+
+  /**
+   * Get collaboration-safe tools filtered for a specific bot.
+   * Combines collaboration exclusion + per-bot disabledTools.
+   */
+  getCollaborationToolsForBot(botId: string): { tools: Tool[]; definitions: ToolDefinition[] } {
+    const excluded = new Set(['collaborate', 'delegate_to_bot']);
+    const disabled = this.getDisabledSet(botId);
+    const tools = this.ctx.tools.filter((t) => {
+      const name = t.definition.function.name;
+      return !excluded.has(name) && !disabled.has(name);
+    });
+    const definitions = tools.map((t) => t.definition);
+    return { tools, definitions };
+  }
+
+  /**
    * Create a tool executor callback for the Ollama client.
    * chatId and botId are injected into tool calls.
+   * Disabled tools for the bot are rejected as a safety net.
    */
   createExecutor(
     chatId: number,
     botId: string
   ): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
+    const disabled = this.getDisabledSet(botId);
     return async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
+      if (disabled.has(name)) {
+        this.ctx.logger.warn({ tool: name, botId }, 'Disabled tool requested by LLM');
+        return { success: false, content: `Tool "${name}" is not available for this bot` };
+      }
       const tool = this.ctx.tools.find((t) => t.definition.function.name === name);
       if (!tool) {
         this.ctx.logger.warn({ tool: name }, 'Unknown tool requested by LLM');

@@ -6,6 +6,7 @@ import type { BotContext, SeenUser } from './types';
 import type { ConversationPipeline } from './conversation-pipeline';
 import type { GroupActivation } from './group-activation';
 import type { MemoryFlusher } from './memory-flush';
+import type { ToolRegistry } from './tool-registry';
 
 export class HandlerRegistrar {
   constructor(
@@ -13,6 +14,7 @@ export class HandlerRegistrar {
     private conversationPipeline: ConversationPipeline,
     private groupActivation: GroupActivation,
     private memoryFlusher: MemoryFlusher,
+    private toolRegistry: ToolRegistry,
   ) {}
 
   /**
@@ -292,7 +294,7 @@ export class HandlerRegistrar {
 
   private registerConversationHandler(bot: Bot, config: BotConfig): void {
     const sessionConfig = this.ctx.config.session;
-    const hasTools = this.ctx.tools.length > 0;
+    const hasTools = this.toolRegistry.getDefinitionsForBot(config.id).length > 0;
     const botLogger = this.ctx.getBotLogger(config.id);
 
     // Text message handler

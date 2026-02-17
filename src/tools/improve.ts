@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { backupSoulFile } from '../soul';
 import type { Logger } from '../logger';
 import type { Tool, ToolResult } from './types';
 
@@ -137,6 +138,15 @@ export async function runImprove(opts: {
   }
 
   const prompt = buildClaudePrompt(targetDir, focus, context);
+
+  // Back up soul files that may be modified
+  const filesToBackup: string[] = [];
+  if (focus === 'soul' || focus === 'all') filesToBackup.push(join(targetDir, 'SOUL.md'));
+  if (focus === 'identity' || focus === 'all') filesToBackup.push(join(targetDir, 'IDENTITY.md'));
+  if (focus === 'motivations' || focus === 'all') filesToBackup.push(join(targetDir, 'MOTIVATIONS.md'));
+  for (const f of filesToBackup) {
+    backupSoulFile(f, logger);
+  }
 
   logger.info(
     { focus, hasContext: !!context, botId, targetDir },

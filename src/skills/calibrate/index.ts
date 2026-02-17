@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { backupSoulFile } from '../../soul';
 import type { CallbackQueryData, Skill, SkillContext, TelegramMessage } from '../../core/types';
 import type {
   CalibrateConfig,
@@ -270,6 +271,7 @@ async function handleApply(ctx: SkillContext, session: CalibrationSession): Prom
       continue;
     }
     const filepath = join(soulDir, rewrite.filename);
+    backupSoulFile(filepath, ctx.logger);
     writeFileSync(filepath, rewrite.content, 'utf-8');
     ctx.logger.info({ filename: rewrite.filename }, 'Soul file updated by calibration');
   }

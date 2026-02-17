@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync, copyFileSync, unlinkSync } from 'node:fs';
+import { join, basename, dirname } from 'node:path';
 import type { SoulConfig } from './config';
 import type { Logger } from './logger';
 
@@ -31,14 +31,66 @@ function sanitizeFact(fact: string): string | null {
   return sanitized;
 }
 
+/**
+ * Back up a soul file before overwriting it.
+ * Creates a `.versions/` subdirectory and copies the file with a timestamp.
+ * Uses `.bak` extension to prevent the memory indexer (which watches *.md) from indexing backups.
+ * Prunes oldest versions beyond maxVersions per filename.
+ */
+export function backupSoulFile(filepath: string, logger: Logger, maxVersions = 10): void {
+  if (!existsSync(filepath)) return;
+
+  const dir = dirname(filepath);
+  const name = basename(filepath);
+  const versionsDir = join(dir, '.versions');
+
+  if (!existsSync(versionsDir)) {
+    mkdirSync(versionsDir, { recursive: true });
+  }
+
+  const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, '');
+  const backupName = `${name}.${timestamp}.bak`;
+  const backupPath = join(versionsDir, backupName);
+
+  try {
+    copyFileSync(filepath, backupPath);
+    logger.debug({ filepath, backupPath }, 'Soul file backed up');
+  } catch (err) {
+    logger.warn({ err, filepath }, 'Failed to back up soul file');
+    return;
+  }
+
+  // Prune old versions for this filename
+  try {
+    const prefix = `${name}.`;
+    const versions = readdirSync(versionsDir)
+      .filter((f) => f.startsWith(prefix) && f.endsWith('.bak'))
+      .sort(); // lexicographic = chronological for ISO timestamps
+
+    if (versions.length > maxVersions) {
+      const toDelete = versions.slice(0, versions.length - maxVersions);
+      for (const old of toDelete) {
+        unlinkSync(join(versionsDir, old));
+      }
+      logger.debug({ pruned: toDelete.length, file: name }, 'Pruned old soul file versions');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to prune soul file versions');
+  }
+}
+
 export class SoulLoader {
   private dir: string;
+  private versioningEnabled: boolean;
+  private maxVersions: number;
 
   constructor(
     private config: SoulConfig,
     private logger: Logger
   ) {
     this.dir = config.dir;
+    this.versioningEnabled = config.versioning?.enabled ?? true;
+    this.maxVersions = config.versioning?.maxVersionsPerFile ?? 10;
   }
 
   /**
@@ -291,6 +343,9 @@ export class SoulLoader {
    */
   writeMotivations(content: string): void {
     const motivationsPath = join(this.dir, 'MOTIVATIONS.md');
+    if (this.versioningEnabled) {
+      backupSoulFile(motivationsPath, this.logger, this.maxVersions);
+    }
     writeFileSync(motivationsPath, content, 'utf-8');
     this.logger.info('Motivations updated');
   }
@@ -343,6 +398,9 @@ export class SoulLoader {
    */
   writeSoul(content: string): void {
     const soulPath = join(this.dir, 'SOUL.md');
+    if (this.versioningEnabled) {
+      backupSoulFile(soulPath, this.logger, this.maxVersions);
+    }
     writeFileSync(soulPath, content, 'utf-8');
     this.logger.info('Soul updated');
   }
@@ -352,6 +410,9 @@ export class SoulLoader {
    */
   writeIdentity(fields: { name?: string; emoji?: string; vibe?: string }): void {
     const identityPath = join(this.dir, 'IDENTITY.md');
+    if (this.versioningEnabled) {
+      backupSoulFile(identityPath, this.logger, this.maxVersions);
+    }
 
     // Read and parse existing fields
     const existing: Record<string, string> = {};
