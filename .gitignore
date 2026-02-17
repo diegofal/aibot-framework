@@ -27,3 +27,12 @@ Thumbs.db
 # Temporary files
 *.tmp
 temp/
+
+# Soul / identity / memory (runtime-generated, per-deployment)
+config/soul/
+
+# Local Claude Code settings
+.claude/
+
+# Notes
+improvements.md
