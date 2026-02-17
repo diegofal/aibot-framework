@@ -37,7 +37,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
   });
   const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
-  const next = cron.nextRun(new Date(nowSecondMs - 1));
+  const next = cron.nextRun(new Date(nowSecondMs));
   if (!next) {
     return undefined;
   }
