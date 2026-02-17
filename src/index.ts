@@ -7,7 +7,7 @@ import { CronService } from './cron';
 import { createLogger } from './logger';
 import { MemoryManager } from './memory/manager';
 import { SessionManager } from './session';
-import { SoulLoader } from './soul';
+import { SoulLoader, migrateSoulRootToPerBot } from './soul';
 import { startWebServer } from './web/server';
 
 async function main() {
@@ -54,7 +54,10 @@ async function main() {
       process.exit(1);
     }
 
-    // Initialize soul loader
+    // Migrate flat soul layout to per-bot subdirectories (idempotent)
+    migrateSoulRootToPerBot(config.soul.dir, 'default', logger);
+
+    // Initialize soul loader (fallback for bots without per-bot loader)
     const soulLoader = new SoulLoader(config.soul, logger);
     await soulLoader.initialize();
 

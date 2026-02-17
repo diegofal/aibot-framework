@@ -1,5 +1,5 @@
 import { Bot, InputFile, type Context } from 'grammy';
-import type { BotConfig } from '../config';
+import { resolveAgentConfig, type BotConfig } from '../config';
 import type { CallbackQueryData, Skill, SkillContext, TelegramClient } from '../core/types';
 import { MediaError } from '../media';
 import type { BotContext, SeenUser } from './types';
@@ -710,6 +710,7 @@ export class HandlerRegistrar {
       ...baseContext,
       telegram: telegramClient,
       session,
+      soulDir: resolveAgentConfig(this.ctx.config, config).soulDir,
     };
   }
 

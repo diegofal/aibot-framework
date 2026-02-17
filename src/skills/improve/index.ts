@@ -40,7 +40,7 @@ const skill: Skill = {
 
         try {
           const config = ctx.config as ImproveConfig;
-          const soulDir = config.soulDir || DEFAULT_SOUL_DIR;
+          const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
           const claudePath = config.claudePath || DEFAULT_CLAUDE_PATH;
           const timeout = config.timeout || DEFAULT_TIMEOUT;
           const maxOutputLength = config.maxOutputLength || DEFAULT_MAX_OUTPUT;

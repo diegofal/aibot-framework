@@ -327,6 +327,168 @@ function showCloneModal(sourceId, el, onDone) {
   });
 }
 
+function showGenerateSoulModal(agentId, agentName) {
+  showModal(`
+    <div class="modal-title">Generate Soul with AI</div>
+    <div class="form-group">
+      <label>Role</label>
+      <input type="text" id="gen-role" placeholder="e.g. therapist, coach, assistant, comedian">
+    </div>
+    <div class="form-group">
+      <label>Personality Description</label>
+      <textarea id="gen-personality" rows="4" placeholder="Describe the bot's personality, tone, and character traits..."></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Language</label>
+        <select id="gen-language">
+          <option value="Spanish" selected>Spanish</option>
+          <option value="English">English</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Emoji (optional)</label>
+        <input type="text" id="gen-emoji" placeholder="AI picks if empty" maxlength="4" style="width:80px">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="gen-cancel">Cancel</button>
+      <button class="btn btn-primary" id="gen-submit">Generate</button>
+    </div>
+  `);
+
+  document.getElementById('gen-cancel').addEventListener('click', closeModal);
+  document.getElementById('gen-submit').addEventListener('click', async () => {
+    const role = document.getElementById('gen-role').value.trim();
+    const personalityDescription = document.getElementById('gen-personality').value.trim();
+    const language = document.getElementById('gen-language').value;
+    const emoji = document.getElementById('gen-emoji').value.trim();
+
+    if (!role || !personalityDescription) {
+      alert('Role and personality description are required.');
+      return;
+    }
+
+    const btn = document.getElementById('gen-submit');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    try {
+      const result = await api(`/api/agents/${agentId}/generate-soul`, {
+        method: 'POST',
+        body: { name: agentName, role, personalityDescription, language, emoji: emoji || undefined },
+      });
+
+      if (result.error) {
+        alert(`Generation failed: ${result.error}`);
+        btn.disabled = false;
+        btn.textContent = 'Generate';
+        return;
+      }
+
+      showSoulPreviewModal(agentId, agentName, result, { role, personalityDescription, language, emoji });
+    } catch (err) {
+      alert(`Generation failed: ${err.message || err}`);
+      btn.disabled = false;
+      btn.textContent = 'Generate';
+    }
+  });
+}
+
+function showSoulPreviewModal(agentId, agentName, soulData, inputData, options = {}) {
+  const { onComplete } = options;
+  closeModal();
+  showModal(`
+    <div class="modal-title">Generated Soul Preview</div>
+    <div style="max-height:60vh;overflow-y:auto">
+      <h4>IDENTITY.md</h4>
+      <pre class="code-block">${escapeHtml(soulData.identity)}</pre>
+      <h4>SOUL.md</h4>
+      <pre class="code-block">${escapeHtml(soulData.soul)}</pre>
+      <h4>MOTIVATIONS.md</h4>
+      <pre class="code-block">${escapeHtml(soulData.motivations)}</pre>
+    </div>
+    <div class="modal-actions">
+      ${onComplete
+        ? '<button class="btn" id="preview-skip">Skip</button>'
+        : '<button class="btn" id="preview-cancel">Cancel</button>'
+      }
+      <button class="btn" id="preview-regenerate">Regenerate</button>
+      <button class="btn btn-primary" id="preview-apply">Apply</button>
+    </div>
+  `);
+
+  if (onComplete) {
+    document.getElementById('preview-skip').addEventListener('click', () => {
+      closeModal();
+      onComplete();
+    });
+  } else {
+    document.getElementById('preview-cancel').addEventListener('click', closeModal);
+  }
+
+  document.getElementById('preview-regenerate').addEventListener('click', async () => {
+    const btn = document.getElementById('preview-regenerate');
+    btn.disabled = true;
+    btn.textContent = 'Regenerating...';
+
+    try {
+      const result = await api(`/api/agents/${agentId}/generate-soul`, {
+        method: 'POST',
+        body: {
+          name: agentName,
+          role: inputData.role,
+          personalityDescription: inputData.personalityDescription,
+          language: inputData.language,
+          emoji: inputData.emoji || undefined,
+        },
+      });
+
+      if (result.error) {
+        alert(`Regeneration failed: ${result.error}`);
+        btn.disabled = false;
+        btn.textContent = 'Regenerate';
+        return;
+      }
+
+      showSoulPreviewModal(agentId, agentName, result, inputData, options);
+    } catch (err) {
+      alert(`Regeneration failed: ${err.message || err}`);
+      btn.disabled = false;
+      btn.textContent = 'Regenerate';
+    }
+  });
+
+  document.getElementById('preview-apply').addEventListener('click', async () => {
+    const btn = document.getElementById('preview-apply');
+    btn.disabled = true;
+    btn.textContent = 'Applying...';
+
+    try {
+      const result = await api(`/api/agents/${agentId}/apply-soul`, {
+        method: 'POST',
+        body: soulData,
+      });
+
+      if (result.error) {
+        alert(`Apply failed: ${result.error}`);
+        btn.disabled = false;
+        btn.textContent = 'Apply';
+        return;
+      }
+
+      closeModal();
+      if (onComplete) {
+        onComplete();
+      }
+    } catch (err) {
+      alert(`Apply failed: ${err.message || err}`);
+      btn.disabled = false;
+      btn.textContent = 'Apply';
+    }
+  });
+}
+
 function showNewAgentModal(skills, el) {
   showModal(`
     <div class="modal-title">New Agent</div>
@@ -342,9 +504,32 @@ function showNewAgentModal(skills, el) {
       <label>Token</label>
       <input type="password" id="new-token" placeholder="Telegram bot token">
     </div>
+    <div class="form-separator"></div>
+    <div class="form-section-title">Soul Generation</div>
+    <div class="form-group">
+      <label>Role</label>
+      <input type="text" id="new-role" placeholder="e.g. therapist, coach, assistant, comedian">
+    </div>
+    <div class="form-group">
+      <label>Personality Description</label>
+      <textarea id="new-personality" rows="4" placeholder="Describe the bot's personality, tone, and character traits..."></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Language</label>
+        <select id="new-language">
+          <option value="Spanish" selected>Spanish</option>
+          <option value="English">English</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Emoji (optional)</label>
+        <input type="text" id="new-emoji" placeholder="AI picks if empty" maxlength="4" style="width:80px">
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn" id="new-cancel">Cancel</button>
-      <button class="btn btn-primary" id="new-confirm">Create</button>
+      <button class="btn btn-primary" id="new-confirm">Create & Generate Soul</button>
     </div>
   `);
 
@@ -353,10 +538,51 @@ function showNewAgentModal(skills, el) {
     const id = document.getElementById('new-id').value.trim();
     const name = document.getElementById('new-name').value.trim();
     const token = document.getElementById('new-token').value.trim();
-    if (!id || !name) return;
+    const role = document.getElementById('new-role').value.trim();
+    const personalityDescription = document.getElementById('new-personality').value.trim();
+    const language = document.getElementById('new-language').value;
+    const emoji = document.getElementById('new-emoji').value.trim();
 
-    await api('/api/agents', { method: 'POST', body: { id, name, token, skills: [], enabled: false } });
-    closeModal();
-    renderAgents(el);
+    if (!id || !name || !token || !role || !personalityDescription) {
+      alert('ID, Name, Token, Role, and Personality Description are required.');
+      return;
+    }
+
+    const btn = document.getElementById('new-confirm');
+    btn.disabled = true;
+    btn.textContent = 'Creating...';
+
+    try {
+      const createResult = await api('/api/agents', { method: 'POST', body: { id, name, token, skills: [], enabled: false } });
+      if (createResult.error) {
+        alert(`Failed to create agent: ${createResult.error}`);
+        btn.disabled = false;
+        btn.textContent = 'Create & Generate Soul';
+        return;
+      }
+
+      btn.textContent = 'Generating soul...';
+
+      const soulResult = await api(`/api/agents/${id}/generate-soul`, {
+        method: 'POST',
+        body: { name, role, personalityDescription, language, emoji: emoji || undefined },
+      });
+
+      if (soulResult.error) {
+        alert(`Agent created, but soul generation failed: ${soulResult.error}`);
+        closeModal();
+        location.hash = `#/agents/${id}/edit`;
+        return;
+      }
+
+      const inputData = { role, personalityDescription, language, emoji };
+      showSoulPreviewModal(id, name, soulResult, inputData, {
+        onComplete: () => { location.hash = `#/agents/${id}/edit`; },
+      });
+    } catch (err) {
+      alert(`Failed: ${err.message || err}`);
+      btn.disabled = false;
+      btn.textContent = 'Create & Generate Soul';
+    }
   });
 }

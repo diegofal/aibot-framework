@@ -39,7 +39,7 @@ const skill: Skill = {
       description: 'Review and correct soul memory claims interactively',
       async handler(args: string[], ctx: SkillContext) {
         const config = ctx.config as CalibrateConfig;
-        const soulDir = config.soulDir || DEFAULT_SOUL_DIR;
+        const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
         const maxBatches = config.maxBatches || DEFAULT_MAX_BATCHES;
         const timeoutMs = config.sessionTimeoutMs || DEFAULT_TIMEOUT_MS;
         const chatId = ctx.session!.chatId;
@@ -262,7 +262,7 @@ async function handleCancel(ctx: SkillContext, session: CalibrationSession): Pro
 
 async function handleApply(ctx: SkillContext, session: CalibrationSession): Promise<void> {
   const config = ctx.config as CalibrateConfig;
-  const soulDir = config.soulDir || DEFAULT_SOUL_DIR;
+  const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
 
   for (const rewrite of session.rewrites) {
     // Only allow writing to known soul files (safety guard)
@@ -367,7 +367,7 @@ async function finalizeBatches(ctx: SkillContext, session: CalibrationSession): 
 
   try {
     const config = ctx.config as CalibrateConfig;
-    const soulDir = config.soulDir || DEFAULT_SOUL_DIR;
+    const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
 
     // Read current files that may need rewriting
     const affectedFiles = [...new Set(corrections.map((c) => c.sourceFile))];

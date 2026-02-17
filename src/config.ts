@@ -389,7 +389,7 @@ export interface ResolvedAgentConfig {
 export function resolveAgentConfig(globalConfig: Config, botConfig: BotConfig): ResolvedAgentConfig {
   return {
     model: botConfig.model ?? globalConfig.ollama.models.primary,
-    soulDir: botConfig.soulDir ?? globalConfig.soul.dir,
+    soulDir: botConfig.soulDir ?? `${globalConfig.soul.dir}/${botConfig.id}`,
     systemPrompt: botConfig.conversation?.systemPrompt ?? globalConfig.conversation.systemPrompt,
     temperature: botConfig.conversation?.temperature ?? globalConfig.conversation.temperature,
     maxHistory: botConfig.conversation?.maxHistory ?? globalConfig.conversation.maxHistory,

@@ -193,15 +193,13 @@ export class BotManager {
       const resolved = resolveAgentConfig(this.config, config);
       this.activeModels.set(config.id, resolved.model);
 
-      if (config.soulDir) {
-        const perBotSoulLoader = new SoulLoader(
-          { ...this.config.soul, dir: config.soulDir },
-          botLogger
-        );
-        await perBotSoulLoader.initialize();
-        this.soulLoaders.set(config.id, perBotSoulLoader);
-        botLogger.info({ soulDir: config.soulDir }, 'Per-agent soul loader initialized');
-      }
+      const perBotSoulLoader = new SoulLoader(
+        { ...this.config.soul, dir: resolved.soulDir },
+        botLogger
+      );
+      await perBotSoulLoader.initialize();
+      this.soulLoaders.set(config.id, perBotSoulLoader);
+      botLogger.info({ soulDir: resolved.soulDir }, 'Per-agent soul loader initialized');
 
       bot.catch((error) => {
         botLogger.error({ error, botId: config.id }, 'Bot error');

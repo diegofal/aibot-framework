@@ -60,7 +60,7 @@ const skill: Skill = {
 
   async onLoad(ctx: SkillContext) {
     const config = ctx.config as ReflectionConfig;
-    const soulDir = config.soulDir || './config/soul';
+    const soulDir = ctx.soulDir || config.soulDir || './config/soul';
 
     // Ensure MOTIVATIONS.md exists with initial template
     const motivationsPath = join(soulDir, 'MOTIVATIONS.md');
@@ -115,7 +115,7 @@ const skill: Skill = {
  */
 async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Promise<string> {
   const config = ctx.config as ReflectionConfig;
-  const soulDir = config.soulDir || './config/soul';
+  const soulDir = ctx.soulDir || config.soulDir || './config/soul';
 
   // Step 1 — Gather context
   ctx.logger.info({ trigger }, 'Reflection: gathering context');

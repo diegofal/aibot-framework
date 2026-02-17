@@ -69,6 +69,7 @@ export interface SkillContext {
   data: DataStore;
   skillId: string;
   session?: SessionInfo;
+  soulDir?: string;
 }
 
 export interface CallbackQueryData {

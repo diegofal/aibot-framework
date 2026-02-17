@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync, copyFileSync, unlinkSync, renameSync, statSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 import type { SoulConfig } from './config';
 import type { Logger } from './logger';
@@ -436,4 +436,51 @@ export class SoulLoader {
     writeFileSync(identityPath, lines.join('\n') + '\n', 'utf-8');
     this.logger.info({ fields: Object.keys(fields) }, 'Identity updated');
   }
+}
+
+/**
+ * Migrate old flat soul layout (files at root) to per-bot subdirectory.
+ * Detects IDENTITY.md at root level and moves soul files into {root}/{defaultBotId}/.
+ * Idempotent — skips if target already exists.
+ */
+export function migrateSoulRootToPerBot(rootDir: string, defaultBotId: string, logger: Logger): void {
+  const targetDir = join(rootDir, defaultBotId);
+  const identityAtRoot = join(rootDir, 'IDENTITY.md');
+
+  // Already migrated or nothing to migrate
+  if (existsSync(join(targetDir, 'IDENTITY.md')) || !existsSync(identityAtRoot)) {
+    return;
+  }
+
+  logger.info({ rootDir, defaultBotId }, 'Migrating soul root to per-bot layout');
+  mkdirSync(targetDir, { recursive: true });
+
+  // Files/dirs to move
+  const toMove = ['IDENTITY.md', 'SOUL.md', 'MOTIVATIONS.md', 'memory', '.versions'];
+
+  for (const name of toMove) {
+    const src = join(rootDir, name);
+    if (!existsSync(src)) continue;
+
+    // Skip if it's a bot subdirectory (has its own IDENTITY.md)
+    try {
+      const stat = statSync(src);
+      if (stat.isDirectory() && existsSync(join(src, 'IDENTITY.md'))) {
+        continue;
+      }
+    } catch {
+      // stat failed, skip
+      continue;
+    }
+
+    const dest = join(targetDir, name);
+    try {
+      renameSync(src, dest);
+      logger.info({ from: src, to: dest }, 'Migrated soul file');
+    } catch (err) {
+      logger.warn({ err, from: src, to: dest }, 'Failed to migrate soul file');
+    }
+  }
+
+  logger.info({ targetDir }, 'Soul root migration complete');
 }

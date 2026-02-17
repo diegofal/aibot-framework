@@ -2,8 +2,10 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync } from 'node
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import type { BotConfig, Config } from '../../config';
+import { resolveAgentConfig, type BotConfig, type Config } from '../../config';
 import type { Logger } from '../../logger';
+import { generateSoul } from '../../soul-generator';
+import { backupSoulFile } from '../../soul';
 
 export function agentsRoutes(deps: {
   config: Config;
@@ -184,12 +186,12 @@ export function agentsRoutes(deps: {
       enabled: false,
     };
 
-    // If source has a custom soulDir, copy soul files to a new dir for the clone
-    if (source.soulDir && existsSync(source.soulDir)) {
-      const cloneSoulDir = `./config/soul/${body.id}`;
+    // Copy soul files from source bot's resolved soulDir
+    const sourceSoulDir = resolveAgentConfig(deps.config, source).soulDir;
+    if (existsSync(sourceSoulDir)) {
+      const cloneSoulDir = `${deps.config.soul.dir}/${body.id}`;
       mkdirSync(cloneSoulDir, { recursive: true });
-      cpSync(source.soulDir, cloneSoulDir, { recursive: true });
-      clone.soulDir = cloneSoulDir;
+      cpSync(sourceSoulDir, cloneSoulDir, { recursive: true });
     }
 
     deps.config.bots.push(clone);
@@ -207,19 +209,89 @@ export function agentsRoutes(deps: {
     const agentSoulDir = `./config/soul/${id}`;
 
     if (!existsSync(agentSoulDir)) {
-      mkdirSync(agentSoulDir, { recursive: true });
-
-      // Copy files from global soul dir if it exists
-      const globalSoulDir = deps.config.soul.dir;
-      if (existsSync(globalSoulDir)) {
-        cpSync(globalSoulDir, agentSoulDir, { recursive: true });
-      }
+      mkdirSync(join(agentSoulDir, 'memory'), { recursive: true });
+      writeFileSync(join(agentSoulDir, 'IDENTITY.md'), `name: ${bot.name}\n`);
     }
 
     bot.soulDir = agentSoulDir;
     persistBots(deps.configPath, deps.config.bots);
 
     return c.json({ ok: true, soulDir: agentSoulDir });
+  });
+
+  // Generate soul files with AI (preview only — doesn't write)
+  app.post('/:id/generate-soul', async (c) => {
+    const id = c.req.param('id');
+    const bot = deps.config.bots.find((b) => b.id === id);
+    if (!bot) return c.json({ error: 'Agent not found' }, 404);
+
+    const body = await c.req.json<{
+      name?: string;
+      role: string;
+      personalityDescription: string;
+      language?: string;
+      emoji?: string;
+    }>();
+
+    if (!body.role || !body.personalityDescription) {
+      return c.json({ error: 'role and personalityDescription are required' }, 400);
+    }
+
+    try {
+      const result = await generateSoul(
+        {
+          name: body.name || bot.name,
+          role: body.role,
+          personalityDescription: body.personalityDescription,
+          language: body.language,
+          emoji: body.emoji,
+        },
+        {
+          soulDir: deps.config.soul.dir,
+          logger: deps.logger,
+        },
+      );
+      return c.json(result);
+    } catch (err: any) {
+      deps.logger.error({ botId: id, error: err.message }, 'Soul generation failed');
+      return c.json({ error: err.message ?? 'Soul generation failed' }, 500);
+    }
+  });
+
+  // Apply generated soul files to disk
+  app.post('/:id/apply-soul', async (c) => {
+    const id = c.req.param('id');
+    const bot = deps.config.bots.find((b) => b.id === id);
+    if (!bot) return c.json({ error: 'Agent not found' }, 404);
+
+    const body = await c.req.json<{
+      identity: string;
+      soul: string;
+      motivations: string;
+    }>();
+
+    if (!body.identity || !body.soul || !body.motivations) {
+      return c.json({ error: 'identity, soul, and motivations are required' }, 400);
+    }
+
+    const soulDir = resolveAgentConfig(deps.config, bot).soulDir;
+    mkdirSync(join(soulDir, 'memory'), { recursive: true });
+
+    // Back up existing files
+    for (const filename of ['IDENTITY.md', 'SOUL.md', 'MOTIVATIONS.md']) {
+      const filepath = join(soulDir, filename);
+      if (existsSync(filepath)) {
+        backupSoulFile(filepath, deps.logger);
+      }
+    }
+
+    // Write new files
+    writeFileSync(join(soulDir, 'IDENTITY.md'), body.identity, 'utf-8');
+    writeFileSync(join(soulDir, 'SOUL.md'), body.soul, 'utf-8');
+    writeFileSync(join(soulDir, 'MOTIVATIONS.md'), body.motivations, 'utf-8');
+
+    deps.logger.info({ botId: id, soulDir }, 'Soul files applied via API');
+    return c.json({ ok: true, soulDir });
   });
 
   return app;
