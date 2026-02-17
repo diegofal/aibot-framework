@@ -1,0 +1,35 @@
+{
+  "id": "improve",
+  "name": "Soul Improve",
+  "version": "1.0.0",
+  "description": "Spawn Claude Code to review and improve soul/memory files",
+  "author": "Diego Falciola",
+  "main": "./index.ts",
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "soulDir": {
+          "type": "string",
+          "description": "Path to soul directory"
+        },
+        "claudePath": {
+          "type": "string",
+          "description": "Path to claude CLI binary"
+        },
+        "timeout": {
+          "type": "number",
+          "description": "Timeout in milliseconds for Claude session"
+        },
+        "maxOutputLength": {
+          "type": "number",
+          "description": "Max output characters from Claude"
+        },
+        "telegramChatId": {
+          "type": "number",
+          "description": "Telegram chat ID for notifications"
+        }
+      }
+    }
+  }
+}

@@ -4,11 +4,13 @@ import type { Skill, SkillContext } from '../../core/types';
 import { buildAnalysisPrompt, buildExplorationPrompt, buildImprovementPrompt, buildJsonFixPrompt, buildCompactionPrompt } from './prompts';
 import { createWebSearchTool } from '../../tools/web-search';
 import { createWebFetchTool } from '../../tools/web-fetch';
+import { claudeGenerate } from '../../claude-cli';
 import type { ChatMessage } from '../../ollama';
 import type { Tool, ToolResult } from '../../tools/types';
 
 interface ReflectionConfig {
   soulDir?: string;
+  claudePath?: string;
   telegramChatId?: number;
   notifyOnReflection?: boolean;
   cronSchedule?: string;
@@ -104,6 +106,30 @@ const skill: Skill = {
 };
 
 /**
+ * Generate text via Claude CLI with Ollama fallback.
+ */
+async function generateWithClaude(
+  ctx: SkillContext,
+  system: string,
+  prompt: string,
+  config: ReflectionConfig,
+  temperature: number,
+): Promise<string> {
+  if (config.claudePath) {
+    try {
+      return await claudeGenerate(`${system}\n\n${prompt}`, {
+        claudePath: config.claudePath,
+        timeout: 90_000,
+        logger: ctx.logger,
+      });
+    } catch (err) {
+      ctx.logger.warn({ err }, 'Claude CLI failed, falling back to Ollama');
+    }
+  }
+  return ctx.ollama.generate(prompt, { system, temperature });
+}
+
+/**
  * Main reflection pipeline.
  * 1. Gather context (soul, motivations, un-reflected logs)
  * 2. Analyze via LLM ("The Mirror")
@@ -149,10 +175,9 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     recentLogs: cappedLogs,
   });
 
-  const analysisRaw = await ctx.ollama.generate(analysisInput.prompt, {
-    system: analysisInput.system,
-    temperature: 0.4,
-  });
+  const analysisRaw = await generateWithClaude(
+    ctx, analysisInput.system, analysisInput.prompt, config, 0.4,
+  );
 
   const analysis = await parseJsonResponse<AnalysisResult>(ctx, analysisRaw);
   if (!analysis) {
@@ -204,10 +229,9 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     originalMotivations: getInitialMotivations(),
   });
 
-  const improvementRaw = await ctx.ollama.generate(improvementInput.prompt, {
-    system: improvementInput.system,
-    temperature: 0.5,
-  });
+  const improvementRaw = await generateWithClaude(
+    ctx, improvementInput.system, improvementInput.prompt, config, 0.5,
+  );
 
   const improvement = await parseJsonResponse<ImprovementResult>(ctx, improvementRaw);
   if (!improvement) {
@@ -273,10 +297,9 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
         if (lineCount > lineThreshold) {
           ctx.logger.info({ yesterday, lineCount, lineThreshold }, 'Reflection: compacting yesterday\'s log');
           const compactionInput = buildCompactionPrompt(yesterdayContent);
-          const compacted = await ctx.ollama.generate(compactionInput.prompt, {
-            system: compactionInput.system,
-            temperature: 0.2,
-          });
+          const compacted = await generateWithClaude(
+            ctx, compactionInput.system, compactionInput.prompt, config, 0.2,
+          );
 
           if (compacted && compacted.trim()) {
             writeFileSync(yesterdayPath, compacted.trim() + '\n', 'utf-8');
@@ -372,7 +395,9 @@ async function parseJsonResponse<T>(ctx: SkillContext, raw: string): Promise<T |
   // Retry: ask LLM to fix the JSON
   try {
     const fixPrompt = buildJsonFixPrompt(cleaned);
-    const fixed = await ctx.ollama.generate(fixPrompt, { temperature: 0.1 });
+    const fixed = await generateWithClaude(
+      ctx, '', fixPrompt, ctx.config as ReflectionConfig, 0.1,
+    );
 
     let fixedCleaned = fixed.trim();
     if (fixedCleaned.startsWith('```')) {

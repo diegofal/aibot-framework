@@ -38,6 +38,17 @@ interface FtsRow {
   rank: number;
 }
 
+const STOP_WORDS = new Set([
+  // Spanish
+  'a', 'al', 'con', 'de', 'del', 'el', 'en', 'es', 'la', 'las', 'lo', 'los',
+  'me', 'mi', 'no', 'o', 'para', 'por', 'que', 'se', 'si', 'su', 'te', 'un',
+  'una', 'y', 'como', 'cual', 'tiene', 'esta',
+  // English
+  'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has',
+  'he', 'in', 'is', 'it', 'its', 'of', 'on', 'or', 'she', 'the', 'to',
+  'was', 'we', 'with', 'you',
+]);
+
 export async function hybridSearch(
   db: Database,
   query: string,
@@ -80,13 +91,15 @@ export async function hybridSearch(
 
   // --- Keyword search (FTS5) ---
   try {
-    // Sanitize query for FTS5: remove special chars, wrap tokens in quotes
-    const ftsQuery = query
+    // Sanitize query for FTS5: remove special chars, filter stop words, prefix matching
+    const ftsTokens = query
       .replace(/[^\w\s]/g, ' ')
       .split(/\s+/)
       .filter(Boolean)
-      .map(t => `"${t}"`)
-      .join(' OR ');
+      .map(t => t.toLowerCase())
+      .filter(t => t.length >= 3 && !STOP_WORDS.has(t));
+
+    const ftsQuery = ftsTokens.map(t => `${t}*`).join(' OR ');
 
     if (ftsQuery) {
       const ftsResults = db.prepare<FtsRow, [string]>(

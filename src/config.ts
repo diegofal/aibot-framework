@@ -102,6 +102,13 @@ const WebToolsConfigSchema = z.object({
   maxToolRounds: z.number().int().min(1).max(10).default(5),
 });
 
+const AutoRagConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxResults: z.number().int().positive().default(3),
+  minScore: z.number().min(0).max(1).default(0.25),
+  maxContentChars: z.number().int().positive().default(2000),
+}).default({});
+
 const MemorySearchConfigSchema = z.object({
   enabled: z.boolean().default(false),
   embeddingModel: z.string().default('nomic-embed-text'),
@@ -116,6 +123,7 @@ const MemorySearchConfigSchema = z.object({
   dbPath: z.string().default('./data/memory.db'),
   concurrency: z.number().int().positive().default(3),
   watchEnabled: z.boolean().default(true),
+  autoRag: AutoRagConfigSchema,
 });
 
 const MemoryFlushConfigSchema = z.object({
@@ -175,6 +183,15 @@ const PhoneCallConfigSchema = z.object({
 const HumanizerConfigSchema = z.object({
   enabled: z.boolean().default(false),
 });
+
+const ImproveToolConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  claudePath: z.string().default('claude'),
+  timeout: z.number().int().positive().max(300_000).default(120_000),
+  maxOutputLength: z.number().int().positive().default(15_000),
+  soulDir: z.string().default('./config/soul'),
+  allowedFocus: z.array(z.string()).default(['memory', 'soul', 'motivations', 'identity', 'all']),
+}).default({});
 
 const CollaborationConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -247,6 +264,7 @@ const ConfigSchema = z.object({
   cron: CronConfigSchema.default({}),
   phoneCall: PhoneCallConfigSchema.optional(),
   humanizer: HumanizerConfigSchema.default({}),
+  improve: ImproveToolConfigSchema,
   collaboration: CollaborationConfigSchema,
   buffer: BufferConfigSchema,
   web: WebConfigSchema.default({}),
@@ -267,12 +285,14 @@ export type FileToolsConfig = z.infer<typeof FileToolsConfigSchema>;
 export type ProcessToolConfig = z.infer<typeof ProcessToolConfigSchema>;
 export type SoulConfig = z.infer<typeof SoulConfigSchema>;
 export type MemorySearchConfig = z.infer<typeof MemorySearchConfigSchema>;
+export type AutoRagConfig = z.infer<typeof AutoRagConfigSchema>;
 export type MediaConfig = z.infer<typeof MediaConfigSchema>;
 export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 export type DatetimeToolConfig = z.infer<typeof DatetimeToolConfigSchema>;
 export type CronConfig = z.infer<typeof CronConfigSchema>;
 export type PhoneCallConfig = z.infer<typeof PhoneCallConfigSchema>;
 export type HumanizerConfig = z.infer<typeof HumanizerConfigSchema>;
+export type ImproveToolConfig = z.infer<typeof ImproveToolConfigSchema>;
 export type CollaborationConfig = z.infer<typeof CollaborationConfigSchema>;
 export type BufferConfig = z.infer<typeof BufferConfigSchema>;
 export type WebConfig = z.infer<typeof WebConfigSchema>;

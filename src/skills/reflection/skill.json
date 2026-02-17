@@ -13,6 +13,10 @@
           "type": "string",
           "description": "Path to soul directory"
         },
+        "claudePath": {
+          "type": "string",
+          "description": "Path to claude CLI binary for high-quality summarization (falls back to Ollama)"
+        },
         "telegramChatId": {
           "type": "number",
           "description": "Telegram chat ID for reflection notifications"

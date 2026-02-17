@@ -137,7 +137,18 @@ export class SoulLoader {
       sections.push(`## Your Inner Motivations\n\n${motivations}`);
     }
 
-    // 4. Daily memory logs (today + yesterday)
+    // 4. Legacy memory (core biographical data — always present)
+    const legacyPath = join(this.dir, 'memory', 'legacy.md');
+    try {
+      const legacy = readFileSync(legacyPath, 'utf-8').trim();
+      if (legacy) {
+        sections.push(`## Core Memory\n\n${legacy}`);
+      }
+    } catch {
+      // No legacy file
+    }
+
+    // 5. Daily memory logs (today + yesterday)
     const dailyLogs = this.readRecentDailyLogs();
     if (dailyLogs) {
       sections.push(dailyLogs);

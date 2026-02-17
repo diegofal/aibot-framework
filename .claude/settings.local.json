@@ -61,7 +61,15 @@
       "Bash(test:*)",
       "Bash(pkill:*)",
       "Bash(pgrep:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(git merge:*)",
+      "Bash(claude:*)",
+      "Bash(/home/diego/.local/bin/claude:*)",
+      "Bash(/tmp/test-embed.ts:*)",
+      "Bash(git -C /home/diego/projects/aibot-framework status)",
+      "Bash(git -C /home/diego/projects/aibot-framework diff src/bot/system-prompt-builder.ts)",
+      "Bash(git -C /home/diego/projects/aibot-framework log --oneline -5)",
+      "Bash(git -C /home/diego/projects/aibot-framework add src/bot/ src/bot.ts src/config.ts src/memory/search.ts src/skills/reflection/ src/skills/improve/ src/tools/improve.ts src/claude-cli.ts src/soul.ts CLAUDE.md .claude/settings.local.json config/soul/)"
     ]
   }
 }
