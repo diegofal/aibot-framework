@@ -3,6 +3,7 @@ import type { OllamaClient, ChatMessage, ChatOptions } from '../ollama';
 import { claudeGenerate } from '../claude-cli';
 
 export interface LLMGenerateOptions {
+  model?: string;
   system?: string;
   temperature?: number;
   maxTokens?: number;
@@ -47,14 +48,11 @@ export class ClaudeCliLLMClient implements LLMClient {
   ) {}
 
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<string> {
-    const fullPrompt = opts?.system
-      ? `${opts.system}\n\n${prompt}`
-      : prompt;
-
-    return claudeGenerate(fullPrompt, {
+    return claudeGenerate(prompt, {
       claudePath: this.claudePath,
       timeout: this.timeout,
       logger: this.logger,
+      systemPrompt: opts?.system,
     });
   }
 

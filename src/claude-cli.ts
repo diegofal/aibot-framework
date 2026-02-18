@@ -5,6 +5,7 @@ export interface ClaudeGenerateOptions {
   claudePath?: string;
   timeout?: number;
   maxLength?: number;
+  systemPrompt?: string;
 }
 
 const DEFAULT_CLAUDE_PATH = 'claude';
@@ -28,7 +29,12 @@ export async function claudeGenerate(
   delete env.CLAUDECODE;
   env.TERM = 'dumb';
 
-  const proc = Bun.spawn([claudePath, '-p', prompt, '--output-format', 'text'], {
+  const args = [claudePath, '-p', prompt, '--output-format', 'text'];
+  if (opts.systemPrompt) {
+    args.push('--system-prompt', opts.systemPrompt);
+  }
+
+  const proc = Bun.spawn(args, {
     cwd: resolve('.'),
     stdout: 'pipe',
     stderr: 'pipe',

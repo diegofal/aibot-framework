@@ -14,6 +14,8 @@ import { sessionsRoutes } from './routes/sessions';
 import { settingsRoutes } from './routes/settings';
 import { skillsRoutes } from './routes/skills';
 import { statusRoutes } from './routes/status';
+import { toolsRoutes } from './routes/tools';
+import { agentLoopRoutes } from './routes/agent-loop';
 
 export type WebServerDeps = {
   config: Config;
@@ -38,6 +40,14 @@ export function startWebServer(deps: WebServerDeps): void {
   app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager }));
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
   app.route('/api/settings', settingsRoutes({ config, configPath: deps.configPath, logger }));
+  app.route('/api/agent-loop', agentLoopRoutes({ config, botManager: deps.botManager, logger }));
+
+  // Dynamic tools routes (only if enabled)
+  const dynamicStore = deps.botManager.getDynamicToolStore();
+  const dynamicRegistry = deps.botManager.getDynamicToolRegistry();
+  if (dynamicStore && dynamicRegistry) {
+    app.route('/api/tools', toolsRoutes({ store: dynamicStore, registry: dynamicRegistry }));
+  }
 
   // Static files from web/ directory
   app.use('/*', serveStatic({ root: './web' }));
@@ -133,6 +143,7 @@ export function startWebServer(deps: WebServerDeps): void {
     },
     port,
     hostname: host,
+    idleTimeout: 255,
     websocket: {
       open(ws) {
         wsClients.add(ws);

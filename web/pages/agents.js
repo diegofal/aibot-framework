@@ -1,5 +1,76 @@
 import { showModal, closeModal, api, escapeHtml } from './shared.js';
 
+function formatDuration(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
+}
+
+function statusBadge(status) {
+  const cls = status === 'completed' ? 'badge-ok'
+    : status === 'error' ? 'badge-error'
+    : 'badge-disabled';
+  return `<span class="badge ${cls}">${status}</span>`;
+}
+
+function renderAgentLoopResult(r) {
+  const sections = [];
+
+  sections.push(`<div class="flex-between mb-16">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-weight:600;font-size:14px">Agent Loop Result</span>
+      ${statusBadge(r.status)}
+    </div>
+    <span class="text-dim text-sm">${formatDuration(r.durationMs)}</span>
+  </div>`);
+
+  if (r.plannerReasoning) {
+    sections.push(`<div class="result-section">
+      <div class="result-section-title">Planner Reasoning</div>
+      <pre>${escapeHtml(r.plannerReasoning)}</pre>
+    </div>`);
+  }
+
+  if (r.plan && r.plan.length > 0) {
+    sections.push(`<div class="result-section">
+      <div class="result-section-title">Plan</div>
+      <ol style="margin:0;padding-left:20px;font-size:13px">${r.plan.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+    </div>`);
+  }
+
+  if (r.toolCalls && r.toolCalls.length > 0) {
+    sections.push(`<div class="result-section">
+      <div class="result-section-title">Tool Calls (${r.toolCalls.length})</div>
+      ${r.toolCalls.map(tc => {
+        const badge = tc.success
+          ? '<span class="badge badge-ok">OK</span>'
+          : '<span class="badge badge-error">FAIL</span>';
+        const argsStr = JSON.stringify(tc.args || {}, null, 2);
+        return `<div class="tool-call-item">
+          <div class="tool-call-header">
+            <span style="font-family:monospace;font-weight:600">${escapeHtml(tc.name)}</span> ${badge}
+          </div>
+          <details class="tool-call-details">
+            <summary class="text-dim text-sm">Args</summary>
+            <pre>${escapeHtml(argsStr)}</pre>
+          </details>
+          <details class="tool-call-details" ${!tc.success ? 'open' : ''}>
+            <summary class="text-dim text-sm">Result</summary>
+            <pre>${escapeHtml(tc.result || '')}</pre>
+          </details>
+        </div>`;
+      }).join('')}
+    </div>`);
+  }
+
+  sections.push(`<div class="result-section">
+    <div class="result-section-title">Summary</div>
+    <pre>${escapeHtml(r.summary || '')}</pre>
+  </div>`);
+
+  return sections.join('');
+}
+
 export async function renderAgents(el) {
   el.innerHTML = '<div class="page-title">Agents</div><p class="text-dim">Loading...</p>';
 
@@ -36,6 +107,10 @@ export async function renderAgents(el) {
           ? `<button class="btn btn-sm btn-danger" data-action="stop" data-id="${agent.id}">Stop</button>`
           : `<button class="btn btn-sm" data-action="start" data-id="${agent.id}">Start</button>`
         }
+        ${agent.running
+          ? `<button class="btn btn-sm" data-action="run-loop" data-id="${agent.id}">Run Loop</button>`
+          : ''
+        }
         <button class="btn btn-sm" data-action="edit" data-id="${agent.id}">Edit</button>
         <button class="btn btn-sm" data-action="clone" data-id="${agent.id}">Clone</button>
         <button class="btn btn-sm btn-danger" data-action="delete" data-id="${agent.id}">Delete</button>
@@ -63,6 +138,32 @@ export async function renderAgents(el) {
       const res = await api(`/api/agents/${id}/stop`, { method: 'POST' });
       if (res.error) alert(`Failed to stop: ${res.error}`);
       renderAgents(el);
+    } else if (action === 'run-loop') {
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      try {
+        const res = await api(`/api/agent-loop/run/${encodeURIComponent(id)}`, { method: 'POST' });
+        if (res.error) {
+          alert(`Agent loop error: ${res.error}`);
+        } else {
+          showModal(`
+            <div class="modal-title">Agent Loop Result</div>
+            <div style="max-height:60vh;overflow-y:auto">${renderAgentLoopResult(res.result)}</div>
+            <div class="modal-actions">
+              <button class="btn" id="loop-result-close">Close</button>
+            </div>
+          `);
+          document.getElementById('modal').style.maxWidth = '700px';
+          document.getElementById('loop-result-close').addEventListener('click', () => {
+            document.getElementById('modal').style.maxWidth = '';
+            closeModal();
+          });
+        }
+      } catch (err) {
+        alert(`Agent loop failed: ${err.message}`);
+      }
+      btn.disabled = false;
+      btn.textContent = 'Run Loop';
     } else if (action === 'edit') {
       location.hash = `#/agents/${id}/edit`;
     } else if (action === 'clone') {
@@ -96,8 +197,9 @@ export async function renderAgentDetail(el, id) {
     ? '<span class="badge badge-running">Running</span>'
     : '<span class="badge badge-stopped">Stopped</span>';
 
-  const modelDisplay = agent.model
-    ? escapeHtml(agent.model)
+  const effectiveModel = agent.llmBackend === 'claude-cli' ? 'claude-cli' : agent.model;
+  const modelDisplay = effectiveModel
+    ? escapeHtml(effectiveModel)
     : `<span class="text-dim">${escapeHtml(defaults.model)} (global)</span>`;
 
   const soulDirDisplay = agent.soulDir
@@ -143,7 +245,12 @@ export async function renderAgentDetail(el, id) {
       }
       <a href="#/agents/${agent.id}/edit" class="btn">Edit</a>
       <button class="btn" id="btn-clone">Clone</button>
+      ${agent.running
+        ? `<button class="btn" id="btn-run-loop">Run Agent Loop</button>`
+        : ''
+      }
     </div>
+    <div id="agent-loop-result"></div>
   `;
 
   document.getElementById('btn-toggle').addEventListener('click', async (e) => {
@@ -158,6 +265,30 @@ export async function renderAgentDetail(el, id) {
   document.getElementById('btn-clone').addEventListener('click', () => {
     showCloneModal(id, el, () => renderAgentDetail(el, id));
   });
+
+  const runLoopBtn = document.getElementById('btn-run-loop');
+  if (runLoopBtn) {
+    runLoopBtn.addEventListener('click', async () => {
+      runLoopBtn.disabled = true;
+      runLoopBtn.textContent = 'Running...';
+      const resultDiv = document.getElementById('agent-loop-result');
+      resultDiv.innerHTML = '<p class="text-dim text-sm mt-8">Executing agent loop...</p>';
+
+      try {
+        const res = await api(`/api/agent-loop/run/${encodeURIComponent(id)}`, { method: 'POST' });
+        if (res.error) {
+          resultDiv.innerHTML = `<div class="detail-card mt-8"><p style="color:var(--red)">${escapeHtml(res.error)}</p></div>`;
+        } else {
+          resultDiv.innerHTML = `<div class="detail-card mt-8">${renderAgentLoopResult(res.result)}</div>`;
+        }
+      } catch (err) {
+        resultDiv.innerHTML = `<div class="detail-card mt-8"><p style="color:var(--red)">Failed: ${escapeHtml(err.message)}</p></div>`;
+      }
+
+      runLoopBtn.disabled = false;
+      runLoopBtn.textContent = 'Run Agent Loop';
+    });
+  }
 }
 
 export async function renderAgentEdit(el, id) {
@@ -214,7 +345,15 @@ export async function renderAgentEdit(el, id) {
 
       <div class="form-group">
         <label>Model</label>
-        <input type="text" name="model" value="${escapeHtml(agent.model || '')}" placeholder="${escapeHtml(defaults.model)}">
+        <select name="model">
+          <option value="">Global default (${escapeHtml(defaults.model)})</option>
+          ${(defaults.availableModels || []).map((m) => {
+            const selected = m === 'claude-cli'
+              ? agent.llmBackend === 'claude-cli' ? 'selected' : ''
+              : agent.model === m && agent.llmBackend !== 'claude-cli' ? 'selected' : '';
+            return `<option value="${escapeHtml(m)}" ${selected}>${escapeHtml(m)}</option>`;
+          }).join('')}
+        </select>
       </div>
       <div class="form-group">
         <label>System Prompt</label>
@@ -279,7 +418,14 @@ export async function renderAgentEdit(el, id) {
     patch.mentionPatterns = form.mentionPatterns.value.split(',').map((s) => s.trim()).filter(Boolean);
 
     // Per-agent overrides (empty string = clear override)
-    patch.model = form.model.value.trim() || undefined;
+    const selectedModel = form.model.value.trim();
+    if (selectedModel === 'claude-cli') {
+      patch.model = undefined;
+      patch.llmBackend = 'claude-cli';
+    } else {
+      patch.model = selectedModel || undefined;
+      patch.llmBackend = undefined;
+    }
     patch.soulDir = form.soulDir.value.trim() || undefined;
 
     // Build conversation overrides
