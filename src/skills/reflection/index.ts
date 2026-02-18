@@ -123,6 +123,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
   const identity = readSoulFile(soulDir, 'IDENTITY.md') || '(no identity configured)';
   const soul = readSoulFile(soulDir, 'SOUL.md') || '(no soul configured)';
   const motivations = readSoulFile(soulDir, 'MOTIVATIONS.md') || '(no motivations yet)';
+  const goals = readSoulFile(soulDir, 'GOALS.md') || '';
 
   // Parse watermark from MOTIVATIONS.md
   const lastReflectionDate = parseLastReflectionDate(motivations);
@@ -150,6 +151,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     soul: cappedSoul,
     motivations: cappedMotivations,
     recentLogs: cappedLogs,
+    goals: goals || undefined,
   });
 
   const analysisRaw = await ctx.llm.generate(analysisInput.prompt, {

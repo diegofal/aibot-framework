@@ -5,8 +5,8 @@ import type { BotContext } from './types';
 import type { ToolRegistry } from './tool-registry';
 
 export interface SystemPromptOptions {
-  /** 'conversation' includes all tool blocks; 'collaboration' only memory_search + soul */
-  mode: 'conversation' | 'collaboration';
+  /** 'conversation' includes all tool blocks; 'collaboration' only memory_search + soul; 'autonomous' for agent loop */
+  mode: 'conversation' | 'collaboration' | 'autonomous';
   botId: string;
   botConfig: BotConfig;
   isGroup: boolean;
@@ -38,6 +38,8 @@ export class SystemPromptBuilder {
 
     if (mode === 'conversation') {
       prompt = this.appendConversationToolBlocks(prompt, defs, botConfig, ragContext);
+    } else if (mode === 'autonomous') {
+      prompt = this.appendAutonomousToolBlocks(prompt, defs, botConfig);
     } else {
       // Collaboration mode: only memory_search + soul tools
       prompt = this.appendCollaborationToolBlocks(prompt, defs);
@@ -142,6 +144,16 @@ export class SystemPromptBuilder {
       prompt += this.collaborationInstructions(botConfig);
     }
 
+    // Goals tool
+    if (defs.some((d) => d.function.name === 'manage_goals')) {
+      prompt += this.goalsToolInstructions();
+    }
+
+    // Create tool (dynamic tools)
+    if (defs.some((d) => d.function.name === 'create_tool')) {
+      prompt += this.createToolInstructions();
+    }
+
     return prompt;
   }
 
@@ -165,6 +177,30 @@ export class SystemPromptBuilder {
         '\n\nYou have persistent files that define who you are. ' +
         'They ARE your memory — update them to persist across conversations.\n' +
         "- save_memory: When you learn a preference, fact, or context worth remembering, save it. Don't ask — just do it.";
+    }
+
+    return prompt;
+  }
+
+  private appendAutonomousToolBlocks(
+    prompt: string,
+    defs: import('../tools/types').ToolDefinition[],
+    botConfig: BotConfig,
+  ): string {
+    if (defs.length === 0) return prompt;
+
+    prompt +=
+      '\n\n## Autonomous Mode\n\n' +
+      'You are running autonomously without a human in the loop. ' +
+      'Execute your plan efficiently using available tools. ' +
+      'Focus on making concrete progress on your goals and motivations.';
+
+    // Include all relevant tool instruction blocks (same as conversation minus group-specific ones)
+    prompt = this.appendConversationToolBlocks(prompt, defs, botConfig);
+
+    // Goals tool instructions
+    if (defs.some((d) => d.function.name === 'manage_goals')) {
+      prompt += this.goalsToolInstructions();
     }
 
     return prompt;
@@ -289,6 +325,30 @@ export class SystemPromptBuilder {
       'You can delegate messages to other bots using `delegate_to_bot`.\n' +
       'Use it when the user\'s request is better handled by another bot.\n\n' +
       'Available bots:\n' + otherBots
+    );
+  }
+
+  private createToolInstructions(): string {
+    return (
+      '\n\n## Dynamic Tool Creation\n\n' +
+      'You can create new tools using the `create_tool` tool.\n' +
+      '- Provide a snake_case name, description, type (typescript or command), and the source code.\n' +
+      '- For TypeScript tools: write a script that reads JSON args from argv[2] and prints JSON result to stdout.\n' +
+      '- For command tools: write a shell command template with {{param}} placeholders.\n' +
+      '- New tools require human approval before they become available.\n' +
+      '- Use this when you need a capability that your existing tools don\'t provide.'
+    );
+  }
+
+  private goalsToolInstructions(): string {
+    return (
+      '\n\n## Goal Management\n\n' +
+      'You can manage your goals using the `manage_goals` tool.\n' +
+      '- Use action "list" to see all current goals.\n' +
+      '- Use action "add" to create a new goal with priority (high/medium/low).\n' +
+      '- Use action "update" to change a goal\'s status or notes.\n' +
+      '- Use action "complete" to mark a goal as done with an outcome summary.\n\n' +
+      'Keep goals concrete and actionable. Update them as you make progress.'
     );
   }
 

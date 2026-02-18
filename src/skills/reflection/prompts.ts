@@ -15,6 +15,7 @@ export function buildAnalysisPrompt(input: {
   soul: string;
   motivations: string;
   recentLogs: string;
+  goals?: string;
 }): { system: string; prompt: string } {
   const system = `You are the introspective layer of an AI personality. Your job is to privately evaluate recent behavior by comparing it against the personality's soul, identity, and motivations.
 
@@ -35,7 +36,7 @@ ${input.motivations}
 
 ## Recent Daily Memory Logs (new since last reflection)
 ${input.recentLogs}
-
+${input.goals ? `\n## Current Goals\n${input.goals}\n` : ''}
 ---
 
 Analyze my recent behavior across these dimensions:

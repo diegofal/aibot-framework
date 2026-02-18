@@ -28,6 +28,9 @@ Thumbs.db
 *.tmp
 temp/
 
+# Generated reports (intel-gatherer, etc.)
+intel?gatherer*.html
+
 # Soul / identity / memory (runtime-generated, per-deployment)
 config/soul/
 

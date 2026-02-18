@@ -7,6 +7,7 @@ import type { BotContext } from './types';
 import type { MemoryFlusher } from './memory-flush';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import type { ToolRegistry } from './tool-registry';
+import { sendLongMessage } from './telegram-utils';
 
 export class ConversationPipeline {
   constructor(
@@ -226,7 +227,7 @@ export class ConversationPipeline {
           '🤖 Sending to LLM'
         );
 
-        const response = await this.ctx.ollamaClient.chat(messages, {
+        const response = await this.ctx.getLLMClient(config.id).chat(messages, {
           model: activeModel,
           temperature: resolved.temperature,
           tools: hasTools ? botToolDefs : undefined,
@@ -258,7 +259,7 @@ export class ConversationPipeline {
         }
 
         if (response.trim()) {
-          await ctx.reply(response);
+          await sendLongMessage(t => ctx.reply(t), response);
         } else {
           botLogger.debug({ chatId }, 'LLM returned empty response, sending ack');
           await ctx.reply('✅');

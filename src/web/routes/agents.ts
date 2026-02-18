@@ -29,6 +29,11 @@ export function agentsRoutes(deps: {
   app.get('/defaults', (c) => {
     return c.json({
       model: deps.config.ollama.models.primary,
+      availableModels: [
+        deps.config.ollama.models.primary,
+        ...(deps.config.ollama.models.fallbacks || []),
+        'claude-cli',
+      ],
       systemPrompt: deps.config.conversation.systemPrompt,
       temperature: deps.config.conversation.temperature,
       maxHistory: deps.config.conversation.maxHistory,
@@ -66,6 +71,7 @@ export function agentsRoutes(deps: {
       allowedUsers: body.allowedUsers,
       mentionPatterns: body.mentionPatterns,
       model: body.model,
+      llmBackend: (body as any).llmBackend,
       soulDir: body.soulDir,
       disabledTools: body.disabledTools,
       conversation: body.conversation,
@@ -95,6 +101,7 @@ export function agentsRoutes(deps: {
 
     // Per-agent override fields (undefined = clear override, use global default)
     if ('model' in body) bot.model = body.model || undefined;
+    if ('llmBackend' in body) bot.llmBackend = (body as any).llmBackend || undefined;
     if ('soulDir' in body) bot.soulDir = body.soulDir || undefined;
     if ('conversation' in body) {
       if (body.conversation && Object.values(body.conversation).some((v) => v !== undefined)) {

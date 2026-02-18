@@ -13,6 +13,7 @@ import type { OllamaClient } from '../ollama';
 import type { SessionManager } from '../session';
 import type { SoulLoader } from '../soul';
 import type { Tool, ToolDefinition } from '../tools/types';
+import type { LLMClient } from '../core/llm-client';
 
 export interface SeenUser {
   id: number;
@@ -50,9 +51,11 @@ export interface BotContext {
   readonly botLoggers: Map<string, Logger>;
   readonly seenUsers: Map<number, Map<number, SeenUser>>;
   readonly handledMessageIds: Set<string>;
+  readonly llmClients: Map<string, LLMClient>;
 
   // Helper methods
   getActiveModel(botId: string): string;
+  getLLMClient(botId: string): LLMClient;
   getSoulLoader(botId: string): SoulLoader;
   getBotLogger(botId: string): Logger;
   resolveBotId(targetBotId: string): string | undefined;

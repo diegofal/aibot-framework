@@ -8,6 +8,25 @@ const BotConversationOverrideSchema = z.object({
   maxHistory: z.number().int().positive().optional(),
 }).optional();
 
+const GlobalAgentLoopConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  every: z.string().default('6h'),
+  maxToolRounds: z.number().int().min(1).max(20).default(10),
+  maxDurationMs: z.number().int().positive().default(300_000),
+  disabledTools: z.array(z.string()).optional(),
+}).default({});
+
+const BotAgentLoopOverrideSchema = z.object({
+  reportChatId: z.number().optional(),
+  disabledTools: z.array(z.string()).optional(),
+}).optional();
+
+const DynamicToolsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  storePath: z.string().default('./data/tools'),
+  maxToolsPerBot: z.number().default(20),
+}).default({});
+
 const BotConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -17,10 +36,12 @@ const BotConfigSchema = z.object({
   skills: z.array(z.string()),
   mentionPatterns: z.array(z.string()).optional(),
   model: z.string().optional(),
+  llmBackend: z.enum(['ollama', 'claude-cli']).optional(),
   soulDir: z.string().optional(),
   description: z.string().optional(),
   disabledTools: z.array(z.string()).optional(),
   conversation: BotConversationOverrideSchema,
+  agentLoop: BotAgentLoopOverrideSchema,
 });
 
 const OllamaConfigSchema = z.object({
@@ -273,6 +294,8 @@ const ConfigSchema = z.object({
   collaboration: CollaborationConfigSchema,
   buffer: BufferConfigSchema,
   web: WebConfigSchema.default({}),
+  agentLoop: GlobalAgentLoopConfigSchema,
+  dynamicTools: DynamicToolsConfigSchema,
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
 });
@@ -301,6 +324,9 @@ export type ImproveToolConfig = z.infer<typeof ImproveToolConfigSchema>;
 export type CollaborationConfig = z.infer<typeof CollaborationConfigSchema>;
 export type BufferConfig = z.infer<typeof BufferConfigSchema>;
 export type WebConfig = z.infer<typeof WebConfigSchema>;
+export type AgentLoopConfig = z.infer<typeof GlobalAgentLoopConfigSchema>;
+export type BotAgentLoopOverride = z.infer<typeof BotAgentLoopOverrideSchema>;
+export type DynamicToolsConfig = z.infer<typeof DynamicToolsConfigSchema>;
 export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
 export type SessionMemoryConfig = z.infer<typeof SessionMemoryConfigSchema>;
 export type LlmRelevanceCheckConfig = z.infer<typeof LlmRelevanceCheckSchema>;
@@ -376,6 +402,7 @@ export function getSkillConfig<T = unknown>(config: Config, skillId: string): T 
  */
 export interface ResolvedAgentConfig {
   model: string;
+  llmBackend?: 'ollama' | 'claude-cli';
   soulDir: string;
   systemPrompt: string;
   temperature: number;
@@ -389,6 +416,7 @@ export interface ResolvedAgentConfig {
 export function resolveAgentConfig(globalConfig: Config, botConfig: BotConfig): ResolvedAgentConfig {
   return {
     model: botConfig.model ?? globalConfig.ollama.models.primary,
+    llmBackend: botConfig.llmBackend,
     soulDir: botConfig.soulDir ?? `${globalConfig.soul.dir}/${botConfig.id}`,
     systemPrompt: botConfig.conversation?.systemPrompt ?? globalConfig.conversation.systemPrompt,
     temperature: botConfig.conversation?.temperature ?? globalConfig.conversation.temperature,

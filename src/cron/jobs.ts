@@ -206,15 +206,19 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     return { kind: 'message', text: patch.text, chatId: patch.chatId, botId: patch.botId };
   }
 
-  if (typeof patch.skillId !== 'string' || !patch.skillId) {
-    throw new Error('cron: skillJob payload requires skillId');
+  if (patch.kind === 'skillJob') {
+    if (typeof patch.skillId !== 'string' || !patch.skillId) {
+      throw new Error('cron: skillJob payload requires skillId');
+    }
+    if (typeof patch.jobId !== 'string' || !patch.jobId) {
+      throw new Error('cron: skillJob payload requires jobId');
+    }
+    const result: CronPayload & { kind: 'skillJob' } = { kind: 'skillJob', skillId: patch.skillId, jobId: patch.jobId };
+    if (patch.llmBackend) result.llmBackend = patch.llmBackend;
+    if (patch.claudePath) result.claudePath = patch.claudePath;
+    if (patch.claudeTimeout) result.claudeTimeout = patch.claudeTimeout;
+    return result;
   }
-  if (typeof patch.jobId !== 'string' || !patch.jobId) {
-    throw new Error('cron: skillJob payload requires jobId');
-  }
-  const result: CronPayload & { kind: 'skillJob' } = { kind: 'skillJob', skillId: patch.skillId, jobId: patch.jobId };
-  if (patch.llmBackend) result.llmBackend = patch.llmBackend;
-  if (patch.claudePath) result.claudePath = patch.claudePath;
-  if (patch.claudeTimeout) result.claudeTimeout = patch.claudeTimeout;
-  return result;
+
+  throw new Error(`cron: unknown payload kind: ${(patch as any).kind}`);
 }

@@ -1,12 +1,15 @@
+import { renderDashboard } from './pages/dashboard.js';
 import { renderAgents, renderAgentDetail, renderAgentEdit } from './pages/agents.js';
 import { renderSessions, renderSessionTranscript } from './pages/sessions.js';
 import { renderCron, renderCronDetail, renderCronCreate } from './pages/cron.js';
+import { renderTools, renderToolDetail } from './pages/tools.js';
 import { renderLogs, destroyLogs } from './pages/logs.js';
 import { renderSettings } from './pages/settings.js';
 
 const content = document.getElementById('content');
 
 const routes = [
+  { pattern: /^#\/$/, handler: () => renderDashboard(content) },
   { pattern: /^#\/agents\/([^/]+)\/edit$/, handler: (m) => renderAgentEdit(content, m[1]) },
   { pattern: /^#\/agents\/([^/]+)$/,        handler: (m) => renderAgentDetail(content, m[1]) },
   { pattern: /^#\/agents$/,                  handler: () => renderAgents(content) },
@@ -15,19 +18,24 @@ const routes = [
   { pattern: /^#\/cron\/new$/,               handler: () => renderCronCreate(content) },
   { pattern: /^#\/cron\/([^/]+)$/,           handler: (m) => renderCronDetail(content, m[1]) },
   { pattern: /^#\/cron$/,                    handler: () => renderCron(content) },
+  { pattern: /^#\/tools\/([^/]+)$/,          handler: (m) => renderToolDetail(content, m[1]) },
+  { pattern: /^#\/tools$/,                   handler: () => renderTools(content) },
   { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },
   { pattern: /^#\/settings$/,               handler: () => renderSettings(content) },
 ];
 
 function navigate() {
   destroyLogs();
-  const hash = location.hash || '#/agents';
-  if (hash === '#/' || hash === '#') { location.hash = '#/agents'; return; }
+  const hash = location.hash || '#/';
+  if (hash === '#') { location.hash = '#/'; return; }
 
   // Update active nav link
   document.querySelectorAll('.nav-link').forEach((el) => {
     const page = el.dataset.page;
-    el.classList.toggle('active', hash.startsWith(`#/${page}`));
+    const isActive = page === ''
+      ? hash === '#/' || hash === '#'
+      : hash.startsWith(`#/${page}`);
+    el.classList.toggle('active', isActive);
   });
 
   for (const route of routes) {
@@ -36,7 +44,7 @@ function navigate() {
   }
 
   // Default fallback
-  renderAgents(content);
+  renderDashboard(content);
 }
 
 window.addEventListener('hashchange', navigate);

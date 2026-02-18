@@ -189,7 +189,13 @@ export class SoulLoader {
       sections.push(`## Your Inner Motivations\n\n${motivations}`);
     }
 
-    // 4. Legacy memory (core biographical data — always present)
+    // 4. Goals
+    const goals = this.readFile('GOALS.md');
+    if (goals) {
+      sections.push(`## Goals\n\n${goals}`);
+    }
+
+    // 6. Legacy memory (core biographical data — always present)
     const legacyPath = join(this.dir, 'memory', 'legacy.md');
     try {
       const legacy = readFileSync(legacyPath, 'utf-8').trim();
@@ -200,7 +206,7 @@ export class SoulLoader {
       // No legacy file
     }
 
-    // 5. Daily memory logs (today + yesterday)
+    // 7. Daily memory logs (today + yesterday)
     const dailyLogs = this.readRecentDailyLogs();
     if (dailyLogs) {
       sections.push(dailyLogs);
@@ -362,6 +368,25 @@ export class SoulLoader {
    */
   readIdentity(): string | null {
     return this.readFile('IDENTITY.md');
+  }
+
+  /**
+   * Read GOALS.md content
+   */
+  readGoals(): string | null {
+    return this.readFile('GOALS.md');
+  }
+
+  /**
+   * Write GOALS.md content
+   */
+  writeGoals(content: string): void {
+    const goalsPath = join(this.dir, 'GOALS.md');
+    if (this.versioningEnabled) {
+      backupSoulFile(goalsPath, this.logger, this.maxVersions);
+    }
+    writeFileSync(goalsPath, content, 'utf-8');
+    this.logger.info('Goals updated');
   }
 
   /**

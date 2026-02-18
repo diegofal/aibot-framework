@@ -13,11 +13,18 @@ import { createMemoryGetTool } from '../tools/memory-get';
 import { createPhoneCallTool } from '../tools/phone-call';
 import { createMemorySearchTool } from '../tools/memory-search';
 import { createProcessTool } from '../tools/process';
+import { createCreateToolTool } from '../tools/create-tool';
+import { DynamicToolStore } from '../tools/dynamic-tool-store';
+import { DynamicToolRegistry } from './dynamic-tool-registry';
+import { createGoalsTool } from '../tools/goals';
 import { createSaveMemoryTool, createUpdateIdentityTool, createUpdateSoulTool } from '../tools/soul';
 import { createWebFetchTool } from '../tools/web-fetch';
 import { createWebSearchTool } from '../tools/web-search';
 
 export class ToolRegistry {
+  private dynamicToolRegistry: DynamicToolRegistry | null = null;
+  private dynamicToolStore: DynamicToolStore | null = null;
+
   constructor(private ctx: BotContext) {}
 
   /**
@@ -62,9 +69,10 @@ export class ToolRegistry {
       tools.push(
         createSaveMemoryTool(soulResolver),
         createUpdateSoulTool(soulResolver),
-        createUpdateIdentityTool(soulResolver)
+        createUpdateIdentityTool(soulResolver),
+        createGoalsTool(soulResolver)
       );
-      logger.info('Soul tools initialized');
+      logger.info('Soul tools initialized (including goals)');
     }
 
     // Memory search tools
@@ -173,6 +181,17 @@ export class ToolRegistry {
       logger.info('Improve tool initialized');
     }
 
+    // Dynamic tools (create_tool + approved dynamic tools)
+    const dtConfig = config.dynamicTools;
+    if (dtConfig?.enabled) {
+      this.dynamicToolStore = new DynamicToolStore(dtConfig.storePath);
+      this.dynamicToolRegistry = new DynamicToolRegistry(this.ctx, this.dynamicToolStore, logger);
+      tools.push(createCreateToolTool(this.dynamicToolStore, dtConfig.maxToolsPerBot));
+      logger.info('create_tool registered');
+      // Load approved dynamic tools (adds to ctx.tools[] via dynamicToolRegistry)
+      this.dynamicToolRegistry.initialize();
+    }
+
     // Populate definitions
     this.ctx.toolDefinitions.length = 0;
     this.ctx.toolDefinitions.push(...tools.map((t) => t.definition));
@@ -257,6 +276,20 @@ export class ToolRegistry {
       const effectiveArgs = { ...args, _chatId: chatId, _botId: botId };
       return tool.execute(effectiveArgs, this.ctx.logger);
     };
+  }
+
+  /**
+   * Get the dynamic tool store (for web API).
+   */
+  getDynamicToolStore(): DynamicToolStore | null {
+    return this.dynamicToolStore;
+  }
+
+  /**
+   * Get the dynamic tool registry (for web API approve/reject).
+   */
+  getDynamicToolRegistry(): DynamicToolRegistry | null {
+    return this.dynamicToolRegistry;
   }
 
   /**

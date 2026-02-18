@@ -14,15 +14,18 @@ import type { OllamaClient } from '../ollama';
 import type { SessionManager } from '../session';
 import { SoulLoader } from '../soul';
 import type { Tool, ToolDefinition } from '../tools/types';
+import { createLLMClient, OllamaLLMClient, type LLMClient } from '../core/llm-client';
 
 import type { BotContext, SeenUser } from './types';
 import { ToolRegistry } from './tool-registry';
 import { SystemPromptBuilder } from './system-prompt-builder';
+import { sendLongMessage } from './telegram-utils';
 import { MemoryFlusher } from './memory-flush';
 import { GroupActivation } from './group-activation';
 import { ConversationPipeline } from './conversation-pipeline';
 import { CollaborationManager } from './collaboration';
 import { HandlerRegistrar } from './handler-registrar';
+import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
 
 export class BotManager {
   // Shared mutable state
@@ -35,6 +38,8 @@ export class BotManager {
   private seenUsers: Map<number, Map<number, SeenUser>> = new Map();
   private handledMessageIds: Set<string> = new Set();
   private defaultSoulLoader: SoulLoader;
+  private llmClients: Map<string, LLMClient> = new Map();
+  private defaultLLMClient: LLMClient;
 
   // Infrastructure
   private messageBuffer: MessageBuffer;
@@ -51,6 +56,7 @@ export class BotManager {
   private conversationPipeline: ConversationPipeline;
   private collaborationManager: CollaborationManager;
   private handlerRegistrar: HandlerRegistrar;
+  private agentLoop: AgentLoop;
 
   constructor(
     private skillRegistry: SkillRegistry,
@@ -63,6 +69,7 @@ export class BotManager {
     private memoryManager?: MemoryManager
   ) {
     this.defaultSoulLoader = soulLoader;
+    this.defaultLLMClient = new OllamaLLMClient(ollamaClient);
     this.agentRegistry = new AgentRegistry();
 
     const collabConfig = config.collaboration;
@@ -102,8 +109,10 @@ export class BotManager {
       botLoggers: this.botLoggers,
       seenUsers: this.seenUsers,
       handledMessageIds: this.handledMessageIds,
+      llmClients: this.llmClients,
 
       getActiveModel: (botId: string) => this.getActiveModel(botId),
+      getLLMClient: (botId: string) => this.getLLMClient(botId),
       getSoulLoader: (botId: string) => this.getSoulLoader(botId),
       getBotLogger: (botId: string) => this.getBotLogger(botId),
       resolveBotId: (targetBotId: string) => this.resolveBotId(targetBotId),
@@ -123,6 +132,7 @@ export class BotManager {
     this.handlerRegistrar = new HandlerRegistrar(
       ctx, this.conversationPipeline, this.groupActivation, this.memoryFlusher, this.toolRegistry
     );
+    this.agentLoop = new AgentLoop(ctx, this.systemPromptBuilder, this.toolRegistry);
 
     // Initialize tools (with lazy callbacks for circular deps)
     this.toolRegistry.initializeAll(
@@ -153,6 +163,10 @@ export class BotManager {
 
   getActiveModel(botId: string): string {
     return this.activeModels.get(botId) ?? this.config.ollama.models.primary;
+  }
+
+  getLLMClient(botId: string): LLMClient {
+    return this.llmClients.get(botId) ?? this.defaultLLMClient;
   }
 
   getSoulLoader(botId: string): SoulLoader {
@@ -193,6 +207,15 @@ export class BotManager {
       const resolved = resolveAgentConfig(this.config, config);
       this.activeModels.set(config.id, resolved.model);
 
+      // Create per-bot LLMClient based on backend setting
+      const llmClient = createLLMClient(
+        { llmBackend: resolved.llmBackend },
+        this.ollamaClient,
+        botLogger,
+      );
+      this.llmClients.set(config.id, llmClient);
+      botLogger.info({ backend: llmClient.backend }, 'Per-agent LLM client initialized');
+
       const perBotSoulLoader = new SoulLoader(
         { ...this.config.soul, dir: resolved.soulDir },
         botLogger
@@ -208,8 +231,39 @@ export class BotManager {
       // Register all handlers via HandlerRegistrar
       this.handlerRegistrar.registerAll(bot, config);
 
-      bot.start();
+      // Start polling and handle async failures (e.g. 409 conflict after ungraceful shutdown)
+      const pollingPromise = bot.start();
       this.bots.set(config.id, bot);
+
+      pollingPromise.catch(async (err) => {
+        const is409 = err?.error_code === 409 || err?.message?.includes('409');
+        if (is409) {
+          botLogger.warn({ botId: config.id }, 'Polling hit 409 conflict, retrying in 3s...');
+          await new Promise((r) => setTimeout(r, 3000));
+          try {
+            // Create a fresh bot instance for the retry
+            this.cleanupBot(config.id);
+            const retryBot = new Bot(config.token);
+            retryBot.catch((error) => {
+              botLogger.error({ error, botId: config.id }, 'Bot error');
+            });
+            this.handlerRegistrar.registerAll(retryBot, config);
+            const retryPromise = retryBot.start();
+            this.bots.set(config.id, retryBot);
+            retryPromise.catch((retryErr) => {
+              botLogger.error({ error: retryErr, botId: config.id }, 'Polling retry failed, bot stopped');
+              this.cleanupBot(config.id);
+            });
+            botLogger.info({ botId: config.id }, 'Polling retry started');
+          } catch (retryErr) {
+            botLogger.error({ error: retryErr, botId: config.id }, 'Polling retry setup failed');
+            this.cleanupBot(config.id);
+          }
+        } else {
+          botLogger.error({ error: err, botId: config.id }, 'Polling failed, bot stopped');
+          this.cleanupBot(config.id);
+        }
+      });
 
       // Register in agent registry
       try {
@@ -238,23 +292,28 @@ export class BotManager {
     }
   }
 
+  private cleanupBot(botId: string): void {
+    this.bots.delete(botId);
+    this.activeModels.delete(botId);
+    this.llmClients.delete(botId);
+    this.soulLoaders.delete(botId);
+    this.agentRegistry.unregister(botId);
+  }
+
   async stopBot(botId: string): Promise<void> {
     const bot = this.bots.get(botId);
     if (!bot) return;
 
     await bot.stop();
-    this.bots.delete(botId);
-    this.activeModels.delete(botId);
-    this.soulLoaders.delete(botId);
+    this.cleanupBot(botId);
     this.botLoggers.delete(botId);
-    this.agentRegistry.unregister(botId);
     this.logger.info({ botId }, 'Bot stopped');
   }
 
   async sendMessage(chatId: number, text: string, botId: string): Promise<void> {
     const bot = this.bots.get(botId);
     if (!bot) throw new Error(`Bot not found: ${botId}`);
-    await bot.api.sendMessage(chatId, text);
+    await sendLongMessage(t => bot.api.sendMessage(chatId, t), text);
   }
 
   isRunning(botId: string): boolean {
@@ -266,6 +325,7 @@ export class BotManager {
   }
 
   async stopAll(): Promise<void> {
+    this.agentLoop.stop();
     this.messageBuffer.dispose();
     this.collaborationTracker.dispose();
     this.collaborationSessions.dispose();
@@ -275,6 +335,32 @@ export class BotManager {
       this.logger.info({ botId }, 'Bot stopped');
     }
     this.bots.clear();
+  }
+
+  // Agent loop
+  startAgentLoop(): void {
+    this.agentLoop.start();
+  }
+
+  async runAgentLoopAll(): Promise<AgentLoopResult[]> {
+    return this.agentLoop.runNow();
+  }
+
+  async runAgentLoop(botId: string): Promise<AgentLoopResult> {
+    return this.agentLoop.runOne(botId);
+  }
+
+  getAgentLoopState(): AgentLoopState {
+    return this.agentLoop.getState();
+  }
+
+  // Dynamic tools (for web API)
+  getDynamicToolStore() {
+    return this.toolRegistry.getDynamicToolStore();
+  }
+
+  getDynamicToolRegistry() {
+    return this.toolRegistry.getDynamicToolRegistry();
   }
 
   // Collaboration delegates

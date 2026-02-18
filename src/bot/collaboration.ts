@@ -5,6 +5,7 @@ import type { ChatMessage } from '../ollama';
 import type { BotContext } from './types';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import type { ToolRegistry } from './tool-registry';
+import { sendLongMessage } from './telegram-utils';
 
 export class CollaborationManager {
   constructor(
@@ -28,7 +29,7 @@ export class CollaborationManager {
     if (!agent || !resolvedTargetId) throw new Error(`Target agent not found: ${targetBotId}`);
 
     const visibleText = `@${agent.telegramUsername} ${message}`;
-    await bot.api.sendMessage(chatId, visibleText);
+    await sendLongMessage(t => bot.api.sendMessage(chatId, t), visibleText);
 
     const sourceLogger = this.ctx.getBotLogger(sourceBotId);
     sourceLogger.info(
@@ -96,7 +97,7 @@ export class CollaborationManager {
         }
       : undefined;
 
-    return this.ctx.ollamaClient.chat(messages, {
+    return this.ctx.getLLMClient(respondingBotId).chat(messages, {
       model: this.ctx.getActiveModel(respondingBotId),
       temperature: resolved.temperature,
       tools: hasTools ? collabDefs : undefined,
@@ -145,7 +146,7 @@ export class CollaborationManager {
       }
 
       if (response.trim()) {
-        await respondingBot.api.sendMessage(chatId, response);
+        await sendLongMessage(t => respondingBot.api.sendMessage(chatId, t), response);
       }
 
       botLogger.info(
@@ -202,13 +203,13 @@ export class CollaborationManager {
       'Handling delegation'
     );
 
-    const response = await this.ctx.ollamaClient.chat(messages, {
+    const response = await this.ctx.getLLMClient(targetBotId).chat(messages, {
       model: this.ctx.getActiveModel(targetBotId),
       temperature: resolved.temperature,
     });
 
     if (response.trim()) {
-      await targetBot.api.sendMessage(chatId, response);
+      await sendLongMessage(t => targetBot.api.sendMessage(chatId, t), response);
     }
 
     botLogger.info(
@@ -306,7 +307,7 @@ export class CollaborationManager {
 
     const timeout = collabConfig.internalQueryTimeout;
     const response = await Promise.race([
-      this.ctx.ollamaClient.chat(messages, {
+      this.ctx.getLLMClient(targetBotId).chat(messages, {
         model: this.ctx.getActiveModel(targetBotId),
         temperature: resolved.temperature,
         tools: hasTools ? collabTools.definitions : undefined,
@@ -385,7 +386,7 @@ export class CollaborationManager {
 
         const timeout = collabConfig.internalQueryTimeout;
         const sourceResponse = await Promise.race([
-          this.ctx.ollamaClient.chat(evalMessages, {
+          this.ctx.getLLMClient(sourceBotId).chat(evalMessages, {
             model: this.ctx.getActiveModel(sourceBotId),
             temperature: resolved.temperature,
           }),

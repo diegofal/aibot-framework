@@ -180,6 +180,9 @@ async function main() {
       logger.info({ botId: botConfig.id, name: botConfig.name }, 'Bot started');
     }
 
+    // Start global agent loop timer
+    botManager.startAgentLoop();
+
     // Start web server if enabled
     if (config.web.enabled) {
       startWebServer({

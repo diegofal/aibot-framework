@@ -74,10 +74,9 @@ export class GroupActivation {
         'Is this message intended for this bot? Answer ONLY "yes" or "no".',
       ].filter(Boolean).join('\n');
 
-      const model = botId ? this.ctx.getActiveModel(botId) : this.ctx.config.ollama.models.primary;
       const result = await Promise.race([
-        this.ctx.ollamaClient.generate(prompt, {
-          model,
+        this.ctx.getLLMClient(botId ?? '').generate(prompt, {
+          model: botId ? this.ctx.getActiveModel(botId) : this.ctx.config.ollama.models.primary,
           temperature: rlc.temperature,
         }),
         new Promise<string>((_, reject) =>
@@ -134,10 +133,9 @@ export class GroupActivation {
         'Answer "yes" only if the message is for this bot or for all bots. Answer "no" otherwise.',
       ].filter(Boolean).join('\n');
 
-      const model = this.ctx.getActiveModel(botId);
       const result = await Promise.race([
-        this.ctx.ollamaClient.generate(prompt, {
-          model,
+        this.ctx.getLLMClient(botId).generate(prompt, {
+          model: this.ctx.getActiveModel(botId),
           temperature: rlc.temperature,
         }),
         new Promise<string>((_, reject) =>

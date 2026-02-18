@@ -7,6 +7,7 @@ import type { ConversationPipeline } from './conversation-pipeline';
 import type { GroupActivation } from './group-activation';
 import type { MemoryFlusher } from './memory-flush';
 import type { ToolRegistry } from './tool-registry';
+import { sendLongMessage } from './telegram-utils';
 
 export class HandlerRegistrar {
   constructor(
@@ -144,25 +145,7 @@ export class HandlerRegistrar {
 
       const dump = this.ctx.getSoulLoader(config.id).dumpMemory();
 
-      if (dump.length <= 4096) {
-        await ctx.reply(dump);
-      } else {
-        const chunks: string[] = [];
-        let remaining = dump;
-        while (remaining.length > 0) {
-          if (remaining.length <= 4096) {
-            chunks.push(remaining);
-            break;
-          }
-          const cutAt = remaining.lastIndexOf('\n', 4096);
-          const splitPos = cutAt > 0 ? cutAt : 4096;
-          chunks.push(remaining.slice(0, splitPos));
-          remaining = remaining.slice(splitPos + 1);
-        }
-        for (const chunk of chunks) {
-          await ctx.reply(chunk);
-        }
-      }
+      await sendLongMessage(t => ctx.reply(t), dump);
     });
   }
 

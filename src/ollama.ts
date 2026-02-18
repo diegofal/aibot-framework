@@ -80,7 +80,7 @@ export class OllamaClient {
 
       return data.response;
     } catch (error) {
-      this.logger.warn({ error, model }, 'Primary model failed, trying fallbacks');
+      this.logger.warn({ err: error, model }, 'Primary model failed, trying fallbacks');
 
       // Try fallback models
       const fallbacks = this.config.models.fallbacks || [];
@@ -89,12 +89,12 @@ export class OllamaClient {
           this.logger.debug({ fallback }, 'Trying fallback model');
           return await this.generate(prompt, { ...options, model: fallback });
         } catch (fallbackError) {
-          this.logger.debug({ error: fallbackError, fallback }, 'Fallback model failed');
+          this.logger.debug({ err: fallbackError, fallback }, 'Fallback model failed');
           continue;
         }
       }
 
-      this.logger.error({ error }, 'All Ollama models failed');
+      this.logger.error({ err: error }, 'All Ollama models failed');
       throw new Error(`Failed to generate response: ${error}`);
     }
   }
@@ -192,7 +192,7 @@ export class OllamaClient {
       this.logger.warn({ maxRounds }, 'Tool loop exhausted without text response');
       return 'I was unable to complete the request within the allowed number of steps.';
     } catch (error) {
-      this.logger.warn({ error, model }, 'Primary model failed for chat, trying fallbacks');
+      this.logger.warn({ err: error, model }, 'Primary model failed for chat, trying fallbacks');
 
       const fallbacks = this.config.models.fallbacks || [];
       for (const fallback of fallbacks) {
@@ -200,12 +200,12 @@ export class OllamaClient {
           this.logger.debug({ fallback }, 'Trying fallback model for chat');
           return await this.chat(messages, { ...options, model: fallback });
         } catch (fallbackError) {
-          this.logger.debug({ error: fallbackError, fallback }, 'Fallback model failed for chat');
+          this.logger.debug({ err: fallbackError, fallback }, 'Fallback model failed for chat');
           continue;
         }
       }
 
-      this.logger.error({ error }, 'All Ollama models failed for chat');
+      this.logger.error({ err: error }, 'All Ollama models failed for chat');
       throw new Error(`Failed to chat: ${error}`);
     }
   }
@@ -241,7 +241,7 @@ export class OllamaClient {
 
       return { embedding, model: data.model };
     } catch (error) {
-      this.logger.error({ error, model: embeddingModel }, 'Failed to generate embedding');
+      this.logger.error({ err: error, model: embeddingModel }, 'Failed to generate embedding');
       throw error;
     }
   }
@@ -271,7 +271,7 @@ export class OllamaClient {
       const data = await response.json();
       return data.models?.map((m: { name: string }) => m.name) || [];
     } catch (error) {
-      this.logger.error({ error }, 'Failed to list Ollama models');
+      this.logger.error({ err: error }, 'Failed to list Ollama models');
       throw error;
     }
   }
