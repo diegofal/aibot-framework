@@ -38,6 +38,8 @@ export function agentsRoutes(deps: {
       temperature: deps.config.conversation.temperature,
       maxHistory: deps.config.conversation.maxHistory,
       soulDir: deps.config.soul.dir,
+      productionsBaseDir: deps.config.productions.baseDir,
+      agentLoopInterval: deps.config.agentLoop.every,
     });
   });
 
@@ -103,11 +105,20 @@ export function agentsRoutes(deps: {
     if ('model' in body) bot.model = body.model || undefined;
     if ('llmBackend' in body) bot.llmBackend = (body as any).llmBackend || undefined;
     if ('soulDir' in body) bot.soulDir = body.soulDir || undefined;
+    if ('workDir' in body) bot.workDir = (body as any).workDir || undefined;
     if ('conversation' in body) {
       if (body.conversation && Object.values(body.conversation).some((v) => v !== undefined)) {
         bot.conversation = body.conversation;
       } else {
         bot.conversation = undefined;
+      }
+    }
+    if ('agentLoop' in body) {
+      const al = (body as any).agentLoop;
+      if (al && Object.values(al).some((v: unknown) => v !== undefined)) {
+        bot.agentLoop = { ...bot.agentLoop, ...al };
+      } else {
+        bot.agentLoop = undefined;
       }
     }
 
@@ -139,10 +150,6 @@ export function agentsRoutes(deps: {
       deps.logger.warn({ botId: id }, 'Start failed: agent not found');
       return c.json({ error: 'Agent not found' }, 404);
     }
-    if (!bot.token) {
-      deps.logger.warn({ botId: id }, 'Start failed: no token configured');
-      return c.json({ error: 'Agent has no token configured' }, 400);
-    }
     if (deps.botManager.isRunning(id)) {
       deps.logger.warn({ botId: id }, 'Start failed: already running');
       return c.json({ error: 'Agent already running' }, 400);
@@ -169,6 +176,25 @@ export function agentsRoutes(deps: {
     await deps.botManager.stopBot(id);
     deps.logger.info({ botId: id }, 'Agent stopped via API');
     return c.json({ ok: true, running: false });
+  });
+
+  // Reset agent (clear all transient state, preserve identity)
+  app.post('/:id/reset', async (c) => {
+    const id = c.req.param('id');
+    const bot = deps.config.bots.find((b) => b.id === id);
+    if (!bot) return c.json({ error: 'Agent not found' }, 404);
+    if (deps.botManager.isRunning(id)) {
+      return c.json({ error: 'Stop the agent before resetting' }, 400);
+    }
+
+    try {
+      const result = await deps.botManager.resetBot(id);
+      deps.logger.info({ botId: id, cleared: result.cleared }, 'Agent reset via API');
+      return c.json(result);
+    } catch (err: any) {
+      deps.logger.error({ botId: id, error: err.message }, 'Reset failed');
+      return c.json({ error: err.message ?? 'Reset failed' }, 500);
+    }
   });
 
   // Clone agent

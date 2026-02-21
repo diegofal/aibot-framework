@@ -15,7 +15,9 @@ export function agentLoopRoutes(deps: {
     const state = deps.botManager.getAgentLoopState();
     return c.json({
       enabled: deps.config.agentLoop.enabled,
-      every: deps.config.agentLoop.every,
+      defaultInterval: deps.config.agentLoop.every,
+      minInterval: deps.config.agentLoop.minInterval,
+      maxInterval: deps.config.agentLoop.maxInterval,
       ...state,
     });
   });
