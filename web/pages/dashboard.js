@@ -13,6 +13,13 @@ function statusBadge(status) {
   return `<span class="badge ${cls}">${status}</span>`;
 }
 
+function modeBadge(mode) {
+  if (mode === 'continuous') {
+    return '<span class="badge badge-ok">continuous</span>';
+  }
+  return '<span class="badge badge-disabled">periodic</span>';
+}
+
 function renderToolCallsTable(toolCalls) {
   if (!toolCalls || toolCalls.length === 0) return '';
   return toolCalls.map(tc => {
@@ -38,6 +45,14 @@ function renderToolCallsTable(toolCalls) {
 
 function renderDetailRow(r, colspan) {
   const sections = [];
+
+  if (r.strategistRan) {
+    sections.push(`<div class="result-section">
+      <div class="result-section-title">Strategist</div>
+      ${r.focus ? `<div style="margin-bottom:6px"><strong>Focus:</strong> ${escapeHtml(r.focus)}</div>` : ''}
+      ${r.strategistReflection ? `<pre>${escapeHtml(r.strategistReflection)}</pre>` : ''}
+    </div>`);
+  }
 
   if (r.plannerReasoning) {
     sections.push(`<div class="result-section">
@@ -112,9 +127,10 @@ function attachResultRowListeners(container, results) {
 export async function renderDashboard(el) {
   el.innerHTML = '<div class="page-title">Dashboard</div><p class="text-dim">Loading...</p>';
 
-  const [loopState, statusData] = await Promise.all([
+  const [loopState, statusData, inboxData] = await Promise.all([
     api('/api/agent-loop'),
     api('/api/status'),
+    api('/api/ask-human/count'),
   ]);
 
   const enabledBadge = loopState.enabled
@@ -133,8 +149,18 @@ export async function renderDashboard(el) {
     ? '<span class="badge badge-ok" style="margin-left:8px">Running</span>'
     : '';
 
+  const inboxCount = inboxData.count ?? 0;
+  const inboxBanner = inboxCount > 0
+    ? `<div class="inbox-pending-banner">
+        <span>Pending Input (${inboxCount}) — Bots are waiting for your input.</span>
+        <a href="#/inbox" class="btn btn-sm">View Inbox</a>
+      </div>`
+    : '';
+
   el.innerHTML = `
     <div class="page-title">Dashboard</div>
+
+    ${inboxBanner}
 
     <div class="detail-card">
       <div class="flex-between mb-16">
@@ -146,10 +172,41 @@ export async function renderDashboard(el) {
         <button class="btn btn-primary" id="btn-run-now" ${loopState.running ? 'disabled' : ''}>Run Now</button>
       </div>
       <div style="display:flex;gap:24px;font-size:13px;color:var(--text-dim);margin-bottom:16px">
-        <span>Every: <strong style="color:var(--text)">${escapeHtml(loopState.every || '--')}</strong></span>
+        <span>Default Interval: <strong style="color:var(--text)">${escapeHtml(loopState.defaultInterval || '--')}</strong></span>
         <span>Next run: <strong style="color:var(--text)">${nextRunText}</strong></span>
         <span>Last run: <strong style="color:var(--text)">${lastRunText}</strong></span>
       </div>
+
+      ${loopState.botSchedules?.length ? `
+        <div class="text-dim text-sm mb-16" style="font-weight:500">Bot Schedules</div>
+        <table class="results-table" style="margin-bottom:16px">
+          <thead><tr><th>Bot</th><th>Mode</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Strategist</th></tr></thead>
+          <tbody>
+            ${loopState.botSchedules.map(s => {
+              const isContinuous = s.mode === 'continuous';
+              const stratInfo = s.lastFocus
+                ? `<span class="text-dim text-sm" title="${escapeHtml(s.lastFocus)}" style="cursor:help;max-width:180px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.lastFocus.slice(0, 60))}</span>`
+                : '<span class="text-dim">--</span>';
+              const cyclesLeft = s.strategistCyclesUntilNext != null
+                ? `<span class="text-dim text-sm" style="margin-left:4px">(${s.strategistCyclesUntilNext} cycles left)</span>`
+                : '';
+              const nextRunCell = isContinuous
+                ? `<span class="text-dim text-sm">Cycle #${s.continuousCycleCount || 0}</span>`
+                : (s.nextRunAt ? timeAgo(s.nextRunAt, true) : '--');
+              return `
+              <tr>
+                <td>${escapeHtml(s.botName)}</td>
+                <td>${modeBadge(s.mode || 'periodic')}</td>
+                <td class="text-dim">${nextRunCell}</td>
+                <td class="text-dim">${s.lastRunAt ? timeAgo(s.lastRunAt) : 'Never'}</td>
+                <td class="text-dim">${s.nextCheckIn ? escapeHtml(s.nextCheckIn) : '--'}</td>
+                <td>${s.lastStatus ? statusBadge(s.lastStatus) : '<span class="text-dim">--</span>'}</td>
+                <td>${stratInfo}${cyclesLeft}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      ` : ''}
 
       <div id="loop-results">
         ${loopState.lastResults?.length

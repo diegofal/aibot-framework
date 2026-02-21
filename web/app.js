@@ -5,11 +5,14 @@ import { renderCron, renderCronDetail, renderCronCreate } from './pages/cron.js'
 import { renderTools, renderToolDetail } from './pages/tools.js';
 import { renderLogs, destroyLogs } from './pages/logs.js';
 import { renderSettings } from './pages/settings.js';
+import { renderInbox, destroyInbox } from './pages/inbox.js';
+import { renderProductions, renderBotProductions } from './pages/productions.js';
 
 const content = document.getElementById('content');
 
 const routes = [
   { pattern: /^#\/$/, handler: () => renderDashboard(content) },
+  { pattern: /^#\/inbox$/, handler: () => renderInbox(content) },
   { pattern: /^#\/agents\/([^/]+)\/edit$/, handler: (m) => renderAgentEdit(content, m[1]) },
   { pattern: /^#\/agents\/([^/]+)$/,        handler: (m) => renderAgentDetail(content, m[1]) },
   { pattern: /^#\/agents$/,                  handler: () => renderAgents(content) },
@@ -18,6 +21,8 @@ const routes = [
   { pattern: /^#\/cron\/new$/,               handler: () => renderCronCreate(content) },
   { pattern: /^#\/cron\/([^/]+)$/,           handler: (m) => renderCronDetail(content, m[1]) },
   { pattern: /^#\/cron$/,                    handler: () => renderCron(content) },
+  { pattern: /^#\/productions\/([^/]+)$/,     handler: (m) => renderBotProductions(content, m[1]) },
+  { pattern: /^#\/productions$/,             handler: () => renderProductions(content) },
   { pattern: /^#\/tools\/([^/]+)$/,          handler: (m) => renderToolDetail(content, m[1]) },
   { pattern: /^#\/tools$/,                   handler: () => renderTools(content) },
   { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },
@@ -26,6 +31,7 @@ const routes = [
 
 function navigate() {
   destroyLogs();
+  destroyInbox();
   const hash = location.hash || '#/';
   if (hash === '#') { location.hash = '#/'; return; }
 
@@ -61,6 +67,26 @@ async function loadStatus() {
 
 loadStatus();
 setInterval(loadStatus, 10000);
+
+// Inbox badge polling
+async function loadInboxBadge() {
+  try {
+    const res = await fetch('/api/ask-human/count');
+    const data = await res.json();
+    const badge = document.getElementById('inbox-badge');
+    if (badge) {
+      if (data.count > 0) {
+        badge.textContent = data.count;
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+loadInboxBadge();
+setInterval(loadInboxBadge, 10000);
 
 // Initial route
 navigate();

@@ -113,6 +113,7 @@ export async function renderAgents(el) {
         }
         <button class="btn btn-sm" data-action="edit" data-id="${agent.id}">Edit</button>
         <button class="btn btn-sm" data-action="clone" data-id="${agent.id}">Clone</button>
+        ${!agent.running ? `<button class="btn btn-sm btn-danger" data-action="reset" data-id="${agent.id}">Reset</button>` : ''}
         <button class="btn btn-sm btn-danger" data-action="delete" data-id="${agent.id}">Delete</button>
       </td>
     `;
@@ -168,6 +169,14 @@ export async function renderAgents(el) {
       location.hash = `#/agents/${id}/edit`;
     } else if (action === 'clone') {
       showCloneModal(id, el);
+    } else if (action === 'reset') {
+      if (confirm(`Reset agent "${id}"? This will clear all conversations, memory, goals, and learned facts. Soul and identity are preserved. This cannot be undone.`)) {
+        btn.disabled = true;
+        btn.textContent = 'Resetting...';
+        const res = await api(`/api/agents/${id}/reset`, { method: 'POST' });
+        if (res.error) alert(`Reset failed: ${res.error}`);
+        renderAgents(el);
+      }
     } else if (action === 'delete') {
       if (confirm(`Delete agent "${id}"? This cannot be undone.`)) {
         await api(`/api/agents/${id}`, { method: 'DELETE' });
@@ -206,6 +215,15 @@ export async function renderAgentDetail(el, id) {
     ? escapeHtml(agent.soulDir)
     : `<span class="text-dim">${escapeHtml(defaults.soulDir)} (global)</span>`;
 
+  const workDirDisplay = agent.workDir
+    ? escapeHtml(agent.workDir)
+    : `<span class="text-dim">${escapeHtml((defaults.productionsBaseDir || './productions') + '/' + agent.id)} (default)</span>`;
+
+  const agentLoopEvery = agent.agentLoop?.every;
+  const loopIntervalDisplay = agentLoopEvery
+    ? escapeHtml(agentLoopEvery)
+    : `<span class="text-dim">${escapeHtml(defaults.agentLoopInterval || '6h')} (global)</span>`;
+
   const systemPromptDisplay = agent.conversation?.systemPrompt
     ? escapeHtml(agent.conversation.systemPrompt).substring(0, 120) + (agent.conversation.systemPrompt.length > 120 ? '...' : '')
     : `<span class="text-dim">Global default</span>`;
@@ -230,12 +248,14 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim">Enabled</td><td>${agent.enabled ? 'Yes' : 'No'}</td></tr>
         <tr><td class="text-dim">Model</td><td>${modelDisplay}</td></tr>
         <tr><td class="text-dim">Soul Dir</td><td>${soulDirDisplay}</td></tr>
+        <tr><td class="text-dim">Work Dir</td><td>${workDirDisplay}</td></tr>
         <tr><td class="text-dim">System Prompt</td><td>${systemPromptDisplay}</td></tr>
         <tr><td class="text-dim">Temperature</td><td>${tempDisplay}</td></tr>
         <tr><td class="text-dim">Max History</td><td>${maxHistDisplay}</td></tr>
         <tr><td class="text-dim">Skills</td><td>${agent.skills.map((s) => `<span class="badge">${escapeHtml(s)}</span>`).join(' ')}</td></tr>
         <tr><td class="text-dim">Allowed Users</td><td>${agent.allowedUsers?.length ? agent.allowedUsers.join(', ') : '<span class="text-dim">All</span>'}</td></tr>
         <tr><td class="text-dim">Mention Patterns</td><td>${agent.mentionPatterns?.length ? agent.mentionPatterns.join(', ') : '<span class="text-dim">None</span>'}</td></tr>
+        <tr><td class="text-dim">Loop Interval</td><td>${loopIntervalDisplay}</td></tr>
       </table>
     </div>
     <div class="actions">
@@ -247,7 +267,7 @@ export async function renderAgentDetail(el, id) {
       <button class="btn" id="btn-clone">Clone</button>
       ${agent.running
         ? `<button class="btn" id="btn-run-loop">Run Agent Loop</button>`
-        : ''
+        : `<button class="btn btn-danger" id="btn-reset">Reset</button>`
       }
     </div>
     <div id="agent-loop-result"></div>
@@ -265,6 +285,26 @@ export async function renderAgentDetail(el, id) {
   document.getElementById('btn-clone').addEventListener('click', () => {
     showCloneModal(id, el, () => renderAgentDetail(el, id));
   });
+
+  const resetBtn = document.getElementById('btn-reset');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', async () => {
+      if (!confirm(`Reset agent "${id}"? This will clear all conversations, memory, goals, and learned facts. Soul and identity are preserved. This cannot be undone.`)) return;
+      resetBtn.disabled = true;
+      resetBtn.textContent = 'Resetting...';
+      try {
+        const res = await api(`/api/agents/${id}/reset`, { method: 'POST' });
+        if (res.error) {
+          alert(`Reset failed: ${res.error}`);
+        } else {
+          alert('Agent reset successfully.');
+        }
+      } catch (err) {
+        alert(`Reset failed: ${err.message}`);
+      }
+      renderAgentDetail(el, id);
+    });
+  }
 
   const runLoopBtn = document.getElementById('btn-run-loop');
   if (runLoopBtn) {
@@ -376,6 +416,20 @@ export async function renderAgentEdit(el, id) {
           <button type="button" class="btn btn-sm" id="btn-init-soul">Init Custom Soul</button>
         </div>
       </div>
+      <div class="form-group">
+        <label>Working Directory</label>
+        <input type="text" name="workDir" value="${escapeHtml(agent.workDir || '')}" placeholder="${escapeHtml((defaults.productionsBaseDir || './productions') + '/' + agent.id)}">
+        <span class="text-dim text-sm">File tools and exec operate within this directory. Default: productions/&lt;botId&gt;</span>
+      </div>
+
+      <div class="form-separator"></div>
+      <div class="form-section-title">Agent Loop <span class="text-dim text-sm">(empty = use global default)</span></div>
+
+      <div class="form-group">
+        <label>Loop Interval</label>
+        <input type="text" name="agentLoopEvery" value="${escapeHtml(agent.agentLoop?.every || '')}" placeholder="${escapeHtml(defaults.agentLoopInterval || '6h')}">
+        <span class="text-dim text-sm">How often this bot runs autonomously (e.g. 30m, 1h, 6h, 1d)</span>
+      </div>
 
       <div class="actions">
         <button type="submit" class="btn btn-primary">Save</button>
@@ -427,6 +481,7 @@ export async function renderAgentEdit(el, id) {
       patch.llmBackend = undefined;
     }
     patch.soulDir = form.soulDir.value.trim() || undefined;
+    patch.workDir = form.workDir.value.trim() || undefined;
 
     // Build conversation overrides
     const systemPrompt = form.systemPrompt.value.trim() || undefined;
@@ -437,6 +492,15 @@ export async function renderAgentEdit(el, id) {
       patch.conversation = { systemPrompt, temperature, maxHistory };
     } else {
       patch.conversation = undefined;
+    }
+
+    // Agent loop overrides
+    const agentLoopEvery = form.agentLoopEvery.value.trim() || undefined;
+    if (agentLoopEvery !== undefined) {
+      patch.agentLoop = { ...agent.agentLoop, every: agentLoopEvery };
+    } else if (agent.agentLoop?.every) {
+      // Clear the every field but keep other agentLoop settings
+      patch.agentLoop = { ...agent.agentLoop, every: undefined };
     }
 
     await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
