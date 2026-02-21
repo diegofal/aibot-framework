@@ -7,6 +7,7 @@ export interface FileToolsConfig {
   basePath: string;
   maxFileSizeBytes?: number;
   deniedPatterns?: string[];
+  allowedPaths?: string[];
 }
 
 /** Default patterns for sensitive files */
@@ -26,51 +27,95 @@ const BUILTIN_DENIED = [
 ];
 
 /**
- * Validate that a resolved path is within the allowed basePath.
- * Blocks path traversal and symlinks that escape the base.
+ * Check denied patterns against a resolved path.
+ * Returns an error string if blocked, or undefined if OK.
  */
-async function validatePath(
-  rawPath: string,
-  basePath: string,
+function checkDeniedPatterns(
+  resolved: string,
   deniedPatterns: RegExp[],
-): Promise<string | { error: string }> {
-  const resolved = resolve(basePath, rawPath);
-
-  // Must be inside basePath
-  const rel = relative(basePath, resolved);
-  if (rel.startsWith('..') || resolve(basePath, rel) !== resolved) {
-    return { error: `Path outside allowed directory: ${rawPath}` };
-  }
-
-  // Check denied patterns against the resolved path
+): string | undefined {
   for (const pattern of BUILTIN_DENIED) {
     if (pattern.test(resolved)) {
-      return { error: `Access denied: file matches blocked pattern (${pattern})` };
+      return `Access denied: file matches blocked pattern (${pattern})`;
     }
   }
   for (const pattern of deniedPatterns) {
     if (pattern.test(resolved)) {
-      return { error: `Access denied: file matches denied pattern (${pattern})` };
+      return `Access denied: file matches denied pattern (${pattern})`;
     }
   }
+  return undefined;
+}
 
-  // If the file exists, ensure it's not a symlink escaping basePath
+/**
+ * Check that a resolved path doesn't escape its root via symlink.
+ * Returns an error string if it escapes, or undefined if OK.
+ */
+async function checkSymlink(
+  resolved: string,
+  root: string,
+  rawPath: string,
+): Promise<string | undefined> {
   try {
     const stat = await lstat(resolved);
     if (stat.isSymbolicLink()) {
       const { readlink } = await import('node:fs/promises');
       const target = await readlink(resolved);
-      const resolvedTarget = resolve(basePath, target);
-      const relTarget = relative(basePath, resolvedTarget);
+      const resolvedTarget = resolve(root, target);
+      const relTarget = relative(root, resolvedTarget);
       if (relTarget.startsWith('..')) {
-        return { error: `Symlink escapes allowed directory: ${rawPath}` };
+        return `Symlink escapes allowed directory: ${rawPath}`;
       }
     }
   } catch {
     // File doesn't exist yet — that's fine for writes
   }
+  return undefined;
+}
 
-  return resolved;
+/**
+ * Validate that a resolved path is within the allowed basePath (or one of the
+ * extra allowedPaths, which are read-only).
+ * Blocks path traversal and symlinks that escape the permitted root.
+ */
+async function validatePath(
+  rawPath: string,
+  basePath: string,
+  deniedPatterns: RegExp[],
+  allowedPaths: string[] = [],
+): Promise<string | { error: string }> {
+  const resolved = resolve(basePath, rawPath);
+
+  // Try basePath first
+  const rel = relative(basePath, resolved);
+  if (!rel.startsWith('..') && resolve(basePath, rel) === resolved) {
+    const denied = checkDeniedPatterns(resolved, deniedPatterns);
+    if (denied) return { error: denied };
+
+    const symErr = await checkSymlink(resolved, basePath, rawPath);
+    if (symErr) return { error: symErr };
+
+    return resolved;
+  }
+
+  // basePath didn't match — try each allowedPath
+  for (const allowed of allowedPaths) {
+    const resolvedInAllowed = resolve(allowed, rawPath);
+    const relAllowed = relative(allowed, resolvedInAllowed);
+    if (relAllowed.startsWith('..') || resolve(allowed, relAllowed) !== resolvedInAllowed) {
+      continue;
+    }
+
+    const denied = checkDeniedPatterns(resolvedInAllowed, deniedPatterns);
+    if (denied) return { error: denied };
+
+    const symErr = await checkSymlink(resolvedInAllowed, allowed, rawPath);
+    if (symErr) return { error: symErr };
+
+    return resolvedInAllowed;
+  }
+
+  return { error: `Path outside allowed directory: ${rawPath}` };
 }
 
 // ─── file_read ──────────────────────────────────────────────
@@ -79,6 +124,7 @@ export function createFileReadTool(config: FileToolsConfig): Tool {
   const basePath = resolve(config.basePath);
   const maxSize = config.maxFileSizeBytes ?? 1_048_576;
   const denied = (config.deniedPatterns ?? []).map((p) => new RegExp(p));
+  const allowedPaths = (config.allowedPaths ?? []).map((p) => resolve(p));
 
   return {
     definition: {
@@ -115,7 +161,7 @@ export function createFileReadTool(config: FileToolsConfig): Tool {
         return { success: false, content: 'Missing required parameter: path' };
       }
 
-      const validated = await validatePath(rawPath, basePath, denied);
+      const validated = await validatePath(rawPath, basePath, denied, allowedPaths);
       if (typeof validated === 'object') {
         logger.warn({ path: rawPath, reason: validated.error }, 'file_read: blocked');
         return { success: false, content: validated.error };
