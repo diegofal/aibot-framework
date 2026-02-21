@@ -80,6 +80,24 @@ export class DynamicToolRegistry {
   }
 
   /**
+   * Get the set of dynamic tool names a bot should NOT see (based on scope).
+   * A tool is excluded if its scope is not 'all', not the bot's own ID,
+   * and the bot didn't create it.
+   */
+  getExcludedNamesForBot(botId: string): Set<string> {
+    const excluded = new Set<string>();
+    for (const [id, tool] of this.loadedTools) {
+      const entry = this.store.get(id);
+      if (!entry) continue;
+      const { scope, createdBy } = entry.meta;
+      if (scope !== 'all' && scope !== botId && createdBy !== botId) {
+        excluded.add(tool.definition.function.name);
+      }
+    }
+    return excluded;
+  }
+
+  /**
    * Get definitions for a specific bot.
    */
   getDefinitionsForBot(botId: string): import('../tools/types').ToolDefinition[] {

@@ -530,6 +530,38 @@ export class SessionManager {
   }
 
   /**
+   * Clear all sessions and active conversations for a specific bot.
+   * Returns the number of sessions cleared.
+   */
+  clearBotSessions(botId: string): number {
+    let count = 0;
+    const prefix = `bot:${botId}:`;
+
+    // Clear matching session transcripts and metadata
+    for (const key of this.metadata.keys()) {
+      if (key.startsWith(prefix)) {
+        this.clearSession(key);
+        count++;
+      }
+    }
+
+    // Clear matching active conversations (keyed as "botId:chatId:userId")
+    const convPrefix = `${botId}:`;
+    for (const key of this.activeConversations.keys()) {
+      if (key.startsWith(convPrefix)) {
+        this.activeConversations.delete(key);
+        this.activeConvDirty = true;
+      }
+    }
+
+    // Flush changes to disk
+    this.flush();
+    this.flushActiveConversations();
+
+    return count;
+  }
+
+  /**
    * Clean up timers and flush all pending data to disk
    */
   dispose(): void {

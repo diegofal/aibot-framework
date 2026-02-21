@@ -52,6 +52,15 @@ export class SystemPromptBuilder {
         'Always be aware of who you are talking to. Address people by name when relevant.';
     }
 
+    // Core Memory injection (structured identity - near end for recency bias)
+    if (this.ctx.memoryManager?.getCoreMemory()) {
+      const coreMemory = this.ctx.memoryManager.getCoreMemory()!;
+      const coreMemoryBlock = coreMemory.renderForSystemPrompt(800);
+      if (coreMemoryBlock) {
+        prompt += coreMemoryBlock;
+      }
+    }
+
     // RAG context injection (near end for recency bias)
     if (mode === 'conversation' && ragContext) {
       prompt += '\n\n' + ragContext;
@@ -147,6 +156,11 @@ export class SystemPromptBuilder {
     // Goals tool
     if (defs.some((d) => d.function.name === 'manage_goals')) {
       prompt += this.goalsToolInstructions();
+    }
+
+    // Core memory tools
+    if (defs.some((d) => d.function.name === 'core_memory_append')) {
+      prompt += this.coreMemoryToolInstructions();
     }
 
     // Create tool (dynamic tools)
@@ -316,7 +330,7 @@ export class SystemPromptBuilder {
 
   private delegationInstructions(botConfig: BotConfig): string {
     const otherBots = this.ctx.config.bots
-      .filter((b) => b.id !== botConfig.id && b.enabled !== false && this.ctx.bots.has(b.id))
+      .filter((b) => b.id !== botConfig.id && b.enabled !== false && this.ctx.runningBots.has(b.id))
       .map((b) => `- ${b.id} (${b.name})`)
       .join('\n');
     if (!otherBots) return '';
@@ -349,6 +363,18 @@ export class SystemPromptBuilder {
       '- Use action "update" to change a goal\'s status or notes.\n' +
       '- Use action "complete" to mark a goal as done with an outcome summary.\n\n' +
       'Keep goals concrete and actionable. Update them as you make progress.'
+    );
+  }
+
+  private coreMemoryToolInstructions(): string {
+    return (
+      '\n\n## Core Memory (Structured)\n\n' +
+      'You have a structured key-value memory organized by category.\n' +
+      '- `core_memory_append`: Save a fact (category + key + value + importance 1-10).\n' +
+      '- `core_memory_replace`: Update an existing fact (must match old_value exactly).\n' +
+      '- `core_memory_search`: Search your core memory by query and optional category.\n\n' +
+      'Categories: identity, relationships, preferences, goals, constraints.\n' +
+      'Use this for structured, high-importance facts. Use `save_memory` for freeform daily notes.'
     );
   }
 

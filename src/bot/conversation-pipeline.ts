@@ -163,10 +163,11 @@ export class ConversationPipeline {
         const meta = this.ctx.sessionManager.getSessionMeta(serializedKey);
         if (meta && meta.messageCount >= flushConfig.messageThreshold
             && meta.lastFlushCompactionIndex !== (meta.compactionCount ?? 0)) {
-          botLogger.info({ key: serializedKey, msgs: meta.messageCount }, 'Proactive memory flush');
+          botLogger.info({ key: serializedKey, msgs: meta.messageCount }, 'Proactive memory flush with scoring');
           const recentHistory = this.ctx.sessionManager.getFullHistory(serializedKey);
           this.ctx.sessionManager.markMemoryFlushed(serializedKey);
-          this.memoryFlusher.flushToDaily(recentHistory, config.id).catch((err) => {
+          // Use flushWithScoring for importance-weighted Core Memory storage
+          this.memoryFlusher.flushWithScoring(recentHistory, config.id).catch((err) => {
             botLogger.warn({ err }, 'Proactive memory flush failed');
           });
         }

@@ -6,6 +6,7 @@ import type { BotContext } from './types';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import type { ToolRegistry } from './tool-registry';
 import { sendLongMessage } from './telegram-utils';
+import { ToolExecutor } from './tool-executor';
 
 export class CollaborationManager {
   constructor(
@@ -19,7 +20,7 @@ export class CollaborationManager {
    */
   async sendVisibleMessage(chatId: number, sourceBotId: string, targetBotId: string, message: string): Promise<void> {
     const bot = this.ctx.bots.get(sourceBotId);
-    if (!bot) throw new Error(`Source bot not running: ${sourceBotId}`);
+    if (!bot) throw new Error(`Source bot has no Telegram instance (headless?): ${sourceBotId}`);
 
     let agent = this.ctx.agentRegistry.getByBotId(targetBotId);
     const resolvedTargetId = agent ? targetBotId : this.ctx.resolveBotId(targetBotId);
@@ -89,19 +90,21 @@ export class CollaborationManager {
     const { tools: collabTools, definitions: collabDefs } = this.toolRegistry.getCollaborationToolsForBot(respondingBotId);
     const hasTools = collabDefs.length > 0;
 
-    const toolExecutor = hasTools
-      ? async (name: string, args: Record<string, unknown>) => {
-          const tool = collabTools.find((t) => t.definition.function.name === name);
-          if (!tool) return { success: false, content: `Unknown tool: ${name}` };
-          return tool.execute({ ...args, _chatId: chatId, _botId: respondingBotId }, this.ctx.logger);
-        }
+    // Create executor with collaboration filter
+    const executor = hasTools
+      ? new ToolExecutor(this.ctx, {
+          botId: respondingBotId,
+          chatId,
+          tools: collabTools,
+          toolFilter: () => true, // Already filtered by collabTools
+        }).createCallback()
       : undefined;
 
     return this.ctx.getLLMClient(respondingBotId).chat(messages, {
       model: this.ctx.getActiveModel(respondingBotId),
       temperature: resolved.temperature,
       tools: hasTools ? collabDefs : undefined,
-      toolExecutor,
+      toolExecutor: executor,
       maxToolRounds: this.ctx.config.webTools?.maxToolRounds,
     });
   }
@@ -177,7 +180,7 @@ export class CollaborationManager {
     }
     targetBotId = resolvedId;
 
-    const targetBot = this.ctx.bots.get(targetBotId)!;
+    const targetBot = this.ctx.bots.get(targetBotId);
     const targetConfig = this.ctx.config.bots.find((b) => b.id === targetBotId);
     if (!targetConfig) {
       throw new Error(`Target bot config not found: ${targetBotId}`);
@@ -208,8 +211,10 @@ export class CollaborationManager {
       temperature: resolved.temperature,
     });
 
-    if (response.trim()) {
+    if (response.trim() && targetBot) {
       await sendLongMessage(t => targetBot.api.sendMessage(chatId, t), response);
+    } else if (response.trim()) {
+      botLogger.info({ targetBotId, chatId }, 'Delegation response generated but bot is headless, skipping Telegram send');
     }
 
     botLogger.info(
@@ -283,14 +288,14 @@ export class CollaborationManager {
     const collabTools = useTools ? this.toolRegistry.getCollaborationToolsForBot(targetBotId) : { tools: [], definitions: [] };
     const hasTools = collabTools.definitions.length > 0;
 
-    const toolExecutor = hasTools
-      ? async (name: string, args: Record<string, unknown>) => {
-          const tool = collabTools.tools.find((t) => t.definition.function.name === name);
-          if (!tool) {
-            return { success: false, content: `Unknown tool: ${name}` };
-          }
-          return tool.execute({ ...args, _chatId: 0, _botId: targetBotId }, this.ctx.logger);
-        }
+    // Create executor with collaboration filter
+    const executor = hasTools
+      ? new ToolExecutor(this.ctx, {
+          botId: targetBotId,
+          chatId: 0,
+          tools: collabTools.tools,
+          toolFilter: () => true, // Already filtered by collabTools
+        }).createCallback()
       : undefined;
 
     botLogger.info(
@@ -311,7 +316,7 @@ export class CollaborationManager {
         model: this.ctx.getActiveModel(targetBotId),
         temperature: resolved.temperature,
         tools: hasTools ? collabTools.definitions : undefined,
-        toolExecutor,
+        toolExecutor: executor,
         maxToolRounds: this.ctx.config.webTools?.maxToolRounds,
       }),
       new Promise<never>((_, reject) =>
@@ -347,7 +352,7 @@ export class CollaborationManager {
 
     const sourceConfig = this.ctx.config.bots.find((b) => b.id === sourceBotId);
     if (!sourceConfig) throw new Error(`Source bot config not found: ${sourceBotId}`);
-    if (!this.ctx.bots.has(sourceBotId)) throw new Error(`Source bot not running: ${sourceBotId}`);
+    if (!this.ctx.runningBots.has(sourceBotId)) throw new Error(`Source bot not running: ${sourceBotId}`);
 
     const resolved = resolveAgentConfig(this.ctx.config, sourceConfig);
     const sourceSoulLoader = this.ctx.getSoulLoader(sourceBotId);

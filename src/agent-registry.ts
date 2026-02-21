@@ -1,8 +1,8 @@
 export interface AgentInfo {
   botId: string;
   name: string;
-  telegramUserId: number;
-  telegramUsername: string;
+  telegramUserId?: number;
+  telegramUsername?: string;
   skills: string[];
   description?: string;
   tools?: string[];
@@ -18,13 +18,17 @@ export class AgentRegistry {
 
   register(info: AgentInfo): void {
     this.agents.set(info.botId, info);
-    this.telegramIdMap.set(info.telegramUserId, info.botId);
+    if (info.telegramUserId) {
+      this.telegramIdMap.set(info.telegramUserId, info.botId);
+    }
   }
 
   unregister(botId: string): void {
     const info = this.agents.get(botId);
     if (info) {
-      this.telegramIdMap.delete(info.telegramUserId);
+      if (info.telegramUserId) {
+        this.telegramIdMap.delete(info.telegramUserId);
+      }
       this.agents.delete(botId);
     }
   }
@@ -41,7 +45,7 @@ export class AgentRegistry {
   getByTelegramUsername(username: string): AgentInfo | undefined {
     const normalized = username.replace(/^@/, '').toLowerCase();
     for (const agent of this.agents.values()) {
-      if (agent.telegramUsername.toLowerCase() === normalized) {
+      if (agent.telegramUsername?.toLowerCase() === normalized) {
         return agent;
       }
     }

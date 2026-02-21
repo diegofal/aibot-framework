@@ -162,8 +162,8 @@ async function main() {
 
     await cronService.start();
 
-    // Start bots
-    logger.info('Starting Telegram bots...');
+    // Initialize bot manager (bots start stopped — use dashboard to start them)
+    logger.info('Initializing bot manager...');
     botManager = new BotManager(
       skillRegistry,
       logger,
@@ -175,12 +175,7 @@ async function main() {
       memoryManager
     );
 
-    for (const botConfig of config.bots.filter((b) => b.enabled)) {
-      await botManager.startBot(botConfig);
-      logger.info({ botId: botConfig.id, name: botConfig.name }, 'Bot started');
-    }
-
-    // Start global agent loop timer
+    // Start global agent loop timer (runs only for started bots)
     botManager.startAgentLoop();
 
     // Start web server if enabled

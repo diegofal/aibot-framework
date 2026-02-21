@@ -116,6 +116,7 @@ export class SoulLoader {
   /**
    * Migrate MEMORY.md content to memory/legacy.md (one-time, idempotent).
    * After migration, MEMORY.md is cleared. legacy.md gets auto-indexed by the file watcher.
+   * Skips if MEMORY.md is a consolidated file (created by soul-health-check).
    */
   private migrateMemoryToLegacy(): void {
     const memoryPath = join(this.dir, 'MEMORY.md');
@@ -133,6 +134,11 @@ export class SoulLoader {
 
     const content = readFileSync(memoryPath, 'utf-8').trim();
     if (!content) {
+      return;
+    }
+
+    // Skip if MEMORY.md is a consolidated file (from soul-health-check)
+    if (content.includes('<!-- last-consolidated:')) {
       return;
     }
 
@@ -195,18 +201,33 @@ export class SoulLoader {
       sections.push(`## Goals\n\n${goals}`);
     }
 
-    // 6. Legacy memory (core biographical data — always present)
+    // 6. Consolidated memory (MEMORY.md) or fall back to legacy.md
+    const memoryMdPath = join(this.dir, 'MEMORY.md');
     const legacyPath = join(this.dir, 'memory', 'legacy.md');
+    let coreMemoryLoaded = false;
+
     try {
-      const legacy = readFileSync(legacyPath, 'utf-8').trim();
-      if (legacy) {
-        sections.push(`## Core Memory\n\n${legacy}`);
+      const memoryMd = readFileSync(memoryMdPath, 'utf-8').trim();
+      if (memoryMd) {
+        sections.push(`## Core Memory\n\n${memoryMd}`);
+        coreMemoryLoaded = true;
       }
     } catch {
-      // No legacy file
+      // No MEMORY.md yet
     }
 
-    // 7. Daily memory logs (today + yesterday)
+    if (!coreMemoryLoaded) {
+      try {
+        const legacy = readFileSync(legacyPath, 'utf-8').trim();
+        if (legacy) {
+          sections.push(`## Core Memory\n\n${legacy}`);
+        }
+      } catch {
+        // No legacy file either
+      }
+    }
+
+    // 7. Daily memory log (today only — older logs are consolidated into MEMORY.md)
     const dailyLogs = this.readRecentDailyLogs();
     if (dailyLogs) {
       sections.push(dailyLogs);
@@ -268,33 +289,24 @@ export class SoulLoader {
   }
 
   /**
-   * Read today's and yesterday's daily log files for inclusion in the system prompt
+   * Read today's daily log file for inclusion in the system prompt.
+   * Older logs are consolidated into MEMORY.md on startup.
    */
   readRecentDailyLogs(): string {
     const memoryDir = join(this.dir, 'memory');
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
 
-    const sections: string[] = [];
-
-    for (const dateStr of [yesterday, today]) {
-      const logPath = join(memoryDir, `${dateStr}.md`);
-      try {
-        const content = readFileSync(logPath, 'utf-8').trim();
-        if (content) {
-          sections.push(`### ${dateStr}\n${content}`);
-        }
-      } catch {
-        // File doesn't exist — skip
+    const logPath = join(memoryDir, `${today}.md`);
+    try {
+      const content = readFileSync(logPath, 'utf-8').trim();
+      if (content) {
+        return `## Recent Memory\n\n### ${today}\n${content}`;
       }
+    } catch {
+      // File doesn't exist — skip
     }
 
-    if (sections.length === 0) {
-      return '';
-    }
-
-    return `## Recent Memory\n\n${sections.join('\n\n')}`;
+    return '';
   }
 
   /**
@@ -308,7 +320,7 @@ export class SoulLoader {
     const memoryDir = join(this.dir, 'memory');
     try {
       const files = readdirSync(memoryDir)
-        .filter((f) => f.endsWith('.md') && f !== 'legacy.md')
+        .filter((f) => f.endsWith('.md') && f !== 'legacy.md' && /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
         .sort()
         .reverse(); // newest date first
 

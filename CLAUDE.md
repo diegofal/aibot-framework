@@ -15,6 +15,8 @@ NO buscar en internet la documentacion de OpenClaw - usar el codigo fuente local
 - NUNCA hacer git commit o git push a menos que el usuario lo pida explicitamente.
 - Al implementar features, solo escribir codigo. El commit/push es decision del usuario.
 - Antes de refactorizar, agregar features, o corregir bugs en el bot core: SIEMPRE leer la sección "Arquitectura del Bot" más abajo para entender qué módulo modificar y cómo se relacionan entre sí.
+- Cada cambio de código debe incluir o actualizar tests unitarios en `tests/`. Ejecutar `bun test` antes de considerar el trabajo terminado.
+- Cualquier cambio relevante debe agregarse al archivo `CHANGELOG.md` en la raíz del proyecto.
 
 ## Proyecto
 - Runtime: Bun

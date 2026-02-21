@@ -1,7 +1,10 @@
 import type { Logger } from '../logger';
+import type { z } from 'zod';
 
 /**
  * OpenAI-compatible function/tool definition (what Ollama expects)
+ * Extended with optional outputSchema for structured validation
+ * and maxRetries for automatic retry on transient failures
  */
 export interface ToolDefinition {
   type: 'function';
@@ -14,6 +17,20 @@ export interface ToolDefinition {
       required?: string[];
     };
   };
+  /**
+   * Optional Zod schema for validating tool output.
+   * When provided, the tool's result will be validated against this schema.
+   * Validation failures are returned to the LLM with detailed error messages
+   * to enable retry with corrected output.
+   */
+  outputSchema?: z.ZodType<unknown>;
+  /**
+   * Maximum number of retry attempts for transient execution failures.
+   * When a tool throws an exception or returns an error result, the executor
+   * will retry up to this many times, including the error feedback in context.
+   * Default: 0 (no retries)
+   */
+  maxRetries?: number;
 }
 
 /**

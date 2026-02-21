@@ -4,7 +4,7 @@ import type { Logger } from '../logger';
 
 type SoulLoaderResolver = (botId: string) => SoulLoader;
 
-interface GoalEntry {
+export interface GoalEntry {
   text: string;
   status: string;
   priority: string;
@@ -107,7 +107,7 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
   };
 }
 
-function parseGoals(content: string | null): { active: GoalEntry[]; completed: GoalEntry[] } {
+export function parseGoals(content: string | null): { active: GoalEntry[]; completed: GoalEntry[] } {
   const active: GoalEntry[] = [];
   const completed: GoalEntry[] = [];
 
@@ -175,7 +175,7 @@ function parseGoals(content: string | null): { active: GoalEntry[]; completed: G
   return { active, completed };
 }
 
-function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): string {
+export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): string {
   const lines: string[] = ['## Active Goals'];
 
   if (active.length === 0) {

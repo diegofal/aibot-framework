@@ -9,8 +9,8 @@ export interface ClaudeGenerateOptions {
 }
 
 const DEFAULT_CLAUDE_PATH = 'claude';
-const DEFAULT_TIMEOUT = 60_000;
-const DEFAULT_MAX_LENGTH = 15_000;
+const DEFAULT_TIMEOUT = 120_000;
+const DEFAULT_MAX_LENGTH = 50_000;
 
 /**
  * Spawn Claude CLI in prompt mode and return the text output.
@@ -45,6 +45,8 @@ export async function claudeGenerate(
     try { proc.kill(); } catch {}
   }, timeout);
 
+  const startTime = Date.now();
+
   try {
     const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -54,7 +56,20 @@ export async function claudeGenerate(
     clearTimeout(timer);
 
     if (exitCode !== 0) {
+      const durationMs = Date.now() - startTime;
+      const isTimeout = exitCode === 143 || exitCode === 137; // SIGTERM or SIGKILL
       const detail = stderr.trim() || stdout.trim() || `exit code ${exitCode}`;
+
+      opts.logger.warn({
+        exitCode,
+        durationMs,
+        isTimeout,
+        stdoutLen: stdout.length,
+        stderrLen: stderr.length,
+        stdoutPreview: stdout.slice(0, 500) || '(empty)',
+        stderrPreview: stderr.slice(0, 500) || '(empty)',
+      }, 'Claude CLI failed');
+
       throw new Error(`Claude CLI exited with code ${exitCode}: ${detail}`);
     }
 
@@ -66,6 +81,8 @@ export async function claudeGenerate(
     if (output.length > maxLength) {
       output = output.slice(0, maxLength);
     }
+
+    opts.logger.info({ durationMs: Date.now() - startTime, outputLen: output.length }, 'Claude CLI completed');
 
     return output;
   } catch (err) {

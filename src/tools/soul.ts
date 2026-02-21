@@ -34,9 +34,13 @@ export function createSaveMemoryTool(getSoulLoader: SoulLoaderResolver): Tool {
       args: Record<string, unknown>,
       logger: Logger
     ): Promise<ToolResult> {
-      const fact = String(args.fact ?? '').trim();
+      const MAX_MEMORY_LENGTH = 2000;
+      let fact = String(args.fact ?? '').trim();
       if (!fact) {
         return { success: false, content: 'Missing required parameter: fact' };
+      }
+      if (fact.length > MAX_MEMORY_LENGTH) {
+        fact = fact.slice(0, MAX_MEMORY_LENGTH) + '\n...(truncated)';
       }
 
       try {

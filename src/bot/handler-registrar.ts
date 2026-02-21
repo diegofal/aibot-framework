@@ -7,6 +7,7 @@ import type { ConversationPipeline } from './conversation-pipeline';
 import type { GroupActivation } from './group-activation';
 import type { MemoryFlusher } from './memory-flush';
 import type { ToolRegistry } from './tool-registry';
+import type { AskHumanStore } from './ask-human-store';
 import { sendLongMessage } from './telegram-utils';
 
 export class HandlerRegistrar {
@@ -16,6 +17,7 @@ export class HandlerRegistrar {
     private groupActivation: GroupActivation,
     private memoryFlusher: MemoryFlusher,
     private toolRegistry: ToolRegistry,
+    private askHumanStore?: AskHumanStore,
   ) {}
 
   /**
@@ -64,7 +66,7 @@ export class HandlerRegistrar {
       const noFlush = (ctx.match || '').toString().trim().includes('--no-flush');
 
       const clearedBots: string[] = [];
-      for (const botId of this.ctx.bots.keys()) {
+      for (const botId of this.ctx.runningBots) {
         const sessionKey = this.ctx.sessionManager.deriveKey(botId, ctx);
         const serializedKey = this.ctx.sessionManager.serializeKey(sessionKey);
 
@@ -297,6 +299,15 @@ export class HandlerRegistrar {
       );
 
       this.trackUser(ctx);
+
+      // Intercept replies to pending ask_human questions
+      if (this.askHumanStore?.hasPending(ctx.chat.id)) {
+        const replyToId = ctx.message.reply_to_message?.message_id;
+        if (this.askHumanStore.handleReply(ctx.chat.id, ctx.message.text, replyToId)) {
+          botLogger.info({ chatId: ctx.chat.id }, 'Message handled as ask_human reply');
+          return;
+        }
+      }
 
       if (ctx.message.text.startsWith('/')) {
         botLogger.debug({ text: ctx.message.text }, 'Skipping: command message');

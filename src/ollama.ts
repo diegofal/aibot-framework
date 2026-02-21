@@ -1,6 +1,8 @@
 import type { OllamaConfig } from './config';
 import type { Logger } from './logger';
 import type { ToolDefinition, ToolCall, ToolExecutor } from './tools/types';
+import { runToolLoop } from './core/tool-runner';
+import { NativeToolStrategy } from './core/native-tool-strategy';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
@@ -106,91 +108,26 @@ export class OllamaClient {
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<string> {
     const model = options.model || this.config.models.primary;
     const hasTools = options.tools && options.tools.length > 0 && options.toolExecutor;
-    const maxRounds = options.maxToolRounds ?? 5;
 
     try {
       this.logger.debug({ model, messageCount: messages.length, hasTools }, 'Chat with Ollama');
 
-      // Work with a mutable copy so tool messages can be appended
-      const workingMessages = [...messages];
-
-      for (let round = 0; round <= maxRounds; round++) {
-        const isLastRound = round === maxRounds;
-
-        // Build request body
-        const body: Record<string, unknown> = {
-          model,
-          messages: workingMessages,
-          stream: false,
-          options: {
-            temperature: options.temperature,
-            num_predict: options.maxTokens,
-          },
-        };
-
-        // Include tools unless this is the last round (force text response)
-        if (hasTools && !isLastRound) {
-          body.tools = options.tools;
-        }
-
-        const response = await fetch(`${this.config.baseUrl}/api/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
-        }
-
-        const data: OllamaChatResponse = await response.json();
-        const assistantMsg = data.message;
-
-        // If the model returned tool calls, execute them and continue the loop
-        // On the last round, ignore tool calls to force a text response
-        if (!isLastRound && assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0 && options.toolExecutor) {
-          this.logger.info(
-            { round, toolCalls: assistantMsg.tool_calls.map((tc) => tc.function.name) },
-            'LLM requested tool calls'
-          );
-
-          // Push the assistant message (with tool_calls) into working messages
-          workingMessages.push({
-            role: 'assistant',
-            content: assistantMsg.content || '',
-            tool_calls: assistantMsg.tool_calls,
-          });
-
-          // Execute each tool call and push results
-          for (const toolCall of assistantMsg.tool_calls) {
-            const { name, arguments: args } = toolCall.function;
-            this.logger.debug({ tool: name, args }, 'Executing tool call');
-
-            const result = await options.toolExecutor(name, args);
-
-            this.logger.debug(
-              { tool: name, success: result.success, contentLength: result.content.length },
-              'Tool call result'
-            );
-
-            workingMessages.push({
-              role: 'tool',
-              content: result.content,
-            });
-          }
-
-          continue; // Next round
-        }
-
-        // No tool calls — return the text response
-        const content = assistantMsg.content || '';
-        this.logger.debug({ model, response: content.slice(0, 100) }, 'Chat response');
-        return content;
+      // If tools are provided, delegate to the generic tool loop
+      if (hasTools) {
+        const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger);
+        return await runToolLoop(strategy, messages, {
+          maxRounds: options.maxToolRounds ?? 5,
+          tools: options.tools!,
+          toolExecutor: options.toolExecutor!,
+          logger: this.logger,
+        }, options);
       }
 
-      // Should not reach here, but just in case
-      this.logger.warn({ maxRounds }, 'Tool loop exhausted without text response');
-      return 'I was unable to complete the request within the allowed number of steps.';
+      // Simple path: no tools, single chat call
+      const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger);
+      const result = await strategy.chat(messages, options);
+      this.logger.debug({ model, response: (result.content || '').slice(0, 100) }, 'Chat response');
+      return result.content || '';
     } catch (error) {
       this.logger.warn({ err: error, model }, 'Primary model failed for chat, trying fallbacks');
 

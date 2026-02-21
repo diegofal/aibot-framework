@@ -39,3 +39,6 @@ config/soul/
 
 # Notes
 improvements.md
+
+# Productions (runtime-generated)
+productions/
