@@ -14,6 +14,8 @@ import type { SessionManager } from '../session';
 import type { SoulLoader } from '../soul';
 import type { Tool, ToolDefinition } from '../tools/types';
 import type { LLMClient } from '../core/llm-client';
+import type { AskHumanStore } from './ask-human-store';
+import type { ProductionsService } from '../productions/service';
 
 export interface SeenUser {
   id: number;
@@ -43,6 +45,7 @@ export interface BotContext {
 
   // Per-bot mutable state (shared by reference)
   readonly bots: Map<string, Bot>;
+  readonly runningBots: Set<string>;
   readonly activeModels: Map<string, string>;
   readonly tools: Tool[];
   readonly toolDefinitions: ToolDefinition[];
@@ -52,6 +55,8 @@ export interface BotContext {
   readonly seenUsers: Map<number, Map<number, SeenUser>>;
   readonly handledMessageIds: Set<string>;
   readonly llmClients: Map<string, LLMClient>;
+  readonly askHumanStore: AskHumanStore;
+  readonly productionsService?: ProductionsService;
 
   // Helper methods
   getActiveModel(botId: string): string;

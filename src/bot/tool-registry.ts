@@ -1,6 +1,7 @@
 import type { Logger } from '../logger';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import type { BotContext } from './types';
+import { ToolExecutor } from './tool-executor';
 
 import { createCollaborateTool } from '../tools/collaborate';
 import { createCronTool } from '../tools/cron';
@@ -19,7 +20,12 @@ import { DynamicToolRegistry } from './dynamic-tool-registry';
 import { createGoalsTool } from '../tools/goals';
 import { createSaveMemoryTool, createUpdateIdentityTool, createUpdateSoulTool } from '../tools/soul';
 import { createWebFetchTool } from '../tools/web-fetch';
+import { createCoreMemoryTools } from '../tools/core-memory';
+import { createRecallMemoryTool } from '../tools/recall-memory';
 import { createWebSearchTool } from '../tools/web-search';
+import { createAskHumanTool, type AskHumanDeps } from '../tools/ask-human';
+import { createBrowserTool } from '../tools/browser';
+import { createProductionLogTool } from '../tools/production-log';
 
 export class ToolRegistry {
   private dynamicToolRegistry: DynamicToolRegistry | null = null;
@@ -34,6 +40,7 @@ export class ToolRegistry {
   initializeAll(
     getDelegationHandler: () => import('../tools/delegate').DelegationHandler,
     getCollaborateHandler: () => import('../tools/collaborate').CollaborateHandler,
+    askHumanDeps?: AskHumanDeps,
   ): void {
     const { config, logger } = this.ctx;
     const tools = this.ctx.tools;
@@ -82,6 +89,18 @@ export class ToolRegistry {
         createMemoryGetTool(this.ctx.memoryManager)
       );
       logger.info('Memory search tools initialized');
+
+      // Core memory tools (structured identity storage)
+      const coreMemory = this.ctx.memoryManager.getCoreMemory();
+      if (coreMemory) {
+        const coreTools = createCoreMemoryTools(coreMemory);
+        tools.push(...coreTools);
+        logger.info({ coreToolCount: coreTools.length }, 'Core memory tools initialized');
+
+        // Self-directed memory retrieval tool
+        tools.push(createRecallMemoryTool(coreMemory));
+        logger.info('Recall memory tool initialized');
+      }
     }
 
     // Exec tool
@@ -126,6 +145,12 @@ export class ToolRegistry {
         maxOutputChars: config.processTools.maxOutputChars,
       }));
       logger.info('Process tool initialized');
+    }
+
+    // Browser tool
+    if (config.browserTools?.enabled) {
+      tools.push(createBrowserTool({ ...config.browserTools }));
+      logger.info('Browser tool initialized');
     }
 
     // Datetime tool
@@ -181,6 +206,18 @@ export class ToolRegistry {
       logger.info('Improve tool initialized');
     }
 
+    // ask_human tool
+    if (askHumanDeps) {
+      tools.push(createAskHumanTool(askHumanDeps));
+      logger.info('ask_human tool initialized');
+    }
+
+    // Productions tool
+    if (this.ctx.productionsService) {
+      tools.push(createProductionLogTool(this.ctx.productionsService));
+      logger.info('read_production_log tool initialized');
+    }
+
     // Dynamic tools (create_tool + approved dynamic tools)
     const dtConfig = config.dynamicTools;
     if (dtConfig?.enabled) {
@@ -221,33 +258,46 @@ export class ToolRegistry {
   }
 
   /**
-   * Get tool definitions filtered for a specific bot (respects disabledTools).
+   * Get the full excluded set for a bot: disabledTools + dynamic scope exclusions.
    */
-  getDefinitionsForBot(botId: string): ToolDefinition[] {
+  private getExcludedSet(botId: string): Set<string> {
     const disabled = this.getDisabledSet(botId);
-    if (disabled.size === 0) return this.ctx.toolDefinitions;
-    return this.ctx.toolDefinitions.filter((d) => !disabled.has(d.function.name));
+    if (!this.dynamicToolRegistry) return disabled;
+    const dynamicExcluded = this.dynamicToolRegistry.getExcludedNamesForBot(botId);
+    if (dynamicExcluded.size === 0) return disabled;
+    const merged = new Set(disabled);
+    for (const name of dynamicExcluded) merged.add(name);
+    return merged;
   }
 
   /**
-   * Get tool instances filtered for a specific bot (respects disabledTools).
+   * Get tool definitions filtered for a specific bot (respects disabledTools + dynamic scope).
+   */
+  getDefinitionsForBot(botId: string): ToolDefinition[] {
+    const excluded = this.getExcludedSet(botId);
+    if (excluded.size === 0) return this.ctx.toolDefinitions;
+    return this.ctx.toolDefinitions.filter((d) => !excluded.has(d.function.name));
+  }
+
+  /**
+   * Get tool instances filtered for a specific bot (respects disabledTools + dynamic scope).
    */
   getToolsForBot(botId: string): Tool[] {
-    const disabled = this.getDisabledSet(botId);
-    if (disabled.size === 0) return this.ctx.tools;
-    return this.ctx.tools.filter((t) => !disabled.has(t.definition.function.name));
+    const excluded = this.getExcludedSet(botId);
+    if (excluded.size === 0) return this.ctx.tools;
+    return this.ctx.tools.filter((t) => !excluded.has(t.definition.function.name));
   }
 
   /**
    * Get collaboration-safe tools filtered for a specific bot.
-   * Combines collaboration exclusion + per-bot disabledTools.
+   * Combines collaboration exclusion + per-bot disabledTools + dynamic scope.
    */
   getCollaborationToolsForBot(botId: string): { tools: Tool[]; definitions: ToolDefinition[] } {
-    const excluded = new Set(['collaborate', 'delegate_to_bot']);
-    const disabled = this.getDisabledSet(botId);
+    const collabExcluded = new Set(['collaborate', 'delegate_to_bot']);
+    const excluded = this.getExcludedSet(botId);
     const tools = this.ctx.tools.filter((t) => {
       const name = t.definition.function.name;
-      return !excluded.has(name) && !disabled.has(name);
+      return !collabExcluded.has(name) && !excluded.has(name);
     });
     const definitions = tools.map((t) => t.definition);
     return { tools, definitions };
@@ -257,25 +307,18 @@ export class ToolRegistry {
    * Create a tool executor callback for the Ollama client.
    * chatId and botId are injected into tool calls.
    * Disabled tools for the bot are rejected as a safety net.
+   * Delegates to ToolExecutor for unified execution logic.
    */
   createExecutor(
     chatId: number,
     botId: string
   ): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
-    const disabled = this.getDisabledSet(botId);
-    return async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
-      if (disabled.has(name)) {
-        this.ctx.logger.warn({ tool: name, botId }, 'Disabled tool requested by LLM');
-        return { success: false, content: `Tool "${name}" is not available for this bot` };
-      }
-      const tool = this.ctx.tools.find((t) => t.definition.function.name === name);
-      if (!tool) {
-        this.ctx.logger.warn({ tool: name }, 'Unknown tool requested by LLM');
-        return { success: false, content: `Unknown tool: ${name}` };
-      }
-      const effectiveArgs = { ...args, _chatId: chatId, _botId: botId };
-      return tool.execute(effectiveArgs, this.ctx.logger);
-    };
+    const executor = new ToolExecutor(this.ctx, {
+      botId,
+      chatId,
+      tools: this.getToolsForBot(botId),
+    });
+    return executor.createCallback();
   }
 
   /**
