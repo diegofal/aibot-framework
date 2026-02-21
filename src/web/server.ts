@@ -16,6 +16,8 @@ import { skillsRoutes } from './routes/skills';
 import { statusRoutes } from './routes/status';
 import { toolsRoutes } from './routes/tools';
 import { agentLoopRoutes } from './routes/agent-loop';
+import { askHumanRoutes } from './routes/ask-human';
+import { productionsRoutes } from './routes/productions';
 
 export type WebServerDeps = {
   config: Config;
@@ -41,6 +43,13 @@ export function startWebServer(deps: WebServerDeps): void {
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
   app.route('/api/settings', settingsRoutes({ config, configPath: deps.configPath, logger }));
   app.route('/api/agent-loop', agentLoopRoutes({ config, botManager: deps.botManager, logger }));
+  app.route('/api/ask-human', askHumanRoutes({ botManager: deps.botManager, logger }));
+
+  // Productions routes (only if enabled)
+  const productionsService = deps.botManager.getProductionsService();
+  if (productionsService) {
+    app.route('/api/productions', productionsRoutes({ productionsService, botManager: deps.botManager, logger }));
+  }
 
   // Dynamic tools routes (only if enabled)
   const dynamicStore = deps.botManager.getDynamicToolStore();
