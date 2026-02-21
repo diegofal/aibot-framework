@@ -11,10 +11,12 @@ import { createEmbeddingService, type EmbeddingService } from './embeddings';
 import { fullReindex, indexFile } from './indexer';
 import { hybridSearch } from './search';
 import { indexAllSessions } from './session-indexer';
+import { createCoreMemoryManager, type CoreMemoryManager } from './core-memory';
 
 export class MemoryManager {
   private db: Database | null = null;
   private embeddingService: EmbeddingService | null = null;
+  private coreMemoryManager: CoreMemoryManager | null = null;
   private watcher: FSWatcher | null = null;
   private pendingPaths = new Set<string>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -40,6 +42,9 @@ export class MemoryManager {
       this.logger,
     );
 
+    // Initialize core memory manager
+    this.coreMemoryManager = createCoreMemoryManager(this.db, this.logger);
+
     // Full reindex on startup
     await fullReindex(this.db, this.soulDir, this.embeddingService, this.config, this.logger);
 
@@ -47,6 +52,14 @@ export class MemoryManager {
     if (this.config.watchEnabled) {
       this.startWatcher();
     }
+  }
+
+  /**
+   * Get the core memory manager for structured identity storage.
+   * Returns null if not initialized.
+   */
+  getCoreMemory(): CoreMemoryManager | null {
+    return this.coreMemoryManager;
   }
 
   async search(query: string, maxResults?: number, minScore?: number): Promise<MemorySearchResult[]> {
@@ -88,6 +101,27 @@ export class MemoryManager {
   async indexSessions(): Promise<void> {
     if (!this.db || !this.embeddingService || !this.transcriptsDir) return;
     await indexAllSessions(this.db, this.transcriptsDir, this.embeddingService, this.config, this.logger);
+  }
+
+  /**
+   * Delete all core memory entries.
+   */
+  clearCoreMemory(): void {
+    if (!this.db) return;
+    this.db.exec('DELETE FROM core_memory');
+    this.logger.info('Core memory cleared');
+  }
+
+  /**
+   * Delete all indexed files/chunks and rebuild FTS.
+   */
+  clearIndex(): void {
+    if (!this.db) return;
+    this.db.exec('DELETE FROM chunks');
+    this.db.exec('DELETE FROM files');
+    // Rebuild FTS index after clearing
+    this.db.exec("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')");
+    this.logger.info('Memory index cleared');
   }
 
   dispose(): void {

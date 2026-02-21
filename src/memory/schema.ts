@@ -49,6 +49,22 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
   INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', old.id, old.content);
   INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES (new.id, new.content);
 END;
+
+-- Core Memory tables (MemGPT-style structured identity storage)
+CREATE TABLE IF NOT EXISTS core_memory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  importance INTEGER NOT NULL DEFAULT 5,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(category, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_core_memory_category ON core_memory(category);
+CREATE INDEX IF NOT EXISTS idx_core_memory_importance ON core_memory(importance DESC);
+CREATE INDEX IF NOT EXISTS idx_core_memory_updated ON core_memory(updated_at DESC);
 `;
 
 /**

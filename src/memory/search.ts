@@ -5,6 +5,12 @@ import type { EmbeddingService } from './embeddings';
 import type { MemorySearchResult } from './types';
 import { deserializeEmbedding } from './schema';
 
+// Extended result with importance weighting
+export interface WeightedMemoryResult extends MemorySearchResult {
+  importance: number; // 1-10, 0 for non-core memory
+  category?: string;
+}
+
 function cosineSimilarity(a: number[], b: number[]): number {
   let dotProduct = 0;
   let normA = 0;
@@ -116,6 +122,17 @@ export async function hybridSearch(
     logger.warn({ err }, 'Keyword search failed, falling back to vector-only');
   }
 
+  // --- Core Memory search (importance-weighted) ---
+  const coreMemoryResults: WeightedMemoryResult[] = [];
+  try {
+    const coreResults = searchCoreMemory(db, query);
+    for (const result of coreResults) {
+      coreMemoryResults.push(result);
+    }
+  } catch (err) {
+    logger.debug({ err }, 'Core Memory search failed (table may not exist)');
+  }
+
   // --- Merge scores ---
   const allChunkIds = new Set([...vectorScores.keys(), ...keywordScores.keys()]);
   const merged: { chunkId: number; score: number; source: 'vector' | 'keyword' | 'both' }[] = [];
@@ -162,10 +179,136 @@ export async function hybridSearch(
     });
   }
 
+  // Merge Core Memory results (they get priority boost based on importance)
+  const mergedResults = mergeWithCoreMemory(results, coreMemoryResults, maxResults);
+
   logger.debug(
-    { query: query.slice(0, 50), results: results.length, vectorHits: vectorScores.size, keywordHits: keywordScores.size },
+    { query: query.slice(0, 50), results: mergedResults.length, vectorHits: vectorScores.size, keywordHits: keywordScores.size, coreMemoryHits: coreMemoryResults.length },
     'Hybrid search completed',
   );
 
-  return results;
+  return mergedResults;
+}
+
+// Core Memory row type
+interface CoreMemoryRow {
+  id: number;
+  category: string;
+  key: string;
+  value: string;
+  importance: number;
+  updated_at: string;
+}
+
+/**
+ * Search Core Memory with keyword matching and importance weighting.
+ * Returns results sorted by relevance * importance.
+ */
+function searchCoreMemory(db: Database, query: string): WeightedMemoryResult[] {
+  // Check if core_memory table exists
+  const tableCheck = db.prepare<{ name: string }, []>(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='core_memory'"
+  ).get();
+  if (!tableCheck) return [];
+
+  const tokens = query
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(t => t.length >= 3 && !STOP_WORDS.has(t));
+
+  if (tokens.length === 0) return [];
+
+  // Search in both key and value
+  const conditions = tokens.map(() => '(LOWER(key) LIKE ? OR LOWER(value) LIKE ?)').join(' OR ');
+  const params = tokens.flatMap(t => [`%${t}%`, `%${t}%`]);
+
+  const rows = db.prepare<CoreMemoryRow, string[]>(
+    `SELECT id, category, key, value, importance, updated_at
+     FROM core_memory
+     WHERE ${conditions}
+     ORDER BY importance DESC, updated_at DESC
+     LIMIT 20`
+  ).all(...params);
+
+  const results: WeightedMemoryResult[] = [];
+  for (const row of rows) {
+    // Calculate match score based on token overlap
+    const content = `${row.key} ${row.value}`.toLowerCase();
+    const matches = tokens.filter(t => content.includes(t)).length;
+    const matchScore = matches / tokens.length;
+
+    // Weight by importance (1-10) - high importance gets boosted
+    const importanceWeight = row.importance / 5; // 0.2 to 2.0
+    const finalScore = Math.min(1, matchScore * importanceWeight);
+
+    if (finalScore > 0.1) {
+      results.push({
+        filePath: `core_memory/${row.category}`,
+        startLine: row.id,
+        endLine: row.id,
+        content: `[${row.importance}/10] ${row.key}: ${row.value}`,
+        score: Math.round(finalScore * 1000) / 1000,
+        source: 'keyword',
+        sourceType: 'memory',
+        importance: row.importance,
+        category: row.category,
+      });
+    }
+  }
+
+  return results.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Merge regular search results with Core Memory results.
+ * Core Memory results get boosted by importance and are deduplicated.
+ */
+function mergeWithCoreMemory(
+  regularResults: MemorySearchResult[],
+  coreResults: WeightedMemoryResult[],
+  maxResults: number,
+): MemorySearchResult[] {
+  // If no core results, return regular results
+  if (coreResults.length === 0) return regularResults;
+
+  // Create a set of content hashes to deduplicate
+  const seenContent = new Set<string>();
+  const merged: MemorySearchResult[] = [];
+
+  // Add high-importance core memory first (importance >= 7)
+  for (const result of coreResults) {
+    if (result.importance >= 7 && merged.length < maxResults) {
+      const contentHash = result.content.slice(0, 100).toLowerCase().replace(/\s+/g, '');
+      if (!seenContent.has(contentHash)) {
+        merged.push(result);
+        seenContent.add(contentHash);
+      }
+    }
+  }
+
+  // Then add regular results
+  for (const result of regularResults) {
+    if (merged.length >= maxResults) break;
+    const contentHash = result.content.slice(0, 100).toLowerCase().replace(/\s+/g, '');
+    if (!seenContent.has(contentHash)) {
+      merged.push(result);
+      seenContent.add(contentHash);
+    }
+  }
+
+  // Fill remaining slots with lower-importance core memory
+  for (const result of coreResults) {
+    if (merged.length >= maxResults) break;
+    if (result.importance < 7) {
+      const contentHash = result.content.slice(0, 100).toLowerCase().replace(/\s+/g, '');
+      if (!seenContent.has(contentHash)) {
+        merged.push(result);
+        seenContent.add(contentHash);
+      }
+    }
+  }
+
+  return merged;
 }
