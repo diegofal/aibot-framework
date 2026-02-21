@@ -8,17 +8,37 @@ const BotConversationOverrideSchema = z.object({
   maxHistory: z.number().int().positive().optional(),
 }).optional();
 
-const GlobalAgentLoopConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  every: z.string().default('6h'),
-  maxToolRounds: z.number().int().min(1).max(20).default(10),
-  maxDurationMs: z.number().int().positive().default(300_000),
-  disabledTools: z.array(z.string()).optional(),
+const StrategistConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  everyCycles: z.number().int().min(1).default(4),
+  minInterval: z.string().default('4h'),
 }).default({});
 
-const BotAgentLoopOverrideSchema = z.object({
-  reportChatId: z.number().optional(),
+export const GlobalAgentLoopConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  every: z.string().default('6h'),
+  minInterval: z.string().default('1m'),
+  maxInterval: z.string().default('24h'),
+  maxToolRounds: z.number().int().min(1).max(20).default(10),
+  maxDurationMs: z.number().int().positive().default(300_000),
+  claudeTimeout: z.number().int().positive().default(120_000),
   disabledTools: z.array(z.string()).optional(),
+  strategist: StrategistConfigSchema,
+}).default({});
+
+export const BotAgentLoopOverrideSchema = z.object({
+  reportChatId: z.number().optional(),
+  every: z.string().optional(),
+  claudeTimeout: z.number().int().positive().optional(),
+  disabledTools: z.array(z.string()).optional(),
+  mode: z.enum(['periodic', 'continuous']).default('periodic'),
+  continuousPauseMs: z.number().int().min(0).default(5_000),
+  continuousMemoryEvery: z.number().int().min(1).default(5),
+  strategist: z.object({
+    enabled: z.boolean().optional(),
+    everyCycles: z.number().int().min(1).optional(),
+    minInterval: z.string().optional(),
+  }).optional(),
 }).optional();
 
 const DynamicToolsConfigSchema = z.object({
@@ -27,10 +47,16 @@ const DynamicToolsConfigSchema = z.object({
   maxToolsPerBot: z.number().default(20),
 }).default({});
 
+const BotProductionsConfigSchema = z.object({
+  dir: z.string().optional(),
+  trackOnly: z.boolean().default(false),
+  enabled: z.boolean().default(true),
+}).optional();
+
 const BotConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
-  token: z.string(),
+  token: z.string().optional().default(''),
   enabled: z.boolean().default(true),
   allowedUsers: z.array(z.number()).optional(),
   skills: z.array(z.string()),
@@ -38,10 +64,12 @@ const BotConfigSchema = z.object({
   model: z.string().optional(),
   llmBackend: z.enum(['ollama', 'claude-cli']).optional(),
   soulDir: z.string().optional(),
+  workDir: z.string().optional(),
   description: z.string().optional(),
   disabledTools: z.array(z.string()).optional(),
   conversation: BotConversationOverrideSchema,
   agentLoop: BotAgentLoopOverrideSchema,
+  productions: BotProductionsConfigSchema,
 });
 
 const OllamaConfigSchema = z.object({
@@ -111,6 +139,25 @@ const ProcessToolConfigSchema = z.object({
   maxOutputChars: z.number().int().positive().default(200_000),
 });
 
+const BrowserToolsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  headless: z.boolean().default(true),
+  executablePath: z.string().optional(),
+  launchTimeout: z.number().int().positive().default(30_000),
+  navigationTimeout: z.number().int().positive().default(30_000),
+  actionTimeout: z.number().int().positive().default(10_000),
+  idleTimeoutMs: z.number().int().positive().default(300_000), // 5 min auto-close
+  screenshotDir: z.string().default('./data/screenshots'),
+  maxSnapshotChars: z.number().int().positive().default(40_000),
+  allowedUrlPatterns: z.array(z.string()).optional(),
+  blockedUrlPatterns: z.array(z.string()).optional(),
+  enableEvaluate: z.boolean().default(false),
+  viewport: z.object({
+    width: z.number().int().positive().default(1280),
+    height: z.number().int().positive().default(720),
+  }).default({}),
+});
+
 const DatetimeToolConfigSchema = z.object({
   enabled: z.boolean().default(true),
   timezone: z.string().default('America/Argentina/Buenos_Aires'),
@@ -158,6 +205,12 @@ const SessionMemoryConfigSchema = z.object({
   indexOnStartup: z.boolean().default(false),
 }).default({});
 
+const HealthCheckConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  cooldownMs: z.number().int().positive().default(86_400_000), // 24h
+  consolidateMemory: z.boolean().default(true),
+}).default({});
+
 const SoulConfigSchema = z.object({
   enabled: z.boolean().default(true),
   dir: z.string().default('./config/soul'),
@@ -168,6 +221,7 @@ const SoulConfigSchema = z.object({
     enabled: z.boolean().default(true),
     maxVersionsPerFile: z.number().int().positive().default(10),
   }).default({}),
+  healthCheck: HealthCheckConfigSchema,
 });
 
 const WhisperConfigSchema = z.object({
@@ -274,6 +328,11 @@ const SessionConfigSchema = z.object({
   llmRelevanceCheck: LlmRelevanceCheckSchema,
 });
 
+const ProductionsConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  baseDir: z.string().default('./productions'),
+}).default({});
+
 const ConfigSchema = z.object({
   bots: z.array(BotConfigSchema),
   ollama: OllamaConfigSchema,
@@ -295,7 +354,9 @@ const ConfigSchema = z.object({
   buffer: BufferConfigSchema,
   web: WebConfigSchema.default({}),
   agentLoop: GlobalAgentLoopConfigSchema,
+  browserTools: BrowserToolsConfigSchema.default({}),
   dynamicTools: DynamicToolsConfigSchema,
+  productions: ProductionsConfigSchema,
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
 });
@@ -331,6 +392,10 @@ export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
 export type SessionMemoryConfig = z.infer<typeof SessionMemoryConfigSchema>;
 export type LlmRelevanceCheckConfig = z.infer<typeof LlmRelevanceCheckSchema>;
 export type BotConversationOverride = z.infer<typeof BotConversationOverrideSchema>;
+export type ProductionsConfig = z.infer<typeof ProductionsConfigSchema>;
+export type BotProductionsConfig = z.infer<typeof BotProductionsConfigSchema>;
+export type BrowserToolsConfig = z.infer<typeof BrowserToolsConfigSchema>;
+export type HealthCheckConfig = z.infer<typeof HealthCheckConfigSchema>;
 
 /**
  * Substitute environment variables in strings
@@ -404,6 +469,7 @@ export interface ResolvedAgentConfig {
   model: string;
   llmBackend?: 'ollama' | 'claude-cli';
   soulDir: string;
+  workDir: string;
   systemPrompt: string;
   temperature: number;
   maxHistory: number;
@@ -418,6 +484,7 @@ export function resolveAgentConfig(globalConfig: Config, botConfig: BotConfig): 
     model: botConfig.model ?? globalConfig.ollama.models.primary,
     llmBackend: botConfig.llmBackend,
     soulDir: botConfig.soulDir ?? `${globalConfig.soul.dir}/${botConfig.id}`,
+    workDir: botConfig.workDir ?? `${globalConfig.productions?.baseDir ?? './productions'}/${botConfig.id}`,
     systemPrompt: botConfig.conversation?.systemPrompt ?? globalConfig.conversation.systemPrompt,
     temperature: botConfig.conversation?.temperature ?? globalConfig.conversation.temperature,
     maxHistory: botConfig.conversation?.maxHistory ?? globalConfig.conversation.maxHistory,

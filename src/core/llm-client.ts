@@ -1,6 +1,9 @@
 import type { Logger } from '../logger';
 import type { OllamaClient, ChatMessage, ChatOptions } from '../ollama';
 import { claudeGenerate } from '../claude-cli';
+import { runToolLoop } from './tool-runner';
+import { TextToolStrategy } from './text-tool-strategy';
+import { createLoopDetector } from './loop-detector';
 
 export interface LLMGenerateOptions {
   model?: string;
@@ -36,7 +39,7 @@ export class OllamaLLMClient implements LLMClient {
 
 /**
  * Wraps claudeGenerate(). chat() formats messages into a single prompt.
- * Logs warning if tools are requested (not supported by Claude CLI).
+ * Supports tool calling via text-based <tool_call> protocol.
  */
 export class ClaudeCliLLMClient implements LLMClient {
   readonly backend = 'claude-cli' as const;
@@ -57,11 +60,21 @@ export class ClaudeCliLLMClient implements LLMClient {
   }
 
   async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<string> {
-    if (opts?.tools && opts.tools.length > 0) {
-      this.logger.warn('Claude CLI does not support tool calling — ignoring tools');
+    const hasTools = opts?.tools && opts.tools.length > 0 && opts.toolExecutor;
+
+    if (hasTools) {
+      const strategy = new TextToolStrategy(this.claudePath, this.timeout, this.logger);
+      const maxRounds = opts.maxToolRounds ?? 5;
+      return runToolLoop(strategy, messages, {
+        maxRounds,
+        tools: opts.tools!,
+        toolExecutor: opts.toolExecutor!,
+        logger: this.logger,
+        loopDetector: createLoopDetector(maxRounds),
+      }, opts);
     }
 
-    // Serialize messages into a single prompt
+    // Simple path: no tools, single generate call
     const parts: string[] = [];
     let system: string | undefined;
 
@@ -103,9 +116,15 @@ export class LLMClientWithFallback implements LLMClient {
   }
 
   async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<string> {
-    // Smart routing: if tools requested and primary is claude-cli, skip to fallback
-    if (opts?.tools && opts.tools.length > 0 && this.primary.backend === 'claude-cli') {
-      this.logger.debug('Tool-calling request routed directly to fallback (Ollama)');
+    // Route tool-based chat directly to fallback when primary is Claude CLI.
+    // Claude CLI uses a text-based <tool_call> XML protocol that produces huge prompts
+    // and regularly times out. Ollama supports native tool calling efficiently.
+    const hasTools = opts?.tools && opts.tools.length > 0 && opts?.toolExecutor;
+    if (hasTools && this.primary.backend === 'claude-cli') {
+      this.logger.info(
+        { backend: this.primary.backend, fallback: this.fallback.backend, toolCount: opts!.tools!.length },
+        'Bypassing Claude CLI for tool-based chat, routing to fallback',
+      );
       return this.fallback.chat(messages, opts);
     }
 
