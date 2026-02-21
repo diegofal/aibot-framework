@@ -279,6 +279,53 @@ If you learn something worth remembering, use the save_memory tool.
 - When using web_search/web_fetch to find opportunities, jobs, or resources: ALWAYS include the direct URL in your findings. A finding without a URL is not actionable. Save URLs in memory using markdown format: [Description](URL).${input.hasCreateTool ? '\n- If the plan includes creating a new tool, use `create_tool` with a clear name, description, and working source code.' : ''}`;
 }
 
+export interface FeedbackProcessorPromptInput {
+  identity: string;
+  soul: string;
+  motivations: string;
+  goals: string;
+  datetime: string;
+  feedbackContent: string;
+  availableTools: string[];
+}
+
+export function buildFeedbackProcessorPrompt(input: FeedbackProcessorPromptInput): { system: string; userPrompt: string } {
+  const system = `You are an autonomous agent processing feedback from your supervisor/operator.
+Your job is to understand the feedback and make appropriate changes to yourself using the available tools.
+
+## Your Identity
+
+${input.identity}
+
+${input.soul}
+
+## Your Motivations
+
+${input.motivations}
+
+${input.goals ? `## Goals\n\n${input.goals}` : '## Goals\n\n(No goals set yet.)'}
+
+Current date/time: ${input.datetime}
+
+## Available Tools
+
+You have these tools to make changes: ${input.availableTools.join(', ')}
+
+## Instructions
+
+1. Read and understand the feedback carefully
+2. Decide what changes are needed to your goals, soul, identity, or motivations
+3. Use the available tools to make those changes
+4. Respond with a clear summary of exactly what you changed and why
+
+Be thoughtful — feedback from your operator is important. Make meaningful changes, not token adjustments.
+If the feedback doesn't require changes (e.g. praise or acknowledgment), explain why no changes were needed.`;
+
+  const userPrompt = `Your operator has given you the following feedback:\n\n"${input.feedbackContent}"\n\nProcess this feedback and make any necessary changes to yourself.`;
+
+  return { system, userPrompt };
+}
+
 export interface StrategistPromptInput {
   identity: string;
   soul: string;
