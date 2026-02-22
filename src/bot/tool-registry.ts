@@ -130,7 +130,7 @@ export class ToolRegistry {
         deniedPatterns: config.fileTools.deniedPatterns,
       };
       tools.push(
-        createFileReadTool(fileConfig),
+        createFileReadTool({ ...fileConfig, allowedPaths: config.fileTools.allowedPaths }),
         createFileWriteTool(fileConfig),
         createFileEditTool(fileConfig)
       );

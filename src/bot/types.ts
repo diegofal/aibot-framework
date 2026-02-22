@@ -15,6 +15,7 @@ import type { SoulLoader } from '../soul';
 import type { Tool, ToolDefinition } from '../tools/types';
 import type { LLMClient } from '../core/llm-client';
 import type { AskHumanStore } from './ask-human-store';
+import type { AgentFeedbackStore } from './agent-feedback-store';
 import type { ProductionsService } from '../productions/service';
 
 export interface SeenUser {
@@ -56,6 +57,7 @@ export interface BotContext {
   readonly handledMessageIds: Set<string>;
   readonly llmClients: Map<string, LLMClient>;
   readonly askHumanStore: AskHumanStore;
+  readonly agentFeedbackStore: AgentFeedbackStore;
   readonly productionsService?: ProductionsService;
 
   // Helper methods
