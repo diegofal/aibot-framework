@@ -7,6 +7,7 @@ import { renderLogs, destroyLogs } from './pages/logs.js';
 import { renderSettings } from './pages/settings.js';
 import { renderInbox, destroyInbox } from './pages/inbox.js';
 import { renderProductions, renderBotProductions } from './pages/productions.js';
+import { renderFeedback, renderBotFeedback } from './pages/feedback.js';
 
 const content = document.getElementById('content');
 
@@ -23,6 +24,8 @@ const routes = [
   { pattern: /^#\/cron$/,                    handler: () => renderCron(content) },
   { pattern: /^#\/productions\/([^/]+)$/,     handler: (m) => renderBotProductions(content, m[1]) },
   { pattern: /^#\/productions$/,             handler: () => renderProductions(content) },
+  { pattern: /^#\/feedback\/([^/]+)$/,       handler: (m) => renderBotFeedback(content, m[1]) },
+  { pattern: /^#\/feedback$/,                handler: () => renderFeedback(content) },
   { pattern: /^#\/tools\/([^/]+)$/,          handler: (m) => renderToolDetail(content, m[1]) },
   { pattern: /^#\/tools$/,                   handler: () => renderTools(content) },
   { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },
@@ -87,6 +90,26 @@ async function loadInboxBadge() {
 
 loadInboxBadge();
 setInterval(loadInboxBadge, 10000);
+
+// Feedback badge polling
+async function loadFeedbackBadge() {
+  try {
+    const res = await fetch('/api/agent-feedback/count');
+    const data = await res.json();
+    const badge = document.getElementById('feedback-badge');
+    if (badge) {
+      if (data.count > 0) {
+        badge.textContent = data.count;
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+loadFeedbackBadge();
+setInterval(loadFeedbackBadge, 10000);
 
 // Initial route
 navigate();

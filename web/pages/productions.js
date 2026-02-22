@@ -91,13 +91,16 @@ export async function renderBotProductions(el, botId) {
         <a href="#/productions" class="btn btn-sm">&larr; Back</a>
       </div>
 
-      <div class="detail-card mb-16" style="display:flex;gap:24px;flex-wrap:wrap">
+      <div class="detail-card mb-16" style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">
         <div><strong>${stats.total}</strong> <span class="text-dim">Total</span></div>
         <div><span style="color:var(--green)">${stats.approved}</span> <span class="text-dim">Approved</span></div>
         <div><span style="color:var(--red)">${stats.rejected}</span> <span class="text-dim">Rejected</span></div>
         <div><span style="color:var(--orange)">${stats.unreviewed}</span> <span class="text-dim">Unreviewed</span></div>
         <div>${stats.avgRating != null ? starsHtml(Math.round(stats.avgRating)) + ` <span class="text-dim">${stats.avgRating}</span>` : '<span class="text-dim">No ratings</span>'}</div>
+        <div style="margin-left:auto"><button class="btn btn-sm" id="generate-summary-btn">Generate Summary</button></div>
       </div>
+
+      <div id="summary-container" class="mb-16"></div>
 
       <div class="mb-16">
         <select id="status-filter" class="log-agent-filter">
@@ -121,6 +124,32 @@ export async function renderBotProductions(el, botId) {
       currentStatus = e.target.value;
       load();
     });
+
+    const summaryBtn = document.getElementById('generate-summary-btn');
+    if (summaryBtn) {
+      summaryBtn.addEventListener('click', async () => {
+        summaryBtn.disabled = true;
+        summaryBtn.textContent = 'Generating...';
+        const container = document.getElementById('summary-container');
+        container.innerHTML = '<p class="text-dim">Analyzing productions...</p>';
+
+        try {
+          const result = await api(`/api/productions/${encodeURIComponent(botId)}/generate-summary`, {
+            method: 'POST',
+          });
+          if (result.error) {
+            container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">${escapeHtml(result.error)}</p></div>`;
+          } else {
+            container.innerHTML = `<div class="detail-card" style="white-space:pre-wrap">${escapeHtml(result.summary)}</div>`;
+          }
+        } catch (err) {
+          container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">Request failed: ${escapeHtml(String(err))}</p></div>`;
+        }
+
+        summaryBtn.disabled = false;
+        summaryBtn.textContent = 'Regenerate Summary';
+      });
+    }
 
     if (entries.length === 0) return;
 
