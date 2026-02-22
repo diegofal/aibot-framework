@@ -2,7 +2,34 @@
 
 ## Unreleased
 
+### Fixed
+- **Feedback processing returns "(no response)"** — `processFeedback()` now uses a direct
+  `ClaudeCliLLMClient` instead of going through `LLMClientWithFallback`, which was routing
+  tool-based calls to the Ollama fallback and producing empty responses for `claude-cli` bots.
+
 ### Added
+- **Generate Summary button on Productions page** — New "Generate Summary" button on the
+  per-bot productions page. Calls Claude CLI to analyze the bot's recent productions, soul
+  context, goals, and memory, then displays a read-only summary card explaining what the bot
+  is currently working on. Backend: `POST /api/productions/:botId/generate-summary`.
+- **Generate Feedback button** — New "Generate Feedback" button on the agent feedback
+  dashboard page. Calls Claude CLI to analyze the bot's soul files, productions, memory,
+  goals, and feedback history, then produces harsh, actionable feedback that the operator
+  can review and edit before submitting. Backend: `POST /api/agent-feedback/:botId/generate`.
+  Uses `config.improve.claudePath` and `config.improve.timeout` for CLI configuration.
+- **Agent-level feedback system** — New dashboard page lets operators submit high-level
+  directives to individual bots (e.g. "focus more on X", "change your tone"). Feedback is
+  persisted as JSONL in each bot's soul directory. The agent loop processes pending feedback
+  before each cycle: an LLM call with restricted soul-modifying tools (`manage_goals`,
+  `update_soul`, `update_identity`, `save_memory`) autonomously applies changes, and the
+  bot's response is recorded. Dashboard shows feedback history with status badges (pending,
+  applied, dismissed) and the bot's response for applied items. Badge polling in nav shows
+  pending count. API: `GET/POST /api/agent-feedback/:botId`, `DELETE /api/agent-feedback/:botId/:id`,
+  `GET /api/agent-feedback/count`.
+- **`allowedPaths` for file tools** — New `fileTools.allowedPaths` config option adds
+  read-only access to extra directories (e.g. reference codebases). `file_read` checks
+  `basePath` first, then each allowed path. `file_write` and `file_edit` remain restricted
+  to `basePath` only, keeping extra paths strictly read-only.
 - **Dynamic tool scope filtering** — Dynamic tools with a `scope` field (specific bot ID)
   are now enforced at runtime. Tools scoped to a bot are only visible to that bot (and its
   creator). Previously all approved dynamic tools were visible to all bots regardless of
