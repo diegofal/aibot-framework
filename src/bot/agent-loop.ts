@@ -1,11 +1,13 @@
 import { type BotConfig, resolveAgentConfig } from '../config';
 import type { ChatMessage } from '../ollama';
 import type { Logger } from '../logger';
+import { ClaudeCliLLMClient } from '../core/llm-client';
 import type { BotContext } from './types';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import type { ToolRegistry } from './tool-registry';
-import { buildPlannerPrompt, buildContinuousPlannerPrompt, buildExecutorPrompt, buildStrategistPrompt } from './agent-loop-prompts';
+import { buildPlannerPrompt, buildContinuousPlannerPrompt, buildExecutorPrompt, buildStrategistPrompt, buildFeedbackProcessorPrompt } from './agent-loop-prompts';
 import type { PlannerResult, ContinuousPlannerResult } from './agent-loop-prompts';
+import type { AgentFeedback } from './agent-feedback-store';
 import { parseGoals, serializeGoals } from '../tools/goals';
 import { sendLongMessage } from './telegram-utils';
 import { ToolExecutor, type ToolExecutionRecord } from './tool-executor';
@@ -495,12 +497,23 @@ export class AgentLoop {
     const model = this.ctx.getActiveModel(botId);
 
     // Gather context
-    const identity = soulLoader.readIdentity() || '(no identity)';
-    const soul = soulLoader.readSoul() || '(no soul)';
-    const motivations = soulLoader.readMotivations() || '(no motivations)';
+    let identity = soulLoader.readIdentity() || '(no identity)';
+    let soul = soulLoader.readSoul() || '(no soul)';
+    let motivations = soulLoader.readMotivations() || '(no motivations)';
     let goals = soulLoader.readGoals?.() || '';
     const recentMemory = soulLoader.readRecentDailyLogs();
     const datetime = new Date().toISOString();
+
+    // Phase -1: Process pending human feedback
+    const pendingFeedback = this.ctx.agentFeedbackStore.getPending(botId);
+    if (pendingFeedback.length > 0) {
+      await this.processFeedback(botId, botConfig, botLogger, pendingFeedback, soulLoader);
+      // Re-read soul files since feedback may have modified them
+      identity = soulLoader.readIdentity() || '(no identity)';
+      soul = soulLoader.readSoul() || '(no soul)';
+      motivations = soulLoader.readMotivations() || '(no motivations)';
+      goals = soulLoader.readGoals?.() || '';
+    }
 
     // Phase 0: Strategist (conditional)
     let strategistRan = false;
@@ -679,6 +692,91 @@ export class AgentLoop {
       strategistReflection,
       focus,
     };
+  }
+
+  private async processFeedback(
+    botId: string,
+    botConfig: BotConfig,
+    botLogger: Logger,
+    pendingFeedback: AgentFeedback[],
+    soulLoader: ReturnType<BotContext['getSoulLoader']>,
+  ): Promise<void> {
+    // Always use Claude CLI directly for feedback — bypasses LLMClientWithFallback
+    // which would route tool-based calls to Ollama and produce empty responses.
+    const claudePath = this.ctx.config.improve?.claudePath ?? 'claude';
+    const claudeTimeout = botConfig.agentLoop?.claudeTimeout ?? this.ctx.config.agentLoop.claudeTimeout;
+    const feedbackLLM = new ClaudeCliLLMClient(claudePath, claudeTimeout, botLogger);
+    const globalConfig = this.ctx.config.agentLoop;
+    const botOverride = botConfig.agentLoop;
+
+    // Restrict tools to soul-modifying subset
+    const feedbackToolNames = new Set(['manage_goals', 'update_soul', 'update_identity', 'save_memory']);
+    const allDisabled = new Set([
+      ...(botConfig.disabledTools ?? []),
+      ...(globalConfig.disabledTools ?? []),
+      ...(botOverride?.disabledTools ?? []),
+    ]);
+    const baseDefs = this.toolRegistry.getDefinitionsForBot(botId);
+    const defs = baseDefs.filter(
+      (d) => feedbackToolNames.has(d.function.name) && !allDisabled.has(d.function.name),
+    );
+
+    botLogger.info(
+      { botId, count: pendingFeedback.length, tools: defs.map((d) => d.function.name) },
+      'Agent loop: processing pending feedback',
+    );
+
+    for (const feedback of pendingFeedback) {
+      try {
+        const identity = soulLoader.readIdentity() || '(no identity)';
+        const soul = soulLoader.readSoul() || '(no soul)';
+        const motivations = soulLoader.readMotivations() || '(no motivations)';
+        const goals = soulLoader.readGoals?.() || '';
+        const datetime = new Date().toISOString();
+
+        const { system, userPrompt } = buildFeedbackProcessorPrompt({
+          identity,
+          soul,
+          motivations,
+          goals,
+          datetime,
+          feedbackContent: feedback.content,
+          availableTools: defs.map((d) => d.function.name),
+        });
+
+        const messages: import('../ollama').ChatMessage[] = [
+          { role: 'system', content: system },
+          { role: 'user', content: userPrompt },
+        ];
+
+        const executor = new ToolExecutor(this.ctx, {
+          botId,
+          chatId: botOverride?.reportChatId ?? 0,
+          disabledTools: allDisabled,
+          enableLogging: true,
+        });
+
+        const response = await feedbackLLM.chat(messages, {
+          temperature: 0.5,
+          tools: defs,
+          toolExecutor: executor.createCallback(),
+          maxToolRounds: 5,
+        });
+
+        const responseText = response || '(no response)';
+        this.ctx.agentFeedbackStore.markApplied(botId, feedback.id, responseText);
+        this.logToMemory(botId, `[feedback] Applied: "${feedback.content}" → ${responseText}`);
+        botLogger.info({ botId, feedbackId: feedback.id }, 'Agent loop: feedback processed');
+      } catch (err) {
+        botLogger.error({ botId, feedbackId: feedback.id, error: err }, 'Agent loop: failed to process feedback');
+        // Mark as applied with error response so it doesn't block future loops
+        this.ctx.agentFeedbackStore.markApplied(
+          botId,
+          feedback.id,
+          `Error processing feedback: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   private shouldRunStrategist(botId: string, botConfig: BotConfig): boolean {

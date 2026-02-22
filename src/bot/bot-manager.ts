@@ -29,6 +29,7 @@ import { CollaborationManager } from './collaboration';
 import { HandlerRegistrar } from './handler-registrar';
 import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
 import { AskHumanStore, type PendingQuestionInfo } from './ask-human-store';
+import { AgentFeedbackStore, type AgentFeedback } from './agent-feedback-store';
 import { ProductionsService } from '../productions/service';
 import { runStartupSoulCheck } from './soul-health-check';
 
@@ -64,6 +65,7 @@ export class BotManager {
   private handlerRegistrar: HandlerRegistrar;
   private agentLoop: AgentLoop;
   private askHumanStore: AskHumanStore;
+  private agentFeedbackStore: AgentFeedbackStore;
   private productionsService?: ProductionsService;
 
   constructor(
@@ -94,6 +96,9 @@ export class BotManager {
 
     // Initialize ask-human store early so it's available in BotContext
     this.askHumanStore = new AskHumanStore(logger);
+
+    // Initialize agent feedback store
+    this.agentFeedbackStore = new AgentFeedbackStore(logger);
 
     // Initialize productions service if enabled
     if (config.productions?.enabled !== false) {
@@ -129,6 +134,7 @@ export class BotManager {
       handledMessageIds: this.handledMessageIds,
       llmClients: this.llmClients,
       askHumanStore: this.askHumanStore,
+      agentFeedbackStore: this.agentFeedbackStore,
       productionsService: this.productionsService,
 
       getActiveModel: (botId: string) => this.getActiveModel(botId),
@@ -254,6 +260,9 @@ export class BotManager {
       await perBotSoulLoader.initialize();
       this.soulLoaders.set(config.id, perBotSoulLoader);
       botLogger.info({ soulDir: resolved.soulDir }, 'Per-agent soul loader initialized');
+
+      // Load agent feedback from disk
+      this.agentFeedbackStore.loadFromDisk(config.id, resolved.soulDir);
 
       // Background soul health check + memory consolidation (non-blocking)
       const healthCheckConfig = this.config.soul.healthCheck;
@@ -539,6 +548,29 @@ export class BotManager {
     const ok = this.askHumanStore.dismissById(id);
     if (ok) this.agentLoop.wakeUp();
     return ok;
+  }
+
+  // Agent feedback delegates
+  submitAgentFeedback(botId: string, content: string): AgentFeedback {
+    const entry = this.agentFeedbackStore.submit(botId, content);
+    this.agentLoop.wakeUp();
+    return entry;
+  }
+
+  getAgentFeedback(botId: string, opts?: { status?: string; limit?: number; offset?: number }): AgentFeedback[] {
+    return this.agentFeedbackStore.getAll(botId, opts);
+  }
+
+  getAgentFeedbackPendingCount(): number {
+    return this.agentFeedbackStore.getPendingCount();
+  }
+
+  dismissAgentFeedback(botId: string, id: string): boolean {
+    return this.agentFeedbackStore.dismiss(botId, id);
+  }
+
+  getAgentFeedbackBotIds(): string[] {
+    return this.agentFeedbackStore.getBotIds();
   }
 
   // Dynamic tools (for web API)
