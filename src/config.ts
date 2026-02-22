@@ -130,6 +130,7 @@ const FileToolsConfigSchema = z.object({
   basePath: z.string().default('./'),
   maxFileSizeBytes: z.number().int().positive().default(1_048_576), // 1MB
   deniedPatterns: z.array(z.string()).optional(), // regex patterns for blocked files
+  allowedPaths: z.array(z.string()).default([]), // extra read-only directories
 });
 
 const ProcessToolConfigSchema = z.object({

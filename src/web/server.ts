@@ -18,6 +18,7 @@ import { toolsRoutes } from './routes/tools';
 import { agentLoopRoutes } from './routes/agent-loop';
 import { askHumanRoutes } from './routes/ask-human';
 import { productionsRoutes } from './routes/productions';
+import { agentFeedbackRoutes } from './routes/agent-feedback';
 
 export type WebServerDeps = {
   config: Config;
@@ -44,11 +45,17 @@ export function startWebServer(deps: WebServerDeps): void {
   app.route('/api/settings', settingsRoutes({ config, configPath: deps.configPath, logger }));
   app.route('/api/agent-loop', agentLoopRoutes({ config, botManager: deps.botManager, logger }));
   app.route('/api/ask-human', askHumanRoutes({ botManager: deps.botManager, logger }));
+  app.route('/api/agent-feedback', agentFeedbackRoutes({
+    config,
+    botManager: deps.botManager,
+    logger,
+    productionsService: deps.botManager.getProductionsService(),
+  }));
 
   // Productions routes (only if enabled)
   const productionsService = deps.botManager.getProductionsService();
   if (productionsService) {
-    app.route('/api/productions', productionsRoutes({ productionsService, botManager: deps.botManager, logger }));
+    app.route('/api/productions', productionsRoutes({ productionsService, botManager: deps.botManager, logger, config }));
   }
 
   // Dynamic tools routes (only if enabled)
