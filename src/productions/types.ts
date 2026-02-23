@@ -1,0 +1,30 @@
+import type { ThreadMessage } from '../types/thread';
+
+export interface ProductionEvaluation {
+  status?: 'approved' | 'rejected';
+  rating?: number; // 1-5
+  feedback?: string;
+  evaluatedAt: string; // ISO
+  aiResponse?: string;
+  aiResponseAt?: string; // ISO
+  thread?: ThreadMessage[];
+}
+
+export interface SummaryData {
+  summary?: string;
+  error?: string;
+  generatedAt: string;
+}
+
+export interface ProductionEntry {
+  id: string;
+  timestamp: string; // ISO
+  botId: string;
+  tool: string; // file_write | file_edit | exec
+  path: string; // file path (relative to productions dir or basePath)
+  action: 'create' | 'edit' | 'delete';
+  description: string;
+  size: number;
+  trackOnly: boolean;
+  evaluation?: ProductionEvaluation;
+}

@@ -40,5 +40,6 @@ config/soul/
 # Notes
 improvements.md
 
-# Productions (runtime-generated)
+# Productions (runtime-generated, but track src/productions/)
 productions/
+!src/productions/
