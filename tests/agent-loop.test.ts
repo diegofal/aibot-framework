@@ -642,6 +642,31 @@ describe('buildContinuousPlannerPrompt', () => {
     expect(system).toContain('create_tool');
     expect(system).toContain('Dynamic Tool Creation');
   });
+
+  test('injects autonomousCyclesNote when provided', () => {
+    const { system } = buildContinuousPlannerPrompt({
+      ...baseInput,
+      autonomousCyclesNote: '## Autonomous Run Notice\n\nYou have been running autonomously for 10 cycles.',
+    });
+    expect(system).toContain('## Autonomous Run Notice');
+    expect(system).toContain('10 cycles');
+  });
+
+  test('omits autonomousCyclesNote when not provided', () => {
+    const { system } = buildContinuousPlannerPrompt(baseInput);
+    expect(system).not.toContain('Autonomous Run Notice');
+  });
+
+  test('HUMAN COLLABORATION uses proactive language in continuous mode', () => {
+    const { system } = buildContinuousPlannerPrompt(baseInput);
+    expect(system).toContain('proactively ask when the human\'s preference matters');
+    expect(system).not.toContain('you cannot determine on your own');
+  });
+
+  test('priority "none" requires ask_human first in continuous mode', () => {
+    const { system } = buildContinuousPlannerPrompt(baseInput);
+    expect(system).toContain('Return this ONLY after you have already called ask_human');
+  });
 });
 
 describe('continuous mode config defaults', () => {
@@ -1279,6 +1304,55 @@ describe('idle cycle tracking', () => {
   });
 });
 
+describe('cyclesSinceAskHuman tracking', () => {
+  // Mirrors the logic in agent-loop.ts executeSingleBot
+  function trackCycle(
+    cyclesSinceAskHuman: number,
+    toolCalls: { name: string }[],
+    isIdle: boolean,
+  ): number {
+    const usedAskHuman = toolCalls.some((t) => t.name === 'ask_human');
+    if (usedAskHuman) {
+      return 0;
+    } else if (!isIdle) {
+      return cyclesSinceAskHuman + 1;
+    }
+    return cyclesSinceAskHuman;
+  }
+
+  test('increments on non-idle cycle without ask_human', () => {
+    expect(trackCycle(0, [{ name: 'save_memory' }], false)).toBe(1);
+    expect(trackCycle(3, [{ name: 'web_search' }], false)).toBe(4);
+  });
+
+  test('resets to 0 when ask_human is used', () => {
+    expect(trackCycle(5, [{ name: 'ask_human' }], false)).toBe(0);
+    expect(trackCycle(10, [{ name: 'save_memory' }, { name: 'ask_human' }], false)).toBe(0);
+  });
+
+  test('does not increment on idle cycles', () => {
+    expect(trackCycle(3, [], true)).toBe(3);
+  });
+
+  test('resets even on idle cycle if ask_human was used', () => {
+    // Edge case: ask_human in tool calls but idle result
+    expect(trackCycle(5, [{ name: 'ask_human' }], true)).toBe(0);
+  });
+
+  test('autonomousCyclesNote generated at threshold', () => {
+    const threshold = 5;
+    const buildNote = (cycles: number) =>
+      cycles >= threshold
+        ? `## Autonomous Run Notice\n\nYou have been running autonomously for ${cycles} cycles without checking in with your human operator.`
+        : undefined;
+
+    expect(buildNote(4)).toBeUndefined();
+    expect(buildNote(5)).toContain('5 cycles');
+    expect(buildNote(10)).toContain('10 cycles');
+    expect(buildNote(0)).toBeUndefined();
+  });
+});
+
 describe('config schema — karma and idleSuppression', () => {
   test('karma config has sensible defaults', () => {
     const { z } = require('zod');
@@ -1305,6 +1379,28 @@ describe('config schema — karma and idleSuppression', () => {
     const { GlobalAgentLoopConfigSchema } = require('../src/config');
     const result = GlobalAgentLoopConfigSchema.parse({ idleSuppression: false });
     expect(result.idleSuppression).toBe(false);
+  });
+
+  test('askHumanCheckInCycles defaults to 5', () => {
+    const { GlobalAgentLoopConfigSchema } = require('../src/config');
+    const result = GlobalAgentLoopConfigSchema.parse({});
+    expect(result.askHumanCheckInCycles).toBe(5);
+  });
+
+  test('askHumanCheckInCycles can be customized', () => {
+    const { GlobalAgentLoopConfigSchema } = require('../src/config');
+    const result = GlobalAgentLoopConfigSchema.parse({ askHumanCheckInCycles: 10 });
+    expect(result.askHumanCheckInCycles).toBe(10);
+  });
+
+  test('askHumanCheckInCycles rejects values below 1', () => {
+    const { GlobalAgentLoopConfigSchema } = require('../src/config');
+    expect(() => GlobalAgentLoopConfigSchema.parse({ askHumanCheckInCycles: 0 })).toThrow();
+  });
+
+  test('askHumanCheckInCycles rejects values above 50', () => {
+    const { GlobalAgentLoopConfigSchema } = require('../src/config');
+    expect(() => GlobalAgentLoopConfigSchema.parse({ askHumanCheckInCycles: 51 })).toThrow();
   });
 });
 
