@@ -179,6 +179,8 @@ describe('browser tool — act validation', () => {
   });
 
   test('act without running browser returns error', async () => {
+    // Close browser to ensure clean state (prior tests may have launched it)
+    await tool.execute({ action: 'close' }, noopLogger);
     const result = await tool.execute({ action: 'act', kind: 'click', ref: 'e1' }, noopLogger);
     expect(result.success).toBe(false);
     expect(result.content).toContain('Browser is not running');

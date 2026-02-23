@@ -18,6 +18,7 @@ NO buscar en internet la documentacion de OpenClaw - usar el codigo fuente local
 - Cada cambio de código debe incluir o actualizar tests unitarios en `tests/`. Ejecutar `bun test` antes de considerar el trabajo terminado.
 - Cualquier cambio relevante debe agregarse al archivo `CHANGELOG.md` en la raíz del proyecto.
 - Cualquier cambio que afecte la arquitectura, módulos, tools, skills, rutas web, config schemas, o memoria debe reflejarse en la documentación en `docs/architecture-docs/`. Actualizar la página HTML correspondiente para mantener la documentación sincronizada con el código.
+- Todo código generado por AI (incluyendo este asistente) DEBE producir tests que pasen. Ejecutar `bun test` y verificar que no se introducen nuevos fallos antes de considerar el trabajo terminado. Los tests pre-existentes que fallan por dependencias externas (Playwright, API keys) no cuentan como fallos nuevos.
 
 ## Proyecto
 - Runtime: Bun
