@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import type { Config } from '../../config';
+import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
 import { claudeGenerate } from '../../claude-cli';
@@ -71,6 +72,9 @@ Write your feedback in the bot's primary language (match the language used in it
   return sections.join('\n\n');
 }
 
+const THREAD_SYSTEM_PROMPT = `You are an AI bot in a conversation thread discussing your work or behavior with a human reviewer.
+Rules: Be concise (2-4 sentences), no markdown headers, match the bot's language, respond to the latest message in context of the full thread, be specific.`;
+
 const GENERATE_SYSTEM_PROMPT = `You are a ruthless quality auditor for AI bot agents. Your job is to analyze a bot's configuration, outputs, and behavior, then produce blunt, specific, actionable feedback.
 
 Rules:
@@ -133,7 +137,7 @@ export function agentFeedbackRoutes(deps: {
 
       // Recent memory (7 days)
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      const sinceDate = sevenDaysAgo.toISOString().slice(0, 10);
+      const sinceDate = localDateStr(sevenDaysAgo);
       const recentMemory = soulLoader.readDailyLogsSince(sinceDate);
 
       // Productions
@@ -239,6 +243,121 @@ export function agentFeedbackRoutes(deps: {
     const entry = deps.botManager.submitAgentFeedback(botId, body.content.trim());
     deps.logger.info({ botId, id: entry.id }, 'Agent feedback submitted via web');
     return c.json(entry, 201);
+  });
+
+  const generatingReplies = new Set<string>();
+
+  // Thread reply: add human message + trigger AI response
+  app.post('/:botId/:id/reply', async (c) => {
+    const botId = c.req.param('botId');
+    const id = c.req.param('id');
+    const body = await c.req.json<{ message?: string }>();
+
+    if (!body.message || typeof body.message !== 'string' || !body.message.trim()) {
+      return c.json({ error: 'Missing "message" string in body' }, 400);
+    }
+
+    const entry = deps.botManager.getAgentFeedbackById(botId, id);
+    if (!entry) {
+      return c.json({ error: 'Feedback not found' }, 404);
+    }
+
+    const key = `${botId}:${id}`;
+    if (generatingReplies.has(key)) {
+      return c.json({ error: 'Already generating a reply' }, 409);
+    }
+
+    const msg = deps.botManager.addAgentFeedbackThreadMessage(botId, id, 'human', body.message.trim());
+    if (!msg) {
+      return c.json({ error: 'Failed to add message' }, 500);
+    }
+
+    // Reload entry to return updated state
+    const updated = deps.botManager.getAgentFeedbackById(botId, id);
+
+    // Fire-and-forget AI response
+    generatingReplies.add(key);
+    (async () => {
+      try {
+        const soulLoader = deps.botManager.getSoulLoader(botId);
+        const identity = soulLoader.readIdentity();
+        const goals = soulLoader.readGoals();
+
+        // Build thread from legacy fields + thread array
+        const current = deps.botManager.getAgentFeedbackById(botId, id);
+        const thread = current?.thread ?? [];
+
+        const sections: string[] = [];
+        sections.push(`# Agent Feedback Discussion Thread`);
+        sections.push(`## Original Feedback\n${current?.content ?? entry.content}`);
+
+        if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
+        if (goals) sections.push(`## Bot Goals\n${truncate(goals, 1000)}`);
+
+        // Legacy response as context
+        if (current?.response) {
+          sections.push(`## Initial Bot Response\n${current.response}`);
+        }
+
+        // Format thread (last 10 messages)
+        const recent = thread.slice(-10);
+        if (recent.length > 0) {
+          const threadText = recent.map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`).join('\n\n');
+          sections.push(`## Conversation Thread\n${threadText}`);
+        }
+
+        sections.push(`## Task\n\nRespond to the latest message in this thread. Be specific and concise.`);
+
+        const prompt = sections.join('\n\n');
+        const claudePath = deps.config.improve?.claudePath ?? 'claude';
+        const timeout = deps.config.improve?.timeout ?? 120_000;
+
+        const response = await claudeGenerate(prompt, {
+          systemPrompt: THREAD_SYSTEM_PROMPT,
+          claudePath,
+          timeout,
+          maxLength: 2000,
+          logger: deps.logger,
+        });
+
+        deps.botManager.addAgentFeedbackThreadMessage(botId, id, 'bot', response);
+
+        // Write to bot memory
+        if (soulLoader) {
+          soulLoader.appendDailyMemory(
+            `## Feedback Thread Reply\n- Original feedback: "${truncate(entry.content, 100)}"\n- My response: "${truncate(response, 200)}"`,
+          );
+        }
+
+        deps.logger.info({ botId, id }, 'Thread bot reply generated for agent feedback');
+      } catch (err) {
+        deps.logger.error({ err, botId, id }, 'Failed to generate thread reply for agent feedback');
+      } finally {
+        generatingReplies.delete(key);
+      }
+    })();
+
+    return c.json({ message: msg, entry: updated });
+  });
+
+  // Thread reply: poll for bot reply generation status
+  app.get('/:botId/:id/reply-status', (c) => {
+    const botId = c.req.param('botId');
+    const id = c.req.param('id');
+
+    const entry = deps.botManager.getAgentFeedbackById(botId, id);
+    if (!entry) {
+      return c.json({ error: 'Feedback not found' }, 404);
+    }
+
+    const key = `${botId}:${id}`;
+    if (generatingReplies.has(key)) {
+      return c.json({ status: 'generating' });
+    }
+
+    const thread = entry.thread ?? [];
+    const lastBot = [...thread].reverse().find((m) => m.role === 'bot');
+    return c.json({ status: 'idle', lastBotMessage: lastBot ?? null });
   });
 
   // Dismiss feedback

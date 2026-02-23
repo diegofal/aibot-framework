@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Loop - AIBot Framework Architecture</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+  <div class="layout">
+
+    <!-- Hamburger (mobile) -->
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+    <!-- Backdrop (mobile) -->
+    <div class="sidebar-backdrop" id="backdrop"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        AIBot Framework
+        <small>Architecture Docs</small>
+      </div>
+      <nav>
+        <div class="nav-group">Pages</div>
+        <a href="index.html">Overview</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="bot-core.html">Bot Core Modules</a>
+        <a href="data-flows.html">Data Flows</a>
+        <a href="tools-skills.html">Tools &amp; Skills</a>
+        <a href="memory-soul.html">Memory &amp; Soul</a>
+        <a href="agent-loop.html" class="active">Agent Loop</a>
+        <a href="web-dashboard.html">Web Dashboard</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="simplifications.html">Simplifications</a>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="content">
+
+        <!-- Page Header -->
+        <div class="page-header">
+          <h1>Agent Loop</h1>
+          <p>Autonomous agent execution: planning, strategy, and tool use</p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 1. Overview -->
+        <!-- ============================================================ -->
+        <h2 id="overview">Overview</h2>
+        <p>
+          The agent loop is the autonomous execution engine of the AIBot Framework. It runs independently of
+          Telegram messages, allowing bots to pursue goals, execute plans, and take actions proactively.
+        </p>
+        <p>
+          The loop was refactored from a single monolithic <code>agent-loop.ts</code> (1,482 lines) into a
+          family of focused modules. The main orchestrator <code>agent-loop.ts</code> (724 lines) delegates to:
+          <code>agent-scheduler.ts</code> (scheduling and concurrency),
+          <code>agent-retry-engine.ts</code> (retry logic),
+          <code>agent-planner.ts</code> (plan generation),
+          <code>agent-strategist.ts</code> (strategic oversight),
+          <code>agent-loop-utils.ts</code> (shared utilities), and
+          <code>llm-json-parser.ts</code> (generic JSON parsing).
+          Supporting modules include <code>agent-loop-prompts.ts</code> (prompt templates),
+          <code>agent-feedback-store.ts</code> (human feedback persistence),
+          <code>ask-human-store.ts</code> (human-in-the-loop questions), and
+          <code>tool-executor.ts</code> (centralized tool execution engine).
+        </p>
+        <div class="stat-row">
+          <div class="stat">
+            <div class="number">724</div>
+            <div class="label">Orchestrator Lines</div>
+          </div>
+          <div class="stat">
+            <div class="number">7</div>
+            <div class="label">Agent Loop Modules</div>
+          </div>
+          <div class="stat">
+            <div class="number">2</div>
+            <div class="label">Operating Modes</div>
+          </div>
+          <div class="stat">
+            <div class="number">5</div>
+            <div class="label">Supporting Modules</div>
+          </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 1b. Module Structure -->
+        <!-- ============================================================ -->
+        <h2 id="module-structure">Module Structure</h2>
+        <p>The agent loop is composed of these focused modules, each with a single responsibility.</p>
+
+        <table>
+          <thead>
+            <tr><th>Module</th><th>Lines</th><th>Responsibility</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>agent-loop.ts</code></td>
+              <td>724</td>
+              <td>Main <code>AgentLoop</code> class: orchestrates cycle phases (feedback, strategist, planner, executor), composes results, manages state. Delegates scheduling, retry, planning, and strategy to extracted modules.</td>
+            </tr>
+            <tr>
+              <td><code>agent-scheduler.ts</code></td>
+              <td>353</td>
+              <td><code>AgentScheduler</code> class: per-bot scheduling, concurrency semaphore (maxConcurrent), interruptible sleep, bot loop lifecycle, schedule sync, staggered starts, sleep computation, idle tracking.</td>
+            </tr>
+            <tr>
+              <td><code>agent-strategist.ts</code></td>
+              <td>257</td>
+              <td><code>parseStrategistResult</code>, <code>shouldRunStrategist</code>, <code>runStrategist</code>, <code>applyGoalOperations</code>, <code>computeCyclesUntilStrategist</code>. Handles strategic oversight, goal CRUD, and focus directives.</td>
+            </tr>
+            <tr>
+              <td><code>agent-loop-utils.ts</code></td>
+              <td>159</td>
+              <td>Shared utilities: <code>buildRecentActionsDigest</code>, <code>isSimilarSummary</code>, <code>isRepetitiveAction</code>, <code>scanFileTree</code>, <code>logToMemory</code>, <code>sendReport</code>.</td>
+            </tr>
+            <tr>
+              <td><code>agent-retry-engine.ts</code></td>
+              <td>141</td>
+              <td><code>isRetryableError</code>, <code>computeRetryDelay</code>, <code>resolveRetryConfig</code>, <code>executeSingleBotWithRetry</code>. Transient error detection, exponential backoff with jitter, side-effect suppression.</td>
+            </tr>
+            <tr>
+              <td><code>agent-planner.ts</code></td>
+              <td>69</td>
+              <td><code>parsePlannerResult</code>, <code>runPlannerWithRetry</code>. Unified planner for both periodic and continuous modes with temperature fallback.</td>
+            </tr>
+            <tr>
+              <td><code>llm-json-parser.ts</code></td>
+              <td>60</td>
+              <td>Generic <code>parseLLMJson&lt;T&gt;</code> function: strips markdown fences, attempts JSON.parse, validates shape. Used by both planner and strategist parsers.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- ============================================================ -->
+        <!-- 2. Phase Diagram -->
+        <!-- ============================================================ -->
+        <h2 id="phase-diagram">Phase Diagram</h2>
+        <p>Each agent loop cycle follows this sequence of phases. The strategist runs conditionally every N cycles.</p>
+        <div class="diagram-container">
+          <svg viewBox="0 0 820 520" xmlns="http://www.w3.org/2000/svg" style="max-width:820px;">
+            <defs>
+              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#8b8d97"/>
+              </marker>
+              <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+              </marker>
+            </defs>
+
+            <!-- Node: Timer / Wake Signal (top center) -->
+            <rect x="310" y="10" width="200" height="44" rx="22" ry="22"
+                  fill="rgba(52,211,153,0.10)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="410" y="37" text-anchor="middle" font-size="13" font-weight="600" fill="#34d399">Timer / Wake Signal</text>
+
+            <!-- Arrow down -->
+            <line x1="410" y1="54" x2="410" y2="80" class="arrow" marker-end="url(#arrowhead)"/>
+
+            <!-- Node: Select Next Bot -->
+            <rect x="310" y="80" width="200" height="44" rx="8" ry="8"
+                  fill="rgba(52,211,153,0.08)" stroke="#2a2d36" stroke-width="1.5"/>
+            <text x="410" y="107" text-anchor="middle" font-size="13" font-weight="500" fill="#e0e0e6">Select Next Bot</text>
+
+            <!-- Arrow down -->
+            <line x1="410" y1="124" x2="410" y2="150" class="arrow" marker-end="url(#arrowhead)"/>
+
+            <!-- Node: Load Context -->
+            <rect x="290" y="150" width="240" height="44" rx="8" ry="8"
+                  fill="rgba(52,211,153,0.08)" stroke="#2a2d36" stroke-width="1.5"/>
+            <text x="410" y="177" text-anchor="middle" font-size="13" font-weight="500" fill="#e0e0e6">Load Context</text>
+            <text x="410" y="191" text-anchor="middle" font-size="10" fill="#8b8d97">(soul, goals, actions, feedback)</text>
+
+            <!-- Arrow down-left to Strategist -->
+            <line x1="350" y1="194" x2="200" y2="240" class="arrow" marker-end="url(#arrowhead)"/>
+
+            <!-- Arrow down-right to Planner -->
+            <line x1="470" y1="194" x2="600" y2="240" class="arrow" marker-end="url(#arrowhead)"/>
+
+            <!-- Node: Strategist (left branch) -->
+            <rect x="80" y="240" width="240" height="52" rx="8" ry="8"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="200" y="267" text-anchor="middle" font-size="13" font-weight="600" fill="#a78bfa">Strategist</text>
+            <text x="200" y="283" text-anchor="middle" font-size="10" fill="#8b8d97">(every N cycles)</text>
+
+            <!-- Arrow from Strategist to Planner -->
+            <line x1="320" y1="266" x2="490" y2="266" class="arrow" stroke="#a78bfa" marker-end="url(#arrowhead)"/>
+
+            <!-- Node: Planner (right branch) -->
+            <rect x="490" y="240" width="240" height="52" rx="8" ry="8"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="610" y="267" text-anchor="middle" font-size="13" font-weight="600" fill="#34d399">Planner (LLM call)</text>
+            <text x="610" y="283" text-anchor="middle" font-size="10" fill="#8b8d97">returns plan JSON</text>
+
+            <!-- Arrow down from Planner -->
+            <line x1="610" y1="292" x2="610" y2="325" class="arrow" marker-end="url(#arrowhead)"/>
+
+            <!-- Node: Parse Plan JSON -->
+            <rect x="490" y="325" width="240" height="44" rx="8" ry="8"
+                  fill="rgba(52,211,153,0.08)" stroke="#2a2d36" stroke-width="1.5"/>
+            <text x="610" y="352" text-anchor="middle" font-size="13" font-weight="500" fill="#e0e0e6">Parse Plan JSON</text>
+
+            <!-- Arrow down from Parse -->
+            <line x1="610" y1="369" x2="610" y2="400" class="arrow" marker-end="url(#arrowhead)"/>
+
+            <!-- Node: Executor (tool calls) -->
+            <rect x="490" y="400" width="240" height="44" rx="8" ry="8"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="610" y="427" text-anchor="middle" font-size="13" font-weight="600" fill="#6c8cff">Executor (tool calls)</text>
+
+            <!-- Arrow left from Executor -->
+            <line x1="490" y1="422" x2="340" y2="422" class="arrow" marker-end="url(#arrowhead)"/>
+
+            <!-- Node: Log Summary -->
+            <rect x="120" y="400" width="220" height="44" rx="8" ry="8"
+                  fill="rgba(52,211,153,0.08)" stroke="#2a2d36" stroke-width="1.5"/>
+            <text x="230" y="427" text-anchor="middle" font-size="13" font-weight="500" fill="#e0e0e6">Log Summary to Memory</text>
+
+            <!-- Arrow down from Log Summary -->
+            <line x1="230" y1="444" x2="230" y2="475" class="arrow" marker-end="url(#arrowhead)"/>
+
+            <!-- Node: Schedule Next Run -->
+            <rect x="120" y="475" width="220" height="44" rx="22" ry="22"
+                  fill="rgba(52,211,153,0.10)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="230" y="502" text-anchor="middle" font-size="13" font-weight="600" fill="#34d399">Schedule Next Run</text>
+
+            <!-- Arrow looping back up from Schedule to Timer -->
+            <path d="M 120,497 L 40,497 L 40,32 L 310,32" fill="none" class="arrow" stroke="#34d399" stroke-dasharray="6,4" marker-end="url(#arrowhead-green)"/>
+          </svg>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 3. Operating Modes -->
+        <!-- ============================================================ -->
+        <h2 id="operating-modes">Operating Modes</h2>
+        <p>The agent loop supports two distinct operating modes, configurable per bot via <code>botConfig.agentLoop.mode</code>.</p>
+
+        <div class="card-grid cols-2">
+          <div class="card">
+            <h3>Periodic Mode <span class="badge badge-green">Default</span></h3>
+            <p>
+              Runs at configurable intervals (e.g., every 5 minutes). The bot sleeps between runs using an
+              interruptible sleep mechanism that can be woken via <code>wakeUp()</code>.
+            </p>
+            <h4>Key Config</h4>
+            <table class="methods-table">
+              <tbody>
+                <tr><td>every</td><td>Interval duration string (e.g. <code>"5m"</code>, <code>"1h"</code>). Parsed by <code>parseDurationMs()</code>.</td></tr>
+                <tr><td>maxDurationMs</td><td>Hard timeout per cycle. A session timeout guard triggers at 80% of this limit.</td></tr>
+              </tbody>
+            </table>
+            <h4>Behavior</h4>
+            <p>Each bot gets its own async loop via <code>runBotLoop()</code>. After execution, sleep duration is computed from config. On transient errors (timeout, network), exponential-backoff retries are attempted before falling back to the normal 5-min+ sleep cycle.</p>
+          </div>
+
+          <div class="card">
+            <h3>Continuous Mode <span class="badge badge-cyan">Advanced</span></h3>
+            <p>
+              Runs back-to-back cycles with only a short configurable pause between them. The bot stays active
+              as long as it has work to do.
+            </p>
+            <h4>Key Config</h4>
+            <table class="methods-table">
+              <tbody>
+                <tr><td>mode</td><td>Set to <code>"continuous"</code> on the per-bot <code>agentLoop</code> config.</td></tr>
+                <tr><td>continuousPauseMs</td><td>Milliseconds to wait between back-to-back cycles (default: <code>5000</code>).</td></tr>
+                <tr><td>continuousMemoryEvery</td><td>Log to memory every N cycles to avoid flooding (default: <code>5</code>).</td></tr>
+              </tbody>
+            </table>
+            <h4>Tracking</h4>
+            <p>Tracks <code>continuousCycleCount</code> and <code>sessionStartAt</code> per bot schedule. Uses a separate continuous planner prompt that includes the last cycle summary for context continuity.</p>
+          </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 4. Strategist -->
+        <!-- ============================================================ -->
+        <h2 id="strategist">Strategist</h2>
+        <p>
+          The strategist is the strategic oversight layer, implemented in <code>agent-strategist.ts</code>.
+          It runs conditionally every N cycles (configured via
+          <code>strategist.everyCycles</code>) and only when the minimum interval has elapsed
+          (<code>strategist.minInterval</code>). Both conditions must be met (AND logic).
+        </p>
+
+        <div class="module-section">
+          <h3>What It Does</h3>
+          <div class="responsibility">Reviews goals and recent activity (last 7 days), performs goal operations, sets focus for upcoming cycles, and provides strategic reflection.</div>
+
+          <h4>Goal Operations</h4>
+          <p>The strategist can perform four types of goal operations:</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Description</th>
+                <th>Fields</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>add</code></td>
+                <td>Add a new goal to active list</td>
+                <td><code>goal</code>, <code>priority?</code>, <code>notes?</code></td>
+              </tr>
+              <tr>
+                <td><code>complete</code></td>
+                <td>Move goal from active to completed</td>
+                <td><code>goal</code> (substring match), <code>outcome?</code></td>
+              </tr>
+              <tr>
+                <td><code>update</code></td>
+                <td>Modify an existing active goal</td>
+                <td><code>goal</code> (substring match), <code>status?</code>, <code>priority?</code>, <code>notes?</code></td>
+              </tr>
+              <tr>
+                <td><code>remove</code></td>
+                <td>Delete a goal from active list</td>
+                <td><code>goal</code> (substring match)</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h4>Output Format: StrategistResult</h4>
+<pre><code>interface StrategistResult {
+  goal_operations: GoalOperation[];
+  focus: string;           // 1-2 sentence directive for next cycles
+  reflection: string;      // Analysis of agent's current state
+  next_strategy_in?: string; // Suggested next run, e.g. "6h"
+}</code></pre>
+
+          <h4>Retry Behavior</h4>
+          <p>
+            The strategist uses <code>runStrategist()</code> with up to 1 retry. First attempt uses
+            temperature 0.4, retry uses temperature 0. JSON parsing is handled by the shared
+            <code>parseLLMJson&lt;T&gt;</code> utility from <code>llm-json-parser.ts</code>.
+            If both attempts fail to produce parseable JSON, the strategist
+            result is <code>null</code> and the cycle continues without strategic guidance.
+          </p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 5. Planner -->
+        <!-- ============================================================ -->
+        <h2 id="planner">Planner</h2>
+        <p>
+          Planner logic lives in <code>agent-planner.ts</code>.
+          Each cycle, the planner makes a lightweight LLM call to decide whether to act and what steps to take.
+          It receives the full bot context: identity, soul, motivations, goals, available tools, recent memory,
+          feedback, and the strategist's focus. A unified <code>runPlannerWithRetry()</code> handles both periodic
+          and continuous modes.
+        </p>
+
+        <div class="card-grid cols-2">
+          <div class="card">
+            <h3>Periodic Planner</h3>
+            <p>Used in periodic mode. Built by <code>buildPlannerPrompt()</code>.</p>
+            <h4>Input (<code>PlannerPromptInput</code>)</h4>
+<pre><code>interface PlannerPromptInput {
+  identity: string;
+  soul: string;
+  motivations: string;
+  goals: string;
+  recentMemory: string;
+  datetime: string;
+  availableTools: string[];
+  hasCreateTool: boolean;
+  focus?: string;
+  answeredQuestions?: Array&lt;{
+    question: string;
+    answer: string;
+  }&gt;;
+  pendingQuestions?: Array&lt;{
+    question: string;
+  }&gt;;
+  recentActionsDigest?: string;
+  karmaBlock?: string;
+}</code></pre>
+          </div>
+
+          <div class="card">
+            <h3>Continuous Planner</h3>
+            <p>Used in continuous mode. Built by <code>buildContinuousPlannerPrompt()</code>. Includes last cycle summary for continuity.</p>
+            <h4>Additional Input</h4>
+<pre><code>interface ContinuousPlannerPromptInput
+  extends PlannerPromptInput {
+  lastCycleSummary?: string;
+}</code></pre>
+          </div>
+        </div>
+
+        <h3>Output Format: PlannerResult</h3>
+        <div class="module-section">
+<pre><code>interface PlannerResult {
+  reasoning: string;
+  plan: string[];    // 0-5 concrete action steps
+  priority: 'high' | 'medium' | 'low' | 'none';
+}</code></pre>
+          <h4>Priority Levels</h4>
+          <table>
+            <thead>
+              <tr><th>Priority</th><th>Meaning</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><span class="badge badge-high">high</span></td><td>Urgent or time-sensitive tasks, direct goal progress</td></tr>
+              <tr><td><span class="badge badge-medium">medium</span></td><td>Routine work, exploration, incremental progress</td></tr>
+              <tr><td><span class="badge badge-low">low</span></td><td>Creative exploration, boundary-pushing, novel research</td></tr>
+              <tr><td><span class="tag">none</span></td><td>Nothing novel to do. Empty plan required. Triggers idle tracking.</td></tr>
+            </tbody>
+          </table>
+
+          <h4>Novelty Imperative</h4>
+          <p>
+            The planner prompt includes a strong <em>Novelty Imperative</em>: repeating the same action is treated as
+            worse than doing nothing. A <code>recentActionsDigest</code> is built from the bot's last 24 hours of
+            actions, flagging patterns repeated 2+ or 3+ times. Anti-patterns such as "reviewing goals just to review them"
+            or "saving reflections to memory" are explicitly banned.
+          </p>
+
+          <h4>Retry Behavior</h4>
+          <p>
+            Uses <code>runPlannerWithRetry()</code> (from <code>agent-planner.ts</code>) with 1 retry.
+            First attempt at temperature 0.3, retry at 0. JSON parsing uses the shared
+            <code>parseLLMJson&lt;T&gt;</code> from <code>llm-json-parser.ts</code>. If
+            parsing still fails, returns an idle plan (<code>priority: 'none'</code>) rather than generating busywork.
+          </p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 6. Executor -->
+        <!-- ============================================================ -->
+        <h2 id="executor">Executor</h2>
+        <p>
+          The executor takes the planner's steps and carries them out using the full LLM tool-calling interface.
+          It builds a system prompt via <code>SystemPromptBuilder</code> in <code>autonomous</code> mode and sends
+          the plan as a user message via <code>buildExecutorPrompt()</code>.
+        </p>
+
+        <div class="module-section">
+          <h3>File Tree Scanning</h3>
+          <p>
+            Before building the executor prompt, <code>scanFileTree()</code> (from <code>agent-loop-utils.ts</code>)
+            walks the bot's <code>workDir</code>
+            (max depth 3, max 100 entries) and passes the result as <code>fileTree</code> to
+            <code>buildExecutorPrompt()</code>. When the directory is empty or missing, the prompt explicitly
+            tells the LLM that the directory is empty and to use <code>file_write</code> only &mdash; preventing
+            blind <code>file_read</code>/<code>file_edit</code> attempts on non-existent files.
+          </p>
+        </div>
+
+        <div class="module-section">
+          <h3>Proportional Karma Penalties</h3>
+          <p>
+            Tool errors are scored proportionally per tool name: if &gt;50% of a tool's calls in a cycle
+            failed, delta is <code>-1</code>; if &le;50% failed, delta is <code>0</code> (logged as
+            <code>Minor:</code> for visibility but no score impact). Each tool is evaluated independently.
+          </p>
+        </div>
+
+        <div class="module-section">
+          <h3>ToolExecutor</h3>
+          <div class="file-path">src/bot/tool-executor.ts</div>
+          <div class="responsibility">
+            Centralized tool execution engine that handles tool lookup, disabled tool filtering,
+            context injection (<code>_chatId</code>, <code>_botId</code>), per-bot <code>workDir</code> path resolution,
+            retry with exponential backoff, output schema validation, and event emission.
+          </div>
+
+          <h4>Key Features</h4>
+          <table>
+            <thead>
+              <tr><th>Feature</th><th>Detail</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Disabled tool filtering</td><td>Merges global, agent loop, and per-bot disabled tool sets</td></tr>
+              <tr><td>Context injection</td><td>Adds <code>_chatId</code> and <code>_botId</code> to every tool call</td></tr>
+              <tr><td>workDir resolution</td><td>Resolves relative file paths to bot-specific working directories</td></tr>
+              <tr><td>Retry &amp; backoff</td><td>Configurable <code>maxRetries</code> per tool with exponential backoff (1s, 2s, 4s, max 10s)</td></tr>
+              <tr><td>Output validation</td><td>Validates tool output against optional Zod <code>outputSchema</code></td></tr>
+              <tr><td>Event hooks</td><td>Emits <code>tool:start</code>, <code>tool:end</code>, <code>tool:error</code> events</td></tr>
+              <tr><td>Execution log</td><td>Records each call as <code>ToolExecutionRecord</code> when <code>enableLogging: true</code></td></tr>
+              <tr><td>Productions tracking</td><td>Logs file writes to ProductionsService with quality gate (template detection)</td></tr>
+            </tbody>
+          </table>
+
+          <h4>ToolExecutionRecord</h4>
+<pre><code>interface ToolExecutionRecord {
+  name: string;
+  args: Record&lt;string, unknown&gt;;
+  success: boolean;
+  result: string;
+  durationMs?: number;
+}</code></pre>
+
+          <h4>Execution Flow</h4>
+          <p>
+            The <code>AgentLoop</code> creates a <code>ToolExecutor</code> instance per cycle, then calls
+            <code>executor.createCallback()</code> to get a function compatible with <code>LLMClient.chat()</code>.
+            The LLM makes tool calls, which the callback dispatches through the executor. After the LLM conversation
+            finishes, <code>executor.getExecutionLog()</code> retrieves all recorded tool calls for the cycle result.
+          </p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 7. Feedback System -->
+        <!-- ============================================================ -->
+        <h2 id="feedback-system">Feedback System</h2>
+        <p>
+          The <code>AgentFeedbackStore</code> allows humans to submit feedback to bots via the web dashboard.
+          Feedback is processed at the beginning of each agent loop cycle, before the strategist and planner run.
+        </p>
+
+        <div class="module-section">
+          <h3>AgentFeedbackStore</h3>
+          <div class="file-path">src/bot/agent-feedback-store.ts</div>
+          <div class="responsibility">Manages agent-level feedback with JSONL persistence in the bot's soul directory.</div>
+
+          <h4>Feedback Interface</h4>
+<pre><code>interface AgentFeedback {
+  id: string;          // UUID
+  botId: string;
+  content: string;     // The feedback text
+  createdAt: string;   // ISO timestamp
+  status: 'pending' | 'applied' | 'dismissed';
+  appliedAt?: string;  // When processed
+  response?: string;   // Bot's response to the feedback
+}</code></pre>
+
+          <h4>Lifecycle</h4>
+          <table>
+            <thead>
+              <tr><th>Step</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>1. Submit</td><td>Human submits feedback via web dashboard. Appended to <code>{soulDir}/feedback.jsonl</code>.</td></tr>
+              <tr><td>2. Detect</td><td>At cycle start, <code>getPending(botId)</code> checks for unprocessed feedback.</td></tr>
+              <tr><td>3. Process</td><td>Each feedback item gets a dedicated LLM call with soul-modifying tools only (<code>manage_goals</code>, <code>update_soul</code>, <code>update_identity</code>, <code>save_memory</code>). Uses Claude CLI directly.</td></tr>
+              <tr><td>4. Apply</td><td>Feedback marked as <code>applied</code> with the bot's response text. Soul files re-read.</td></tr>
+            </tbody>
+          </table>
+
+          <h4>Storage</h4>
+          <p>
+            Persisted as JSONL (one JSON object per line) in <code>{soulDir}/feedback.jsonl</code>. Loaded into
+            memory on startup via <code>loadFromDisk()</code>. On status changes, the entire file is rewritten via
+            <code>rewriteJSONL()</code>.
+          </p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 8. Ask-Human Flow -->
+        <!-- ============================================================ -->
+        <h2 id="ask-human">Ask-Human Flow</h2>
+        <p>
+          The <code>AskHumanStore</code> enables agents to request human input during autonomous operation.
+          When an agent cannot proceed without a decision, it uses the <code>ask_human</code> tool to pose a
+          question.
+        </p>
+
+        <div class="module-section">
+          <h3>AskHumanStore</h3>
+          <div class="file-path">src/bot/ask-human-store.ts</div>
+          <div class="responsibility">Manages pending ask_human questions with promise-based resolution, timeout handling, and web dashboard integration.</div>
+
+          <h4>Key Interfaces</h4>
+<pre><code>interface PendingQuestion {
+  id: string;          // UUID
+  botId: string;
+  chatId: number;
+  question: string;
+  messageId: number | null;  // Telegram message ID
+  createdAt: number;
+  timeoutMs: number;
+  // + resolve/reject callbacks, timer
+}
+
+interface AnsweredQuestion {
+  id: string;
+  botId: string;
+  question: string;
+  answer: string;
+  answeredAt: number;
+}
+
+interface PendingQuestionInfo {
+  id: string;
+  botId: string;
+  chatId: number;
+  question: string;
+  createdAt: number;
+  timeoutMs: number;
+  remainingMs: number;  // Computed countdown
+}</code></pre>
+
+          <h4>Flow</h4>
+          <table>
+            <thead>
+              <tr><th>Step</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>1. Ask</td><td>Agent calls <code>ask_human</code> tool. <code>AskHumanStore.ask()</code> registers the question and returns a promise.</td></tr>
+              <tr><td>2. Display</td><td>Question appears in the web dashboard inbox and optionally as a Telegram message.</td></tr>
+              <tr><td>3. Answer</td><td>Human answers via web (<code>answerById()</code>) or Telegram reply (<code>handleReply()</code>). Promise resolves.</td></tr>
+              <tr><td>4. Consume</td><td>Next agent loop cycle calls <code>consumeAnswersForBot()</code>. Answered questions are injected into the planner context as top priority.</td></tr>
+              <tr><td>5. Timeout</td><td>Unanswered questions auto-reject after <code>timeoutMs</code>. Timer cleared on answer or dismiss.</td></tr>
+            </tbody>
+          </table>
+
+          <h4>Reply Matching</h4>
+          <p>
+            When a Telegram reply arrives, <code>handleReply()</code> first tries to match by
+            <code>replyToMessageId</code>. If no reply-to but exactly one pending question exists in that chat,
+            it matches automatically. Answered questions are stored in a separate map and consumed by the agent
+            loop on the next cycle.
+          </p>
+
+          <h4>Dismissal</h4>
+          <p>
+            Questions can be dismissed via <code>dismissById()</code>, which rejects the promise with an error.
+            The agent sees this as a timeout and moves on to other work. Pending questions are also listed in
+            the planner prompt with instructions not to re-ask.
+          </p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 9. Scheduling -->
+        <!-- ============================================================ -->
+        <h2 id="scheduling">Scheduling</h2>
+        <p>
+          Scheduling logic lives in <code>agent-scheduler.ts</code> as the <code>AgentScheduler</code> class.
+          Each bot maintains its own <code>BotSchedule</code> object that tracks execution state, strategist timing,
+          and recent activity history.
+        </p>
+
+        <div class="module-section">
+          <h3>BotSchedule</h3>
+<pre><code>interface BotSchedule {
+  nextRunAt: number;
+  lastRunAt: number | null;
+  lastResult: AgentLoopResult | null;
+  nextCheckIn: string | null;
+  strategistCycleCount: number;
+  lastStrategistAt: number | null;
+  lastFocus: string | null;
+  continuousCycleCount: number;
+  sessionStartAt: number | null;
+  recentActions: RecentAction[];
+  consecutiveIdleCycles: number;
+  lastLoggedSummary: string | null;
+  retryCount: number;
+  lastErrorMessage: string | null;
+}</code></pre>
+
+          <h4>Schedule Management</h4>
+          <table>
+            <thead>
+              <tr><th>Aspect</th><th>Detail</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Sync</td><td><code>syncSchedules()</code> adds new bots with staggered start times (each new bot offset by <code>botIndex × 30s</code>) and removes stopped bots. Stagger prevents thundering-herd on startup.</td></tr>
+              <tr><td>Concurrency</td><td>A semaphore in <code>runBotLoop()</code> limits simultaneous executions to <code>maxConcurrent</code> (default: 2, configurable 1–10). Queued bots wait in FIFO order, preventing Ollama overload.</td></tr>
+              <tr><td>Update</td><td><code>updateBotSchedule()</code> runs after each cycle, updating timestamps, strategist counters, and check-in display.</td></tr>
+              <tr><td>Sleep</td><td><code>computeBotSleepMs()</code> derives interval from per-bot or global config. On error, minimum 5 minutes.</td></tr>
+              <tr><td>Idle tracking</td><td><code>consecutiveIdleCycles</code> increments on idle; resets on active cycle with a resume log message.</td></tr>
+              <tr><td>Idle suppression</td><td>When enabled, only the first idle cycle logs to memory. Subsequent idle cycles are silent.</td></tr>
+              <tr><td>Deduplication</td><td><code>isSimilarSummary()</code> normalizes summaries (strips timestamps, collapses whitespace) to avoid duplicate memory entries.</td></tr>
+            </tbody>
+          </table>
+
+          <h4>Recent Actions</h4>
+<pre><code>interface RecentAction {
+  cycle: number;
+  timestamp: number;
+  tools: string[];       // Tool names used
+  planSummary: string;   // Truncated to 200 chars
+}</code></pre>
+          <p>
+            Kept as a rolling window: last 20 entries or last 24 hours. Used for repetition detection
+            (<code>buildRecentActionsDigest()</code>) and karma tracking. Patterns repeated 3+ times are
+            flagged as <em>exhausted</em> in the planner prompt.
+          </p>
+        </div>
+
+        <h3>Retry on Error</h3>
+        <p>
+          Retry logic lives in <code>agent-retry-engine.ts</code>.
+          When <code>executeSingleBot()</code> returns an error, <code>executeSingleBotWithRetry()</code> checks
+          if the error is transient (timeout, network, rate limit) via <code>isRetryableError()</code>. Permanent
+          errors (auth, permission) skip retry entirely. Each retry gets a fresh <code>maxDurationMs</code> budget.
+        </p>
+
+        <div class="module-section">
+          <h4>Retry Config</h4>
+<pre><code>// agentLoop.retry (global or per-bot override)
+{
+  maxRetries: 2,          // default: 2 (3 total attempts)
+  initialDelayMs: 10000,  // default: 10s
+  maxDelayMs: 60000,      // default: 60s cap
+  backoffMultiplier: 2    // default: exponential x2
+}</code></pre>
+
+          <h4>Backoff Formula</h4>
+          <p>
+            <code>delay = min(initialDelayMs * multiplier^attempt, maxDelayMs) ± 20% jitter</code>.
+            The jitter prevents thundering herd when multiple bots fail simultaneously.
+          </p>
+
+          <h4>Side-Effect Suppression</h4>
+          <p>
+            During intermediate retries, <code>logToMemory()</code> and <code>sendReport()</code> are suppressed
+            via the <code>suppressSideEffects</code> option. Only the final attempt (success or last failure)
+            writes to memory and sends reports.
+          </p>
+
+          <h4>Schedule Tracking</h4>
+          <p>
+            <code>BotSchedule</code> tracks <code>retryCount</code> and <code>lastErrorMessage</code>.
+            Both reset to zero on success. The dashboard displays retry count in the bot schedules table
+            and shows a retry attempt badge in the last results table.
+          </p>
+        </div>
+
+        <h3>Public Schedule API: BotScheduleInfo</h3>
+        <p>Exposed via <code>AgentLoop.getState()</code> for the web dashboard and API consumers.</p>
+<pre><code>interface BotScheduleInfo {
+  botId: string;
+  botName: string;
+  mode: 'periodic' | 'continuous';
+  nextRunAt: number | null;    // null for continuous
+  lastRunAt: number | null;
+  nextCheckIn: string | null;
+  lastStatus: 'completed' | 'skipped' | 'error' | null;
+  lastStrategistAt: number | null;
+  lastFocus: string | null;
+  strategistCyclesUntilNext: number;
+  continuousCycleCount: number;
+  isIdle: boolean;
+  consecutiveIdleCycles: number;
+  recentActionsSummary: string[];  // Last 5 plan summaries
+  retryCount: number;
+  lastErrorMessage: string | null;
+}</code></pre>
+
+        <!-- ============================================================ -->
+        <!-- 10. Key Types -->
+        <!-- ============================================================ -->
+        <h2 id="key-types">Key Types</h2>
+
+        <div class="card-grid cols-2">
+          <div class="card">
+            <h3>AgentLoopResult</h3>
+            <p>Returned after each bot cycle execution.</p>
+<pre><code>interface AgentLoopResult {
+  botId: string;
+  botName: string;
+  status: 'completed'
+        | 'skipped'
+        | 'error';
+  summary: string;
+  durationMs: number;
+  plannerReasoning: string;
+  plan: string[];
+  toolCalls: ToolCallRecord[];
+  priority?: 'high' | 'medium'
+           | 'low' | 'none';
+  strategistRan: boolean;
+  strategistReflection?: string;
+  focus?: string;
+  isIdle?: boolean;
+  consecutiveIdleCycles?: number;
+  retryAttempt?: number;
+}</code></pre>
+          </div>
+
+          <div class="card">
+            <h3>AgentLoopState</h3>
+            <p>Snapshot of full loop state for the API.</p>
+<pre><code>interface AgentLoopState {
+  running: boolean;
+  sleeping: boolean;
+  lastRunAt: number | null;
+  lastResults: AgentLoopResult[];
+  nextRunAt: number | null;
+  botSchedules: BotScheduleInfo[];
+}</code></pre>
+            <h4 style="margin-top:16px;">ToolCallRecord</h4>
+<pre><code>interface ToolCallRecord {
+  name: string;
+  args: Record&lt;string, unknown&gt;;
+  success: boolean;
+  result: string;
+}</code></pre>
+            <h4 style="margin-top:16px;">GoalOperation</h4>
+<pre><code>interface GoalOperation {
+  action: 'add' | 'complete'
+        | 'update' | 'remove';
+  goal: string;
+  priority?: string;
+  status?: string;
+  notes?: string;
+  outcome?: string;
+}</code></pre>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Mobile sidebar toggle -->
+  <script>
+    (function () {
+      var hamburger = document.getElementById('hamburger');
+      var sidebar = document.getElementById('sidebar');
+      var backdrop = document.getElementById('backdrop');
+
+      function toggle() {
+        sidebar.classList.toggle('open');
+        backdrop.classList.toggle('show');
+      }
+
+      hamburger.addEventListener('click', toggle);
+      backdrop.addEventListener('click', toggle);
+    })();
+  </script>
+</body>
+</html>

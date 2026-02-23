@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } fr
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '../logger';
+import type { ThreadMessage } from '../types/thread';
 
 export interface AgentFeedback {
   id: string;
@@ -11,6 +12,7 @@ export interface AgentFeedback {
   status: 'pending' | 'applied' | 'dismissed';
   appliedAt?: string;
   response?: string;
+  thread?: ThreadMessage[];
 }
 
 /**
@@ -93,6 +95,38 @@ export class AgentFeedbackStore {
     const offset = opts?.offset ?? 0;
     const limit = opts?.limit ?? 100;
     return items.slice(offset, offset + limit);
+  }
+
+  /** Get a single feedback entry by ID. */
+  getById(botId: string, id: string): AgentFeedback | null {
+    const items = this.entries.get(botId);
+    if (!items) return null;
+    return items.find((e) => e.id === id) ?? null;
+  }
+
+  /** Append a thread message to a feedback entry. Returns the created message. */
+  addThreadMessage(botId: string, feedbackId: string, role: 'human' | 'bot', content: string): ThreadMessage | null {
+    const items = this.entries.get(botId);
+    if (!items) return null;
+
+    const entry = items.find((e) => e.id === feedbackId);
+    if (!entry) return null;
+
+    if (!entry.thread) {
+      entry.thread = [];
+    }
+
+    const msg: ThreadMessage = {
+      id: randomUUID(),
+      role,
+      content,
+      createdAt: new Date().toISOString(),
+    };
+    entry.thread.push(msg);
+
+    this.rewriteJSONL(botId);
+    this.logger.debug({ botId, feedbackId, role, msgId: msg.id }, 'AgentFeedback: thread message added');
+    return msg;
   }
 
   /** Mark feedback as applied with the bot's response. */

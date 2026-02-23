@@ -10,7 +10,7 @@
 | **Language** | TypeScript (strict mode) |
 | **Bot framework** | [grammY](https://grammy.dev/) (Telegram Bot API) |
 | **LLM backends** | Ollama (local, tool-calling), Claude CLI (Anthropic, text-only + fallback) |
-| **Embedding model** | Ollama `nomic-embed-text` (768-dim) |
+| **Embedding model** | Configurable via `soul.search.embeddingModel` (768-dim default) |
 | **Database** | SQLite via `bun:sqlite` (memory search index) |
 | **Web framework** | [Hono](https://hono.dev/) + Bun.serve (HTTP + WebSocket) |
 | **Config validation** | [Zod](https://zod.dev/) |

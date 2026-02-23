@@ -5,6 +5,8 @@ import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import type { BotContext } from './types';
 import { z } from 'zod';
 import { EventEmitter } from 'events';
+import { ProductionsService } from '../productions/service';
+import type { KarmaService } from '../karma/service';
 
 /**
  * Record of a tool execution for logging/auditing purposes.
@@ -86,6 +88,8 @@ export interface ToolExecutorOptions {
   toolFilter?: (tool: Tool) => boolean;
   /** Optional tool list override (for collaboration) */
   tools?: Tool[];
+  /** Optional karma service for quality gate penalties */
+  karmaService?: KarmaService;
 }
 
 /**
@@ -142,6 +146,35 @@ export class ToolExecutor extends EventEmitter {
   }
 
   /**
+   * Build a failure result, emit error + end events, and log the execution.
+   * @param emitError - The error string to emit in the tool:error event (may differ from content).
+   */
+  private buildFailResult(
+    name: string,
+    args: Record<string, unknown>,
+    startMs: number,
+    errorMsg: string,
+    phase: 'lookup' | 'validation' | 'execution',
+    retryAttempts: number = 0,
+    emitError?: string,
+  ): ToolExecutionResult {
+    const { botId, chatId } = this.options;
+    const durationMs = Date.now() - startMs;
+    this.emit('tool:error', {
+      toolName: name, args, error: emitError ?? errorMsg, phase, botId, chatId, timestamp: Date.now(),
+    });
+    const result: ToolExecutionResult = {
+      success: false, content: errorMsg, toolName: name, args, durationMs, retryAttempts,
+    };
+    this.logExecution(name, args, false, errorMsg, durationMs);
+    this.emit('tool:end', {
+      toolName: name, args, success: false, result: errorMsg,
+      durationMs, retryAttempts, botId, chatId, timestamp: Date.now(),
+    });
+    return result;
+  }
+
+  /**
    * Execute a single tool call with full lifecycle management.
    * Returns the tool result with execution metadata.
    */
@@ -154,119 +187,26 @@ export class ToolExecutor extends EventEmitter {
 
     // Emit start event
     this.emit('tool:start', {
-      toolName: name,
-      args,
-      botId,
-      chatId,
-      timestamp: startMs,
+      toolName: name, args, botId, chatId, timestamp: startMs,
     });
 
     // Check if tool is disabled
     if (this.disabledTools.has(name)) {
       this.logger.warn({ tool: name, botId }, 'Disabled tool requested');
-      const errorMsg = `Tool "${name}" is not available`;
-      this.emit('tool:error', {
-        toolName: name,
-        args,
-        error: errorMsg,
-        phase: 'lookup',
-        botId,
-        chatId,
-        timestamp: Date.now(),
-      });
-      const result: ToolExecutionResult = {
-        success: false,
-        content: errorMsg,
-        toolName: name,
-        args,
-        durationMs: Date.now() - startMs,
-      };
-      this.logExecution(name, args, false, result.content, result.durationMs);
-      this.emit('tool:end', {
-        toolName: name,
-        args,
-        success: false,
-        result: errorMsg,
-        durationMs: result.durationMs,
-        retryAttempts: 0,
-        botId,
-        chatId,
-        timestamp: Date.now(),
-      });
-      return result;
+      return this.buildFailResult(name, args, startMs, `Tool "${name}" is not available`, 'lookup');
     }
 
     // Find the tool
     const tool = this.tools.find((t) => t.definition.function.name === name);
     if (!tool) {
       this.logger.warn({ tool: name }, 'Unknown tool requested');
-      const errorMsg = `Unknown tool: ${name}`;
-      const durationMs = Date.now() - startMs;
-      this.emit('tool:error', {
-        toolName: name,
-        args,
-        error: errorMsg,
-        phase: 'lookup',
-        botId,
-        chatId,
-        timestamp: Date.now(),
-      });
-      const result: ToolExecutionResult = {
-        success: false,
-        content: errorMsg,
-        toolName: name,
-        args,
-        durationMs,
-      };
-      this.logExecution(name, args, false, result.content, durationMs);
-      this.emit('tool:end', {
-        toolName: name,
-        args,
-        success: false,
-        result: errorMsg,
-        durationMs,
-        retryAttempts: 0,
-        botId,
-        chatId,
-        timestamp: Date.now(),
-      });
-      return result;
+      return this.buildFailResult(name, args, startMs, `Unknown tool: ${name}`, 'lookup');
     }
 
     // Apply optional tool filter (for collaboration)
     if (this.options.toolFilter && !this.options.toolFilter(tool)) {
       this.logger.warn({ tool: name, botId }, 'Tool filtered out by collaboration filter');
-      const errorMsg = `Tool "${name}" is not available in this context`;
-      const durationMs = Date.now() - startMs;
-      this.emit('tool:error', {
-        toolName: name,
-        args,
-        error: errorMsg,
-        phase: 'lookup',
-        botId,
-        chatId,
-        timestamp: Date.now(),
-      });
-      const result: ToolExecutionResult = {
-        success: false,
-        content: errorMsg,
-        toolName: name,
-        args,
-        durationMs,
-      };
-      this.logExecution(name, args, false, result.content, durationMs);
-      this.emit('tool:end', {
-        toolName: name,
-        args,
-        success: false,
-        result: errorMsg,
-        durationMs,
-        retryAttempts: 0,
-        botId,
-        chatId,
-        timestamp: Date.now(),
-      });
-      return result;
+      return this.buildFailResult(name, args, startMs, `Tool "${name}" is not available in this context`, 'lookup');
     }
 
     // Get retry configuration
@@ -275,8 +215,6 @@ export class ToolExecutor extends EventEmitter {
     // Execute with retry loop
     let lastError: string | null = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const attemptStartMs = Date.now();
-
       // Inject context arguments + retry feedback on subsequent attempts
       const effectiveArgs: Record<string, unknown> = {
         ...args,
@@ -320,7 +258,7 @@ export class ToolExecutor extends EventEmitter {
         const validatedResult = await this.validateOutput(tool, toolResult);
 
         if (validatedResult.success) {
-          // Productions: log successful file operations
+          // Productions: log successful file operations with quality gate
           if (
             this.ctx.productionsService &&
             ['file_write', 'file_edit'].includes(name)
@@ -328,191 +266,101 @@ export class ToolExecutor extends EventEmitter {
             const ps = this.ctx.productionsService;
             if (ps.isEnabled(botId)) {
               const logPath = originalPathForProductions ?? (args.path as string);
-              ps.logProduction({
-                timestamp: new Date().toISOString(),
-                botId,
-                tool: name,
-                path: logPath,
-                action: name === 'file_write' ? ((args as any).append ? 'edit' : 'create') : 'edit',
-                description: `${name}: ${logPath}`,
-                size: typeof (args as any).content === 'string' ? ((args as any).content as string).length : 0,
-                trackOnly: ps.isTrackOnly(botId),
-              });
+              const content = typeof (args as any).content === 'string' ? (args as any).content as string : '';
+              const quality = ProductionsService.assessContentQuality(content);
+
+              if (quality.isTemplate) {
+                this.logger.debug(
+                  { botId, path: logPath, ratio: quality.ratio },
+                  'Quality gate: skipping template production',
+                );
+                if (this.options.karmaService) {
+                  this.options.karmaService.addEvent(
+                    botId, -3,
+                    `Empty template detected in "${logPath}"`,
+                    'production',
+                  );
+                }
+              } else {
+                ps.logProduction({
+                  timestamp: new Date().toISOString(),
+                  botId,
+                  tool: name,
+                  path: logPath,
+                  action: name === 'file_write' ? ((args as any).append ? 'edit' : 'create') : 'edit',
+                  description: `${name}: ${logPath}`,
+                  size: content.length,
+                  trackOnly: ps.isTrackOnly(botId),
+                });
+              }
             }
           }
 
           // Success! Return result with retry count
           const durationMs = Date.now() - startMs;
           const result: ToolExecutionResult = {
-            ...validatedResult,
-            toolName: name,
-            args,
-            durationMs,
-            retryAttempts: attempt,
+            ...validatedResult, toolName: name, args, durationMs, retryAttempts: attempt,
           };
           this.logExecution(name, args, true, validatedResult.content, durationMs);
           this.emit('tool:end', {
-            toolName: name,
-            args,
-            success: true,
-            result: validatedResult.content,
-            durationMs,
-            retryAttempts: attempt,
-            botId,
-            chatId,
-            timestamp: Date.now(),
+            toolName: name, args, success: true, result: validatedResult.content,
+            durationMs, retryAttempts: attempt, botId, chatId, timestamp: Date.now(),
           });
           return result;
         }
 
-        // Check if this was a tool error (not a validation error)
-        // Tool errors should pass through without retry attempts
+        // Tool error (not validation) — pass through without retry
         if (!toolResult.success) {
-          const durationMs = Date.now() - startMs;
-          const errorMsg = validatedResult.content;
-          this.emit('tool:error', {
-            toolName: name,
-            args,
-            error: errorMsg,
-            phase: 'execution',
-            botId,
-            chatId,
-            timestamp: Date.now(),
-          });
-          const result: ToolExecutionResult = {
-            success: false,
-            content: errorMsg,
-            toolName: name,
-            args,
-            durationMs,
-            retryAttempts: attempt,
-          };
-          this.logExecution(name, args, false, result.content, durationMs);
-          this.emit('tool:end', {
-            toolName: name,
-            args,
-            success: false,
-            result: errorMsg,
-            durationMs,
-            retryAttempts: attempt,
-            botId,
-            chatId,
-            timestamp: Date.now(),
-          });
-          return result;
+          return this.buildFailResult(name, args, startMs, validatedResult.content, 'execution', attempt);
         }
 
-        // Validation failure - treat as retryable error if we have retries left
+        // Validation failure — retryable if we have retries left
         lastError = validatedResult.content;
         this.emit('tool:error', {
-          toolName: name,
-          args,
-          error: lastError,
-          phase: 'validation',
-          botId,
-          chatId,
-          timestamp: Date.now(),
+          toolName: name, args, error: lastError, phase: 'validation',
+          botId, chatId, timestamp: Date.now(),
         });
         if (attempt < maxRetries) {
           this.logger.warn(
             { tool: name, botId, attempt, error: lastError },
             'Tool validation failed, will retry'
           );
-          // Wait before retry with exponential backoff
           await this.delay(this.calculateBackoff(attempt));
           continue;
         }
 
-        // No retries left - return validation error
-        const durationMs = Date.now() - startMs;
-        const errorMsg = `Validation failed after ${attempt + 1} attempt(s): ${lastError}`;
-        const result: ToolExecutionResult = {
-          success: false,
-          content: errorMsg,
-          toolName: name,
-          args,
-          durationMs,
-          retryAttempts: attempt,
-        };
-        this.logExecution(name, args, false, result.content, durationMs);
-        this.emit('tool:end', {
-          toolName: name,
-          args,
-          success: false,
-          result: errorMsg,
-          durationMs,
-          retryAttempts: attempt,
-          botId,
-          chatId,
-          timestamp: Date.now(),
-        });
-        return result;
+        // No retries left — return validation error
+        return this.buildFailResult(
+          name, args, startMs,
+          `Validation failed after ${attempt + 1} attempt(s): ${lastError}`,
+          'validation', attempt,
+        );
 
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         this.logger.error({ tool: name, botId, attempt, error: err }, 'Tool execution error');
 
-        // If we have retries left, emit error and continue to next attempt
+        // Retries left — emit error and continue
         if (attempt < maxRetries) {
           this.emit('tool:error', {
-            toolName: name,
-            args,
-            error: lastError,
-            phase: 'execution',
-            botId,
-            chatId,
-            timestamp: Date.now(),
+            toolName: name, args, error: lastError, phase: 'execution',
+            botId, chatId, timestamp: Date.now(),
           });
           await this.delay(this.calculateBackoff(attempt));
           continue;
         }
 
-        // No retries left - return final error (emit final error + end)
-        const durationMs = Date.now() - startMs;
-        const errorMsg = `Tool execution failed after ${attempt + 1} attempt(s): ${lastError}`;
-        this.emit('tool:error', {
-          toolName: name,
-          args,
-          error: lastError,
-          phase: 'execution',
-          botId,
-          chatId,
-          timestamp: Date.now(),
-        });
-        const result: ToolExecutionResult = {
-          success: false,
-          content: errorMsg,
-          toolName: name,
-          args,
-          durationMs,
-          retryAttempts: attempt,
-        };
-        this.logExecution(name, args, false, errorMsg, durationMs);
-        this.emit('tool:end', {
-          toolName: name,
-          args,
-          success: false,
-          result: errorMsg,
-          durationMs,
-          retryAttempts: attempt,
-          botId,
-          chatId,
-          timestamp: Date.now(),
-        });
-        return result;
+        // No retries left — return final error
+        return this.buildFailResult(
+          name, args, startMs,
+          `Tool execution failed after ${attempt + 1} attempt(s): ${lastError}`,
+          'execution', attempt, lastError!,
+        );
       }
     }
 
     // Should never reach here, but TypeScript requires a return
-    const durationMs = Date.now() - startMs;
-    return {
-      success: false,
-      content: 'Unexpected execution path',
-      toolName: name,
-      args,
-      durationMs,
-      retryAttempts: maxRetries,
-    };
+    return this.buildFailResult(name, args, startMs, 'Unexpected execution path', 'execution', maxRetries);
   }
 
   /**

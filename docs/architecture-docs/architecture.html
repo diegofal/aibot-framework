@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture Overview - AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+
+<!-- Hamburger (mobile) -->
+<button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+<!-- Sidebar backdrop (mobile) -->
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      AIBot Framework
+      <small>Architecture Docs</small>
+    </div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="architecture.html" class="active">Architecture</a>
+      <a href="bot-core.html">Bot Core Modules</a>
+      <a href="data-flows.html">Data Flows</a>
+      <a href="tools-skills.html">Tools &amp; Skills</a>
+      <a href="memory-soul.html">Memory &amp; Soul</a>
+      <a href="agent-loop.html">Agent Loop</a>
+      <a href="web-dashboard.html">Web Dashboard</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="simplifications.html">Simplifications</a>
+    </nav>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main">
+    <div class="content">
+
+      <!-- Page header -->
+      <div class="page-header">
+        <h1>Architecture Overview</h1>
+        <p>How the bot core is structured: facade pattern, focused modules, shared context, and dependency ordering.</p>
+      </div>
+
+      <!-- ============================================================
+           Section: Facade Pattern
+           ============================================================ -->
+      <h2>Facade Pattern &mdash; BotManager</h2>
+
+      <p>
+        The entire bot core is exposed through a single public API: <code>BotManager</code>.
+        It lives in <code>src/bot/bot-manager.ts</code> (627 lines) and is the only export
+        from <code>src/bot/index.ts</code>. External callers &mdash; the web dashboard,
+        the CLI entry point, tests &mdash; never touch internal modules directly.
+      </p>
+
+      <p>
+        <code>BotManager</code> is a <strong>slim facade</strong>. It does not contain business logic
+        itself; instead, it composes focused modules and delegates to them. Its responsibilities are limited to:
+      </p>
+
+      <ul style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px; line-height: 1.8;">
+        <li><strong>Constructor</strong> &mdash; creates the shared <code>BotContext</code>, instantiates all modules in dependency order, and wires lazy callbacks for circular dependencies.</li>
+        <li><strong>startBot / stopBot / stopAll</strong> &mdash; lifecycle management for Telegram polling and headless agents.</li>
+        <li><strong>sendMessage</strong> &mdash; delivers text to a Telegram chat via a specific bot instance.</li>
+        <li><strong>Agent loop delegates</strong> &mdash; <code>startAgentLoop</code>, <code>runAgentLoop</code>, <code>getAgentLoopState</code>, <code>wakeAgentLoop</code>.</li>
+        <li><strong>Ask-human delegates</strong> &mdash; <code>getAskHumanPending</code>, <code>answerAskHuman</code>, <code>dismissAskHuman</code>.</li>
+        <li><strong>Collaboration delegates</strong> &mdash; <code>sendVisibleMessage</code>, <code>handleDelegation</code>, <code>discoverAgents</code>, <code>collaborationStep</code>.</li>
+      </ul>
+
+      <p>
+        Because the facade is thin, adding a new feature means creating or modifying a focused module
+        and then exposing it through one or two delegate methods on <code>BotManager</code>.
+      </p>
+
+      <!-- ============================================================
+           Section: Module Inventory
+           ============================================================ -->
+      <h2>Module Inventory</h2>
+
+      <p>
+        The bot core (<code>src/bot/</code>) contains <strong>20 modules</strong> totaling roughly
+        6,000 lines of TypeScript. The table below lists every file, its size, and its
+        single-sentence responsibility.
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th style="text-align: right;">Lines</th>
+              <th>Responsibility</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>agent-feedback-store.ts</code></td>
+              <td style="text-align: right;">156</td>
+              <td>Persists &amp; queries agent feedback entries</td>
+            </tr>
+            <tr>
+              <td><code>agent-loop-prompts.ts</code></td>
+              <td style="text-align: right;">437</td>
+              <td>Prompt templates for planner / executor / strategist</td>
+            </tr>
+            <tr>
+              <td><code>agent-loop.ts</code></td>
+              <td style="text-align: right;">1,375</td>
+              <td>Autonomous agent loop: scheduling, planning, strategy, execution</td>
+            </tr>
+            <tr>
+              <td><code>ask-human-store.ts</code></td>
+              <td style="text-align: right;">289</td>
+              <td>Store for ask-human pending questions with timeout</td>
+            </tr>
+            <tr>
+              <td><code>bot-manager.ts</code></td>
+              <td style="text-align: right;">627</td>
+              <td>Facade: constructor, startBot, stopBot, sendMessage, public API</td>
+            </tr>
+            <tr>
+              <td><code>builtin-commands.ts</code></td>
+              <td style="text-align: right;">177</td>
+              <td>Built-in slash commands (/ping, /model, /session, etc.)</td>
+            </tr>
+            <tr>
+              <td><code>collaboration.ts</code></td>
+              <td style="text-align: right;">429</td>
+              <td>Bot-to-bot: visible, internal, delegation, multi-turn</td>
+            </tr>
+            <tr>
+              <td><code>conversation-pipeline.ts</code></td>
+              <td style="text-align: right;">293</td>
+              <td>Pipeline: session expiry, RAG prefetch, LLM call, persist, reply</td>
+            </tr>
+            <tr>
+              <td><code>dynamic-tool-registry.ts</code></td>
+              <td style="text-align: right;">143</td>
+              <td>Runtime registration / deregistration of dynamic tools</td>
+            </tr>
+            <tr>
+              <td><code>group-activation.ts</code></td>
+              <td style="text-align: right;">167</td>
+              <td>Group relevance checks: deference, LLM relevance, broadcast</td>
+            </tr>
+            <tr>
+              <td><code>handler-registrar.ts</code></td>
+              <td style="text-align: right;">472</td>
+              <td>Grammy handler registration: skills, commands, media, auth</td>
+            </tr>
+            <tr>
+              <td><code>index.ts</code></td>
+              <td style="text-align: right;">2</td>
+              <td>Barrel re-export of BotManager and AgentLoop</td>
+            </tr>
+            <tr>
+              <td><code>media-handlers.ts</code></td>
+              <td style="text-align: right;">209</td>
+              <td>Media message processing (photos, voice, documents)</td>
+            </tr>
+            <tr>
+              <td><code>memory-flush.ts</code></td>
+              <td style="text-align: right;">218</td>
+              <td>Flush session conversations to daily memory log</td>
+            </tr>
+            <tr>
+              <td><code>soul-health-check.ts</code></td>
+              <td style="text-align: right;">573</td>
+              <td>Soul structural lint + memory consolidation + quality review</td>
+            </tr>
+            <tr>
+              <td><code>system-prompt-builder.ts</code></td>
+              <td style="text-align: right;">421</td>
+              <td>System prompt composition for conversation &amp; collaboration modes</td>
+            </tr>
+            <tr>
+              <td><code>telegram-utils.ts</code></td>
+              <td style="text-align: right;">28</td>
+              <td>Utility: sendLongMessage (splits &gt;4096 char messages)</td>
+            </tr>
+            <tr>
+              <td><code>tool-executor.ts</code></td>
+              <td style="text-align: right;">729</td>
+              <td>Tool call execution with error handling and logging</td>
+            </tr>
+            <tr>
+              <td><code>tool-registry.ts</code></td>
+              <td style="text-align: right;">347</td>
+              <td>Tool initialization, filtering, collaboration-safe tools</td>
+            </tr>
+            <tr>
+              <td><code>types.ts</code></td>
+              <td style="text-align: right;">69</td>
+              <td>BotContext interface + SeenUser type</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ============================================================
+           Section: Dependency Graph
+           ============================================================ -->
+      <h2>Dependency Graph</h2>
+
+      <p>
+        The diagram below shows how <code>BotManager</code> composes its modules and which modules
+        depend on others. Color coding indicates the dependency weight of each node.
+      </p>
+
+      <div style="display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0 20px;">
+        <span class="badge badge-low">Facade</span>
+        <span class="badge badge-green">No dependencies</span>
+        <span class="badge badge-medium">Dependent modules</span>
+        <span class="badge badge-high">Heavy modules</span>
+      </div>
+
+      <div class="diagram-container">
+        <svg viewBox="0 0 820 620" xmlns="http://www.w3.org/2000/svg" style="width: 100%; max-width: 820px;">
+          <defs>
+            <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#8b8d97" />
+            </marker>
+            <marker id="arrowhead-accent" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#6c8cff" />
+            </marker>
+          </defs>
+
+          <!-- ===== FACADE (top) ===== -->
+          <rect x="300" y="20" width="220" height="44" rx="6" ry="6"
+                fill="#181a20" stroke="#6c8cff" stroke-width="2" />
+          <text x="410" y="47" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="14" font-weight="700" fill="#6c8cff">BotManager</text>
+
+          <!-- ===== TIER 1: No-dep modules (green) ===== -->
+          <!-- ToolRegistry -->
+          <rect x="30" y="140" width="170" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#34d399" stroke-width="1.5" />
+          <text x="115" y="165" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#34d399">ToolRegistry</text>
+
+          <!-- MemoryFlusher -->
+          <rect x="230" y="140" width="170" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#34d399" stroke-width="1.5" />
+          <text x="315" y="165" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#34d399">MemoryFlusher</text>
+
+          <!-- GroupActivation -->
+          <rect x="430" y="140" width="170" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#34d399" stroke-width="1.5" />
+          <text x="515" y="165" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#34d399">GroupActivation</text>
+
+          <!-- ===== TIER 2: Dependent modules (orange) ===== -->
+          <!-- SystemPromptBuilder -->
+          <rect x="30" y="270" width="200" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#fbbf24" stroke-width="1.5" />
+          <text x="130" y="295" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#fbbf24">SystemPromptBuilder</text>
+
+          <!-- CollaborationManager -->
+          <rect x="570" y="270" width="220" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#fbbf24" stroke-width="1.5" />
+          <text x="680" y="295" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#fbbf24">CollaborationManager</text>
+
+          <!-- ===== TIER 3: Heavy modules (red) ===== -->
+          <!-- ConversationPipeline -->
+          <rect x="30" y="400" width="220" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#f87171" stroke-width="1.5" />
+          <text x="140" y="425" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#f87171">ConversationPipeline</text>
+
+          <!-- HandlerRegistrar -->
+          <rect x="300" y="400" width="200" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#f87171" stroke-width="1.5" />
+          <text x="400" y="425" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#f87171">HandlerRegistrar</text>
+
+          <!-- AgentLoop -->
+          <rect x="550" y="400" width="220" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#f87171" stroke-width="1.5" />
+          <text x="660" y="425" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#f87171">AgentLoop</text>
+
+          <!-- ===== ARROWS: BotManager -> Tier 1 ===== -->
+          <!-- BotManager -> ToolRegistry -->
+          <line x1="360" y1="64" x2="115" y2="136" class="arrow" />
+          <!-- BotManager -> MemoryFlusher -->
+          <line x1="400" y1="64" x2="315" y2="136" class="arrow" />
+          <!-- BotManager -> GroupActivation -->
+          <line x1="450" y1="64" x2="515" y2="136" class="arrow" />
+
+          <!-- ===== ARROWS: BotManager -> Tier 2 ===== -->
+          <!-- BotManager -> SystemPromptBuilder -->
+          <line x1="340" y1="64" x2="130" y2="266" class="arrow" />
+          <!-- BotManager -> CollaborationManager -->
+          <line x1="490" y1="64" x2="680" y2="266" class="arrow" />
+
+          <!-- ===== ARROWS: BotManager -> Tier 3 ===== -->
+          <!-- BotManager -> ConversationPipeline -->
+          <line x1="350" y1="64" x2="140" y2="396" class="arrow" />
+          <!-- BotManager -> HandlerRegistrar -->
+          <line x1="410" y1="64" x2="400" y2="396" class="arrow" />
+          <!-- BotManager -> AgentLoop -->
+          <line x1="470" y1="64" x2="660" y2="396" class="arrow" />
+
+          <!-- ===== INTER-MODULE ARROWS (dashed, accent) ===== -->
+          <!-- SystemPromptBuilder -> ToolRegistry (reads definitions) -->
+          <line x1="115" y1="180" x2="115" y2="266"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- CollaborationManager -> SystemPromptBuilder -->
+          <line x1="570" y1="290" x2="234" y2="290"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- CollaborationManager -> ToolRegistry -->
+          <line x1="620" y1="270" x2="190" y2="180"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- ConversationPipeline -> SystemPromptBuilder -->
+          <line x1="80" y1="396" x2="100" y2="314"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- ConversationPipeline -> MemoryFlusher -->
+          <line x1="200" y1="396" x2="300" y2="184"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- ConversationPipeline -> ToolRegistry -->
+          <line x1="50" y1="396" x2="70" y2="184"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- HandlerRegistrar -> ConversationPipeline -->
+          <line x1="340" y1="400" x2="210" y2="440"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- HandlerRegistrar -> GroupActivation -->
+          <line x1="440" y1="396" x2="500" y2="184"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- HandlerRegistrar -> MemoryFlusher -->
+          <line x1="380" y1="396" x2="335" y2="184"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- AgentLoop -> SystemPromptBuilder -->
+          <line x1="570" y1="400" x2="200" y2="314"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- AgentLoop -> ToolRegistry -->
+          <line x1="600" y1="400" x2="180" y2="180"
+                stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4"
+                marker-end="url(#arrowhead-accent)" />
+
+          <!-- ===== LEGEND ===== -->
+          <rect x="30" y="490" width="760" height="110" rx="8" ry="8"
+                fill="#181a20" stroke="#2a2d36" stroke-width="1" />
+          <text x="50" y="515"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="11" font-weight="700" fill="#8b8d97" text-transform="uppercase"
+                letter-spacing="0.5">LEGEND</text>
+
+          <!-- Solid arrow -->
+          <line x1="50" y1="540" x2="90" y2="540" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead)" />
+          <text x="100" y="544"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" fill="#e0e0e6">BotManager owns / creates</text>
+
+          <!-- Dashed arrow -->
+          <line x1="350" y1="540" x2="390" y2="540" stroke="#6c8cff" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrowhead-accent)" />
+          <text x="400" y="544"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" fill="#e0e0e6">Module uses / reads from</text>
+
+          <!-- Color legend -->
+          <rect x="50" y="560" width="14" height="14" rx="3" ry="3" fill="#181a20" stroke="#6c8cff" stroke-width="1.5" />
+          <text x="72" y="572"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" fill="#e0e0e6">Facade</text>
+
+          <rect x="150" y="560" width="14" height="14" rx="3" ry="3" fill="#181a20" stroke="#34d399" stroke-width="1.5" />
+          <text x="172" y="572"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" fill="#e0e0e6">No deps</text>
+
+          <rect x="260" y="560" width="14" height="14" rx="3" ry="3" fill="#181a20" stroke="#fbbf24" stroke-width="1.5" />
+          <text x="282" y="572"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" fill="#e0e0e6">Dependent</text>
+
+          <rect x="390" y="560" width="14" height="14" rx="3" ry="3" fill="#181a20" stroke="#f87171" stroke-width="1.5" />
+          <text x="412" y="572"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" fill="#e0e0e6">Heavy (3+ deps)</text>
+
+        </svg>
+      </div>
+
+      <!-- ============================================================
+           Section: Composition Patterns
+           ============================================================ -->
+      <h2>Composition Patterns</h2>
+
+      <h3>Shared BotContext (mutable state by reference)</h3>
+
+      <p>
+        Every module receives the same <code>BotContext</code> object (defined in
+        <code>types.ts</code>, 69 lines). It holds references to all infrastructure services
+        (<code>SessionManager</code>, <code>MemoryManager</code>, <code>SkillRegistry</code>,
+        etc.) plus per-bot mutable state like <code>bots: Map&lt;string, Bot&gt;</code>,
+        <code>runningBots: Set&lt;string&gt;</code>, and <code>activeModels: Map&lt;string, string&gt;</code>.
+      </p>
+
+      <p>
+        Because <code>BotContext</code> is passed by reference, when <code>BotManager.startBot()</code>
+        adds a bot to <code>runningBots</code>, all modules immediately see the change &mdash;
+        no event bus, no pub/sub, no syncing.
+      </p>
+
+      <pre><code>// types.ts — BotContext (abridged)
+export interface BotContext {
+  readonly config: Config;
+  readonly sessionManager: SessionManager;
+  readonly skillRegistry: SkillRegistry;
+  readonly memoryManager: MemoryManager | undefined;
+  readonly logger: Logger;
+
+  // Per-bot mutable state (shared by reference)
+  readonly bots: Map&lt;string, Bot&gt;;
+  readonly runningBots: Set&lt;string&gt;;
+  readonly activeModels: Map&lt;string, string&gt;;
+  readonly tools: Tool[];
+  readonly toolDefinitions: ToolDefinition[];
+
+  // Helper methods
+  getActiveModel(botId: string): string;
+  getLLMClient(botId: string): LLMClient;
+  getSoulLoader(botId: string): SoulLoader;
+}</code></pre>
+
+      <h3>Lazy callbacks for circular dependencies</h3>
+
+      <p>
+        The collaboration and delegation tools need a reference to <code>CollaborationManager</code>,
+        but <code>CollaborationManager</code> itself is created after <code>ToolRegistry</code>.
+        This circular dependency is broken with lazy callbacks:
+      </p>
+
+      <pre><code>// bot-manager.ts constructor — wire circular deps
+this.toolRegistry.initializeAll(
+  () =&gt; this.collaborationManager,   // lazy — not evaluated at init time
+  () =&gt; ({
+    discoverAgents: (excludeBotId) =&gt;
+      this.collaborationManager.discoverAgents(excludeBotId),
+    collaborationStep: (sessionId, targetBotId, message, sourceBotId) =&gt;
+      this.collaborationManager.collaborationStep(
+        sessionId, targetBotId, message, sourceBotId
+      ),
+    // ...
+  }),
+);</code></pre>
+
+      <p>
+        The arrow function <code>() =&gt; this.collaborationManager</code> captures
+        <code>this</code> in a closure but is not invoked until a tool is actually called
+        at runtime &mdash; by which point <code>collaborationManager</code> is fully initialized.
+      </p>
+
+      <h3>Initialization order matters</h3>
+
+      <p>
+        Modules are instantiated in dependency order inside the <code>BotManager</code> constructor.
+        The sequence reflects the dependency graph shown above:
+      </p>
+
+      <pre><code>// bot-manager.ts constructor — initialization order
+this.toolRegistry       = new ToolRegistry(ctx);                            // 1. no deps
+this.systemPromptBuilder = new SystemPromptBuilder(ctx, this.toolRegistry); // 2. reads ToolRegistry
+this.memoryFlusher      = new MemoryFlusher(ctx);                           // 3. no deps
+this.groupActivation    = new GroupActivation(ctx);                         // 4. no deps
+this.conversationPipeline = new ConversationPipeline(                       // 5. uses 1, 2, 3
+  ctx, this.systemPromptBuilder, this.memoryFlusher, this.toolRegistry
+);
+this.collaborationManager = new CollaborationManager(                       // 6. uses 1, 2
+  ctx, this.systemPromptBuilder, this.toolRegistry
+);
+this.handlerRegistrar   = new HandlerRegistrar(                             // 7. uses 4, 5, 3, 1
+  ctx, this.conversationPipeline, this.groupActivation,
+  this.memoryFlusher, this.toolRegistry, this.askHumanStore
+);
+this.agentLoop          = new AgentLoop(                                    // 8. uses 1, 2
+  ctx, this.systemPromptBuilder, this.toolRegistry
+);</code></pre>
+
+      <p>
+        If a new module depends on an existing one, it must be instantiated <strong>after</strong>
+        its dependency in this sequence. If it would create a circular dependency, use the lazy
+        callback pattern described above.
+      </p>
+
+    </div>
+  </main>
+</div>
+
+<!-- Mobile sidebar toggle -->
+<script>
+(function () {
+  var hamburger = document.getElementById('hamburger');
+  var sidebar = document.getElementById('sidebar');
+  var backdrop = document.getElementById('sidebarBackdrop');
+
+  function toggleSidebar() {
+    sidebar.classList.toggle('open');
+    backdrop.classList.toggle('show');
+  }
+
+  function closeSidebar() {
+    sidebar.classList.remove('open');
+    backdrop.classList.remove('show');
+  }
+
+  hamburger.addEventListener('click', toggleSidebar);
+  backdrop.addEventListener('click', closeSidebar);
+})();
+</script>
+
+</body>
+</html>

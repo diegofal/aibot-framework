@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory &amp; Soul System - AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+  <div class="layout">
+
+    <!-- Hamburger (mobile) -->
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+    <!-- Backdrop (mobile) -->
+    <div class="sidebar-backdrop" id="backdrop"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        AIBot Framework
+        <small>Architecture Docs</small>
+      </div>
+      <nav>
+        <div class="nav-group">Pages</div>
+        <a href="index.html">Overview</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="bot-core.html">Bot Core Modules</a>
+        <a href="data-flows.html">Data Flows</a>
+        <a href="tools-skills.html">Tools &amp; Skills</a>
+        <a href="memory-soul.html" class="active">Memory &amp; Soul</a>
+        <a href="agent-loop.html">Agent Loop</a>
+        <a href="web-dashboard.html">Web Dashboard</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="simplifications.html">Simplifications</a>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="content">
+
+        <!-- Page header -->
+        <div class="page-header">
+          <h1>Memory &amp; Soul System</h1>
+          <p>4-layer memory architecture with RAG-powered retrieval</p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- Section 1: 4-Layer Memory Architecture                       -->
+        <!-- ============================================================ -->
+        <h2 id="architecture">4-Layer Memory Architecture</h2>
+        <p>The memory system is organized into four distinct layers, each serving a different purpose in the bot's ability to remember and retrieve information. Higher layers are volatile and fast; lower layers are persistent and deep.</p>
+
+        <div class="diagram-container">
+          <svg viewBox="0 0 700 420" width="700" height="420" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="layer1Grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#6c8cff" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#6c8cff" stop-opacity="0.10"/>
+              </linearGradient>
+              <linearGradient id="layer2Grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#34d399" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#34d399" stop-opacity="0.10"/>
+              </linearGradient>
+              <linearGradient id="layer3Grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.10"/>
+              </linearGradient>
+              <linearGradient id="layer4Grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#fbbf24" stop-opacity="0.10"/>
+              </linearGradient>
+            </defs>
+
+            <!-- Layer 1: Session Memory -->
+            <rect x="40" y="20" width="620" height="80" rx="8" ry="8" fill="url(#layer1Grad)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="60" y="50" font-size="15" font-weight="700" fill="#6c8cff">Layer 1 &mdash; Session Memory</text>
+            <text x="60" y="72" font-size="12" fill="#8b8d97">In-memory, per-chat, volatile. Holds current conversation history (ChatMessage[]).</text>
+            <text x="60" y="88" font-size="12" fill="#8b8d97">Cleared on session expiry or /clear. Flushed to Layer 2 before clearing.</text>
+
+            <!-- Arrow: Layer 1 -> Layer 2 -->
+            <line x1="350" y1="100" x2="350" y2="120" stroke="#8b8d97" stroke-width="1.5" stroke-dasharray="4,3"/>
+            <polygon points="345,118 355,118 350,126" fill="#8b8d97"/>
+            <text x="360" y="116" font-size="10" fill="#8b8d97">flush on expiry</text>
+
+            <!-- Layer 2: Daily Memory Logs -->
+            <rect x="40" y="126" width="620" height="80" rx="8" ry="8" fill="url(#layer2Grad)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="60" y="156" font-size="15" font-weight="700" fill="#34d399">Layer 2 &mdash; Daily Memory Logs</text>
+            <text x="60" y="178" font-size="12" fill="#8b8d97">Markdown files in soul/memory/ directory. One file per day (YYYY-MM-DD.md).</text>
+            <text x="60" y="194" font-size="12" fill="#8b8d97">LLM-summarized session flushes with importance-scored facts.</text>
+
+            <!-- Arrow: Layer 2 -> Layer 3 -->
+            <line x1="350" y1="206" x2="350" y2="226" stroke="#8b8d97" stroke-width="1.5" stroke-dasharray="4,3"/>
+            <polygon points="345,224 355,224 350,232" fill="#8b8d97"/>
+            <text x="360" y="222" font-size="10" fill="#8b8d97">consolidation</text>
+
+            <!-- Layer 3: Soul Files -->
+            <rect x="40" y="232" width="620" height="80" rx="8" ry="8" fill="url(#layer3Grad)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="60" y="262" font-size="15" font-weight="700" fill="#a78bfa">Layer 3 &mdash; Soul Files</text>
+            <text x="60" y="284" font-size="12" fill="#8b8d97">IDENTITY.md, SOUL.md, MOTIVATIONS.md, GOALS.md, MEMORY.md.</text>
+            <text x="60" y="300" font-size="12" fill="#8b8d97">Persistent personality, identity, goals. Indexed for RAG search. Versioned in .versions/.</text>
+
+            <!-- Arrow: Layer 3 -> Layer 4 -->
+            <line x1="350" y1="312" x2="350" y2="332" stroke="#8b8d97" stroke-width="1.5" stroke-dasharray="4,3"/>
+            <polygon points="345,330 355,330 350,338" fill="#8b8d97"/>
+            <text x="360" y="328" font-size="10" fill="#8b8d97">structured storage</text>
+
+            <!-- Layer 4: Core Memory -->
+            <rect x="40" y="338" width="620" height="80" rx="8" ry="8" fill="url(#layer4Grad)" stroke="#fbbf24" stroke-width="1.5"/>
+            <text x="60" y="368" font-size="15" font-weight="700" fill="#fbbf24">Layer 4 &mdash; Core Memory (SQLite)</text>
+            <text x="60" y="390" font-size="12" fill="#8b8d97">Key-value persistent store with categories and importance scoring (1-10).</text>
+            <text x="60" y="406" font-size="12" fill="#8b8d97">Categories: identity, relationships, preferences, goals, constraints. Injected into system prompt.</text>
+          </svg>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- Section 2: Memory Modules                                    -->
+        <!-- ============================================================ -->
+        <h2 id="modules">Memory Modules</h2>
+        <p>The memory system lives in <code>src/memory/</code> with 9 focused modules coordinated by <code>MemoryManager</code>.</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Responsibility</th>
+              <th>Key Exports</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>chunker.ts</code></td>
+              <td>Text chunking for embedding. Splits markdown by headings and token targets with configurable overlap. Also provides <code>contentHash()</code> for SHA-256 deduplication.</td>
+              <td><code>chunkMarkdown()</code>, <code>contentHash()</code>, <code>estimateTokens()</code></td>
+            </tr>
+            <tr>
+              <td><code>core-memory.ts</code></td>
+              <td>MemGPT-style key-value persistent store. Categories: identity, relationships, preferences, goals, constraints. Supports importance scoring (1-10) and system prompt rendering.</td>
+              <td><code>CoreMemoryManager</code>, <code>createCoreMemoryManager()</code></td>
+            </tr>
+            <tr>
+              <td><code>embeddings.ts</code></td>
+              <td>Embedding generation via Ollama with SQLite-backed cache. Supports batch processing with configurable concurrency. Cache keyed by content hash.</td>
+              <td><code>EmbeddingService</code>, <code>createEmbeddingService()</code></td>
+            </tr>
+            <tr>
+              <td><code>indexer.ts</code></td>
+              <td>Document indexing for search. Discovers <code>.md</code> files recursively, chunks them, generates embeddings, and stores in SQLite. Handles incremental re-indexing via content hash comparison.</td>
+              <td><code>fullReindex()</code>, <code>indexFile()</code>, <code>discoverFiles()</code></td>
+            </tr>
+            <tr>
+              <td><code>manager.ts</code></td>
+              <td>MemoryManager facade. Orchestrates initialization, file watching (debounced), search delegation, session indexing, and cleanup. Single entry point for the memory subsystem.</td>
+              <td><code>MemoryManager</code></td>
+            </tr>
+            <tr>
+              <td><code>schema.ts</code></td>
+              <td>SQLite schema definitions and migrations. Tables: <code>files</code>, <code>chunks</code>, <code>embedding_cache</code>, <code>core_memory</code>. FTS5 virtual table with auto-sync triggers. WAL journaling.</td>
+              <td><code>initializeMemoryDb()</code>, <code>serializeEmbedding()</code>, <code>deserializeEmbedding()</code></td>
+            </tr>
+            <tr>
+              <td><code>search.ts</code></td>
+              <td>Hybrid search combining vector similarity (cosine) and keyword matching (FTS5/BM25). Bilingual stop-word filtering (Spanish + English). Core Memory results boosted by importance weighting.</td>
+              <td><code>hybridSearch()</code></td>
+            </tr>
+            <tr>
+              <td><code>session-indexer.ts</code></td>
+              <td>Session conversation indexer. Converts JSONL transcript files to plain text, chunks, embeds, and stores with <code>source_type = 'session'</code> to distinguish from soul memory files.</td>
+              <td><code>indexAllSessions()</code>, <code>indexSessionTranscript()</code>, <code>transcriptToText()</code></td>
+            </tr>
+            <tr>
+              <td><code>types.ts</code></td>
+              <td>Type definitions shared across the memory subsystem.</td>
+              <td><code>MemoryChunk</code>, <code>MemoryFile</code>, <code>MemorySearchResult</code>, <code>RawChunk</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- ============================================================ -->
+        <!-- Section 3: Memory Lifecycle                                  -->
+        <!-- ============================================================ -->
+        <h2 id="lifecycle">Memory Lifecycle</h2>
+        <p>A conversation message travels through the full memory pipeline, from volatile session storage to persistent vector-indexed knowledge.</p>
+
+        <div class="diagram-container">
+          <svg viewBox="0 0 780 200" width="780" height="200" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="#8b8d97"/>
+              </marker>
+              <marker id="arrowAccent" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="#6c8cff"/>
+              </marker>
+            </defs>
+
+            <!-- Nodes -->
+            <rect x="10" y="60" width="100" height="50" rx="6" fill="#181a20" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="60" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#6c8cff">Conversation</text>
+            <text x="60" y="98" text-anchor="middle" font-size="10" fill="#8b8d97">user messages</text>
+
+            <rect x="140" y="60" width="100" height="50" rx="6" fill="#181a20" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="190" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#6c8cff">Session</text>
+            <text x="190" y="98" text-anchor="middle" font-size="10" fill="#8b8d97">in-memory</text>
+
+            <rect x="270" y="60" width="100" height="50" rx="6" fill="#181a20" stroke="#34d399" stroke-width="1.5"/>
+            <text x="320" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#34d399">Flush</text>
+            <text x="320" y="98" text-anchor="middle" font-size="10" fill="#8b8d97">LLM scoring</text>
+
+            <rect x="400" y="60" width="100" height="50" rx="6" fill="#181a20" stroke="#34d399" stroke-width="1.5"/>
+            <text x="450" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#34d399">Daily Log</text>
+            <text x="450" y="98" text-anchor="middle" font-size="10" fill="#8b8d97">.md files</text>
+
+            <rect x="530" y="60" width="100" height="50" rx="6" fill="#181a20" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="580" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#a78bfa">Index</text>
+            <text x="580" y="98" text-anchor="middle" font-size="10" fill="#8b8d97">chunk + embed</text>
+
+            <rect x="660" y="60" width="100" height="50" rx="6" fill="#181a20" stroke="#fbbf24" stroke-width="1.5"/>
+            <text x="710" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#fbbf24">Vector Store</text>
+            <text x="710" y="98" text-anchor="middle" font-size="10" fill="#8b8d97">SQLite + FTS5</text>
+
+            <!-- Arrows -->
+            <line x1="110" y1="85" x2="138" y2="85" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+            <line x1="240" y1="85" x2="268" y2="85" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+            <line x1="370" y1="85" x2="398" y2="85" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+            <line x1="500" y1="85" x2="528" y2="85" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+            <line x1="630" y1="85" x2="658" y2="85" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+            <!-- Core Memory branch from Flush -->
+            <rect x="270" y="140" width="100" height="50" rx="6" fill="#181a20" stroke="#fbbf24" stroke-width="1.5"/>
+            <text x="320" y="162" text-anchor="middle" font-size="12" font-weight="600" fill="#fbbf24">Core Memory</text>
+            <text x="320" y="178" text-anchor="middle" font-size="10" fill="#8b8d97">key-value store</text>
+
+            <line x1="320" y1="110" x2="320" y2="138" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowAccent)"/>
+            <text x="330" y="130" font-size="10" fill="#fbbf24">importance >= 5</text>
+
+            <!-- Labels above -->
+            <text x="190" y="44" text-anchor="middle" font-size="10" fill="#8b8d97">on expiry / /clear</text>
+            <text x="320" y="44" text-anchor="middle" font-size="10" fill="#8b8d97">flushWithScoring()</text>
+            <text x="580" y="44" text-anchor="middle" font-size="10" fill="#8b8d97">file watcher</text>
+          </svg>
+        </div>
+
+        <h3>Lifecycle Steps</h3>
+        <ol>
+          <li><strong>Conversation</strong> &mdash; User sends messages, bot replies. All messages stored as <code>ChatMessage[]</code> in session memory.</li>
+          <li><strong>Session Expiry</strong> &mdash; When session timeout elapses or user runs <code>/clear</code>, <code>MemoryFlusher.flushSessionToMemory()</code> is called.</li>
+          <li><strong>LLM Scoring</strong> &mdash; The conversation transcript is sent to the LLM (Claude or Ollama) with a prompt to extract facts with importance scores (1-10) and categories.</li>
+          <li><strong>Dual Storage</strong> &mdash; Facts are written to Core Memory (SQLite key-value) and/or daily memory log files (<code>memory/YYYY-MM-DD.md</code>).</li>
+          <li><strong>Indexing</strong> &mdash; A file watcher (debounced) detects new/changed <code>.md</code> files, chunks them by heading boundaries and token targets, and generates embeddings.</li>
+          <li><strong>Vector Store</strong> &mdash; Chunks and embeddings are stored in SQLite with FTS5 full-text search and auto-sync triggers for keyword matching.</li>
+        </ol>
+
+        <!-- ============================================================ -->
+        <!-- Section 4: RAG Search Flow                                   -->
+        <!-- ============================================================ -->
+        <h2 id="rag-search">RAG Search Flow</h2>
+        <p>The <code>hybridSearch()</code> function in <code>search.ts</code> combines vector similarity with keyword matching for robust retrieval. Results are merged with Core Memory entries weighted by importance.</p>
+
+        <div class="card-grid cols-2">
+          <div class="card">
+            <h3>Vector Search Path</h3>
+            <p>Query text is embedded via Ollama using the configured embedding model. The query embedding is compared against all stored chunk embeddings using cosine similarity. Results scored 0-1.</p>
+            <pre><code>queryEmbedding = embeddingService.getEmbedding(query)
+for each chunk:
+  score = cosineSimilarity(queryEmbedding, chunk.embedding)</code></pre>
+          </div>
+          <div class="card">
+            <h3>Keyword Search Path</h3>
+            <p>Query is tokenized, stop-words removed (bilingual: Spanish + English), and tokens with prefix matching are fed to SQLite FTS5. BM25 ranking scores are normalized to 0-1.</p>
+            <pre><code>tokens = query.split().filter(stopWords).map(t =&gt; t + '*')
+ftsQuery = tokens.join(' OR ')
+score = 1 / (1 + |bm25_rank|)</code></pre>
+          </div>
+        </div>
+
+        <h3>Merge and Scoring</h3>
+        <p>The final score is a weighted combination of both search paths, controlled by <code>config.vectorWeight</code> and <code>config.keywordWeight</code>:</p>
+        <pre><code>finalScore = vectorWeight * vectorScore + keywordWeight * keywordScore</code></pre>
+
+        <p>Results are filtered by <code>minScore</code>, sorted descending, and limited to <code>maxResults</code>. Core Memory entries with <code>importance >= 7</code> are prioritized above regular results. Lower-importance core entries fill remaining slots.</p>
+
+        <h3>Stop Words</h3>
+        <p>Bilingual filtering removes common words in both Spanish and English before FTS5 queries. Only tokens with 3+ characters pass through.</p>
+        <div class="card">
+          <h3>Filtered Languages</h3>
+          <p><span class="tag">Spanish</span> <span class="tag">English</span></p>
+          <p style="color:var(--text-dim);font-size:13px;margin-top:8px;">Examples: <code>a</code>, <code>al</code>, <code>con</code>, <code>de</code>, <code>el</code>, <code>en</code>, <code>and</code>, <code>are</code>, <code>for</code>, <code>the</code>, <code>with</code></p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- Section 5: Soul System                                       -->
+        <!-- ============================================================ -->
+        <h2 id="soul-system">Soul System</h2>
+        <p>Each bot has a <code>soul/</code> directory containing persistent identity files that define personality, motivations, and long-term memory. These files are indexed for RAG search and reviewed by the soul health check system.</p>
+
+        <div class="card-grid cols-2">
+          <div class="card">
+            <h3>IDENTITY.md</h3>
+            <p>Core identity definition: who the bot is, its name, description, and fundamental characteristics.</p>
+          </div>
+          <div class="card">
+            <h3>SOUL.md</h3>
+            <p>Personality traits, communication style, tone of voice, and behavioral patterns.</p>
+          </div>
+          <div class="card">
+            <h3>MOTIVATIONS.md</h3>
+            <p>Inner motivations, impulses, and drives that shape behavior. Updated through reflection cycles.</p>
+          </div>
+          <div class="card">
+            <h3>GOALS.md</h3>
+            <p>Current objectives and focus areas. Can be updated by the bot itself or by operators.</p>
+          </div>
+          <div class="card">
+            <h3>MEMORY.md</h3>
+            <p>Consolidated long-term memory. Merged from daily logs by the memory consolidation process.</p>
+          </div>
+          <div class="card">
+            <h3>memory/ directory</h3>
+            <p>Daily memory log files (<code>YYYY-MM-DD.md</code>). Archived into <code>memory/archive/</code> after consolidation.</p>
+          </div>
+        </div>
+
+        <h3>Soul Health Check</h3>
+        <p>The <code>soul-health-check.ts</code> module runs on startup (with cooldown) and performs three operations:</p>
+        <ol>
+          <li><strong>Structural Lint</strong> (no LLM) &mdash; Validates required files exist (<code>IDENTITY.md</code>, <code>SOUL.md</code>, <code>MOTIVATIONS.md</code>), checks for duplicated sections leaked into SOUL.md, detects stale placeholders in MOTIVATIONS.md, and verifies the <code>memory/</code> directory exists.</li>
+          <li><strong>Memory Consolidation</strong> &mdash; Merges old daily logs (older than today) into <code>MEMORY.md</code> using Claude CLI. Deduplicates facts, removes noise (agent-loop artifacts), organizes by natural categories, and archives processed logs.</li>
+          <li><strong>Quality Review</strong> &mdash; Spawns Claude CLI with <code>--allowedTools Read,Edit,Write</code> to review soul files for personality drift, vague language, contradictions, and outdated content. Makes targeted, minimal edits preserving voice.</li>
+        </ol>
+        <p>Consolidation and quality review run concurrently since they operate on different files. A cooldown timestamp (<code>.last-health-check</code>) prevents redundant runs.</p>
+
+        <!-- ============================================================ -->
+        <!-- Section 6: Core Memory                                       -->
+        <!-- ============================================================ -->
+        <h2 id="core-memory">Core Memory</h2>
+        <p>Core Memory is a MemGPT-style structured key-value store in SQLite. It enables the bot to maintain explicit, categorized knowledge about itself and the people it interacts with. High-importance entries are automatically injected into the system prompt.</p>
+
+        <h3>Categories</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Description</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>identity</code></td>
+              <td>Who the bot is (name, description, values, style)</td>
+              <td><code>name: "Lina"</code></td>
+            </tr>
+            <tr>
+              <td><code>relationships</code></td>
+              <td>Data about specific users the bot interacts with</td>
+              <td><code>diego_timezone: "UTC-3"</code></td>
+            </tr>
+            <tr>
+              <td><code>preferences</code></td>
+              <td>Bot's own preferences and behavioral choices</td>
+              <td><code>reply_style: "concise"</code></td>
+            </tr>
+            <tr>
+              <td><code>goals</code></td>
+              <td>Long-term objectives and focus areas</td>
+              <td><code>learn_cooking: "..."</code></td>
+            </tr>
+            <tr>
+              <td><code>constraints</code></td>
+              <td>Self-imposed limits and behavioral boundaries</td>
+              <td><code>no_politics: "..."</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>API Methods</h3>
+        <table class="methods-table">
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>get(category, key)</td>
+              <td>Retrieve a single entry by category and key. Returns <code>CoreMemoryEntry | null</code>.</td>
+            </tr>
+            <tr>
+              <td>set(category, key, value, importance?)</td>
+              <td>Insert or update an entry. Key max 100 chars, value max 2000 chars, importance 1-10 (default 5).</td>
+            </tr>
+            <tr>
+              <td>delete(category, key)</td>
+              <td>Delete an entry. Returns <code>boolean</code> indicating whether a row was removed.</td>
+            </tr>
+            <tr>
+              <td>search(query, category?, limit?)</td>
+              <td>Search entries by query string matching key or value. Optionally filtered by category.</td>
+            </tr>
+            <tr>
+              <td>list(category?, minImportance?)</td>
+              <td>List entries optionally filtered by category and/or minimum importance threshold.</td>
+            </tr>
+            <tr>
+              <td>renderForSystemPrompt(maxChars?)</td>
+              <td>Render entries with importance >= 5 as formatted markdown for system prompt injection (default 800 chars max).</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>System Prompt Injection</h3>
+        <p><code>renderForSystemPrompt()</code> queries all entries with <code>importance >= 5</code>, groups them by category, and formats up to 5 items per category within the character budget. The output is injected as a <code>## Core Memory</code> section in the system prompt, giving the bot persistent awareness of its most important knowledge.</p>
+
+        <pre><code>## Core Memory
+
+**Identity**:
+- name: Lina
+- description: A creative and empathetic AI companion
+
+**Relationships**:
+- diego_preference: prefers technical discussions
+- maria_language: speaks in Spanish</code></pre>
+
+        <!-- ============================================================ -->
+        <!-- Section 7: Memory Consolidation                              -->
+        <!-- ============================================================ -->
+        <h2 id="consolidation">Memory Consolidation</h2>
+        <p>The <code>soul-health-check.ts</code> module's <code>consolidateMemory()</code> function merges daily memory logs into a unified <code>MEMORY.md</code> file. This prevents unbounded growth of daily log files and keeps the bot's long-term memory organized.</p>
+
+        <h3>Consolidation Process</h3>
+        <div class="diagram-container">
+          <svg viewBox="0 0 700 260" width="700" height="260" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrowhead2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="#8b8d97"/>
+              </marker>
+            </defs>
+
+            <!-- Step 1: Detect -->
+            <rect x="10" y="30" width="130" height="60" rx="6" fill="#181a20" stroke="#34d399" stroke-width="1.5"/>
+            <text x="75" y="55" text-anchor="middle" font-size="12" font-weight="600" fill="#34d399">Detect Old Logs</text>
+            <text x="75" y="73" text-anchor="middle" font-size="10" fill="#8b8d97">date &lt; today</text>
+
+            <!-- Step 2: Read -->
+            <rect x="170" y="30" width="130" height="60" rx="6" fill="#181a20" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="235" y="55" text-anchor="middle" font-size="12" font-weight="600" fill="#6c8cff">Read Contents</text>
+            <text x="235" y="73" text-anchor="middle" font-size="10" fill="#8b8d97">logs + MEMORY.md</text>
+
+            <!-- Step 3: Claude CLI -->
+            <rect x="330" y="30" width="130" height="60" rx="6" fill="#181a20" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="395" y="55" text-anchor="middle" font-size="12" font-weight="600" fill="#a78bfa">Claude CLI</text>
+            <text x="395" y="73" text-anchor="middle" font-size="10" fill="#8b8d97">merge + deduplicate</text>
+
+            <!-- Step 4: Write -->
+            <rect x="490" y="30" width="130" height="60" rx="6" fill="#181a20" stroke="#fbbf24" stroke-width="1.5"/>
+            <text x="555" y="55" text-anchor="middle" font-size="12" font-weight="600" fill="#fbbf24">Write MEMORY.md</text>
+            <text x="555" y="73" text-anchor="middle" font-size="10" fill="#8b8d97">backup first</text>
+
+            <!-- Arrows -->
+            <line x1="140" y1="60" x2="168" y2="60" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead2)"/>
+            <line x1="300" y1="60" x2="328" y2="60" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead2)"/>
+            <line x1="460" y1="60" x2="488" y2="60" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead2)"/>
+
+            <!-- Step 5: Archive -->
+            <rect x="490" y="120" width="130" height="60" rx="6" fill="#181a20" stroke="#f87171" stroke-width="1.5"/>
+            <text x="555" y="145" text-anchor="middle" font-size="12" font-weight="600" fill="#f87171">Archive Logs</text>
+            <text x="555" y="163" text-anchor="middle" font-size="10" fill="#8b8d97">memory/archive/</text>
+
+            <line x1="555" y1="90" x2="555" y2="118" stroke="#8b8d97" stroke-width="1.5" marker-end="url(#arrowhead2)"/>
+
+            <!-- Consolidation rules box -->
+            <rect x="10" y="130" width="450" height="118" rx="6" fill="#181a20" stroke="#2a2d36" stroke-width="1"/>
+            <text x="25" y="154" font-size="12" font-weight="600" fill="#e0e0e6">Consolidation Rules (Claude CLI Prompt)</text>
+            <text x="25" y="175" font-size="11" fill="#8b8d97">1. Merge daily facts into MEMORY.md structure</text>
+            <text x="25" y="192" font-size="11" fill="#8b8d97">2. Deduplicate identical facts across days</text>
+            <text x="25" y="209" font-size="11" fill="#8b8d97">3. Remove noise (agent-loop artifacts, empty entries)</text>
+            <text x="25" y="226" font-size="11" fill="#8b8d97">4. Organize by natural categories, preserve timestamps</text>
+            <text x="25" y="243" font-size="11" fill="#8b8d97">5. Keep ALL factual info about people and relationships</text>
+          </svg>
+        </div>
+
+        <h3>Key Details</h3>
+        <ul>
+          <li><code>getUnconsolidatedLogs()</code> finds all <code>YYYY-MM-DD.md</code> files in <code>memory/</code> older than today (excluding <code>legacy.md</code>).</li>
+          <li>Existing <code>MEMORY.md</code> is read first; falls back to <code>legacy.md</code> for first-time migration.</li>
+          <li>Before overwriting, <code>MEMORY.md</code> is backed up via <code>backupSoulFile()</code> into <code>.versions/</code>.</li>
+          <li>Claude CLI runs in prompt-only mode (<code>-p</code> flag, <code>--output-format text</code>) with no file editing tools.</li>
+          <li>Processed daily logs are moved to <code>memory/archive/</code> via <code>renameSync()</code>.</li>
+          <li>Output starts with a <code>&lt;!-- last-consolidated: YYYY-MM-DD --&gt;</code> metadata comment.</li>
+        </ul>
+
+        <!-- ============================================================ -->
+        <!-- SQLite Schema Reference                                      -->
+        <!-- ============================================================ -->
+        <h2 id="schema">SQLite Schema Reference</h2>
+        <p>All persistent memory data lives in a single SQLite database configured via <code>config.memorySearch.dbPath</code>. Uses WAL journaling and foreign keys.</p>
+
+        <h3>Tables</h3>
+        <div class="card-grid cols-2">
+          <div class="card">
+            <h3>files</h3>
+            <p>Tracks indexed files with content hashes for incremental re-indexing.</p>
+            <pre><code>id INTEGER PRIMARY KEY
+path TEXT UNIQUE NOT NULL
+content_hash TEXT NOT NULL
+last_indexed_at TEXT NOT NULL
+chunk_count INTEGER DEFAULT 0
+source_type TEXT DEFAULT 'memory'</code></pre>
+          </div>
+          <div class="card">
+            <h3>chunks</h3>
+            <p>Text chunks with embeddings. Foreign-keyed to files with cascading deletes.</p>
+            <pre><code>id INTEGER PRIMARY KEY
+file_id INTEGER REFERENCES files(id)
+chunk_index INTEGER NOT NULL
+content TEXT NOT NULL
+start_line / end_line INTEGER
+token_estimate INTEGER
+content_hash TEXT NOT NULL
+embedding BLOB</code></pre>
+          </div>
+          <div class="card">
+            <h3>embedding_cache</h3>
+            <p>Caches generated embeddings by content hash to avoid redundant Ollama calls.</p>
+            <pre><code>content_hash TEXT PRIMARY KEY
+embedding BLOB NOT NULL
+model TEXT NOT NULL
+created_at TEXT DEFAULT now()</code></pre>
+          </div>
+          <div class="card">
+            <h3>core_memory</h3>
+            <p>Structured key-value store with importance scoring and category indexing.</p>
+            <pre><code>id INTEGER PRIMARY KEY
+category TEXT NOT NULL
+key TEXT NOT NULL
+value TEXT NOT NULL
+importance INTEGER DEFAULT 5
+created_at / updated_at TEXT
+UNIQUE(category, key)</code></pre>
+          </div>
+        </div>
+
+        <h3>FTS5 Virtual Table</h3>
+        <p>A <code>chunks_fts</code> virtual table using SQLite FTS5 is kept in sync with the <code>chunks</code> table via <code>AFTER INSERT</code>, <code>AFTER DELETE</code>, and <code>AFTER UPDATE</code> triggers. This enables BM25-ranked keyword search alongside vector similarity.</p>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Mobile sidebar toggle -->
+  <script>
+    (function () {
+      var hamburger = document.getElementById('hamburger');
+      var sidebar = document.getElementById('sidebar');
+      var backdrop = document.getElementById('backdrop');
+
+      function toggle() {
+        sidebar.classList.toggle('open');
+        backdrop.classList.toggle('show');
+      }
+
+      hamburger.addEventListener('click', toggle);
+      backdrop.addEventListener('click', toggle);
+    })();
+  </script>
+</body>
+</html>

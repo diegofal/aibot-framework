@@ -1,17 +1,17 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, jest } from 'bun:test';
 import { ToolExecutor, createToolExecutor, createCollaborationToolExecutor } from '../tool-executor';
 import { z } from 'zod';
 import type { Tool, BotContext } from '../types';
 import type { Logger } from '../../logger';
 
-// Mock logger
+// Mock logger factory
 const createMockLogger = (): Logger => {
   const logger: Logger = {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    child: vi.fn().mockReturnValue(logger),
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    child: jest.fn(() => logger),
   };
   return logger;
 };
@@ -31,7 +31,7 @@ const createMockTool = (overrides: Partial<Tool> = {}): Tool => ({
     maxRetries: 0,
     ...overrides.definition,
   },
-  execute: vi.fn().mockResolvedValue({ success: true, content: 'success' }),
+  execute: jest.fn(() => Promise.resolve({ success: true, content: 'success' })),
   ...overrides,
 });
 
@@ -122,7 +122,7 @@ describe('ToolExecutor', () => {
       ctx.tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const startHandler = vi.fn();
+      const startHandler = jest.fn();
       executor.on('tool:start', startHandler);
 
       await executor.execute('test_tool', { foo: 'bar' });
@@ -141,7 +141,7 @@ describe('ToolExecutor', () => {
       ctx.tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const endHandler = vi.fn();
+      const endHandler = jest.fn();
       executor.on('tool:end', endHandler);
 
       await executor.execute('test_tool', { foo: 'bar' });
@@ -161,12 +161,12 @@ describe('ToolExecutor', () => {
 
     it('should emit tool:end event on failure', async () => {
       const tool = createMockTool({
-        execute: vi.fn().mockRejectedValue(new Error('execution failed')),
+        execute: jest.fn(() => Promise.reject(new Error('execution failed'))),
       });
       ctx.tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const endHandler = vi.fn();
+      const endHandler = jest.fn();
       executor.on('tool:end', endHandler);
 
       await executor.execute('test_tool', {});
@@ -184,7 +184,7 @@ describe('ToolExecutor', () => {
       ctx.config.bots[0].disabledTools = ['test_tool'];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const errorHandler = vi.fn();
+      const errorHandler = jest.fn();
       executor.on('tool:error', errorHandler);
 
       await executor.execute('test_tool', { foo: 'bar' });
@@ -202,7 +202,7 @@ describe('ToolExecutor', () => {
 
     it('should emit tool:error for unknown tool', async () => {
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const errorHandler = vi.fn();
+      const errorHandler = jest.fn();
       executor.on('tool:error', errorHandler);
 
       await executor.execute('unknown', {});
@@ -216,12 +216,12 @@ describe('ToolExecutor', () => {
 
     it('should emit tool:error for execution error', async () => {
       const tool = createMockTool({
-        execute: vi.fn().mockRejectedValue(new Error('boom')),
+        execute: jest.fn(() => Promise.reject(new Error('boom'))),
       });
       ctx.tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const errorHandler = vi.fn();
+      const errorHandler = jest.fn();
       executor.on('tool:error', errorHandler);
 
       await executor.execute('test_tool', {});
@@ -247,10 +247,10 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string(), age: z.number() }),
         },
-        execute: vi.fn().mockResolvedValue({
+        execute: jest.fn(() => Promise.resolve({
           success: true,
           content: '{"name": "John", "age": 30}',
-        }),
+        })),
       });
       ctx.tools = [tool];
 
@@ -271,10 +271,10 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string(), age: z.number() }),
         },
-        execute: vi.fn().mockResolvedValue({
+        execute: jest.fn(() => Promise.resolve({
           success: true,
           content: '{"name": "John", "age": "not a number"}',
-        }),
+        })),
       });
       ctx.tools = [tool];
 
@@ -296,15 +296,15 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string() }),
         },
-        execute: vi.fn().mockResolvedValue({
+        execute: jest.fn(() => Promise.resolve({
           success: true,
           content: '{"invalid": true}',
-        }),
+        })),
       });
       ctx.tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const errorHandler = vi.fn();
+      const errorHandler = jest.fn();
       executor.on('tool:error', errorHandler);
 
       await executor.execute('test_tool', {});
@@ -327,10 +327,10 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string() }),
         },
-        execute: vi.fn().mockResolvedValue({
+        execute: jest.fn(() => Promise.resolve({
           success: false,
           content: 'some error',
-        }),
+        })),
       });
       ctx.tools = [tool];
 
@@ -343,10 +343,10 @@ describe('ToolExecutor', () => {
 
     it('should skip validation when no schema defined', async () => {
       const tool = createMockTool({
-        execute: vi.fn().mockResolvedValue({
+        execute: jest.fn(() => Promise.resolve({
           success: true,
           content: 'any content',
-        }),
+        })),
       });
       ctx.tools = [tool];
 
@@ -367,10 +367,10 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.string(),
         },
-        execute: vi.fn().mockResolvedValue({
+        execute: jest.fn(() => Promise.resolve({
           success: true,
           content: 'plain text response',
-        }),
+        })),
       });
       ctx.tools = [tool];
 
@@ -383,9 +383,14 @@ describe('ToolExecutor', () => {
 
   describe('retry logic', () => {
     it('should retry on validation failure with maxRetries > 0', async () => {
-      const execute = vi.fn()
-        .mockResolvedValueOnce({ success: true, content: '{"invalid": true}' })
-        .mockResolvedValueOnce({ success: true, content: '{"name": "valid"}' });
+      let callCount = 0;
+      const execute = jest.fn(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve({ success: true, content: '{"invalid": true}' });
+        }
+        return Promise.resolve({ success: true, content: '{"name": "valid"}' });
+      });
 
       const tool = createMockTool({
         definition: {
@@ -411,9 +416,14 @@ describe('ToolExecutor', () => {
     });
 
     it('should include _retryAttempt and _previousError on retries', async () => {
-      const execute = vi.fn()
-        .mockResolvedValueOnce({ success: true, content: 'invalid' })
-        .mockResolvedValueOnce({ success: true, content: 'valid' });
+      let callCount = 0;
+      const execute = jest.fn(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve({ success: true, content: 'invalid' });
+        }
+        return Promise.resolve({ success: true, content: 'valid' });
+      });
 
       const tool = createMockTool({
         definition: {
@@ -443,10 +453,10 @@ describe('ToolExecutor', () => {
     });
 
     it('should return error after exhausting retries', async () => {
-      const execute = vi.fn().mockResolvedValue({
+      const execute = jest.fn(() => Promise.resolve({
         success: true,
         content: '{"invalid": true}',
-      });
+      }));
 
       const tool = createMockTool({
         definition: {
@@ -473,9 +483,14 @@ describe('ToolExecutor', () => {
     });
 
     it('should retry on execution errors', async () => {
-      const execute = vi.fn()
-        .mockRejectedValueOnce(new Error('network error'))
-        .mockResolvedValueOnce({ success: true, content: 'success' });
+      let callCount = 0;
+      const execute = jest.fn(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.reject(new Error('network error'));
+        }
+        return Promise.resolve({ success: true, content: 'success' });
+      });
 
       const tool = createMockTool({
         definition: {
@@ -499,7 +514,7 @@ describe('ToolExecutor', () => {
     });
 
     it('should not retry when maxRetries is 0', async () => {
-      const execute = vi.fn().mockRejectedValue(new Error('fail'));
+      const execute = jest.fn(() => Promise.reject(new Error('fail')));
 
       const tool = createMockTool({
         definition: {
@@ -523,10 +538,10 @@ describe('ToolExecutor', () => {
     });
 
     it('should not retry tool execution failures (only validation failures)', async () => {
-      const execute = vi.fn().mockResolvedValue({
+      const execute = jest.fn(() => Promise.resolve({
         success: false,
         content: 'tool returned error',
-      });
+      }));
 
       const tool = createMockTool({
         definition: {
@@ -608,10 +623,10 @@ describe('ToolExecutor', () => {
 
     it('should truncate long results in logs', async () => {
       const tool = createMockTool({
-        execute: vi.fn().mockResolvedValue({
+        execute: jest.fn(() => Promise.resolve({
           success: true,
           content: 'x'.repeat(3000),
-        }),
+        })),
       });
       ctx.tools = [tool];
 
@@ -748,7 +763,7 @@ describe('ToolExecutor', () => {
       ctx.config.bots[0].disabledTools = ['test_tool'];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const errorHandler = vi.fn();
+      const errorHandler = jest.fn();
       executor.on('tool:error', errorHandler);
 
       await executor.execute('test_tool', {});
@@ -769,15 +784,15 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string() }),
         },
-        execute: vi.fn().mockResolvedValue({
+        execute: jest.fn(() => Promise.resolve({
           success: true,
           content: '{"invalid": true}',
-        }),
+        })),
       });
       ctx.tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const errorHandler = vi.fn();
+      const errorHandler = jest.fn();
       executor.on('tool:error', errorHandler);
 
       await executor.execute('test_tool', {});
@@ -789,12 +804,12 @@ describe('ToolExecutor', () => {
 
     it('should classify execution error as execution phase', async () => {
       const tool = createMockTool({
-        execute: vi.fn().mockRejectedValue(new Error('runtime error')),
+        execute: jest.fn(() => Promise.reject(new Error('runtime error'))),
       });
       ctx.tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
-      const errorHandler = vi.fn();
+      const errorHandler = jest.fn();
       executor.on('tool:error', errorHandler);
 
       await executor.execute('test_tool', {});

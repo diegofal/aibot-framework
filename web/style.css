@@ -62,6 +62,8 @@ tr:hover td{background:var(--bg-hover)}
 .btn-primary:hover{background:var(--accent-hover)}
 .btn-danger{border-color:var(--red);color:var(--red)}
 .btn-danger:hover{background:rgba(248,113,113,.1)}
+.btn-retry{border-color:var(--orange);color:var(--orange)}
+.btn-retry:hover{background:rgba(251,191,36,.1)}
 .btn-sm{padding:4px 10px;font-size:12px}
 
 .actions{display:flex;gap:6px;flex-wrap:wrap}
@@ -127,6 +129,7 @@ textarea{resize:vertical;min-height:60px}
 .mt-16{margin-top:16px}
 .mb-16{margin-bottom:16px}
 .flex-between{display:flex;justify-content:space-between;align-items:center}
+.hidden{display:none}
 
 /* Log viewer */
 .log-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
@@ -234,6 +237,19 @@ textarea{resize:vertical;min-height:60px}
 .production-content{max-height:300px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px}
 .production-content pre{padding:12px;margin:0;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace}
 .eval-controls{margin-top:12px}
+
+/* Thread */
+.thread-messages{max-height:300px;overflow-y:auto;padding:8px 0}
+.thread-input-area{display:flex;gap:8px;align-items:flex-start;margin-top:8px}
+.thread-input{
+  flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text);font-size:14px;font-family:inherit;resize:vertical;min-height:40px;
+}
+.thread-input:focus{outline:none;border-color:var(--accent)}
+.thread-send-btn{align-self:flex-end}
+.thread-typing{
+  align-self:flex-start;padding:8px 14px;color:var(--text-dim);font-size:13px;font-style:italic;
+}
 
 /* Responsive */
 @media(max-width:768px){

@@ -11,6 +11,7 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     private ollama: OllamaClient,
     private baseUrl: string,
     private logger: { debug: (...args: unknown[]) => void },
+    private timeout: number = 120_000,
   ) {}
 
   async chat(
@@ -36,6 +37,7 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(this.timeout),
       body: JSON.stringify(body),
     });
 

@@ -133,7 +133,7 @@ Secciones típicas:
 - Database: `data/memory.db` (SQLite con WAL mode)
 - Tablas: `files`, `chunks`, `chunks_fts` (FTS5), `embedding_cache`
 - Column `source_type`: `'memory'` (soul files) o `'session'` (transcripts)
-- Embedding model: `nomic-embed-text` (768 dimensiones), via Ollama
+- Embedding model: configurable via `soul.search.embeddingModel`, 768 dimensiones default, via Ollama
 
 **Chunking**:
 - Split por headings de Markdown
@@ -293,7 +293,7 @@ Tres modos:
     "dir": "config/soul",
     "search": {
       "enabled": true,
-      "embeddingModel": "nomic-embed-text",
+      "embeddingModel": "your-embedding-model",
       "chunkTargetTokens": 400,
       "vectorWeight": 0.7,
       "keywordWeight": 0.3,

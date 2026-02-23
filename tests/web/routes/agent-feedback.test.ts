@@ -44,6 +44,9 @@ describe('agent-feedback routes', () => {
       getAgentFeedbackPendingCount: () => store.getPendingCount(),
       submitAgentFeedback: (botId: string, content: string) => store.submit(botId, content),
       dismissAgentFeedback: (botId: string, id: string) => store.dismiss(botId, id),
+      getAgentFeedbackById: (botId: string, feedbackId: string) => store.getById(botId, feedbackId),
+      addAgentFeedbackThreadMessage: (botId: string, feedbackId: string, role: 'human' | 'bot', content: string) =>
+        store.addThreadMessage(botId, feedbackId, role, content),
       getSoulLoader: () => ({
         readIdentity: () => 'I am TestBot',
         readSoul: () => 'A helpful soul',
@@ -195,6 +198,122 @@ describe('agent-feedback routes', () => {
     test('returns 404 for unknown id', async () => {
       const res = await req('/bot1/nonexistent', { method: 'DELETE' });
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /:botId/:id/reply', () => {
+    test('returns 400 for empty message', async () => {
+      const entry = store.submit('bot1', 'Feedback');
+      const res = await req(`/bot1/${entry.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: '' }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    test('returns 404 for non-existent entry', async () => {
+      const res = await req('/bot1/nonexistent/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Hello' }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    test('adds human message and returns updated entry', async () => {
+      const mockClaudeGenerate = mock(() => Promise.resolve('Bot reply'));
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/agent-feedback');
+
+      const entry = store.submit('bot1', 'Original feedback');
+
+      const mockBotManager = {
+        getAgentFeedbackBotIds: () => store.getBotIds(),
+        getAgentFeedback: (botId: string, opts?: any) => store.getAll(botId, opts),
+        getAgentFeedbackPendingCount: () => store.getPendingCount(),
+        submitAgentFeedback: (botId: string, content: string) => store.submit(botId, content),
+        dismissAgentFeedback: (botId: string, id: string) => store.dismiss(botId, id),
+        getAgentFeedbackById: (botId: string, feedbackId: string) => store.getById(botId, feedbackId),
+        addAgentFeedbackThreadMessage: (botId: string, feedbackId: string, role: 'human' | 'bot', content: string) =>
+          store.addThreadMessage(botId, feedbackId, role, content),
+        getSoulLoader: () => ({
+          readIdentity: () => 'I am TestBot',
+          readSoul: () => 'A helpful soul',
+          readMotivations: () => 'Stay curious',
+          readGoals: () => '- Goal 1',
+          readDailyLogsSince: () => '',
+          appendDailyMemory: mock(() => {}),
+        }),
+      };
+
+      const testApp = new Hono();
+      testApp.route(
+        '/api/agent-feedback',
+        freshModule.agentFeedbackRoutes({
+          config: mockConfig,
+          botManager: mockBotManager as any,
+          logger: noopLogger,
+        }),
+      );
+
+      const res = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Follow-up question' }),
+      });
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.message).toBeTruthy();
+      expect(data.message.role).toBe('human');
+      expect(data.message.content).toBe('Follow-up question');
+      expect(data.entry).toBeTruthy();
+
+      // Wait for background AI generation
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(mockClaudeGenerate).toHaveBeenCalledTimes(1);
+
+      // Verify thread was persisted
+      const updated = store.getById('bot1', entry.id);
+      expect(updated!.thread).toBeTruthy();
+      expect(updated!.thread!.length).toBeGreaterThanOrEqual(1);
+
+      // Restore
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+  });
+
+  describe('GET /:botId/:id/reply-status', () => {
+    test('returns 404 for non-existent entry', async () => {
+      const res = await req('/bot1/nonexistent/reply-status');
+      expect(res.status).toBe(404);
+    });
+
+    test('returns idle when not generating', async () => {
+      const entry = store.submit('bot1', 'Feedback');
+      store.addThreadMessage('bot1', entry.id, 'human', 'Question');
+      store.addThreadMessage('bot1', entry.id, 'bot', 'Answer');
+
+      const res = await req(`/bot1/${entry.id}/reply-status`);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.status).toBe('idle');
+      expect(data.lastBotMessage).toBeTruthy();
+      expect(data.lastBotMessage.content).toBe('Answer');
+    });
+
+    test('returns idle with null when no bot messages', async () => {
+      const entry = store.submit('bot1', 'Feedback');
+      store.addThreadMessage('bot1', entry.id, 'human', 'Question only');
+
+      const res = await req(`/bot1/${entry.id}/reply-status`);
+      const data = await res.json();
+      expect(data.status).toBe('idle');
+      expect(data.lastBotMessage).toBeNull();
     });
   });
 

@@ -3,6 +3,7 @@ import { resolveAgentConfig } from '../config';
 import { HUMANIZER_PROMPT } from '../humanizer-prompt';
 import type { BotContext } from './types';
 import type { ToolRegistry } from './tool-registry';
+import type { KarmaService } from '../karma/service';
 
 export interface SystemPromptOptions {
   /** 'conversation' includes all tool blocks; 'collaboration' only memory_search + soul; 'autonomous' for agent loop */
@@ -15,10 +16,16 @@ export interface SystemPromptOptions {
 }
 
 export class SystemPromptBuilder {
+  private karmaService: KarmaService | null = null;
+
   constructor(
     private ctx: BotContext,
     private toolRegistry: ToolRegistry,
   ) {}
+
+  setKarmaService(karmaService: KarmaService): void {
+    this.karmaService = karmaService;
+  }
 
   /**
    * Build a complete system prompt for either conversation or collaboration mode.
@@ -50,6 +57,11 @@ export class SystemPromptBuilder {
       prompt +=
         '\n\nThis is a group chat. Each user message is prefixed with [Name]: to identify the sender. ' +
         'Always be aware of who you are talking to. Address people by name when relevant.';
+    }
+
+    // Karma injection (conversation and autonomous modes)
+    if (this.karmaService && this.ctx.config.karma?.enabled && (mode === 'conversation' || mode === 'autonomous')) {
+      prompt += '\n\n' + this.karmaService.renderShort(botId);
     }
 
     // Core Memory injection (structured identity - near end for recency bias)

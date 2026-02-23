@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simplification Proposals - AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    .proposal h3 .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      flex-shrink: 0;
+    }
+    .proposal-detail {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .proposal-detail dt {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    .proposal-detail dd {
+      font-size: 14px;
+      color: var(--text);
+      margin: 0 0 12px;
+      line-height: 1.6;
+    }
+    .proposal-detail .full-width {
+      grid-column: 1 / -1;
+    }
+    .proposal .files-list {
+      list-style: none;
+      padding: 0;
+      margin: 4px 0 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .proposal .files-list li {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      padding: 2px 10px;
+      border-radius: 4px;
+      color: var(--accent);
+    }
+    .summary-table .impact-cell {
+      white-space: nowrap;
+    }
+    .summary-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      margin: 20px 0;
+    }
+    .summary-section h3 {
+      margin: 0 0 12px;
+    }
+    .summary-section ol {
+      margin: 0 0 0 20px;
+      color: var(--text-dim);
+      font-size: 14px;
+      line-height: 1.8;
+    }
+    .summary-section ol strong {
+      color: var(--text);
+    }
+    .badge-done {
+      background: rgba(52,211,153,0.15);
+      color: #34d399;
+      border: 1px solid rgba(52,211,153,0.3);
+      padding: 2px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-left: 8px;
+    }
+    .proposal.done {
+      opacity: 0.7;
+    }
+    .proposal.done h3 {
+      text-decoration: line-through;
+      text-decoration-color: rgba(52,211,153,0.4);
+    }
+    @media (max-width: 600px) {
+      .proposal-detail {
+        grid-template-columns: 1fr;
+      }
+      .proposal-detail .full-width {
+        grid-column: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Hamburger (mobile) -->
+<button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+<!-- Sidebar backdrop (mobile) -->
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      AIBot Framework
+      <small>Architecture Docs</small>
+    </div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="bot-core.html">Bot Core Modules</a>
+      <a href="data-flows.html">Data Flows</a>
+      <a href="tools-skills.html">Tools &amp; Skills</a>
+      <a href="memory-soul.html">Memory &amp; Soul</a>
+      <a href="agent-loop.html">Agent Loop</a>
+      <a href="web-dashboard.html">Web Dashboard</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="simplifications.html" class="active">Simplifications</a>
+    </nav>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main">
+    <div class="content">
+
+      <!-- Page header -->
+      <div class="page-header">
+        <h1>Simplification Proposals</h1>
+        <p>10 concrete complexity reduction opportunities ranked by impact &mdash; 6 completed, 4 remaining</p>
+      </div>
+
+      <!-- ============================================================
+           Summary Table
+           ============================================================ -->
+      <h2>Overview</h2>
+
+      <table class="summary-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Proposal</th>
+            <th>Impact</th>
+            <th>Effort</th>
+            <th>Primary File</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><s>Agent Loop Monolith</s> <span class="badge-done">Done</span></td>
+            <td class="impact-cell"><span class="badge badge-high">High</span></td>
+            <td>Large</td>
+            <td><code>agent-loop.ts</code></td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><s>BotManager Facade Bloat</s> <span class="badge-done">Done (partial)</span></td>
+            <td class="impact-cell"><span class="badge badge-high">High</span></td>
+            <td>Medium</td>
+            <td><code>bot-manager.ts</code></td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><s>Handler Registrar Kitchen Sink</s> <span class="badge-done">Done (partial)</span></td>
+            <td class="impact-cell"><span class="badge badge-medium">Medium</span></td>
+            <td>Small</td>
+            <td><code>handler-registrar.ts</code></td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><s>Duplicated LLM JSON Parsing</s> <span class="badge-done">Done</span></td>
+            <td class="impact-cell"><span class="badge badge-medium">Medium</span></td>
+            <td>Small</td>
+            <td><code>llm-json-parser.ts</code></td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><s>Soul Health Check Mix of Concerns</s> <span class="badge-done">Done</span></td>
+            <td class="impact-cell"><span class="badge badge-medium">Medium</span></td>
+            <td>Medium</td>
+            <td><code>soul-health-check.ts</code></td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td><s>ToolExecutor Verbosity</s> <span class="badge-done">Done</span></td>
+            <td class="impact-cell"><span class="badge badge-medium">Medium</span></td>
+            <td>Small</td>
+            <td><code>tool-executor.ts</code></td>
+          </tr>
+          <tr>
+            <td>7</td>
+            <td>Config Schema Monolith</td>
+            <td class="impact-cell"><span class="badge badge-low">Low</span></td>
+            <td>Medium</td>
+            <td><code>config.ts</code></td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td>SystemPromptBuilder Concatenation</td>
+            <td class="impact-cell"><span class="badge badge-low">Low</span></td>
+            <td>Medium</td>
+            <td><code>system-prompt-builder.ts</code></td>
+          </tr>
+          <tr>
+            <td>9</td>
+            <td>Collaboration Flow Duplication</td>
+            <td class="impact-cell"><span class="badge badge-low">Low</span></td>
+            <td>Small</td>
+            <td><code>collaboration.ts</code></td>
+          </tr>
+          <tr>
+            <td>10</td>
+            <td>Memory Module Tight Coupling</td>
+            <td class="impact-cell"><span class="badge badge-low">Low</span></td>
+            <td>Large</td>
+            <td><code>src/memory/*.ts</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ============================================================
+           HIGH IMPACT
+           ============================================================ -->
+      <div class="category-header">
+        <h2>High Impact</h2>
+        <span class="count">2 proposals</span>
+      </div>
+
+      <!-- Proposal 1 -->
+      <div class="proposal done" id="proposal-1">
+        <h3>
+          <span class="num">1</span>
+          Agent Loop Monolith
+          <span class="badge badge-high">High</span>
+          <span class="badge-done">Done</span>
+        </h3>
+        <p class="summary">The single largest file in the bot core has been split into 7 focused modules.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Result</dt>
+            <dd>
+              <code>agent-loop.ts</code> was reduced from <strong>1,482 lines to 724 lines</strong> by extracting:
+              <ul style="margin: 8px 0 0 20px; line-height: 1.8;">
+                <li><strong>agent-scheduler.ts</strong> (353 lines) &mdash; AgentScheduler class: scheduling, concurrency semaphore, interruptible sleep, bot loops</li>
+                <li><strong>agent-strategist.ts</strong> (257 lines) &mdash; parseStrategistResult, shouldRunStrategist, runStrategist, applyGoalOperations, computeCyclesUntilStrategist</li>
+                <li><strong>agent-loop-utils.ts</strong> (159 lines) &mdash; buildRecentActionsDigest, isSimilarSummary, isRepetitiveAction, scanFileTree, logToMemory, sendReport</li>
+                <li><strong>agent-retry-engine.ts</strong> (141 lines) &mdash; isRetryableError, computeRetryDelay, resolveRetryConfig, executeSingleBotWithRetry</li>
+                <li><strong>agent-planner.ts</strong> (69 lines) &mdash; parsePlannerResult, runPlannerWithRetry (unified for periodic+continuous)</li>
+                <li><strong>llm-json-parser.ts</strong> (60 lines) &mdash; generic parseLLMJson&lt;T&gt; used by both planner and strategist</li>
+              </ul>
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Created</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/bot/agent-scheduler.ts</li>
+                <li>src/bot/agent-strategist.ts</li>
+                <li>src/bot/agent-loop-utils.ts</li>
+                <li>src/bot/agent-retry-engine.ts</li>
+                <li>src/bot/agent-planner.ts</li>
+                <li>src/bot/llm-json-parser.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- Proposal 2 -->
+      <div class="proposal done" id="proposal-2">
+        <h3>
+          <span class="num">2</span>
+          BotManager Facade Bloat
+          <span class="badge badge-high">High</span>
+          <span class="badge-done">Done (partial)</span>
+        </h3>
+        <p class="summary">Tenant management methods extracted to a dedicated sub-facade, reducing the facade surface.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Result</dt>
+            <dd>
+              <code>bot-manager.ts</code> was reduced from <strong>867 to 712 lines</strong> by extracting tenant
+              management methods into <code>tenant-facade.ts</code> (165 lines). The <code>TenantFacade</code> class
+              handles all tenant CRUD, bot-to-tenant mapping, and tenant-scoped queries, delegated from BotManager.
+              Further sub-facade extractions (agent, collaboration) remain as future work.
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Created</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/bot/tenant-facade.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- ============================================================
+           MEDIUM IMPACT
+           ============================================================ -->
+      <div class="category-header">
+        <h2>Medium Impact</h2>
+        <span class="count">4 proposals</span>
+      </div>
+
+      <!-- Proposal 3 -->
+      <div class="proposal done" id="proposal-3">
+        <h3>
+          <span class="num">3</span>
+          Handler Registrar Kitchen Sink
+          <span class="badge badge-medium">Medium</span>
+          <span class="badge-done">Done (partial)</span>
+        </h3>
+        <p class="summary">ConversationGate extracted; media-handlers and builtin-commands were already extracted previously.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Result</dt>
+            <dd>
+              The multi-step conversation activation gate logic was extracted into
+              <code>conversation-gate.ts</code> (~120 lines) as a <code>ConversationGate</code> class with an
+              <code>evaluate()</code> method. Combined with the earlier extractions of <code>media-handlers.ts</code>
+              and <code>builtin-commands.ts</code>, the handler registrar is now a thinner orchestrator.
+              Auth middleware extraction remains as future work.
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Created</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/bot/conversation-gate.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- Proposal 4 -->
+      <div class="proposal done" id="proposal-4">
+        <h3>
+          <span class="num">4</span>
+          Duplicated LLM JSON Parsing
+          <span class="badge badge-medium">Medium</span>
+          <span class="badge-done">Done</span>
+        </h3>
+        <p class="summary">Unified into a generic <code>parseLLMJson&lt;T&gt;</code> function in <code>llm-json-parser.ts</code>.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Result</dt>
+            <dd>
+              Created <code>llm-json-parser.ts</code> (60 lines) with a generic <code>parseLLMJson&lt;T&gt;</code>
+              function that handles markdown fence stripping, JSON.parse, and shape validation.
+              Both <code>parsePlannerResult</code> (in <code>agent-planner.ts</code>) and
+              <code>parseStrategistResult</code> (in <code>agent-strategist.ts</code>) now delegate to this
+              shared utility, eliminating duplicated parsing logic.
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Created</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/bot/llm-json-parser.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- Proposal 5 -->
+      <div class="proposal done" id="proposal-5">
+        <h3>
+          <span class="num">5</span>
+          Soul Health Check Mix of Concerns
+          <span class="badge badge-medium">Medium</span>
+          <span class="badge-done">Done</span>
+        </h3>
+        <p class="summary">Split into three focused modules with <code>soul-health-check.ts</code> as thin orchestrator.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Result</dt>
+            <dd>
+              <code>soul-health-check.ts</code> was reduced from <strong>575 to 121 lines</strong> by extracting:
+              <ul style="margin: 8px 0 0 20px; line-height: 1.8;">
+                <li><strong>soul-lint.ts</strong> (84 lines) &mdash; <code>lintSoulDirectory</code>, <code>SoulLintIssue</code>: deterministic structural checks</li>
+                <li><strong>soul-memory-consolidator.ts</strong> (222 lines) &mdash; <code>getUnconsolidatedLogs</code>, <code>consolidateMemory</code>: daily log merging</li>
+                <li><strong>soul-quality-reviewer.ts</strong> (132 lines) &mdash; <code>runQualityReview</code>: LLM-based persona consistency review</li>
+              </ul>
+              The orchestrator now delegates to these three modules and handles only cooldown management.
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Created</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/bot/soul-lint.ts</li>
+                <li>src/bot/soul-memory-consolidator.ts</li>
+                <li>src/bot/soul-quality-reviewer.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- Proposal 6 -->
+      <div class="proposal done" id="proposal-6">
+        <h3>
+          <span class="num">6</span>
+          ToolExecutor Verbosity
+          <span class="badge badge-medium">Medium</span>
+          <span class="badge-done">Done</span>
+        </h3>
+        <p class="summary">Error paths consolidated via <code>buildFailResult()</code> helper.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Result</dt>
+            <dd>
+              Introduced a <code>buildFailResult()</code> helper function in <code>tool-executor.ts</code> that
+              consolidates 6 separate error response construction paths into a single unified handler.
+              Each call site now passes the tool name and reason, and the helper constructs a consistent
+              error response. Error format is now uniform across all unavailable-tool scenarios.
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- ============================================================
+           LOW IMPACT
+           ============================================================ -->
+      <div class="category-header">
+        <h2>Low Impact</h2>
+        <span class="count">4 proposals</span>
+      </div>
+
+      <!-- Proposal 7 -->
+      <div class="proposal" id="proposal-7">
+        <h3>
+          <span class="num">7</span>
+          Config Schema Monolith
+          <span class="badge badge-low">Low</span>
+        </h3>
+        <p class="summary">All Zod validation schemas live in a single 503-line file, making it hard to locate the schema for a specific feature.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Current State</dt>
+            <dd>
+              <code>src/config.ts</code> contains <strong>38 Zod schemas</strong> in <strong>503 lines</strong>,
+              covering everything from bot configuration to web tools, memory settings, collaboration options,
+              session management, and karma. Finding a specific schema requires scrolling through the entire file.
+              Schema interdependencies are implicit via ordering.
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Proposed Solution</dt>
+            <dd>
+              Split into a <code>src/config/schemas/</code> directory with one file per logical group:
+              <ul style="margin: 8px 0 0 20px; line-height: 1.8;">
+                <li><code>bot.schema.ts</code> &mdash; BotConfig, conversation overrides, agent loop</li>
+                <li><code>tools.schema.ts</code> &mdash; web tools, exec, file, browser, datetime</li>
+                <li><code>memory.schema.ts</code> &mdash; auto-RAG, memory search, memory flush, session</li>
+                <li><code>infra.schema.ts</code> &mdash; paths, logging, ollama, web, cron</li>
+                <li><code>features.schema.ts</code> &mdash; collaboration, soul, karma, productions, humanizer</li>
+              </ul>
+              A barrel <code>src/config/index.ts</code> re-exports the composed <code>ConfigSchema</code>.
+            </dd>
+          </div>
+          <div>
+            <dt>Expected Benefit</dt>
+            <dd>Each schema file is ~80&ndash;120 lines. Schema ownership becomes clear. Adding a new feature schema does not require editing a 500-line file.</dd>
+          </div>
+          <div>
+            <dt>Estimated Effort</dt>
+            <dd>Medium &mdash; mechanical extraction but requires updating all import paths. No logic changes, just file reorganization.</dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Affected</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/config.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- Proposal 8 -->
+      <div class="proposal" id="proposal-8">
+        <h3>
+          <span class="num">8</span>
+          SystemPromptBuilder Concatenation
+          <span class="badge badge-low">Low</span>
+        </h3>
+        <p class="summary">The system prompt is built by concatenating 15+ private methods, making it difficult to test individual prompt sections or compose them dynamically.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Current State</dt>
+            <dd>
+              <code>system-prompt-builder.ts</code> uses ~15 private methods, each returning a string block.
+              The main <code>build()</code> method concatenates them all with newlines. Testing requires
+              calling <code>build()</code> and searching the full output for expected substrings. There is no way
+              to test or reuse individual sections, and adding conditional blocks requires if-statements
+              scattered across the concatenation chain.
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Proposed Solution</dt>
+            <dd>
+              Adopt a <strong>registered block pattern</strong>: each section is a named block with a
+              <code>{ id, priority, condition?, render() }</code> signature. The builder collects blocks,
+              filters by condition, sorts by priority, and joins. Individual blocks can be unit-tested
+              by calling <code>render()</code> directly. Plugins or skills could register custom prompt blocks.
+            </dd>
+          </div>
+          <div>
+            <dt>Expected Benefit</dt>
+            <dd>Individual prompt sections become unit-testable. Conditional inclusion becomes declarative. Opens the door for skill-contributed prompt blocks.</dd>
+          </div>
+          <div>
+            <dt>Estimated Effort</dt>
+            <dd>Medium &mdash; requires defining the block interface and migrating each private method to a block registration. The actual prompt content does not change.</dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Affected</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/bot/system-prompt-builder.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- Proposal 9 -->
+      <div class="proposal" id="proposal-9">
+        <h3>
+          <span class="num">9</span>
+          Collaboration Flow Duplication
+          <span class="badge badge-low">Low</span>
+        </h3>
+        <p class="summary">Three collaboration flows duplicate prompt construction and context assembly logic.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Current State</dt>
+            <dd>
+              <code>collaboration.ts</code> implements three distinct flows &mdash; visible messaging,
+              internal messaging, and delegation &mdash; each of which independently constructs the
+              LLM prompt by assembling the target bot's persona, conversation history, and collaboration
+              instructions. The assembly logic is ~70% identical across flows, differing only in
+              which instructions and response format are appended.
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Proposed Solution</dt>
+            <dd>
+              Extract a shared <code>buildCollaborationContext(targetBot, flow, history)</code> function
+              that assembles the common prompt prefix (persona + history + base instructions), then
+              each flow appends its specific suffix. This follows the same pattern used by
+              <code>SystemPromptBuilder</code> for conversation vs. collaboration modes.
+            </dd>
+          </div>
+          <div>
+            <dt>Expected Benefit</dt>
+            <dd>Eliminates ~100 lines of duplicated prompt assembly. Changes to shared context (e.g., adding token counts) apply to all flows at once.</dd>
+          </div>
+          <div>
+            <dt>Estimated Effort</dt>
+            <dd>Small &mdash; the common prefix is easy to identify and extract. The three flows already follow a similar structure.</dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Affected</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/bot/collaboration.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- Proposal 10 -->
+      <div class="proposal" id="proposal-10">
+        <h3>
+          <span class="num">10</span>
+          Memory Module Tight Coupling
+          <span class="badge badge-low">Low</span>
+        </h3>
+        <p class="summary">Eight memory module files are tightly coupled through a shared raw Database object, making it hard to test or swap storage backends.</p>
+        <dl class="proposal-detail">
+          <div class="full-width">
+            <dt>Current State</dt>
+            <dd>
+              The <code>src/memory/</code> directory contains 8 files that all receive and operate on
+              a raw <code>Database</code> object directly. Each module constructs its own SQL queries,
+              manages its own table schemas, and handles serialization. There is no shared abstraction
+              for common operations like "search by embedding" or "insert with timestamp". Testing
+              requires a real SQLite database because the raw <code>Database</code> API is not easily mockable.
+            </dd>
+          </div>
+          <div class="full-width">
+            <dt>Proposed Solution</dt>
+            <dd>
+              Introduce a <code>MemoryDB</code> abstraction layer that encapsulates the raw database
+              and provides typed methods for common operations:
+              <ul style="margin: 8px 0 0 20px; line-height: 1.8;">
+                <li><code>search(table, embedding, limit)</code> &mdash; vector similarity search</li>
+                <li><code>insert(table, record)</code> &mdash; typed insert with automatic timestamps</li>
+                <li><code>query(table, filters)</code> &mdash; filtered reads with pagination</li>
+              </ul>
+              Memory modules would depend on <code>MemoryDB</code> instead of the raw <code>Database</code>,
+              making them testable with a mock implementation.
+            </dd>
+          </div>
+          <div>
+            <dt>Expected Benefit</dt>
+            <dd>Enables unit testing memory modules without SQLite. Makes it feasible to swap storage backends (e.g., PostgreSQL for production). Centralizes SQL query construction and error handling.</dd>
+          </div>
+          <div>
+            <dt>Estimated Effort</dt>
+            <dd>Large &mdash; requires defining the abstraction, migrating all 8 modules, and ensuring no performance regressions in query patterns. Should be done incrementally.</dd>
+          </div>
+          <div class="full-width">
+            <dt>Files Affected</dt>
+            <dd>
+              <ul class="files-list">
+                <li>src/memory/*.ts</li>
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- ============================================================
+           Summary & Recommendations
+           ============================================================ -->
+      <h2>Summary &amp; Recommendations</h2>
+
+      <div class="summary-section">
+        <h3>Recommended Priority Order</h3>
+        <p style="color: var(--text-dim); font-size: 14px; margin-bottom: 16px;">
+          6 of 10 proposals have been completed. Remaining proposals ordered by impact and effort.
+        </p>
+        <ol>
+          <li style="text-decoration: line-through; color: var(--text-dim);">
+            <strong>#4 Duplicated LLM JSON Parsing</strong> &mdash; Done. Created <code>llm-json-parser.ts</code>.
+          </li>
+          <li style="text-decoration: line-through; color: var(--text-dim);">
+            <strong>#3 Handler Registrar Kitchen Sink</strong> &mdash; Partially done. Extracted <code>ConversationGate</code>.
+          </li>
+          <li style="text-decoration: line-through; color: var(--text-dim);">
+            <strong>#6 ToolExecutor Verbosity</strong> &mdash; Done. Consolidated via <code>buildFailResult()</code>.
+          </li>
+          <li style="text-decoration: line-through; color: var(--text-dim);">
+            <strong>#1 Agent Loop Monolith</strong> &mdash; Done. Split into 7 modules (1,482 &rarr; 724 lines).
+          </li>
+          <li style="text-decoration: line-through; color: var(--text-dim);">
+            <strong>#5 Soul Health Check Mix of Concerns</strong> &mdash; Done. Split into 3 modules (575 &rarr; 121 lines).
+          </li>
+          <li style="text-decoration: line-through; color: var(--text-dim);">
+            <strong>#2 BotManager Facade Bloat</strong> &mdash; Partially done. Extracted <code>TenantFacade</code> (867 &rarr; 712 lines).
+          </li>
+          <li>
+            <strong>#9 Collaboration Flow Duplication</strong> &mdash;
+            Small, self-contained cleanup. Good candidate for a low-risk session.
+          </li>
+          <li>
+            <strong>#8 SystemPromptBuilder Concatenation</strong> &mdash;
+            Architectural improvement that pays off when adding new features. Not urgent but valuable.
+          </li>
+          <li>
+            <strong>#7 Config Schema Monolith</strong> &mdash;
+            Pure reorganization with no logic changes. Can be done whenever there is a lull in feature work.
+          </li>
+          <li>
+            <strong>#10 Memory Module Tight Coupling</strong> &mdash;
+            Largest effort with the most risk. Defer until the memory layer needs significant new capabilities or a backend swap.
+          </li>
+        </ol>
+      </div>
+
+      <p style="color: var(--text-dim); font-size: 14px; margin-top: 24px;">
+        <strong>Progress so far:</strong>
+        The bot core's largest files have been reduced: agent-loop.ts from 1,482 to 724 lines,
+        soul-health-check.ts from 575 to 121 lines, bot-manager.ts from 867 to 712 lines.
+        Duplicated JSON parsing and error construction have been consolidated.
+        <strong>Remaining:</strong> 4 proposals (#7, #8, #9, #10) plus further sub-facade extractions
+        for BotManager and auth middleware extraction for HandlerRegistrar.
+      </p>
+
+    </div>
+  </main>
+
+</div>
+
+<!-- Mobile sidebar toggle -->
+<script>
+(function () {
+  var hamburger = document.getElementById('hamburger');
+  var sidebar = document.getElementById('sidebar');
+  var backdrop = document.getElementById('sidebarBackdrop');
+
+  function toggleSidebar() {
+    sidebar.classList.toggle('open');
+    backdrop.classList.toggle('show');
+  }
+
+  function closeSidebar() {
+    sidebar.classList.remove('open');
+    backdrop.classList.remove('show');
+  }
+
+  hamburger.addEventListener('click', toggleSidebar);
+  backdrop.addEventListener('click', closeSidebar);
+})();
+</script>
+
+</body>
+</html>

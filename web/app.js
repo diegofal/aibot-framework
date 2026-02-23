@@ -8,6 +8,9 @@ import { renderSettings } from './pages/settings.js';
 import { renderInbox, destroyInbox } from './pages/inbox.js';
 import { renderProductions, renderBotProductions } from './pages/productions.js';
 import { renderFeedback, renderBotFeedback } from './pages/feedback.js';
+import { renderKarma, renderBotKarma } from './pages/karma.js';
+import { renderSkills, renderSkillDetail, renderSkillEdit, renderSkillCreate } from './pages/skills.js';
+import { renderIntegrations } from './pages/integrations.js';
 
 const content = document.getElementById('content');
 
@@ -26,9 +29,16 @@ const routes = [
   { pattern: /^#\/productions$/,             handler: () => renderProductions(content) },
   { pattern: /^#\/feedback\/([^/]+)$/,       handler: (m) => renderBotFeedback(content, m[1]) },
   { pattern: /^#\/feedback$/,                handler: () => renderFeedback(content) },
+  { pattern: /^#\/karma\/([^/]+)$/,          handler: (m) => renderBotKarma(content, m[1]) },
+  { pattern: /^#\/karma$/,                   handler: () => renderKarma(content) },
+  { pattern: /^#\/skills\/new$/,              handler: () => renderSkillCreate(content) },
+  { pattern: /^#\/skills\/([^/]+)\/edit$/,   handler: (m) => renderSkillEdit(content, decodeURIComponent(m[1])) },
+  { pattern: /^#\/skills\/([^/]+)$/,         handler: (m) => renderSkillDetail(content, decodeURIComponent(m[1])) },
+  { pattern: /^#\/skills$/,                  handler: () => renderSkills(content) },
   { pattern: /^#\/tools\/([^/]+)$/,          handler: (m) => renderToolDetail(content, m[1]) },
   { pattern: /^#\/tools$/,                   handler: () => renderTools(content) },
   { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },
+  { pattern: /^#\/integrations$/,            handler: () => renderIntegrations(content) },
   { pattern: /^#\/settings$/,               handler: () => renderSettings(content) },
 ];
 

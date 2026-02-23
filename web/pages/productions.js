@@ -1,7 +1,7 @@
-import { api, escapeHtml, timeAgo, showModal, closeModal } from './shared.js';
+import { api, escapeHtml, timeAgo, showModal, closeModal, renderThread } from './shared.js';
 
 function statusBadge(entry) {
-  if (!entry.evaluation) return '<span class="badge eval-badge-unreviewed">Unreviewed</span>';
+  if (!entry.evaluation?.status) return '<span class="badge eval-badge-unreviewed">Unreviewed</span>';
   if (entry.evaluation.status === 'approved') return '<span class="badge eval-badge-approved">Approved</span>';
   return '<span class="badge eval-badge-rejected">Rejected</span>';
 }
@@ -30,6 +30,12 @@ export async function renderProductions(el) {
 
   const total = stats.reduce((s, b) => s + b.total, 0);
 
+  // Build botNameMap for unified list
+  const botNameMap = {};
+  for (const bot of stats) {
+    botNameMap[bot.botId] = bot.name;
+  }
+
   el.innerHTML = `
     <div class="flex-between mb-16">
       <div class="page-title">Productions <span class="count">${total}</span></div>
@@ -41,6 +47,7 @@ export async function renderProductions(el) {
           <tbody id="prod-tbody"></tbody>
         </table>`
     }
+    <div id="unified-entries-section"></div>
   `;
 
   if (stats.length === 0) return;
@@ -63,6 +70,108 @@ export async function renderProductions(el) {
     });
     tbody.appendChild(tr);
   }
+
+  // Unified entries list
+  const section = document.getElementById('unified-entries-section');
+  if (!section || total === 0) return;
+
+  let filterBot = '';
+  let filterStatus = '';
+  let currentOffset = 0;
+  const PAGE_SIZE = 100;
+  let loadedEntries = [];
+  let loadedTotal = 0;
+
+  async function loadUnifiedEntries(append) {
+    const params = new URLSearchParams();
+    params.set('limit', String(PAGE_SIZE));
+    params.set('offset', String(append ? currentOffset : 0));
+    if (filterBot) params.set('botId', filterBot);
+    if (filterStatus) params.set('status', filterStatus);
+
+    const data = await api(`/api/productions/all-entries?${params}`);
+    if (data.error) return;
+
+    if (append) {
+      loadedEntries = loadedEntries.concat(data.entries);
+    } else {
+      loadedEntries = data.entries;
+      currentOffset = 0;
+    }
+    loadedTotal = data.total;
+    currentOffset = loadedEntries.length;
+
+    renderUnifiedEntries();
+  }
+
+  function renderUnifiedEntries() {
+    section.innerHTML = `
+      <div class="form-separator"></div>
+      <div class="flex-between mb-16">
+        <div class="page-title" style="font-size:1.1rem">All Entries</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="unified-bot-filter" class="log-agent-filter">
+            <option value="">All Bots</option>
+            ${stats.map((b) => `<option value="${escapeHtml(b.botId)}"${filterBot === b.botId ? ' selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
+          </select>
+          <select id="unified-status-filter" class="log-agent-filter">
+            <option value=""${filterStatus === '' ? ' selected' : ''}>All</option>
+            <option value="approved"${filterStatus === 'approved' ? ' selected' : ''}>Approved</option>
+            <option value="rejected"${filterStatus === 'rejected' ? ' selected' : ''}>Rejected</option>
+            <option value="unreviewed"${filterStatus === 'unreviewed' ? ' selected' : ''}>Unreviewed</option>
+          </select>
+        </div>
+      </div>
+
+      ${loadedEntries.length === 0
+        ? '<p class="text-dim">No entries match the filter.</p>'
+        : `<table>
+            <thead><tr><th>Time</th><th>Bot</th><th>Path</th><th>Tool</th><th>Action</th><th>Status</th><th>Rating</th></tr></thead>
+            <tbody id="unified-entries-tbody"></tbody>
+          </table>`
+      }
+
+      ${loadedTotal > loadedEntries.length
+        ? `<div style="text-align:center;margin-top:12px"><button class="btn btn-sm" id="unified-load-more">Load More (${loadedEntries.length}/${loadedTotal})</button></div>`
+        : ''
+      }
+    `;
+
+    // Bind filter events
+    document.getElementById('unified-bot-filter')?.addEventListener('change', (e) => {
+      filterBot = e.target.value;
+      loadUnifiedEntries(false);
+    });
+    document.getElementById('unified-status-filter')?.addEventListener('change', (e) => {
+      filterStatus = e.target.value;
+      loadUnifiedEntries(false);
+    });
+    document.getElementById('unified-load-more')?.addEventListener('click', () => {
+      loadUnifiedEntries(true);
+    });
+
+    // Populate rows
+    const utbody = document.getElementById('unified-entries-tbody');
+    if (!utbody) return;
+
+    for (const entry of loadedEntries) {
+      const tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      tr.innerHTML = `
+        <td class="text-dim">${timeAgo(entry.timestamp)}</td>
+        <td>${escapeHtml(botNameMap[entry.botId] || entry.botId)}</td>
+        <td>${escapeHtml(entry.path)}</td>
+        <td class="text-dim">${escapeHtml(entry.tool)}</td>
+        <td class="text-dim">${escapeHtml(entry.action)}${entry.trackOnly ? ' <span class="badge badge-disabled">track</span>' : ''}</td>
+        <td>${statusBadge(entry)}</td>
+        <td>${entry.evaluation?.rating ? starsHtml(entry.evaluation.rating) : '<span class="text-dim">-</span>'}</td>
+      `;
+      tr.addEventListener('click', () => showDetailModal(entry.botId, entry.id, () => loadUnifiedEntries(false)));
+      utbody.appendChild(tr);
+    }
+  }
+
+  await loadUnifiedEntries(false);
 }
 
 export async function renderBotProductions(el, botId) {
@@ -125,8 +234,50 @@ export async function renderBotProductions(el, botId) {
       load();
     });
 
+    function checkSummaryStatus(id) {
+      const btn = document.getElementById('generate-summary-btn');
+      const container = document.getElementById('summary-container');
+      if (!btn || !container) return Promise.resolve('gone');
+
+      return api(`/api/productions/${encodeURIComponent(id)}/summary-status`).then((res) => {
+        // Guard: DOM may be gone if user navigated away
+        if (!document.getElementById('generate-summary-btn')) return 'gone';
+
+        if (res.status === 'generating') {
+          btn.disabled = true;
+          btn.textContent = 'Generating...';
+          container.innerHTML = '<p class="text-dim">Analyzing productions...</p>';
+        } else if (res.status === 'done') {
+          btn.disabled = false;
+          btn.textContent = 'Regenerate Summary';
+          container.innerHTML = `<div class="detail-card" style="white-space:pre-wrap">${escapeHtml(res.summary)}</div>`;
+        } else if (res.status === 'error') {
+          btn.disabled = false;
+          btn.textContent = 'Retry Summary';
+          container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">${escapeHtml(res.error)}</p></div>`;
+        } else {
+          // idle
+          btn.disabled = false;
+          btn.textContent = 'Generate Summary';
+        }
+        return res.status;
+      });
+    }
+
+    function startPolling(id) {
+      const interval = setInterval(async () => {
+        const status = await checkSummaryStatus(id);
+        if (status !== 'generating') clearInterval(interval);
+      }, 3000);
+    }
+
     const summaryBtn = document.getElementById('generate-summary-btn');
     if (summaryBtn) {
+      // Check status on load
+      checkSummaryStatus(botId).then((status) => {
+        if (status === 'generating') startPolling(botId);
+      });
+
       summaryBtn.addEventListener('click', async () => {
         summaryBtn.disabled = true;
         summaryBtn.textContent = 'Generating...';
@@ -134,20 +285,15 @@ export async function renderBotProductions(el, botId) {
         container.innerHTML = '<p class="text-dim">Analyzing productions...</p>';
 
         try {
-          const result = await api(`/api/productions/${encodeURIComponent(botId)}/generate-summary`, {
+          await api(`/api/productions/${encodeURIComponent(botId)}/generate-summary`, {
             method: 'POST',
           });
-          if (result.error) {
-            container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">${escapeHtml(result.error)}</p></div>`;
-          } else {
-            container.innerHTML = `<div class="detail-card" style="white-space:pre-wrap">${escapeHtml(result.summary)}</div>`;
-          }
+          startPolling(botId);
         } catch (err) {
           container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">Request failed: ${escapeHtml(String(err))}</p></div>`;
+          summaryBtn.disabled = false;
+          summaryBtn.textContent = 'Retry Summary';
         }
-
-        summaryBtn.disabled = false;
-        summaryBtn.textContent = 'Regenerate Summary';
       });
     }
 
@@ -165,7 +311,7 @@ export async function renderBotProductions(el, botId) {
         <td>${statusBadge(entry)}</td>
         <td>${entry.evaluation?.rating ? starsHtml(entry.evaluation.rating) : '<span class="text-dim">-</span>'}</td>
       `;
-      tr.addEventListener('click', () => showDetailModal(botId, entry.id));
+      tr.addEventListener('click', () => showDetailModal(botId, entry.id, () => load()));
       tbody.appendChild(tr);
     }
   }
@@ -173,7 +319,7 @@ export async function renderBotProductions(el, botId) {
   await load();
 }
 
-async function showDetailModal(botId, entryId) {
+async function showDetailModal(botId, entryId, onDelete) {
   showModal('<p class="text-dim">Loading...</p>');
 
   const data = await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}`);
@@ -185,6 +331,7 @@ async function showDetailModal(botId, entryId) {
   const { entry, content } = data;
   let currentRating = entry.evaluation?.rating || 0;
   let currentStatus = entry.evaluation?.status || '';
+  let threadGenerating = false;
 
   function render() {
     const modal = document.getElementById('modal');
@@ -201,17 +348,16 @@ async function showDetailModal(botId, entryId) {
       <div class="production-content">${content != null ? `<pre>${escapeHtml(content)}</pre>` : '<p class="text-dim">File not found or empty</p>'}</div>
 
       <div class="form-separator"></div>
+      <div class="form-section-title">Discussion</div>
+      <div id="thread-container"></div>
+
+      <div class="form-separator"></div>
 
       <div class="eval-controls">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
           <button class="btn btn-sm${currentStatus === 'approved' ? ' btn-primary' : ''}" id="eval-approve">Approve</button>
           <button class="btn btn-sm${currentStatus === 'rejected' ? ' btn-danger' : ''}" id="eval-reject">Reject</button>
           <span style="margin-left:12px">${starsHtml(currentRating, true)}</span>
-        </div>
-
-        <div class="form-group">
-          <label>Feedback</label>
-          <textarea id="eval-feedback" rows="2">${escapeHtml(entry.evaluation?.feedback || '')}</textarea>
         </div>
 
         <div class="modal-actions" style="justify-content:space-between">
@@ -247,11 +393,7 @@ async function showDetailModal(botId, entryId) {
 
     // Save
     document.getElementById('eval-save').addEventListener('click', async () => {
-      if (!currentStatus) {
-        alert('Please select Approve or Reject');
-        return;
-      }
-      const feedback = document.getElementById('eval-feedback').value.trim();
+      if (!currentStatus && !currentRating) return; // nothing to save
       const btn = document.getElementById('eval-save');
       btn.disabled = true;
       btn.textContent = 'Saving...';
@@ -259,12 +401,20 @@ async function showDetailModal(botId, entryId) {
       await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/evaluate`, {
         method: 'POST',
         body: {
-          status: currentStatus,
+          status: currentStatus || undefined,
           rating: currentRating || undefined,
-          feedback: feedback || undefined,
         },
       });
-      closeModal();
+
+      // Update entry in-place so badge reflects new status
+      if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
+      if (currentStatus) entry.evaluation.status = currentStatus;
+      if (currentRating) entry.evaluation.rating = currentRating;
+
+      btn.textContent = 'Saved';
+      setTimeout(() => {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save Evaluation'; }
+      }, 1500);
     });
 
     // Delete
@@ -272,13 +422,72 @@ async function showDetailModal(botId, entryId) {
       if (!confirm('Delete this production and its file? This cannot be undone.')) return;
       await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}`, { method: 'DELETE' });
       closeModal();
-      // Re-render the page
-      const contentEl = document.getElementById('content');
-      renderBotProductions(contentEl, botId);
+      if (onDelete) {
+        onDelete();
+      } else {
+        const contentEl = document.getElementById('content');
+        renderBotProductions(contentEl, botId);
+      }
     });
 
     // Close
     document.getElementById('eval-cancel').addEventListener('click', closeModal);
+
+    // Thread discussion
+    const threadContainer = document.getElementById('thread-container');
+
+    function renderThreadUI() {
+      if (!threadContainer) return;
+      renderThread(threadContainer, {
+        thread: entry.evaluation?.thread ?? [],
+        legacyFeedback: entry.evaluation?.feedback || null,
+        legacyResponse: entry.evaluation?.aiResponse || null,
+        generating: threadGenerating,
+        onSend: async (text) => {
+          // Optimistically add human message
+          if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
+          if (!entry.evaluation.thread) entry.evaluation.thread = [];
+          entry.evaluation.thread.push({ id: 'temp', role: 'human', content: text, createdAt: new Date().toISOString() });
+          threadGenerating = true;
+          renderThreadUI();
+
+          const res = await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/thread`, {
+            method: 'POST',
+            body: { message: text },
+          });
+
+          if (res.error) {
+            threadGenerating = false;
+            renderThreadUI();
+            return;
+          }
+
+          // Update entry with server response
+          if (res.entry?.evaluation) entry.evaluation = res.entry.evaluation;
+
+          // Poll for bot reply
+          const pollInterval = setInterval(async () => {
+            if (!document.getElementById('thread-container')) {
+              clearInterval(pollInterval);
+              return;
+            }
+            const statusRes = await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/thread-status`);
+            if (statusRes.status === 'idle') {
+              clearInterval(pollInterval);
+              if (statusRes.lastBotMessage) {
+                if (!entry.evaluation.thread.find(m => m.id === statusRes.lastBotMessage.id)) {
+                  entry.evaluation.thread.push(statusRes.lastBotMessage);
+                }
+              }
+              threadGenerating = false;
+              renderThreadUI();
+            }
+          }, 2000);
+        },
+      });
+    }
+
+    renderThreadUI();
   }
 
   render();

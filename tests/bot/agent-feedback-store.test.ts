@@ -226,6 +226,83 @@ describe('AgentFeedbackStore', () => {
     });
   });
 
+  describe('getById', () => {
+    test('returns entry by id', () => {
+      store.loadFromDisk('bot1', tmpDir);
+      const created = store.submit('bot1', 'Find me');
+
+      const found = store.getById('bot1', created.id);
+      expect(found).not.toBeNull();
+      expect(found!.content).toBe('Find me');
+      expect(found!.id).toBe(created.id);
+    });
+
+    test('returns null for unknown id', () => {
+      store.loadFromDisk('bot1', tmpDir);
+      expect(store.getById('bot1', 'nonexistent')).toBeNull();
+    });
+
+    test('returns null for unknown bot', () => {
+      expect(store.getById('unknown', 'id')).toBeNull();
+    });
+  });
+
+  describe('addThreadMessage', () => {
+    test('adds a thread message to a feedback entry', () => {
+      store.loadFromDisk('bot1', tmpDir);
+      const created = store.submit('bot1', 'Original feedback');
+
+      const msg = store.addThreadMessage('bot1', created.id, 'human', 'Follow-up question');
+      expect(msg).not.toBeNull();
+      expect(msg!.role).toBe('human');
+      expect(msg!.content).toBe('Follow-up question');
+      expect(msg!.id).toBeTruthy();
+      expect(msg!.createdAt).toBeTruthy();
+
+      const entry = store.getById('bot1', created.id);
+      expect(entry!.thread).toHaveLength(1);
+      expect(entry!.thread![0].content).toBe('Follow-up question');
+    });
+
+    test('appends multiple messages to thread', () => {
+      store.loadFromDisk('bot1', tmpDir);
+      const created = store.submit('bot1', 'Feedback');
+
+      store.addThreadMessage('bot1', created.id, 'human', 'Question');
+      store.addThreadMessage('bot1', created.id, 'bot', 'Answer');
+      store.addThreadMessage('bot1', created.id, 'human', 'Follow-up');
+
+      const entry = store.getById('bot1', created.id);
+      expect(entry!.thread).toHaveLength(3);
+      expect(entry!.thread![0].role).toBe('human');
+      expect(entry!.thread![1].role).toBe('bot');
+      expect(entry!.thread![2].role).toBe('human');
+    });
+
+    test('persists thread to JSONL', () => {
+      store.loadFromDisk('bot1', tmpDir);
+      const created = store.submit('bot1', 'Feedback');
+      store.addThreadMessage('bot1', created.id, 'human', 'Persisted msg');
+
+      // Reload from disk
+      const store2 = new AgentFeedbackStore(noopLogger);
+      store2.loadFromDisk('bot1', tmpDir);
+
+      const entry = store2.getById('bot1', created.id);
+      expect(entry!.thread).toHaveLength(1);
+      expect(entry!.thread![0].content).toBe('Persisted msg');
+    });
+
+    test('returns null for non-existent entry', () => {
+      store.loadFromDisk('bot1', tmpDir);
+      expect(store.addThreadMessage('bot1', 'nonexistent', 'human', 'msg')).toBeNull();
+    });
+
+    test('returns null for unknown bot', () => {
+      expect(store.addThreadMessage('unknown', 'id', 'human', 'msg')).toBeNull();
+    });
+  });
+
   describe('getBotIds', () => {
     test('returns loaded bot IDs', () => {
       store.loadFromDisk('bot1', tmpDir);

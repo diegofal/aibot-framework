@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import type { Skill, SkillContext } from '../../core/types';
+import { localDateStr } from '../../date-utils';
 import type { IntelConfig, SourcesConfig, TriggerInfo } from './types';
 import { IntelCollector } from './collector';
 import { IntelAnalyzer } from './analyzer';
@@ -60,7 +61,7 @@ function loadHistory(dataDir: string): Array<{ date: string; content: string }> 
 async function runCollection(ctx: SkillContext, trigger?: TriggerInfo): Promise<string> {
   const dataDir = getDataDir(ctx);
   const config = getConfig(ctx);
-  const date = new Date().toISOString().split('T')[0];
+  const date = localDateStr();
 
   // Dedup: skip if already collected today
   const lastDate = ctx.data.get<string>('lastCollectionDate');
@@ -164,7 +165,7 @@ Reports saved:
 
 async function runAnalysis(ctx: SkillContext): Promise<string> {
   const dataDir = getDataDir(ctx);
-  const date = new Date().toISOString().split('T')[0];
+  const date = localDateStr();
 
   ctx.logger.info('Starting trend analysis...');
 
@@ -199,7 +200,7 @@ Analysis saved: ${analysisPath}`;
 
 async function showToday(ctx: SkillContext): Promise<string> {
   const dataDir = getDataDir(ctx);
-  const date = new Date().toISOString().split('T')[0];
+  const date = localDateStr();
 
   const mdPath = join(dataDir, 'raw', `${date}.md`);
   const htmlPath = join(dataDir, 'html', `${date}.html`);
@@ -292,7 +293,7 @@ Features: Category-based collection, LLM summaries, trend analysis`;
 
           const config = getConfig(ctx);
           if (config.telegramChatId) {
-            const date = new Date().toISOString().split('T')[0];
+            const date = localDateStr();
             const dataDir = getDataDir(ctx);
 
             // Send digest via Telegram

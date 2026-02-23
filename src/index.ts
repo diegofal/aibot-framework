@@ -19,6 +19,10 @@ async function main() {
   try {
     // Load configuration
     const config = await loadConfig('./config/config.json');
+
+    // Set system timezone so all Date formatting (Pino, toLocaleString, etc.) uses local time
+    process.env.TZ = config.datetime?.timezone || 'America/Argentina/Buenos_Aires';
+
     const logger = createLogger(config.logging);
 
     logger.info('Starting AIBot Framework v1.0.0');
@@ -174,6 +178,9 @@ async function main() {
       cronService,
       memoryManager
     );
+
+    // Load external skills from configured folders
+    await botManager.initializeExternalSkills();
 
     // Start global agent loop timer (runs only for started bots)
     botManager.startAgentLoop();

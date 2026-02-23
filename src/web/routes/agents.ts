@@ -40,6 +40,8 @@ export function agentsRoutes(deps: {
       soulDir: deps.config.soul.dir,
       productionsBaseDir: deps.config.productions.baseDir,
       agentLoopInterval: deps.config.agentLoop.every,
+      availableTools: deps.botManager.getAvailableToolNames(),
+      availableSkills: deps.botManager.getExternalSkillNames(),
     });
   });
 
@@ -100,6 +102,7 @@ export function agentsRoutes(deps: {
     if (body.allowedUsers !== undefined) bot.allowedUsers = body.allowedUsers;
     if (body.mentionPatterns !== undefined) bot.mentionPatterns = body.mentionPatterns;
     if (body.disabledTools !== undefined) bot.disabledTools = body.disabledTools;
+    if ((body as any).disabledSkills !== undefined) bot.disabledSkills = (body as any).disabledSkills;
 
     // Per-agent override fields (undefined = clear override, use global default)
     if ('model' in body) bot.model = body.model || undefined;

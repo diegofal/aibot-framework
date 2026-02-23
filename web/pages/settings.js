@@ -3,17 +3,39 @@ import { api } from './shared.js';
 export async function renderSettings(el) {
   el.innerHTML = '<div class="page-title">Settings</div><p class="text-dim">Loading...</p>';
 
-  const [session, collab] = await Promise.all([
+  const [session, collab, skillsFolders] = await Promise.all([
     api('/api/settings/session'),
     api('/api/settings/collaboration'),
+    api('/api/settings/skills-folders'),
   ]);
   if (session.error || collab.error) {
     el.innerHTML = '<div class="page-title">Settings</div><p>Failed to load settings.</p>';
     return;
   }
 
+  const sfPaths = skillsFolders.paths || [];
+  const sfDefault = skillsFolders.defaultPath || '';
+
   el.innerHTML = `
     <div class="page-title">Settings</div>
+
+    <div class="detail-card" id="skills-folders-card">
+      <div class="form-section-title">Skill Folders</div>
+      <p class="text-dim text-sm mb-16">Directories containing external skill packages (skill.json + handlers). Changes take effect on restart.</p>
+      <div id="sf-list"></div>
+      <div class="form-row" style="align-items:flex-end;gap:8px;margin-top:12px">
+        <div class="form-group" style="flex:1;margin-bottom:0">
+          <label>Add Folder Path</label>
+          <input type="text" id="sf-new-path" placeholder="./productions/tsc/src/skills">
+        </div>
+        <button type="button" class="btn btn-sm" id="sf-add-btn" style="margin-bottom:0">Add</button>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button type="button" class="btn btn-primary btn-sm" id="sf-save-btn">Save Folders</button>
+        <span class="text-dim text-sm" id="sf-save-status"></span>
+      </div>
+    </div>
+
     <form id="settings-form">
 
       <div class="detail-card">
@@ -179,6 +201,77 @@ export async function renderSettings(el) {
       </div>
     </form>
   `;
+
+  // --- Skill Folders UI logic ---
+  let currentSfPaths = [...sfPaths];
+
+  function renderSfList() {
+    const listEl = document.getElementById('sf-list');
+    const items = [];
+
+    // Default folder (non-removable)
+    if (sfDefault) {
+      items.push(`<div style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <code style="flex:1">${sfDefault}</code>
+        <span class="badge badge-disabled">(default)</span>
+      </div>`);
+    }
+
+    // Extra folders
+    for (let i = 0; i < currentSfPaths.length; i++) {
+      items.push(`<div style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <code style="flex:1">${currentSfPaths[i]}</code>
+        <button type="button" class="btn btn-sm btn-danger sf-remove-btn" data-idx="${i}">Remove</button>
+      </div>`);
+    }
+
+    if (items.length === 0) {
+      listEl.innerHTML = '<p class="text-dim text-sm">No skill folders configured.</p>';
+    } else {
+      listEl.innerHTML = items.join('');
+    }
+
+    // Wire remove buttons
+    listEl.querySelectorAll('.sf-remove-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        currentSfPaths.splice(parseInt(btn.dataset.idx, 10), 1);
+        renderSfList();
+      });
+    });
+  }
+
+  renderSfList();
+
+  document.getElementById('sf-add-btn').addEventListener('click', () => {
+    const input = document.getElementById('sf-new-path');
+    const val = input.value.trim();
+    if (val && !currentSfPaths.includes(val)) {
+      currentSfPaths.push(val);
+      input.value = '';
+      renderSfList();
+    }
+  });
+
+  document.getElementById('sf-save-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('sf-save-btn');
+    const status = document.getElementById('sf-save-status');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    const res = await api('/api/settings/skills-folders', { method: 'PATCH', body: { paths: currentSfPaths } });
+
+    btn.disabled = false;
+    btn.textContent = 'Save Folders';
+
+    if (res.error) {
+      status.textContent = 'Failed to save';
+      status.style.color = 'var(--red)';
+    } else {
+      status.textContent = 'Saved (restart to apply)';
+      status.style.color = 'var(--green)';
+      setTimeout(() => { status.textContent = ''; }, 4000);
+    }
+  });
 
   document.getElementById('settings-form').addEventListener('submit', async (e) => {
     e.preventDefault();

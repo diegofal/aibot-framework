@@ -1,6 +1,7 @@
 import type { Context } from 'grammy';
 import type { BotConfig } from '../config';
 import { resolveAgentConfig } from '../config';
+import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import type { BotContext } from './types';
@@ -53,8 +54,8 @@ export class ConversationPipeline {
 
       // Filter out today/yesterday daily logs (already in system prompt via readRecentDailyLogs)
       const now = new Date();
-      const today = now.toISOString().slice(0, 10);
-      const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+      const today = localDateStr(now);
+      const yesterday = localDateStr(new Date(now.getTime() - 86_400_000));
       const recentDailyPattern = new RegExp(`memory/(${today}|${yesterday})\\.md$`);
 
       const filtered = results.filter((r) =>
@@ -287,7 +288,11 @@ export class ConversationPipeline {
       }
     } catch (error) {
       botLogger.error({ error, chatId }, 'Conversation handler failed');
-      await ctx.reply('❌ Failed to generate response. Please try again later.');
+      try {
+        await ctx.reply('❌ Failed to generate response. Please try again later.');
+      } catch {
+        // Cannot send error message to user
+      }
     }
   }
 }

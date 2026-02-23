@@ -1,6 +1,7 @@
-import type { Tool, ToolResult } from './types';
-import type { SoulLoader } from '../soul';
+import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
+import type { SoulLoader } from '../soul';
+import type { Tool, ToolResult } from './types';
 
 type SoulLoaderResolver = (botId: string) => SoulLoader;
 
@@ -264,7 +265,7 @@ function completeGoal(soulLoader: SoulLoader, goalSubstring: string, outcome?: s
 
   const [goal] = active.splice(idx, 1);
   goal.status = 'completed';
-  goal.completed = new Date().toISOString().slice(0, 10);
+  goal.completed = localDateStr();
   if (outcome) goal.outcome = outcome;
   completed.push(goal);
 

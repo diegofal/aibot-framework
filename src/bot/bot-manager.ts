@@ -31,7 +31,12 @@ import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-lo
 import { AskHumanStore, type PendingQuestionInfo } from './ask-human-store';
 import { AgentFeedbackStore, type AgentFeedback } from './agent-feedback-store';
 import { ProductionsService } from '../productions/service';
+import { KarmaService } from '../karma/service';
 import { runStartupSoulCheck } from './soul-health-check';
+import type { TenantManagerConfig } from '../tenant/manager';
+import type { BillingProvider } from '../tenant/billing';
+import type { Tenant, UsageEventType } from '../tenant/types';
+import { TenantFacade } from './tenant-facade';
 
 export class BotManager {
   // Shared mutable state
@@ -67,6 +72,8 @@ export class BotManager {
   private askHumanStore: AskHumanStore;
   private agentFeedbackStore: AgentFeedbackStore;
   private productionsService?: ProductionsService;
+  private karmaService?: KarmaService;
+  private tenantFacade: TenantFacade;
 
   constructor(
     private skillRegistry: SkillRegistry,
@@ -105,6 +112,21 @@ export class BotManager {
       this.productionsService = new ProductionsService(config, logger);
       logger.info({ baseDir: config.productions.baseDir }, 'Productions service initialized');
     }
+
+    // Initialize karma service if enabled
+    if (config.karma?.enabled !== false) {
+      this.karmaService = new KarmaService(config.karma, logger);
+      logger.info({ baseDir: config.karma.baseDir }, 'Karma service initialized');
+    }
+
+    // Initialize tenant facade
+    this.tenantFacade = new TenantFacade({
+      config,
+      logger,
+      runningBots: this.runningBots,
+      stopBot: (botId: string) => this.stopBot(botId),
+      startBot: (botConfig: BotConfig) => this.startBot(botConfig),
+    });
 
     // Build shared BotContext
     const ctx: BotContext = {
@@ -159,6 +181,12 @@ export class BotManager {
       ctx, this.conversationPipeline, this.groupActivation, this.memoryFlusher, this.toolRegistry, this.askHumanStore
     );
     this.agentLoop = new AgentLoop(ctx, this.systemPromptBuilder, this.toolRegistry);
+
+    // Wire karma service into modules that need it
+    if (this.karmaService) {
+      this.agentLoop.setKarmaService(this.karmaService);
+      this.systemPromptBuilder.setKarmaService(this.karmaService);
+    }
 
     // Initialize tools (with lazy callbacks for circular deps)
     this.toolRegistry.initializeAll(
@@ -569,8 +597,20 @@ export class BotManager {
     return this.agentFeedbackStore.dismiss(botId, id);
   }
 
+  getAgentFeedbackById(botId: string, feedbackId: string): AgentFeedback | null {
+    return this.agentFeedbackStore.getById(botId, feedbackId);
+  }
+
+  addAgentFeedbackThreadMessage(botId: string, feedbackId: string, role: 'human' | 'bot', content: string) {
+    return this.agentFeedbackStore.addThreadMessage(botId, feedbackId, role, content);
+  }
+
   getAgentFeedbackBotIds(): string[] {
     return this.agentFeedbackStore.getBotIds();
+  }
+
+  getAvailableToolNames(): string[] {
+    return this.toolDefinitions.map((d) => d.function.name);
   }
 
   // Dynamic tools (for web API)
@@ -582,8 +622,28 @@ export class BotManager {
     return this.toolRegistry.getDynamicToolRegistry();
   }
 
+  async initializeExternalSkills(): Promise<void> {
+    await this.toolRegistry.initializeExternalSkills();
+  }
+
+  getExternalSkillNames(): string[] {
+    return this.toolRegistry.getExternalSkillNames();
+  }
+
+  getExternalSkills(): import('../core/external-skill-loader').LoadedExternalSkill[] {
+    return this.toolRegistry.getExternalSkills();
+  }
+
   getProductionsService(): ProductionsService | undefined {
     return this.productionsService;
+  }
+
+  getKarmaService(): KarmaService | undefined {
+    return this.karmaService;
+  }
+
+  getOllamaClient(): OllamaClient {
+    return this.ollamaClient;
   }
 
   // Collaboration delegates
@@ -616,4 +676,37 @@ export class BotManager {
   ): Promise<{ sessionId: string; transcript: string; turns: number }> {
     return this.collaborationManager.initiateCollaboration(sourceBotId, targetBotId, topic, maxTurns);
   }
+
+  // --- Tenant Management (delegates to TenantFacade) ---
+
+  initializeTenantManager(config: TenantManagerConfig, billing?: BillingProvider): void {
+    this.tenantFacade.initializeTenantManager(config, billing);
+  }
+
+  getTenantManager() { return this.tenantFacade.getTenantManager(); }
+  isMultiTenant() { return this.tenantFacade.isMultiTenant(); }
+  createTenant(name: string, email: string, plan?: Tenant['plan']) { return this.tenantFacade.createTenant(name, email, plan); }
+  getTenant(tenantId: string) { return this.tenantFacade.getTenant(tenantId); }
+  getTenantByApiKey(apiKey: string) { return this.tenantFacade.getTenantByApiKey(apiKey); }
+  listTenants() { return this.tenantFacade.listTenants(); }
+  updateTenant(tenantId: string, updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>) { return this.tenantFacade.updateTenant(tenantId, updates); }
+  deleteTenant(tenantId: string) { return this.tenantFacade.deleteTenant(tenantId); }
+  regenerateTenantApiKey(tenantId: string) { return this.tenantFacade.regenerateTenantApiKey(tenantId); }
+
+  // --- Usage Metering ---
+
+  recordUsage(tenantId: string, botId: string, type: UsageEventType, quantity?: number, metadata?: Record<string, unknown>) { this.tenantFacade.recordUsage(tenantId, botId, type, quantity, metadata); }
+  getTenantUsage(tenantId: string) { return this.tenantFacade.getTenantUsage(tenantId); }
+  checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount?: number) { return this.tenantFacade.checkQuota(tenantId, type, amount); }
+
+  // --- Bot Lifecycle with Tenant Awareness ---
+
+  startBotWithTenant(botConfig: BotConfig) { return this.tenantFacade.startBotWithTenant(botConfig); }
+  getTenantBots(tenantId: string) { return this.tenantFacade.getTenantBots(tenantId); }
+  getRunningTenantBots(tenantId: string) { return this.tenantFacade.getRunningTenantBots(tenantId); }
+
+  // --- Billing Integration ---
+
+  getBillingProvider() { return this.tenantFacade.getBillingProvider(); }
+  createBillingCustomer(tenantId: string) { return this.tenantFacade.createBillingCustomer(tenantId); }
 }

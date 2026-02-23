@@ -1,5 +1,6 @@
-import type { Logger } from '../../logger';
+import { localDateStr } from '../../date-utils';
 import type { LLMClient } from '../../core/llm-client';
+import type { Logger } from '../../logger';
 import type {
   TrendData,
   AnalysisResult,
@@ -211,7 +212,7 @@ export class IntelAnalyzer {
     }
 
     const result: AnalysisResult = {
-      date: new Date().toISOString().split('T')[0],
+      date: localDateStr(),
       generatedAt: new Date().toISOString(),
       summary: { totalTrends },
       alerts: [],

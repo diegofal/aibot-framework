@@ -20,6 +20,12 @@ export interface ToolRunnerOptions {
   toolExecutor: ToolExecutor;
   logger: Logger;
   loopDetector?: LoopDetector;
+  /**
+   * If provided, the loop will detect deliverable completion and stop early
+   * when the response signals the deliverable is done (no more tool calls,
+   * summary-like response).
+   */
+  deliverable?: string;
 }
 
 /**

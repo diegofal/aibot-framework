@@ -1,4 +1,4 @@
-import { showModal, closeModal, api, escapeHtml } from './shared.js';
+import { showModal, closeModal, api, escapeHtml, timeAgo } from './shared.js';
 
 function formatDuration(ms) {
   if (ms < 1000) return `${ms}ms`;
@@ -11,6 +11,27 @@ function statusBadge(status) {
     : status === 'error' ? 'badge-error'
     : 'badge-disabled';
   return `<span class="badge ${cls}">${status}</span>`;
+}
+
+function karmaScoreColor(score) {
+  if (score >= 70) return 'var(--green)';
+  if (score >= 40) return 'var(--orange)';
+  return 'var(--red)';
+}
+
+function karmaCompact(score, trend) {
+  if (score == null) return '<span class="text-dim">--</span>';
+  const color = karmaScoreColor(score);
+  const arrow = trend === 'rising' ? '&#8593;' : trend === 'falling' ? '&#8595;' : '';
+  const arrowColor = trend === 'rising' ? 'var(--green)' : trend === 'falling' ? 'var(--red)' : '';
+  return `<span style="font-weight:600;color:${color}">${score}</span>`
+    + (arrow ? `<span style="color:${arrowColor};margin-left:2px">${arrow}</span>` : '');
+}
+
+function karmaTrendBadge(trend) {
+  if (trend === 'rising') return '<span class="badge badge-ok">&#8593; rising</span>';
+  if (trend === 'falling') return '<span class="badge badge-error">&#8595; falling</span>';
+  return '<span class="badge badge-disabled">&#8594; stable</span>';
 }
 
 function renderAgentLoopResult(r) {
@@ -74,10 +95,17 @@ function renderAgentLoopResult(r) {
 export async function renderAgents(el) {
   el.innerHTML = '<div class="page-title">Agents</div><p class="text-dim">Loading...</p>';
 
-  const [agents, skills] = await Promise.all([
+  const [agents, skills, karmaScores] = await Promise.all([
     api('/api/agents'),
     api('/api/skills'),
+    api('/api/karma'),
   ]);
+
+  // Build karma lookup by botId (graceful if karma is disabled)
+  const karmaMap = {};
+  if (Array.isArray(karmaScores)) {
+    for (const k of karmaScores) karmaMap[k.botId] = k;
+  }
 
   el.innerHTML = `
     <div class="flex-between mb-16">
@@ -85,7 +113,7 @@ export async function renderAgents(el) {
       <button class="btn btn-primary" id="btn-new-agent">+ New Agent</button>
     </div>
     <table>
-      <thead><tr><th>Name</th><th>ID</th><th>Status</th><th>Skills</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>ID</th><th>Status</th><th>Karma</th><th>Skills</th><th>Actions</th></tr></thead>
       <tbody id="agents-tbody"></tbody>
     </table>
   `;
@@ -97,10 +125,12 @@ export async function renderAgents(el) {
       : '<span class="badge badge-stopped">Stopped</span>';
 
     const tr = document.createElement('tr');
+    const karma = karmaMap[agent.id];
     tr.innerHTML = `
       <td><a href="#/agents/${agent.id}">${escapeHtml(agent.name)}</a></td>
       <td class="text-dim">${escapeHtml(agent.id)}</td>
       <td>${statusBadge}</td>
+      <td><a href="#/karma/${encodeURIComponent(agent.id)}" style="text-decoration:none">${karmaCompact(karma?.current, karma?.trend)}</a></td>
       <td class="text-dim">${agent.skills.length}</td>
       <td class="actions">
         ${agent.running
@@ -191,10 +221,11 @@ export async function renderAgents(el) {
 }
 
 export async function renderAgentDetail(el, id) {
-  const [agent, skills, defaults] = await Promise.all([
+  const [agent, skills, defaults, karmaData] = await Promise.all([
     api(`/api/agents/${id}`),
     api('/api/skills'),
     api('/api/agents/defaults'),
+    api(`/api/karma/${encodeURIComponent(id)}`),
   ]);
 
   if (agent.error) {
@@ -258,6 +289,38 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim">Loop Interval</td><td>${loopIntervalDisplay}</td></tr>
       </table>
     </div>
+    ${!karmaData.error ? `
+    <div class="detail-card" style="margin-top:16px">
+      <div class="flex-between mb-16">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-weight:600">Karma</span>
+          ${karmaTrendBadge(karmaData.trend)}
+        </div>
+        <a href="#/karma/${encodeURIComponent(id)}" class="btn btn-sm">View Details</a>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+        <span style="font-size:32px;font-weight:700;color:${karmaScoreColor(karmaData.current)}">${karmaData.current}</span>
+        <div style="flex:1;height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden">
+          <div style="width:${karmaData.current}%;height:100%;background:${karmaScoreColor(karmaData.current)};border-radius:4px"></div>
+        </div>
+        <span class="text-dim text-sm">/ 100</span>
+      </div>
+      ${karmaData.recentEvents?.length ? `
+        <div class="text-dim text-sm" style="margin-bottom:4px">Recent events</div>
+        ${karmaData.recentEvents.slice(0, 15).map(evt => {
+          const sign = evt.delta >= 0 ? '+' : '';
+          const color = evt.delta > 0 ? 'var(--green)' : evt.delta < 0 ? 'var(--red)' : 'var(--text-dim)';
+          return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
+            <span style="font-weight:600;color:${color};min-width:36px;font-family:monospace">${sign}${evt.delta}</span>
+            <span class="badge badge-disabled" style="font-size:11px">${escapeHtml(evt.source)}</span>
+            <span style="flex:1">${escapeHtml(evt.reason)}</span>
+            <span class="text-dim text-sm">${timeAgo(evt.timestamp)}</span>
+          </div>`;
+        }).join('')}
+      ` : '<p class="text-dim text-sm">No karma events yet.</p>'}
+    </div>
+    ` : ''}
+
     <div class="actions">
       ${agent.running
         ? `<button class="btn btn-danger" id="btn-toggle">Stop</button>`
@@ -431,6 +494,42 @@ export async function renderAgentEdit(el, id) {
         <span class="text-dim text-sm">How often this bot runs autonomously (e.g. 30m, 1h, 6h, 1d)</span>
       </div>
 
+      ${(defaults.availableTools && defaults.availableTools.length) ? `
+      <div class="form-separator"></div>
+      <div class="form-section-title">Tools <span class="text-dim text-sm">(uncheck to disable)</span></div>
+
+      <div class="form-group">
+        <div class="checkbox-group" id="tools-group">
+          ${defaults.availableTools.map((t) => {
+            const disabled = (agent.disabledTools || []).includes(t);
+            return `
+            <label class="${!disabled ? 'checked' : ''}">
+              <input type="checkbox" name="tools" value="${escapeHtml(t)}" ${!disabled ? 'checked' : ''}>
+              ${escapeHtml(t)}
+            </label>`;
+          }).join('')}
+        </div>
+      </div>
+      ` : ''}
+
+      ${(defaults.availableSkills && defaults.availableSkills.length) ? `
+      <div class="form-separator"></div>
+      <div class="form-section-title">External Skills <span class="text-dim text-sm">(uncheck to disable all tools from a skill)</span></div>
+
+      <div class="form-group">
+        <div class="checkbox-group" id="ext-skills-group">
+          ${defaults.availableSkills.map((s) => {
+            const disabled = (agent.disabledSkills || []).includes(s);
+            return `
+            <label class="${!disabled ? 'checked' : ''}">
+              <input type="checkbox" name="extSkills" value="${escapeHtml(s)}" ${!disabled ? 'checked' : ''}>
+              ${escapeHtml(s)}
+            </label>`;
+          }).join('')}
+        </div>
+      </div>
+      ` : ''}
+
       <div class="actions">
         <button type="submit" class="btn btn-primary">Save</button>
         <a href="#/agents/${id}" class="btn">Cancel</a>
@@ -492,6 +591,20 @@ export async function renderAgentEdit(el, id) {
       patch.conversation = { systemPrompt, temperature, maxHistory };
     } else {
       patch.conversation = undefined;
+    }
+
+    // Disabled tools (unchecked = disabled)
+    if (defaults.availableTools && defaults.availableTools.length) {
+      const checkedTools = Array.from(form.querySelectorAll('input[name="tools"]:checked')).map((i) => i.value);
+      const disabledTools = defaults.availableTools.filter((t) => !checkedTools.includes(t));
+      patch.disabledTools = disabledTools.length > 0 ? disabledTools : [];
+    }
+
+    // Disabled external skills (unchecked = disabled)
+    if (defaults.availableSkills && defaults.availableSkills.length) {
+      const checkedSkills = Array.from(form.querySelectorAll('input[name="extSkills"]:checked')).map((i) => i.value);
+      const disabledSkills = defaults.availableSkills.filter((s) => !checkedSkills.includes(s));
+      patch.disabledSkills = disabledSkills.length > 0 ? disabledSkills : [];
     }
 
     // Agent loop overrides

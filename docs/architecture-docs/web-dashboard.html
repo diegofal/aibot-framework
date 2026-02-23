@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Dashboard - AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+
+<!-- Hamburger (mobile) -->
+<button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+<!-- Sidebar backdrop (mobile) -->
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      AIBot Framework
+      <small>Architecture Docs</small>
+    </div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="bot-core.html">Bot Core Modules</a>
+      <a href="data-flows.html">Data Flows</a>
+      <a href="tools-skills.html">Tools &amp; Skills</a>
+      <a href="memory-soul.html">Memory &amp; Soul</a>
+      <a href="agent-loop.html">Agent Loop</a>
+      <a href="web-dashboard.html" class="active">Web Dashboard</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="simplifications.html">Simplifications</a>
+    </nav>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main">
+    <div class="content">
+
+      <!-- Page header -->
+      <div class="page-header">
+        <h1>Web Dashboard</h1>
+        <p>REST API, WebSocket streaming, and SPA frontend</p>
+      </div>
+
+      <!-- ============================================================
+           Section 1: Architecture
+           ============================================================ -->
+      <h2>Architecture</h2>
+
+      <p>
+        The web server is built on <strong>Bun's native HTTP server</strong> with
+        <a href="https://hono.dev">Hono</a> as the routing framework. It serves two
+        distinct concerns from a single process:
+      </p>
+
+      <ul style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px; line-height: 1.8;">
+        <li><strong>REST API</strong> &mdash; All routes are mounted under <code>/api/*</code> and organized
+            into focused route modules (one file per domain).</li>
+        <li><strong>SPA Frontend</strong> &mdash; Static files are served from the <code>web/</code> directory
+            via Hono's <code>serveStatic</code> middleware, with a fallback to <code>index.html</code> for
+            client-side routing.</li>
+        <li><strong>WebSocket</strong> &mdash; A dedicated <code>/ws/logs</code> endpoint streams real-time
+            log entries to connected dashboard clients.</li>
+      </ul>
+
+      <p>
+        The server entry point is <code>src/web/server.ts</code>. It receives all major services
+        as a <code>WebServerDeps</code> dependency bag:
+      </p>
+
+      <pre><code>export type WebServerDeps = {
+  config: Config;
+  configPath: string;
+  logger: Logger;
+  botManager: BotManager;
+  sessionManager: SessionManager;
+  skillRegistry: SkillRegistry;
+  cronService: CronService;
+};</code></pre>
+
+      <p>
+        Some route groups are conditionally mounted based on whether their backing service
+        is enabled in the configuration:
+      </p>
+
+      <ul style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px; line-height: 1.8;">
+        <li><code>/api/productions</code> &mdash; only if <code>ProductionsService</code> is available.</li>
+        <li><code>/api/karma</code> &mdash; only if <code>KarmaService</code> is available.</li>
+        <li><code>/api/tools</code> &mdash; only if <code>DynamicToolStore</code> and <code>DynamicToolRegistry</code> are available.</li>
+      </ul>
+
+      <div class="diagram-container">
+        <svg viewBox="0 0 720 340" xmlns="http://www.w3.org/2000/svg" style="width: 100%; max-width: 720px;">
+          <defs>
+            <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#8b8d97" />
+            </marker>
+          </defs>
+
+          <!-- Browser -->
+          <rect x="260" y="10" width="200" height="44" rx="6" ry="6"
+                fill="#181a20" stroke="#6c8cff" stroke-width="2" />
+          <text x="360" y="37" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="14" font-weight="700" fill="#6c8cff">Browser (SPA)</text>
+
+          <!-- Arrows down -->
+          <line x1="310" y1="54" x2="310" y2="100" class="arrow" />
+          <line x1="410" y1="54" x2="410" y2="100" class="arrow" />
+
+          <!-- Bun.serve -->
+          <rect x="200" y="104" width="320" height="44" rx="6" ry="6"
+                fill="#181a20" stroke="#34d399" stroke-width="1.5" />
+          <text x="360" y="131" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="13" font-weight="600" fill="#34d399">Bun.serve  (HTTP + WebSocket)</text>
+
+          <!-- Three branches -->
+          <line x1="280" y1="148" x2="120" y2="200" class="arrow" />
+          <line x1="360" y1="148" x2="360" y2="200" class="arrow" />
+          <line x1="440" y1="148" x2="600" y2="200" class="arrow" />
+
+          <!-- Hono REST API -->
+          <rect x="40" y="204" width="160" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#fbbf24" stroke-width="1.5" />
+          <text x="120" y="229" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#fbbf24">Hono REST API</text>
+
+          <!-- Static files -->
+          <rect x="270" y="204" width="180" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#a78bfa" stroke-width="1.5" />
+          <text x="360" y="229" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#a78bfa">Static Files (web/)</text>
+
+          <!-- WebSocket -->
+          <rect x="520" y="204" width="160" height="40" rx="6" ry="6"
+                fill="#181a20" stroke="#22d3ee" stroke-width="1.5" />
+          <text x="600" y="229" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="12" font-weight="600" fill="#22d3ee">WebSocket /ws/logs</text>
+
+          <!-- Route modules -->
+          <line x1="120" y1="244" x2="120" y2="280" class="arrow" />
+          <rect x="20" y="284" width="200" height="36" rx="6" ry="6"
+                fill="#181a20" stroke="#2a2d36" stroke-width="1" />
+          <text x="120" y="307" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="11" fill="#8b8d97">12 route modules (/api/*)</text>
+
+          <!-- Log file -->
+          <line x1="600" y1="244" x2="600" y2="280" class="arrow" />
+          <rect x="510" y="284" width="180" height="36" rx="6" ry="6"
+                fill="#181a20" stroke="#2a2d36" stroke-width="1" />
+          <text x="600" y="307" text-anchor="middle"
+                font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                font-size="11" fill="#8b8d97">aibot.log (fs.watch)</text>
+        </svg>
+      </div>
+
+      <!-- ============================================================
+           Section 2: API Routes
+           ============================================================ -->
+      <h2>API Routes</h2>
+
+      <p>
+        All API routes are mounted under <code>/api</code>. The table below lists every endpoint
+        extracted from the 12 route files in <code>src/web/routes/</code>.
+      </p>
+
+      <!-- --- Status --- -->
+      <h3>Status</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/status</code></td>
+              <td>System status: uptime, start time, configured/running bot counts and IDs</td>
+              <td><code>status.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Agents --- -->
+      <h3>Agents</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents</code></td>
+              <td>List all agents with masked tokens and running status</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/defaults</code></td>
+              <td>Global defaults (model, temperature, maxHistory, soulDir, etc.) for placeholder display</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id</code></td>
+              <td>Get single agent details</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents</code></td>
+              <td>Create a new agent (requires <code>id</code> and <code>name</code>)</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PATCH</span></td>
+              <td><code>/api/agents/:id</code></td>
+              <td>Update agent fields (name, token, enabled, skills, model, conversation overrides, etc.)</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/agents/:id</code></td>
+              <td>Delete agent (must be stopped first)</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/:id/start</code></td>
+              <td>Start a stopped agent (launches Telegram polling)</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/:id/stop</code></td>
+              <td>Stop a running agent</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/:id/reset</code></td>
+              <td>Reset agent (clear transient state, preserve identity; must be stopped)</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/:id/clone</code></td>
+              <td>Clone agent config and soul files to a new ID</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/:id/init-soul</code></td>
+              <td>Initialize a per-agent soul directory with default IDENTITY.md</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/:id/generate-soul</code></td>
+              <td>Generate soul files via AI (preview only, does not write to disk)</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/:id/apply-soul</code></td>
+              <td>Write generated soul files (IDENTITY.md, SOUL.md, MOTIVATIONS.md) to disk with backups</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Agent Loop --- -->
+      <h3>Agent Loop</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agent-loop</code></td>
+              <td>Agent loop status: enabled flag, intervals (default/min/max), current state</td>
+              <td><code>agent-loop.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agent-loop/run</code></td>
+              <td>Manually trigger agent loop for all bots</td>
+              <td><code>agent-loop.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agent-loop/run/:botId</code></td>
+              <td>Manually trigger agent loop for a single bot (must be running)</td>
+              <td><code>agent-loop.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Sessions --- -->
+      <h3>Sessions</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/sessions</code></td>
+              <td>List all active sessions with metadata</td>
+              <td><code>sessions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/sessions/:key/transcript</code></td>
+              <td>Get session transcript (paginated: <code>?limit=100&amp;offset=0</code>)</td>
+              <td><code>sessions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/sessions/:key</code></td>
+              <td>Clear a session and flush to disk</td>
+              <td><code>sessions.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Ask Human --- -->
+      <h3>Ask Human (Inbox)</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/ask-human</code></td>
+              <td>List all pending ask-human questions with total count</td>
+              <td><code>ask-human.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/ask-human/count</code></td>
+              <td>Lightweight pending count (used for badge polling)</td>
+              <td><code>ask-human.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/ask-human/:id/answer</code></td>
+              <td>Answer a pending question (body: <code>{ answer: string }</code>)</td>
+              <td><code>ask-human.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/ask-human/:id</code></td>
+              <td>Dismiss a pending question</td>
+              <td><code>ask-human.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Cron --- -->
+      <h3>Cron Jobs</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/cron</code></td>
+              <td>List all cron jobs (including disabled)</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/cron/:id</code></td>
+              <td>Get single cron job with last 20 run history entries</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/cron</code></td>
+              <td>Create a cron job (requires <code>name</code>, <code>schedule</code>, <code>payload</code>)</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PATCH</span></td>
+              <td><code>/api/cron/:id</code></td>
+              <td>Update cron job fields</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/cron/:id/run</code></td>
+              <td>Force-run a cron job immediately</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/cron/:id/runs</code></td>
+              <td>Clear all run log entries for a job</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/cron/:id/runs/delete</code></td>
+              <td>Delete specific run log entries by timestamp array</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/cron/:id</code></td>
+              <td>Delete a cron job</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Skills --- -->
+      <h3>Skills</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/skills</code></td>
+              <td>List all registered skills (id, name, version, commands, jobs, llmBackend)</td>
+              <td><code>skills.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Tools --- -->
+      <h3>Tools (Dynamic)</h3>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        Only mounted if <code>DynamicToolStore</code> and <code>DynamicToolRegistry</code> are available.
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/tools</code></td>
+              <td>List all dynamic tools</td>
+              <td><code>tools.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/tools/:id</code></td>
+              <td>Get tool detail including source code</td>
+              <td><code>tools.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/tools/:id/approve</code></td>
+              <td>Approve a dynamic tool for execution</td>
+              <td><code>tools.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/tools/:id/reject</code></td>
+              <td>Reject a dynamic tool (optional <code>note</code> in body)</td>
+              <td><code>tools.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PATCH</span></td>
+              <td><code>/api/tools/:id</code></td>
+              <td>Edit tool metadata (name, description, scope, parameters)</td>
+              <td><code>tools.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/tools/:id</code></td>
+              <td>Delete a dynamic tool</td>
+              <td><code>tools.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Productions --- -->
+      <h3>Productions</h3>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        Only mounted if <code>ProductionsService</code> is available.
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/productions</code></td>
+              <td>List all bots with production stats (total, approved, rejected, avg rating)</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/productions/:botId</code></td>
+              <td>List productions for a bot (paginated: <code>?limit=50&amp;offset=0&amp;status=&amp;since=</code>)</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/productions/:botId/:id</code></td>
+              <td>Get single production entry with file content</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/productions/:botId/generate-summary</code></td>
+              <td>Generate AI summary of bot's recent productions via Claude CLI</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/productions/:botId/:id/evaluate</code></td>
+              <td>Evaluate a production (approved/rejected, 1-5 rating, optional feedback)</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PUT</span></td>
+              <td><code>/api/productions/:botId/:id/content</code></td>
+              <td>Update production file content</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/productions/:botId/:id/thread</code></td>
+              <td>Add a human message to the discussion thread; triggers AI reply (fire-and-forget). Body: <code>{ message: string }</code></td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/productions/:botId/:id/thread-status</code></td>
+              <td>Poll for bot reply generation status (<code>generating</code> / <code>idle</code> + last bot message)</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/productions/:botId/:id</code></td>
+              <td>Delete a production entry</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Agent Feedback --- -->
+      <h3>Agent Feedback</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agent-feedback</code></td>
+              <td>List bots with feedback counts (total, pending, applied, dismissed)</td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agent-feedback/count</code></td>
+              <td>Total pending feedback count (badge polling)</td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agent-feedback/:botId</code></td>
+              <td>List feedback history for a bot (filter: <code>?status=&amp;limit=100&amp;offset=0</code>)</td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agent-feedback/:botId</code></td>
+              <td>Submit new feedback for a bot (body: <code>{ content: string }</code>)</td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agent-feedback/:botId/generate</code></td>
+              <td>Generate AI feedback via Claude CLI analysis (soul, memory, productions context)</td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agent-feedback/:botId/:id/reply</code></td>
+              <td>Add a human reply to the feedback thread; triggers AI reply (fire-and-forget). Body: <code>{ message: string }</code></td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agent-feedback/:botId/:id/reply-status</code></td>
+              <td>Poll for bot reply generation status (<code>generating</code> / <code>idle</code> + last bot message)</td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/agent-feedback/:botId/:id</code></td>
+              <td>Dismiss a pending feedback entry</td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Karma --- -->
+      <h3>Karma</h3>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        Only mounted if <code>KarmaService</code> is available.
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/karma</code></td>
+              <td>Get karma scores for all bots</td>
+              <td><code>karma.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/karma/:botId</code></td>
+              <td>Get karma score for a specific bot</td>
+              <td><code>karma.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/karma/:botId/history</code></td>
+              <td>Get paginated karma history (<code>?limit=50&amp;offset=0</code>)</td>
+              <td><code>karma.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/karma/:botId/adjust</code></td>
+              <td>Manual karma adjustment (body: <code>{ delta: number, reason: string }</code>)</td>
+              <td><code>karma.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Integrations --- -->
+      <h3>Integrations</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/integrations/ollama/status</code></td>
+              <td>Ollama health check: connection status, latency, available models, configured timeout</td>
+              <td><code>integrations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/integrations/ollama/chat</code></td>
+              <td>Proxy a test chat through OllamaClient (body: <code>{ message, model? }</code>)</td>
+              <td><code>integrations.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Settings --- -->
+      <h3>Settings</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/settings/session</code></td>
+              <td>Get session settings (groupActivation, resetPolicy, llmRelevanceCheck, etc.)</td>
+              <td><code>settings.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PATCH</span></td>
+              <td><code>/api/settings/session</code></td>
+              <td>Update session settings (persisted to config.json)</td>
+              <td><code>settings.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/settings/collaboration</code></td>
+              <td>Get collaboration settings (enabled, maxRounds, cooldown, etc.)</td>
+              <td><code>settings.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PATCH</span></td>
+              <td><code>/api/settings/collaboration</code></td>
+              <td>Update collaboration settings (persisted to config.json)</td>
+              <td><code>settings.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ============================================================
+           Section 3: WebSocket
+           ============================================================ -->
+      <h2>WebSocket &mdash; Log Streaming</h2>
+
+      <p>
+        The server provides a WebSocket endpoint at <code>/ws/logs</code> that streams real-time
+        structured log entries to the dashboard's Logs page. The implementation works as follows:
+      </p>
+
+      <h3>Connection lifecycle</h3>
+
+      <ol style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px; line-height: 1.8;">
+        <li><strong>Upgrade</strong> &mdash; <code>Bun.serve</code>'s <code>fetch</code> handler intercepts
+            requests to <code>/ws/logs</code> and upgrades them to WebSocket connections.
+            All other requests are delegated to the Hono app.</li>
+        <li><strong>History</strong> &mdash; On connect, the last 100 lines of the log file are parsed
+            from disk and sent as a <code>{ type: "history", lines: [...] }</code> message so the
+            client can render a backlog immediately.</li>
+        <li><strong>Live streaming</strong> &mdash; The server uses <code>fs.watch()</code> on the log file
+            (configurable via <code>config.logging.file</code>, defaults to <code>./data/logs/aibot.log</code>).
+            When new bytes are appended, they are read using a tracked file offset, parsed as
+            JSON-lines, and broadcast to all connected clients as
+            <code>{ type: "logs", lines: [...] }</code>.</li>
+        <li><strong>Rotation handling</strong> &mdash; If the file size shrinks (log rotation or truncation),
+            the offset resets to 0 so the new file contents are picked up from the beginning.</li>
+        <li><strong>Cleanup</strong> &mdash; Closed WebSocket connections are removed from the client set.
+            Failed sends also trigger client removal.</li>
+      </ol>
+
+      <pre><code>// WebSocket message types
+{ type: "history", lines: [...] }   // sent on connect (last 100 entries)
+{ type: "logs",    lines: [...] }   // sent on file change (new entries)
+
+// Each line is a parsed JSON log object, e.g.:
+{
+  "level": 30,
+  "time": 1708617600000,
+  "msg": "Agent loop completed",
+  "botId": "poet",
+  "module": "agent-loop"
+}</code></pre>
+
+      <p>
+        The WebSocket is unidirectional &mdash; the server does not process any client-to-server
+        messages. The <code>message</code> handler is a no-op.
+      </p>
+
+      <!-- ============================================================
+           Section 4: SPA Frontend Pages
+           ============================================================ -->
+      <h2>SPA Frontend Pages</h2>
+
+      <p>
+        The frontend is a single-page application served from the <code>web/</code> directory.
+        Hono's <code>serveStatic</code> middleware serves assets, with a wildcard fallback to
+        <code>index.html</code> for client-side routing. The dashboard includes the following pages:
+      </p>
+
+      <div class="card-grid cols-2">
+
+        <div class="card">
+          <h3>Dashboard</h3>
+          <p>Overview statistics: uptime, running bots, active sessions, pending inbox items,
+             and cron job status at a glance.</p>
+        </div>
+
+        <div class="card">
+          <h3>Inbox</h3>
+          <p>Ask-human question queue. Bots can use the <code>ask_human</code> tool to request
+             operator input. Questions are listed with answer and dismiss actions. Badge polling
+             via <code>/api/ask-human/count</code>.</p>
+        </div>
+
+        <div class="card">
+          <h3>Agents</h3>
+          <p>Bot management: create, edit, start, stop, reset, clone, and delete agents.
+             Per-agent configuration overrides for model, conversation parameters, and
+             agent loop settings. Soul file generation and application.</p>
+        </div>
+
+        <div class="card">
+          <h3>Sessions</h3>
+          <p>Conversation history browser. Lists all active sessions with metadata (bot,
+             chat, message count, timestamps). Click through to view full transcripts
+             with pagination.</p>
+        </div>
+
+        <div class="card">
+          <h3>Cron Jobs</h3>
+          <p>Scheduled task management: create, edit, enable/disable, force-run, and
+             delete cron jobs. View run history with timestamps and results. Supports
+             selective log entry deletion.</p>
+        </div>
+
+        <div class="card">
+          <h3>Tools</h3>
+          <p>Dynamic tool inventory. Lists bot-created tools with their source code,
+             parameters, and approval status. Approve, reject, edit metadata, or
+             delete tools from the dashboard.</p>
+        </div>
+
+        <div class="card">
+          <h3>Productions</h3>
+          <p>Creative production tracking. Lists each bot's outputs (files, text, etc.)
+             with evaluation workflow: approve/reject with 1-5 ratings and written feedback.
+             AI-generated summaries of recent work via Claude CLI.</p>
+        </div>
+
+        <div class="card">
+          <h3>Feedback</h3>
+          <p>Agent feedback management. Submit, view, or auto-generate harsh quality
+             audits via Claude CLI that analyze soul coherence, production quality,
+             goal progress, and behavioral patterns. Feedback entries can be applied
+             or dismissed.</p>
+        </div>
+
+        <div class="card">
+          <h3>Karma</h3>
+          <p>Bot karma scoring system. View current scores for all bots, browse
+             paginated event history, and make manual adjustments with reasons.
+             Tracks automatic karma events from production evaluations and other signals.</p>
+        </div>
+
+        <div class="card">
+          <h3>Logs</h3>
+          <p>Real-time log viewer powered by the <code>/ws/logs</code> WebSocket.
+             Displays structured JSON log entries with level, timestamp, module,
+             and message. Shows a 100-line history backlog on connect, then
+             streams new entries live.</p>
+        </div>
+
+        <div class="card">
+          <h3>Integrations</h3>
+          <p>Ollama diagnostic page. Shows connection status, latency, configured
+             timeout, and available models. Includes a test chat form that proxies
+             messages through the same <code>OllamaClient</code> code path the bots
+             use, displaying the response and duration.</p>
+        </div>
+
+        <div class="card">
+          <h3>Settings</h3>
+          <p>Configuration editor for session and collaboration settings. Edits are
+             persisted directly to <code>config.json</code>. Covers session reset
+             policies, group activation, LLM relevance checks, and collaboration
+             parameters (max rounds, cooldown, timeouts).</p>
+        </div>
+
+        <div class="card">
+          <h3>Skills</h3>
+          <p>Read-only inventory of registered skills. Displays skill metadata
+             (id, name, version, description), registered commands, scheduled
+             jobs, and LLM backend assignment.</p>
+        </div>
+
+      </div>
+
+      <!-- ============================================================
+           Section 5: Authentication
+           ============================================================ -->
+      <h2>Authentication</h2>
+
+      <p>
+        The web dashboard currently operates <strong>without authentication</strong>.
+        There is no auth middleware, API key validation, or session-based login in the
+        server code. All API endpoints and the WebSocket are openly accessible to any
+        client that can reach the configured host and port.
+      </p>
+
+      <p>
+        This design assumes the dashboard is run on a <strong>trusted local network</strong>
+        or behind a reverse proxy that handles authentication externally (e.g., a VPN,
+        Tailscale, or nginx with basic auth). The server binds to the host and port
+        specified in <code>config.web</code>:
+      </p>
+
+      <pre><code>Bun.serve({
+  port,            // from config.web.port
+  hostname: host,  // from config.web.host
+  idleTimeout: 255,
+  // ...
+});</code></pre>
+
+      <p>
+        If network-level protection is not available, it is strongly recommended to
+        place the dashboard behind an authenticating reverse proxy before exposing it
+        to the public internet.
+      </p>
+
+    </div>
+  </main>
+</div>
+
+<!-- Mobile sidebar toggle -->
+<script>
+(function () {
+  var hamburger = document.getElementById('hamburger');
+  var sidebar = document.getElementById('sidebar');
+  var backdrop = document.getElementById('sidebarBackdrop');
+
+  function toggleSidebar() {
+    sidebar.classList.toggle('open');
+    backdrop.classList.toggle('show');
+  }
+
+  function closeSidebar() {
+    sidebar.classList.remove('open');
+    backdrop.classList.remove('show');
+  }
+
+  hamburger.addEventListener('click', toggleSidebar);
+  backdrop.addEventListener('click', closeSidebar);
+})();
+</script>
+
+</body>
+</html>

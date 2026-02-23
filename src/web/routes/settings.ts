@@ -84,6 +84,32 @@ export function settingsRoutes(deps: {
     return c.json(collab);
   });
 
+  // Get skills folders
+  app.get('/skills-folders', (c) => {
+    return c.json({
+      paths: deps.config.skillsFolders?.paths ?? [],
+      defaultPath: deps.config.paths.skills,
+    });
+  });
+
+  // Update skills folders
+  app.patch('/skills-folders', async (c) => {
+    const body = await c.req.json<{ paths: string[] }>();
+
+    if (!Array.isArray(body.paths)) {
+      return c.json({ error: 'paths must be an array of strings' }, 400);
+    }
+
+    deps.config.skillsFolders.paths = body.paths.filter((p) => typeof p === 'string' && p.trim());
+    persistSkillsFolders(deps.configPath, deps.config.skillsFolders);
+    deps.logger.info({ paths: deps.config.skillsFolders.paths }, 'Skills folders updated via API');
+
+    return c.json({
+      paths: deps.config.skillsFolders.paths,
+      defaultPath: deps.config.paths.skills,
+    });
+  });
+
   return app;
 }
 
@@ -96,5 +122,11 @@ function persistSession(configPath: string, session: Config['session']): void {
 function persistCollaboration(configPath: string, collaboration: Config['collaboration']): void {
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   raw.collaboration = collaboration;
+  writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
+}
+
+function persistSkillsFolders(configPath: string, skillsFolders: Config['skillsFolders']): void {
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+  raw.skillsFolders = skillsFolders;
   writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
 }

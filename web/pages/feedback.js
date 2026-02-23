@@ -1,4 +1,4 @@
-import { api, escapeHtml, timeAgo } from './shared.js';
+import { api, escapeHtml, timeAgo, renderThread } from './shared.js';
 
 function statusBadge(status) {
   if (status === 'applied') return '<span class="badge eval-badge-approved">Applied</span>';
@@ -181,20 +181,91 @@ export async function renderBotFeedback(el, botId) {
           <strong>Feedback:</strong>
           <div style="margin-top:4px;white-space:pre-wrap">${escapeHtml(entry.content)}</div>
         </div>
-        ${entry.status === 'applied' && entry.response ? `
+        ${entry.status === 'applied' && entry.response && !(entry.thread && entry.thread.length > 0) ? `
           <div style="background:var(--surface-2);padding:12px;border-radius:8px;border-left:3px solid var(--green)">
             <strong>Bot Response:</strong>
             <div style="margin-top:4px;white-space:pre-wrap">${escapeHtml(entry.response)}</div>
           </div>
           ${entry.appliedAt ? `<div class="text-dim text-sm" style="margin-top:8px">Applied ${timeAgo(entry.appliedAt)}</div>` : ''}
         ` : ''}
-        ${entry.status === 'pending' ? `
-          <div style="margin-top:8px">
-            <button class="btn btn-sm btn-danger dismiss-btn" data-id="${entry.id}">Dismiss</button>
-          </div>
-        ` : ''}
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="btn btn-sm reply-btn" data-id="${entry.id}">Reply</button>
+          ${entry.status === 'pending' ? `<button class="btn btn-sm btn-danger dismiss-btn" data-id="${entry.id}">Dismiss</button>` : ''}
+        </div>
+        <div class="thread-area hidden" data-thread-id="${entry.id}"></div>
       `;
       list.appendChild(card);
+
+      // Thread state per card
+      const threadArea = card.querySelector(`.thread-area[data-thread-id="${entry.id}"]`);
+      let threadVisible = false;
+      let threadGenerating = false;
+
+      function renderCardThread() {
+        renderThread(threadArea, {
+          thread: entry.thread ?? [],
+          legacyFeedback: null,
+          legacyResponse: entry.response || null,
+          generating: threadGenerating,
+          onSend: async (text) => {
+            if (!entry.thread) entry.thread = [];
+            entry.thread.push({ id: 'temp', role: 'human', content: text, createdAt: new Date().toISOString() });
+            threadGenerating = true;
+            renderCardThread();
+
+            const res = await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply`, {
+              method: 'POST',
+              body: { message: text },
+            });
+
+            if (res.error) {
+              threadGenerating = false;
+              renderCardThread();
+              return;
+            }
+
+            if (res.entry?.thread) entry.thread = res.entry.thread;
+
+            // Poll for bot reply
+            const pollInterval = setInterval(async () => {
+              if (!threadArea || threadArea.classList.contains('hidden')) {
+                clearInterval(pollInterval);
+                return;
+              }
+              const statusRes = await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply-status`);
+              if (statusRes.status === 'idle') {
+                clearInterval(pollInterval);
+                if (statusRes.lastBotMessage) {
+                  if (!entry.thread) entry.thread = [];
+                  if (!entry.thread.find(m => m.id === statusRes.lastBotMessage.id)) {
+                    entry.thread.push(statusRes.lastBotMessage);
+                  }
+                }
+                threadGenerating = false;
+                renderCardThread();
+              }
+            }, 2000);
+          },
+        });
+      }
+
+      // Reply button toggle
+      card.querySelector(`.reply-btn[data-id="${entry.id}"]`).addEventListener('click', () => {
+        threadVisible = !threadVisible;
+        if (threadVisible) {
+          threadArea.classList.remove('hidden');
+          renderCardThread();
+        } else {
+          threadArea.classList.add('hidden');
+        }
+      });
+
+      // Auto-open thread if there are existing thread messages
+      if (entry.thread && entry.thread.length > 0) {
+        threadVisible = true;
+        threadArea.classList.remove('hidden');
+        renderCardThread();
+      }
     }
 
     // Dismiss handlers

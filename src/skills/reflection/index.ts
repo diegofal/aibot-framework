@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Skill, SkillContext } from '../../core/types';
+import { localDateStr, localTimeStr } from '../../date-utils';
 import { buildAnalysisPrompt, buildExplorationPrompt, buildImprovementPrompt, buildJsonFixPrompt, buildCompactionPrompt } from './prompts';
 import { createWebSearchTool } from '../../tools/web-search';
 import { createWebFetchTool } from '../../tools/web-fetch';
@@ -197,7 +198,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
 
   // Step 3 — Improve ("The Architect")
   ctx.logger.info('Reflection: generating improvements (The Architect)');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateStr();
   const improvementInput = buildImprovementPrompt({
     identity,
     soul: cappedSoul,
@@ -256,8 +257,8 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
   // Append journal entry to daily memory log
   if (improvement.journal_entry) {
     const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10);
-    const timeStr = now.toTimeString().slice(0, 5);
+    const dateStr = localDateStr(now);
+    const timeStr = localTimeStr(now);
     const logPath = join(soulDir, 'memory', `${dateStr}.md`);
     appendFileSync(logPath, `- [${timeStr}] [reflection] ${improvement.journal_entry}\n`, 'utf-8');
     ctx.logger.info('Journal entry appended to daily log');
@@ -270,7 +271,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
 
   if (compactionEnabled) {
     try {
-      const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const yesterday = localDateStr(new Date(Date.now() - 86_400_000));
       const yesterdayPath = join(soulDir, 'memory', `${yesterday}.md`);
 
       if (existsSync(yesterdayPath)) {

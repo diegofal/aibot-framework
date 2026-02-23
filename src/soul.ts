@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync, copyFileSync, unlinkSync, renameSync, statSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 import type { SoulConfig } from './config';
+import { localDateStr, localTimeStr } from './date-utils';
 import type { Logger } from './logger';
 
 // Patterns to redact from memory facts before writing
@@ -281,8 +282,8 @@ export class SoulLoader {
     }
 
     const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
-    const timeStr = now.toTimeString().slice(0, 5);  // HH:MM
+    const dateStr = localDateStr(now);
+    const timeStr = localTimeStr(now);
     const logPath = join(this.dir, 'memory', `${dateStr}.md`);
     appendFileSync(logPath, `- [${timeStr}] ${sanitized}\n`, 'utf-8');
     this.logger.info({ date: dateStr, fact: sanitized.slice(0, 80) }, 'Daily memory appended');
@@ -294,7 +295,7 @@ export class SoulLoader {
    */
   readRecentDailyLogs(): string {
     const memoryDir = join(this.dir, 'memory');
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateStr();
 
     const logPath = join(memoryDir, `${today}.md`);
     try {

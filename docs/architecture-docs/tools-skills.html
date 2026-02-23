@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tools &amp; Skills - AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    /* ---- Tool grid ---- */
+    .tool-grid {
+      display: grid;
+      gap: 12px;
+      margin: 16px 0 32px;
+    }
+    .tool-grid.cols-2 {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    @media (max-width: 750px) {
+      .tool-grid.cols-2 { grid-template-columns: 1fr; }
+    }
+
+    .tool-card .tool-name {
+      font-family: var(--mono);
+      font-size: 14px;
+      color: var(--accent);
+      margin: 0 0 4px;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .tool-card .tool-desc {
+      color: var(--text-dim);
+      font-size: 13px;
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+
+    .tool-card .tool-params {
+      font-size: 12px;
+      color: var(--text-dim);
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+      margin-top: 4px;
+    }
+
+    .tool-card .tool-params ul {
+      list-style: none;
+      padding: 0;
+      margin: 4px 0 0;
+    }
+
+    .tool-card .tool-params li {
+      padding: 2px 0;
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+    }
+
+    .tool-card .tool-params li code {
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .tool-card .tool-params .param-type {
+      color: var(--purple);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .tool-card .tool-params .param-desc {
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    .tool-card .tool-params .param-req {
+      color: var(--orange);
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    /* ---- Skill cards ---- */
+    .skill-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 12px;
+      transition: border-color .15s;
+    }
+    .skill-card:hover { border-color: var(--accent); }
+
+    .skill-card .skill-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+
+    .skill-card .skill-header h3 {
+      margin: 0;
+      font-size: 16px;
+      color: var(--text);
+    }
+
+    .skill-card .skill-id {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .skill-card .skill-desc {
+      color: var(--text-dim);
+      font-size: 13px;
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+
+    .skill-card .skill-meta {
+      font-size: 12px;
+      color: var(--text-dim);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .skill-grid {
+      display: grid;
+      gap: 12px;
+      margin: 16px 0 32px;
+    }
+    .skill-grid.cols-2 {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    @media (max-width: 750px) {
+      .skill-grid.cols-2 { grid-template-columns: 1fr; }
+    }
+
+    /* ---- Overview stat row ---- */
+    .tools-stat-row {
+      display: flex;
+      gap: 16px;
+      margin: 24px 0 32px;
+      flex-wrap: wrap;
+    }
+    .tools-stat {
+      flex: 1;
+      min-width: 100px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+    .tools-stat .number {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .tools-stat .label {
+      font-size: 12px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-top: 4px;
+    }
+    @media (max-width: 600px) {
+      .tools-stat-row { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+
+    <!-- Hamburger (mobile) -->
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+    <!-- Backdrop (mobile) -->
+    <div class="sidebar-backdrop" id="backdrop"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        AIBot Framework
+        <small>Architecture Docs</small>
+      </div>
+      <nav>
+        <div class="nav-group">Pages</div>
+        <a href="index.html">Overview</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="bot-core.html">Bot Core Modules</a>
+        <a href="data-flows.html">Data Flows</a>
+        <a href="tools-skills.html" class="active">Tools &amp; Skills</a>
+        <a href="memory-soul.html">Memory &amp; Soul</a>
+        <a href="agent-loop.html">Agent Loop</a>
+        <a href="web-dashboard.html">Web Dashboard</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="simplifications.html">Simplifications</a>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="content">
+
+        <!-- Page header -->
+        <div class="page-header">
+          <h1>Tools &amp; Skills</h1>
+          <p>27 LLM tools and 8 skills powering the agents</p>
+        </div>
+
+        <!-- Stats overview -->
+        <div class="tools-stat-row">
+          <div class="tools-stat">
+            <div class="number">27</div>
+            <div class="label">LLM Tools</div>
+          </div>
+          <div class="tools-stat">
+            <div class="number">8</div>
+            <div class="label">Skills</div>
+          </div>
+          <div class="tools-stat">
+            <div class="number">8</div>
+            <div class="label">Categories</div>
+          </div>
+          <div class="tools-stat">
+            <div class="number">&infin;</div>
+            <div class="label">Dynamic Tools</div>
+          </div>
+        </div>
+
+        <p>Tools are OpenAI-compatible function definitions that the LLM can invoke during conversations and agent loop cycles. They are registered in <code>ToolRegistry</code> (<code>src/bot/tool-registry.ts</code>) and executed by the <code>ToolExecutor</code>. Each tool has a JSON schema for parameters, safety validations, and per-bot enable/disable controls.</p>
+
+        <p>Skills are higher-level capabilities packaged as <code>src/skills/&lt;id&gt;/</code> directories with a <code>skill.json</code> manifest and an <code>index.ts</code> entry point. Skills can register Telegram commands, cron jobs, and tool integrations.</p>
+
+        <!-- ============================================================ -->
+        <!--  TOOLS SECTION                                                -->
+        <!-- ============================================================ -->
+
+        <h2 id="tools">LLM Tools</h2>
+
+        <!-- ---- Web ---- -->
+        <div class="category-header">
+          <h2 id="cat-web">Web</h2>
+          <span class="count">3 tools</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- web_search -->
+          <div class="tool-card">
+            <h4 class="tool-name">web_search</h4>
+            <div class="tool-desc">Search the web for current information. Use this when you need up-to-date facts, news, or information you don't have. Powered by the Brave Search API with built-in TTL cache.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>query</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The search query</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- web_fetch -->
+          <div class="tool-card">
+            <h4 class="tool-name">web_fetch</h4>
+            <div class="tool-desc">Fetch and read the contents of a web page. Returns plain text extracted from HTML. Includes SSRF protection against private/local addresses and a TTL cache.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>url</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The URL to fetch</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- browser -->
+          <div class="tool-card">
+            <h4 class="tool-name">browser</h4>
+            <div class="tool-desc">Control a headless Playwright browser for interacting with dynamic web pages. Supports navigation, accessibility snapshots with interactive element refs, user interactions (click, type, fill, press, hover, select), screenshots, and session management with auto-idle timeout.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>action</code> <span class="param-type">enum</span> <span class="param-req">required</span> <span class="param-desc">&mdash; status | navigate | snapshot | act | screenshot | close</span></li>
+                <li><code>url</code> <span class="param-type">string</span> <span class="param-desc">&mdash; URL to navigate to (for "navigate")</span></li>
+                <li><code>kind</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; click | type | fill | press | hover | select (for "act")</span></li>
+                <li><code>ref</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Element reference from snapshot, e.g. "e3" (for "act")</span></li>
+                <li><code>text</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Text input for "type" or "fill"</span></li>
+                <li><code>key</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Key to press, e.g. "Enter", "Tab"</span></li>
+                <li><code>values</code> <span class="param-type">string[]</span> <span class="param-desc">&mdash; Values for "select" action</span></li>
+                <li><code>full_page</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Capture full scrollable page for "screenshot"</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid Web -->
+
+
+        <!-- ---- Soul & Memory ---- -->
+        <div class="category-header">
+          <h2 id="cat-soul-memory">Soul &amp; Memory</h2>
+          <span class="count">6 tools</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- save_memory -->
+          <div class="tool-card">
+            <h4 class="tool-name">save_memory</h4>
+            <div class="tool-desc">Save a fact, preference, or piece of context to the persistent daily memory log. Will not save credentials, API keys, tokens, phone numbers, or facts already in the Recent Memory section. Max 2000 characters.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>fact</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The fact or preference to remember</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- update_soul -->
+          <div class="tool-card">
+            <h4 class="tool-name">update_soul</h4>
+            <div class="tool-desc">Rewrite the bot's personality, tone, and behavioral rules. The content provided replaces the entire SOUL.md definition. Used when the user asks the bot to change how it behaves.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>content</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The full new soul content (personality, tone, style rules)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- update_identity -->
+          <div class="tool-card">
+            <h4 class="tool-name">update_identity</h4>
+            <div class="tool-desc">Change the bot's name, emoji, or vibe in IDENTITY.md. Only the fields provided will be updated; others stay the same.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>name</code> <span class="param-type">string</span> <span class="param-desc">&mdash; New display name</span></li>
+                <li><code>emoji</code> <span class="param-type">string</span> <span class="param-desc">&mdash; New emoji that represents the bot</span></li>
+                <li><code>vibe</code> <span class="param-type">string</span> <span class="param-desc">&mdash; New vibe or short personality tagline</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- recall_memory -->
+          <div class="tool-card">
+            <h4 class="tool-name">recall_memory</h4>
+            <div class="tool-desc">Self-directed retrieval from structured core memory. Searches keys and values, filters by category and importance, and returns results ordered by relevance. Use when the agent needs to remember information without relying on automatic prefetch.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>topic</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Topic or keyword to recall</span></li>
+                <li><code>context</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Additional context to refine the search</span></li>
+                <li><code>category</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; identity | relationships | preferences | goals | constraints</span></li>
+                <li><code>min_importance</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Minimum importance 1-10</span></li>
+                <li><code>max_results</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Max results to return (default: 5)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- memory_search -->
+          <div class="tool-card">
+            <h4 class="tool-name">memory_search</h4>
+            <div class="tool-desc">Search persistent memory for relevant facts, preferences, conversation history, and context. Uses the MemoryManager's search engine with relevance scoring. Should be used before answering questions about people, past conversations, or decisions.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>query</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Describe what you are looking for</span></li>
+                <li><code>maxResults</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Maximum results (default: 5)</span></li>
+                <li><code>minScore</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Minimum relevance score 0-1 (default: 0.1)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- memory_get -->
+          <div class="tool-card">
+            <h4 class="tool-name">memory_get</h4>
+            <div class="tool-desc">Retrieve the contents of a specific memory file with line numbers. Use this to read more context around a search result. Rejects absolute paths and directory traversal for security.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>path</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Relative path to the memory file (e.g. "MEMORY.md")</span></li>
+                <li><code>from</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Starting line number (1-indexed, default: 1)</span></li>
+                <li><code>lines</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Number of lines to read (default: entire file)</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid Soul & Memory -->
+
+
+        <!-- ---- Core Memory ---- -->
+        <div class="category-header">
+          <h2 id="cat-core-memory">Core Memory</h2>
+          <span class="count">3 tools</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- core_memory_append -->
+          <div class="tool-card">
+            <h4 class="tool-name">core_memory_append</h4>
+            <div class="tool-desc">Add or update a structured memory fact about identity, relationships, preferences, goals, or constraints. Persists across conversations with category organization and 1-10 importance scoring.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>category</code> <span class="param-type">enum</span> <span class="param-req">required</span> <span class="param-desc">&mdash; identity | relationships | preferences | goals | constraints</span></li>
+                <li><code>key</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Short identifier (e.g. "user_diego_work")</span></li>
+                <li><code>value</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The content to remember (max 2000 chars)</span></li>
+                <li><code>importance</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Importance score 1-10 (default: 5)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- core_memory_replace -->
+          <div class="tool-card">
+            <h4 class="tool-name">core_memory_replace</h4>
+            <div class="tool-desc">Replace an existing memory fact with a new value. The old_value must match exactly for safety, preventing accidental overwrites of updated information.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>category</code> <span class="param-type">enum</span> <span class="param-req">required</span> <span class="param-desc">&mdash; identity | relationships | preferences | goals | constraints</span></li>
+                <li><code>key</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Identifier of the fact to replace</span></li>
+                <li><code>old_value</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Current value (must match exactly)</span></li>
+                <li><code>new_value</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; New value to replace with</span></li>
+                <li><code>importance</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Optional new importance score 1-10</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- core_memory_search -->
+          <div class="tool-card">
+            <h4 class="tool-name">core_memory_search</h4>
+            <div class="tool-desc">Search structured core memory for facts about identity, relationships, preferences, goals, or constraints. Returns facts ordered by importance. Should be used before claiming knowledge about a person or the bot itself.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>query</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Search query (matches against keys and values)</span></li>
+                <li><code>category</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; Filter to specific category</span></li>
+                <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Maximum results (default: 10, max: 50)</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid Core Memory -->
+
+
+        <!-- ---- File & Exec ---- -->
+        <div class="category-header">
+          <h2 id="cat-file-exec">File &amp; Exec</h2>
+          <span class="count">5 tools</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- file_read -->
+          <div class="tool-card">
+            <h4 class="tool-name">file_read</h4>
+            <div class="tool-desc">Read the contents of a file with line numbers. Validates paths against a base directory, blocks sensitive file patterns (.env, credentials, SSH keys), and rejects symlinks escaping the allowed directory.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>path</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; File path relative to the allowed base directory</span></li>
+                <li><code>offset</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Line number to start reading from (1-based)</span></li>
+                <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Maximum number of lines to return</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- file_write -->
+          <div class="tool-card">
+            <h4 class="tool-name">file_write</h4>
+            <div class="tool-desc">Write content to a file. Creates the file if it doesn't exist, or overwrites it. Set append=true to append instead of overwriting. Creates intermediate directories automatically. Same security validations as file_read.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>path</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; File path relative to the allowed base directory</span></li>
+                <li><code>content</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The content to write</span></li>
+                <li><code>append</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Append instead of overwrite (default: false)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- file_edit -->
+          <div class="tool-card">
+            <h4 class="tool-name">file_edit</h4>
+            <div class="tool-desc">Edit an existing file by replacing exact text. Searches for old_text and replaces with new_text. Fails if old_text is not found or appears multiple times (unless replace_all is true). Preferred over file_write for modifications.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>path</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; File path relative to the allowed base directory</span></li>
+                <li><code>old_text</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The exact text to find</span></li>
+                <li><code>new_text</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The replacement text</span></li>
+                <li><code>replace_all</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Replace all occurrences (default: false)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- exec -->
+          <div class="tool-card">
+            <h4 class="tool-name">exec</h4>
+            <div class="tool-desc">Execute a shell command on the host machine and return stdout/stderr. Includes safety checks blocking dangerous commands (rm -rf /, fork bombs, mkfs, etc.), configurable allow/deny patterns, and optional background mode that returns a session ID for the process tool.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>command</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The shell command to execute</span></li>
+                <li><code>workdir</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Working directory for the command</span></li>
+                <li><code>background</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Run in background, returns session ID (default: false)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- process -->
+          <div class="tool-card">
+            <h4 class="tool-name">process</h4>
+            <div class="tool-desc">Manage background processes started by exec with background=true. List running/finished processes, poll new output, send stdin input, kill running processes, or clear finished sessions from the registry.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>action</code> <span class="param-type">enum</span> <span class="param-req">required</span> <span class="param-desc">&mdash; list | poll | write | kill | clear</span></li>
+                <li><code>session_id</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Session ID (required for poll, write, kill, clear)</span></li>
+                <li><code>input</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Text to send to stdin (for "write" action)</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid File & Exec -->
+
+
+        <!-- ---- Communication ---- -->
+        <div class="category-header">
+          <h2 id="cat-communication">Communication</h2>
+          <span class="count">4 tools</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- collaborate -->
+          <div class="tool-card">
+            <h4 class="tool-name">collaborate</h4>
+            <div class="tool-desc">Collaborate with other AI agents in the system. Discover available agents and their capabilities, send messages for multi-turn conversations via session IDs, or end collaboration sessions. Supports both internal (invisible) and visible (public in group chat) modes.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>action</code> <span class="param-type">enum</span> <span class="param-req">required</span> <span class="param-desc">&mdash; discover | send | end_session</span></li>
+                <li><code>targetBotId</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Bot ID to collaborate with (for "send")</span></li>
+                <li><code>message</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Message to send to the target agent</span></li>
+                <li><code>sessionId</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Session ID for multi-turn continuation</span></li>
+                <li><code>visible</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Send visibly in group chat (default: false)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- delegate_to_bot -->
+          <div class="tool-card">
+            <h4 class="tool-name">delegate_to_bot</h4>
+            <div class="tool-desc">Delegate a message to another bot in the group. The target bot will respond as itself in the chat. Use when the user's request is better handled by another bot's capabilities.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>targetBotId</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The ID of the bot to delegate to</span></li>
+                <li><code>message</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Context/prompt to pass to the target bot</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- ask_human -->
+          <div class="tool-card">
+            <h4 class="tool-name">ask_human</h4>
+            <div class="tool-desc">Ask the human operator a question. Non-blocking: the question is queued to the web inbox and optionally sent as a Telegram notification. The answer will be injected into the bot's next agent loop cycle. Continue working on other tasks in the meantime.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>question</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The question to ask the human operator</span></li>
+                <li><code>timeout_minutes</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Minutes to wait for response (default: 30, max: 120)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- phone_call -->
+          <div class="tool-card">
+            <h4 class="tool-name">phone_call</h4>
+            <div class="tool-desc">Make phone calls via Twilio or manage a phonebook of contacts. Supports calling by contact name or direct phone number, adding/removing contacts, and listing the phonebook. Messages are spoken using TTS with configurable language and voice.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>action</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; call | add_contact | list_contacts | remove_contact</span></li>
+                <li><code>contact</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Contact name or direct phone number</span></li>
+                <li><code>message</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Message to speak in the call</span></li>
+                <li><code>phone_number</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Phone number in E.164 format (for add_contact)</span></li>
+                <li><code>loop</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Times to repeat the message (default: 1, use 3 for emergencies)</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid Communication -->
+
+
+        <!-- ---- Utility ---- -->
+        <div class="category-header">
+          <h2 id="cat-utility">Utility</h2>
+          <span class="count">2 tools</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- get_datetime -->
+          <div class="tool-card">
+            <h4 class="tool-name">get_datetime</h4>
+            <div class="tool-desc">Get the current date and time. Returns a human-readable date, time, day of week, timezone, and ISO 8601 timestamp. Supports IANA timezone overrides.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>timezone</code> <span class="param-type">string</span> <span class="param-desc">&mdash; IANA timezone override (e.g. "America/New_York")</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- cron -->
+          <div class="tool-card">
+            <h4 class="tool-name">cron</h4>
+            <div class="tool-desc">Manage scheduled jobs and reminders. Create one-shot (at), interval (every), or cron-expression (cron) schedules. List, remove, run, or check status of jobs. One-shot jobs auto-delete after execution.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>action</code> <span class="param-type">enum</span> <span class="param-req">required</span> <span class="param-desc">&mdash; add | list | remove | run | status</span></li>
+                <li><code>name</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Job name (for "add")</span></li>
+                <li><code>schedule</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Schedule config: { kind: "at"|"every"|"cron", at?, everyMs?, expr?, tz? }</span></li>
+                <li><code>text</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Reminder/message text (for "add")</span></li>
+                <li><code>jobId</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Job ID (for "remove" and "run")</span></li>
+                <li><code>deleteAfterRun</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Delete after first execution</span></li>
+                <li><code>includeDisabled</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Include disabled jobs in list</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid Utility -->
+
+
+        <!-- ---- Meta ---- -->
+        <div class="category-header">
+          <h2 id="cat-meta">Meta</h2>
+          <span class="count">3 tools</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- create_tool -->
+          <div class="tool-card">
+            <h4 class="tool-name">create_tool</h4>
+            <div class="tool-desc">Create a new custom tool that will be available after human approval. Supports TypeScript (Bun script) and command (shell with {{param}} placeholders) types. Includes static analysis to reject dangerous code patterns. Tools start in "pending" status.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>name</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Tool name in snake_case (must be unique)</span></li>
+                <li><code>description</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; What the tool does (shown to the LLM)</span></li>
+                <li><code>type</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; "typescript" or "command"</span></li>
+                <li><code>source</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The source code for the tool</span></li>
+                <li><code>parameters</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Parameter definitions { paramName: { type, description, required } }</span></li>
+                <li><code>scope</code> <span class="param-type">string</span> <span class="param-desc">&mdash; "all" (default) or a specific bot ID</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- improve -->
+          <div class="tool-card">
+            <h4 class="tool-name">improve</h4>
+            <div class="tool-desc">Spawn a Claude Code session to review and improve the bot's soul, personality, memory, motivations, or identity files. A powerful editing operation that reads and edits actual files on disk. Backs up files before modification.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>focus</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; memory | soul | motivations | identity | all</span></li>
+                <li><code>context</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Optional instructions (e.g. "make the personality more sarcastic")</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- manage_goals -->
+          <div class="tool-card">
+            <h4 class="tool-name">manage_goals</h4>
+            <div class="tool-desc">Manage structured goals in GOALS.md. Track tasks, projects, and objectives that persist in the soul directory and are visible during reflection and agent loop cycles. Supports listing, adding, updating status, and completing goals with outcomes.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>action</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; list | add | update | complete</span></li>
+                <li><code>goal</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Goal text (for add) or identifier substring (for update/complete)</span></li>
+                <li><code>status</code> <span class="param-type">string</span> <span class="param-desc">&mdash; pending | in_progress | blocked (for update)</span></li>
+                <li><code>priority</code> <span class="param-type">string</span> <span class="param-desc">&mdash; high | medium | low</span></li>
+                <li><code>notes</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Additional notes or context</span></li>
+                <li><code>outcome</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Outcome summary (for complete)</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid Meta -->
+
+
+        <!-- ---- Production ---- -->
+        <div class="category-header">
+          <h2 id="cat-production">Production</h2>
+          <span class="count">1 tool</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- read_production_log -->
+          <div class="tool-card">
+            <h4 class="tool-name">read_production_log</h4>
+            <div class="tool-desc">Read the bot's production changelog and evaluations. Use to learn from past work, review human feedback on outputs, and improve future productions. Returns stats (total, approved, rejected, unreviewed, average rating) and recent entries.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Max entries to return (default: 20)</span></li>
+                <li><code>status</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; approved | rejected | unreviewed | all (default: all)</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid Production -->
+
+
+        <!-- ============================================================ -->
+        <!--  Dynamic Tools                                                -->
+        <!-- ============================================================ -->
+
+        <h2 id="dynamic-tools">Dynamic Tools</h2>
+
+        <p>Beyond the 27 built-in tools, agents can create custom tools at runtime using the <code>create_tool</code> tool. Dynamic tools go through a human approval workflow:</p>
+
+        <ol style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px;">
+          <li>The agent creates a tool via <code>create_tool</code> (TypeScript or shell command)</li>
+          <li>Static analysis checks for dangerous patterns (eval, child_process, fs, etc.)</li>
+          <li>The tool is stored in <code>DynamicToolStore</code> with status <span class="badge badge-medium">PENDING</span></li>
+          <li>A human reviews and approves/rejects via the web dashboard</li>
+          <li>Approved tools are loaded by <code>DynamicToolRegistry</code> and become available to agents</li>
+        </ol>
+
+        <p>Dynamic tools support per-bot scoping &mdash; a tool can be available to all bots or restricted to the bot that created it.</p>
+
+
+        <!-- ============================================================ -->
+        <!--  SKILLS SECTION                                               -->
+        <!-- ============================================================ -->
+
+        <h2 id="skills">Skills</h2>
+
+        <p>Skills are self-contained capability packages in <code>src/skills/&lt;id&gt;/</code>. Each skill has a <code>skill.json</code> manifest defining metadata and configuration schema, and an <code>index.ts</code> entry point that can register Telegram commands, cron jobs, event handlers, and tool integrations.</p>
+
+        <div class="skill-grid cols-2">
+
+          <!-- calibrate -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Soul Calibration</h3>
+              <span class="skill-id">calibrate</span>
+            </div>
+            <div class="skill-desc">Interactive review and correction of soul memory claims. Presents batches of stored facts for the user to confirm, correct, or delete &mdash; ensuring the bot's memory stays accurate over time.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">config: soulDir, maxBatches, sessionTimeoutMs</span>
+            </div>
+          </div>
+
+          <!-- example -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Example Skill</h3>
+              <span class="skill-id">example</span>
+            </div>
+            <div class="skill-desc">A simple example skill demonstrating the framework. Serves as a reference implementation for building new skills.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">template</span>
+            </div>
+          </div>
+
+          <!-- humanizer -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Humanizer</h3>
+              <span class="skill-id">humanizer</span>
+            </div>
+            <div class="skill-desc">Remove signs of AI-generated writing from text, based on Wikipedia's "Signs of AI writing" guide. Rewrites content to sound more natural and human-authored.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">text processing</span>
+            </div>
+          </div>
+
+          <!-- improve -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Soul Improve</h3>
+              <span class="skill-id">improve</span>
+            </div>
+            <div class="skill-desc">Spawn Claude Code to review and improve soul/memory files. Provides the <code>/improve</code> command as a skill interface to the improve tool, with configurable focus areas and Telegram notifications.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">config: soulDir, claudePath, timeout, maxOutputLength, telegramChatId</span>
+            </div>
+          </div>
+
+          <!-- intel-gatherer -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Intelligence Gatherer</h3>
+              <span class="skill-id">intel-gatherer</span>
+            </div>
+            <div class="skill-desc">Collects and analyzes intelligence from multiple sources (Reddit, Hacker News, GitHub) with category-based collection and LLM summaries. Delivers daily reports via Telegram with configurable source definitions.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v4.1.0</span>
+              <span class="tag">config: telegramChatId, sourcesFile, dataDir, githubToken</span>
+            </div>
+          </div>
+
+          <!-- phone-call -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Phone Call</h3>
+              <span class="skill-id">phone-call</span>
+            </div>
+            <div class="skill-desc">Make phone calls via Twilio with <code>/mayday</code> and <code>/call</code> commands. Provides quick-access emergency calls and general voice calls with configurable default numbers and TTS settings.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">commands: /mayday, /call</span>
+              <span class="tag">config: accountSid, authToken, fromNumber, toNumber, language, voice</span>
+            </div>
+          </div>
+
+          <!-- reflection -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Self-Reflection</h3>
+              <span class="skill-id">reflection</span>
+            </div>
+            <div class="skill-desc">Nightly self-reflection and evolving motivations system. Runs on a cron schedule to review the day's memories, update MOTIVATIONS.md, and optionally send a reflection summary via Telegram. Falls back from Claude Code to Ollama for summarization.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">config: soulDir, claudePath, telegramChatId, notifyOnReflection, cronSchedule</span>
+            </div>
+          </div>
+
+        </div><!-- /skill-grid -->
+
+
+        <!-- ============================================================ -->
+        <!--  Tool Architecture                                            -->
+        <!-- ============================================================ -->
+
+        <h2 id="architecture">Tool Architecture</h2>
+
+        <h3>Tool Interface</h3>
+        <p>Every tool implements the <code>Tool</code> interface from <code>src/tools/types.ts</code>:</p>
+
+        <pre><code>interface Tool {
+  definition: ToolDefinition;  // OpenAI-compatible function schema
+  execute(args: Record&lt;string, unknown&gt;, logger: Logger): Promise&lt;ToolResult&gt;;
+}
+
+interface ToolResult {
+  success: boolean;
+  content: string;
+}
+
+interface ToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: { type: 'object'; properties: Record&lt;string, unknown&gt;; required?: string[] };
+  };
+  outputSchema?: ZodType;   // Optional structured output validation
+  maxRetries?: number;       // Auto-retry on transient failures
+}</code></pre>
+
+        <h3>Registration Flow</h3>
+        <p><code>ToolRegistry.initializeAll()</code> checks each tool's config flag and creates instances. The registry provides filtered views per bot (<code>getDefinitionsForBot()</code>, <code>getToolsForBot()</code>) that respect per-bot <code>disabledTools</code> and dynamic tool scope exclusions.</p>
+
+        <h3>Execution Pipeline</h3>
+        <p>The <code>ToolExecutor</code> handles the full lifecycle: argument injection (<code>_botId</code>, <code>_chatId</code>), disabled tool rejection, execution with logging, and result formatting. External content is wrapped with <code>&lt;&lt;&lt;EXTERNAL_UNTRUSTED_CONTENT&gt;&gt;&gt;</code> markers so the LLM knows to treat it as untrusted.</p>
+
+        <h3>Safety Layers</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Layer</th>
+              <th>Mechanism</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Per-bot disable</td>
+              <td><code>config.bots[].disabledTools</code> array</td>
+            </tr>
+            <tr>
+              <td>SSRF protection</td>
+              <td>Blocked host patterns in web_fetch and browser</td>
+            </tr>
+            <tr>
+              <td>Path traversal</td>
+              <td>file_read/write/edit validate against basePath + symlink checks</td>
+            </tr>
+            <tr>
+              <td>Command safety</td>
+              <td>exec blocks fork bombs, rm -rf /, mkfs, shutdown, etc.</td>
+            </tr>
+            <tr>
+              <td>Sensitive files</td>
+              <td>Built-in deny patterns for .env, credentials, SSH keys, etc.</td>
+            </tr>
+            <tr>
+              <td>Dynamic tool review</td>
+              <td>Static analysis + human approval before activation</td>
+            </tr>
+            <tr>
+              <td>Collaboration safety</td>
+              <td>collaborate/delegate_to_bot excluded from collaboration-mode tool sets</td>
+            </tr>
+            <tr>
+              <td>External content</td>
+              <td><code>wrapExternalContent()</code> markers prevent prompt injection</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- External Skills -->
+        <h2 id="external-skills">External Skills</h2>
+        <p>
+          External skill packages follow the TSC format: a directory containing a
+          <code>skill.json</code> manifest and an <code>index.ts</code> handler file.
+          They are loaded at startup from directories listed in
+          <code>config.skillsFolders.paths[]</code>.
+        </p>
+
+        <h3>Loading Pipeline</h3>
+        <pre><code>Settings UI (folder picker) → Config (skillsFolders.paths[])
+                                         ↓
+Startup: scan all folders → Loader (discover + parse + import) → Adapter (ToolHandler → Tool) → ToolRegistry (ctx.tools[])
+                                         ↓
+Agent Edit UI → Per-bot skill enable/disable (BotConfig.disabledSkills[])</code></pre>
+
+        <h3>Key Files</h3>
+        <table>
+          <thead><tr><th>File</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>src/core/external-skill-loader.ts</code></td>
+              <td>Discovers skill dirs, reads manifests, validates, dynamically imports handlers</td>
+            </tr>
+            <tr>
+              <td><code>src/core/external-tool-adapter.ts</code></td>
+              <td>Adapts TSC ToolHandler signature to framework Tool interface with namespaced names</td>
+            </tr>
+            <tr>
+              <td><code>src/bot/tool-registry.ts</code></td>
+              <td><code>initializeExternalSkills()</code> orchestrates loading; <code>getExcludedSet()</code> handles <code>disabledSkills</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Tool Namespacing</h3>
+        <p>
+          Each external tool is namespaced as <code>${skillId}_${toolName}</code>
+          (e.g. <code>github_repo_list</code>, <code>linear_issue_create</code>).
+          This prevents name collisions with built-in tools and between skills.
+        </p>
+
+        <h3>Per-Bot Filtering</h3>
+        <p>
+          <code>BotConfig.disabledSkills: ["github"]</code> disables ALL tools from the
+          <code>github</code> skill for that bot. Individual tools can still be disabled via
+          the existing <code>disabledTools</code> mechanism. Both sets are merged in
+          <code>ToolRegistry.getExcludedSet()</code>.
+        </p>
+
+        <!-- ============================================================ -->
+        <!--  Skills Dashboard                                             -->
+        <!-- ============================================================ -->
+
+        <h2 id="skills-dashboard">Skills Dashboard</h2>
+
+        <p>
+          The web UI includes a unified <strong>Skills</strong> page at
+          <code>#/skills</code> that merges built-in and external skills into a
+          single browsable list. Built-in skills are read-only; external skills
+          support full CRUD operations.
+        </p>
+
+        <h3>Pages</h3>
+        <table>
+          <thead><tr><th>Route</th><th>View</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>#/skills</code></td>
+              <td>List</td>
+              <td>Table of all skills with type badges, command/tool counts, warnings, and actions</td>
+            </tr>
+            <tr>
+              <td><code>#/skills/:id</code></td>
+              <td>Detail</td>
+              <td>Metadata grid, commands/jobs (built-in) or tools table + handler code (external)</td>
+            </tr>
+            <tr>
+              <td><code>#/skills/:id/edit</code></td>
+              <td>Edit</td>
+              <td>Edit skill.json + handler code for external skills. Shows "Restart required" after save</td>
+            </tr>
+            <tr>
+              <td><code>#/skills/new</code></td>
+              <td>Create</td>
+              <td>Create new external skill manually or via AI generation with Claude CLI</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>API Endpoints</h3>
+        <table>
+          <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>GET</code></td><td><code>/api/skills</code></td><td>List all skills (built-in + external merged)</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/skills/:id</code></td><td>Detail for a single skill</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/skills/:id/source</code></td><td>Handler source code (external only)</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/skills</code></td><td>Create new external skill on disk</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/skills/generate</code></td><td>AI-generate skill (preview only)</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/skills/generate/apply</code></td><td>Write generated files to disk</td></tr>
+            <tr><td><code>PUT</code></td><td><code>/api/skills/:id</code></td><td>Update external skill files</td></tr>
+            <tr><td><code>DELETE</code></td><td><code>/api/skills/:id</code></td><td>Delete external skill directory</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Security</h3>
+        <p>
+          All write operations (create, update, delete, apply) validate that the
+          target directory is within one of the configured
+          <code>skillsFolders.paths[]</code> using <code>resolve() + startsWith()</code>.
+          Requests targeting directories outside the allowed paths are rejected with
+          <code>403 Forbidden</code>.
+        </p>
+
+        <h3>AI Generation</h3>
+        <p>
+          <code>src/skill-generator.ts</code> follows the same pattern as
+          <code>src/soul-generator.ts</code>: builds a prompt with format specs and
+          1&ndash;2 examples from existing external skills, calls <code>claudeGenerate()</code>,
+          strips markdown fences, and parses the JSON response into
+          <code>{ skillJson, handlerCode }</code>. The generate endpoint returns a
+          preview; the apply endpoint writes files to disk.
+        </p>
+
+      </div><!-- /content -->
+    </main>
+
+  </div><!-- /layout -->
+
+  <!-- Hamburger mobile JS -->
+  <script>
+    (function () {
+      var hamburger = document.getElementById('hamburger');
+      var sidebar   = document.getElementById('sidebar');
+      var backdrop  = document.getElementById('backdrop');
+
+      function toggle() {
+        sidebar.classList.toggle('open');
+        backdrop.classList.toggle('show');
+      }
+
+      function close() {
+        sidebar.classList.remove('open');
+        backdrop.classList.remove('show');
+      }
+
+      hamburger.addEventListener('click', toggle);
+      backdrop.addEventListener('click', close);
+
+      // Close sidebar when a nav link is clicked (mobile)
+      var links = sidebar.querySelectorAll('nav a');
+      for (var i = 0; i < links.length; i++) {
+        links[i].addEventListener('click', close);
+      }
+    })();
+  </script>
+</body>
+</html>

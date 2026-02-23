@@ -17,6 +17,7 @@ NO buscar en internet la documentacion de OpenClaw - usar el codigo fuente local
 - Antes de refactorizar, agregar features, o corregir bugs en el bot core: SIEMPRE leer la sección "Arquitectura del Bot" más abajo para entender qué módulo modificar y cómo se relacionan entre sí.
 - Cada cambio de código debe incluir o actualizar tests unitarios en `tests/`. Ejecutar `bun test` antes de considerar el trabajo terminado.
 - Cualquier cambio relevante debe agregarse al archivo `CHANGELOG.md` en la raíz del proyecto.
+- Cualquier cambio que afecte la arquitectura, módulos, tools, skills, rutas web, config schemas, o memoria debe reflejarse en la documentación en `docs/architecture-docs/`. Actualizar la página HTML correspondiente para mantener la documentación sincronizada con el código.
 
 ## Proyecto
 - Runtime: Bun
@@ -37,13 +38,28 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 |---|---|
 | `types.ts` | `BotContext` interface compartido + `SeenUser` |
 | `bot-manager.ts` | Facade slim: constructor, `startBot`, `stopBot`, `sendMessage`, API pública |
+| `tenant-facade.ts` | Tenant/billing/metering — delegado desde BotManager |
 | `tool-registry.ts` | Inicialización de tools, executor, filtro collaboration-safe |
+| `tool-executor.ts` | Ejecución de tools con lifecycle events y retry |
 | `system-prompt-builder.ts` | Composición unificada de system prompts (modo `conversation` y `collaboration`) |
 | `memory-flush.ts` | Flush de sesión a daily memory log |
 | `group-activation.ts` | Checks de relevancia en grupos: deference, LLM relevance, broadcast |
 | `conversation-pipeline.ts` | Pipeline core: session expiry, RAG prefetch, LLM call, persist, reply |
+| `conversation-gate.ts` | Pre-condiciones de mensajes: auth, grupo, bot-to-bot, ask_human |
 | `collaboration.ts` | Bot-to-bot: visible, internal, delegation, multi-turn |
-| `handler-registrar.ts` | Registro de handlers grammy: skills, commands, media, auth, built-ins |
+| `handler-registrar.ts` | Registro de handlers grammy: skills, commands, media, built-ins |
+| `agent-loop.ts` | Orquestador del agent loop: ejecuta bots periódica/continuamente |
+| `agent-scheduler.ts` | Scheduling, concurrency, sleep, bot loops |
+| `agent-retry-engine.ts` | Retry con backoff exponencial, clasificación de errores |
+| `agent-planner.ts` | LLM planner con retry (periódico y continuo) |
+| `agent-strategist.ts` | Strategist: reflexión, operaciones de goals, cadencia |
+| `agent-loop-utils.ts` | Funciones puras: digest, dedup, file scan, memory log |
+| `agent-loop-prompts.ts` | Prompt builders para planner, strategist, executor, feedback |
+| `llm-json-parser.ts` | Parser genérico de JSON desde output LLM |
+| `soul-health-check.ts` | Orquestador: lint + consolidación + quality review |
+| `soul-lint.ts` | Lint estructural de soul directory (sin LLM) |
+| `soul-memory-consolidator.ts` | Consolidación de daily logs → MEMORY.md |
+| `soul-quality-reviewer.ts` | Quality review de soul files (Claude CLI) |
 | `index.ts` | Barrel re-export de `BotManager` |
 
 ### Patrón de composición
@@ -55,11 +71,19 @@ Las dependencias circulares (delegation/collaborate tools → CollaborationManag
 
 ```
 BotManager (facade)
+  ├── TenantFacade            (tenant/billing/metering)
   ├── ToolRegistry            (sin deps de módulo)
   ├── SystemPromptBuilder     (lee ToolRegistry.getDefinitions())
   ├── MemoryFlusher           (sin deps de módulo)
   ├── GroupActivation         (sin deps de módulo)
   ├── ConversationPipeline    (usa SystemPromptBuilder, MemoryFlusher, ToolRegistry)
   ├── CollaborationManager    (usa SystemPromptBuilder, ToolRegistry)
-  └── HandlerRegistrar        (usa ConversationPipeline, GroupActivation, MemoryFlusher)
+  ├── HandlerRegistrar        (usa ConversationPipeline, GroupActivation, ConversationGate)
+  │   └── ConversationGate    (auth, grupo, bot-to-bot gates)
+  └── AgentLoop               (orquestador)
+      ├── AgentScheduler      (scheduling, concurrency, sleep)
+      ├── AgentRetryEngine    (retry con backoff)
+      ├── AgentPlanner        (LLM planner)
+      ├── AgentStrategist     (strategist, goals)
+      └── AgentLoopUtils      (funciones puras)
 ```

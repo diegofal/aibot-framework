@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test';
-import { parseDurationMs } from '../src/bot/agent-loop';
+import { parseDurationMs, parseStrategistResult, isRetryableError, computeRetryDelay } from '../src/bot/agent-loop';
 import { parseGoals, serializeGoals } from '../src/tools/goals';
-import { buildStrategistPrompt, buildContinuousPlannerPrompt, buildPlannerPrompt } from '../src/bot/agent-loop-prompts';
-import { BotAgentLoopOverrideSchema } from '../src/config';
+import { buildStrategistPrompt, buildContinuousPlannerPrompt, buildPlannerPrompt, buildExecutorPrompt } from '../src/bot/agent-loop-prompts';
+import { BotAgentLoopOverrideSchema, GlobalAgentLoopConfigSchema, AgentLoopRetryConfigSchema } from '../src/config';
 
 describe('parseDurationMs', () => {
   test('parses milliseconds', () => {
@@ -65,7 +65,7 @@ describe('error backoff formula', () => {
   });
 });
 
-describe('planner prompt — no skip gate', () => {
+describe('planner prompt — novelty imperative', () => {
   const baseInput = {
     identity: 'test',
     soul: 'test',
@@ -84,42 +84,78 @@ describe('planner prompt — no skip gate', () => {
     expect(system).not.toContain('next_check_in');
   });
 
-  test('always requires a plan (no option to skip)', () => {
+  test('contains NOVELTY IMPERATIVE (not SURVIVAL IMPERATIVE)', () => {
     const { system } = buildPlannerPrompt(baseInput);
-    expect(system).toContain('always produce a plan');
-    expect(system).toContain('no option to skip');
+    expect(system).toContain('NOVELTY IMPERATIVE');
+    expect(system).not.toContain('SURVIVAL IMPERATIVE');
+    expect(system).not.toContain('eliminated');
   });
 
-  test('contains survival imperative', () => {
-    const { system } = buildPlannerPrompt(baseInput);
-    expect(system).toContain('eliminated');
-    expect(system).toContain('SURVIVAL IMPERATIVE');
-  });
-
-  test('includes priority in the JSON schema', () => {
+  test('includes priority with "none" option in the JSON schema', () => {
     const { system } = buildPlannerPrompt(baseInput);
     expect(system).toContain('"priority"');
-    expect(system).toContain('"high" | "medium" | "low"');
+    expect(system).toContain('"high" | "medium" | "low" | "none"');
   });
 
-  test('suggests self-improvement activities', () => {
+  test('contains anti-patterns instead of self-improvement', () => {
     const { system } = buildPlannerPrompt(baseInput);
-    expect(system).toContain('self-improvement');
-    expect(system).toContain('Review and update the status of your goals');
-    expect(system).toContain('Reflect on recent activity and save insights');
-    expect(system).toContain('Research opportunities');
-    expect(system).toContain('ask_human to request new directives');
+    expect(system).toContain('ANTI-PATTERNS');
+    expect(system).toContain('Reviewing goals just to review them');
+    expect(system).toContain('Saving "reflections" to memory');
+    expect(system).toContain('Verifying documents you already verified');
+    expect(system).not.toContain('self-improvement');
   });
 
-  test('includes ask_human guidance', () => {
+  test('suggests boundary-pushing activities', () => {
     const { system } = buildPlannerPrompt(baseInput);
+    expect(system).toContain('Push into unfamiliar territory');
+    expect(system).toContain('Challenge your own assumptions');
+    expect(system).toContain('Find blind spots');
+  });
+
+  test('includes ask_human guidance with HUMAN COLLABORATION block', () => {
+    const { system } = buildPlannerPrompt(baseInput);
+    expect(system).toContain('HUMAN COLLABORATION');
     expect(system).toContain('ask_human');
-    expect(system).toContain('Do NOT passively wait');
+    expect(system).toContain('NON-BLOCKING');
+    expect(system).toContain('Do NOT return priority "none" when you could ask the human instead');
   });
 
-  test('prompt instructs to always produce a plan', () => {
+  test('prompt instructs to do something different on repetition', () => {
     const { prompt } = buildPlannerPrompt(baseInput);
-    expect(prompt).toContain('must always produce a plan');
+    expect(prompt).toContain('repetition');
+    expect(prompt).toContain('MUST do something different');
+  });
+
+  test('examples show ask_human instead of idle for blocked deliverable', () => {
+    const { system } = buildPlannerPrompt(baseInput);
+    expect(system).toContain('ask_human to request');
+    expect(system).toContain('"priority":"medium"');
+    // The old idle example (plan:[], priority:none) should be replaced
+    expect(system).not.toContain('"reasoning":"Deliverable blocked — waiting for human approval');
+  });
+
+  test('injects recentActionsDigest when provided', () => {
+    const { system } = buildPlannerPrompt({
+      ...baseInput,
+      recentActionsDigest: '## Recent Actions (last 24h)\n- 2h ago: Reviewed goals',
+    });
+    expect(system).toContain('## Recent Actions (last 24h)');
+    expect(system).toContain('Reviewed goals');
+  });
+
+  test('injects karmaBlock when provided', () => {
+    const { system } = buildPlannerPrompt({
+      ...baseInput,
+      karmaBlock: '## Your Karma: 65/100 (rising ↑)',
+    });
+    expect(system).toContain('65/100');
+    expect(system).toContain('rising');
+  });
+
+  test('omits recentActionsDigest when not provided', () => {
+    const { system } = buildPlannerPrompt(baseInput);
+    expect(system).not.toContain('## Recent Actions');
   });
 });
 
@@ -186,6 +222,23 @@ describe('executor prompt — goals bootstrap', () => {
     expect(result).toContain('Goal 1: Ship feature X');
     expect(result).not.toContain('No goals yet');
   });
+
+  test('includes ask_human guidance in executor prompt', () => {
+    const { buildExecutorPrompt } = require('../src/bot/agent-loop-prompts');
+    const result = buildExecutorPrompt({
+      plan: ['Gather requirements from operator'],
+      identity: 'test',
+      soul: 'test',
+      motivations: 'test',
+      goals: '- [ ] Goal A',
+      datetime: '2026-01-01',
+      hasCreateTool: false,
+      workDir: './productions/test-bot',
+    });
+    expect(result).toContain('ask_human');
+    expect(result).toContain('non-blocking');
+    expect(result).toContain('human inbox');
+  });
 });
 
 describe('buildStrategistPrompt', () => {
@@ -216,6 +269,20 @@ describe('buildStrategistPrompt', () => {
       datetime: '2026-02-20T10:00:00Z',
     });
     expect(system).toContain('(no goals set)');
+  });
+
+  test('deliverable sizing allows ask_human as alternative to no-dependencies', () => {
+    const { system } = buildStrategistPrompt({
+      identity: 'test bot',
+      soul: '',
+      motivations: 'be helpful',
+      goals: '- [ ] Goal A',
+      recentMemory: '',
+      datetime: '2026-02-20T10:00:00Z',
+    });
+    expect(system).toContain('ask_human');
+    expect(system).toContain('Self-Contained OR Ask');
+    expect(system).not.toContain('No Dependencies');
   });
 });
 
@@ -333,6 +400,109 @@ describe('strategist cycle counting logic', () => {
   });
 });
 
+describe('parseStrategistResult', () => {
+  const noopLogger = { warn: () => {} };
+
+  test('parses result with focus field', () => {
+    const raw = JSON.stringify({
+      goal_operations: [],
+      focus: 'Write unit tests',
+      reflection: 'Tests are lacking',
+    });
+    const result = parseStrategistResult(raw, noopLogger);
+    expect(result).not.toBeNull();
+    expect(result!.focus).toBe('Write unit tests');
+    expect(result!.single_deliverable).toBe('Write unit tests');
+    expect(result!.reflection).toBe('Tests are lacking');
+  });
+
+  test('parses result with single_deliverable field', () => {
+    const raw = JSON.stringify({
+      goal_operations: [],
+      single_deliverable: 'Deploy the API endpoint',
+      reflection: 'API is ready',
+    });
+    const result = parseStrategistResult(raw, noopLogger);
+    expect(result).not.toBeNull();
+    expect(result!.single_deliverable).toBe('Deploy the API endpoint');
+    expect(result!.focus).toBe('Deploy the API endpoint');
+    expect(result!.reflection).toBe('API is ready');
+  });
+
+  test('prefers single_deliverable over focus when both present', () => {
+    const raw = JSON.stringify({
+      goal_operations: [],
+      single_deliverable: 'New deliverable',
+      focus: 'Old focus',
+      reflection: 'Both present',
+    });
+    const result = parseStrategistResult(raw, noopLogger);
+    expect(result).not.toBeNull();
+    expect(result!.single_deliverable).toBe('New deliverable');
+    expect(result!.focus).toBe('New deliverable');
+  });
+
+  test('returns null when neither focus nor single_deliverable present', () => {
+    const raw = JSON.stringify({
+      goal_operations: [],
+      reflection: 'Missing deliverable',
+    });
+    const result = parseStrategistResult(raw, noopLogger);
+    expect(result).toBeNull();
+  });
+
+  test('returns null when reflection is missing', () => {
+    const raw = JSON.stringify({
+      goal_operations: [],
+      single_deliverable: 'Something',
+    });
+    const result = parseStrategistResult(raw, noopLogger);
+    expect(result).toBeNull();
+  });
+
+  test('strips markdown fences', () => {
+    const raw = '```json\n' + JSON.stringify({
+      goal_operations: [],
+      single_deliverable: 'Fenced result',
+      reflection: 'Was fenced',
+    }) + '\n```';
+    const result = parseStrategistResult(raw, noopLogger);
+    expect(result).not.toBeNull();
+    expect(result!.single_deliverable).toBe('Fenced result');
+  });
+
+  test('extracts JSON from surrounding prose with single_deliverable', () => {
+    const json = JSON.stringify({
+      goal_operations: [],
+      single_deliverable: 'Embedded result',
+      reflection: 'Surrounded by prose',
+    });
+    const raw = `Here is my analysis:\n${json}\nThat's my plan.`;
+    const result = parseStrategistResult(raw, noopLogger);
+    expect(result).not.toBeNull();
+    expect(result!.single_deliverable).toBe('Embedded result');
+  });
+
+  test('returns null for invalid JSON', () => {
+    const result = parseStrategistResult('not json at all', noopLogger);
+    expect(result).toBeNull();
+  });
+
+  test('handles goal_operations and next_strategy_in', () => {
+    const raw = JSON.stringify({
+      goal_operations: [{ action: 'add', goal: 'New goal', priority: 'high' }],
+      single_deliverable: 'Do something',
+      reflection: 'Looks good',
+      next_strategy_in: '2h',
+    });
+    const result = parseStrategistResult(raw, noopLogger);
+    expect(result).not.toBeNull();
+    expect(result!.goal_operations).toHaveLength(1);
+    expect(result!.goal_operations[0].action).toBe('add');
+    expect(result!.next_strategy_in).toBe('2h');
+  });
+});
+
 describe('buildContinuousPlannerPrompt', () => {
   const baseInput = {
     identity: 'I am a continuous bot',
@@ -350,17 +520,30 @@ describe('buildContinuousPlannerPrompt', () => {
     expect(system).not.toContain('should_act');
   });
 
-  test('always expects a plan (no skip option)', () => {
+  test('contains NOVELTY IMPERATIVE', () => {
     const { system } = buildContinuousPlannerPrompt(baseInput);
-    expect(system).toContain('Always produce a plan');
-    expect(system).toContain('no option to skip');
-    expect(system).not.toContain('skip_reason');
+    expect(system).toContain('NOVELTY IMPERATIVE');
+    expect(system).not.toContain('SURVIVAL IMPERATIVE');
   });
 
-  test('includes priority in the JSON schema', () => {
+  test('includes priority with "none" option in the JSON schema', () => {
     const { system } = buildContinuousPlannerPrompt(baseInput);
     expect(system).toContain('"priority"');
-    expect(system).toContain('"high" | "medium" | "low"');
+    expect(system).toContain('"high" | "medium" | "low" | "none"');
+  });
+
+  test('contains anti-patterns', () => {
+    const { system } = buildContinuousPlannerPrompt(baseInput);
+    expect(system).toContain('ANTI-PATTERNS');
+    expect(system).toContain('Reviewing goals just to review them');
+  });
+
+  test('includes HUMAN COLLABORATION block with ask_human guidance', () => {
+    const { system } = buildContinuousPlannerPrompt(baseInput);
+    expect(system).toContain('HUMAN COLLABORATION');
+    expect(system).toContain('ask_human');
+    expect(system).toContain('NON-BLOCKING');
+    expect(system).toContain('Do NOT return priority "none" when you could ask the human instead');
   });
 
   test('includes last cycle summary when provided', () => {
@@ -827,5 +1010,908 @@ describe('per-bot running state logic', () => {
     // Try to start same bot
     const alreadyRunning = runningBotIds.has('bot-a');
     expect(alreadyRunning).toBe(true);
+  });
+});
+
+describe('planner result parsing — empty plan + priority none', () => {
+  // Replicates the parsePlannerResult logic from AgentLoop
+  function parsePlannerResult(raw: string): { reasoning: string; plan: string[]; priority: string } | null {
+    let cleaned = raw.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+    if (!cleaned.startsWith('{')) {
+      const match = cleaned.match(/\{[\s\S]*"plan"[\s\S]*\}/);
+      if (match) cleaned = match[0];
+    }
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (!parsed.reasoning || !Array.isArray(parsed.plan)) return null;
+      const priority = ['high', 'medium', 'low', 'none'].includes(parsed.priority) ? parsed.priority : 'medium';
+      if (parsed.plan.length === 0 && priority !== 'none') return null;
+      return { reasoning: String(parsed.reasoning), plan: parsed.plan.map(String), priority };
+    } catch {
+      return null;
+    }
+  }
+
+  test('accepts empty plan with priority "none"', () => {
+    const raw = '{"reasoning":"Nothing novel to do","plan":[],"priority":"none"}';
+    const result = parsePlannerResult(raw);
+    expect(result).not.toBeNull();
+    expect(result!.plan).toEqual([]);
+    expect(result!.priority).toBe('none');
+  });
+
+  test('rejects empty plan without priority "none"', () => {
+    const raw = '{"reasoning":"IDK","plan":[],"priority":"low"}';
+    const result = parsePlannerResult(raw);
+    expect(result).toBeNull();
+  });
+
+  test('accepts normal plan with priority "low"', () => {
+    const raw = '{"reasoning":"Do stuff","plan":["Step 1"],"priority":"low"}';
+    const result = parsePlannerResult(raw);
+    expect(result).not.toBeNull();
+    expect(result!.plan).toEqual(['Step 1']);
+  });
+
+  test('accepts priority "none" with plan', () => {
+    // Technically valid but unusual — plan with "none" is allowed
+    const raw = '{"reasoning":"Not sure","plan":["Maybe this"],"priority":"none"}';
+    const result = parsePlannerResult(raw);
+    expect(result).not.toBeNull();
+  });
+
+  test('defaults to "medium" for unknown priority', () => {
+    const raw = '{"reasoning":"Do stuff","plan":["Step 1"],"priority":"urgent"}';
+    const result = parsePlannerResult(raw);
+    expect(result).not.toBeNull();
+    expect(result!.priority).toBe('medium');
+  });
+});
+
+describe('isSimilarSummary — memory dedup', () => {
+  // Replicates the isSimilarSummary logic
+  function isSimilarSummary(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    const normalize = (s: string) =>
+      s.replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/gi, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+    return normalize(a) === normalize(b);
+  }
+
+  test('detects identical summaries', () => {
+    expect(isSimilarSummary('Reviewed goals and saved memory.', 'Reviewed goals and saved memory.')).toBe(true);
+  });
+
+  test('ignores timestamp differences', () => {
+    const a = 'Checked status at 2026-02-22T10:00:00Z and found nothing.';
+    const b = 'Checked status at 2026-02-22T11:30:00Z and found nothing.';
+    expect(isSimilarSummary(a, b)).toBe(true);
+  });
+
+  test('ignores whitespace differences', () => {
+    expect(isSimilarSummary('Reviewed  goals  and  saved.', 'Reviewed goals and saved.')).toBe(true);
+  });
+
+  test('returns false for different summaries', () => {
+    expect(isSimilarSummary('Reviewed goals.', 'Researched new opportunities.')).toBe(false);
+  });
+
+  test('returns false for empty strings', () => {
+    expect(isSimilarSummary('', 'Something')).toBe(false);
+    expect(isSimilarSummary('Something', '')).toBe(false);
+  });
+});
+
+describe('repetition tracking', () => {
+  // Replicates the buildRecentActionsDigest pattern
+  function buildDigest(actions: Array<{ timestamp: number; planSummary: string; tools: string[] }>): string {
+    if (actions.length === 0) return '';
+    const now = Date.now();
+    const lines: string[] = ['## Recent Actions (last 24h)'];
+    const summaryCount = new Map<string, number>();
+    for (const action of actions) {
+      const normalized = action.planSummary.toLowerCase().replace(/\s+/g, ' ').trim();
+      summaryCount.set(normalized, (summaryCount.get(normalized) ?? 0) + 1);
+    }
+    for (const action of actions) {
+      const hoursAgo = Math.round((now - action.timestamp) / 3_600_000);
+      const normalized = action.planSummary.toLowerCase().replace(/\s+/g, ' ').trim();
+      const count = summaryCount.get(normalized) ?? 0;
+      const repeatTag = count >= 3 ? ` ← REPEATED x${count}` : count >= 2 ? ' ← REPEATED' : '';
+      lines.push(`- ${hoursAgo}h ago: ${action.planSummary}${repeatTag}`);
+    }
+    const exhausted: string[] = [];
+    for (const [summary, count] of summaryCount) {
+      if (count >= 3) exhausted.push(summary.slice(0, 60));
+    }
+    if (exhausted.length > 0) {
+      lines.push('');
+      lines.push(`EXHAUSTED PATTERNS (done 3+ times): ${exhausted.join(', ')}`);
+    }
+    return lines.join('\n');
+  }
+
+  test('generates empty string for no actions', () => {
+    expect(buildDigest([])).toBe('');
+  });
+
+  test('lists recent actions without repeat tags', () => {
+    const now = Date.now();
+    const digest = buildDigest([
+      { timestamp: now - 2 * 3_600_000, planSummary: 'Research DeFi trends', tools: ['web_search'] },
+      { timestamp: now - 1 * 3_600_000, planSummary: 'Update goals', tools: ['manage_goals'] },
+    ]);
+    expect(digest).toContain('Research DeFi trends');
+    expect(digest).toContain('Update goals');
+    expect(digest).not.toContain('REPEATED');
+    expect(digest).not.toContain('EXHAUSTED');
+  });
+
+  test('marks repeated actions (2x)', () => {
+    const now = Date.now();
+    const digest = buildDigest([
+      { timestamp: now - 3 * 3_600_000, planSummary: 'Review goals', tools: [] },
+      { timestamp: now - 2 * 3_600_000, planSummary: 'Review goals', tools: [] },
+    ]);
+    expect(digest).toContain('← REPEATED');
+    expect(digest).not.toContain('EXHAUSTED');
+  });
+
+  test('marks exhausted patterns (3+)', () => {
+    const now = Date.now();
+    const digest = buildDigest([
+      { timestamp: now - 4 * 3_600_000, planSummary: 'Verify documents', tools: ['file_read'] },
+      { timestamp: now - 3 * 3_600_000, planSummary: 'Verify documents', tools: ['file_read'] },
+      { timestamp: now - 2 * 3_600_000, planSummary: 'Verify documents', tools: ['file_read'] },
+      { timestamp: now - 1 * 3_600_000, planSummary: 'Research new idea', tools: ['web_search'] },
+    ]);
+    expect(digest).toContain('REPEATED x3');
+    expect(digest).toContain('EXHAUSTED PATTERNS');
+    expect(digest).toContain('verify documents');
+  });
+});
+
+describe('idle cycle tracking', () => {
+  test('consecutive idle cycles increment correctly', () => {
+    let consecutiveIdle = 0;
+
+    // First idle
+    consecutiveIdle++;
+    expect(consecutiveIdle).toBe(1);
+
+    // Second idle
+    consecutiveIdle++;
+    expect(consecutiveIdle).toBe(2);
+
+    // Active cycle resets
+    consecutiveIdle = 0;
+    expect(consecutiveIdle).toBe(0);
+  });
+
+  test('first idle cycle should log, subsequent should not', () => {
+    let consecutiveIdle = 0;
+    const logged: string[] = [];
+
+    // Simulate 3 idle cycles
+    for (let i = 0; i < 3; i++) {
+      consecutiveIdle++;
+      if (consecutiveIdle === 1) {
+        logged.push('Idle — no novel action found.');
+      }
+    }
+
+    expect(logged.length).toBe(1);
+    expect(consecutiveIdle).toBe(3);
+  });
+
+  test('active after idle should log resume message', () => {
+    let consecutiveIdle = 3;
+    const logged: string[] = [];
+
+    // Active cycle after idle
+    if (consecutiveIdle > 0) {
+      logged.push(`Resuming after ${consecutiveIdle} idle cycles.`);
+    }
+    consecutiveIdle = 0;
+
+    expect(logged.length).toBe(1);
+    expect(logged[0]).toContain('3 idle cycles');
+  });
+});
+
+describe('config schema — karma and idleSuppression', () => {
+  test('karma config has sensible defaults', () => {
+    const { z } = require('zod');
+    const KarmaConfigSchema = z.object({
+      enabled: z.boolean().default(true),
+      baseDir: z.string().default('./data/karma'),
+      initialScore: z.number().default(50),
+      decayDays: z.number().default(30),
+    }).default({});
+    const result = KarmaConfigSchema.parse({});
+    expect(result.enabled).toBe(true);
+    expect(result.baseDir).toBe('./data/karma');
+    expect(result.initialScore).toBe(50);
+    expect(result.decayDays).toBe(30);
+  });
+
+  test('idleSuppression defaults to true', () => {
+    const { GlobalAgentLoopConfigSchema } = require('../src/config');
+    const result = GlobalAgentLoopConfigSchema.parse({});
+    expect(result.idleSuppression).toBe(true);
+  });
+
+  test('idleSuppression can be disabled', () => {
+    const { GlobalAgentLoopConfigSchema } = require('../src/config');
+    const result = GlobalAgentLoopConfigSchema.parse({ idleSuppression: false });
+    expect(result.idleSuppression).toBe(false);
+  });
+});
+
+describe('tool error karma deduplication', () => {
+  // Mirrors the dedup logic in agent-loop.ts (lines ~552-563)
+  function deduplicateToolErrors(toolCalls: { name: string; success: boolean }[]) {
+    const toolErrors = toolCalls.filter((t) => !t.success);
+    const errorsByTool = new Map<string, number>();
+    for (const err of toolErrors) {
+      errorsByTool.set(err.name, (errorsByTool.get(err.name) ?? 0) + 1);
+    }
+    const events: { delta: number; reason: string }[] = [];
+    for (const [toolName, count] of errorsByTool) {
+      const reason = count > 1
+        ? `Tool error: ${toolName} (x${count})`
+        : `Tool error: ${toolName}`;
+      events.push({ delta: -1, reason });
+    }
+    return events;
+  }
+
+  test('multiple errors from the same tool produce a single karma event', () => {
+    const calls = Array.from({ length: 10 }, () => ({ name: 'file_read', success: false }));
+    const events = deduplicateToolErrors(calls);
+    expect(events).toHaveLength(1);
+    expect(events[0].delta).toBe(-1);
+    expect(events[0].reason).toBe('Tool error: file_read (x10)');
+  });
+
+  test('errors from different tools produce one event each', () => {
+    const calls = [
+      { name: 'file_read', success: false },
+      { name: 'web_search', success: false },
+      { name: 'execute_code', success: false },
+    ];
+    const events = deduplicateToolErrors(calls);
+    expect(events).toHaveLength(3);
+    const reasons = events.map((e) => e.reason);
+    expect(reasons).toContain('Tool error: file_read');
+    expect(reasons).toContain('Tool error: web_search');
+    expect(reasons).toContain('Tool error: execute_code');
+    // Each without (xN) since count = 1
+    for (const r of reasons) {
+      expect(r).not.toContain('(x');
+    }
+  });
+
+  test('mixed same and different tools deduplicate correctly', () => {
+    const calls = [
+      { name: 'file_read', success: false },
+      { name: 'file_read', success: false },
+      { name: 'file_read', success: false },
+      { name: 'web_search', success: false },
+      { name: 'web_search', success: false },
+      { name: 'execute_code', success: false },
+    ];
+    const events = deduplicateToolErrors(calls);
+    expect(events).toHaveLength(3);
+    const byTool = Object.fromEntries(events.map((e) => [e.reason, e.delta]));
+    expect(byTool['Tool error: file_read (x3)']).toBe(-1);
+    expect(byTool['Tool error: web_search (x2)']).toBe(-1);
+    expect(byTool['Tool error: execute_code']).toBe(-1);
+  });
+
+  test('successful tool calls are excluded', () => {
+    const calls = [
+      { name: 'file_read', success: true },
+      { name: 'file_read', success: false },
+      { name: 'web_search', success: true },
+    ];
+    const events = deduplicateToolErrors(calls);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBe('Tool error: file_read');
+  });
+
+  test('no errors produce no karma events', () => {
+    const calls = [
+      { name: 'file_read', success: true },
+      { name: 'web_search', success: true },
+    ];
+    const events = deduplicateToolErrors(calls);
+    expect(events).toHaveLength(0);
+  });
+
+  test('reason includes (xN) only when count > 1', () => {
+    const calls = [
+      { name: 'file_read', success: false },
+    ];
+    const events = deduplicateToolErrors(calls);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBe('Tool error: file_read');
+    expect(events[0].reason).not.toContain('(x');
+  });
+});
+
+describe('buildExecutorPrompt — file tree context', () => {
+  const baseInput = {
+    plan: ['Write a config file'],
+    identity: 'test bot',
+    soul: 'helpful',
+    motivations: 'produce output',
+    goals: '- [ ] Create config',
+    datetime: '2026-02-22T10:00:00Z',
+    hasCreateTool: false,
+    workDir: './productions/test-bot',
+  };
+
+  test('includes file tree when provided', () => {
+    const result = buildExecutorPrompt({
+      ...baseInput,
+      fileTree: 'config/\n  settings.json\nREADME.md',
+    });
+    expect(result).toContain('config/');
+    expect(result).toContain('settings.json');
+    expect(result).toContain('README.md');
+    expect(result).not.toContain('EMPTY');
+    expect(result).not.toContain('Do NOT attempt file_read or file_edit on non-existent files');
+  });
+
+  test('shows EMPTY notice when fileTree is null', () => {
+    const result = buildExecutorPrompt({
+      ...baseInput,
+      fileTree: null,
+    });
+    expect(result).toContain('EMPTY');
+    expect(result).toContain('Use file_write to create new files');
+    expect(result).toContain('Do NOT attempt file_read or file_edit on non-existent files');
+    expect(result).not.toContain('You already know the project structure');
+  });
+
+  test('shows EMPTY notice when fileTree is undefined', () => {
+    const result = buildExecutorPrompt(baseInput);
+    expect(result).toContain('EMPTY');
+    expect(result).toContain('Do NOT attempt file_read or file_edit on non-existent files');
+  });
+
+  test('does not contain old "You already know the project structure" claim', () => {
+    const result = buildExecutorPrompt({
+      ...baseInput,
+      fileTree: 'somefile.txt',
+    });
+    expect(result).not.toContain('You already know the project structure');
+  });
+
+  test('does not contain old "Do NOT use exec with find/ls/tree" rule', () => {
+    const result = buildExecutorPrompt({
+      ...baseInput,
+      fileTree: 'somefile.txt',
+    });
+    expect(result).not.toContain('Do NOT use exec with find/ls/tree');
+  });
+});
+
+describe('proportional karma penalty logic', () => {
+  // Mirrors the updated logic in agent-loop.ts
+  function computeToolKarma(toolCalls: { name: string; success: boolean }[]) {
+    const totalsByTool = new Map<string, { total: number; errors: number }>();
+    for (const tc of toolCalls) {
+      const entry = totalsByTool.get(tc.name) ?? { total: 0, errors: 0 };
+      entry.total++;
+      if (!tc.success) entry.errors++;
+      totalsByTool.set(tc.name, entry);
+    }
+    const events: { delta: number; reason: string }[] = [];
+    for (const [toolName, { total, errors }] of totalsByTool) {
+      if (errors === 0) continue;
+      const majorityFailed = errors / total > 0.5;
+      const delta = majorityFailed ? -1 : 0;
+      const reason = `Tool error: ${toolName} (${errors}/${total} failed)`;
+      events.push({ delta: majorityFailed ? -1 : 0, reason: majorityFailed ? reason : `Minor: ${reason}` });
+    }
+    return events;
+  }
+
+  test('majority failures produce delta -1', () => {
+    const calls = [
+      { name: 'file_edit', success: false },
+      { name: 'file_edit', success: false },
+      { name: 'file_edit', success: false },
+      { name: 'file_edit', success: true },
+    ];
+    const events = computeToolKarma(calls);
+    expect(events).toHaveLength(1);
+    expect(events[0].delta).toBe(-1);
+    expect(events[0].reason).toBe('Tool error: file_edit (3/4 failed)');
+    expect(events[0].reason).not.toContain('Minor');
+  });
+
+  test('minority failures produce delta 0 with Minor prefix', () => {
+    const calls = [
+      { name: 'file_read', success: false },
+      { name: 'file_read', success: true },
+      { name: 'file_read', success: true },
+      { name: 'file_read', success: true },
+    ];
+    const events = computeToolKarma(calls);
+    expect(events).toHaveLength(1);
+    expect(events[0].delta).toBe(0);
+    expect(events[0].reason).toContain('Minor');
+    expect(events[0].reason).toContain('1/4 failed');
+  });
+
+  test('exactly 50% failures produce delta 0 (not majority)', () => {
+    const calls = [
+      { name: 'exec', success: false },
+      { name: 'exec', success: true },
+    ];
+    const events = computeToolKarma(calls);
+    expect(events).toHaveLength(1);
+    expect(events[0].delta).toBe(0);
+    expect(events[0].reason).toContain('Minor');
+  });
+
+  test('100% failures produce delta -1', () => {
+    const calls = [
+      { name: 'file_edit', success: false },
+      { name: 'file_edit', success: false },
+    ];
+    const events = computeToolKarma(calls);
+    expect(events).toHaveLength(1);
+    expect(events[0].delta).toBe(-1);
+    expect(events[0].reason).toBe('Tool error: file_edit (2/2 failed)');
+  });
+
+  test('mixed tools are scored independently', () => {
+    const calls = [
+      // file_edit: 3/4 failed → -1
+      { name: 'file_edit', success: false },
+      { name: 'file_edit', success: false },
+      { name: 'file_edit', success: false },
+      { name: 'file_edit', success: true },
+      // file_read: 1/3 failed → 0 (minor)
+      { name: 'file_read', success: false },
+      { name: 'file_read', success: true },
+      { name: 'file_read', success: true },
+      // exec: all success → no event
+      { name: 'exec', success: true },
+      { name: 'exec', success: true },
+    ];
+    const events = computeToolKarma(calls);
+    expect(events).toHaveLength(2);
+
+    const editEvent = events.find((e) => e.reason.includes('file_edit'));
+    expect(editEvent).toBeDefined();
+    expect(editEvent!.delta).toBe(-1);
+    expect(editEvent!.reason).toContain('3/4 failed');
+
+    const readEvent = events.find((e) => e.reason.includes('file_read'));
+    expect(readEvent).toBeDefined();
+    expect(readEvent!.delta).toBe(0);
+    expect(readEvent!.reason).toContain('Minor');
+    expect(readEvent!.reason).toContain('1/3 failed');
+  });
+
+  test('no errors produce no events', () => {
+    const calls = [
+      { name: 'file_read', success: true },
+      { name: 'exec', success: true },
+    ];
+    const events = computeToolKarma(calls);
+    expect(events).toHaveLength(0);
+  });
+
+  test('single failure out of one call is majority → -1', () => {
+    const calls = [
+      { name: 'file_read', success: false },
+    ];
+    const events = computeToolKarma(calls);
+    expect(events).toHaveLength(1);
+    expect(events[0].delta).toBe(-1);
+    expect(events[0].reason).toBe('Tool error: file_read (1/1 failed)');
+  });
+});
+
+describe('isRetryableError', () => {
+  test('classifies timeout errors as retryable', () => {
+    expect(isRetryableError(new Error('Executor phase timed out after 193660ms (session timeout guard)'))).toBe(true);
+    expect(isRetryableError(new Error('Agent loop timed out after 300000ms'))).toBe(true);
+    expect(isRetryableError('Request timeout')).toBe(true);
+  });
+
+  test('classifies network errors as retryable', () => {
+    expect(isRetryableError(new Error('fetch failed'))).toBe(true);
+    expect(isRetryableError(new Error('ECONNRESET'))).toBe(true);
+    expect(isRetryableError(new Error('ECONNREFUSED'))).toBe(true);
+    expect(isRetryableError(new Error('ENOTFOUND'))).toBe(true);
+    expect(isRetryableError(new Error('EAI_AGAIN'))).toBe(true);
+    expect(isRetryableError(new Error('socket hang up'))).toBe(true);
+    expect(isRetryableError(new Error('network error'))).toBe(true);
+  });
+
+  test('classifies rate limit errors as retryable', () => {
+    expect(isRetryableError(new Error('rate limit exceeded'))).toBe(true);
+    expect(isRetryableError(new Error('429 Too Many Requests'))).toBe(true);
+  });
+
+  test('classifies server errors as retryable', () => {
+    expect(isRetryableError(new Error('502 Bad Gateway'))).toBe(true);
+    expect(isRetryableError(new Error('503 Service Unavailable'))).toBe(true);
+    expect(isRetryableError(new Error('504 Gateway Timeout'))).toBe(true);
+  });
+
+  test('classifies auth errors as non-retryable', () => {
+    expect(isRetryableError(new Error('Authentication failed'))).toBe(false);
+    expect(isRetryableError(new Error('401 Unauthorized'))).toBe(false);
+    expect(isRetryableError(new Error('403 Forbidden'))).toBe(false);
+    expect(isRetryableError(new Error('Permission denied'))).toBe(false);
+    expect(isRetryableError(new Error('invalid_api_key'))).toBe(false);
+    expect(isRetryableError(new Error('Invalid API Key provided'))).toBe(false);
+  });
+
+  test('classifies unknown errors as non-retryable', () => {
+    expect(isRetryableError(new Error('Something unexpected happened'))).toBe(false);
+    expect(isRetryableError(new Error('Cannot read property of undefined'))).toBe(false);
+    expect(isRetryableError('random string error')).toBe(false);
+  });
+
+  test('handles non-Error objects', () => {
+    expect(isRetryableError('timed out')).toBe(true);
+    expect(isRetryableError(42)).toBe(false);
+    expect(isRetryableError(null)).toBe(false);
+    expect(isRetryableError(undefined)).toBe(false);
+  });
+
+  test('non-retryable patterns take precedence over retryable when both match', () => {
+    // "auth" + "timeout" → auth takes priority (non-retryable checked first)
+    expect(isRetryableError(new Error('auth request timed out'))).toBe(false);
+  });
+});
+
+describe('computeRetryDelay', () => {
+  test('first attempt uses initialDelayMs as base', () => {
+    const delays: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      delays.push(computeRetryDelay(0, 10_000, 60_000, 2));
+    }
+    // Base = 10000, jitter = ±2000, range = [8000, 12000]
+    for (const d of delays) {
+      expect(d).toBeGreaterThanOrEqual(8000);
+      expect(d).toBeLessThanOrEqual(12000);
+    }
+  });
+
+  test('exponential growth: attempt 1 doubles', () => {
+    const delays: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      delays.push(computeRetryDelay(1, 10_000, 60_000, 2));
+    }
+    // Base = 20000, jitter = ±4000, range = [16000, 24000]
+    for (const d of delays) {
+      expect(d).toBeGreaterThanOrEqual(16000);
+      expect(d).toBeLessThanOrEqual(24000);
+    }
+  });
+
+  test('caps at maxDelayMs', () => {
+    const delays: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      delays.push(computeRetryDelay(10, 10_000, 60_000, 2));
+    }
+    // Base would be 10000 * 2^10 = 10_240_000, capped at 60_000
+    // Jitter ±12_000 → [48000, 72000]
+    for (const d of delays) {
+      expect(d).toBeGreaterThanOrEqual(48000);
+      expect(d).toBeLessThanOrEqual(72000);
+    }
+  });
+
+  test('respects custom multiplier', () => {
+    const delays: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      delays.push(computeRetryDelay(1, 5_000, 60_000, 3));
+    }
+    // Base = 5000 * 3^1 = 15000, jitter = ±3000, range = [12000, 18000]
+    for (const d of delays) {
+      expect(d).toBeGreaterThanOrEqual(12000);
+      expect(d).toBeLessThanOrEqual(18000);
+    }
+  });
+
+  test('never returns negative', () => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      for (let i = 0; i < 50; i++) {
+        const d = computeRetryDelay(attempt, 1000, 60_000, 2);
+        expect(d).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+});
+
+describe('staggered bot startup', () => {
+  test('first bot gets nextRunAt = now, second += 30s, third += 60s', () => {
+    const botSchedules = new Map<string, { nextRunAt: number }>();
+    const now = Date.now();
+
+    // Simulates syncSchedules stagger logic
+    function registerBot(botId: string) {
+      if (botSchedules.has(botId)) return;
+      const staggerOffset = botSchedules.size * 30_000;
+      botSchedules.set(botId, { nextRunAt: now + staggerOffset });
+    }
+
+    registerBot('bot-a');
+    registerBot('bot-b');
+    registerBot('bot-c');
+
+    expect(botSchedules.get('bot-a')!.nextRunAt).toBe(now);
+    expect(botSchedules.get('bot-b')!.nextRunAt).toBe(now + 30_000);
+    expect(botSchedules.get('bot-c')!.nextRunAt).toBe(now + 60_000);
+  });
+
+  test('re-registering existing bot does not change stagger', () => {
+    const botSchedules = new Map<string, { nextRunAt: number }>();
+    const now = Date.now();
+
+    function registerBot(botId: string) {
+      if (botSchedules.has(botId)) return;
+      const staggerOffset = botSchedules.size * 30_000;
+      botSchedules.set(botId, { nextRunAt: now + staggerOffset });
+    }
+
+    registerBot('bot-a');
+    registerBot('bot-b');
+    const originalB = botSchedules.get('bot-b')!.nextRunAt;
+
+    // Re-register should be no-op
+    registerBot('bot-b');
+    expect(botSchedules.get('bot-b')!.nextRunAt).toBe(originalB);
+  });
+
+  test('stagger accounts for already-registered bots when adding later', () => {
+    const botSchedules = new Map<string, { nextRunAt: number }>();
+    const now = Date.now();
+
+    function registerBot(botId: string) {
+      if (botSchedules.has(botId)) return;
+      const staggerOffset = botSchedules.size * 30_000;
+      botSchedules.set(botId, { nextRunAt: now + staggerOffset });
+    }
+
+    registerBot('bot-a');
+    registerBot('bot-b');
+    // Later, a third bot joins — it should get offset based on current size (2)
+    registerBot('bot-c');
+    expect(botSchedules.get('bot-c')!.nextRunAt).toBe(now + 60_000);
+  });
+});
+
+describe('concurrency semaphore', () => {
+  function createSemaphore(limit: number) {
+    let running = 0;
+    const queue: Array<() => void> = [];
+
+    function acquire(): Promise<void> {
+      if (running < limit) {
+        running++;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        queue.push(() => {
+          running++;
+          resolve();
+        });
+      });
+    }
+
+    function release(): void {
+      running--;
+      const next = queue.shift();
+      if (next) next();
+    }
+
+    return { acquire, release, getRunning: () => running, getQueueLength: () => queue.length };
+  }
+
+  test('allows up to limit concurrent acquisitions', async () => {
+    const sem = createSemaphore(2);
+
+    await sem.acquire();
+    await sem.acquire();
+    expect(sem.getRunning()).toBe(2);
+
+    // Third acquire should queue
+    let thirdResolved = false;
+    const p3 = sem.acquire().then(() => { thirdResolved = true; });
+    // Give microtask a chance
+    await new Promise((r) => setTimeout(r, 10));
+    expect(thirdResolved).toBe(false);
+    expect(sem.getQueueLength()).toBe(1);
+
+    // Release one — third should now resolve
+    sem.release();
+    await p3;
+    expect(thirdResolved).toBe(true);
+    expect(sem.getRunning()).toBe(2);
+  });
+
+  test('FIFO ordering: first queued gets released first', async () => {
+    const sem = createSemaphore(1);
+    const order: string[] = [];
+
+    await sem.acquire();
+
+    const p1 = sem.acquire().then(() => { order.push('first'); });
+    const p2 = sem.acquire().then(() => { order.push('second'); });
+
+    sem.release();
+    await p1;
+    sem.release();
+    await p2;
+
+    expect(order).toEqual(['first', 'second']);
+  });
+
+  test('release without pending queue decrements running', () => {
+    const sem = createSemaphore(3);
+
+    // Acquire and release all
+    const acquired: Promise<void>[] = [];
+    for (let i = 0; i < 3; i++) acquired.push(sem.acquire());
+
+    expect(sem.getRunning()).toBe(3);
+
+    sem.release();
+    expect(sem.getRunning()).toBe(2);
+    sem.release();
+    expect(sem.getRunning()).toBe(1);
+    sem.release();
+    expect(sem.getRunning()).toBe(0);
+  });
+
+  test('concurrent execution respects limit under load', async () => {
+    const sem = createSemaphore(2);
+    let maxConcurrent = 0;
+    let currentConcurrent = 0;
+
+    async function simulateBot(id: string, durationMs: number) {
+      await sem.acquire();
+      try {
+        currentConcurrent++;
+        if (currentConcurrent > maxConcurrent) maxConcurrent = currentConcurrent;
+        await new Promise((r) => setTimeout(r, durationMs));
+      } finally {
+        currentConcurrent--;
+        sem.release();
+      }
+    }
+
+    // Launch 5 bots that each take 50ms
+    await Promise.all([
+      simulateBot('a', 50),
+      simulateBot('b', 50),
+      simulateBot('c', 50),
+      simulateBot('d', 50),
+      simulateBot('e', 50),
+    ]);
+
+    expect(maxConcurrent).toBe(2);
+    expect(currentConcurrent).toBe(0);
+    expect(sem.getRunning()).toBe(0);
+    expect(sem.getQueueLength()).toBe(0);
+  });
+});
+
+describe('maxConcurrent config schema', () => {
+  test('defaults to 2', () => {
+    const result = GlobalAgentLoopConfigSchema.parse({});
+    expect(result.maxConcurrent).toBe(2);
+  });
+
+  test('accepts valid values', () => {
+    expect(GlobalAgentLoopConfigSchema.parse({ maxConcurrent: 1 }).maxConcurrent).toBe(1);
+    expect(GlobalAgentLoopConfigSchema.parse({ maxConcurrent: 5 }).maxConcurrent).toBe(5);
+    expect(GlobalAgentLoopConfigSchema.parse({ maxConcurrent: 10 }).maxConcurrent).toBe(10);
+  });
+
+  test('rejects values below 1', () => {
+    expect(() => GlobalAgentLoopConfigSchema.parse({ maxConcurrent: 0 })).toThrow();
+    expect(() => GlobalAgentLoopConfigSchema.parse({ maxConcurrent: -1 })).toThrow();
+  });
+
+  test('rejects values above 10', () => {
+    expect(() => GlobalAgentLoopConfigSchema.parse({ maxConcurrent: 11 })).toThrow();
+  });
+
+  test('rejects non-integer values', () => {
+    expect(() => GlobalAgentLoopConfigSchema.parse({ maxConcurrent: 2.5 })).toThrow();
+  });
+});
+
+describe('retry config schema', () => {
+  test('AgentLoopRetryConfigSchema has sensible defaults', () => {
+    const result = AgentLoopRetryConfigSchema.parse({});
+    expect(result.maxRetries).toBe(2);
+    expect(result.initialDelayMs).toBe(10_000);
+    expect(result.maxDelayMs).toBe(60_000);
+    expect(result.backoffMultiplier).toBe(2);
+  });
+
+  test('GlobalAgentLoopConfigSchema includes retry with defaults', () => {
+    const result = GlobalAgentLoopConfigSchema.parse({});
+    expect(result.retry).toBeDefined();
+    expect(result.retry.maxRetries).toBe(2);
+    expect(result.retry.initialDelayMs).toBe(10_000);
+    expect(result.retry.maxDelayMs).toBe(60_000);
+    expect(result.retry.backoffMultiplier).toBe(2);
+  });
+
+  test('retry config can be overridden at global level', () => {
+    const result = GlobalAgentLoopConfigSchema.parse({
+      retry: { maxRetries: 5, initialDelayMs: 5000 },
+    });
+    expect(result.retry.maxRetries).toBe(5);
+    expect(result.retry.initialDelayMs).toBe(5000);
+    expect(result.retry.maxDelayMs).toBe(60_000); // still default
+  });
+
+  test('per-bot retry override schema accepts partial config', () => {
+    const result = BotAgentLoopOverrideSchema.parse({
+      retry: { maxRetries: 0 },
+    });
+    expect(result?.retry?.maxRetries).toBe(0);
+    expect(result?.retry?.initialDelayMs).toBeUndefined();
+  });
+
+  test('per-bot retry override with all fields', () => {
+    const result = BotAgentLoopOverrideSchema.parse({
+      retry: {
+        maxRetries: 3,
+        initialDelayMs: 5000,
+        maxDelayMs: 120_000,
+        backoffMultiplier: 3,
+      },
+    });
+    expect(result?.retry?.maxRetries).toBe(3);
+    expect(result?.retry?.initialDelayMs).toBe(5000);
+    expect(result?.retry?.maxDelayMs).toBe(120_000);
+    expect(result?.retry?.backoffMultiplier).toBe(3);
+  });
+
+  test('rejects maxRetries > 10', () => {
+    expect(() => AgentLoopRetryConfigSchema.parse({ maxRetries: 11 })).toThrow();
+  });
+
+  test('rejects negative maxRetries', () => {
+    expect(() => AgentLoopRetryConfigSchema.parse({ maxRetries: -1 })).toThrow();
+  });
+
+  test('rejects initialDelayMs below 1000', () => {
+    expect(() => AgentLoopRetryConfigSchema.parse({ initialDelayMs: 500 })).toThrow();
+  });
+
+  test('rejects backoffMultiplier below 1', () => {
+    expect(() => AgentLoopRetryConfigSchema.parse({ backoffMultiplier: 0.5 })).toThrow();
+  });
+
+  test('rejects backoffMultiplier above 10', () => {
+    expect(() => AgentLoopRetryConfigSchema.parse({ backoffMultiplier: 11 })).toThrow();
+  });
+
+  test('maxRetries 0 disables retries', () => {
+    const result = AgentLoopRetryConfigSchema.parse({ maxRetries: 0 });
+    expect(result.maxRetries).toBe(0);
   });
 });

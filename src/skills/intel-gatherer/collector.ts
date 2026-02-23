@@ -1,3 +1,4 @@
+import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type {
   RedditPost,
@@ -194,7 +195,7 @@ export class IntelCollector {
    * Collect all intelligence data organized by category
    */
   async collect(config: SourcesConfig): Promise<IntelData> {
-    const date = new Date().toISOString().split('T')[0];
+    const date = localDateStr();
     const categories: Record<string, CategoryData> = {};
     const { settings } = config;
 

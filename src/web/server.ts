@@ -19,6 +19,8 @@ import { agentLoopRoutes } from './routes/agent-loop';
 import { askHumanRoutes } from './routes/ask-human';
 import { productionsRoutes } from './routes/productions';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
+import { karmaRoutes } from './routes/karma';
+import { integrationsRoutes } from './routes/integrations';
 
 export type WebServerDeps = {
   config: Config;
@@ -38,7 +40,13 @@ export function startWebServer(deps: WebServerDeps): void {
 
   // API routes
   app.route('/api/status', statusRoutes({ config, botManager: deps.botManager }));
-  app.route('/api/skills', skillsRoutes({ skillRegistry: deps.skillRegistry }));
+  app.route('/api/skills', skillsRoutes({
+    skillRegistry: deps.skillRegistry,
+    config,
+    configPath: deps.configPath,
+    botManager: deps.botManager,
+    logger,
+  }));
   app.route('/api/agents', agentsRoutes({ config, botManager: deps.botManager, configPath: deps.configPath, logger }));
   app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager }));
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
@@ -52,10 +60,18 @@ export function startWebServer(deps: WebServerDeps): void {
     productionsService: deps.botManager.getProductionsService(),
   }));
 
+  app.route('/api/integrations', integrationsRoutes({ config, botManager: deps.botManager, logger }));
+
   // Productions routes (only if enabled)
   const productionsService = deps.botManager.getProductionsService();
   if (productionsService) {
     app.route('/api/productions', productionsRoutes({ productionsService, botManager: deps.botManager, logger, config }));
+  }
+
+  // Karma routes (only if enabled)
+  const karmaService = deps.botManager.getKarmaService();
+  if (karmaService) {
+    app.route('/api/karma', karmaRoutes({ karmaService, config, logger }));
   }
 
   // Dynamic tools routes (only if enabled)

@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bot Core Modules - AIBot Framework Architecture</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<button class="hamburger" id="hamburger" aria-label="Toggle sidebar">&#9776;</button>
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">AIBot Framework<small>Architecture Docs</small></div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="bot-core.html" class="active">Bot Core Modules</a>
+      <a href="data-flows.html">Data Flows</a>
+      <a href="tools-skills.html">Tools &amp; Skills</a>
+      <a href="memory-soul.html">Memory &amp; Soul</a>
+      <a href="agent-loop.html">Agent Loop</a>
+      <a href="web-dashboard.html">Web Dashboard</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="simplifications.html">Simplifications</a>
+    </nav>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="content">
+
+      <div class="page-header">
+        <h1>Bot Core Modules</h1>
+        <p>Deep dive into all 29 modules in <code>src/bot/</code></p>
+      </div>
+
+      <!-- Stats -->
+      <div class="stat-row">
+        <div class="stat">
+          <div class="number">29</div>
+          <div class="label">Modules</div>
+        </div>
+        <div class="stat">
+          <div class="number">~7,200</div>
+          <div class="label">Lines of Code</div>
+        </div>
+        <div class="stat">
+          <div class="number">7</div>
+          <div class="label">Groups</div>
+        </div>
+        <div class="stat">
+          <div class="number">16</div>
+          <div class="label">Classes</div>
+        </div>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- FOUNDATION -->
+      <!-- ================================================================ -->
+      <div class="category-header">
+        <h2>Foundation</h2>
+        <span class="count">3 modules</span>
+      </div>
+
+      <!-- types.ts -->
+      <div class="module-section" id="types">
+        <h3>types.ts</h3>
+        <div class="file-path">src/bot/types.ts &middot; 69 lines</div>
+        <p class="responsibility">
+          Defines the shared <code>BotContext</code> interface and the <code>SeenUser</code> type.
+          <code>BotContext</code> is the single mutable state object passed by reference to every
+          bot module, containing all service references, maps, sets, and helper methods.
+        </p>
+        <h4>Exported Types</h4>
+        <ul class="inline-list">
+          <li><code>SeenUser</code></li>
+          <li><code>BotContext</code></li>
+        </ul>
+        <h4>SeenUser Fields</h4>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>id</code></td><td>number</td><td>Telegram user ID</td></tr>
+            <tr><td><code>firstName</code></td><td>string</td><td>User's first name</td></tr>
+            <tr><td><code>username</code></td><td>string?</td><td>Optional @username</td></tr>
+            <tr><td><code>lastSeen</code></td><td>number</td><td>Epoch ms of last activity</td></tr>
+          </tbody>
+        </table>
+        <h4>BotContext Helper Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>getActiveModel</td><td>botId: string</td><td>Returns the current LLM model name for a bot</td></tr>
+            <tr><td>getLLMClient</td><td>botId: string</td><td>Returns the LLMClient for a bot (Ollama or Claude CLI)</td></tr>
+            <tr><td>getSoulLoader</td><td>botId: string</td><td>Returns the SoulLoader for a bot</td></tr>
+            <tr><td>getBotLogger</td><td>botId: string</td><td>Returns a child logger scoped to a bot ID</td></tr>
+            <tr><td>resolveBotId</td><td>targetBotId: string</td><td>Resolves a bot ID by name, username, or direct match; returns undefined if not running</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p>Imports types from <code>../config</code>, <code>../agent-registry</code>, <code>../collaboration-tracker</code>, <code>../collaboration-session</code>, <code>../core/skill-registry</code>, <code>../cron</code>, <code>../logger</code>, <code>../media</code>, <code>../memory/manager</code>, <code>../message-buffer</code>, <code>../ollama</code>, <code>../session</code>, <code>../soul</code>, <code>../tools/types</code>, <code>../core/llm-client</code>, <code>./ask-human-store</code>, <code>./agent-feedback-store</code>, <code>../productions/service</code>. No bot-module runtime dependencies.</p>
+      </div>
+
+      <!-- index.ts -->
+      <div class="module-section" id="index">
+        <h3>index.ts</h3>
+        <div class="file-path">src/bot/index.ts &middot; 2 lines</div>
+        <p class="responsibility">
+          Barrel re-export module. Makes <code>BotManager</code> and <code>AgentLoop</code>
+          the public API of the <code>src/bot/</code> package. All external imports resolve to
+          this file via <code>./bot</code>.
+        </p>
+        <h4>Re-exports</h4>
+        <ul class="inline-list">
+          <li><code>BotManager</code> from ./bot-manager</li>
+          <li><code>AgentLoop</code> from ./agent-loop</li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>./bot-manager</code>, <code>./agent-loop</code></p>
+      </div>
+
+      <!-- telegram-utils.ts -->
+      <div class="module-section" id="telegram-utils">
+        <h3>telegram-utils.ts</h3>
+        <div class="file-path">src/bot/telegram-utils.ts &middot; 28 lines</div>
+        <p class="responsibility">
+          Utility functions for dealing with Telegram API constraints. Handles message splitting
+          at the 4096-character limit and sending chunked messages sequentially.
+        </p>
+        <h4>Exported Functions</h4>
+        <table class="methods-table">
+          <thead><tr><th>Function</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>splitMessage</td><td>text: string, maxLength?: number</td><td>Splits text into chunks at newline boundaries respecting the 4096-char Telegram limit</td></tr>
+            <tr><td>sendLongMessage</td><td>send: (text: string) =&gt; Promise, text: string</td><td>Splits a long message and sends each chunk via the provided send callback</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p>No imports. Pure utility functions.</p>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- CORE PIPELINE -->
+      <!-- ================================================================ -->
+      <div class="category-header">
+        <h2>Core Pipeline</h2>
+        <span class="count">6 modules</span>
+      </div>
+
+      <!-- conversation-pipeline.ts -->
+      <div class="module-section" id="conversation-pipeline">
+        <h3>conversation-pipeline.ts</h3>
+        <div class="file-path">src/bot/conversation-pipeline.ts &middot; 293 lines</div>
+        <p class="responsibility">
+          The core conversation pipeline shared by both text and media handlers. Manages
+          session expiry with memory flush, RAG context pre-fetching, system prompt composition,
+          LLM chat calls with tool execution, history persistence, and reply delivery.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>ConversationPipeline</code></li>
+        </ul>
+        <h4>Constructor</h4>
+        <p><code>new ConversationPipeline(ctx, systemPromptBuilder, memoryFlusher, toolRegistry)</code></p>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>prefetchMemoryContext</td><td>userText: string, isGroup: boolean, botLogger: Logger</td><td>Runs RAG search in parallel and returns formatted memory context or null. Filters out today/yesterday daily logs and short queries.</td></tr>
+            <tr><td>handleConversation</td><td>ctx: Context, config: BotConfig, serializedKey: string, userText: string, images?: string[], sessionText?: string</td><td>Full pipeline: session expiry check, proactive memory flush, RAG await, system prompt build, LLM call with tools, session persist, reply with typing indicator.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./telegram-utils</code> (sendLongMessage)</p>
+      </div>
+
+      <!-- handler-registrar.ts -->
+      <div class="module-section" id="handler-registrar">
+        <h3>handler-registrar.ts</h3>
+        <div class="file-path">src/bot/handler-registrar.ts &middot; 472 lines</div>
+        <p class="responsibility">
+          Registers all grammy handlers on each bot instance: skill commands, skill message handlers,
+          callback queries, built-in commands (/start, /help, /clear, /model, /who, /memory),
+          the main conversation handler with group activation logic, ask_human interception,
+          bot-to-bot collaboration gating, and media handlers. The conversation handler must be
+          registered last to act as a catch-all.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>HandlerRegistrar</code></li>
+        </ul>
+        <h4>Constructor</h4>
+        <p><code>new HandlerRegistrar(ctx, conversationPipeline, groupActivation, memoryFlusher, toolRegistry, askHumanStore?)</code></p>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>registerAll</td><td>bot: Bot, config: BotConfig</td><td>Entry point: registers skill commands, callback queries, built-in commands, conversation handler, and media handlers in the correct order.</td></tr>
+          </tbody>
+        </table>
+        <h4>Internal Handler Flow</h4>
+        <p>Text messages pass through: ask_human reply check, command skip, skill consumption check,
+        bot-to-bot collaboration gate, group activation gate (mention, reply, LLM relevance, broadcast),
+        mention stripping, then enqueue to <code>MessageBuffer</code> for batched processing.</p>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>./conversation-pipeline</code>, <code>./conversation-gate</code>, <code>./group-activation</code>, <code>./memory-flush</code>, <code>./tool-registry</code>, <code>./ask-human-store</code>, <code>./telegram-utils</code>, <code>./media-handlers</code>, <code>./builtin-commands</code></p>
+      </div>
+
+      <!-- conversation-gate.ts -->
+      <div class="module-section" id="conversation-gate">
+        <h3>conversation-gate.ts</h3>
+        <div class="file-path">src/bot/conversation-gate.ts &middot; ~120 lines</div>
+        <p class="responsibility">
+          Extracted from <code>handler-registrar.ts</code>. Encapsulates the multi-step conversation
+          activation gate logic: ask_human reply interception, command skip, skill consumption check,
+          bot-to-bot collaboration gating, group activation checks (mention, reply, LLM relevance,
+          broadcast), and mention stripping. Provides a single <code>evaluate()</code> method that
+          returns whether the message should proceed to the conversation pipeline.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>ConversationGate</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>evaluate</td><td>ctx: Context, config: BotConfig</td><td>Runs all gate checks in sequence. Returns a result indicating whether to proceed, skip, or redirect the message.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>./group-activation</code>, <code>./ask-human-store</code></p>
+      </div>
+
+      <!-- group-activation.ts -->
+      <div class="module-section" id="group-activation">
+        <h3>group-activation.ts</h3>
+        <div class="file-path">src/bot/group-activation.ts &middot; 167 lines</div>
+        <p class="responsibility">
+          Handles group chat activation logic: deterministic deference when another bot is @mentioned,
+          LLM-based relevance checking for reply-window messages, and broadcast relevance detection
+          for messages directed at all bots. Fail-open for relevance checks, fail-closed for broadcast.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>GroupActivation</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>messageTargetsAnotherBot</td><td>ctx: Context, thisBotId: string</td><td>Deterministic check: returns true if message @mentions a registered bot that is not this bot.</td></tr>
+            <tr><td>getOtherBotsContext</td><td>thisBotId: string</td><td>Builds a context string listing other bots for multi-bot-aware LLM checks. Returns empty string if disabled.</td></tr>
+            <tr><td>checkLlmRelevance</td><td>ctx: Context, botName: string, serializedKey: string, botId?: string</td><td>LLM classifier: asks whether a reply-window message is directed at this bot. Fail-open on error/timeout.</td></tr>
+            <tr><td>checkBroadcastRelevance</td><td>ctx: Context, botName: string, botId: string</td><td>LLM classifier: checks if a message targets this bot or all bots. Fail-closed on error.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code> (BotContext). Uses <code>ctx.agentRegistry</code>, <code>ctx.sessionManager</code>, <code>ctx.getLLMClient()</code>.</p>
+      </div>
+
+      <!-- media-handlers.ts -->
+      <div class="module-section" id="media-handlers">
+        <h3>media-handlers.ts</h3>
+        <div class="file-path">src/bot/media-handlers.ts &middot; 209 lines</div>
+        <p class="responsibility">
+          Extracted media handler registration for photos, documents, and voice messages. Also
+          provides utility functions for user tracking, authorization, and Telegram file URL building.
+          Each handler processes the media through <code>MediaHandler</code>, then enqueues the
+          result into <code>MessageBuffer</code>.
+        </p>
+        <h4>Exported Functions</h4>
+        <table class="methods-table">
+          <thead><tr><th>Function</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>trackUser</td><td>ctx: BotContext, telegramCtx: Context</td><td>Records user in the seenUsers map (skips bots)</td></tr>
+            <tr><td>isAuthorized</td><td>ctx: BotContext, userId: number | undefined, config: BotConfig</td><td>Checks if a user is in the bot's allowedUsers list</td></tr>
+            <tr><td>buildFileUrl</td><td>config: BotConfig, filePath: string</td><td>Constructs the Telegram API file download URL</td></tr>
+            <tr><td>registerMediaHandlers</td><td>bot: Bot, config: BotConfig, deps: MediaHandlerDeps</td><td>Registers photo, document, and voice handlers on a grammy bot instance</td></tr>
+          </tbody>
+        </table>
+        <h4>Exported Interfaces</h4>
+        <ul class="inline-list">
+          <li><code>MediaHandlerDeps</code></li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>./types</code> (BotContext), <code>../media</code> (MediaError), <code>../config</code> (BotConfig)</p>
+      </div>
+
+      <!-- builtin-commands.ts -->
+      <div class="module-section" id="builtin-commands">
+        <h3>builtin-commands.ts</h3>
+        <div class="file-path">src/bot/builtin-commands.ts &middot; 177 lines</div>
+        <p class="responsibility">
+          Built-in Telegram command handlers extracted from HandlerRegistrar to reduce SRP
+          violation. Registers <code>/clear</code>, <code>/model</code>, <code>/who</code>,
+          and <code>/memory</code> commands. Also provides standalone <code>handleStart</code>
+          and <code>handleHelp</code> functions.
+        </p>
+        <h4>Exported Functions</h4>
+        <table class="methods-table">
+          <thead><tr><th>Function</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>registerBuiltinCommands</td><td>bot: Bot, config: BotConfig, deps: BuiltinCommandDeps</td><td>Registers /clear, /model, /who, /memory commands on the bot</td></tr>
+            <tr><td>handleStart</td><td>ctx: Context, config: BotConfig</td><td>Sends welcome message for /start command</td></tr>
+            <tr><td>handleHelp</td><td>ctx: Context, config: BotConfig, skillRegistry</td><td>Renders help text with all available commands from skills and built-ins</td></tr>
+          </tbody>
+        </table>
+        <h4>Exported Interfaces</h4>
+        <ul class="inline-list">
+          <li><code>BuiltinCommandDeps</code></li>
+        </ul>
+        <h4>Command Details</h4>
+        <table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/clear</code></td><td>Flushes session to memory (with scoring), clears history for all bots. Supports <code>--no-flush</code> flag.</td></tr>
+            <tr><td><code>/model</code></td><td>Shows or changes the active LLM model for a bot</td></tr>
+            <tr><td><code>/who</code></td><td>Lists all users seen in the current chat with last-seen timestamps</td></tr>
+            <tr><td><code>/memory</code></td><td>Dumps all memory via SoulLoader.dumpMemory()</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>./memory-flush</code>, <code>./telegram-utils</code></p>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- TOOL SYSTEM -->
+      <!-- ================================================================ -->
+      <div class="category-header">
+        <h2>Tool System</h2>
+        <span class="count">3 modules</span>
+      </div>
+
+      <!-- tool-registry.ts -->
+      <div class="module-section" id="tool-registry">
+        <h3>tool-registry.ts</h3>
+        <div class="file-path">src/bot/tool-registry.ts &middot; 347 lines</div>
+        <p class="responsibility">
+          Central registry for all LLM tools. Initializes every tool (web, soul, memory, exec,
+          file, process, browser, datetime, phone, cron, delegation, collaboration, improve,
+          ask_human, productions, dynamic tools) based on config flags. Provides per-bot
+          filtering (respects <code>disabledTools</code> and dynamic tool scope), collaboration-safe
+          tool sets, and executor creation.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>ToolRegistry</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>initializeAll</td><td>getDelegationHandler, getCollaborateHandler, askHumanDeps?</td><td>Creates all tools from config, populates ctx.tools[] and ctx.toolDefinitions[]. Delegation/collaboration use lazy callbacks to break circular deps.</td></tr>
+            <tr><td>getTools</td><td>(none)</td><td>Returns all registered Tool instances</td></tr>
+            <tr><td>getDefinitions</td><td>(none)</td><td>Returns all ToolDefinition objects</td></tr>
+            <tr><td>getDisabledSet</td><td>botId: string</td><td>Returns the Set of disabled tool names for a bot from config</td></tr>
+            <tr><td>getDefinitionsForBot</td><td>botId: string</td><td>Returns definitions filtered by disabled + dynamic scope for a bot</td></tr>
+            <tr><td>getToolsForBot</td><td>botId: string</td><td>Returns Tool instances filtered for a specific bot</td></tr>
+            <tr><td>getCollaborationToolsForBot</td><td>botId: string</td><td>Returns tools excluding collaborate/delegate, respecting per-bot disabled set</td></tr>
+            <tr><td>getCollaborationTools</td><td>(none)</td><td>Returns all tools minus collaborate/delegate_to_bot</td></tr>
+            <tr><td>createExecutor</td><td>chatId: number, botId: string</td><td>Creates a ToolExecutor callback for Ollama/LLM client chat calls</td></tr>
+            <tr><td>getDynamicToolStore</td><td>(none)</td><td>Returns the DynamicToolStore instance (for web API)</td></tr>
+            <tr><td>getDynamicToolRegistry</td><td>(none)</td><td>Returns the DynamicToolRegistry instance (for web API approve/reject)</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>./tool-executor</code>, <code>./dynamic-tool-registry</code>, plus all tool factory imports from <code>../tools/*</code></p>
+      </div>
+
+      <!-- tool-executor.ts -->
+      <div class="module-section" id="tool-executor">
+        <h3>tool-executor.ts</h3>
+        <div class="file-path">src/bot/tool-executor.ts &middot; 729 lines</div>
+        <p class="responsibility">
+          Centralized tool execution engine that replaces duplicated logic across AgentLoop,
+          ToolRegistry, and CollaborationManager. Handles tool lookup, disabled tool filtering,
+          context injection (<code>_chatId</code>, <code>_botId</code>), per-bot workDir path resolution,
+          output validation with Zod schemas, retry with exponential backoff, productions logging
+          with quality gate, and observable lifecycle events (tool:start, tool:end, tool:error).
+          Extends EventEmitter. Error paths are consolidated via <code>buildFailResult()</code>
+          helper that unifies 6 different error response construction sites.
+        </p>
+        <h4>Exported Classes / Functions</h4>
+        <ul class="inline-list">
+          <li><code>ToolExecutor</code> (class, extends EventEmitter)</li>
+          <li><code>createToolExecutor</code> (factory)</li>
+          <li><code>createCollaborationToolExecutor</code> (factory)</li>
+        </ul>
+        <h4>Exported Interfaces</h4>
+        <ul class="inline-list">
+          <li><code>ToolExecutionRecord</code></li>
+          <li><code>ToolStartEvent</code></li>
+          <li><code>ToolEndEvent</code></li>
+          <li><code>ToolErrorEvent</code></li>
+          <li><code>ToolExecutorEvents</code></li>
+          <li><code>ToolExecutorOptions</code></li>
+          <li><code>ToolExecutionResult</code></li>
+        </ul>
+        <h4>ToolExecutor Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>execute</td><td>name: string, args: Record&lt;string, unknown&gt;</td><td>Full lifecycle: lookup, disabled check, filter, context injection, workDir resolution, execute with retry loop, Zod output validation, productions logging, event emission. Returns ToolExecutionResult.</td></tr>
+            <tr><td>createCallback</td><td>(none)</td><td>Returns a <code>(name, args) =&gt; Promise&lt;ToolResult&gt;</code> callback for LLMClient.chat()</td></tr>
+            <tr><td>getExecutionLog</td><td>(none)</td><td>Returns copy of execution history (when enableLogging is true)</td></tr>
+            <tr><td>clearExecutionLog</td><td>(none)</td><td>Clears execution history</td></tr>
+            <tr><td>getDefinitions</td><td>(none)</td><td>Returns ToolDefinition[] for available tools after filtering</td></tr>
+            <tr><td>isToolAvailable</td><td>name: string</td><td>Checks if a tool is available (not disabled, passes filter)</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>zod</code>, <code>events</code> (EventEmitter), <code>../productions/service</code>, <code>../karma/service</code>, <code>../tools/types</code>, <code>../logger</code></p>
+      </div>
+
+      <!-- dynamic-tool-registry.ts -->
+      <div class="module-section" id="dynamic-tool-registry">
+        <h3>dynamic-tool-registry.ts</h3>
+        <div class="file-path">src/bot/dynamic-tool-registry.ts &middot; 143 lines</div>
+        <p class="responsibility">
+          Runtime registry for user-created dynamic tools. On initialization, loads all approved
+          tools from the <code>DynamicToolStore</code> on disk. Supports hot-loading on approval
+          and removal on rejection. Manages per-bot scope filtering so tools are only visible to
+          the bots that should see them.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>DynamicToolRegistry</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>initialize</td><td>(none)</td><td>Scans store for approved tools and loads them into ctx.tools[] and ctx.toolDefinitions[]</td></tr>
+            <tr><td>approve</td><td>id: string</td><td>Hot-loads a tool after approval: updates status, removes old version, loads new</td></tr>
+            <tr><td>reject</td><td>id: string, note?: string</td><td>Rejects and removes a tool from runtime</td></tr>
+            <tr><td>getToolsForBot</td><td>botId: string</td><td>Returns dynamic tools visible to a bot (scope: all, own ID, or creator)</td></tr>
+            <tr><td>getExcludedNamesForBot</td><td>botId: string</td><td>Returns set of dynamic tool names a bot should NOT see based on scope</td></tr>
+            <tr><td>getDefinitionsForBot</td><td>botId: string</td><td>Returns ToolDefinition[] for a specific bot</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>../tools/dynamic-tool-store</code> (DynamicToolStore, DynamicToolMeta), <code>../tools/dynamic-tool-loader</code> (loadDynamicTool), <code>../logger</code></p>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- MEMORY & SOUL -->
+      <!-- ================================================================ -->
+      <div class="category-header">
+        <h2>Memory &amp; Soul</h2>
+        <span class="count">5 modules</span>
+      </div>
+
+      <!-- memory-flush.ts -->
+      <div class="module-section" id="memory-flush">
+        <h3>memory-flush.ts</h3>
+        <div class="file-path">src/bot/memory-flush.ts &middot; 218 lines</div>
+        <p class="responsibility">
+          Summarizes conversations and writes to persistent memory. The primary method
+          <code>flushWithScoring</code> extracts facts with importance scores (1-10) and
+          categories, storing them in Core Memory. Falls back to legacy daily log append when
+          Core Memory is unavailable or on error.
+        </p>
+        <h4>Exported Types / Classes</h4>
+        <ul class="inline-list">
+          <li><code>ScoredFact</code> (interface)</li>
+          <li><code>MemoryFlusher</code> (class)</li>
+        </ul>
+        <h4>ScoredFact Fields</h4>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>fact</code></td><td>string</td><td>The extracted fact</td></tr>
+            <tr><td><code>importance</code></td><td>number (1-10)</td><td>10 = critical, 1 = trivial</td></tr>
+            <tr><td><code>category</code></td><td>string enum</td><td>identity | relationships | preferences | goals | constraints | general</td></tr>
+          </tbody>
+        </table>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>flushToDaily <span class="badge badge-medium">deprecated</span></td><td>history: ChatMessage[], botId?: string</td><td>Legacy: summarizes conversation to bullet points and appends to daily log</td></tr>
+            <tr><td>flushWithScoring</td><td>history: ChatMessage[], botId?: string</td><td>Extracts facts with importance/category, stores in Core Memory or daily log fallback</td></tr>
+            <tr><td>flushSessionToMemory</td><td>history: ChatMessage[], botId?: string</td><td>Entry point: delegates to flushWithScoring. Called on session expiry and /clear.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>../ollama</code> (ChatMessage), <code>../claude-cli</code> (claudeGenerate)</p>
+      </div>
+
+      <!-- soul-health-check.ts -->
+      <div class="module-section" id="soul-health-check">
+        <h3>soul-health-check.ts</h3>
+        <div class="file-path">src/bot/soul-health-check.ts &middot; 121 lines</div>
+        <p class="responsibility">
+          Thin orchestrator for startup soul checks. Delegates to three extracted modules:
+          <code>soul-lint.ts</code> (structural validation),
+          <code>soul-quality-reviewer.ts</code> (LLM-based quality review), and
+          <code>soul-memory-consolidator.ts</code> (memory log consolidation).
+          Respects a file-based cooldown to avoid running too frequently.
+        </p>
+        <h4>Exported Types / Functions</h4>
+        <ul class="inline-list">
+          <li><code>StartupSoulCheckOptions</code> (interface)</li>
+          <li><code>runStartupSoulCheck</code> (function)</li>
+        </ul>
+        <h4>Key Functions</h4>
+        <table class="methods-table">
+          <thead><tr><th>Function</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>runStartupSoulCheck</td><td>opts: StartupSoulCheckOptions</td><td>Main entry: lint + quality review + memory consolidation. Runs concurrently, writes cooldown timestamp on completion.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./soul-lint</code>, <code>./soul-quality-reviewer</code>, <code>./soul-memory-consolidator</code>, <code>../logger</code>, <code>node:fs</code>, <code>node:path</code></p>
+      </div>
+
+      <!-- soul-lint.ts -->
+      <div class="module-section" id="soul-lint">
+        <h3>soul-lint.ts</h3>
+        <div class="file-path">src/bot/soul-lint.ts &middot; 84 lines</div>
+        <p class="responsibility">
+          Structural linting of soul directories. Deterministic checks (no LLM) for required files
+          (IDENTITY.md, SOUL.md, MOTIVATIONS.md), duplicate headers in SOUL.md, stale placeholders
+          in MOTIVATIONS.md, and missing memory/ directory.
+        </p>
+        <h4>Exported Types / Functions</h4>
+        <ul class="inline-list">
+          <li><code>SoulLintIssue</code> (interface)</li>
+          <li><code>lintSoulDirectory</code> (function)</li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>node:fs</code>, <code>node:path</code></p>
+      </div>
+
+      <!-- soul-memory-consolidator.ts -->
+      <div class="module-section" id="soul-memory-consolidator">
+        <h3>soul-memory-consolidator.ts</h3>
+        <div class="file-path">src/bot/soul-memory-consolidator.ts &middot; 222 lines</div>
+        <p class="responsibility">
+          Memory consolidation: merging old daily logs into MEMORY.md with deduplication and archival.
+          Identifies unconsolidated log files and uses Claude CLI to produce consolidated summaries.
+        </p>
+        <h4>Exported Functions</h4>
+        <ul class="inline-list">
+          <li><code>getUnconsolidatedLogs</code> (function)</li>
+          <li><code>consolidateMemory</code> (function)</li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>../soul</code> (backupSoulFile), <code>../logger</code>, <code>node:fs</code>, <code>node:path</code></p>
+      </div>
+
+      <!-- soul-quality-reviewer.ts -->
+      <div class="module-section" id="soul-quality-reviewer">
+        <h3>soul-quality-reviewer.ts</h3>
+        <div class="file-path">src/bot/soul-quality-reviewer.ts &middot; 132 lines</div>
+        <p class="responsibility">
+          LLM-based quality review of soul files using Claude CLI. Checks for personality drift,
+          contradictions, and duplicated content. Runs with <code>--allowedTools</code> for soul-modifying operations.
+        </p>
+        <h4>Exported Functions</h4>
+        <ul class="inline-list">
+          <li><code>runQualityReview</code> (function)</li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>../soul</code>, <code>../logger</code>, <code>node:fs</code>, <code>node:path</code></p>
+      </div>
+
+      <!-- system-prompt-builder.ts -->
+      <div class="module-section" id="system-prompt-builder">
+        <h3>system-prompt-builder.ts</h3>
+        <div class="file-path">src/bot/system-prompt-builder.ts &middot; 421 lines</div>
+        <p class="responsibility">
+          Unified system prompt composition for all three modes: <code>conversation</code>
+          (full tool instructions), <code>collaboration</code> (memory_search + soul only), and
+          <code>autonomous</code> (agent loop). Appends mode-specific tool instruction blocks,
+          group chat awareness, karma injection, Core Memory context, RAG context, and memory
+          search reinforcement reminders.
+        </p>
+        <h4>Exported Types / Classes</h4>
+        <ul class="inline-list">
+          <li><code>SystemPromptOptions</code> (interface)</li>
+          <li><code>SystemPromptBuilder</code> (class)</li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>setKarmaService</td><td>karmaService: KarmaService</td><td>Injects the karma service for score rendering in prompts</td></tr>
+            <tr><td>build</td><td>options: SystemPromptOptions</td><td>Composes the full system prompt. Options include mode (conversation/collaboration/autonomous), botId, botConfig, isGroup, ragContext.</td></tr>
+          </tbody>
+        </table>
+        <h4>Tool Instruction Blocks (private)</h4>
+        <table>
+          <thead><tr><th>Block</th><th>Trigger</th></tr></thead>
+          <tbody>
+            <tr><td>webToolsInstructions</td><td>web_* tools present</td></tr>
+            <tr><td>soulToolsInstructions</td><td>save_memory present</td></tr>
+            <tr><td>execToolInstructions</td><td>exec present</td></tr>
+            <tr><td>fileToolsInstructions</td><td>file_read present</td></tr>
+            <tr><td>processToolInstructions</td><td>process present</td></tr>
+            <tr><td>memorySearchInstructions</td><td>memory_search present</td></tr>
+            <tr><td>datetimeToolInstructions</td><td>get_datetime present</td></tr>
+            <tr><td>phoneCallInstructions</td><td>phone_call present</td></tr>
+            <tr><td>cronToolInstructions</td><td>cron present</td></tr>
+            <tr><td>delegationInstructions</td><td>delegate_to_bot present</td></tr>
+            <tr><td>collaborationInstructions</td><td>collaborate present</td></tr>
+            <tr><td>goalsToolInstructions</td><td>manage_goals present</td></tr>
+            <tr><td>coreMemoryToolInstructions</td><td>core_memory_append present</td></tr>
+            <tr><td>createToolInstructions</td><td>create_tool present</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>./tool-registry</code>, <code>../config</code> (resolveAgentConfig), <code>../humanizer-prompt</code>, <code>../karma/service</code></p>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- COLLABORATION -->
+      <!-- ================================================================ -->
+      <div class="category-header">
+        <h2>Collaboration</h2>
+        <span class="count">1 module</span>
+      </div>
+
+      <!-- collaboration.ts -->
+      <div class="module-section" id="collaboration">
+        <h3>collaboration.ts</h3>
+        <div class="file-path">src/bot/collaboration.ts &middot; 429 lines</div>
+        <p class="responsibility">
+          Bot-to-bot communication system supporting visible group discussions, internal
+          multi-turn sessions, delegation, and agent discovery. Visible mode sends @mentions in
+          group chats and drives multi-turn discussions. Internal mode uses collaboration sessions
+          with tool access. Delegation runs the target bot's LLM without tools to prevent loops.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>CollaborationManager</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>sendVisibleMessage</td><td>chatId, sourceBotId, targetBotId, message</td><td>Sends a @mention message in a group and kicks off a multi-turn visible discussion (up to visibleMaxTurns)</td></tr>
+            <tr><td>handleDelegation</td><td>targetBotId, chatId, message, sourceBotId</td><td>Runs the target bot's LLM without tools. Sends response to Telegram if bot has a token.</td></tr>
+            <tr><td>discoverAgents</td><td>excludeBotId: string</td><td>Returns agent info with model for all other running agents</td></tr>
+            <tr><td>collaborationStep</td><td>sessionId?, targetBotId, message, sourceBotId</td><td>Single internal collaboration turn with session tracking and tool access. Creates session if none exists.</td></tr>
+            <tr><td>initiateCollaboration</td><td>sourceBotId, targetBotId, topic, maxTurns?</td><td>Programmatic API: runs a full multi-turn internal collaboration with [DONE] detection</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>./system-prompt-builder</code>, <code>./tool-registry</code>, <code>./tool-executor</code>, <code>./telegram-utils</code>, <code>../config</code>, <code>../agent-registry</code></p>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- AGENT LOOP -->
+      <!-- ================================================================ -->
+      <div class="category-header">
+        <h2>Agent Loop</h2>
+        <span class="count">10 modules</span>
+      </div>
+
+      <p>For a detailed walkthrough of the agent loop architecture, see the dedicated
+        <a href="agent-loop.html">Agent Loop</a> page.</p>
+
+      <!-- agent-loop.ts -->
+      <div class="module-section" id="agent-loop">
+        <h3>agent-loop.ts</h3>
+        <div class="file-path">src/bot/agent-loop.ts &middot; 724 lines</div>
+        <p class="responsibility">
+          The autonomous agent execution orchestrator. Composes cycle phases (feedback processing,
+          strategist, planner, executor) and manages result assembly. Delegates scheduling to
+          <code>AgentScheduler</code>, retry logic to <code>agent-retry-engine</code>, planning to
+          <code>agent-planner</code>, strategy to <code>agent-strategist</code>, and shared utilities
+          to <code>agent-loop-utils</code>.
+        </p>
+        <h4>Exported Types / Classes / Functions</h4>
+        <ul class="inline-list">
+          <li><code>ToolCallRecord</code></li>
+          <li><code>AgentLoopResult</code></li>
+          <li><code>BotScheduleInfo</code></li>
+          <li><code>AgentLoopState</code></li>
+          <li><code>parseDurationMs</code> (function)</li>
+          <li><code>AgentLoop</code> (class)</li>
+        </ul>
+        <h4>AgentLoop Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>start</td><td>(none)</td><td>Starts the main run loop that syncs bot schedules and spawns per-bot loops</td></tr>
+            <tr><td>stop</td><td>(none)</td><td>Stops all loops and clears schedules</td></tr>
+            <tr><td>wakeUp</td><td>(none)</td><td>Interrupts sleep so the loop re-evaluates immediately</td></tr>
+            <tr><td>runNow</td><td>(none)</td><td>Manual trigger: executes all periodic bots in parallel, returns results</td></tr>
+            <tr><td>runOne</td><td>botId: string</td><td>Executes a single bot cycle immediately</td></tr>
+            <tr><td>getState</td><td>(none)</td><td>Returns AgentLoopState with schedule info for all bots</td></tr>
+            <tr><td>setKarmaService</td><td>karmaService: KarmaService</td><td>Injects the karma service for tracking novel vs repetitive actions</td></tr>
+          </tbody>
+        </table>
+        <h4>Execution Phases</h4>
+        <table>
+          <thead><tr><th>Phase</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>-1. Feedback</td><td>Processes pending human feedback via Claude CLI with soul-modifying tools</td></tr>
+            <tr><td>0. Strategist</td><td>Periodic strategic review: goal operations, focus directive, reflection</td></tr>
+            <tr><td>1. Planner</td><td>LLM decides what to do: reasoning, plan steps (0-5), priority (high/medium/low/none)</td></tr>
+            <tr><td>2. Executor</td><td>Full agentic LLM call with tools to carry out the plan</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>./agent-scheduler</code>, <code>./agent-planner</code>, <code>./agent-strategist</code>, <code>./agent-retry-engine</code>, <code>./agent-loop-utils</code>, <code>./system-prompt-builder</code>, <code>./tool-registry</code>, <code>./tool-executor</code>, <code>./agent-loop-prompts</code>, <code>./telegram-utils</code>, <code>../config</code>, <code>../core/llm-client</code>, <code>../tools/goals</code>, <code>../karma/service</code></p>
+      </div>
+
+      <!-- agent-scheduler.ts -->
+      <div class="module-section" id="agent-scheduler">
+        <h3>agent-scheduler.ts</h3>
+        <div class="file-path">src/bot/agent-scheduler.ts &middot; 353 lines</div>
+        <p class="responsibility">
+          Extracted from <code>agent-loop.ts</code>. Manages per-bot scheduling, concurrency
+          semaphore (<code>maxConcurrent</code>), interruptible sleep with <code>wakeUp()</code>,
+          bot loop lifecycle, schedule sync with staggered starts, sleep duration computation,
+          and idle cycle tracking.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>AgentScheduler</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>syncSchedules</td><td>(none)</td><td>Adds new bots with staggered start times, removes stopped bots</td></tr>
+            <tr><td>runBotLoop</td><td>botId: string</td><td>Per-bot async loop with concurrency semaphore</td></tr>
+            <tr><td>wakeUp</td><td>(none)</td><td>Interrupts interruptible sleep for immediate re-evaluation</td></tr>
+            <tr><td>computeBotSleepMs</td><td>botId: string</td><td>Derives sleep interval from per-bot or global config</td></tr>
+            <tr><td>updateBotSchedule</td><td>botId: string, result: AgentLoopResult</td><td>Updates timestamps, strategist counters, check-in display</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>../config</code>, <code>../logger</code></p>
+      </div>
+
+      <!-- agent-strategist.ts -->
+      <div class="module-section" id="agent-strategist">
+        <h3>agent-strategist.ts</h3>
+        <div class="file-path">src/bot/agent-strategist.ts &middot; 257 lines</div>
+        <p class="responsibility">
+          Extracted from <code>agent-loop.ts</code>. Strategic oversight layer: determines when
+          to run the strategist, executes it with retry, parses results via <code>parseLLMJson</code>,
+          applies goal operations (add/complete/update/remove), and computes cycles until next run.
+        </p>
+        <h4>Exported Functions</h4>
+        <ul class="inline-list">
+          <li><code>parseStrategistResult</code></li>
+          <li><code>shouldRunStrategist</code></li>
+          <li><code>runStrategist</code></li>
+          <li><code>applyGoalOperations</code></li>
+          <li><code>computeCyclesUntilStrategist</code></li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>./llm-json-parser</code>, <code>./agent-loop-prompts</code>, <code>../config</code>, <code>../core/llm-client</code>, <code>../tools/goals</code></p>
+      </div>
+
+      <!-- agent-planner.ts -->
+      <div class="module-section" id="agent-planner">
+        <h3>agent-planner.ts</h3>
+        <div class="file-path">src/bot/agent-planner.ts &middot; 69 lines</div>
+        <p class="responsibility">
+          Extracted from <code>agent-loop.ts</code>. Unified planner for both periodic and continuous
+          modes. Parses planner results via <code>parseLLMJson</code> and runs with temperature
+          fallback (0.3 then 0).
+        </p>
+        <h4>Exported Functions</h4>
+        <ul class="inline-list">
+          <li><code>parsePlannerResult</code></li>
+          <li><code>runPlannerWithRetry</code></li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>./llm-json-parser</code>, <code>./agent-loop-prompts</code>, <code>../core/llm-client</code></p>
+      </div>
+
+      <!-- agent-retry-engine.ts -->
+      <div class="module-section" id="agent-retry-engine">
+        <h3>agent-retry-engine.ts</h3>
+        <div class="file-path">src/bot/agent-retry-engine.ts &middot; 141 lines</div>
+        <p class="responsibility">
+          Extracted from <code>agent-loop.ts</code>. Handles transient error detection
+          (<code>isRetryableError</code>), exponential backoff with jitter
+          (<code>computeRetryDelay</code>), retry config resolution, and the
+          <code>executeSingleBotWithRetry</code> wrapper with side-effect suppression.
+        </p>
+        <h4>Exported Functions</h4>
+        <ul class="inline-list">
+          <li><code>isRetryableError</code></li>
+          <li><code>computeRetryDelay</code></li>
+          <li><code>resolveRetryConfig</code></li>
+          <li><code>executeSingleBotWithRetry</code></li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>../config</code>, <code>../logger</code></p>
+      </div>
+
+      <!-- agent-loop-utils.ts -->
+      <div class="module-section" id="agent-loop-utils">
+        <h3>agent-loop-utils.ts</h3>
+        <div class="file-path">src/bot/agent-loop-utils.ts &middot; 159 lines</div>
+        <p class="responsibility">
+          Extracted from <code>agent-loop.ts</code>. Shared utility functions: recent actions
+          digest building, summary deduplication, repetition detection, file tree scanning,
+          memory logging, and Telegram report sending.
+        </p>
+        <h4>Exported Functions</h4>
+        <ul class="inline-list">
+          <li><code>buildRecentActionsDigest</code></li>
+          <li><code>isSimilarSummary</code></li>
+          <li><code>isRepetitiveAction</code></li>
+          <li><code>scanFileTree</code></li>
+          <li><code>logToMemory</code></li>
+          <li><code>sendReport</code></li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>./telegram-utils</code>, <code>../logger</code>, <code>node:fs</code>, <code>node:path</code></p>
+      </div>
+
+      <!-- llm-json-parser.ts -->
+      <div class="module-section" id="llm-json-parser">
+        <h3>llm-json-parser.ts</h3>
+        <div class="file-path">src/bot/llm-json-parser.ts &middot; 60 lines</div>
+        <p class="responsibility">
+          Generic LLM JSON response parser. Strips markdown fences, attempts JSON.parse, validates
+          the parsed shape. Used by both <code>agent-planner.ts</code> and <code>agent-strategist.ts</code>
+          to eliminate duplicated parsing logic.
+        </p>
+        <h4>Exported Functions</h4>
+        <ul class="inline-list">
+          <li><code>parseLLMJson&lt;T&gt;</code></li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p>No imports. Pure utility function.</p>
+      </div>
+
+      <!-- agent-loop-prompts.ts -->
+      <div class="module-section" id="agent-loop-prompts">
+        <h3>agent-loop-prompts.ts</h3>
+        <div class="file-path">src/bot/agent-loop-prompts.ts &middot; 437 lines</div>
+        <p class="responsibility">
+          Prompt templates for the autonomous agent loop. Contains builders for five prompt types:
+          periodic planner, continuous planner, executor, strategist, and feedback processor.
+          Includes anti-pattern lists, novelty imperatives, karma blocks, and answered/pending
+          question injection.
+        </p>
+        <h4>Exported Types / Functions</h4>
+        <ul class="inline-list">
+          <li><code>PlannerPromptInput</code></li>
+          <li><code>ContinuousPlannerPromptInput</code></li>
+          <li><code>PlannerResult</code></li>
+          <li><code>ContinuousPlannerResult</code> <span class="badge badge-medium">deprecated</span></li>
+          <li><code>ExecutorPromptInput</code></li>
+          <li><code>FeedbackProcessorPromptInput</code></li>
+          <li><code>StrategistPromptInput</code></li>
+          <li><code>buildPlannerPrompt</code></li>
+          <li><code>buildContinuousPlannerPrompt</code></li>
+          <li><code>buildExecutorPrompt</code></li>
+          <li><code>buildFeedbackProcessorPrompt</code></li>
+          <li><code>buildStrategistPrompt</code></li>
+        </ul>
+        <h4>Prompt Builders</h4>
+        <table class="methods-table">
+          <thead><tr><th>Function</th><th>Returns</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>buildPlannerPrompt</td><td>{ system, prompt }</td><td>Periodic mode: decides what to do next. Injects identity, soul, motivations, goals, focus, karma, recent actions, anti-patterns. Expects JSON: reasoning + plan[] + priority.</td></tr>
+            <tr><td>buildContinuousPlannerPrompt</td><td>{ system, prompt }</td><td>Continuous mode: same as periodic but adds lastCycleSummary context. Emphasizes building on prior work.</td></tr>
+            <tr><td>buildExecutorPrompt</td><td>string (user prompt)</td><td>Generates the user message for the executor phase with plan steps, identity, goals, and tool usage rules.</td></tr>
+            <tr><td>buildStrategistPrompt</td><td>{ system, prompt }</td><td>Strategic review: analyzes staleness, completion, relevance, gaps. Expects JSON: goal_operations + focus + reflection.</td></tr>
+            <tr><td>buildFeedbackProcessorPrompt</td><td>{ system, userPrompt }</td><td>Processes operator feedback: understands feedback and makes soul/goal changes using available tools.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p>No imports. Pure template functions.</p>
+      </div>
+
+      <!-- agent-feedback-store.ts -->
+      <div class="module-section" id="agent-feedback-store">
+        <h3>agent-feedback-store.ts</h3>
+        <div class="file-path">src/bot/agent-feedback-store.ts &middot; 156 lines</div>
+        <p class="responsibility">
+          Manages operator feedback for agents with JSONL file persistence. Feedback items have
+          statuses (pending, applied, dismissed) and are stored per-bot in
+          <code>{soulDir}/feedback.jsonl</code>. The agent loop processes pending feedback before
+          each cycle.
+        </p>
+        <h4>Exported Types / Classes</h4>
+        <ul class="inline-list">
+          <li><code>AgentFeedback</code> (interface)</li>
+          <li><code>AgentFeedbackStore</code> (class)</li>
+        </ul>
+        <h4>AgentFeedback Fields</h4>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>id</code></td><td>string (UUID)</td><td>Unique identifier</td></tr>
+            <tr><td><code>botId</code></td><td>string</td><td>Target bot ID</td></tr>
+            <tr><td><code>content</code></td><td>string</td><td>Feedback text from operator</td></tr>
+            <tr><td><code>createdAt</code></td><td>string (ISO)</td><td>Creation timestamp</td></tr>
+            <tr><td><code>status</code></td><td>pending | applied | dismissed</td><td>Current state</td></tr>
+            <tr><td><code>appliedAt</code></td><td>string?</td><td>When the agent processed it</td></tr>
+            <tr><td><code>response</code></td><td>string?</td><td>Agent's response after processing</td></tr>
+          </tbody>
+        </table>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>loadFromDisk</td><td>botId: string, soulDir: string</td><td>Loads feedback.jsonl into memory for a bot. Called once per bot on startup.</td></tr>
+            <tr><td>submit</td><td>botId: string, content: string</td><td>Creates a new pending feedback entry, persists to JSONL</td></tr>
+            <tr><td>getPending</td><td>botId: string</td><td>Returns all pending feedback for a bot</td></tr>
+            <tr><td>getAll</td><td>botId: string, opts?</td><td>Returns feedback with optional status filter, limit, offset (newest first)</td></tr>
+            <tr><td>markApplied</td><td>botId: string, id: string, response: string</td><td>Marks feedback as applied with the bot's response, rewrites JSONL</td></tr>
+            <tr><td>dismiss</td><td>botId: string, id: string</td><td>Marks feedback as dismissed</td></tr>
+            <tr><td>getPendingCount</td><td>(none)</td><td>Total pending count across all bots</td></tr>
+            <tr><td>getBotIds</td><td>(none)</td><td>Returns all bot IDs that have been loaded</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>../logger</code>, <code>node:fs</code>, <code>node:path</code>, <code>node:crypto</code> (randomUUID)</p>
+      </div>
+
+      <!-- ask-human-store.ts -->
+      <div class="module-section" id="ask-human-store">
+        <h3>ask-human-store.ts</h3>
+        <div class="file-path">src/bot/ask-human-store.ts &middot; 289 lines</div>
+        <p class="responsibility">
+          Manages pending "ask_human" questions. When an agent needs human input, it registers a
+          question with a timeout. The store matches incoming Telegram replies by message ID
+          (or single-pending fallback) and resolves the awaiting promise. Also supports web
+          dashboard answering/dismissal. Answered questions are held for consumption by the next
+          agent loop cycle.
+        </p>
+        <h4>Exported Types / Classes</h4>
+        <ul class="inline-list">
+          <li><code>PendingQuestion</code> (interface)</li>
+          <li><code>PendingQuestionInfo</code> (interface)</li>
+          <li><code>AnsweredQuestion</code> (interface)</li>
+          <li><code>AskHumanStore</code> (class)</li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>ask</td><td>botId, chatId, question, timeoutMs</td><td>Registers a question with timeout. Returns { id, promise } where promise resolves with the answer.</td></tr>
+            <tr><td>setMessageId</td><td>questionId: string, messageId: number</td><td>Sets the Telegram message ID for reply-to matching</td></tr>
+            <tr><td>handleReply</td><td>chatId, text, replyToMessageId?</td><td>Matches an incoming reply to a pending question by message ID or single-pending fallback</td></tr>
+            <tr><td>hasPending</td><td>chatId: number</td><td>Checks if there are pending questions for a chat</td></tr>
+            <tr><td>answerById</td><td>id: string, answer: string</td><td>Answers a question from the web dashboard</td></tr>
+            <tr><td>dismissById</td><td>id: string</td><td>Dismisses a question (rejects the promise with error)</td></tr>
+            <tr><td>consumeAnswersForBot</td><td>botId: string</td><td>Returns and deletes all answered questions for a bot (consumed by agent loop)</td></tr>
+            <tr><td>getPendingForBot</td><td>botId: string</td><td>Returns pending questions for a bot with remaining time</td></tr>
+            <tr><td>hasPendingForBot</td><td>botId: string</td><td>Quick check if a bot has any pending questions</td></tr>
+            <tr><td>getAll</td><td>(none)</td><td>Returns all pending questions with remaining time info</td></tr>
+            <tr><td>getPendingCount</td><td>(none)</td><td>Returns total number of pending questions</td></tr>
+            <tr><td>dispose</td><td>(none)</td><td>Clears all timers and rejects all pending promises</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>../logger</code>, <code>node:crypto</code> (randomUUID)</p>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- FACADE -->
+      <!-- ================================================================ -->
+      <div class="category-header">
+        <h2>Facade</h2>
+        <span class="count">2 modules</span>
+      </div>
+
+      <!-- bot-manager.ts -->
+      <div class="module-section" id="bot-manager">
+        <h3>bot-manager.ts</h3>
+        <div class="file-path">src/bot/bot-manager.ts &middot; 712 lines</div>
+        <p class="responsibility">
+          The slim facade that composes all bot modules and exposes the public API. Constructs
+          the shared <code>BotContext</code>, initializes modules in dependency order, wires
+          lazy callbacks for circular dependencies, and delegates all operations to the
+          appropriate module. Manages bot lifecycle (start/stop/reset), Telegram polling with
+          409-conflict retry, headless mode, and all delegate methods for agent loop, ask-human,
+          feedback, collaboration, dynamic tools, productions, and karma.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>BotManager</code></li>
+        </ul>
+        <h4>Constructor</h4>
+        <p><code>new BotManager(skillRegistry, logger, ollamaClient, config, sessionManager, soulLoader, cronService, memoryManager?)</code></p>
+        <h4>Module Composition (initialization order)</h4>
+        <table>
+          <thead><tr><th>Order</th><th>Module</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>ToolRegistry</td></tr>
+            <tr><td>2</td><td>SystemPromptBuilder (reads ToolRegistry.getDefinitions)</td></tr>
+            <tr><td>3</td><td>MemoryFlusher</td></tr>
+            <tr><td>4</td><td>GroupActivation</td></tr>
+            <tr><td>5</td><td>ConversationPipeline (uses 2, 3, 1)</td></tr>
+            <tr><td>6</td><td>CollaborationManager (uses 2, 1)</td></tr>
+            <tr><td>7</td><td>HandlerRegistrar (uses 5, 4, 3, 1)</td></tr>
+            <tr><td>8</td><td>AgentLoop (uses 2, 1)</td></tr>
+          </tbody>
+        </table>
+        <h4>Key Public Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>startBot</td><td>config: BotConfig</td><td>Starts a bot: sets up LLM client, soul loader, feedback loading, soul health check, Telegram polling or headless mode, registers in agent registry</td></tr>
+            <tr><td>stopBot</td><td>botId: string</td><td>Stops polling and cleans up all bot state</td></tr>
+            <tr><td>resetBot</td><td>botId: string</td><td>Full reset: clears sessions, goals, memory logs, versions, core memory, index</td></tr>
+            <tr><td>sendMessage</td><td>chatId, text, botId</td><td>Sends a message via a bot's Telegram instance</td></tr>
+            <tr><td>startAgentLoop</td><td>(none)</td><td>Starts the autonomous agent loop</td></tr>
+            <tr><td>runAgentLoopAll</td><td>(none)</td><td>Manually triggers all periodic bots</td></tr>
+            <tr><td>runAgentLoop</td><td>botId: string</td><td>Triggers a single bot's agent loop cycle</td></tr>
+            <tr><td>getAgentLoopState</td><td>(none)</td><td>Returns full agent loop state</td></tr>
+            <tr><td>stopAll</td><td>(none)</td><td>Stops agent loop, message buffer, collaboration, ask-human, and all bots</td></tr>
+            <tr><td>getAskHumanPending</td><td>(none)</td><td>Returns pending ask-human questions with bot names</td></tr>
+            <tr><td>answerAskHuman</td><td>id, answer</td><td>Answers a pending question and wakes the agent loop</td></tr>
+            <tr><td>submitAgentFeedback</td><td>botId, content</td><td>Submits operator feedback and wakes agent loop</td></tr>
+            <tr><td>getProductionsService</td><td>(none)</td><td>Returns ProductionsService for web API</td></tr>
+            <tr><td>getKarmaService</td><td>(none)</td><td>Returns KarmaService for web API</td></tr>
+            <tr><td>sendVisibleMessage</td><td>chatId, sourceBotId, targetBotId, message</td><td>Delegates to CollaborationManager</td></tr>
+            <tr><td>initiateCollaboration</td><td>sourceBotId, targetBotId, topic, maxTurns?</td><td>Delegates to CollaborationManager</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p>Imports all other bot modules: <code>./types</code>, <code>./tool-registry</code>, <code>./system-prompt-builder</code>, <code>./memory-flush</code>, <code>./group-activation</code>, <code>./conversation-pipeline</code>, <code>./collaboration</code>, <code>./handler-registrar</code>, <code>./agent-loop</code>, <code>./ask-human-store</code>, <code>./agent-feedback-store</code>, <code>./telegram-utils</code>, <code>./soul-health-check</code>, <code>./tenant-facade</code>. Also imports infrastructure: <code>grammy</code>, <code>../agent-registry</code>, <code>../config</code>, <code>../collaboration-tracker</code>, <code>../collaboration-session</code>, <code>../media</code>, <code>../message-buffer</code>, <code>../soul</code>, <code>../core/llm-client</code>, <code>../productions/service</code>, <code>../karma/service</code>.</p>
+      </div>
+
+      <!-- tenant-facade.ts -->
+      <div class="module-section" id="tenant-facade">
+        <h3>tenant-facade.ts</h3>
+        <div class="file-path">src/bot/tenant-facade.ts &middot; 165 lines</div>
+        <p class="responsibility">
+          Extracted from <code>bot-manager.ts</code>. Encapsulates all tenant management methods:
+          tenant CRUD operations, bot-to-tenant mapping, tenant-scoped bot queries, and tenant
+          lifecycle management. Delegated from <code>BotManager</code> to reduce facade bloat.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>TenantFacade</code></li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>../tenant/manager</code>, <code>../config</code></p>
+      </div>
+
+    </div><!-- .content -->
+  </main>
+</div><!-- .layout -->
+
+<!-- Hamburger mobile JS -->
+<script>
+(function() {
+  var hamburger = document.getElementById('hamburger');
+  var sidebar = document.getElementById('sidebar');
+  var backdrop = document.getElementById('sidebar-backdrop');
+
+  function toggle() {
+    sidebar.classList.toggle('open');
+    backdrop.classList.toggle('show');
+  }
+
+  function close() {
+    sidebar.classList.remove('open');
+    backdrop.classList.remove('show');
+  }
+
+  hamburger.addEventListener('click', toggle);
+  backdrop.addEventListener('click', close);
+
+  // Close on ESC
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') close();
+  });
+})();
+</script>
+</body>
+</html>

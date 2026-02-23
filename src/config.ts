@@ -14,6 +14,13 @@ const StrategistConfigSchema = z.object({
   minInterval: z.string().default('4h'),
 }).default({});
 
+export const AgentLoopRetryConfigSchema = z.object({
+  maxRetries: z.number().int().min(0).max(10).default(2),
+  initialDelayMs: z.number().int().min(1000).max(300_000).default(10_000),
+  maxDelayMs: z.number().int().min(1000).max(600_000).default(60_000),
+  backoffMultiplier: z.number().min(1).max(10).default(2),
+}).default({});
+
 export const GlobalAgentLoopConfigSchema = z.object({
   enabled: z.boolean().default(false),
   every: z.string().default('6h'),
@@ -21,9 +28,12 @@ export const GlobalAgentLoopConfigSchema = z.object({
   maxInterval: z.string().default('24h'),
   maxToolRounds: z.number().int().min(1).max(20).default(10),
   maxDurationMs: z.number().int().positive().default(300_000),
+  maxConcurrent: z.number().int().min(1).max(10).default(2),
   claudeTimeout: z.number().int().positive().default(120_000),
   disabledTools: z.array(z.string()).optional(),
+  idleSuppression: z.boolean().default(true),
   strategist: StrategistConfigSchema,
+  retry: AgentLoopRetryConfigSchema,
 }).default({});
 
 export const BotAgentLoopOverrideSchema = z.object({
@@ -39,12 +49,22 @@ export const BotAgentLoopOverrideSchema = z.object({
     everyCycles: z.number().int().min(1).optional(),
     minInterval: z.string().optional(),
   }).optional(),
+  retry: z.object({
+    maxRetries: z.number().int().min(0).max(10).optional(),
+    initialDelayMs: z.number().int().min(1000).max(300_000).optional(),
+    maxDelayMs: z.number().int().min(1000).max(600_000).optional(),
+    backoffMultiplier: z.number().min(1).max(10).optional(),
+  }).optional(),
 }).optional();
 
 const DynamicToolsConfigSchema = z.object({
   enabled: z.boolean().default(false),
   storePath: z.string().default('./data/tools'),
   maxToolsPerBot: z.number().default(20),
+}).default({});
+
+const SkillsFoldersConfigSchema = z.object({
+  paths: z.array(z.string()).default([]),
 }).default({});
 
 const BotProductionsConfigSchema = z.object({
@@ -67,13 +87,30 @@ const BotConfigSchema = z.object({
   workDir: z.string().optional(),
   description: z.string().optional(),
   disabledTools: z.array(z.string()).optional(),
+  disabledSkills: z.array(z.string()).default([]),
   conversation: BotConversationOverrideSchema,
   agentLoop: BotAgentLoopOverrideSchema,
   productions: BotProductionsConfigSchema,
+  // Multi-tenant hosting fields
+  tenantId: z.string().optional(),
+  apiKey: z.string().optional(),
+  plan: z.enum(['free', 'starter', 'pro', 'enterprise']).default('free'),
+  usageQuota: z.object({
+    messagesPerMonth: z.number().int().positive().optional(),
+    apiCallsPerMonth: z.number().int().positive().optional(),
+    storageBytes: z.number().int().positive().optional(),
+  }).optional(),
+  billing: z.object({
+    stripeCustomerId: z.string().optional(),
+    stripeSubscriptionId: z.string().optional(),
+    currentPeriodStart: z.string().datetime().optional(),
+    currentPeriodEnd: z.string().datetime().optional(),
+  }).optional(),
 });
 
 const OllamaConfigSchema = z.object({
   baseUrl: z.string().url(),
+  timeout: z.number().int().positive().default(300_000),
   models: z.object({
     primary: z.string(),
     fallbacks: z.array(z.string()).optional(),
@@ -181,7 +218,7 @@ const AutoRagConfigSchema = z.object({
 
 const MemorySearchConfigSchema = z.object({
   enabled: z.boolean().default(false),
-  embeddingModel: z.string().default('nomic-embed-text'),
+  embeddingModel: z.string().default(''),
   embeddingDimensions: z.number().int().positive().default(768),
   chunkTargetTokens: z.number().int().positive().default(400),
   chunkOverlapTokens: z.number().int().positive().default(80),
@@ -334,6 +371,13 @@ const ProductionsConfigSchema = z.object({
   baseDir: z.string().default('./productions'),
 }).default({});
 
+const KarmaConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  baseDir: z.string().default('./data/karma'),
+  initialScore: z.number().default(50),
+  decayDays: z.number().default(30),
+}).default({});
+
 const ConfigSchema = z.object({
   bots: z.array(BotConfigSchema),
   ollama: OllamaConfigSchema,
@@ -357,7 +401,9 @@ const ConfigSchema = z.object({
   agentLoop: GlobalAgentLoopConfigSchema,
   browserTools: BrowserToolsConfigSchema.default({}),
   dynamicTools: DynamicToolsConfigSchema,
+  skillsFolders: SkillsFoldersConfigSchema,
   productions: ProductionsConfigSchema,
+  karma: KarmaConfigSchema,
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
 });
@@ -387,6 +433,7 @@ export type CollaborationConfig = z.infer<typeof CollaborationConfigSchema>;
 export type BufferConfig = z.infer<typeof BufferConfigSchema>;
 export type WebConfig = z.infer<typeof WebConfigSchema>;
 export type AgentLoopConfig = z.infer<typeof GlobalAgentLoopConfigSchema>;
+export type AgentLoopRetryConfig = z.infer<typeof AgentLoopRetryConfigSchema>;
 export type BotAgentLoopOverride = z.infer<typeof BotAgentLoopOverrideSchema>;
 export type DynamicToolsConfig = z.infer<typeof DynamicToolsConfigSchema>;
 export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
@@ -397,6 +444,8 @@ export type ProductionsConfig = z.infer<typeof ProductionsConfigSchema>;
 export type BotProductionsConfig = z.infer<typeof BotProductionsConfigSchema>;
 export type BrowserToolsConfig = z.infer<typeof BrowserToolsConfigSchema>;
 export type HealthCheckConfig = z.infer<typeof HealthCheckConfigSchema>;
+export type KarmaConfig = z.infer<typeof KarmaConfigSchema>;
+export type SkillsFoldersConfig = z.infer<typeof SkillsFoldersConfigSchema>;
 
 /**
  * Substitute environment variables in strings

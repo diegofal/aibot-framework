@@ -124,9 +124,9 @@ describe('getUnconsolidatedLogs', () => {
   test('returns old daily logs but not today', () => {
     const soulDir = setupSoulDir();
     const memoryDir = join(soulDir, 'memory');
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
+    const today = new Date().toLocaleDateString('sv-SE');
+    const yesterday = new Date(Date.now() - 86_400_000).toLocaleDateString('sv-SE');
+    const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000).toLocaleDateString('sv-SE');
 
     writeFileSync(join(memoryDir, `${today}.md`), '- today fact', 'utf-8');
     writeFileSync(join(memoryDir, `${yesterday}.md`), '- yesterday fact', 'utf-8');
@@ -262,8 +262,8 @@ describe('SoulLoader.composeSystemPrompt with MEMORY.md', () => {
   test('loads only today daily log (not yesterday)', () => {
     const soulDir = setupSoulDir();
     const memoryDir = join(soulDir, 'memory');
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const today = new Date().toLocaleDateString('sv-SE');
+    const yesterday = new Date(Date.now() - 86_400_000).toLocaleDateString('sv-SE');
 
     writeFileSync(join(memoryDir, `${today}.md`), '- [10:00] Today fact', 'utf-8');
     writeFileSync(join(memoryDir, `${yesterday}.md`), '- [10:00] Yesterday fact', 'utf-8');

@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Data Flows - AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+  <div class="layout">
+
+    <!-- Hamburger (mobile) -->
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+    <!-- Backdrop (mobile) -->
+    <div class="sidebar-backdrop" id="backdrop"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        AIBot Framework
+        <small>Architecture Docs</small>
+      </div>
+      <nav>
+        <div class="nav-group">Pages</div>
+        <a href="index.html">Overview</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="bot-core.html">Bot Core Modules</a>
+        <a href="data-flows.html" class="active">Data Flows</a>
+        <a href="tools-skills.html">Tools &amp; Skills</a>
+        <a href="memory-soul.html">Memory &amp; Soul</a>
+        <a href="agent-loop.html">Agent Loop</a>
+        <a href="web-dashboard.html">Web Dashboard</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="simplifications.html">Simplifications</a>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="content">
+
+        <!-- Page header -->
+        <div class="page-header">
+          <h1>Data Flows</h1>
+          <p>Visual walkthrough of the 4 core processing pipelines</p>
+        </div>
+
+        <!-- ============================================================
+             1. Conversation Pipeline Flow
+             ============================================================ -->
+        <h2>1. Conversation Pipeline</h2>
+        <p>
+          The main message-handling path in <code>ConversationPipeline.handleConversation()</code>.
+          A Telegram message enters the pipeline, passes through auth and session checks,
+          triggers a parallel RAG pre-fetch, builds the system prompt, calls the LLM with
+          optional tool execution rounds, persists the exchange to the session, and sends
+          the reply back to Telegram.
+        </p>
+
+        <div class="diagram-container">
+          <h3>Conversation Pipeline Flow</h3>
+          <svg viewBox="0 0 800 920" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrow-blue" viewBox="0 0 10 7" refX="10" refY="3.5"
+                      markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#6c8cff"/>
+              </marker>
+            </defs>
+
+            <!-- Nodes -->
+            <rect x="280" y="10" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="38" text-anchor="middle" font-size="14" fill="#e0e0e6" font-weight="600">Telegram Message</text>
+
+            <line x1="400" y1="54" x2="400" y2="80" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="80" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="108" text-anchor="middle" font-size="14" fill="#e0e0e6">MessageBuffer (debounce)</text>
+
+            <line x1="400" y1="124" x2="400" y2="150" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="150" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="178" text-anchor="middle" font-size="14" fill="#e0e0e6">Auth Check</text>
+
+            <line x1="400" y1="194" x2="400" y2="220" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="220" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="248" text-anchor="middle" font-size="14" fill="#e0e0e6">Session Load</text>
+
+            <line x1="400" y1="264" x2="400" y2="290" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="290" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="318" text-anchor="middle" font-size="14" fill="#e0e0e6">Session Expiry Check</text>
+
+            <line x1="400" y1="334" x2="400" y2="360" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="360" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.18)" stroke="#6c8cff" stroke-width="1.5" stroke-dasharray="5,3"/>
+            <text x="400" y="388" text-anchor="middle" font-size="14" fill="#e0e0e6">Memory Flush (if expired)</text>
+
+            <line x1="400" y1="404" x2="400" y2="430" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="430" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="458" text-anchor="middle" font-size="14" fill="#e0e0e6">RAG Prefetch (parallel)</text>
+
+            <line x1="400" y1="474" x2="400" y2="500" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="500" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="528" text-anchor="middle" font-size="14" fill="#e0e0e6">Build System Prompt</text>
+
+            <line x1="400" y1="544" x2="400" y2="570" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="570" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.22)" stroke="#6c8cff" stroke-width="2"/>
+            <text x="400" y="598" text-anchor="middle" font-size="14" fill="#e0e0e6" font-weight="600">LLM Call</text>
+
+            <line x1="400" y1="614" x2="400" y2="640" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="640" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.18)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="668" text-anchor="middle" font-size="14" fill="#e0e0e6">Tool Execution Loop</text>
+
+            <!-- Loop-back arrow for tool rounds -->
+            <path d="M 520 662 C 570 662, 570 592, 520 592"
+                  fill="none" stroke="#6c8cff" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow-blue)"/>
+            <text x="580" y="630" text-anchor="start" font-size="11" fill="#8b8d97">maxToolRounds</text>
+
+            <line x1="400" y1="684" x2="400" y2="710" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="710" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="738" text-anchor="middle" font-size="14" fill="#e0e0e6">Persist to Session</text>
+
+            <line x1="400" y1="754" x2="400" y2="780" stroke="#6c8cff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+            <rect x="280" y="780" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1.5"/>
+            <text x="400" y="808" text-anchor="middle" font-size="14" fill="#e0e0e6" font-weight="600">Send Reply</text>
+
+            <!-- Side annotations -->
+            <text x="140" y="388" text-anchor="end" font-size="11" fill="#8b8d97">flushSessionToMemory()</text>
+            <line x1="145" y1="382" x2="278" y2="382" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <text x="140" y="458" text-anchor="end" font-size="11" fill="#8b8d97">prefetchMemoryContext()</text>
+            <line x1="145" y1="452" x2="278" y2="452" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <text x="140" y="598" text-anchor="end" font-size="11" fill="#8b8d97">ollama.chat() / claude</text>
+            <line x1="145" y1="592" x2="278" y2="592" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <!-- Legend -->
+            <rect x="280" y="850" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(108,140,255,0.12)" stroke="#6c8cff" stroke-width="1"/>
+            <text x="302" y="863" font-size="12" fill="#8b8d97">Pipeline step</text>
+
+            <rect x="420" y="850" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(108,140,255,0.18)" stroke="#6c8cff" stroke-width="1" stroke-dasharray="4,2"/>
+            <text x="442" y="863" font-size="12" fill="#8b8d97">Conditional step</text>
+          </svg>
+        </div>
+
+        <!-- ============================================================
+             2. Agent Loop Flow
+             ============================================================ -->
+        <h2>2. Agent Loop</h2>
+        <p>
+          The autonomous execution loop in <code>AgentLoop</code>. Each bot runs in its own
+          independent async loop (<code>runBotLoop</code>). The loop supports two modes:
+          <strong>periodic</strong> (timer-based with configurable intervals) and
+          <strong>continuous</strong> (runs back-to-back with a short pause). Every N cycles
+          the Strategist phase fires to review goals and adjust focus before the Planner
+          generates a step list for the Executor.
+        </p>
+
+        <div class="diagram-container">
+          <h3>Agent Loop Flow</h3>
+          <svg viewBox="0 0 800 1000" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrow-green" viewBox="0 0 10 7" refX="10" refY="3.5"
+                      markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#34d399"/>
+              </marker>
+              <marker id="arrow-green-dim" viewBox="0 0 10 7" refX="10" refY="3.5"
+                      markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#8b8d97"/>
+              </marker>
+            </defs>
+
+            <!-- Start -->
+            <rect x="300" y="10" width="200" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="400" y="38" text-anchor="middle" font-size="14" fill="#e0e0e6" font-weight="600">Timer / Wake / Manual</text>
+
+            <line x1="400" y1="54" x2="400" y2="80" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Mode branching diamond -->
+            <polygon points="400,80 470,120 400,160 330,120" fill="rgba(52,211,153,0.08)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="400" y="125" text-anchor="middle" font-size="12" fill="#e0e0e6">Mode?</text>
+
+            <!-- Periodic branch (left) -->
+            <line x1="330" y1="120" x2="220" y2="120" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+            <text x="275" y="112" text-anchor="middle" font-size="11" fill="#8b8d97">periodic</text>
+
+            <rect x="100" y="98" width="120" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="160" y="118" text-anchor="middle" font-size="12" fill="#e0e0e6">Sleep for</text>
+            <text x="160" y="133" text-anchor="middle" font-size="11" fill="#8b8d97">config.every</text>
+
+            <line x1="160" y1="142" x2="160" y2="190" stroke="#34d399" stroke-width="1.2" marker-end="url(#arrow-green)"/>
+            <line x1="160" y1="190" x2="400" y2="190" stroke="#34d399" stroke-width="1.2" marker-end="url(#arrow-green)"/>
+
+            <!-- Continuous branch (right) -->
+            <line x1="470" y1="120" x2="580" y2="120" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+            <text x="525" y="112" text-anchor="middle" font-size="11" fill="#8b8d97">continuous</text>
+
+            <rect x="580" y="98" width="120" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="640" y="118" text-anchor="middle" font-size="12" fill="#e0e0e6">Pause</text>
+            <text x="640" y="133" text-anchor="middle" font-size="11" fill="#8b8d97">5s default</text>
+
+            <line x1="640" y1="142" x2="640" y2="190" stroke="#34d399" stroke-width="1.2" marker-end="url(#arrow-green)"/>
+            <line x1="640" y1="190" x2="400" y2="190" stroke="#34d399" stroke-width="1.2"/>
+
+            <!-- Select Bot -->
+            <rect x="300" y="190" width="200" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="400" y="218" text-anchor="middle" font-size="14" fill="#e0e0e6">Select Bot</text>
+
+            <line x1="400" y1="234" x2="400" y2="260" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Load Soul & Goals -->
+            <rect x="300" y="260" width="200" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="400" y="288" text-anchor="middle" font-size="14" fill="#e0e0e6">Load Soul &amp; Goals</text>
+
+            <line x1="400" y1="304" x2="400" y2="330" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Process Feedback -->
+            <rect x="300" y="330" width="200" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.15)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="5,3"/>
+            <text x="400" y="358" text-anchor="middle" font-size="14" fill="#e0e0e6">Process Feedback</text>
+
+            <text x="160" y="358" text-anchor="end" font-size="11" fill="#8b8d97">if pending feedback</text>
+            <line x1="165" y1="352" x2="298" y2="352" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <line x1="400" y1="374" x2="400" y2="400" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Strategist -->
+            <rect x="280" y="400" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.18)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="5,3"/>
+            <text x="400" y="428" text-anchor="middle" font-size="14" fill="#e0e0e6">Strategist (every N cycles)</text>
+
+            <text x="160" y="428" text-anchor="end" font-size="11" fill="#8b8d97">goal ops + focus</text>
+            <line x1="165" y1="422" x2="278" y2="422" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <line x1="400" y1="444" x2="400" y2="470" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Planner LLM Call -->
+            <rect x="280" y="470" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.22)" stroke="#34d399" stroke-width="2"/>
+            <text x="400" y="498" text-anchor="middle" font-size="14" fill="#e0e0e6" font-weight="600">Planner LLM Call</text>
+
+            <line x1="400" y1="514" x2="400" y2="540" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Parse Plan JSON -->
+            <rect x="280" y="540" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="400" y="568" text-anchor="middle" font-size="14" fill="#e0e0e6">Parse Plan JSON</text>
+
+            <line x1="400" y1="584" x2="400" y2="610" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Priority check diamond -->
+            <polygon points="400,610 460,640 400,670 340,640" fill="rgba(52,211,153,0.08)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="400" y="645" text-anchor="middle" font-size="11" fill="#e0e0e6">idle?</text>
+
+            <!-- Idle path (right) -->
+            <line x1="460" y1="640" x2="570" y2="640" stroke="#8b8d97" stroke-width="1.2" marker-end="url(#arrow-green-dim)"/>
+            <text x="515" y="632" text-anchor="middle" font-size="11" fill="#8b8d97">none</text>
+            <rect x="570" y="618" width="140" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.06)" stroke="#8b8d97" stroke-width="1"/>
+            <text x="640" y="646" text-anchor="middle" font-size="13" fill="#8b8d97">Skip (idle cycle)</text>
+
+            <!-- Active path (down) -->
+            <line x1="400" y1="670" x2="400" y2="700" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Executor -->
+            <rect x="280" y="700" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.22)" stroke="#34d399" stroke-width="2"/>
+            <text x="400" y="728" text-anchor="middle" font-size="14" fill="#e0e0e6" font-weight="600">Executor (tool calls)</text>
+
+            <text x="160" y="728" text-anchor="end" font-size="11" fill="#8b8d97">maxToolRounds</text>
+            <line x1="165" y1="722" x2="278" y2="722" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <line x1="400" y1="744" x2="400" y2="770" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Summary -->
+            <rect x="280" y="770" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="400" y="798" text-anchor="middle" font-size="14" fill="#e0e0e6">Summary &amp; Log to Memory</text>
+
+            <line x1="400" y1="814" x2="400" y2="840" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+            <!-- Schedule Next -->
+            <rect x="280" y="840" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="400" y="868" text-anchor="middle" font-size="14" fill="#e0e0e6">Schedule Next Cycle</text>
+
+            <!-- Loop-back arrow -->
+            <path d="M 280 862 C 70 862, 70 32, 300 32"
+                  fill="none" stroke="#34d399" stroke-width="1.2" stroke-dasharray="6,4" marker-end="url(#arrow-green)"/>
+
+            <!-- Legend -->
+            <rect x="280" y="920" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(52,211,153,0.12)" stroke="#34d399" stroke-width="1"/>
+            <text x="302" y="933" font-size="12" fill="#8b8d97">Always runs</text>
+
+            <rect x="420" y="920" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(52,211,153,0.18)" stroke="#34d399" stroke-width="1" stroke-dasharray="4,2"/>
+            <text x="442" y="933" font-size="12" fill="#8b8d97">Conditional</text>
+
+            <rect x="560" y="920" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(52,211,153,0.22)" stroke="#34d399" stroke-width="1.5"/>
+            <text x="582" y="933" font-size="12" fill="#8b8d97">LLM call</text>
+          </svg>
+        </div>
+
+        <!-- ============================================================
+             3. Collaboration Flow
+             ============================================================ -->
+        <h2>3. Collaboration Flow</h2>
+        <p>
+          <code>CollaborationManager</code> supports three collaboration modes between bots.
+          <strong>Visible</strong> collaboration sends real Telegram messages between bots
+          with multi-turn discussion support. <strong>Internal</strong> collaboration uses
+          <code>collaborationStep()</code> for direct LLM-to-LLM communication with session
+          tracking. <strong>Delegation</strong> hands off a task to another bot's full LLM
+          pipeline (without tools to prevent loops).
+        </p>
+
+        <div class="diagram-container">
+          <h3>Collaboration Flow &mdash; 3 Modes</h3>
+          <svg viewBox="0 0 800 640" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrow-purple" viewBox="0 0 10 7" refX="10" refY="3.5"
+                      markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#a78bfa"/>
+              </marker>
+            </defs>
+
+            <!-- Column headers -->
+            <text x="133" y="30" text-anchor="middle" font-size="16" fill="#a78bfa" font-weight="600">Visible</text>
+            <text x="133" y="48" text-anchor="middle" font-size="11" fill="#8b8d97">sendVisibleMessage()</text>
+
+            <text x="400" y="30" text-anchor="middle" font-size="16" fill="#a78bfa" font-weight="600">Internal</text>
+            <text x="400" y="48" text-anchor="middle" font-size="11" fill="#8b8d97">collaborationStep()</text>
+
+            <text x="667" y="30" text-anchor="middle" font-size="16" fill="#a78bfa" font-weight="600">Delegation</text>
+            <text x="667" y="48" text-anchor="middle" font-size="11" fill="#8b8d97">handleDelegation()</text>
+
+            <!-- Divider lines -->
+            <line x1="267" y1="15" x2="267" y2="600" stroke="#2a2d36" stroke-width="1" stroke-dasharray="4,4"/>
+            <line x1="533" y1="15" x2="533" y2="600" stroke="#2a2d36" stroke-width="1" stroke-dasharray="4,4"/>
+
+            <!-- ---- Visible column ---- -->
+            <rect x="48" y="70" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="133" y="95" text-anchor="middle" font-size="13" fill="#e0e0e6">Bot A (source)</text>
+
+            <line x1="133" y1="110" x2="133" y2="140" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="48" y="140" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.18)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="133" y="165" text-anchor="middle" font-size="13" fill="#e0e0e6">Telegram Message</text>
+            <text x="133" y="178" text-anchor="middle" font-size="10" fill="#8b8d97">@targetBot text</text>
+
+            <line x1="133" y1="180" x2="133" y2="210" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="48" y="210" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="133" y="235" text-anchor="middle" font-size="13" fill="#e0e0e6">Bot B reads msg</text>
+
+            <line x1="133" y1="250" x2="133" y2="280" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="48" y="280" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.18)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="133" y="305" text-anchor="middle" font-size="13" fill="#e0e0e6">runVisibleTurn()</text>
+
+            <line x1="133" y1="320" x2="133" y2="350" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="48" y="350" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="133" y="375" text-anchor="middle" font-size="13" fill="#e0e0e6">LLM (collab tools)</text>
+
+            <line x1="133" y1="390" x2="133" y2="420" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="48" y="420" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="133" y="445" text-anchor="middle" font-size="13" fill="#e0e0e6">Send to Telegram</text>
+
+            <!-- Multi-turn loop back -->
+            <path d="M 218 440 C 250 440, 250 300, 218 300"
+                  fill="none" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow-purple)"/>
+            <text x="257" y="370" text-anchor="start" font-size="10" fill="#8b8d97">visibleMaxTurns</text>
+
+            <line x1="133" y1="460" x2="133" y2="490" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="48" y="490" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="133" y="515" text-anchor="middle" font-size="13" fill="#e0e0e6">Persist to sessions</text>
+
+            <!-- ---- Internal column ---- -->
+            <rect x="315" y="70" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="400" y="95" text-anchor="middle" font-size="13" fill="#e0e0e6">Bot A (source)</text>
+
+            <line x1="400" y1="110" x2="400" y2="140" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="315" y="140" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.18)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="400" y="165" text-anchor="middle" font-size="13" fill="#e0e0e6">collaborate tool</text>
+
+            <line x1="400" y1="180" x2="400" y2="210" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="315" y="210" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="400" y="235" text-anchor="middle" font-size="13" fill="#e0e0e6">Tracker check</text>
+
+            <line x1="400" y1="250" x2="400" y2="280" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="315" y="280" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="400" y="305" text-anchor="middle" font-size="13" fill="#e0e0e6">Create/resume session</text>
+
+            <line x1="400" y1="320" x2="400" y2="350" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="315" y="350" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.22)" stroke="#a78bfa" stroke-width="2"/>
+            <text x="400" y="375" text-anchor="middle" font-size="13" fill="#e0e0e6" font-weight="600">LLM call on Bot B</text>
+
+            <line x1="400" y1="390" x2="400" y2="420" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="315" y="420" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="400" y="445" text-anchor="middle" font-size="13" fill="#e0e0e6">Append to session</text>
+
+            <line x1="400" y1="460" x2="400" y2="490" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="315" y="490" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="400" y="515" text-anchor="middle" font-size="13" fill="#e0e0e6">Return response</text>
+
+            <!-- Timeout annotation -->
+            <text x="400" y="556" text-anchor="middle" font-size="11" fill="#8b8d97">internalQueryTimeout guard</text>
+
+            <!-- ---- Delegation column ---- -->
+            <rect x="582" y="70" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="667" y="95" text-anchor="middle" font-size="13" fill="#e0e0e6">Bot A (source)</text>
+
+            <line x1="667" y1="110" x2="667" y2="140" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="582" y="140" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.18)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="667" y="165" text-anchor="middle" font-size="13" fill="#e0e0e6">delegate tool</text>
+
+            <line x1="667" y1="180" x2="667" y2="210" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="582" y="210" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="667" y="235" text-anchor="middle" font-size="13" fill="#e0e0e6">Resolve target bot</text>
+
+            <line x1="667" y1="250" x2="667" y2="280" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="582" y="280" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="667" y="305" text-anchor="middle" font-size="13" fill="#e0e0e6">Load soul + prompt</text>
+
+            <line x1="667" y1="320" x2="667" y2="350" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="582" y="350" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.22)" stroke="#a78bfa" stroke-width="2"/>
+            <text x="667" y="369" text-anchor="middle" font-size="13" fill="#e0e0e6" font-weight="600">Bot B LLM call</text>
+            <text x="667" y="383" text-anchor="middle" font-size="10" fill="#8b8d97">(no tools)</text>
+
+            <line x1="667" y1="390" x2="667" y2="420" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="582" y="420" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="667" y="445" text-anchor="middle" font-size="13" fill="#e0e0e6">Send to Telegram</text>
+
+            <line x1="667" y1="460" x2="667" y2="490" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+
+            <rect x="582" y="490" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="667" y="515" text-anchor="middle" font-size="13" fill="#e0e0e6">Return result</text>
+
+            <!-- Legend -->
+            <rect x="200" y="590" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1"/>
+            <text x="222" y="603" font-size="12" fill="#8b8d97">Processing step</text>
+
+            <rect x="370" y="590" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(167,139,250,0.22)" stroke="#a78bfa" stroke-width="1.5"/>
+            <text x="392" y="603" font-size="12" fill="#8b8d97">LLM call</text>
+
+            <rect x="500" y="590" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(167,139,250,0.18)" stroke="#a78bfa" stroke-width="1"/>
+            <text x="522" y="603" font-size="12" fill="#8b8d97">Entry point</text>
+          </svg>
+        </div>
+
+        <!-- ============================================================
+             4. Memory Search Flow
+             ============================================================ -->
+        <h2>4. Memory Search Flow</h2>
+        <p>
+          The hybrid search in <code>memory/search.ts</code> combines three strategies:
+          <strong>vector search</strong> using cosine similarity on embeddings,
+          <strong>keyword search</strong> via SQLite FTS5 with BM25 scoring, and
+          <strong>Core Memory search</strong> with importance weighting. Results from all
+          three are merged, deduplicated, scored with configurable weights
+          (<code>vectorWeight</code> / <code>keywordWeight</code>), and returned as
+          the top-K matches.
+        </p>
+
+        <div class="diagram-container">
+          <h3>Memory Search Flow (hybridSearch)</h3>
+          <svg viewBox="0 0 800 680" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrow-cyan" viewBox="0 0 10 7" refX="10" refY="3.5"
+                      markerWidth="10" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#22d3ee"/>
+              </marker>
+            </defs>
+
+            <!-- Query input -->
+            <rect x="300" y="10" width="200" height="44" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.12)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="400" y="38" text-anchor="middle" font-size="14" fill="#e0e0e6" font-weight="600">Query</text>
+
+            <line x1="400" y1="54" x2="400" y2="84" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+
+            <!-- Generate Embedding -->
+            <rect x="280" y="84" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.12)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="400" y="112" text-anchor="middle" font-size="14" fill="#e0e0e6">Generate Embedding</text>
+
+            <text x="155" y="112" text-anchor="end" font-size="11" fill="#8b8d97">embeddingService</text>
+            <line x1="160" y1="106" x2="278" y2="106" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <!-- Fork into 3 parallel branches -->
+            <line x1="400" y1="128" x2="400" y2="158" stroke="#22d3ee" stroke-width="1.5"/>
+
+            <!-- Horizontal line connecting three branches -->
+            <line x1="133" y1="158" x2="667" y2="158" stroke="#22d3ee" stroke-width="1.5"/>
+
+            <!-- Branch down lines -->
+            <line x1="133" y1="158" x2="133" y2="188" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+            <line x1="400" y1="158" x2="400" y2="188" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+            <line x1="667" y1="158" x2="667" y2="188" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+
+            <!-- PARALLEL label -->
+            <rect x="348" y="144" width="104" height="20" rx="4" ry="4"
+                  fill="rgba(34,211,238,0.15)" stroke="none"/>
+            <text x="400" y="158" text-anchor="middle" font-size="11" fill="#22d3ee" font-weight="600">PARALLEL</text>
+
+            <!-- Vector Search -->
+            <rect x="48" y="188" width="170" height="44" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.18)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="133" y="210" text-anchor="middle" font-size="13" fill="#e0e0e6" font-weight="600">Vector Search</text>
+            <text x="133" y="225" text-anchor="middle" font-size="10" fill="#8b8d97">cosine similarity</text>
+
+            <line x1="133" y1="232" x2="133" y2="262" stroke="#22d3ee" stroke-width="1.2" marker-end="url(#arrow-cyan)"/>
+
+            <rect x="48" y="262" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.10)" stroke="#22d3ee" stroke-width="1"/>
+            <text x="133" y="287" text-anchor="middle" font-size="12" fill="#8b8d97">all chunks with embeddings</text>
+
+            <line x1="133" y1="302" x2="133" y2="330" stroke="#22d3ee" stroke-width="1.2" marker-end="url(#arrow-cyan)"/>
+
+            <rect x="48" y="330" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.12)" stroke="#22d3ee" stroke-width="1"/>
+            <text x="133" y="355" text-anchor="middle" font-size="12" fill="#e0e0e6">vectorScores map</text>
+
+            <!-- Keyword Search -->
+            <rect x="315" y="188" width="170" height="44" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.18)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="400" y="210" text-anchor="middle" font-size="13" fill="#e0e0e6" font-weight="600">Keyword Search</text>
+            <text x="400" y="225" text-anchor="middle" font-size="10" fill="#8b8d97">FTS5 + BM25</text>
+
+            <line x1="400" y1="232" x2="400" y2="262" stroke="#22d3ee" stroke-width="1.2" marker-end="url(#arrow-cyan)"/>
+
+            <rect x="315" y="262" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.10)" stroke="#22d3ee" stroke-width="1"/>
+            <text x="400" y="280" text-anchor="middle" font-size="12" fill="#8b8d97">tokenize + stop words</text>
+            <text x="400" y="294" text-anchor="middle" font-size="12" fill="#8b8d97">prefix matching</text>
+
+            <line x1="400" y1="302" x2="400" y2="330" stroke="#22d3ee" stroke-width="1.2" marker-end="url(#arrow-cyan)"/>
+
+            <rect x="315" y="330" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.12)" stroke="#22d3ee" stroke-width="1"/>
+            <text x="400" y="355" text-anchor="middle" font-size="12" fill="#e0e0e6">keywordScores map</text>
+
+            <!-- Core Memory Search -->
+            <rect x="582" y="188" width="170" height="44" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.18)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="667" y="210" text-anchor="middle" font-size="13" fill="#e0e0e6" font-weight="600">Core Memory</text>
+            <text x="667" y="225" text-anchor="middle" font-size="10" fill="#8b8d97">importance-weighted</text>
+
+            <line x1="667" y1="232" x2="667" y2="262" stroke="#22d3ee" stroke-width="1.2" marker-end="url(#arrow-cyan)"/>
+
+            <rect x="582" y="262" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.10)" stroke="#22d3ee" stroke-width="1"/>
+            <text x="667" y="280" text-anchor="middle" font-size="12" fill="#8b8d97">LIKE on key + value</text>
+            <text x="667" y="294" text-anchor="middle" font-size="12" fill="#8b8d97">importance / 5 weight</text>
+
+            <line x1="667" y1="302" x2="667" y2="330" stroke="#22d3ee" stroke-width="1.2" marker-end="url(#arrow-cyan)"/>
+
+            <rect x="582" y="330" width="170" height="40" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.12)" stroke="#22d3ee" stroke-width="1"/>
+            <text x="667" y="355" text-anchor="middle" font-size="12" fill="#e0e0e6">coreMemoryResults</text>
+
+            <!-- Converge into merge -->
+            <line x1="133" y1="370" x2="133" y2="398" stroke="#22d3ee" stroke-width="1.2"/>
+            <line x1="400" y1="370" x2="400" y2="398" stroke="#22d3ee" stroke-width="1.2"/>
+            <line x1="667" y1="370" x2="667" y2="398" stroke="#22d3ee" stroke-width="1.2"/>
+            <line x1="133" y1="398" x2="667" y2="398" stroke="#22d3ee" stroke-width="1.5"/>
+            <line x1="400" y1="398" x2="400" y2="428" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+
+            <!-- Merge & Deduplicate -->
+            <rect x="260" y="428" width="280" height="44" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.15)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="400" y="456" text-anchor="middle" font-size="14" fill="#e0e0e6">Merge &amp; Deduplicate</text>
+
+            <text x="155" y="456" text-anchor="end" font-size="11" fill="#8b8d97">content hash dedup</text>
+            <line x1="160" y1="450" x2="258" y2="450" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <line x1="400" y1="472" x2="400" y2="502" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+
+            <!-- Score & Rank -->
+            <rect x="260" y="502" width="280" height="44" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.15)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="400" y="530" text-anchor="middle" font-size="14" fill="#e0e0e6">Score &amp; Rank</text>
+
+            <text x="155" y="524" text-anchor="end" font-size="11" fill="#8b8d97">vectorWeight * v +</text>
+            <text x="155" y="536" text-anchor="end" font-size="11" fill="#8b8d97">keywordWeight * k</text>
+            <line x1="160" y1="524" x2="258" y2="524" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <line x1="400" y1="546" x2="400" y2="576" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+
+            <!-- Return Top-K -->
+            <rect x="280" y="576" width="240" height="44" rx="6" ry="6"
+                  fill="rgba(34,211,238,0.12)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="400" y="604" text-anchor="middle" font-size="14" fill="#e0e0e6" font-weight="600">Return Top-K Results</text>
+
+            <text x="155" y="604" text-anchor="end" font-size="11" fill="#8b8d97">high importance first</text>
+            <line x1="160" y1="598" x2="278" y2="598" stroke="#2a2d36" stroke-width="1" stroke-dasharray="3,3"/>
+
+            <!-- Legend -->
+            <rect x="240" y="644" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(34,211,238,0.12)" stroke="#22d3ee" stroke-width="1"/>
+            <text x="262" y="657" font-size="12" fill="#8b8d97">Step</text>
+
+            <rect x="320" y="644" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(34,211,238,0.18)" stroke="#22d3ee" stroke-width="1.5"/>
+            <text x="342" y="657" font-size="12" fill="#8b8d97">Search engine</text>
+
+            <rect x="460" y="644" width="16" height="16" rx="3" ry="3"
+                  fill="rgba(34,211,238,0.10)" stroke="#22d3ee" stroke-width="1"/>
+            <text x="482" y="657" font-size="12" fill="#8b8d97">Detail</text>
+          </svg>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Mobile sidebar toggle -->
+  <script>
+    (function () {
+      var hamburger = document.getElementById('hamburger');
+      var sidebar = document.getElementById('sidebar');
+      var backdrop = document.getElementById('backdrop');
+
+      function toggle() {
+        sidebar.classList.toggle('open');
+        backdrop.classList.toggle('show');
+      }
+
+      hamburger.addEventListener('click', toggle);
+      backdrop.addEventListener('click', toggle);
+    })();
+  </script>
+</body>
+</html>

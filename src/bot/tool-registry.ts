@@ -2,6 +2,8 @@ import type { Logger } from '../logger';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import type { BotContext } from './types';
 import { ToolExecutor } from './tool-executor';
+import { discoverSkillDirs, loadExternalSkill, type LoadedExternalSkill } from '../core/external-skill-loader';
+import { adaptExternalTool } from '../core/external-tool-adapter';
 
 import { createCollaborateTool } from '../tools/collaborate';
 import { createCronTool } from '../tools/cron';
@@ -30,6 +32,10 @@ import { createProductionLogTool } from '../tools/production-log';
 export class ToolRegistry {
   private dynamicToolRegistry: DynamicToolRegistry | null = null;
   private dynamicToolStore: DynamicToolStore | null = null;
+  /** Loaded external skills metadata (for per-bot filtering + web API) */
+  private externalSkills: LoadedExternalSkill[] = [];
+  /** Maps namespaced tool name → originating skill ID */
+  private externalToolToSkill: Map<string, string> = new Map();
 
   constructor(private ctx: BotContext) {}
 
@@ -241,6 +247,95 @@ export class ToolRegistry {
     }
   }
 
+  /**
+   * Discover, load, and register external skills from configured skill folders.
+   * Each skill's tools are namespaced (skillId_toolName) and added to ctx.tools[].
+   */
+  async initializeExternalSkills(): Promise<void> {
+    const { config, logger } = this.ctx;
+    const paths = config.skillsFolders?.paths ?? [];
+    if (paths.length === 0) return;
+
+    const skillDirs = discoverSkillDirs(paths);
+    if (skillDirs.length === 0) {
+      logger.info({ paths }, 'No external skills found in configured folders');
+      return;
+    }
+
+    logger.info({ count: skillDirs.length, paths }, 'Discovered external skill directories');
+
+    for (const dir of skillDirs) {
+      try {
+        const loaded = await loadExternalSkill(dir, logger);
+        const { manifest, handlers, warnings } = loaded;
+
+        if (warnings.length > 0) {
+          logger.warn({ skillId: manifest.id, warnings }, 'External skill loaded with warnings');
+        }
+
+        // Build per-skill shared state and config
+        const skillState = new Map<string, unknown>();
+        const skillConfig: Record<string, unknown> = manifest.config ?? {};
+
+        // Merge framework-level skill config if available
+        const frameworkConfig = config.skills?.config?.[manifest.id];
+        if (frameworkConfig && typeof frameworkConfig === 'object') {
+          Object.assign(skillConfig, frameworkConfig);
+        }
+
+        let toolCount = 0;
+        for (const toolDef of manifest.tools) {
+          const handler = handlers[toolDef.name];
+          if (typeof handler !== 'function') continue;
+
+          const tool = adaptExternalTool(
+            manifest.id,
+            toolDef,
+            handler,
+            skillConfig,
+            skillState,
+            logger,
+          );
+
+          this.ctx.tools.push(tool);
+          this.externalToolToSkill.set(tool.definition.function.name, manifest.id);
+          toolCount++;
+        }
+
+        this.externalSkills.push(loaded);
+        logger.info(
+          { skillId: manifest.id, toolCount, dir },
+          'External skill loaded',
+        );
+      } catch (err) {
+        logger.error({ dir, err }, 'Failed to load external skill');
+      }
+    }
+
+    // Re-sync definitions after adding external tools
+    this.ctx.toolDefinitions.length = 0;
+    this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
+
+    logger.info(
+      { externalSkillCount: this.externalSkills.length, totalTools: this.ctx.tools.length },
+      'External skills initialization complete',
+    );
+  }
+
+  /**
+   * Get IDs of all loaded external skills (for web API / UI).
+   */
+  getExternalSkillNames(): string[] {
+    return this.externalSkills.map((s) => s.manifest.id);
+  }
+
+  /**
+   * Get full metadata for all loaded external skills (for web API).
+   */
+  getExternalSkills(): LoadedExternalSkill[] {
+    return this.externalSkills;
+  }
+
   getTools(): Tool[] {
     return this.ctx.tools;
   }
@@ -258,10 +353,23 @@ export class ToolRegistry {
   }
 
   /**
-   * Get the full excluded set for a bot: disabledTools + dynamic scope exclusions.
+   * Get the full excluded set for a bot: disabledTools + disabledSkills + dynamic scope exclusions.
    */
   private getExcludedSet(botId: string): Set<string> {
     const disabled = this.getDisabledSet(botId);
+
+    // Expand disabledSkills → individual tool names
+    const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+    const disabledSkills = botConfig?.disabledSkills ?? [];
+    if (disabledSkills.length > 0) {
+      const skillSet = new Set(disabledSkills);
+      for (const [toolName, skillId] of this.externalToolToSkill) {
+        if (skillSet.has(skillId)) {
+          disabled.add(toolName);
+        }
+      }
+    }
+
     if (!this.dynamicToolRegistry) return disabled;
     const dynamicExcluded = this.dynamicToolRegistry.getExcludedNamesForBot(botId);
     if (dynamicExcluded.size === 0) return disabled;

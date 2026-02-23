@@ -89,14 +89,15 @@ function renderResultsTable(results) {
   }
   return `
     <table class="results-table">
-      <thead><tr><th>Bot</th><th>Status</th><th>Time</th><th>Summary</th></tr></thead>
+      <thead><tr><th>Bot</th><th>Status</th><th>Time</th><th>Summary</th><th></th></tr></thead>
       <tbody>
         ${results.map((r, i) => `
-          <tr class="result-row" data-idx="${i}">
+          <tr class="result-row" data-idx="${i}" data-bot-id="${escapeHtml(r.botId || '')}">
             <td>${escapeHtml(r.botName)}</td>
-            <td>${statusBadge(r.status)}</td>
+            <td>${statusBadge(r.status)}${r.retryAttempt > 0 ? ` <span class="badge badge-error" style="font-size:10px">retry #${r.retryAttempt}</span>` : ''}</td>
             <td class="text-dim">${formatDuration(r.durationMs)}</td>
             <td class="text-dim text-sm" style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.summary?.slice(0, 120) || '')}</td>
+            <td>${r.status === 'error' ? '<button class="btn btn-sm btn-retry">Retry</button>' : ''}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -104,10 +105,30 @@ function renderResultsTable(results) {
   `;
 }
 
+function showRowError(row, message) {
+  const errorTr = document.createElement('tr');
+  errorTr.className = 'retry-error-row';
+  errorTr.innerHTML = `<td colspan="5" style="padding:6px 12px;border-bottom:1px solid var(--border)"><span style="color:var(--red);font-size:12px">${escapeHtml(message)}</span></td>`;
+  row.insertAdjacentElement('afterend', errorTr);
+  setTimeout(() => errorTr.remove(), 5000);
+}
+
+function updateResultRow(tr, result, idx) {
+  tr.dataset.idx = idx;
+  tr.dataset.botId = result.botId || '';
+  const cells = tr.querySelectorAll('td');
+  cells[0].textContent = result.botName;
+  cells[1].innerHTML = statusBadge(result.status);
+  cells[2].textContent = formatDuration(result.durationMs);
+  cells[3].textContent = result.summary?.slice(0, 120) || '';
+  cells[4].innerHTML = result.status === 'error' ? '<button class="btn btn-sm btn-retry">Retry</button>' : '';
+}
+
 function attachResultRowListeners(container, results) {
   const rows = container.querySelectorAll('.result-row');
   rows.forEach(row => {
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.btn-retry')) return;
       const idx = parseInt(row.dataset.idx, 10);
       const existing = row.nextElementSibling;
       const isOpen = existing && existing.classList.contains('result-detail');
@@ -119,8 +140,48 @@ function attachResultRowListeners(container, results) {
       if (isOpen) return;
 
       // Insert detail row after clicked row
-      row.insertAdjacentHTML('afterend', renderDetailRow(results[idx], 4));
+      row.insertAdjacentHTML('afterend', renderDetailRow(results[idx], 5));
     });
+  });
+}
+
+function attachRetryListeners(container, results) {
+  container.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.btn-retry');
+    if (!btn) return;
+    const row = btn.closest('tr.result-row');
+    if (!row) return;
+    const idx = parseInt(row.dataset.idx, 10);
+    const botId = row.dataset.botId;
+    if (!botId) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+
+    // Remove any existing error rows for this row
+    const nextEl = row.nextElementSibling;
+    if (nextEl && nextEl.classList.contains('retry-error-row')) nextEl.remove();
+
+    try {
+      const res = await api(`/api/agent-loop/run/${encodeURIComponent(botId)}`, { method: 'POST' });
+      if (res.error) {
+        btn.disabled = false;
+        btn.textContent = 'Retry';
+        showRowError(row, res.error);
+        return;
+      }
+      // Update the results array so expanded details reflect new data
+      results[idx] = res.result;
+      updateResultRow(row, res.result, idx);
+
+      // Collapse any open detail row for this result
+      const detail = row.nextElementSibling;
+      if (detail && detail.classList.contains('result-detail')) detail.remove();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+      showRowError(row, err.message || 'Request failed');
+    }
   });
 }
 
@@ -180,7 +241,7 @@ export async function renderDashboard(el) {
       ${loopState.botSchedules?.length ? `
         <div class="text-dim text-sm mb-16" style="font-weight:500">Bot Schedules</div>
         <table class="results-table" style="margin-bottom:16px">
-          <thead><tr><th>Bot</th><th>Mode</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Strategist</th></tr></thead>
+          <thead><tr><th>Bot</th><th>Mode</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Retries</th><th>Strategist</th></tr></thead>
           <tbody>
             ${loopState.botSchedules.map(s => {
               const isContinuous = s.mode === 'continuous';
@@ -201,6 +262,7 @@ export async function renderDashboard(el) {
                 <td class="text-dim">${s.lastRunAt ? timeAgo(s.lastRunAt) : 'Never'}</td>
                 <td class="text-dim">${s.nextCheckIn ? escapeHtml(s.nextCheckIn) : '--'}</td>
                 <td>${s.lastStatus ? statusBadge(s.lastStatus) : '<span class="text-dim">--</span>'}</td>
+                <td>${s.retryCount > 0 ? `<span class="badge badge-error">${s.retryCount} retries</span>` : '<span class="text-dim">0</span>'}</td>
                 <td>${stratInfo}${cyclesLeft}</td>
               </tr>`;
             }).join('')}
@@ -225,9 +287,11 @@ export async function renderDashboard(el) {
     </div>
   `;
 
-  // Attach expand listeners for initial results
+  // Attach expand and retry listeners for initial results
   if (loopState.lastResults?.length) {
-    attachResultRowListeners(document.getElementById('loop-results'), loopState.lastResults);
+    const resultsContainer = document.getElementById('loop-results');
+    attachResultRowListeners(resultsContainer, loopState.lastResults);
+    attachRetryListeners(resultsContainer, loopState.lastResults);
   }
 
   // Run Now button
@@ -247,6 +311,7 @@ export async function renderDashboard(el) {
           `<div class="text-dim text-sm mb-16" style="font-weight:500">Last Results</div>` +
           renderResultsTable(res.results);
         attachResultRowListeners(resultsDiv, res.results);
+        attachRetryListeners(resultsDiv, res.results);
       }
     } catch (err) {
       resultsDiv.innerHTML = `<p class="text-dim text-sm" style="color:var(--red)">Failed: ${escapeHtml(err.message)}</p>`;

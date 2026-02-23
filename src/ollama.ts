@@ -61,6 +61,7 @@ export class OllamaClient {
       const response = await fetch(`${this.config.baseUrl}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(this.config.timeout),
         body: JSON.stringify({
           model,
           prompt,
@@ -114,7 +115,7 @@ export class OllamaClient {
 
       // If tools are provided, delegate to the generic tool loop
       if (hasTools) {
-        const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger);
+        const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger, this.config.timeout);
         return await runToolLoop(strategy, messages, {
           maxRounds: options.maxToolRounds ?? 5,
           tools: options.tools!,
@@ -124,7 +125,7 @@ export class OllamaClient {
       }
 
       // Simple path: no tools, single chat call
-      const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger);
+      const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger, this.config.timeout);
       const result = await strategy.chat(messages, options);
       this.logger.debug({ model, response: (result.content || '').slice(0, 100) }, 'Chat response');
       return result.content || '';
@@ -150,8 +151,11 @@ export class OllamaClient {
   /**
    * Generate embeddings for text using Ollama
    */
-  async embed(text: string, model?: string): Promise<{ embedding: number[]; model: string }> {
-    const embeddingModel = model || 'nomic-embed-text';
+  async embed(text: string, model: string): Promise<{ embedding: number[]; model: string }> {
+    if (!model) {
+      throw new Error('Embedding model not configured (soul.search.embeddingModel is empty)');
+    }
+    const embeddingModel = model;
 
     try {
       this.logger.debug({ model: embeddingModel, textLength: text.length }, 'Generating embedding');
@@ -159,6 +163,7 @@ export class OllamaClient {
       const response = await fetch(`${this.config.baseUrl}/api/embed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(this.config.timeout),
         body: JSON.stringify({
           model: embeddingModel,
           input: text,
@@ -188,7 +193,9 @@ export class OllamaClient {
    */
   async ping(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.config.baseUrl}/api/tags`);
+      const response = await fetch(`${this.config.baseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(5_000),
+      });
       return response.ok;
     } catch {
       return false;
@@ -200,7 +207,9 @@ export class OllamaClient {
    */
   async listModels(): Promise<string[]> {
     try {
-      const response = await fetch(`${this.config.baseUrl}/api/tags`);
+      const response = await fetch(`${this.config.baseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(10_000),
+      });
       if (!response.ok) {
         throw new Error(`Failed to list models: ${response.status}`);
       }
