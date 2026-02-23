@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Fixed
+- **Bots not using `ask_human` — proactive human check-in** — Five improvements to make bots
+  proactively consult their human operator instead of running fully autonomously:
+  1. **Strategist**: Added ask_human deliverable examples ("Ask the operator which social channels
+     to prioritize") and a "Human Check-In Cadence" rule requiring check-in deliverables every
+     3-5 sessions.
+  2. **Planner** (both periodic and continuous): Rewrote `HUMAN COLLABORATION` block from
+     "if you cannot determine on your own" (too high a threshold) to "proactively ask when the
+     human's preference matters". Added "When unsure between two approaches, ask the human
+     instead of guessing".
+  3. **Planner priority "none"**: Tightened from "genuinely impossible AND can't ask human" to
+     "ONLY after you have already called ask_human and are waiting". Bots that haven't asked
+     must use at least priority "low" with an ask_human step.
+  4. **Autonomous cycle counter**: New `cyclesSinceAskHuman` counter on `BotSchedule` tracks
+     non-idle cycles without ask_human. After `askHumanCheckInCycles` (default 5, configurable
+     1-50), the planner receives an "Autonomous Run Notice" nudging a check-in.
+  5. **Planner examples**: Changed from "need human input on API key" (reactive) to
+     "asking operator for preference" (proactive decision-making pattern).
+  Files: `agent-loop-prompts.ts`, `agent-loop.ts`, `agent-scheduler.ts`, `config.ts`.
 - **Karma -1 per tool error** — Every tool execution or validation error now produces a karma -1
   event via `ToolExecutor.buildFailResult()`. Previously, tool errors only had karma tracking in the
   agent loop via post-hoc batch analysis with a >50% majority threshold (so minority failures got
