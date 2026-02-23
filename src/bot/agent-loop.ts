@@ -298,6 +298,14 @@ export class AgentLoop {
             .filter((a) => a.timestamp >= cutoff)
             .slice(-20);
         }
+
+        // Track cycles since last ask_human usage
+        const usedAskHuman = detail.toolCalls.some((t) => t.name === 'ask_human');
+        if (usedAskHuman) {
+          schedule.cyclesSinceAskHuman = 0;
+        } else if (!isIdle) {
+          schedule.cyclesSinceAskHuman++;
+        }
       }
 
       // Karma: track novel vs repetitive actions
@@ -308,21 +316,6 @@ export class AgentLoop {
           this.karmaService.addEvent(botId, -2, `Repeated action: ${planSummary.slice(0, 80)}`, 'agent-loop');
         } else {
           this.karmaService.addEvent(botId, 1, `Novel action: ${planSummary.slice(0, 80)}`, 'agent-loop');
-        }
-
-        const totalsByTool = new Map<string, { total: number; errors: number }>();
-        for (const tc of detail.toolCalls) {
-          const entry = totalsByTool.get(tc.name) ?? { total: 0, errors: 0 };
-          entry.total++;
-          if (!tc.success) entry.errors++;
-          totalsByTool.set(tc.name, entry);
-        }
-        for (const [toolName, { total, errors }] of totalsByTool) {
-          if (errors === 0) continue;
-          const majorityFailed = errors / total > 0.5;
-          const delta = majorityFailed ? -1 : 0;
-          const reason = `Tool error: ${toolName} (${errors}/${total} failed)`;
-          this.karmaService.addEvent(botId, delta, majorityFailed ? reason : `Minor: ${reason}`, 'agent-loop');
         }
       }
 
@@ -511,6 +504,13 @@ export class AgentLoop {
       ? this.karmaService.renderForPrompt(botId)
       : undefined;
 
+    // Build autonomous cycles note if bot hasn't used ask_human recently
+    const askHumanCheckInThreshold = globalConfig.askHumanCheckInCycles ?? 5;
+    const cyclesSinceAskHuman = schedule?.cyclesSinceAskHuman ?? 0;
+    const autonomousCyclesNote = cyclesSinceAskHuman >= askHumanCheckInThreshold
+      ? `## Autonomous Run Notice\n\nYou have been running autonomously for ${cyclesSinceAskHuman} cycles without checking in with your human operator. Consider using ask_human to check in — ask for feedback on recent work, confirm priorities, or request direction.`
+      : undefined;
+
     if (isContinuous) {
       const lastCycleSummary = schedule?.lastResult?.summary;
       const continuousInput = buildContinuousPlannerPrompt({
@@ -528,6 +528,7 @@ export class AgentLoop {
         pendingQuestions: pendingQuestions.map((q) => ({ question: q.question })),
         recentActionsDigest: recentActionsDigest || undefined,
         karmaBlock,
+        autonomousCyclesNote,
       });
 
       const continuousResult = await withTimeout(
@@ -554,6 +555,7 @@ export class AgentLoop {
         pendingQuestions: pendingQuestions.map((q) => ({ question: q.question })),
         recentActionsDigest: recentActionsDigest || undefined,
         karmaBlock,
+        autonomousCyclesNote,
       });
 
       const plannerResult = await withTimeout(
@@ -613,6 +615,7 @@ export class AgentLoop {
       chatId: botOverride?.reportChatId ?? 0,
       disabledTools: allDisabled,
       enableLogging: true,
+      karmaService: this.karmaService ?? undefined,
     });
 
     const response = await withTimeout(

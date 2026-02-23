@@ -501,4 +501,139 @@ describe('ToolExecutor Observability Hooks', () => {
       expect(count).toBe(1); // Did not increment
     });
   });
+
+  describe('karma penalty on tool error', () => {
+    function createMockKarmaService() {
+      const events: { botId: string; delta: number; reason: string; source: string }[] = [];
+      return {
+        events,
+        service: {
+          addEvent: (botId: string, delta: number, reason: string, source: string) => {
+            events.push({ botId, delta, reason, source });
+          },
+        } as any,
+      };
+    }
+
+    it('should emit karma -1 on tool execution failure', async () => {
+      const failTool = createTestTool('fail_tool', { success: false, content: 'Something broke' });
+      const ctx = createMockContext([failTool]);
+      const { service, events } = createMockKarmaService();
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        karmaService: service,
+      });
+
+      await executor.execute('fail_tool', {});
+
+      expect(events).toHaveLength(1);
+      expect(events[0].botId).toBe('test-bot');
+      expect(events[0].delta).toBe(-1);
+      expect(events[0].reason).toContain('Tool error: fail_tool');
+      expect(events[0].reason).toContain('Something broke');
+      expect(events[0].source).toBe('tool');
+    });
+
+    it('should emit karma -1 on tool thrown error', async () => {
+      const throwTool = createThrowingTool('throw_tool', 'Kaboom!');
+      const ctx = createMockContext([throwTool]);
+      const { service, events } = createMockKarmaService();
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        karmaService: service,
+      });
+
+      await executor.execute('throw_tool', {});
+
+      expect(events).toHaveLength(1);
+      expect(events[0].delta).toBe(-1);
+      expect(events[0].reason).toContain('Tool error: throw_tool');
+      expect(events[0].reason).toContain('Kaboom!');
+    });
+
+    it('should emit karma -1 on validation failure (after retries exhausted)', async () => {
+      const invalidTool = createSchemaTool('invalid', z.object({ count: z.number() }), { count: 'not a number' });
+      const ctx = createMockContext([invalidTool]);
+      const { service, events } = createMockKarmaService();
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        karmaService: service,
+      });
+
+      await executor.execute('invalid', {});
+
+      // Final buildFailResult call should emit karma -1
+      const karmaEvents = events.filter((e) => e.delta === -1);
+      expect(karmaEvents.length).toBeGreaterThanOrEqual(1);
+      const finalEvent = karmaEvents[karmaEvents.length - 1];
+      expect(finalEvent.reason).toContain('Tool error: invalid');
+      expect(finalEvent.source).toBe('tool');
+    });
+
+    it('should NOT emit karma on lookup errors (disabled/unknown tools)', async () => {
+      const ctx = createMockContext([]);
+      const { service, events } = createMockKarmaService();
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        karmaService: service,
+      });
+
+      // Disabled tool
+      await executor.execute('disabled_tool', {});
+      // Unknown tool
+      await executor.execute('unknown_tool', {});
+
+      expect(events).toHaveLength(0);
+    });
+
+    it('should NOT emit karma when karmaService is not provided', async () => {
+      const failTool = createTestTool('fail_tool', { success: false, content: 'Something broke' });
+      const ctx = createMockContext([failTool]);
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        // No karmaService
+      });
+
+      // Should not throw
+      await executor.execute('fail_tool', {});
+    });
+
+    it('should NOT emit karma on successful execution', async () => {
+      const successTool = createTestTool('ok_tool', { success: true, content: 'all good' });
+      const ctx = createMockContext([successTool]);
+      const { service, events } = createMockKarmaService();
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        karmaService: service,
+      });
+
+      await executor.execute('ok_tool', {});
+
+      expect(events).toHaveLength(0);
+    });
+
+    it('should truncate long error messages in karma reason', async () => {
+      const longError = 'E'.repeat(300);
+      const failTool = createTestTool('long_err', { success: false, content: longError });
+      const ctx = createMockContext([failTool]);
+      const { service, events } = createMockKarmaService();
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        karmaService: service,
+      });
+
+      await executor.execute('long_err', {});
+
+      expect(events).toHaveLength(1);
+      // "Tool error: long_err — " + 120 chars of error
+      expect(events[0].reason.length).toBeLessThanOrEqual(200);
+    });
+  });
 });

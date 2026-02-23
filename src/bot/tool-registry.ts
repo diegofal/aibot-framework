@@ -4,6 +4,7 @@ import type { BotContext } from './types';
 import { ToolExecutor } from './tool-executor';
 import { discoverSkillDirs, loadExternalSkill, type LoadedExternalSkill } from '../core/external-skill-loader';
 import { adaptExternalTool } from '../core/external-tool-adapter';
+import type { KarmaService } from '../karma/service';
 
 import { createCollaborateTool } from '../tools/collaborate';
 import { createCronTool } from '../tools/cron';
@@ -36,8 +37,13 @@ export class ToolRegistry {
   private externalSkills: LoadedExternalSkill[] = [];
   /** Maps namespaced tool name → originating skill ID */
   private externalToolToSkill: Map<string, string> = new Map();
+  private karmaService?: KarmaService;
 
   constructor(private ctx: BotContext) {}
+
+  setKarmaService(ks: KarmaService): void {
+    this.karmaService = ks;
+  }
 
   /**
    * Initialize all tools based on config. Populates ctx.tools and ctx.toolDefinitions.
@@ -425,6 +431,7 @@ export class ToolRegistry {
       botId,
       chatId,
       tools: this.getToolsForBot(botId),
+      karmaService: this.karmaService,
     });
     return executor.createCallback();
   }

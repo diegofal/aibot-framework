@@ -21,6 +21,8 @@ export interface BotSchedule {
   lastLoggedSummary: string | null;
   retryCount: number;
   lastErrorMessage: string | null;
+  /** Number of consecutive cycles without an ask_human tool call */
+  cyclesSinceAskHuman: number;
 }
 
 /**
@@ -169,6 +171,7 @@ export class AgentScheduler {
           lastLoggedSummary: null,
           retryCount: 0,
           lastErrorMessage: null,
+          cyclesSinceAskHuman: 0,
         });
         this.ctx.logger.debug({ botId, staggerOffset }, 'Agent loop: added new bot to schedule');
       }
@@ -222,6 +225,7 @@ export class AgentScheduler {
         lastLoggedSummary: null,
         retryCount: 0,
         lastErrorMessage: null,
+        cyclesSinceAskHuman: 0,
       });
     }
   }

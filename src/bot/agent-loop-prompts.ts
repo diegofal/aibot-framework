@@ -20,6 +20,8 @@ export interface PlannerPromptInput {
   pendingQuestions?: Array<{ question: string }>;
   recentActionsDigest?: string;
   karmaBlock?: string;
+  /** Injected note when bot has been running autonomously for many cycles without ask_human */
+  autonomousCyclesNote?: string;
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -39,6 +41,8 @@ export interface ContinuousPlannerPromptInput {
   pendingQuestions?: Array<{ question: string }>;
   recentActionsDigest?: string;
   karmaBlock?: string;
+  /** Injected note when bot has been running autonomously for many cycles without ask_human */
+  autonomousCyclesNote?: string;
 }
 
 export interface PlannerResult {
@@ -124,7 +128,7 @@ The strategist has analyzed your recent activity and goals and recommends:
 ${input.focus}
 
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
-` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}
+` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -150,11 +154,12 @@ SINGLE-FOCUS MODE INSTRUCTIONS:
 4. When the deliverable is complete, STOP — don't start anything else
 
 HUMAN COLLABORATION:
-If you need information, approval, or a decision you cannot determine on your own, include an ask_human step in your plan.
+If you're about to make a significant decision, change direction, or have been working 3+ cycles without human input, use ask_human to check in. Don't wait until you're stuck — proactively ask when the human's preference matters.
 - ask_human is NON-BLOCKING — the question is queued and the answer arrives next cycle
 - Using ask_human counts as a productive step, NOT as going off-plan
 - Do NOT return priority "none" when you could ask the human instead
 - If the deliverable needs human input, include an ask_human step AND continue with whatever you can do independently
+- When unsure between two approaches, ask the human instead of guessing
 
 ANTI-PATTERNS (banned):
 - Reviewing goals just to review them (only update if status actually changed)
@@ -168,7 +173,7 @@ Assign a priority to your plan:
 - "high": deliverable is urgent or blocking other work
 - "medium": standard deliverable, routine work
 - "low": exploratory deliverable, learning-focused
-- "none": ONLY if the deliverable is genuinely impossible to start AND you cannot make progress by asking the human (use ask_human first!)
+- "none": Return this ONLY after you have already called ask_human and are waiting for a response with nothing else to do. If you haven't asked the human yet, your priority is at least "low" with a plan that includes ask_human.
 
 CRITICAL: You MUST respond with ONLY a valid JSON object. Absolutely NO other text, NO markdown fences, NO explanation before or after.
 
@@ -176,7 +181,7 @@ Your response will be parsed by code using JSON.parse().
 
 Examples:
 {"reasoning":"Need to add retry logic to LLM client as assigned","plan":["Read current LLM client implementation","Add exponential backoff retry logic","Test retry with simulated failure"],"priority":"high"}
-{"reasoning":"Need human input on API key — asking via ask_human","plan":["Use ask_human to request the API key from the operator"],"priority":"medium"}
+{"reasoning":"Deliverable requires choosing an API — asking operator for preference","plan":["Use ask_human to ask the operator which API to prioritize","Research both APIs while waiting for response"],"priority":"medium"}
 
 JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
@@ -231,7 +236,7 @@ The strategist has analyzed your recent activity and goals and recommends:
 ${input.focus}
 
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
-` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}
+` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -263,11 +268,12 @@ SINGLE-FOCUS MODE INSTRUCTIONS:
 4. When the deliverable is complete, STOP — don't start anything else
 
 HUMAN COLLABORATION:
-If you need information, approval, or a decision you cannot determine on your own, include an ask_human step in your plan.
+If you're about to make a significant decision, change direction, or have been working 3+ cycles without human input, use ask_human to check in. Don't wait until you're stuck — proactively ask when the human's preference matters.
 - ask_human is NON-BLOCKING — the question is queued and the answer arrives next cycle
 - Using ask_human counts as a productive step, NOT as going off-plan
 - Do NOT return priority "none" when you could ask the human instead
 - If the deliverable needs human input, include an ask_human step AND continue with whatever you can do independently
+- When unsure between two approaches, ask the human instead of guessing
 
 ANTI-PATTERNS (banned):
 - Reviewing goals just to review them (only update if status actually changed)
@@ -281,7 +287,7 @@ Assign a priority to your plan:
 - "high": deliverable is urgent or blocking other work
 - "medium": standard deliverable, routine work
 - "low": exploratory deliverable, learning-focused
-- "none": ONLY if the deliverable is genuinely impossible to start AND you cannot make progress by asking the human (use ask_human first!)
+- "none": Return this ONLY after you have already called ask_human and are waiting for a response with nothing else to do. If you haven't asked the human yet, your priority is at least "low" with a plan that includes ask_human.
 
 CRITICAL: You MUST respond with ONLY a valid JSON object. Absolutely NO other text, NO markdown fences, NO explanation before or after.
 
@@ -289,7 +295,7 @@ Your response will be parsed by code using JSON.parse().
 
 Examples:
 {"reasoning":"Need to add retry logic to LLM client as assigned","plan":["Read current LLM client implementation","Add exponential backoff retry logic","Test retry with simulated failure"],"priority":"high"}
-{"reasoning":"Need human input on API key — asking via ask_human","plan":["Use ask_human to request the API key from the operator"],"priority":"medium"}
+{"reasoning":"Deliverable requires choosing an API — asking operator for preference","plan":["Use ask_human to ask the operator which API to prioritize","Research both APIs while waiting for response"],"priority":"medium"}
 
 JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
@@ -502,6 +508,8 @@ Your single_deliverable MUST follow these constraints:
 - "Write a test for the error classification function in conversation-pipeline.ts"
 - "Delete the obsolete tests/tool-executor.test.ts file"
 - "Add circuit breaker pattern to the LLM client"
+- "Ask the operator which social channels to prioritize, then draft the first post for the chosen channel"
+- "Check in with the operator on recent work and ask for feedback or direction"
 
 ### Examples of BAD deliverables (TOO LARGE):
 - "Fix the codebase" — vague, unbounded
@@ -520,6 +528,13 @@ Your single_deliverable MUST follow these constraints:
 - Keep active goals between 3-7. Too few = no direction, too many = scattered
 - Prefer completing existing goals + adding fresh ones over endlessly updating the same goals
 - If the agent is stuck in a loop, break the pattern: suggest a different approach or pivot
+
+## Human Check-In Cadence
+
+- Every 3-5 sessions, assign a deliverable that includes checking in with the human operator
+- Good check-in deliverables: "Ask the operator for feedback on recent work", "Ask the operator which priority to focus on next", "Check in with the operator and confirm current direction"
+- If the agent has been working autonomously for 3+ sessions without human input, prioritize a check-in deliverable
+- The agent has ask_human as a non-blocking tool — the question is queued and answered asynchronously
 
 ## Output Format
 

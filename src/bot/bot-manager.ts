@@ -186,6 +186,8 @@ export class BotManager {
     if (this.karmaService) {
       this.agentLoop.setKarmaService(this.karmaService);
       this.systemPromptBuilder.setKarmaService(this.karmaService);
+      this.toolRegistry.setKarmaService(this.karmaService);
+      this.collaborationManager.setKarmaService(this.karmaService);
     }
 
     // Initialize tools (with lazy callbacks for circular deps)

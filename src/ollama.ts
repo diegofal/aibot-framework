@@ -54,9 +54,10 @@ export class OllamaClient {
    */
   async generate(prompt: string, options: GenerateOptions = {}): Promise<string> {
     const model = options.model || this.config.models.primary;
+    const startMs = Date.now();
 
     try {
-      this.logger.debug({ model, prompt: prompt.slice(0, 100) }, 'Generating with Ollama');
+      this.logger.debug({ model, prompt: prompt.slice(0, 100), timeoutMs: this.config.timeout }, 'Generating with Ollama');
 
       const response = await fetch(`${this.config.baseUrl}/api/generate`, {
         method: 'POST',
@@ -79,11 +80,12 @@ export class OllamaClient {
       }
 
       const data: OllamaResponse = await response.json();
-      this.logger.debug({ model, response: data.response.slice(0, 100) }, 'Generated response');
+      this.logger.debug({ model, response: data.response.slice(0, 100), elapsedMs: Date.now() - startMs }, 'Generated response');
 
       return data.response;
     } catch (error) {
-      this.logger.warn({ err: error, model }, 'Primary model failed, trying fallbacks');
+      const elapsedMs = Date.now() - startMs;
+      this.logger.warn({ err: error, model, elapsedMs, configuredTimeoutMs: this.config.timeout }, 'Primary model failed, trying fallbacks');
 
       // Try fallback models
       const fallbacks = this.config.models.fallbacks || [];
@@ -109,9 +111,10 @@ export class OllamaClient {
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<string> {
     const model = options.model || this.config.models.primary;
     const hasTools = options.tools && options.tools.length > 0 && options.toolExecutor;
+    const startMs = Date.now();
 
     try {
-      this.logger.debug({ model, messageCount: messages.length, hasTools }, 'Chat with Ollama');
+      this.logger.debug({ model, messageCount: messages.length, hasTools, timeoutMs: this.config.timeout }, 'Chat with Ollama');
 
       // If tools are provided, delegate to the generic tool loop
       if (hasTools) {
@@ -127,10 +130,11 @@ export class OllamaClient {
       // Simple path: no tools, single chat call
       const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger, this.config.timeout);
       const result = await strategy.chat(messages, options);
-      this.logger.debug({ model, response: (result.content || '').slice(0, 100) }, 'Chat response');
+      this.logger.debug({ model, response: (result.content || '').slice(0, 100), elapsedMs: Date.now() - startMs }, 'Chat response');
       return result.content || '';
     } catch (error) {
-      this.logger.warn({ err: error, model }, 'Primary model failed for chat, trying fallbacks');
+      const elapsedMs = Date.now() - startMs;
+      this.logger.warn({ err: error, model, elapsedMs, configuredTimeoutMs: this.config.timeout }, 'Primary model failed for chat, trying fallbacks');
 
       const fallbacks = this.config.models.fallbacks || [];
       for (const fallback of fallbacks) {

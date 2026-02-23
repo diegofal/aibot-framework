@@ -7,13 +7,20 @@ import type { SystemPromptBuilder } from './system-prompt-builder';
 import type { ToolRegistry } from './tool-registry';
 import { sendLongMessage } from './telegram-utils';
 import { ToolExecutor } from './tool-executor';
+import type { KarmaService } from '../karma/service';
 
 export class CollaborationManager {
+  private karmaService?: KarmaService;
+
   constructor(
     private ctx: BotContext,
     private systemPromptBuilder: SystemPromptBuilder,
     private toolRegistry: ToolRegistry,
   ) {}
+
+  setKarmaService(ks: KarmaService): void {
+    this.karmaService = ks;
+  }
 
   /**
    * Send a visible collaboration message in a group chat, mentioning the target bot.
@@ -55,6 +62,19 @@ export class CollaborationManager {
     if (!respondingConfig) throw new Error(`Bot config not found: ${respondingBotId}`);
 
     const resolved = resolveAgentConfig(this.ctx.config, respondingConfig);
+    const model = this.ctx.getActiveModel(respondingBotId);
+
+    const turnLogger = this.ctx.getBotLogger(respondingBotId);
+    turnLogger.debug(
+      {
+        respondingBotId,
+        chatId,
+        model,
+        toolsEnabled: this.ctx.config.collaboration.enableTargetTools,
+        transcriptEntries: transcript.length,
+      },
+      'Visible collaboration turn starting',
+    );
 
     // Build system prompt via unified builder (collaboration mode)
     const systemPrompt = this.systemPromptBuilder.build({
@@ -97,11 +117,12 @@ export class CollaborationManager {
           chatId,
           tools: collabTools,
           toolFilter: () => true, // Already filtered by collabTools
+          karmaService: this.karmaService,
         }).createCallback()
       : undefined;
 
     return this.ctx.getLLMClient(respondingBotId).chat(messages, {
-      model: this.ctx.getActiveModel(respondingBotId),
+      model,
       temperature: resolved.temperature,
       tools: hasTools ? collabDefs : undefined,
       toolExecutor: executor,
@@ -130,6 +151,11 @@ export class CollaborationManager {
       if (!respondingBot) break;
 
       try { await respondingBot.api.sendChatAction(chatId, 'typing'); } catch { /* ignore */ }
+
+      botLogger.info(
+        { respondingBotId, turn, transcriptLength: transcript.length },
+        'Visible collaboration: bot receiving turn',
+      );
 
       const response = await this.runVisibleTurn(chatId, respondingBotId, transcript);
       transcript.push({ botId: respondingBotId, text: response });
@@ -201,13 +227,15 @@ export class CollaborationManager {
       { role: 'user', content: message },
     ];
 
+    const model = this.ctx.getActiveModel(targetBotId);
+
     botLogger.info(
-      { targetBotId, sourceBotId, chatId, messagePreview: message.substring(0, 120) },
+      { targetBotId, sourceBotId, chatId, model, messagePreview: message.substring(0, 120) },
       'Handling delegation'
     );
 
     const response = await this.ctx.getLLMClient(targetBotId).chat(messages, {
-      model: this.ctx.getActiveModel(targetBotId),
+      model,
       temperature: resolved.temperature,
     });
 
@@ -259,7 +287,20 @@ export class CollaborationManager {
 
     const check = this.ctx.collaborationTracker.checkAndRecord(sourceBotId, targetBotId, 0);
     if (!check.allowed) {
+      const botLogger = this.ctx.getBotLogger(targetBotId);
+      botLogger.warn(
+        { sourceBotId, targetBotId, reason: check.reason },
+        'Collaboration rate-limited',
+      );
       throw new Error(`Collaboration blocked: ${check.reason}`);
+    }
+
+    {
+      const botLogger = this.ctx.getBotLogger(targetBotId);
+      botLogger.debug(
+        { sourceBotId, targetBotId },
+        'Collaboration rate-limit check passed',
+      );
     }
 
     const collabConfig = this.ctx.config.collaboration;
@@ -268,9 +309,21 @@ export class CollaborationManager {
     const botLogger = this.ctx.getBotLogger(targetBotId);
 
     let session = sessionId ? this.ctx.collaborationSessions.get(sessionId) : undefined;
+    const isResumed = !!session;
     if (!session) {
       session = this.ctx.collaborationSessions.create(sourceBotId, targetBotId);
     }
+
+    botLogger.debug(
+      {
+        sessionId: session.id,
+        sourceBotId,
+        targetBotId,
+        resumed: isResumed,
+        ...(isResumed && { messageCount: session.messages.length }),
+      },
+      isResumed ? 'Collaboration session resumed' : 'Collaboration session created',
+    );
 
     let systemPrompt = targetSoulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
     const sourceConfig = this.ctx.config.bots.find((b) => b.id === sourceBotId);
@@ -295,8 +348,12 @@ export class CollaborationManager {
           chatId: 0,
           tools: collabTools.tools,
           toolFilter: () => true, // Already filtered by collabTools
+          karmaService: this.karmaService,
         }).createCallback()
       : undefined;
+
+    const model = this.ctx.getActiveModel(targetBotId);
+    const timeout = collabConfig.internalQueryTimeout;
 
     botLogger.info(
       {
@@ -305,24 +362,37 @@ export class CollaborationManager {
         sourceBotId,
         historyLength: session.messages.length,
         toolsEnabled: hasTools,
+        model,
+        timeout,
+        totalMessages: messages.length,
         messagePreview: message.substring(0, 120),
       },
       'Collaboration step'
     );
 
-    const timeout = collabConfig.internalQueryTimeout;
-    const response = await Promise.race([
-      this.ctx.getLLMClient(targetBotId).chat(messages, {
-        model: this.ctx.getActiveModel(targetBotId),
-        temperature: resolved.temperature,
-        tools: hasTools ? collabTools.definitions : undefined,
-        toolExecutor: executor,
-        maxToolRounds: this.ctx.config.webTools?.maxToolRounds,
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Collaboration step timeout')), timeout)
-      ),
-    ]);
+    let response: string;
+    try {
+      response = await Promise.race([
+        this.ctx.getLLMClient(targetBotId).chat(messages, {
+          model,
+          temperature: resolved.temperature,
+          tools: hasTools ? collabTools.definitions : undefined,
+          toolExecutor: executor,
+          maxToolRounds: this.ctx.config.webTools?.maxToolRounds,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Collaboration step timeout')), timeout)
+        ),
+      ]);
+    } catch (err) {
+      if (err instanceof Error && err.message === 'Collaboration step timeout') {
+        botLogger.warn(
+          { sessionId: session.id, targetBotId, model, timeout, historyLength: session.messages.length },
+          'Collaboration step timed out',
+        );
+      }
+      throw err;
+    }
 
     this.ctx.collaborationSessions.appendMessages(session.id, [
       userMessage,
@@ -390,15 +460,27 @@ export class CollaborationManager {
         ];
 
         const timeout = collabConfig.internalQueryTimeout;
-        const sourceResponse = await Promise.race([
-          this.ctx.getLLMClient(sourceBotId).chat(evalMessages, {
-            model: this.ctx.getActiveModel(sourceBotId),
-            temperature: resolved.temperature,
-          }),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Collaboration source timeout')), timeout)
-          ),
-        ]);
+        const sourceModel = this.ctx.getActiveModel(sourceBotId);
+        let sourceResponse: string;
+        try {
+          sourceResponse = await Promise.race([
+            this.ctx.getLLMClient(sourceBotId).chat(evalMessages, {
+              model: sourceModel,
+              temperature: resolved.temperature,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Collaboration source timeout')), timeout)
+            ),
+          ]);
+        } catch (err) {
+          if (err instanceof Error && err.message === 'Collaboration source timeout') {
+            botLogger.warn(
+              { sessionId, sourceBotId, targetBotId, model: sourceModel, timeout, turn: i },
+              'Collaboration source-side timed out',
+            );
+          }
+          throw err;
+        }
 
         transcriptLines.push(`[${sourceBotId}]: ${sourceResponse}`);
 
@@ -418,6 +500,10 @@ export class CollaborationManager {
 
     if (sessionId) {
       this.ctx.collaborationSessions.end(sessionId);
+      botLogger.info(
+        { sessionId, sourceBotId, targetBotId },
+        'Collaboration session ended',
+      );
     }
 
     return {

@@ -9,14 +9,32 @@ import type { MemoryFlusher } from './memory-flush';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import type { ToolRegistry } from './tool-registry';
 import { sendLongMessage } from './telegram-utils';
+import {
+  executeWithResilience,
+  CircuitBreaker,
+  formatLLMErrorForUser,
+  type LLMErrorInfo,
+} from './llm-resilience';
 
 export class ConversationPipeline {
+  private circuitBreaker: CircuitBreaker;
+
   constructor(
     private ctx: BotContext,
     private systemPromptBuilder: SystemPromptBuilder,
     private memoryFlusher: MemoryFlusher,
     private toolRegistry: ToolRegistry,
-  ) {}
+  ) {
+    // Initialize circuit breaker for LLM calls
+    this.circuitBreaker = new CircuitBreaker(
+      {
+        failureThreshold: 5,
+        resetTimeoutMs: 30000,
+        halfOpenMaxCalls: 3,
+      },
+      ctx.logger,
+    );
+  }
 
   /**
    * Pre-fetch relevant memory context via RAG for injection into the system prompt.
@@ -229,18 +247,57 @@ export class ConversationPipeline {
           '🤖 Sending to LLM'
         );
 
-        const response = await this.ctx.getLLMClient(config.id).chat(messages, {
-          model: activeModel,
-          temperature: resolved.temperature,
-          tools: hasTools ? botToolDefs : undefined,
-          toolExecutor: hasTools ? this.toolRegistry.createExecutor(chatId, config.id) : undefined,
-          maxToolRounds: webToolsConfig?.maxToolRounds,
-        });
+        // Execute LLM call with retry and circuit breaker
+        const llmResult = await executeWithResilience(
+          () => this.ctx.getLLMClient(config.id).chat(messages, {
+            model: activeModel,
+            temperature: resolved.temperature,
+            tools: hasTools ? botToolDefs : undefined,
+            toolExecutor: hasTools ? this.toolRegistry.createExecutor(chatId, config.id) : undefined,
+            maxToolRounds: webToolsConfig?.maxToolRounds,
+          }),
+          'conversation-pipeline.chat',
+          {
+            retryConfig: {
+              maxRetries: 3,
+              baseDelayMs: 1000,
+              maxDelayMs: 15000,
+              backoffMultiplier: 2,
+            },
+            circuitBreaker: this.circuitBreaker,
+            logger: botLogger,
+            onRetry: (attempt, delayMs, error) => {
+              botLogger.warn(
+                { attempt, delayMs, category: error.category },
+                'LLM call retry scheduled'
+              );
+            },
+          }
+        );
+
+        if (!llmResult.success) {
+          const error = llmResult.error!;
+          botLogger.error(
+            {
+              chatId,
+              category: error.category,
+              attempts: llmResult.attempts,
+              durationMs: llmResult.totalDurationMs,
+              message: error.message,
+            },
+            'LLM call failed after retries'
+          );
+          throw new Error(`LLM call failed: ${error.message}`);
+        }
+
+        const response = llmResult.data!;
 
         botLogger.info(
           {
             chatId,
             responseLength: response.length,
+            attempts: llmResult.attempts,
+            durationMs: llmResult.totalDurationMs,
             responsePreview: response.substring(0, 200),
           },
           '📤 LLM response received'
@@ -287,11 +344,31 @@ export class ConversationPipeline {
         clearInterval(typingInterval);
       }
     } catch (error) {
-      botLogger.error({ error, chatId }, 'Conversation handler failed');
+      const errorInfo = error instanceof Error ? error.message : String(error);
+      botLogger.error({ error, chatId, circuitState: this.circuitBreaker.getState() }, 'Conversation handler failed');
+      
+      // Determine user-facing message based on error context
+      let userMessage = '❌ Failed to generate response. Please try again later.';
+      
+      if (error instanceof Error) {
+        // Check if it's a circuit breaker open error
+        if (error.message.includes('Circuit breaker is open')) {
+          userMessage = '⏳ The AI service is temporarily overloaded. Please wait a moment and try again.';
+        }
+        // Check if it was a timeout after retries
+        else if (error.message.includes('timeout') || error.message.includes('timed out')) {
+          userMessage = '⏱️ The request took too long. The service might be busy. Please try again.';
+        }
+        // Check for context length errors
+        else if (error.message.includes('context length') || error.message.includes('too many tokens')) {
+          userMessage = '📏 The conversation is too long. Try /reset to start fresh.';
+        }
+      }
+      
       try {
-        await ctx.reply('❌ Failed to generate response. Please try again later.');
-      } catch {
-        // Cannot send error message to user
+        await ctx.reply(userMessage);
+      } catch (replyError) {
+        botLogger.error({ replyError }, 'Failed to send error message to user');
       }
     }
   }

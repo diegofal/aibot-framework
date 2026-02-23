@@ -163,6 +163,17 @@ export class ToolExecutor extends EventEmitter {
     this.emit('tool:error', {
       toolName: name, args, error: emitError ?? errorMsg, phase, botId, chatId, timestamp: Date.now(),
     });
+
+    // Karma -1 per tool error (execution and validation phases)
+    if (this.options.karmaService && (phase === 'execution' || phase === 'validation')) {
+      const truncatedError = (emitError ?? errorMsg).slice(0, 120);
+      this.options.karmaService.addEvent(
+        botId, -1,
+        `Tool error: ${name} — ${truncatedError}`,
+        'tool',
+      );
+    }
+
     const result: ToolExecutionResult = {
       success: false, content: errorMsg, toolName: name, args, durationMs, retryAttempts,
     };

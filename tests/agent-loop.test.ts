@@ -121,17 +121,30 @@ describe('planner prompt — novelty imperative', () => {
     expect(system).toContain('Do NOT return priority "none" when you could ask the human instead');
   });
 
+  test('HUMAN COLLABORATION uses proactive language, not "cannot determine on your own"', () => {
+    const { system } = buildPlannerPrompt(baseInput);
+    expect(system).toContain('proactively ask when the human\'s preference matters');
+    expect(system).not.toContain('you cannot determine on your own');
+    expect(system).toContain('When unsure between two approaches, ask the human instead of guessing');
+  });
+
+  test('priority "none" definition requires having already called ask_human', () => {
+    const { system } = buildPlannerPrompt(baseInput);
+    expect(system).toContain('Return this ONLY after you have already called ask_human');
+    expect(system).toContain('your priority is at least "low" with a plan that includes ask_human');
+    expect(system).not.toContain('genuinely impossible to start AND you cannot make progress');
+  });
+
   test('prompt instructs to do something different on repetition', () => {
     const { prompt } = buildPlannerPrompt(baseInput);
     expect(prompt).toContain('repetition');
     expect(prompt).toContain('MUST do something different');
   });
 
-  test('examples show ask_human instead of idle for blocked deliverable', () => {
+  test('examples show ask_human for decisions, not just blocked deliverables', () => {
     const { system } = buildPlannerPrompt(baseInput);
-    expect(system).toContain('ask_human to request');
+    expect(system).toContain('asking operator for preference');
     expect(system).toContain('"priority":"medium"');
-    // The old idle example (plan:[], priority:none) should be replaced
     expect(system).not.toContain('"reasoning":"Deliverable blocked — waiting for human approval');
   });
 
@@ -156,6 +169,21 @@ describe('planner prompt — novelty imperative', () => {
   test('omits recentActionsDigest when not provided', () => {
     const { system } = buildPlannerPrompt(baseInput);
     expect(system).not.toContain('## Recent Actions');
+  });
+
+  test('injects autonomousCyclesNote when provided', () => {
+    const { system } = buildPlannerPrompt({
+      ...baseInput,
+      autonomousCyclesNote: '## Autonomous Run Notice\n\nYou have been running autonomously for 7 cycles without checking in with your human operator.',
+    });
+    expect(system).toContain('## Autonomous Run Notice');
+    expect(system).toContain('7 cycles');
+    expect(system).toContain('checking in with your human operator');
+  });
+
+  test('omits autonomousCyclesNote when not provided', () => {
+    const { system } = buildPlannerPrompt(baseInput);
+    expect(system).not.toContain('Autonomous Run Notice');
   });
 });
 
@@ -283,6 +311,33 @@ describe('buildStrategistPrompt', () => {
     expect(system).toContain('ask_human');
     expect(system).toContain('Self-Contained OR Ask');
     expect(system).not.toContain('No Dependencies');
+  });
+
+  test('includes ask_human deliverable examples', () => {
+    const { system } = buildStrategistPrompt({
+      identity: 'test bot',
+      soul: '',
+      motivations: 'be helpful',
+      goals: '- [ ] Goal A',
+      recentMemory: '',
+      datetime: '2026-02-20T10:00:00Z',
+    });
+    expect(system).toContain('Ask the operator which social channels to prioritize');
+    expect(system).toContain('Check in with the operator');
+  });
+
+  test('includes human check-in cadence rules', () => {
+    const { system } = buildStrategistPrompt({
+      identity: 'test bot',
+      soul: '',
+      motivations: 'be helpful',
+      goals: '- [ ] Goal A',
+      recentMemory: '',
+      datetime: '2026-02-20T10:00:00Z',
+    });
+    expect(system).toContain('Human Check-In Cadence');
+    expect(system).toContain('Every 3-5 sessions');
+    expect(system).toContain('checking in with the human operator');
   });
 });
 
@@ -1253,97 +1308,8 @@ describe('config schema — karma and idleSuppression', () => {
   });
 });
 
-describe('tool error karma deduplication', () => {
-  // Mirrors the dedup logic in agent-loop.ts (lines ~552-563)
-  function deduplicateToolErrors(toolCalls: { name: string; success: boolean }[]) {
-    const toolErrors = toolCalls.filter((t) => !t.success);
-    const errorsByTool = new Map<string, number>();
-    for (const err of toolErrors) {
-      errorsByTool.set(err.name, (errorsByTool.get(err.name) ?? 0) + 1);
-    }
-    const events: { delta: number; reason: string }[] = [];
-    for (const [toolName, count] of errorsByTool) {
-      const reason = count > 1
-        ? `Tool error: ${toolName} (x${count})`
-        : `Tool error: ${toolName}`;
-      events.push({ delta: -1, reason });
-    }
-    return events;
-  }
-
-  test('multiple errors from the same tool produce a single karma event', () => {
-    const calls = Array.from({ length: 10 }, () => ({ name: 'file_read', success: false }));
-    const events = deduplicateToolErrors(calls);
-    expect(events).toHaveLength(1);
-    expect(events[0].delta).toBe(-1);
-    expect(events[0].reason).toBe('Tool error: file_read (x10)');
-  });
-
-  test('errors from different tools produce one event each', () => {
-    const calls = [
-      { name: 'file_read', success: false },
-      { name: 'web_search', success: false },
-      { name: 'execute_code', success: false },
-    ];
-    const events = deduplicateToolErrors(calls);
-    expect(events).toHaveLength(3);
-    const reasons = events.map((e) => e.reason);
-    expect(reasons).toContain('Tool error: file_read');
-    expect(reasons).toContain('Tool error: web_search');
-    expect(reasons).toContain('Tool error: execute_code');
-    // Each without (xN) since count = 1
-    for (const r of reasons) {
-      expect(r).not.toContain('(x');
-    }
-  });
-
-  test('mixed same and different tools deduplicate correctly', () => {
-    const calls = [
-      { name: 'file_read', success: false },
-      { name: 'file_read', success: false },
-      { name: 'file_read', success: false },
-      { name: 'web_search', success: false },
-      { name: 'web_search', success: false },
-      { name: 'execute_code', success: false },
-    ];
-    const events = deduplicateToolErrors(calls);
-    expect(events).toHaveLength(3);
-    const byTool = Object.fromEntries(events.map((e) => [e.reason, e.delta]));
-    expect(byTool['Tool error: file_read (x3)']).toBe(-1);
-    expect(byTool['Tool error: web_search (x2)']).toBe(-1);
-    expect(byTool['Tool error: execute_code']).toBe(-1);
-  });
-
-  test('successful tool calls are excluded', () => {
-    const calls = [
-      { name: 'file_read', success: true },
-      { name: 'file_read', success: false },
-      { name: 'web_search', success: true },
-    ];
-    const events = deduplicateToolErrors(calls);
-    expect(events).toHaveLength(1);
-    expect(events[0].reason).toBe('Tool error: file_read');
-  });
-
-  test('no errors produce no karma events', () => {
-    const calls = [
-      { name: 'file_read', success: true },
-      { name: 'web_search', success: true },
-    ];
-    const events = deduplicateToolErrors(calls);
-    expect(events).toHaveLength(0);
-  });
-
-  test('reason includes (xN) only when count > 1', () => {
-    const calls = [
-      { name: 'file_read', success: false },
-    ];
-    const events = deduplicateToolErrors(calls);
-    expect(events).toHaveLength(1);
-    expect(events[0].reason).toBe('Tool error: file_read');
-    expect(events[0].reason).not.toContain('(x');
-  });
-});
+// Tool error karma deduplication tests removed — karma -1 per tool error is now
+// handled directly in ToolExecutor.buildFailResult(). See tool-executor-hooks.test.ts.
 
 describe('buildExecutorPrompt — file tree context', () => {
   const baseInput = {
@@ -1403,126 +1369,9 @@ describe('buildExecutorPrompt — file tree context', () => {
   });
 });
 
-describe('proportional karma penalty logic', () => {
-  // Mirrors the updated logic in agent-loop.ts
-  function computeToolKarma(toolCalls: { name: string; success: boolean }[]) {
-    const totalsByTool = new Map<string, { total: number; errors: number }>();
-    for (const tc of toolCalls) {
-      const entry = totalsByTool.get(tc.name) ?? { total: 0, errors: 0 };
-      entry.total++;
-      if (!tc.success) entry.errors++;
-      totalsByTool.set(tc.name, entry);
-    }
-    const events: { delta: number; reason: string }[] = [];
-    for (const [toolName, { total, errors }] of totalsByTool) {
-      if (errors === 0) continue;
-      const majorityFailed = errors / total > 0.5;
-      const delta = majorityFailed ? -1 : 0;
-      const reason = `Tool error: ${toolName} (${errors}/${total} failed)`;
-      events.push({ delta: majorityFailed ? -1 : 0, reason: majorityFailed ? reason : `Minor: ${reason}` });
-    }
-    return events;
-  }
-
-  test('majority failures produce delta -1', () => {
-    const calls = [
-      { name: 'file_edit', success: false },
-      { name: 'file_edit', success: false },
-      { name: 'file_edit', success: false },
-      { name: 'file_edit', success: true },
-    ];
-    const events = computeToolKarma(calls);
-    expect(events).toHaveLength(1);
-    expect(events[0].delta).toBe(-1);
-    expect(events[0].reason).toBe('Tool error: file_edit (3/4 failed)');
-    expect(events[0].reason).not.toContain('Minor');
-  });
-
-  test('minority failures produce delta 0 with Minor prefix', () => {
-    const calls = [
-      { name: 'file_read', success: false },
-      { name: 'file_read', success: true },
-      { name: 'file_read', success: true },
-      { name: 'file_read', success: true },
-    ];
-    const events = computeToolKarma(calls);
-    expect(events).toHaveLength(1);
-    expect(events[0].delta).toBe(0);
-    expect(events[0].reason).toContain('Minor');
-    expect(events[0].reason).toContain('1/4 failed');
-  });
-
-  test('exactly 50% failures produce delta 0 (not majority)', () => {
-    const calls = [
-      { name: 'exec', success: false },
-      { name: 'exec', success: true },
-    ];
-    const events = computeToolKarma(calls);
-    expect(events).toHaveLength(1);
-    expect(events[0].delta).toBe(0);
-    expect(events[0].reason).toContain('Minor');
-  });
-
-  test('100% failures produce delta -1', () => {
-    const calls = [
-      { name: 'file_edit', success: false },
-      { name: 'file_edit', success: false },
-    ];
-    const events = computeToolKarma(calls);
-    expect(events).toHaveLength(1);
-    expect(events[0].delta).toBe(-1);
-    expect(events[0].reason).toBe('Tool error: file_edit (2/2 failed)');
-  });
-
-  test('mixed tools are scored independently', () => {
-    const calls = [
-      // file_edit: 3/4 failed → -1
-      { name: 'file_edit', success: false },
-      { name: 'file_edit', success: false },
-      { name: 'file_edit', success: false },
-      { name: 'file_edit', success: true },
-      // file_read: 1/3 failed → 0 (minor)
-      { name: 'file_read', success: false },
-      { name: 'file_read', success: true },
-      { name: 'file_read', success: true },
-      // exec: all success → no event
-      { name: 'exec', success: true },
-      { name: 'exec', success: true },
-    ];
-    const events = computeToolKarma(calls);
-    expect(events).toHaveLength(2);
-
-    const editEvent = events.find((e) => e.reason.includes('file_edit'));
-    expect(editEvent).toBeDefined();
-    expect(editEvent!.delta).toBe(-1);
-    expect(editEvent!.reason).toContain('3/4 failed');
-
-    const readEvent = events.find((e) => e.reason.includes('file_read'));
-    expect(readEvent).toBeDefined();
-    expect(readEvent!.delta).toBe(0);
-    expect(readEvent!.reason).toContain('Minor');
-    expect(readEvent!.reason).toContain('1/3 failed');
-  });
-
-  test('no errors produce no events', () => {
-    const calls = [
-      { name: 'file_read', success: true },
-      { name: 'exec', success: true },
-    ];
-    const events = computeToolKarma(calls);
-    expect(events).toHaveLength(0);
-  });
-
-  test('single failure out of one call is majority → -1', () => {
-    const calls = [
-      { name: 'file_read', success: false },
-    ];
-    const events = computeToolKarma(calls);
-    expect(events).toHaveLength(1);
-    expect(events[0].delta).toBe(-1);
-    expect(events[0].reason).toBe('Tool error: file_read (1/1 failed)');
-  });
-});
+// Proportional karma penalty tests removed — tool error karma is now -1 per error
+// in ToolExecutor.buildFailResult() instead of post-hoc batch analysis.
+// See tool-executor-hooks.test.ts for the new karma tests.
 
 describe('isRetryableError', () => {
   test('classifies timeout errors as retryable', () => {

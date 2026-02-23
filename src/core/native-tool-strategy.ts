@@ -19,6 +19,7 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     opts: ChatOptions,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     const model = opts.model || 'llama3';
+    const startMs = Date.now();
 
     const body: Record<string, unknown> = {
       model,
@@ -34,6 +35,8 @@ export class NativeToolStrategy implements ToolCallingStrategy {
       body.tools = opts.tools;
     }
 
+    this.logger.debug({ model, timeoutMs: this.timeout, messageCount: messages.length }, 'NativeToolStrategy: fetch starting');
+
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -48,6 +51,8 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     const data = (await response.json()) as {
       message: { content: string; tool_calls?: ToolCall[] };
     };
+
+    this.logger.debug({ model, elapsedMs: Date.now() - startMs }, 'NativeToolStrategy: fetch completed');
 
     return {
       content: data.message.content || '',

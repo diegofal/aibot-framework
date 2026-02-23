@@ -628,12 +628,15 @@
       <!-- collaboration.ts -->
       <div class="module-section" id="collaboration">
         <h3>collaboration.ts</h3>
-        <div class="file-path">src/bot/collaboration.ts &middot; 429 lines</div>
+        <div class="file-path">src/bot/collaboration.ts &middot; 506 lines</div>
         <p class="responsibility">
           Bot-to-bot communication system supporting visible group discussions, internal
           multi-turn sessions, delegation, and agent discovery. Visible mode sends @mentions in
           group chats and drives multi-turn discussions. Internal mode uses collaboration sessions
           with tool access. Delegation runs the target bot's LLM without tools to prevent loops.
+          Includes structured logging at key decision points: session lifecycle (create/resume/end),
+          rate-limit checks, LLM call context (model, timeout, message count), timeout warnings,
+          and per-turn visibility for debugging collaboration failures.
         </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">

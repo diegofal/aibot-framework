@@ -4,7 +4,7 @@ export interface KarmaEvent {
   timestamp: string;
   delta: number;
   reason: string;
-  source: 'production' | 'agent-loop' | 'feedback' | 'goal' | 'manual';
+  source: 'production' | 'agent-loop' | 'feedback' | 'goal' | 'manual' | 'tool';
   metadata?: Record<string, unknown>;
 }
 

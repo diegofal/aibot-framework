@@ -32,6 +32,8 @@ export const GlobalAgentLoopConfigSchema = z.object({
   claudeTimeout: z.number().int().positive().default(120_000),
   disabledTools: z.array(z.string()).optional(),
   idleSuppression: z.boolean().default(true),
+  /** Number of non-idle cycles without ask_human before injecting a check-in nudge */
+  askHumanCheckInCycles: z.number().int().min(1).max(50).default(5),
   strategist: StrategistConfigSchema,
   retry: AgentLoopRetryConfigSchema,
 }).default({});
