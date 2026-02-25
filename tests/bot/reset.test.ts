@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionManager } from '../../src/session';
@@ -101,100 +101,176 @@ describe('BotManager.resetBot', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test('deletes GOALS.md', async () => {
-    writeFileSync(join(soulDir, 'GOALS.md'), '# Goals\n- Be helpful', 'utf-8');
-    writeFileSync(join(soulDir, 'IDENTITY.md'), '# Identity', 'utf-8');
-
-    // Import dynamically to avoid loading all bot deps at module level
+  async function createMockManager(overrides: Record<string, any> = {}) {
     const { BotManager } = await import('../../src/bot/bot-manager');
-
-    // Create a minimal mock that exercises the resetBot logic
-    const mockSessionManager = {
-      clearBotSessions: mock(() => 3),
-    };
-    const mockMemoryManager = {
-      clearCoreMemory: mock(() => {}),
-      clearIndex: mock(() => {}),
-    };
-    const mockConfig = {
+    const manager = Object.create(BotManager.prototype);
+    manager.config = {
       bots: [{ id: 'test-bot', name: 'Test Bot', soulDir }],
       soul: { dir: join(tmpDir, 'soul') },
       ollama: { models: { primary: 'test' } },
       conversation: { systemPrompt: 'You are a test bot.', temperature: 0.7, maxHistory: 20 },
     };
-
-    // Use Object.create to build a BotManager-like object without invoking constructor
-    const manager = Object.create(BotManager.prototype);
-    manager.config = mockConfig;
     manager.runningBots = new Set();
-    manager.sessionManager = mockSessionManager;
-    manager.memoryManager = mockMemoryManager;
+    manager.sessionManager = { clearBotSessions: mock(() => 0) };
+    manager.memoryManager = { clearCoreMemory: mock(() => {}), clearIndex: mock(() => {}) };
+    manager.agentFeedbackStore = { clearForBot: mock(() => {}) };
+    manager.askHumanStore = { clearForBot: mock(() => {}) };
+    manager.askPermissionStore = { clearForBot: mock(() => {}) };
     manager.logger = noopLogger;
+    Object.assign(manager, overrides);
+    return manager;
+  }
 
+  test('restores soul files from .baseline/', async () => {
+    // Write current (evolved) soul files
+    writeFileSync(join(soulDir, 'IDENTITY.md'), '# Evolved Identity', 'utf-8');
+    writeFileSync(join(soulDir, 'SOUL.md'), '# Evolved Soul', 'utf-8');
+    writeFileSync(join(soulDir, 'MOTIVATIONS.md'), '# Evolved Motivations', 'utf-8');
+
+    // Write baseline copies
+    const baselineDir = join(soulDir, '.baseline');
+    mkdirSync(baselineDir, { recursive: true });
+    writeFileSync(join(baselineDir, 'IDENTITY.md'), '# Original Identity', 'utf-8');
+    writeFileSync(join(baselineDir, 'SOUL.md'), '# Original Soul', 'utf-8');
+    writeFileSync(join(baselineDir, 'MOTIVATIONS.md'), '# Original Motivations', 'utf-8');
+
+    const manager = await createMockManager();
+    const result = await manager.resetBot('test-bot');
+
+    expect(result.ok).toBe(true);
+    expect(result.cleared.soulRestored).toBe(true);
+    expect(readFileSync(join(soulDir, 'IDENTITY.md'), 'utf-8')).toBe('# Original Identity');
+    expect(readFileSync(join(soulDir, 'SOUL.md'), 'utf-8')).toBe('# Original Soul');
+    expect(readFileSync(join(soulDir, 'MOTIVATIONS.md'), 'utf-8')).toBe('# Original Motivations');
+  });
+
+  test('deletes soul files when no .baseline/ exists', async () => {
+    writeFileSync(join(soulDir, 'IDENTITY.md'), '# Identity', 'utf-8');
+    writeFileSync(join(soulDir, 'SOUL.md'), '# Soul', 'utf-8');
+    writeFileSync(join(soulDir, 'MOTIVATIONS.md'), '# Motivations', 'utf-8');
+
+    const manager = await createMockManager();
+    const result = await manager.resetBot('test-bot');
+
+    expect(result.ok).toBe(true);
+    expect(result.cleared.soulRestored).toBe(false);
+    expect(existsSync(join(soulDir, 'IDENTITY.md'))).toBe(false);
+    expect(existsSync(join(soulDir, 'SOUL.md'))).toBe(false);
+    expect(existsSync(join(soulDir, 'MOTIVATIONS.md'))).toBe(false);
+  });
+
+  test('deletes GOALS.md', async () => {
+    writeFileSync(join(soulDir, 'GOALS.md'), '# Goals\n- Be helpful', 'utf-8');
+
+    const manager = await createMockManager({
+      sessionManager: { clearBotSessions: mock(() => 3) },
+    });
     const result = await manager.resetBot('test-bot');
 
     expect(result.ok).toBe(true);
     expect(result.cleared.goals).toBe(true);
     expect(result.cleared.sessions).toBe(3);
-    expect(result.cleared.coreMemory).toBe(true);
-    expect(result.cleared.index).toBe(true);
     expect(existsSync(join(soulDir, 'GOALS.md'))).toBe(false);
-    // Identity preserved
-    expect(existsSync(join(soulDir, 'IDENTITY.md'))).toBe(true);
   });
 
-  test('deletes memory logs and .versions', async () => {
-    writeFileSync(join(soulDir, 'memory', '2024-01-15.md'), '# Memory log', 'utf-8');
-    writeFileSync(join(soulDir, 'memory', '2024-01-16.md'), '# Memory log 2', 'utf-8');
-    writeFileSync(join(soulDir, '.versions', 'SOUL-v1.md'), 'backup', 'utf-8');
+  test('deletes MEMORY.md at soul root', async () => {
+    writeFileSync(join(soulDir, 'MEMORY.md'), '# Memory root file', 'utf-8');
 
-    const { BotManager } = await import('../../src/bot/bot-manager');
-
-    const manager = Object.create(BotManager.prototype);
-    manager.config = {
-      bots: [{ id: 'test-bot', name: 'Test Bot', soulDir }],
-      soul: { dir: join(tmpDir, 'soul') },
-      ollama: { models: { primary: 'test' } },
-      conversation: { systemPrompt: 'You are a test bot.', temperature: 0.7, maxHistory: 20 },
-    };
-    manager.runningBots = new Set();
-    manager.sessionManager = { clearBotSessions: () => 0 };
-    manager.memoryManager = { clearCoreMemory: () => {}, clearIndex: () => {} };
-    manager.logger = noopLogger;
-
+    const manager = await createMockManager();
     const result = await manager.resetBot('test-bot');
 
-    expect(result.cleared.memoryLogs).toBe(2);
-    expect(result.cleared.versions).toBe(true);
-    expect(existsSync(join(soulDir, 'memory', '2024-01-15.md'))).toBe(false);
-    expect(existsSync(join(soulDir, '.versions'))).toBe(false);
-    // memory directory itself still exists
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(soulDir, 'MEMORY.md'))).toBe(false);
+  });
+
+  test('recursively clears memory/ directory including subdirs', async () => {
+    // Create files and subdirectories inside memory/
+    mkdirSync(join(soulDir, 'memory', 'archive'), { recursive: true });
+    writeFileSync(join(soulDir, 'memory', '2024-01-15.md'), '# Memory log', 'utf-8');
+    writeFileSync(join(soulDir, 'memory', '2024-01-16.md'), '# Memory log 2', 'utf-8');
+    writeFileSync(join(soulDir, 'memory', 'archive', 'old.md'), '# Archived', 'utf-8');
+    writeFileSync(join(soulDir, 'memory', 'notes.txt'), 'non-md file', 'utf-8');
+
+    const manager = await createMockManager();
+    const result = await manager.resetBot('test-bot');
+
+    expect(result.cleared.memoryDir).toBe(true);
+    // memory/ directory recreated but empty
     expect(existsSync(join(soulDir, 'memory'))).toBe(true);
+    expect(existsSync(join(soulDir, 'memory', '2024-01-15.md'))).toBe(false);
+    expect(existsSync(join(soulDir, 'memory', 'archive'))).toBe(false);
+    expect(existsSync(join(soulDir, 'memory', 'notes.txt'))).toBe(false);
+  });
+
+  test('deletes .versions/', async () => {
+    writeFileSync(join(soulDir, '.versions', 'SOUL-v1.md'), 'backup', 'utf-8');
+
+    const manager = await createMockManager();
+    const result = await manager.resetBot('test-bot');
+
+    expect(result.cleared.versions).toBe(true);
+    expect(existsSync(join(soulDir, '.versions'))).toBe(false);
+  });
+
+  test('deletes feedback.jsonl', async () => {
+    writeFileSync(join(soulDir, 'feedback.jsonl'), '{"id":"1","content":"test"}\n', 'utf-8');
+
+    const manager = await createMockManager();
+    const result = await manager.resetBot('test-bot');
+
+    expect(result.cleared.feedback).toBe(true);
+    expect(existsSync(join(soulDir, 'feedback.jsonl'))).toBe(false);
+  });
+
+  test('calls clearForBot on all stores', async () => {
+    const feedbackClear = mock(() => {});
+    const askHumanClear = mock(() => {});
+    const askPermissionClear = mock(() => {});
+
+    const manager = await createMockManager({
+      agentFeedbackStore: { clearForBot: feedbackClear },
+      askHumanStore: { clearForBot: askHumanClear },
+      askPermissionStore: { clearForBot: askPermissionClear },
+    });
+
+    await manager.resetBot('test-bot');
+
+    expect(feedbackClear).toHaveBeenCalledWith('test-bot');
+    expect(askHumanClear).toHaveBeenCalledWith('test-bot');
+    expect(askPermissionClear).toHaveBeenCalledWith('test-bot');
+  });
+
+  test('clears core memory and index', async () => {
+    const clearCoreMemory = mock(() => {});
+    const clearIndex = mock(() => {});
+
+    const manager = await createMockManager({
+      memoryManager: { clearCoreMemory, clearIndex },
+    });
+    const result = await manager.resetBot('test-bot');
+
+    expect(result.cleared.coreMemory).toBe(true);
+    expect(result.cleared.index).toBe(true);
+    expect(clearCoreMemory).toHaveBeenCalled();
+    expect(clearIndex).toHaveBeenCalled();
   });
 
   test('throws if bot is running', async () => {
-    const { BotManager } = await import('../../src/bot/bot-manager');
-
-    const manager = Object.create(BotManager.prototype);
-    manager.config = {
-      bots: [{ id: 'test-bot', name: 'Test Bot' }],
-      soul: { dir: join(tmpDir, 'soul') },
-      ollama: { models: { primary: 'test' } },
-      conversation: { systemPrompt: 'You are a test bot.', temperature: 0.7, maxHistory: 20 },
-    };
-    manager.runningBots = new Set(['test-bot']);
-    manager.logger = noopLogger;
+    const manager = await createMockManager({
+      runningBots: new Set(['test-bot']),
+    });
 
     expect(() => manager.resetBot('test-bot')).toThrow('Stop the agent before resetting');
   });
 
   test('throws if bot not found', async () => {
-    const { BotManager } = await import('../../src/bot/bot-manager');
-
-    const manager = Object.create(BotManager.prototype);
-    manager.config = { bots: [], soul: { dir: join(tmpDir, 'soul') }, ollama: { models: { primary: 'test' } }, conversation: { systemPrompt: 'You are a test bot.', temperature: 0.7, maxHistory: 20 } };
-    manager.runningBots = new Set();
-    manager.logger = noopLogger;
+    const manager = await createMockManager();
+    manager.config = {
+      bots: [],
+      soul: { dir: join(tmpDir, 'soul') },
+      ollama: { models: { primary: 'test' } },
+      conversation: { systemPrompt: 'You are a test bot.', temperature: 0.7, maxHistory: 20 },
+    };
 
     expect(() => manager.resetBot('nonexistent')).toThrow('Bot not found');
   });

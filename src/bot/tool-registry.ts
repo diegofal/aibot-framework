@@ -27,8 +27,49 @@ import { createCoreMemoryTools } from '../tools/core-memory';
 import { createRecallMemoryTool } from '../tools/recall-memory';
 import { createWebSearchTool } from '../tools/web-search';
 import { createAskHumanTool, type AskHumanDeps } from '../tools/ask-human';
+import { createAskPermissionTool, type AskPermissionDeps } from '../tools/ask-permission';
 import { createBrowserTool } from '../tools/browser';
 import { createProductionLogTool } from '../tools/production-log';
+import { createArchiveFileTool } from '../tools/archive-file';
+import { createRedditSearchTool, createRedditHotTool, createRedditReadTool } from '../tools/reddit';
+import { createTwitterSearchTool, createTwitterPostTool, createTwitterReadTool } from '../tools/twitter';
+import { createCalendarListTool, createCalendarAvailabilityTool, createCalendarScheduleTool } from '../tools/calendar';
+
+// ─── Tool Category System ───
+
+export const TOOL_CATEGORY_NAMES = [
+  'web', 'memory', 'soul', 'files', 'system',
+  'social', 'calendar', 'communication', 'browser', 'production',
+] as const;
+
+export type ToolCategory = (typeof TOOL_CATEGORY_NAMES)[number];
+
+export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
+  web: ['web_search', 'web_fetch'],
+  memory: ['memory_search', 'memory_get', 'recall_memory', 'core_memory_append', 'core_memory_replace', 'core_memory_search', 'save_memory'],
+  soul: ['update_soul', 'update_identity', 'manage_goals', 'improve'],
+  files: ['file_read', 'file_write', 'file_edit'],
+  system: ['exec', 'process', 'get_datetime', 'cron'],
+  social: ['reddit_search', 'reddit_hot', 'reddit_read', 'twitter_search', 'twitter_read', 'twitter_post'],
+  calendar: ['calendar_list', 'calendar_availability', 'calendar_schedule'],
+  communication: ['ask_human', 'ask_permission', 'phone_call', 'delegate_to_bot', 'collaborate'],
+  browser: ['browser'],
+  production: ['read_production_log', 'archive_file', 'create_tool', 'signal_completion'],
+};
+
+/** Tools always sent to the executor regardless of category selection */
+export const ALWAYS_INCLUDED_TOOLS = new Set(['get_datetime', 'ask_human', 'ask_permission']);
+
+/** Reverse map: tool name → category */
+export const TOOL_TO_CATEGORY: Map<string, ToolCategory> = (() => {
+  const map = new Map<string, ToolCategory>();
+  for (const [category, tools] of Object.entries(TOOL_CATEGORIES)) {
+    for (const tool of tools) {
+      map.set(tool, category as ToolCategory);
+    }
+  }
+  return map;
+})();
 
 export class ToolRegistry {
   private dynamicToolRegistry: DynamicToolRegistry | null = null;
@@ -53,6 +94,7 @@ export class ToolRegistry {
     getDelegationHandler: () => import('../tools/delegate').DelegationHandler,
     getCollaborateHandler: () => import('../tools/collaborate').CollaborateHandler,
     askHumanDeps?: AskHumanDeps,
+    askPermissionDeps?: AskPermissionDeps,
   ): void {
     const { config, logger } = this.ctx;
     const tools = this.ctx.tools;
@@ -188,6 +230,41 @@ export class ToolRegistry {
       logger.info('Phone call tool initialized');
     }
 
+    // Reddit tools
+    if (config.reddit?.enabled) {
+      tools.push(
+        createRedditSearchTool(config.reddit),
+        createRedditHotTool(config.reddit),
+        createRedditReadTool(config.reddit),
+      );
+      logger.info('Reddit tools initialized (search, hot, read)');
+    }
+
+    // Twitter tools
+    if (config.twitter?.enabled) {
+      tools.push(
+        createTwitterSearchTool(config.twitter),
+        createTwitterReadTool(config.twitter),
+      );
+      // Post tool only when write credentials are present
+      if (config.twitter.accessToken && config.twitter.accessSecret) {
+        tools.push(createTwitterPostTool(config.twitter));
+        logger.info('Twitter tools initialized (search, read, post)');
+      } else {
+        logger.info('Twitter tools initialized (search, read — post disabled: no write credentials)');
+      }
+    }
+
+    // Calendar tools
+    if (config.calendar?.enabled) {
+      tools.push(
+        createCalendarListTool(config.calendar),
+        createCalendarAvailabilityTool(config.calendar),
+        createCalendarScheduleTool(config.calendar),
+      );
+      logger.info({ provider: config.calendar.provider }, 'Calendar tools initialized (list, availability, schedule)');
+    }
+
     // Cron tool
     if (config.cron.enabled) {
       tools.push(createCronTool(this.ctx.cronService));
@@ -224,10 +301,17 @@ export class ToolRegistry {
       logger.info('ask_human tool initialized');
     }
 
-    // Productions tool
+    // ask_permission tool
+    if (askPermissionDeps) {
+      tools.push(createAskPermissionTool(askPermissionDeps));
+      logger.info('ask_permission tool initialized');
+    }
+
+    // Productions tools
     if (this.ctx.productionsService) {
       tools.push(createProductionLogTool(this.ctx.productionsService));
-      logger.info('read_production_log tool initialized');
+      tools.push(createArchiveFileTool(this.ctx.productionsService));
+      logger.info('Production tools initialized (read_production_log, archive_file)');
     }
 
     // Dynamic tools (create_tool + approved dynamic tools)
@@ -276,6 +360,12 @@ export class ToolRegistry {
         const { manifest, handlers, warnings } = loaded;
 
         if (warnings.length > 0) {
+          const hasMissingEnv = warnings.some(w => w.startsWith('Missing env var'));
+          const hasMissingBin = warnings.some(w => w.startsWith('Missing binary'));
+          if (hasMissingEnv || hasMissingBin) {
+            logger.info({ skillId: manifest.id, warnings }, 'Skipping external skill due to missing requirements');
+            continue;
+          }
           logger.warn({ skillId: manifest.id, warnings }, 'External skill loaded with warnings');
         }
 
@@ -391,6 +481,26 @@ export class ToolRegistry {
     const excluded = this.getExcludedSet(botId);
     if (excluded.size === 0) return this.ctx.toolDefinitions;
     return this.ctx.toolDefinitions.filter((d) => !excluded.has(d.function.name));
+  }
+
+  /**
+   * Get tool definitions filtered by selected categories for a specific bot.
+   * Uncategorized tools (external/dynamic) always pass through.
+   * Falls back to getDefinitionsForBot() when categories is empty/undefined.
+   */
+  getDefinitionsByCategories(categories: ToolCategory[] | undefined, botId: string): ToolDefinition[] {
+    if (!categories || categories.length === 0) {
+      return this.getDefinitionsForBot(botId);
+    }
+    const selectedCategories = new Set(categories);
+    const baseDefs = this.getDefinitionsForBot(botId);
+    return baseDefs.filter((d) => {
+      const name = d.function.name;
+      if (ALWAYS_INCLUDED_TOOLS.has(name)) return true;
+      const category = TOOL_TO_CATEGORY.get(name);
+      if (!category) return true; // uncategorized (external/dynamic) — always pass through
+      return selectedCategories.has(category);
+    });
   }
 
   /**

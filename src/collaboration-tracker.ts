@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 export interface CollaborationRecord {
   initiatorBotId: string;
   responderBotId: string;
@@ -18,9 +21,42 @@ export class CollaborationTracker {
   constructor(
     private maxRounds: number = 5,
     private cooldownMs: number = 30_000,
+    private dataDir?: string,
   ) {
+    if (dataDir) this.loadFromDisk();
     // Periodic cleanup every 60 s
     this.sweepTimer = setInterval(() => this.sweep(), 60_000);
+  }
+
+  /** Load records from disk on startup. Runs sweep() to remove stale entries. */
+  loadFromDisk(): void {
+    if (!this.dataDir) return;
+    const filePath = join(this.dataDir, 'tracker.json');
+    if (!existsSync(filePath)) return;
+
+    try {
+      const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
+      if (raw.records && typeof raw.records === 'object') {
+        for (const [key, record] of Object.entries(raw.records)) {
+          this.records.set(key, record as CollaborationRecord);
+        }
+      }
+      this.sweep();
+    } catch {
+      // Ignore corrupt file
+    }
+  }
+
+  /** Persist records to disk. */
+  private persistToDisk(): void {
+    if (!this.dataDir) return;
+    try {
+      mkdirSync(this.dataDir, { recursive: true });
+      const data = { records: Object.fromEntries(this.records) };
+      writeFileSync(join(this.dataDir, 'tracker.json'), JSON.stringify(data, null, 2), 'utf-8');
+    } catch {
+      // Swallow write errors (non-critical)
+    }
   }
 
   private pairKey(botA: string, botB: string, chatId: number): string {
@@ -87,16 +123,19 @@ export class CollaborationTracker {
         lastMessageAt: Date.now(),
       });
     }
+    this.persistToDisk();
   }
 
   /** Remove stale records older than 5 minutes past cooldown */
   sweep(): void {
+    const sizeBefore = this.records.size;
     const cutoff = Date.now() - this.cooldownMs - 300_000;
     for (const [key, record] of this.records) {
       if (record.lastMessageAt < cutoff) {
         this.records.delete(key);
       }
     }
+    if (this.records.size !== sizeBefore) this.persistToDisk();
   }
 
   dispose(): void {

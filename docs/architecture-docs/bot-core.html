@@ -101,7 +101,7 @@
           </tbody>
         </table>
         <h4>Dependencies</h4>
-        <p>Imports types from <code>../config</code>, <code>../agent-registry</code>, <code>../collaboration-tracker</code>, <code>../collaboration-session</code>, <code>../core/skill-registry</code>, <code>../cron</code>, <code>../logger</code>, <code>../media</code>, <code>../memory/manager</code>, <code>../message-buffer</code>, <code>../ollama</code>, <code>../session</code>, <code>../soul</code>, <code>../tools/types</code>, <code>../core/llm-client</code>, <code>./ask-human-store</code>, <code>./agent-feedback-store</code>, <code>../productions/service</code>. No bot-module runtime dependencies.</p>
+        <p>Imports types from <code>../config</code>, <code>../agent-registry</code>, <code>../collaboration-tracker</code>, <code>../collaboration-session</code>, <code>../core/skill-registry</code>, <code>../cron</code>, <code>../logger</code>, <code>../media</code>, <code>../memory/manager</code>, <code>../message-buffer</code>, <code>../ollama</code>, <code>../session</code>, <code>../soul</code>, <code>../tools/types</code>, <code>../core/llm-client</code>, <code>./ask-human-store</code>, <code>./ask-permission-store</code>, <code>./agent-feedback-store</code>, <code>../productions/service</code>. No bot-module runtime dependencies.</p>
       </div>
 
       <!-- index.ts -->
@@ -342,7 +342,7 @@
         <p class="responsibility">
           Central registry for all LLM tools. Initializes every tool (web, soul, memory, exec,
           file, process, browser, datetime, phone, cron, delegation, collaboration, improve,
-          ask_human, productions, dynamic tools) based on config flags. Provides per-bot
+          ask_human, ask_permission, productions, dynamic tools) based on config flags. Provides per-bot
           filtering (respects <code>disabledTools</code> and dynamic tool scope), collaboration-safe
           tool sets, and executor creation.
         </p>
@@ -969,6 +969,41 @@
         <p><code>../logger</code>, <code>node:crypto</code> (randomUUID)</p>
       </div>
 
+      <!-- ask-permission-store.ts -->
+      <div class="module-section" id="ask-permission-store">
+        <h3>ask-permission-store.ts</h3>
+        <div class="file-path">src/bot/ask-permission-store.ts</div>
+        <p class="responsibility">
+          Manages pending "ask_permission" requests. When an agent needs human approval before
+          performing a sensitive action, it registers a permission request with action, resource,
+          description, and urgency. The store supports web dashboard approval/denial and timeout.
+          Decisions (approved/denied) are held for consumption by the next agent loop cycle.
+        </p>
+        <h4>Exported Types / Classes</h4>
+        <ul class="inline-list">
+          <li><code>PendingPermission</code> (interface)</li>
+          <li><code>PendingPermissionInfo</code> (interface)</li>
+          <li><code>PermissionDecision</code> (interface)</li>
+          <li><code>AskPermissionStore</code> (class)</li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>request</td><td>botId, chatId, action, resource, description, urgency, timeoutMs</td><td>Registers a permission request with timeout. Returns { id, promise } where promise resolves with the decision.</td></tr>
+            <tr><td>approveById</td><td>id: string</td><td>Approves a pending permission request from the web dashboard</td></tr>
+            <tr><td>denyById</td><td>id: string</td><td>Denies a pending permission request from the web dashboard</td></tr>
+            <tr><td>consumeDecisionsForBot</td><td>botId: string</td><td>Returns and deletes all decided permissions for a bot (consumed by agent loop)</td></tr>
+            <tr><td>getPendingForBot</td><td>botId: string</td><td>Returns pending permission requests for a bot with remaining time</td></tr>
+            <tr><td>getAll</td><td>(none)</td><td>Returns all pending permission requests with remaining time info</td></tr>
+            <tr><td>getPendingCount</td><td>(none)</td><td>Returns total number of pending permission requests</td></tr>
+            <tr><td>dispose</td><td>(none)</td><td>Clears all timers and rejects all pending promises</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>../logger</code>, <code>node:crypto</code> (randomUUID)</p>
+      </div>
+
       <!-- ================================================================ -->
       <!-- FACADE -->
       <!-- ================================================================ -->
@@ -987,7 +1022,7 @@
           lazy callbacks for circular dependencies, and delegates all operations to the
           appropriate module. Manages bot lifecycle (start/stop/reset), Telegram polling with
           409-conflict retry, headless mode, and all delegate methods for agent loop, ask-human,
-          feedback, collaboration, dynamic tools, productions, and karma.
+          ask-permission, feedback, collaboration, dynamic tools, productions, and karma.
         </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">
@@ -1021,9 +1056,12 @@
             <tr><td>runAgentLoopAll</td><td>(none)</td><td>Manually triggers all periodic bots</td></tr>
             <tr><td>runAgentLoop</td><td>botId: string</td><td>Triggers a single bot's agent loop cycle</td></tr>
             <tr><td>getAgentLoopState</td><td>(none)</td><td>Returns full agent loop state</td></tr>
-            <tr><td>stopAll</td><td>(none)</td><td>Stops agent loop, message buffer, collaboration, ask-human, and all bots</td></tr>
+            <tr><td>stopAll</td><td>(none)</td><td>Stops agent loop, message buffer, collaboration, ask-human, ask-permission, and all bots</td></tr>
             <tr><td>getAskHumanPending</td><td>(none)</td><td>Returns pending ask-human questions with bot names</td></tr>
             <tr><td>answerAskHuman</td><td>id, answer</td><td>Answers a pending question and wakes the agent loop</td></tr>
+            <tr><td>getAskPermissionPending</td><td>(none)</td><td>Returns pending ask-permission requests with bot names</td></tr>
+            <tr><td>approveAskPermission</td><td>id: string</td><td>Approves a pending permission request and wakes the agent loop</td></tr>
+            <tr><td>denyAskPermission</td><td>id: string</td><td>Denies a pending permission request and wakes the agent loop</td></tr>
             <tr><td>submitAgentFeedback</td><td>botId, content</td><td>Submits operator feedback and wakes agent loop</td></tr>
             <tr><td>getProductionsService</td><td>(none)</td><td>Returns ProductionsService for web API</td></tr>
             <tr><td>getKarmaService</td><td>(none)</td><td>Returns KarmaService for web API</td></tr>
@@ -1032,7 +1070,7 @@
           </tbody>
         </table>
         <h4>Dependencies</h4>
-        <p>Imports all other bot modules: <code>./types</code>, <code>./tool-registry</code>, <code>./system-prompt-builder</code>, <code>./memory-flush</code>, <code>./group-activation</code>, <code>./conversation-pipeline</code>, <code>./collaboration</code>, <code>./handler-registrar</code>, <code>./agent-loop</code>, <code>./ask-human-store</code>, <code>./agent-feedback-store</code>, <code>./telegram-utils</code>, <code>./soul-health-check</code>, <code>./tenant-facade</code>. Also imports infrastructure: <code>grammy</code>, <code>../agent-registry</code>, <code>../config</code>, <code>../collaboration-tracker</code>, <code>../collaboration-session</code>, <code>../media</code>, <code>../message-buffer</code>, <code>../soul</code>, <code>../core/llm-client</code>, <code>../productions/service</code>, <code>../karma/service</code>.</p>
+        <p>Imports all other bot modules: <code>./types</code>, <code>./tool-registry</code>, <code>./system-prompt-builder</code>, <code>./memory-flush</code>, <code>./group-activation</code>, <code>./conversation-pipeline</code>, <code>./collaboration</code>, <code>./handler-registrar</code>, <code>./agent-loop</code>, <code>./ask-human-store</code>, <code>./ask-permission-store</code>, <code>./agent-feedback-store</code>, <code>./telegram-utils</code>, <code>./soul-health-check</code>, <code>./tenant-facade</code>. Also imports infrastructure: <code>grammy</code>, <code>../agent-registry</code>, <code>../config</code>, <code>../collaboration-tracker</code>, <code>../collaboration-session</code>, <code>../media</code>, <code>../message-buffer</code>, <code>../soul</code>, <code>../core/llm-client</code>, <code>../productions/service</code>, <code>../karma/service</code>.</p>
       </div>
 
       <!-- tenant-facade.ts -->
@@ -1050,6 +1088,53 @@
         </ul>
         <h4>Dependencies</h4>
         <p><code>./types</code>, <code>../tenant/manager</code>, <code>../config</code></p>
+      </div>
+
+      <!-- ================================================================ -->
+      <!-- PERSISTENCE -->
+      <!-- ================================================================ -->
+      <div class="category-header">
+        <h2>State Persistence</h2>
+        <span class="count">Disk-backed stores</span>
+      </div>
+
+      <div class="module-section" id="persistence">
+        <h3>Persistence Pattern</h3>
+        <p class="responsibility">
+          All in-memory stores that hold important state now persist to <code>config.paths.data</code>
+          (typically <code>./data/</code>). Each store accepts an optional <code>dataDir</code> parameter.
+          When provided, the store loads state on construction and writes to disk on every mutation.
+          Pending entries containing Promises are NOT persisted and are treated as expired on restart.
+        </p>
+
+        <h4>Disk Layout</h4>
+        <table class="methods-table">
+          <thead><tr><th>Store</th><th>Path</th><th>Format</th></tr></thead>
+          <tbody>
+            <tr><td>AskPermissionStore</td><td><code>data/ask-permission/history.json</code></td><td>JSON: { history, resolved }</td></tr>
+            <tr><td>AskHumanStore</td><td><code>data/ask-human/answered.json</code></td><td>JSON: { answered }</td></tr>
+            <tr><td>AgentScheduler</td><td><code>data/agent-scheduler/schedules.json</code></td><td>JSON: { botId: schedule } (debounced 10s)</td></tr>
+            <tr><td>CollaborationTracker</td><td><code>data/collaboration/tracker.json</code></td><td>JSON: { records }</td></tr>
+            <tr><td>CollaborationSessionManager</td><td><code>data/collaboration/sessions.json</code></td><td>JSON: { sessions }</td></tr>
+            <tr><td>ToolAuditLog</td><td><code>data/tool-audit/{botId}/YYYY-MM-DD.jsonl</code></td><td>Append-only JSONL, daily rotation</td></tr>
+          </tbody>
+        </table>
+
+        <h4>New Module: tool-audit-log.ts</h4>
+        <p>
+          <code>src/bot/tool-audit-log.ts</code> &mdash; Persists tool execution audit entries to
+          daily JSONL files. Subscribes to <code>tool:end</code> events from <code>ToolExecutor</code>
+          in the agent loop. Each entry records timestamp, botId, chatId, toolName, args, success,
+          result (truncated to 500 chars), durationMs, and retryAttempts.
+        </p>
+
+        <h4>Data NOT Persisted</h4>
+        <ul>
+          <li><code>pending</code> maps in AskPermissionStore/AskHumanStore (contain Promises)</li>
+          <li><code>handledMessageIds</code> Set (Telegram manages offsets)</li>
+          <li><code>seenUsers</code> Map (cache, reconstructed naturally)</li>
+          <li><code>generatingReplies</code> Set in conversation routes (transient)</li>
+        </ul>
       </div>
 
     </div><!-- .content -->

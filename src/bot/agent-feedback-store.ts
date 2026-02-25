@@ -175,6 +175,13 @@ export class AgentFeedbackStore {
     return Array.from(this.entries.keys());
   }
 
+  /** Clear all in-memory entries for a bot. Does NOT delete the JSONL file (caller handles that). */
+  clearForBot(botId: string): void {
+    this.entries.delete(botId);
+    this.soulDirs.delete(botId);
+    this.logger.info({ botId }, 'AgentFeedback: cleared in-memory entries');
+  }
+
   /** Rewrite the JSONL file for a bot from in-memory state. */
   private rewriteJSONL(botId: string): void {
     const soulDir = this.soulDirs.get(botId);

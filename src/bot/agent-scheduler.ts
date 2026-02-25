@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { BotConfig } from '../config';
 import type { Logger } from '../logger';
 import type { BotContext } from './types';
@@ -39,11 +41,69 @@ export class AgentScheduler {
   private loopPromise: Promise<void> | null = null;
   private lastRunAt: number | null = null;
   private lastResults: AgentLoopResult[] = [];
+  private flushDirty = false;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private draining = false;
+  private drainingResolve: (() => void) | null = null;
+  private static readonly FLUSH_DEBOUNCE_MS = 10_000;
 
   constructor(
     private ctx: BotContext,
     private runOneBotFn: (botId: string, botConfig: BotConfig, opts?: { suppressSideEffects?: boolean }) => Promise<AgentLoopResult>,
-  ) {}
+    private dataDir?: string,
+  ) {
+    if (dataDir) this.loadFromDisk();
+  }
+
+  /** Load schedules from disk on startup. Excludes lastResult (verbose, regenerated). */
+  loadFromDisk(): void {
+    if (!this.dataDir) return;
+    const filePath = join(this.dataDir, 'schedules.json');
+    if (!existsSync(filePath)) return;
+
+    try {
+      const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
+      for (const [botId, schedule] of Object.entries(raw)) {
+        const s = schedule as BotSchedule;
+        // Restore without lastResult (verbose, regenerated at runtime)
+        this.botSchedules.set(botId, {
+          ...s,
+          lastResult: null,
+        });
+      }
+      this.ctx.logger.debug({ count: this.botSchedules.size }, 'AgentScheduler: loaded from disk');
+    } catch (err) {
+      this.ctx.logger.warn({ err }, 'AgentScheduler: failed to load from disk');
+    }
+  }
+
+  /** Mark dirty and schedule a debounced flush. */
+  private schedulePersist(): void {
+    if (!this.dataDir) return;
+    this.flushDirty = true;
+    if (this.flushTimer) return; // already scheduled
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flushToDisk();
+    }, AgentScheduler.FLUSH_DEBOUNCE_MS);
+  }
+
+  /** Write schedules to disk (without lastResult). */
+  flushToDisk(): void {
+    if (!this.dataDir || !this.flushDirty) return;
+    try {
+      mkdirSync(this.dataDir, { recursive: true });
+      const data: Record<string, Omit<BotSchedule, 'lastResult'>> = {};
+      for (const [botId, schedule] of this.botSchedules) {
+        const { lastResult, ...rest } = schedule;
+        data[botId] = rest;
+      }
+      writeFileSync(join(this.dataDir, 'schedules.json'), JSON.stringify(data, null, 2), 'utf-8');
+      this.flushDirty = false;
+    } catch (err) {
+      this.ctx.logger.warn({ err }, 'AgentScheduler: failed to flush to disk');
+    }
+  }
 
   // --- Getters for AgentLoop to use ---
 
@@ -75,6 +135,14 @@ export class AgentScheduler {
     return this.sleepControllers.size > 0;
   }
 
+  isDraining(): boolean {
+    return this.draining;
+  }
+
+  isExecutingLoop(botId: string): boolean {
+    return this.runningBotIds.has(botId);
+  }
+
   // --- Lifecycle ---
 
   start(): void {
@@ -90,12 +158,72 @@ export class AgentScheduler {
   stop(): void {
     this.enabled = false;
     for (const c of this.sleepControllers) c.abort();
+    // Flush synchronously before clearing maps
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    this.flushDirty = true;
+    this.flushToDisk();
     this.botSchedules.clear();
     this.botLoops.clear();
   }
 
   wakeUp(): void {
     for (const c of this.sleepControllers) c.abort();
+  }
+
+  /**
+   * Gracefully stop all bot loops: sets draining flag, wakes sleeping bots,
+   * waits for all executing cycles to finish, then calls stop().
+   * Resolves when all loops have exited or after timeoutMs.
+   */
+  async gracefulStop(timeoutMs = 120_000): Promise<void> {
+    if (this.draining) {
+      // Already draining — wait for the existing drain to complete
+      if (this.drainingResolve) {
+        return new Promise<void>((resolve) => {
+          const prev = this.drainingResolve;
+          this.drainingResolve = () => { prev?.(); resolve(); };
+        });
+      }
+      return;
+    }
+
+    this.draining = true;
+    this.ctx.logger.info('AgentScheduler: graceful stop initiated — draining');
+
+    // Wake all sleeping bots so they exit their loop guards
+    for (const c of this.sleepControllers) c.abort();
+
+    // Also release any queued concurrency waiters so they can exit
+    while (this.concurrencyQueue.length > 0) {
+      const next = this.concurrencyQueue.shift();
+      if (next) next();
+    }
+
+    // Wait for all active botLoops to settle (or timeout)
+    const loopPromises = [...this.botLoops.values()];
+    const settled = new Promise<void>((resolve) => {
+      this.drainingResolve = resolve;
+      if (loopPromises.length === 0 && this.runningBotIds.size === 0) {
+        resolve();
+        return;
+      }
+      Promise.allSettled(loopPromises).then(() => resolve());
+    });
+
+    const timeout = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        this.ctx.logger.warn({ timeoutMs }, 'AgentScheduler: graceful stop timed out');
+        resolve();
+      }, timeoutMs);
+    });
+
+    await Promise.race([settled, timeout]);
+
+    // Full cleanup
+    this.stop();
+    this.draining = false;
+    this.drainingResolve = null;
+    this.ctx.logger.info('AgentScheduler: graceful stop completed');
   }
 
   // --- Concurrency ---
@@ -182,6 +310,7 @@ export class AgentScheduler {
         this.ctx.logger.debug({ botId }, 'Agent loop: removed stopped bot from schedule');
       }
     }
+    this.schedulePersist();
   }
 
   updateBotSchedule(botId: string, botConfig: BotConfig, result: AgentLoopResult): void {
@@ -228,6 +357,7 @@ export class AgentScheduler {
         cyclesSinceAskHuman: 0,
       });
     }
+    this.schedulePersist();
   }
 
   computeBotSleepMs(botId: string, result: AgentLoopResult): number {
@@ -303,10 +433,10 @@ export class AgentScheduler {
 
   private async runLoop(): Promise<void> {
     this.ctx.logger.info('Agent loop: run loop started');
-    while (this.enabled) {
+    while (this.enabled && !this.draining) {
       this.syncSchedules();
       this.syncBotLoops();
-      if (!this.enabled) break;
+      if (!this.enabled || this.draining) break;
       await this.interruptibleSleep(5_000);
     }
     this.ctx.logger.info('Agent loop: run loop stopped');
@@ -319,7 +449,7 @@ export class AgentScheduler {
 
     botLogger.info({ botId, mode }, 'Bot loop started');
 
-    while (this.enabled && this.ctx.runningBots.has(botId)) {
+    while (this.enabled && !this.draining && this.ctx.runningBots.has(botId)) {
       if (this.runningBotIds.has(botId)) {
         await this.interruptibleSleep(1_000);
         continue;
@@ -343,7 +473,7 @@ export class AgentScheduler {
         this.releaseConcurrency();
       }
 
-      if (!this.enabled || !this.ctx.runningBots.has(botId)) break;
+      if (!this.enabled || this.draining || !this.ctx.runningBots.has(botId)) break;
 
       const sleepMs = isContinuous
         ? (botConfig.agentLoop?.continuousPauseMs ?? 5_000)

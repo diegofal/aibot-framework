@@ -2,7 +2,277 @@
 
 ## Unreleased
 
+### Added
+- **Tool pre-selection for agent loop** — The planner now selects which tool categories the executor
+  needs, reducing the number of tool definitions sent to Ollama by ~2,500-3,500 tokens per call.
+  This prevents 503 errors when tool definitions + context exceed model context windows.
+  - 10 built-in tool categories: `web`, `memory`, `soul`, `files`, `system`, `social`, `calendar`,
+    `communication`, `browser`, `production`
+  - `ALWAYS_INCLUDED_TOOLS` (`get_datetime`, `ask_human`, `ask_permission`) are always sent regardless
+    of category selection
+  - External/dynamic tools (uncategorized) always pass through
+  - Falls back to sending all tools when planner doesn't return categories or when disabled
+  - Config toggle: `agentLoop.toolPreSelection` (default: `true`)
+  - New observability fields in `AgentLoopResult`: `selectedToolCategories`, `executorToolCount`
+
+- **Error detection + retry for all conversation-like interfaces** — All bot reply generation
+  flows now detect failures and expose them to the frontend instead of silently dropping.
+  - Backend: `Set<string>` tracking replaced with `Map<string, { status, error? }>` in all 3
+    route files (`conversations.ts`, `agent-feedback.ts`, `productions.ts`). Generation logic
+    extracted into reusable helpers shared by message-send and retry endpoints. New retry
+    endpoints: `POST /:botId/:id/retry` (conversations), `POST /:botId/:id/retry-reply`
+    (agent-feedback), `POST /:botId/:id/retry-response` and `POST /:botId/:id/retry-thread`
+    (productions). Status endpoints now return `{ status: 'error', error }` on failure.
+  - Frontend: `renderThread()` in `shared.js` extended with `error` + `onRetry` props. Error
+    banner with retry button shown on failure. All 4 pages (`conversations.js`, `inbox.js`,
+    `productions.js`, `feedback.js`) updated with poll timeout (3 min / 90 polls at 2s),
+    `status === 'error'` handling, and retry-on-click. Polling extracted into `startPolling()`
+    functions reused by both send and retry flows.
+  - CSS: `.thread-error` class with red border and error badge styling.
+  - Tests: Error state + retry tests added to all 3 route test files.
+
+
+- **Inbox as conversation type** — `ask_human` questions now create persistent inbox conversations
+  (type `'inbox'`) with JSONL-backed threaded chat. The inbox page is a conversation list (pending
+  vs previous) instead of ephemeral cards. Clicking opens a full chat thread with `renderThread`.
+  First human reply still unblocks the agent loop (backward compatible), but the conversation
+  persists for follow-up discussion. Supports `inboxStatus` field (`pending`/`answered`/`dismissed`/
+  `timed_out`) with automatic status transitions via `AskHumanStore` callbacks.
+  - `ConversationsService`: extended with `'inbox'` type, `askHumanQuestionId`/`inboxStatus` fields,
+    `markInboxStatus()`, `countByInboxStatus()`, `findByQuestionId()` methods
+  - `AskHumanStore`: `conversationId` field on questions, `setConversationId()`, `HandleReplyResult`
+    return type, `onTimeout`/`onDismiss` callbacks
+  - `ask_human` tool: creates inbox conversation with bot question as first message
+  - `BotManager`: owns shared `ConversationsService`, wires timeout/dismiss callbacks, writes
+    human answers to conversation on `answerAskHuman()`
+  - `ConversationGate`: writes Telegram replies to inbox conversations
+  - Web routes: `/api/ask-human/count` uses conversation-based pending count, `/api/conversations`
+    supports `'inbox'` type, first reply to pending inbox resolves `ask_human`
+  - Frontend: `inbox.js` rewritten as conversation list + `renderInboxChat()` chat view,
+    `app.js` route `#/inbox/:botId/:id`, status badge CSS
+
+- **Persist in-memory state to disk** — All transient Maps/Sets now survive app restarts:
+  - `AskPermissionStore`: history + resolved decisions persisted to `data/ask-permission/history.json`
+  - `AskHumanStore`: answered questions persisted to `data/ask-human/answered.json`
+  - `AgentScheduler`: bot schedules persisted to `data/agent-scheduler/schedules.json` (debounced 10s flush)
+  - `CollaborationTracker`: exchange records persisted to `data/collaboration/tracker.json`
+  - `CollaborationSessionManager`: sessions persisted to `data/collaboration/sessions.json`
+  - `ToolAuditLog` (new): append-only daily JSONL files at `data/tool-audit/{botId}/YYYY-MM-DD.jsonl`
+  - All stores are backward-compatible (`dataDir` is optional)
+  - Pending entries with Promises are NOT persisted (treated as expired on restart)
+
 ### Fixed
+- **fix(tool-registry):** remove dead facilita tool imports — bot-specific tools should use external skills or dynamic tool registry
+
+### Changed
+- **Full bot reset with baseline restore** — `resetBot()` now restores soul files (IDENTITY.md,
+  SOUL.md, MOTIVATIONS.md) from `.baseline/` copies saved at apply-soul time, instead of preserving
+  evolved versions. Also clears MEMORY.md at soul root, recursively deletes memory/ (including
+  archive/ subdirs and non-.md files), deletes feedback.jsonl, and clears ask-human, ask-permission,
+  and agent-feedback in-memory stores. Added `clearForBot(botId)` to AskHumanStore,
+  AskPermissionStore, and AgentFeedbackStore.
+
+### Added
+- **Soul generation from agent edit screen** — "Generate Soul" button added to the agent edit form,
+  wiring the existing `showGenerateSoulModal` so existing agents can generate/regenerate their soul
+  without going through the new-agent flow. Edit page refreshes after applying.
+- **Production Index & Archival System** — Auto-generated `INDEX.md` per production directory.
+  `ProductionsService.rebuildIndex(botId)` scans the directory tree, reads `changelog.jsonl` for
+  descriptions (falls back to first markdown heading or humanized filename), and generates a
+  grouped-by-directory index with tables. Triggered automatically after every `logProduction()`.
+  Files excluded from index: `changelog.jsonl`, `summary.json`, `INDEX.md`, `node_modules/`, `venv/`.
+- **Production archival** — `ProductionsService.archiveFile(botId, path, reason)` moves files to
+  `archived/` subdirectory with a tracked reason. New `archive` action type in `ProductionEntry`
+  with `archivedFrom` and `archiveReason` fields. Archived files get a different table format in
+  INDEX.md showing original path, reason, and date.
+- **archive_file tool** — New LLM tool for bots to archive production files with reasons.
+  Registered alongside `read_production_log` when productions are enabled.
+- **Production directory rules in prompts** — Executor prompt now includes mandatory directory
+  structure rules (use subdirectories, descriptive names), archival protocol (archive before
+  replacing, never delete), and anti-duplication checks (read INDEX.md before creating files).
+  Planner prompts include new anti-patterns: creating duplicates and dumping files at root.
+- **Better production descriptions** — Tool executor now extracts the first markdown heading
+  from file content for changelog descriptions instead of generic `"file_write: path"`.
+  INDEX.md logging is skipped to prevent circular entries.
+- **INDEX.md priority in file tree** — `scanFileTree()` sorts INDEX.md first so it's visible
+  even when the tree is truncated at 100 entries.
+- **Production cleanup script** — `scripts/cleanup-productions.ts` reorganizes all existing
+  production directories. Supports `--execute` flag (dry-run by default). Categorizes 227 files
+  across 8 productions into subdirectories and archives 21 duplicates/stale files. Deletes
+  orphaned Python venv in default production. Rebuilds INDEX.md for all productions after cleanup.
+
+- **Permission execution feedback** — Permission decisions now track a full lifecycle:
+  `pending → decided → consumed → executed/failed`. After approving or denying on the web
+  dashboard, the card transitions in-place showing processing status with a pulse animation.
+  The agent loop reports execution results (summary, tool calls, success/failure) back to the
+  store. History section on the Permissions page shows recent decisions with colored status
+  badges and execution details. New API endpoints: `GET /api/ask-permission/history`,
+  `GET /api/ask-permission/history/:id`. History is bounded (100 entries, 24h TTL).
+
+### Fixed
+- **Telegram 409 polling conflict — custom polling loop + inter-poll delay** — replaced grammy's
+  `bot.start()` entirely with a custom polling loop (`pollLoop`) that calls `bot.api.getUpdates()`
+  directly and feeds updates to `bot.handleUpdate()`. grammy's `handlePollingError` treated 409 as
+  fatal (throws immediately, killing the poll loop), and the previous API transformer approach
+  (5 retries) was insufficient — the 409 is persistent enough to exhaust all retries.
+  The new loop handles 409 with escalating backoff (3s × attempt, capped at 30s) and only
+  gives up after sustained failure (20 consecutive 409s OR 5 minutes). 401 throws immediately
+  (bad token), 429 respects `retry_after`, update processing errors are caught (never kill
+  the loop), and offset advances before handling (prevents infinite crash on poisoned updates).
+  Cleanup uses `AbortController` instead of `bot.stop()` (which could itself issue a
+  conflicting `getUpdates`). Retained sliding-window restart limit (3 in 5 min) as fallback.
+  **Root cause fix**: Added 500ms inter-poll delay (`POLL_INTERVAL_MS`) between `getUpdates`
+  cycles. Telegram's server-side session has a brief teardown window after a long-poll returns;
+  Bun's fetch reuses TCP connections so the next request arrives nearly instantly, hitting the
+  session overlap window → 409. The 500ms pause eliminates the 409-per-cycle pattern entirely.
+  First 2 consecutive 409s now log at `debug` level (only `warn` after 3+) to reduce log noise
+  for occasional transient overlaps.
+  File: `src/bot/bot-manager.ts`. Tests: `tests/bot/poll-loop.test.ts`.
+
+### Added
+- **Reddit integration** — 3 new LLM tools (`reddit_search`, `reddit_hot`, `reddit_read`) + Telegram
+  skill (`/reddit hot <subreddit>`, `/reddit search <query>`). OAuth2 script-app auth with promise-based
+  mutex for token refresh. Responses wrapped with `wrapExternalContent()`, cached via `TtlCache`.
+  Rate limited at 100 req/min. Config: `reddit` section in `config.json` (disabled by default).
+- **Twitter/X integration** — 3 new LLM tools (`twitter_search`, `twitter_read`, `twitter_post`) +
+  Telegram skill (`/twitter search`, `/twitter trending`, `/twitter post`). Read ops use Bearer Token
+  (app-only auth), write ops use OAuth 1.0a signature (built-in, no deps). `twitter_post` requires
+  `ask_permission` approval before posting. Post tool only registered when write credentials present.
+  Rate limited at 300/15min (search) and 200/15min (tweets). Config: `twitter` section (disabled by default).
+- **Calendar integration** — 3 new LLM tools (`calendar_list`, `calendar_availability`, `calendar_schedule`) +
+  Telegram skill (`/cal today`, `/cal availability`, `/cal schedule`). Provider abstraction supports
+  Calendly and Google Calendar. `calendar_schedule` requires `ask_permission` approval. Calendly
+  gracefully reports that direct scheduling is not supported (use scheduling links).
+  Config: `calendar` section (disabled by default).
+- **Shared API client** — `src/tools/api-client.ts` with `apiRequest<T>()` (authenticated fetch with
+  timeout, JSON parsing, structured errors) and `RateLimiter` (token-bucket). Used by all 3 integrations.
+- **`ask_permission` tool + Permissions dashboard** — Bots can now request permission
+  before performing sensitive actions (file writes, command execution, external API calls,
+  resource modifications). Mirrors the `ask_human` lifecycle: bot calls `ask_permission`
+  (non-blocking) → request appears in the "Permissions" dashboard page → human approves
+  or denies with optional note → decision injected into bot's next agent loop cycle.
+  - New store: `src/bot/ask-permission-store.ts` (dedup, timeout, consume-on-read)
+  - New tool: `src/tools/ask-permission.ts` (action, resource, description, urgency, timeout)
+  - New API routes: `GET/POST /api/ask-permission` (list, count, approve, deny)
+  - New dashboard page: `web/pages/permissions.js` with urgency badges, approve/deny buttons
+  - Sidebar link with live badge polling (10s interval)
+  - Agent loop integration: resolved/pending permissions injected into planner prompts
+  - PERMISSION PROTOCOL paragraph added to both planner prompt templates
+  - Soul generator updated: new bots auto-include Permission Protocol in Boundaries
+  - All 11 existing bot SOUL.md files updated with Permission Protocol section
+  Files: `src/bot/ask-permission-store.ts`, `src/tools/ask-permission.ts`,
+  `src/web/routes/ask-permission.ts`, `web/pages/permissions.js`, `src/bot/types.ts`,
+  `src/bot/bot-manager.ts`, `src/bot/tool-registry.ts`, `src/bot/agent-loop.ts`,
+  `src/bot/agent-loop-prompts.ts`, `src/web/server.ts`, `web/index.html`, `web/app.js`,
+  `src/soul-generator.ts`, `config/soul/*/SOUL.md`.
+  Tests: `tests/ask-permission-store.test.ts` (24 tests),
+  `tests/web/routes/ask-permission.test.ts` (7 tests).
+- **Test Chat with Tools (integrations page)** — New card on the integrations page sends
+  messages with tool definitions attached, using the same `ollamaClient.chat()` + tool
+  executor code path as the agent loop. Lets you verify whether a model supports native
+  tool calling without waiting for a full agent cycle. Includes model selector, per-tool
+  checkboxes with Select All/None toggle, and detailed result display (tool calls executed
+  with args/result, final LLM response, duration).
+  Backend: `GET /api/integrations/ollama/tools`, `POST /api/integrations/ollama/chat-with-tools`.
+  New public method: `BotManager.getToolRegistry()`.
+  Files: `src/bot/bot-manager.ts`, `src/web/routes/integrations.ts`,
+  `web/pages/integrations.js`, `tests/web/routes/integrations.test.ts`.
+- **TTS voice picker in agent edit screen** — New "Voice (TTS)" section in the agent edit form
+  lets operators select an ElevenLabs voice per bot from a dropdown, plus speed and stability
+  sliders. "Load Voices" button fetches available voices from ElevenLabs (API key stays
+  server-side). Includes global defaults display and clear-to-reset-to-global behavior.
+  Backend: `GET /api/integrations/elevenlabs/voices` proxy endpoint, `tts` support in
+  `PATCH /api/agents/:id`, `ttsEnabled`/`ttsVoiceId` in `/api/agents/defaults`.
+  Files: `src/web/routes/integrations.ts`, `src/web/routes/agents.ts`, `web/pages/agents.js`,
+  `tests/web/routes/integrations.test.ts`, `tests/web/routes/agents-tts.test.ts`.
+- **Per-bot TTS voice configuration** — Each bot can now override the global TTS voice
+  settings (`voiceId`, `modelId`, `outputFormat`, `languageCode`, `maxTextLength`,
+  `voiceSettings`) via a per-bot `tts` block in config. Follows the existing
+  `global defaults + per-bot optional overrides` pattern (like `conversation` and
+  `agentLoop`). API key and provider remain global. New `resolveTtsConfig()` resolver
+  in `src/config.ts` merges global and per-bot settings at runtime. The conversation
+  pipeline now uses the resolved config when generating voice replies.
+  Files: `src/config.ts`, `src/bot/conversation-pipeline.ts`, `config/config.json`,
+  `tests/tts.test.ts`, `src/bot/__tests__/conversation-pipeline.test.ts`.
+- **Audio Output: ElevenLabs TTS (inbound mode)** — When a user sends a voice message,
+  the bot now responds with a voice note (OGG/Opus) instead of text. Uses ElevenLabs API
+  with configurable voice, model, language, and voice settings. Inbound-only: TTS only
+  triggers when the user's input was a voice message. Falls back to text on TTS failure
+  or when TTS is not configured. Added `isVoice` flag to `BufferEntry` and pipeline,
+  `TtsConfigSchema` to media config, and new `src/tts.ts` module with `generateSpeech()`.
+  Created 22 unit tests in `tests/tts.test.ts` and 4 pipeline integration tests.
+  Files: `src/tts.ts`, `src/message-buffer.ts`, `src/bot/media-handlers.ts`,
+  `src/bot/conversation-pipeline.ts`, `src/bot/bot-manager.ts`, `src/config.ts`,
+  `config/config.json`, `tests/tts.test.ts`,
+  `src/bot/__tests__/conversation-pipeline.test.ts`.
+- **Audio Input: OpenAI Whisper API key support** — Added optional `apiKey` field to
+  `WhisperConfigSchema` and conditional `Authorization: Bearer` header in `processVoice()`.
+  Endpoints without auth (e.g. local whisper.cpp) continue to work unchanged.
+  Added whisper block to `config/config.json` pointing to OpenAI API with `${OPENAI_API_KEY}`.
+  Created comprehensive test suite for `processVoice()` (13 test cases) in `tests/media.test.ts`.
+  Files: `src/config.ts`, `src/media.ts`, `config/config.json`, `tests/media.test.ts`.
+- **Roadmap: external integrations planned** — Added Projects 4-7 to `docs/roadmap.md`:
+  Twitter/X (search, post, read), Reddit (search, hot, read), Calendly/Calendars
+  (availability, schedule, list), and Discord (deferred, needs multi-channel abstraction).
+  Each integration follows the tool + skill + external skill pattern.
+  Updated `docs/architecture-docs/tools-skills.html` with a "Planned Integrations" section.
+  Added `CLAUDE.md` rule to consult roadmap before proposing new features.
+- **Web Conversations** — Chat with bots directly from the web dashboard. Two conversation types:
+  `general` (discuss goals, motivations, behavior) and `productions` (discuss production work).
+  Conversations are JSONL-backed under `data/conversations/{botId}/`, use the same
+  `renderThread()` chat UI as production threads, and fire-and-forget bot replies via Claude CLI.
+  Bot replies include soul context (identity, motivations, goals). Productions-type chats also
+  inject recent production stats. All conversations are visible from a unified "Conversations"
+  screen. Productions page now includes a "Productions Chat" section inline.
+  Files: `src/conversations/service.ts`, `src/web/routes/conversations.ts`, `src/web/server.ts`,
+  `src/config.ts`, `web/pages/conversations.js`, `web/pages/productions.js`, `web/app.js`,
+  `web/index.html`, `web/style.css`.
+
+### Fixed
+- **`file_edit` false-positive template penalty (critical)** — Every `file_edit` operation was
+  penalized -3 karma for "empty template" because the quality gate read `args.content` (which
+  only exists for `file_write`). For `file_edit`, `args.content` is always `undefined`, producing
+  an empty string that `assessContentQuality('')` flagged as a template. Now reads `args.new_text`
+  for `file_edit`. When neither content field exists, the quality gate is skipped entirely.
+  This was the #1 cause of karma bleeding across all bots (-44 on default, -25 on Therapist).
+  Files: `src/bot/tool-executor.ts`.
+- **Karma dedup keys not normalizing paths** — Dedup key extraction for production events used
+  the raw file path from the LLM, so `./manuscrito.md` and `manuscrito.md` produced different
+  keys, bypassing the cooldown window. Now strips leading `./` and collapses duplicate slashes
+  before building the dedup key. Files: `src/karma/service.ts`.
+- **Bots reading wrong file paths (workDir unawareness)** — Autonomous bots tried to read
+  framework source files (e.g. `src/tenant/billing.ts`) which resolved inside their sandbox
+  and failed. Added a "File Sandbox" section to autonomous mode prompts explaining that all
+  file operations are sandboxed to their workDir and they cannot access files outside it.
+  Files: `src/bot/system-prompt-builder.ts`.
+- **Ollama timeout resilience** — Fallback models now use a reduced timeout (60s instead of
+  the primary's 300s) to avoid stacking retries that multiply wait times. `embed()` now logs
+  elapsed time on failure (matching `generate()` and `chat()`). Added `qwen3:8b` as a default
+  fallback model in config.json so `kimi-k2.5:cloud` failures don't block all LLM paths.
+  Files: `src/ollama.ts`, `config/config.json`.
+- **Tool loop exhaustion — loop detector now active in all LLM paths** — The existing
+  `createLoopDetector()` (repeat-detector, no-progress-detector, global circuit breaker) was
+  only wired into the Claude CLI path. Now also active in the Ollama chat tool loop, which
+  covers both conversation pipeline and agent-loop executor phases. Repeated identical tool
+  calls (4+) or identical results (3+) now break the loop early instead of exhausting all
+  rounds silently. Files: `src/ollama.ts`.
+- **External skills with missing requirements no longer loaded** — Skills requiring env vars
+  (`GITHUB_TOKEN`, `LINEAR_API_KEY`, etc.) or binaries that aren't available are now skipped
+  at startup instead of being registered as tools that fail at runtime. Warnings with
+  `Missing env var` or `Missing binary` prefixes trigger the skip. Also downgraded the noisy
+  "Skill not found" warning (80+ per startup) to debug level — this is expected for
+  external-only skills listed in bot config but not in the built-in skill registry.
+  Files: `src/bot/tool-registry.ts`, `src/bot/handler-registrar.ts`.
+
+### Fixed
+- **Karma dedup cooldown** — Negative karma events are now deduplicated within a configurable
+  cooldown window (default 60 minutes). The same error on the same file/tool no longer fires
+  a penalty every cycle — only the first occurrence within the window is recorded. Dedup key
+  extraction: production events keyed by file path, tool events by tool name + error prefix,
+  agent-loop events by action prefix. Positive events and manual adjustments are never deduped.
+  All bot karma event files reset to start fresh after the fix.
+  Config: `karma.dedupCooldownMinutes` (default 60).
+  Files: `src/karma/service.ts`, `src/config.ts`.
 - **Bots not using `ask_human` — proactive human check-in** — Five improvements to make bots
   proactively consult their human operator instead of running fully autonomously:
   1. **Strategist**: Added ask_human deliverable examples ("Ask the operator which social channels

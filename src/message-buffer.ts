@@ -12,6 +12,7 @@ export interface BufferEntry {
   sessionText?: string;
   messageId: number;
   isMedia: boolean;
+  isVoice?: boolean;
   timestamp: number;
 }
 
@@ -22,6 +23,7 @@ export type ConversationProcessor = (
   userText: string,
   images?: string[],
   sessionText?: string,
+  isVoice?: boolean,
 ) => Promise<void>;
 
 const SEEN_MESSAGES_CAP = 250;
@@ -183,9 +185,9 @@ export class MessageBuffer {
   // ─── Dispatch ──────────────────────────────────────────────────
 
   private dispatch(entry: BufferEntry): void {
-    const { ctx, config, sessionKey, userText, images, sessionText } = entry;
+    const { ctx, config, sessionKey, userText, images, sessionText, isVoice } = entry;
 
-    const task = this.processor(ctx, config, sessionKey, userText, images, sessionText)
+    const task = this.processor(ctx, config, sessionKey, userText, images, sessionText, isVoice)
       .catch((err) => {
         this.logger.error({ err, sessionKey }, 'Conversation processor failed (buffer dispatch)');
       })

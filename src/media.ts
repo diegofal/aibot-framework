@@ -207,9 +207,15 @@ export class MediaHandler {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), whisperConfig.timeout);
 
+    const headers: Record<string, string> = {};
+    if (whisperConfig.apiKey) {
+      headers['Authorization'] = `Bearer ${whisperConfig.apiKey}`;
+    }
+
     try {
       const response = await fetch(whisperConfig.endpoint, {
         method: 'POST',
+        headers,
         body: formData,
         signal: controller.signal,
       });

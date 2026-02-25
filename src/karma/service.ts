@@ -9,12 +9,16 @@ export interface KarmaConfig {
   baseDir: string;
   initialScore: number;
   decayDays: number;
+  dedupCooldownMinutes?: number;
 }
 
 export class KarmaService {
   private baseDir: string;
   private initialScore: number;
   private decayDays: number;
+  private dedupCooldownMs: number;
+  /** botId → dedupKey → lastTimestamp (ms) */
+  private dedupMap = new Map<string, Map<string, number>>();
 
   constructor(
     private config: KarmaConfig,
@@ -23,6 +27,7 @@ export class KarmaService {
     this.baseDir = config.baseDir;
     this.initialScore = config.initialScore;
     this.decayDays = config.decayDays;
+    this.dedupCooldownMs = (config.dedupCooldownMinutes ?? 60) * 60_000;
   }
 
   private getBotDir(botId: string): string {
@@ -37,13 +42,55 @@ export class KarmaService {
     return join(this.getBotDir(botId), 'events.jsonl');
   }
 
+  /**
+   * Extract a dedup key from the event source + reason.
+   * Used to prevent the same error from hammering karma repeatedly.
+   */
+  static extractDedupKey(source: KarmaEvent['source'], reason: string): string {
+    if (source === 'production') {
+      // "Empty template detected in "path/file.md"" → production:path/file.md
+      const match = reason.match(/"([^"]+)"/);
+      if (match) {
+        // Normalize: strip leading ./ and collapse duplicate slashes
+        const normalized = match[1].replace(/^\.\//, '').replace(/\/\//g, '/');
+        return `production:${normalized}`;
+      }
+    }
+    if (source === 'tool') {
+      // "Tool error: file_read — ..." → tool:file_read:<prefix>
+      const toolMatch = reason.match(/^Tool error:\s*(\S+)/);
+      if (toolMatch) return `tool:${toolMatch[1]}:${reason.slice(0, 50)}`;
+    }
+    if (source === 'agent-loop') {
+      return `agent-loop:${reason.slice(0, 60)}`;
+    }
+    return `${source}:${reason.slice(0, 60)}`;
+  }
+
   addEvent(
     botId: string,
     delta: number,
     reason: string,
     source: KarmaEvent['source'],
     metadata?: Record<string, unknown>,
-  ): KarmaEvent {
+  ): KarmaEvent | null {
+    // Only dedup negative events from automated sources
+    if (delta < 0 && source !== 'manual' && source !== 'feedback') {
+      const dedupKey = KarmaService.extractDedupKey(source, reason);
+      const now = Date.now();
+      let botDedup = this.dedupMap.get(botId);
+      if (!botDedup) {
+        botDedup = new Map();
+        this.dedupMap.set(botId, botDedup);
+      }
+      const lastSeen = botDedup.get(dedupKey);
+      if (lastSeen !== undefined && (now - lastSeen) < this.dedupCooldownMs) {
+        this.logger.debug({ botId, delta, dedupKey }, 'Karma event deduped (cooldown)');
+        return null;
+      }
+      botDedup.set(dedupKey, now);
+    }
+
     const event: KarmaEvent = {
       id: randomUUID(),
       botId,

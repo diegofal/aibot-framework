@@ -1,0 +1,71 @@
+{
+  "id": "task-tracker",
+  "name": "Task Tracker",
+  "version": "1.0.0",
+  "description": "Simple task management with priorities, due dates, and status tracking",
+  "author": "MakeMyLifeEasier",
+  "entry": "index.ts",
+  "tools": [
+    {
+      "name": "task_add",
+      "description": "Add a new task with optional priority and due date",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "Task title/description" },
+          "priority": { "type": "string", "enum": ["low", "medium", "high"], "description": "Task priority level" },
+          "dueDate": { "type": "string", "description": "Optional due date (ISO 8601 or natural language like 'tomorrow')" },
+          "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags for categorization" }
+        },
+        "required": ["title"]
+      }
+    },
+    {
+      "name": "task_list",
+      "description": "List tasks with optional filtering",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["pending", "done", "all"], "description": "Filter by status" },
+          "priority": { "type": "string", "enum": ["low", "medium", "high", "all"], "description": "Filter by priority" },
+          "tag": { "type": "string", "description": "Filter by tag" }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "task_complete",
+      "description": "Mark a task as completed",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "taskId": { "type": "string", "description": "ID of the task to complete" }
+        },
+        "required": ["taskId"]
+      }
+    },
+    {
+      "name": "task_delete",
+      "description": "Delete a task by ID",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "taskId": { "type": "string", "description": "ID of the task to delete" }
+        },
+        "required": ["taskId"]
+      }
+    },
+    {
+      "name": "task_prioritize",
+      "description": "Change a task's priority",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "taskId": { "type": "string", "description": "ID of the task" },
+          "priority": { "type": "string", "enum": ["low", "medium", "high"], "description": "New priority level" }
+        },
+        "required": ["taskId", "priority"]
+      }
+    }
+  ]
+}

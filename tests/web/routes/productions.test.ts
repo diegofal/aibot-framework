@@ -658,6 +658,85 @@ describe('productions routes', () => {
     });
   });
 
+  describe('POST /:botId/:id/retry-thread', () => {
+    test('re-triggers thread generation after failure', async () => {
+      let callCount = 0;
+      const mockClaudeGenerate = mock(() => {
+        callCount++;
+        if (callCount === 1) return Promise.reject(new Error('First fail'));
+        return Promise.resolve('Retry reply!');
+      });
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/productions');
+      const deps = makeMockDeps();
+      const mockEntry = {
+        id: 'p1', botId: 'bot1', tool: 'file_write', path: '/output/test.md',
+        action: 'create', description: 'Test', size: 100, trackOnly: false,
+        timestamp: '2026-02-20T10:00:00Z',
+        evaluation: {
+          evaluatedAt: '2026-02-20T10:00:00Z',
+          thread: [
+            { id: 'hmsg1', role: 'human', content: 'Question', createdAt: '2026-02-22T09:00:00Z' },
+          ],
+        },
+      };
+      deps.productionsService.getEntry = () => mockEntry;
+      deps.productionsService.addThreadMessage = mock((_b: string, _i: string, role: string, content: string) => ({
+        message: { id: 'msg-new', role, content, createdAt: new Date().toISOString() },
+        entry: mockEntry,
+      }));
+
+      const mockSoulLoader = {
+        readIdentity: () => 'I am TestBot',
+        readGoals: () => '- Goal 1',
+        appendDailyMemory: mock(() => {}),
+      };
+      deps.botManager = { getSoulLoader: () => mockSoulLoader } as any;
+
+      const app = new Hono();
+      app.route('/api/productions', freshModule.productionsRoutes(deps));
+
+      // First send fails
+      await app.request('http://localhost/api/productions/bot1/p1/thread', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Hello' }),
+      });
+      await tick(100);
+
+      // Status should be error
+      let statusRes = await app.request('http://localhost/api/productions/bot1/p1/thread-status');
+      let statusData = await statusRes.json();
+      expect(statusData.status).toBe('error');
+      expect(statusData.error).toContain('First fail');
+
+      // Retry
+      const retryRes = await app.request('http://localhost/api/productions/bot1/p1/retry-thread', { method: 'POST' });
+      expect(retryRes.status).toBe(200);
+      expect((await retryRes.json()).status).toBe('generating');
+
+      await tick(100);
+
+      // Should be idle now
+      statusRes = await app.request('http://localhost/api/productions/bot1/p1/thread-status');
+      statusData = await statusRes.json();
+      expect(statusData.status).toBe('idle');
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+
+    test('returns 404 for non-existent entry', async () => {
+      const deps = makeMockDeps();
+      const app = new Hono();
+      app.route('/api/productions', productionsRoutes(deps));
+
+      const res = await app.request('http://localhost/api/productions/bot1/p1/retry-thread', { method: 'POST' });
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('POST /:botId/:id/evaluate with feedback', () => {
     test('triggers AI response generation when feedback is provided', async () => {
       const mockClaudeGenerate = mock(() => Promise.resolve('I understand the feedback.'));

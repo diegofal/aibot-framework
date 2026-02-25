@@ -4,6 +4,7 @@ import type { Logger } from '../logger';
 import type { BotContext } from './types';
 import type { GroupActivation } from './group-activation';
 import type { AskHumanStore } from './ask-human-store';
+import type { ConversationsService } from '../conversations/service';
 
 /**
  * Result of evaluating the conversation gate.
@@ -37,6 +38,7 @@ export class ConversationGate {
     private ctx: BotContext,
     private groupActivation: GroupActivation,
     private askHumanStore?: AskHumanStore,
+    private conversationsService?: ConversationsService,
   ) {}
 
   async evaluate(
@@ -51,8 +53,14 @@ export class ConversationGate {
     // 1. ask_human reply intercept
     if (this.askHumanStore?.hasPending(chatId)) {
       const replyToId = grammyCtx.message.reply_to_message?.message_id;
-      if (this.askHumanStore.handleReply(chatId, text, replyToId)) {
-        botLogger.info({ chatId }, 'Message handled as ask_human reply');
+      const replyResult = this.askHumanStore.handleReply(chatId, text, replyToId);
+      if (replyResult.matched) {
+        botLogger.info({ chatId, questionId: replyResult.questionId }, 'Message handled as ask_human reply');
+        // Write Telegram reply to the inbox conversation and mark answered
+        if (replyResult.conversationId && replyResult.botId && this.conversationsService) {
+          this.conversationsService.addMessage(replyResult.botId, replyResult.conversationId, 'human', text);
+          this.conversationsService.markInboxStatus(replyResult.botId, replyResult.conversationId, 'answered');
+        }
         return { allowed: false, reason: 'ask_human_reply' };
       }
     }

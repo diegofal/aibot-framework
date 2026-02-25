@@ -1,0 +1,44 @@
+{
+  "id": "twitter",
+  "name": "Twitter/X",
+  "version": "1.0.0",
+  "description": "Search tweets, read timelines, and post on Twitter/X",
+  "author": "AIBot Framework",
+  "entry": "index.ts",
+  "tools": [
+    {
+      "name": "twitter_search",
+      "description": "Search recent tweets by query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search query" },
+          "max_results": { "type": "number", "description": "Results (10-100)" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "twitter_read",
+      "description": "Read a specific tweet or user timeline",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "username": { "type": "string", "description": "Twitter username" },
+          "tweet_id": { "type": "string", "description": "Tweet ID" }
+        }
+      }
+    },
+    {
+      "name": "twitter_post",
+      "description": "Post a tweet (requires write credentials and operator approval)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "Tweet text (max 280 chars)" }
+        },
+        "required": ["text"]
+      }
+    }
+  ]
+}

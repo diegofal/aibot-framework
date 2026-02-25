@@ -573,6 +573,27 @@
             </div>
           </div>
 
+          <!-- ask_permission -->
+          <div class="tool-card">
+            <h4 class="tool-name">ask_permission</h4>
+            <div class="tool-desc">Request human approval before performing a sensitive action. Non-blocking: the request is queued to the web permissions page. The decision (approved/denied) will be injected into the bot's next agent loop cycle. Continue working on other tasks in the meantime.
+              <br><br><strong>History lifecycle:</strong> <code>pending &rarr; decided &rarr; consumed &rarr; executed/failed</code>.
+              After approval/denial, the agent loop consumes the decision and reports execution outcome (summary, tool calls, success/failure) back to the store. History is bounded (100 entries, 24h TTL).
+              <br><strong>API endpoints:</strong> <code>GET /api/ask-permission/history?limit=N</code> (recent decisions),
+              <code>GET /api/ask-permission/history/:id</code> (single entry for status polling).
+            </div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>action</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The action the bot wants to perform</span></li>
+                <li><code>resource</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The resource or target of the action</span></li>
+                <li><code>description</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Human-readable explanation of why permission is needed</span></li>
+                <li><code>urgency</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Urgency level: low | normal | high (default: normal)</span></li>
+                <li><code>timeout_minutes</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Minutes to wait for decision (default: 30, max: 120)</span></li>
+              </ul>
+            </div>
+          </div>
+
           <!-- phone_call -->
           <div class="tool-card">
             <h4 class="tool-name">phone_call</h4>
@@ -590,6 +611,138 @@
           </div>
 
         </div><!-- /tool-grid Communication -->
+
+
+        <!-- ---- External Integrations ---- -->
+        <div class="category-header">
+          <h2 id="cat-integrations">External Integrations</h2>
+          <span class="count">9 tools</span>
+        </div>
+
+        <div class="tool-grid cols-2">
+
+          <!-- reddit_search -->
+          <div class="tool-card">
+            <h4 class="tool-name">reddit_search</h4>
+            <div class="tool-desc">Search Reddit for posts matching a query. Returns titles, scores, comment counts, and links. Supports subreddit filtering and sort options (hot/new/top/relevance).</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>query</code> <span class="param-type">string</span> <span class="param-req">required</span></li>
+                <li><code>subreddit</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Limit to specific subreddit</span></li>
+                <li><code>sort</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; hot | new | top | relevance</span></li>
+                <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Results (1-25, default 10)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- reddit_hot -->
+          <div class="tool-card">
+            <h4 class="tool-name">reddit_hot</h4>
+            <div class="tool-desc">Get hot or top posts from a subreddit. Returns post titles, scores, authors, and links.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>subreddit</code> <span class="param-type">string</span> <span class="param-req">required</span></li>
+                <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Posts (1-25, default 10)</span></li>
+                <li><code>time</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; hour | day | week | month | year | all</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- reddit_read -->
+          <div class="tool-card">
+            <h4 class="tool-name">reddit_read</h4>
+            <div class="tool-desc">Read a Reddit post and its top comments. Accepts a post URL or post ID.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>url</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Reddit post URL or post ID</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- twitter_search -->
+          <div class="tool-card">
+            <h4 class="tool-name">twitter_search</h4>
+            <div class="tool-desc">Search recent tweets on Twitter/X. Returns tweet text, author, metrics (likes, RTs, replies), and links. Uses Bearer Token (app-only auth).</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>query</code> <span class="param-type">string</span> <span class="param-req">required</span></li>
+                <li><code>max_results</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Results (10-100, default 10)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- twitter_read -->
+          <div class="tool-card">
+            <h4 class="tool-name">twitter_read</h4>
+            <div class="tool-desc">Read a specific tweet by ID, or recent tweets from a user by username. Uses Bearer Token.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>username</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Twitter username (without @)</span></li>
+                <li><code>tweet_id</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Specific tweet ID</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- twitter_post -->
+          <div class="tool-card">
+            <h4 class="tool-name">twitter_post</h4>
+            <div class="tool-desc">Post a tweet on Twitter/X. Uses OAuth 1.0a (user context). Requires ask_permission approval before posting. Only registered when write credentials are configured.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>text</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Tweet text (max 280 chars)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- calendar_list -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_list</h4>
+            <div class="tool-desc">List upcoming calendar events. Supports Calendly and Google Calendar providers.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>days</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Days ahead (1-30, default 7)</span></li>
+                <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Max events (1-50, default 10)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- calendar_availability -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_availability</h4>
+            <div class="tool-desc">Check calendar availability for a specific date. Returns busy time slots so the LLM can identify free times.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>date</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Date (YYYY-MM-DD)</span></li>
+                <li><code>duration_minutes</code> <span class="param-type">number</span> <span class="param-desc">&mdash; 15 | 30 | 60 (default 30)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- calendar_schedule -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_schedule</h4>
+            <div class="tool-desc">Schedule a new calendar event. Requires ask_permission approval. Calendly provider reports that direct scheduling is not supported (use scheduling links).</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>title</code> <span class="param-type">string</span> <span class="param-req">required</span></li>
+                <li><code>start_time</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; ISO 8601</span></li>
+                <li><code>duration_minutes</code> <span class="param-type">number</span> <span class="param-req">required</span></li>
+                <li><code>description</code> <span class="param-type">string</span></li>
+                <li><code>attendees</code> <span class="param-type">array</span> <span class="param-desc">&mdash; Email addresses</span></li>
+              </ul>
+            </div>
+          </div>
+
+        </div><!-- /tool-grid Integrations -->
 
 
         <!-- ---- Utility ---- -->
@@ -708,6 +861,19 @@
               <ul>
                 <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Max entries to return (default: 20)</span></li>
                 <li><code>status</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; approved | rejected | unreviewed | all (default: all)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- archive_file -->
+          <div class="tool-card">
+            <h4 class="tool-name">archive_file</h4>
+            <div class="tool-desc">Move a production file to archived/ with a reason. Use when a file is superseded, stale, or duplicated. NEVER delete production files &mdash; always archive with a reason. Logs the archive action in the changelog and rebuilds INDEX.md.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>path</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Relative path of the file to archive</span></li>
+                <li><code>reason</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Why this file is being archived (e.g. "Superseded by pipeline_tracker.md")</span></li>
               </ul>
             </div>
           </div>
@@ -836,6 +1002,48 @@
             </div>
           </div>
 
+          <!-- reddit -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Reddit</h3>
+              <span class="skill-id">reddit</span>
+            </div>
+            <div class="skill-desc">Browse Reddit: search posts, view hot/top threads, read full posts with comments. OAuth2 script-app auth with token refresh mutex. Rate limited at 100 req/min.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">commands: /reddit hot, /reddit search</span>
+              <span class="tag">config: clientId, clientSecret, username, password</span>
+            </div>
+          </div>
+
+          <!-- twitter -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Twitter/X</h3>
+              <span class="skill-id">twitter</span>
+            </div>
+            <div class="skill-desc">Search tweets, read timelines, post on Twitter/X. Read uses Bearer Token, write uses OAuth 1.0a (built-in HMAC-SHA1 signer). Post requires ask_permission approval.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">commands: /twitter search, /twitter trending, /twitter post</span>
+              <span class="tag">config: apiKey, apiSecret, bearerToken, accessToken, accessSecret</span>
+            </div>
+          </div>
+
+          <!-- calendar -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Calendar</h3>
+              <span class="skill-id">calendar</span>
+            </div>
+            <div class="skill-desc">Manage calendar events: list upcoming, check availability, schedule new events. Provider abstraction supports Calendly and Google Calendar. Schedule requires ask_permission approval.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">commands: /cal today, /cal availability, /cal schedule</span>
+              <span class="tag">config: provider (calendly|google), apiKey, calendarId</span>
+            </div>
+          </div>
+
         </div><!-- /skill-grid -->
 
 
@@ -871,6 +1079,11 @@ interface ToolDefinition {
 
         <h3>Registration Flow</h3>
         <p><code>ToolRegistry.initializeAll()</code> checks each tool's config flag and creates instances. The registry provides filtered views per bot (<code>getDefinitionsForBot()</code>, <code>getToolsForBot()</code>) that respect per-bot <code>disabledTools</code> and dynamic tool scope exclusions.</p>
+
+        <h3>Tool Categories &amp; Pre-Selection</h3>
+        <p>Tools are organized into 10 categories (<code>TOOL_CATEGORIES</code> in <code>tool-registry.ts</code>): <code>web</code>, <code>memory</code>, <code>soul</code>, <code>files</code>, <code>system</code>, <code>social</code>, <code>calendar</code>, <code>communication</code>, <code>browser</code>, <code>production</code>.</p>
+        <p>During agent loop execution, the planner selects which categories the executor needs (via <code>toolCategories</code> in its JSON response). The agent loop then calls <code>getDefinitionsByCategories()</code> to send only the matching tools, reducing token usage by ~2,500&ndash;3,500 tokens per call. Three tools (<code>get_datetime</code>, <code>ask_human</code>, <code>ask_permission</code>) are always included. External/dynamic tools (not in any category) also pass through unconditionally.</p>
+        <p>Config: <code>agentLoop.toolPreSelection</code> (default: <code>true</code>). Set to <code>false</code> to disable and always send all tools.</p>
 
         <h3>Execution Pipeline</h3>
         <p>The <code>ToolExecutor</code> handles the full lifecycle: argument injection (<code>_botId</code>, <code>_chatId</code>), disabled tool rejection, execution with logging, and result formatting. External content is wrapped with <code>&lt;&lt;&lt;EXTERNAL_UNTRUSTED_CONTENT&gt;&gt;&gt;</code> markers so the LLM knows to treat it as untrusted.</p>
@@ -1042,6 +1255,90 @@ Agent Edit UI → Per-bot skill enable/disable (BotConfig.disabledSkills[])</cod
           <code>{ skillJson, handlerCode }</code>. The generate endpoint returns a
           preview; the apply endpoint writes files to disk.
         </p>
+
+        <!-- ────────────────────────────────────────── -->
+        <!-- Planned Integrations                       -->
+        <!-- ────────────────────────────────────────── -->
+        <h2 id="planned-integrations">Planned Integrations</h2>
+        <p>
+          The following external service integrations are planned. Each will be implemented
+          as a <strong>native tool</strong> + <strong>built-in skill</strong> + <strong>external skill</strong>,
+          covering all three integration patterns in the framework.
+          See <a href="../roadmap.md"><code>docs/roadmap.md</code></a> for detailed status and next steps.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>Status</th>
+              <th>Tools</th>
+              <th>Skill Commands</th>
+              <th>API</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Twitter/X</strong></td>
+              <td><span class="badge badge-yellow">Planning</span></td>
+              <td>
+                <code>twitter_search</code>,
+                <code>twitter_post</code>,
+                <code>twitter_read</code>
+              </td>
+              <td>
+                <code>/twitter trending</code>,
+                <code>/twitter post</code>,
+                <code>/twitter search</code>
+              </td>
+              <td>Twitter API v2 (OAuth 2.0 / 1.0a)</td>
+            </tr>
+            <tr>
+              <td><strong>Reddit</strong></td>
+              <td><span class="badge badge-yellow">Planning</span></td>
+              <td>
+                <code>reddit_search</code>,
+                <code>reddit_hot</code>,
+                <code>reddit_read</code>
+              </td>
+              <td>
+                <code>/reddit hot</code>,
+                <code>/reddit search</code>
+              </td>
+              <td>Reddit API (OAuth2 script app)</td>
+            </tr>
+            <tr>
+              <td><strong>Calendly / Calendars</strong></td>
+              <td><span class="badge badge-yellow">Planning</span></td>
+              <td>
+                <code>calendar_availability</code>,
+                <code>calendar_schedule</code>,
+                <code>calendar_list</code>
+              </td>
+              <td>
+                <code>/cal availability</code>,
+                <code>/cal schedule</code>,
+                <code>/cal today</code>
+              </td>
+              <td>Calendly API v2 / Google Calendar API</td>
+            </tr>
+            <tr>
+              <td><strong>Discord</strong></td>
+              <td><span class="badge badge-dim">Deferred</span></td>
+              <td colspan="3">
+                Requires multi-channel abstraction (see WhatsApp project). Will use <code>discord.js</code>.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Integration Pattern</h3>
+        <p>Each integration follows the same three-layer pattern:</p>
+        <ol>
+          <li><strong>Native Tool</strong> (<code>src/tools/&lt;service&gt;.ts</code>) &mdash; LLM-callable tool with typed parameters, registered in <code>ToolRegistry</code></li>
+          <li><strong>Built-in Skill</strong> (<code>src/skills/&lt;service&gt;/</code>) &mdash; Telegram command handlers with <code>skill.json</code> manifest</li>
+          <li><strong>External Skill</strong> (<code>productions/</code>) &mdash; TSC-format package loadable via <code>skillsFolders</code> config</li>
+        </ol>
 
       </div><!-- /content -->
     </main>

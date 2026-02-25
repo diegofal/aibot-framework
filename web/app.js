@@ -5,8 +5,10 @@ import { renderCron, renderCronDetail, renderCronCreate } from './pages/cron.js'
 import { renderTools, renderToolDetail } from './pages/tools.js';
 import { renderLogs, destroyLogs } from './pages/logs.js';
 import { renderSettings } from './pages/settings.js';
-import { renderInbox, destroyInbox } from './pages/inbox.js';
+import { renderInbox, destroyInbox, renderInboxChat } from './pages/inbox.js';
+import { renderPermissions, destroyPermissions } from './pages/permissions.js';
 import { renderProductions, renderBotProductions } from './pages/productions.js';
+import { renderConversations, renderBotConversations, renderConversationChat } from './pages/conversations.js';
 import { renderFeedback, renderBotFeedback } from './pages/feedback.js';
 import { renderKarma, renderBotKarma } from './pages/karma.js';
 import { renderSkills, renderSkillDetail, renderSkillEdit, renderSkillCreate } from './pages/skills.js';
@@ -16,7 +18,9 @@ const content = document.getElementById('content');
 
 const routes = [
   { pattern: /^#\/$/, handler: () => renderDashboard(content) },
+  { pattern: /^#\/inbox\/([^/]+)\/([^/]+)$/, handler: (m) => renderInboxChat(content, m[1], m[2]) },
   { pattern: /^#\/inbox$/, handler: () => renderInbox(content) },
+  { pattern: /^#\/permissions$/, handler: () => renderPermissions(content) },
   { pattern: /^#\/agents\/([^/]+)\/edit$/, handler: (m) => renderAgentEdit(content, m[1]) },
   { pattern: /^#\/agents\/([^/]+)$/,        handler: (m) => renderAgentDetail(content, m[1]) },
   { pattern: /^#\/agents$/,                  handler: () => renderAgents(content) },
@@ -25,6 +29,9 @@ const routes = [
   { pattern: /^#\/cron\/new$/,               handler: () => renderCronCreate(content) },
   { pattern: /^#\/cron\/([^/]+)$/,           handler: (m) => renderCronDetail(content, m[1]) },
   { pattern: /^#\/cron$/,                    handler: () => renderCron(content) },
+  { pattern: /^#\/conversations\/([^/]+)\/([^/]+)$/, handler: (m) => renderConversationChat(content, m[1], m[2]) },
+  { pattern: /^#\/conversations\/([^/]+)$/,  handler: (m) => renderBotConversations(content, m[1]) },
+  { pattern: /^#\/conversations$/,           handler: () => renderConversations(content) },
   { pattern: /^#\/productions\/([^/]+)$/,     handler: (m) => renderBotProductions(content, m[1]) },
   { pattern: /^#\/productions$/,             handler: () => renderProductions(content) },
   { pattern: /^#\/feedback\/([^/]+)$/,       handler: (m) => renderBotFeedback(content, m[1]) },
@@ -45,6 +52,7 @@ const routes = [
 function navigate() {
   destroyLogs();
   destroyInbox();
+  destroyPermissions();
   const hash = location.hash || '#/';
   if (hash === '#') { location.hash = '#/'; return; }
 
@@ -120,6 +128,26 @@ async function loadFeedbackBadge() {
 
 loadFeedbackBadge();
 setInterval(loadFeedbackBadge, 10000);
+
+// Permissions badge polling
+async function loadPermissionsBadge() {
+  try {
+    const res = await fetch('/api/ask-permission/count');
+    const data = await res.json();
+    const badge = document.getElementById('permissions-badge');
+    if (badge) {
+      if (data.count > 0) {
+        badge.textContent = data.count;
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+loadPermissionsBadge();
+setInterval(loadPermissionsBadge, 10000);
 
 // Initial route
 navigate();

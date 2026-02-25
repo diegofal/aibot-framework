@@ -575,4 +575,160 @@ describe('TenantFacade', () => {
       expect(mgr.regenerateApiKey).toHaveBeenCalledWith('t1');
     });
   });
+
+  // ----------------------------------------------------------------
+  // handleWebhook - invoice.payment_succeeded
+  // ----------------------------------------------------------------
+  describe('handleWebhook', () => {
+    test('returns success false when not initialized', async () => {
+      const result = await facade.handleWebhook('payload', 'sig');
+      expect(result).toEqual({ success: false });
+    });
+
+    test('payment_succeeded: updates tenant billing status to active', async () => {
+      const mockBilling = {
+        createCustomer: vi.fn(),
+        createSubscription: vi.fn(),
+        cancelSubscription: vi.fn(),
+        updateSubscription: vi.fn(),
+        getInvoiceUrl: vi.fn(),
+        handleWebhook: vi.fn().mockResolvedValue({
+          type: 'payment_succeeded',
+          tenantId: 't1',
+          stripeCustomerId: 'cust_123',
+          stripeSubscriptionId: 'sub_456',
+          invoiceId: 'inv_789',
+        }),
+      };
+
+      facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling);
+      const mgr = facade.getTenantManager()! as any;
+      const tenant = { 
+        id: 't1', 
+        name: 'Acme', 
+        billing: { stripeCustomerId: 'cust_123', status: 'past_due' } 
+      };
+      mgr.getTenant.mockReturnValue(tenant);
+
+      const result = await facade.handleWebhook('payload', 'sig');
+
+      expect(result).toEqual({ success: true, tenantId: 't1' });
+      expect(mockBilling.handleWebhook).toHaveBeenCalledWith('payload', 'sig');
+      expect(mgr.updateTenant).toHaveBeenCalledWith('t1', {
+        billing: {
+          stripeCustomerId: 'cust_123',
+          status: 'active',
+          stripeSubscriptionId: 'sub_456',
+        },
+      });
+    });
+
+    test('payment_succeeded: handles tenant not found gracefully', async () => {
+      const mockBilling = {
+        handleWebhook: vi.fn().mockResolvedValue({
+          type: 'payment_succeeded',
+          tenantId: 't1',
+          stripeCustomerId: 'cust_123',
+          invoiceId: 'inv_789',
+        }),
+      };
+
+      facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling as any);
+      const mgr = facade.getTenantManager()! as any;
+      mgr.getTenant.mockReturnValue(undefined);
+
+      const result = await facade.handleWebhook('payload', 'sig');
+
+      expect(result).toEqual({ success: true, tenantId: 't1' });
+      expect(mgr.updateTenant).not.toHaveBeenCalled();
+    });
+
+    test('payment_failed: updates tenant billing status to past_due', async () => {
+      const mockBilling = {
+        handleWebhook: vi.fn().mockResolvedValue({
+          type: 'payment_failed',
+          tenantId: 't1',
+          stripeCustomerId: 'cust_123',
+          stripeSubscriptionId: 'sub_456',
+          invoiceId: 'inv_789',
+        }),
+      };
+
+      facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling as any);
+      const mgr = facade.getTenantManager()! as any;
+      const tenant = { 
+        id: 't1', 
+        name: 'Acme', 
+        billing: { stripeCustomerId: 'cust_123', status: 'active' } 
+      };
+      mgr.getTenant.mockReturnValue(tenant);
+
+      const result = await facade.handleWebhook('payload', 'sig');
+
+      expect(result).toEqual({ success: true, tenantId: 't1' });
+      expect(mgr.updateTenant).toHaveBeenCalledWith('t1', {
+        billing: {
+          stripeCustomerId: 'cust_123',
+          status: 'past_due',
+        },
+      });
+    });
+
+    test('subscription_canceled: updates tenant billing status to canceled', async () => {
+      const mockBilling = {
+        handleWebhook: vi.fn().mockResolvedValue({
+          type: 'subscription_canceled',
+          tenantId: 't1',
+          stripeCustomerId: 'cust_123',
+          stripeSubscriptionId: 'sub_456',
+        }),
+      };
+
+      facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling as any);
+      const mgr = facade.getTenantManager()! as any;
+      const tenant = { 
+        id: 't1', 
+        name: 'Acme', 
+        billing: { stripeCustomerId: 'cust_123', status: 'active' } 
+      };
+      mgr.getTenant.mockReturnValue(tenant);
+
+      const result = await facade.handleWebhook('payload', 'sig');
+
+      expect(result).toEqual({ success: true, tenantId: 't1' });
+      expect(mgr.updateTenant).toHaveBeenCalledWith('t1', {
+        billing: {
+          stripeCustomerId: 'cust_123',
+          status: 'canceled',
+        },
+      });
+    });
+
+    test('returns success true for unhandled event types', async () => {
+      const mockBilling = {
+        handleWebhook: vi.fn().mockResolvedValue({
+          type: 'unhandled',
+        }),
+      };
+
+      facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling as any);
+
+      const result = await facade.handleWebhook('payload', 'sig');
+
+      expect(result).toEqual({ success: true });
+    });
+
+    test('returns success false when webhook handling throws', async () => {
+      const mockBilling = {
+        handleWebhook: vi.fn().mockRejectedValue(new Error('Invalid signature')),
+      };
+
+      facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling as any);
+
+      const result = await facade.handleWebhook('payload', 'sig');
+
+      expect(result).toEqual({ success: false });
+      expect(deps.logger.error).toHaveBeenCalled();
+    });
+  });
 });

@@ -245,38 +245,13 @@ export function agentFeedbackRoutes(deps: {
     return c.json(entry, 201);
   });
 
-  const generatingReplies = new Set<string>();
+  const generationState = new Map<string, { status: 'generating' | 'error'; error?: string }>();
 
-  // Thread reply: add human message + trigger AI response
-  app.post('/:botId/:id/reply', async (c) => {
-    const botId = c.req.param('botId');
-    const id = c.req.param('id');
-    const body = await c.req.json<{ message?: string }>();
-
-    if (!body.message || typeof body.message !== 'string' || !body.message.trim()) {
-      return c.json({ error: 'Missing "message" string in body' }, 400);
-    }
-
-    const entry = deps.botManager.getAgentFeedbackById(botId, id);
-    if (!entry) {
-      return c.json({ error: 'Feedback not found' }, 404);
-    }
-
+  /** Extracted reply generation logic — shared by reply send and retry. */
+  function generateFeedbackReply(botId: string, id: string, entry: { content: string }) {
     const key = `${botId}:${id}`;
-    if (generatingReplies.has(key)) {
-      return c.json({ error: 'Already generating a reply' }, 409);
-    }
+    generationState.set(key, { status: 'generating' });
 
-    const msg = deps.botManager.addAgentFeedbackThreadMessage(botId, id, 'human', body.message.trim());
-    if (!msg) {
-      return c.json({ error: 'Failed to add message' }, 500);
-    }
-
-    // Reload entry to return updated state
-    const updated = deps.botManager.getAgentFeedbackById(botId, id);
-
-    // Fire-and-forget AI response
-    generatingReplies.add(key);
     (async () => {
       try {
         const soulLoader = deps.botManager.getSoulLoader(botId);
@@ -330,12 +305,47 @@ export function agentFeedbackRoutes(deps: {
         }
 
         deps.logger.info({ botId, id }, 'Thread bot reply generated for agent feedback');
+        generationState.delete(key);
       } catch (err) {
         deps.logger.error({ err, botId, id }, 'Failed to generate thread reply for agent feedback');
-      } finally {
-        generatingReplies.delete(key);
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        generationState.set(key, { status: 'error', error: `Failed to generate reply: ${message}` });
       }
     })();
+  }
+
+  // Thread reply: add human message + trigger AI response
+  app.post('/:botId/:id/reply', async (c) => {
+    const botId = c.req.param('botId');
+    const id = c.req.param('id');
+    const body = await c.req.json<{ message?: string }>();
+
+    if (!body.message || typeof body.message !== 'string' || !body.message.trim()) {
+      return c.json({ error: 'Missing "message" string in body' }, 400);
+    }
+
+    const entry = deps.botManager.getAgentFeedbackById(botId, id);
+    if (!entry) {
+      return c.json({ error: 'Feedback not found' }, 404);
+    }
+
+    const key = `${botId}:${id}`;
+    const state = generationState.get(key);
+    if (state?.status === 'generating') {
+      return c.json({ error: 'Already generating a reply' }, 409);
+    }
+
+    const msg = deps.botManager.addAgentFeedbackThreadMessage(botId, id, 'human', body.message.trim());
+    if (!msg) {
+      return c.json({ error: 'Failed to add message' }, 500);
+    }
+
+    // Reload entry to return updated state
+    const updated = deps.botManager.getAgentFeedbackById(botId, id);
+
+    // Clear any previous error state and fire-and-forget AI response
+    generationState.delete(key);
+    generateFeedbackReply(botId, id, entry);
 
     return c.json({ message: msg, entry: updated });
   });
@@ -351,13 +361,37 @@ export function agentFeedbackRoutes(deps: {
     }
 
     const key = `${botId}:${id}`;
-    if (generatingReplies.has(key)) {
+    const state = generationState.get(key);
+    if (state?.status === 'generating') {
       return c.json({ status: 'generating' });
+    }
+    if (state?.status === 'error') {
+      return c.json({ status: 'error', error: state.error });
     }
 
     const thread = entry.thread ?? [];
     const lastBot = [...thread].reverse().find((m) => m.role === 'bot');
     return c.json({ status: 'idle', lastBotMessage: lastBot ?? null });
+  });
+
+  // Retry failed reply generation
+  app.post('/:botId/:id/retry-reply', (c) => {
+    const botId = c.req.param('botId');
+    const id = c.req.param('id');
+
+    const entry = deps.botManager.getAgentFeedbackById(botId, id);
+    if (!entry) {
+      return c.json({ error: 'Feedback not found' }, 404);
+    }
+
+    const key = `${botId}:${id}`;
+    const state = generationState.get(key);
+    if (state?.status === 'generating') {
+      return c.json({ error: 'Already generating a reply' }, 409);
+    }
+
+    generateFeedbackReply(botId, id, entry);
+    return c.json({ status: 'generating' });
   });
 
   // Dismiss feedback

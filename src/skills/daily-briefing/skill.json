@@ -1,0 +1,59 @@
+{
+  "id": "daily-briefing",
+  "name": "Daily Briefing",
+  "version": "1.0.0",
+  "description": "Genera resúmenes diarios integrando goals, memoria y contexto temporal",
+  "author": "Facilita",
+  "entry": "index.ts",
+  "tools": [
+    {
+      "name": "generate_brief",
+      "description": "Genera un daily briefing con goals activos, memoria reciente y contexto temporal",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": ["markdown", "text", "json"],
+            "description": "Formato de salida",
+            "default": "markdown"
+          },
+          "maxGoals": {
+            "type": "number",
+            "description": "Máximo de goals a incluir",
+            "default": 5
+          },
+          "timeWindowHours": {
+            "type": "number",
+            "description": "Ventana de tiempo para memoria (horas)",
+            "default": 48
+          }
+        }
+      }
+    },
+    {
+      "name": "schedule_brief",
+      "description": "Programa un brief diario automático",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time": {
+            "type": "string",
+            "description": "Hora del brief (formato HH:MM)",
+            "default": "07:00"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "Zona horaria",
+            "default": "America/Argentina/Buenos_Aires"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Activar/desactivar",
+            "default": true
+          }
+        }
+      }
+    }
+  ]
+}

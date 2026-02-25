@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import type { Logger } from '../../logger';
+import type { ConversationsService } from '../../conversations/service';
 
 export function askHumanRoutes(deps: {
   botManager: BotManager;
   logger: Logger;
+  conversationsService?: ConversationsService;
 }) {
   const app = new Hono();
 
@@ -19,7 +21,16 @@ export function askHumanRoutes(deps: {
   });
 
   // Lightweight count for badge polling
+  // Counts pending inbox conversations across all bots (if conversationsService available),
+  // falls back to in-memory pending count.
   app.get('/count', (c) => {
+    if (deps.conversationsService) {
+      let count = 0;
+      for (const botId of deps.conversationsService.getBotIds()) {
+        count += deps.conversationsService.countByInboxStatus(botId, 'pending');
+      }
+      return c.json({ count });
+    }
     const questionCount = deps.botManager.getAskHumanCount();
     return c.json({ count: questionCount });
   });

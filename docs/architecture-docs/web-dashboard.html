@@ -151,7 +151,7 @@
                 fill="#181a20" stroke="#2a2d36" stroke-width="1" />
           <text x="120" y="307" text-anchor="middle"
                 font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-                font-size="11" fill="#8b8d97">12 route modules (/api/*)</text>
+                font-size="11" fill="#8b8d97">13 route modules (/api/*)</text>
 
           <!-- Log file -->
           <line x1="600" y1="244" x2="600" y2="280" class="arrow" />
@@ -170,7 +170,7 @@
 
       <p>
         All API routes are mounted under <code>/api</code>. The table below lists every endpoint
-        extracted from the 12 route files in <code>src/web/routes/</code>.
+        extracted from the 13 route files in <code>src/web/routes/</code>.
       </p>
 
       <!-- --- Status --- -->
@@ -407,6 +407,48 @@
         </table>
       </div>
 
+      <!-- --- Ask-Permission --- -->
+      <h3>Ask-Permission</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/ask-permission</code></td>
+              <td>List all pending permission requests with total count</td>
+              <td><code>ask-permission.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/ask-permission/count</code></td>
+              <td>Lightweight pending count (used for badge polling)</td>
+              <td><code>ask-permission.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/ask-permission/:id/approve</code></td>
+              <td>Approve a pending permission request</td>
+              <td><code>ask-permission.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/ask-permission/:id/deny</code></td>
+              <td>Deny a pending permission request</td>
+              <td><code>ask-permission.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <!-- --- Cron --- -->
       <h3>Cron Jobs</h3>
 
@@ -618,7 +660,19 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/productions/:botId/:id/thread-status</code></td>
-              <td>Poll for bot reply generation status (<code>generating</code> / <code>idle</code> + last bot message)</td>
+              <td>Poll for bot reply generation status (<code>generating</code> / <code>error</code> / <code>idle</code> + last bot message)</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/productions/:botId/:id/retry-response</code></td>
+              <td>Retry failed evaluation response generation. Returns 409/400/404 as appropriate.</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/productions/:botId/:id/retry-thread</code></td>
+              <td>Retry failed thread reply generation. Returns 409 if already generating, 404 if not found.</td>
               <td><code>productions.ts</code></td>
             </tr>
             <tr>
@@ -626,6 +680,76 @@
               <td><code>/api/productions/:botId/:id</code></td>
               <td>Delete a production entry</td>
               <td><code>productions.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Conversations --- -->
+      <h3>Conversations</h3>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        Always mounted. JSONL-backed storage under <code>data/conversations/{botId}/</code>.
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/conversations</code></td>
+              <td>List all bots with conversation counts</td>
+              <td><code>conversations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/conversations/:botId</code></td>
+              <td>List conversations for a bot (<code>?type=&amp;limit=50&amp;offset=0</code>)</td>
+              <td><code>conversations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/conversations/:botId</code></td>
+              <td>Create a conversation (body: <code>{ type?, title? }</code>)</td>
+              <td><code>conversations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/conversations/:botId/:id</code></td>
+              <td>Get conversation with all messages</td>
+              <td><code>conversations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-high">DELETE</span></td>
+              <td><code>/api/conversations/:botId/:id</code></td>
+              <td>Delete a conversation and its messages</td>
+              <td><code>conversations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/conversations/:botId/:id/messages</code></td>
+              <td>Send human message; triggers bot reply via Claude CLI (fire-and-forget). Body: <code>{ message: string }</code></td>
+              <td><code>conversations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/conversations/:botId/:id/status</code></td>
+              <td>Poll for bot reply generation status (<code>generating</code> / <code>error</code> / <code>idle</code> + last bot message)</td>
+              <td><code>conversations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/conversations/:botId/:id/retry</code></td>
+              <td>Retry failed bot reply generation. Returns 409 if already generating, 404 if not found.</td>
+              <td><code>conversations.ts</code></td>
             </tr>
           </tbody>
         </table>
@@ -684,7 +808,13 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agent-feedback/:botId/:id/reply-status</code></td>
-              <td>Poll for bot reply generation status (<code>generating</code> / <code>idle</code> + last bot message)</td>
+              <td>Poll for bot reply generation status (<code>generating</code> / <code>error</code> / <code>idle</code> + last bot message)</td>
+              <td><code>agent-feedback.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/agent-feedback/:botId/:id/retry-reply</code></td>
+              <td>Retry failed reply generation. Returns 409 if already generating, 404 if not found.</td>
               <td><code>agent-feedback.ts</code></td>
             </tr>
             <tr>
@@ -890,6 +1020,14 @@
         </div>
 
         <div class="card">
+          <h3>Permissions</h3>
+          <p>Permission request queue. Bots can use the <code>ask_permission</code> tool to request
+             approval before performing sensitive actions. Requests are listed with approve and deny
+             actions, showing action, resource, description, and urgency. Badge polling
+             via <code>/api/ask-permission/count</code>.</p>
+        </div>
+
+        <div class="card">
           <h3>Agents</h3>
           <p>Bot management: create, edit, start, stop, reset, clone, and delete agents.
              Per-agent configuration overrides for model, conversation parameters, and
@@ -922,6 +1060,15 @@
           <p>Creative production tracking. Lists each bot's outputs (files, text, etc.)
              with evaluation workflow: approve/reject with 1-5 ratings and written feedback.
              AI-generated summaries of recent work via Claude CLI.</p>
+        </div>
+
+        <div class="card">
+          <h3>Conversations</h3>
+          <p>Direct web-based chat with bots. Two types: <em>general</em> (discuss goals,
+             motivations, behavior) and <em>productions</em> (discuss recent work).
+             Three views: bots list, bot conversations, and full-page chat using
+             <code>renderThread()</code>. Bot replies via Claude CLI with soul context.
+             Also integrated inline in the Productions page.</p>
         </div>
 
         <div class="card">

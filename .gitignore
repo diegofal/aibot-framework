@@ -43,3 +43,4 @@ improvements.md
 # Productions (runtime-generated, but track src/productions/)
 productions/
 !src/productions/
+.vercel

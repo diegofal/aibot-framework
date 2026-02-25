@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Logger } from '../logger';
 
 export interface PendingQuestion {
@@ -7,6 +9,7 @@ export interface PendingQuestion {
   chatId: number;
   question: string;
   messageId: number | null;
+  conversationId?: string;
   resolve: (answer: string) => void;
   reject: (reason: Error) => void;
   createdAt: number;
@@ -19,6 +22,7 @@ export interface PendingQuestionInfo {
   botId: string;
   chatId: number;
   question: string;
+  conversationId?: string;
   createdAt: number;
   timeoutMs: number;
   remainingMs: number;
@@ -30,6 +34,14 @@ export interface AnsweredQuestion {
   question: string;
   answer: string;
   answeredAt: number;
+  conversationId?: string;
+}
+
+export interface HandleReplyResult {
+  matched: boolean;
+  questionId?: string;
+  conversationId?: string;
+  botId?: string;
 }
 
 /**
@@ -43,7 +55,54 @@ export class AskHumanStore {
   // Answered questions waiting to be consumed by the next agent loop cycle
   private answered = new Map<string, AnsweredQuestion>();
 
-  constructor(private logger: Logger) {}
+  private onTimeout?: (questionId: string, botId: string, conversationId?: string) => void;
+  private onDismiss?: (questionId: string, botId: string, conversationId?: string) => void;
+
+  constructor(
+    private logger: Logger,
+    private dataDir?: string,
+    callbacks?: {
+      onTimeout?: (questionId: string, botId: string, conversationId?: string) => void;
+      onDismiss?: (questionId: string, botId: string, conversationId?: string) => void;
+    },
+  ) {
+    this.onTimeout = callbacks?.onTimeout;
+    this.onDismiss = callbacks?.onDismiss;
+    if (dataDir) this.loadFromDisk();
+  }
+
+  /** Load answered questions from disk on startup. Pending entries are NOT persisted. */
+  loadFromDisk(): void {
+    if (!this.dataDir) return;
+    const filePath = join(this.dataDir, 'answered.json');
+    if (!existsSync(filePath)) return;
+
+    try {
+      const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
+      if (raw.answered && typeof raw.answered === 'object') {
+        for (const [id, entry] of Object.entries(raw.answered)) {
+          this.answered.set(id, entry as AnsweredQuestion);
+        }
+      }
+      this.logger.debug({ count: this.answered.size }, 'AskHuman: loaded from disk');
+    } catch (err) {
+      this.logger.warn({ err }, 'AskHuman: failed to load from disk');
+    }
+  }
+
+  /** Persist answered map to disk. */
+  private persistAnswered(): void {
+    if (!this.dataDir) return;
+    try {
+      mkdirSync(this.dataDir, { recursive: true });
+      const data = {
+        answered: Object.fromEntries(this.answered),
+      };
+      writeFileSync(join(this.dataDir, 'answered.json'), JSON.stringify(data, null, 2), 'utf-8');
+    } catch (err) {
+      this.logger.warn({ err }, 'AskHuman: failed to persist to disk');
+    }
+  }
 
   /**
    * Register a pending question. Returns a promise that resolves with the human's answer.
@@ -60,7 +119,10 @@ export class AskHumanStore {
     const { promise, resolve, reject } = this.createDeferredPromise<string>();
 
     const timer = setTimeout(() => {
+      const entry = this.pending.get(id);
+      const conversationId = entry?.conversationId;
       this.cleanup(id);
+      this.onTimeout?.(id, botId, conversationId);
       reject(new Error('Question timed out — no response received'));
     }, timeoutMs);
 
@@ -100,14 +162,24 @@ export class AskHumanStore {
   }
 
   /**
+   * Set the conversation ID after creating the inbox conversation.
+   */
+  setConversationId(questionId: string, conversationId: string): void {
+    const entry = this.pending.get(questionId);
+    if (entry) {
+      entry.conversationId = conversationId;
+    }
+  }
+
+  /**
    * Try to match an incoming reply to a pending question in this chat.
    * If replyToMessageId matches a pending question's messageId, resolve it.
    * If no replyToMessageId but there's exactly one pending question in the chat, resolve that.
    * Returns true if a question was matched and resolved.
    */
-  handleReply(chatId: number, text: string, replyToMessageId?: number): boolean {
+  handleReply(chatId: number, text: string, replyToMessageId?: number): HandleReplyResult {
     const questionIds = this.byChatId.get(chatId);
-    if (!questionIds || questionIds.size === 0) return false;
+    if (!questionIds || questionIds.size === 0) return { matched: false };
 
     // Try to match by reply-to
     if (replyToMessageId) {
@@ -121,10 +193,14 @@ export class AskHumanStore {
             question: entry.question,
             answer: text,
             answeredAt: Date.now(),
+            conversationId: entry.conversationId,
           });
+          this.persistAnswered();
           entry.resolve(text);
+          const conversationId = entry.conversationId;
+          const botId = entry.botId;
           this.cleanup(qId);
-          return true;
+          return { matched: true, questionId: qId, conversationId, botId };
         }
       }
     }
@@ -141,14 +217,18 @@ export class AskHumanStore {
           question: entry.question,
           answer: text,
           answeredAt: Date.now(),
+          conversationId: entry.conversationId,
         });
+        this.persistAnswered();
         entry.resolve(text);
+        const conversationId = entry.conversationId;
+        const botId = entry.botId;
         this.cleanup(qId);
-        return true;
+        return { matched: true, questionId: qId, conversationId, botId };
       }
     }
 
-    return false;
+    return { matched: false };
   }
 
   /**
@@ -200,6 +280,7 @@ export class AskHumanStore {
         botId: entry.botId,
         chatId: entry.chatId,
         question: entry.question,
+        conversationId: entry.conversationId,
         createdAt: entry.createdAt,
         timeoutMs: entry.timeoutMs,
         remainingMs,
@@ -212,9 +293,9 @@ export class AskHumanStore {
     return this.pending.size;
   }
 
-  answerById(id: string, answer: string): boolean {
+  answerById(id: string, answer: string): { ok: boolean; conversationId?: string; botId?: string } {
     const entry = this.pending.get(id);
-    if (!entry) return false;
+    if (!entry) return { ok: false };
     this.logger.info({ questionId: id }, 'AskHuman: answered via web');
     this.answered.set(id, {
       id,
@@ -222,19 +303,26 @@ export class AskHumanStore {
       question: entry.question,
       answer,
       answeredAt: Date.now(),
+      conversationId: entry.conversationId,
     });
+    this.persistAnswered();
     entry.resolve(answer);
+    const conversationId = entry.conversationId;
+    const botId = entry.botId;
     this.cleanup(id);
-    return true;
+    return { ok: true, conversationId, botId };
   }
 
-  dismissById(id: string): boolean {
+  dismissById(id: string): { ok: boolean; conversationId?: string; botId?: string } {
     const entry = this.pending.get(id);
-    if (!entry) return false;
+    if (!entry) return { ok: false };
     this.logger.info({ questionId: id }, 'AskHuman: dismissed via web');
+    const conversationId = entry.conversationId;
+    const botId = entry.botId;
     entry.reject(new Error('Question dismissed'));
     this.cleanup(id);
-    return true;
+    this.onDismiss?.(id, botId, conversationId);
+    return { ok: true, conversationId, botId };
   }
 
   hasPendingForBot(botId: string): boolean {
@@ -253,6 +341,7 @@ export class AskHumanStore {
         this.answered.delete(id);
       }
     }
+    if (results.length > 0) this.persistAnswered();
     return results;
   }
 
@@ -269,12 +358,36 @@ export class AskHumanStore {
         botId: entry.botId,
         chatId: entry.chatId,
         question: entry.question,
+        conversationId: entry.conversationId,
         createdAt: entry.createdAt,
         timeoutMs: entry.timeoutMs,
         remainingMs,
       });
     }
     return results;
+  }
+
+  /** Clear all pending questions and answered entries for a specific bot. */
+  clearForBot(botId: string): void {
+    // Reject + remove pending questions for this bot
+    for (const [id, entry] of this.pending) {
+      if (entry.botId === botId) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error('AskHumanStore cleared for bot reset'));
+        this.pending.delete(id);
+        const chatIds = this.byChatId.get(entry.chatId);
+        if (chatIds) {
+          chatIds.delete(id);
+          if (chatIds.size === 0) this.byChatId.delete(entry.chatId);
+        }
+      }
+    }
+    // Clear answered entries for this bot
+    for (const [id, entry] of this.answered) {
+      if (entry.botId === botId) this.answered.delete(id);
+    }
+    this.logger.info({ botId }, 'AskHuman: cleared all entries for bot');
+    this.persistAnswered();
   }
 
   dispose(): void {

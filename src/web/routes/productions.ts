@@ -45,7 +45,129 @@ export function productionsRoutes(deps: {
   const { productionsService, botManager, logger, config } = deps;
 
   const generatingBots = new Set<string>();
-  const generatingResponses = new Set<string>();
+  const generationState = new Map<string, { status: 'generating' | 'error'; error?: string }>();
+
+  /** Extracted evaluate response generation — shared by evaluate and retry. */
+  function generateEvaluateResponse(
+    botId: string,
+    id: string,
+    updated: { path: string; action: string; description: string },
+    feedback: { status: string; rating?: number; feedback: string },
+  ) {
+    const key = `${botId}:${id}`;
+    generationState.set(key, { status: 'generating' });
+
+    (async () => {
+      try {
+        const soulLoaderForResponse = botManager.getSoulLoader(botId);
+        const identity = soulLoaderForResponse.readIdentity();
+        const goals = soulLoaderForResponse.readGoals();
+
+        const sections: string[] = [];
+        sections.push(`# Production Feedback Response`);
+        sections.push(`## Production\n- Path: ${updated.path}\n- Action: ${updated.action}\n- Description: ${updated.description}`);
+
+        const content = productionsService.getFileContent(botId, id);
+        if (content) {
+          sections.push(`## Content Preview\n${truncate(content, 3000)}`);
+        }
+
+        sections.push(`## Evaluation\n- Status: ${feedback.status}\n- Rating: ${feedback.rating ?? 'N/A'}/5\n- Feedback: "${feedback.feedback}"`);
+
+        if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
+        if (goals) sections.push(`## Bot Goals\n${truncate(goals, 1000)}`);
+
+        sections.push(`## Task\n\nRespond to this feedback. Acknowledge what the human said, explain what you understand from it, and describe what you will improve.`);
+
+        const prompt = sections.join('\n\n');
+        const claudePath = config.improve?.claudePath ?? 'claude';
+        const timeout = config.improve?.timeout ?? 120_000;
+
+        const response = await claudeGenerate(prompt, {
+          systemPrompt: RESPONSE_SYSTEM_PROMPT,
+          claudePath,
+          timeout,
+          maxLength: 2000,
+          logger,
+        });
+
+        productionsService.setAiResponse(botId, id, response);
+
+        // Also write response to bot memory
+        if (soulLoaderForResponse) {
+          soulLoaderForResponse.appendDailyMemory(
+            `## AI Response to Production Feedback\n- File: ${updated.path}\n- My response: "${truncate(response, 200)}"`,
+          );
+        }
+
+        logger.info({ botId, id }, 'AI response generated for production feedback');
+        generationState.delete(key);
+      } catch (err) {
+        logger.error({ err, botId, id }, 'Failed to generate AI response for production feedback');
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        generationState.set(key, { status: 'error', error: `Failed to generate response: ${message}` });
+      }
+    })();
+  }
+
+  /** Extracted thread reply generation — shared by thread send and retry. */
+  function generateThreadReply(botId: string, id: string, entry: { path: string; action: string; description: string }) {
+    const key = `${botId}:${id}:thread`;
+    generationState.set(key, { status: 'generating' });
+
+    (async () => {
+      try {
+        const soulLoader = botManager.getSoulLoader(botId);
+        const identity = soulLoader.readIdentity();
+        const goals = soulLoader.readGoals();
+
+        // Reload entry to get full thread
+        const current = productionsService.getEntry(botId, id);
+        const thread = current?.evaluation?.thread ?? [];
+
+        const sections: string[] = [];
+        sections.push(`# Production Discussion Thread`);
+        sections.push(`## Production\n- Path: ${entry.path}\n- Action: ${entry.action}\n- Description: ${entry.description}`);
+
+        if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
+        if (goals) sections.push(`## Bot Goals\n${truncate(goals, 1000)}`);
+
+        // Format thread (last 10 messages)
+        const recent = thread.slice(-10);
+        const threadText = recent.map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`).join('\n\n');
+        sections.push(`## Conversation Thread\n${threadText}`);
+        sections.push(`## Task\n\nRespond to the latest message in this thread. Be specific and concise.`);
+
+        const prompt = sections.join('\n\n');
+        const claudePath = config.improve?.claudePath ?? 'claude';
+        const timeout = config.improve?.timeout ?? 120_000;
+
+        const response = await claudeGenerate(prompt, {
+          systemPrompt: THREAD_SYSTEM_PROMPT,
+          claudePath,
+          timeout,
+          maxLength: 2000,
+          logger,
+        });
+
+        productionsService.addThreadMessage(botId, id, 'bot', response);
+
+        // Write to bot memory
+        if (soulLoader) {
+          soulLoader.appendDailyMemory(
+            `## Production Thread Reply\n- File: ${entry.path}\n- My response: "${truncate(response, 200)}"`,
+          );
+        }
+
+        logger.info({ botId, id }, 'Thread bot reply generated for production');
+        generationState.delete(key);
+      } catch (err) {
+        logger.error({ err, botId, id }, 'Failed to generate thread reply for production');
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        generationState.set(key, { status: 'error', error: `Failed to generate reply: ${message}` });
+      }
+    })();
+  }
 
   // List all bots with production stats
   app.get('/', (c) => {
@@ -205,8 +327,12 @@ export function productionsRoutes(deps: {
     }
 
     const key = `${botId}:${id}`;
-    if (generatingResponses.has(key)) {
+    const state = generationState.get(key);
+    if (state?.status === 'generating') {
       return c.json({ status: 'generating' });
+    }
+    if (state?.status === 'error') {
+      return c.json({ status: 'error', error: state.error });
     }
 
     if (entry.evaluation?.aiResponse) {
@@ -280,59 +406,13 @@ export function productionsRoutes(deps: {
     // Fire-and-forget AI response generation when feedback text is present
     if (body.feedback?.trim()) {
       const key = `${botId}:${id}`;
-      if (!generatingResponses.has(key)) {
-        generatingResponses.add(key);
-
-        (async () => {
-          try {
-            const soulLoaderForResponse = botManager.getSoulLoader(botId);
-            const identity = soulLoaderForResponse.readIdentity();
-            const goals = soulLoaderForResponse.readGoals();
-
-            const sections: string[] = [];
-            sections.push(`# Production Feedback Response`);
-            sections.push(`## Production\n- Path: ${updated.path}\n- Action: ${updated.action}\n- Description: ${updated.description}`);
-
-            const content = productionsService.getFileContent(botId, id);
-            if (content) {
-              sections.push(`## Content Preview\n${truncate(content, 3000)}`);
-            }
-
-            sections.push(`## Evaluation\n- Status: ${body.status}\n- Rating: ${body.rating ?? 'N/A'}/5\n- Feedback: "${body.feedback}"`);
-
-            if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
-            if (goals) sections.push(`## Bot Goals\n${truncate(goals, 1000)}`);
-
-            sections.push(`## Task\n\nRespond to this feedback. Acknowledge what the human said, explain what you understand from it, and describe what you will improve.`);
-
-            const prompt = sections.join('\n\n');
-            const claudePath = config.improve?.claudePath ?? 'claude';
-            const timeout = config.improve?.timeout ?? 120_000;
-
-            const response = await claudeGenerate(prompt, {
-              systemPrompt: RESPONSE_SYSTEM_PROMPT,
-              claudePath,
-              timeout,
-              maxLength: 2000,
-              logger,
-            });
-
-            productionsService.setAiResponse(botId, id, response);
-
-            // Also write response to bot memory
-            if (soulLoaderForResponse) {
-              soulLoaderForResponse.appendDailyMemory(
-                `## AI Response to Production Feedback\n- File: ${updated.path}\n- My response: "${truncate(response, 200)}"`,
-              );
-            }
-
-            logger.info({ botId, id }, 'AI response generated for production feedback');
-          } catch (err) {
-            logger.error({ err, botId, id }, 'Failed to generate AI response for production feedback');
-          } finally {
-            generatingResponses.delete(key);
-          }
-        })();
+      const state = generationState.get(key);
+      if (state?.status !== 'generating') {
+        generateEvaluateResponse(botId, id, updated, {
+          status: body.status,
+          rating: body.rating,
+          feedback: body.feedback,
+        });
       }
     }
 
@@ -354,8 +434,9 @@ export function productionsRoutes(deps: {
       return c.json({ error: 'Production not found' }, 404);
     }
 
-    const key = `${botId}:${id}`;
-    if (generatingResponses.has(key)) {
+    const key = `${botId}:${id}:thread`;
+    const state = generationState.get(key);
+    if (state?.status === 'generating') {
       return c.json({ error: 'Already generating a response' }, 409);
     }
 
@@ -364,59 +445,9 @@ export function productionsRoutes(deps: {
       return c.json({ error: 'Failed to add message' }, 500);
     }
 
-    // Fire-and-forget AI response
-    generatingResponses.add(key);
-    (async () => {
-      try {
-        const soulLoader = botManager.getSoulLoader(botId);
-        const identity = soulLoader.readIdentity();
-        const goals = soulLoader.readGoals();
-
-        // Reload entry to get full thread
-        const current = productionsService.getEntry(botId, id);
-        const thread = current?.evaluation?.thread ?? [];
-
-        const sections: string[] = [];
-        sections.push(`# Production Discussion Thread`);
-        sections.push(`## Production\n- Path: ${entry.path}\n- Action: ${entry.action}\n- Description: ${entry.description}`);
-
-        if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
-        if (goals) sections.push(`## Bot Goals\n${truncate(goals, 1000)}`);
-
-        // Format thread (last 10 messages)
-        const recent = thread.slice(-10);
-        const threadText = recent.map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`).join('\n\n');
-        sections.push(`## Conversation Thread\n${threadText}`);
-        sections.push(`## Task\n\nRespond to the latest message in this thread. Be specific and concise.`);
-
-        const prompt = sections.join('\n\n');
-        const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 120_000;
-
-        const response = await claudeGenerate(prompt, {
-          systemPrompt: THREAD_SYSTEM_PROMPT,
-          claudePath,
-          timeout,
-          maxLength: 2000,
-          logger,
-        });
-
-        productionsService.addThreadMessage(botId, id, 'bot', response);
-
-        // Write to bot memory
-        if (soulLoader) {
-          soulLoader.appendDailyMemory(
-            `## Production Thread Reply\n- File: ${entry.path}\n- My response: "${truncate(response, 200)}"`,
-          );
-        }
-
-        logger.info({ botId, id }, 'Thread bot reply generated for production');
-      } catch (err) {
-        logger.error({ err, botId, id }, 'Failed to generate thread reply for production');
-      } finally {
-        generatingResponses.delete(key);
-      }
-    })();
+    // Clear any previous error state and fire-and-forget AI response
+    generationState.delete(key);
+    generateThreadReply(botId, id, entry);
 
     return c.json({ message: result.message, entry: result.entry });
   });
@@ -431,14 +462,66 @@ export function productionsRoutes(deps: {
       return c.json({ error: 'Production not found' }, 404);
     }
 
-    const key = `${botId}:${id}`;
-    if (generatingResponses.has(key)) {
+    const key = `${botId}:${id}:thread`;
+    const state = generationState.get(key);
+    if (state?.status === 'generating') {
       return c.json({ status: 'generating' });
+    }
+    if (state?.status === 'error') {
+      return c.json({ status: 'error', error: state.error });
     }
 
     const thread = entry.evaluation?.thread ?? [];
     const lastBot = [...thread].reverse().find((m) => m.role === 'bot');
     return c.json({ status: 'idle', lastBotMessage: lastBot ?? null });
+  });
+
+  // Retry failed response generation (evaluation feedback response)
+  app.post('/:botId/:id/retry-response', (c) => {
+    const botId = c.req.param('botId');
+    const id = c.req.param('id');
+
+    const entry = productionsService.getEntry(botId, id);
+    if (!entry) {
+      return c.json({ error: 'Production not found' }, 404);
+    }
+
+    const key = `${botId}:${id}`;
+    const state = generationState.get(key);
+    if (state?.status === 'generating') {
+      return c.json({ error: 'Already generating a response' }, 409);
+    }
+
+    if (!entry.evaluation?.feedback) {
+      return c.json({ error: 'No feedback to respond to' }, 400);
+    }
+
+    generateEvaluateResponse(botId, id, entry, {
+      status: entry.evaluation.status ?? 'approved',
+      rating: entry.evaluation.rating,
+      feedback: entry.evaluation.feedback,
+    });
+    return c.json({ status: 'generating' });
+  });
+
+  // Retry failed thread reply generation
+  app.post('/:botId/:id/retry-thread', (c) => {
+    const botId = c.req.param('botId');
+    const id = c.req.param('id');
+
+    const entry = productionsService.getEntry(botId, id);
+    if (!entry) {
+      return c.json({ error: 'Production not found' }, 404);
+    }
+
+    const key = `${botId}:${id}:thread`;
+    const state = generationState.get(key);
+    if (state?.status === 'generating') {
+      return c.json({ error: 'Already generating a response' }, 409);
+    }
+
+    generateThreadReply(botId, id, entry);
+    return c.json({ status: 'generating' });
   });
 
   // Update file content

@@ -18,10 +18,14 @@ export interface PlannerPromptInput {
   singleDeliverable?: string;
   answeredQuestions?: Array<{ question: string; answer: string }>;
   pendingQuestions?: Array<{ question: string }>;
+  resolvedPermissions?: Array<{ action: string; resource: string; status: 'approved' | 'denied'; note?: string }>;
+  pendingPermissions?: Array<{ action: string; resource: string }>;
   recentActionsDigest?: string;
   karmaBlock?: string;
   /** Injected note when bot has been running autonomously for many cycles without ask_human */
   autonomousCyclesNote?: string;
+  /** Tool category names for pre-selection — when set, planner should include toolCategories in response */
+  toolCategoryList?: string[];
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -39,16 +43,22 @@ export interface ContinuousPlannerPromptInput {
   lastCycleSummary?: string;
   answeredQuestions?: Array<{ question: string; answer: string }>;
   pendingQuestions?: Array<{ question: string }>;
+  resolvedPermissions?: Array<{ action: string; resource: string; status: 'approved' | 'denied'; note?: string }>;
+  pendingPermissions?: Array<{ action: string; resource: string }>;
   recentActionsDigest?: string;
   karmaBlock?: string;
   /** Injected note when bot has been running autonomously for many cycles without ask_human */
   autonomousCyclesNote?: string;
+  /** Tool category names for pre-selection — when set, planner should include toolCategories in response */
+  toolCategoryList?: string[];
 }
 
 export interface PlannerResult {
   reasoning: string;
   plan: string[];
   priority: 'high' | 'medium' | 'low' | 'none';
+  /** Tool categories the executor needs — used for tool pre-selection to reduce token usage */
+  toolCategories?: string[];
 }
 /** @deprecated Use PlannerResult instead */
 export type ContinuousPlannerResult = PlannerResult;
@@ -66,6 +76,31 @@ export interface ExecutorPromptInput {
   singleDeliverable?: string;
   /** Pre-scanned file tree of workDir, or null if empty/missing */
   fileTree?: string | null;
+}
+
+function buildToolCategorySection(toolCategoryList?: string[]): string {
+  if (!toolCategoryList || toolCategoryList.length === 0) return '';
+
+  const descriptions: Record<string, string> = {
+    web: 'web_search, web_fetch — searching and fetching web content',
+    memory: 'memory_search, memory_get, recall_memory, core_memory_* — reading and writing memory',
+    soul: 'update_soul, update_identity, manage_goals, improve — self-modification',
+    files: 'file_read, file_write, file_edit — file operations',
+    system: 'exec, process, get_datetime, cron — system commands and scheduling',
+    social: 'reddit_*, twitter_* — social media tools',
+    calendar: 'calendar_* — scheduling and availability',
+    communication: 'ask_human, ask_permission, phone_call, delegate_to_bot, collaborate — human and bot interaction',
+    browser: 'browser — web browsing with headless browser',
+    production: 'read_production_log, archive_file, create_tool — production management',
+  };
+
+  let section = '\n## Tool Categories\n\nSelect which tool categories your plan needs. Only selected categories will be available to the executor (saves context).\n\nAvailable categories:\n';
+  for (const cat of toolCategoryList) {
+    const desc = descriptions[cat] || cat;
+    section += `- **${cat}**: ${desc}\n`;
+  }
+  section += '\nInclude a `"toolCategories"` array in your JSON response with the categories your plan needs (e.g. `["web", "memory"]`). Omit or leave empty to use all tools.\n';
+  return section;
 }
 
 function buildHumanQuestionsSection(
@@ -86,6 +121,30 @@ function buildHumanQuestionsSection(
       section += `- "${q.question}"\n`;
     }
     section += '\nDo NOT ask the same question again. Work on other tasks while waiting.\n';
+  }
+  return section;
+}
+
+function buildPermissionDecisionsSection(
+  resolved?: Array<{ action: string; resource: string; status: 'approved' | 'denied'; note?: string }>,
+  pending?: Array<{ action: string; resource: string }>,
+): string {
+  let section = '';
+  if (resolved && resolved.length > 0) {
+    section += '\n## Permission Decisions\n\nThe human has decided on your permission requests:\n\n';
+    for (const p of resolved) {
+      const statusLabel = p.status === 'approved' ? 'APPROVED' : 'DENIED';
+      section += `- ${statusLabel}: ${p.action} on "${p.resource}"${p.note ? ` — Note: "${p.note}"` : ''}\n`;
+    }
+    section += '\nAct on approved permissions — proceed with the authorized action.\n';
+    section += 'For denied permissions — do NOT retry the same request. Respect the decision.\n';
+  }
+  if (pending && pending.length > 0) {
+    section += '\n## Pending Permissions\n\nYou have permission requests waiting for human decision:\n\n';
+    for (const p of pending) {
+      section += `- ${p.action} on "${p.resource}"\n`;
+    }
+    section += '\nDo NOT request the same permission again. Work on other tasks while waiting.\n';
   }
   return section;
 }
@@ -128,7 +187,7 @@ The strategist has analyzed your recent activity and goals and recommends:
 ${input.focus}
 
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
-` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
+` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -161,6 +220,13 @@ If you're about to make a significant decision, change direction, or have been w
 - If the deliverable needs human input, include an ask_human step AND continue with whatever you can do independently
 - When unsure between two approaches, ask the human instead of guessing
 
+PERMISSION PROTOCOL:
+When you need to perform a sensitive action (write files to protected paths, run commands, access external services, modify protected resources), use ask_permission BEFORE performing it.
+- Do NOT proceed with a sensitive action without permission
+- If denied, respect the decision — do NOT retry the same request
+- Permission requests are non-blocking — continue with other work while waiting
+- If the Permission Decisions section shows APPROVED, proceed with the action immediately
+
 ANTI-PATTERNS (banned):
 - Reviewing goals just to review them (only update if status actually changed)
 - Saving "reflections" to memory (only save NEW facts or insights)
@@ -168,6 +234,8 @@ ANTI-PATTERNS (banned):
 - Creating templates or checklists without real data to fill them
 - Writing about what you plan to do instead of doing it
 - Adding extra tasks beyond the assigned deliverable
+- Creating a new file when a similar one already exists (check INDEX.md first)
+- Dumping files at root level instead of using subdirectories
 
 Assign a priority to your plan:
 - "high": deliverable is urgent or blocking other work
@@ -175,18 +243,18 @@ Assign a priority to your plan:
 - "low": exploratory deliverable, learning-focused
 - "none": Return this ONLY after you have already called ask_human and are waiting for a response with nothing else to do. If you haven't asked the human yet, your priority is at least "low" with a plan that includes ask_human.
 
-CRITICAL: You MUST respond with ONLY a valid JSON object. Absolutely NO other text, NO markdown fences, NO explanation before or after.
+${buildToolCategorySection(input.toolCategoryList)}CRITICAL: You MUST respond with ONLY a valid JSON object. Absolutely NO other text, NO markdown fences, NO explanation before or after.
 
 Your response will be parsed by code using JSON.parse().
 
 Examples:
-{"reasoning":"Need to add retry logic to LLM client as assigned","plan":["Read current LLM client implementation","Add exponential backoff retry logic","Test retry with simulated failure"],"priority":"high"}
-{"reasoning":"Deliverable requires choosing an API — asking operator for preference","plan":["Use ask_human to ask the operator which API to prioritize","Research both APIs while waiting for response"],"priority":"medium"}
+{"reasoning":"Need to add retry logic to LLM client as assigned","plan":["Read current LLM client implementation","Add exponential backoff retry logic","Test retry with simulated failure"],"priority":"high"${input.toolCategoryList ? ',"toolCategories":["files","system"]' : ''}}
+{"reasoning":"Deliverable requires choosing an API — asking operator for preference","plan":["Use ask_human to ask the operator which API to prioritize","Research both APIs while waiting for response"],"priority":"medium"${input.toolCategoryList ? ',"toolCategories":["web","communication"]' : ''}}
 
 JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
 - plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none")
-- priority: "high" | "medium" | "low" | "none" (required)
+- priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
 
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.
 Each step should produce a concrete result: a file written, a goal updated, a memory saved, a test run.
@@ -236,7 +304,7 @@ The strategist has analyzed your recent activity and goals and recommends:
 ${input.focus}
 
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
-` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
+` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -275,6 +343,13 @@ If you're about to make a significant decision, change direction, or have been w
 - If the deliverable needs human input, include an ask_human step AND continue with whatever you can do independently
 - When unsure between two approaches, ask the human instead of guessing
 
+PERMISSION PROTOCOL:
+When you need to perform a sensitive action (write files to protected paths, run commands, access external services, modify protected resources), use ask_permission BEFORE performing it.
+- Do NOT proceed with a sensitive action without permission
+- If denied, respect the decision — do NOT retry the same request
+- Permission requests are non-blocking — continue with other work while waiting
+- If the Permission Decisions section shows APPROVED, proceed with the action immediately
+
 ANTI-PATTERNS (banned):
 - Reviewing goals just to review them (only update if status actually changed)
 - Saving "reflections" to memory (only save NEW facts or insights)
@@ -282,6 +357,8 @@ ANTI-PATTERNS (banned):
 - Creating templates or checklists without real data to fill them
 - Writing about what you plan to do instead of doing it
 - Adding extra tasks beyond the assigned deliverable
+- Creating a new file when a similar one already exists (check INDEX.md first)
+- Dumping files at root level instead of using subdirectories
 
 Assign a priority to your plan:
 - "high": deliverable is urgent or blocking other work
@@ -289,18 +366,18 @@ Assign a priority to your plan:
 - "low": exploratory deliverable, learning-focused
 - "none": Return this ONLY after you have already called ask_human and are waiting for a response with nothing else to do. If you haven't asked the human yet, your priority is at least "low" with a plan that includes ask_human.
 
-CRITICAL: You MUST respond with ONLY a valid JSON object. Absolutely NO other text, NO markdown fences, NO explanation before or after.
+${buildToolCategorySection(input.toolCategoryList)}CRITICAL: You MUST respond with ONLY a valid JSON object. Absolutely NO other text, NO markdown fences, NO explanation before or after.
 
 Your response will be parsed by code using JSON.parse().
 
 Examples:
-{"reasoning":"Need to add retry logic to LLM client as assigned","plan":["Read current LLM client implementation","Add exponential backoff retry logic","Test retry with simulated failure"],"priority":"high"}
-{"reasoning":"Deliverable requires choosing an API — asking operator for preference","plan":["Use ask_human to ask the operator which API to prioritize","Research both APIs while waiting for response"],"priority":"medium"}
+{"reasoning":"Need to add retry logic to LLM client as assigned","plan":["Read current LLM client implementation","Add exponential backoff retry logic","Test retry with simulated failure"],"priority":"high"${input.toolCategoryList ? ',"toolCategories":["files","system"]' : ''}}
+{"reasoning":"Deliverable requires choosing an API — asking operator for preference","plan":["Use ask_human to ask the operator which API to prioritize","Research both APIs while waiting for response"],"priority":"medium"${input.toolCategoryList ? ',"toolCategories":["web","communication"]' : ''}}
 
 JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
 - plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none")
-- priority: "high" | "medium" | "low" | "none" (required)
+- priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
 
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.
 Each step should produce a concrete result: a file written, a goal updated, a memory saved, a test run.`;
@@ -371,7 +448,26 @@ ${input.fileTree
 - Use file_read/file_write/file_edit for file operations — reserve exec ONLY for running commands (tests, git, build tools).
 - You have a LIMITED number of tool rounds. Focus on DOING things (writing, editing, saving), not just reading.
 - Produce concrete output: save findings to memory, update goals, write/edit files. Reading without action is wasted effort.
-- When using web_search/web_fetch to find opportunities, jobs, or resources: ALWAYS include the direct URL in your findings. A finding without a URL is not actionable. Save URLs in memory using markdown format: [Description](URL).${input.hasCreateTool ? '\n- If the plan includes creating a new tool, use `create_tool` with a clear name, description, and working source code.' : ''}`;
+- When using web_search/web_fetch to find opportunities, jobs, or resources: ALWAYS include the direct URL in your findings. A finding without a URL is not actionable. Save URLs in memory using markdown format: [Description](URL).${input.hasCreateTool ? '\n- If the plan includes creating a new tool, use `create_tool` with a clear name, description, and working source code.' : ''}
+
+## Production Directory Rules
+
+Your working directory has an auto-generated INDEX.md — do NOT edit it manually.
+
+DIRECTORY STRUCTURE (mandatory):
+- Use subdirectories by topic/category. NEVER dump files at root level.
+- Name files descriptively: \`liftai_application_package.md\` not \`package1.md\`
+- When creating a new file, place it in the appropriate subdirectory. Create the subdirectory if needed.
+
+ARCHIVAL PROTOCOL:
+- When you create a new version of a file, archive the old one first using \`archive_file\`.
+- When content becomes stale (superseded by newer content), archive it.
+- NEVER delete production files — always archive with a reason.
+
+ANTI-DUPLICATION:
+- Before creating a new file, check if a similar file exists (use file_read on INDEX.md).
+- If it exists, UPDATE the existing file instead of creating a new one.
+- If the existing file is outdated, archive it first, then create the replacement.`;
 }
 
 export interface FeedbackProcessorPromptInput {

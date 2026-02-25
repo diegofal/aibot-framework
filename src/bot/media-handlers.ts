@@ -193,6 +193,7 @@ export function registerMediaHandlers(
         sessionText: result.sessionText,
         messageId: telegramCtx.message!.message_id,
         isMedia: true,
+        isVoice: true,
         timestamp: Date.now(),
       });
     } catch (error) {

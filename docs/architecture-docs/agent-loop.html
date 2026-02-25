@@ -65,7 +65,8 @@
           <code>llm-json-parser.ts</code> (generic JSON parsing).
           Supporting modules include <code>agent-loop-prompts.ts</code> (prompt templates),
           <code>agent-feedback-store.ts</code> (human feedback persistence),
-          <code>ask-human-store.ts</code> (human-in-the-loop questions), and
+          <code>ask-human-store.ts</code> (human-in-the-loop questions),
+          <code>ask-permission-store.ts</code> (human-in-the-loop permission requests), and
           <code>tool-executor.ts</code> (centralized tool execution engine).
         </p>
         <div class="stat-row">
@@ -376,6 +377,15 @@
   pendingQuestions?: Array&lt;{
     question: string;
   }&gt;;
+  permissionDecisions?: Array&lt;{
+    action: string;
+    resource: string;
+    decision: 'approved' | 'denied';
+  }&gt;;
+  pendingPermissions?: Array&lt;{
+    action: string;
+    resource: string;
+  }&gt;;
   recentActionsDigest?: string;
   karmaBlock?: string;
 }</code></pre>
@@ -623,6 +633,59 @@ interface PendingQuestionInfo {
             The agent sees this as a timeout and moves on to other work. Pending questions are also listed in
             the planner prompt with instructions not to re-ask.
           </p>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 8b. Ask-Permission Flow -->
+        <!-- ============================================================ -->
+        <h2 id="ask-permission">Ask-Permission Flow</h2>
+        <p>
+          The <code>AskPermissionStore</code> enables agents to request human approval before performing
+          sensitive actions during autonomous operation. Unlike <code>ask_human</code> (free-text answers),
+          permission requests receive binary decisions: approved or denied.
+        </p>
+
+        <div class="module-section">
+          <h3>AskPermissionStore</h3>
+          <div class="file-path">src/bot/ask-permission-store.ts</div>
+          <div class="responsibility">Manages pending ask_permission requests with promise-based resolution, timeout handling, and web dashboard integration.</div>
+
+          <h4>Key Interfaces</h4>
+<pre><code>interface PendingPermission {
+  id: string;          // UUID
+  botId: string;
+  chatId: number;
+  action: string;
+  resource: string;
+  description: string;
+  urgency: 'low' | 'normal' | 'high';
+  createdAt: number;
+  timeoutMs: number;
+  // + resolve/reject callbacks, timer
+}
+
+interface PermissionDecision {
+  id: string;
+  botId: string;
+  action: string;
+  resource: string;
+  decision: 'approved' | 'denied';
+  decidedAt: number;
+}</code></pre>
+
+          <h4>Flow</h4>
+          <table>
+            <thead>
+              <tr><th>Step</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>1. Request</td><td>Agent calls <code>ask_permission</code> tool. <code>AskPermissionStore.request()</code> registers the request and returns a promise.</td></tr>
+              <tr><td>2. Display</td><td>Permission request appears in the web dashboard permissions page with action, resource, description, and urgency.</td></tr>
+              <tr><td>3. Decide</td><td>Human approves (<code>approveById()</code>) or denies (<code>denyById()</code>). Promise resolves with the decision.</td></tr>
+              <tr><td>4. Consume</td><td>Next agent loop cycle calls <code>consumeDecisionsForBot()</code>. Permission decisions are injected into the planner context.</td></tr>
+              <tr><td>5. Timeout</td><td>Undecided requests auto-reject after <code>timeoutMs</code>. Timer cleared on decision.</td></tr>
+            </tbody>
+          </table>
         </div>
 
         <!-- ============================================================ -->

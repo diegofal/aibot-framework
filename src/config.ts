@@ -26,11 +26,13 @@ export const GlobalAgentLoopConfigSchema = z.object({
   every: z.string().default('6h'),
   minInterval: z.string().default('1m'),
   maxInterval: z.string().default('24h'),
-  maxToolRounds: z.number().int().min(1).max(20).default(10),
+  maxToolRounds: z.number().int().min(1).max(50).default(30),
   maxDurationMs: z.number().int().positive().default(300_000),
   maxConcurrent: z.number().int().min(1).max(10).default(2),
   claudeTimeout: z.number().int().positive().default(120_000),
   disabledTools: z.array(z.string()).optional(),
+  /** Enable tool pre-selection: planner picks tool categories, executor only receives matching tools */
+  toolPreSelection: z.boolean().default(true),
   idleSuppression: z.boolean().default(true),
   /** Number of non-idle cycles without ask_human before injecting a check-in nudge */
   askHumanCheckInCycles: z.number().int().min(1).max(50).default(5),
@@ -42,6 +44,7 @@ export const BotAgentLoopOverrideSchema = z.object({
   reportChatId: z.number().optional(),
   every: z.string().optional(),
   claudeTimeout: z.number().int().positive().optional(),
+  maxToolRounds: z.number().int().min(1).max(50).optional(),
   disabledTools: z.array(z.string()).optional(),
   mode: z.enum(['periodic', 'continuous']).default('periodic'),
   continuousPauseMs: z.number().int().min(0).default(5_000),
@@ -69,6 +72,21 @@ const SkillsFoldersConfigSchema = z.object({
   paths: z.array(z.string()).default([]),
 }).default({});
 
+const BotTtsOverrideSchema = z.object({
+  voiceId: z.string().optional(),
+  modelId: z.string().optional(),
+  outputFormat: z.string().optional(),
+  languageCode: z.string().optional(),
+  maxTextLength: z.number().int().positive().optional(),
+  voiceSettings: z.object({
+    stability: z.number().min(0).max(1).optional(),
+    similarityBoost: z.number().min(0).max(1).optional(),
+    style: z.number().min(0).max(1).optional(),
+    useSpeakerBoost: z.boolean().optional(),
+    speed: z.number().min(0.5).max(2).optional(),
+  }).optional(),
+}).optional();
+
 const BotProductionsConfigSchema = z.object({
   dir: z.string().optional(),
   trackOnly: z.boolean().default(false),
@@ -92,6 +110,7 @@ const BotConfigSchema = z.object({
   disabledSkills: z.array(z.string()).default([]),
   conversation: BotConversationOverrideSchema,
   agentLoop: BotAgentLoopOverrideSchema,
+  tts: BotTtsOverrideSchema,
   productions: BotProductionsConfigSchema,
   // Multi-tenant hosting fields
   tenantId: z.string().optional(),
@@ -269,12 +288,32 @@ const WhisperConfigSchema = z.object({
   model: z.string().default('whisper-1'),
   language: z.string().optional(),
   timeout: z.number().int().positive().default(60_000),
+  apiKey: z.string().optional(),
+});
+
+const TtsConfigSchema = z.object({
+  provider: z.enum(['elevenlabs']).default('elevenlabs'),
+  apiKey: z.string(),
+  voiceId: z.string().default('pMsXgVXv3BLzUgSXRplE'),
+  modelId: z.string().default('eleven_multilingual_v2'),
+  outputFormat: z.string().default('opus_48000_64'),
+  languageCode: z.string().optional(),
+  timeout: z.number().int().positive().default(30_000),
+  maxTextLength: z.number().int().positive().default(1500),
+  voiceSettings: z.object({
+    stability: z.number().min(0).max(1).default(0.5),
+    similarityBoost: z.number().min(0).max(1).default(0.75),
+    style: z.number().min(0).max(1).default(0),
+    useSpeakerBoost: z.boolean().default(true),
+    speed: z.number().min(0.5).max(2).default(1),
+  }).default({}),
 });
 
 const MediaConfigSchema = z.object({
   enabled: z.boolean().default(false),
   maxFileSizeMb: z.number().positive().default(10),
   whisper: WhisperConfigSchema.optional(),
+  tts: TtsConfigSchema.optional(),
   supportedDocTypes: z.array(z.string()).optional(),
 });
 
@@ -373,12 +412,49 @@ const ProductionsConfigSchema = z.object({
   baseDir: z.string().default('./productions'),
 }).default({});
 
+const ConversationsFeatureConfigSchema = z.object({
+  baseDir: z.string().default('./data/conversations'),
+}).default({});
+
 const KarmaConfigSchema = z.object({
   enabled: z.boolean().default(true),
   baseDir: z.string().default('./data/karma'),
   initialScore: z.number().default(50),
   decayDays: z.number().default(30),
+  dedupCooldownMinutes: z.number().default(60),
 }).default({});
+
+export const RedditConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  clientId: z.string(),
+  clientSecret: z.string(),
+  username: z.string(),
+  password: z.string(),
+  userAgent: z.string().default('AIBot:aibot-framework:1.0 (by /u/aibot)'),
+  cacheTtlMs: z.number().int().positive().default(300_000),
+  timeout: z.number().int().positive().default(30_000),
+});
+
+export const TwitterConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  apiKey: z.string(),
+  apiSecret: z.string(),
+  bearerToken: z.string(),
+  accessToken: z.string().optional(),
+  accessSecret: z.string().optional(),
+  cacheTtlMs: z.number().int().positive().default(120_000),
+  timeout: z.number().int().positive().default(30_000),
+});
+
+export const CalendarConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  provider: z.enum(['calendly', 'google']),
+  apiKey: z.string(),
+  calendarId: z.string().optional(),
+  defaultTimezone: z.string().default('America/Argentina/Buenos_Aires'),
+  cacheTtlMs: z.number().int().positive().default(60_000),
+  timeout: z.number().int().positive().default(30_000),
+});
 
 const ConfigSchema = z.object({
   bots: z.array(BotConfigSchema),
@@ -405,7 +481,11 @@ const ConfigSchema = z.object({
   dynamicTools: DynamicToolsConfigSchema,
   skillsFolders: SkillsFoldersConfigSchema,
   productions: ProductionsConfigSchema,
+  conversations: ConversationsFeatureConfigSchema,
   karma: KarmaConfigSchema,
+  reddit: RedditConfigSchema.optional(),
+  twitter: TwitterConfigSchema.optional(),
+  calendar: CalendarConfigSchema.optional(),
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
 });
@@ -425,6 +505,7 @@ export type SoulConfig = z.infer<typeof SoulConfigSchema>;
 export type MemorySearchConfig = z.infer<typeof MemorySearchConfigSchema>;
 export type AutoRagConfig = z.infer<typeof AutoRagConfigSchema>;
 export type MediaConfig = z.infer<typeof MediaConfigSchema>;
+export type TtsConfig = z.infer<typeof TtsConfigSchema>;
 export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 export type DatetimeToolConfig = z.infer<typeof DatetimeToolConfigSchema>;
 export type CronConfig = z.infer<typeof CronConfigSchema>;
@@ -442,11 +523,16 @@ export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
 export type SessionMemoryConfig = z.infer<typeof SessionMemoryConfigSchema>;
 export type LlmRelevanceCheckConfig = z.infer<typeof LlmRelevanceCheckSchema>;
 export type BotConversationOverride = z.infer<typeof BotConversationOverrideSchema>;
+export type BotTtsOverride = z.infer<typeof BotTtsOverrideSchema>;
 export type ProductionsConfig = z.infer<typeof ProductionsConfigSchema>;
 export type BotProductionsConfig = z.infer<typeof BotProductionsConfigSchema>;
 export type BrowserToolsConfig = z.infer<typeof BrowserToolsConfigSchema>;
 export type HealthCheckConfig = z.infer<typeof HealthCheckConfigSchema>;
 export type KarmaConfig = z.infer<typeof KarmaConfigSchema>;
+export type ConversationsFeatureConfig = z.infer<typeof ConversationsFeatureConfigSchema>;
+export type RedditConfig = z.infer<typeof RedditConfigSchema>;
+export type TwitterConfig = z.infer<typeof TwitterConfigSchema>;
+export type CalendarConfig = z.infer<typeof CalendarConfigSchema>;
 export type SkillsFoldersConfig = z.infer<typeof SkillsFoldersConfigSchema>;
 
 /**
@@ -458,7 +544,8 @@ function substituteEnvVars(obj: unknown): unknown {
     return obj.replace(/\$\{([^}]+)\}/g, (_, varName) => {
       const value = process.env[varName];
       if (value === undefined) {
-        throw new Error(`Environment variable ${varName} is not defined`);
+        console.warn(`Warning: Environment variable ${varName} is not defined, using empty string`);
+        return '';
       }
       return value;
     });
@@ -540,5 +627,29 @@ export function resolveAgentConfig(globalConfig: Config, botConfig: BotConfig): 
     systemPrompt: botConfig.conversation?.systemPrompt ?? globalConfig.conversation.systemPrompt,
     temperature: botConfig.conversation?.temperature ?? globalConfig.conversation.temperature,
     maxHistory: botConfig.conversation?.maxHistory ?? globalConfig.conversation.maxHistory,
+  };
+}
+
+/**
+ * Merge global TTS config with per-bot overrides.
+ * Only voice identity fields are overridable — apiKey and provider are global.
+ */
+export function resolveTtsConfig(globalTts: TtsConfig, botConfig: BotConfig): TtsConfig {
+  const botOverride = botConfig.tts;
+  if (!botOverride) return globalTts;
+  return {
+    ...globalTts,
+    voiceId: botOverride.voiceId ?? globalTts.voiceId,
+    modelId: botOverride.modelId ?? globalTts.modelId,
+    outputFormat: botOverride.outputFormat ?? globalTts.outputFormat,
+    languageCode: botOverride.languageCode ?? globalTts.languageCode,
+    maxTextLength: botOverride.maxTextLength ?? globalTts.maxTextLength,
+    voiceSettings: {
+      stability: botOverride.voiceSettings?.stability ?? globalTts.voiceSettings.stability,
+      similarityBoost: botOverride.voiceSettings?.similarityBoost ?? globalTts.voiceSettings.similarityBoost,
+      style: botOverride.voiceSettings?.style ?? globalTts.voiceSettings.style,
+      useSpeakerBoost: botOverride.voiceSettings?.useSpeakerBoost ?? globalTts.voiceSettings.useSpeakerBoost,
+      speed: botOverride.voiceSettings?.speed ?? globalTts.voiceSettings.speed,
+    },
   };
 }

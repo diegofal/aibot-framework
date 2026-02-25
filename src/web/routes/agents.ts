@@ -42,6 +42,8 @@ export function agentsRoutes(deps: {
       agentLoopInterval: deps.config.agentLoop.every,
       availableTools: deps.botManager.getAvailableToolNames(),
       availableSkills: deps.botManager.getExternalSkillNames(),
+      ttsEnabled: !!deps.config.media?.tts,
+      ttsVoiceId: deps.config.media?.tts?.voiceId,
     });
   });
 
@@ -124,6 +126,14 @@ export function agentsRoutes(deps: {
         bot.agentLoop = undefined;
       }
     }
+    if ('tts' in body) {
+      const tts = (body as any).tts;
+      if (tts && Object.values(tts).some((v: unknown) => v !== undefined)) {
+        bot.tts = tts;
+      } else {
+        bot.tts = undefined;
+      }
+    }
 
     persistBots(deps.configPath, deps.config.bots);
 
@@ -181,7 +191,7 @@ export function agentsRoutes(deps: {
     return c.json({ ok: true, running: false });
   });
 
-  // Reset agent (clear all transient state, preserve identity)
+  // Reset agent (full reset to baseline)
   app.post('/:id/reset', async (c) => {
     const id = c.req.param('id');
     const bot = deps.config.bots.find((b) => b.id === id);
@@ -325,6 +335,13 @@ export function agentsRoutes(deps: {
     writeFileSync(join(soulDir, 'IDENTITY.md'), body.identity, 'utf-8');
     writeFileSync(join(soulDir, 'SOUL.md'), body.soul, 'utf-8');
     writeFileSync(join(soulDir, 'MOTIVATIONS.md'), body.motivations, 'utf-8');
+
+    // Save baseline for reset
+    const baselineDir = join(soulDir, '.baseline');
+    mkdirSync(baselineDir, { recursive: true });
+    writeFileSync(join(baselineDir, 'IDENTITY.md'), body.identity, 'utf-8');
+    writeFileSync(join(baselineDir, 'SOUL.md'), body.soul, 'utf-8');
+    writeFileSync(join(baselineDir, 'MOTIVATIONS.md'), body.motivations, 'utf-8');
 
     deps.logger.info({ botId: id, soulDir }, 'Soul files applied via API');
     return c.json({ ok: true, soulDir });

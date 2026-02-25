@@ -113,7 +113,7 @@ describe('ConversationGate', () => {
   it('intercepts ask_human replies', async () => {
     const askHumanStore = {
       hasPending: vi.fn().mockReturnValue(true),
-      handleReply: vi.fn().mockReturnValue(true),
+      handleReply: vi.fn().mockReturnValue({ matched: true, questionId: 'q1', botId: 'bot1' }),
     };
     const ctx = createMockCtx();
     const gate = new ConversationGate(ctx, createMockGroupActivation(), askHumanStore as any);

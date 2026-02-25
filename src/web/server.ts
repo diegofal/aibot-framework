@@ -17,9 +17,11 @@ import { statusRoutes } from './routes/status';
 import { toolsRoutes } from './routes/tools';
 import { agentLoopRoutes } from './routes/agent-loop';
 import { askHumanRoutes } from './routes/ask-human';
+import { askPermissionRoutes } from './routes/ask-permission';
 import { productionsRoutes } from './routes/productions';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
 import { karmaRoutes } from './routes/karma';
+import { conversationsRoutes } from './routes/conversations';
 import { integrationsRoutes } from './routes/integrations';
 
 export type WebServerDeps = {
@@ -52,7 +54,8 @@ export function startWebServer(deps: WebServerDeps): void {
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
   app.route('/api/settings', settingsRoutes({ config, configPath: deps.configPath, logger }));
   app.route('/api/agent-loop', agentLoopRoutes({ config, botManager: deps.botManager, logger }));
-  app.route('/api/ask-human', askHumanRoutes({ botManager: deps.botManager, logger }));
+  app.route('/api/ask-human', askHumanRoutes({ botManager: deps.botManager, logger, conversationsService: deps.botManager.getConversationsService() }));
+  app.route('/api/ask-permission', askPermissionRoutes({ botManager: deps.botManager, logger }));
   app.route('/api/agent-feedback', agentFeedbackRoutes({
     config,
     botManager: deps.botManager,
@@ -73,6 +76,16 @@ export function startWebServer(deps: WebServerDeps): void {
   if (karmaService) {
     app.route('/api/karma', karmaRoutes({ karmaService, config, logger }));
   }
+
+  // Conversations routes (use shared ConversationsService from BotManager)
+  const conversationsService = deps.botManager.getConversationsService();
+  app.route('/api/conversations', conversationsRoutes({
+    conversationsService,
+    botManager: deps.botManager,
+    logger,
+    config,
+    productionsService,
+  }));
 
   // Dynamic tools routes (only if enabled)
   const dynamicStore = deps.botManager.getDynamicToolStore();

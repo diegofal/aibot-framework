@@ -1,6 +1,11 @@
-import { describe, expect, test, beforeEach, mock } from 'bun:test';
+import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test';
+import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { AskHumanStore } from '../src/bot/ask-human-store';
 import { createAskHumanTool } from '../src/tools/ask-human';
+import { ConversationsService } from '../src/conversations/service';
+
+const CONV_TEST_DIR = join(import.meta.dir, '.tmp-ask-human-conv-test');
 
 function makeLogger() {
   return {
@@ -57,8 +62,8 @@ describe('AskHumanStore', () => {
     const { id, promise } = store.ask('bot1', 100, 'q1', 60_000);
     expect(store.getPendingCount()).toBe(1);
 
-    const ok = store.answerById(id, 'my answer');
-    expect(ok).toBe(true);
+    const result = store.answerById(id, 'my answer');
+    expect(result.ok).toBe(true);
     expect(store.getPendingCount()).toBe(0);
     expect(store.getAll()).toEqual([]);
 
@@ -66,16 +71,16 @@ describe('AskHumanStore', () => {
     expect(answer).toBe('my answer');
   });
 
-  test('answerById() returns false for unknown ID', () => {
-    expect(store.answerById('nonexistent', 'x')).toBe(false);
+  test('answerById() returns ok:false for unknown ID', () => {
+    expect(store.answerById('nonexistent', 'x').ok).toBe(false);
   });
 
-  test('answerById() returns false for already-answered question', async () => {
+  test('answerById() returns ok:false for already-answered question', async () => {
     const { id, promise } = store.ask('bot1', 100, 'q1', 60_000);
     store.answerById(id, 'first');
     await promise;
 
-    expect(store.answerById(id, 'second')).toBe(false);
+    expect(store.answerById(id, 'second').ok).toBe(false);
   });
 
   test('dismissById() rejects the promise and cleans up', async () => {
@@ -83,16 +88,16 @@ describe('AskHumanStore', () => {
     promise.catch(() => {}); // prevent unhandled rejection
     expect(store.getPendingCount()).toBe(1);
 
-    const ok = store.dismissById(id);
-    expect(ok).toBe(true);
+    const result = store.dismissById(id);
+    expect(result.ok).toBe(true);
     expect(store.getPendingCount()).toBe(0);
     expect(store.getAll()).toEqual([]);
 
     await expect(promise).rejects.toThrow('Question dismissed');
   });
 
-  test('dismissById() returns false for unknown ID', () => {
-    expect(store.dismissById('nonexistent')).toBe(false);
+  test('dismissById() returns ok:false for unknown ID', () => {
+    expect(store.dismissById('nonexistent').ok).toBe(false);
   });
 
   test('hasPendingForBot() returns true when bot has pending question', () => {
@@ -163,8 +168,10 @@ describe('AskHumanStore', () => {
     const { id } = store.ask('bot1', 100, 'What next?', 60_000);
     store.setMessageId(id, 999);
 
-    const matched = store.handleReply(100, 'Do X', 999);
-    expect(matched).toBe(true);
+    const result = store.handleReply(100, 'Do X', 999);
+    expect(result.matched).toBe(true);
+    expect(result.questionId).toBe(id);
+    expect(result.botId).toBe('bot1');
 
     const answers = store.consumeAnswersForBot('bot1');
     expect(answers).toHaveLength(1);
@@ -186,6 +193,88 @@ describe('AskHumanStore', () => {
     expect(bot2Pending[0].botId).toBe('bot2');
 
     expect(store.getPendingForBot('bot-unknown')).toEqual([]);
+  });
+
+  test('setConversationId links question to conversation', () => {
+    const { id } = store.ask('bot1', 100, 'q1', 60_000);
+    store.setConversationId(id, 'conv-123');
+
+    const pending = store.getAll();
+    expect(pending[0].conversationId).toBe('conv-123');
+  });
+
+  test('answerById returns conversationId when set', () => {
+    const { id } = store.ask('bot1', 100, 'q1', 60_000);
+    store.setConversationId(id, 'conv-456');
+
+    const result = store.answerById(id, 'answer');
+    expect(result.ok).toBe(true);
+    expect(result.conversationId).toBe('conv-456');
+    expect(result.botId).toBe('bot1');
+  });
+
+  test('dismissById returns conversationId when set', () => {
+    const { id, promise } = store.ask('bot1', 100, 'q1', 60_000);
+    promise.catch(() => {});
+    store.setConversationId(id, 'conv-789');
+
+    const result = store.dismissById(id);
+    expect(result.ok).toBe(true);
+    expect(result.conversationId).toBe('conv-789');
+    expect(result.botId).toBe('bot1');
+  });
+
+  test('handleReply returns conversationId when set', () => {
+    const { id } = store.ask('bot1', 100, 'q1', 60_000);
+    store.setConversationId(id, 'conv-abc');
+
+    const result = store.handleReply(100, 'answer');
+    expect(result.matched).toBe(true);
+    expect(result.conversationId).toBe('conv-abc');
+  });
+
+  test('consumeAnswersForBot includes conversationId', () => {
+    const { id } = store.ask('bot1', 100, 'q1', 60_000);
+    store.setConversationId(id, 'conv-xyz');
+    store.answerById(id, 'a1');
+
+    const answers = store.consumeAnswersForBot('bot1');
+    expect(answers).toHaveLength(1);
+    expect(answers[0].conversationId).toBe('conv-xyz');
+  });
+
+  test('onTimeout callback is called on timeout', async () => {
+    let callbackArgs: any = null;
+    const logger = makeLogger();
+    const timedStore = new AskHumanStore(logger, undefined, {
+      onTimeout: (qId, botId, convId) => { callbackArgs = { qId, botId, convId }; },
+    });
+
+    const { id, promise } = timedStore.ask('bot1', 100, 'q1', 50);
+    timedStore.setConversationId(id, 'conv-timeout');
+    promise.catch(() => {});
+
+    await new Promise((r) => setTimeout(r, 100));
+    expect(callbackArgs).not.toBeNull();
+    expect(callbackArgs.botId).toBe('bot1');
+    expect(callbackArgs.convId).toBe('conv-timeout');
+  });
+
+  test('onDismiss callback is called on dismiss', () => {
+    let callbackArgs: any = null;
+    const logger = makeLogger();
+    const dismissStore = new AskHumanStore(logger, undefined, {
+      onDismiss: (qId, botId, convId) => { callbackArgs = { qId, botId, convId }; },
+    });
+
+    const { id, promise } = dismissStore.ask('bot1', 100, 'q1', 60_000);
+    promise.catch(() => {});
+    dismissStore.setConversationId(id, 'conv-dismiss');
+    dismissStore.dismissById(id);
+
+    expect(callbackArgs).not.toBeNull();
+    expect(callbackArgs.botId).toBe('bot1');
+    expect(callbackArgs.convId).toBe('conv-dismiss');
   });
 
   test('dispose clears answered map too', () => {
@@ -297,5 +386,47 @@ describe('ask_human tool', () => {
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('_botId');
+  });
+
+  test('creates inbox conversation when conversationsService is provided', async () => {
+    if (existsSync(CONV_TEST_DIR)) rmSync(CONV_TEST_DIR, { recursive: true });
+    const convService = new ConversationsService(CONV_TEST_DIR);
+
+    const tool = createAskHumanTool({
+      store,
+      getBotInstance: () => undefined,
+      getBotName: () => 'TestBot',
+      conversationsService: convService,
+    });
+
+    const result = await tool.execute(
+      { question: 'What should I prioritize today?', _botId: 'bot1', _chatId: 0 },
+      makeLogger(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('queued to the human inbox');
+
+    // Verify conversation was created
+    const convos = convService.listConversations('bot1', { type: 'inbox' });
+    expect(convos.length).toBe(1);
+    expect(convos[0].type).toBe('inbox');
+    expect(convos[0].inboxStatus).toBe('pending');
+    expect(convos[0].askHumanQuestionId).toBeTruthy();
+    expect(convos[0].title).toBe('What should I prioritize today?');
+
+    // Verify question was added as bot message
+    const messages = convService.getMessages('bot1', convos[0].id);
+    expect(messages.length).toBe(1);
+    expect(messages[0].role).toBe('bot');
+    expect(messages[0].content).toBe('What should I prioritize today?');
+
+    // Verify conversationId was set on pending question
+    const pending = store.getAll();
+    expect(pending[0].conversationId).toBe(convos[0].id);
+
+    // Cleanup
+    store.dismissById(pending[0].id);
+    if (existsSync(CONV_TEST_DIR)) rmSync(CONV_TEST_DIR, { recursive: true });
   });
 });

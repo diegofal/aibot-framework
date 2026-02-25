@@ -1,0 +1,57 @@
+{
+  "id": "quick-notes",
+  "name": "Quick Notes",
+  "version": "1.0.0",
+  "description": "Fast idea capture via Telegram. Save notes with tags, search, and quick retrieval.",
+  "author": "MakeMyLifeEasier",
+  "entry": "index.ts",
+  "tools": [
+    {
+      "name": "quick_notes_save",
+      "description": "Save a quick note with optional tags",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string", "description": "The note content" },
+          "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for categorization" },
+          "source": { "type": "string", "description": "Where the note came from" }
+        },
+        "required": ["content"]
+      }
+    },
+    {
+      "name": "quick_notes_list",
+      "description": "List recent notes, optionally filtered by tag",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "number", "description": "Max notes to return (1-20)" },
+          "tag": { "type": "string", "description": "Filter by tag" }
+        }
+      }
+    },
+    {
+      "name": "quick_notes_search",
+      "description": "Search notes by content",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Search term" },
+          "limit": { "type": "number", "description": "Max results (1-10)" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "quick_notes_delete",
+      "description": "Delete a note by ID",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Note ID to delete" }
+        },
+        "required": ["id"]
+      }
+    }
+  ]
+}

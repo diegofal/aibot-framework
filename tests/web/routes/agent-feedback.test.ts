@@ -317,6 +317,138 @@ describe('agent-feedback routes', () => {
     });
   });
 
+  describe('GET /:botId/:id/reply-status (error state)', () => {
+    test('returns error after generation failure', async () => {
+      const mockClaudeGenerate = mock(() => Promise.reject(new Error('CLI exploded')));
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/agent-feedback');
+      const entry = store.submit('bot1', 'Feedback');
+
+      const mockBotManager = {
+        getAgentFeedbackBotIds: () => store.getBotIds(),
+        getAgentFeedback: (botId: string, opts?: any) => store.getAll(botId, opts),
+        getAgentFeedbackPendingCount: () => store.getPendingCount(),
+        submitAgentFeedback: (botId: string, content: string) => store.submit(botId, content),
+        dismissAgentFeedback: (botId: string, id: string) => store.dismiss(botId, id),
+        getAgentFeedbackById: (botId: string, feedbackId: string) => store.getById(botId, feedbackId),
+        addAgentFeedbackThreadMessage: (botId: string, feedbackId: string, role: 'human' | 'bot', content: string) =>
+          store.addThreadMessage(botId, feedbackId, role, content),
+        getSoulLoader: () => ({
+          readIdentity: () => 'I am TestBot',
+          readSoul: () => null,
+          readMotivations: () => null,
+          readGoals: () => null,
+          readDailyLogsSince: () => '',
+          appendDailyMemory: mock(() => {}),
+        }),
+      };
+
+      const testApp = new Hono();
+      testApp.route('/api/agent-feedback', freshModule.agentFeedbackRoutes({
+        config: mockConfig,
+        botManager: mockBotManager as any,
+        logger: noopLogger,
+      }));
+
+      // Send a reply to trigger generation
+      await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Follow up' }),
+      });
+
+      // Wait for background to complete
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Status should show error
+      const statusRes = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`);
+      const statusData = await statusRes.json();
+      expect(statusData.status).toBe('error');
+      expect(statusData.error).toContain('CLI exploded');
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+  });
+
+  describe('POST /:botId/:id/retry-reply', () => {
+    test('re-triggers and succeeds', async () => {
+      let callCount = 0;
+      const mockClaudeGenerate = mock(() => {
+        callCount++;
+        if (callCount === 1) return Promise.reject(new Error('First fail'));
+        return Promise.resolve('Retry worked!');
+      });
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/agent-feedback');
+      const entry = store.submit('bot1', 'Feedback');
+
+      const mockBotManager = {
+        getAgentFeedbackBotIds: () => store.getBotIds(),
+        getAgentFeedback: (botId: string, opts?: any) => store.getAll(botId, opts),
+        getAgentFeedbackPendingCount: () => store.getPendingCount(),
+        submitAgentFeedback: (botId: string, content: string) => store.submit(botId, content),
+        dismissAgentFeedback: (botId: string, id: string) => store.dismiss(botId, id),
+        getAgentFeedbackById: (botId: string, feedbackId: string) => store.getById(botId, feedbackId),
+        addAgentFeedbackThreadMessage: (botId: string, feedbackId: string, role: 'human' | 'bot', content: string) =>
+          store.addThreadMessage(botId, feedbackId, role, content),
+        getSoulLoader: () => ({
+          readIdentity: () => 'I am TestBot',
+          readSoul: () => null,
+          readMotivations: () => null,
+          readGoals: () => null,
+          readDailyLogsSince: () => '',
+          appendDailyMemory: mock(() => {}),
+        }),
+      };
+
+      const testApp = new Hono();
+      testApp.route('/api/agent-feedback', freshModule.agentFeedbackRoutes({
+        config: mockConfig,
+        botManager: mockBotManager as any,
+        logger: noopLogger,
+      }));
+
+      // First reply triggers generation failure
+      await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Follow up' }),
+      });
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Confirm error
+      let statusRes = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`);
+      expect((await statusRes.json()).status).toBe('error');
+
+      // Retry
+      const retryRes = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/retry-reply`, {
+        method: 'POST',
+      });
+      expect(retryRes.status).toBe(200);
+      expect((await retryRes.json()).status).toBe('generating');
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Should be idle now with bot reply
+      statusRes = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`);
+      const statusData = await statusRes.json();
+      expect(statusData.status).toBe('idle');
+      expect(statusData.lastBotMessage).toBeTruthy();
+      expect(statusData.lastBotMessage.content).toBe('Retry worked!');
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+
+    test('returns 404 for non-existent entry', async () => {
+      const res = await req('/bot1/nonexistent/retry-reply', { method: 'POST' });
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('POST /:botId/generate', () => {
     test('returns 404 for unknown bot', async () => {
       const res = await req('/unknown-bot/generate', { method: 'POST' });

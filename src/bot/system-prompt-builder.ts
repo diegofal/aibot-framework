@@ -221,6 +221,20 @@ export class SystemPromptBuilder {
       'Execute your plan efficiently using available tools. ' +
       'Focus on making concrete progress on your goals and motivations.';
 
+    // workDir sandboxing awareness
+    const workDir = botConfig.workDir
+      ?? (this.ctx.config.productions?.baseDir
+        ? `${this.ctx.config.productions.baseDir}/${botConfig.id}`
+        : undefined);
+    if (workDir) {
+      prompt +=
+        '\n\n## File Sandbox\n\n' +
+        `Your file operations are sandboxed to your working directory: \`${workDir}\`.\n` +
+        'All file paths (file_read, file_write, file_edit) are resolved relative to this directory.\n' +
+        'You CANNOT read files outside your workspace — only files you created or that were placed in your directory.\n' +
+        'Do NOT attempt to read framework source code, system configs, or other bots\' files — those paths will resolve inside your sandbox and fail.';
+    }
+
     // Include all relevant tool instruction blocks (same as conversation minus group-specific ones)
     prompt = this.appendConversationToolBlocks(prompt, defs, botConfig);
 

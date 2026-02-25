@@ -276,6 +276,25 @@ describe('ConversationPipeline', () => {
 
       expect(mockSessionManager.markActive).toHaveBeenCalledWith('test-bot', 123456, 789);
     });
+
+    it('should send specific error message when session expires mid-conversation', async () => {
+      // Simulate session expiring during processing by having isExpired return true
+      (mockSessionManager.isExpired as jest.Mock).mockReturnValue(true);
+      (mockSessionManager.getFullHistory as jest.Mock).mockReturnValue([
+        { role: 'user', content: 'Old message' },
+      ]);
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'New message');
+
+      // Should flush old session
+      expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalled();
+      expect(mockSessionManager.clearSession).toHaveBeenCalledWith('user:123');
+      // Should still complete successfully with new session
+      expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
+    });
   });
 
   describe('RAG pre-fetch', () => {
@@ -447,7 +466,8 @@ describe('ConversationPipeline', () => {
 
   describe('error handling', () => {
     it('should handle LLM errors gracefully', async () => {
-      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('LLM timeout'));
+      // Use a permanent error (auth error) to avoid retry delays causing timeout
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('invalid api key'));
 
       const ctx = createMockContext();
       const config = createMockBotConfig();
@@ -484,6 +504,107 @@ describe('ConversationPipeline', () => {
 
       expect(ctx.reply).toHaveBeenCalledWith('❌ Failed to generate response. Please try again later.');
     });
+
+    it('should retry transient LLM errors and eventually succeed', async () => {
+      // First two calls fail with transient error, third succeeds
+      let callCount = 0;
+      (mockLLMClient.chat as jest.Mock).mockImplementation(() => {
+        callCount++;
+        if (callCount < 3) {
+          return Promise.reject(new Error('timeout'));
+        }
+        return Promise.resolve('Success after retries');
+      });
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
+
+      // Should have retried 3 times total
+      expect(mockLLMClient.chat).toHaveBeenCalledTimes(3);
+      expect(ctx.reply).toHaveBeenCalledWith('Success after retries');
+      // Should have logged retries
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ attempt: 0, category: 'transient' }),
+        'LLM call failed'
+      );
+    });
+
+    it('should fail after max retries exceeded', async () => {
+      // All calls fail with transient error
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('timeout'));
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
+
+      // Should have tried 4 times (initial + 3 retries)
+      expect(mockLLMClient.chat).toHaveBeenCalledTimes(4);
+      // Should send user-friendly error message
+      expect(ctx.reply).toHaveBeenCalledWith('⏱️ The request took too long. The service might be busy. Please try again.');
+    }, { timeout: 30000 });
+
+    it('should not retry permanent errors', async () => {
+      // Auth error is permanent, should not retry
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('unauthorized: invalid api key'));
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
+
+      // Should have tried only once (no retries for permanent errors)
+      expect(mockLLMClient.chat).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ category: 'permanent', retryable: false }),
+        'LLM call failed'
+      );
+    });
+
+    it('should handle context length errors with specific message', async () => {
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('context length exceeded'));
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
+
+      expect(ctx.reply).toHaveBeenCalledWith('📏 The conversation is too long. Try /reset to start fresh.');
+    });
+
+    it('should handle circuit breaker open state', async () => {
+      // Circuit breaker has failureThreshold: 5
+      // Each failed call records 1 failure when retries are exhausted (for retryable errors)
+      // OR 1 failure immediately (for permanent errors)
+      // Use permanent errors to avoid retry delays making test slow
+      
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('unauthorized: invalid api key'));
+
+      const config = createMockBotConfig();
+
+      // First 4 calls - circuit still closed (4 failures < 5 threshold)
+      for (let i = 0; i < 4; i++) {
+        const ctx = createMockContext();
+        await pipeline.handleConversation(ctx, config, `user:${i}`, `Hello ${i}`);
+      }
+      
+      // 5th call - circuit opens after this failure (5 failures >= 5 threshold)
+      const ctx5 = createMockContext();
+      await pipeline.handleConversation(ctx5, config, 'user:5', 'Fifth hello');
+      
+      // 6th call - circuit is now open, should fail immediately
+      const ctx6 = createMockContext();
+      await pipeline.handleConversation(ctx6, config, 'user:6', 'Sixth hello');
+
+      // Circuit open message should be sent
+      expect(ctx6.reply).toHaveBeenCalledWith('⏳ The AI service is temporarily overloaded. Please wait a moment and try again.');
+      
+      // Verify the 6th call didn't reach LLM (circuit blocked it)
+      // Total LLM calls: 5 (first 5 calls, 6th was blocked by circuit)
+      expect(mockLLMClient.chat).toHaveBeenCalledTimes(5);
+    }, { timeout: 10000 });
   });
 
   describe('tools integration', () => {
@@ -583,7 +704,7 @@ describe('ConversationPipeline', () => {
 
     it('should strip name prefix from group messages', async () => {
       (mockBotContext.config.soul.search.autoRag as any).enabled = true;
-      
+
       (mockMemoryManager.search as jest.Mock).mockResolvedValue([]);
 
       await pipeline.prefetchMemoryContext('[Alice]: Hello everyone', true, mockLogger);
@@ -594,6 +715,187 @@ describe('ConversationPipeline', () => {
         expect.any(Number),
         expect.any(Number)
       );
+    });
+  });
+
+  describe('TTS voice reply', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('should generate voice reply when isVoice=true and TTS configured', async () => {
+      // Configure TTS
+      (mockBotContext.config as any).media = {
+        tts: {
+          provider: 'elevenlabs',
+          apiKey: 'test-key',
+          voiceId: 'test-voice',
+          modelId: 'eleven_multilingual_v2',
+          outputFormat: 'opus_48000_64',
+          timeout: 30000,
+          maxTextLength: 1500,
+          voiceSettings: {
+            stability: 0.5,
+            similarityBoost: 0.75,
+            style: 0,
+            useSpeakerBoost: true,
+            speed: 1,
+          },
+        },
+      };
+
+      const fakeAudio = new Uint8Array([0x4f, 0x67, 0x67, 0x53]);
+      globalThis.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(fakeAudio.buffer),
+      }) as any;
+
+      const ctx = createMockContext();
+      (ctx as any).replyWithVoice = jest.fn().mockResolvedValue(undefined);
+
+      const config = createMockBotConfig();
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, true);
+
+      // Should have called replyWithVoice instead of reply with text
+      expect((ctx as any).replyWithVoice).toHaveBeenCalledTimes(1);
+      // The first positional arg should be an InputFile
+      const voiceArg = (ctx as any).replyWithVoice.mock.calls[0][0];
+      expect(voiceArg).toBeDefined();
+    });
+
+    it('should send text reply when isVoice=false', async () => {
+      (mockBotContext.config as any).media = {
+        tts: {
+          provider: 'elevenlabs',
+          apiKey: 'test-key',
+          voiceId: 'test-voice',
+          modelId: 'eleven_multilingual_v2',
+          outputFormat: 'opus_48000_64',
+          timeout: 30000,
+          maxTextLength: 1500,
+          voiceSettings: {
+            stability: 0.5,
+            similarityBoost: 0.75,
+            style: 0,
+            useSpeakerBoost: true,
+            speed: 1,
+          },
+        },
+      };
+
+      const ctx = createMockContext();
+      (ctx as any).replyWithVoice = jest.fn();
+
+      const config = createMockBotConfig();
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, false);
+
+      // Should send text, not voice
+      expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
+      expect((ctx as any).replyWithVoice).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to text when TTS fails', async () => {
+      (mockBotContext.config as any).media = {
+        tts: {
+          provider: 'elevenlabs',
+          apiKey: 'test-key',
+          voiceId: 'test-voice',
+          modelId: 'eleven_multilingual_v2',
+          outputFormat: 'opus_48000_64',
+          timeout: 30000,
+          maxTextLength: 1500,
+          voiceSettings: {
+            stability: 0.5,
+            similarityBoost: 0.75,
+            style: 0,
+            useSpeakerBoost: true,
+            speed: 1,
+          },
+        },
+      };
+
+      // TTS API returns error
+      globalThis.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+      }) as any;
+
+      const ctx = createMockContext();
+      (ctx as any).replyWithVoice = jest.fn();
+
+      const config = createMockBotConfig();
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, true);
+
+      // Should fall back to text reply
+      expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
+      expect((ctx as any).replyWithVoice).not.toHaveBeenCalled();
+      // Should log warning
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error) }),
+        'TTS failed, falling back to text',
+      );
+    });
+
+    it('should send text when isVoice=true but no TTS config', async () => {
+      // No TTS config (media without tts)
+      (mockBotContext.config as any).media = {};
+
+      const ctx = createMockContext();
+      (ctx as any).replyWithVoice = jest.fn();
+
+      const config = createMockBotConfig();
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, true);
+
+      // Should send text reply since TTS is not configured
+      expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
+      expect((ctx as any).replyWithVoice).not.toHaveBeenCalled();
+    });
+
+    it('should use per-bot TTS override voiceId when bot has tts config', async () => {
+      // Configure global TTS
+      (mockBotContext.config as any).media = {
+        tts: {
+          provider: 'elevenlabs',
+          apiKey: 'test-key',
+          voiceId: 'global-voice',
+          modelId: 'eleven_multilingual_v2',
+          outputFormat: 'opus_48000_64',
+          timeout: 30000,
+          maxTextLength: 1500,
+          voiceSettings: {
+            stability: 0.5,
+            similarityBoost: 0.75,
+            style: 0,
+            useSpeakerBoost: true,
+            speed: 1,
+          },
+        },
+      };
+
+      const fakeAudio = new Uint8Array([0x4f, 0x67, 0x67, 0x53]);
+      globalThis.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(fakeAudio.buffer),
+      }) as any;
+
+      const ctx = createMockContext();
+      (ctx as any).replyWithVoice = jest.fn().mockResolvedValue(undefined);
+
+      // Bot with per-bot TTS override
+      const config = createMockBotConfig({ tts: { voiceId: 'bot-specific-voice' } } as any);
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, true);
+
+      // Verify the fetch was called with the bot-specific voiceId in the URL
+      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      expect(fetchCall[0]).toContain('bot-specific-voice');
+      expect(fetchCall[0]).not.toContain('global-voice');
+      expect((ctx as any).replyWithVoice).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -22,9 +22,11 @@ export interface ProductionEntry {
   botId: string;
   tool: string; // file_write | file_edit | exec
   path: string; // file path (relative to productions dir or basePath)
-  action: 'create' | 'edit' | 'delete';
+  action: 'create' | 'edit' | 'delete' | 'archive';
   description: string;
   size: number;
   trackOnly: boolean;
+  archivedFrom?: string;   // Original path before archiving
+  archiveReason?: string;  // Why it was archived
   evaluation?: ProductionEvaluation;
 }

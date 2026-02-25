@@ -162,4 +162,66 @@ export class TenantFacade {
       return undefined;
     }
   }
+
+  /**
+   * Handle Stripe webhook events to update tenant billing status.
+   * Called by the webhook endpoint when Stripe sends events.
+   */
+  async handleWebhook(payload: unknown, signature: string): Promise<{ success: boolean; tenantId?: string }> {
+    if (!this.billingProvider || !this.tenantManager) {
+      return { success: false };
+    }
+
+    try {
+      const result = await this.billingProvider.handleWebhook(payload, signature);
+
+      if (result.type === 'payment_succeeded' && result.tenantId) {
+        const tenant = this.tenantManager.getTenant(result.tenantId);
+        if (tenant) {
+          this.tenantManager.updateTenant(result.tenantId, {
+            billing: {
+              ...tenant.billing,
+              status: 'active',
+              stripeSubscriptionId: result.stripeSubscriptionId || tenant.billing?.stripeSubscriptionId,
+            },
+          });
+          this.deps.logger.info({ tenantId: result.tenantId, invoiceId: result.invoiceId }, 'Payment succeeded, tenant activated');
+        }
+        return { success: true, tenantId: result.tenantId };
+      }
+
+      if (result.type === 'payment_failed' && result.tenantId) {
+        const tenant = this.tenantManager.getTenant(result.tenantId);
+        if (tenant) {
+          this.tenantManager.updateTenant(result.tenantId, {
+            billing: {
+              ...tenant.billing,
+              status: 'past_due',
+            },
+          });
+          this.deps.logger.warn({ tenantId: result.tenantId }, 'Payment failed, tenant marked past_due');
+        }
+        return { success: true, tenantId: result.tenantId };
+      }
+
+      if (result.type === 'subscription_canceled' && result.tenantId) {
+        const tenant = this.tenantManager.getTenant(result.tenantId);
+        if (tenant) {
+          this.tenantManager.updateTenant(result.tenantId, {
+            billing: {
+              ...tenant.billing,
+              status: 'canceled',
+            },
+          });
+          this.deps.logger.info({ tenantId: result.tenantId }, 'Subscription canceled');
+        }
+        return { success: true, tenantId: result.tenantId };
+      }
+
+      return { success: true };
+    } catch (err) {
+      this.deps.logger.error({ err }, 'Webhook handling failed');
+      return { success: false };
+    }
+  }
 }

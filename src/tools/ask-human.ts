@@ -1,6 +1,7 @@
 import type { Tool, ToolResult } from './types';
 import type { Logger } from '../logger';
 import type { AskHumanStore } from '../bot/ask-human-store';
+import type { ConversationsService } from '../conversations/service';
 import type { Bot } from 'grammy';
 
 const MAX_TIMEOUT_MINUTES = 120;
@@ -10,6 +11,7 @@ export interface AskHumanDeps {
   store: AskHumanStore;
   getBotInstance: (botId: string) => Bot | undefined;
   getBotName: (botId: string) => string;
+  conversationsService?: ConversationsService;
 }
 
 /**
@@ -74,6 +76,24 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
       promise.catch((err) => {
         logger.info({ questionId: id, botId, reason: err.message }, 'ask_human: question closed without answer');
       });
+
+      // Create inbox conversation so the question persists as a thread
+      if (deps.conversationsService) {
+        try {
+          const truncatedQuestion = question.length > 60
+            ? question.slice(0, 57) + '...'
+            : question;
+          const conv = deps.conversationsService.createConversation(botId, 'inbox', truncatedQuestion, {
+            askHumanQuestionId: id,
+            inboxStatus: 'pending',
+          });
+          deps.conversationsService.addMessage(botId, conv.id, 'bot', question);
+          deps.store.setConversationId(id, conv.id);
+          logger.debug({ questionId: id, conversationId: conv.id }, 'ask_human: inbox conversation created');
+        } catch (err) {
+          logger.warn({ err, questionId: id }, 'ask_human: failed to create inbox conversation (non-fatal)');
+        }
+      }
 
       // Send Telegram notification if we have a valid chatId and bot instance
       if (chatId) {

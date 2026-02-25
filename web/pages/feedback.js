@@ -200,6 +200,46 @@ export async function renderBotFeedback(el, botId) {
       const threadArea = card.querySelector(`.thread-area[data-thread-id="${entry.id}"]`);
       let threadVisible = false;
       let threadGenerating = false;
+      let threadErrorMsg = null;
+      const CARD_MAX_POLLS = 90;
+
+      function startCardPolling() {
+        let pollCount = 0;
+        const pollInterval = setInterval(async () => {
+          if (!threadArea || threadArea.classList.contains('hidden')) {
+            clearInterval(pollInterval);
+            return;
+          }
+          pollCount++;
+          if (pollCount >= CARD_MAX_POLLS) {
+            clearInterval(pollInterval);
+            threadGenerating = false;
+            threadErrorMsg = 'Response timed out (3 minutes). The bot may still be processing.';
+            renderCardThread();
+            return;
+          }
+          const statusRes = await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply-status`);
+          if (statusRes.status === 'error') {
+            clearInterval(pollInterval);
+            threadGenerating = false;
+            threadErrorMsg = statusRes.error || 'Generation failed';
+            renderCardThread();
+            return;
+          }
+          if (statusRes.status === 'idle') {
+            clearInterval(pollInterval);
+            if (statusRes.lastBotMessage) {
+              if (!entry.thread) entry.thread = [];
+              if (!entry.thread.find(m => m.id === statusRes.lastBotMessage.id)) {
+                entry.thread.push(statusRes.lastBotMessage);
+              }
+            }
+            threadGenerating = false;
+            threadErrorMsg = null;
+            renderCardThread();
+          }
+        }, 2000);
+      }
 
       function renderCardThread() {
         renderThread(threadArea, {
@@ -207,10 +247,19 @@ export async function renderBotFeedback(el, botId) {
           legacyFeedback: null,
           legacyResponse: entry.response || null,
           generating: threadGenerating,
+          error: threadErrorMsg,
+          onRetry: async () => {
+            threadErrorMsg = null;
+            threadGenerating = true;
+            renderCardThread();
+            await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/retry-reply`, { method: 'POST' });
+            startCardPolling();
+          },
           onSend: async (text) => {
             if (!entry.thread) entry.thread = [];
             entry.thread.push({ id: 'temp', role: 'human', content: text, createdAt: new Date().toISOString() });
             threadGenerating = true;
+            threadErrorMsg = null;
             renderCardThread();
 
             const res = await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply`, {
@@ -226,25 +275,7 @@ export async function renderBotFeedback(el, botId) {
 
             if (res.entry?.thread) entry.thread = res.entry.thread;
 
-            // Poll for bot reply
-            const pollInterval = setInterval(async () => {
-              if (!threadArea || threadArea.classList.contains('hidden')) {
-                clearInterval(pollInterval);
-                return;
-              }
-              const statusRes = await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply-status`);
-              if (statusRes.status === 'idle') {
-                clearInterval(pollInterval);
-                if (statusRes.lastBotMessage) {
-                  if (!entry.thread) entry.thread = [];
-                  if (!entry.thread.find(m => m.id === statusRes.lastBotMessage.id)) {
-                    entry.thread.push(statusRes.lastBotMessage);
-                  }
-                }
-                threadGenerating = false;
-                renderCardThread();
-              }
-            }, 2000);
+            startCardPolling();
           },
         });
       }

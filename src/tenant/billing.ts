@@ -1,4 +1,4 @@
-import type { BillingProvider, Tenant } from './types';
+import type { BillingProvider, Tenant, WebhookResult } from './types';
 
 /**
  * No-op billing provider for self-hosted / open source deployments.
@@ -25,8 +25,8 @@ export class NoOpBillingProvider implements BillingProvider {
     return undefined;
   }
 
-  async handleWebhook(_payload: unknown, _signature: string): Promise<void> {
-    // No-op
+  async handleWebhook(_payload: unknown, _signature: string): Promise<WebhookResult> {
+    return { type: 'unhandled' };
   }
 }
 
@@ -65,7 +65,7 @@ export class StripeBillingProvider implements BillingProvider {
     return customer.id;
   }
 
-  async createSubscription(tenantId: string, plan: string): Promise<string> {
+  async createSubscription(customerId: string, plan: string): Promise<string> {
     // Map plan to price ID (these should be configured in Stripe dashboard)
     const priceIds: Record<string, string> = {
       starter: process.env.STRIPE_STARTER_PRICE_ID || '',
@@ -78,27 +78,68 @@ export class StripeBillingProvider implements BillingProvider {
       throw new Error(`No price ID configured for plan: ${plan}`);
     }
 
-    // Note: This requires the customer to already exist in Stripe
-    // In practice, you'd store stripeCustomerId on the tenant
-    throw new Error('Stripe subscription creation requires customer ID - implement tenant.billing.stripeCustomerId flow');
+    const subscription = await this.stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: priceId }],
+      payment_behavior: 'default_incomplete',
+      expand: ['latest_invoice.payment_intent'],
+    });
+
+    return subscription.id;
   }
 
-  async cancelSubscription(tenantId: string): Promise<void> {
-    // Requires storing subscription ID on tenant
-    throw new Error('Stripe subscription cancellation requires subscription ID - implement tenant.billing.stripeSubscriptionId flow');
+  async cancelSubscription(subscriptionId: string): Promise<void> {
+    await this.stripe.subscriptions.cancel(subscriptionId);
   }
 
-  async updateSubscription(tenantId: string, newPlan: string): Promise<void> {
-    // Requires storing subscription ID on tenant
-    throw new Error('Stripe subscription update requires subscription ID - implement tenant.billing.stripeSubscriptionId flow');
+  async updateSubscription(subscriptionId: string, newPlan: string): Promise<void> {
+    const priceIds: Record<string, string> = {
+      starter: process.env.STRIPE_STARTER_PRICE_ID || '',
+      pro: process.env.STRIPE_PRO_PRICE_ID || '',
+      enterprise: process.env.STRIPE_ENTERPRISE_PRICE_ID || '',
+    };
+
+    const priceId = priceIds[newPlan];
+    if (!priceId) {
+      throw new Error(`No price ID configured for plan: ${newPlan}`);
+    }
+
+    // Get current subscription to find the item to update
+    const subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    const itemId = subscription.items.data[0]?.id;
+
+    if (!itemId) {
+      throw new Error('No subscription items found to update');
+    }
+
+    await this.stripe.subscriptions.update(subscriptionId, {
+      items: [{ id: itemId, price: priceId }],
+      proration_behavior: 'create_prorations',
+    });
   }
 
-  async getInvoiceUrl(tenantId: string): Promise<string | undefined> {
-    // List invoices for customer and return portal URL
-    throw new Error('Stripe invoice URL retrieval requires customer ID - implement tenant.billing.stripeCustomerId flow');
+  async getInvoiceUrl(customerId: string): Promise<string | undefined> {
+    const invoices = await this.stripe.invoices.list({
+      customer: customerId,
+      limit: 1,
+    });
+
+    if (invoices.data.length > 0 && invoices.data[0].hosted_invoice_url) {
+      return invoices.data[0].hosted_invoice_url;
+    }
+
+    return undefined;
   }
 
-  async handleWebhook(payload: unknown, signature: string): Promise<void> {
+  async createBillingPortalSession(customerId: string, returnUrl: string): Promise<string> {
+    const session = await this.stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl,
+    });
+    return session.url;
+  }
+
+  async handleWebhook(payload: unknown, signature: string): Promise<WebhookResult> {
     try {
       const event = this.stripe.webhooks.constructEvent(
         payload as string,
@@ -107,20 +148,51 @@ export class StripeBillingProvider implements BillingProvider {
       );
 
       switch (event.type) {
-        case 'invoice.payment_succeeded':
-          // Update tenant billing status
-          break;
-        case 'invoice.payment_failed':
-          // Mark tenant as past_due
-          break;
-        case 'customer.subscription.deleted':
-          // Handle cancellation
-          break;
+        case 'invoice.payment_succeeded': {
+          const invoice = event.data.object;
+          const tenantId = invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId;
+          return {
+            type: 'payment_succeeded',
+            tenantId,
+            stripeCustomerId: invoice.customer,
+            stripeSubscriptionId: invoice.subscription,
+            invoiceId: invoice.id,
+          };
+        }
+        case 'invoice.payment_failed': {
+          const invoice = event.data.object;
+          const tenantId = invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId;
+          return {
+            type: 'payment_failed',
+            tenantId,
+            stripeCustomerId: invoice.customer,
+            stripeSubscriptionId: invoice.subscription,
+            invoiceId: invoice.id,
+          };
+        }
+        case 'customer.subscription.deleted': {
+          const subscription = event.data.object;
+          const tenantId = subscription.metadata?.tenantId;
+          return {
+            type: 'subscription_canceled',
+            tenantId,
+            stripeCustomerId: subscription.customer,
+            stripeSubscriptionId: subscription.id,
+          };
+        }
         default:
-          // Unhandled event type
+          return { type: 'unhandled' };
       }
     } catch (err) {
       throw new Error(`Webhook signature verification failed: ${err}`);
     }
   }
+}
+
+export interface WebhookResult {
+  type: 'payment_succeeded' | 'payment_failed' | 'subscription_canceled' | 'unhandled';
+  tenantId?: string;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  invoiceId?: string;
 }

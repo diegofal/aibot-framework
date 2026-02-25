@@ -200,7 +200,7 @@ export async function renderAgents(el) {
     } else if (action === 'clone') {
       showCloneModal(id, el);
     } else if (action === 'reset') {
-      if (confirm(`Reset agent "${id}"? This will clear all conversations, memory, goals, and learned facts. Soul and identity are preserved. This cannot be undone.`)) {
+      if (confirm(`Reset agent "${id}"? This will fully reset the agent to its original state: all conversations, memory, goals, and learned facts will be cleared, and soul files will be restored to their generated baseline. This cannot be undone.`)) {
         btn.disabled = true;
         btn.textContent = 'Resetting...';
         const res = await api(`/api/agents/${id}/reset`, { method: 'POST' });
@@ -352,7 +352,7 @@ export async function renderAgentDetail(el, id) {
   const resetBtn = document.getElementById('btn-reset');
   if (resetBtn) {
     resetBtn.addEventListener('click', async () => {
-      if (!confirm(`Reset agent "${id}"? This will clear all conversations, memory, goals, and learned facts. Soul and identity are preserved. This cannot be undone.`)) return;
+      if (!confirm(`Reset agent "${id}"? This will fully reset the agent to its original state: all conversations, memory, goals, and learned facts will be cleared, and soul files will be restored to their generated baseline. This cannot be undone.`)) return;
       resetBtn.disabled = true;
       resetBtn.textContent = 'Resetting...';
       try {
@@ -494,6 +494,32 @@ export async function renderAgentEdit(el, id) {
         <span class="text-dim text-sm">How often this bot runs autonomously (e.g. 30m, 1h, 6h, 1d)</span>
       </div>
 
+      ${defaults.ttsEnabled ? `
+      <div class="form-separator"></div>
+      <div class="form-section-title">Voice (TTS) <span class="text-dim text-sm">(empty = use global default)</span></div>
+
+      <div class="form-group">
+        <label>Voice</label>
+        <div class="input-with-btn">
+          <select name="ttsVoiceId" id="tts-voice-select">
+            <option value="">Global default${defaults.ttsVoiceId ? ` (${escapeHtml(defaults.ttsVoiceId)})` : ''}</option>
+            ${agent.tts?.voiceId ? `<option value="${escapeHtml(agent.tts.voiceId)}" selected>${escapeHtml(agent.tts.voiceId)}</option>` : ''}
+          </select>
+          <button type="button" class="btn btn-sm" id="btn-load-voices">Load Voices</button>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Speed</label>
+          <input type="number" name="ttsSpeed" min="0.5" max="2" step="0.1" value="${agent.tts?.voiceSettings?.speed ?? ''}" placeholder="1.0">
+        </div>
+        <div class="form-group">
+          <label>Stability</label>
+          <input type="number" name="ttsStability" min="0" max="1" step="0.1" value="${agent.tts?.voiceSettings?.stability ?? ''}" placeholder="0.5">
+        </div>
+      </div>
+      ` : ''}
+
       ${(defaults.availableTools && defaults.availableTools.length) ? `
       <div class="form-separator"></div>
       <div class="form-section-title">Tools <span class="text-dim text-sm">(uncheck to disable)</span></div>
@@ -532,6 +558,7 @@ export async function renderAgentEdit(el, id) {
 
       <div class="actions">
         <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn" id="btn-generate-soul">Generate Soul</button>
         <a href="#/agents/${id}" class="btn">Cancel</a>
       </div>
     </form>
@@ -559,6 +586,48 @@ export async function renderAgentEdit(el, id) {
       e.target.textContent = 'Init Custom Soul';
     }, 2000);
   });
+
+  // Generate soul button
+  document.getElementById('btn-generate-soul').addEventListener('click', () => {
+    showGenerateSoulModal(id, agent.name, () => renderAgentEdit(el, id));
+  });
+
+  // Load ElevenLabs voices button
+  const loadVoicesBtn = document.getElementById('btn-load-voices');
+  if (loadVoicesBtn) {
+    loadVoicesBtn.addEventListener('click', async () => {
+      loadVoicesBtn.disabled = true;
+      loadVoicesBtn.textContent = 'Loading...';
+      try {
+        const data = await api('/api/integrations/elevenlabs/voices');
+        if (data.error) {
+          alert(`Failed to load voices: ${data.error}`);
+          return;
+        }
+        const select = document.getElementById('tts-voice-select');
+        const currentValue = select.value;
+        select.innerHTML = `<option value="">Global default${defaults.ttsVoiceId ? ` (${escapeHtml(defaults.ttsVoiceId)})` : ''}</option>`;
+        for (const v of data.voices) {
+          const labelParts = [v.name];
+          if (v.labels) {
+            const tags = [v.labels.gender, v.labels.accent, v.labels.age].filter(Boolean);
+            if (tags.length) labelParts.push(`(${tags.join(', ')})`);
+          }
+          const opt = document.createElement('option');
+          opt.value = v.voice_id;
+          opt.textContent = labelParts.join(' ');
+          if (v.voice_id === currentValue) opt.selected = true;
+          select.appendChild(opt);
+        }
+        loadVoicesBtn.textContent = 'Loaded';
+      } catch (err) {
+        alert(`Failed to load voices: ${err.message}`);
+      } finally {
+        loadVoicesBtn.disabled = false;
+        setTimeout(() => { loadVoicesBtn.textContent = 'Load Voices'; }, 2000);
+      }
+    });
+  }
 
   document.getElementById('edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -616,6 +685,24 @@ export async function renderAgentEdit(el, id) {
       patch.agentLoop = { ...agent.agentLoop, every: undefined };
     }
 
+    // TTS overrides
+    if (defaults.ttsEnabled) {
+      const ttsVoiceId = form.ttsVoiceId?.value || undefined;
+      const ttsSpeed = form.ttsSpeed?.value !== '' ? parseFloat(form.ttsSpeed.value) : undefined;
+      const ttsStability = form.ttsStability?.value !== '' ? parseFloat(form.ttsStability.value) : undefined;
+
+      if (ttsVoiceId || ttsSpeed !== undefined || ttsStability !== undefined) {
+        patch.tts = { voiceId: ttsVoiceId };
+        if (ttsSpeed !== undefined || ttsStability !== undefined) {
+          patch.tts.voiceSettings = {};
+          if (ttsSpeed !== undefined) patch.tts.voiceSettings.speed = ttsSpeed;
+          if (ttsStability !== undefined) patch.tts.voiceSettings.stability = ttsStability;
+        }
+      } else {
+        patch.tts = undefined;
+      }
+    }
+
     await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
     location.hash = `#/agents/${id}`;
   });
@@ -650,7 +737,7 @@ function showCloneModal(sourceId, el, onDone) {
   });
 }
 
-function showGenerateSoulModal(agentId, agentName) {
+function showGenerateSoulModal(agentId, agentName, onComplete) {
   showModal(`
     <div class="modal-title">Generate Soul with AI</div>
     <div class="form-group">
@@ -709,7 +796,7 @@ function showGenerateSoulModal(agentId, agentName) {
         return;
       }
 
-      showSoulPreviewModal(agentId, agentName, result, { role, personalityDescription, language, emoji });
+      showSoulPreviewModal(agentId, agentName, result, { role, personalityDescription, language, emoji }, { onComplete });
     } catch (err) {
       alert(`Generation failed: ${err.message || err}`);
       btn.disabled = false;

@@ -19,6 +19,7 @@ NO buscar en internet la documentacion de OpenClaw - usar el codigo fuente local
 - Cualquier cambio relevante debe agregarse al archivo `CHANGELOG.md` en la raíz del proyecto.
 - Cualquier cambio que afecte la arquitectura, módulos, tools, skills, rutas web, config schemas, o memoria debe reflejarse en la documentación en `docs/architecture-docs/`. Actualizar la página HTML correspondiente para mantener la documentación sincronizada con el código.
 - Todo código generado por AI (incluyendo este asistente) DEBE producir tests que pasen. Ejecutar `bun test` y verificar que no se introducen nuevos fallos antes de considerar el trabajo terminado. Los tests pre-existentes que fallan por dependencias externas (Playwright, API keys) no cuentan como fallos nuevos.
+- Antes de proponer nuevos features o integraciones, consultar `docs/roadmap.md` para entender el estado actual de los proyectos planificados y evitar trabajo duplicado.
 
 ## Proyecto
 - Runtime: Bun
@@ -40,13 +41,14 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `types.ts` | `BotContext` interface compartido + `SeenUser` |
 | `bot-manager.ts` | Facade slim: constructor, `startBot`, `stopBot`, `sendMessage`, API pública |
 | `tenant-facade.ts` | Tenant/billing/metering — delegado desde BotManager |
-| `tool-registry.ts` | Inicialización de tools, executor, filtro collaboration-safe |
+| `tool-registry.ts` | Inicialización de tools, categorías (`TOOL_CATEGORIES`), pre-selección por categoría, filtro collaboration-safe |
 | `tool-executor.ts` | Ejecución de tools con lifecycle events y retry |
 | `system-prompt-builder.ts` | Composición unificada de system prompts (modo `conversation` y `collaboration`) |
 | `memory-flush.ts` | Flush de sesión a daily memory log |
 | `group-activation.ts` | Checks de relevancia en grupos: deference, LLM relevance, broadcast |
 | `conversation-pipeline.ts` | Pipeline core: session expiry, RAG prefetch, LLM call, persist, reply |
 | `conversation-gate.ts` | Pre-condiciones de mensajes: auth, grupo, bot-to-bot, ask_human |
+| `ask-permission-store.ts` | Cola de permisos: request → approve/deny → consume en agent loop |
 | `collaboration.ts` | Bot-to-bot: visible, internal, delegation, multi-turn |
 | `handler-registrar.ts` | Registro de handlers grammy: skills, commands, media, built-ins |
 | `agent-loop.ts` | Orquestador del agent loop: ejecuta bots periódica/continuamente |

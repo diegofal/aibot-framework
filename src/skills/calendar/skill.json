@@ -1,0 +1,48 @@
+{
+  "id": "calendar",
+  "name": "Calendar",
+  "version": "1.0.0",
+  "description": "Manage calendar events: list, check availability, schedule",
+  "author": "AIBot Framework",
+  "entry": "index.ts",
+  "tools": [
+    {
+      "name": "calendar_list",
+      "description": "List upcoming calendar events",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "days": { "type": "number", "description": "Days ahead (1-30)" },
+          "limit": { "type": "number", "description": "Max events (1-50)" }
+        }
+      }
+    },
+    {
+      "name": "calendar_availability",
+      "description": "Check calendar availability for a date",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date": { "type": "string", "description": "Date (YYYY-MM-DD)" },
+          "duration_minutes": { "type": "number", "enum": [15, 30, 60] }
+        },
+        "required": ["date"]
+      }
+    },
+    {
+      "name": "calendar_schedule",
+      "description": "Schedule a new event (requires operator approval)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "start_time": { "type": "string", "description": "ISO 8601" },
+          "duration_minutes": { "type": "number" },
+          "description": { "type": "string" },
+          "attendees": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["title", "start_time", "duration_minutes"]
+      }
+    }
+  ]
+}

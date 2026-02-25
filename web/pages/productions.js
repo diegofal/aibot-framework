@@ -317,6 +317,201 @@ export async function renderBotProductions(el, botId) {
   }
 
   await load();
+
+  // --- Productions Chat section ---
+  const chatSection = document.createElement('div');
+  chatSection.className = 'mb-16';
+  chatSection.id = 'productions-chat-section';
+  el.appendChild(chatSection);
+
+  let chatConvos = [];
+  let activeChat = null;
+  let chatMessages = [];
+  let chatGenerating = false;
+  let chatErrorMsg = null;
+  const MAX_POLLS = 90;
+
+  async function loadProductionsChats() {
+    const data = await api(`/api/conversations/${encodeURIComponent(botId)}?type=productions`);
+    if (!data.error) chatConvos = data;
+    renderProductionsChat();
+  }
+
+  function renderProductionsChat() {
+    const section = document.getElementById('productions-chat-section');
+    if (!section) return;
+
+    section.innerHTML = `
+      <div class="form-separator"></div>
+      <div class="flex-between mb-16">
+        <div class="page-title" style="font-size:1.1rem">Productions Chat</div>
+        <button class="btn btn-primary btn-sm" id="new-prod-chat-btn">New Chat</button>
+      </div>
+      ${chatConvos.length > 0 && !activeChat
+        ? `<div id="prod-chat-list" class="mb-16">
+            ${chatConvos.map((c) => `
+              <div class="detail-card mb-8 prod-chat-item" data-id="${c.id}" style="cursor:pointer;padding:10px 14px;display:flex;justify-content:space-between;align-items:center">
+                <div>
+                  <strong>${escapeHtml(c.title)}</strong>
+                  <span class="text-dim text-sm" style="margin-left:8px">${c.messageCount} messages</span>
+                </div>
+                <span class="text-dim text-sm">${timeAgo(c.updatedAt)}</span>
+              </div>
+            `).join('')}
+          </div>`
+        : ''
+      }
+      ${activeChat
+        ? `<div class="detail-card mb-16">
+            <div class="flex-between mb-8">
+              <strong>${escapeHtml(activeChat.title)}</strong>
+              <div style="display:flex;gap:8px;align-items:center">
+                <a href="#/conversations/${encodeURIComponent(botId)}/${activeChat.id}" class="text-dim text-sm">Open in Conversations &rarr;</a>
+                <button class="btn btn-sm" id="prod-chat-back-btn">Back to list</button>
+              </div>
+            </div>
+            <div id="prod-chat-thread"></div>
+          </div>`
+        : ''
+      }
+      ${!activeChat && chatConvos.length === 0
+        ? '<p class="text-dim">No productions chats yet. Start a conversation about this bot\'s work.</p>'
+        : ''
+      }`;
+
+    // Wire new chat button
+    document.getElementById('new-prod-chat-btn')?.addEventListener('click', async () => {
+      const res = await api(`/api/conversations/${encodeURIComponent(botId)}`, {
+        method: 'POST',
+        body: { type: 'productions' },
+      });
+      if (res.id) {
+        activeChat = res;
+        chatMessages = [];
+        chatGenerating = false;
+        renderProductionsChat();
+      }
+    });
+
+    // Wire back button
+    document.getElementById('prod-chat-back-btn')?.addEventListener('click', () => {
+      activeChat = null;
+      loadProductionsChats();
+    });
+
+    // Wire chat item clicks
+    document.querySelectorAll('.prod-chat-item').forEach((item) => {
+      item.addEventListener('click', async () => {
+        const convId = item.dataset.id;
+        const data = await api(`/api/conversations/${encodeURIComponent(botId)}/${convId}`);
+        if (data.conversation) {
+          activeChat = data.conversation;
+          chatMessages = data.messages || [];
+          chatGenerating = false;
+          renderProductionsChat();
+        }
+      });
+    });
+
+    // Render thread if active chat
+    if (activeChat) {
+      renderProdChatThread();
+    }
+  }
+
+  function startProdChatPolling() {
+    let pollCount = 0;
+    const pollInterval = setInterval(async () => {
+      if (!document.getElementById('prod-chat-thread')) {
+        clearInterval(pollInterval);
+        return;
+      }
+      pollCount++;
+      if (pollCount >= MAX_POLLS) {
+        clearInterval(pollInterval);
+        chatGenerating = false;
+        chatErrorMsg = 'Response timed out (3 minutes). The bot may still be processing.';
+        renderProdChatThread();
+        return;
+      }
+      const statusRes = await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/status`);
+      if (statusRes.status === 'error') {
+        clearInterval(pollInterval);
+        chatGenerating = false;
+        chatErrorMsg = statusRes.error || 'Generation failed';
+        renderProdChatThread();
+        return;
+      }
+      if (statusRes.status === 'idle') {
+        clearInterval(pollInterval);
+        if (statusRes.lastBotMessage) {
+          if (!chatMessages.find((m) => m.id === statusRes.lastBotMessage.id)) {
+            chatMessages.push(statusRes.lastBotMessage);
+          }
+        }
+        chatGenerating = false;
+        chatErrorMsg = null;
+        renderProdChatThread();
+
+        // Refresh title
+        const convData = await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}`);
+        if (convData.conversation) {
+          activeChat.title = convData.conversation.title;
+          loadProductionsChats().then(() => {});
+          renderProductionsChat();
+        }
+      }
+    }, 2000);
+  }
+
+  function renderProdChatThread() {
+    const container = document.getElementById('prod-chat-thread');
+    if (!container || !activeChat) return;
+
+    renderThread(container, {
+      thread: chatMessages,
+      generating: chatGenerating,
+      error: chatErrorMsg,
+      onRetry: async () => {
+        chatErrorMsg = null;
+        chatGenerating = true;
+        renderProdChatThread();
+        await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/retry`, { method: 'POST' });
+        startProdChatPolling();
+      },
+      onSend: async (text) => {
+        chatMessages.push({
+          id: 'temp-' + Date.now(),
+          role: 'human',
+          content: text,
+          createdAt: new Date().toISOString(),
+        });
+        chatGenerating = true;
+        chatErrorMsg = null;
+        renderProdChatThread();
+
+        const res = await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/messages`, {
+          method: 'POST',
+          body: { message: text },
+        });
+
+        if (res.error) {
+          chatGenerating = false;
+          renderProdChatThread();
+          return;
+        }
+
+        if (res.message) {
+          const tempIdx = chatMessages.findIndex((m) => m.id.startsWith('temp-'));
+          if (tempIdx !== -1) chatMessages[tempIdx] = res.message;
+        }
+
+        startProdChatPolling();
+      },
+    });
+  }
+
+  await loadProductionsChats();
 }
 
 async function showDetailModal(botId, entryId, onDelete) {
@@ -332,6 +527,8 @@ async function showDetailModal(botId, entryId, onDelete) {
   let currentRating = entry.evaluation?.rating || 0;
   let currentStatus = entry.evaluation?.status || '';
   let threadGenerating = false;
+  let threadErrorMsg = null;
+  const MODAL_MAX_POLLS = 90;
 
   function render() {
     const modal = document.getElementById('modal');
@@ -436,6 +633,43 @@ async function showDetailModal(botId, entryId, onDelete) {
     // Thread discussion
     const threadContainer = document.getElementById('thread-container');
 
+    function startModalThreadPolling() {
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        if (!document.getElementById('thread-container')) {
+          clearInterval(pollInterval);
+          return;
+        }
+        pollCount++;
+        if (pollCount >= MODAL_MAX_POLLS) {
+          clearInterval(pollInterval);
+          threadGenerating = false;
+          threadErrorMsg = 'Response timed out (3 minutes). The bot may still be processing.';
+          renderThreadUI();
+          return;
+        }
+        const statusRes = await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/thread-status`);
+        if (statusRes.status === 'error') {
+          clearInterval(pollInterval);
+          threadGenerating = false;
+          threadErrorMsg = statusRes.error || 'Generation failed';
+          renderThreadUI();
+          return;
+        }
+        if (statusRes.status === 'idle') {
+          clearInterval(pollInterval);
+          if (statusRes.lastBotMessage) {
+            if (!entry.evaluation.thread.find(m => m.id === statusRes.lastBotMessage.id)) {
+              entry.evaluation.thread.push(statusRes.lastBotMessage);
+            }
+          }
+          threadGenerating = false;
+          threadErrorMsg = null;
+          renderThreadUI();
+        }
+      }, 2000);
+    }
+
     function renderThreadUI() {
       if (!threadContainer) return;
       renderThread(threadContainer, {
@@ -443,12 +677,21 @@ async function showDetailModal(botId, entryId, onDelete) {
         legacyFeedback: entry.evaluation?.feedback || null,
         legacyResponse: entry.evaluation?.aiResponse || null,
         generating: threadGenerating,
+        error: threadErrorMsg,
+        onRetry: async () => {
+          threadErrorMsg = null;
+          threadGenerating = true;
+          renderThreadUI();
+          await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/retry-thread`, { method: 'POST' });
+          startModalThreadPolling();
+        },
         onSend: async (text) => {
           // Optimistically add human message
           if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
           if (!entry.evaluation.thread) entry.evaluation.thread = [];
           entry.evaluation.thread.push({ id: 'temp', role: 'human', content: text, createdAt: new Date().toISOString() });
           threadGenerating = true;
+          threadErrorMsg = null;
           renderThreadUI();
 
           const res = await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/thread`, {
@@ -465,24 +708,7 @@ async function showDetailModal(botId, entryId, onDelete) {
           // Update entry with server response
           if (res.entry?.evaluation) entry.evaluation = res.entry.evaluation;
 
-          // Poll for bot reply
-          const pollInterval = setInterval(async () => {
-            if (!document.getElementById('thread-container')) {
-              clearInterval(pollInterval);
-              return;
-            }
-            const statusRes = await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/thread-status`);
-            if (statusRes.status === 'idle') {
-              clearInterval(pollInterval);
-              if (statusRes.lastBotMessage) {
-                if (!entry.evaluation.thread.find(m => m.id === statusRes.lastBotMessage.id)) {
-                  entry.evaluation.thread.push(statusRes.lastBotMessage);
-                }
-              }
-              threadGenerating = false;
-              renderThreadUI();
-            }
-          }, 2000);
+          startModalThreadPolling();
         },
       });
     }

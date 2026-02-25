@@ -3,6 +3,7 @@ import type { Logger } from './logger';
 import type { ToolDefinition, ToolCall, ToolExecutor } from './tools/types';
 import { runToolLoop } from './core/tool-runner';
 import { NativeToolStrategy } from './core/native-tool-strategy';
+import { createLoopDetector } from './core/loop-detector';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
@@ -18,6 +19,8 @@ export interface ChatOptions {
   tools?: ToolDefinition[];
   toolExecutor?: ToolExecutor;
   maxToolRounds?: number;
+  /** @internal Prevent recursive fallback loops */
+  _skipFallbacks?: boolean;
 }
 
 export interface GenerateOptions {
@@ -25,6 +28,8 @@ export interface GenerateOptions {
   system?: string;
   temperature?: number;
   maxTokens?: number;
+  /** @internal Prevent recursive fallback loops */
+  _skipFallbacks?: boolean;
 }
 
 export interface OllamaResponse {
@@ -85,19 +90,31 @@ export class OllamaClient {
       return data.response;
     } catch (error) {
       const elapsedMs = Date.now() - startMs;
+
+      // If already in a fallback call, don't recurse into fallbacks again
+      if (options._skipFallbacks) {
+        throw error;
+      }
+
       this.logger.warn({ err: error, model, elapsedMs, configuredTimeoutMs: this.config.timeout }, 'Primary model failed, trying fallbacks');
 
-      // Try fallback models
+      // Try fallback models with reduced timeout
       const fallbacks = this.config.models.fallbacks || [];
+      const savedTimeout = this.config.timeout;
       for (const fallback of fallbacks) {
         try {
           this.logger.debug({ fallback }, 'Trying fallback model');
-          return await this.generate(prompt, { ...options, model: fallback });
+          const fallbackTimeout = Math.min(this.config.timeout, 60_000);
+          this.config.timeout = fallbackTimeout;
+          const result = await this.generate(prompt, { ...options, model: fallback, _skipFallbacks: true });
+          this.config.timeout = savedTimeout;
+          return result;
         } catch (fallbackError) {
           this.logger.debug({ err: fallbackError, fallback }, 'Fallback model failed');
           continue;
         }
       }
+      this.config.timeout = savedTimeout;
 
       this.logger.error({ err: error }, 'All Ollama models failed');
       throw new Error(`Failed to generate response: ${error}`);
@@ -118,12 +135,14 @@ export class OllamaClient {
 
       // If tools are provided, delegate to the generic tool loop
       if (hasTools) {
+        const maxRounds = options.maxToolRounds ?? 5;
         const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger, this.config.timeout);
         return await runToolLoop(strategy, messages, {
-          maxRounds: options.maxToolRounds ?? 5,
+          maxRounds,
           tools: options.tools!,
           toolExecutor: options.toolExecutor!,
           logger: this.logger,
+          loopDetector: createLoopDetector(maxRounds),
         }, options);
       }
 
@@ -134,18 +153,30 @@ export class OllamaClient {
       return result.content || '';
     } catch (error) {
       const elapsedMs = Date.now() - startMs;
+
+      // If already in a fallback call, don't recurse into fallbacks again
+      if (options._skipFallbacks) {
+        throw error;
+      }
+
       this.logger.warn({ err: error, model, elapsedMs, configuredTimeoutMs: this.config.timeout }, 'Primary model failed for chat, trying fallbacks');
 
       const fallbacks = this.config.models.fallbacks || [];
+      const savedTimeout = this.config.timeout;
       for (const fallback of fallbacks) {
         try {
           this.logger.debug({ fallback }, 'Trying fallback model for chat');
-          return await this.chat(messages, { ...options, model: fallback });
+          const fallbackTimeout = Math.min(this.config.timeout, 60_000);
+          this.config.timeout = fallbackTimeout;
+          const result = await this.chat(messages, { ...options, model: fallback, _skipFallbacks: true });
+          this.config.timeout = savedTimeout;
+          return result;
         } catch (fallbackError) {
           this.logger.debug({ err: fallbackError, fallback }, 'Fallback model failed for chat');
           continue;
         }
       }
+      this.config.timeout = savedTimeout;
 
       this.logger.error({ err: error }, 'All Ollama models failed for chat');
       throw new Error(`Failed to chat: ${error}`);
@@ -160,6 +191,7 @@ export class OllamaClient {
       throw new Error('Embedding model not configured (soul.search.embeddingModel is empty)');
     }
     const embeddingModel = model;
+    const startMs = Date.now();
 
     try {
       this.logger.debug({ model: embeddingModel, textLength: text.length }, 'Generating embedding');
@@ -187,7 +219,8 @@ export class OllamaClient {
 
       return { embedding, model: data.model };
     } catch (error) {
-      this.logger.error({ err: error, model: embeddingModel }, 'Failed to generate embedding');
+      const elapsedMs = Date.now() - startMs;
+      this.logger.error({ err: error, model: embeddingModel, elapsedMs }, 'Failed to generate embedding');
       throw error;
     }
   }

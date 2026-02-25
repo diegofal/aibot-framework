@@ -244,6 +244,140 @@ describe('KarmaService', () => {
     });
   });
 
+  describe('dedup cooldown', () => {
+    test('duplicate negative tool events within cooldown are skipped', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      const first = svc.addEvent('bot1', -1, 'Tool error: file_read — not found', 'tool');
+      const second = svc.addEvent('bot1', -1, 'Tool error: file_read — not found', 'tool');
+      expect(first).not.toBeNull();
+      expect(second).toBeNull();
+      expect(svc.getAllEvents('bot1').length).toBe(1);
+    });
+
+    test('duplicate template events on same file are skipped', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      const first = svc.addEvent('bot1', -3, 'Empty template detected in "notes.md"', 'production');
+      const second = svc.addEvent('bot1', -3, 'Empty template detected in "notes.md"', 'production');
+      expect(first).not.toBeNull();
+      expect(second).toBeNull();
+      expect(svc.getAllEvents('bot1').length).toBe(1);
+    });
+
+    test('positive events are never deduped', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      const first = svc.addEvent('bot1', 1, 'Novel action: review goals', 'agent-loop');
+      const second = svc.addEvent('bot1', 1, 'Novel action: review goals', 'agent-loop');
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(svc.getAllEvents('bot1').length).toBe(2);
+    });
+
+    test('events beyond cooldown window ARE recorded', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 0 }), noopLogger);
+      const first = svc.addEvent('bot1', -1, 'Tool error: file_read — not found', 'tool');
+      // cooldown is 0 minutes, so immediately beyond the window
+      const second = svc.addEvent('bot1', -1, 'Tool error: file_read — not found', 'tool');
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(svc.getAllEvents('bot1').length).toBe(2);
+    });
+
+    test('different tool errors are NOT deduped against each other', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      const first = svc.addEvent('bot1', -1, 'Tool error: file_read — not found', 'tool');
+      const second = svc.addEvent('bot1', -1, 'Tool error: file_write — permission denied', 'tool');
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(svc.getAllEvents('bot1').length).toBe(2);
+    });
+
+    test('addEvent returns null for deduped events', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      svc.addEvent('bot1', -2, 'Repeated action: review goals again', 'agent-loop');
+      const result = svc.addEvent('bot1', -2, 'Repeated action: review goals again', 'agent-loop');
+      expect(result).toBeNull();
+    });
+
+    test('manual negative events are never deduped', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      const first = svc.addEvent('bot1', -5, 'Manual penalty', 'manual');
+      const second = svc.addEvent('bot1', -5, 'Manual penalty', 'manual');
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(svc.getAllEvents('bot1').length).toBe(2);
+    });
+
+    test('template events on different files are NOT deduped', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      const first = svc.addEvent('bot1', -3, 'Empty template detected in "notes.md"', 'production');
+      const second = svc.addEvent('bot1', -3, 'Empty template detected in "report.md"', 'production');
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(svc.getAllEvents('bot1').length).toBe(2);
+    });
+
+    test('dedup is per-bot (same event on different bots is not deduped)', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      const first = svc.addEvent('bot1', -1, 'Tool error: file_read — not found', 'tool');
+      const second = svc.addEvent('bot2', -1, 'Tool error: file_read — not found', 'tool');
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+    });
+  });
+
+  describe('extractDedupKey', () => {
+    test('extracts file path from production source', () => {
+      const key = KarmaService.extractDedupKey('production', 'Empty template detected in "notes.md"');
+      expect(key).toBe('production:notes.md');
+    });
+
+    test('extracts tool name from tool source', () => {
+      const key = KarmaService.extractDedupKey('tool', 'Tool error: file_read — File not found');
+      expect(key).toContain('tool:file_read:');
+    });
+
+    test('uses prefix for agent-loop source', () => {
+      const key = KarmaService.extractDedupKey('agent-loop', 'Repeated action: something long here');
+      expect(key).toStartWith('agent-loop:');
+    });
+
+    test('falls back to source:prefix for other sources', () => {
+      const key = KarmaService.extractDedupKey('goal', 'Some goal failure reason');
+      expect(key).toBe('goal:Some goal failure reason');
+    });
+
+    test('normalizes leading ./ in production paths', () => {
+      const key1 = KarmaService.extractDedupKey('production', 'Empty template detected in "./notes.md"');
+      const key2 = KarmaService.extractDedupKey('production', 'Empty template detected in "notes.md"');
+      expect(key1).toBe(key2);
+      expect(key1).toBe('production:notes.md');
+    });
+
+    test('normalizes ./ prefix in nested paths', () => {
+      const key1 = KarmaService.extractDedupKey('production', 'Empty template detected in "./src/chapter1.md"');
+      const key2 = KarmaService.extractDedupKey('production', 'Empty template detected in "src/chapter1.md"');
+      expect(key1).toBe(key2);
+      expect(key1).toBe('production:src/chapter1.md');
+    });
+
+    test('collapses duplicate slashes in production paths', () => {
+      const key1 = KarmaService.extractDedupKey('production', 'Empty template detected in "src//chapter1.md"');
+      const key2 = KarmaService.extractDedupKey('production', 'Empty template detected in "src/chapter1.md"');
+      expect(key1).toBe(key2);
+    });
+  });
+
+  describe('dedup with path normalization', () => {
+    test('./file.md and file.md produce same dedup key and are deduped', () => {
+      const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
+      const first = svc.addEvent('bot1', -3, 'Empty template detected in "./manuscrito.md"', 'production');
+      const second = svc.addEvent('bot1', -3, 'Empty template detected in "manuscrito.md"', 'production');
+      expect(first).not.toBeNull();
+      expect(second).toBeNull();
+      expect(svc.getAllEvents('bot1').length).toBe(1);
+    });
+  });
+
   describe('getHistory', () => {
     test('returns paginated history newest first', () => {
       for (let i = 0; i < 10; i++) {

@@ -360,6 +360,8 @@ pre code {
 .badge-green  { background: rgba(52,211,153,.15);  color: var(--green); }
 .badge-purple { background: rgba(167,139,250,.15); color: var(--purple); }
 .badge-cyan   { background: rgba(34,211,238,.15);  color: var(--cyan); }
+.badge-yellow { background: rgba(251,191,36,.15);  color: var(--orange); }
+.badge-dim    { background: rgba(148,163,184,.12); color: var(--text-dim); }
 
 /* ---- Tags (inline labels) ---- */
 .tag {

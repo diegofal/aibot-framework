@@ -65,9 +65,11 @@ export function timeAgo(isoOrDate, future = false) {
  * @param {string} [opts.legacyResponse] - Legacy aiResponse/response field (first bot message)
  * @param {function} opts.onSend - Callback when user sends a message
  * @param {boolean} opts.generating - Whether bot is currently generating a reply
+ * @param {string} [opts.error] - Error message to display (replaces "is thinking")
+ * @param {function} [opts.onRetry] - Callback when user clicks retry button
  */
 export function renderThread(container, opts) {
-  const { thread = [], legacyFeedback, legacyResponse, onSend, generating } = opts;
+  const { thread = [], legacyFeedback, legacyResponse, onSend, generating, error, onRetry } = opts;
 
   // Build messages list: legacy fields first (if no thread array), then thread
   const messages = [];
@@ -98,7 +100,13 @@ export function renderThread(container, opts) {
     }
   }
 
-  if (generating) {
+  if (error) {
+    html += `<div class="thread-error">
+      <span class="badge badge-error">Error</span>
+      <span>${escapeHtml(error)}</span>
+      ${onRetry ? '<button class="btn btn-retry btn-sm thread-retry-btn">Retry</button>' : ''}
+    </div>`;
+  } else if (generating) {
     html += '<div class="thread-typing"><span class="bubble-role">Bot</span> is thinking...</div>';
   }
 
@@ -108,7 +116,7 @@ export function renderThread(container, opts) {
   html += `
     <div class="thread-input-area">
       <textarea class="thread-input" rows="2" placeholder="Type a message..."></textarea>
-      <button class="btn btn-primary btn-sm thread-send-btn"${generating ? ' disabled' : ''}>Send</button>
+      <button class="btn btn-primary btn-sm thread-send-btn"${generating || error ? ' disabled' : ''}>Send</button>
     </div>`;
 
   container.innerHTML = html;
@@ -137,4 +145,10 @@ export function renderThread(container, opts) {
       doSend();
     }
   });
+
+  // Wire retry button
+  const retryBtn = container.querySelector('.thread-retry-btn');
+  if (retryBtn && onRetry) {
+    retryBtn.addEventListener('click', onRetry);
+  }
 }

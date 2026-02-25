@@ -7,6 +7,7 @@ import type { GroupActivation } from './group-activation';
 import type { MemoryFlusher } from './memory-flush';
 import type { ToolRegistry } from './tool-registry';
 import type { AskHumanStore } from './ask-human-store';
+import type { ConversationsService } from '../conversations/service';
 import { sendLongMessage } from './telegram-utils';
 import { registerMediaHandlers, trackUser, isAuthorized as isAuthorizedMedia, buildFileUrl } from './media-handlers';
 import { registerBuiltinCommands, handleStart, handleHelp } from './builtin-commands';
@@ -22,8 +23,9 @@ export class HandlerRegistrar {
     private memoryFlusher: MemoryFlusher,
     private toolRegistry: ToolRegistry,
     private askHumanStore?: AskHumanStore,
+    private conversationsService?: ConversationsService,
   ) {
-    this.conversationGate = new ConversationGate(ctx, groupActivation, askHumanStore);
+    this.conversationGate = new ConversationGate(ctx, groupActivation, askHumanStore, conversationsService);
   }
 
   /**
@@ -38,7 +40,7 @@ export class HandlerRegistrar {
 
       const skill = this.ctx.skillRegistry.get(skillId);
       if (!skill) {
-        this.ctx.logger.warn({ skillId, botId: config.id }, 'Skill not found');
+        this.ctx.logger.debug({ skillId, botId: config.id }, 'Skill not found in built-in registry (may be external-only)');
         continue;
       }
       if (skill.commands) {

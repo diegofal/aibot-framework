@@ -1,6 +1,6 @@
-import { existsSync, unlinkSync, rmSync, readdirSync, mkdirSync } from 'node:fs';
+import { existsSync, unlinkSync, rmSync, readdirSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Bot } from 'grammy';
+import { Bot, GrammyError } from 'grammy';
 import { AgentRegistry, type AgentInfo } from '../agent-registry';
 import type { BotConfig, Config } from '../config';
 import { resolveAgentConfig } from '../config';
@@ -29,8 +29,11 @@ import { CollaborationManager } from './collaboration';
 import { HandlerRegistrar } from './handler-registrar';
 import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
 import { AskHumanStore, type PendingQuestionInfo } from './ask-human-store';
+import { AskPermissionStore, type PermissionRequestInfo, type PermissionHistoryEntry } from './ask-permission-store';
 import { AgentFeedbackStore, type AgentFeedback } from './agent-feedback-store';
+import { ToolAuditLog } from './tool-audit-log';
 import { ProductionsService } from '../productions/service';
+import { ConversationsService } from '../conversations/service';
 import { KarmaService } from '../karma/service';
 import { runStartupSoulCheck } from './soul-health-check';
 import type { TenantManagerConfig } from '../tenant/manager';
@@ -70,10 +73,15 @@ export class BotManager {
   private handlerRegistrar: HandlerRegistrar;
   private agentLoop: AgentLoop;
   private askHumanStore: AskHumanStore;
+  private askPermissionStore: AskPermissionStore;
   private agentFeedbackStore: AgentFeedbackStore;
   private productionsService?: ProductionsService;
+  private conversationsService: ConversationsService;
   private karmaService?: KarmaService;
+  private toolAuditLog: ToolAuditLog;
   private tenantFacade: TenantFacade;
+  private restartAttempts = new Map<string, number[]>();
+  private pollAbortControllers = new Map<string, AbortController>();
 
   constructor(
     private skillRegistry: SkillRegistry,
@@ -89,23 +97,46 @@ export class BotManager {
     this.defaultLLMClient = new OllamaLLMClient(ollamaClient);
     this.agentRegistry = new AgentRegistry();
 
+    const dataDir = config.paths.data;
     const collabConfig = config.collaboration;
+    const collabDataDir = join(dataDir, 'collaboration');
     this.collaborationTracker = new CollaborationTracker(
       collabConfig.maxRounds,
       collabConfig.cooldownMs,
+      collabDataDir,
     );
-    this.collaborationSessions = new CollaborationSessionManager(collabConfig.sessionTtlMs);
+    this.collaborationSessions = new CollaborationSessionManager(collabConfig.sessionTtlMs, collabDataDir);
 
     if (config.media?.enabled) {
       this.mediaHandler = new MediaHandler(config.media, logger);
       this.logger.info('Media handler initialized');
     }
 
+    // Initialize conversations service
+    this.conversationsService = new ConversationsService(config.conversations.baseDir);
+
     // Initialize ask-human store early so it's available in BotContext
-    this.askHumanStore = new AskHumanStore(logger);
+    this.askHumanStore = new AskHumanStore(logger, join(dataDir, 'ask-human'), {
+      onTimeout: (_questionId, botId, conversationId) => {
+        if (conversationId) {
+          this.conversationsService.markInboxStatus(botId, conversationId, 'timed_out');
+        }
+      },
+      onDismiss: (_questionId, botId, conversationId) => {
+        if (conversationId) {
+          this.conversationsService.markInboxStatus(botId, conversationId, 'dismissed');
+        }
+      },
+    });
+
+    // Initialize ask-permission store
+    this.askPermissionStore = new AskPermissionStore(logger, join(dataDir, 'ask-permission'));
 
     // Initialize agent feedback store
     this.agentFeedbackStore = new AgentFeedbackStore(logger);
+
+    // Initialize tool audit log
+    this.toolAuditLog = new ToolAuditLog(join(dataDir, 'tool-audit'), logger);
 
     // Initialize productions service if enabled
     if (config.productions?.enabled !== false) {
@@ -156,7 +187,9 @@ export class BotManager {
       handledMessageIds: this.handledMessageIds,
       llmClients: this.llmClients,
       askHumanStore: this.askHumanStore,
+      askPermissionStore: this.askPermissionStore,
       agentFeedbackStore: this.agentFeedbackStore,
+      toolAuditLog: this.toolAuditLog,
       productionsService: this.productionsService,
 
       getActiveModel: (botId: string) => this.getActiveModel(botId),
@@ -178,7 +211,7 @@ export class BotManager {
       ctx, this.systemPromptBuilder, this.toolRegistry
     );
     this.handlerRegistrar = new HandlerRegistrar(
-      ctx, this.conversationPipeline, this.groupActivation, this.memoryFlusher, this.toolRegistry, this.askHumanStore
+      ctx, this.conversationPipeline, this.groupActivation, this.memoryFlusher, this.toolRegistry, this.askHumanStore, this.conversationsService
     );
     this.agentLoop = new AgentLoop(ctx, this.systemPromptBuilder, this.toolRegistry);
 
@@ -205,14 +238,20 @@ export class BotManager {
         store: this.askHumanStore,
         getBotInstance: (botId: string) => this.bots.get(botId),
         getBotName: (botId: string) => this.config.bots.find((b) => b.id === botId)?.name ?? botId,
+        conversationsService: this.conversationsService,
+      },
+      {
+        store: this.askPermissionStore,
+        getBotInstance: (botId: string) => this.bots.get(botId),
+        getBotName: (botId: string) => this.config.bots.find((b) => b.id === botId)?.name ?? botId,
       },
     );
 
     // Create message buffer (needs handleConversation callback)
     this.messageBuffer = new MessageBuffer(
       config.buffer,
-      (gramCtx, botCfg, sessionKey, userText, images, sessionText) =>
-        this.conversationPipeline.handleConversation(gramCtx, botCfg, sessionKey, userText, images, sessionText),
+      (gramCtx, botCfg, sessionKey, userText, images, sessionText, isVoice) =>
+        this.conversationPipeline.handleConversation(gramCtx, botCfg, sessionKey, userText, images, sessionText, isVoice),
       this.logger
     );
 
@@ -311,6 +350,10 @@ export class BotManager {
       const token = config.token?.trim();
       let mode: 'telegram' | 'headless' = 'headless';
 
+      // Add to runningBots BEFORE starting to close the race window where
+      // a concurrent startBot() could overlap (runningBots.has() returns false).
+      this.runningBots.add(config.id);
+
       if (token) {
         try {
           await this.startTelegramBot({ ...config, token }, botLogger);
@@ -322,14 +365,113 @@ export class BotManager {
       } else {
         this.registerHeadless(config, botLogger);
       }
-
-      this.runningBots.add(config.id);
       // Wake the agent loop so it picks up the new bot immediately
       if (this.config.agentLoop.enabled) this.agentLoop.wakeUp();
       this.logger.info({ botId: config.id, name: config.name, mode }, 'Bot started successfully');
     } catch (error) {
+      this.runningBots.delete(config.id);
       this.logger.error({ error, botId: config.id }, 'Failed to start bot');
       throw error;
+    }
+  }
+
+  private abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (signal.aborted) { resolve(); return; }
+      const timer = setTimeout(resolve, ms);
+      signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+  }
+
+  /** Brief pause between polls to prevent Telegram server-side session overlap → 409 */
+  private static readonly POLL_INTERVAL_MS = 500;
+
+  /**
+   * Custom polling loop that replaces grammy's bot.start().
+   * Calls getUpdates directly and feeds updates to bot.handleUpdate().
+   * grammy's handlePollingError is never invoked — we handle 409 with backoff.
+   */
+  private async pollLoop(bot: Bot, botId: string, signal: AbortSignal, logger: Logger): Promise<void> {
+    let offset = 0;
+    let consecutive409 = 0;
+    let first409At = 0;
+    const MAX_409_CONSECUTIVE = 20;
+    const MAX_409_DURATION_MS = 5 * 60_000;
+
+    // Match grammy's internal behavior: clear any webhook before polling
+    await bot.api.deleteWebhook();
+
+    while (!signal.aborted) {
+      try {
+        const updates = await bot.api.getUpdates({ offset, limit: 100, timeout: 30 }, signal);
+
+        // Success — reset 409 tracking
+        consecutive409 = 0;
+        first409At = 0;
+
+        if (updates.length === 0) {
+          // Inter-poll pause before next getUpdates (prevents session overlap → 409)
+          if (!signal.aborted) await this.abortableSleep(BotManager.POLL_INTERVAL_MS, signal);
+          continue;
+        }
+
+        // Advance offset BEFORE handling (prevents infinite crash loop on poisoned update)
+        offset = updates[updates.length - 1].update_id + 1;
+
+        for (const update of updates) {
+          try {
+            await bot.handleUpdate(update);
+          } catch (err) {
+            logger.error({ err, updateId: update.update_id, botId }, 'Error handling update (non-fatal)');
+          }
+        }
+      } catch (err) {
+        if (signal.aborted) break;
+
+        // Classify the error
+        const is409 = err instanceof GrammyError && err.error_code === 409;
+        const is401 = err instanceof GrammyError && err.error_code === 401;
+        const is429 = err instanceof GrammyError && err.error_code === 429;
+
+        if (is401) {
+          throw err; // Bad token — unrecoverable
+        }
+
+        if (is409) {
+          consecutive409++;
+          if (first409At === 0) first409At = Date.now();
+
+          const elapsed = Date.now() - first409At;
+          if (consecutive409 >= MAX_409_CONSECUTIVE || elapsed >= MAX_409_DURATION_MS) {
+            logger.error({ botId, consecutive409, elapsedMs: elapsed },
+              'Sustained 409 conflict — giving up');
+            throw err;
+          }
+
+          const delay = Math.min(3_000 * consecutive409, 30_000);
+          if (consecutive409 <= 2) {
+            logger.debug({ botId, attempt: consecutive409, delay }, 'getUpdates 409 — backing off');
+          } else {
+            logger.warn({ botId, attempt: consecutive409, delay }, 'getUpdates 409 — backing off');
+          }
+          await this.abortableSleep(delay, signal);
+          continue;
+        }
+
+        if (is429) {
+          const retryAfter = (err as GrammyError & { parameters?: { retry_after?: number } }).parameters?.retry_after ?? 10;
+          logger.warn({ botId, retryAfter }, 'Rate limited — respecting retry_after');
+          await this.abortableSleep(retryAfter * 1000, signal);
+          continue;
+        }
+
+        // Other transient errors — brief backoff
+        logger.warn({ err, botId }, 'getUpdates error — retrying in 3s');
+        await this.abortableSleep(3_000, signal);
+      }
+
+      // Brief pause between polls to prevent Telegram session overlap → 409
+      if (!signal.aborted) await this.abortableSleep(BotManager.POLL_INTERVAL_MS, signal);
     }
   }
 
@@ -340,6 +482,9 @@ export class BotManager {
     // If the token is invalid, this throws and prevents the bot from being marked as running.
     const me = await bot.api.getMe();
 
+    // Required for bot.handleUpdate() to work — grammy checks this.me internally
+    bot.botInfo = me;
+
     bot.catch((error) => {
       botLogger.error({ error, botId: config.id }, 'Bot error');
     });
@@ -347,38 +492,48 @@ export class BotManager {
     // Register all handlers via HandlerRegistrar
     this.handlerRegistrar.registerAll(bot, config);
 
-    // Start polling and handle async failures (e.g. 409 conflict after ungraceful shutdown)
-    const pollingPromise = bot.start();
+    // Store bot instance before starting the poll loop
     this.bots.set(config.id, bot);
 
+    // Custom polling loop — replaces bot.start() entirely.
+    // grammy's handlePollingError treats 409 as fatal (throws, kills loop).
+    // Our pollLoop handles 409 with backoff and never crashes on transient conflicts.
+    const ac = new AbortController();
+    this.pollAbortControllers.set(config.id, ac);
+
+    const pollingPromise = this.pollLoop(bot, config.id, ac.signal, botLogger);
+
     pollingPromise.catch(async (err) => {
-      const is409 = err?.error_code === 409 || err?.message?.includes('409');
-      if (is409) {
-        botLogger.warn({ botId: config.id }, 'Polling hit 409 conflict, retrying in 3s...');
-        await new Promise((r) => setTimeout(r, 3000));
-        try {
-          // Create a fresh bot instance for the retry
-          this.bots.delete(config.id);
-          const retryBot = new Bot(config.token);
-          retryBot.catch((error) => {
-            botLogger.error({ error, botId: config.id }, 'Bot error');
-          });
-          this.handlerRegistrar.registerAll(retryBot, config);
-          const retryPromise = retryBot.start();
-          this.bots.set(config.id, retryBot);
-          retryPromise.catch((retryErr) => {
-            botLogger.error({ error: retryErr, botId: config.id }, 'Polling retry failed, bot stopped');
-            this.cleanupBot(config.id);
-          });
-          botLogger.info({ botId: config.id }, 'Polling retry started');
-        } catch (retryErr) {
-          botLogger.error({ error: retryErr, botId: config.id }, 'Polling retry setup failed');
-          this.cleanupBot(config.id);
-        }
-      } else {
-        botLogger.error({ error: err, botId: config.id }, 'Polling failed, bot stopped');
-        this.cleanupBot(config.id);
+      botLogger.error({ error: err, botId: config.id }, 'Polling failed');
+
+      await this.cleanupBot(config.id);
+
+      // Track restart attempts (sliding 5-min window)
+      const now = Date.now();
+      const recent = (this.restartAttempts.get(config.id) ?? [])
+        .filter(t => now - t < 5 * 60_000);
+
+      if (recent.length >= 3) {
+        botLogger.error({ botId: config.id, attempts: recent.length },
+          'Max auto-restart attempts reached (3 in 5 min). Manual restart required.');
+        this.restartAttempts.delete(config.id);
+        return;
       }
+      this.restartAttempts.set(config.id, [...recent, now]);
+
+      const delay = 10_000;
+      botLogger.info({ botId: config.id, delay, attempt: recent.length + 1 },
+        'Scheduling auto-restart...');
+      setTimeout(async () => {
+        const botConfig = this.config.bots.find(b => b.id === config.id);
+        if (!botConfig || this.runningBots.has(config.id)) return;
+        try {
+          await this.startBot(botConfig);
+          botLogger.info({ botId: config.id }, 'Auto-restart succeeded');
+        } catch (e) {
+          botLogger.error({ error: e, botId: config.id }, 'Auto-restart failed');
+        }
+      }, delay);
     });
 
     // Register in agent registry with the already-validated bot info
@@ -408,7 +563,11 @@ export class BotManager {
     botLogger.info('Registered headless bot in agent registry');
   }
 
-  private cleanupBot(botId: string): void {
+  private async cleanupBot(botId: string): Promise<void> {
+    // Abort the custom poll loop (if running) — we never called bot.start(),
+    // so bot.stop() would either no-op or issue a getUpdates that could itself 409.
+    const ac = this.pollAbortControllers.get(botId);
+    if (ac) { ac.abort(); this.pollAbortControllers.delete(botId); }
     this.bots.delete(botId);
     this.runningBots.delete(botId);
     this.activeModels.delete(botId);
@@ -420,11 +579,8 @@ export class BotManager {
   async stopBot(botId: string): Promise<void> {
     if (!this.runningBots.has(botId)) return;
 
-    const bot = this.bots.get(botId);
-    if (bot) {
-      await bot.stop();
-    }
-    this.cleanupBot(botId);
+    await this.cleanupBot(botId);
+    this.restartAttempts.delete(botId);
     this.botLoggers.delete(botId);
     this.logger.info({ botId }, 'Bot stopped');
   }
@@ -433,11 +589,13 @@ export class BotManager {
     ok: true;
     cleared: {
       sessions: number;
+      soulRestored: boolean;
       goals: boolean;
-      memoryLogs: number;
+      memoryDir: boolean;
       versions: boolean;
       coreMemory: boolean;
       index: boolean;
+      feedback: boolean;
     };
   }> {
     const botConfig = this.config.bots.find((b) => b.id === botId);
@@ -452,52 +610,87 @@ export class BotManager {
     const soulDir = resolved.soulDir;
     const cleared = {
       sessions: 0,
+      soulRestored: false,
       goals: false,
-      memoryLogs: 0,
+      memoryDir: false,
       versions: false,
       coreMemory: false,
       index: false,
+      feedback: false,
     };
 
     // 1. Clear sessions
     cleared.sessions = this.sessionManager.clearBotSessions(botId);
 
-    // 2. Delete GOALS.md
+    // 2. Restore soul files from .baseline/ (or delete if no baseline)
+    const baselineDir = join(soulDir, '.baseline');
+    const soulFiles = ['IDENTITY.md', 'SOUL.md', 'MOTIVATIONS.md'] as const;
+    const hasBaseline = existsSync(baselineDir);
+
+    for (const file of soulFiles) {
+      const baselinePath = join(baselineDir, file);
+      const currentPath = join(soulDir, file);
+      if (hasBaseline && existsSync(baselinePath)) {
+        copyFileSync(baselinePath, currentPath);
+        cleared.soulRestored = true;
+      } else if (existsSync(currentPath)) {
+        unlinkSync(currentPath);
+      }
+    }
+
+    // 3. Delete GOALS.md
     const goalsPath = join(soulDir, 'GOALS.md');
     if (existsSync(goalsPath)) {
       unlinkSync(goalsPath);
       cleared.goals = true;
     }
 
-    // 3. Delete all .md files in memory/
-    const memoryDir = join(soulDir, 'memory');
-    if (existsSync(memoryDir)) {
-      for (const file of readdirSync(memoryDir)) {
-        if (file.endsWith('.md')) {
-          unlinkSync(join(memoryDir, file));
-          cleared.memoryLogs++;
-        }
-      }
+    // 4. Delete MEMORY.md at soul root
+    const rootMemoryPath = join(soulDir, 'MEMORY.md');
+    if (existsSync(rootMemoryPath)) {
+      unlinkSync(rootMemoryPath);
     }
 
-    // 4. Delete .versions/ recursively
+    // 5. Recursively delete memory/ and recreate empty
+    const memoryDir = join(soulDir, 'memory');
+    if (existsSync(memoryDir)) {
+      rmSync(memoryDir, { recursive: true });
+      cleared.memoryDir = true;
+    }
+    mkdirSync(memoryDir, { recursive: true });
+
+    // 6. Delete .versions/ recursively
     const versionsDir = join(soulDir, '.versions');
     if (existsSync(versionsDir)) {
       rmSync(versionsDir, { recursive: true });
       cleared.versions = true;
     }
 
-    // 5. Clear core memory
+    // 7. Delete feedback.jsonl + clear in-memory feedback store
+    const feedbackPath = join(soulDir, 'feedback.jsonl');
+    if (existsSync(feedbackPath)) {
+      unlinkSync(feedbackPath);
+      cleared.feedback = true;
+    }
+    this.agentFeedbackStore.clearForBot(botId);
+
+    // 8. Clear core memory
     if (this.memoryManager) {
       this.memoryManager.clearCoreMemory();
       cleared.coreMemory = true;
     }
 
-    // 6. Clear index
+    // 9. Clear index
     if (this.memoryManager) {
       this.memoryManager.clearIndex();
       cleared.index = true;
     }
+
+    // 10. Clear ask-human store for this bot
+    this.askHumanStore.clearForBot(botId);
+
+    // 11. Clear ask-permission store for this bot
+    this.askPermissionStore.clearForBot(botId);
 
     this.logger.info({ botId, cleared }, 'Bot reset completed');
     return { ok: true, cleared };
@@ -523,13 +716,15 @@ export class BotManager {
     this.collaborationTracker.dispose();
     this.collaborationSessions.dispose();
     this.askHumanStore.dispose();
+    this.askPermissionStore.dispose();
+    // Abort all custom poll loops
+    for (const [botId, ac] of this.pollAbortControllers) {
+      ac.abort();
+      this.logger.info({ botId }, 'Bot stopped');
+    }
+    this.pollAbortControllers.clear();
     for (const botId of this.runningBots) {
       this.agentRegistry.unregister(botId);
-      const bot = this.bots.get(botId);
-      if (bot) {
-        await bot.stop();
-      }
-      this.logger.info({ botId }, 'Bot stopped');
     }
     this.bots.clear();
     this.runningBots.clear();
@@ -569,15 +764,64 @@ export class BotManager {
   }
 
   answerAskHuman(id: string, answer: string): boolean {
-    const ok = this.askHumanStore.answerById(id, answer);
+    const result = this.askHumanStore.answerById(id, answer);
+    if (result.ok) {
+      // Write the answer to the inbox conversation and mark as answered
+      if (result.conversationId && result.botId) {
+        this.conversationsService.addMessage(result.botId, result.conversationId, 'human', answer);
+        this.conversationsService.markInboxStatus(result.botId, result.conversationId, 'answered');
+      }
+      this.agentLoop.wakeUp();
+    }
+    return result.ok;
+  }
+
+  dismissAskHuman(id: string): boolean {
+    const result = this.askHumanStore.dismissById(id);
+    if (result.ok) {
+      this.agentLoop.wakeUp();
+    }
+    return result.ok;
+  }
+
+  // Ask-permission delegates
+  getPermissionsPending(): Array<PermissionRequestInfo & { botName: string }> {
+    return this.askPermissionStore.getAll().map((r) => ({
+      ...r,
+      botName: this.config.bots.find((b) => b.id === r.botId)?.name ?? r.botId,
+    }));
+  }
+
+  getPermissionsCount(): number {
+    return this.askPermissionStore.getPendingCount();
+  }
+
+  approvePermission(id: string, note?: string): boolean {
+    const ok = this.askPermissionStore.approveById(id, note);
     if (ok) this.agentLoop.wakeUp();
     return ok;
   }
 
-  dismissAskHuman(id: string): boolean {
-    const ok = this.askHumanStore.dismissById(id);
+  denyPermission(id: string, note?: string): boolean {
+    const ok = this.askPermissionStore.denyById(id, note);
     if (ok) this.agentLoop.wakeUp();
     return ok;
+  }
+
+  getPermissionsHistory(limit?: number): Array<PermissionHistoryEntry & { botName: string }> {
+    return this.askPermissionStore.getHistory(limit).map((e) => ({
+      ...e,
+      botName: this.config.bots.find((b) => b.id === e.botId)?.name ?? e.botId,
+    }));
+  }
+
+  getPermissionHistoryById(id: string): (PermissionHistoryEntry & { botName: string }) | undefined {
+    const entry = this.askPermissionStore.getHistoryById(id);
+    if (!entry) return undefined;
+    return {
+      ...entry,
+      botName: this.config.bots.find((b) => b.id === entry.botId)?.name ?? entry.botId,
+    };
   }
 
   // Agent feedback delegates
@@ -636,6 +880,10 @@ export class BotManager {
     return this.toolRegistry.getExternalSkills();
   }
 
+  getConversationsService(): ConversationsService {
+    return this.conversationsService;
+  }
+
   getProductionsService(): ProductionsService | undefined {
     return this.productionsService;
   }
@@ -646,6 +894,10 @@ export class BotManager {
 
   getOllamaClient(): OllamaClient {
     return this.ollamaClient;
+  }
+
+  getToolRegistry(): ToolRegistry {
+    return this.toolRegistry;
   }
 
   // Collaboration delegates

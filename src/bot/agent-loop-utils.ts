@@ -100,7 +100,12 @@ export function scanFileTree(dirPath: string): string | null {
     } catch {
       return [];
     }
-    entries.sort();
+    // Sort with INDEX.md first for priority visibility when truncated
+    entries.sort((a, b) => {
+      if (a === 'INDEX.md') return -1;
+      if (b === 'INDEX.md') return 1;
+      return a.localeCompare(b);
+    });
     const lines: string[] = [];
     for (const entry of entries) {
       if (count >= MAX_ENTRIES) {

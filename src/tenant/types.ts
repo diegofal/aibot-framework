@@ -185,7 +185,15 @@ export interface BillingProvider {
   cancelSubscription(tenantId: string): Promise<void>;
   updateSubscription(tenantId: string, newPlan: string): Promise<void>;
   getInvoiceUrl(tenantId: string): Promise<string | undefined>;
-  handleWebhook(payload: unknown, signature: string): Promise<void>;
+  handleWebhook(payload: unknown, signature: string): Promise<WebhookResult>;
+}
+
+export interface WebhookResult {
+  type: 'payment_succeeded' | 'payment_failed' | 'subscription_canceled' | 'unhandled';
+  tenantId?: string;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  invoiceId?: string;
 }
 
 /**

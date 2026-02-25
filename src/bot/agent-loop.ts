@@ -1,10 +1,11 @@
+import { join } from 'node:path';
 import { type BotConfig, resolveAgentConfig } from '../config';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { ClaudeCliLLMClient } from '../core/llm-client';
 import type { BotContext } from './types';
 import type { SystemPromptBuilder } from './system-prompt-builder';
-import type { ToolRegistry } from './tool-registry';
+import { TOOL_CATEGORY_NAMES, type ToolCategory, type ToolRegistry } from './tool-registry';
 import { buildPlannerPrompt, buildContinuousPlannerPrompt, buildExecutorPrompt, buildFeedbackProcessorPrompt } from './agent-loop-prompts';
 import type { PlannerResult } from './agent-loop-prompts';
 import type { AgentFeedback } from './agent-feedback-store';
@@ -57,6 +58,10 @@ export interface AgentLoopResult {
   isIdle?: boolean;
   consecutiveIdleCycles?: number;
   retryAttempt?: number;
+  /** Tool categories selected by planner for pre-selection */
+  selectedToolCategories?: string[];
+  /** Number of tool definitions sent to executor after pre-selection */
+  executorToolCount?: number;
 }
 
 interface ExecuteLoopDetail {
@@ -68,6 +73,8 @@ interface ExecuteLoopDetail {
   strategistRan: boolean;
   strategistReflection?: string;
   focus?: string;
+  selectedToolCategories?: string[];
+  executorToolCount?: number;
 }
 
 export interface BotScheduleInfo {
@@ -116,7 +123,11 @@ export class AgentLoop {
     private systemPromptBuilder: SystemPromptBuilder,
     private toolRegistry: ToolRegistry,
   ) {
-    this.scheduler = new AgentScheduler(ctx, (botId, botConfig) => this.executeBotWithRetry(botId, botConfig));
+    this.scheduler = new AgentScheduler(
+      ctx,
+      (botId, botConfig) => this.executeBotWithRetry(botId, botConfig),
+      join(ctx.config.paths.data, 'agent-scheduler'),
+    );
   }
 
   setKarmaService(karmaService: KarmaService): void {
@@ -357,6 +368,8 @@ export class AgentLoop {
         focus: detail.focus,
         isIdle,
         consecutiveIdleCycles: schedule?.consecutiveIdleCycles ?? 0,
+        selectedToolCategories: detail.selectedToolCategories,
+        executorToolCount: detail.executorToolCount,
       };
     } catch (err) {
       const durationMs = Date.now() - startMs;
@@ -473,6 +486,18 @@ export class AgentLoop {
       );
     }
 
+    // Check for permission decisions from previous cycles
+    const resolvedPermissions = this.ctx.askPermissionStore.consumeDecisionsForBot(botId);
+    const consumedPermissionIds = resolvedPermissions.map(p => p.id);
+    const pendingPermissions = this.ctx.askPermissionStore.getPendingForBot(botId);
+
+    if (resolvedPermissions.length > 0) {
+      botLogger.info(
+        { botId, count: resolvedPermissions.length },
+        'Agent loop: injecting permission decisions into planner',
+      );
+    }
+
     // Get available tools (respecting disabled tools from both global and per-bot)
     const allDisabled = new Set([
       ...(botConfig.disabledTools ?? []),
@@ -497,6 +522,11 @@ export class AgentLoop {
     let plan: string[];
     let plannerReasoning: string;
     let priority: 'high' | 'medium' | 'low' | 'none' | undefined;
+    let selectedToolCategories: string[] | undefined;
+
+    // Tool pre-selection: planner picks categories, executor gets fewer tools
+    const toolPreSelectionEnabled = globalConfig.toolPreSelection !== false;
+    const toolCategoryList = toolPreSelectionEnabled ? [...TOOL_CATEGORY_NAMES] : undefined;
 
     // Build recent actions digest and karma block for planner context
     const recentActionsDigest = schedule ? buildRecentActionsDigest(schedule.recentActions) : null;
@@ -526,9 +556,12 @@ export class AgentLoop {
         lastCycleSummary: lastCycleSummary || undefined,
         answeredQuestions: answeredQuestions.map((q) => ({ question: q.question, answer: q.answer })),
         pendingQuestions: pendingQuestions.map((q) => ({ question: q.question })),
+        resolvedPermissions: resolvedPermissions.map((p) => ({ action: p.action, resource: p.resource, status: p.status, note: p.note })),
+        pendingPermissions: pendingPermissions.map((p) => ({ action: p.action, resource: p.resource })),
         recentActionsDigest: recentActionsDigest || undefined,
         karmaBlock,
         autonomousCyclesNote,
+        toolCategoryList,
       });
 
       const continuousResult = await withTimeout(
@@ -540,6 +573,7 @@ export class AgentLoop {
       plan = continuousResult.plan;
       plannerReasoning = continuousResult.reasoning;
       priority = continuousResult.priority;
+      selectedToolCategories = continuousResult.toolCategories;
     } else {
       const plannerInput = buildPlannerPrompt({
         identity,
@@ -553,9 +587,12 @@ export class AgentLoop {
         focus,
         answeredQuestions: answeredQuestions.map((q) => ({ question: q.question, answer: q.answer })),
         pendingQuestions: pendingQuestions.map((q) => ({ question: q.question })),
+        resolvedPermissions: resolvedPermissions.map((p) => ({ action: p.action, resource: p.resource, status: p.status, note: p.note })),
+        pendingPermissions: pendingPermissions.map((p) => ({ action: p.action, resource: p.resource })),
         recentActionsDigest: recentActionsDigest || undefined,
         karmaBlock,
         autonomousCyclesNote,
+        toolCategoryList,
       });
 
       const plannerResult = await withTimeout(
@@ -567,9 +604,14 @@ export class AgentLoop {
       plan = plannerResult.plan;
       plannerReasoning = plannerResult.reasoning;
       priority = plannerResult.priority;
+      selectedToolCategories = plannerResult.toolCategories;
     }
 
     if (plan.length === 0 || priority === 'none') {
+      if (consumedPermissionIds.length > 0) {
+        const idleSummary = priority === 'none' ? `Idle: ${plannerReasoning}` : 'Planner produced no plan steps.';
+        this.ctx.askPermissionStore.reportExecution(consumedPermissionIds, idleSummary, [], true);
+      }
       return { summary: priority === 'none' ? `Idle: ${plannerReasoning}` : 'Planner produced no plan steps.', plannerReasoning, plan: [], toolCalls: [], priority, strategistRan, strategistReflection, focus };
     }
 
@@ -618,19 +660,88 @@ export class AgentLoop {
       karmaService: this.karmaService ?? undefined,
     });
 
-    const response = await withTimeout(
-      () => llmClient.chat(messages, {
-        model,
-        temperature: 0.7,
-        tools: defs,
-        toolExecutor: executor.createCallback(),
-        maxToolRounds: globalConfig.maxToolRounds,
-      }),
-      'Executor phase',
-      90000,
+    // Subscribe to tool:end for audit log persistence
+    if (this.ctx.toolAuditLog) {
+      const auditLog = this.ctx.toolAuditLog;
+      executor.on('tool:end', (event) => {
+        auditLog.append({
+          timestamp: new Date(event.timestamp).toISOString(),
+          botId: event.botId,
+          chatId: event.chatId,
+          toolName: event.toolName,
+          args: event.args,
+          success: event.success,
+          result: event.result.slice(0, 500),
+          durationMs: event.durationMs,
+          retryAttempts: event.retryAttempts,
+        });
+      });
+    }
+
+    // Tool pre-selection: narrow executor tools based on planner's category picks
+    let executorDefs = defs;
+    if (toolPreSelectionEnabled && selectedToolCategories && selectedToolCategories.length > 0) {
+      const categoryFiltered = this.toolRegistry.getDefinitionsByCategories(
+        selectedToolCategories as ToolCategory[],
+        botId,
+      );
+      // Apply the same allDisabled filter on top of category filtering
+      executorDefs = categoryFiltered.filter((d) => !allDisabled.has(d.function.name));
+      botLogger.info(
+        { botId, selectedCategories: selectedToolCategories, fullToolCount: defs.length, filteredToolCount: executorDefs.length },
+        'Agent loop: tool pre-selection active',
+      );
+    }
+
+    // Per-bot override → global config → default 30. Session timeout guard (80% of maxDurationMs)
+    // and per-operation withTimeout already prevent runaway execution.
+    const maxToolRounds = botOverride?.maxToolRounds ?? globalConfig.maxToolRounds;
+    botLogger.info(
+      { botId, maxToolRounds },
+      'Agent loop: starting executor phase',
     );
 
-    toolCallLog.push(...executor.getExecutionLog());
+    let response: string;
+    try {
+      response = await withTimeout(
+        () => llmClient.chat(messages, {
+          model,
+          temperature: 0.7,
+          tools: executorDefs,
+          toolExecutor: executor.createCallback(),
+          maxToolRounds,
+        }),
+        'Executor phase',
+        90000,
+      );
+
+      toolCallLog.push(...executor.getExecutionLog());
+
+      // Report successful execution for consumed permissions
+      if (consumedPermissionIds.length > 0) {
+        const toolCallSummary = toolCallLog.map(t => ({ name: t.name, success: t.success }));
+        this.ctx.askPermissionStore.reportExecution(
+          consumedPermissionIds,
+          response || '(no response from executor)',
+          toolCallSummary,
+          true,
+        );
+      }
+    } catch (err) {
+      toolCallLog.push(...executor.getExecutionLog());
+
+      // Report failed execution for consumed permissions
+      if (consumedPermissionIds.length > 0) {
+        const toolCallSummary = toolCallLog.map(t => ({ name: t.name, success: t.success }));
+        this.ctx.askPermissionStore.reportExecution(
+          consumedPermissionIds,
+          `Executor failed: ${err instanceof Error ? err.message : String(err)}`,
+          toolCallSummary,
+          false,
+        );
+      }
+      throw err;
+    }
 
     return {
       summary: response || '(no response from executor)',
@@ -641,6 +752,8 @@ export class AgentLoop {
       strategistRan,
       strategistReflection,
       focus,
+      selectedToolCategories,
+      executorToolCount: executorDefs.length,
     };
   }
 
@@ -702,6 +815,23 @@ export class AgentLoop {
           disabledTools: allDisabled,
           enableLogging: true,
         });
+
+        if (this.ctx.toolAuditLog) {
+          const auditLog = this.ctx.toolAuditLog;
+          executor.on('tool:end', (event) => {
+            auditLog.append({
+              timestamp: new Date(event.timestamp).toISOString(),
+              botId: event.botId,
+              chatId: event.chatId,
+              toolName: event.toolName,
+              args: event.args,
+              success: event.success,
+              result: event.result.slice(0, 500),
+              durationMs: event.durationMs,
+              retryAttempts: event.retryAttempts,
+            });
+          });
+        }
 
         const response = await feedbackLLM.chat(messages, {
           temperature: 0.5,

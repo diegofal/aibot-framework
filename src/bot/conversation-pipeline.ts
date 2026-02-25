@@ -1,9 +1,10 @@
-import type { Context } from 'grammy';
+import { InputFile, type Context } from 'grammy';
 import type { BotConfig } from '../config';
-import { resolveAgentConfig } from '../config';
+import { resolveAgentConfig, resolveTtsConfig } from '../config';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import { generateSpeech } from '../tts';
 import type { BotContext } from './types';
 import type { MemoryFlusher } from './memory-flush';
 import type { SystemPromptBuilder } from './system-prompt-builder';
@@ -135,7 +136,8 @@ export class ConversationPipeline {
     serializedKey: string,
     userText: string,
     images?: string[],
-    sessionText?: string
+    sessionText?: string,
+    isVoice?: boolean,
   ): Promise<void> {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
@@ -318,7 +320,27 @@ export class ConversationPipeline {
         }
 
         if (response.trim()) {
-          await sendLongMessage(t => ctx.reply(t), response);
+          // TTS: if inbound was voice and TTS is configured, generate voice note
+          if (isVoice && this.ctx.config.media.tts) {
+            try {
+              await ctx.replyWithChatAction('record_voice');
+              const ttsConfig = resolveTtsConfig(this.ctx.config.media.tts, config);
+              const ttsResult = await generateSpeech(
+                response,
+                ttsConfig,
+                botLogger,
+              );
+              await ctx.replyWithVoice(
+                new InputFile(ttsResult.audioBuffer, 'reply.opus'),
+              );
+              botLogger.info({ latencyMs: ttsResult.latencyMs }, 'Voice reply sent');
+            } catch (ttsErr) {
+              botLogger.warn({ err: ttsErr }, 'TTS failed, falling back to text');
+              await sendLongMessage(t => ctx.reply(t), response);
+            }
+          } else {
+            await sendLongMessage(t => ctx.reply(t), response);
+          }
         } else {
           botLogger.debug({ chatId }, 'LLM returned empty response, sending ack');
           await ctx.reply('✅');

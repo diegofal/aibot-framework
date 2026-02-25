@@ -3,7 +3,12 @@ import { api, escapeHtml } from './shared.js';
 export async function renderIntegrations(el) {
   el.innerHTML = '<div class="page-title">Integrations</div><p class="text-dim">Loading...</p>';
 
-  const status = await api('/api/integrations/ollama/status');
+  const [status, toolsData] = await Promise.all([
+    api('/api/integrations/ollama/status'),
+    api('/api/integrations/ollama/tools'),
+  ]);
+
+  const availableTools = toolsData.tools || [];
 
   el.innerHTML = `
     <div class="page-title">Integrations</div>
@@ -38,6 +43,43 @@ export async function renderIntegrations(el) {
 
       <div id="chat-result" style="margin-top:16px"></div>
     </div>
+
+    <div class="detail-card" id="ollama-tools-card">
+      <div class="form-section-title">Test Chat with Tools</div>
+      <p class="text-dim text-sm mb-16">Send a message with tool definitions attached — same code path as the agent loop. Use this to verify whether a model supports native tool calling.</p>
+
+      <div class="form-row" style="align-items:flex-end;gap:8px">
+        <div class="form-group" style="width:220px;margin-bottom:0">
+          <label>Model</label>
+          <select id="tools-model">
+            ${buildModelOptions(status)}
+          </select>
+        </div>
+        <div class="form-group" style="flex:1;margin-bottom:0">
+          <label>Message</label>
+          <input type="text" id="tools-message" placeholder="What time is it?" value="What time is it?">
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="tools-send-btn" style="margin-bottom:0"${status.ok && availableTools.length > 0 ? '' : ' disabled'}>Send</button>
+      </div>
+
+      <div style="margin-top:12px">
+        <label class="text-dim text-sm">Tools (${availableTools.length})</label>
+        <div style="margin-top:4px;display:flex;align-items:center;gap:8px">
+          <button type="button" class="btn btn-sm" id="tools-toggle-btn" style="font-size:11px">Select All</button>
+        </div>
+        <div id="tools-checklist" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px 16px;max-height:200px;overflow-y:auto">
+          ${availableTools.map((t) => `
+            <label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer">
+              <input type="checkbox" class="tool-checkbox" value="${escapeHtml(t)}" checked>
+              <code style="font-size:12px">${escapeHtml(t)}</code>
+            </label>
+          `).join('')}
+          ${availableTools.length === 0 ? '<span class="text-dim text-sm">No tools registered</span>' : ''}
+        </div>
+      </div>
+
+      <div id="tools-result" style="margin-top:16px"></div>
+    </div>
   `;
 
   // Refresh button
@@ -49,22 +91,35 @@ export async function renderIntegrations(el) {
     const freshStatus = await api('/api/integrations/ollama/status');
     document.getElementById('ollama-status-body').innerHTML = renderStatusBody(freshStatus);
 
-    // Update model dropdown
-    const select = document.getElementById('chat-model');
-    select.innerHTML = buildModelOptions(freshStatus);
+    // Update both model dropdowns
+    const modelHtml = buildModelOptions(freshStatus);
+    document.getElementById('chat-model').innerHTML = modelHtml;
+    document.getElementById('tools-model').innerHTML = modelHtml;
     document.getElementById('chat-send-btn').disabled = !freshStatus.ok;
+    document.getElementById('tools-send-btn').disabled = !freshStatus.ok || availableTools.length === 0;
 
     btn.disabled = false;
     btn.textContent = 'Refresh';
   });
 
-  // Send chat
+  // Send chat (no tools)
   document.getElementById('chat-send-btn').addEventListener('click', sendChat);
   document.getElementById('chat-message').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      sendChat();
-    }
+    if (e.key === 'Enter') { e.preventDefault(); sendChat(); }
+  });
+
+  // Tools toggle (Select All / None)
+  document.getElementById('tools-toggle-btn').addEventListener('click', () => {
+    const boxes = document.querySelectorAll('.tool-checkbox');
+    const allChecked = [...boxes].every((b) => b.checked);
+    boxes.forEach((b) => (b.checked = !allChecked));
+    document.getElementById('tools-toggle-btn').textContent = allChecked ? 'Select All' : 'Select None';
+  });
+
+  // Send chat with tools
+  document.getElementById('tools-send-btn').addEventListener('click', sendToolChat);
+  document.getElementById('tools-message').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendToolChat(); }
   });
 }
 
@@ -105,6 +160,81 @@ async function sendChat() {
         <pre style="white-space:pre-wrap;margin-top:8px">${escapeHtml(res.response)}</pre>
       </div>`;
   }
+}
+
+async function sendToolChat() {
+  const btn = document.getElementById('tools-send-btn');
+  const msgInput = document.getElementById('tools-message');
+  const modelSelect = document.getElementById('tools-model');
+  const resultEl = document.getElementById('tools-result');
+
+  const message = msgInput.value.trim();
+  if (!message) return;
+
+  const selected = [...document.querySelectorAll('.tool-checkbox:checked')].map((b) => b.value);
+  if (selected.length === 0) {
+    resultEl.innerHTML = '<p style="color:var(--red)">Select at least one tool.</p>';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  resultEl.innerHTML = '<p class="text-dim">Waiting for response (tool calls may take a while)...</p>';
+
+  const res = await api('/api/integrations/ollama/chat-with-tools', {
+    method: 'POST',
+    body: { message, model: modelSelect.value, tools: selected },
+  });
+
+  btn.disabled = false;
+  btn.textContent = 'Send';
+
+  if (res.error) {
+    resultEl.innerHTML = `
+      <div class="detail-card" style="border-left:3px solid var(--red);margin:0">
+        <div><strong>Error</strong> <span class="text-dim text-sm">${res.durationMs != null ? `${(res.durationMs / 1000).toFixed(1)}s` : ''}</span></div>
+        <pre style="white-space:pre-wrap;margin-top:8px;color:var(--red)">${escapeHtml(res.error)}</pre>
+        ${renderToolCalls(res.toolCalls)}
+      </div>`;
+  } else {
+    resultEl.innerHTML = `
+      <div class="detail-card" style="border-left:3px solid var(--green);margin:0">
+        <div>
+          <span class="badge badge-running">${escapeHtml(res.model)}</span>
+          <span class="text-dim text-sm" style="margin-left:8px">${(res.durationMs / 1000).toFixed(1)}s</span>
+          <span class="text-dim text-sm" style="margin-left:8px">${res.toolCalls?.length || 0} tool call(s)</span>
+        </div>
+        ${renderToolCalls(res.toolCalls)}
+        <div style="margin-top:12px">
+          <label class="text-dim text-sm">LLM Response</label>
+          <pre style="white-space:pre-wrap;margin-top:4px">${escapeHtml(res.response)}</pre>
+        </div>
+      </div>`;
+  }
+}
+
+function renderToolCalls(toolCalls) {
+  if (!toolCalls || toolCalls.length === 0) return '';
+  return `
+    <div style="margin-top:12px">
+      <label class="text-dim text-sm">Tool Calls</label>
+      ${toolCalls.map((tc) => `
+        <div style="margin-top:6px;padding:8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border)">
+          <div>
+            <code style="font-weight:600">${escapeHtml(tc.name)}</code>
+            <span class="badge ${tc.success ? 'badge-running' : 'badge-error'}" style="margin-left:6px;font-size:10px">${tc.success ? 'OK' : 'FAIL'}</span>
+          </div>
+          <div style="margin-top:4px">
+            <span class="text-dim text-sm">Args:</span>
+            <pre style="white-space:pre-wrap;font-size:12px;margin-top:2px">${escapeHtml(JSON.stringify(tc.args, null, 2))}</pre>
+          </div>
+          <div style="margin-top:4px">
+            <span class="text-dim text-sm">Result:</span>
+            <pre style="white-space:pre-wrap;font-size:12px;margin-top:2px;max-height:120px;overflow-y:auto">${escapeHtml(tc.result)}</pre>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
 }
 
 function renderStatusBody(status) {

@@ -277,32 +277,58 @@ export class ToolExecutor extends EventEmitter {
             const ps = this.ctx.productionsService;
             if (ps.isEnabled(botId)) {
               const logPath = originalPathForProductions ?? (args.path as string);
-              const content = typeof (args as any).content === 'string' ? (args as any).content as string : '';
-              const quality = ProductionsService.assessContentQuality(content);
 
-              if (quality.isTemplate) {
-                this.logger.debug(
-                  { botId, path: logPath, ratio: quality.ratio },
-                  'Quality gate: skipping template production',
-                );
-                if (this.options.karmaService) {
-                  this.options.karmaService.addEvent(
-                    botId, -3,
-                    `Empty template detected in "${logPath}"`,
-                    'production',
-                  );
+              // Skip INDEX.md to avoid circular logging
+              if (!logPath.endsWith('/INDEX.md') && logPath !== 'INDEX.md') {
+                // file_write uses `content`, file_edit uses `new_text`
+                const content = name === 'file_edit'
+                  ? (typeof (args as any).new_text === 'string' ? (args as any).new_text as string : '')
+                  : (typeof (args as any).content === 'string' ? (args as any).content as string : '');
+
+                // Extract first heading for better descriptions
+                const firstHeading = content ? content.match(/^#+ (.+)$/m)?.[1] : null;
+                const description = firstHeading ?? `${name}: ${logPath}`;
+
+                if (!content) {
+                  // No content to assess (e.g. missing args) — skip quality gate entirely
+                  ps.logProduction({
+                    timestamp: new Date().toISOString(),
+                    botId,
+                    tool: name,
+                    path: logPath,
+                    action: name === 'file_write' ? ((args as any).append ? 'edit' : 'create') : 'edit',
+                    description,
+                    size: 0,
+                    trackOnly: ps.isTrackOnly(botId),
+                  });
+                } else {
+                  const quality = ProductionsService.assessContentQuality(content);
+
+                  if (quality.isTemplate) {
+                    this.logger.debug(
+                      { botId, path: logPath, ratio: quality.ratio },
+                      'Quality gate: skipping template production',
+                    );
+                    if (this.options.karmaService) {
+                      this.options.karmaService.addEvent(
+                        botId, -3,
+                        `Empty template detected in "${logPath}"`,
+                        'production',
+                      );
+                    }
+                  } else {
+                    ps.logProduction({
+                      timestamp: new Date().toISOString(),
+                      botId,
+                      tool: name,
+                      path: logPath,
+                      action: name === 'file_write' ? ((args as any).append ? 'edit' : 'create') : 'edit',
+                      description,
+                      size: content.length,
+                      trackOnly: ps.isTrackOnly(botId),
+                    });
+                  }
                 }
-              } else {
-                ps.logProduction({
-                  timestamp: new Date().toISOString(),
-                  botId,
-                  tool: name,
-                  path: logPath,
-                  action: name === 'file_write' ? ((args as any).append ? 'edit' : 'create') : 'edit',
-                  description: `${name}: ${logPath}`,
-                  size: content.length,
-                  trackOnly: ps.isTrackOnly(botId),
-                });
               }
             }
           }

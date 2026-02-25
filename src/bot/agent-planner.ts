@@ -2,10 +2,13 @@ import type { Logger } from '../logger';
 import type { LLMClient } from '../core/llm-client';
 import type { PlannerResult, ContinuousPlannerResult } from './agent-loop-prompts';
 import { parseLLMJson } from './llm-json-parser';
+import { TOOL_CATEGORY_NAMES } from './tool-registry';
 
 /**
  * Parse a planner result (works for both periodic and continuous modes).
  */
+const validCategorySet = new Set<string>(TOOL_CATEGORY_NAMES);
+
 export function parsePlannerResult(raw: string, logger: Pick<Logger, 'warn'>): PlannerResult | null {
   return parseLLMJson<PlannerResult>(raw, logger, {
     extractPattern: /\{[\s\S]*"plan"[\s\S]*\}/,
@@ -15,10 +18,20 @@ export function parsePlannerResult(raw: string, logger: Pick<Logger, 'warn'>): P
         ? parsed.priority
         : 'medium';
       if (parsed.plan.length === 0 && priority !== 'none') return null;
+
+      // Extract and validate toolCategories
+      let toolCategories: string[] | undefined;
+      if (Array.isArray(parsed.toolCategories)) {
+        const valid = parsed.toolCategories
+          .filter((c: unknown): c is string => typeof c === 'string' && validCategorySet.has(c));
+        toolCategories = valid.length > 0 ? valid : undefined;
+      }
+
       return {
         reasoning: String(parsed.reasoning),
         plan: parsed.plan.map(String),
         priority,
+        toolCategories,
       };
     },
     label: 'planner',

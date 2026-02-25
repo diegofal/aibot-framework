@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, appendFileSync } from 'node:fs';
-import { join, resolve, relative } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, appendFileSync, readdirSync, statSync, renameSync } from 'node:fs';
+import { join, resolve, relative, basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Config } from '../config';
 import type { Logger } from '../logger';
@@ -54,6 +54,7 @@ export class ProductionsService {
     const changelogPath = join(dir, 'changelog.jsonl');
     appendFileSync(changelogPath, JSON.stringify(full) + '\n', 'utf-8');
     this.logger.debug({ botId: entry.botId, path: entry.path, id: full.id }, 'Production logged');
+    this.rebuildIndex(entry.botId);
     return full;
   }
 
@@ -440,6 +441,232 @@ export class ProductionsService {
     const total = allEntries.length;
     const entries = allEntries.slice(offset, offset + limit);
     return { entries, total };
+  }
+
+  /** Files/dirs excluded from INDEX.md generation */
+  private static readonly INDEX_EXCLUDES = new Set([
+    'changelog.jsonl', 'summary.json', 'INDEX.md', '.gitignore',
+    'node_modules', 'venv', '.vercel', '.git',
+  ]);
+
+  /**
+   * Rebuild the auto-generated INDEX.md for a production directory.
+   * Scans all files, groups by subdirectory, and uses changelog descriptions.
+   */
+  rebuildIndex(botId: string): void {
+    const dir = this.resolveDir(botId);
+
+    // Load changelog for description lookup (newest first per path)
+    const descMap = new Map<string, string>();
+    const changelogPath = join(dir, 'changelog.jsonl');
+    if (existsSync(changelogPath)) {
+      const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const entry: ProductionEntry = JSON.parse(line);
+          // Keep newest description per path (later lines = newer)
+          descMap.set(entry.path, entry.description);
+        } catch { /* skip malformed lines */ }
+      }
+    }
+
+    // Scan directory recursively
+    interface FileInfo {
+      relativePath: string;
+      name: string;
+      dir: string; // relative dir ('' for root)
+      size: number;
+      created: Date;
+      isArchived: boolean;
+    }
+
+    const files: FileInfo[] = [];
+    let dirCount = 0;
+
+    const walk = (current: string, relPrefix: string): void => {
+      let entries: string[];
+      try {
+        entries = readdirSync(current);
+      } catch { return; }
+
+      for (const entry of entries) {
+        if (ProductionsService.INDEX_EXCLUDES.has(entry)) continue;
+        const fullPath = join(current, entry);
+        let stat;
+        try { stat = statSync(fullPath); } catch { continue; }
+
+        if (stat.isDirectory()) {
+          dirCount++;
+          walk(fullPath, relPrefix ? `${relPrefix}/${entry}` : entry);
+        } else {
+          files.push({
+            relativePath: relPrefix ? `${relPrefix}/${entry}` : entry,
+            name: entry,
+            dir: relPrefix,
+            size: stat.size,
+            created: stat.birthtime,
+            isArchived: relPrefix === 'archived' || relPrefix.startsWith('archived/'),
+          });
+        }
+      }
+    };
+
+    walk(dir, '');
+
+    // Group files by directory
+    const groups = new Map<string, FileInfo[]>();
+    for (const f of files) {
+      const key = f.dir || 'root';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(f);
+    }
+
+    // Sort groups: root first, then archived last, rest alphabetical
+    const sortedKeys = [...groups.keys()].sort((a, b) => {
+      if (a === 'root') return -1;
+      if (b === 'root') return 1;
+      if (a === 'archived' || a.startsWith('archived/')) return 1;
+      if (b === 'archived' || b.startsWith('archived/')) return -1;
+      return a.localeCompare(b);
+    });
+
+    // Build INDEX.md
+    const lines: string[] = [
+      `# Production Index — ${botId}`,
+      `**Last updated:** ${new Date().toISOString()}`,
+      `**Files:** ${files.length} | **Directories:** ${dirCount}`,
+      '',
+    ];
+
+    for (const key of sortedKeys) {
+      const group = groups.get(key)!;
+      group.sort((a, b) => a.name.localeCompare(b.name));
+
+      const heading = key === 'root' ? '## Root' : `## ${key}/`;
+      lines.push(heading, '');
+
+      if (key === 'archived' || key.startsWith('archived/')) {
+        // Archived files get a different table format
+        lines.push('| File | Archived From | Reason | Original Date |');
+        lines.push('|------|---------------|--------|---------------|');
+        for (const f of group) {
+          // Look up archive entry in changelog
+          const desc = descMap.get(f.relativePath) ?? '';
+          const archiveEntry = this.findArchiveEntry(botId, f.relativePath);
+          const from = archiveEntry?.archivedFrom ?? '—';
+          const reason = archiveEntry?.archiveReason ?? (desc || '—');
+          const date = f.created.toISOString().slice(0, 10);
+          lines.push(`| ${f.name} | ${from} | ${reason} | ${date} |`);
+        }
+      } else {
+        lines.push('| File | Description | Created | Size |');
+        lines.push('|------|-------------|---------|------|');
+        for (const f of group) {
+          const desc = this.getFileDescription(f.relativePath, descMap, join(dir, f.relativePath));
+          const date = f.created.toISOString().slice(0, 10);
+          const size = this.formatSize(f.size);
+          lines.push(`| ${f.name} | ${desc} | ${date} | ${size} |`);
+        }
+      }
+      lines.push('');
+    }
+
+    const indexPath = join(dir, 'INDEX.md');
+    writeFileSync(indexPath, lines.join('\n'), 'utf-8');
+  }
+
+  /**
+   * Archive a production file by moving it to archived/ with a reason.
+   */
+  archiveFile(botId: string, relativePath: string, reason: string): boolean {
+    const dir = this.resolveDir(botId);
+    const srcPath = join(dir, relativePath);
+
+    if (!existsSync(srcPath)) {
+      this.logger.warn({ botId, path: relativePath }, 'Cannot archive: file not found');
+      return false;
+    }
+
+    // Create archived/ if needed
+    const archivedDir = join(dir, 'archived');
+    if (!existsSync(archivedDir)) {
+      mkdirSync(archivedDir, { recursive: true });
+    }
+
+    const fileName = basename(relativePath);
+    const destPath = join(archivedDir, fileName);
+
+    try {
+      renameSync(srcPath, destPath);
+    } catch (err) {
+      this.logger.error({ err, botId, path: relativePath }, 'Failed to archive file');
+      return false;
+    }
+
+    // Log the archive action
+    this.logProduction({
+      timestamp: new Date().toISOString(),
+      botId,
+      tool: 'archive',
+      path: `archived/${fileName}`,
+      action: 'archive',
+      description: reason,
+      size: 0,
+      trackOnly: false,
+      archivedFrom: relativePath,
+      archiveReason: reason,
+    });
+
+    this.logger.info({ botId, from: relativePath, reason }, 'File archived');
+    return true;
+  }
+
+  /** Get description for a file: changelog > first heading > humanized name */
+  private getFileDescription(relPath: string, descMap: Map<string, string>, absPath: string): string {
+    // Try changelog description (skip generic "file_write:" descriptions)
+    const changelogDesc = descMap.get(relPath);
+    if (changelogDesc && !changelogDesc.startsWith('file_write:') && !changelogDesc.startsWith('file_edit:')) {
+      return changelogDesc;
+    }
+
+    // Try first heading from markdown file
+    try {
+      if (existsSync(absPath) && (absPath.endsWith('.md') || absPath.endsWith('.txt'))) {
+        const content = readFileSync(absPath, 'utf-8');
+        const heading = content.match(/^#+ (.+)$/m)?.[1];
+        if (heading) return heading.slice(0, 80);
+      }
+    } catch { /* skip */ }
+
+    // Humanize filename
+    return basename(relPath, '.md')
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+      .slice(0, 60);
+  }
+
+  /** Format file size for display */
+  private formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  }
+
+  /** Find the archive changelog entry for a given archived path */
+  private findArchiveEntry(botId: string, archivedPath: string): ProductionEntry | null {
+    const dir = this.resolveDir(botId);
+    const changelogPath = join(dir, 'changelog.jsonl');
+    if (!existsSync(changelogPath)) return null;
+
+    const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
+    // Search from end (newest first)
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry: ProductionEntry = JSON.parse(lines[i]);
+        if (entry.action === 'archive' && entry.path === archivedPath) return entry;
+      } catch { /* skip */ }
+    }
+    return null;
   }
 
   private loadRawChangelog(botId: string): ProductionEntry[] {

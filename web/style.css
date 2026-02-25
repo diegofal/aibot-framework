@@ -225,6 +225,10 @@ textarea{resize:vertical;min-height:60px}
   background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--orange);
   border-radius:8px;padding:14px 20px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;
 }
+.badge-inbox-pending{background:rgba(251,191,36,.15);color:var(--orange)}
+.badge-inbox-answered{background:rgba(52,211,153,.15);color:var(--green)}
+.badge-inbox-dismissed{background:rgba(139,141,151,.15);color:var(--text-dim)}
+.badge-inbox-timed-out{background:rgba(248,113,113,.1);color:var(--red)}
 
 /* Productions */
 .star-rating{display:inline-flex;gap:2px;font-size:16px;user-select:none}
@@ -240,6 +244,7 @@ textarea{resize:vertical;min-height:60px}
 
 /* Thread */
 .thread-messages{max-height:300px;overflow-y:auto;padding:8px 0}
+#conv-thread-container .thread-messages{max-height:calc(100vh - 220px)}
 .thread-input-area{display:flex;gap:8px;align-items:flex-start;margin-top:8px}
 .thread-input{
   flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);
@@ -249,6 +254,30 @@ textarea{resize:vertical;min-height:60px}
 .thread-send-btn{align-self:flex-end}
 .thread-typing{
   align-self:flex-start;padding:8px 14px;color:var(--text-dim);font-size:13px;font-style:italic;
+}
+.thread-error{
+  display:flex;align-items:center;gap:8px;padding:10px 14px;margin:4px 0;
+  background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.25);border-radius:var(--radius);
+  font-size:13px;color:var(--red);
+}
+.thread-error .badge{flex-shrink:0}
+.thread-error span:nth-child(2){flex:1}
+
+/* Permission history cards */
+.history-card{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px 16px;margin-bottom:10px;transition:border-color .2s;
+}
+.history-card:hover{border-color:var(--text-dim)}
+
+/* Processing pulse animation */
+.processing-pulse{
+  display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--orange);animation:pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse{
+  0%,100%{opacity:1;transform:scale(1)}
+  50%{opacity:.4;transform:scale(.8)}
 }
 
 /* Responsive */
