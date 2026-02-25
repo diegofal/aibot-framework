@@ -94,11 +94,13 @@ export interface BotScheduleInfo {
   recentActionsSummary: string[];
   retryCount: number;
   lastErrorMessage: string | null;
+  isExecutingLoop: boolean;
 }
 
 export interface AgentLoopState {
   running: boolean;
   sleeping: boolean;
+  draining: boolean;
   lastRunAt: number | null;
   lastResults: AgentLoopResult[];
   nextRunAt: number | null;
@@ -147,6 +149,11 @@ export class AgentLoop {
   /** Interrupt current sleep so the loop re-evaluates immediately */
   wakeUp(): void {
     this.scheduler.wakeUp();
+  }
+
+  /** Gracefully stop: wait for executing cycles to finish, then stop */
+  async gracefulStop(timeoutMs?: number): Promise<void> {
+    return this.scheduler.gracefulStop(timeoutMs);
   }
 
   /** Manual trigger — runs immediately for all periodic bots in parallel */
@@ -208,6 +215,7 @@ export class AgentLoop {
     return {
       running: this.scheduler.getRunningBotIds().size > 0,
       sleeping: this.scheduler.isSleeping(),
+      draining: this.scheduler.isDraining(),
       lastRunAt: this.scheduler.getLastRunAt(),
       lastResults: this.scheduler.getLastResults(),
       nextRunAt: this.scheduler.getEarliestRunAt(),

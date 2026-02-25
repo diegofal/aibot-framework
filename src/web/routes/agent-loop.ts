@@ -29,6 +29,19 @@ export function agentLoopRoutes(deps: {
     return c.json({ ok: true, results });
   });
 
+  // Graceful stop — drain executing cycles then stop
+  app.post('/stop-safe', async (c) => {
+    deps.logger.info('Agent loop: graceful stop triggered via API');
+    try {
+      await deps.botManager.gracefulStopAll();
+      return c.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.logger.error({ error: message }, 'Agent loop: graceful stop failed');
+      return c.json({ error: message }, 500);
+    }
+  });
+
   // Run agent loop for a single bot
   app.post('/run/:botId', async (c) => {
     const botId = c.req.param('botId');

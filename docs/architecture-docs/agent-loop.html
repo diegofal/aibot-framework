@@ -747,6 +747,38 @@ interface PermissionDecision {
           </p>
         </div>
 
+        <h3>Graceful Stop (Draining)</h3>
+        <p>
+          <code>AgentScheduler.gracefulStop(timeoutMs?)</code> enables safe shutdown: it sets a
+          <code>draining</code> flag, wakes all sleeping bots, and waits for executing cycles to
+          finish (or timeout). The <code>runBotLoop()</code> and <code>runLoop()</code> guards check
+          <code>!this.draining</code>, so sleeping bots exit immediately while executing bots finish
+          their current cycle before exiting. After all loops settle, <code>stop()</code> runs for full cleanup.
+        </p>
+        <div class="module-section">
+          <h4>State Exposure</h4>
+          <table>
+            <thead>
+              <tr><th>Field</th><th>Location</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>draining</code></td><td><code>AgentLoopState</code></td><td>Whether the scheduler is in graceful-stop mode.</td></tr>
+              <tr><td><code>isExecutingLoop</code></td><td><code>BotScheduleInfo</code></td><td>Whether a specific bot is mid-execution in its loop cycle.</td></tr>
+            </tbody>
+          </table>
+          <h4>API</h4>
+          <p>
+            <code>POST /api/agent-loop/stop-safe</code> triggers <code>BotManager.gracefulStopAll()</code>,
+            which drains the agent loop then performs full Telegram polling + infrastructure cleanup.
+          </p>
+          <h4>Dashboard</h4>
+          <p>
+            A "Stop All Safe" button appears when the loop is enabled/draining. An "Activity" column in
+            the bot schedules table shows "Executing" (with pulsing dot) or "Idle" per bot. A "Draining..."
+            badge appears next to the Running badge during drain. Auto-refresh polls every 5s while active.
+          </p>
+        </div>
+
         <h3>Retry on Error</h3>
         <p>
           Retry logic lives in <code>agent-retry-engine.ts</code>.

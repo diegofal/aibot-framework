@@ -13,6 +13,7 @@ import { renderFeedback, renderBotFeedback } from './pages/feedback.js';
 import { renderKarma, renderBotKarma } from './pages/karma.js';
 import { renderSkills, renderSkillDetail, renderSkillEdit, renderSkillCreate } from './pages/skills.js';
 import { renderIntegrations } from './pages/integrations.js';
+import { renderToolRunner } from './pages/tool-runner.js';
 
 const content = document.getElementById('content');
 
@@ -42,6 +43,7 @@ const routes = [
   { pattern: /^#\/skills\/([^/]+)\/edit$/,   handler: (m) => renderSkillEdit(content, decodeURIComponent(m[1])) },
   { pattern: /^#\/skills\/([^/]+)$/,         handler: (m) => renderSkillDetail(content, decodeURIComponent(m[1])) },
   { pattern: /^#\/skills$/,                  handler: () => renderSkills(content) },
+  { pattern: /^#\/tool-runner$/,              handler: () => renderToolRunner(content) },
   { pattern: /^#\/tools\/([^/]+)$/,          handler: (m) => renderToolDetail(content, m[1]) },
   { pattern: /^#\/tools$/,                   handler: () => renderTools(content) },
   { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },

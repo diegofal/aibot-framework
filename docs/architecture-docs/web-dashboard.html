@@ -559,6 +559,18 @@
           <tbody>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/tools/all</code></td>
+              <td>List ALL tools (built-in + dynamic) with full parameter schemas</td>
+              <td><code>tools.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/tools/execute</code></td>
+              <td>Execute a tool directly (no LLM). Body: <code>{ name, args }</code>. 30s timeout.</td>
+              <td><code>tools.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/tools</code></td>
               <td>List all dynamic tools</td>
               <td><code>tools.ts</code></td>
@@ -1053,6 +1065,14 @@
           <p>Dynamic tool inventory. Lists bot-created tools with their source code,
              parameters, and approval status. Approve, reject, edit metadata, or
              delete tools from the dashboard.</p>
+        </div>
+
+        <div class="card">
+          <h3>Tool Runner</h3>
+          <p>Direct tool execution page. Lists ALL tools (built-in + dynamic) in a searchable
+             sidebar grouped by source. Select a tool to view its description and auto-generated
+             parameter form (string, number, boolean, enum, object/array). Execute directly
+             without LLM mediation and view results with success/failure badge and duration.</p>
         </div>
 
         <div class="card">

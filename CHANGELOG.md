@@ -3,6 +3,26 @@
 ## Unreleased
 
 ### Added
+- **Tool Runner page** — New `#/tool-runner` page in the web UI that lists ALL tools (built-in +
+  dynamic), lets you select one, fill in parameters via a dynamically generated form, execute it
+  directly (no LLM), and see the result with success/failure badge and duration.
+  - `GET /api/tools/all` returns every tool with full parameter schemas and source type
+  - `POST /api/tools/execute` runs a tool directly with a 30s timeout
+  - Searchable tool list grouped by source (built-in vs dynamic)
+  - Parameter form auto-generated from JSON schema (string, number, boolean, enum, object/array)
+
+- **Graceful stop & loop execution visibility** — New "Stop All Safe" button on the Dashboard that
+  drains running agent loop cycles before stopping Telegram polling, preventing in-flight tool calls
+  from failing. Per-bot execution indicators (pulsing dot + "Executing" / "Idle" labels) now appear
+  in both Dashboard bot schedules table and Agents list/detail views. Dashboard auto-refreshes every
+  5s while bots are running or draining. New API endpoint: `POST /api/agent-loop/stop-safe`.
+  - Backend: `AgentScheduler.gracefulStop()` sets a `draining` flag, wakes sleeping bots, waits for
+    executing cycles to finish (with configurable timeout), then calls `stop()`.
+  - `BotScheduleInfo.isExecutingLoop` and `AgentLoopState.draining` fields exposed via API.
+  - `BotManager.gracefulStopAll()` orchestrates drain → cleanup sequence.
+  - CSS: `.badge-draining` style with orange pulse animation.
+
+
 - **Tool pre-selection for agent loop** — The planner now selects which tool categories the executor
   needs, reducing the number of tool definitions sent to Ollama by ~2,500-3,500 tokens per call.
   This prevents 503 errors when tool definitions + context exceed model context windows.

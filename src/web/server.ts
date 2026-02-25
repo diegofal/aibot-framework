@@ -91,7 +91,12 @@ export function startWebServer(deps: WebServerDeps): void {
   const dynamicStore = deps.botManager.getDynamicToolStore();
   const dynamicRegistry = deps.botManager.getDynamicToolRegistry();
   if (dynamicStore && dynamicRegistry) {
-    app.route('/api/tools', toolsRoutes({ store: dynamicStore, registry: dynamicRegistry }));
+    app.route('/api/tools', toolsRoutes({
+      store: dynamicStore,
+      registry: dynamicRegistry,
+      botManager: deps.botManager,
+      logger,
+    }));
   }
 
   // Static files from web/ directory

@@ -95,16 +95,23 @@ function renderAgentLoopResult(r) {
 export async function renderAgents(el) {
   el.innerHTML = '<div class="page-title">Agents</div><p class="text-dim">Loading...</p>';
 
-  const [agents, skills, karmaScores] = await Promise.all([
+  const [agents, skills, karmaScores, loopState] = await Promise.all([
     api('/api/agents'),
     api('/api/skills'),
     api('/api/karma'),
+    api('/api/agent-loop'),
   ]);
 
   // Build karma lookup by botId (graceful if karma is disabled)
   const karmaMap = {};
   if (Array.isArray(karmaScores)) {
     for (const k of karmaScores) karmaMap[k.botId] = k;
+  }
+
+  // Build executing lookup from loop state
+  const executingMap = {};
+  if (loopState.botSchedules) {
+    for (const s of loopState.botSchedules) executingMap[s.botId] = s.isExecutingLoop;
   }
 
   el.innerHTML = `
@@ -120,8 +127,12 @@ export async function renderAgents(el) {
 
   const tbody = document.getElementById('agents-tbody');
   for (const agent of agents) {
+    const isExecuting = executingMap[agent.id];
+    const executingDot = agent.running && isExecuting
+      ? ' <span class="processing-pulse" style="margin-left:4px" title="Executing loop cycle"></span>'
+      : '';
     const statusBadge = agent.running
-      ? '<span class="badge badge-running">Running</span>'
+      ? `<span class="badge badge-running">Running</span>${executingDot}`
       : '<span class="badge badge-stopped">Stopped</span>';
 
     const tr = document.createElement('tr');
@@ -221,12 +232,17 @@ export async function renderAgents(el) {
 }
 
 export async function renderAgentDetail(el, id) {
-  const [agent, skills, defaults, karmaData] = await Promise.all([
+  const [agent, skills, defaults, karmaData, loopState] = await Promise.all([
     api(`/api/agents/${id}`),
     api('/api/skills'),
     api('/api/agents/defaults'),
     api(`/api/karma/${encodeURIComponent(id)}`),
+    api('/api/agent-loop'),
   ]);
+
+  // Find this bot's schedule info
+  const botSchedule = loopState.botSchedules?.find(s => s.botId === id);
+  const isExecutingLoop = botSchedule?.isExecutingLoop ?? false;
 
   if (agent.error) {
     el.innerHTML = `<p>Agent not found.</p>`;
@@ -287,6 +303,9 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim">Allowed Users</td><td>${agent.allowedUsers?.length ? agent.allowedUsers.join(', ') : '<span class="text-dim">All</span>'}</td></tr>
         <tr><td class="text-dim">Mention Patterns</td><td>${agent.mentionPatterns?.length ? agent.mentionPatterns.join(', ') : '<span class="text-dim">None</span>'}</td></tr>
         <tr><td class="text-dim">Loop Interval</td><td>${loopIntervalDisplay}</td></tr>
+        ${agent.running ? `<tr><td class="text-dim">Loop Status</td><td>${isExecutingLoop
+          ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing cycle</span>'
+          : '<span class="text-dim">Idle</span>'}</td></tr>` : ''}
       </table>
     </div>
     ${!karmaData.error ? `

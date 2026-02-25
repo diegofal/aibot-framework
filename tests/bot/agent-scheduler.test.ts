@@ -3,12 +3,11 @@ import { AgentScheduler, type BotSchedule } from '../../src/bot/agent-scheduler'
 import type { AgentLoopResult } from '../../src/bot/agent-loop';
 
 // ---------------------------------------------------------------------------
-// Mock external dependency: computeCyclesUntilStrategist
+// Note: We don't mock agent-strategist here because:
+// 1. Bun's vi.mock persists across test files and lacks vi.unmock()
+// 2. The real implementation is simple enough to use directly
+// 3. This avoids polluting other tests that import the real module
 // ---------------------------------------------------------------------------
-vi.mock('../../src/bot/agent-strategist', () => ({
-  computeCyclesUntilStrategist: (_botConfig: unknown, _global: unknown, schedule: { strategistCycleCount: number }) =>
-    Math.max(0, 3 - schedule.strategistCycleCount),
-}));
 
 // ---------------------------------------------------------------------------
 // Helpers

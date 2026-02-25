@@ -420,7 +420,7 @@ describe('NoOpBillingProvider', () => {
   });
 
   it('should no-op for webhook handling', async () => {
-    await expect(provider.handleWebhook({}, 'signature')).resolves.toBeUndefined();
+    await expect(provider.handleWebhook({}, 'signature')).resolves.toEqual({ type: 'unhandled' });
   });
 });
 

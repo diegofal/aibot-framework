@@ -413,6 +413,7 @@ export class AgentScheduler {
         recentActionsSummary: sched.recentActions.slice(-5).map((a) => a.planSummary),
         retryCount: sched.retryCount,
         lastErrorMessage: sched.lastErrorMessage,
+        isExecutingLoop: this.runningBotIds.has(botId),
       });
     }
     return schedules;

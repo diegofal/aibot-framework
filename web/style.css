@@ -51,6 +51,7 @@ tr:hover td{background:var(--bg-hover)}
 .badge-disabled{background:rgba(139,141,151,.15);color:var(--text-dim)}
 .badge-ok{background:rgba(52,211,153,.15);color:var(--green)}
 .badge-error{background:rgba(248,113,113,.1);color:var(--red)}
+.badge-draining{background:rgba(251,191,36,.15);color:var(--orange);display:inline-flex;align-items:center;gap:6px}
 
 /* Buttons */
 .btn{
@@ -279,6 +280,10 @@ textarea{resize:vertical;min-height:60px}
   0%,100%{opacity:1;transform:scale(1)}
   50%{opacity:.4;transform:scale(.8)}
 }
+
+/* Tool Runner */
+.tool-list-item{padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border);border-left:3px solid transparent;transition:all .15s}
+.tool-list-item:hover{background:var(--bg-hover)}
 
 /* Responsive */
 @media(max-width:768px){

@@ -730,6 +730,28 @@ export class BotManager {
     this.runningBots.clear();
   }
 
+  /** Gracefully stop all: drain agent loop (wait for executing cycles), then full cleanup */
+  async gracefulStopAll(timeoutMs?: number): Promise<void> {
+    // Phase 1: Drain agent loop — executing bots finish their current cycle
+    await this.agentLoop.gracefulStop(timeoutMs);
+    // Phase 2: Full cleanup (same as stopAll)
+    this.messageBuffer.dispose();
+    this.collaborationTracker.dispose();
+    this.collaborationSessions.dispose();
+    this.askHumanStore.dispose();
+    this.askPermissionStore.dispose();
+    for (const [botId, ac] of this.pollAbortControllers) {
+      ac.abort();
+      this.logger.info({ botId }, 'Bot stopped (graceful)');
+    }
+    this.pollAbortControllers.clear();
+    for (const botId of this.runningBots) {
+      this.agentRegistry.unregister(botId);
+    }
+    this.bots.clear();
+    this.runningBots.clear();
+  }
+
   // Agent loop
   startAgentLoop(): void {
     this.agentLoop.start();

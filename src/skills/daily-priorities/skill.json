@@ -1,0 +1,104 @@
+{
+  "id": "daily-priorities",
+  "name": "Daily Priorities",
+  "version": "1.0.0",
+  "description": "Morning priority setting and evening review with progress tracking",
+  "author": "MakeMyLifeEasier",
+  "entry": "index.ts",
+  "tools": [
+    {
+      "name": "daily_set_priorities",
+      "description": "Set today's top priorities (1-3 items)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "priorities": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of priority items for today"
+          },
+          "date": {
+            "type": "string",
+            "description": "Date in YYYY-MM-DD format (defaults to today)"
+          }
+        },
+        "required": ["priorities"]
+      }
+    },
+    {
+      "name": "daily_get_priorities",
+      "description": "Get today's priorities",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Date in YYYY-MM-DD format (defaults to today)"
+          }
+        }
+      }
+    },
+    {
+      "name": "daily_check_progress",
+      "description": "Check off a priority as completed",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "number",
+            "description": "Index of the priority to check (0-based)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Date in YYYY-MM-DD format (defaults to today)"
+          }
+        },
+        "required": ["index"]
+      }
+    },
+    {
+      "name": "daily_review",
+      "description": "Complete evening review with reflection",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reflection": {
+            "type": "string",
+            "description": "Brief reflection on the day"
+          },
+          "date": {
+            "type": "string",
+            "description": "Date in YYYY-MM-DD format (defaults to today)"
+          }
+        },
+        "required": ["reflection"]
+      }
+    },
+    {
+      "name": "daily_get_history",
+      "description": "Get priority history for a date range",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "number",
+            "description": "Number of days to look back (default 7)"
+          }
+        }
+      }
+    },
+    {
+      "name": "daily_get_stats",
+      "description": "Get completion statistics over time",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "number",
+            "description": "Number of days to analyze (default 30)"
+          }
+        }
+      }
+    }
+  ]
+}

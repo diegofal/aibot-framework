@@ -210,6 +210,10 @@ export async function renderDashboard(el) {
     ? '<span class="badge badge-ok" style="margin-left:8px">Running</span>'
     : '';
 
+  const drainingBadge = loopState.draining
+    ? '<span class="badge badge-draining"><span class="processing-pulse"></span> Draining...</span>'
+    : '';
+
   const inboxCount = inboxData.count ?? 0;
   const inboxBanner = inboxCount > 0
     ? `<div class="inbox-pending-banner">
@@ -229,8 +233,12 @@ export async function renderDashboard(el) {
           <span style="font-weight:600;font-size:16px">Agent Loop</span>
           ${enabledBadge}
           ${runningBadge}
+          ${drainingBadge}
         </div>
-        <button class="btn btn-primary" id="btn-run-now" ${loopState.running ? 'disabled' : ''}>Run Now</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" id="btn-run-now" ${loopState.running ? 'disabled' : ''}>Run Now</button>
+          ${loopState.enabled || loopState.draining ? `<button class="btn btn-danger" id="btn-stop-safe" ${loopState.draining ? 'disabled' : ''}>${loopState.draining ? 'Draining...' : 'Stop All Safe'}</button>` : ''}
+        </div>
       </div>
       <div style="display:flex;gap:24px;font-size:13px;color:var(--text-dim);margin-bottom:16px">
         <span>Default Interval: <strong style="color:var(--text)">${escapeHtml(loopState.defaultInterval || '--')}</strong></span>
@@ -241,7 +249,7 @@ export async function renderDashboard(el) {
       ${loopState.botSchedules?.length ? `
         <div class="text-dim text-sm mb-16" style="font-weight:500">Bot Schedules</div>
         <table class="results-table" style="margin-bottom:16px">
-          <thead><tr><th>Bot</th><th>Mode</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Retries</th><th>Strategist</th></tr></thead>
+          <thead><tr><th>Bot</th><th>Mode</th><th>Activity</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Retries</th><th>Strategist</th></tr></thead>
           <tbody>
             ${loopState.botSchedules.map(s => {
               const isContinuous = s.mode === 'continuous';
@@ -254,10 +262,14 @@ export async function renderDashboard(el) {
               const nextRunCell = isContinuous
                 ? `<span class="text-dim text-sm">Cycle #${s.continuousCycleCount || 0}</span>`
                 : (s.nextRunAt ? timeAgo(s.nextRunAt, true) : '--');
+              const activityCell = s.isExecutingLoop
+                ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing</span>'
+                : '<span class="text-dim">Idle</span>';
               return `
               <tr>
                 <td>${escapeHtml(s.botName)}</td>
                 <td>${modeBadge(s.mode || 'periodic')}</td>
+                <td>${activityCell}</td>
                 <td class="text-dim">${nextRunCell}</td>
                 <td class="text-dim">${s.lastRunAt ? timeAgo(s.lastRunAt) : 'Never'}</td>
                 <td class="text-dim">${s.nextCheckIn ? escapeHtml(s.nextCheckIn) : '--'}</td>
@@ -320,4 +332,58 @@ export async function renderDashboard(el) {
     runBtn.disabled = false;
     runBtn.textContent = 'Run Now';
   });
+
+  // Stop All Safe button
+  const stopSafeBtn = document.getElementById('btn-stop-safe');
+  if (stopSafeBtn) {
+    stopSafeBtn.addEventListener('click', async () => {
+      if (!confirm('Gracefully stop all bots? Running cycles will finish before stopping.')) return;
+      stopSafeBtn.disabled = true;
+      stopSafeBtn.textContent = 'Draining...';
+      try {
+        const res = await api('/api/agent-loop/stop-safe', { method: 'POST' });
+        if (res.error) alert(`Graceful stop failed: ${res.error}`);
+      } catch (err) {
+        alert(`Graceful stop failed: ${err.message}`);
+      }
+      renderDashboard(el);
+    });
+  }
+
+  // Auto-refresh polling: refresh bot schedules + badges every 5s while running or draining
+  let refreshTimer = null;
+  function startAutoRefresh() {
+    if (refreshTimer) return;
+    refreshTimer = setInterval(async () => {
+      try {
+        const fresh = await api('/api/agent-loop');
+        if (!fresh.running && !fresh.draining) {
+          clearInterval(refreshTimer);
+          refreshTimer = null;
+          renderDashboard(el);
+          return;
+        }
+        // Update schedules table in-place
+        const tbody = el.querySelector('.results-table:first-of-type tbody');
+        if (tbody && fresh.botSchedules) {
+          for (const s of fresh.botSchedules) {
+            // Find matching row by bot name (first cell)
+            for (const row of tbody.querySelectorAll('tr')) {
+              const cells = row.querySelectorAll('td');
+              if (cells.length > 2 && cells[0].textContent === s.botName) {
+                cells[2].innerHTML = s.isExecutingLoop
+                  ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing</span>'
+                  : '<span class="text-dim">Idle</span>';
+                break;
+              }
+            }
+          }
+        }
+      } catch (_) { /* ignore refresh errors */ }
+    }, 5000);
+  }
+  if (loopState.running || loopState.draining) startAutoRefresh();
+
+  // Cleanup on navigation (el gets replaced, timer becomes orphan)
+  el._dashboardCleanup = () => { if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; } };
 }
