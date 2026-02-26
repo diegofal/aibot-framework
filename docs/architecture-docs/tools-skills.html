@@ -1137,12 +1137,18 @@ interface ToolDefinition {
         <p>
           External skill packages follow the TSC format: a directory containing a
           <code>skill.json</code> manifest and an <code>index.ts</code> handler file.
-          They are loaded at startup from directories listed in
-          <code>config.skillsFolders.paths[]</code>.
+          They are loaded at startup from two sources:
         </p>
+        <ol>
+          <li><strong>Configured paths</strong> &mdash; directories listed in <code>config.skillsFolders.paths[]</code></li>
+          <li><strong>Auto-discovered production paths</strong> &mdash; <code>discoverProductionSkillPaths()</code> scans <code>productions/{botName}/src/skills/</code> for each bot directory. Skills discovered this way carry a <code>botName</code> tag indicating their origin.</li>
+        </ol>
+        <p>Both sources are deduplicated by absolute path before loading.</p>
 
         <h3>Loading Pipeline</h3>
         <pre><code>Settings UI (folder picker) → Config (skillsFolders.paths[])
+                                         ↓
+discoverProductionSkillPaths() → productions/{bot}/src/skills/ (auto-discovered, tagged with botName)
                                          ↓
 Startup: scan all folders → Loader (discover + parse + import) → Adapter (ToolHandler → Tool) → ToolRegistry (ctx.tools[])
                                          ↓
@@ -1190,9 +1196,12 @@ Agent Edit UI → Per-bot skill enable/disable (BotConfig.disabledSkills[])</cod
 
         <p>
           The web UI includes a unified <strong>Skills</strong> page at
-          <code>#/skills</code> that merges built-in and external skills into a
-          single browsable list. Built-in skills are read-only; external skills
-          support full CRUD operations.
+          <code>#/skills</code> that shows <strong>all</strong> available built-in skills
+          (enabled and disabled, with badges) plus external skills from configured
+          folders and auto-discovered production directories. Built-in skills are
+          read-only; external skills support full CRUD operations. Disabled built-in
+          skills appear with muted styling. External skills from production directories
+          display a bot origin badge (e.g. "makemylifeeasier").
         </p>
 
         <h3>Pages</h3>
@@ -1226,7 +1235,7 @@ Agent Edit UI → Per-bot skill enable/disable (BotConfig.disabledSkills[])</cod
         <table>
           <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td><code>GET</code></td><td><code>/api/skills</code></td><td>List all skills (built-in + external merged)</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/skills</code></td><td>List all skills (all built-in with <code>enabled</code> field + external with <code>botName</code>)</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/skills/:id</code></td><td>Detail for a single skill</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/skills/:id/source</code></td><td>Handler source code (external only)</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/skills</code></td><td>Create new external skill on disk</td></tr>

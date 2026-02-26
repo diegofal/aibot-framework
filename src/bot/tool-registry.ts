@@ -1,8 +1,9 @@
+import { resolve } from 'node:path';
 import type { Logger } from '../logger';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import type { BotContext } from './types';
 import { ToolExecutor } from './tool-executor';
-import { discoverSkillDirs, loadExternalSkill, type LoadedExternalSkill } from '../core/external-skill-loader';
+import { discoverSkillDirs, discoverProductionSkillPaths, loadExternalSkill, type LoadedExternalSkill } from '../core/external-skill-loader';
 import { adaptExternalTool } from '../core/external-tool-adapter';
 import type { KarmaService } from '../karma/service';
 
@@ -343,21 +344,56 @@ export class ToolRegistry {
    */
   async initializeExternalSkills(): Promise<void> {
     const { config, logger } = this.ctx;
-    const paths = config.skillsFolders?.paths ?? [];
-    if (paths.length === 0) return;
 
-    const skillDirs = discoverSkillDirs(paths);
-    if (skillDirs.length === 0) {
-      logger.info({ paths }, 'No external skills found in configured folders');
+    // Collect from configured skillsFolders.paths
+    const configuredPaths = config.skillsFolders?.paths ?? [];
+    const configuredDirs = discoverSkillDirs(configuredPaths);
+
+    // Collect from auto-discovered production directories
+    const productionEntries = discoverProductionSkillPaths(config.productions?.baseDir ?? './productions');
+    const productionDirs = discoverSkillDirs(productionEntries.map((e) => e.path));
+
+    // Build botName lookup: resolved dir → botName
+    const dirToBotName = new Map<string, string>();
+    for (const entry of productionEntries) {
+      const resolved = resolve(entry.path);
+      for (const dir of productionDirs) {
+        if (resolve(dir).startsWith(resolved)) {
+          dirToBotName.set(resolve(dir), entry.botName);
+        }
+      }
+    }
+
+    // Deduplicate by resolved absolute path
+    const seen = new Set<string>();
+    const allDirs: string[] = [];
+    for (const dir of [...configuredDirs, ...productionDirs]) {
+      const abs = resolve(dir);
+      if (!seen.has(abs)) {
+        seen.add(abs);
+        allDirs.push(dir);
+      }
+    }
+
+    if (allDirs.length === 0) {
+      if (configuredPaths.length > 0 || productionEntries.length > 0) {
+        logger.info({ configuredPaths, productionPaths: productionEntries.map((e) => e.path) }, 'No external skills found');
+      }
       return;
     }
 
-    logger.info({ count: skillDirs.length, paths }, 'Discovered external skill directories');
+    logger.info({ count: allDirs.length, configuredPaths, productionPaths: productionEntries.map((e) => e.path) }, 'Discovered external skill directories');
 
-    for (const dir of skillDirs) {
+    for (const dir of allDirs) {
       try {
         const loaded = await loadExternalSkill(dir, logger);
         const { manifest, handlers, warnings } = loaded;
+
+        // Tag with bot name if from a production directory
+        const botName = dirToBotName.get(resolve(dir));
+        if (botName) {
+          loaded.botName = botName;
+        }
 
         if (warnings.length > 0) {
           const hasMissingEnv = warnings.some(w => w.startsWith('Missing env var'));

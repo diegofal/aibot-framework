@@ -2,7 +2,26 @@
 
 ## Unreleased
 
+### Fixed
+- **Collaborate tool: graceful fallback to invisible mode in agent loop** — When `visible=true`
+  is requested but no Telegram chat context exists (autonomous agent loop mode), the collaborate
+  tool now automatically falls back to invisible collaboration instead of returning an error.
+  The delegate_to_bot tool now returns a helpful message guiding the bot to use `collaborate`
+  with `visible=false` as an alternative.
+
 ### Added
+- **Skills page: show all built-ins + auto-discover production skills** — The `#/skills` page now
+  shows ALL available built-in skills (with enabled/disabled badges) instead of only loaded ones.
+  External skills from production directories (`productions/*/src/skills/`) are auto-discovered
+  and tagged with their bot origin name.
+  - `SkillLoader.readManifest()` reads skill.json without importing the module
+  - `SkillRegistry.listAvailable()` lists all built-in skill IDs with manifests
+  - `discoverProductionSkillPaths()` scans production dirs for skill folders
+  - `ToolRegistry.initializeExternalSkills()` now merges configured + production paths
+  - `GET /api/skills` returns `enabled` field for built-ins and `botName` for external skills
+  - `GET /api/settings/skills-folders` includes auto-discovered production paths
+  - UI: green/dim enabled/disabled badges, bot origin badge, muted row styling for disabled skills
+
 - **Tool Runner page** — New `#/tool-runner` page in the web UI that lists ALL tools (built-in +
   dynamic), lets you select one, fill in parameters via a dynamically generated form, execute it
   directly (no LLM), and see the result with success/failure badge and duration.
@@ -51,6 +70,14 @@
   - CSS: `.thread-error` class with red border and error badge styling.
   - Tests: Error state + retry tests added to all 3 route test files.
 
+
+- **Declarative Skills Support (SKILL.md)** — New adapter allowing skills to be defined via YAML frontmatter + Markdown instead of TypeScript code. Transplanted from OpenClaw's pattern.
+  - `SkillMdParser`: Parses YAML frontmatter and Markdown content from SKILL.md files
+  - `SkillValidator`: Validates skill manifests against strict schema (name, semver, tools, parameters)
+  - `SkillMdLoader`: Orchestrates loading, validation, and tool generation
+  - `framework-bridge.ts`: Integration point with `external-skill-loader.ts` for seamless discovery
+  - Supports: skills with metadata, multiple tools, typed parameters, default tool implementations
+  - Location: `src/skills/skill-md-adapter/` with 56 tests
 
 - **Inbox as conversation type** — `ask_human` questions now create persistent inbox conversations
   (type `'inbox'`) with JSONL-backed threaded chat. The inbox page is a conversation list (pending

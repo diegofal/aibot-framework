@@ -18,10 +18,14 @@ const noopLogger: Logger = {
 const TEST_DIR = join(process.cwd(), '.test-skills-routes');
 const SKILLS_FOLDER = join(TEST_DIR, 'external-skills');
 
-function makeSkillRegistry(skills: any[] = []) {
+function makeSkillRegistry(skills: any[] = [], enabledIds: string[] = [], available?: any[]) {
+  const enabledSet = new Set(enabledIds);
   return {
     getAll: () => skills,
+    get: (id: string) => skills.find((s: any) => s.id === id),
     getContext: (id: string) => ({ config: {} }),
+    getEnabledIds: () => enabledSet,
+    listAvailable: async () => available ?? skills.map((s: any) => ({ id: s.id, manifest: { id: s.id, name: s.name, version: s.version, description: s.description } })),
   };
 }
 
@@ -82,7 +86,7 @@ describe('skills routes', () => {
   });
 
   describe('GET /', () => {
-    test('returns merged built-in + external list', async () => {
+    test('returns merged built-in + external list with enabled field', async () => {
       const builtInSkills = [
         { id: 'calibrate', name: 'Soul Calibration', version: '1.0.0', description: 'Calibrate', commands: { calibrate: {} }, jobs: [] },
       ];
@@ -91,7 +95,7 @@ describe('skills routes', () => {
       ];
 
       const app = makeApp({
-        skillRegistry: makeSkillRegistry(builtInSkills) as any,
+        skillRegistry: makeSkillRegistry(builtInSkills, ['calibrate']) as any,
         botManager: makeBotManager(externalSkills) as any,
       });
 
@@ -102,11 +106,47 @@ describe('skills routes', () => {
 
       const builtin = data.find((s: any) => s.id === 'calibrate');
       expect(builtin.type).toBe('builtin');
+      expect(builtin.enabled).toBe(true);
       expect(builtin.commands).toEqual(['calibrate']);
 
       const ext = data.find((s: any) => s.id === 'github');
       expect(ext.type).toBe('external');
       expect(ext.toolCount).toBe(2);
+    });
+
+    test('returns disabled built-in skills from listAvailable', async () => {
+      // No loaded skills, but available via manifest
+      const available = [
+        { id: 'twitter', manifest: { id: 'twitter', name: 'Twitter', version: '1.0.0', description: 'Twitter integration' } },
+      ];
+
+      const app = makeApp({
+        skillRegistry: makeSkillRegistry([], [], available) as any,
+      });
+
+      const res = await app.request('http://localhost/api/skills');
+      const data = await res.json();
+      expect(data.length).toBe(1);
+
+      const twitter = data.find((s: any) => s.id === 'twitter');
+      expect(twitter.type).toBe('builtin');
+      expect(twitter.enabled).toBe(false);
+      expect(twitter.name).toBe('Twitter');
+    });
+
+    test('returns external skills with botName', async () => {
+      const externalSkills = [
+        { manifest: { id: 'daily-digest', name: 'Daily Digest', version: '1.0.0', tools: [{ name: 'digest' }] }, dir: '/prod/mybot/src/skills/daily-digest', warnings: [], botName: 'mybot' },
+      ];
+
+      const app = makeApp({
+        botManager: makeBotManager(externalSkills) as any,
+      });
+
+      const res = await app.request('http://localhost/api/skills');
+      const data = await res.json();
+      const ext = data.find((s: any) => s.id === 'daily-digest');
+      expect(ext.botName).toBe('mybot');
     });
 
     test('returns empty array when no skills', async () => {
@@ -122,7 +162,7 @@ describe('skills routes', () => {
       const skills = [
         { id: 'calibrate', name: 'Soul Calibration', version: '1.0.0', description: 'Calibrate', commands: { start: {} }, jobs: [{ id: 'j1', schedule: '0 0 * * *' }], onMessage: null },
       ];
-      const app = makeApp({ skillRegistry: makeSkillRegistry(skills) as any });
+      const app = makeApp({ skillRegistry: makeSkillRegistry(skills, ['calibrate']) as any });
 
       const res = await app.request('http://localhost/api/skills/calibrate');
       expect(res.status).toBe(200);

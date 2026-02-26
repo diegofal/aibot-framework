@@ -79,6 +79,25 @@ export class SkillLoader {
   }
 
   /**
+   * Read a skill's manifest (skill.json) without importing the module.
+   * Returns null if the manifest is missing or invalid.
+   */
+  readManifest(skillId: string): SkillManifest | null {
+    const skillDir = join(this.skillsPath, skillId);
+    const manifestPath = join(skillDir, 'skill.json');
+    try {
+      const content = readFileSync(manifestPath, 'utf-8');
+      const manifest: SkillManifest = JSON.parse(content);
+      if (!manifest.id || !manifest.name || !manifest.version || !manifest.main) {
+        return null;
+      }
+      return manifest;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * List available skills
    */
   async listSkills(): Promise<string[]> {

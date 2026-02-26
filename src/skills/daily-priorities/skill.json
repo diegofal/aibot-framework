@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Morning priority setting and evening review with progress tracking",
   "author": "MakeMyLifeEasier",
-  "entry": "index.ts",
+  "main": "index.ts",
   "tools": [
     {
       "name": "daily_set_priorities",

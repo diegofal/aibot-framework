@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Browse Reddit: search posts, view hot/top, read threads",
   "author": "AIBot Framework",
-  "entry": "index.ts",
+  "main": "index.ts",
   "tools": [
     {
       "name": "reddit_search",

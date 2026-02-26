@@ -36,8 +36,16 @@ export function createDelegationTool(getHandler: () => DelegationHandler): Tool 
       const chatId = args._chatId as number | undefined;
       const sourceBotId = args._botId as string | undefined;
 
-      if (!chatId || !sourceBotId) {
-        return { success: false, content: 'Internal error: missing chat context for delegation' };
+      if (!sourceBotId) {
+        return { success: false, content: 'Internal error: missing bot context for delegation' };
+      }
+
+      if (!chatId) {
+        return {
+          success: false,
+          content: 'Delegation requires a chat context (a Telegram chat where the target bot can respond publicly). '
+            + 'In autonomous mode, use the "collaborate" tool with visible=false instead to exchange messages internally with other agents.',
+        };
       }
 
       if (targetBotId === sourceBotId) {

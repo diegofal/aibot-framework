@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Fast idea capture via Telegram. Save notes with tags, search, and quick retrieval.",
   "author": "MakeMyLifeEasier",
-  "entry": "index.ts",
+  "main": "index.ts",
   "tools": [
     {
       "name": "quick_notes_save",

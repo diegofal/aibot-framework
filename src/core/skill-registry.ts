@@ -7,6 +7,7 @@ import type {
   DataStore,
   Skill,
   SkillContext,
+  SkillManifest,
   TelegramClient,
 } from './types';
 
@@ -115,6 +116,24 @@ export class SkillRegistry {
    */
   has(skillId: string): boolean {
     return this.skills.has(skillId);
+  }
+
+  /**
+   * List all available built-in skill IDs with their manifests (loaded or not).
+   */
+  async listAvailable(): Promise<Array<{ id: string; manifest: SkillManifest | null }>> {
+    const ids = await this.loader.listSkills();
+    return ids.map((id) => ({
+      id,
+      manifest: this.loader.readManifest(id),
+    }));
+  }
+
+  /**
+   * Get the set of enabled skill IDs from config.
+   */
+  getEnabledIds(): Set<string> {
+    return new Set(this.config.skills.enabled);
   }
 
   /**

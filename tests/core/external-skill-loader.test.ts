@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   discoverSkillDirs,
+  discoverProductionSkillPaths,
   checkRequirements,
   normalizeToolDefs,
   loadExternalSkill,
@@ -280,5 +281,43 @@ export const handlers = {
     const loaded = await loadExternalSkill(dir, mockLogger);
     expect(loaded.manifest.id).toBe('custom-entry');
     expect(typeof loaded.handlers.ping).toBe('function');
+  });
+});
+
+describe('discoverProductionSkillPaths', () => {
+  const prodBase = join(tmpBase, 'productions');
+
+  test('discovers valid production skill paths', () => {
+    const skillsDir = join(prodBase, 'mybot', 'src', 'skills');
+    mkdirSync(skillsDir, { recursive: true });
+
+    const results = discoverProductionSkillPaths(prodBase);
+    expect(results.length).toBe(1);
+    expect(results[0].botName).toBe('mybot');
+    expect(results[0].path).toBe(skillsDir);
+  });
+
+  test('skips production dirs without src/skills/', () => {
+    const noSkillsDir = join(prodBase, 'otherbot', 'src');
+    mkdirSync(noSkillsDir, { recursive: true });
+
+    const results = discoverProductionSkillPaths(prodBase);
+    const otherBot = results.find((r) => r.botName === 'otherbot');
+    expect(otherBot).toBeUndefined();
+  });
+
+  test('returns empty for non-existent base directory', () => {
+    const results = discoverProductionSkillPaths('/tmp/nonexistent-prod-dir-12345');
+    expect(results).toEqual([]);
+  });
+
+  test('discovers multiple production bots', () => {
+    mkdirSync(join(prodBase, 'bot-a', 'src', 'skills'), { recursive: true });
+    mkdirSync(join(prodBase, 'bot-b', 'src', 'skills'), { recursive: true });
+
+    const results = discoverProductionSkillPaths(prodBase);
+    const botNames = results.map((r) => r.botName);
+    expect(botNames).toContain('bot-a');
+    expect(botNames).toContain('bot-b');
   });
 });

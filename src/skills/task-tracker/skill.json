@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Simple task management with priorities, due dates, and status tracking",
   "author": "MakeMyLifeEasier",
-  "entry": "index.ts",
+  "main": "index.ts",
   "tools": [
     {
       "name": "task_add",

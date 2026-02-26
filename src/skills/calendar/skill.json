@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Manage calendar events: list, check availability, schedule",
   "author": "AIBot Framework",
-  "entry": "index.ts",
+  "main": "index.ts",
   "tools": [
     {
       "name": "calendar_list",

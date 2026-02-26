@@ -6,6 +6,18 @@ function typeBadge(type) {
     : '<span class="badge badge-medium">External</span>';
 }
 
+function enabledBadge(skill) {
+  if (skill.type !== 'builtin') return '';
+  return skill.enabled
+    ? ' <span class="badge badge-ok">Enabled</span>'
+    : ' <span class="badge" style="opacity:0.5">Disabled</span>';
+}
+
+function botNameBadge(skill) {
+  if (!skill.botName) return '';
+  return ` <span class="badge" style="background:var(--surface-2);color:var(--text-secondary)">${escapeHtml(skill.botName)}</span>`;
+}
+
 // ─── List Page ──────────────────────────────────────────────────────
 export async function renderSkills(el) {
   el.innerHTML = '<div class="page-title">Skills</div><p class="text-dim">Loading...</p>';
@@ -52,9 +64,14 @@ export async function renderSkills(el) {
          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${escapeHtml(skill.id)}">Delete</button>`
       : '';
 
+    // Muted styling for disabled built-in skills
+    if (skill.type === 'builtin' && skill.enabled === false) {
+      tr.style.opacity = '0.6';
+    }
+
     tr.innerHTML = `
       <td><a href="#/skills/${encodeURIComponent(skill.id)}">${escapeHtml(skill.name)}</a></td>
-      <td>${typeBadge(skill.type)}</td>
+      <td>${typeBadge(skill.type)}${enabledBadge(skill)}${botNameBadge(skill)}</td>
       <td class="text-dim">${escapeHtml(skill.version || '--')}</td>
       <td class="text-dim">${countLabel}</td>
       <td>${warningBadge}</td>
@@ -100,15 +117,17 @@ export async function renderSkillDetail(el, id) {
   let detailHtml = `
     <div class="detail-header">
       <a href="#/skills" class="back">&larr;</a>
-      <div class="page-title">${escapeHtml(skill.name)} ${typeBadge(skill.type)}</div>
+      <div class="page-title">${escapeHtml(skill.name)} ${typeBadge(skill.type)}${enabledBadge(skill)}${botNameBadge(skill)}</div>
     </div>
     <div class="detail-card">
       <table>
         <tr><td class="text-dim" style="width:140px">ID</td><td>${escapeHtml(skill.id)}</td></tr>
         <tr><td class="text-dim">Version</td><td>${escapeHtml(skill.version || '--')}</td></tr>
         <tr><td class="text-dim">Description</td><td>${escapeHtml(skill.description || '--')}</td></tr>
-        ${isExternal ? `<tr><td class="text-dim">Directory</td><td><code>${escapeHtml(skill.dir)}</code></td></tr>` : ''}
-        ${!isExternal ? `<tr><td class="text-dim">LLM Backend</td><td>${escapeHtml(skill.llmBackend || '--')}</td></tr>` : ''}
+        ${isExternal && skill.dir ? `<tr><td class="text-dim">Directory</td><td><code>${escapeHtml(skill.dir)}</code></td></tr>` : ''}
+        ${isExternal && skill.botName ? `<tr><td class="text-dim">Bot Origin</td><td>${escapeHtml(skill.botName)}</td></tr>` : ''}
+        ${!isExternal && skill.enabled !== false ? `<tr><td class="text-dim">LLM Backend</td><td>${escapeHtml(skill.llmBackend || '--')}</td></tr>` : ''}
+        ${!isExternal ? `<tr><td class="text-dim">Status</td><td>${skill.enabled ? '<span class="badge badge-ok">Enabled</span>' : '<span class="badge" style="opacity:0.5">Disabled</span>'}</td></tr>` : ''}
       </table>
     </div>
   `;

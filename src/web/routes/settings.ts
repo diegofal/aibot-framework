@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
+import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
 
 export function settingsRoutes(deps: {
   config: Config;
@@ -84,10 +85,19 @@ export function settingsRoutes(deps: {
     return c.json(collab);
   });
 
-  // Get skills folders
+  // Get skills folders (configured + auto-discovered production paths)
   app.get('/skills-folders', (c) => {
+    const configuredPaths = deps.config.skillsFolders?.paths ?? [];
+    const productionEntries = discoverProductionSkillPaths(deps.config.productions?.baseDir ?? './productions');
+    const productionPaths = productionEntries.map((e) => e.path);
+
+    // Merge and deduplicate
+    const allPaths = [...new Set([...configuredPaths, ...productionPaths])];
+
     return c.json({
-      paths: deps.config.skillsFolders?.paths ?? [],
+      paths: allPaths,
+      configuredPaths,
+      productionPaths,
       defaultPath: deps.config.paths.skills,
     });
   });

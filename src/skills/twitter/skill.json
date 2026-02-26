@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Search tweets, read timelines, and post on Twitter/X",
   "author": "AIBot Framework",
-  "entry": "index.ts",
+  "main": "index.ts",
   "tools": [
     {
       "name": "twitter_search",

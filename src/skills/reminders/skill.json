@@ -1,0 +1,95 @@
+{
+  "id": "reminders",
+  "name": "Reminders",
+  "version": "1.0.0",
+  "description": "Set time-based reminders with natural language scheduling",
+  "author": "MakeMyLifeEasier",
+  "main": "index.ts",
+  "tools": [
+    {
+      "name": "reminders_set",
+      "description": "Set a new reminder with text and time",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Reminder message text"
+          },
+          "when": {
+            "type": "string",
+            "description": "When to remind: 'in 5 minutes', 'at 3pm', 'tomorrow 9am', '2026-02-26 14:00'"
+          },
+          "recurring": {
+            "type": "boolean",
+            "description": "Whether this should repeat (default: false)"
+          },
+          "recurring_pattern": {
+            "type": "string",
+            "description": "Cron expression for recurring reminders (e.g., '0 9 * * *' for daily at 9am)"
+          }
+        },
+        "required": ["text", "when"]
+      }
+    },
+    {
+      "name": "reminders_list",
+      "description": "List all active reminders",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "include_completed": {
+            "type": "boolean",
+            "description": "Include completed reminders in the list"
+          }
+        }
+      }
+    },
+    {
+      "name": "reminders_delete",
+      "description": "Delete a reminder by ID",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Reminder ID to delete"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "reminders_snooze",
+      "description": "Snooze a triggered reminder for later",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Reminder ID to snooze"
+          },
+          "duration": {
+            "type": "string",
+            "description": "How long to snooze: '5 minutes', '30 minutes', '1 hour', 'tomorrow'"
+          }
+        },
+        "required": ["id", "duration"]
+      }
+    },
+    {
+      "name": "reminders_complete",
+      "description": "Mark a reminder as completed/done",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Reminder ID to mark complete"
+          }
+        },
+        "required": ["id"]
+      }
+    }
+  ]
+}

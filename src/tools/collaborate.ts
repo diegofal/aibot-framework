@@ -103,17 +103,19 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
         if (visible) {
           const chatId = args._chatId as number;
           if (!chatId || chatId === 0) {
-            return { success: false, content: 'Visible collaboration requires a group chat context' };
-          }
-          try {
-            await handler.sendVisibleMessage(chatId, sourceBotId, targetBotId, message);
-            return {
-              success: true,
-              content: 'Message sent visibly to the group chat. The target bot will respond publicly. Do NOT repeat the message content in your reply — just let the user know you asked.',
-            };
-          } catch (err) {
-            logger.error({ err, targetBotId, sourceBotId, chatId }, 'visible collaborate send failed');
-            return { success: false, content: `Visible collaboration failed: ${String(err)}` };
+            // No chat context (e.g. agent loop autonomous mode) — fall back to invisible collaboration
+            logger.info({ targetBotId, sourceBotId }, 'No chat context for visible collaboration, falling back to invisible mode');
+          } else {
+            try {
+              await handler.sendVisibleMessage(chatId, sourceBotId, targetBotId, message);
+              return {
+                success: true,
+                content: 'Message sent visibly to the group chat. The target bot will respond publicly. Do NOT repeat the message content in your reply — just let the user know you asked.',
+              };
+            } catch (err) {
+              logger.error({ err, targetBotId, sourceBotId, chatId }, 'visible collaborate send failed');
+              return { success: false, content: `Visible collaboration failed: ${String(err)}` };
+            }
           }
         }
 

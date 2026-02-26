@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Genera resúmenes diarios integrando goals, memoria y contexto temporal",
   "author": "Facilita",
-  "entry": "index.ts",
+  "main": "index.ts",
   "tools": [
     {
       "name": "generate_brief",

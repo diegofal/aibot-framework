@@ -6,6 +6,7 @@ import type { Config } from '../../config';
 import type { BotManager } from '../../bot';
 import type { Logger } from '../../logger';
 import { generateSkill } from '../../skill-generator';
+import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
 
 export interface SkillsRouteDeps {
   skillRegistry: SkillRegistry;
@@ -16,33 +17,52 @@ export interface SkillsRouteDeps {
 }
 
 /**
- * Check that a target directory is within one of the configured skillsFolders paths.
+ * Get all valid skills folder paths: configured + auto-discovered production paths.
+ */
+export function getValidSkillsPaths(config: Config): string[] {
+  const paths = [...(config.skillsFolders?.paths ?? [])];
+  const productionEntries = discoverProductionSkillPaths(config.productions?.baseDir ?? './productions');
+  for (const entry of productionEntries) {
+    paths.push(entry.path);
+  }
+  return paths;
+}
+
+/**
+ * Check that a target directory is within one of the valid skills folder paths.
  */
 function isInsideSkillsFolders(dir: string, config: Config): boolean {
   const resolved = resolve(dir);
-  const paths = config.skillsFolders?.paths ?? [];
+  const paths = getValidSkillsPaths(config);
   return paths.some((p) => resolved.startsWith(resolve(p)));
 }
 
 export function skillsRoutes(deps: SkillsRouteDeps) {
   const app = new Hono();
 
-  // GET / — List all skills (built-in + external merged)
-  app.get('/', (c) => {
-    const builtIn = deps.skillRegistry.getAll().map((s) => {
-      const ctx = deps.skillRegistry.getContext(s.id);
+  // GET / — List all skills (all built-in with enabled/disabled + external merged)
+  app.get('/', async (c) => {
+    const enabledIds = deps.skillRegistry.getEnabledIds();
+    const allAvailable = await deps.skillRegistry.listAvailable();
+
+    const builtIn = allAvailable.map(({ id, manifest }) => {
+      const loaded = deps.skillRegistry.get(id);
+      const enabled = enabledIds.has(id);
+      const ctx = enabled ? deps.skillRegistry.getContext(id) : undefined;
       const cfg = (ctx?.config ?? {}) as Record<string, unknown>;
+
       return {
-        id: s.id,
-        name: s.name,
+        id,
+        name: loaded?.name ?? manifest?.name ?? id,
         type: 'builtin' as const,
-        version: s.version,
-        description: s.description,
-        author: undefined as string | undefined,
-        commands: s.commands ? Object.keys(s.commands) : [],
-        jobs: s.jobs?.map((j) => ({ id: j.id, schedule: j.schedule })) ?? [],
-        hasOnMessage: !!s.onMessage,
-        llmBackend: (cfg.llmBackend as string) || 'ollama',
+        version: loaded?.version ?? manifest?.version ?? undefined,
+        description: loaded?.description ?? manifest?.description ?? undefined,
+        author: manifest?.author ?? undefined,
+        enabled,
+        commands: loaded?.commands ? Object.keys(loaded.commands) : [],
+        jobs: loaded?.jobs?.map((j) => ({ id: j.id, schedule: j.schedule })) ?? [],
+        hasOnMessage: loaded ? !!loaded.onMessage : false,
+        llmBackend: enabled ? ((cfg.llmBackend as string) || 'ollama') : undefined,
       };
     });
 
@@ -57,17 +77,19 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
       warnings: s.warnings,
       dir: s.dir,
       requires: s.manifest.requires,
+      botName: s.botName,
     }));
 
     return c.json([...builtIn, ...external]);
   });
 
   // GET /:id — Detail for a single skill
-  app.get('/:id', (c) => {
+  app.get('/:id', async (c) => {
     const id = c.req.param('id');
+    const enabledIds = deps.skillRegistry.getEnabledIds();
 
-    // Check built-in first
-    const builtInSkill = deps.skillRegistry.getAll().find((s) => s.id === id);
+    // Check built-in first (loaded or available via manifest)
+    const builtInSkill = deps.skillRegistry.get(id);
     if (builtInSkill) {
       const ctx = deps.skillRegistry.getContext(id);
       const cfg = (ctx?.config ?? {}) as Record<string, unknown>;
@@ -77,10 +99,29 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
         type: 'builtin',
         version: builtInSkill.version,
         description: builtInSkill.description,
+        enabled: enabledIds.has(id),
         commands: builtInSkill.commands ? Object.keys(builtInSkill.commands) : [],
         jobs: builtInSkill.jobs?.map((j) => ({ id: j.id, schedule: j.schedule })) ?? [],
         hasOnMessage: !!builtInSkill.onMessage,
         llmBackend: (cfg.llmBackend as string) || 'ollama',
+      });
+    }
+
+    // Check if it's a known but unloaded built-in
+    const allAvailable = await deps.skillRegistry.listAvailable();
+    const availableEntry = allAvailable.find((a) => a.id === id);
+    if (availableEntry) {
+      const manifest = availableEntry.manifest;
+      return c.json({
+        id,
+        name: manifest?.name ?? id,
+        type: 'builtin',
+        version: manifest?.version,
+        description: manifest?.description,
+        enabled: false,
+        commands: [],
+        jobs: [],
+        hasOnMessage: false,
       });
     }
 
@@ -98,6 +139,7 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
         dir: extSkill.dir,
         requires: extSkill.manifest.requires,
         config: extSkill.manifest.config,
+        botName: extSkill.botName,
       });
     }
 

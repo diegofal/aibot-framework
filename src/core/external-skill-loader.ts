@@ -43,6 +43,7 @@ export interface LoadedExternalSkill {
   handlers: Record<string, (args: Record<string, unknown>, context: unknown) => Promise<unknown>>;
   dir: string;
   warnings: string[];
+  botName?: string;
 }
 
 /**
@@ -191,4 +192,47 @@ export async function loadExternalSkill(
   }
 
   return { manifest, handlers, dir: skillDir, warnings };
+}
+
+/**
+ * Scan each subdirectory of baseDir for src/skills/ directories.
+ * Returns an array of { path, botName } where path is the skills parent dir
+ * and botName is the production directory name.
+ */
+export function discoverProductionSkillPaths(
+  baseDir: string,
+): Array<{ path: string; botName: string }> {
+  const absBase = resolve(baseDir);
+  if (!existsSync(absBase)) return [];
+
+  const results: Array<{ path: string; botName: string }> = [];
+
+  let entries: string[];
+  try {
+    entries = readdirSync(absBase);
+  } catch {
+    return [];
+  }
+
+  for (const entry of entries) {
+    const prodDir = join(absBase, entry);
+    try {
+      if (!statSync(prodDir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+
+    const skillsDir = join(prodDir, 'src', 'skills');
+    if (existsSync(skillsDir)) {
+      try {
+        if (statSync(skillsDir).isDirectory()) {
+          results.push({ path: skillsDir, botName: entry });
+        }
+      } catch {
+        // skip
+      }
+    }
+  }
+
+  return results;
 }
