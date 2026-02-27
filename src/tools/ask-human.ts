@@ -1,7 +1,10 @@
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Tool, ToolResult } from './types';
 import type { Logger } from '../logger';
 import type { AskHumanStore } from '../bot/ask-human-store';
 import type { ConversationsService } from '../conversations/service';
+import type { FileRef } from '../types/thread';
 import type { Bot } from 'grammy';
 
 const MAX_TIMEOUT_MINUTES = 120;
@@ -40,6 +43,11 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
               type: 'number',
               description: `Minutes to wait for a response (default: ${DEFAULT_TIMEOUT_MINUTES}, max: ${MAX_TIMEOUT_MINUTES})`,
             },
+            files: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'File paths relevant to this question (relative to your working directory)',
+            },
           },
           required: ['question'],
         },
@@ -77,6 +85,25 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
         logger.info({ questionId: id, botId, reason: err.message }, 'ask_human: question closed without answer');
       });
 
+      // Resolve file references
+      const rawFiles = Array.isArray(args.files) ? args.files as string[] : [];
+      const workDir = args._workDir as string | undefined;
+      const fileRefs: FileRef[] = [];
+      for (const filePath of rawFiles) {
+        if (typeof filePath !== 'string' || !filePath) continue;
+        try {
+          const absPath = workDir ? resolve(workDir, filePath) : filePath;
+          if (existsSync(absPath)) {
+            const st = statSync(absPath);
+            fileRefs.push({ path: filePath, size: st.size });
+          } else {
+            fileRefs.push({ path: filePath });
+          }
+        } catch {
+          fileRefs.push({ path: filePath });
+        }
+      }
+
       // Create inbox conversation so the question persists as a thread
       if (deps.conversationsService) {
         try {
@@ -87,9 +114,9 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
             askHumanQuestionId: id,
             inboxStatus: 'pending',
           });
-          deps.conversationsService.addMessage(botId, conv.id, 'bot', question);
+          deps.conversationsService.addMessage(botId, conv.id, 'bot', question, fileRefs.length > 0 ? fileRefs : undefined);
           deps.store.setConversationId(id, conv.id);
-          logger.debug({ questionId: id, conversationId: conv.id }, 'ask_human: inbox conversation created');
+          logger.debug({ questionId: id, conversationId: conv.id, files: fileRefs.length }, 'ask_human: inbox conversation created');
         } catch (err) {
           logger.warn({ err, questionId: id }, 'ask_human: failed to create inbox conversation (non-fatal)');
         }

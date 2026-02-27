@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+### Changed
+- **ConversationsService resilience** — JSONL parsing now skips corrupt lines instead of
+  crashing the service. Writes use atomic rename (write-to-tmp-then-rename). `attachFiles`
+  preserves corrupt lines verbatim to prevent data loss. 16 new tests.
+- **Per-bot browser/process isolation** — Browser sessions (`browser-session.ts`) and process
+  sessions (`process.ts`) are now keyed by `botId` instead of global singletons. Two bots
+  running simultaneously no longer share browser state, element refs, or process registries.
+  Ownership validation prevents cross-bot access to sessions. 16 new tests.
+- **BotManager decomposition** — Extracted `TelegramPoller` (112 lines) and `BotResetService`
+  (125 lines) from `BotManager`, reducing it from 1005 to 823 lines. Both modules are
+  independently testable with cleaner dependency injection.
+- **server.ts ESM cleanup** — Replaced 7 `require('fs')` calls with proper `node:fs` imports.
+
+### Added
+- **SKILL.md declarative skill adapter (core)** — Migrated the SKILL.md adapter from
+  `productions/openclone/` to `src/core/skill-md-adapter/`. Skills can now be defined
+  declaratively using Markdown + YAML frontmatter instead of `skill.json` + `index.ts`.
+  - Parser (`parser.ts`): extracts YAML frontmatter manifest + Markdown tool declarations
+  - Validator (`validator.ts`): Zod-based validation of manifest, tools, and parameters
+  - Loader (`loader.ts`): full load pipeline (parse → validate → check requirements → generate tools → register)
+  - Framework bridge (`framework-bridge.ts`): converts declarative skills to `LoadedExternalSkill` format
+  - Integrated into `external-skill-loader.ts`: `discoverSkillDirs()` and `loadExternalSkill()` now
+    detect and load SKILL.md skills automatically (SKILL.md takes priority over skill.json)
+  - 56 tests covering parser, validator, loader, framework bridge, and integration fixtures
+
+- **Activity Stream (real-time bot visibility)** — New unified real-time activity feed showing
+  everything the bot does as it does it. Events include tool calls, LLM requests, agent loop
+  phases (strategist/planner/executor), memory operations, and collaboration sessions.
+  - `ActivityStream` module (`src/bot/activity-stream.ts`): EventEmitter + circular buffer (200 events)
+  - Event types: `tool:start/end/error`, `llm:start/end`, `agent:phase/idle/result`, `memory:flush/rag`, `collab:start/end`
+  - Events emitted from `agent-loop.ts`, `conversation-pipeline.ts`, `memory-flush.ts`, `collaboration.ts`
+  - WebSocket endpoint `/ws/activity` with auto-reconnect and history-on-connect
+  - REST endpoint `GET /api/activity?count=N` for initial load
+  - Web UI page (`#/activity`): real-time timeline with color-coded badges, bot/type filters,
+    expandable event details, pause/resume, 500-event DOM limit
+
+- **Moltbook registration tool** — `moltbook_register` tool allows the bot to register as
+  "NodeSpider" on the Moltbook agent directory. Checks for existing registration, saves
+  credentials to `~/.config/moltbook/credentials.json`, returns claim URL for human verification.
+  Added to `communication` tool category.
+
+- **Requeue/retry failed permission requests** — Failed or stuck-consumed permission requests
+  can now be retried from the web UI or API. A "Retry" button appears on failed history cards
+  in the Permissions page. The `POST /api/ask-permission/history/:id/requeue` endpoint pushes
+  the entry back into the resolved queue for the next agent loop cycle.
+  - `AskPermissionStore.requeueById()` resets history entry and re-creates resolved permission
+  - `BotManager.requeuePermission()` delegates to store and wakes agent loop
+  - Only approved entries with `executionStatus: 'failed'` or `'consumed'` can be requeued
+
+- **File attachments on bot messages** — Bot messages can now include file references that
+  are displayed as clickable chips in the web UI. Files are structurally tracked via a new
+  `files` field on `ThreadMessage` (not auto-detected from text).
+  - `FileRef` interface (`path`, `size?`) added to `src/types/thread.ts`
+  - `ConversationsService.addMessage()` accepts optional `files` parameter
+  - `ConversationsService.attachFiles()` method for retroactive file attachment
+  - `ask_human` tool accepts a `files` array parameter for explicit file references
+  - `ToolExecutor.getFileOperations()` extracts file_write/file_edit paths from execution log
+  - Agent loop auto-attaches file operations to ask_human inbox messages
+  - `GET /api/files/:botId/*path` endpoint serves files from bot workDir with security checks
+    (path traversal, denied patterns, symlink escape, 1MB size cap)
+  - Frontend: "Files" section below messages with clickable chips and modal preview
+  - `botId` passed to `renderThread()` from conversations, inbox, and productions pages
+
 ### Fixed
 - **Collaborate tool: graceful fallback to invisible mode in agent loop** — When `visible=true`
   is requested but no Telegram chat context exists (autonomous agent loop mode), the collaborate

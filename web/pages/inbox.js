@@ -207,6 +207,7 @@ export async function renderInboxChat(el, botId, conversationId) {
       thread: threadMessages,
       generating,
       error: errorMsg,
+      botId,
       onRetry: async () => {
         errorMsg = null;
         generating = true;

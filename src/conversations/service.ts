@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, appendFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, appendFileSync, readdirSync, rmSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ThreadMessage } from '../types/thread';
+import type { ThreadMessage, FileRef } from '../types/thread';
 
 export type ConversationType = 'general' | 'productions' | 'inbox';
 export type InboxStatus = 'pending' | 'answered' | 'dismissed' | 'timed_out';
@@ -41,17 +41,28 @@ export class ConversationsService {
     return join(this.botDir(botId), 'messages', `${conversationId}.jsonl`);
   }
 
+  private safeParseJsonlLines<T>(lines: string[], context: string): T[] {
+    const results: T[] = [];
+    for (const line of lines) {
+      try { results.push(JSON.parse(line) as T); }
+      catch { console.warn(`[ConversationsService] Skipping corrupt JSONL line in ${context}:`, line.slice(0, 100)); }
+    }
+    return results;
+  }
+
   private readConversations(botId: string): Conversation[] {
     const path = this.conversationsPath(botId);
     if (!existsSync(path)) return [];
     const lines = readFileSync(path, 'utf-8').trim().split('\n').filter(Boolean);
-    return lines.map((line) => JSON.parse(line));
+    return this.safeParseJsonlLines<Conversation>(lines, 'conversations');
   }
 
   private writeConversations(botId: string, conversations: Conversation[]): void {
     this.ensureBotDir(botId);
     const path = this.conversationsPath(botId);
-    writeFileSync(path, conversations.map((c) => JSON.stringify(c)).join('\n') + (conversations.length ? '\n' : ''), 'utf-8');
+    const tmp = path + '.tmp';
+    writeFileSync(tmp, conversations.map((c) => JSON.stringify(c)).join('\n') + (conversations.length ? '\n' : ''), 'utf-8');
+    renameSync(tmp, path);
   }
 
   getBotIds(): string[] {
@@ -131,14 +142,14 @@ export class ConversationsService {
     const path = this.messagesPath(botId, conversationId);
     if (!existsSync(path)) return [];
     const lines = readFileSync(path, 'utf-8').trim().split('\n').filter(Boolean);
-    let messages: ThreadMessage[] = lines.map((line) => JSON.parse(line));
+    let messages: ThreadMessage[] = this.safeParseJsonlLines<ThreadMessage>(lines, 'messages');
     if (opts?.limit) {
       messages = messages.slice(-opts.limit);
     }
     return messages;
   }
 
-  addMessage(botId: string, conversationId: string, role: 'human' | 'bot', content: string): ThreadMessage | null {
+  addMessage(botId: string, conversationId: string, role: 'human' | 'bot', content: string, files?: FileRef[]): ThreadMessage | null {
     const convos = this.readConversations(botId);
     const idx = convos.findIndex((c) => c.id === conversationId);
     if (idx === -1) return null;
@@ -149,6 +160,7 @@ export class ConversationsService {
       id: randomUUID(),
       role,
       content,
+      ...(files && files.length > 0 ? { files } : {}),
       createdAt: new Date().toISOString(),
     };
 
@@ -190,6 +202,30 @@ export class ConversationsService {
   findByQuestionId(botId: string, questionId: string): Conversation | null {
     const convos = this.readConversations(botId);
     return convos.find((c) => c.askHumanQuestionId === questionId) ?? null;
+  }
+
+  /** Attach files to an existing message (used by agent loop for retroactive file attachment). */
+  attachFiles(botId: string, conversationId: string, messageId: string, files: FileRef[]): boolean {
+    if (!files.length) return false;
+    const msgPath = this.messagesPath(botId, conversationId);
+    if (!existsSync(msgPath)) return false;
+    const lines = readFileSync(msgPath, 'utf-8').trim().split('\n').filter(Boolean);
+    let found = false;
+    const updated = lines.map((line) => {
+      let msg: ThreadMessage;
+      try { msg = JSON.parse(line); } catch { return line; }
+      if (msg.id === messageId) {
+        found = true;
+        msg.files = [...(msg.files ?? []), ...files];
+        return JSON.stringify(msg);
+      }
+      return line;
+    });
+    if (!found) return false;
+    const tmp = msgPath + '.tmp';
+    writeFileSync(tmp, updated.join('\n') + '\n', 'utf-8');
+    renameSync(tmp, msgPath);
+    return true;
   }
 
   private truncateTitle(text: string, maxLen = 60): string {

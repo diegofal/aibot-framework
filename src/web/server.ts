@@ -1,4 +1,4 @@
-import { watch } from 'fs';
+import { watch, readFileSync, statSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
 import type { ServerWebSocket } from 'bun';
@@ -23,6 +23,7 @@ import { agentFeedbackRoutes } from './routes/agent-feedback';
 import { karmaRoutes } from './routes/karma';
 import { conversationsRoutes } from './routes/conversations';
 import { integrationsRoutes } from './routes/integrations';
+import { filesRoutes } from './routes/files';
 
 export type WebServerDeps = {
   config: Config;
@@ -64,6 +65,7 @@ export function startWebServer(deps: WebServerDeps): void {
   }));
 
   app.route('/api/integrations', integrationsRoutes({ config, botManager: deps.botManager, logger }));
+  app.route('/api/files', filesRoutes({ config, logger }));
 
   // Productions routes (only if enabled)
   const productionsService = deps.botManager.getProductionsService();
@@ -105,14 +107,23 @@ export function startWebServer(deps: WebServerDeps): void {
   // Fallback: serve index.html for SPA routing
   app.get('*', serveStatic({ root: './web', path: '/index.html' }));
 
+  // --- Activity stream REST endpoint ---
+  const activityStream = deps.botManager.getActivityStream();
+  app.get('/api/activity', (c) => {
+    const count = Number(c.req.query('count') || '50');
+    return c.json(activityStream.getRecent(count));
+  });
+
   // --- WebSocket log streaming ---
   const logFile = config.logging?.file || './data/logs/aibot.log';
-  const wsClients = new Set<ServerWebSocket<unknown>>();
+  type WsData = { type: string };
+  const wsClients = new Set<ServerWebSocket<WsData>>();
+  const activityClients = new Set<ServerWebSocket<WsData>>();
   let fileOffset = 0;
 
   function readLastLines(path: string, maxLines: number): string[] {
     try {
-      const text = require('fs').readFileSync(path, 'utf-8') as string;
+      const text = readFileSync(path, 'utf-8') as string;
       const lines = text.trimEnd().split('\n');
       return lines.slice(-maxLines);
     } catch {
@@ -122,7 +133,7 @@ export function startWebServer(deps: WebServerDeps): void {
 
   function getFileSize(path: string): number {
     try {
-      return require('fs').statSync(path).size;
+      return statSync(path).size;
     } catch {
       return 0;
     }
@@ -138,6 +149,21 @@ export function startWebServer(deps: WebServerDeps): void {
     }
   }
 
+  function broadcastActivity(data: string) {
+    for (const ws of activityClients) {
+      try {
+        ws.send(data);
+      } catch {
+        activityClients.delete(ws);
+      }
+    }
+  }
+
+  // Subscribe to activity stream for WebSocket broadcasting
+  activityStream.on('activity', (event: unknown) => {
+    broadcastActivity(JSON.stringify({ type: 'activity', event }));
+  });
+
   // Initialize offset to current file size
   fileOffset = getFileSize(logFile);
 
@@ -145,8 +171,8 @@ export function startWebServer(deps: WebServerDeps): void {
   try {
     watch(logFile, () => {
       try {
-        const fd = require('fs').openSync(logFile, 'r');
-        const stat = require('fs').fstatSync(fd);
+        const fd = openSync(logFile, 'r');
+        const stat = fstatSync(fd);
         const newSize = stat.size;
 
         if (newSize <= fileOffset) {
@@ -156,9 +182,9 @@ export function startWebServer(deps: WebServerDeps): void {
 
         if (newSize > fileOffset) {
           const buf = Buffer.alloc(newSize - fileOffset);
-          require('fs').readSync(fd, buf, 0, buf.length, fileOffset);
+          readSync(fd, buf, 0, buf.length, fileOffset);
           fileOffset = newSize;
-          require('fs').closeSync(fd);
+          closeSync(fd);
 
           const chunk = buf.toString('utf-8');
           const rawLines = chunk.trimEnd().split('\n');
@@ -173,7 +199,7 @@ export function startWebServer(deps: WebServerDeps): void {
             broadcast(JSON.stringify({ type: 'logs', lines: parsed }));
           }
         } else {
-          require('fs').closeSync(fd);
+          closeSync(fd);
         }
       } catch { /* ignore read errors */ }
     });
@@ -181,11 +207,16 @@ export function startWebServer(deps: WebServerDeps): void {
     logger.warn('Could not watch log file for live streaming');
   }
 
-  Bun.serve({
+  Bun.serve<WsData>({
     fetch(req, server) {
       const url = new URL(req.url);
       if (url.pathname === '/ws/logs') {
-        const ok = server.upgrade(req);
+        const ok = server.upgrade(req, { data: { type: 'logs' } });
+        if (ok) return undefined;
+        return new Response('WebSocket upgrade failed', { status: 400 });
+      }
+      if (url.pathname === '/ws/activity') {
+        const ok = server.upgrade(req, { data: { type: 'activity' } });
         if (ok) return undefined;
         return new Response('WebSocket upgrade failed', { status: 400 });
       }
@@ -196,22 +227,33 @@ export function startWebServer(deps: WebServerDeps): void {
     idleTimeout: 255,
     websocket: {
       open(ws) {
-        wsClients.add(ws);
-        // Send last 100 lines as history
-        const historyLines = readLastLines(logFile, 100);
-        const parsed: unknown[] = [];
-        for (const line of historyLines) {
-          try {
-            parsed.push(JSON.parse(line));
-          } catch { /* skip */ }
+        if (ws.data?.type === 'activity') {
+          activityClients.add(ws);
+          // Send recent activity events as history
+          const recent = activityStream.getRecent(50);
+          ws.send(JSON.stringify({ type: 'history', events: recent }));
+        } else {
+          wsClients.add(ws);
+          // Send last 100 lines as history
+          const historyLines = readLastLines(logFile, 100);
+          const parsed: unknown[] = [];
+          for (const line of historyLines) {
+            try {
+              parsed.push(JSON.parse(line));
+            } catch { /* skip */ }
+          }
+          ws.send(JSON.stringify({ type: 'history', lines: parsed }));
         }
-        ws.send(JSON.stringify({ type: 'history', lines: parsed }));
       },
       message() {
         // No client->server messages needed
       },
       close(ws) {
-        wsClients.delete(ws);
+        if (ws.data?.type === 'activity') {
+          activityClients.delete(ws);
+        } else {
+          wsClients.delete(ws);
+        }
       },
     },
   });

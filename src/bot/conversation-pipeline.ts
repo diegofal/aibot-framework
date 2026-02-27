@@ -115,6 +115,7 @@ export class ConversationPipeline {
         },
         '🔍 RAG pre-fetch injected'
       );
+      this.ctx.activityStream?.publish({ type: 'memory:rag', botId: '', timestamp: Date.now(), data: { query: query.substring(0, 80), resultsFound: results.length, injected: snippets.length } });
 
       return '## Relevant Memory Context\n\n' +
         'The following was retrieved from your long-term memory for this conversation.\n' +
@@ -248,6 +249,7 @@ export class ConversationPipeline {
           },
           '🤖 Sending to LLM'
         );
+        this.ctx.activityStream?.publish({ type: 'llm:start', botId: config.id, timestamp: Date.now(), data: { model: activeModel, historyLength: history.length, toolCount: hasTools ? botToolDefs.length : 0 } });
 
         // Execute LLM call with retry and circuit breaker
         const llmResult = await executeWithResilience(
@@ -304,6 +306,7 @@ export class ConversationPipeline {
           },
           '📤 LLM response received'
         );
+        this.ctx.activityStream?.publish({ type: 'llm:end', botId: config.id, timestamp: Date.now(), data: { responseLength: response.length, durationMs: llmResult.totalDurationMs, attempts: llmResult.attempts } });
 
         // Persist messages to session
         if (sessionConfig.enabled) {

@@ -18,6 +18,19 @@ export class ProductionsService {
     this.baseDir = resolve(config.productions.baseDir);
   }
 
+  /** Safely parse JSONL lines, skipping corrupt/non-JSON lines. */
+  private parseJsonlLines(lines: string[]): ProductionEntry[] {
+    const entries: ProductionEntry[] = [];
+    for (const line of lines) {
+      try {
+        entries.push(JSON.parse(line));
+      } catch {
+        // Skip corrupt lines (e.g. markdown accidentally written to JSONL)
+      }
+    }
+    return entries;
+  }
+
   resolveDir(botId: string): string {
     const botConfig = this.config.bots.find((b) => b.id === botId);
     const dir = botConfig?.productions?.dir ?? join(this.baseDir, botId);
@@ -67,7 +80,7 @@ export class ProductionsService {
     if (!existsSync(changelogPath)) return [];
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
-    let entries: ProductionEntry[] = lines.map((line) => JSON.parse(line));
+    let entries: ProductionEntry[] = this.parseJsonlLines(lines);
 
     if (opts?.since) {
       const sinceDate = new Date(opts.since).getTime();
@@ -115,7 +128,7 @@ export class ProductionsService {
     if (!existsSync(changelogPath)) return null;
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
-    const entries: ProductionEntry[] = lines.map((line) => JSON.parse(line));
+    const entries: ProductionEntry[] = this.parseJsonlLines(lines);
 
     const idx = entries.findIndex((e) => e.id === id);
     if (idx === -1) return null;
@@ -170,7 +183,7 @@ export class ProductionsService {
     if (!existsSync(changelogPath)) return null;
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
-    const entries: ProductionEntry[] = lines.map((line) => JSON.parse(line));
+    const entries: ProductionEntry[] = this.parseJsonlLines(lines);
 
     const idx = entries.findIndex((e) => e.id === id);
     if (idx === -1 || !entries[idx].evaluation) return null;
@@ -196,7 +209,7 @@ export class ProductionsService {
     if (!existsSync(changelogPath)) return null;
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
-    const entries: ProductionEntry[] = lines.map((line) => JSON.parse(line));
+    const entries: ProductionEntry[] = this.parseJsonlLines(lines);
 
     const idx = entries.findIndex((e) => e.id === id);
     if (idx === -1) return null;
@@ -231,7 +244,7 @@ export class ProductionsService {
     if (!existsSync(changelogPath)) return false;
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
-    const entries: ProductionEntry[] = lines.map((line) => JSON.parse(line));
+    const entries: ProductionEntry[] = this.parseJsonlLines(lines);
 
     const idx = entries.findIndex((e) => e.id === id);
     if (idx === -1) return false;
@@ -311,7 +324,7 @@ export class ProductionsService {
     }
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
-    const entries: ProductionEntry[] = lines.map((line) => JSON.parse(line));
+    const entries: ProductionEntry[] = this.parseJsonlLines(lines);
 
     let approved = 0;
     let rejected = 0;
@@ -675,7 +688,7 @@ export class ProductionsService {
     if (!existsSync(changelogPath)) return [];
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
-    return lines.map((line) => JSON.parse(line));
+    return this.parseJsonlLines(lines);
   }
 
   getAllBotStats(): Array<{ botId: string; name: string } & ReturnType<ProductionsService['getStats']>> {

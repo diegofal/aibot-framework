@@ -472,6 +472,7 @@ export async function renderBotProductions(el, botId) {
       thread: chatMessages,
       generating: chatGenerating,
       error: chatErrorMsg,
+      botId,
       onRetry: async () => {
         chatErrorMsg = null;
         chatGenerating = true;
@@ -678,6 +679,7 @@ async function showDetailModal(botId, entryId, onDelete) {
         legacyResponse: entry.evaluation?.aiResponse || null,
         generating: threadGenerating,
         error: threadErrorMsg,
+        botId,
         onRetry: async () => {
           threadErrorMsg = null;
           threadGenerating = true;

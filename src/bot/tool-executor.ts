@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Logger } from '../logger';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
@@ -242,6 +242,7 @@ export class ToolExecutor extends EventEmitter {
       let originalPathForProductions: string | undefined;
       if (workDir) {
         mkdirSync(workDir, { recursive: true });
+        effectiveArgs._workDir = workDir;
 
         if (['file_read', 'file_write', 'file_edit'].includes(name) && typeof effectiveArgs.path === 'string') {
           originalPathForProductions = effectiveArgs.path as string;
@@ -506,6 +507,36 @@ export class ToolExecutor extends EventEmitter {
    */
   getExecutionLog(): ToolExecutionRecord[] {
     return [...this.executionLog];
+  }
+
+  /**
+   * Extract file paths created/edited during execution (file_write, file_edit).
+   * Returns paths relative to workDir with optional sizes.
+   */
+  getFileOperations(): { path: string; size?: number }[] {
+    const workDir = this.resolveWorkDir();
+    return this.executionLog
+      .filter((r) => r.success && ['file_write', 'file_edit'].includes(r.name))
+      .map((r) => {
+        const rawPath = r.args.path as string;
+        if (!rawPath) return null;
+        try {
+          const absPath = workDir ? resolve(workDir, rawPath) : rawPath;
+          const size = existsSync(absPath) ? statSync(absPath).size : undefined;
+          return { path: rawPath, size };
+        } catch {
+          return { path: rawPath };
+        }
+      })
+      .filter((f): f is { path: string; size?: number } => f !== null);
+  }
+
+  private resolveWorkDir(): string | undefined {
+    const botConfig = this.ctx.config.bots.find((b) => b.id === this.options.botId);
+    return botConfig?.workDir
+      ?? (this.ctx.config.productions?.baseDir
+        ? `${this.ctx.config.productions.baseDir}/${this.options.botId}`
+        : undefined);
   }
 
   /**

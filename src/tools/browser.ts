@@ -77,13 +77,13 @@ function validateUrl(
 
 // ─── Action Handlers ────────────────────────────────────────
 
-async function handleStatus(logger: Logger): Promise<ToolResult> {
-  const status = getBrowserStatus();
+async function handleStatus(botId: string, logger: Logger): Promise<ToolResult> {
+  const status = getBrowserStatus(botId);
   if (!status.running) {
     return { success: true, content: 'Browser is not running.' };
   }
 
-  const page = getActivePage()!;
+  const page = getActivePage(botId)!;
   const title = await page.title();
   logger.debug('browser: status');
   return {
@@ -93,6 +93,7 @@ async function handleStatus(logger: Logger): Promise<ToolResult> {
 }
 
 async function handleNavigate(
+  botId: string,
   args: Record<string, unknown>,
   config: BrowserToolsConfig,
   logger: Logger,
@@ -111,7 +112,7 @@ async function handleNavigate(
 
   let page;
   try {
-    page = await ensureBrowser(config);
+    page = await ensureBrowser(botId, config);
     await page.goto(rawUrl, { waitUntil: 'load' });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -120,27 +121,28 @@ async function handleNavigate(
 
   // Auto-snapshot after navigation
   const snap = await takeSnapshot(page, config.maxSnapshotChars);
-  storeRefs(snap.refs);
-  touchActivity();
+  storeRefs(botId, snap.refs);
+  touchActivity(botId);
 
   const suffix = snap.truncated ? '\n\n[snapshot truncated]' : '';
   return { success: true, content: wrapExternalContent(snap.text + suffix) };
 }
 
 async function handleSnapshot(
+  botId: string,
   config: BrowserToolsConfig,
   logger: Logger,
 ): Promise<ToolResult> {
-  if (!isRunning()) {
+  if (!isRunning(botId)) {
     return { success: false, content: 'Browser is not running. Use navigate first.' };
   }
 
-  const page = getActivePage()!;
+  const page = getActivePage(botId)!;
   logger.debug('browser: snapshot');
 
   const snap = await takeSnapshot(page, config.maxSnapshotChars);
-  storeRefs(snap.refs);
-  touchActivity();
+  storeRefs(botId, snap.refs);
+  touchActivity(botId);
 
   const suffix = snap.truncated ? '\n\n[snapshot truncated]' : '';
   return { success: true, content: wrapExternalContent(snap.text + suffix) };
@@ -149,6 +151,7 @@ async function handleSnapshot(
 const VALID_ACT_KINDS = new Set(['click', 'type', 'fill', 'press', 'hover', 'select']);
 
 async function handleAct(
+  botId: string,
   args: Record<string, unknown>,
   config: BrowserToolsConfig,
   logger: Logger,
@@ -169,11 +172,11 @@ async function handleAct(
     return { success: false, content: 'Missing required parameter: ref' };
   }
 
-  if (!isRunning()) {
+  if (!isRunning(botId)) {
     return { success: false, content: 'Browser is not running. Use navigate first.' };
   }
 
-  const element = resolveRef(ref);
+  const element = resolveRef(botId, ref);
   if (!element) {
     return {
       success: false,
@@ -181,7 +184,7 @@ async function handleAct(
     };
   }
 
-  const page = getActivePage()!;
+  const page = getActivePage(botId)!;
   logger.info({ kind, ref, element: element.name }, 'browser: act');
 
   try {
@@ -223,23 +226,24 @@ async function handleAct(
 
   // Auto-snapshot after action
   const snap = await takeSnapshot(page, config.maxSnapshotChars);
-  storeRefs(snap.refs);
-  touchActivity();
+  storeRefs(botId, snap.refs);
+  touchActivity(botId);
 
   const suffix = snap.truncated ? '\n\n[snapshot truncated]' : '';
   return { success: true, content: wrapExternalContent(snap.text + suffix) };
 }
 
 async function handleScreenshot(
+  botId: string,
   args: Record<string, unknown>,
   config: BrowserToolsConfig,
   logger: Logger,
 ): Promise<ToolResult> {
-  if (!isRunning()) {
+  if (!isRunning(botId)) {
     return { success: false, content: 'Browser is not running. Use navigate first.' };
   }
 
-  const page = getActivePage()!;
+  const page = getActivePage(botId)!;
   const fullPage = args.full_page === true;
 
   mkdirSync(config.screenshotDir, { recursive: true });
@@ -252,7 +256,7 @@ async function handleScreenshot(
     fullPage,
   });
 
-  touchActivity();
+  touchActivity(botId);
   logger.info({ filepath, fullPage }, 'browser: screenshot');
 
   return {
@@ -261,8 +265,8 @@ async function handleScreenshot(
   };
 }
 
-async function handleClose(logger: Logger): Promise<ToolResult> {
-  await closeBrowser();
+async function handleClose(botId: string, logger: Logger): Promise<ToolResult> {
+  await closeBrowser(botId);
   logger.info('browser: closed');
   return { success: true, content: 'Browser closed.' };
 }
@@ -329,20 +333,21 @@ export function createBrowserTool(config: BrowserToolsConfig): Tool {
 
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const action = String(args.action ?? '').trim();
+      const botId = String(args._botId ?? '');
 
       switch (action) {
         case 'status':
-          return handleStatus(logger);
+          return handleStatus(botId, logger);
         case 'navigate':
-          return handleNavigate(args, config, logger);
+          return handleNavigate(botId, args, config, logger);
         case 'snapshot':
-          return handleSnapshot(config, logger);
+          return handleSnapshot(botId, config, logger);
         case 'act':
-          return handleAct(args, config, logger);
+          return handleAct(botId, args, config, logger);
         case 'screenshot':
-          return handleScreenshot(args, config, logger);
+          return handleScreenshot(botId, args, config, logger);
         case 'close':
-          return handleClose(logger);
+          return handleClose(botId, logger);
         default:
           return {
             success: false,

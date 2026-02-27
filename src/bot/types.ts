@@ -19,6 +19,8 @@ import type { AskPermissionStore } from './ask-permission-store';
 import type { AgentFeedbackStore } from './agent-feedback-store';
 import type { ToolAuditLog } from './tool-audit-log';
 import type { ProductionsService } from '../productions/service';
+import type { ConversationsService } from '../conversations/service';
+import type { ActivityStream } from './activity-stream';
 
 export interface SeenUser {
   id: number;
@@ -63,6 +65,8 @@ export interface BotContext {
   readonly agentFeedbackStore: AgentFeedbackStore;
   readonly toolAuditLog?: ToolAuditLog;
   readonly productionsService?: ProductionsService;
+  readonly conversationsService?: ConversationsService;
+  readonly activityStream?: ActivityStream;
 
   // Helper methods
   getActiveModel(botId: string): string;

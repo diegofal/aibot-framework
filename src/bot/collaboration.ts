@@ -37,6 +37,7 @@ export class CollaborationManager {
     if (!agent || !resolvedTargetId) throw new Error(`Target agent not found: ${targetBotId}`);
 
     const visibleText = `@${agent.telegramUsername} ${message}`;
+    this.ctx.activityStream?.publish({ type: 'collab:start', botId: sourceBotId, timestamp: Date.now(), data: { targetBotId: resolvedTargetId, mode: 'visible' } });
     await sendLongMessage(t => bot.api.sendMessage(chatId, t), visibleText);
 
     const sourceLogger = this.ctx.getBotLogger(sourceBotId);
@@ -308,6 +309,8 @@ export class CollaborationManager {
     const targetSoulLoader = this.ctx.getSoulLoader(targetBotId);
     const botLogger = this.ctx.getBotLogger(targetBotId);
 
+    this.ctx.activityStream?.publish({ type: 'collab:start', botId: sourceBotId, timestamp: Date.now(), data: { targetBotId, mode: 'internal' } });
+
     let session = sessionId ? this.ctx.collaborationSessions.get(sessionId) : undefined;
     const isResumed = !!session;
     if (!session) {
@@ -403,6 +406,7 @@ export class CollaborationManager {
       { sessionId: session.id, targetBotId, responseLength: response.length },
       'Collaboration step completed'
     );
+    this.ctx.activityStream?.publish({ type: 'collab:end', botId: sourceBotId, timestamp: Date.now(), data: { targetBotId, sessionId: session.id, responseLength: response.length } });
 
     return { sessionId: session.id, response };
   }

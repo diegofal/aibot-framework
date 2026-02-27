@@ -320,6 +320,101 @@ describe('AskPermissionStore history', () => {
   });
 });
 
+describe('AskPermissionStore requeueById', () => {
+  let store: AskPermissionStore;
+
+  beforeEach(() => {
+    store = new AskPermissionStore(makeLogger());
+  });
+
+  test('requeueById moves failed entry back to resolved', async () => {
+    const { id, promise } = store.request('bot1', 'file_write', '/a', 'desc');
+    store.approveById(id);
+    await promise;
+    store.consumeDecisionsForBot('bot1');
+    store.reportExecution([id], 'Crashed', [], false);
+
+    const entry = store.getHistoryById(id);
+    expect(entry!.executionStatus).toBe('failed');
+
+    const ok = store.requeueById(id);
+    expect(ok).toBe(true);
+
+    // History entry should be reset
+    const updated = store.getHistoryById(id);
+    expect(updated!.executionStatus).toBe('decided');
+    expect(updated!.consumedAt).toBeUndefined();
+    expect(updated!.executedAt).toBeUndefined();
+    expect(updated!.executionSummary).toBeUndefined();
+    expect(updated!.toolCalls).toBeUndefined();
+  });
+
+  test('requeued entry appears in consumeDecisionsForBot', async () => {
+    const { id, promise } = store.request('bot1', 'file_write', '/a', 'desc');
+    store.approveById(id);
+    await promise;
+    store.consumeDecisionsForBot('bot1');
+    store.reportExecution([id], 'Crashed', [], false);
+
+    store.requeueById(id);
+
+    const decisions = store.consumeDecisionsForBot('bot1');
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].id).toBe(id);
+    expect(decisions[0].status).toBe('approved');
+  });
+
+  test('requeueById returns false for non-existent ID', () => {
+    expect(store.requeueById('nonexistent')).toBe(false);
+  });
+
+  test('requeueById returns false for executed entry (already succeeded)', async () => {
+    const { id, promise } = store.request('bot1', 'file_write', '/a', 'desc');
+    store.approveById(id);
+    await promise;
+    store.consumeDecisionsForBot('bot1');
+    store.reportExecution([id], 'Done', [{ name: 'file_write', success: true }], true);
+
+    expect(store.requeueById(id)).toBe(false);
+  });
+
+  test('requeueById returns false for denied entries', async () => {
+    const { id, promise } = store.request('bot1', 'exec', 'cmd', 'desc');
+    store.denyById(id);
+    await promise;
+
+    expect(store.requeueById(id)).toBe(false);
+  });
+
+  test('requeueById works for stuck consumed entries', async () => {
+    const { id, promise } = store.request('bot1', 'file_write', '/a', 'desc');
+    store.approveById(id);
+    await promise;
+    store.consumeDecisionsForBot('bot1');
+
+    // Entry is consumed but never reported — stuck
+    const entry = store.getHistoryById(id);
+    expect(entry!.executionStatus).toBe('consumed');
+
+    const ok = store.requeueById(id);
+    expect(ok).toBe(true);
+
+    const decisions = store.consumeDecisionsForBot('bot1');
+    expect(decisions).toHaveLength(1);
+  });
+
+  test('requeueById returns false for decided entry (not yet consumed)', async () => {
+    const { id, promise } = store.request('bot1', 'file_write', '/a', 'desc');
+    store.approveById(id);
+    await promise;
+    // Don't consume — entry is still 'decided' and sitting in resolved queue
+    const entry = store.getHistoryById(id);
+    expect(entry!.executionStatus).toBe('decided');
+
+    expect(store.requeueById(id)).toBe(false);
+  });
+});
+
 describe('ask_permission tool', () => {
   let store: AskPermissionStore;
 
@@ -492,6 +587,28 @@ describe('AskPermissionStore persistence', () => {
     // Should not throw — just silently skips disk operations
     expect(store.getHistory()).toHaveLength(1);
     store.dispose();
+  });
+
+  test('requeueById persists across restart', async () => {
+    const store1 = new AskPermissionStore(makeLogger(), tmpDir);
+    const { id, promise } = store1.request('bot1', 'file_write', '/a', 'desc');
+    store1.approveById(id);
+    await promise;
+    store1.consumeDecisionsForBot('bot1');
+    store1.reportExecution([id], 'Crashed', [], false);
+    store1.requeueById(id);
+
+    // Recreate store from disk
+    const store2 = new AskPermissionStore(makeLogger(), tmpDir);
+
+    // History entry should show 'decided'
+    const entry = store2.getHistoryById(id);
+    expect(entry!.executionStatus).toBe('decided');
+
+    // Resolved decision should be consumable
+    const decisions = store2.consumeDecisionsForBot('bot1');
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].id).toBe(id);
   });
 
   test('clearForBot removes persisted entries', async () => {

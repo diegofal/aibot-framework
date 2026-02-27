@@ -57,6 +57,40 @@ export function timeAgo(isoOrDate, future = false) {
 }
 
 /**
+ * Preview a file from a bot's workDir in a modal.
+ * @param {string} botId
+ * @param {string} path - Relative path within the bot's workDir
+ */
+export async function previewFile(botId, path) {
+  showModal('<p class="text-dim">Loading file...</p>');
+  const data = await api(`/api/files/${encodeURIComponent(botId)}/${encodeURIComponent(path)}`);
+  if (data.error) {
+    showModal(`
+      <div class="modal-title">${escapeHtml(path)}</div>
+      <p class="text-dim">${escapeHtml(data.error)}</p>
+      <div class="modal-actions"><button class="btn" id="file-preview-close">Close</button></div>
+    `);
+    document.getElementById('file-preview-close')?.addEventListener('click', closeModal);
+    return;
+  }
+  const sizeStr = data.size != null ? ` (${formatFileSize(data.size)})` : '';
+  const modal = document.getElementById('modal');
+  modal.style.maxWidth = '700px';
+  showModal(`
+    <div class="modal-title">${escapeHtml(data.path)}${sizeStr}</div>
+    <div class="file-preview-content"><pre>${escapeHtml(data.content)}</pre></div>
+    <div class="modal-actions"><button class="btn" id="file-preview-close">Close</button></div>
+  `);
+  document.getElementById('file-preview-close')?.addEventListener('click', closeModal);
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+/**
  * Render a chat-like thread component into a container.
  * @param {HTMLElement} container - Target element
  * @param {object} opts
@@ -67,9 +101,10 @@ export function timeAgo(isoOrDate, future = false) {
  * @param {boolean} opts.generating - Whether bot is currently generating a reply
  * @param {string} [opts.error] - Error message to display (replaces "is thinking")
  * @param {function} [opts.onRetry] - Callback when user clicks retry button
+ * @param {string} [opts.botId] - Bot ID for file previews
  */
 export function renderThread(container, opts) {
-  const { thread = [], legacyFeedback, legacyResponse, onSend, generating, error, onRetry } = opts;
+  const { thread = [], legacyFeedback, legacyResponse, onSend, generating, error, onRetry, botId } = opts;
 
   // Build messages list: legacy fields first (if no thread array), then thread
   const messages = [];
@@ -97,6 +132,19 @@ export function renderThread(container, opts) {
           <div class="bubble-role">${roleLabel}${timeStr}</div>
           ${escapeHtml(msg.content)}
         </div>`;
+
+      // Render file attachments
+      if (msg.files && msg.files.length > 0 && botId) {
+        html += '<div class="message-files">';
+        html += '<div class="message-files-label">Files</div>';
+        html += '<div class="message-files-list">';
+        for (const file of msg.files) {
+          const fileName = file.path.split('/').pop() || file.path;
+          const sizeStr = file.size != null ? ` <span class="text-dim">${formatFileSize(file.size)}</span>` : '';
+          html += `<div class="file-chip" data-path="${escapeHtml(file.path)}" data-bot="${escapeHtml(botId)}">&#128196; ${escapeHtml(fileName)}${sizeStr}</div>`;
+        }
+        html += '</div></div>';
+      }
     }
   }
 
@@ -126,6 +174,15 @@ export function renderThread(container, opts) {
   if (messagesEl) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+
+  // Wire file chip click handlers
+  container.querySelectorAll('.file-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const filePath = chip.dataset.path;
+      const fileBotId = chip.dataset.bot;
+      if (filePath && fileBotId) previewFile(fileBotId, filePath);
+    });
+  });
 
   // Wire send button + Enter key
   const textarea = container.querySelector('.thread-input');

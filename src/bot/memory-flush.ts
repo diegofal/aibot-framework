@@ -71,6 +71,7 @@ export class MemoryFlusher {
    * High-importance facts are weighted more heavily in searches.
    */
   async flushWithScoring(history: ChatMessage[], botId?: string): Promise<ScoredFact[]> {
+    this.ctx.activityStream?.publish({ type: 'memory:flush', botId: botId || '', timestamp: Date.now(), phase: 'start', data: { messageCount: history.length } });
     try {
       const transcript = history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -121,6 +122,7 @@ export class MemoryFlusher {
           await coreMemory.set(fact.category, key, fact.fact, fact.importance);
         }
         this.ctx.logger.info({ count: facts.length }, 'Conversation flushed to Core Memory with scoring');
+        this.ctx.activityStream?.publish({ type: 'memory:flush', botId: botId || '', timestamp: Date.now(), phase: 'end', data: { factCount: facts.length } });
       } else if (facts.length > 0) {
         // Fallback to daily log if Core Memory not available
         const soulLoader = botId ? this.ctx.getSoulLoader(botId) : this.ctx.defaultSoulLoader;

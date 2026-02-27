@@ -273,7 +273,7 @@
           <!-- browser -->
           <div class="tool-card">
             <h4 class="tool-name">browser</h4>
-            <div class="tool-desc">Control a headless Playwright browser for interacting with dynamic web pages. Supports navigation, accessibility snapshots with interactive element refs, user interactions (click, type, fill, press, hover, select), screenshots, and session management with auto-idle timeout.</div>
+            <div class="tool-desc">Control a headless Playwright browser for interacting with dynamic web pages. Supports navigation, accessibility snapshots with interactive element refs, user interactions (click, type, fill, press, hover, select), screenshots, and session management with auto-idle timeout. <strong>Per-bot isolation:</strong> browser sessions, element refs, and idle timers are keyed by <code>botId</code> &mdash; multiple bots can browse simultaneously without sharing state.</div>
             <div class="tool-params">
               <strong>Parameters</strong>
               <ul>
@@ -509,7 +509,7 @@
           <!-- process -->
           <div class="tool-card">
             <h4 class="tool-name">process</h4>
-            <div class="tool-desc">Manage background processes started by exec with background=true. List running/finished processes, poll new output, send stdin input, kill running processes, or clear finished sessions from the registry.</div>
+            <div class="tool-desc">Manage background processes started by exec with background=true. List running/finished processes, poll new output, send stdin input, kill running processes, or clear finished sessions from the registry. <strong>Per-bot isolation:</strong> session IDs are prefixed with <code>botId</code>, list filters by owner, and poll/write/kill/clear validate ownership to prevent cross-bot access.</div>
             <div class="tool-params">
               <strong>Parameters</strong>
               <ul>
@@ -569,6 +569,7 @@
               <ul>
                 <li><code>question</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The question to ask the human operator</span></li>
                 <li><code>timeout_minutes</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Minutes to wait for response (default: 30, max: 120)</span></li>
+                <li><code>files</code> <span class="param-type">string[]</span> <span class="param-desc">&mdash; File paths relevant to this question (relative to working directory). Files are attached to the inbox message as previable chips.</span></li>
               </ul>
             </div>
           </div>
@@ -606,6 +607,18 @@
                 <li><code>message</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Message to speak in the call</span></li>
                 <li><code>phone_number</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Phone number in E.164 format (for add_contact)</span></li>
                 <li><code>loop</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Times to repeat the message (default: 1, use 3 for emergencies)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- moltbook_register -->
+          <div class="tool-card">
+            <h4 class="tool-name">moltbook_register</h4>
+            <div class="tool-desc">Register this agent as "NodeSpider" on the Moltbook agent directory. Checks for existing registration before calling the API. Saves credentials to <code>~/.config/moltbook/credentials.json</code>. Returns a claim URL for human verification via ask_human.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>description</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Short description of this agent for the Moltbook profile</span></li>
               </ul>
             </div>
           </div>
@@ -1186,6 +1199,81 @@ Agent Edit UI → Per-bot skill enable/disable (BotConfig.disabledSkills[])</cod
           <code>github</code> skill for that bot. Individual tools can still be disabled via
           the existing <code>disabledTools</code> mechanism. Both sets are merged in
           <code>ToolRegistry.getExcludedSet()</code>.
+        </p>
+
+        <!-- ============================================================ -->
+        <!--  SKILL.md Declarative Adapter                                 -->
+        <!-- ============================================================ -->
+
+        <h2 id="skill-md-adapter">SKILL.md Declarative Adapter</h2>
+        <p>
+          Skills can be defined declaratively using a <code>SKILL.md</code> file instead of
+          <code>skill.json</code> + <code>index.ts</code>. The adapter lives in
+          <code>src/core/skill-md-adapter/</code> and is automatically integrated into the
+          external skill loader &mdash; both <code>discoverSkillDirs()</code> and
+          <code>loadExternalSkill()</code> detect <code>SKILL.md</code> first, falling back
+          to <code>skill.json</code> if not found.
+        </p>
+
+        <h3>SKILL.md Format</h3>
+        <pre><code>---
+name: weather-checker
+version: 1.0.0
+description: Check current weather and forecasts
+metadata:
+  aibot:
+    emoji: "🌤️"
+    category: web
+    requires:
+      anyBins: ["curl", "wget"]
+    maxRetries: 2
+---
+
+# Weather Checker Skill
+
+Instructions for the LLM go here as Markdown body.
+
+### get-current-weather
+
+**Description:** Fetch current weather for a location
+**Parameters:**
+- \`location\` (string, required): City name
+- \`units\` (string, optional): Units, default: \`metric\`
+
+**Implementation:** \`scripts/fetch-weather.ts\`</code></pre>
+
+        <h3>Module Structure</h3>
+        <table>
+          <thead><tr><th>File</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td><code>types.ts</code></td><td>Type definitions: <code>SkillDocument</code>, <code>DeclaredTool</code>, <code>ToolParameter</code>, error classes</td></tr>
+            <tr><td><code>schema.ts</code></td><td>Zod schemas for runtime validation of manifest, tools, and parameters</td></tr>
+            <tr><td><code>parser.ts</code></td><td><code>SkillMdParser</code> &mdash; splits YAML frontmatter + Markdown body, extracts tool declarations</td></tr>
+            <tr><td><code>validator.ts</code></td><td><code>SkillValidator</code> &mdash; validates parsed documents against Zod schemas</td></tr>
+            <tr><td><code>loader.ts</code></td><td><code>SkillMdLoader</code> &mdash; full pipeline: parse → validate → check requirements → generate tools → register</td></tr>
+            <tr><td><code>framework-bridge.ts</code></td><td>Converts <code>DeclarativeSkill</code> to <code>LoadedExternalSkill</code> format for seamless integration</td></tr>
+            <tr><td><code>index.ts</code></td><td>Barrel re-exports</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Loading Flow</h3>
+        <pre><code>SKILL.md file
+  ↓
+SkillMdParser.parse()         → SkillDocument (manifest + instructions + declaredTools)
+  ↓
+SkillValidator.validate()     → ValidationResult (Zod-based)
+  ↓
+DefaultToolGenerator          → Tool[] (OpenAI-compatible function definitions)
+  ↓
+framework-bridge              → LoadedExternalSkill (same format as skill.json skills)
+  ↓
+external-skill-loader         → ToolRegistry (transparent to consumers)</code></pre>
+
+        <h3>Priority</h3>
+        <p>
+          When both <code>SKILL.md</code> and <code>skill.json</code> exist in the same
+          directory, <code>SKILL.md</code> takes priority. This allows gradual migration
+          from JSON to declarative format.
         </p>
 
         <!-- ============================================================ -->

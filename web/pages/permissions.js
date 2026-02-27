@@ -101,6 +101,12 @@ function renderHistoryCard(entry) {
       </div>`
     : '';
 
+  const retryHtml = entry.executionStatus === 'failed'
+    ? `<div style="margin-top:8px;text-align:right">
+        <button class="btn btn-primary btn-retry" style="font-size:12px;padding:4px 12px">Retry</button>
+      </div>`
+    : '';
+
   return `<div class="history-card" style="border-left:3px solid ${borderColor}" data-id="${escapeHtml(entry.id)}">
     <div class="inbox-card-header">
       <span class="inbox-card-bot">${escapeHtml(entry.botName)}</span>
@@ -119,6 +125,7 @@ function renderHistoryCard(entry) {
     ${entry.note ? `<div style="font-size:12px;color:var(--text-dim);margin:4px 0"><em>Note: ${escapeHtml(entry.note)}</em></div>` : ''}
     ${toolCallsHtml}
     ${summaryHtml}
+    ${retryHtml}
   </div>`;
 }
 
@@ -240,6 +247,27 @@ async function render(el) {
         }
       });
     }
+  });
+
+  // Attach retry handlers for failed history entries
+  el.querySelectorAll('#permission-history .history-card .btn-retry').forEach((btn) => {
+    const card = btn.closest('.history-card');
+    const id = card?.dataset.id;
+    if (!id) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Retrying...';
+      const res = await api(`/api/ask-permission/history/${encodeURIComponent(id)}/requeue`, {
+        method: 'POST',
+        body: {},
+      });
+      if (res.ok) {
+        render(el);
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Retry';
+      }
+    });
   });
 
   // Start polling for in-progress history entries

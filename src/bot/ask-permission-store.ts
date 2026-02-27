@@ -363,6 +363,42 @@ export class AskPermissionStore {
   }
 
   /**
+   * Requeue a failed or stuck-consumed permission back into the resolved queue
+   * so the next agent loop cycle picks it up again.
+   * Only allowed when executionStatus is 'failed' or 'consumed' and original status was 'approved'.
+   */
+  requeueById(id: string): boolean {
+    const hist = this.history.get(id);
+    if (!hist) return false;
+    if (hist.status !== 'approved') return false;
+    if (hist.executionStatus !== 'failed' && hist.executionStatus !== 'consumed') return false;
+
+    // Re-create a resolved permission from the history entry
+    const resolved: ResolvedPermission = {
+      id: hist.id,
+      botId: hist.botId,
+      action: hist.action,
+      resource: hist.resource,
+      description: hist.description,
+      status: 'approved',
+      resolvedAt: hist.resolvedAt,
+      note: hist.note,
+    };
+    this.resolved.set(id, resolved);
+
+    // Reset history entry fields
+    hist.executionStatus = 'decided';
+    delete hist.consumedAt;
+    delete hist.executedAt;
+    delete hist.executionSummary;
+    delete hist.toolCalls;
+
+    this.persistToDisk();
+    this.logger.info({ id, botId: hist.botId }, 'AskPermission: requeued failed/consumed entry');
+    return true;
+  }
+
+  /**
    * Get history entries, newest-first. Prunes expired entries on read.
    */
   getHistory(limit = 20): PermissionHistoryEntry[] {

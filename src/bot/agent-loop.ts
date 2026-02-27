@@ -266,6 +266,7 @@ export class AgentLoop {
     };
 
     botLogger.info({ botId }, 'Agent loop starting for bot');
+    this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'start' });
 
     try {
       const startMs = Date.now();
@@ -463,6 +464,7 @@ export class AgentLoop {
 
     const schedule = this.scheduler.getSchedule(botId);
     if (shouldRunStrategist(botId, botConfig, globalConfig.strategist, schedule)) {
+      this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'strategist:start' });
       const strategistResult = await withTimeout(
         () => runStrategist(this.ctx, botId, botConfig, botLogger, {
           identity, soul, motivations, goals, datetime, soulLoader,
@@ -476,6 +478,7 @@ export class AgentLoop {
         focus = strategistResult.focus;
         goals = soulLoader.readGoals?.() || '';
       }
+      this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'strategist:end', data: { focus, reflection: strategistReflection?.slice(0, 200) } });
     }
 
     // If strategist didn't run this cycle, use lastFocus from schedule
@@ -524,6 +527,7 @@ export class AgentLoop {
     }
     const isContinuous = this.scheduler.isContinuousBot(botId);
     botLogger.info({ botId, toolCount: defs.length, focus, mode: isContinuous ? 'continuous' : 'periodic' }, 'Agent loop: running planner');
+    this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'planner:start', data: { mode: isContinuous ? 'continuous' : 'periodic', toolCount: defs.length } });
 
     const hasCreateTool = availableToolNames.includes('create_tool');
 
@@ -615,7 +619,10 @@ export class AgentLoop {
       selectedToolCategories = plannerResult.toolCategories;
     }
 
+    this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'planner:end', data: { planSteps: plan.length, priority, categories: selectedToolCategories } });
+
     if (plan.length === 0 || priority === 'none') {
+      this.ctx.activityStream?.publish({ type: 'agent:idle', botId, timestamp: Date.now(), data: { reasoning: plannerReasoning.slice(0, 200) } });
       if (consumedPermissionIds.length > 0) {
         const idleSummary = priority === 'none' ? `Idle: ${plannerReasoning}` : 'Planner produced no plan steps.';
         this.ctx.askPermissionStore.reportExecution(consumedPermissionIds, idleSummary, [], true);
@@ -686,6 +693,14 @@ export class AgentLoop {
       });
     }
 
+    // Bridge tool events to activity stream
+    if (this.ctx.activityStream) {
+      const stream = this.ctx.activityStream;
+      executor.on('tool:start', (e) => stream.publish({ type: 'tool:start', botId, timestamp: e.timestamp, data: { toolName: e.toolName, args: e.args } }));
+      executor.on('tool:end', (e) => stream.publish({ type: 'tool:end', botId, timestamp: e.timestamp, data: { toolName: e.toolName, success: e.success, durationMs: e.durationMs, result: e.result.slice(0, 300) } }));
+      executor.on('tool:error', (e) => stream.publish({ type: 'tool:error', botId, timestamp: e.timestamp, data: { toolName: e.toolName, error: e.error.slice(0, 300), phase: e.phase } }));
+    }
+
     // Tool pre-selection: narrow executor tools based on planner's category picks
     let executorDefs = defs;
     if (toolPreSelectionEnabled && selectedToolCategories && selectedToolCategories.length > 0) {
@@ -704,6 +719,7 @@ export class AgentLoop {
     // Per-bot override → global config → default 30. Session timeout guard (80% of maxDurationMs)
     // and per-operation withTimeout already prevent runaway execution.
     const maxToolRounds = botOverride?.maxToolRounds ?? globalConfig.maxToolRounds;
+    this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'executor:start', data: { planSteps: plan.length, toolCount: executorDefs.length } });
     botLogger.info(
       { botId, maxToolRounds },
       'Agent loop: starting executor phase',
@@ -724,6 +740,9 @@ export class AgentLoop {
       );
 
       toolCallLog.push(...executor.getExecutionLog());
+
+      // Auto-attach files to ask_human inbox messages
+      this.autoAttachFiles(botId, executor, toolCallLog, botLogger);
 
       // Report successful execution for consumed permissions
       if (consumedPermissionIds.length > 0) {
@@ -751,6 +770,8 @@ export class AgentLoop {
       throw err;
     }
 
+    this.ctx.activityStream?.publish({ type: 'agent:result', botId, timestamp: Date.now(), data: { toolCallCount: toolCallLog.length, priority, summary: (response || '').slice(0, 200) } });
+
     return {
       summary: response || '(no response from executor)',
       plannerReasoning,
@@ -763,6 +784,54 @@ export class AgentLoop {
       selectedToolCategories,
       executorToolCount: executorDefs.length,
     };
+  }
+
+  /**
+   * After executor phase, if ask_human was called, retroactively attach
+   * file_write/file_edit outputs to the inbox conversation message.
+   */
+  private autoAttachFiles(
+    botId: string,
+    executor: ToolExecutor,
+    toolCallLog: ToolExecutionRecord[],
+    botLogger: Logger,
+  ): void {
+    const askHumanCall = toolCallLog.find((t) => t.name === 'ask_human' && t.success);
+    if (!askHumanCall) return;
+
+    const fileOps = executor.getFileOperations();
+    if (fileOps.length === 0) return;
+
+    // Find the inbox conversation for this ask_human call
+    const conversationsService = this.ctx.conversationsService;
+    if (!conversationsService) return;
+
+    // The ask_human store tracks the question → conversation mapping
+    const pending = this.ctx.askHumanStore.getPendingForBot(botId);
+    if (pending.length === 0) return;
+
+    // Get the most recent pending question's conversation
+    const lastQuestion = pending[pending.length - 1];
+    const conversationId = lastQuestion.conversationId;
+    if (!conversationId) return;
+
+    // Get messages to find the bot message
+    const messages = conversationsService.getMessages(botId, conversationId);
+    const botMsg = messages.find((m) => m.role === 'bot');
+    if (!botMsg) return;
+
+    // Only attach files that aren't already on the message
+    const existingPaths = new Set((botMsg.files ?? []).map((f) => f.path));
+    const newFiles = fileOps.filter((f) => !existingPaths.has(f.path));
+    if (newFiles.length === 0) return;
+
+    const attached = conversationsService.attachFiles(botId, conversationId, botMsg.id, newFiles);
+    if (attached) {
+      botLogger.info(
+        { botId, conversationId, fileCount: newFiles.length },
+        'Agent loop: auto-attached files to ask_human inbox message',
+      );
+    }
   }
 
   private async processFeedback(

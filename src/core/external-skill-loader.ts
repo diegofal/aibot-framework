@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Logger } from '../logger';
+import { hasSkillMd, loadDeclarativeSkill } from './skill-md-adapter';
 
 /**
  * Mirrors the TSC skill.json manifest format.
@@ -72,6 +73,12 @@ export function discoverSkillDirs(paths: string[]): string[] {
         continue;
       }
 
+      // Check for SKILL.md first (declarative format)
+      if (existsSync(join(skillDir, 'SKILL.md'))) {
+        dirs.push(skillDir);
+        continue;
+      }
+
       const manifestPath = join(skillDir, 'skill.json');
       if (!existsSync(manifestPath)) continue;
 
@@ -138,6 +145,11 @@ export async function loadExternalSkill(
   skillDir: string,
   logger: Logger,
 ): Promise<LoadedExternalSkill> {
+  // Check for SKILL.md first (declarative format)
+  if (hasSkillMd(skillDir)) {
+    return loadDeclarativeSkill(skillDir, logger);
+  }
+
   const manifestPath = join(skillDir, 'skill.json');
   const raw = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 

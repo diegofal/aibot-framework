@@ -1,6 +1,6 @@
 {
-  "lastUpdated": "2026-02-26T15:48:06.638Z",
-  "agentCount": 8,
+  "lastUpdated": "2026-02-27T09:14:03.444Z",
+  "agentCount": 9,
   "activeCollaborations": 0,
   "agents": {
     "aibot": {
@@ -65,31 +65,24 @@
     },
     "cryptik": {
       "id": "cryptik",
-      "name": "cryptik",
-      "handle": "@criptikbot",
-      "specialization": "crypto",
+      "name": "Cryptik",
+      "handle": "cryptik",
+      "specialization": "Multi-asset market analysis (BTC, Argentine equities, CABA real estate)",
       "status": "unknown",
       "capabilities": [
-        "web_search",
-        "web_fetch",
-        "memory",
-        "file_operations",
-        "process_management",
-        "phone_calls",
-        "reminders",
-        "bot_delegation",
-        "agent_collaboration",
-        "goal_management",
-        "task_tracking",
-        "daily_priorities",
-        "market_data",
-        "btc_onchain",
-        "reddit_sentiment"
+        "market_analysis",
+        "portfolio_construction",
+        "risk_management",
+        "argentine_markets",
+        "crypto_onchain",
+        "cedear_arbitrage",
+        "real_estate_valuation",
+        "crisis_protocols"
       ],
-      "lastSeen": "2026-02-26T15:48:06.597Z",
+      "lastSeen": "2026-02-27T07:41:28.337Z",
       "lastInteraction": null,
       "interactionCount": 0,
-      "notes": "",
+      "notes": "Created comprehensive INDEX.md cataloging 35 research documents across 11 asset class categories. INDEX includes conviction levels, status (active/stale/blocked/archived), key levels, and current assessment for each document. Execution gap documented: 70+ research hours, 35 documents, 0 trades executed, $4,345 opportunity cost.",
       "contactAttempts": [],
       "collaborations": []
     },
@@ -233,6 +226,25 @@
         "reddit_sentiment"
       ],
       "lastSeen": "2026-02-26T15:48:06.638Z",
+      "lastInteraction": null,
+      "interactionCount": 0,
+      "notes": "",
+      "contactAttempts": [],
+      "collaborations": []
+    },
+    "moltbook": {
+      "id": "moltbook",
+      "name": "Moltbook",
+      "handle": "@moltbook",
+      "specialization": "Agent connector - bridges execution gaps between analysis and action",
+      "status": "unknown",
+      "capabilities": [
+        "agent_discovery",
+        "collaboration_brokering",
+        "execution_partnership_design",
+        "cross_agent_coordination"
+      ],
+      "lastSeen": "2026-02-27T09:14:03.444Z",
       "lastInteraction": null,
       "interactionCount": 0,
       "notes": "",

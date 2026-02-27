@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionManager } from '../../src/session';
+import { BotResetService, type BotResetDeps } from '../../src/bot/bot-reset';
 import type { SessionConfig } from '../../src/config';
 import type { Logger } from '../../src/logger';
 
@@ -68,8 +69,6 @@ describe('SessionManager.clearBotSessions', () => {
     sessionManager.clearBotSessions('alpha');
 
     // beta conversation should still be active
-    // Use shouldRespondInGroup to verify active state indirectly
-    // (isActive is private, but we can check the persisted file)
     const remaining = sessionManager.listSessions();
     // No alpha sessions
     expect(remaining.every((s) => !s.key.startsWith('bot:alpha:'))).toBe(true);
@@ -84,9 +83,9 @@ describe('SessionManager.clearBotSessions', () => {
   });
 });
 
-// --- BotManager.resetBot ---
+// --- BotResetService ---
 
-describe('BotManager.resetBot', () => {
+describe('BotResetService', () => {
   let tmpDir: string;
   let soulDir: string;
 
@@ -95,6 +94,177 @@ describe('BotManager.resetBot', () => {
     soulDir = join(tmpDir, 'soul', 'test-bot');
     mkdirSync(join(soulDir, 'memory'), { recursive: true });
     mkdirSync(join(soulDir, '.versions'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function createResetService(overrides: Partial<BotResetDeps> = {}): BotResetService {
+    const deps: BotResetDeps = {
+      sessionManager: { clearBotSessions: mock(() => 0) } as any,
+      memoryManager: { clearCoreMemory: mock(() => {}), clearIndex: mock(() => {}) } as any,
+      agentFeedbackStore: { clearForBot: mock(() => {}) } as any,
+      askHumanStore: { clearForBot: mock(() => {}) } as any,
+      askPermissionStore: { clearForBot: mock(() => {}) } as any,
+      logger: noopLogger,
+      ...overrides,
+    };
+    return new BotResetService(deps);
+  }
+
+  test('restores soul files from .baseline/', async () => {
+    // Write current (evolved) soul files
+    writeFileSync(join(soulDir, 'IDENTITY.md'), '# Evolved Identity', 'utf-8');
+    writeFileSync(join(soulDir, 'SOUL.md'), '# Evolved Soul', 'utf-8');
+    writeFileSync(join(soulDir, 'MOTIVATIONS.md'), '# Evolved Motivations', 'utf-8');
+
+    // Write baseline copies
+    const baselineDir = join(soulDir, '.baseline');
+    mkdirSync(baselineDir, { recursive: true });
+    writeFileSync(join(baselineDir, 'IDENTITY.md'), '# Original Identity', 'utf-8');
+    writeFileSync(join(baselineDir, 'SOUL.md'), '# Original Soul', 'utf-8');
+    writeFileSync(join(baselineDir, 'MOTIVATIONS.md'), '# Original Motivations', 'utf-8');
+
+    const service = createResetService();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.ok).toBe(true);
+    expect(result.cleared.soulRestored).toBe(true);
+    expect(readFileSync(join(soulDir, 'IDENTITY.md'), 'utf-8')).toBe('# Original Identity');
+    expect(readFileSync(join(soulDir, 'SOUL.md'), 'utf-8')).toBe('# Original Soul');
+    expect(readFileSync(join(soulDir, 'MOTIVATIONS.md'), 'utf-8')).toBe('# Original Motivations');
+  });
+
+  test('deletes soul files when no .baseline/ exists', async () => {
+    writeFileSync(join(soulDir, 'IDENTITY.md'), '# Identity', 'utf-8');
+    writeFileSync(join(soulDir, 'SOUL.md'), '# Soul', 'utf-8');
+    writeFileSync(join(soulDir, 'MOTIVATIONS.md'), '# Motivations', 'utf-8');
+
+    const service = createResetService();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.ok).toBe(true);
+    expect(result.cleared.soulRestored).toBe(false);
+    expect(existsSync(join(soulDir, 'IDENTITY.md'))).toBe(false);
+    expect(existsSync(join(soulDir, 'SOUL.md'))).toBe(false);
+    expect(existsSync(join(soulDir, 'MOTIVATIONS.md'))).toBe(false);
+  });
+
+  test('deletes GOALS.md', async () => {
+    writeFileSync(join(soulDir, 'GOALS.md'), '# Goals\n- Be helpful', 'utf-8');
+
+    const service = createResetService({
+      sessionManager: { clearBotSessions: mock(() => 3) } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.ok).toBe(true);
+    expect(result.cleared.goals).toBe(true);
+    expect(result.cleared.sessions).toBe(3);
+    expect(existsSync(join(soulDir, 'GOALS.md'))).toBe(false);
+  });
+
+  test('deletes MEMORY.md at soul root', async () => {
+    writeFileSync(join(soulDir, 'MEMORY.md'), '# Memory root file', 'utf-8');
+
+    const service = createResetService();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(soulDir, 'MEMORY.md'))).toBe(false);
+  });
+
+  test('recursively clears memory/ directory including subdirs', async () => {
+    mkdirSync(join(soulDir, 'memory', 'archive'), { recursive: true });
+    writeFileSync(join(soulDir, 'memory', '2024-01-15.md'), '# Memory log', 'utf-8');
+    writeFileSync(join(soulDir, 'memory', '2024-01-16.md'), '# Memory log 2', 'utf-8');
+    writeFileSync(join(soulDir, 'memory', 'archive', 'old.md'), '# Archived', 'utf-8');
+    writeFileSync(join(soulDir, 'memory', 'notes.txt'), 'non-md file', 'utf-8');
+
+    const service = createResetService();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.memoryDir).toBe(true);
+    // memory/ directory recreated but empty
+    expect(existsSync(join(soulDir, 'memory'))).toBe(true);
+    expect(existsSync(join(soulDir, 'memory', '2024-01-15.md'))).toBe(false);
+    expect(existsSync(join(soulDir, 'memory', 'archive'))).toBe(false);
+    expect(existsSync(join(soulDir, 'memory', 'notes.txt'))).toBe(false);
+  });
+
+  test('deletes .versions/', async () => {
+    writeFileSync(join(soulDir, '.versions', 'SOUL-v1.md'), 'backup', 'utf-8');
+
+    const service = createResetService();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.versions).toBe(true);
+    expect(existsSync(join(soulDir, '.versions'))).toBe(false);
+  });
+
+  test('deletes feedback.jsonl', async () => {
+    writeFileSync(join(soulDir, 'feedback.jsonl'), '{"id":"1","content":"test"}\n', 'utf-8');
+
+    const service = createResetService();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.feedback).toBe(true);
+    expect(existsSync(join(soulDir, 'feedback.jsonl'))).toBe(false);
+  });
+
+  test('calls clearForBot on all stores', async () => {
+    const feedbackClear = mock(() => {});
+    const askHumanClear = mock(() => {});
+    const askPermissionClear = mock(() => {});
+
+    const service = createResetService({
+      agentFeedbackStore: { clearForBot: feedbackClear } as any,
+      askHumanStore: { clearForBot: askHumanClear } as any,
+      askPermissionStore: { clearForBot: askPermissionClear } as any,
+    });
+
+    await service.reset('test-bot', soulDir);
+
+    expect(feedbackClear).toHaveBeenCalledWith('test-bot');
+    expect(askHumanClear).toHaveBeenCalledWith('test-bot');
+    expect(askPermissionClear).toHaveBeenCalledWith('test-bot');
+  });
+
+  test('clears core memory and index', async () => {
+    const clearCoreMemory = mock(() => {});
+    const clearIndex = mock(() => {});
+
+    const service = createResetService({
+      memoryManager: { clearCoreMemory, clearIndex } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.coreMemory).toBe(true);
+    expect(result.cleared.index).toBe(true);
+    expect(clearCoreMemory).toHaveBeenCalled();
+    expect(clearIndex).toHaveBeenCalled();
+  });
+
+  test('handles missing memoryManager gracefully', async () => {
+    const service = createResetService({ memoryManager: undefined });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.coreMemory).toBe(false);
+    expect(result.cleared.index).toBe(false);
+  });
+});
+
+// --- BotManager.resetBot preconditions ---
+
+describe('BotManager.resetBot preconditions', () => {
+  let tmpDir: string;
+  let soulDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `reset-precond-${Date.now()}`);
+    soulDir = join(tmpDir, 'soul', 'test-bot');
+    mkdirSync(join(soulDir, 'memory'), { recursive: true });
   });
 
   afterEach(() => {
@@ -111,149 +281,18 @@ describe('BotManager.resetBot', () => {
       conversation: { systemPrompt: 'You are a test bot.', temperature: 0.7, maxHistory: 20 },
     };
     manager.runningBots = new Set();
-    manager.sessionManager = { clearBotSessions: mock(() => 0) };
-    manager.memoryManager = { clearCoreMemory: mock(() => {}), clearIndex: mock(() => {}) };
-    manager.agentFeedbackStore = { clearForBot: mock(() => {}) };
-    manager.askHumanStore = { clearForBot: mock(() => {}) };
-    manager.askPermissionStore = { clearForBot: mock(() => {}) };
+    manager.botResetService = new BotResetService({
+      sessionManager: { clearBotSessions: mock(() => 0) } as any,
+      memoryManager: { clearCoreMemory: mock(() => {}), clearIndex: mock(() => {}) } as any,
+      agentFeedbackStore: { clearForBot: mock(() => {}) } as any,
+      askHumanStore: { clearForBot: mock(() => {}) } as any,
+      askPermissionStore: { clearForBot: mock(() => {}) } as any,
+      logger: noopLogger,
+    });
     manager.logger = noopLogger;
     Object.assign(manager, overrides);
     return manager;
   }
-
-  test('restores soul files from .baseline/', async () => {
-    // Write current (evolved) soul files
-    writeFileSync(join(soulDir, 'IDENTITY.md'), '# Evolved Identity', 'utf-8');
-    writeFileSync(join(soulDir, 'SOUL.md'), '# Evolved Soul', 'utf-8');
-    writeFileSync(join(soulDir, 'MOTIVATIONS.md'), '# Evolved Motivations', 'utf-8');
-
-    // Write baseline copies
-    const baselineDir = join(soulDir, '.baseline');
-    mkdirSync(baselineDir, { recursive: true });
-    writeFileSync(join(baselineDir, 'IDENTITY.md'), '# Original Identity', 'utf-8');
-    writeFileSync(join(baselineDir, 'SOUL.md'), '# Original Soul', 'utf-8');
-    writeFileSync(join(baselineDir, 'MOTIVATIONS.md'), '# Original Motivations', 'utf-8');
-
-    const manager = await createMockManager();
-    const result = await manager.resetBot('test-bot');
-
-    expect(result.ok).toBe(true);
-    expect(result.cleared.soulRestored).toBe(true);
-    expect(readFileSync(join(soulDir, 'IDENTITY.md'), 'utf-8')).toBe('# Original Identity');
-    expect(readFileSync(join(soulDir, 'SOUL.md'), 'utf-8')).toBe('# Original Soul');
-    expect(readFileSync(join(soulDir, 'MOTIVATIONS.md'), 'utf-8')).toBe('# Original Motivations');
-  });
-
-  test('deletes soul files when no .baseline/ exists', async () => {
-    writeFileSync(join(soulDir, 'IDENTITY.md'), '# Identity', 'utf-8');
-    writeFileSync(join(soulDir, 'SOUL.md'), '# Soul', 'utf-8');
-    writeFileSync(join(soulDir, 'MOTIVATIONS.md'), '# Motivations', 'utf-8');
-
-    const manager = await createMockManager();
-    const result = await manager.resetBot('test-bot');
-
-    expect(result.ok).toBe(true);
-    expect(result.cleared.soulRestored).toBe(false);
-    expect(existsSync(join(soulDir, 'IDENTITY.md'))).toBe(false);
-    expect(existsSync(join(soulDir, 'SOUL.md'))).toBe(false);
-    expect(existsSync(join(soulDir, 'MOTIVATIONS.md'))).toBe(false);
-  });
-
-  test('deletes GOALS.md', async () => {
-    writeFileSync(join(soulDir, 'GOALS.md'), '# Goals\n- Be helpful', 'utf-8');
-
-    const manager = await createMockManager({
-      sessionManager: { clearBotSessions: mock(() => 3) },
-    });
-    const result = await manager.resetBot('test-bot');
-
-    expect(result.ok).toBe(true);
-    expect(result.cleared.goals).toBe(true);
-    expect(result.cleared.sessions).toBe(3);
-    expect(existsSync(join(soulDir, 'GOALS.md'))).toBe(false);
-  });
-
-  test('deletes MEMORY.md at soul root', async () => {
-    writeFileSync(join(soulDir, 'MEMORY.md'), '# Memory root file', 'utf-8');
-
-    const manager = await createMockManager();
-    const result = await manager.resetBot('test-bot');
-
-    expect(result.ok).toBe(true);
-    expect(existsSync(join(soulDir, 'MEMORY.md'))).toBe(false);
-  });
-
-  test('recursively clears memory/ directory including subdirs', async () => {
-    // Create files and subdirectories inside memory/
-    mkdirSync(join(soulDir, 'memory', 'archive'), { recursive: true });
-    writeFileSync(join(soulDir, 'memory', '2024-01-15.md'), '# Memory log', 'utf-8');
-    writeFileSync(join(soulDir, 'memory', '2024-01-16.md'), '# Memory log 2', 'utf-8');
-    writeFileSync(join(soulDir, 'memory', 'archive', 'old.md'), '# Archived', 'utf-8');
-    writeFileSync(join(soulDir, 'memory', 'notes.txt'), 'non-md file', 'utf-8');
-
-    const manager = await createMockManager();
-    const result = await manager.resetBot('test-bot');
-
-    expect(result.cleared.memoryDir).toBe(true);
-    // memory/ directory recreated but empty
-    expect(existsSync(join(soulDir, 'memory'))).toBe(true);
-    expect(existsSync(join(soulDir, 'memory', '2024-01-15.md'))).toBe(false);
-    expect(existsSync(join(soulDir, 'memory', 'archive'))).toBe(false);
-    expect(existsSync(join(soulDir, 'memory', 'notes.txt'))).toBe(false);
-  });
-
-  test('deletes .versions/', async () => {
-    writeFileSync(join(soulDir, '.versions', 'SOUL-v1.md'), 'backup', 'utf-8');
-
-    const manager = await createMockManager();
-    const result = await manager.resetBot('test-bot');
-
-    expect(result.cleared.versions).toBe(true);
-    expect(existsSync(join(soulDir, '.versions'))).toBe(false);
-  });
-
-  test('deletes feedback.jsonl', async () => {
-    writeFileSync(join(soulDir, 'feedback.jsonl'), '{"id":"1","content":"test"}\n', 'utf-8');
-
-    const manager = await createMockManager();
-    const result = await manager.resetBot('test-bot');
-
-    expect(result.cleared.feedback).toBe(true);
-    expect(existsSync(join(soulDir, 'feedback.jsonl'))).toBe(false);
-  });
-
-  test('calls clearForBot on all stores', async () => {
-    const feedbackClear = mock(() => {});
-    const askHumanClear = mock(() => {});
-    const askPermissionClear = mock(() => {});
-
-    const manager = await createMockManager({
-      agentFeedbackStore: { clearForBot: feedbackClear },
-      askHumanStore: { clearForBot: askHumanClear },
-      askPermissionStore: { clearForBot: askPermissionClear },
-    });
-
-    await manager.resetBot('test-bot');
-
-    expect(feedbackClear).toHaveBeenCalledWith('test-bot');
-    expect(askHumanClear).toHaveBeenCalledWith('test-bot');
-    expect(askPermissionClear).toHaveBeenCalledWith('test-bot');
-  });
-
-  test('clears core memory and index', async () => {
-    const clearCoreMemory = mock(() => {});
-    const clearIndex = mock(() => {});
-
-    const manager = await createMockManager({
-      memoryManager: { clearCoreMemory, clearIndex },
-    });
-    const result = await manager.resetBot('test-bot');
-
-    expect(result.cleared.coreMemory).toBe(true);
-    expect(result.cleared.index).toBe(true);
-    expect(clearCoreMemory).toHaveBeenCalled();
-    expect(clearIndex).toHaveBeenCalled();
-  });
 
   test('throws if bot is running', async () => {
     const manager = await createMockManager({

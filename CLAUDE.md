@@ -51,6 +51,8 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `ask-permission-store.ts` | Cola de permisos: request → approve/deny → consume en agent loop |
 | `collaboration.ts` | Bot-to-bot: visible, internal, delegation, multi-turn |
 | `handler-registrar.ts` | Registro de handlers grammy: skills, commands, media, built-ins |
+| `telegram-poller.ts` | Custom polling loop: getUpdates + 409/429 backoff + abort |
+| `bot-reset.ts` | Reset de soul files, memoria, sessions, stores |
 | `agent-loop.ts` | Orquestador del agent loop: ejecuta bots periódica/continuamente |
 | `agent-scheduler.ts` | Scheduling, concurrency, sleep, bot loops |
 | `agent-retry-engine.ts` | Retry con backoff exponencial, clasificación de errores |
@@ -81,6 +83,8 @@ BotManager (facade)
   ├── GroupActivation         (sin deps de módulo)
   ├── ConversationPipeline    (usa SystemPromptBuilder, MemoryFlusher, ToolRegistry)
   ├── CollaborationManager    (usa SystemPromptBuilder, ToolRegistry)
+  ├── TelegramPoller          (polling loop, inyectado en startTelegramBot)
+  ├── BotResetService         (reset soul/memory/sessions/stores)
   ├── HandlerRegistrar        (usa ConversationPipeline, GroupActivation, ConversationGate)
   │   └── ConversationGate    (auth, grupo, bot-to-bot gates)
   └── AgentLoop               (orquestador)

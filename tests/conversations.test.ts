@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConversationsService } from '../src/conversations/service';
 
@@ -289,6 +289,160 @@ describe('ConversationsService', () => {
       const ids = svc.getBotIds();
       expect(ids).toContain('bot1');
       expect(ids).toContain('bot2');
+    });
+  });
+
+  describe('corrupt JSONL resilience', () => {
+    test('listConversations skips corrupt lines in conversations.jsonl', () => {
+      // Create a valid conversation first to set up directory structure
+      const convo = svc.createConversation('bot1', 'general', 'Valid');
+
+      // Manually inject a corrupt line into the conversations file
+      const convoPath = join(TEST_DIR, 'bot1', 'conversations.jsonl');
+      const validLine = JSON.stringify(convo);
+      writeFileSync(convoPath, `${validLine}\n{CORRUPT LINE\n{"also":"bad\n`, 'utf-8');
+
+      // Should return only the valid conversation without throwing
+      const list = svc.listConversations('bot1');
+      expect(list.length).toBe(1);
+      expect(list[0].id).toBe(convo.id);
+      expect(list[0].title).toBe('Valid');
+    });
+
+    test('getMessages skips corrupt lines in messages.jsonl', () => {
+      const convo = svc.createConversation('bot1');
+      const msg1 = svc.addMessage('bot1', convo.id, 'human', 'Hello');
+      const msg2 = svc.addMessage('bot1', convo.id, 'bot', 'Hi there');
+
+      // Inject corrupt line into messages file
+      const msgPath = join(TEST_DIR, 'bot1', 'messages', `${convo.id}.jsonl`);
+      const content = readFileSync(msgPath, 'utf-8');
+      const lines = content.trim().split('\n');
+      // Insert corrupt line between valid lines
+      const corrupted = [lines[0], 'NOT VALID JSON {{{{', lines[1]].join('\n') + '\n';
+      writeFileSync(msgPath, corrupted, 'utf-8');
+
+      const messages = svc.getMessages('bot1', convo.id);
+      expect(messages.length).toBe(2);
+      expect(messages[0].content).toBe('Hello');
+      expect(messages[1].content).toBe('Hi there');
+    });
+
+    test('attachFiles preserves corrupt lines verbatim', () => {
+      const convo = svc.createConversation('bot1');
+      const msg = svc.addMessage('bot1', convo.id, 'human', 'Hello');
+
+      // Inject a corrupt line into messages file
+      const msgPath = join(TEST_DIR, 'bot1', 'messages', `${convo.id}.jsonl`);
+      const validLine = readFileSync(msgPath, 'utf-8').trim();
+      writeFileSync(msgPath, `CORRUPT_LINE\n${validLine}\n`, 'utf-8');
+
+      // Attach files to the valid message
+      const result = svc.attachFiles('bot1', convo.id, msg!.id, [
+        { type: 'image', url: 'https://example.com/img.png', name: 'img.png' },
+      ]);
+      expect(result).toBe(true);
+
+      // Verify corrupt line is preserved
+      const raw = readFileSync(msgPath, 'utf-8');
+      const rawLines = raw.trim().split('\n');
+      expect(rawLines[0]).toBe('CORRUPT_LINE');
+      // Valid line should have the file attached
+      const parsed = JSON.parse(rawLines[1]);
+      expect(parsed.files).toHaveLength(1);
+      expect(parsed.files[0].url).toBe('https://example.com/img.png');
+    });
+
+    test('all-corrupt conversations.jsonl returns empty array', () => {
+      // Set up directory manually
+      mkdirSync(join(TEST_DIR, 'bot1', 'messages'), { recursive: true });
+      writeFileSync(join(TEST_DIR, 'bot1', 'conversations.jsonl'), 'BAD\nALSO BAD\n', 'utf-8');
+
+      const list = svc.listConversations('bot1');
+      expect(list).toEqual([]);
+    });
+  });
+
+  describe('attachFiles', () => {
+    test('attaches files to an existing message', () => {
+      const convo = svc.createConversation('bot1');
+      const msg = svc.addMessage('bot1', convo.id, 'human', 'Check this out');
+
+      const result = svc.attachFiles('bot1', convo.id, msg!.id, [
+        { type: 'image', url: 'https://example.com/a.png', name: 'a.png' },
+        { type: 'document', url: 'https://example.com/b.pdf', name: 'b.pdf' },
+      ]);
+      expect(result).toBe(true);
+
+      const messages = svc.getMessages('bot1', convo.id);
+      expect(messages[0].files).toHaveLength(2);
+      expect(messages[0].files![0].name).toBe('a.png');
+      expect(messages[0].files![1].name).toBe('b.pdf');
+    });
+
+    test('returns false for non-existent conversation', () => {
+      expect(svc.attachFiles('bot1', 'no-such-convo', 'msg-1', [
+        { type: 'image', url: 'https://example.com/x.png', name: 'x.png' },
+      ])).toBe(false);
+    });
+
+    test('returns false for non-existent message', () => {
+      const convo = svc.createConversation('bot1');
+      svc.addMessage('bot1', convo.id, 'human', 'Hello');
+
+      const result = svc.attachFiles('bot1', convo.id, 'wrong-msg-id', [
+        { type: 'image', url: 'https://example.com/x.png', name: 'x.png' },
+      ]);
+      expect(result).toBe(false);
+    });
+
+    test('returns false for empty files array', () => {
+      const convo = svc.createConversation('bot1');
+      const msg = svc.addMessage('bot1', convo.id, 'human', 'Hello');
+
+      expect(svc.attachFiles('bot1', convo.id, msg!.id, [])).toBe(false);
+    });
+
+    test('appends to existing files on a message', () => {
+      const convo = svc.createConversation('bot1');
+      const msg = svc.addMessage('bot1', convo.id, 'human', 'Hello', [
+        { type: 'image', url: 'https://example.com/first.png', name: 'first.png' },
+      ]);
+
+      svc.attachFiles('bot1', convo.id, msg!.id, [
+        { type: 'image', url: 'https://example.com/second.png', name: 'second.png' },
+      ]);
+
+      const messages = svc.getMessages('bot1', convo.id);
+      expect(messages[0].files).toHaveLength(2);
+      expect(messages[0].files![0].name).toBe('first.png');
+      expect(messages[0].files![1].name).toBe('second.png');
+    });
+  });
+
+  describe('atomic writes', () => {
+    test('writeConversations is atomic (no .tmp left behind)', () => {
+      const convo = svc.createConversation('bot1');
+      svc.updateTitle('bot1', convo.id, 'Updated');
+
+      // No .tmp file should remain
+      const tmpPath = join(TEST_DIR, 'bot1', 'conversations.jsonl.tmp');
+      expect(existsSync(tmpPath)).toBe(false);
+
+      // Data should be intact
+      const updated = svc.getConversation('bot1', convo.id);
+      expect(updated!.title).toBe('Updated');
+    });
+
+    test('attachFiles write is atomic (no .tmp left behind)', () => {
+      const convo = svc.createConversation('bot1');
+      const msg = svc.addMessage('bot1', convo.id, 'human', 'Hello');
+      svc.attachFiles('bot1', convo.id, msg!.id, [
+        { type: 'image', url: 'https://example.com/x.png', name: 'x.png' },
+      ]);
+
+      const tmpPath = join(TEST_DIR, 'bot1', 'messages', `${convo.id}.jsonl.tmp`);
+      expect(existsSync(tmpPath)).toBe(false);
     });
   });
 });

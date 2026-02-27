@@ -398,6 +398,27 @@ describe('ProductionsService', () => {
       expect(stats.total).toBe(0);
       expect(stats.avgRating).toBeNull();
     });
+
+    test('skips corrupt non-JSON lines in changelog', () => {
+      // Create a valid entry first
+      service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1', tool: 'file_write', path: 'valid.ts', action: 'create',
+        description: 'valid', size: 10, trackOnly: false,
+      });
+
+      // Inject corrupt lines into changelog (simulates bot writing markdown to JSONL)
+      const { appendFileSync } = require('node:fs');
+      const { join } = require('node:path');
+      const dir = service.resolveDir('bot1');
+      const changelogPath = join(dir, 'changelog.jsonl');
+      appendFileSync(changelogPath, '# This is markdown, not JSON\n## Corrupt line\n');
+
+      // Should still return stats for the valid entry, not crash
+      const stats = service.getStats('bot1');
+      expect(stats.total).toBe(1);
+      expect(stats.unreviewed).toBe(1);
+    });
   });
 
   describe('getChangelog with status filter', () => {

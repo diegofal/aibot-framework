@@ -10,6 +10,7 @@ export interface ProcessToolConfig {
 
 interface ProcessSession {
   id: string;
+  botId: string;
   command: string;
   proc: Subprocess;
   pid: number;
@@ -22,6 +23,7 @@ interface ProcessSession {
 
 interface FinishedSession {
   id: string;
+  botId: string;
   command: string;
   pid: number;
   startedAt: number;
@@ -55,6 +57,7 @@ function startSweeper(ttlMs: number): void {
  * Called by exec tool when background=true.
  */
 export function registerProcess(
+  botId: string,
   command: string,
   proc: Subprocess,
   config: ProcessToolConfig,
@@ -64,15 +67,21 @@ export function registerProcess(
   const maxOutput = config.maxOutputChars ?? 200_000;
   const ttlMs = config.finishedTtlMs ?? 600_000;
 
-  if (activeSessions.size >= maxSessions) {
-    throw new Error(`Max background sessions reached (${maxSessions}). Kill or clear existing ones first.`);
+  // Count active sessions for this bot only
+  let botActiveCount = 0;
+  for (const s of activeSessions.values()) {
+    if (s.botId === botId) botActiveCount++;
+  }
+  if (botActiveCount >= maxSessions) {
+    throw new Error(`Max background sessions reached (${maxSessions}) for bot ${botId}. Kill or clear existing ones first.`);
   }
 
-  const id = `proc_${++idCounter}`;
+  const id = `${botId}_proc_${++idCounter}`;
   const pid = proc.pid;
 
   const session: ProcessSession = {
     id,
+    botId,
     command,
     proc,
     pid,
@@ -141,6 +150,7 @@ export function registerProcess(
       activeSessions.delete(id);
       finishedSessions.set(id, {
         id,
+        botId: active.botId,
         command: active.command,
         pid: active.pid,
         startedAt: active.startedAt,
@@ -154,7 +164,7 @@ export function registerProcess(
 
   startSweeper(ttlMs);
 
-  logger.info({ sessionId: id, pid, command }, 'process: registered background process');
+  logger.info({ sessionId: id, pid, command, botId }, 'process: registered background process');
   return { sessionId: id, pid };
 }
 
@@ -198,16 +208,16 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const action = String(args.action ?? '').trim();
       const sessionId = String(args.session_id ?? '').trim();
+      const botId = String(args._botId ?? '');
 
       switch (action) {
         case 'list': {
           const lines: string[] = [];
 
-          if (activeSessions.size === 0 && finishedSessions.size === 0) {
-            return { success: true, content: 'No background processes.' };
-          }
-
+          let hasAny = false;
           for (const s of activeSessions.values()) {
+            if (s.botId !== botId) continue;
+            hasAny = true;
             const elapsed = Math.round((Date.now() - s.startedAt) / 1000);
             lines.push(
               `[RUNNING] ${s.id} — PID ${s.pid} — ${elapsed}s — ${s.command}`
@@ -215,13 +225,19 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
           }
 
           for (const s of finishedSessions.values()) {
+            if (s.botId !== botId) continue;
+            hasAny = true;
             const elapsed = Math.round((s.finishedAt - s.startedAt) / 1000);
             lines.push(
               `[FINISHED] ${s.id} — PID ${s.pid} — exit ${s.exitCode} — ${elapsed}s — ${s.command}`
             );
           }
 
-          logger.info({ active: activeSessions.size, finished: finishedSessions.size }, 'process: list');
+          if (!hasAny) {
+            return { success: true, content: 'No background processes.' };
+          }
+
+          logger.info({ botId, count: lines.length }, 'process: list');
           return { success: true, content: lines.join('\n') };
         }
 
@@ -233,6 +249,9 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
           // Check active first
           const active = activeSessions.get(sessionId);
           if (active) {
+            if (active.botId !== botId) {
+              return { success: false, content: `Session ${sessionId} belongs to another bot` };
+            }
             const output = active.pending || '(no new output)';
             active.pending = '';
             logger.info({ sessionId, bytes: output.length }, 'process: poll (active)');
@@ -242,6 +261,9 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
           // Check finished
           const finished = finishedSessions.get(sessionId);
           if (finished) {
+            if (finished.botId !== botId) {
+              return { success: false, content: `Session ${sessionId} belongs to another bot` };
+            }
             const output = finished.pending || '(no new output)';
             finished.pending = '';
             logger.info({ sessionId, bytes: output.length }, 'process: poll (finished)');
@@ -266,6 +288,9 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
           const session = activeSessions.get(sessionId);
           if (!session) {
             return { success: false, content: `Session not found or not running: ${sessionId}` };
+          }
+          if (session.botId !== botId) {
+            return { success: false, content: `Session ${sessionId} belongs to another bot` };
           }
 
           try {
@@ -294,6 +319,9 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
           if (!session) {
             return { success: false, content: `Session not found or not running: ${sessionId}` };
           }
+          if (session.botId !== botId) {
+            return { success: false, content: `Session ${sessionId} belongs to another bot` };
+          }
 
           try {
             session.proc.kill();
@@ -314,7 +342,12 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
             return { success: false, content: `Session ${sessionId} is still running. Kill it first.` };
           }
 
-          if (finishedSessions.delete(sessionId)) {
+          const finished = finishedSessions.get(sessionId);
+          if (finished) {
+            if (finished.botId !== botId) {
+              return { success: false, content: `Session ${sessionId} belongs to another bot` };
+            }
+            finishedSessions.delete(sessionId);
             logger.info({ sessionId }, 'process: clear');
             return { success: true, content: `Cleared session ${sessionId}` };
           }

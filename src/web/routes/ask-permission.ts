@@ -60,6 +60,17 @@ export function askPermissionRoutes(deps: {
     return c.json({ entries });
   });
 
+  // Requeue a failed/consumed history entry back into the resolved queue
+  app.post('/history/:id/requeue', (c) => {
+    const id = c.req.param('id');
+    const ok = deps.botManager.requeuePermission(id);
+    if (!ok) {
+      return c.json({ error: 'Entry not found or not requeueable (must be approved + failed/consumed)' }, 404);
+    }
+    deps.logger.info({ requestId: id }, 'Permission request requeued via web');
+    return c.json({ ok: true });
+  });
+
   // Single history entry (for polling execution status)
   app.get('/history/:id', (c) => {
     const id = c.req.param('id');

@@ -14,6 +14,7 @@ import { renderKarma, renderBotKarma } from './pages/karma.js';
 import { renderSkills, renderSkillDetail, renderSkillEdit, renderSkillCreate } from './pages/skills.js';
 import { renderIntegrations } from './pages/integrations.js';
 import { renderToolRunner } from './pages/tool-runner.js';
+import { renderActivity, destroyActivity } from './pages/activity.js';
 
 const content = document.getElementById('content');
 
@@ -46,6 +47,7 @@ const routes = [
   { pattern: /^#\/tool-runner$/,              handler: () => renderToolRunner(content) },
   { pattern: /^#\/tools\/([^/]+)$/,          handler: (m) => renderToolDetail(content, m[1]) },
   { pattern: /^#\/tools$/,                   handler: () => renderTools(content) },
+  { pattern: /^#\/activity$/,                 handler: () => renderActivity(content) },
   { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },
   { pattern: /^#\/integrations$/,            handler: () => renderIntegrations(content) },
   { pattern: /^#\/settings$/,               handler: () => renderSettings(content) },
@@ -55,6 +57,7 @@ function navigate() {
   destroyLogs();
   destroyInbox();
   destroyPermissions();
+  destroyActivity();
   const hash = location.hash || '#/';
   if (hash === '#') { location.hash = '#/'; return; }
 

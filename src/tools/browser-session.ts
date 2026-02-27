@@ -2,91 +2,116 @@ import type { Browser, BrowserContext, Page } from 'playwright';
 import type { ElementRef } from './browser-snapshot';
 import type { BrowserToolsConfig } from '../config';
 
-// ─── Singleton State ────────────────────────────────────────
+// ─── Per-Bot Session State ──────────────────────────────────
 
-let browser: Browser | null = null;
-let context: BrowserContext | null = null;
-let activePage: Page | null = null;
-let currentRefs = new Map<string, ElementRef>();
-let idleTimer: ReturnType<typeof setTimeout> | null = null;
-let launchPromise: Promise<void> | null = null;
-let currentConfig: BrowserToolsConfig | null = null;
+interface BrowserSession {
+  browser: Browser | null;
+  context: BrowserContext | null;
+  activePage: Page | null;
+  currentRefs: Map<string, ElementRef>;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  launchPromise: Promise<void> | null;
+  currentConfig: BrowserToolsConfig | null;
+}
+
+const sessions = new Map<string, BrowserSession>();
+
+function getSession(botId: string): BrowserSession {
+  let session = sessions.get(botId);
+  if (!session) {
+    session = {
+      browser: null,
+      context: null,
+      activePage: null,
+      currentRefs: new Map(),
+      idleTimer: null,
+      launchPromise: null,
+      currentConfig: null,
+    };
+    sessions.set(botId, session);
+  }
+  return session;
+}
 
 // ─── Idle Timer ─────────────────────────────────────────────
 
-function resetIdleTimer(): void {
-  if (idleTimer) clearTimeout(idleTimer);
-  const timeout = currentConfig?.idleTimeoutMs ?? 300_000;
-  idleTimer = setTimeout(() => {
-    closeBrowser().catch(() => {});
+function resetIdleTimer(botId: string, session: BrowserSession): void {
+  if (session.idleTimer) clearTimeout(session.idleTimer);
+  const timeout = session.currentConfig?.idleTimeoutMs ?? 300_000;
+  session.idleTimer = setTimeout(() => {
+    closeBrowser(botId).catch(() => {});
   }, timeout);
 }
 
 // ─── Public API ─────────────────────────────────────────────
 
-export function touchActivity(): void {
-  resetIdleTimer();
+export function touchActivity(botId: string): void {
+  const session = getSession(botId);
+  resetIdleTimer(botId, session);
 }
 
-export function storeRefs(refs: Map<string, ElementRef>): void {
-  currentRefs = refs;
+export function storeRefs(botId: string, refs: Map<string, ElementRef>): void {
+  getSession(botId).currentRefs = refs;
 }
 
-export function resolveRef(refId: string): ElementRef | undefined {
-  return currentRefs.get(refId);
+export function resolveRef(botId: string, refId: string): ElementRef | undefined {
+  return getSession(botId).currentRefs.get(refId);
 }
 
-export function getBrowserStatus(): {
+export function getBrowserStatus(botId: string): {
   running: boolean;
   url?: string;
   title?: string;
 } {
-  if (!browser || !activePage) {
+  const session = getSession(botId);
+  if (!session.browser || !session.activePage) {
     return { running: false };
   }
   return {
     running: true,
-    url: activePage.url(),
-    title: undefined, // title requires async — set by caller if needed
+    url: session.activePage.url(),
+    title: undefined,
   };
 }
 
-export function isRunning(): boolean {
-  return browser !== null && activePage !== null;
+export function isRunning(botId: string): boolean {
+  const session = getSession(botId);
+  return session.browser !== null && session.activePage !== null;
 }
 
-export function getActivePage(): Page | null {
-  return activePage;
+export function getActivePage(botId: string): Page | null {
+  return getSession(botId).activePage;
 }
 
 /**
  * Ensure browser is launched and a page is ready.
  * Deduplicates concurrent launches via launchPromise.
  */
-export async function ensureBrowser(config: BrowserToolsConfig): Promise<Page> {
-  currentConfig = config;
+export async function ensureBrowser(botId: string, config: BrowserToolsConfig): Promise<Page> {
+  const session = getSession(botId);
+  session.currentConfig = config;
 
-  if (activePage && browser) {
-    touchActivity();
-    return activePage;
+  if (session.activePage && session.browser) {
+    touchActivity(botId);
+    return session.activePage;
   }
 
-  if (launchPromise) {
-    await launchPromise;
-    if (activePage) return activePage;
+  if (session.launchPromise) {
+    await session.launchPromise;
+    if (session.activePage) return session.activePage;
   }
 
-  launchPromise = doLaunch(config);
+  session.launchPromise = doLaunch(botId, session, config);
   try {
-    await launchPromise;
+    await session.launchPromise;
   } finally {
-    launchPromise = null;
+    session.launchPromise = null;
   }
 
-  return activePage!;
+  return session.activePage!;
 }
 
-async function doLaunch(config: BrowserToolsConfig): Promise<void> {
+async function doLaunch(botId: string, session: BrowserSession, config: BrowserToolsConfig): Promise<void> {
   const pw = await import('playwright');
 
   const launchOptions: Record<string, unknown> = {
@@ -97,55 +122,69 @@ async function doLaunch(config: BrowserToolsConfig): Promise<void> {
     launchOptions.executablePath = config.executablePath;
   }
 
-  browser = await pw.chromium.launch(launchOptions);
+  session.browser = await pw.chromium.launch(launchOptions);
 
-  context = await browser.newContext({
+  session.context = await session.browser.newContext({
     viewport: {
       width: config.viewport.width,
       height: config.viewport.height,
     },
   });
 
-  activePage = await context.newPage();
-  activePage.setDefaultNavigationTimeout(config.navigationTimeout);
-  activePage.setDefaultTimeout(config.actionTimeout);
+  session.activePage = await session.context.newPage();
+  session.activePage.setDefaultNavigationTimeout(config.navigationTimeout);
+  session.activePage.setDefaultTimeout(config.actionTimeout);
 
-  // Close everything if browser disconnects unexpectedly
-  browser.on('disconnected', () => {
-    browser = null;
-    context = null;
-    activePage = null;
-    currentRefs.clear();
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = null;
+  // Close everything if browser disconnects unexpectedly.
+  // Capture `session` by closure (not re-fetching from map) because
+  // closeBrowser may have already deleted the map entry.
+  session.browser.on('disconnected', () => {
+    session.browser = null;
+    session.context = null;
+    session.activePage = null;
+    session.currentRefs.clear();
+    if (session.idleTimer) {
+      clearTimeout(session.idleTimer);
+      session.idleTimer = null;
     }
   });
 
-  resetIdleTimer();
+  resetIdleTimer(botId, session);
 }
 
 /**
- * Close the browser and free all resources. Idempotent.
+ * Close the browser and free all resources for a specific bot. Idempotent.
  */
-export async function closeBrowser(): Promise<void> {
-  if (idleTimer) {
-    clearTimeout(idleTimer);
-    idleTimer = null;
+export async function closeBrowser(botId: string): Promise<void> {
+  const session = sessions.get(botId);
+  if (!session) return;
+
+  if (session.idleTimer) {
+    clearTimeout(session.idleTimer);
+    session.idleTimer = null;
   }
 
-  currentRefs.clear();
+  session.currentRefs.clear();
 
-  if (browser) {
+  if (session.browser) {
     try {
-      await browser.close();
+      await session.browser.close();
     } catch {
       // Already closed
     }
   }
 
-  browser = null;
-  context = null;
-  activePage = null;
-  launchPromise = null;
+  session.browser = null;
+  session.context = null;
+  session.activePage = null;
+  session.launchPromise = null;
+  sessions.delete(botId);
+}
+
+/**
+ * Close all browser sessions (for shutdown).
+ */
+export async function closeAllBrowsers(): Promise<void> {
+  const botIds = [...sessions.keys()];
+  await Promise.all(botIds.map((id) => closeBrowser(id)));
 }

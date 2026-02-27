@@ -18,6 +18,7 @@ function makeBotManager(overrides: Record<string, any> = {}) {
     getPermissionsCount: mock(() => overrides.count ?? 0),
     approvePermission: mock((id: string, note?: string) => overrides.approveResult ?? (id === 'valid-id')),
     denyPermission: mock((id: string, note?: string) => overrides.denyResult ?? (id === 'valid-id')),
+    requeuePermission: mock((id: string) => overrides.requeueResult ?? (id === 'valid-id')),
     getPermissionsHistory: mock((limit?: number) => overrides.history ?? []),
     getPermissionHistoryById: mock((id: string) => overrides.historyById?.[id] ?? undefined),
   } as any;
@@ -182,5 +183,34 @@ describe('ask-permission routes', () => {
     expect(res.status).toBe(404);
     const data = await res.json();
     expect(data.error).toContain('not found');
+  });
+
+  test('POST /history/:id/requeue returns 200 on success', async () => {
+    const bm = makeBotManager();
+    const app = createApp(bm);
+    const res = await app.request('/api/ask-permission/history/valid-id/requeue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(bm.requeuePermission).toHaveBeenCalledWith('valid-id');
+  });
+
+  test('POST /history/:id/requeue returns 404 for unknown/non-requeueable ID', async () => {
+    const bm = makeBotManager();
+    const app = createApp(bm);
+    const res = await app.request('/api/ask-permission/history/unknown-id/requeue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(404);
+    const data = await res.json();
+    expect(data.error).toContain('not requeueable');
   });
 });

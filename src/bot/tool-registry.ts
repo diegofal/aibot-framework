@@ -35,6 +35,7 @@ import { createArchiveFileTool } from '../tools/archive-file';
 import { createRedditSearchTool, createRedditHotTool, createRedditReadTool } from '../tools/reddit';
 import { createTwitterSearchTool, createTwitterPostTool, createTwitterReadTool } from '../tools/twitter';
 import { createCalendarListTool, createCalendarAvailabilityTool, createCalendarScheduleTool } from '../tools/calendar';
+import { createMoltbookRegisterTool } from '../tools/moltbook';
 
 // ─── Tool Category System ───
 
@@ -53,7 +54,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   system: ['exec', 'process', 'get_datetime', 'cron'],
   social: ['reddit_search', 'reddit_hot', 'reddit_read', 'twitter_search', 'twitter_read', 'twitter_post'],
   calendar: ['calendar_list', 'calendar_availability', 'calendar_schedule'],
-  communication: ['ask_human', 'ask_permission', 'phone_call', 'delegate_to_bot', 'collaborate'],
+  communication: ['ask_human', 'ask_permission', 'phone_call', 'delegate_to_bot', 'collaborate', 'moltbook_register'],
   browser: ['browser'],
   production: ['read_production_log', 'archive_file', 'create_tool', 'signal_completion'],
 };
@@ -314,6 +315,10 @@ export class ToolRegistry {
       tools.push(createArchiveFileTool(this.ctx.productionsService));
       logger.info('Production tools initialized (read_production_log, archive_file)');
     }
+
+    // Moltbook registration tool
+    tools.push(createMoltbookRegisterTool());
+    logger.info('moltbook_register tool initialized');
 
     // Dynamic tools (create_tool + approved dynamic tools)
     const dtConfig = config.dynamicTools;

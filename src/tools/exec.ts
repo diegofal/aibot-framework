@@ -105,6 +105,7 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
 
       const cwd = String(args.workdir ?? workdir);
       const background = Boolean(args.background);
+      const botId = String(args._botId ?? '');
 
       // Background mode: register and return immediately
       if (background && config.processToolConfig) {
@@ -119,6 +120,7 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
           });
 
           const { sessionId, pid } = registerProcess(
+            botId,
             command,
             proc,
             config.processToolConfig,

@@ -915,6 +915,26 @@
         </table>
       </div>
 
+      <!-- --- Files --- -->
+      <h3>Files</h3>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr><th>Method</th><th>Endpoint</th><th>Description</th><th>Route file</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/files/:botId/*path</code></td>
+              <td>Serve a file from a bot's workDir. Returns <code>{ path, content, size }</code>.
+                Security: path traversal validation, denied patterns (.env, .key, .pem, credentials, etc.),
+                symlink escape check, 1MB size cap.</td>
+              <td><code>files.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <!-- --- Settings --- -->
       <h3>Settings</h3>
 
@@ -960,11 +980,13 @@
       <!-- ============================================================
            Section 3: WebSocket
            ============================================================ -->
-      <h2>WebSocket &mdash; Log Streaming</h2>
+      <h2>WebSocket &mdash; Log &amp; Activity Streaming</h2>
 
       <p>
-        The server provides a WebSocket endpoint at <code>/ws/logs</code> that streams real-time
-        structured log entries to the dashboard's Logs page. The implementation works as follows:
+        The server provides two WebSocket endpoints: <code>/ws/logs</code> for structured log
+        streaming and <code>/ws/activity</code> for real-time bot activity events. Both use
+        <code>Bun.serve</code>'s upgrade mechanism with discriminated <code>data.type</code>
+        to route connections to separate client sets. The log streaming works as follows:
       </p>
 
       <h3>Connection lifecycle</h3>
@@ -1001,9 +1023,30 @@
 }</code></pre>
 
       <p>
-        The WebSocket is unidirectional &mdash; the server does not process any client-to-server
-        messages. The <code>message</code> handler is a no-op.
+        Both WebSocket endpoints are unidirectional &mdash; the server does not process any
+        client-to-server messages. The <code>message</code> handler is a no-op.
       </p>
+
+      <h3>Activity Stream (<code>/ws/activity</code>)</h3>
+
+      <p>
+        The activity WebSocket streams events from the <code>ActivityStream</code> module
+        (<code>src/bot/activity-stream.ts</code>). On connect, the last 50 events are sent as
+        <code>{ type: "history", events: [...] }</code>. New events are broadcast as
+        <code>{ type: "activity", event: {...} }</code>. The <code>ActivityStream</code> is an
+        <code>EventEmitter</code> with a circular buffer (default 200 events) that receives
+        events from agent-loop, conversation-pipeline, memory-flush, and collaboration modules.
+      </p>
+
+      <pre><code>// Activity event types
+tool:start | tool:end | tool:error    // Tool execution lifecycle
+llm:start | llm:end                   // LLM call lifecycle
+agent:phase | agent:idle | agent:result // Agent loop phases
+memory:flush | memory:rag             // Memory operations
+collab:start | collab:end             // Bot-to-bot collaboration
+
+// ActivityEvent interface
+{ type, botId, timestamp, phase?, data? }</code></pre>
 
       <!-- ============================================================
            Section 4: SPA Frontend Pages
@@ -1025,10 +1068,22 @@
         </div>
 
         <div class="card">
+          <h3>Activity</h3>
+          <p>Real-time activity stream powered by the <code>/ws/activity</code> WebSocket.
+             Shows everything the bot does as it does it: tool calls (start/end/error),
+             LLM requests, agent loop phases (strategist/planner/executor), memory operations
+             (flush, RAG), and collaboration sessions. Color-coded event type badges,
+             filter by bot or event type, expandable event details. 500-event DOM limit
+             with auto-scroll and pause/resume. REST fallback via <code>GET /api/activity</code>.</p>
+        </div>
+
+        <div class="card">
           <h3>Inbox</h3>
           <p>Ask-human question queue. Bots can use the <code>ask_human</code> tool to request
              operator input. Questions are listed with answer and dismiss actions. Badge polling
-             via <code>/api/ask-human/count</code>.</p>
+             via <code>/api/ask-human/count</code>. Messages may include <strong>file attachments</strong>
+             shown as clickable chips below the message bubble; clicking a chip opens a modal preview
+             fetched from <code>/api/files/:botId/*path</code>.</p>
         </div>
 
         <div class="card">

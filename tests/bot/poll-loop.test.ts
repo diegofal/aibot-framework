@@ -1,15 +1,7 @@
-import { describe, test, expect, vi, beforeEach } from 'bun:test';
+import { describe, test, expect, vi } from 'bun:test';
 import { GrammyError } from 'grammy';
 import type { Logger } from '../../src/logger';
-
-/**
- * Tests for the custom polling loop in BotManager.
- *
- * Since pollLoop and abortableSleep are private methods on BotManager
- * (a massive facade with many deps), we extract and test the core logic
- * directly by re-implementing the same algorithm in a minimal harness.
- * This validates behavior without needing the full BotManager constructor.
- */
+import { TelegramPoller, abortableSleep, type SleepFn } from '../../src/bot/telegram-poller';
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -23,14 +15,6 @@ function makeLogger(): Logger {
 }
 
 // ---------- abortableSleep ----------
-
-function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) { resolve(); return; }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-  });
-}
 
 describe('abortableSleep', () => {
   test('resolves after timeout', async () => {
@@ -58,9 +42,8 @@ describe('abortableSleep', () => {
   });
 });
 
-// ---------- pollLoop core logic ----------
+// ---------- Helpers ----------
 
-/** Helper to create a GrammyError with specific error_code */
 function make409(): GrammyError {
   return new GrammyError(
     'Conflict: terminated by other getUpdates request',
@@ -108,102 +91,14 @@ function createMockBot(): MockBot {
   };
 }
 
-type SleepFn = (ms: number, signal: AbortSignal) => Promise<void>;
-
-const POLL_INTERVAL_MS = 500;
-
-/**
- * Minimal re-implementation of BotManager.pollLoop for unit testing.
- * Mirrors the exact logic in bot-manager.ts, with injectable sleep for fast tests.
- */
-async function pollLoop(
-  bot: MockBot,
-  botId: string,
-  signal: AbortSignal,
-  logger: Logger,
-  opts?: { maxConsecutive409?: number; max409DurationMs?: number; sleep?: SleepFn },
-): Promise<void> {
-  let offset = 0;
-  let consecutive409 = 0;
-  let first409At = 0;
-  const MAX_409_CONSECUTIVE = opts?.maxConsecutive409 ?? 20;
-  const MAX_409_DURATION_MS = opts?.max409DurationMs ?? 5 * 60_000;
-  const sleep = opts?.sleep ?? abortableSleep;
-
-  await bot.api.deleteWebhook();
-
-  while (!signal.aborted) {
-    try {
-      const updates = await bot.api.getUpdates({ offset, limit: 100, timeout: 30 }, signal);
-
-      consecutive409 = 0;
-      first409At = 0;
-
-      if (updates.length === 0) {
-        // Inter-poll pause (before continue)
-        if (!signal.aborted) await sleep(POLL_INTERVAL_MS, signal);
-        continue;
-      }
-
-      offset = updates[updates.length - 1].update_id + 1;
-
-      for (const update of updates) {
-        try {
-          await bot.handleUpdate(update);
-        } catch (err) {
-          logger.error({ err, updateId: update.update_id, botId }, 'Error handling update (non-fatal)');
-        }
-      }
-    } catch (err) {
-      if (signal.aborted) break;
-
-      const is409 = err instanceof GrammyError && err.error_code === 409;
-      const is401 = err instanceof GrammyError && err.error_code === 401;
-      const is429 = err instanceof GrammyError && err.error_code === 429;
-
-      if (is401) throw err;
-
-      if (is409) {
-        consecutive409++;
-        if (first409At === 0) first409At = Date.now();
-
-        const elapsed = Date.now() - first409At;
-        if (consecutive409 >= MAX_409_CONSECUTIVE || elapsed >= MAX_409_DURATION_MS) {
-          throw err;
-        }
-
-        const delay = Math.min(3_000 * consecutive409, 30_000);
-        if (consecutive409 <= 2) {
-          logger.debug({ botId, attempt: consecutive409, delay }, 'getUpdates 409 — backing off');
-        } else {
-          logger.warn({ botId, attempt: consecutive409, delay }, 'getUpdates 409 — backing off');
-        }
-        await sleep(delay, signal);
-        continue;
-      }
-
-      if (is429) {
-        const retryAfter = (err as any).parameters?.retry_after ?? 10;
-        logger.warn({ botId, retryAfter }, 'Rate limited — respecting retry_after');
-        await sleep(retryAfter * 1000, signal);
-        continue;
-      }
-
-      logger.warn({ err, botId }, 'getUpdates error — retrying in 3s');
-      await sleep(3_000, signal);
-    }
-
-    // Brief pause between polls to prevent Telegram session overlap → 409
-    if (!signal.aborted) await sleep(POLL_INTERVAL_MS, signal);
-  }
-}
-
 /** Instant sleep for fast tests */
 const instantSleep: SleepFn = async () => {};
 
+const POLL_INTERVAL_MS = 500;
+
 // ---------- Tests ----------
 
-describe('pollLoop', () => {
+describe('TelegramPoller', () => {
   test('successful poll cycle: getUpdates → handleUpdate → offset advances', async () => {
     const bot = createMockBot();
     const ac = new AbortController();
@@ -222,7 +117,8 @@ describe('pollLoop', () => {
       return [];
     });
 
-    await pollLoop(bot, 'test', ac.signal, logger, { sleep: instantSleep });
+    const poller = new TelegramPoller(logger, { sleep: instantSleep });
+    await poller.start(bot as any, 'test', ac.signal);
 
     expect(bot.api.deleteWebhook).toHaveBeenCalledTimes(1);
     expect(bot.handleUpdate).toHaveBeenCalledTimes(2);
@@ -250,7 +146,8 @@ describe('pollLoop', () => {
       return [];
     });
 
-    await pollLoop(bot, 'test', ac.signal, logger, { maxConsecutive409: 5, sleep: instantSleep });
+    const poller = new TelegramPoller(logger, { sleep: instantSleep });
+    await poller.start(bot as any, 'test', ac.signal);
 
     expect(bot.handleUpdate).toHaveBeenCalledTimes(1);
     expect(bot.handleUpdate).toHaveBeenCalledWith({ update_id: 200, message: { text: 'recovered' } });
@@ -266,12 +163,13 @@ describe('pollLoop', () => {
 
     bot.api.getUpdates.mockRejectedValue(make409());
 
+    const poller = new TelegramPoller(logger, { sleep: instantSleep });
     await expect(
-      pollLoop(bot, 'test', ac.signal, logger, { maxConsecutive409: 3, sleep: instantSleep })
+      poller.start(bot as any, 'test', ac.signal)
     ).rejects.toThrow('Conflict');
 
-    // Should have tried 3 times then thrown
-    expect(bot.api.getUpdates).toHaveBeenCalledTimes(3);
+    // Should have tried 20 times (default MAX_409_CONSECUTIVE) then thrown
+    expect(bot.api.getUpdates).toHaveBeenCalledTimes(20);
   });
 
   test('clean abort: AbortController.abort() → loop exits without error', async () => {
@@ -284,8 +182,8 @@ describe('pollLoop', () => {
       return [];
     });
 
-    // Should resolve (not throw)
-    await pollLoop(bot, 'test', ac.signal, logger, { sleep: instantSleep });
+    const poller = new TelegramPoller(logger, { sleep: instantSleep });
+    await poller.start(bot as any, 'test', ac.signal);
     expect(bot.api.deleteWebhook).toHaveBeenCalledTimes(1);
   });
 
@@ -311,7 +209,8 @@ describe('pollLoop', () => {
       .mockRejectedValueOnce(new Error('handler crash'))
       .mockResolvedValueOnce(undefined);
 
-    await pollLoop(bot, 'test', ac.signal, logger, { sleep: instantSleep });
+    const poller = new TelegramPoller(logger, { sleep: instantSleep });
+    await poller.start(bot as any, 'test', ac.signal);
 
     // Both updates were attempted
     expect(bot.handleUpdate).toHaveBeenCalledTimes(2);
@@ -326,8 +225,9 @@ describe('pollLoop', () => {
 
     bot.api.getUpdates.mockRejectedValue(make401());
 
+    const poller = new TelegramPoller(logger, { sleep: instantSleep });
     await expect(
-      pollLoop(bot, 'test', ac.signal, logger, { sleep: instantSleep })
+      poller.start(bot as any, 'test', ac.signal)
     ).rejects.toThrow('Unauthorized');
 
     // Only 1 attempt — no retries for 401
@@ -350,7 +250,8 @@ describe('pollLoop', () => {
       return [];
     });
 
-    await pollLoop(bot, 'test', ac.signal, logger, { sleep: trackingSleep });
+    const poller = new TelegramPoller(logger, { sleep: trackingSleep });
+    await poller.start(bot as any, 'test', ac.signal);
 
     // Should have requested 5000ms sleep (5s × 1000)
     expect(sleepCalls).toEqual([5000]);
@@ -372,7 +273,8 @@ describe('pollLoop', () => {
       return [];
     });
 
-    await pollLoop(bot, 'test', ac.signal, logger, { sleep: trackingSleep });
+    const poller = new TelegramPoller(logger, { sleep: trackingSleep });
+    await poller.start(bot as any, 'test', ac.signal);
 
     expect(bot.api.getUpdates).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledTimes(1);
@@ -392,7 +294,8 @@ describe('pollLoop', () => {
       return [];
     });
 
-    await pollLoop(bot, 'test', ac.signal, logger, { sleep: instantSleep });
+    const poller = new TelegramPoller(logger, { sleep: instantSleep });
+    await poller.start(bot as any, 'test', ac.signal);
 
     expect(bot.handleUpdate).not.toHaveBeenCalled();
     expect(bot.api.getUpdates).toHaveBeenCalledTimes(3);
@@ -415,11 +318,10 @@ describe('pollLoop', () => {
       return [];
     });
 
-    await pollLoop(bot, 'test', ac.signal, logger, { sleep: trackingSleep });
+    const poller = new TelegramPoller(logger, { sleep: trackingSleep });
+    await poller.start(bot as any, 'test', ac.signal);
 
     // Each successful cycle should have a POLL_INTERVAL_MS (500) sleep
-    // Cycle 1: empty updates → 500ms before continue
-    // Cycle 2: updates processed → 500ms at end of loop
     expect(sleepCalls.filter(ms => ms === POLL_INTERVAL_MS)).toHaveLength(2);
   });
 
@@ -429,7 +331,6 @@ describe('pollLoop', () => {
     const logger = makeLogger();
 
     // Sequence: 2 × 409 → success → 2 × 409 → success → abort
-    // With maxConsecutive409=3, this should NOT throw (counter resets each success)
     let callCount = 0;
     bot.api.getUpdates.mockImplementation(async () => {
       callCount++;
@@ -441,7 +342,8 @@ describe('pollLoop', () => {
       return [];
     });
 
-    await pollLoop(bot, 'test', ac.signal, logger, { maxConsecutive409: 3, sleep: instantSleep });
+    const poller = new TelegramPoller(logger, { sleep: instantSleep });
+    await poller.start(bot as any, 'test', ac.signal);
 
     expect(bot.handleUpdate).toHaveBeenCalledTimes(2);
     // 4 total 409s: each burst of 2 → both debug (<=2), no warns for 409
