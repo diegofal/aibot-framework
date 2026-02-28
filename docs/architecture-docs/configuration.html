@@ -1024,6 +1024,12 @@ const config = await loadConfig('./config/config.json');</code></pre>
               <td>(defaults)</td>
               <td>Nested <code>StrategistConfigSchema</code></td>
             </tr>
+            <tr>
+              <td><code>phaseTimeouts</code></td>
+              <td>object</td>
+              <td>(defaults)</td>
+              <td>Per-phase timeout limits: <code>feedbackMs</code> (30s), <code>strategistMs</code> (60s), <code>plannerMs</code> (60s), <code>executorMs</code> (90s). Per-bot overridable via <code>botConfig.agentLoop.phaseTimeouts</code>.</td>
+            </tr>
           </tbody>
         </table>
       </div>

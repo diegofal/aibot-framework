@@ -224,7 +224,7 @@ export class HandlerRegistrar {
       const userMessage = gate.strippedText ?? ctx.message.text;
       const sessionKey = this.ctx.sessionManager.deriveKey(config.id, ctx);
       const serializedKey = this.ctx.sessionManager.serializeKey(sessionKey);
-      this.ctx.messageBuffer.enqueue({
+      this.ctx.messageBuffer!.enqueue({
         sessionKey: serializedKey,
         ctx, config,
         userText: userMessage,

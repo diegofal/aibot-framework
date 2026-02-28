@@ -35,6 +35,7 @@ export class AgentScheduler {
   private botSchedules = new Map<string, BotSchedule>();
   private botLoops = new Map<string, Promise<void>>();
   private runningBotIds = new Set<string>();
+  private pendingWakeRequests = new Set<string>();
   private concurrencyRunning = 0;
   private concurrencyQueue: Array<() => void> = [];
   private enabled = false;
@@ -162,12 +163,45 @@ export class AgentScheduler {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     this.flushDirty = true;
     this.flushToDisk();
+    this.pendingWakeRequests.clear();
     this.botSchedules.clear();
     this.botLoops.clear();
   }
 
   wakeUp(): void {
     for (const c of this.sleepControllers) c.abort();
+  }
+
+  /**
+   * Request an immediate agent loop run for a specific bot.
+   * - If bot is idle (not currently executing), sets nextRunAt = now and wakes the loop.
+   * - If bot is busy (currently executing), queues a pending wake so the bot
+   *   skips sleep after the current cycle finishes.
+   */
+  requestImmediateRun(botId: string): void {
+    if (!this.enabled) return;
+    if (!this.ctx.runningBots.has(botId)) return;
+
+    if (this.runningBotIds.has(botId)) {
+      // Bot is currently executing — queue a pending wake
+      this.pendingWakeRequests.add(botId);
+      this.ctx.logger.info({ botId }, 'Agent loop: queued pending wake request (bot busy)');
+      return;
+    }
+
+    // Bot is idle — set nextRunAt to now and wake the loop
+    const schedule = this.botSchedules.get(botId);
+    if (schedule) {
+      schedule.nextRunAt = Date.now();
+      this.schedulePersist();
+    }
+    this.ctx.logger.info({ botId }, 'Agent loop: immediate run triggered (bot idle)');
+    this.wakeUp();
+  }
+
+  /** Returns true if a pending wake was consumed for the given bot. */
+  consumePendingWake(botId: string): boolean {
+    return this.pendingWakeRequests.delete(botId);
   }
 
   /**
@@ -475,6 +509,12 @@ export class AgentScheduler {
       }
 
       if (!this.enabled || this.draining || !this.ctx.runningBots.has(botId)) break;
+
+      // If an immediate run was requested while this bot was executing, skip sleep
+      if (this.pendingWakeRequests.delete(botId)) {
+        botLogger.info({ botId }, 'Agent loop: consumed pending wake — skipping sleep');
+        continue;
+      }
 
       const sleepMs = isContinuous
         ? (botConfig.agentLoop?.continuousPauseMs ?? 5_000)

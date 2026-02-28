@@ -1023,6 +1023,8 @@
           appropriate module. Manages bot lifecycle (start/stop/reset), Telegram polling with
           409-conflict retry, headless mode, and all delegate methods for agent loop, ask-human,
           ask-permission, feedback, collaboration, dynamic tools, productions, and karma.
+          Auto-restart timers are tracked and cancelled on <code>stopBot()</code> to prevent
+          ghost restarts. Collaboration pending tasks are drained during cleanup.
         </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">

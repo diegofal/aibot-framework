@@ -17,6 +17,7 @@ export interface ToolExecutionRecord {
   success: boolean;
   result: string;
   durationMs?: number;
+  category?: string;
 }
 
 /**
@@ -283,8 +284,8 @@ export class ToolExecutor extends EventEmitter {
               if (!logPath.endsWith('/INDEX.md') && logPath !== 'INDEX.md') {
                 // file_write uses `content`, file_edit uses `new_text`
                 const content = name === 'file_edit'
-                  ? (typeof (args as any).new_text === 'string' ? (args as any).new_text as string : '')
-                  : (typeof (args as any).content === 'string' ? (args as any).content as string : '');
+                  ? (typeof args.new_text === 'string' ? args.new_text : '')
+                  : (typeof args.content === 'string' ? args.content : '');
 
                 // Extract first heading for better descriptions
                 const firstHeading = content ? content.match(/^#+ (.+)$/m)?.[1] : null;
@@ -297,7 +298,7 @@ export class ToolExecutor extends EventEmitter {
                     botId,
                     tool: name,
                     path: logPath,
-                    action: name === 'file_write' ? ((args as any).append ? 'edit' : 'create') : 'edit',
+                    action: name === 'file_write' ? (args.append ? 'edit' : 'create') : 'edit',
                     description,
                     size: 0,
                     trackOnly: ps.isTrackOnly(botId),
@@ -323,7 +324,7 @@ export class ToolExecutor extends EventEmitter {
                       botId,
                       tool: name,
                       path: logPath,
-                      action: name === 'file_write' ? ((args as any).append ? 'edit' : 'create') : 'edit',
+                      action: name === 'file_write' ? (args.append ? 'edit' : 'create') : 'edit',
                       description,
                       size: content.length,
                       trackOnly: ps.isTrackOnly(botId),

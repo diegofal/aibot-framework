@@ -21,6 +21,13 @@ export const AgentLoopRetryConfigSchema = z.object({
   backoffMultiplier: z.number().min(1).max(10).default(2),
 }).default({});
 
+export const PhaseTimeoutsSchema = z.object({
+  feedbackMs: z.number().int().positive().default(30_000),
+  strategistMs: z.number().int().positive().default(60_000),
+  plannerMs: z.number().int().positive().default(60_000),
+  executorMs: z.number().int().positive().default(90_000),
+}).default({});
+
 export const GlobalAgentLoopConfigSchema = z.object({
   enabled: z.boolean().default(false),
   every: z.string().default('6h'),
@@ -36,6 +43,8 @@ export const GlobalAgentLoopConfigSchema = z.object({
   idleSuppression: z.boolean().default(true),
   /** Number of non-idle cycles without ask_human before injecting a check-in nudge */
   askHumanCheckInCycles: z.number().int().min(1).max(50).default(5),
+  /** Per-phase timeout limits for agent loop operations */
+  phaseTimeouts: PhaseTimeoutsSchema,
   strategist: StrategistConfigSchema,
   retry: AgentLoopRetryConfigSchema,
 }).default({});
@@ -59,6 +68,12 @@ export const BotAgentLoopOverrideSchema = z.object({
     initialDelayMs: z.number().int().min(1000).max(300_000).optional(),
     maxDelayMs: z.number().int().min(1000).max(600_000).optional(),
     backoffMultiplier: z.number().min(1).max(10).optional(),
+  }).optional(),
+  phaseTimeouts: z.object({
+    feedbackMs: z.number().int().positive().optional(),
+    strategistMs: z.number().int().positive().optional(),
+    plannerMs: z.number().int().positive().optional(),
+    executorMs: z.number().int().positive().optional(),
   }).optional(),
 }).optional();
 

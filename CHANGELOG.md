@@ -2,7 +2,34 @@
 
 ## Unreleased
 
+### Added
+- **Immediate agent loop trigger** — New `requestImmediateRun(botId)` on `AgentScheduler`,
+  `AgentLoop`, and `BotManager`. Every user conversation now triggers an immediate agent loop
+  cycle so bots act on requests without waiting for the next scheduled cycle. If the bot is
+  already executing, the request is queued as a pending wake (Set-based dedup) and the bot
+  skips its inter-cycle sleep once the current cycle finishes. 10 new tests.
+
 ### Changed
+- **Auto-restart timer tracking** — `BotManager` now tracks `setTimeout` timer IDs for
+  auto-restart. `stopBot()` and `cleanupBot()` cancel pending restart timers, preventing
+  ghost restarts after explicit stops. 5 new tests.
+- **Collaboration task tracking** — `CollaborationManager.sendVisibleMessage()` fire-and-forget
+  promise is now tracked in a per-bot `pendingTasks` set. New `drainPending(botId)` method
+  awaits all pending tasks, called from `cleanupBot()` before unregistering. 4 new tests.
+- **Cron error logging** — `resolveChain` in `cron/locked.ts` now logs swallowed errors
+  via `console.error` instead of silently discarding them. 4 new tests.
+- **Type safety fixes** — Eliminated 6 `as any` casts: `tool-executor.ts` productions
+  logging uses proper `Record<string, unknown>` access, `bot-manager.ts` messageBuffer
+  uses typed null instead of `null as any`, `BotContext.messageBuffer` is now
+  `MessageBuffer | null`. Added `category` field to `ToolExecutionRecord`.
+- **Circuit breaker deduplication** — `ConversationPipeline` now uses `DEFAULT_CIRCUIT_CONFIG`
+  from `llm-resilience.ts` instead of hardcoded values, centralizing the configuration.
+- **Agent loop phase timeouts configurable** — Hardcoded timeouts (30s feedback, 60s
+  strategist/planner, 90s executor) moved to `agentLoop.phaseTimeouts` in config schema
+  with per-bot override support via `botConfig.agentLoop.phaseTimeouts`.
+- **Soul module test coverage** — Added 18 tests for `soul-health-check.ts` (cooldown logic,
+  concurrent steps, failure isolation) and `soul-memory-consolidator.ts` (log detection,
+  consolidation, archiving, error handling).
 - **ConversationsService resilience** — JSONL parsing now skips corrupt lines instead of
   crashing the service. Writes use atomic rename (write-to-tmp-then-rename). `attachFiles`
   preserves corrupt lines verbatim to prevent data loss. 16 new tests.

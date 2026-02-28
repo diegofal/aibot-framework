@@ -151,6 +151,11 @@ export class AgentLoop {
     this.scheduler.wakeUp();
   }
 
+  /** Request an immediate agent loop run for a specific bot */
+  requestImmediateRun(botId: string): void {
+    this.scheduler.requestImmediateRun(botId);
+  }
+
   /** Gracefully stop: wait for executing cycles to finish, then stop */
   async gracefulStop(timeoutMs?: number): Promise<void> {
     return this.scheduler.gracefulStop(timeoutMs);
@@ -410,6 +415,14 @@ export class AgentLoop {
     const llmClient = this.ctx.getLLMClient(botId);
     const model = this.ctx.getActiveModel(botId);
 
+    // Resolve phase timeouts: per-bot override → global config
+    const pt = globalConfig.phaseTimeouts;
+    const bpt = botOverride?.phaseTimeouts;
+    const feedbackTimeoutMs = bpt?.feedbackMs ?? pt.feedbackMs;
+    const strategistTimeoutMs = bpt?.strategistMs ?? pt.strategistMs;
+    const plannerTimeoutMs = bpt?.plannerMs ?? pt.plannerMs;
+    const executorTimeoutMs = bpt?.executorMs ?? pt.executorMs;
+
     // Helper to wrap async operations with dynamic timeout
     const withTimeout = async <T>(
       operation: () => Promise<T>,
@@ -446,7 +459,7 @@ export class AgentLoop {
       await withTimeout(
         () => this.processFeedback(botId, botConfig, botLogger, pendingFeedback, soulLoader),
         'Feedback processing',
-        30000,
+        feedbackTimeoutMs,
       );
       identity = soulLoader.readIdentity() || '(no identity)';
       soul = soulLoader.readSoul() || '(no soul)';
@@ -470,7 +483,7 @@ export class AgentLoop {
           identity, soul, motivations, goals, datetime, soulLoader,
         }),
         'Strategist',
-        60000,
+        strategistTimeoutMs,
       );
       if (strategistResult) {
         strategistRan = true;
@@ -579,7 +592,7 @@ export class AgentLoop {
       const continuousResult = await withTimeout(
         () => runPlannerWithRetry(llmClient, continuousInput, model, botLogger),
         'Continuous planner',
-        60000,
+        plannerTimeoutMs,
       );
 
       plan = continuousResult.plan;
@@ -610,7 +623,7 @@ export class AgentLoop {
       const plannerResult = await withTimeout(
         () => runPlannerWithRetry(llmClient, plannerInput, model, botLogger),
         'Planner',
-        60000,
+        plannerTimeoutMs,
       );
 
       plan = plannerResult.plan;
@@ -736,7 +749,7 @@ export class AgentLoop {
           maxToolRounds,
         }),
         'Executor phase',
-        90000,
+        executorTimeoutMs,
       );
 
       toolCallLog.push(...executor.getExecutionLog());

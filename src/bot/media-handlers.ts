@@ -88,7 +88,7 @@ export function registerMediaHandlers(
       const result = await mediaHandler.processPhoto(fileUrl, caption ?? undefined, photo.file_size);
       const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
       const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
-      ctx.messageBuffer.enqueue({
+      ctx.messageBuffer!.enqueue({
         sessionKey: serializedKey,
         ctx: telegramCtx,
         config,
@@ -142,7 +142,7 @@ export function registerMediaHandlers(
       );
       const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
       const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
-      ctx.messageBuffer.enqueue({
+      ctx.messageBuffer!.enqueue({
         sessionKey: serializedKey,
         ctx: telegramCtx,
         config,
@@ -185,7 +185,7 @@ export function registerMediaHandlers(
       const result = await mediaHandler.processVoice(fileUrl, voice.duration, voice.file_size);
       const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
       const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
-      ctx.messageBuffer.enqueue({
+      ctx.messageBuffer!.enqueue({
         sessionKey: serializedKey,
         ctx: telegramCtx,
         config,

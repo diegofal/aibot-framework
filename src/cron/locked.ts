@@ -5,7 +5,7 @@ const storeLocks = new Map<string, Promise<void>>();
 const resolveChain = (promise: Promise<unknown>) =>
   promise.then(
     () => undefined,
-    () => undefined
+    (err) => { console.error('[cron/locked] Swallowed chain error:', err); }
   );
 
 export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {

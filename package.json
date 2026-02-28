@@ -13,6 +13,7 @@
     "format": "biome format --write ."
   },
   "dependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/marked": "^6.0.0",
     "croner": "^10.0.1",
     "grammy": "^1.31.0",

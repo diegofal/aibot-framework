@@ -747,6 +747,31 @@ interface PermissionDecision {
           </p>
         </div>
 
+        <h3>Immediate Run &amp; Pending Wake</h3>
+        <p>
+          <code>requestImmediateRun(botId)</code> triggers an agent loop cycle as soon as possible for a specific bot.
+          This is called automatically after every user conversation completes (via the <code>MessageBuffer</code> callback
+          in <code>BotManager</code>), ensuring the bot acts on user requests without waiting for the next scheduled cycle.
+        </p>
+        <div class="module-section">
+          <h4>Behavior</h4>
+          <table>
+            <thead>
+              <tr><th>Bot State</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Idle (not executing)</td><td>Sets <code>schedule.nextRunAt = Date.now()</code> and calls <code>wakeUp()</code> to abort the current sleep, causing the bot loop to run immediately.</td></tr>
+              <tr><td>Busy (executing)</td><td>Adds <code>botId</code> to a <code>pendingWakeRequests</code> Set. When the current cycle finishes, <code>runBotLoop()</code> checks and consumes the pending wake, skipping the inter-cycle sleep.</td></tr>
+            </tbody>
+          </table>
+          <h4>Design Decisions</h4>
+          <ul>
+            <li><strong>Set, not queue:</strong> Multiple requests for the same bot coalesce into one pending wake. The planner sees all recent conversation context on re-run.</li>
+            <li><strong>Fire-and-forget:</strong> The conversation pipeline does not await the agent loop. Response latency is unaffected.</li>
+            <li><strong>No LLM classification:</strong> Every user message triggers a wake. The planner already decides if there's actionable work (returns <code>priority: none</code> cheaply if not).</li>
+          </ul>
+        </div>
+
         <h3>Graceful Stop (Draining)</h3>
         <p>
           <code>AgentScheduler.gracefulStop(timeoutMs?)</code> enables safe shutdown: it sets a

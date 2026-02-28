@@ -13,6 +13,7 @@ import { sendLongMessage } from './telegram-utils';
 import {
   executeWithResilience,
   CircuitBreaker,
+  DEFAULT_CIRCUIT_CONFIG,
   formatLLMErrorForUser,
   type LLMErrorInfo,
 } from './llm-resilience';
@@ -26,15 +27,8 @@ export class ConversationPipeline {
     private memoryFlusher: MemoryFlusher,
     private toolRegistry: ToolRegistry,
   ) {
-    // Initialize circuit breaker for LLM calls
-    this.circuitBreaker = new CircuitBreaker(
-      {
-        failureThreshold: 5,
-        resetTimeoutMs: 30000,
-        halfOpenMaxCalls: 3,
-      },
-      ctx.logger,
-    );
+    // Initialize circuit breaker for LLM calls (uses shared defaults from llm-resilience)
+    this.circuitBreaker = new CircuitBreaker(DEFAULT_CIRCUIT_CONFIG, ctx.logger);
   }
 
   /**

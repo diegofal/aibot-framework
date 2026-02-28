@@ -86,6 +86,7 @@ export class BotManager {
   private activityStream: ActivityStream;
   private botResetService: BotResetService;
   private restartAttempts = new Map<string, number[]>();
+  private restartTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pollAbortControllers = new Map<string, AbortController>();
 
   constructor(
@@ -190,7 +191,7 @@ export class BotManager {
       collaborationSessions: this.collaborationSessions,
       logger,
       mediaHandler: this.mediaHandler,
-      messageBuffer: null as any, // set below after MessageBuffer is created
+      messageBuffer: null, // set below after MessageBuffer is created
       searchEnabled: config.soul.search?.enabled ?? false,
 
       bots: this.bots,
@@ -270,13 +271,15 @@ export class BotManager {
     // Create message buffer (needs handleConversation callback)
     this.messageBuffer = new MessageBuffer(
       config.buffer,
-      (gramCtx, botCfg, sessionKey, userText, images, sessionText, isVoice) =>
-        this.conversationPipeline.handleConversation(gramCtx, botCfg, sessionKey, userText, images, sessionText, isVoice),
+      async (gramCtx, botCfg, sessionKey, userText, images, sessionText, isVoice) => {
+        await this.conversationPipeline.handleConversation(gramCtx, botCfg, sessionKey, userText, images, sessionText, isVoice);
+        this.requestImmediateAgentRun(botCfg.id);
+      },
       this.logger
     );
 
     // Wire messageBuffer into BotContext
-    (ctx as any).messageBuffer = this.messageBuffer;
+    ctx.messageBuffer = this.messageBuffer;
   }
 
   // --- Public API (unchanged) ---
@@ -447,7 +450,8 @@ export class BotManager {
       const delay = 10_000;
       botLogger.info({ botId: config.id, delay, attempt: recent.length + 1 },
         'Scheduling auto-restart...');
-      setTimeout(async () => {
+      const timer = setTimeout(async () => {
+        this.restartTimers.delete(config.id);
         const botConfig = this.config.bots.find(b => b.id === config.id);
         if (!botConfig || this.runningBots.has(config.id)) return;
         try {
@@ -457,6 +461,7 @@ export class BotManager {
           botLogger.error({ error: e, botId: config.id }, 'Auto-restart failed');
         }
       }, delay);
+      this.restartTimers.set(config.id, timer);
     });
 
     // Register in agent registry with the already-validated bot info
@@ -487,6 +492,11 @@ export class BotManager {
   }
 
   private async cleanupBot(botId: string): Promise<void> {
+    // Cancel any pending auto-restart timer
+    const restartTimer = this.restartTimers.get(botId);
+    if (restartTimer) { clearTimeout(restartTimer); this.restartTimers.delete(botId); }
+    // Drain pending collaboration tasks before unregistering
+    await this.collaborationManager.drainPending(botId);
     // Abort the custom poll loop (if running) — we never called bot.start(),
     // so bot.stop() would either no-op or issue a getUpdates that could itself 409.
     const ac = this.pollAbortControllers.get(botId);
@@ -502,6 +512,9 @@ export class BotManager {
   async stopBot(botId: string): Promise<void> {
     if (!this.runningBots.has(botId)) return;
 
+    // Cancel any pending auto-restart timer
+    const restartTimer = this.restartTimers.get(botId);
+    if (restartTimer) { clearTimeout(restartTimer); this.restartTimers.delete(botId); }
     await this.cleanupBot(botId);
     this.restartAttempts.delete(botId);
     this.botLoggers.delete(botId);
@@ -542,6 +555,9 @@ export class BotManager {
     this.collaborationSessions.dispose();
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
+    // Cancel all pending restart timers
+    for (const [, timer] of this.restartTimers) { clearTimeout(timer); }
+    this.restartTimers.clear();
     // Abort all custom poll loops
     for (const [botId, ac] of this.pollAbortControllers) {
       ac.abort();
@@ -565,6 +581,9 @@ export class BotManager {
     this.collaborationSessions.dispose();
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
+    // Cancel all pending restart timers
+    for (const [, timer] of this.restartTimers) { clearTimeout(timer); }
+    this.restartTimers.clear();
     for (const [botId, ac] of this.pollAbortControllers) {
       ac.abort();
       this.logger.info({ botId }, 'Bot stopped (graceful)');
@@ -596,6 +615,13 @@ export class BotManager {
 
   wakeAgentLoop(): void {
     this.agentLoop.wakeUp();
+  }
+
+  /** Request an immediate agent loop run for a specific bot (e.g. after user message) */
+  requestImmediateAgentRun(botId: string): void {
+    if (this.config.agentLoop.enabled) {
+      this.agentLoop.requestImmediateRun(botId);
+    }
   }
 
   // Ask-human delegates

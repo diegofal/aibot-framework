@@ -45,7 +45,7 @@ export interface BotContext {
   readonly collaborationSessions: CollaborationSessionManager;
   readonly logger: Logger;
   readonly mediaHandler: MediaHandler | null;
-  readonly messageBuffer: MessageBuffer;
+  messageBuffer: MessageBuffer | null;
   readonly searchEnabled: boolean;
 
   // Per-bot mutable state (shared by reference)

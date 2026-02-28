@@ -11,6 +11,7 @@ import type { KarmaService } from '../karma/service';
 
 export class CollaborationManager {
   private karmaService?: KarmaService;
+  private pendingTasks = new Map<string, Set<Promise<void>>>();
 
   constructor(
     private ctx: BotContext,
@@ -20,6 +21,17 @@ export class CollaborationManager {
 
   setKarmaService(ks: KarmaService): void {
     this.karmaService = ks;
+  }
+
+  /**
+   * Await all pending background collaboration tasks for a bot.
+   * Called during cleanup to ensure no detached promises are lost.
+   */
+  async drainPending(botId: string): Promise<void> {
+    const tasks = this.pendingTasks.get(botId);
+    if (!tasks || tasks.size === 0) return;
+    await Promise.allSettled([...tasks]);
+    this.pendingTasks.delete(botId);
   }
 
   /**
@@ -46,9 +58,18 @@ export class CollaborationManager {
       'Visible collaboration message sent'
     );
 
-    this.processVisibleResponse(chatId, resolvedTargetId, sourceBotId, message).catch((err) => {
-      sourceLogger.error({ err, chatId, targetBotId: resolvedTargetId }, 'Failed to process visible collaboration response');
-    });
+    // Track the background task so stopBot can await it
+    let botTasks = this.pendingTasks.get(sourceBotId);
+    if (!botTasks) {
+      botTasks = new Set();
+      this.pendingTasks.set(sourceBotId, botTasks);
+    }
+    const task = this.processVisibleResponse(chatId, resolvedTargetId, sourceBotId, message)
+      .catch((err) => {
+        sourceLogger.error({ err, chatId, targetBotId: resolvedTargetId }, 'Failed to process visible collaboration response');
+      })
+      .finally(() => { botTasks!.delete(task); });
+    botTasks.add(task);
   }
 
   /**
