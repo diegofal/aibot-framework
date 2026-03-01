@@ -35,7 +35,9 @@ export class GroupActivation {
     const others = this.ctx.agentRegistry.listOtherAgents(thisBotId);
     if (others.length === 0) return '';
     const list = others
-      .map((a) => `- ${a.name} (@${a.telegramUsername})${a.description ? ': ' + a.description : ''}`)
+      .map(
+        (a) => `- ${a.name} (@${a.telegramUsername})${a.description ? `: ${a.description}` : ''}`
+      )
       .join('\n');
     return `\nOther bots in this group:\n${list}\n`;
   }
@@ -72,7 +74,9 @@ export class GroupActivation {
         `New message: ${userText}`,
         '',
         'Is this message intended for this bot? Answer ONLY "yes" or "no".',
-      ].filter(Boolean).join('\n');
+      ]
+        .filter(Boolean)
+        .join('\n');
 
       const result = await Promise.race([
         this.ctx.getLLMClient(botId ?? '').generate(prompt, {
@@ -89,7 +93,7 @@ export class GroupActivation {
 
       this.ctx.logger.info(
         {
-          chatId: ctx.chat!.id,
+          chatId: ctx.chat?.id,
           userId: ctx.from?.id,
           botId,
           answer,
@@ -101,7 +105,10 @@ export class GroupActivation {
 
       return isRelevant;
     } catch (err) {
-      this.ctx.logger.warn({ err, chatId: ctx.chat?.id, botId }, 'LLM relevance check failed, fail-open');
+      this.ctx.logger.warn(
+        { err, chatId: ctx.chat?.id, botId },
+        'LLM relevance check failed, fail-open'
+      );
       return true;
     }
   }
@@ -110,11 +117,7 @@ export class GroupActivation {
    * Ask the LLM whether a message with no prior activation context is directed
    * at this bot or at ALL bots (broadcast). Fail-closed: errors return false.
    */
-  async checkBroadcastRelevance(
-    ctx: Context,
-    botName: string,
-    botId: string
-  ): Promise<boolean> {
+  async checkBroadcastRelevance(ctx: Context, botName: string, botId: string): Promise<boolean> {
     const rlc = this.ctx.config.session.llmRelevanceCheck;
     try {
       const userText = ctx.message?.text ?? '';
@@ -131,7 +134,9 @@ export class GroupActivation {
         `Message: ${userText}`,
         '',
         'Answer "yes" only if the message is for this bot or for all bots. Answer "no" otherwise.',
-      ].filter(Boolean).join('\n');
+      ]
+        .filter(Boolean)
+        .join('\n');
 
       const result = await Promise.race([
         this.ctx.getLLMClient(botId).generate(prompt, {
@@ -148,7 +153,7 @@ export class GroupActivation {
 
       this.ctx.logger.info(
         {
-          chatId: ctx.chat!.id,
+          chatId: ctx.chat?.id,
           userId: ctx.from?.id,
           botId,
           answer,
@@ -160,7 +165,10 @@ export class GroupActivation {
 
       return isRelevant;
     } catch (err) {
-      this.ctx.logger.warn({ err, chatId: ctx.chat?.id, botId }, 'Broadcast relevance check failed, fail-closed');
+      this.ctx.logger.warn(
+        { err, chatId: ctx.chat?.id, botId },
+        'Broadcast relevance check failed, fail-closed'
+      );
       return false;
     }
   }

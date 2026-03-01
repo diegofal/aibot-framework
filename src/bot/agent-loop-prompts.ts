@@ -18,7 +18,12 @@ export interface PlannerPromptInput {
   singleDeliverable?: string;
   answeredQuestions?: Array<{ question: string; answer: string }>;
   pendingQuestions?: Array<{ question: string }>;
-  resolvedPermissions?: Array<{ action: string; resource: string; status: 'approved' | 'denied'; note?: string }>;
+  resolvedPermissions?: Array<{
+    action: string;
+    resource: string;
+    status: 'approved' | 'denied';
+    note?: string;
+  }>;
   pendingPermissions?: Array<{ action: string; resource: string }>;
   recentActionsDigest?: string;
   karmaBlock?: string;
@@ -43,7 +48,12 @@ export interface ContinuousPlannerPromptInput {
   lastCycleSummary?: string;
   answeredQuestions?: Array<{ question: string; answer: string }>;
   pendingQuestions?: Array<{ question: string }>;
-  resolvedPermissions?: Array<{ action: string; resource: string; status: 'approved' | 'denied'; note?: string }>;
+  resolvedPermissions?: Array<{
+    action: string;
+    resource: string;
+    status: 'approved' | 'denied';
+    note?: string;
+  }>;
   pendingPermissions?: Array<{ action: string; resource: string }>;
   recentActionsDigest?: string;
   karmaBlock?: string;
@@ -89,23 +99,26 @@ function buildToolCategorySection(toolCategoryList?: string[]): string {
     system: 'exec, process, get_datetime, cron — system commands and scheduling',
     social: 'reddit_*, twitter_* — social media tools',
     calendar: 'calendar_* — scheduling and availability',
-    communication: 'ask_human, ask_permission, phone_call, delegate_to_bot, collaborate — human and bot interaction',
+    communication:
+      'ask_human, ask_permission, phone_call, delegate_to_bot, collaborate — human and bot interaction',
     browser: 'browser — web browsing with headless browser',
     production: 'read_production_log, archive_file, create_tool — production management',
   };
 
-  let section = '\n## Tool Categories\n\nSelect which tool categories your plan needs. Only selected categories will be available to the executor (saves context).\n\nAvailable categories:\n';
+  let section =
+    '\n## Tool Categories\n\nSelect which tool categories your plan needs. Only selected categories will be available to the executor (saves context).\n\nAvailable categories:\n';
   for (const cat of toolCategoryList) {
     const desc = descriptions[cat] || cat;
     section += `- **${cat}**: ${desc}\n`;
   }
-  section += '\nInclude a `"toolCategories"` array in your JSON response with the categories your plan needs (e.g. `["web", "memory"]`). Omit or leave empty to use all tools.\n';
+  section +=
+    '\nInclude a `"toolCategories"` array in your JSON response with the categories your plan needs (e.g. `["web", "memory"]`). Omit or leave empty to use all tools.\n';
   return section;
 }
 
 function buildHumanQuestionsSection(
   answered?: Array<{ question: string; answer: string }>,
-  pending?: Array<{ question: string }>,
+  pending?: Array<{ question: string }>
 ): string {
   let section = '';
   if (answered && answered.length > 0) {
@@ -126,12 +139,18 @@ function buildHumanQuestionsSection(
 }
 
 function buildPermissionDecisionsSection(
-  resolved?: Array<{ action: string; resource: string; status: 'approved' | 'denied'; note?: string }>,
-  pending?: Array<{ action: string; resource: string }>,
+  resolved?: Array<{
+    action: string;
+    resource: string;
+    status: 'approved' | 'denied';
+    note?: string;
+  }>,
+  pending?: Array<{ action: string; resource: string }>
 ): string {
   let section = '';
   if (resolved && resolved.length > 0) {
-    section += '\n## Permission Decisions\n\nThe human has decided on your permission requests:\n\n';
+    section +=
+      '\n## Permission Decisions\n\nThe human has decided on your permission requests:\n\n';
     for (const p of resolved) {
       const statusLabel = p.status === 'approved' ? 'APPROVED' : 'DENIED';
       section += `- ${statusLabel}: ${p.action} on "${p.resource}"${p.note ? ` — Note: "${p.note}"` : ''}\n`;
@@ -140,7 +159,8 @@ function buildPermissionDecisionsSection(
     section += 'For denied permissions — do NOT retry the same request. Respect the decision.\n';
   }
   if (pending && pending.length > 0) {
-    section += '\n## Pending Permissions\n\nYou have permission requests waiting for human decision:\n\n';
+    section +=
+      '\n## Pending Permissions\n\nYou have permission requests waiting for human decision:\n\n';
     for (const p of pending) {
       section += `- ${p.action} on "${p.resource}"\n`;
     }
@@ -168,10 +188,14 @@ ${input.soul}
 
 ${input.motivations}
 
-${input.goals
+${
+  input.goals
     ? `## Goals\n\n${input.goals}`
-    : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`}
-${input.singleDeliverable ? `
+    : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
+}
+${
+  input.singleDeliverable
+    ? `
 ## Single Deliverable (THIS SESSION ONLY)
 
 The strategist has assigned ONE concrete deliverable for this session:
@@ -179,7 +203,9 @@ The strategist has assigned ONE concrete deliverable for this session:
 **${input.singleDeliverable}**
 
 Your entire plan must serve this deliverable. Do NOT add tasks beyond completing this one thing.
-` : input.focus ? `
+`
+    : input.focus
+      ? `
 ## Strategic Focus
 
 The strategist has analyzed your recent activity and goals and recommends:
@@ -187,7 +213,9 @@ The strategist has analyzed your recent activity and goals and recommends:
 ${input.focus}
 
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
-` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
+`
+      : ''
+}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -195,7 +223,9 @@ ${input.recentMemory || '(no recent memory)'}
 Current date/time: ${input.datetime}
 
 You have access to these tools: ${input.availableTools.join(', ')}
-${input.hasCreateTool ? `
+${
+  input.hasCreateTool
+    ? `
 ## Special Capability: Dynamic Tool Creation
 
 You have the ability to create NEW tools using \`create_tool\`. Consider this when:
@@ -204,7 +234,9 @@ You have the ability to create NEW tools using \`create_tool\`. Consider this wh
 - You want to extend your abilities for future autonomous runs
 
 Tools you create require human approval before becoming available.
-` : ''}
+`
+    : ''
+}
 
 SINGLE-FOCUS MODE INSTRUCTIONS:
 1. Break the assigned deliverable into 1-3 concrete steps
@@ -261,12 +293,16 @@ Each step should produce a concrete result: a file written, a goal updated, a me
 BAD plan: ["Explore the codebase", "Map the architecture", "Investigate issues", "Write tests", "Update docs"]
 GOOD plan: ["Add retry logic with exponential backoff", "Write test for retry mechanism", "Update goal status"]`;
 
-  const prompt = 'Decide what to do next. If your recent actions show repetition, you MUST do something different. Respond with ONLY the JSON object.';
+  const prompt =
+    'Decide what to do next. If your recent actions show repetition, you MUST do something different. Respond with ONLY the JSON object.';
 
   return { system, prompt };
 }
 
-export function buildContinuousPlannerPrompt(input: ContinuousPlannerPromptInput): { system: string; prompt: string } {
+export function buildContinuousPlannerPrompt(input: ContinuousPlannerPromptInput): {
+  system: string;
+  prompt: string;
+} {
   const system = `You are an autonomous agent running in continuous mode with SINGLE-FOCUS MODE enabled. Your value comes from completing ONE concrete deliverable per session.
 
 SINGLE-FOCUS RULE: You will be assigned ONE deliverable by the strategist. Your job is to break it into 1-3 concrete steps and complete it. Do NOT add extra tasks.
@@ -285,10 +321,14 @@ ${input.soul}
 
 ${input.motivations}
 
-${input.goals
+${
+  input.goals
     ? `## Goals\n\n${input.goals}`
-    : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`}
-${input.singleDeliverable ? `
+    : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
+}
+${
+  input.singleDeliverable
+    ? `
 ## Single Deliverable (THIS SESSION ONLY)
 
 The strategist has assigned ONE concrete deliverable for this session:
@@ -296,7 +336,9 @@ The strategist has assigned ONE concrete deliverable for this session:
 **${input.singleDeliverable}**
 
 Your entire plan must serve this deliverable. Do NOT add tasks beyond completing this one thing.
-` : input.focus ? `
+`
+    : input.focus
+      ? `
 ## Strategic Focus
 
 The strategist has analyzed your recent activity and goals and recommends:
@@ -304,21 +346,29 @@ The strategist has analyzed your recent activity and goals and recommends:
 ${input.focus}
 
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
-` : ''}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
+`
+      : ''
+}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
-${input.lastCycleSummary ? `
+${
+  input.lastCycleSummary
+    ? `
 ## Last Cycle Result
 
 ${input.lastCycleSummary}
 
 Use this context to decide what to do next. Avoid repeating the exact same actions — build on what was done.
-` : ''}
+`
+    : ''
+}
 Current date/time: ${input.datetime}
 
 You have access to these tools: ${input.availableTools.join(', ')}
-${input.hasCreateTool ? `
+${
+  input.hasCreateTool
+    ? `
 ## Special Capability: Dynamic Tool Creation
 
 You have the ability to create NEW tools using \`create_tool\`. Consider this when:
@@ -327,7 +377,9 @@ You have the ability to create NEW tools using \`create_tool\`. Consider this wh
 - You want to extend your abilities for future autonomous runs
 
 Tools you create require human approval before becoming available.
-` : ''}
+`
+    : ''
+}
 
 SINGLE-FOCUS MODE INSTRUCTIONS:
 1. Break the assigned deliverable into 1-3 concrete steps
@@ -382,7 +434,8 @@ JSON Schema (MUST follow exactly):
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.
 Each step should produce a concrete result: a file written, a goal updated, a memory saved, a test run.`;
 
-  const prompt = 'Decide what to do next in your continuous loop. If your recent actions show repetition, you MUST do something different. Respond with ONLY the JSON object.';
+  const prompt =
+    'Decide what to do next in your continuous loop. If your recent actions show repetition, you MUST do something different. Respond with ONLY the JSON object.';
 
   return { system, prompt };
 }
@@ -392,7 +445,9 @@ export function buildExecutorPrompt(input: ExecutorPromptInput): string {
 
 ${input.plan.map((step, i) => `${i + 1}. ${step}`).join('\n')}
 
-${input.singleDeliverable ? `
+${
+  input.singleDeliverable
+    ? `
 ## Single Deliverable (STOP WHEN COMPLETE) — CRITICAL
 
 This session has ONE assigned deliverable:
@@ -407,7 +462,9 @@ This session has ONE assigned deliverable:
 - STOP means STOP. The session ends when the deliverable is done.
 
 Use the \`manage_goals\` tool to mark the associated goal as complete if applicable.
-` : ''}
+`
+    : ''
+}
 
 ## Your Identity
 
@@ -419,9 +476,11 @@ ${input.soul}
 
 ${input.motivations}
 
-${input.goals
+${
+  input.goals
     ? `## Goals\n\n${input.goals}`
-    : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`}
+    : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
+}
 
 Current date/time: ${input.datetime}
 
@@ -437,9 +496,11 @@ If you learn something worth remembering, use the save_memory tool.
 ## Working Directory Contents
 
 Your working directory is \`${input.workDir}\`.
-${input.fileTree
+${
+  input.fileTree
     ? `\n\`\`\`\n${input.fileTree}\n\`\`\`\n\nUse RELATIVE paths when referencing these files.`
-    : `\nThe directory is currently **EMPTY**. Use file_write to create new files. Do NOT attempt file_read or file_edit on non-existent files — there is nothing to read or edit yet.`}
+    : '\nThe directory is currently **EMPTY**. Use file_write to create new files. Do NOT attempt file_read or file_edit on non-existent files — there is nothing to read or edit yet.'
+}
 
 ## Tool Usage Rules
 
@@ -480,7 +541,10 @@ export interface FeedbackProcessorPromptInput {
   availableTools: string[];
 }
 
-export function buildFeedbackProcessorPrompt(input: FeedbackProcessorPromptInput): { system: string; userPrompt: string } {
+export function buildFeedbackProcessorPrompt(input: FeedbackProcessorPromptInput): {
+  system: string;
+  userPrompt: string;
+} {
   const system = `You are an autonomous agent processing feedback from your supervisor/operator.
 Your job is to understand the feedback and make appropriate changes to yourself using the available tools.
 
@@ -547,7 +611,10 @@ export interface StrategistResult {
   next_strategy_in?: string;
 }
 
-export function buildStrategistPrompt(input: StrategistPromptInput): { system: string; prompt: string } {
+export function buildStrategistPrompt(input: StrategistPromptInput): {
+  system: string;
+  prompt: string;
+} {
   const system = `You are the strategic oversight layer for an autonomous agent.
 Your job is to review the agent's goals, recent activity, and overall direction — then assign ONE concrete deliverable for the next session.
 
@@ -652,7 +719,8 @@ JSON Schema:
 Example:
 {"goal_operations":[{"action":"complete","goal":"set up monitoring","outcome":"Monitoring dashboard deployed and working"},{"action":"add","goal":"Explore partnership opportunities with DeFi protocols","priority":"high"}],"single_deliverable":"Send 3 partnership outreach messages to DeFi protocols identified in the research phase","reflection":"Agent has been stuck optimizing internal tools for 3 days instead of pursuing its core mission of community growth. Time to execute, not plan.","next_strategy_in":"6h"}`;
 
-  const prompt = 'Perform a strategic review and assign ONE concrete deliverable for the next session. Remember: the executor will STOP after completing this ONE deliverable. Make it specific, achievable, and bounded. Respond with ONLY the JSON object.';
+  const prompt =
+    'Perform a strategic review and assign ONE concrete deliverable for the next session. Remember: the executor will STOP after completing this ONE deliverable. Make it specific, achievable, and bounded. Respond with ONLY the JSON object.';
 
   return { system, prompt };
 }

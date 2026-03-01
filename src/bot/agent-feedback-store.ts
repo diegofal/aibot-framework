@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Logger } from '../logger';
 import type { ThreadMessage } from '../types/thread';
 
@@ -43,7 +43,10 @@ export class AgentFeedbackStore {
       try {
         items.push(JSON.parse(line));
       } catch {
-        this.logger.warn({ botId, line: line.slice(0, 100) }, 'AgentFeedback: skipping malformed line');
+        this.logger.warn(
+          { botId, line: line.slice(0, 100) },
+          'AgentFeedback: skipping malformed line'
+        );
       }
     }
     this.entries.set(botId, items);
@@ -69,7 +72,7 @@ export class AgentFeedbackStore {
     if (soulDir) {
       const filePath = join(soulDir, 'feedback.jsonl');
       mkdirSync(dirname(filePath), { recursive: true });
-      appendFileSync(filePath, JSON.stringify(entry) + '\n', 'utf-8');
+      appendFileSync(filePath, `${JSON.stringify(entry)}\n`, 'utf-8');
     }
 
     this.logger.info({ botId, id: entry.id }, 'AgentFeedback: submitted');
@@ -82,7 +85,10 @@ export class AgentFeedbackStore {
   }
 
   /** Get all feedback for a bot with optional status filter. */
-  getAll(botId: string, opts?: { status?: string; limit?: number; offset?: number }): AgentFeedback[] {
+  getAll(
+    botId: string,
+    opts?: { status?: string; limit?: number; offset?: number }
+  ): AgentFeedback[] {
     let items = this.entries.get(botId) ?? [];
 
     if (opts?.status) {
@@ -105,7 +111,12 @@ export class AgentFeedbackStore {
   }
 
   /** Append a thread message to a feedback entry. Returns the created message. */
-  addThreadMessage(botId: string, feedbackId: string, role: 'human' | 'bot', content: string): ThreadMessage | null {
+  addThreadMessage(
+    botId: string,
+    feedbackId: string,
+    role: 'human' | 'bot',
+    content: string
+  ): ThreadMessage | null {
     const items = this.entries.get(botId);
     if (!items) return null;
 
@@ -125,7 +136,10 @@ export class AgentFeedbackStore {
     entry.thread.push(msg);
 
     this.rewriteJSONL(botId);
-    this.logger.debug({ botId, feedbackId, role, msgId: msg.id }, 'AgentFeedback: thread message added');
+    this.logger.debug(
+      { botId, feedbackId, role, msgId: msg.id },
+      'AgentFeedback: thread message added'
+    );
     return msg;
   }
 
@@ -189,9 +203,7 @@ export class AgentFeedbackStore {
 
     const items = this.entries.get(botId) ?? [];
     const filePath = join(soulDir, 'feedback.jsonl');
-    const content = items.length > 0
-      ? items.map((e) => JSON.stringify(e)).join('\n') + '\n'
-      : '';
+    const content = items.length > 0 ? `${items.map((e) => JSON.stringify(e)).join('\n')}\n` : '';
     writeFileSync(filePath, content, 'utf-8');
   }
 }

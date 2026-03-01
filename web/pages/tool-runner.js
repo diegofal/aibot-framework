@@ -1,7 +1,8 @@
 import { api, escapeHtml } from './shared.js';
 
 export async function renderToolRunner(el) {
-  el.innerHTML = '<div class="page-title">Tool Runner</div><p class="text-dim">Loading tools...</p>';
+  el.innerHTML =
+    '<div class="page-title">Tool Runner</div><p class="text-dim">Loading tools...</p>';
 
   const tools = await api('/api/tools/all');
 
@@ -13,8 +14,8 @@ export async function renderToolRunner(el) {
     return;
   }
 
-  const builtIn = tools.filter(t => t.source === 'built-in');
-  const dynamic = tools.filter(t => t.source === 'dynamic');
+  const builtIn = tools.filter((t) => t.source === 'built-in');
+  const dynamic = tools.filter((t) => t.source === 'dynamic');
 
   el.innerHTML = `
     <div class="page-title">Tool Runner <span class="count">${tools.length} tools</span></div>
@@ -47,19 +48,23 @@ export async function renderToolRunner(el) {
 
   function renderList(filter = '') {
     const lower = filter.toLowerCase();
-    const filteredBuiltIn = builtIn.filter(t =>
-      t.name.toLowerCase().includes(lower) || t.description.toLowerCase().includes(lower)
+    const filteredBuiltIn = builtIn.filter(
+      (t) => t.name.toLowerCase().includes(lower) || t.description.toLowerCase().includes(lower)
     );
-    const filteredDynamic = dynamic.filter(t =>
-      t.name.toLowerCase().includes(lower) || t.description.toLowerCase().includes(lower)
+    const filteredDynamic = dynamic.filter(
+      (t) => t.name.toLowerCase().includes(lower) || t.description.toLowerCase().includes(lower)
     );
 
     let html = '';
 
     if (filteredBuiltIn.length > 0) {
-      html += '<div style="padding:6px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">Built-in</div>';
+      html +=
+        '<div style="padding:6px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">Built-in</div>';
       for (const t of filteredBuiltIn) {
-        const active = selectedTool && selectedTool.name === t.name ? ' style="background:var(--bg-hover);border-left:3px solid var(--accent)"' : '';
+        const active =
+          selectedTool && selectedTool.name === t.name
+            ? ' style="background:var(--bg-hover);border-left:3px solid var(--accent)"'
+            : '';
         html += `<div class="tool-list-item" data-name="${escapeHtml(t.name)}"${active}>
           <div style="font-weight:500;font-size:13px">${escapeHtml(t.name)}</div>
           <div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.description.slice(0, 80))}</div>
@@ -68,14 +73,19 @@ export async function renderToolRunner(el) {
     }
 
     if (filteredDynamic.length > 0) {
-      html += '<div style="padding:6px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">Dynamic</div>';
+      html +=
+        '<div style="padding:6px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">Dynamic</div>';
       for (const t of filteredDynamic) {
-        const statusBadge = t.status === 'approved'
-          ? '<span class="badge badge-running" style="margin-left:6px;font-size:9px">approved</span>'
-          : t.status === 'pending'
-            ? '<span class="badge badge-pending" style="margin-left:6px;font-size:9px">pending</span>'
-            : '<span class="badge badge-stopped" style="margin-left:6px;font-size:9px">' + escapeHtml(t.status) + '</span>';
-        const active = selectedTool && selectedTool.name === t.name ? ' style="background:var(--bg-hover);border-left:3px solid var(--accent)"' : '';
+        const statusBadge =
+          t.status === 'approved'
+            ? '<span class="badge badge-running" style="margin-left:6px;font-size:9px">approved</span>'
+            : t.status === 'pending'
+              ? '<span class="badge badge-pending" style="margin-left:6px;font-size:9px">pending</span>'
+              : `<span class="badge badge-stopped" style="margin-left:6px;font-size:9px">${escapeHtml(t.status)}</span>`;
+        const active =
+          selectedTool && selectedTool.name === t.name
+            ? ' style="background:var(--bg-hover);border-left:3px solid var(--accent)"'
+            : '';
         html += `<div class="tool-list-item" data-name="${escapeHtml(t.name)}"${active}>
           <div style="font-weight:500;font-size:13px">${escapeHtml(t.name)}${statusBadge}</div>
           <div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.description.slice(0, 80))}</div>
@@ -84,7 +94,8 @@ export async function renderToolRunner(el) {
     }
 
     if (filteredBuiltIn.length === 0 && filteredDynamic.length === 0) {
-      html = '<div style="padding:16px;color:var(--text-dim);text-align:center">No tools match your search.</div>';
+      html =
+        '<div style="padding:16px;color:var(--text-dim);text-align:center">No tools match your search.</div>';
     }
 
     toolList.innerHTML = html;
@@ -117,19 +128,19 @@ export async function renderToolRunner(el) {
         } else if (type === 'number' || type === 'integer') {
           formHtml += `<input type="number" data-param="${escapeHtml(name)}" data-type="number" placeholder="${escapeHtml(desc)}" style="width:100%">`;
         } else if (type === 'object' || type === 'array') {
-          formHtml += `<textarea data-param="${escapeHtml(name)}" data-type="${escapeHtml(type)}" rows="3" placeholder='${escapeHtml(desc || 'JSON ' + type)}'></textarea>`;
+          formHtml += `<textarea data-param="${escapeHtml(name)}" data-type="${escapeHtml(type)}" rows="3" placeholder='${escapeHtml(desc || `JSON ${type}`)}'></textarea>`;
         } else if (prop.enum && Array.isArray(prop.enum)) {
           formHtml += `<select data-param="${escapeHtml(name)}" data-type="enum" style="width:100%">`;
           formHtml += `<option value="">-- select --</option>`;
           for (const val of prop.enum) {
             formHtml += `<option value="${escapeHtml(String(val))}">${escapeHtml(String(val))}</option>`;
           }
-          formHtml += `</select>`;
+          formHtml += '</select>';
         } else {
           formHtml += `<input type="text" data-param="${escapeHtml(name)}" data-type="string" placeholder="${escapeHtml(desc)}" style="width:100%">`;
         }
 
-        formHtml += `</div>`;
+        formHtml += '</div>';
       }
     }
 
@@ -185,7 +196,9 @@ export async function renderToolRunner(el) {
       } else if (type === 'object' || type === 'array') {
         const val = input.value.trim();
         if (val) {
-          try { args[name] = JSON.parse(val); } catch {
+          try {
+            args[name] = JSON.parse(val);
+          } catch {
             resultCard.innerHTML = `<span class="badge badge-stopped">Error</span> <span style="margin-left:8px">Invalid JSON for parameter "${escapeHtml(name)}"</span>`;
             resultCard.style.borderLeft = '3px solid var(--red)';
             btn.disabled = false;
@@ -220,7 +233,10 @@ export async function renderToolRunner(el) {
     const badge = data.success
       ? '<span class="badge badge-running">Success</span>'
       : '<span class="badge badge-stopped">Failure</span>';
-    const duration = typeof data.durationMs === 'number' ? `<span class="text-dim" style="margin-left:8px;font-size:12px">${data.durationMs}ms</span>` : '';
+    const duration =
+      typeof data.durationMs === 'number'
+        ? `<span class="text-dim" style="margin-left:8px;font-size:12px">${data.durationMs}ms</span>`
+        : '';
 
     resultCard.style.borderLeft = `3px solid ${borderColor}`;
     resultCard.innerHTML = `
@@ -237,7 +253,7 @@ export async function renderToolRunner(el) {
     const item = e.target.closest('.tool-list-item');
     if (!item) return;
     const name = item.dataset.name;
-    const tool = tools.find(t => t.name === name);
+    const tool = tools.find((t) => t.name === name);
     if (!tool) return;
     selectedTool = tool;
     renderList(searchInput.value);

@@ -1,4 +1,4 @@
-import type { IntelData, AnalysisResult, CategoryConfig } from './types';
+import type { AnalysisResult, CategoryConfig, IntelData } from './types';
 
 export class IntelFormatter {
   private formatDate(dateStr: string): string {
@@ -92,7 +92,7 @@ export class IntelFormatter {
         for (const rel of catData.github) {
           const isNew = rel.isRecent ? ' new' : '';
           const shortDate = rel.published.split('T')[0];
-          const shortBody = rel.body.substring(0, 80).replace(/\|/g, ',') + '...';
+          const shortBody = `${rel.body.substring(0, 80).replace(/\|/g, ',')}...`;
           md += `| ${rel.repo} | [${rel.version}${isNew}](${rel.url}) | ${shortDate} | ${shortBody} |\n`;
         }
         md += '\n';
@@ -110,10 +110,7 @@ export class IntelFormatter {
       const catData = data.categories[cat.id];
       if (!catData) continue;
 
-      const allScores = [
-        ...catData.reddit.map((p) => p.score),
-        ...catData.hn.map((s) => s.score),
-      ];
+      const allScores = [...catData.reddit.map((p) => p.score), ...catData.hn.map((s) => s.score)];
       const count = catData.reddit.length + catData.hn.length + catData.github.length;
       const maxScore = allScores.length > 0 ? Math.max(...allScores) : 0;
 
@@ -154,11 +151,7 @@ export class IntelFormatter {
   /**
    * Generate self-contained HTML report with professional dark theme
    */
-  generateHTML(
-    data: IntelData,
-    categories: CategoryConfig[],
-    analysis?: AnalysisResult
-  ): string {
+  generateHTML(data: IntelData, categories: CategoryConfig[], analysis?: AnalysisResult): string {
     const { date } = data;
 
     // Count totals
@@ -175,8 +168,14 @@ export class IntelFormatter {
 
     // Category color map for left borders
     const categoryColors = [
-      '#6c8cff', '#34d399', '#fbbf24', '#f87171',
-      '#a78bfa', '#f472b6', '#38bdf8', '#fb923c',
+      '#6c8cff',
+      '#34d399',
+      '#fbbf24',
+      '#f87171',
+      '#a78bfa',
+      '#f472b6',
+      '#38bdf8',
+      '#fb923c',
     ];
 
     let html = `<!DOCTYPE html>
@@ -634,10 +633,7 @@ export class IntelFormatter {
       const catData = data.categories[cat.id];
       if (!catData) continue;
 
-      const allScores = [
-        ...catData.reddit.map((p) => p.score),
-        ...catData.hn.map((s) => s.score),
-      ];
+      const allScores = [...catData.reddit.map((p) => p.score), ...catData.hn.map((s) => s.score)];
       const count = catData.reddit.length + catData.hn.length + catData.github.length;
       const maxScore = allScores.length > 0 ? Math.max(...allScores) : 0;
 

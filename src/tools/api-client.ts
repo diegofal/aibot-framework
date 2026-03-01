@@ -10,23 +10,21 @@ export interface ApiRequestOptions {
   timeout?: number;
 }
 
-export type ApiResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; status: number; message: string };
+export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
 
 /**
  * Authenticated fetch with timeout, JSON parsing, and structured errors.
  */
 export async function apiRequest<T>(
   url: string,
-  opts: ApiRequestOptions = {},
+  opts: ApiRequestOptions = {}
 ): Promise<ApiResult<T>> {
   const { method = 'GET', headers = {}, body, timeout = 30_000 } = opts;
 
   const fetchOpts: RequestInit = {
     method,
     headers: {
-      'Accept': 'application/json',
+      Accept: 'application/json',
       ...headers,
     },
     signal: AbortSignal.timeout(timeout),
@@ -61,7 +59,7 @@ export class RateLimiter {
 
   constructor(
     private maxRequests: number,
-    private windowMs: number,
+    private windowMs: number
   ) {
     this.tokens = maxRequests;
     this.lastRefill = Date.now();

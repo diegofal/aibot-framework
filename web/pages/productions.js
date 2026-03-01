@@ -1,8 +1,10 @@
-import { api, escapeHtml, timeAgo, showModal, closeModal, renderThread } from './shared.js';
+import { api, closeModal, escapeHtml, renderThread, showModal, timeAgo } from './shared.js';
 
 function statusBadge(entry) {
-  if (!entry.evaluation?.status) return '<span class="badge eval-badge-unreviewed">Unreviewed</span>';
-  if (entry.evaluation.status === 'approved') return '<span class="badge eval-badge-approved">Approved</span>';
+  if (!entry.evaluation?.status)
+    return '<span class="badge eval-badge-unreviewed">Unreviewed</span>';
+  if (entry.evaluation.status === 'approved')
+    return '<span class="badge eval-badge-approved">Approved</span>';
   return '<span class="badge eval-badge-rejected">Rejected</span>';
 }
 
@@ -40,9 +42,10 @@ export async function renderProductions(el) {
     <div class="flex-between mb-16">
       <div class="page-title">Productions <span class="count">${total}</span></div>
     </div>
-    ${stats.length === 0
-      ? '<p class="text-dim">No productions yet. Bots will log file operations here when they create or edit files.</p>'
-      : `<table>
+    ${
+      stats.length === 0
+        ? '<p class="text-dim">No productions yet. Bots will log file operations here when they create or edit files.</p>'
+        : `<table>
           <thead><tr><th>Bot</th><th>Total</th><th>Approved</th><th>Rejected</th><th>Unreviewed</th><th>Avg Rating</th></tr></thead>
           <tbody id="prod-tbody"></tbody>
         </table>`
@@ -62,7 +65,7 @@ export async function renderProductions(el) {
       <td class="text-dim">${bot.approved}</td>
       <td class="text-dim">${bot.rejected}</td>
       <td>${bot.unreviewed > 0 ? `<span style="color:var(--orange)">${bot.unreviewed}</span>` : '0'}</td>
-      <td>${bot.avgRating != null ? starsHtml(Math.round(bot.avgRating)) + ` <span class="text-dim">${bot.avgRating}</span>` : '<span class="text-dim">-</span>'}</td>
+      <td>${bot.avgRating != null ? `${starsHtml(Math.round(bot.avgRating))} <span class="text-dim">${bot.avgRating}</span>` : '<span class="text-dim">-</span>'}</td>
     `;
     tr.addEventListener('click', (e) => {
       if (e.target.tagName === 'A') return;
@@ -123,17 +126,19 @@ export async function renderProductions(el) {
         </div>
       </div>
 
-      ${loadedEntries.length === 0
-        ? '<p class="text-dim">No entries match the filter.</p>'
-        : `<table>
+      ${
+        loadedEntries.length === 0
+          ? '<p class="text-dim">No entries match the filter.</p>'
+          : `<table>
             <thead><tr><th>Time</th><th>Bot</th><th>Path</th><th>Tool</th><th>Action</th><th>Status</th><th>Rating</th></tr></thead>
             <tbody id="unified-entries-tbody"></tbody>
           </table>`
       }
 
-      ${loadedTotal > loadedEntries.length
-        ? `<div style="text-align:center;margin-top:12px"><button class="btn btn-sm" id="unified-load-more">Load More (${loadedEntries.length}/${loadedTotal})</button></div>`
-        : ''
+      ${
+        loadedTotal > loadedEntries.length
+          ? `<div style="text-align:center;margin-top:12px"><button class="btn btn-sm" id="unified-load-more">Load More (${loadedEntries.length}/${loadedTotal})</button></div>`
+          : ''
       }
     `;
 
@@ -166,7 +171,9 @@ export async function renderProductions(el) {
         <td>${statusBadge(entry)}</td>
         <td>${entry.evaluation?.rating ? starsHtml(entry.evaluation.rating) : '<span class="text-dim">-</span>'}</td>
       `;
-      tr.addEventListener('click', () => showDetailModal(entry.botId, entry.id, () => loadUnifiedEntries(false)));
+      tr.addEventListener('click', () =>
+        showDetailModal(entry.botId, entry.id, () => loadUnifiedEntries(false))
+      );
       utbody.appendChild(tr);
     }
   }
@@ -205,7 +212,7 @@ export async function renderBotProductions(el, botId) {
         <div><span style="color:var(--green)">${stats.approved}</span> <span class="text-dim">Approved</span></div>
         <div><span style="color:var(--red)">${stats.rejected}</span> <span class="text-dim">Rejected</span></div>
         <div><span style="color:var(--orange)">${stats.unreviewed}</span> <span class="text-dim">Unreviewed</span></div>
-        <div>${stats.avgRating != null ? starsHtml(Math.round(stats.avgRating)) + ` <span class="text-dim">${stats.avgRating}</span>` : '<span class="text-dim">No ratings</span>'}</div>
+        <div>${stats.avgRating != null ? `${starsHtml(Math.round(stats.avgRating))} <span class="text-dim">${stats.avgRating}</span>` : '<span class="text-dim">No ratings</span>'}</div>
         <div style="margin-left:auto"><button class="btn btn-sm" id="generate-summary-btn">Generate Summary</button></div>
       </div>
 
@@ -220,9 +227,10 @@ export async function renderBotProductions(el, botId) {
         </select>
       </div>
 
-      ${entries.length === 0
-        ? '<p class="text-dim">No entries match the filter.</p>'
-        : `<table>
+      ${
+        entries.length === 0
+          ? '<p class="text-dim">No entries match the filter.</p>'
+          : `<table>
             <thead><tr><th>Time</th><th>Path</th><th>Tool</th><th>Action</th><th>Status</th><th>Rating</th></tr></thead>
             <tbody id="entries-tbody"></tbody>
           </table>`
@@ -347,9 +355,12 @@ export async function renderBotProductions(el, botId) {
         <div class="page-title" style="font-size:1.1rem">Productions Chat</div>
         <button class="btn btn-primary btn-sm" id="new-prod-chat-btn">New Chat</button>
       </div>
-      ${chatConvos.length > 0 && !activeChat
-        ? `<div id="prod-chat-list" class="mb-16">
-            ${chatConvos.map((c) => `
+      ${
+        chatConvos.length > 0 && !activeChat
+          ? `<div id="prod-chat-list" class="mb-16">
+            ${chatConvos
+              .map(
+                (c) => `
               <div class="detail-card mb-8 prod-chat-item" data-id="${c.id}" style="cursor:pointer;padding:10px 14px;display:flex;justify-content:space-between;align-items:center">
                 <div>
                   <strong>${escapeHtml(c.title)}</strong>
@@ -357,12 +368,15 @@ export async function renderBotProductions(el, botId) {
                 </div>
                 <span class="text-dim text-sm">${timeAgo(c.updatedAt)}</span>
               </div>
-            `).join('')}
+            `
+              )
+              .join('')}
           </div>`
-        : ''
+          : ''
       }
-      ${activeChat
-        ? `<div class="detail-card mb-16">
+      ${
+        activeChat
+          ? `<div class="detail-card mb-16">
             <div class="flex-between mb-8">
               <strong>${escapeHtml(activeChat.title)}</strong>
               <div style="display:flex;gap:8px;align-items:center">
@@ -372,11 +386,12 @@ export async function renderBotProductions(el, botId) {
             </div>
             <div id="prod-chat-thread"></div>
           </div>`
-        : ''
+          : ''
       }
-      ${!activeChat && chatConvos.length === 0
-        ? '<p class="text-dim">No productions chats yet. Start a conversation about this bot\'s work.</p>'
-        : ''
+      ${
+        !activeChat && chatConvos.length === 0
+          ? '<p class="text-dim">No productions chats yet. Start a conversation about this bot\'s work.</p>'
+          : ''
       }`;
 
     // Wire new chat button
@@ -434,7 +449,9 @@ export async function renderBotProductions(el, botId) {
         renderProdChatThread();
         return;
       }
-      const statusRes = await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/status`);
+      const statusRes = await api(
+        `/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/status`
+      );
       if (statusRes.status === 'error') {
         clearInterval(pollInterval);
         chatGenerating = false;
@@ -454,7 +471,9 @@ export async function renderBotProductions(el, botId) {
         renderProdChatThread();
 
         // Refresh title
-        const convData = await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}`);
+        const convData = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}`
+        );
         if (convData.conversation) {
           activeChat.title = convData.conversation.title;
           loadProductionsChats().then(() => {});
@@ -477,12 +496,14 @@ export async function renderBotProductions(el, botId) {
         chatErrorMsg = null;
         chatGenerating = true;
         renderProdChatThread();
-        await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/retry`, { method: 'POST' });
+        await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/retry`, {
+          method: 'POST',
+        });
         startProdChatPolling();
       },
       onSend: async (text) => {
         chatMessages.push({
-          id: 'temp-' + Date.now(),
+          id: `temp-${Date.now()}`,
           role: 'human',
           content: text,
           createdAt: new Date().toISOString(),
@@ -491,10 +512,13 @@ export async function renderBotProductions(el, botId) {
         chatErrorMsg = null;
         renderProdChatThread();
 
-        const res = await api(`/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/messages`, {
-          method: 'POST',
-          body: { message: text },
-        });
+        const res = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/messages`,
+          {
+            method: 'POST',
+            body: { message: text },
+          }
+        );
 
         if (res.error) {
           chatGenerating = false;
@@ -520,7 +544,9 @@ async function showDetailModal(botId, entryId, onDelete) {
 
   const data = await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}`);
   if (data.error) {
-    showModal(`<p class="text-dim">${escapeHtml(data.error)}</p><div class="modal-actions"><button class="btn" onclick="document.getElementById('modal-overlay').classList.add('hidden')">Close</button></div>`);
+    showModal(
+      `<p class="text-dim">${escapeHtml(data.error)}</p><div class="modal-actions"><button class="btn" onclick="document.getElementById('modal-overlay').classList.add('hidden')">Close</button></div>`
+    );
     return;
   }
 
@@ -574,7 +600,7 @@ async function showDetailModal(botId, entryId, onDelete) {
     modal.querySelectorAll('.star-interactive .star').forEach((star) => {
       star.style.cursor = 'pointer';
       star.addEventListener('click', () => {
-        currentRating = parseInt(star.dataset.star);
+        currentRating = Number.parseInt(star.dataset.star);
         render();
       });
     });
@@ -611,7 +637,10 @@ async function showDetailModal(botId, entryId, onDelete) {
 
       btn.textContent = 'Saved';
       setTimeout(() => {
-        if (btn) { btn.disabled = false; btn.textContent = 'Save Evaluation'; }
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Save Evaluation';
+        }
       }, 1500);
     });
 
@@ -649,7 +678,9 @@ async function showDetailModal(botId, entryId, onDelete) {
           renderThreadUI();
           return;
         }
-        const statusRes = await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/thread-status`);
+        const statusRes = await api(
+          `/api/productions/${encodeURIComponent(botId)}/${entryId}/thread-status`
+        );
         if (statusRes.status === 'error') {
           clearInterval(pollInterval);
           threadGenerating = false;
@@ -660,7 +691,7 @@ async function showDetailModal(botId, entryId, onDelete) {
         if (statusRes.status === 'idle') {
           clearInterval(pollInterval);
           if (statusRes.lastBotMessage) {
-            if (!entry.evaluation.thread.find(m => m.id === statusRes.lastBotMessage.id)) {
+            if (!entry.evaluation.thread.find((m) => m.id === statusRes.lastBotMessage.id)) {
               entry.evaluation.thread.push(statusRes.lastBotMessage);
             }
           }
@@ -684,14 +715,21 @@ async function showDetailModal(botId, entryId, onDelete) {
           threadErrorMsg = null;
           threadGenerating = true;
           renderThreadUI();
-          await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/retry-thread`, { method: 'POST' });
+          await api(`/api/productions/${encodeURIComponent(botId)}/${entryId}/retry-thread`, {
+            method: 'POST',
+          });
           startModalThreadPolling();
         },
         onSend: async (text) => {
           // Optimistically add human message
           if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
           if (!entry.evaluation.thread) entry.evaluation.thread = [];
-          entry.evaluation.thread.push({ id: 'temp', role: 'human', content: text, createdAt: new Date().toISOString() });
+          entry.evaluation.thread.push({
+            id: 'temp',
+            role: 'human',
+            content: text,
+            createdAt: new Date().toISOString(),
+          });
           threadGenerating = true;
           threadErrorMsg = null;
           renderThreadUI();

@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { CollaborationSessionManager } from '../src/collaboration-session';
 
 describe('CollaborationSessionManager', () => {
@@ -36,7 +36,7 @@ describe('CollaborationSessionManager', () => {
       const created = manager.create('botA', 'botB');
       const retrieved = manager.get(created.id);
       expect(retrieved).toBeDefined();
-      expect(retrieved!.id).toBe(created.id);
+      expect(retrieved?.id).toBe(created.id);
     });
 
     test('returns undefined for non-existent session', () => {

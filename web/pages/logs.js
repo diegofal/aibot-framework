@@ -1,7 +1,14 @@
 import { api, escapeHtml } from './shared.js';
 
 const LEVEL_MAP = { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' };
-const LEVEL_LABELS = { trace: 'TRC', debug: 'DBG', info: 'INF', warn: 'WRN', error: 'ERR', fatal: 'FTL' };
+const LEVEL_LABELS = {
+  trace: 'TRC',
+  debug: 'DBG',
+  info: 'INF',
+  warn: 'WRN',
+  error: 'ERR',
+  fatal: 'FTL',
+};
 const MAX_DOM_LINES = 2000;
 
 let ws = null;
@@ -19,7 +26,7 @@ let countBadge = null;
 
 function formatTime(ts) {
   const d = new Date(ts);
-  return d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  return `${d.toLocaleTimeString('en-GB', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
 function levelName(num) {
@@ -31,7 +38,7 @@ function matchesFilter(entry) {
   if (!activeLevels.has(lvl)) return false;
   if (activeAgent && (entry.botId || '') !== activeAgent) return false;
   if (searchTerm) {
-    const text = (entry.msg || '') + ' ' + JSON.stringify(entry);
+    const text = `${entry.msg || ''} ${JSON.stringify(entry)}`;
     if (!text.toLowerCase().includes(searchTerm)) return false;
   }
   return true;
@@ -43,7 +50,9 @@ function extraProps(entry) {
   for (const [k, v] of Object.entries(entry)) {
     if (skip.has(k)) continue;
     const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-    parts.push(`<span class="log-prop"><span class="log-prop-key">${escapeHtml(k)}</span>=${escapeHtml(val)}</span>`);
+    parts.push(
+      `<span class="log-prop"><span class="log-prop-key">${escapeHtml(k)}</span>=${escapeHtml(val)}</span>`
+    );
   }
   return parts.join(' ');
 }
@@ -56,16 +65,9 @@ function createLineEl(entry) {
     div.dataset.botid = entry.botId;
   }
 
-  const botTag = entry.botId
-    ? `<span class="log-agent-tag">${escapeHtml(entry.botId)}</span>`
-    : '';
+  const botTag = entry.botId ? `<span class="log-agent-tag">${escapeHtml(entry.botId)}</span>` : '';
 
-  div.innerHTML =
-    `<span class="log-time">${formatTime(entry.time)}</span>` +
-    `<span class="log-badge log-badge-${lvl}">${LEVEL_LABELS[lvl] || 'LOG'}</span>` +
-    botTag +
-    `<span class="log-msg">${escapeHtml(entry.msg || '')}</span>` +
-    `<span class="log-extra">${extraProps(entry)}</span>`;
+  div.innerHTML = `<span class="log-time">${formatTime(entry.time)}</span><span class="log-badge log-badge-${lvl}">${LEVEL_LABELS[lvl] || 'LOG'}</span>${botTag}<span class="log-msg">${escapeHtml(entry.msg || '')}</span><span class="log-extra">${extraProps(entry)}</span>`;
   return div;
 }
 
@@ -124,7 +126,9 @@ function connectWS() {
       } else {
         appendLines(lines);
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   };
 
   ws.onclose = () => {
@@ -150,11 +154,16 @@ export async function renderLogs(el) {
   let agents = [];
   try {
     agents = await api('/api/agents');
-  } catch { /* ignore — dropdown just won't have options */ }
+  } catch {
+    /* ignore — dropdown just won't have options */
+  }
 
-  const agentOptions = agents.map(
-    (a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.id)})</option>`
-  ).join('');
+  const agentOptions = agents
+    .map(
+      (a) =>
+        `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.id)})</option>`
+    )
+    .join('');
 
   el.innerHTML = `
     <div class="flex-between mb-16">

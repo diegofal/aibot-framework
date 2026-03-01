@@ -1,4 +1,4 @@
-import type { OllamaClient, ChatMessage, ChatOptions } from '../ollama';
+import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
 import type { ToolCall } from '../tools/types';
 import type { ToolCallingStrategy } from './tool-runner';
 
@@ -11,12 +11,12 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     private ollama: OllamaClient,
     private baseUrl: string,
     private logger: { debug: (...args: unknown[]) => void },
-    private timeout: number = 120_000,
+    private timeout = 300_000
   ) {}
 
   async chat(
     messages: ChatMessage[],
-    opts: ChatOptions,
+    opts: ChatOptions
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     const model = opts.model || 'llama3';
     const startMs = Date.now();
@@ -35,7 +35,10 @@ export class NativeToolStrategy implements ToolCallingStrategy {
       body.tools = opts.tools;
     }
 
-    this.logger.debug({ model, timeoutMs: this.timeout, messageCount: messages.length }, 'NativeToolStrategy: fetch starting');
+    this.logger.debug(
+      { model, timeoutMs: this.timeout, messageCount: messages.length },
+      'NativeToolStrategy: fetch starting'
+    );
 
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
@@ -52,7 +55,10 @@ export class NativeToolStrategy implements ToolCallingStrategy {
       message: { content: string; tool_calls?: ToolCall[] };
     };
 
-    this.logger.debug({ model, elapsedMs: Date.now() - startMs }, 'NativeToolStrategy: fetch completed');
+    this.logger.debug(
+      { model, elapsedMs: Date.now() - startMs },
+      'NativeToolStrategy: fetch completed'
+    );
 
     return {
       content: data.message.content || '',

@@ -12,16 +12,16 @@ export interface Tenant {
   apiKey: string;
   createdAt: Date;
   updatedAt: Date;
-  
+
   // Quota configuration (from plan + custom overrides)
   quota: TenantQuota;
-  
+
   // Current usage (reset monthly)
   usage: TenantUsage;
-  
+
   // Billing info (Stripe integration)
   billing?: TenantBilling;
-  
+
   // Feature flags
   features: TenantFeatures;
 }
@@ -63,7 +63,7 @@ export interface TenantFeatures {
 /**
  * Usage event types for metering
  */
-export type UsageEventType = 
+export type UsageEventType =
   | 'message_processed'
   | 'api_call'
   | 'llm_request'
@@ -105,7 +105,10 @@ export interface QuotaCheckResult {
 /**
  * Plan definitions with default quotas
  */
-export const PLAN_DEFINITIONS: Record<string, TenantQuota & { price: number; features: TenantFeatures }> = {
+export const PLAN_DEFINITIONS: Record<
+  string,
+  TenantQuota & { price: number; features: TenantFeatures }
+> = {
   free: {
     price: 0,
     messagesPerMonth: 500,
@@ -206,7 +209,7 @@ export interface TenantStorage {
   getByEmail(email: string): Promise<Tenant | undefined>;
   list(): Promise<Tenant[]>;
   delete(id: string): Promise<void>;
-  
+
   // Usage tracking
   recordUsage(event: UsageEvent): Promise<void>;
   getUsageHistory(tenantId: string, start: Date, end: Date): Promise<UsageEvent[]>;

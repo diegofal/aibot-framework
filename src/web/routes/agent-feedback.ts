@@ -1,14 +1,14 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
+import { claudeGenerate } from '../../claude-cli';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
-import { claudeGenerate } from '../../claude-cli';
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + '\n... [truncated]';
+  return `${text.slice(0, maxLen)}\n... [truncated]`;
 }
 
 interface GenerateFeedbackContext {
@@ -17,7 +17,13 @@ interface GenerateFeedbackContext {
   motivations: string | null;
   goals: string | null;
   recentMemory: string;
-  productionsStats: { total: number; approved: number; rejected: number; unreviewed: number; avgRating: number | null } | null;
+  productionsStats: {
+    total: number;
+    approved: number;
+    rejected: number;
+    unreviewed: number;
+    avgRating: number | null;
+  } | null;
   productionsSummary: string;
   feedbackHistory: string;
   botId: string;
@@ -46,7 +52,9 @@ function buildGenerateFeedbackPrompt(ctx: GenerateFeedbackContext): string {
   }
   if (ctx.productionsStats) {
     const s = ctx.productionsStats;
-    sections.push(`## Productions Stats\nTotal: ${s.total} | Approved: ${s.approved} | Rejected: ${s.rejected} | Unreviewed: ${s.unreviewed} | Avg Rating: ${s.avgRating ?? 'N/A'}`);
+    sections.push(
+      `## Productions Stats\nTotal: ${s.total} | Approved: ${s.approved} | Rejected: ${s.rejected} | Unreviewed: ${s.unreviewed} | Avg Rating: ${s.avgRating ?? 'N/A'}`
+    );
   }
   if (ctx.productionsSummary) {
     sections.push(`## Recent Productions\n${truncate(ctx.productionsSummary, 15000)}`);
@@ -152,18 +160,21 @@ export function agentFeedbackRoutes(deps: {
             let line = `- [${entry.timestamp}] ${entry.action} ${entry.path}`;
             if (entry.description) line += ` — ${entry.description}`;
             if (entry.evaluation) {
-              line += ` (${entry.evaluation.status}`;
+              line += ` (${entry.evaluation.status ?? 'unknown'}`;
               if (entry.evaluation.rating) line += `, ${entry.evaluation.rating}/5`;
-              if (entry.evaluation.feedback) line += `: "${truncate(entry.evaluation.feedback, 100)}"`;
+              if (entry.evaluation.feedback)
+                line += `: "${truncate(entry.evaluation.feedback, 100)}"`;
               line += ')';
             }
             summaryParts.push(line);
 
             // Sample content for first 3 entries
             if (summaryParts.length <= 3) {
-              const content = deps.productionsService!.getFileContent(botId, entry.id);
+              const content = deps.productionsService?.getFileContent(botId, entry.id);
               if (content) {
-                summaryParts.push(`  Content preview:\n  ${truncate(content, 1500).split('\n').join('\n  ')}`);
+                summaryParts.push(
+                  `  Content preview:\n  ${truncate(content, 1500).split('\n').join('\n  ')}`
+                );
               }
             }
           }
@@ -175,11 +186,13 @@ export function agentFeedbackRoutes(deps: {
       const feedbackEntries = deps.botManager.getAgentFeedback(botId, { limit: 20 });
       let feedbackHistory = '';
       if (feedbackEntries.length > 0) {
-        feedbackHistory = feedbackEntries.map((e) => {
-          let line = `- [${e.status}] ${truncate(e.content, 200)}`;
-          if (e.response) line += `\n  Bot response: ${truncate(e.response, 150)}`;
-          return line;
-        }).join('\n');
+        feedbackHistory = feedbackEntries
+          .map((e) => {
+            let line = `- [${e.status}] ${truncate(e.content, 200)}`;
+            if (e.response) line += `\n  Bot response: ${truncate(e.response, 150)}`;
+            return line;
+          })
+          .join('\n');
       }
 
       const prompt = buildGenerateFeedbackPrompt({
@@ -196,7 +209,7 @@ export function agentFeedbackRoutes(deps: {
       });
 
       const claudePath = deps.config.improve?.claudePath ?? 'claude';
-      const timeout = deps.config.improve?.timeout ?? 120_000;
+      const timeout = deps.config.improve?.timeout ?? 300_000;
 
       const feedback = await claudeGenerate(prompt, {
         systemPrompt: GENERATE_SYSTEM_PROMPT,
@@ -219,8 +232,8 @@ export function agentFeedbackRoutes(deps: {
   app.get('/:botId', (c) => {
     const botId = c.req.param('botId');
     const status = c.req.query('status');
-    const limit = parseInt(c.req.query('limit') ?? '100', 10);
-    const offset = parseInt(c.req.query('offset') ?? '0', 10);
+    const limit = Number.parseInt(c.req.query('limit') ?? '100', 10);
+    const offset = Number.parseInt(c.req.query('offset') ?? '0', 10);
 
     const entries = deps.botManager.getAgentFeedback(botId, {
       status: status || undefined,
@@ -263,7 +276,7 @@ export function agentFeedbackRoutes(deps: {
         const thread = current?.thread ?? [];
 
         const sections: string[] = [];
-        sections.push(`# Agent Feedback Discussion Thread`);
+        sections.push('# Agent Feedback Discussion Thread');
         sections.push(`## Original Feedback\n${current?.content ?? entry.content}`);
 
         if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
@@ -277,15 +290,19 @@ export function agentFeedbackRoutes(deps: {
         // Format thread (last 10 messages)
         const recent = thread.slice(-10);
         if (recent.length > 0) {
-          const threadText = recent.map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`).join('\n\n');
+          const threadText = recent
+            .map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`)
+            .join('\n\n');
           sections.push(`## Conversation Thread\n${threadText}`);
         }
 
-        sections.push(`## Task\n\nRespond to the latest message in this thread. Be specific and concise.`);
+        sections.push(
+          '## Task\n\nRespond to the latest message in this thread. Be specific and concise.'
+        );
 
         const prompt = sections.join('\n\n');
         const claudePath = deps.config.improve?.claudePath ?? 'claude';
-        const timeout = deps.config.improve?.timeout ?? 120_000;
+        const timeout = deps.config.improve?.timeout ?? 300_000;
 
         const response = await claudeGenerate(prompt, {
           systemPrompt: THREAD_SYSTEM_PROMPT,
@@ -300,7 +317,7 @@ export function agentFeedbackRoutes(deps: {
         // Write to bot memory
         if (soulLoader) {
           soulLoader.appendDailyMemory(
-            `## Feedback Thread Reply\n- Original feedback: "${truncate(entry.content, 100)}"\n- My response: "${truncate(response, 200)}"`,
+            `## Feedback Thread Reply\n- Original feedback: "${truncate(entry.content, 100)}"\n- My response: "${truncate(response, 200)}"`
           );
         }
 
@@ -309,7 +326,10 @@ export function agentFeedbackRoutes(deps: {
       } catch (err) {
         deps.logger.error({ err, botId, id }, 'Failed to generate thread reply for agent feedback');
         const message = err instanceof Error ? err.message : 'Unknown error';
-        generationState.set(key, { status: 'error', error: `Failed to generate reply: ${message}` });
+        generationState.set(key, {
+          status: 'error',
+          error: `Failed to generate reply: ${message}`,
+        });
       }
     })();
   }
@@ -335,7 +355,12 @@ export function agentFeedbackRoutes(deps: {
       return c.json({ error: 'Already generating a reply' }, 409);
     }
 
-    const msg = deps.botManager.addAgentFeedbackThreadMessage(botId, id, 'human', body.message.trim());
+    const msg = deps.botManager.addAgentFeedbackThreadMessage(
+      botId,
+      id,
+      'human',
+      body.message.trim()
+    );
     if (!msg) {
       return c.json({ error: 'Failed to add message' }, 500);
     }

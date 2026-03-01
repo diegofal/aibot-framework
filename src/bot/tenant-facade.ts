@@ -1,7 +1,7 @@
 import type { BotConfig, Config } from '../config';
 import type { Logger } from '../logger';
+import { type BillingProvider, NoOpBillingProvider } from '../tenant/billing';
 import { TenantManager, type TenantManagerConfig } from '../tenant/manager';
-import { NoOpBillingProvider, type BillingProvider } from '../tenant/billing';
 import type { Tenant, UsageEventType } from '../tenant/types';
 
 export interface TenantFacadeDeps {
@@ -60,7 +60,10 @@ export class TenantFacade {
     return this.tenantManager?.listTenants() ?? [];
   }
 
-  updateTenant(tenantId: string, updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>): Tenant | undefined {
+  updateTenant(
+    tenantId: string,
+    updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>
+  ): Tenant | undefined {
     return this.tenantManager?.updateTenant(tenantId, updates);
   }
 
@@ -68,7 +71,7 @@ export class TenantFacade {
     if (!this.tenantManager) return false;
 
     // Stop all bots belonging to this tenant
-    const tenantBots = this.deps.config.bots.filter(b => b.tenantId === tenantId);
+    const tenantBots = this.deps.config.bots.filter((b) => b.tenantId === tenantId);
     for (const bot of tenantBots) {
       if (this.deps.runningBots.has(bot.id)) {
         await this.deps.stopBot(bot.id);
@@ -84,7 +87,13 @@ export class TenantFacade {
 
   // --- Usage Metering ---
 
-  recordUsage(tenantId: string, botId: string, type: UsageEventType, quantity: number = 1, metadata?: Record<string, unknown>): void {
+  recordUsage(
+    tenantId: string,
+    botId: string,
+    type: UsageEventType,
+    quantity = 1,
+    metadata?: Record<string, unknown>
+  ): void {
     if (!this.tenantManager) return;
 
     this.tenantManager.recordUsage({
@@ -97,10 +106,12 @@ export class TenantFacade {
   }
 
   getTenantUsage(tenantId: string): { messages: number; apiCalls: number; storage: number } {
-    return this.tenantManager?.getCurrentMonthUsage(tenantId) ?? { messages: 0, apiCalls: 0, storage: 0 };
+    return (
+      this.tenantManager?.getCurrentMonthUsage(tenantId) ?? { messages: 0, apiCalls: 0, storage: 0 }
+    );
   }
 
-  checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount: number = 1): boolean {
+  checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount = 1): boolean {
     return this.tenantManager?.checkQuota(tenantId, type, amount) ?? true;
   }
 
@@ -113,7 +124,12 @@ export class TenantFacade {
         return { success: false, error: 'Tenant not found' };
       }
 
-      if (!this.tenantManager.canCreateBot(botConfig.tenantId, { config: this.deps.config, runningBots: this.deps.runningBots } as any)) {
+      if (
+        !this.tenantManager.canCreateBot(botConfig.tenantId, {
+          config: this.deps.config,
+          runningBots: this.deps.runningBots,
+        } as any)
+      ) {
         return { success: false, error: 'Bot limit exceeded for tenant plan' };
       }
     }
@@ -127,13 +143,13 @@ export class TenantFacade {
   }
 
   getTenantBots(tenantId: string): BotConfig[] {
-    return this.deps.config.bots.filter(b => b.tenantId === tenantId);
+    return this.deps.config.bots.filter((b) => b.tenantId === tenantId);
   }
 
   getRunningTenantBots(tenantId: string): string[] {
     return this.deps.config.bots
-      .filter(b => b.tenantId === tenantId && this.deps.runningBots.has(b.id))
-      .map(b => b.id);
+      .filter((b) => b.tenantId === tenantId && this.deps.runningBots.has(b.id))
+      .map((b) => b.id);
   }
 
   // --- Billing Integration ---
@@ -167,7 +183,10 @@ export class TenantFacade {
    * Handle Stripe webhook events to update tenant billing status.
    * Called by the webhook endpoint when Stripe sends events.
    */
-  async handleWebhook(payload: unknown, signature: string): Promise<{ success: boolean; tenantId?: string }> {
+  async handleWebhook(
+    payload: unknown,
+    signature: string
+  ): Promise<{ success: boolean; tenantId?: string }> {
     if (!this.billingProvider || !this.tenantManager) {
       return { success: false };
     }
@@ -182,10 +201,14 @@ export class TenantFacade {
             billing: {
               ...tenant.billing,
               status: 'active',
-              stripeSubscriptionId: result.stripeSubscriptionId || tenant.billing?.stripeSubscriptionId,
+              stripeSubscriptionId:
+                result.stripeSubscriptionId || tenant.billing?.stripeSubscriptionId,
             },
           });
-          this.deps.logger.info({ tenantId: result.tenantId, invoiceId: result.invoiceId }, 'Payment succeeded, tenant activated');
+          this.deps.logger.info(
+            { tenantId: result.tenantId, invoiceId: result.invoiceId },
+            'Payment succeeded, tenant activated'
+          );
         }
         return { success: true, tenantId: result.tenantId };
       }
@@ -199,7 +222,10 @@ export class TenantFacade {
               status: 'past_due',
             },
           });
-          this.deps.logger.warn({ tenantId: result.tenantId }, 'Payment failed, tenant marked past_due');
+          this.deps.logger.warn(
+            { tenantId: result.tenantId },
+            'Payment failed, tenant marked past_due'
+          );
         }
         return { success: true, tenantId: result.tenantId };
       }

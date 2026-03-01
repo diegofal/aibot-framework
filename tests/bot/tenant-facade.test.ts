@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, vi } from 'bun:test';
+import { beforeEach, describe, expect, test, vi } from 'bun:test';
 import { TenantFacade, type TenantFacadeDeps } from '../../src/bot/tenant-facade';
 
 vi.mock('../../src/tenant/manager', () => ({
@@ -78,7 +78,7 @@ describe('TenantFacade', () => {
       facade.initializeTenantManager({ dataDir: '/tmp/test' });
       expect(deps.logger.info).toHaveBeenCalledWith(
         { dataDir: '/tmp/test' },
-        'Tenant manager initialized',
+        'Tenant manager initialized'
       );
     });
   });
@@ -603,10 +603,10 @@ describe('TenantFacade', () => {
 
       facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling);
       const mgr = facade.getTenantManager()! as any;
-      const tenant = { 
-        id: 't1', 
-        name: 'Acme', 
-        billing: { stripeCustomerId: 'cust_123', status: 'past_due' } 
+      const tenant = {
+        id: 't1',
+        name: 'Acme',
+        billing: { stripeCustomerId: 'cust_123', status: 'past_due' },
       };
       mgr.getTenant.mockReturnValue(tenant);
 
@@ -656,10 +656,10 @@ describe('TenantFacade', () => {
 
       facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling as any);
       const mgr = facade.getTenantManager()! as any;
-      const tenant = { 
-        id: 't1', 
-        name: 'Acme', 
-        billing: { stripeCustomerId: 'cust_123', status: 'active' } 
+      const tenant = {
+        id: 't1',
+        name: 'Acme',
+        billing: { stripeCustomerId: 'cust_123', status: 'active' },
       };
       mgr.getTenant.mockReturnValue(tenant);
 
@@ -686,10 +686,10 @@ describe('TenantFacade', () => {
 
       facade.initializeTenantManager({ dataDir: '/tmp/test' }, mockBilling as any);
       const mgr = facade.getTenantManager()! as any;
-      const tenant = { 
-        id: 't1', 
-        name: 'Acme', 
-        billing: { stripeCustomerId: 'cust_123', status: 'active' } 
+      const tenant = {
+        id: 't1',
+        name: 'Acme',
+        billing: { stripeCustomerId: 'cust_123', status: 'active' },
       };
       mgr.getTenant.mockReturnValue(tenant);
 

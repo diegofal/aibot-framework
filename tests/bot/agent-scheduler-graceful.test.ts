@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeEach, vi } from 'bun:test';
-import { AgentScheduler } from '../../src/bot/agent-scheduler';
+import { beforeEach, describe, expect, test, vi } from 'bun:test';
 import type { AgentLoopResult } from '../../src/bot/agent-loop';
+import { AgentScheduler } from '../../src/bot/agent-scheduler';
 
 function makeMockCtx(overrides: Record<string, unknown> = {}): any {
   return {

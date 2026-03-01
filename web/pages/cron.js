@@ -1,4 +1,4 @@
-import { showModal, closeModal, api, escapeHtml, timeAgo } from './shared.js';
+import { api, closeModal, escapeHtml, showModal, timeAgo } from './shared.js';
 
 export async function renderCron(el) {
   el.innerHTML = '<div class="page-title">Cron Jobs</div><p class="text-dim">Loading...</p>';
@@ -10,9 +10,10 @@ export async function renderCron(el) {
       <div class="page-title">Cron Jobs <span class="count">${jobs.length}</span></div>
       <a href="#/cron/new" class="btn btn-primary">+ New Job</a>
     </div>
-    ${jobs.length === 0
-      ? '<p class="text-dim">No cron jobs configured.</p>'
-      : `<table>
+    ${
+      jobs.length === 0
+        ? '<p class="text-dim">No cron jobs configured.</p>'
+        : `<table>
           <thead><tr><th>Name</th><th>Schedule</th><th>Enabled</th><th>Next Run</th><th>Last Run</th><th>Actions</th></tr></thead>
           <tbody id="cron-tbody"></tbody>
         </table>`
@@ -31,9 +32,16 @@ export async function renderCron(el) {
     let lastRunHtml = '<span class="text-dim">--</span>';
     if (job.state.lastStatus) {
       const badge = `<span class="badge badge-${job.state.lastStatus}">${job.state.lastStatus}</span>`;
-      const ago = job.state.lastRunAtMs ? ` <span class="text-dim text-sm">${timeAgo(new Date(job.state.lastRunAtMs).toISOString())}</span>` : '';
-      const dur = job.state.lastDurationMs != null ? ` <span class="text-dim text-sm">(${formatDuration(job.state.lastDurationMs)})</span>` : '';
-      const err = job.state.lastError ? `<div class="text-sm" style="color:var(--red);margin-top:2px">${escapeHtml(truncate(job.state.lastError, 80))}</div>` : '';
+      const ago = job.state.lastRunAtMs
+        ? ` <span class="text-dim text-sm">${timeAgo(new Date(job.state.lastRunAtMs).toISOString())}</span>`
+        : '';
+      const dur =
+        job.state.lastDurationMs != null
+          ? ` <span class="text-dim text-sm">(${formatDuration(job.state.lastDurationMs)})</span>`
+          : '';
+      const err = job.state.lastError
+        ? `<div class="text-sm" style="color:var(--red);margin-top:2px">${escapeHtml(truncate(job.state.lastError, 80))}</div>`
+        : '';
       lastRunHtml = `${badge}${ago}${dur}${err}`;
     }
 
@@ -63,7 +71,10 @@ export async function renderCron(el) {
   tbody.addEventListener('change', async (e) => {
     const toggle = e.target.closest('input[data-action="toggle"]');
     if (!toggle) return;
-    await api(`/api/cron/${toggle.dataset.id}`, { method: 'PATCH', body: { enabled: toggle.checked } });
+    await api(`/api/cron/${toggle.dataset.id}`, {
+      method: 'PATCH',
+      body: { enabled: toggle.checked },
+    });
     renderCron(el);
   });
 
@@ -142,9 +153,11 @@ export async function renderCronDetail(el, id) {
         ${payloadHtml}
         <tr><td class="text-dim">Enabled</td><td>${job.enabled ? 'Yes' : 'No'}</td></tr>
         <tr><td class="text-dim">Next Run</td><td>${job.state.nextRunAtMs ? new Date(job.state.nextRunAtMs).toLocaleString() : '--'}</td></tr>
-        <tr><td class="text-dim">Last Status</td><td>${job.state.lastStatus
-          ? `<span class="badge badge-${job.state.lastStatus}">${job.state.lastStatus}</span>`
-          : '--'}</td></tr>
+        <tr><td class="text-dim">Last Status</td><td>${
+          job.state.lastStatus
+            ? `<span class="badge badge-${job.state.lastStatus}">${job.state.lastStatus}</span>`
+            : '--'
+        }</td></tr>
         ${job.state.lastError ? `<tr><td class="text-dim">Last Error</td><td class="text-sm" style="color:var(--red)">${escapeHtml(job.state.lastError)}</td></tr>` : ''}
         <tr><td class="text-dim">Consecutive Errors</td><td>${job.state.consecutiveErrors}</td></tr>
         <tr><td class="text-dim">Created</td><td class="text-dim">${new Date(job.createdAtMs).toLocaleString()}</td></tr>
@@ -158,7 +171,9 @@ export async function renderCronDetail(el, id) {
       <button class="btn btn-danger" id="btn-delete">Delete</button>
     </div>
 
-    ${job.runs?.length ? `
+    ${
+      job.runs?.length
+        ? `
       <div class="flex-between mb-16">
         <h3>Recent Runs</h3>
         <button class="btn btn-sm btn-danger" id="btn-clear-logs">Clear Logs</button>
@@ -166,19 +181,25 @@ export async function renderCronDetail(el, id) {
       <table>
         <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Output</th><th>Error</th><th></th></tr></thead>
         <tbody>
-          ${job.runs.map((r) => `
+          ${job.runs
+            .map(
+              (r) => `
             <tr>
               <td class="text-sm">${r.runAtMs ? new Date(r.runAtMs).toLocaleString() : '--'}</td>
               <td><span class="badge badge-${r.status || 'disabled'}">${r.status || '--'}</span></td>
-              <td class="text-dim">${r.durationMs != null ? r.durationMs + 'ms' : '--'}</td>
+              <td class="text-dim">${r.durationMs != null ? `${r.durationMs}ms` : '--'}</td>
               <td class="text-sm">${r.output ? formatOutput(r.output) : ''}</td>
               <td class="text-sm" style="color:var(--red)">${r.error ? escapeHtml(r.error) : ''}</td>
               <td><button class="btn btn-sm btn-icon" data-action="delete-run" data-ts="${r.ts}" title="Delete">&times;</button></td>
             </tr>
-          `).join('')}
+          `
+            )
+            .join('')}
         </tbody>
       </table>
-    ` : ''}
+    `
+        : ''
+    }
   `;
 
   document.getElementById('btn-run').addEventListener('click', async () => {
@@ -229,10 +250,7 @@ export async function renderCronDetail(el, id) {
 }
 
 export async function renderCronCreate(el) {
-  const [agents, skills] = await Promise.all([
-    api('/api/agents'),
-    api('/api/skills'),
-  ]);
+  const [agents, skills] = await Promise.all([api('/api/agents'), api('/api/skills')]);
 
   el.innerHTML = `
     <div class="detail-header">
@@ -323,7 +341,8 @@ export async function renderCronCreate(el) {
         document.getElementById('create-llmBackend-default').textContent = `Skill default (${def})`;
       });
       document.getElementById('create-llmBackend').addEventListener('change', (e) => {
-        document.getElementById('create-claude-fields').style.display = e.target.value === 'claude-cli' ? 'block' : 'none';
+        document.getElementById('create-claude-fields').style.display =
+          e.target.value === 'claude-cli' ? 'block' : 'none';
       });
     }
   }
@@ -338,7 +357,12 @@ export async function renderCronCreate(el) {
 
     let payload;
     if (kind === 'message') {
-      payload = { kind: 'message', text: form.text.value, chatId: Number(form.chatId.value), botId: form.botId.value };
+      payload = {
+        kind: 'message',
+        text: form.text.value,
+        chatId: Number(form.chatId.value),
+        botId: form.botId.value,
+      };
     } else {
       payload = { kind: 'skillJob', skillId: form.skillId.value, jobId: form.jobId.value };
       const backend = form.llmBackend?.value;
@@ -369,13 +393,16 @@ function showCronEditModal(job, el, id, skills, onSaved) {
   const isMessage = job.payload.kind === 'message';
   const isSkillJob = job.payload.kind === 'skillJob';
   const jobId = id || job.id;
-  const scheduleExpr = job.schedule.kind === 'cron' ? job.schedule.expr
-    : job.schedule.kind === 'every' ? `every ${job.schedule.everyMs}ms`
-    : job.schedule.at || '';
+  const scheduleExpr =
+    job.schedule.kind === 'cron'
+      ? job.schedule.expr
+      : job.schedule.kind === 'every'
+        ? `every ${job.schedule.everyMs}ms`
+        : job.schedule.at || '';
 
-  const currentBackend = isSkillJob ? (job.payload.llmBackend || '') : '';
-  const currentClaudePath = isSkillJob ? (job.payload.claudePath || '') : '';
-  const currentClaudeTimeout = isSkillJob ? (job.payload.claudeTimeout || '') : '';
+  const currentBackend = isSkillJob ? job.payload.llmBackend || '' : '';
+  const currentClaudePath = isSkillJob ? job.payload.claudePath || '' : '';
+  const currentClaudeTimeout = isSkillJob ? job.payload.claudeTimeout || '' : '';
   const skillDefault = isSkillJob ? resolveSkillDefault(skills, job.payload.skillId) : 'ollama';
 
   showModal(`
@@ -388,7 +415,9 @@ function showCronEditModal(job, el, id, skills, onSaved) {
       <label>Schedule</label>
       <input type="text" id="edit-schedule" value="${escapeHtml(scheduleExpr)}">
     </div>
-    ${isMessage ? `
+    ${
+      isMessage
+        ? `
       <div class="form-group">
         <label>Text</label>
         <textarea id="edit-text">${escapeHtml(job.payload.text)}</textarea>
@@ -397,8 +426,12 @@ function showCronEditModal(job, el, id, skills, onSaved) {
         <label>Chat ID</label>
         <input type="number" id="edit-chatId" value="${job.payload.chatId}">
       </div>
-    ` : ''}
-    ${isSkillJob ? `
+    `
+        : ''
+    }
+    ${
+      isSkillJob
+        ? `
       <div class="form-separator"></div>
       <div class="form-group">
         <label>LLM Backend</label>
@@ -418,7 +451,9 @@ function showCronEditModal(job, el, id, skills, onSaved) {
           <input type="number" id="edit-claudeTimeout" value="${currentClaudeTimeout}" placeholder="90000">
         </div>
       </div>
-    ` : ''}
+    `
+        : ''
+    }
     <div class="modal-actions">
       <button class="btn" id="edit-cancel">Cancel</button>
       <button class="btn btn-primary" id="edit-save">Save</button>
@@ -430,7 +465,8 @@ function showCronEditModal(job, el, id, skills, onSaved) {
   if (backendSelect) {
     backendSelect.addEventListener('change', () => {
       const claudeFields = document.getElementById('edit-claude-fields');
-      if (claudeFields) claudeFields.style.display = backendSelect.value === 'claude-cli' ? 'block' : 'none';
+      if (claudeFields)
+        claudeFields.style.display = backendSelect.value === 'claude-cli' ? 'block' : 'none';
     });
   }
 
@@ -478,7 +514,9 @@ function showRunLogsModal(job) {
   const hasRuns = runs.length > 0;
   const rows = !hasRuns
     ? '<tr><td colspan="6" class="text-dim">No run logs yet.</td></tr>'
-    : runs.map((r) => `
+    : runs
+        .map(
+          (r) => `
         <tr>
           <td class="text-sm">${r.runAtMs ? new Date(r.runAtMs).toLocaleString() : '--'}</td>
           <td><span class="badge badge-${r.status || 'disabled'}">${r.status || '--'}</span></td>
@@ -487,7 +525,9 @@ function showRunLogsModal(job) {
           <td class="text-sm" style="color:var(--red)">${r.error ? escapeHtml(r.error) : ''}</td>
           <td><button class="btn btn-sm btn-icon" data-action="modal-delete-run" data-ts="${r.ts}" title="Delete">&times;</button></td>
         </tr>
-      `).join('');
+      `
+        )
+        .join('');
 
   showModal(`
     <div class="modal-title">${escapeHtml(job.name)} — Run Logs</div>
@@ -550,7 +590,7 @@ function formatDuration(ms) {
 
 function truncate(str, max) {
   if (!str || str.length <= max) return str;
-  return str.slice(0, max) + '…';
+  return `${str.slice(0, max)}…`;
 }
 
 function formatOutput(output) {
@@ -559,7 +599,7 @@ function formatOutput(output) {
   if (output.length <= 200) {
     return `<span class="text-dim">${escaped}</span>`;
   }
-  const id = 'out-' + Math.random().toString(36).slice(2, 8);
+  const id = `out-${Math.random().toString(36).slice(2, 8)}`;
   const short = escapeHtml(output.slice(0, 200));
   return `<span class="text-dim"><span id="${id}-short">${short}… <a href="#" onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline';return false">more</a></span><span id="${id}-full" style="display:none">${escaped}</span></span>`;
 }

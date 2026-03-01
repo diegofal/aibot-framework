@@ -22,7 +22,7 @@ export interface CommandHandler {
 export interface JobDefinition {
   id: string;
   schedule: string; // Cron expression
-  handler: (context: SkillContext) => Promise<string | void>;
+  handler: (context: SkillContext) => Promise<string | undefined>;
 }
 
 export interface TelegramMessage {
@@ -42,7 +42,12 @@ export interface TelegramClient {
   sendMessage(chatId: number, text: string, options?: unknown): Promise<void>;
   sendDocument(chatId: number, document: string | Buffer, options?: unknown): Promise<void>;
   answerCallbackQuery(callbackQueryId: string, options?: unknown): Promise<void>;
-  editMessageText(chatId: number, messageId: number, text: string, options?: unknown): Promise<void>;
+  editMessageText(
+    chatId: number,
+    messageId: number,
+    text: string,
+    options?: unknown
+  ): Promise<void>;
 }
 
 export interface DataStore {
@@ -98,7 +103,7 @@ export interface Skill {
 
   // Message handlers (for non-command messages)
   // Return true to indicate the message was consumed (skip conversation handler)
-  onMessage?(message: TelegramMessage, context: SkillContext): Promise<boolean | void>;
+  onMessage?(message: TelegramMessage, context: SkillContext): Promise<boolean | undefined>;
 
   // Callback query handler for inline keyboard buttons
   onCallbackQuery?(query: CallbackQueryData, context: SkillContext): Promise<void>;

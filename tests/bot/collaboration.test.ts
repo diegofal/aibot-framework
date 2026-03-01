@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { CollaborationManager } from '../../src/bot/collaboration';
-import type { BotContext } from '../../src/bot/types';
 import type { SystemPromptBuilder } from '../../src/bot/system-prompt-builder';
 import type { ToolRegistry } from '../../src/bot/tool-registry';
+import type { BotContext } from '../../src/bot/types';
 
 function createMockCtx(overrides?: Partial<BotContext>): BotContext {
   return {
@@ -19,7 +19,10 @@ function createMockCtx(overrides?: Partial<BotContext>): BotContext {
       },
     },
     logger: {
-      info: () => {}, warn: () => {}, error: () => {}, debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
       child: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }),
     },
     bots: new Map(),
@@ -30,7 +33,10 @@ function createMockCtx(overrides?: Partial<BotContext>): BotContext {
     },
     activityStream: { publish: () => {} },
     getBotLogger: () => ({
-      info: () => {}, warn: () => {}, error: () => {}, debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
     }),
     resolveBotId: (id: string) => id,
     ...overrides,
@@ -52,7 +58,7 @@ describe('CollaborationManager.drainPending', () => {
     const cm = new CollaborationManager(
       createMockCtx(),
       createMockSystemPromptBuilder(),
-      createMockToolRegistry(),
+      createMockToolRegistry()
     );
     await cm.drainPending('bot1'); // should not throw
   });
@@ -61,7 +67,7 @@ describe('CollaborationManager.drainPending', () => {
     const cm = new CollaborationManager(
       createMockCtx(),
       createMockSystemPromptBuilder(),
-      createMockToolRegistry(),
+      createMockToolRegistry()
     );
 
     // Access private pendingTasks to inject a tracked promise
@@ -70,8 +76,13 @@ describe('CollaborationManager.drainPending', () => {
 
     const taskSet = new Set<Promise<void>>();
     const task = new Promise<void>((resolve) => {
-      setTimeout(() => { resolved = true; resolve(); }, 50);
-    }).finally(() => { taskSet.delete(task); });
+      setTimeout(() => {
+        resolved = true;
+        resolve();
+      }, 50);
+    }).finally(() => {
+      taskSet.delete(task);
+    });
     taskSet.add(task);
     pendingTasks.set('bot1', taskSet);
 
@@ -84,7 +95,7 @@ describe('CollaborationManager.drainPending', () => {
     const cm = new CollaborationManager(
       createMockCtx(),
       createMockSystemPromptBuilder(),
-      createMockToolRegistry(),
+      createMockToolRegistry()
     );
 
     const pendingTasks = (cm as any).pendingTasks as Map<string, Set<Promise<void>>>;
@@ -92,7 +103,9 @@ describe('CollaborationManager.drainPending', () => {
     pendingTasks.set('bot1', taskSet);
 
     // Create a task that self-removes via .finally()
-    const task = Promise.resolve().finally(() => { taskSet.delete(task); });
+    const task = Promise.resolve().finally(() => {
+      taskSet.delete(task);
+    });
     taskSet.add(task);
 
     // Wait for the task to complete and clean up
@@ -104,7 +117,7 @@ describe('CollaborationManager.drainPending', () => {
     const cm = new CollaborationManager(
       createMockCtx(),
       createMockSystemPromptBuilder(),
-      createMockToolRegistry(),
+      createMockToolRegistry()
     );
 
     const pendingTasks = (cm as any).pendingTasks as Map<string, Set<Promise<void>>>;
@@ -112,7 +125,9 @@ describe('CollaborationManager.drainPending', () => {
 
     const failingTask = Promise.reject(new Error('test error'))
       .catch(() => {}) // suppress unhandled rejection
-      .finally(() => { taskSet.delete(failingTask); });
+      .finally(() => {
+        taskSet.delete(failingTask);
+      });
     taskSet.add(failingTask);
     pendingTasks.set('bot1', taskSet);
 

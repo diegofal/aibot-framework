@@ -1,11 +1,11 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
-import { skillsRoutes } from '../../../src/web/routes/skills';
-import type { SkillsRouteDeps } from '../../../src/web/routes/skills';
 import type { Config } from '../../../src/config';
 import type { Logger } from '../../../src/logger';
+import { skillsRoutes } from '../../../src/web/routes/skills';
+import type { SkillsRouteDeps } from '../../../src/web/routes/skills';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -25,7 +25,12 @@ function makeSkillRegistry(skills: any[] = [], enabledIds: string[] = [], availa
     get: (id: string) => skills.find((s: any) => s.id === id),
     getContext: (id: string) => ({ config: {} }),
     getEnabledIds: () => enabledSet,
-    listAvailable: async () => available ?? skills.map((s: any) => ({ id: s.id, manifest: { id: s.id, name: s.name, version: s.version, description: s.description } })),
+    listAvailable: async () =>
+      available ??
+      skills.map((s: any) => ({
+        id: s.id,
+        manifest: { id: s.id, name: s.name, version: s.version, description: s.description },
+      })),
   };
 }
 
@@ -70,7 +75,13 @@ const sampleManifest = {
   name: 'Test Skill',
   version: '1.0.0',
   description: 'A test skill',
-  tools: [{ name: 'test_tool', description: 'A test tool', parameters: { type: 'object', properties: {} } }],
+  tools: [
+    {
+      name: 'test_tool',
+      description: 'A test tool',
+      parameters: { type: 'object', properties: {} },
+    },
+  ],
 };
 
 const sampleHandler = 'export const handlers = { test_tool: async () => ({ success: true }) };';
@@ -88,10 +99,27 @@ describe('skills routes', () => {
   describe('GET /', () => {
     test('returns merged built-in + external list with enabled field', async () => {
       const builtInSkills = [
-        { id: 'calibrate', name: 'Soul Calibration', version: '1.0.0', description: 'Calibrate', commands: { calibrate: {} }, jobs: [] },
+        {
+          id: 'calibrate',
+          name: 'Soul Calibration',
+          version: '1.0.0',
+          description: 'Calibrate',
+          commands: { calibrate: {} },
+          jobs: [],
+        },
       ];
       const externalSkills = [
-        { manifest: { id: 'github', name: 'GitHub', version: '2.0.0', description: 'GitHub integration', tools: [{ name: 't1' }, { name: 't2' }] }, dir: '/some/dir', warnings: [] },
+        {
+          manifest: {
+            id: 'github',
+            name: 'GitHub',
+            version: '2.0.0',
+            description: 'GitHub integration',
+            tools: [{ name: 't1' }, { name: 't2' }],
+          },
+          dir: '/some/dir',
+          warnings: [],
+        },
       ];
 
       const app = makeApp({
@@ -117,7 +145,15 @@ describe('skills routes', () => {
     test('returns disabled built-in skills from listAvailable', async () => {
       // No loaded skills, but available via manifest
       const available = [
-        { id: 'twitter', manifest: { id: 'twitter', name: 'Twitter', version: '1.0.0', description: 'Twitter integration' } },
+        {
+          id: 'twitter',
+          manifest: {
+            id: 'twitter',
+            name: 'Twitter',
+            version: '1.0.0',
+            description: 'Twitter integration',
+          },
+        },
       ];
 
       const app = makeApp({
@@ -136,7 +172,17 @@ describe('skills routes', () => {
 
     test('returns external skills with botName', async () => {
       const externalSkills = [
-        { manifest: { id: 'daily-digest', name: 'Daily Digest', version: '1.0.0', tools: [{ name: 'digest' }] }, dir: '/prod/mybot/src/skills/daily-digest', warnings: [], botName: 'mybot' },
+        {
+          manifest: {
+            id: 'daily-digest',
+            name: 'Daily Digest',
+            version: '1.0.0',
+            tools: [{ name: 'digest' }],
+          },
+          dir: '/prod/mybot/src/skills/daily-digest',
+          warnings: [],
+          botName: 'mybot',
+        },
       ];
 
       const app = makeApp({
@@ -160,7 +206,15 @@ describe('skills routes', () => {
   describe('GET /:id', () => {
     test('returns built-in skill detail', async () => {
       const skills = [
-        { id: 'calibrate', name: 'Soul Calibration', version: '1.0.0', description: 'Calibrate', commands: { start: {} }, jobs: [{ id: 'j1', schedule: '0 0 * * *' }], onMessage: null },
+        {
+          id: 'calibrate',
+          name: 'Soul Calibration',
+          version: '1.0.0',
+          description: 'Calibrate',
+          commands: { start: {} },
+          jobs: [{ id: 'j1', schedule: '0 0 * * *' }],
+          onMessage: null,
+        },
       ];
       const app = makeApp({ skillRegistry: makeSkillRegistry(skills, ['calibrate']) as any });
 
@@ -180,7 +234,13 @@ describe('skills routes', () => {
             name: 'GitHub',
             version: '2.0.0',
             description: 'GitHub tools',
-            tools: [{ name: 'repo_list', description: 'List repos', parameters: { type: 'object', properties: {} } }],
+            tools: [
+              {
+                name: 'repo_list',
+                description: 'List repos',
+                parameters: { type: 'object', properties: {} },
+              },
+            ],
             requires: { bins: ['gh'] },
             config: { token: 'xxx' },
           },
@@ -307,7 +367,8 @@ describe('skills routes', () => {
       const app = makeApp({ botManager: makeBotManager(extSkills) as any });
 
       const updatedManifest = { ...sampleManifest, name: 'Updated Skill' };
-      const updatedHandler = 'export const handlers = { test_tool: async () => ({ success: false }) };';
+      const updatedHandler =
+        'export const handlers = { test_tool: async () => ({ success: false }) };';
 
       const res = await app.request('http://localhost/api/skills/updatable', {
         method: 'PUT',
@@ -395,7 +456,9 @@ describe('skills routes', () => {
       writeFileSync(join(outsideDir, 'skill.json'), JSON.stringify(sampleManifest));
       writeFileSync(join(outsideDir, 'index.ts'), sampleHandler);
 
-      const extSkills = [{ manifest: { ...sampleManifest, id: 'rogue' }, dir: outsideDir, warnings: [] }];
+      const extSkills = [
+        { manifest: { ...sampleManifest, id: 'rogue' }, dir: outsideDir, warnings: [] },
+      ];
       const app = makeApp({ botManager: makeBotManager(extSkills) as any });
 
       const res = await app.request('http://localhost/api/skills/rogue', {

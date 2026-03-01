@@ -1,20 +1,20 @@
-import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createCoreMemoryManager, type CoreMemoryManager } from '../../src/memory/core-memory';
+import { afterAll, beforeEach, describe, expect, it } from 'bun:test';
+import type { AgentRegistry } from '../../src/bot/agent-registry';
 import { MemoryFlusher, type ScoredFact } from '../../src/bot/memory-flush';
 import { SystemPromptBuilder } from '../../src/bot/system-prompt-builder';
 import { ToolRegistry } from '../../src/bot/tool-registry';
 import type { BotContext, ChatMessage } from '../../src/bot/types';
 import type { BotConfig, Config } from '../../src/config';
+import type { Logger } from '../../src/logger';
 import type { MemoryManager } from '../../src/memory';
-import type { AgentRegistry } from '../../src/bot/agent-registry';
+import { type CoreMemoryManager, createCoreMemoryManager } from '../../src/memory/core-memory';
 import type { OllamaClient } from '../../src/ollama';
 import type { SoulLoader } from '../../src/soul-loader';
-import type { Logger } from '../../src/logger';
 
 /**
  * Integration tests for Core Memory → MemoryFlusher → SystemPromptBuilder pipeline
- * 
+ *
  * This test verifies:
  * 1. CoreMemoryManager stores facts with importance correctly
  * 2. MemoryFlusher.flushWithScoring extracts and scores facts from conversation history
@@ -37,13 +37,14 @@ describe('Core Memory Pipeline Integration', () => {
     db.run(`
       CREATE TABLE IF NOT EXISTS core_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id TEXT NOT NULL DEFAULT 'default',
         category TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         importance INTEGER DEFAULT 5,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(category, key)
+        UNIQUE(bot_id, category, key)
       )
     `);
 
@@ -70,7 +71,11 @@ describe('Core Memory Pipeline Integration', () => {
       humanizer: { enabled: false },
       memory: { vectorStore: { enabled: false } },
       soul: { dir: '/tmp/test-soul' },
-      conversation: { systemPrompt: 'You are a helpful assistant.', temperature: 0.7, maxHistory: 20 },
+      conversation: {
+        systemPrompt: 'You are a helpful assistant.',
+        temperature: 0.7,
+        maxHistory: 20,
+      },
     } as Config;
 
     mockBotConfig = {
@@ -88,10 +93,11 @@ describe('Core Memory Pipeline Integration', () => {
       memoryManager: {
         getCoreMemory: () => coreMemory,
       } as MemoryManager,
-      getSoulLoader: () => ({
-        composeSystemPrompt: () => 'Base system prompt',
-        appendDailyMemory: () => {},
-      } as unknown as SoulLoader),
+      getSoulLoader: () =>
+        ({
+          composeSystemPrompt: () => 'Base system prompt',
+          appendDailyMemory: () => {},
+        }) as unknown as SoulLoader,
       getActiveModel: () => 'test-model',
       defaultSoulLoader: {} as SoulLoader,
       runningBots: new Set(),
@@ -118,8 +124,18 @@ describe('Core Memory Pipeline Integration', () => {
         { category: 'identity', key: 'name', value: 'AutoForja', importance: 10 },
         { category: 'relationships', key: 'user_diego', value: 'Diego likes Rust', importance: 8 },
         { category: 'preferences', key: 'tone', value: 'Technical but digestible', importance: 7 },
-        { category: 'goals', key: 'pipeline_test', value: 'Write integration tests', importance: 9 },
-        { category: 'constraints', key: 'no_secrets', value: 'Never share credentials', importance: 10 },
+        {
+          category: 'goals',
+          key: 'pipeline_test',
+          value: 'Write integration tests',
+          importance: 9,
+        },
+        {
+          category: 'constraints',
+          key: 'no_secrets',
+          value: 'Never share credentials',
+          importance: 10,
+        },
       ];
 
       for (const tc of testCases) {
@@ -130,21 +146,21 @@ describe('Core Memory Pipeline Integration', () => {
       for (const tc of testCases) {
         const entry = await coreMemory.get(tc.category, tc.key);
         expect(entry).not.toBeNull();
-        expect(entry!.value).toBe(tc.value);
-        expect(entry!.importance).toBe(tc.importance);
+        expect(entry?.value).toBe(tc.value);
+        expect(entry?.importance).toBe(tc.importance);
       }
     });
 
     it('should reject invalid categories', async () => {
-      await expect(
-        coreMemory.set('invalid_category', 'key', 'value', 5)
-      ).rejects.toThrow(/Invalid category/);
+      await expect(coreMemory.set('invalid_category', 'key', 'value', 5)).rejects.toThrow(
+        /Invalid category/
+      );
     });
 
     it('should reject importance outside 1-10 range', async () => {
-      await expect(
-        coreMemory.set('identity', 'test_key', 'value', 15)
-      ).rejects.toThrow(/Importance must be between 1 and 10/);
+      await expect(coreMemory.set('identity', 'test_key', 'value', 15)).rejects.toThrow(
+        /Importance must be between 1 and 10/
+      );
     });
 
     it('should list entries filtered by importance', async () => {
@@ -179,7 +195,9 @@ describe('Core Memory Pipeline Integration', () => {
       ]);
 
       // Access private method via type assertion for testing
-      const parsed = (memoryFlusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }).parseScoredFacts(jsonResponse);
+      const parsed = (
+        memoryFlusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }
+      ).parseScoredFacts(jsonResponse);
 
       expect(parsed.length).toBe(2);
       expect(parsed[0].fact).toBe('User prefers concise answers');
@@ -193,7 +211,9 @@ describe('Core Memory Pipeline Integration', () => {
 [5] User works in Python
 [3] User had coffee today`;
 
-      const parsed = (memoryFlusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }).parseScoredFacts(bracketResponse);
+      const parsed = (
+        memoryFlusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }
+      ).parseScoredFacts(bracketResponse);
 
       expect(parsed.length).toBe(3);
       expect(parsed[0].fact).toBe('User likes dark mode');
@@ -207,10 +227,12 @@ describe('Core Memory Pipeline Integration', () => {
         { fact: 'Very trivial', importance: -5, category: 'general' },
       ]);
 
-      const parsed = (memoryFlusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }).parseScoredFacts(response);
+      const parsed = (
+        memoryFlusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }
+      ).parseScoredFacts(response);
 
       expect(parsed[0].importance).toBe(10); // Clamped to max
-      expect(parsed[1].importance).toBe(1);  // Clamped to min
+      expect(parsed[1].importance).toBe(1); // Clamped to min
     });
 
     it('should validate category enum values', () => {
@@ -220,11 +242,13 @@ describe('Core Memory Pipeline Integration', () => {
         { fact: 'Valid identity', importance: 8, category: 'identity' },
       ]);
 
-      const parsed = (memoryFlusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }).parseScoredFacts(response);
+      const parsed = (
+        memoryFlusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }
+      ).parseScoredFacts(response);
 
       expect(parsed.length).toBe(2); // Invalid category filtered out
-      expect(parsed.some(p => p.fact === 'Valid goal')).toBe(true);
-      expect(parsed.some(p => p.fact === 'Valid identity')).toBe(true);
+      expect(parsed.some((p) => p.fact === 'Valid goal')).toBe(true);
+      expect(parsed.some((p) => p.fact === 'Valid identity')).toBe(true);
     });
 
     it('should generate stable fact keys', () => {
@@ -234,8 +258,12 @@ describe('Core Memory Pipeline Integration', () => {
         category: 'relationships',
       };
 
-      const key1 = (memoryFlusher as unknown as { generateFactKey: (f: ScoredFact) => string }).generateFactKey(fact);
-      const key2 = (memoryFlusher as unknown as { generateFactKey: (f: ScoredFact) => string }).generateFactKey(fact);
+      const key1 = (
+        memoryFlusher as unknown as { generateFactKey: (f: ScoredFact) => string }
+      ).generateFactKey(fact);
+      const key2 = (
+        memoryFlusher as unknown as { generateFactKey: (f: ScoredFact) => string }
+      ).generateFactKey(fact);
 
       expect(key1).toBe(key2); // Stable
       expect(key1.length).toBeLessThanOrEqual(50);
@@ -245,9 +273,9 @@ describe('Core Memory Pipeline Integration', () => {
 
   describe('Stage 3: SystemPromptBuilder renders core memories', () => {
     it('should include core memory block in system prompt', async () => {
-      // Setup: Store some core memories
-      await coreMemory.set('identity', 'name', 'AutoForja', 10);
-      await coreMemory.set('preferences', 'style', 'Technical but digestible', 7);
+      // Setup: Store some core memories (botId must match the one used in build())
+      await coreMemory.set('identity', 'name', 'AutoForja', 10, 'test-bot');
+      await coreMemory.set('preferences', 'style', 'Technical but digestible', 7, 'test-bot');
 
       const prompt = systemPromptBuilder.build({
         mode: 'conversation',
@@ -263,8 +291,8 @@ describe('Core Memory Pipeline Integration', () => {
 
     it('should not include core memory when importance is below threshold', async () => {
       // Only low importance memories (using valid category 'goals')
-      await coreMemory.set('goals', 'trivia', 'Some random fact', 3);
-      await coreMemory.set('goals', 'minor', 'Another unimportant thing', 2);
+      await coreMemory.set('goals', 'trivia', 'Some random fact', 3, 'test-bot');
+      await coreMemory.set('goals', 'minor', 'Another unimportant thing', 2, 'test-bot');
 
       const prompt = systemPromptBuilder.build({
         mode: 'conversation',
@@ -284,7 +312,7 @@ describe('Core Memory Pipeline Integration', () => {
       } as unknown as BotContext;
 
       const builder = new SystemPromptBuilder(ctxWithoutCoreMemory, toolRegistry);
-      
+
       const prompt = builder.build({
         mode: 'conversation',
         botId: 'test-bot',
@@ -302,7 +330,10 @@ describe('Core Memory Pipeline Integration', () => {
       // Stage 1: Simulate conversation history
       const history: ChatMessage[] = [
         { role: 'user', content: 'Hi, my name is Diego and I love Rust programming' },
-        { role: 'assistant', content: 'Nice to meet you Diego! Rust is a great language for systems programming.' },
+        {
+          role: 'assistant',
+          content: 'Nice to meet you Diego! Rust is a great language for systems programming.',
+        },
         { role: 'user', content: 'Yes, I also prefer concise technical answers without fluff' },
       ];
 
@@ -316,12 +347,15 @@ describe('Core Memory Pipeline Integration', () => {
 
       // Store facts via CoreMemoryManager (simulating flushWithScoring storage)
       for (const fact of simulatedFacts) {
-        const key = `user_${fact.fact.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 30)}`;
-        await coreMemory.set(fact.category, key, fact.fact, fact.importance);
+        const key = `user_${fact.fact
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, '_')
+          .slice(0, 30)}`;
+        await coreMemory.set(fact.category, key, fact.fact, fact.importance, 'test-bot');
       }
 
       // Verify storage
-      const allMemories = await coreMemory.list();
+      const allMemories = await coreMemory.list(undefined, undefined, 'test-bot');
       expect(allMemories.length).toBe(3);
 
       // Stage 3: Verify SystemPromptBuilder includes these memories
@@ -345,12 +379,12 @@ describe('Core Memory Pipeline Integration', () => {
 
     it('should prioritize high importance memories in prompt rendering', async () => {
       // Store many memories with varying importance
-      await coreMemory.set('relationships', 'user_critical', 'Critical user info', 10);
-      await coreMemory.set('relationships', 'user_important', 'Important user info', 8);
-      await coreMemory.set('relationships', 'user_normal', 'Normal user info', 5);
-      await coreMemory.set('relationships', 'user_minor1', 'Minor info 1', 4);
-      await coreMemory.set('relationships', 'user_minor2', 'Minor info 2', 3);
-      await coreMemory.set('relationships', 'user_minor3', 'Minor info 3', 2);
+      await coreMemory.set('relationships', 'user_critical', 'Critical user info', 10, 'test-bot');
+      await coreMemory.set('relationships', 'user_important', 'Important user info', 8, 'test-bot');
+      await coreMemory.set('relationships', 'user_normal', 'Normal user info', 5, 'test-bot');
+      await coreMemory.set('relationships', 'user_minor1', 'Minor info 1', 4, 'test-bot');
+      await coreMemory.set('relationships', 'user_minor2', 'Minor info 2', 3, 'test-bot');
+      await coreMemory.set('relationships', 'user_minor3', 'Minor info 3', 2, 'test-bot');
 
       const prompt = systemPromptBuilder.build({
         mode: 'conversation',
@@ -371,18 +405,92 @@ describe('Core Memory Pipeline Integration', () => {
 
     it('should update existing memories without duplicates', async () => {
       // Store initial fact
-      await coreMemory.set('relationships', 'user_pref', 'User likes Python', 7);
-      
-      // Update same key with new value
-      await coreMemory.set('relationships', 'user_pref', 'User switched to Rust', 9);
+      await coreMemory.set('relationships', 'user_pref', 'User likes Python', 7, 'test-bot');
 
-      const entry = await coreMemory.get('relationships', 'user_pref');
-      expect(entry!.value).toBe('User switched to Rust');
-      expect(entry!.importance).toBe(9);
+      // Update same key with new value
+      await coreMemory.set('relationships', 'user_pref', 'User switched to Rust', 9, 'test-bot');
+
+      const entry = await coreMemory.get('relationships', 'user_pref', 'test-bot');
+      expect(entry?.value).toBe('User switched to Rust');
+      expect(entry?.importance).toBe(9);
 
       // Verify only one entry exists
-      const all = await coreMemory.list('relationships');
+      const all = await coreMemory.list('relationships', undefined, 'test-bot');
       expect(all.length).toBe(1);
+    });
+  });
+
+  describe('Per-Bot Memory Isolation', () => {
+    it('should isolate core memory entries by botId', async () => {
+      // Store memories for two different bots
+      await coreMemory.set('identity', 'name', 'BotAlpha', 10, 'bot-alpha');
+      await coreMemory.set('identity', 'name', 'BotBeta', 10, 'bot-beta');
+      await coreMemory.set('goals', 'mission', 'Help with code', 8, 'bot-alpha');
+      await coreMemory.set('goals', 'mission', 'Help with writing', 8, 'bot-beta');
+
+      // Search with botId should only return that bot's entries
+      const alphaResults = await coreMemory.search('name', undefined, 10, 'bot-alpha');
+      expect(alphaResults.length).toBe(1);
+      expect(alphaResults[0].value).toBe('BotAlpha');
+
+      const betaResults = await coreMemory.search('mission', undefined, 10, 'bot-beta');
+      expect(betaResults.length).toBe(1);
+      expect(betaResults[0].value).toBe('Help with writing');
+    });
+
+    it('should allow same category+key for different bots', async () => {
+      await coreMemory.set('identity', 'style', 'Formal', 7, 'bot-a');
+      await coreMemory.set('identity', 'style', 'Casual', 7, 'bot-b');
+
+      const a = await coreMemory.get('identity', 'style', 'bot-a');
+      const b = await coreMemory.get('identity', 'style', 'bot-b');
+
+      expect(a?.value).toBe('Formal');
+      expect(b?.value).toBe('Casual');
+    });
+
+    it('should render system prompt only for the specified bot', async () => {
+      await coreMemory.set('identity', 'name', 'AlphaBot', 10, 'bot-alpha');
+      await coreMemory.set('identity', 'name', 'BetaBot', 10, 'bot-beta');
+      await coreMemory.set('preferences', 'tone', 'Friendly', 8, 'bot-alpha');
+
+      const alphaPrompt = coreMemory.renderForSystemPrompt(800, 'bot-alpha');
+      expect(alphaPrompt).toContain('AlphaBot');
+      expect(alphaPrompt).toContain('Friendly');
+      expect(alphaPrompt).not.toContain('BetaBot');
+
+      const betaPrompt = coreMemory.renderForSystemPrompt(800, 'bot-beta');
+      expect(betaPrompt).toContain('BetaBot');
+      expect(betaPrompt).not.toContain('AlphaBot');
+    });
+
+    it('should list entries only for the specified bot', async () => {
+      await coreMemory.set('goals', 'g1', 'Goal A', 8, 'bot-a');
+      await coreMemory.set('goals', 'g2', 'Goal B', 6, 'bot-a');
+      await coreMemory.set('goals', 'g1', 'Goal C', 9, 'bot-b');
+
+      const aGoals = await coreMemory.list('goals', undefined, 'bot-a');
+      expect(aGoals.length).toBe(2);
+
+      const bGoals = await coreMemory.list('goals', undefined, 'bot-b');
+      expect(bGoals.length).toBe(1);
+      expect(bGoals[0].value).toBe('Goal C');
+    });
+
+    it('should delete entries only for the specified bot', async () => {
+      await coreMemory.set('preferences', 'lang', 'ES', 5, 'bot-a');
+      await coreMemory.set('preferences', 'lang', 'EN', 5, 'bot-b');
+
+      const deleted = await coreMemory.delete('preferences', 'lang', 'bot-a');
+      expect(deleted).toBe(true);
+
+      // bot-b entry should still exist
+      const bEntry = await coreMemory.get('preferences', 'lang', 'bot-b');
+      expect(bEntry?.value).toBe('EN');
+
+      // bot-a entry should be gone
+      const aEntry = await coreMemory.get('preferences', 'lang', 'bot-a');
+      expect(aEntry).toBeNull();
     });
   });
 });

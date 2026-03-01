@@ -1,6 +1,6 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { createLoopDetector } from '../src/core/loop-detector';
-import { runToolLoop, type ToolCallingStrategy } from '../src/core/tool-runner';
+import { type ToolCallingStrategy, runToolLoop } from '../src/core/tool-runner';
 
 const noopLogger = {
   debug: () => {},
@@ -21,11 +21,13 @@ describe('Loop detector integration with runToolLoop', () => {
         chatCallCount++;
         return {
           content: '',
-          toolCalls: [{
-            id: `call_${chatCallCount}`,
-            type: 'function' as const,
-            function: { name: 'test_tool', arguments: { key: 'same_value' } },
-          }],
+          toolCalls: [
+            {
+              id: `call_${chatCallCount}`,
+              type: 'function' as const,
+              function: { name: 'test_tool', arguments: { key: 'same_value' } },
+            },
+          ],
         };
       },
     };
@@ -35,20 +37,27 @@ describe('Loop detector integration with runToolLoop', () => {
       content: 'same result',
     });
 
-    const result = await runToolLoop(mockStrategy, [{ role: 'user', content: 'test' }], {
-      maxRounds: 10,
-      tools: [{
-        type: 'function' as const,
-        function: {
-          name: 'test_tool',
-          description: 'test',
-          parameters: { type: 'object', properties: {} },
-        },
-      }],
-      toolExecutor,
-      logger: noopLogger,
-      loopDetector: createLoopDetector(10),
-    }, {});
+    const result = await runToolLoop(
+      mockStrategy,
+      [{ role: 'user', content: 'test' }],
+      {
+        maxRounds: 10,
+        tools: [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'test_tool',
+              description: 'test',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        toolExecutor,
+        logger: noopLogger,
+        loopDetector: createLoopDetector(10),
+      },
+      {}
+    );
 
     expect(result).toContain('Loop stopped');
     expect(chatCallCount).toBeLessThanOrEqual(5);
@@ -62,11 +71,13 @@ describe('Loop detector integration with runToolLoop', () => {
         chatCallCount++;
         return {
           content: '',
-          toolCalls: [{
-            id: `call_${chatCallCount}`,
-            type: 'function' as const,
-            function: { name: 'test_tool', arguments: { iteration: chatCallCount } },
-          }],
+          toolCalls: [
+            {
+              id: `call_${chatCallCount}`,
+              type: 'function' as const,
+              function: { name: 'test_tool', arguments: { iteration: chatCallCount } },
+            },
+          ],
         };
       },
     };
@@ -76,20 +87,27 @@ describe('Loop detector integration with runToolLoop', () => {
       content: 'identical result every time',
     });
 
-    const result = await runToolLoop(mockStrategy, [{ role: 'user', content: 'test' }], {
-      maxRounds: 10,
-      tools: [{
-        type: 'function' as const,
-        function: {
-          name: 'test_tool',
-          description: 'test',
-          parameters: { type: 'object', properties: {} },
-        },
-      }],
-      toolExecutor,
-      logger: noopLogger,
-      loopDetector: createLoopDetector(10),
-    }, {});
+    const result = await runToolLoop(
+      mockStrategy,
+      [{ role: 'user', content: 'test' }],
+      {
+        maxRounds: 10,
+        tools: [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'test_tool',
+              description: 'test',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        toolExecutor,
+        logger: noopLogger,
+        loopDetector: createLoopDetector(10),
+      },
+      {}
+    );
 
     expect(result).toContain('Loop stopped');
     expect(chatCallCount).toBeLessThanOrEqual(4);
@@ -104,11 +122,13 @@ describe('Loop detector integration with runToolLoop', () => {
         if (chatCallCount <= 2) {
           return {
             content: '',
-            toolCalls: [{
-              id: `call_${chatCallCount}`,
-              type: 'function' as const,
-              function: { name: 'test_tool', arguments: { unique: `value_${chatCallCount}` } },
-            }],
+            toolCalls: [
+              {
+                id: `call_${chatCallCount}`,
+                type: 'function' as const,
+                function: { name: 'test_tool', arguments: { unique: `value_${chatCallCount}` } },
+              },
+            ],
           };
         }
         return { content: 'Task completed successfully' };
@@ -121,20 +141,27 @@ describe('Loop detector integration with runToolLoop', () => {
       return { success: true, content: `unique result ${toolCallCount}` };
     };
 
-    const result = await runToolLoop(mockStrategy, [{ role: 'user', content: 'test' }], {
-      maxRounds: 10,
-      tools: [{
-        type: 'function' as const,
-        function: {
-          name: 'test_tool',
-          description: 'test',
-          parameters: { type: 'object', properties: {} },
-        },
-      }],
-      toolExecutor,
-      logger: noopLogger,
-      loopDetector: createLoopDetector(10),
-    }, {});
+    const result = await runToolLoop(
+      mockStrategy,
+      [{ role: 'user', content: 'test' }],
+      {
+        maxRounds: 10,
+        tools: [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'test_tool',
+              description: 'test',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        toolExecutor,
+        logger: noopLogger,
+        loopDetector: createLoopDetector(10),
+      },
+      {}
+    );
 
     expect(result).toBe('Task completed successfully');
     expect(result).not.toContain('Loop stopped');
@@ -150,9 +177,21 @@ describe('Loop detector integration with runToolLoop', () => {
         return {
           content: '',
           toolCalls: [
-            { id: `a_${chatCallCount}`, type: 'function' as const, function: { name: 'tool_a', arguments: { v: chatCallCount } } },
-            { id: `b_${chatCallCount}`, type: 'function' as const, function: { name: 'tool_b', arguments: { v: chatCallCount } } },
-            { id: `c_${chatCallCount}`, type: 'function' as const, function: { name: 'tool_c', arguments: { v: chatCallCount } } },
+            {
+              id: `a_${chatCallCount}`,
+              type: 'function' as const,
+              function: { name: 'tool_a', arguments: { v: chatCallCount } },
+            },
+            {
+              id: `b_${chatCallCount}`,
+              type: 'function' as const,
+              function: { name: 'tool_b', arguments: { v: chatCallCount } },
+            },
+            {
+              id: `c_${chatCallCount}`,
+              type: 'function' as const,
+              function: { name: 'tool_c', arguments: { v: chatCallCount } },
+            },
           ],
         };
       },
@@ -164,17 +203,43 @@ describe('Loop detector integration with runToolLoop', () => {
       return { success: true, content: `result_${toolCallCount}` };
     };
 
-    const result = await runToolLoop(mockStrategy, [{ role: 'user', content: 'test' }], {
-      maxRounds,
-      tools: [
-        { type: 'function' as const, function: { name: 'tool_a', description: 'a', parameters: { type: 'object', properties: {} } } },
-        { type: 'function' as const, function: { name: 'tool_b', description: 'b', parameters: { type: 'object', properties: {} } } },
-        { type: 'function' as const, function: { name: 'tool_c', description: 'c', parameters: { type: 'object', properties: {} } } },
-      ],
-      toolExecutor,
-      logger: noopLogger,
-      loopDetector: createLoopDetector(maxRounds),
-    }, {});
+    const result = await runToolLoop(
+      mockStrategy,
+      [{ role: 'user', content: 'test' }],
+      {
+        maxRounds,
+        tools: [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'tool_a',
+              description: 'a',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+          {
+            type: 'function' as const,
+            function: {
+              name: 'tool_b',
+              description: 'b',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+          {
+            type: 'function' as const,
+            function: {
+              name: 'tool_c',
+              description: 'c',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        toolExecutor,
+        logger: noopLogger,
+        loopDetector: createLoopDetector(maxRounds),
+      },
+      {}
+    );
 
     expect(result).toContain('Loop stopped');
     expect(result).toContain('Exceeded');
@@ -182,14 +247,16 @@ describe('Loop detector integration with runToolLoop', () => {
 
   test('without loopDetector, loop exhausts all rounds', async () => {
     let chatCallCount = 0;
-    const toolDefs = [{
-      type: 'function' as const,
-      function: {
-        name: 'test_tool',
-        description: 'test',
-        parameters: { type: 'object', properties: {} },
+    const toolDefs = [
+      {
+        type: 'function' as const,
+        function: {
+          name: 'test_tool',
+          description: 'test',
+          parameters: { type: 'object', properties: {} },
+        },
       },
-    }];
+    ];
 
     const mockStrategy: ToolCallingStrategy = {
       async chat(_messages, opts) {
@@ -198,11 +265,13 @@ describe('Loop detector integration with runToolLoop', () => {
         if (hasTools) {
           return {
             content: '',
-            toolCalls: [{
-              id: `call_${chatCallCount}`,
-              type: 'function' as const,
-              function: { name: 'test_tool', arguments: { key: 'same_value' } },
-            }],
+            toolCalls: [
+              {
+                id: `call_${chatCallCount}`,
+                type: 'function' as const,
+                function: { name: 'test_tool', arguments: { key: 'same_value' } },
+              },
+            ],
           };
         }
         return { content: 'Exhaustion summary' };
@@ -214,13 +283,18 @@ describe('Loop detector integration with runToolLoop', () => {
       content: 'same result',
     });
 
-    const result = await runToolLoop(mockStrategy, [{ role: 'user', content: 'test' }], {
-      maxRounds: 3,
-      tools: toolDefs,
-      toolExecutor,
-      logger: noopLogger,
-      // NO loopDetector
-    }, { tools: toolDefs });
+    const result = await runToolLoop(
+      mockStrategy,
+      [{ role: 'user', content: 'test' }],
+      {
+        maxRounds: 3,
+        tools: toolDefs,
+        toolExecutor,
+        logger: noopLogger,
+        // NO loopDetector
+      },
+      { tools: toolDefs }
+    );
 
     expect(result).toBe('Exhaustion summary');
     expect(chatCallCount).toBe(4); // 3 tool rounds + 1 final
@@ -251,7 +325,7 @@ describe('OllamaClient fallback recursion prevention', () => {
   function makeClient(primary: string, fallbacks: string[]) {
     return new OllamaClient(
       { baseUrl: 'http://127.0.0.1:99999', timeout: 5_000, models: { primary, fallbacks } },
-      noopLogger,
+      noopLogger
     );
   }
 
@@ -263,7 +337,9 @@ describe('OllamaClient fallback recursion prevention', () => {
 
   test('chat does not recurse infinitely when all models fail', async () => {
     const client = makeClient('bad-primary', ['bad-fallback']);
-    await expect(client.chat([{ role: 'user', content: 'test' }])).rejects.toThrow('Failed to chat');
+    await expect(client.chat([{ role: 'user', content: 'test' }])).rejects.toThrow(
+      'Failed to chat'
+    );
   });
 
   test('generate with _skipFallbacks throws immediately without trying fallbacks', async () => {
@@ -292,7 +368,9 @@ describe('OllamaClient fallback recursion prevention', () => {
     };
     try {
       const client = makeClient('model-a', ['model-b']);
-      await expect(client.chat([{ role: 'user', content: 'hi' }], { _skipFallbacks: true })).rejects.toThrow();
+      await expect(
+        client.chat([{ role: 'user', content: 'hi' }], { _skipFallbacks: true })
+      ).rejects.toThrow();
       expect(fetchCallCount).toBe(1);
     } finally {
       globalThis.fetch = origFetch;

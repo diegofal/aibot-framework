@@ -105,7 +105,14 @@ export function buildImprovementPrompt(input: {
   identity: string;
   soul: string;
   motivations: string;
-  analysis: { consistency: string; people: string; gaps: string; patterns: string; alignment: string; breadth: string };
+  analysis: {
+    consistency: string;
+    people: string;
+    gaps: string;
+    patterns: string;
+    alignment: string;
+    breadth: string;
+  };
   trigger: 'manual' | 'cron';
   date: string;
   discoveries?: string | null;

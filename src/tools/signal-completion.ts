@@ -1,5 +1,5 @@
-import type { Tool, ToolDefinition, ToolResult } from './types';
 import type { Logger } from '../logger';
+import type { Tool, ToolDefinition, ToolResult } from './types';
 
 /**
  * Signal that the single deliverable has been completed.
@@ -41,7 +41,8 @@ This is NOT for:
           },
           complete: {
             type: 'boolean',
-            description: 'true = deliverable is fully complete, session should end. false = partial progress, should continue.',
+            description:
+              'true = deliverable is fully complete, session should end. false = partial progress, should continue.',
           },
         },
         required: ['summary', 'complete'],
@@ -84,12 +85,11 @@ This is NOT for:
         success: true,
         content: `✅ Deliverable complete: ${summary}\n\nSession will end now.`,
       };
-    } else {
-      return {
-        success: true,
-        content: `⏳ Partial progress: ${summary}\n\nContinuing with remaining work...`,
-      };
     }
+    return {
+      success: true,
+      content: `⏳ Partial progress: ${summary}\n\nContinuing with remaining work...`,
+    };
   }
 }
 

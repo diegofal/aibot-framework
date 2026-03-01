@@ -3,9 +3,9 @@
  * Tests the full flow: parse → validate
  */
 
-import { describe, it, expect } from 'bun:test';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { SkillMdParser } from '../../../src/core/skill-md-adapter/parser';
 import { SkillValidator } from '../../../src/core/skill-md-adapter/validator';
 

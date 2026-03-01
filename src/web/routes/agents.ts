@@ -1,11 +1,11 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import { resolveAgentConfig, type BotConfig, type Config } from '../../config';
+import { type BotConfig, type Config, resolveAgentConfig } from '../../config';
 import type { Logger } from '../../logger';
-import { generateSoul } from '../../soul-generator';
 import { backupSoulFile } from '../../soul';
+import { generateSoul } from '../../soul-generator';
 
 export function agentsRoutes(deps: {
   config: Config;
@@ -104,7 +104,8 @@ export function agentsRoutes(deps: {
     if (body.allowedUsers !== undefined) bot.allowedUsers = body.allowedUsers;
     if (body.mentionPatterns !== undefined) bot.mentionPatterns = body.mentionPatterns;
     if (body.disabledTools !== undefined) bot.disabledTools = body.disabledTools;
-    if ((body as any).disabledSkills !== undefined) bot.disabledSkills = (body as any).disabledSkills;
+    if ((body as any).disabledSkills !== undefined)
+      bot.disabledSkills = (body as any).disabledSkills;
 
     // Per-agent override fields (undefined = clear override, use global default)
     if ('model' in body) bot.model = body.model || undefined;
@@ -137,7 +138,11 @@ export function agentsRoutes(deps: {
 
     persistBots(deps.configPath, deps.config.bots);
 
-    return c.json({ ...bot, token: maskToken(bot.token), running: deps.botManager.isRunning(bot.id) });
+    return c.json({
+      ...bot,
+      token: maskToken(bot.token),
+      running: deps.botManager.isRunning(bot.id),
+    });
   });
 
   // Delete agent
@@ -295,7 +300,7 @@ export function agentsRoutes(deps: {
         {
           soulDir: deps.config.soul.dir,
           logger: deps.logger,
-        },
+        }
       );
       return c.json(result);
     } catch (err: any) {
@@ -353,7 +358,7 @@ export function agentsRoutes(deps: {
 function maskToken(token: string): string {
   if (!token || token.startsWith('${')) return token;
   if (token.length <= 8) return '****';
-  return token.slice(0, 4) + '****' + token.slice(-4);
+  return `${token.slice(0, 4)}****${token.slice(-4)}`;
 }
 
 /**
@@ -363,5 +368,5 @@ function maskToken(token: string): string {
 function persistBots(configPath: string, bots: BotConfig[]): void {
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   raw.bots = bots;
-  writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }

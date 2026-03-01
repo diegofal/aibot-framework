@@ -1,10 +1,10 @@
-import { describe, test, expect, vi, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, test, vi } from 'bun:test';
 import {
+  type GoalOperation,
+  applyGoalOperations,
+  computeCyclesUntilStrategist,
   parseStrategistResult,
   shouldRunStrategist,
-  computeCyclesUntilStrategist,
-  applyGoalOperations,
-  type GoalOperation,
 } from '../../src/bot/agent-strategist';
 import { parseGoals, serializeGoals } from '../../src/tools/goals';
 
@@ -37,27 +37,25 @@ describe('parseStrategistResult', () => {
     });
     const result = parseStrategistResult(raw, mockLogger);
     expect(result).not.toBeNull();
-    expect(result!.single_deliverable).toBe('Write a poem');
-    expect(result!.focus).toBe('Write a poem');
-    expect(result!.reflection).toBe('I should be creative');
-    expect(result!.goal_operations).toEqual([]);
+    expect(result?.single_deliverable).toBe('Write a poem');
+    expect(result?.focus).toBe('Write a poem');
+    expect(result?.reflection).toBe('I should be creative');
+    expect(result?.goal_operations).toEqual([]);
   });
 
   test('valid JSON with single_deliverable', () => {
     const raw = JSON.stringify({
       single_deliverable: 'Deploy new feature',
       reflection: 'Deployment is key',
-      goal_operations: [
-        { action: 'add', goal: 'Deploy feature X', priority: 'high' },
-      ],
+      goal_operations: [{ action: 'add', goal: 'Deploy feature X', priority: 'high' }],
     });
     const result = parseStrategistResult(raw, mockLogger);
     expect(result).not.toBeNull();
-    expect(result!.single_deliverable).toBe('Deploy new feature');
-    expect(result!.focus).toBe('Deploy new feature');
-    expect(result!.reflection).toBe('Deployment is key');
-    expect(result!.goal_operations).toHaveLength(1);
-    expect(result!.goal_operations[0].action).toBe('add');
+    expect(result?.single_deliverable).toBe('Deploy new feature');
+    expect(result?.focus).toBe('Deploy new feature');
+    expect(result?.reflection).toBe('Deployment is key');
+    expect(result?.goal_operations).toHaveLength(1);
+    expect(result?.goal_operations[0].action).toBe('add');
   });
 
   test('goal_operations parsed correctly', () => {
@@ -74,11 +72,11 @@ describe('parseStrategistResult', () => {
     });
     const result = parseStrategistResult(raw, mockLogger);
     expect(result).not.toBeNull();
-    expect(result!.goal_operations).toHaveLength(4);
-    expect(result!.goal_operations[0]).toEqual(ops[0]);
-    expect(result!.goal_operations[1]).toEqual(ops[1]);
-    expect(result!.goal_operations[2]).toEqual(ops[2]);
-    expect(result!.goal_operations[3]).toEqual(ops[3]);
+    expect(result?.goal_operations).toHaveLength(4);
+    expect(result?.goal_operations[0]).toEqual(ops[0]);
+    expect(result?.goal_operations[1]).toEqual(ops[1]);
+    expect(result?.goal_operations[2]).toEqual(ops[2]);
+    expect(result?.goal_operations[3]).toEqual(ops[3]);
   });
 
   test('invalid JSON returns null', () => {
@@ -114,7 +112,7 @@ describe('parseStrategistResult', () => {
     });
     const result = parseStrategistResult(raw, mockLogger);
     expect(result).not.toBeNull();
-    expect(result!.next_strategy_in).toBe('2h');
+    expect(result?.next_strategy_in).toBe('2h');
   });
 
   test('non-array goal_operations defaults to empty array', () => {
@@ -125,7 +123,7 @@ describe('parseStrategistResult', () => {
     });
     const result = parseStrategistResult(raw, mockLogger);
     expect(result).not.toBeNull();
-    expect(result!.goal_operations).toEqual([]);
+    expect(result?.goal_operations).toEqual([]);
   });
 
   test('JSON wrapped in markdown code fence is parsed', () => {
@@ -134,10 +132,10 @@ describe('parseStrategistResult', () => {
       reflection: 'API first approach',
       goal_operations: [],
     });
-    const raw = '```json\n' + inner + '\n```';
+    const raw = `\`\`\`json\n${inner}\n\`\`\``;
     const result = parseStrategistResult(raw, mockLogger);
     expect(result).not.toBeNull();
-    expect(result!.single_deliverable).toBe('Build API');
+    expect(result?.single_deliverable).toBe('Build API');
   });
 });
 
@@ -233,7 +231,9 @@ describe('shouldRunStrategist', () => {
       strategistCycleCount: 3,
       lastStrategistAt: Date.now() - 5 * 3_600_000,
     };
-    expect(shouldRunStrategist(botId, botConfigWithOverride, globalConfig, scheduleNotEnough)).toBe(true);
+    expect(shouldRunStrategist(botId, botConfigWithOverride, globalConfig, scheduleNotEnough)).toBe(
+      true
+    );
   });
 
   test('per-bot override for minInterval', () => {
@@ -256,29 +256,23 @@ describe('computeCyclesUntilStrategist', () => {
   const globalConfig = { everyCycles: 4 };
 
   test('basic computation', () => {
-    const result = computeCyclesUntilStrategist(
-      undefined,
-      globalConfig,
-      { strategistCycleCount: 1 },
-    );
+    const result = computeCyclesUntilStrategist(undefined, globalConfig, {
+      strategistCycleCount: 1,
+    });
     expect(result).toBe(3); // 4 - 1
   });
 
   test('returns 0 when cycle count meets threshold', () => {
-    const result = computeCyclesUntilStrategist(
-      undefined,
-      globalConfig,
-      { strategistCycleCount: 4 },
-    );
+    const result = computeCyclesUntilStrategist(undefined, globalConfig, {
+      strategistCycleCount: 4,
+    });
     expect(result).toBe(0);
   });
 
   test('returns 0 when cycle count exceeds threshold', () => {
-    const result = computeCyclesUntilStrategist(
-      undefined,
-      globalConfig,
-      { strategistCycleCount: 10 },
-    );
+    const result = computeCyclesUntilStrategist(undefined, globalConfig, {
+      strategistCycleCount: 10,
+    });
     expect(result).toBe(0);
   });
 
@@ -286,11 +280,9 @@ describe('computeCyclesUntilStrategist', () => {
     const botConfig = {
       agentLoop: { strategist: { everyCycles: 2 } },
     } as any;
-    const result = computeCyclesUntilStrategist(
-      botConfig,
-      globalConfig,
-      { strategistCycleCount: 1 },
-    );
+    const result = computeCyclesUntilStrategist(botConfig, globalConfig, {
+      strategistCycleCount: 1,
+    });
     expect(result).toBe(1); // 2 - 1
   });
 
@@ -298,20 +290,16 @@ describe('computeCyclesUntilStrategist', () => {
     const botConfig = {
       agentLoop: { strategist: { everyCycles: 10 } },
     } as any;
-    const result = computeCyclesUntilStrategist(
-      botConfig,
-      globalConfig,
-      { strategistCycleCount: 3 },
-    );
+    const result = computeCyclesUntilStrategist(botConfig, globalConfig, {
+      strategistCycleCount: 3,
+    });
     expect(result).toBe(7); // 10 - 3
   });
 
   test('already at 0 with no bot config', () => {
-    const result = computeCyclesUntilStrategist(
-      undefined,
-      globalConfig,
-      { strategistCycleCount: 5 },
-    );
+    const result = computeCyclesUntilStrategist(undefined, globalConfig, {
+      strategistCycleCount: 5,
+    });
     expect(result).toBe(0);
   });
 });
@@ -352,9 +340,7 @@ describe('applyGoalOperations', () => {
   });
 
   test('add operation defaults priority to medium', () => {
-    const ops: GoalOperation[] = [
-      { action: 'add', goal: 'Default priority goal' },
-    ];
+    const ops: GoalOperation[] = [{ action: 'add', goal: 'Default priority goal' }];
 
     applyGoalOperations(botId, ops, mockLogger as any, mockSoulLoader as any);
 
@@ -369,7 +355,7 @@ describe('applyGoalOperations', () => {
         { text: 'Finish the report', status: 'in_progress', priority: 'high' },
         { text: 'Review PR', status: 'pending', priority: 'medium' },
       ],
-      [],
+      []
     );
     mockSoulLoader.readGoals.mockReturnValue(existingGoals);
 
@@ -391,15 +377,19 @@ describe('applyGoalOperations', () => {
 
   test('update operation modifies an existing goal', () => {
     const existingGoals = serializeGoals(
-      [
-        { text: 'Build the dashboard', status: 'pending', priority: 'medium' },
-      ],
-      [],
+      [{ text: 'Build the dashboard', status: 'pending', priority: 'medium' }],
+      []
     );
     mockSoulLoader.readGoals.mockReturnValue(existingGoals);
 
     const ops: GoalOperation[] = [
-      { action: 'update', goal: 'build the dashboard', status: 'in_progress', priority: 'high', notes: 'Started work' },
+      {
+        action: 'update',
+        goal: 'build the dashboard',
+        status: 'in_progress',
+        priority: 'high',
+        notes: 'Started work',
+      },
     ];
 
     applyGoalOperations(botId, ops, mockLogger as any, mockSoulLoader as any);
@@ -418,13 +408,11 @@ describe('applyGoalOperations', () => {
         { text: 'Obsolete task', status: 'pending', priority: 'low' },
         { text: 'Keep this one', status: 'pending', priority: 'medium' },
       ],
-      [],
+      []
     );
     mockSoulLoader.readGoals.mockReturnValue(existingGoals);
 
-    const ops: GoalOperation[] = [
-      { action: 'remove', goal: 'obsolete task' },
-    ];
+    const ops: GoalOperation[] = [{ action: 'remove', goal: 'obsolete task' }];
 
     applyGoalOperations(botId, ops, mockLogger as any, mockSoulLoader as any);
 
@@ -437,54 +425,46 @@ describe('applyGoalOperations', () => {
   test('complete with goal not found logs debug and skips', () => {
     mockSoulLoader.readGoals.mockReturnValue('');
 
-    const ops: GoalOperation[] = [
-      { action: 'complete', goal: 'nonexistent goal' },
-    ];
+    const ops: GoalOperation[] = [{ action: 'complete', goal: 'nonexistent goal' }];
 
     applyGoalOperations(botId, ops, mockLogger as any, mockSoulLoader as any);
 
     expect(mockLogger.debug).toHaveBeenCalledWith(
       { goal: 'nonexistent goal' },
-      'Strategist: goal to complete not found, skipping',
+      'Strategist: goal to complete not found, skipping'
     );
   });
 
   test('update with goal not found logs debug and skips', () => {
     mockSoulLoader.readGoals.mockReturnValue('');
 
-    const ops: GoalOperation[] = [
-      { action: 'update', goal: 'ghost goal', status: 'in_progress' },
-    ];
+    const ops: GoalOperation[] = [{ action: 'update', goal: 'ghost goal', status: 'in_progress' }];
 
     applyGoalOperations(botId, ops, mockLogger as any, mockSoulLoader as any);
 
     expect(mockLogger.debug).toHaveBeenCalledWith(
       { goal: 'ghost goal' },
-      'Strategist: goal to update not found, skipping',
+      'Strategist: goal to update not found, skipping'
     );
   });
 
   test('remove with goal not found logs debug and skips', () => {
     mockSoulLoader.readGoals.mockReturnValue('');
 
-    const ops: GoalOperation[] = [
-      { action: 'remove', goal: 'missing goal' },
-    ];
+    const ops: GoalOperation[] = [{ action: 'remove', goal: 'missing goal' }];
 
     applyGoalOperations(botId, ops, mockLogger as any, mockSoulLoader as any);
 
     expect(mockLogger.debug).toHaveBeenCalledWith(
       { goal: 'missing goal' },
-      'Strategist: goal to remove not found, skipping',
+      'Strategist: goal to remove not found, skipping'
     );
   });
 
   test('readGoals returning null is handled gracefully', () => {
     mockSoulLoader.readGoals.mockReturnValue(null);
 
-    const ops: GoalOperation[] = [
-      { action: 'add', goal: 'First goal ever' },
-    ];
+    const ops: GoalOperation[] = [{ action: 'add', goal: 'First goal ever' }];
 
     applyGoalOperations(botId, ops, mockLogger as any, mockSoulLoader as any);
 
@@ -500,7 +480,7 @@ describe('applyGoalOperations', () => {
         { text: 'Task A', status: 'pending', priority: 'medium' },
         { text: 'Task B', status: 'pending', priority: 'low' },
       ],
-      [],
+      []
     );
     mockSoulLoader.readGoals.mockReturnValue(existingGoals);
 

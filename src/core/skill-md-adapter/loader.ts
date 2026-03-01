@@ -5,22 +5,22 @@
  * Flow: Parse → Validate → Check Requirements → Generate Tools → Register
  */
 
-import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { exec } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
+import { SkillMdParser } from './parser';
 import type {
-  SkillDocument,
-  LoadedSkill,
   DeclarativeSkill,
+  DeclaredTool,
+  LoadedSkill,
+  Logger,
+  SkillDocument,
   Tool,
   ToolResult,
-  Logger,
-  DeclaredTool
 } from './types';
-import { SkillMdParser } from './parser';
+import { SkillNotFoundError, SkillRequirementError, SkillValidationError } from './types';
 import { SkillValidator } from './validator';
-import { SkillNotFoundError, SkillValidationError, SkillRequirementError } from './types';
 
 const execAsync = promisify(exec);
 
@@ -277,15 +277,17 @@ export class SkillMdLoader {
       return {
         name: doc.name,
         description: doc.description,
-        tools: tools.map(t => t.definition.function.name),
+        tools: tools.map((t) => t.definition.function.name),
         status: 'loaded',
         sourcePath: skillDir,
       };
     } catch (error) {
       // Re-throw known errors
-      if (error instanceof SkillNotFoundError ||
-          error instanceof SkillValidationError ||
-          error instanceof SkillRequirementError) {
+      if (
+        error instanceof SkillNotFoundError ||
+        error instanceof SkillValidationError ||
+        error instanceof SkillRequirementError
+      ) {
         throw error;
       }
 
@@ -300,7 +302,7 @@ export class SkillMdLoader {
    * Load multiple skills from a parent directory
    */
   async loadFromParentDirectory(parentDir: string): Promise<LoadedSkill[]> {
-    const { readdir } = await import('fs/promises');
+    const { readdir } = await import('node:fs/promises');
     const results: LoadedSkill[] = [];
 
     try {
@@ -416,10 +418,7 @@ export class SkillMdLoader {
 }
 
 // Export convenience function for simple use cases
-export async function loadSkill(
-  skillDir: string,
-  config?: LoaderConfig
-): Promise<LoadedSkill> {
+export async function loadSkill(skillDir: string, config?: LoaderConfig): Promise<LoadedSkill> {
   const loader = new SkillMdLoader(
     undefined, // use default parser
     undefined, // use default validator
@@ -434,12 +433,6 @@ export async function loadSkillsFromDirectory(
   parentDir: string,
   config?: LoaderConfig
 ): Promise<LoadedSkill[]> {
-  const loader = new SkillMdLoader(
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    config
-  );
+  const loader = new SkillMdLoader(undefined, undefined, undefined, undefined, config);
   return loader.loadFromParentDirectory(parentDir);
 }

@@ -1,12 +1,12 @@
-import { mkdirSync, existsSync, statSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { z } from 'zod';
+import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
+import { ProductionsService } from '../productions/service';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import type { BotContext } from './types';
-import { z } from 'zod';
-import { EventEmitter } from 'events';
-import { ProductionsService } from '../productions/service';
-import type { KarmaService } from '../karma/service';
 
 /**
  * Record of a tool execution for logging/auditing purposes.
@@ -156,32 +156,51 @@ export class ToolExecutor extends EventEmitter {
     startMs: number,
     errorMsg: string,
     phase: 'lookup' | 'validation' | 'execution',
-    retryAttempts: number = 0,
-    emitError?: string,
+    retryAttempts = 0,
+    emitError?: string
   ): ToolExecutionResult {
     const { botId, chatId } = this.options;
     const durationMs = Date.now() - startMs;
     this.emit('tool:error', {
-      toolName: name, args, error: emitError ?? errorMsg, phase, botId, chatId, timestamp: Date.now(),
+      toolName: name,
+      args,
+      error: emitError ?? errorMsg,
+      phase,
+      botId,
+      chatId,
+      timestamp: Date.now(),
     });
 
     // Karma -1 per tool error (execution and validation phases)
     if (this.options.karmaService && (phase === 'execution' || phase === 'validation')) {
       const truncatedError = (emitError ?? errorMsg).slice(0, 120);
       this.options.karmaService.addEvent(
-        botId, -1,
+        botId,
+        -1,
         `Tool error: ${name} — ${truncatedError}`,
-        'tool',
+        'tool'
       );
     }
 
     const result: ToolExecutionResult = {
-      success: false, content: errorMsg, toolName: name, args, durationMs, retryAttempts,
+      success: false,
+      content: errorMsg,
+      toolName: name,
+      args,
+      durationMs,
+      retryAttempts,
     };
     this.logExecution(name, args, false, errorMsg, durationMs);
     this.emit('tool:end', {
-      toolName: name, args, success: false, result: errorMsg,
-      durationMs, retryAttempts, botId, chatId, timestamp: Date.now(),
+      toolName: name,
+      args,
+      success: false,
+      result: errorMsg,
+      durationMs,
+      retryAttempts,
+      botId,
+      chatId,
+      timestamp: Date.now(),
     });
     return result;
   }
@@ -190,16 +209,17 @@ export class ToolExecutor extends EventEmitter {
    * Execute a single tool call with full lifecycle management.
    * Returns the tool result with execution metadata.
    */
-  async execute(
-    name: string,
-    args: Record<string, unknown>
-  ): Promise<ToolExecutionResult> {
+  async execute(name: string, args: Record<string, unknown>): Promise<ToolExecutionResult> {
     const startMs = Date.now();
     const { botId, chatId } = this.options;
 
     // Emit start event
     this.emit('tool:start', {
-      toolName: name, args, botId, chatId, timestamp: startMs,
+      toolName: name,
+      args,
+      botId,
+      chatId,
+      timestamp: startMs,
     });
 
     // Check if tool is disabled
@@ -218,7 +238,13 @@ export class ToolExecutor extends EventEmitter {
     // Apply optional tool filter (for collaboration)
     if (this.options.toolFilter && !this.options.toolFilter(tool)) {
       this.logger.warn({ tool: name, botId }, 'Tool filtered out by collaboration filter');
-      return this.buildFailResult(name, args, startMs, `Tool "${name}" is not available in this context`, 'lookup');
+      return this.buildFailResult(
+        name,
+        args,
+        startMs,
+        `Tool "${name}" is not available in this context`,
+        'lookup'
+      );
     }
 
     // Get retry configuration
@@ -236,8 +262,9 @@ export class ToolExecutor extends EventEmitter {
 
       // Per-bot workDir: resolve file paths and exec cwd
       const botConfigForWorkDir = this.ctx.config.bots.find((b) => b.id === botId);
-      const workDir = botConfigForWorkDir?.workDir
-        ?? (this.ctx.config.productions?.baseDir
+      const workDir =
+        botConfigForWorkDir?.workDir ??
+        (this.ctx.config.productions?.baseDir
           ? `${this.ctx.config.productions.baseDir}/${botId}`
           : undefined);
       let originalPathForProductions: string | undefined;
@@ -245,7 +272,10 @@ export class ToolExecutor extends EventEmitter {
         mkdirSync(workDir, { recursive: true });
         effectiveArgs._workDir = workDir;
 
-        if (['file_read', 'file_write', 'file_edit'].includes(name) && typeof effectiveArgs.path === 'string') {
+        if (
+          ['file_read', 'file_write', 'file_edit'].includes(name) &&
+          typeof effectiveArgs.path === 'string'
+        ) {
           originalPathForProductions = effectiveArgs.path as string;
           effectiveArgs.path = resolve(workDir, effectiveArgs.path as string);
         }
@@ -272,10 +302,7 @@ export class ToolExecutor extends EventEmitter {
 
         if (validatedResult.success) {
           // Productions: log successful file operations with quality gate
-          if (
-            this.ctx.productionsService &&
-            ['file_write', 'file_edit'].includes(name)
-          ) {
+          if (this.ctx.productionsService && ['file_write', 'file_edit'].includes(name)) {
             const ps = this.ctx.productionsService;
             if (ps.isEnabled(botId)) {
               const logPath = originalPathForProductions ?? (args.path as string);
@@ -283,9 +310,14 @@ export class ToolExecutor extends EventEmitter {
               // Skip INDEX.md to avoid circular logging
               if (!logPath.endsWith('/INDEX.md') && logPath !== 'INDEX.md') {
                 // file_write uses `content`, file_edit uses `new_text`
-                const content = name === 'file_edit'
-                  ? (typeof args.new_text === 'string' ? args.new_text : '')
-                  : (typeof args.content === 'string' ? args.content : '');
+                const content =
+                  name === 'file_edit'
+                    ? typeof args.new_text === 'string'
+                      ? args.new_text
+                      : ''
+                    : typeof args.content === 'string'
+                      ? args.content
+                      : '';
 
                 // Extract first heading for better descriptions
                 const firstHeading = content ? content.match(/^#+ (.+)$/m)?.[1] : null;
@@ -309,13 +341,14 @@ export class ToolExecutor extends EventEmitter {
                   if (quality.isTemplate) {
                     this.logger.debug(
                       { botId, path: logPath, ratio: quality.ratio },
-                      'Quality gate: skipping template production',
+                      'Quality gate: skipping template production'
                     );
                     if (this.options.karmaService) {
                       this.options.karmaService.addEvent(
-                        botId, -3,
+                        botId,
+                        -3,
                         `Empty template detected in "${logPath}"`,
-                        'production',
+                        'production'
                       );
                     }
                   } else {
@@ -338,26 +371,49 @@ export class ToolExecutor extends EventEmitter {
           // Success! Return result with retry count
           const durationMs = Date.now() - startMs;
           const result: ToolExecutionResult = {
-            ...validatedResult, toolName: name, args, durationMs, retryAttempts: attempt,
+            ...validatedResult,
+            toolName: name,
+            args,
+            durationMs,
+            retryAttempts: attempt,
           };
           this.logExecution(name, args, true, validatedResult.content, durationMs);
           this.emit('tool:end', {
-            toolName: name, args, success: true, result: validatedResult.content,
-            durationMs, retryAttempts: attempt, botId, chatId, timestamp: Date.now(),
+            toolName: name,
+            args,
+            success: true,
+            result: validatedResult.content,
+            durationMs,
+            retryAttempts: attempt,
+            botId,
+            chatId,
+            timestamp: Date.now(),
           });
           return result;
         }
 
         // Tool error (not validation) — pass through without retry
         if (!toolResult.success) {
-          return this.buildFailResult(name, args, startMs, validatedResult.content, 'execution', attempt);
+          return this.buildFailResult(
+            name,
+            args,
+            startMs,
+            validatedResult.content,
+            'execution',
+            attempt
+          );
         }
 
         // Validation failure — retryable if we have retries left
         lastError = validatedResult.content;
         this.emit('tool:error', {
-          toolName: name, args, error: lastError, phase: 'validation',
-          botId, chatId, timestamp: Date.now(),
+          toolName: name,
+          args,
+          error: lastError,
+          phase: 'validation',
+          botId,
+          chatId,
+          timestamp: Date.now(),
         });
         if (attempt < maxRetries) {
           this.logger.warn(
@@ -370,11 +426,13 @@ export class ToolExecutor extends EventEmitter {
 
         // No retries left — return validation error
         return this.buildFailResult(
-          name, args, startMs,
+          name,
+          args,
+          startMs,
           `Validation failed after ${attempt + 1} attempt(s): ${lastError}`,
-          'validation', attempt,
+          'validation',
+          attempt
         );
-
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         this.logger.error({ tool: name, botId, attempt, error: err }, 'Tool execution error');
@@ -382,8 +440,13 @@ export class ToolExecutor extends EventEmitter {
         // Retries left — emit error and continue
         if (attempt < maxRetries) {
           this.emit('tool:error', {
-            toolName: name, args, error: lastError, phase: 'execution',
-            botId, chatId, timestamp: Date.now(),
+            toolName: name,
+            args,
+            error: lastError,
+            phase: 'execution',
+            botId,
+            chatId,
+            timestamp: Date.now(),
           });
           await this.delay(this.calculateBackoff(attempt));
           continue;
@@ -391,15 +454,26 @@ export class ToolExecutor extends EventEmitter {
 
         // No retries left — return final error
         return this.buildFailResult(
-          name, args, startMs,
+          name,
+          args,
+          startMs,
           `Tool execution failed after ${attempt + 1} attempt(s): ${lastError}`,
-          'execution', attempt, lastError!,
+          'execution',
+          attempt,
+          lastError!
         );
       }
     }
 
     // Should never reach here, but TypeScript requires a return
-    return this.buildFailResult(name, args, startMs, 'Unexpected execution path', 'execution', maxRetries);
+    return this.buildFailResult(
+      name,
+      args,
+      startMs,
+      'Unexpected execution path',
+      'execution',
+      maxRetries
+    );
   }
 
   /**
@@ -412,7 +486,7 @@ export class ToolExecutor extends EventEmitter {
    */
   private calculateBackoff(attempt: number): number {
     if (attempt === 0) return 0;
-    return Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+    return Math.min(1000 * 2 ** (attempt - 1), 10000);
   }
 
   /**
@@ -444,8 +518,10 @@ export class ToolExecutor extends EventEmitter {
       let data: unknown;
       if (typeof result.content === 'string') {
         const trimmed = result.content.trim();
-        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-            (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        if (
+          (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+          (trimmed.startsWith('[') && trimmed.endsWith(']'))
+        ) {
           try {
             data = JSON.parse(trimmed);
           } catch {
@@ -464,9 +540,7 @@ export class ToolExecutor extends EventEmitter {
       return result;
     } catch (validationError) {
       if (validationError instanceof z.ZodError) {
-        const issues = validationError.errors.map(
-          (e) => `${e.path.join('.')}: ${e.message}`
-        );
+        const issues = validationError.errors.map((e) => `${e.path.join('.')}: ${e.message}`);
         const errorMsg = `Output validation failed:\n${issues.join('\n')}`;
 
         this.logger.warn(
@@ -489,10 +563,7 @@ export class ToolExecutor extends EventEmitter {
    * Create the callback expected by LLMClient.chat().
    * This is the standard interface for tool execution in conversations.
    */
-  createCallback(): (
-    name: string,
-    args: Record<string, unknown>
-  ) => Promise<ToolResult> {
+  createCallback(): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
     return async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
       const result = await this.execute(name, args);
       // Return only the ToolResult part (without metadata)
@@ -534,10 +605,12 @@ export class ToolExecutor extends EventEmitter {
 
   private resolveWorkDir(): string | undefined {
     const botConfig = this.ctx.config.bots.find((b) => b.id === this.options.botId);
-    return botConfig?.workDir
-      ?? (this.ctx.config.productions?.baseDir
+    return (
+      botConfig?.workDir ??
+      (this.ctx.config.productions?.baseDir
         ? `${this.ctx.config.productions.baseDir}/${this.options.botId}`
-        : undefined);
+        : undefined)
+    );
   }
 
   /**
@@ -596,10 +669,7 @@ export class ToolExecutor extends EventEmitter {
 /**
  * Factory function to create a ToolExecutor with common configurations.
  */
-export function createToolExecutor(
-  ctx: BotContext,
-  options: ToolExecutorOptions
-): ToolExecutor {
+export function createToolExecutor(ctx: BotContext, options: ToolExecutorOptions): ToolExecutor {
   return new ToolExecutor(ctx, options);
 }
 

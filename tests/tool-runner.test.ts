@@ -1,7 +1,11 @@
-import { describe, test, expect } from 'bun:test';
-import { runToolLoop, type ToolCallingStrategy, type ToolRunnerOptions } from '../src/core/tool-runner';
+import { describe, expect, test } from 'bun:test';
+import {
+  type ToolCallingStrategy,
+  type ToolRunnerOptions,
+  runToolLoop,
+} from '../src/core/tool-runner';
 import type { ChatMessage, ChatOptions } from '../src/ollama';
-import type { ToolDefinition, ToolCall } from '../src/tools/types';
+import type { ToolCall, ToolDefinition } from '../src/tools/types';
 
 const dummyTool: ToolDefinition = {
   type: 'function',
@@ -54,7 +58,7 @@ describe('runToolLoop', () => {
     // The last call's messages should include the summarization system message
     const lastCallMessages = capturedMessages[capturedMessages.length - 1];
     const summarizationMsg = lastCallMessages.find(
-      (m) => m.role === 'system' && m.content.includes('maximum number of tool call rounds'),
+      (m) => m.role === 'system' && m.content.includes('maximum number of tool call rounds')
     );
     expect(summarizationMsg).toBeDefined();
   });
@@ -82,7 +86,7 @@ describe('runToolLoop', () => {
     // Only one call, on round 0 (not last round)
     expect(capturedMessages).toHaveLength(1);
     const hasPrompt = capturedMessages[0].some(
-      (m) => m.role === 'system' && m.content.includes('maximum number of tool call rounds'),
+      (m) => m.role === 'system' && m.content.includes('maximum number of tool call rounds')
     );
     expect(hasPrompt).toBe(false);
   });

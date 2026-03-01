@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, jest, afterEach } from 'bun:test';
-import { generateSpeech, stripMarkdown, truncateText } from '../src/tts';
+import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import { resolveTtsConfig } from '../src/config';
-import type { TtsConfig, BotConfig } from '../src/config';
+import type { BotConfig, TtsConfig } from '../src/config';
 import type { Logger } from '../src/logger';
+import { generateSpeech, stripMarkdown, truncateText } from '../src/tts';
 
 describe('TTS Module', () => {
   const createMockLogger = (): Logger =>
@@ -43,7 +43,7 @@ describe('TTS Module', () => {
 
     it('should remove bold and italic markers', () => {
       expect(stripMarkdown('This is **bold** and *italic* text')).toBe(
-        'This is bold and italic text',
+        'This is bold and italic text'
       );
     });
 
@@ -57,7 +57,7 @@ describe('TTS Module', () => {
 
     it('should keep link labels and remove URLs', () => {
       expect(stripMarkdown('Check [this link](https://example.com) out')).toBe(
-        'Check this link out',
+        'Check this link out'
       );
     });
 
@@ -239,7 +239,7 @@ describe('TTS Module', () => {
       const logger = createMockLogger();
 
       await expect(generateSpeech('Test', config, logger)).rejects.toThrow(
-        'ElevenLabs API error (401)',
+        'ElevenLabs API error (401)'
       );
     });
 
@@ -252,14 +252,14 @@ describe('TTS Module', () => {
               err.name = 'AbortError';
               reject(err);
             });
-          }),
+          })
       ) as any;
 
       const config = createDefaultConfig({ timeout: 50 }); // 50ms timeout
       const logger = createMockLogger();
 
       await expect(generateSpeech('Test', config, logger)).rejects.toThrow(
-        'TTS timeout after 50ms',
+        'TTS timeout after 50ms'
       );
     });
 
@@ -279,7 +279,7 @@ describe('TTS Module', () => {
 
       const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
       expect(fetchCall[0]).toBe(
-        'https://api.elevenlabs.io/v1/text-to-speech/my-voice?output_format=mp3_44100_128',
+        'https://api.elevenlabs.io/v1/text-to-speech/my-voice?output_format=mp3_44100_128'
       );
     });
 
@@ -305,7 +305,7 @@ describe('TTS Module', () => {
 
       // Only markdown, stripped to empty
       await expect(generateSpeech('```code```', config, logger)).rejects.toThrow(
-        'TTS: text is empty after processing',
+        'TTS: text is empty after processing'
       );
     });
   });
@@ -351,9 +351,12 @@ describe('TTS Module', () => {
     });
 
     it('should merge voiceSettings partially with global defaults', () => {
-      const result = resolveTtsConfig(globalTts, makeBotConfig({
-        voiceSettings: { stability: 0.9, speed: 1.5 },
-      }));
+      const result = resolveTtsConfig(
+        globalTts,
+        makeBotConfig({
+          voiceSettings: { stability: 0.9, speed: 1.5 },
+        })
+      );
       expect(result.voiceSettings.stability).toBe(0.9);
       expect(result.voiceSettings.speed).toBe(1.5);
       expect(result.voiceSettings.similarityBoost).toBe(0.75);
@@ -362,20 +365,23 @@ describe('TTS Module', () => {
     });
 
     it('should use all bot overrides when fully specified', () => {
-      const result = resolveTtsConfig(globalTts, makeBotConfig({
-        voiceId: 'bot-voice',
-        modelId: 'eleven_turbo_v2_5',
-        outputFormat: 'mp3_44100_128',
-        languageCode: 'es',
-        maxTextLength: 500,
-        voiceSettings: {
-          stability: 0.3,
-          similarityBoost: 0.6,
-          style: 0.2,
-          useSpeakerBoost: false,
-          speed: 1.8,
-        },
-      }));
+      const result = resolveTtsConfig(
+        globalTts,
+        makeBotConfig({
+          voiceId: 'bot-voice',
+          modelId: 'eleven_turbo_v2_5',
+          outputFormat: 'mp3_44100_128',
+          languageCode: 'es',
+          maxTextLength: 500,
+          voiceSettings: {
+            stability: 0.3,
+            similarityBoost: 0.6,
+            style: 0.2,
+            useSpeakerBoost: false,
+            speed: 1.8,
+          },
+        })
+      );
       expect(result.voiceId).toBe('bot-voice');
       expect(result.modelId).toBe('eleven_turbo_v2_5');
       expect(result.outputFormat).toBe('mp3_44100_128');

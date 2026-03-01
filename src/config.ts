@@ -2,111 +2,141 @@ import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 
 // Zod schemas for type-safe configuration
-const BotConversationOverrideSchema = z.object({
-  systemPrompt: z.string().optional(),
-  temperature: z.number().min(0).max(2).optional(),
-  maxHistory: z.number().int().positive().optional(),
-}).optional();
+const BotConversationOverrideSchema = z
+  .object({
+    systemPrompt: z.string().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxHistory: z.number().int().positive().optional(),
+  })
+  .optional();
 
-const StrategistConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  everyCycles: z.number().int().min(1).default(4),
-  minInterval: z.string().default('4h'),
-}).default({});
+const StrategistConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    everyCycles: z.number().int().min(1).default(4),
+    minInterval: z.string().default('4h'),
+  })
+  .default({});
 
-export const AgentLoopRetryConfigSchema = z.object({
-  maxRetries: z.number().int().min(0).max(10).default(2),
-  initialDelayMs: z.number().int().min(1000).max(300_000).default(10_000),
-  maxDelayMs: z.number().int().min(1000).max(600_000).default(60_000),
-  backoffMultiplier: z.number().min(1).max(10).default(2),
-}).default({});
+export { CompactionConfigSchema };
 
-export const PhaseTimeoutsSchema = z.object({
-  feedbackMs: z.number().int().positive().default(30_000),
-  strategistMs: z.number().int().positive().default(60_000),
-  plannerMs: z.number().int().positive().default(60_000),
-  executorMs: z.number().int().positive().default(90_000),
-}).default({});
+export const AgentLoopRetryConfigSchema = z
+  .object({
+    maxRetries: z.number().int().min(0).max(10).default(2),
+    initialDelayMs: z.number().int().min(1000).max(300_000).default(10_000),
+    maxDelayMs: z.number().int().min(1000).max(600_000).default(60_000),
+    backoffMultiplier: z.number().min(1).max(10).default(2),
+  })
+  .default({});
 
-export const GlobalAgentLoopConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  every: z.string().default('6h'),
-  minInterval: z.string().default('1m'),
-  maxInterval: z.string().default('24h'),
-  maxToolRounds: z.number().int().min(1).max(50).default(30),
-  maxDurationMs: z.number().int().positive().default(300_000),
-  maxConcurrent: z.number().int().min(1).max(10).default(2),
-  claudeTimeout: z.number().int().positive().default(120_000),
-  disabledTools: z.array(z.string()).optional(),
-  /** Enable tool pre-selection: planner picks tool categories, executor only receives matching tools */
-  toolPreSelection: z.boolean().default(true),
-  idleSuppression: z.boolean().default(true),
-  /** Number of non-idle cycles without ask_human before injecting a check-in nudge */
-  askHumanCheckInCycles: z.number().int().min(1).max(50).default(5),
-  /** Per-phase timeout limits for agent loop operations */
-  phaseTimeouts: PhaseTimeoutsSchema,
-  strategist: StrategistConfigSchema,
-  retry: AgentLoopRetryConfigSchema,
-}).default({});
+export const PhaseTimeoutsSchema = z
+  .object({
+    feedbackMs: z.number().int().positive().default(30_000),
+    strategistMs: z.number().int().positive().default(60_000),
+    plannerMs: z.number().int().positive().default(60_000),
+    executorMs: z.number().int().positive().default(90_000),
+  })
+  .default({});
 
-export const BotAgentLoopOverrideSchema = z.object({
-  reportChatId: z.number().optional(),
-  every: z.string().optional(),
-  claudeTimeout: z.number().int().positive().optional(),
-  maxToolRounds: z.number().int().min(1).max(50).optional(),
-  disabledTools: z.array(z.string()).optional(),
-  mode: z.enum(['periodic', 'continuous']).default('periodic'),
-  continuousPauseMs: z.number().int().min(0).default(5_000),
-  continuousMemoryEvery: z.number().int().min(1).default(5),
-  strategist: z.object({
-    enabled: z.boolean().optional(),
-    everyCycles: z.number().int().min(1).optional(),
-    minInterval: z.string().optional(),
-  }).optional(),
-  retry: z.object({
-    maxRetries: z.number().int().min(0).max(10).optional(),
-    initialDelayMs: z.number().int().min(1000).max(300_000).optional(),
-    maxDelayMs: z.number().int().min(1000).max(600_000).optional(),
-    backoffMultiplier: z.number().min(1).max(10).optional(),
-  }).optional(),
-  phaseTimeouts: z.object({
-    feedbackMs: z.number().int().positive().optional(),
-    strategistMs: z.number().int().positive().optional(),
-    plannerMs: z.number().int().positive().optional(),
-    executorMs: z.number().int().positive().optional(),
-  }).optional(),
-}).optional();
+export const GlobalAgentLoopConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    every: z.string().default('6h'),
+    minInterval: z.string().default('1m'),
+    maxInterval: z.string().default('24h'),
+    maxToolRounds: z.number().int().min(1).max(50).default(30),
+    maxDurationMs: z.number().int().positive().default(300_000),
+    maxConcurrent: z.number().int().min(1).max(10).default(2),
+    claudeTimeout: z.number().int().positive().default(300_000),
+    disabledTools: z.array(z.string()).optional(),
+    /** Enable tool pre-selection: planner picks tool categories, executor only receives matching tools */
+    toolPreSelection: z.boolean().default(true),
+    idleSuppression: z.boolean().default(true),
+    /** Number of non-idle cycles without ask_human before injecting a check-in nudge */
+    askHumanCheckInCycles: z.number().int().min(1).max(50).default(5),
+    /** Per-phase timeout limits for agent loop operations */
+    phaseTimeouts: PhaseTimeoutsSchema,
+    strategist: StrategistConfigSchema,
+    retry: AgentLoopRetryConfigSchema,
+  })
+  .default({});
 
-const DynamicToolsConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  storePath: z.string().default('./data/tools'),
-  maxToolsPerBot: z.number().default(20),
-}).default({});
+export const BotAgentLoopOverrideSchema = z
+  .object({
+    reportChatId: z.number().optional(),
+    every: z.string().optional(),
+    claudeTimeout: z.number().int().positive().optional(),
+    maxToolRounds: z.number().int().min(1).max(50).optional(),
+    disabledTools: z.array(z.string()).optional(),
+    mode: z.enum(['periodic', 'continuous']).default('periodic'),
+    continuousPauseMs: z.number().int().min(0).default(5_000),
+    continuousMemoryEvery: z.number().int().min(1).default(5),
+    strategist: z
+      .object({
+        enabled: z.boolean().optional(),
+        everyCycles: z.number().int().min(1).optional(),
+        minInterval: z.string().optional(),
+      })
+      .optional(),
+    retry: z
+      .object({
+        maxRetries: z.number().int().min(0).max(10).optional(),
+        initialDelayMs: z.number().int().min(1000).max(300_000).optional(),
+        maxDelayMs: z.number().int().min(1000).max(600_000).optional(),
+        backoffMultiplier: z.number().min(1).max(10).optional(),
+      })
+      .optional(),
+    phaseTimeouts: z
+      .object({
+        feedbackMs: z.number().int().positive().optional(),
+        strategistMs: z.number().int().positive().optional(),
+        plannerMs: z.number().int().positive().optional(),
+        executorMs: z.number().int().positive().optional(),
+      })
+      .optional(),
+  })
+  .optional();
 
-const SkillsFoldersConfigSchema = z.object({
-  paths: z.array(z.string()).default([]),
-}).default({});
+const DynamicToolsConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    storePath: z.string().default('./data/tools'),
+    maxToolsPerBot: z.number().default(20),
+  })
+  .default({});
 
-const BotTtsOverrideSchema = z.object({
-  voiceId: z.string().optional(),
-  modelId: z.string().optional(),
-  outputFormat: z.string().optional(),
-  languageCode: z.string().optional(),
-  maxTextLength: z.number().int().positive().optional(),
-  voiceSettings: z.object({
-    stability: z.number().min(0).max(1).optional(),
-    similarityBoost: z.number().min(0).max(1).optional(),
-    style: z.number().min(0).max(1).optional(),
-    useSpeakerBoost: z.boolean().optional(),
-    speed: z.number().min(0.5).max(2).optional(),
-  }).optional(),
-}).optional();
+const SkillsFoldersConfigSchema = z
+  .object({
+    paths: z.array(z.string()).default([]),
+  })
+  .default({});
 
-const BotProductionsConfigSchema = z.object({
-  dir: z.string().optional(),
-  trackOnly: z.boolean().default(false),
-  enabled: z.boolean().default(true),
-}).optional();
+const BotTtsOverrideSchema = z
+  .object({
+    voiceId: z.string().optional(),
+    modelId: z.string().optional(),
+    outputFormat: z.string().optional(),
+    languageCode: z.string().optional(),
+    maxTextLength: z.number().int().positive().optional(),
+    voiceSettings: z
+      .object({
+        stability: z.number().min(0).max(1).optional(),
+        similarityBoost: z.number().min(0).max(1).optional(),
+        style: z.number().min(0).max(1).optional(),
+        useSpeakerBoost: z.boolean().optional(),
+        speed: z.number().min(0.5).max(2).optional(),
+      })
+      .optional(),
+  })
+  .optional();
+
+const BotProductionsConfigSchema = z
+  .object({
+    dir: z.string().optional(),
+    trackOnly: z.boolean().default(false),
+    enabled: z.boolean().default(true),
+  })
+  .optional();
 
 const BotConfigSchema = z.object({
   id: z.string(),
@@ -131,17 +161,21 @@ const BotConfigSchema = z.object({
   tenantId: z.string().optional(),
   apiKey: z.string().optional(),
   plan: z.enum(['free', 'starter', 'pro', 'enterprise']).default('free'),
-  usageQuota: z.object({
-    messagesPerMonth: z.number().int().positive().optional(),
-    apiCallsPerMonth: z.number().int().positive().optional(),
-    storageBytes: z.number().int().positive().optional(),
-  }).optional(),
-  billing: z.object({
-    stripeCustomerId: z.string().optional(),
-    stripeSubscriptionId: z.string().optional(),
-    currentPeriodStart: z.string().datetime().optional(),
-    currentPeriodEnd: z.string().datetime().optional(),
-  }).optional(),
+  usageQuota: z
+    .object({
+      messagesPerMonth: z.number().int().positive().optional(),
+      apiCallsPerMonth: z.number().int().positive().optional(),
+      storageBytes: z.number().int().positive().optional(),
+    })
+    .optional(),
+  billing: z
+    .object({
+      stripeCustomerId: z.string().optional(),
+      stripeSubscriptionId: z.string().optional(),
+      currentPeriodStart: z.string().datetime().optional(),
+      currentPeriodEnd: z.string().datetime().optional(),
+    })
+    .optional(),
 });
 
 const OllamaConfigSchema = z.object({
@@ -169,11 +203,28 @@ const SkillsConfigSchema = z.object({
   config: z.record(z.unknown()),
 });
 
+const CompactionConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    contextWindows: z
+      .object({
+        ollamaTokens: z.number().int().positive().default(8192),
+        claudeCliTokens: z.number().int().positive().default(180_000),
+      })
+      .default({}),
+    thresholdRatio: z.number().min(0.1).max(0.95).default(0.75),
+    keepRecentMessages: z.number().int().min(2).default(6),
+    maxMessageChars: z.number().int().positive().default(15_000),
+    maxOverflowRetries: z.number().int().min(0).max(3).default(2),
+  })
+  .default({});
+
 const ConversationConfigSchema = z.object({
   enabled: z.boolean().default(true),
   systemPrompt: z.string().default('You are a helpful assistant.'),
   temperature: z.number().min(0).max(2).default(0.7),
   maxHistory: z.number().int().positive().default(20),
+  compaction: CompactionConfigSchema,
 });
 
 const WebToolsSearchConfigSchema = z.object({
@@ -226,10 +277,12 @@ const BrowserToolsConfigSchema = z.object({
   allowedUrlPatterns: z.array(z.string()).optional(),
   blockedUrlPatterns: z.array(z.string()).optional(),
   enableEvaluate: z.boolean().default(false),
-  viewport: z.object({
-    width: z.number().int().positive().default(1280),
-    height: z.number().int().positive().default(720),
-  }).default({}),
+  viewport: z
+    .object({
+      width: z.number().int().positive().default(1280),
+      height: z.number().int().positive().default(720),
+    })
+    .default({}),
 });
 
 const DatetimeToolConfigSchema = z.object({
@@ -245,12 +298,14 @@ const WebToolsConfigSchema = z.object({
   maxToolRounds: z.number().int().min(1).max(10).default(5),
 });
 
-const AutoRagConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  maxResults: z.number().int().positive().default(3),
-  minScore: z.number().min(0).max(1).default(0.25),
-  maxContentChars: z.number().int().positive().default(2000),
-}).default({});
+const AutoRagConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    maxResults: z.number().int().positive().default(3),
+    minScore: z.number().min(0).max(1).default(0.25),
+    maxContentChars: z.number().int().positive().default(2000),
+  })
+  .default({});
 
 const MemorySearchConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -269,21 +324,27 @@ const MemorySearchConfigSchema = z.object({
   autoRag: AutoRagConfigSchema,
 });
 
-const MemoryFlushConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  messageThreshold: z.number().int().positive().default(30),
-}).default({});
+const MemoryFlushConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    messageThreshold: z.number().int().positive().default(30),
+  })
+  .default({});
 
-const SessionMemoryConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  indexOnStartup: z.boolean().default(false),
-}).default({});
+const SessionMemoryConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    indexOnStartup: z.boolean().default(false),
+  })
+  .default({});
 
-const HealthCheckConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  cooldownMs: z.number().int().positive().default(86_400_000), // 24h
-  consolidateMemory: z.boolean().default(true),
-}).default({});
+const HealthCheckConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    cooldownMs: z.number().int().positive().default(86_400_000), // 24h
+    consolidateMemory: z.boolean().default(true),
+  })
+  .default({});
 
 const SoulConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -291,10 +352,12 @@ const SoulConfigSchema = z.object({
   search: MemorySearchConfigSchema.default({}),
   memoryFlush: MemoryFlushConfigSchema,
   sessionMemory: SessionMemoryConfigSchema,
-  versioning: z.object({
-    enabled: z.boolean().default(true),
-    maxVersionsPerFile: z.number().int().positive().default(10),
-  }).default({}),
+  versioning: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxVersionsPerFile: z.number().int().positive().default(10),
+    })
+    .default({}),
   healthCheck: HealthCheckConfigSchema,
 });
 
@@ -315,13 +378,15 @@ const TtsConfigSchema = z.object({
   languageCode: z.string().optional(),
   timeout: z.number().int().positive().default(30_000),
   maxTextLength: z.number().int().positive().default(1500),
-  voiceSettings: z.object({
-    stability: z.number().min(0).max(1).default(0.5),
-    similarityBoost: z.number().min(0).max(1).default(0.75),
-    style: z.number().min(0).max(1).default(0),
-    useSpeakerBoost: z.boolean().default(true),
-    speed: z.number().min(0.5).max(2).default(1),
-  }).default({}),
+  voiceSettings: z
+    .object({
+      stability: z.number().min(0).max(1).default(0.5),
+      similarityBoost: z.number().min(0).max(1).default(0.75),
+      style: z.number().min(0).max(1).default(0),
+      useSpeakerBoost: z.boolean().default(true),
+      speed: z.number().min(0.5).max(2).default(1),
+    })
+    .default({}),
 });
 
 const MediaConfigSchema = z.object({
@@ -358,25 +423,29 @@ const HumanizerConfigSchema = z.object({
   enabled: z.boolean().default(false),
 });
 
-const ImproveToolConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  claudePath: z.string().default('claude'),
-  timeout: z.number().int().positive().max(300_000).default(120_000),
-  maxOutputLength: z.number().int().positive().default(15_000),
-  soulDir: z.string().default('./config/soul'),
-  allowedFocus: z.array(z.string()).default(['memory', 'soul', 'motivations', 'identity', 'all']),
-}).default({});
+const ImproveToolConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    claudePath: z.string().default('claude'),
+    timeout: z.number().int().positive().max(600_000).default(300_000),
+    maxOutputLength: z.number().int().positive().default(15_000),
+    soulDir: z.string().default('./config/soul'),
+    allowedFocus: z.array(z.string()).default(['memory', 'soul', 'motivations', 'identity', 'all']),
+  })
+  .default({});
 
-const CollaborationConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  maxRounds: z.number().int().min(1).max(20).default(5),
-  cooldownMs: z.number().int().min(0).default(30000),
-  internalQueryTimeout: z.number().int().positive().default(60000),
-  enableTargetTools: z.boolean().default(true),
-  maxConverseTurns: z.number().int().min(1).max(10).default(3),
-  sessionTtlMs: z.number().int().positive().default(600000),
-  visibleMaxTurns: z.number().int().min(1).max(10).default(3),
-}).default({});
+const CollaborationConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    maxRounds: z.number().int().min(1).max(20).default(5),
+    cooldownMs: z.number().int().min(0).default(30000),
+    internalQueryTimeout: z.number().int().positive().default(60000),
+    enableTargetTools: z.boolean().default(true),
+    maxConverseTurns: z.number().int().min(1).max(10).default(3),
+    sessionTtlMs: z.number().int().positive().default(600000),
+    visibleMaxTurns: z.number().int().min(1).max(10).default(3),
+  })
+  .default({});
 
 const BufferConfigSchema = z
   .object({
@@ -422,22 +491,28 @@ const SessionConfigSchema = z.object({
   llmRelevanceCheck: LlmRelevanceCheckSchema,
 });
 
-const ProductionsConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  baseDir: z.string().default('./productions'),
-}).default({});
+const ProductionsConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    baseDir: z.string().default('./productions'),
+  })
+  .default({});
 
-const ConversationsFeatureConfigSchema = z.object({
-  baseDir: z.string().default('./data/conversations'),
-}).default({});
+const ConversationsFeatureConfigSchema = z
+  .object({
+    baseDir: z.string().default('./data/conversations'),
+  })
+  .default({});
 
-const KarmaConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  baseDir: z.string().default('./data/karma'),
-  initialScore: z.number().default(50),
-  decayDays: z.number().default(30),
-  dedupCooldownMinutes: z.number().default(60),
-}).default({});
+const KarmaConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    baseDir: z.string().default('./data/karma'),
+    initialScore: z.number().default(50),
+    decayDays: z.number().default(30),
+    dedupCooldownMinutes: z.number().default(60),
+  })
+  .default({});
 
 export const RedditConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -548,6 +623,7 @@ export type ConversationsFeatureConfig = z.infer<typeof ConversationsFeatureConf
 export type RedditConfig = z.infer<typeof RedditConfigSchema>;
 export type TwitterConfig = z.infer<typeof TwitterConfigSchema>;
 export type CalendarConfig = z.infer<typeof CalendarConfigSchema>;
+export type CompactionConfig = z.infer<typeof CompactionConfigSchema>;
 export type SkillsFoldersConfig = z.infer<typeof SkillsFoldersConfigSchema>;
 
 /**
@@ -633,12 +709,17 @@ export interface ResolvedAgentConfig {
  * Merge global defaults with per-agent overrides to produce a flat config.
  * All new fields are optional in BotConfig, so existing configs work unchanged.
  */
-export function resolveAgentConfig(globalConfig: Config, botConfig: BotConfig): ResolvedAgentConfig {
+export function resolveAgentConfig(
+  globalConfig: Config,
+  botConfig: BotConfig
+): ResolvedAgentConfig {
   return {
     model: botConfig.model ?? globalConfig.ollama.models.primary,
     llmBackend: botConfig.llmBackend,
     soulDir: botConfig.soulDir ?? `${globalConfig.soul.dir}/${botConfig.id}`,
-    workDir: botConfig.workDir ?? `${globalConfig.productions?.baseDir ?? './productions'}/${botConfig.id}`,
+    workDir:
+      botConfig.workDir ??
+      `${globalConfig.productions?.baseDir ?? './productions'}/${botConfig.id}`,
     systemPrompt: botConfig.conversation?.systemPrompt ?? globalConfig.conversation.systemPrompt,
     temperature: botConfig.conversation?.temperature ?? globalConfig.conversation.temperature,
     maxHistory: botConfig.conversation?.maxHistory ?? globalConfig.conversation.maxHistory,
@@ -661,9 +742,11 @@ export function resolveTtsConfig(globalTts: TtsConfig, botConfig: BotConfig): Tt
     maxTextLength: botOverride.maxTextLength ?? globalTts.maxTextLength,
     voiceSettings: {
       stability: botOverride.voiceSettings?.stability ?? globalTts.voiceSettings.stability,
-      similarityBoost: botOverride.voiceSettings?.similarityBoost ?? globalTts.voiceSettings.similarityBoost,
+      similarityBoost:
+        botOverride.voiceSettings?.similarityBoost ?? globalTts.voiceSettings.similarityBoost,
       style: botOverride.voiceSettings?.style ?? globalTts.voiceSettings.style,
-      useSpeakerBoost: botOverride.voiceSettings?.useSpeakerBoost ?? globalTts.voiceSettings.useSpeakerBoost,
+      useSpeakerBoost:
+        botOverride.voiceSettings?.useSpeakerBoost ?? globalTts.voiceSettings.useSpeakerBoost,
       speed: botOverride.voiceSettings?.speed ?? globalTts.voiceSettings.speed,
     },
   };

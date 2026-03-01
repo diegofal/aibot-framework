@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BotContext } from './types';
 import { sendLongMessage } from './telegram-utils';
+import type { BotContext } from './types';
 
 /**
  * Represents a single recent action in the schedule tracker.
@@ -61,7 +61,8 @@ export function buildRecentActionsDigest(recentActions: RecentAction[]): string 
 export function isSimilarSummary(a: string, b: string): boolean {
   if (!a || !b) return false;
   const normalize = (s: string) =>
-    s.replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/gi, '')
+    s
+      .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/gi, '')
       .toLowerCase()
       .replace(/\s+/g, ' ')
       .trim();
@@ -122,7 +123,7 @@ export function scanFileTree(dirPath: string): string | null {
       count++;
       if (isDir) {
         lines.push(`${prefix}${entry}/`);
-        lines.push(...walk(fullPath, depth + 1, prefix + '  '));
+        lines.push(...walk(fullPath, depth + 1, `${prefix}  `));
       } else {
         lines.push(`${prefix}${entry}`);
       }
@@ -140,7 +141,7 @@ export function scanFileTree(dirPath: string): string | null {
 export function logToMemory(ctx: BotContext, botId: string, summary: string): void {
   try {
     const soulLoader = ctx.getSoulLoader(botId);
-    const truncated = summary.length > 500 ? summary.slice(0, 500) + '...' : summary;
+    const truncated = summary.length > 500 ? `${summary.slice(0, 500)}...` : summary;
     soulLoader.appendDailyMemory(`[agent-loop] ${truncated}`);
   } catch (err) {
     ctx.logger.warn({ err, botId }, 'Agent loop: failed to log to memory');
@@ -150,11 +151,16 @@ export function logToMemory(ctx: BotContext, botId: string, summary: string): vo
 /**
  * Send an agent loop report to a Telegram chat.
  */
-export async function sendReport(ctx: BotContext, botId: string, chatId: number, summary: string): Promise<void> {
+export async function sendReport(
+  ctx: BotContext,
+  botId: string,
+  chatId: number,
+  summary: string
+): Promise<void> {
   const bot = ctx.bots.get(botId);
   if (!bot) return;
 
-  const header = `🤖 **Agent Loop Report**\n\n`;
+  const header = '🤖 **Agent Loop Report**\n\n';
   const report = header + summary;
   try {
     await sendLongMessage((t) => bot.api.sendMessage(chatId, t), report);

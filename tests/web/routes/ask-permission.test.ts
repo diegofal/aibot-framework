@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, mock } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Hono } from 'hono';
 import { askPermissionRoutes } from '../../../src/web/routes/ask-permission';
 
@@ -16,9 +16,11 @@ function makeBotManager(overrides: Record<string, any> = {}) {
   return {
     getPermissionsPending: mock(() => overrides.pending ?? []),
     getPermissionsCount: mock(() => overrides.count ?? 0),
-    approvePermission: mock((id: string, note?: string) => overrides.approveResult ?? (id === 'valid-id')),
-    denyPermission: mock((id: string, note?: string) => overrides.denyResult ?? (id === 'valid-id')),
-    requeuePermission: mock((id: string) => overrides.requeueResult ?? (id === 'valid-id')),
+    approvePermission: mock(
+      (id: string, note?: string) => overrides.approveResult ?? id === 'valid-id'
+    ),
+    denyPermission: mock((id: string, note?: string) => overrides.denyResult ?? id === 'valid-id'),
+    requeuePermission: mock((id: string) => overrides.requeueResult ?? id === 'valid-id'),
     getPermissionsHistory: mock((limit?: number) => overrides.history ?? []),
     getPermissionHistoryById: mock((id: string) => overrides.historyById?.[id] ?? undefined),
   } as any;
@@ -43,7 +45,19 @@ describe('ask-permission routes', () => {
 
   test('GET / returns pending requests', async () => {
     const pending = [
-      { id: '1', botId: 'bot1', botName: 'TestBot', action: 'file_write', resource: '/tmp/x', description: 'test', urgency: 'normal', status: 'pending', createdAt: Date.now(), timeoutMs: 60000, remainingMs: 55000 },
+      {
+        id: '1',
+        botId: 'bot1',
+        botName: 'TestBot',
+        action: 'file_write',
+        resource: '/tmp/x',
+        description: 'test',
+        urgency: 'normal',
+        status: 'pending',
+        createdAt: Date.now(),
+        timeoutMs: 60000,
+        remainingMs: 55000,
+      },
     ];
     const app = createApp(makeBotManager({ pending }));
     const res = await app.request('/api/ask-permission');
@@ -154,7 +168,18 @@ describe('ask-permission routes', () => {
 
   test('GET /history returns history entries', async () => {
     const history = [
-      { id: 'h1', botId: 'bot1', botName: 'TestBot', action: 'file_write', resource: '/tmp/x', description: 'test', status: 'approved', executionStatus: 'executed', resolvedAt: Date.now(), executionSummary: 'Done' },
+      {
+        id: 'h1',
+        botId: 'bot1',
+        botName: 'TestBot',
+        action: 'file_write',
+        resource: '/tmp/x',
+        description: 'test',
+        status: 'approved',
+        executionStatus: 'executed',
+        resolvedAt: Date.now(),
+        executionSummary: 'Done',
+      },
     ];
     const app = createApp(makeBotManager({ history }));
     const res = await app.request('/api/ask-permission/history');
@@ -166,7 +191,17 @@ describe('ask-permission routes', () => {
   });
 
   test('GET /history/:id returns found entry', async () => {
-    const entry = { id: 'h1', botId: 'bot1', botName: 'TestBot', action: 'exec', resource: 'cmd', description: 'test', status: 'approved', executionStatus: 'consumed', resolvedAt: Date.now() };
+    const entry = {
+      id: 'h1',
+      botId: 'bot1',
+      botName: 'TestBot',
+      action: 'exec',
+      resource: 'cmd',
+      description: 'test',
+      status: 'approved',
+      executionStatus: 'consumed',
+      resolvedAt: Date.now(),
+    };
     const app = createApp(makeBotManager({ historyById: { h1: entry } }));
     const res = await app.request('/api/ask-permission/history/h1');
     const data = await res.json();

@@ -1,9 +1,9 @@
 import type { Database } from 'bun:sqlite';
-import type { Logger } from '../logger';
 import type { MemorySearchConfig } from '../config';
+import type { Logger } from '../logger';
 import type { EmbeddingService } from './embeddings';
-import type { MemorySearchResult } from './types';
 import { deserializeEmbedding } from './schema';
+import type { MemorySearchResult } from './types';
 
 // Extended result with importance weighting
 export interface WeightedMemoryResult extends MemorySearchResult {
@@ -27,6 +27,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 interface SearchOpts {
   maxResults?: number;
   minScore?: number;
+  botId?: string;
 }
 
 interface ChunkRow {
@@ -46,13 +47,62 @@ interface FtsRow {
 
 const STOP_WORDS = new Set([
   // Spanish
-  'a', 'al', 'con', 'de', 'del', 'el', 'en', 'es', 'la', 'las', 'lo', 'los',
-  'me', 'mi', 'no', 'o', 'para', 'por', 'que', 'se', 'si', 'su', 'te', 'un',
-  'una', 'y', 'como', 'cual', 'tiene', 'esta',
+  'a',
+  'al',
+  'con',
+  'de',
+  'del',
+  'el',
+  'en',
+  'es',
+  'la',
+  'las',
+  'lo',
+  'los',
+  'me',
+  'mi',
+  'no',
+  'o',
+  'para',
+  'por',
+  'que',
+  'se',
+  'si',
+  'su',
+  'te',
+  'un',
+  'una',
+  'y',
+  'como',
+  'cual',
+  'tiene',
+  'esta',
   // English
-  'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has',
-  'he', 'in', 'is', 'it', 'its', 'of', 'on', 'or', 'she', 'the', 'to',
-  'was', 'we', 'with', 'you',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'by',
+  'for',
+  'from',
+  'has',
+  'he',
+  'in',
+  'is',
+  'it',
+  'its',
+  'of',
+  'on',
+  'or',
+  'she',
+  'the',
+  'to',
+  'was',
+  'we',
+  'with',
+  'you',
 ]);
 
 export async function hybridSearch(
@@ -61,7 +111,7 @@ export async function hybridSearch(
   embeddingService: EmbeddingService,
   config: MemorySearchConfig,
   logger: Logger,
-  opts?: SearchOpts,
+  opts?: SearchOpts
 ): Promise<MemorySearchResult[]> {
   const maxResults = opts?.maxResults ?? config.defaultMaxResults;
   const minScore = opts?.minScore ?? config.defaultMinScore;
@@ -71,17 +121,27 @@ export async function hybridSearch(
   const keywordScores = new Map<number, number>();
 
   // --- Vector search ---
+  const botId = opts?.botId;
   try {
     const queryEmbedding = await embeddingService.getEmbedding(
       `query:${query}`, // prefix to distinguish from chunk hashes
-      query,
+      query
     );
 
-    const allChunks = db.prepare<ChunkRow, []>(
-      `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
+    let vectorSql = `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
        FROM chunks c JOIN files f ON c.file_id = f.id
-       WHERE c.embedding IS NOT NULL`
-    ).all();
+       WHERE c.embedding IS NOT NULL`;
+    const vectorParams: string[] = [];
+    if (botId) {
+      vectorSql += ` AND (f.path LIKE ? OR f.path LIKE ?)`;
+      vectorParams.push(`${botId}/%`, `sessions/bot-${botId}-%`);
+    }
+
+    const allChunks = (
+      botId
+        ? db.prepare<ChunkRow, string[]>(vectorSql).all(...vectorParams)
+        : db.prepare<ChunkRow, []>(vectorSql).all()
+    ) as ChunkRow[];
 
     for (const chunk of allChunks) {
       if (!chunk.embedding) continue;
@@ -102,15 +162,32 @@ export async function hybridSearch(
       .replace(/[^\w\s]/g, ' ')
       .split(/\s+/)
       .filter(Boolean)
-      .map(t => t.toLowerCase())
-      .filter(t => t.length >= 3 && !STOP_WORDS.has(t));
+      .map((t) => t.toLowerCase())
+      .filter((t) => t.length >= 3 && !STOP_WORDS.has(t));
 
-    const ftsQuery = ftsTokens.map(t => `${t}*`).join(' OR ');
+    const ftsQuery = ftsTokens.map((t) => `${t}*`).join(' OR ');
 
     if (ftsQuery) {
-      const ftsResults = db.prepare<FtsRow, [string]>(
-        `SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT 50`
-      ).all(ftsQuery);
+      let ftsResults: FtsRow[];
+      if (botId) {
+        // Join FTS results with chunks→files to filter by bot path prefix
+        ftsResults = db
+          .prepare<FtsRow, [string, string, string]>(
+            `SELECT fts.rowid, fts.rank FROM chunks_fts fts
+             JOIN chunks c ON c.id = fts.rowid
+             JOIN files f ON f.id = c.file_id
+             WHERE chunks_fts MATCH ?
+               AND (f.path LIKE ? OR f.path LIKE ?)
+             ORDER BY fts.rank LIMIT 50`
+          )
+          .all(ftsQuery, `${botId}/%`, `sessions/bot-${botId}-%`);
+      } else {
+        ftsResults = db
+          .prepare<FtsRow, [string]>(
+            'SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT 50'
+          )
+          .all(ftsQuery);
+      }
 
       for (const row of ftsResults) {
         // BM25 rank is negative (lower = better), convert to 0-1 score
@@ -125,7 +202,7 @@ export async function hybridSearch(
   // --- Core Memory search (importance-weighted) ---
   const coreMemoryResults: WeightedMemoryResult[] = [];
   try {
-    const coreResults = searchCoreMemory(db, query);
+    const coreResults = searchCoreMemory(db, query, botId);
     for (const result of coreResults) {
       coreMemoryResults.push(result);
     }
@@ -183,8 +260,14 @@ export async function hybridSearch(
   const mergedResults = mergeWithCoreMemory(results, coreMemoryResults, maxResults);
 
   logger.debug(
-    { query: query.slice(0, 50), results: mergedResults.length, vectorHits: vectorScores.size, keywordHits: keywordScores.size, coreMemoryHits: coreMemoryResults.length },
-    'Hybrid search completed',
+    {
+      query: query.slice(0, 50),
+      results: mergedResults.length,
+      vectorHits: vectorScores.size,
+      keywordHits: keywordScores.size,
+      coreMemoryHits: coreMemoryResults.length,
+    },
+    'Hybrid search completed'
   );
 
   return mergedResults;
@@ -204,11 +287,13 @@ interface CoreMemoryRow {
  * Search Core Memory with keyword matching and importance weighting.
  * Returns results sorted by relevance * importance.
  */
-function searchCoreMemory(db: Database, query: string): WeightedMemoryResult[] {
+function searchCoreMemory(db: Database, query: string, botId?: string): WeightedMemoryResult[] {
   // Check if core_memory table exists
-  const tableCheck = db.prepare<{ name: string }, []>(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='core_memory'"
-  ).get();
+  const tableCheck = db
+    .prepare<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='core_memory'"
+    )
+    .get();
   if (!tableCheck) return [];
 
   const tokens = query
@@ -216,27 +301,33 @@ function searchCoreMemory(db: Database, query: string): WeightedMemoryResult[] {
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)
     .filter(Boolean)
-    .filter(t => t.length >= 3 && !STOP_WORDS.has(t));
+    .filter((t) => t.length >= 3 && !STOP_WORDS.has(t));
 
   if (tokens.length === 0) return [];
 
   // Search in both key and value
   const conditions = tokens.map(() => '(LOWER(key) LIKE ? OR LOWER(value) LIKE ?)').join(' OR ');
-  const params = tokens.flatMap(t => [`%${t}%`, `%${t}%`]);
+  const params: string[] = [];
+  if (botId) params.push(botId);
+  params.push(...tokens.flatMap((t) => [`%${t}%`, `%${t}%`]));
 
-  const rows = db.prepare<CoreMemoryRow, string[]>(
-    `SELECT id, category, key, value, importance, updated_at
+  const botFilter = botId ? 'bot_id = ? AND' : '';
+
+  const rows = db
+    .prepare<CoreMemoryRow, string[]>(
+      `SELECT id, category, key, value, importance, updated_at
      FROM core_memory
-     WHERE ${conditions}
+     WHERE ${botFilter} (${conditions})
      ORDER BY importance DESC, updated_at DESC
      LIMIT 20`
-  ).all(...params);
+    )
+    .all(...params);
 
   const results: WeightedMemoryResult[] = [];
   for (const row of rows) {
     // Calculate match score based on token overlap
     const content = `${row.key} ${row.value}`.toLowerCase();
-    const matches = tokens.filter(t => content.includes(t)).length;
+    const matches = tokens.filter((t) => content.includes(t)).length;
     const matchScore = matches / tokens.length;
 
     // Weight by importance (1-10) - high importance gets boosted
@@ -268,7 +359,7 @@ function searchCoreMemory(db: Database, query: string): WeightedMemoryResult[] {
 function mergeWithCoreMemory(
   regularResults: MemorySearchResult[],
   coreResults: WeightedMemoryResult[],
-  maxResults: number,
+  maxResults: number
 ): MemorySearchResult[] {
   // If no core results, return regular results
   if (coreResults.length === 0) return regularResults;

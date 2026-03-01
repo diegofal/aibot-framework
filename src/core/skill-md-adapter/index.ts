@@ -24,12 +24,12 @@ export {
   DefaultToolGenerator,
   DefaultRegistryBridge,
   loadSkill,
-  loadSkillsFromDirectory
+  loadSkillsFromDirectory,
 } from './loader';
 export type {
   LoaderConfig,
   ToolGenerator,
-  RegistryBridge
+  RegistryBridge,
 } from './loader';
 
 // Framework integration
@@ -48,13 +48,11 @@ export type {
   DeclaredTool,
   ToolParameter,
   ToolParameterType,
-
   // Metadata types
   SkillMetadata,
   AibotMetadata,
   SkillRequirements,
   SkillCategory,
-
   // Runtime types
   LoadedSkill,
   DeclarativeSkill,

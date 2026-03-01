@@ -1,5 +1,5 @@
-import type { Tool, ToolResult } from './types';
 import type { Logger } from '../logger';
+import type { Tool, ToolResult } from './types';
 
 interface DatetimeToolConfig {
   timezone: string;
@@ -28,14 +28,12 @@ export function createDatetimeTool(config: DatetimeToolConfig): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger,
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       try {
-        const tz = typeof args.timezone === 'string' && args.timezone.trim()
-          ? args.timezone.trim()
-          : config.timezone;
+        const tz =
+          typeof args.timezone === 'string' && args.timezone.trim()
+            ? args.timezone.trim()
+            : config.timezone;
         const locale = config.locale;
 
         const now = new Date();

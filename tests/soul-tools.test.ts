@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { createSaveMemoryTool } from '../src/tools/soul';
 
 const mockLogger = {
@@ -12,7 +12,9 @@ describe('save_memory tool', () => {
   test('truncates facts longer than 2000 characters', async () => {
     let savedFact = '';
     const mockSoulLoader = {
-      appendDailyMemory: (fact: string) => { savedFact = fact; },
+      appendDailyMemory: (fact: string) => {
+        savedFact = fact;
+      },
     };
     const tool = createSaveMemoryTool(() => mockSoulLoader as any);
 
@@ -28,7 +30,9 @@ describe('save_memory tool', () => {
   test('does not truncate facts under 2000 characters', async () => {
     let savedFact = '';
     const mockSoulLoader = {
-      appendDailyMemory: (fact: string) => { savedFact = fact; },
+      appendDailyMemory: (fact: string) => {
+        savedFact = fact;
+      },
     };
     const tool = createSaveMemoryTool(() => mockSoulLoader as any);
 
@@ -42,7 +46,9 @@ describe('save_memory tool', () => {
   test('does not truncate facts exactly at 2000 characters', async () => {
     let savedFact = '';
     const mockSoulLoader = {
-      appendDailyMemory: (fact: string) => { savedFact = fact; },
+      appendDailyMemory: (fact: string) => {
+        savedFact = fact;
+      },
     };
     const tool = createSaveMemoryTool(() => mockSoulLoader as any);
 

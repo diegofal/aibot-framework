@@ -1,6 +1,10 @@
-import { describe, test, expect, mock, afterEach } from 'bun:test';
-import { createTwitterSearchTool, createTwitterPostTool, createTwitterReadTool } from '../../src/tools/twitter';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import type { TwitterConfig } from '../../src/config';
+import {
+  createTwitterPostTool,
+  createTwitterReadTool,
+  createTwitterSearchTool,
+} from '../../src/tools/twitter';
 
 const mockLogger = {
   info: mock(() => {}),
@@ -31,10 +35,13 @@ const originalFetch = globalThis.fetch;
 
 function mockTwitterFetch(responseData: unknown, statusCode = 200) {
   globalThis.fetch = mock(() =>
-    Promise.resolve(new Response(
-      JSON.stringify(responseData),
-      { status: statusCode, statusText: statusCode === 200 ? 'OK' : 'Error', headers: { 'Content-Type': 'application/json' } },
-    )),
+    Promise.resolve(
+      new Response(JSON.stringify(responseData), {
+        status: statusCode,
+        statusText: statusCode === 200 ? 'OK' : 'Error',
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
   ) as typeof fetch;
 }
 
@@ -62,15 +69,14 @@ describe('twitter_search', () => {
     let capturedHeaders: Record<string, string> = {};
     globalThis.fetch = mock((_url: string, init?: RequestInit) => {
       capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
-      return Promise.resolve(new Response(
-        JSON.stringify({ data: [], meta: { result_count: 0 } }),
-        { status: 200 },
-      ));
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: [], meta: { result_count: 0 } }), { status: 200 })
+      );
     }) as typeof fetch;
 
     const tool = createTwitterSearchTool(baseConfig);
     await tool.execute({ query: 'test' }, mockLogger);
-    expect(capturedHeaders['Authorization']).toBe('Bearer test-bearer-token');
+    expect(capturedHeaders.Authorization).toBe('Bearer test-bearer-token');
   });
 
   test('returns formatted results with metrics', async () => {
@@ -171,21 +177,25 @@ describe('twitter_read', () => {
       callCount++;
       if (callCount === 1) {
         // User lookup
-        return Promise.resolve(new Response(
-          JSON.stringify({ data: { id: 'uid1', name: 'Timeline User', username: 'timeline' } }),
-          { status: 200 },
-        ));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ data: { id: 'uid1', name: 'Timeline User', username: 'timeline' } }),
+            { status: 200 }
+          )
+        );
       }
       // Tweets
-      return Promise.resolve(new Response(
-        JSON.stringify({
-          data: [
-            { id: 't1', text: 'First tweet', created_at: '2026-02-24T10:00:00Z' },
-            { id: 't2', text: 'Second tweet', created_at: '2026-02-24T09:00:00Z' },
-          ],
-        }),
-        { status: 200 },
-      ));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: 't1', text: 'First tweet', created_at: '2026-02-24T10:00:00Z' },
+              { id: 't2', text: 'Second tweet', created_at: '2026-02-24T09:00:00Z' },
+            ],
+          }),
+          { status: 200 }
+        )
+      );
     }) as typeof fetch;
 
     const tool = createTwitterReadTool(baseConfig);
@@ -250,17 +260,16 @@ describe('twitter_post', () => {
     let capturedHeaders: Record<string, string> = {};
     globalThis.fetch = mock((_url: string, init?: RequestInit) => {
       capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
-      return Promise.resolve(new Response(
-        JSON.stringify({ data: { id: '1', text: 'test' } }),
-        { status: 200 },
-      ));
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: { id: '1', text: 'test' } }), { status: 200 })
+      );
     }) as typeof fetch;
 
     const tool = createTwitterPostTool(baseConfig);
     await tool.execute({ text: 'auth test' }, mockLogger);
-    expect(capturedHeaders['Authorization']).toMatch(/^OAuth /);
-    expect(capturedHeaders['Authorization']).toContain('oauth_consumer_key');
-    expect(capturedHeaders['Authorization']).toContain('oauth_signature');
+    expect(capturedHeaders.Authorization).toMatch(/^OAuth /);
+    expect(capturedHeaders.Authorization).toContain('oauth_consumer_key');
+    expect(capturedHeaders.Authorization).toContain('oauth_signature');
   });
 
   test('handles API errors on post', async () => {

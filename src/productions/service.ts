@@ -1,19 +1,29 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, appendFileSync, readdirSync, statSync, renameSync } from 'node:fs';
-import { join, resolve, relative, basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { Config } from '../config';
+import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { SoulLoader } from '../soul';
-import type { ProductionEntry, ProductionEvaluation, SummaryData } from './types';
 import type { ThreadMessage } from '../types/thread';
-import type { KarmaService } from '../karma/service';
+import type { ProductionEntry, ProductionEvaluation, SummaryData } from './types';
 
 export class ProductionsService {
   private baseDir: string;
 
   constructor(
     private config: Config,
-    private logger: Logger,
+    private logger: Logger
   ) {
     this.baseDir = resolve(config.productions.baseDir);
   }
@@ -65,7 +75,7 @@ export class ProductionsService {
     const full: ProductionEntry = { id: randomUUID(), ...entry };
     const dir = this.resolveDir(entry.botId);
     const changelogPath = join(dir, 'changelog.jsonl');
-    appendFileSync(changelogPath, JSON.stringify(full) + '\n', 'utf-8');
+    appendFileSync(changelogPath, `${JSON.stringify(full)}\n`, 'utf-8');
     this.logger.debug({ botId: entry.botId, path: entry.path, id: full.id }, 'Production logged');
     this.rebuildIndex(entry.botId);
     return full;
@@ -73,7 +83,7 @@ export class ProductionsService {
 
   getChangelog(
     botId: string,
-    opts?: { limit?: number; offset?: number; since?: string; status?: string },
+    opts?: { limit?: number; offset?: number; since?: string; status?: string }
   ): ProductionEntry[] {
     const dir = this.resolveDir(botId);
     const changelogPath = join(dir, 'changelog.jsonl');
@@ -121,7 +131,7 @@ export class ProductionsService {
     id: string,
     evaluation: { status: 'approved' | 'rejected'; rating?: number; feedback?: string },
     soulLoader?: SoulLoader,
-    karmaService?: KarmaService,
+    karmaService?: KarmaService
   ): ProductionEntry | null {
     const dir = this.resolveDir(botId);
     const changelogPath = join(dir, 'changelog.jsonl');
@@ -142,23 +152,41 @@ export class ProductionsService {
     entries[idx].evaluation = evalData;
 
     // Rewrite the JSONL file
-    const updated = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    const updated = `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`;
     writeFileSync(changelogPath, updated, 'utf-8');
 
     this.logger.info(
       { botId, id, status: evaluation.status, rating: evaluation.rating },
-      'Production evaluated',
+      'Production evaluated'
     );
 
     // Karma: adjust based on evaluation
     if (karmaService) {
       if (evaluation.status === 'rejected') {
-        karmaService.addEvent(botId, -10, `Production rejected: "${entries[idx].path}"`, 'production', { rating: evaluation.rating });
+        karmaService.addEvent(
+          botId,
+          -10,
+          `Production rejected: "${entries[idx].path}"`,
+          'production',
+          { rating: evaluation.rating }
+        );
       } else if (evaluation.rating != null) {
-        const delta = evaluation.rating >= 4 ? (evaluation.rating === 5 ? 10 : 5) : evaluation.rating;
-        karmaService.addEvent(botId, delta, `Production approved: "${entries[idx].path}" (rating: ${evaluation.rating}/5)`, 'production', { rating: evaluation.rating });
+        const delta =
+          evaluation.rating >= 4 ? (evaluation.rating === 5 ? 10 : 5) : evaluation.rating;
+        karmaService.addEvent(
+          botId,
+          delta,
+          `Production approved: "${entries[idx].path}" (rating: ${evaluation.rating}/5)`,
+          'production',
+          { rating: evaluation.rating }
+        );
       } else {
-        karmaService.addEvent(botId, 3, `Production approved: "${entries[idx].path}"`, 'production');
+        karmaService.addEvent(
+          botId,
+          3,
+          `Production approved: "${entries[idx].path}"`,
+          'production'
+        );
       }
     }
 
@@ -191,7 +219,7 @@ export class ProductionsService {
     entries[idx].evaluation!.aiResponse = response;
     entries[idx].evaluation!.aiResponseAt = new Date().toISOString();
 
-    const updated = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    const updated = `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`;
     writeFileSync(changelogPath, updated, 'utf-8');
 
     this.logger.info({ botId, id }, 'AI response saved to production evaluation');
@@ -202,7 +230,7 @@ export class ProductionsService {
     botId: string,
     id: string,
     role: 'human' | 'bot',
-    content: string,
+    content: string
   ): { message: ThreadMessage; entry: ProductionEntry } | null {
     const dir = this.resolveDir(botId);
     const changelogPath = join(dir, 'changelog.jsonl');
@@ -219,7 +247,7 @@ export class ProductionsService {
       entries[idx].evaluation = { evaluatedAt: new Date().toISOString() };
     }
 
-    if (!entries[idx].evaluation!.thread) {
+    if (!entries[idx].evaluation?.thread) {
       entries[idx].evaluation!.thread = [];
     }
 
@@ -229,9 +257,9 @@ export class ProductionsService {
       content,
       createdAt: new Date().toISOString(),
     };
-    entries[idx].evaluation!.thread!.push(msg);
+    entries[idx].evaluation?.thread?.push(msg);
 
-    const updated = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    const updated = `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`;
     writeFileSync(changelogPath, updated, 'utf-8');
 
     this.logger.debug({ botId, id, role, msgId: msg.id }, 'Thread message added to production');
@@ -253,9 +281,7 @@ export class ProductionsService {
 
     // Remove the associated file if not trackOnly
     if (!entry.trackOnly) {
-      const filePath = entry.path.startsWith('/')
-        ? entry.path
-        : join(dir, entry.path);
+      const filePath = entry.path.startsWith('/') ? entry.path : join(dir, entry.path);
       try {
         if (existsSync(filePath)) unlinkSync(filePath);
       } catch (err) {
@@ -264,9 +290,8 @@ export class ProductionsService {
     }
 
     entries.splice(idx, 1);
-    const updated = entries.length > 0
-      ? entries.map((e) => JSON.stringify(e)).join('\n') + '\n'
-      : '';
+    const updated =
+      entries.length > 0 ? `${entries.map((e) => JSON.stringify(e)).join('\n')}\n` : '';
     writeFileSync(changelogPath, updated, 'utf-8');
 
     this.logger.info({ botId, id }, 'Production deleted');
@@ -280,7 +305,9 @@ export class ProductionsService {
     const dir = this.resolveDir(botId);
     const filePath = entry.trackOnly
       ? resolve(entry.path)
-      : (entry.path.startsWith('/') ? entry.path : join(dir, entry.path));
+      : entry.path.startsWith('/')
+        ? entry.path
+        : join(dir, entry.path);
 
     try {
       const fileDir = join(filePath, '..');
@@ -298,9 +325,7 @@ export class ProductionsService {
     if (!entry) return null;
 
     const dir = this.resolveDir(botId);
-    const filePath = entry.path.startsWith('/')
-      ? entry.path
-      : join(dir, entry.path);
+    const filePath = entry.path.startsWith('/') ? entry.path : join(dir, entry.path);
 
     try {
       if (!existsSync(filePath)) return null;
@@ -348,9 +373,10 @@ export class ProductionsService {
       approved,
       rejected,
       unreviewed,
-      avgRating: ratings.length > 0
-        ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
-        : null,
+      avgRating:
+        ratings.length > 0
+          ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
+          : null,
     };
   }
 
@@ -385,7 +411,9 @@ export class ProductionsService {
         // Unchecked checkbox only
         /^[-*]\s*\[\s*\]\s*$/.test(trimmed) ||
         // Lines that are only a heading marker with generic text
-        /^#{1,6}\s+(Section|Title|Heading|Overview|Introduction|Summary|Conclusion|Details|Notes)\s*$/i.test(trimmed) ||
+        /^#{1,6}\s+(Section|Title|Heading|Overview|Introduction|Summary|Conclusion|Details|Notes)\s*$/i.test(
+          trimmed
+        ) ||
         // Lines that are just separators
         /^[-=_*]{3,}$/.test(trimmed);
 
@@ -458,8 +486,14 @@ export class ProductionsService {
 
   /** Files/dirs excluded from INDEX.md generation */
   private static readonly INDEX_EXCLUDES = new Set([
-    'changelog.jsonl', 'summary.json', 'INDEX.md', '.gitignore',
-    'node_modules', 'venv', '.vercel', '.git',
+    'changelog.jsonl',
+    'summary.json',
+    'INDEX.md',
+    '.gitignore',
+    'node_modules',
+    'venv',
+    '.vercel',
+    '.git',
   ]);
 
   /**
@@ -479,7 +513,9 @@ export class ProductionsService {
           const entry: ProductionEntry = JSON.parse(line);
           // Keep newest description per path (later lines = newer)
           descMap.set(entry.path, entry.description);
-        } catch { /* skip malformed lines */ }
+        } catch {
+          /* skip malformed lines */
+        }
       }
     }
 
@@ -500,13 +536,19 @@ export class ProductionsService {
       let entries: string[];
       try {
         entries = readdirSync(current);
-      } catch { return; }
+      } catch {
+        return;
+      }
 
       for (const entry of entries) {
         if (ProductionsService.INDEX_EXCLUDES.has(entry)) continue;
         const fullPath = join(current, entry);
         let stat;
-        try { stat = statSync(fullPath); } catch { continue; }
+        try {
+          stat = statSync(fullPath);
+        } catch {
+          continue;
+        }
 
         if (stat.isDirectory()) {
           dirCount++;
@@ -531,7 +573,7 @@ export class ProductionsService {
     for (const f of files) {
       const key = f.dir || 'root';
       if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(f);
+      groups.get(key)?.push(f);
     }
 
     // Sort groups: root first, then archived last, rest alphabetical
@@ -635,10 +677,18 @@ export class ProductionsService {
   }
 
   /** Get description for a file: changelog > first heading > humanized name */
-  private getFileDescription(relPath: string, descMap: Map<string, string>, absPath: string): string {
+  private getFileDescription(
+    relPath: string,
+    descMap: Map<string, string>,
+    absPath: string
+  ): string {
     // Try changelog description (skip generic "file_write:" descriptions)
     const changelogDesc = descMap.get(relPath);
-    if (changelogDesc && !changelogDesc.startsWith('file_write:') && !changelogDesc.startsWith('file_edit:')) {
+    if (
+      changelogDesc &&
+      !changelogDesc.startsWith('file_write:') &&
+      !changelogDesc.startsWith('file_edit:')
+    ) {
       return changelogDesc;
     }
 
@@ -649,7 +699,9 @@ export class ProductionsService {
         const heading = content.match(/^#+ (.+)$/m)?.[1];
         if (heading) return heading.slice(0, 80);
       }
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
 
     // Humanize filename
     return basename(relPath, '.md')
@@ -677,7 +729,9 @@ export class ProductionsService {
       try {
         const entry: ProductionEntry = JSON.parse(lines[i]);
         if (entry.action === 'archive' && entry.path === archivedPath) return entry;
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
     return null;
   }
@@ -691,7 +745,9 @@ export class ProductionsService {
     return this.parseJsonlLines(lines);
   }
 
-  getAllBotStats(): Array<{ botId: string; name: string } & ReturnType<ProductionsService['getStats']>> {
+  getAllBotStats(): Array<
+    { botId: string; name: string } & ReturnType<ProductionsService['getStats']>
+  > {
     return this.config.bots
       .filter((b) => this.isEnabled(b.id))
       .map((b) => ({

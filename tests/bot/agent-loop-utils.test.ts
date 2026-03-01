@@ -1,15 +1,15 @@
-import { describe, it, expect, vi, afterAll } from 'vitest';
-import {
-  buildRecentActionsDigest,
-  isSimilarSummary,
-  isRepetitiveAction,
-  scanFileTree,
-  logToMemory,
-  type RecentAction,
-} from '../../src/bot/agent-loop-utils';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import {
+  type RecentAction,
+  buildRecentActionsDigest,
+  isRepetitiveAction,
+  isSimilarSummary,
+  logToMemory,
+  scanFileTree,
+} from '../../src/bot/agent-loop-utils';
 
 describe('buildRecentActionsDigest', () => {
   it('returns null for empty actions', () => {
@@ -18,8 +18,18 @@ describe('buildRecentActionsDigest', () => {
 
   it('builds a digest with recent actions', () => {
     const actions: RecentAction[] = [
-      { cycle: 1, timestamp: Date.now() - 3_600_000, tools: ['save_memory'], planSummary: 'check messages' },
-      { cycle: 2, timestamp: Date.now() - 1_800_000, tools: ['file_write'], planSummary: 'write poem' },
+      {
+        cycle: 1,
+        timestamp: Date.now() - 3_600_000,
+        tools: ['save_memory'],
+        planSummary: 'check messages',
+      },
+      {
+        cycle: 2,
+        timestamp: Date.now() - 1_800_000,
+        tools: ['file_write'],
+        planSummary: 'write poem',
+      },
     ];
     const digest = buildRecentActionsDigest(actions)!;
     expect(digest).toContain('## Recent Actions');
@@ -51,10 +61,9 @@ describe('isSimilarSummary', () => {
   });
 
   it('ignores timestamps', () => {
-    expect(isSimilarSummary(
-      'action at 2026-02-22T10:00:00Z',
-      'action at 2026-02-22T11:00:00Z',
-    )).toBe(true);
+    expect(
+      isSimilarSummary('action at 2026-02-22T10:00:00Z', 'action at 2026-02-22T11:00:00Z')
+    ).toBe(true);
   });
 
   it('ignores case and whitespace', () => {
@@ -86,7 +95,7 @@ describe('isRepetitiveAction', () => {
 });
 
 describe('scanFileTree', () => {
-  const testDir = join(tmpdir(), 'agent-loop-utils-test-' + Date.now());
+  const testDir = join(tmpdir(), `agent-loop-utils-test-${Date.now()}`);
 
   afterAll(() => {
     if (existsSync(testDir)) rmSync(testDir, { recursive: true });
@@ -133,7 +142,9 @@ describe('logToMemory', () => {
 
   it('handles errors gracefully', () => {
     const mockCtx = {
-      getSoulLoader: () => { throw new Error('no loader'); },
+      getSoulLoader: () => {
+        throw new Error('no loader');
+      },
       logger: { warn: vi.fn() },
     } as any;
 

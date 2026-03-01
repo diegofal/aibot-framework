@@ -1,8 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import type { Config } from '../../config';
-import type { Logger } from '../../logger';
 import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
+import type { Logger } from '../../logger';
 
 export function settingsRoutes(deps: {
   config: Config;
@@ -25,7 +25,8 @@ export function settingsRoutes(deps: {
     // Top-level session fields
     if (body.groupActivation !== undefined) session.groupActivation = body.groupActivation;
     if (body.replyWindow !== undefined) session.replyWindow = body.replyWindow;
-    if (body.forumTopicIsolation !== undefined) session.forumTopicIsolation = body.forumTopicIsolation;
+    if (body.forumTopicIsolation !== undefined)
+      session.forumTopicIsolation = body.forumTopicIsolation;
 
     // Reset policy
     if (body.resetPolicy) {
@@ -49,8 +50,10 @@ export function settingsRoutes(deps: {
       if (rlc.enabled !== undefined) session.llmRelevanceCheck.enabled = rlc.enabled;
       if (rlc.temperature !== undefined) session.llmRelevanceCheck.temperature = rlc.temperature;
       if (rlc.timeout !== undefined) session.llmRelevanceCheck.timeout = rlc.timeout;
-      if (rlc.contextMessages !== undefined) session.llmRelevanceCheck.contextMessages = rlc.contextMessages;
-      if (rlc.broadcastCheck !== undefined) session.llmRelevanceCheck.broadcastCheck = rlc.broadcastCheck;
+      if (rlc.contextMessages !== undefined)
+        session.llmRelevanceCheck.contextMessages = rlc.contextMessages;
+      if (rlc.broadcastCheck !== undefined)
+        session.llmRelevanceCheck.broadcastCheck = rlc.broadcastCheck;
     }
 
     persistSession(deps.configPath, session);
@@ -73,7 +76,8 @@ export function settingsRoutes(deps: {
     if (body.enabled !== undefined) collab.enabled = body.enabled;
     if (body.maxRounds !== undefined) collab.maxRounds = body.maxRounds;
     if (body.cooldownMs !== undefined) collab.cooldownMs = body.cooldownMs;
-    if (body.internalQueryTimeout !== undefined) collab.internalQueryTimeout = body.internalQueryTimeout;
+    if (body.internalQueryTimeout !== undefined)
+      collab.internalQueryTimeout = body.internalQueryTimeout;
     if (body.enableTargetTools !== undefined) collab.enableTargetTools = body.enableTargetTools;
     if (body.maxConverseTurns !== undefined) collab.maxConverseTurns = body.maxConverseTurns;
     if (body.sessionTtlMs !== undefined) collab.sessionTtlMs = body.sessionTtlMs;
@@ -88,7 +92,9 @@ export function settingsRoutes(deps: {
   // Get skills folders (configured + auto-discovered production paths)
   app.get('/skills-folders', (c) => {
     const configuredPaths = deps.config.skillsFolders?.paths ?? [];
-    const productionEntries = discoverProductionSkillPaths(deps.config.productions?.baseDir ?? './productions');
+    const productionEntries = discoverProductionSkillPaths(
+      deps.config.productions?.baseDir ?? './productions'
+    );
     const productionPaths = productionEntries.map((e) => e.path);
 
     // Merge and deduplicate
@@ -126,17 +132,17 @@ export function settingsRoutes(deps: {
 function persistSession(configPath: string, session: Config['session']): void {
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   raw.session = session;
-  writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }
 
 function persistCollaboration(configPath: string, collaboration: Config['collaboration']): void {
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   raw.collaboration = collaboration;
-  writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }
 
 function persistSkillsFolders(configPath: string, skillsFolders: Config['skillsFolders']): void {
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   raw.skillsFolders = skillsFolders;
-  writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }

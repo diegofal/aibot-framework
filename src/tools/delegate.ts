@@ -1,7 +1,12 @@
 import type { Tool, ToolResult } from './types';
 
 export interface DelegationHandler {
-  handleDelegation(targetBotId: string, chatId: number, message: string, sourceBotId: string): Promise<string>;
+  handleDelegation(
+    targetBotId: string,
+    chatId: number,
+    message: string,
+    sourceBotId: string
+  ): Promise<string>;
 }
 
 export function createDelegationTool(getHandler: () => DelegationHandler): Tool {
@@ -12,7 +17,7 @@ export function createDelegationTool(getHandler: () => DelegationHandler): Tool 
         name: 'delegate_to_bot',
         description:
           'Delegate a message to another bot in the group. The target bot will respond as itself. ' +
-          'Use this when the user\'s request is better handled by another bot.',
+          "Use this when the user's request is better handled by another bot.",
         parameters: {
           type: 'object',
           properties: {
@@ -43,8 +48,9 @@ export function createDelegationTool(getHandler: () => DelegationHandler): Tool 
       if (!chatId) {
         return {
           success: false,
-          content: 'Delegation requires a chat context (a Telegram chat where the target bot can respond publicly). '
-            + 'In autonomous mode, use the "collaborate" tool with visible=false instead to exchange messages internally with other agents.',
+          content:
+            'Delegation requires a chat context (a Telegram chat where the target bot can respond publicly). ' +
+            'In autonomous mode, use the "collaborate" tool with visible=false instead to exchange messages internally with other agents.',
         };
       }
 

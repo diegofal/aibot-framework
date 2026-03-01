@@ -1,13 +1,21 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { LLMClientWithFallback } from '../src/core/llm-client';
-import type { LLMClient, LLMGenerateOptions, LLMChatOptions } from '../src/core/llm-client';
+import type { LLMChatOptions, LLMClient, LLMGenerateOptions } from '../src/core/llm-client';
 import type { ChatMessage } from '../src/ollama';
 
 function mockLogger() {
-  return { info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}), debug: mock(() => {}) } as any;
+  return {
+    info: mock(() => {}),
+    warn: mock(() => {}),
+    error: mock(() => {}),
+    debug: mock(() => {}),
+  } as any;
 }
 
-function mockClient(backend: 'ollama' | 'claude-cli', response = 'ok'): LLMClient & { generate: ReturnType<typeof mock>; chat: ReturnType<typeof mock> } {
+function mockClient(
+  backend: 'ollama' | 'claude-cli',
+  response = 'ok'
+): LLMClient & { generate: ReturnType<typeof mock>; chat: ReturnType<typeof mock> } {
   return {
     backend,
     generate: mock(() => Promise.resolve(response)),
@@ -18,13 +26,22 @@ function mockClient(backend: 'ollama' | 'claude-cli', response = 'ok'): LLMClien
 const dummyMessages: ChatMessage[] = [{ role: 'user', content: 'hello' }];
 
 const toolOpts: LLMChatOptions = {
-  tools: [{ type: 'function', function: { name: 'test_tool', description: 'a tool', parameters: {} } }],
-  toolExecutor: mock(() => Promise.resolve('result')),
+  tools: [
+    {
+      type: 'function',
+      function: {
+        name: 'test_tool',
+        description: 'a tool',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+  ],
+  toolExecutor: mock(() => Promise.resolve({ success: true, content: 'result' })),
 };
 
 describe('LLMClientWithFallback', () => {
-  describe('tool-based chat bypass', () => {
-    test('bypasses claude-cli primary when tools are present', async () => {
+  describe('tool-based chat — no bypass (MCP bridge)', () => {
+    test('routes tool chat to primary (claude-cli) — no longer bypassed', async () => {
       const primary = mockClient('claude-cli', 'primary-response');
       const fallback = mockClient('ollama', 'fallback-response');
       const logger = mockLogger();
@@ -32,13 +49,27 @@ describe('LLMClientWithFallback', () => {
 
       const result = await client.chat(dummyMessages, toolOpts);
 
-      expect(result).toBe('fallback-response');
-      expect(primary.chat).not.toHaveBeenCalled();
-      expect(fallback.chat).toHaveBeenCalledTimes(1);
-      expect(logger.info).toHaveBeenCalledTimes(1);
+      expect(result).toBe('primary-response');
+      expect(primary.chat).toHaveBeenCalledTimes(1);
+      expect(fallback.chat).not.toHaveBeenCalled();
     });
 
-    test('does not bypass when no tools are provided', async () => {
+    test('falls back to ollama when claude-cli tool chat fails', async () => {
+      const primary = mockClient('claude-cli');
+      primary.chat = mock(() => Promise.reject(new Error('MCP bridge timeout')));
+      const fallback = mockClient('ollama', 'fallback-response');
+      const logger = mockLogger();
+      const client = new LLMClientWithFallback(primary, fallback, logger);
+
+      const result = await client.chat(dummyMessages, toolOpts);
+
+      expect(result).toBe('fallback-response');
+      expect(primary.chat).toHaveBeenCalledTimes(1);
+      expect(fallback.chat).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
+
+    test('routes chat without tools to primary normally', async () => {
       const primary = mockClient('claude-cli', 'primary-response');
       const fallback = mockClient('ollama', 'fallback-response');
       const logger = mockLogger();
@@ -51,39 +82,29 @@ describe('LLMClientWithFallback', () => {
       expect(fallback.chat).not.toHaveBeenCalled();
     });
 
-    test('does not bypass when tools array is empty', async () => {
+    test('routes tool chat with empty tools array to primary', async () => {
       const primary = mockClient('claude-cli', 'primary-response');
       const fallback = mockClient('ollama', 'fallback-response');
       const logger = mockLogger();
       const client = new LLMClientWithFallback(primary, fallback, logger);
 
-      const result = await client.chat(dummyMessages, { tools: [], toolExecutor: toolOpts.toolExecutor });
+      const result = await client.chat(dummyMessages, {
+        tools: [],
+        toolExecutor: toolOpts.toolExecutor,
+      });
 
       expect(result).toBe('primary-response');
       expect(primary.chat).toHaveBeenCalledTimes(1);
       expect(fallback.chat).not.toHaveBeenCalled();
     });
 
-    test('does not bypass when primary is not claude-cli', async () => {
+    test('ollama primary with tools works normally', async () => {
       const primary = mockClient('ollama', 'primary-response');
       const fallback = mockClient('claude-cli', 'fallback-response');
       const logger = mockLogger();
       const client = new LLMClientWithFallback(primary, fallback, logger);
 
       const result = await client.chat(dummyMessages, toolOpts);
-
-      expect(result).toBe('primary-response');
-      expect(primary.chat).toHaveBeenCalledTimes(1);
-      expect(fallback.chat).not.toHaveBeenCalled();
-    });
-
-    test('does not bypass when toolExecutor is missing', async () => {
-      const primary = mockClient('claude-cli', 'primary-response');
-      const fallback = mockClient('ollama', 'fallback-response');
-      const logger = mockLogger();
-      const client = new LLMClientWithFallback(primary, fallback, logger);
-
-      const result = await client.chat(dummyMessages, { tools: toolOpts.tools });
 
       expect(result).toBe('primary-response');
       expect(primary.chat).toHaveBeenCalledTimes(1);
@@ -135,6 +156,65 @@ describe('LLMClientWithFallback', () => {
       expect(primary.chat).toHaveBeenCalledTimes(1);
       expect(fallback.chat).toHaveBeenCalledTimes(1);
       expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('onFallback callback', () => {
+    test('fires on generate fallback', async () => {
+      const primary = mockClient('claude-cli');
+      primary.generate = mock(() => Promise.reject(new Error('timeout')));
+      const fallback = mockClient('ollama', 'fallback-response');
+      const logger = mockLogger();
+      const client = new LLMClientWithFallback(primary, fallback, logger);
+
+      const cb = mock(() => {});
+      client.onFallback = cb;
+
+      await client.generate('test');
+
+      expect(cb).toHaveBeenCalledTimes(1);
+      expect(cb).toHaveBeenCalledWith({
+        primaryBackend: 'claude-cli',
+        fallbackBackend: 'ollama',
+        error: 'timeout',
+        method: 'generate',
+      });
+    });
+
+    test('fires on chat fallback', async () => {
+      const primary = mockClient('claude-cli');
+      primary.chat = mock(() => Promise.reject(new Error('connection refused')));
+      const fallback = mockClient('ollama', 'fallback-response');
+      const logger = mockLogger();
+      const client = new LLMClientWithFallback(primary, fallback, logger);
+
+      const cb = mock(() => {});
+      client.onFallback = cb;
+
+      await client.chat(dummyMessages);
+
+      expect(cb).toHaveBeenCalledTimes(1);
+      expect(cb).toHaveBeenCalledWith({
+        primaryBackend: 'claude-cli',
+        fallbackBackend: 'ollama',
+        error: 'connection refused',
+        method: 'chat',
+      });
+    });
+
+    test('does not fire when primary succeeds', async () => {
+      const primary = mockClient('claude-cli', 'ok');
+      const fallback = mockClient('ollama', 'fallback');
+      const logger = mockLogger();
+      const client = new LLMClientWithFallback(primary, fallback, logger);
+
+      const cb = mock(() => {});
+      client.onFallback = cb;
+
+      await client.generate('test');
+      await client.chat(dummyMessages);
+
+      expect(cb).not.toHaveBeenCalled();
     });
   });
 });

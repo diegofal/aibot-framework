@@ -1,13 +1,13 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
-import { toolsRoutes } from '../../../src/web/routes/tools';
-import { DynamicToolStore } from '../../../src/tools/dynamic-tool-store';
-import type { DynamicToolRegistry } from '../../../src/bot/dynamic-tool-registry';
 import type { BotManager } from '../../../src/bot';
+import type { DynamicToolRegistry } from '../../../src/bot/dynamic-tool-registry';
 import type { Logger } from '../../../src/logger';
+import { DynamicToolStore } from '../../../src/tools/dynamic-tool-store';
 import type { Tool, ToolDefinition } from '../../../src/tools/types';
+import { toolsRoutes } from '../../../src/web/routes/tools';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -59,12 +59,14 @@ const mockFailTool: Tool = {
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
-  execute: async () => { throw new Error('Tool exploded'); },
+  execute: async () => {
+    throw new Error('Tool exploded');
+  },
 };
 
 function createMockToolRegistry() {
   const tools = [mockDatetimeTool, mockEchoTool, mockFailTool];
-  const definitions = tools.map(t => t.definition);
+  const definitions = tools.map((t) => t.definition);
   return {
     getTools: () => tools,
     getDefinitions: () => definitions,
@@ -89,12 +91,15 @@ function makeApp(opts: { withBotManager?: boolean; storePath?: string } = {}) {
   const botManager = opts.withBotManager !== false ? createMockBotManager(toolRegistry) : undefined;
 
   const app = new Hono();
-  app.route('/api/tools', toolsRoutes({
-    store,
-    registry: mockDynamicRegistry,
-    botManager,
-    logger: noopLogger,
-  }));
+  app.route(
+    '/api/tools',
+    toolsRoutes({
+      store,
+      registry: mockDynamicRegistry,
+      botManager,
+      logger: noopLogger,
+    })
+  );
 
   return { app, store };
 }
@@ -102,18 +107,21 @@ function makeApp(opts: { withBotManager?: boolean; storePath?: string } = {}) {
 function addDynamicTool(storePath: string, id: string, meta: Record<string, unknown>) {
   const dir = join(storePath, id);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'meta.json'), JSON.stringify({
-    id,
-    name: meta.name || id,
-    description: meta.description || 'A test tool',
-    type: 'typescript',
-    status: meta.status || 'pending',
-    createdBy: 'test-bot',
-    scope: 'all',
-    parameters: meta.parameters || {},
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }));
+  writeFileSync(
+    join(dir, 'meta.json'),
+    JSON.stringify({
+      id,
+      name: meta.name || id,
+      description: meta.description || 'A test tool',
+      type: 'typescript',
+      status: meta.status || 'pending',
+      createdBy: 'test-bot',
+      scope: 'all',
+      parameters: meta.parameters || {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+  );
   writeFileSync(join(dir, 'tool.ts'), 'export default () => "ok"');
 }
 

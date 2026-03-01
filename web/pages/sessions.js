@@ -10,9 +10,10 @@ export async function renderSessions(el) {
 
   el.innerHTML = `
     <div class="page-title">Sessions <span class="count">${sessions.length}</span></div>
-    ${sessions.length === 0
-      ? '<p class="text-dim">No sessions yet.</p>'
-      : `<table>
+    ${
+      sessions.length === 0
+        ? '<p class="text-dim">No sessions yet.</p>'
+        : `<table>
           <thead><tr><th>Session</th><th>Messages</th><th>Last Activity</th><th>Actions</th></tr></thead>
           <tbody id="sessions-tbody"></tbody>
         </table>`
@@ -55,7 +56,7 @@ export async function renderSessionTranscript(el, key) {
 
   const data = await api(`/api/sessions/${encodeURIComponent(key)}/transcript?limit=200`);
   if (data.error) {
-    el.innerHTML = `<p>Session not found.</p>`;
+    el.innerHTML = '<p>Session not found.</p>';
     return;
   }
 

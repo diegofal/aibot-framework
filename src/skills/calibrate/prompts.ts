@@ -19,13 +19,12 @@ Rules:
 - Maximum ${input.maxBatches} batches total. Prioritize the most reviewable claims if you need to cut.
 - You MUST respond with ONLY valid JSON — no markdown fences, no preamble, no explanation.`;
 
-  const filesBlock = input.files
-    .map((f) => `### ${f.filename}\n${f.content}`)
-    .join('\n\n');
+  const filesBlock = input.files.map((f) => `### ${f.filename}\n${f.content}`).join('\n\n');
 
-  const scopeNote = input.scope === 'all'
-    ? 'Extract claims from ALL files.'
-    : `Focus on claims from ${input.scope}-related content, but include cross-references from other files if relevant.`;
+  const scopeNote =
+    input.scope === 'all'
+      ? 'Extract claims from ALL files.'
+      : `Focus on claims from ${input.scope}-related content, but include cross-references from other files if relevant.`;
 
   const prompt = `Here are the personality files to analyze:
 
@@ -58,7 +57,12 @@ Extract claims and return this exact JSON structure:
  */
 export function buildRewritePrompt(input: {
   files: { filename: string; content: string }[];
-  corrections: { claim: string; action: 'edit' | 'remove'; correction?: string; sourceFile: string }[];
+  corrections: {
+    claim: string;
+    action: 'edit' | 'remove';
+    correction?: string;
+    sourceFile: string;
+  }[];
 }): { system: string; prompt: string } {
   const system = `You are a careful editor for an AI personality system. The user has reviewed claims extracted from personality files and marked some for editing or removal. Your job is to rewrite ONLY the affected files, applying the corrections while preserving the overall structure, voice, and formatting.
 

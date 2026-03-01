@@ -1,22 +1,23 @@
-import { InputFile, type Context } from 'grammy';
+import { type Context, InputFile } from 'grammy';
 import type { BotConfig } from '../config';
 import { resolveAgentConfig, resolveTtsConfig } from '../config';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { generateSpeech } from '../tts';
-import type { BotContext } from './types';
-import type { MemoryFlusher } from './memory-flush';
-import type { SystemPromptBuilder } from './system-prompt-builder';
-import type { ToolRegistry } from './tool-registry';
-import { sendLongMessage } from './telegram-utils';
+import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
 import {
-  executeWithResilience,
   CircuitBreaker,
   DEFAULT_CIRCUIT_CONFIG,
-  formatLLMErrorForUser,
   type LLMErrorInfo,
+  executeWithResilience,
+  formatLLMErrorForUser,
 } from './llm-resilience';
+import type { MemoryFlusher } from './memory-flush';
+import type { SystemPromptBuilder } from './system-prompt-builder';
+import { sendLongMessage } from './telegram-utils';
+import type { ToolRegistry } from './tool-registry';
+import type { BotContext } from './types';
 
 export class ConversationPipeline {
   private circuitBreaker: CircuitBreaker;
@@ -26,6 +27,7 @@ export class ConversationPipeline {
     private systemPromptBuilder: SystemPromptBuilder,
     private memoryFlusher: MemoryFlusher,
     private toolRegistry: ToolRegistry,
+    private contextCompactor: ContextCompactor
   ) {
     // Initialize circuit breaker for LLM calls (uses shared defaults from llm-resilience)
     this.circuitBreaker = new CircuitBreaker(DEFAULT_CIRCUIT_CONFIG, ctx.logger);
@@ -38,7 +40,8 @@ export class ConversationPipeline {
   async prefetchMemoryContext(
     userText: string,
     isGroup: boolean,
-    botLogger: Logger
+    botLogger: Logger,
+    botId?: string
   ): Promise<string | null> {
     const ragConfig = this.ctx.config.soul.search?.autoRag;
     if (!ragConfig?.enabled || !this.ctx.searchEnabled || !this.ctx.memoryManager) {
@@ -58,7 +61,8 @@ export class ConversationPipeline {
       const results = await this.ctx.memoryManager.search(
         query,
         ragConfig.maxResults,
-        ragConfig.minScore
+        ragConfig.minScore,
+        botId
       );
 
       if (results.length === 0) {
@@ -71,8 +75,8 @@ export class ConversationPipeline {
       const yesterday = localDateStr(new Date(now.getTime() - 86_400_000));
       const recentDailyPattern = new RegExp(`memory/(${today}|${yesterday})\\.md$`);
 
-      const filtered = results.filter((r) =>
-        !recentDailyPattern.test(r.filePath) && r.sourceType !== 'session'
+      const filtered = results.filter(
+        (r) => !recentDailyPattern.test(r.filePath) && r.sourceType !== 'session'
       );
       if (filtered.length === 0) {
         return null;
@@ -86,7 +90,9 @@ export class ConversationPipeline {
         if (totalChars + snippet.length > ragConfig.maxContentChars) {
           const remaining = ragConfig.maxContentChars - totalChars;
           if (remaining >= 100) {
-            snippets.push(`[${r.filePath} | score: ${r.score.toFixed(2)}]\n${snippet.slice(0, remaining)}…`);
+            snippets.push(
+              `[${r.filePath} | score: ${r.score.toFixed(2)}]\n${snippet.slice(0, remaining)}…`
+            );
           }
           break;
         }
@@ -109,12 +115,18 @@ export class ConversationPipeline {
         },
         '🔍 RAG pre-fetch injected'
       );
-      this.ctx.activityStream?.publish({ type: 'memory:rag', botId: '', timestamp: Date.now(), data: { query: query.substring(0, 80), resultsFound: results.length, injected: snippets.length } });
+      this.ctx.activityStream?.publish({
+        type: 'memory:rag',
+        botId: '',
+        timestamp: Date.now(),
+        data: {
+          query: query.substring(0, 80),
+          resultsFound: results.length,
+          injected: snippets.length,
+        },
+      });
 
-      return '## Relevant Memory Context\n\n' +
-        'The following was retrieved from your long-term memory for this conversation.\n' +
-        'USE this information to answer — it takes precedence over daily log entries.\n\n' +
-        snippets.join('\n\n');
+      return `## Relevant Memory Context\n\nThe following was retrieved from your long-term memory for this conversation.\nUSE this information to answer — it takes precedence over daily log entries.\n\n${snippets.join('\n\n')}`;
     } catch (err) {
       botLogger.warn({ err }, 'RAG pre-fetch failed (non-fatal)');
       return null;
@@ -132,15 +144,15 @@ export class ConversationPipeline {
     userText: string,
     images?: string[],
     sessionText?: string,
-    isVoice?: boolean,
+    isVoice?: boolean
   ): Promise<void> {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
     const webToolsConfig = this.ctx.config.webTools;
     const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id);
     const hasTools = botToolDefs.length > 0;
-    const chatId = ctx.chat!.id;
-    const isGroup = ctx.chat!.type === 'group' || ctx.chat!.type === 'supergroup';
+    const chatId = ctx.chat?.id;
+    const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
     const botLogger = this.ctx.getBotLogger(config.id);
 
     const senderName = isGroup ? (ctx.from?.first_name ?? 'Unknown') : undefined;
@@ -158,7 +170,7 @@ export class ConversationPipeline {
     );
 
     // Start RAG pre-fetch early for parallelism
-    const ragPromise = this.prefetchMemoryContext(userText, isGroup, botLogger);
+    const ragPromise = this.prefetchMemoryContext(userText, isGroup, botLogger, config.id);
 
     try {
       // Memory flush on session expiry
@@ -177,9 +189,15 @@ export class ConversationPipeline {
       const flushConfig = this.ctx.config.soul.memoryFlush;
       if (sessionConfig.enabled && flushConfig?.enabled) {
         const meta = this.ctx.sessionManager.getSessionMeta(serializedKey);
-        if (meta && meta.messageCount >= flushConfig.messageThreshold
-            && meta.lastFlushCompactionIndex !== (meta.compactionCount ?? 0)) {
-          botLogger.info({ key: serializedKey, msgs: meta.messageCount }, 'Proactive memory flush with scoring');
+        if (
+          meta &&
+          meta.messageCount >= flushConfig.messageThreshold &&
+          meta.lastFlushCompactionIndex !== (meta.compactionCount ?? 0)
+        ) {
+          botLogger.info(
+            { key: serializedKey, msgs: meta.messageCount },
+            'Proactive memory flush with scoring'
+          );
           const recentHistory = this.ctx.sessionManager.getFullHistory(serializedKey);
           this.ctx.sessionManager.markMemoryFlushed(serializedKey);
           // Use flushWithScoring for importance-weighted Core Memory storage
@@ -215,11 +233,26 @@ export class ConversationPipeline {
         userMessage.images = images;
       }
 
-      const messages: ChatMessage[] = [
+      const rawMessages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         ...history,
         userMessage,
       ];
+
+      // Truncate oversized individual messages + proactive compaction
+      const compactionConfig = this.ctx.config.conversation.compaction;
+      const { messages: truncated } = truncateOversizedMessages(
+        rawMessages,
+        compactionConfig.maxMessageChars
+      );
+
+      const compResult = await this.contextCompactor.maybeCompact(
+        truncated,
+        serializedKey,
+        config.id,
+        compactionConfig
+      );
+      let currentMessages = compResult.messages;
 
       // Typing indicator
       await ctx.replyWithChatAction('typing');
@@ -240,20 +273,36 @@ export class ConversationPipeline {
             historyLength: history.length,
             toolCount: hasTools ? botToolDefs.length : 0,
             promptToLLM: prefixedText.substring(0, 200),
+            compacted: compResult.compacted,
           },
           '🤖 Sending to LLM'
         );
-        this.ctx.activityStream?.publish({ type: 'llm:start', botId: config.id, timestamp: Date.now(), data: { model: activeModel, historyLength: history.length, toolCount: hasTools ? botToolDefs.length : 0 } });
-
-        // Execute LLM call with retry and circuit breaker
-        const llmResult = await executeWithResilience(
-          () => this.ctx.getLLMClient(config.id).chat(messages, {
+        const llmBackend = this.ctx.getLLMClient(config.id).backend;
+        this.ctx.activityStream?.publish({
+          type: 'llm:start',
+          botId: config.id,
+          timestamp: Date.now(),
+          data: {
             model: activeModel,
-            temperature: resolved.temperature,
-            tools: hasTools ? botToolDefs : undefined,
-            toolExecutor: hasTools ? this.toolRegistry.createExecutor(chatId, config.id) : undefined,
-            maxToolRounds: webToolsConfig?.maxToolRounds,
-          }),
+            historyLength: history.length,
+            toolCount: hasTools ? botToolDefs.length : 0,
+            backend: llmBackend,
+            caller: 'conversation',
+          },
+        });
+
+        // Execute LLM call with overflow retry loop
+        let llmResult = await executeWithResilience(
+          () =>
+            this.ctx.getLLMClient(config.id).chat(currentMessages, {
+              model: activeModel,
+              temperature: resolved.temperature,
+              tools: hasTools ? botToolDefs : undefined,
+              toolExecutor: hasTools
+                ? this.toolRegistry.createExecutor(chatId, config.id)
+                : undefined,
+              maxToolRounds: webToolsConfig?.maxToolRounds,
+            }),
           'conversation-pipeline.chat',
           {
             retryConfig: {
@@ -273,8 +322,54 @@ export class ConversationPipeline {
           }
         );
 
+        // Overflow retry: if context_length error, emergency compact and retry
+        let overflowRetries = 0;
+        while (
+          !llmResult.success &&
+          llmResult.error?.category === 'context_length' &&
+          overflowRetries < compactionConfig.maxOverflowRetries
+        ) {
+          overflowRetries++;
+          botLogger.warn({ attempt: overflowRetries }, 'Context overflow, emergency compaction');
+
+          const emergency = await this.contextCompactor.maybeCompact(
+            currentMessages,
+            serializedKey,
+            config.id,
+            { ...compactionConfig, thresholdRatio: 0.1, keepRecentMessages: 2 }
+          );
+          currentMessages = emergency.messages;
+
+          llmResult = await executeWithResilience(
+            () =>
+              this.ctx.getLLMClient(config.id).chat(currentMessages, {
+                model: activeModel,
+                temperature: resolved.temperature,
+                tools: hasTools ? botToolDefs : undefined,
+                toolExecutor: hasTools
+                  ? this.toolRegistry.createExecutor(chatId, config.id)
+                  : undefined,
+                maxToolRounds: webToolsConfig?.maxToolRounds,
+              }),
+            'conversation-pipeline.chat',
+            {
+              retryConfig: {
+                maxRetries: 1,
+                baseDelayMs: 1000,
+                maxDelayMs: 5000,
+                backoffMultiplier: 2,
+              },
+              circuitBreaker: this.circuitBreaker,
+              logger: botLogger,
+            }
+          );
+        }
+
         if (!llmResult.success) {
-          const error = llmResult.error!;
+          const error = llmResult.error ?? {
+            message: 'unknown error',
+            category: 'unknown' as const,
+          };
           botLogger.error(
             {
               chatId,
@@ -285,10 +380,23 @@ export class ConversationPipeline {
             },
             'LLM call failed after retries'
           );
+          this.ctx.activityStream?.publish({
+            type: 'llm:error',
+            botId: config.id,
+            timestamp: Date.now(),
+            data: {
+              error: error.message,
+              category: error.category,
+              durationMs: llmResult.totalDurationMs,
+              attempts: llmResult.attempts,
+              backend: llmBackend,
+              caller: 'conversation',
+            },
+          });
           throw new Error(`LLM call failed: ${error.message}`);
         }
 
-        const response = llmResult.data!;
+        const response = llmResult.data ?? '';
 
         botLogger.info(
           {
@@ -300,7 +408,18 @@ export class ConversationPipeline {
           },
           '📤 LLM response received'
         );
-        this.ctx.activityStream?.publish({ type: 'llm:end', botId: config.id, timestamp: Date.now(), data: { responseLength: response.length, durationMs: llmResult.totalDurationMs, attempts: llmResult.attempts } });
+        this.ctx.activityStream?.publish({
+          type: 'llm:end',
+          botId: config.id,
+          timestamp: Date.now(),
+          data: {
+            responseLength: response.length,
+            durationMs: llmResult.totalDurationMs,
+            attempts: llmResult.attempts,
+            backend: llmBackend,
+            caller: 'conversation',
+          },
+        });
 
         // Persist messages to session
         if (sessionConfig.enabled) {
@@ -322,21 +441,15 @@ export class ConversationPipeline {
             try {
               await ctx.replyWithChatAction('record_voice');
               const ttsConfig = resolveTtsConfig(this.ctx.config.media.tts, config);
-              const ttsResult = await generateSpeech(
-                response,
-                ttsConfig,
-                botLogger,
-              );
-              await ctx.replyWithVoice(
-                new InputFile(ttsResult.audioBuffer, 'reply.opus'),
-              );
+              const ttsResult = await generateSpeech(response, ttsConfig, botLogger);
+              await ctx.replyWithVoice(new InputFile(ttsResult.audioBuffer, 'reply.opus'));
               botLogger.info({ latencyMs: ttsResult.latencyMs }, 'Voice reply sent');
             } catch (ttsErr) {
               botLogger.warn({ err: ttsErr }, 'TTS failed, falling back to text');
-              await sendLongMessage(t => ctx.reply(t), response);
+              await sendLongMessage((t) => ctx.reply(t), response);
             }
           } else {
-            await sendLongMessage(t => ctx.reply(t), response);
+            await sendLongMessage((t) => ctx.reply(t), response);
           }
         } else {
           botLogger.debug({ chatId }, 'LLM returned empty response, sending ack');
@@ -364,26 +477,33 @@ export class ConversationPipeline {
       }
     } catch (error) {
       const errorInfo = error instanceof Error ? error.message : String(error);
-      botLogger.error({ error, chatId, circuitState: this.circuitBreaker.getState() }, 'Conversation handler failed');
-      
+      botLogger.error(
+        { error, chatId, circuitState: this.circuitBreaker.getState() },
+        'Conversation handler failed'
+      );
+
       // Determine user-facing message based on error context
       let userMessage = '❌ Failed to generate response. Please try again later.';
-      
+
       if (error instanceof Error) {
         // Check if it's a circuit breaker open error
         if (error.message.includes('Circuit breaker is open')) {
-          userMessage = '⏳ The AI service is temporarily overloaded. Please wait a moment and try again.';
+          userMessage =
+            '⏳ The AI service is temporarily overloaded. Please wait a moment and try again.';
         }
         // Check if it was a timeout after retries
         else if (error.message.includes('timeout') || error.message.includes('timed out')) {
           userMessage = '⏱️ The request took too long. The service might be busy. Please try again.';
         }
         // Check for context length errors
-        else if (error.message.includes('context length') || error.message.includes('too many tokens')) {
+        else if (
+          error.message.includes('context length') ||
+          error.message.includes('too many tokens')
+        ) {
           userMessage = '📏 The conversation is too long. Try /reset to start fresh.';
         }
       }
-      
+
       try {
         await ctx.reply(userMessage);
       } catch (replyError) {

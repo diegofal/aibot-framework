@@ -6,9 +6,38 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "recommended": true,
+      "complexity": {
+        "noForEach": "warn",
+        "noBannedTypes": "warn"
+      },
+      "suspicious": {
+        "noExplicitAny": "warn",
+        "noImplicitAnyLet": "warn",
+        "noRedeclare": "warn",
+        "noAssignInExpressions": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "warn",
+        "noParameterAssign": "warn",
+        "useTemplate": "warn",
+        "useConst": "warn",
+        "noUnusedTemplateLiteral": "warn"
+      }
     }
   },
+  "overrides": [
+    {
+      "include": ["tests/**", "src/bot/__tests__/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    }
+  ],
   "formatter": {
     "enabled": true,
     "indentStyle": "space",

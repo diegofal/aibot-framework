@@ -80,7 +80,8 @@ const skill: Skill = {
 
   commands: {
     humanize: {
-      description: 'Humanize AI-generated text. Usage: /humanize <text> or reply to a message with /humanize',
+      description:
+        'Humanize AI-generated text. Usage: /humanize <text> or reply to a message with /humanize',
       async handler(args: string[], ctx: SkillContext) {
         const text = args.join(' ').trim();
 

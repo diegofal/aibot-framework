@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 
 /**
  * Tests for the auto-restart timer tracking in BotManager.
@@ -22,14 +22,15 @@ describe('BotManager auto-restart timer tracking', () => {
 
   afterEach(() => {
     // Clean up any timers
-    for (const [, timer] of restartTimers) { clearTimeout(timer); }
+    for (const [, timer] of restartTimers) {
+      clearTimeout(timer);
+    }
     restartTimers.clear();
   });
 
   function scheduleRestart(botId: string, delayMs: number): void {
     const now = Date.now();
-    const recent = (restartAttempts.get(botId) ?? [])
-      .filter(t => now - t < 5 * 60_000);
+    const recent = (restartAttempts.get(botId) ?? []).filter((t) => now - t < 5 * 60_000);
 
     if (recent.length >= 3) {
       restartAttempts.delete(botId);
@@ -46,7 +47,10 @@ describe('BotManager auto-restart timer tracking', () => {
 
   function cancelRestart(botId: string): void {
     const timer = restartTimers.get(botId);
-    if (timer) { clearTimeout(timer); restartTimers.delete(botId); }
+    if (timer) {
+      clearTimeout(timer);
+      restartTimers.delete(botId);
+    }
     restartAttempts.delete(botId);
   }
 

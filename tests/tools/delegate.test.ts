@@ -1,5 +1,5 @@
-import { describe, test, expect, mock } from 'bun:test';
-import { createDelegationTool, type DelegationHandler } from '../../src/tools/delegate';
+import { describe, expect, mock, test } from 'bun:test';
+import { type DelegationHandler, createDelegationTool } from '../../src/tools/delegate';
 
 function createMockLogger() {
   return {
@@ -35,12 +35,15 @@ describe('delegate_to_bot tool', () => {
     const handler = createMockHandler({ handleDelegation: delegateFn });
     const tool = createDelegationTool(() => handler);
 
-    const result = await tool.execute({
-      targetBotId: 'bot-2',
-      message: 'Handle this please',
-      _chatId: 12345,
-      _botId: 'bot-1',
-    }, logger);
+    const result = await tool.execute(
+      {
+        targetBotId: 'bot-2',
+        message: 'Handle this please',
+        _chatId: 12345,
+        _botId: 'bot-1',
+      },
+      logger
+    );
 
     expect(result.success).toBe(true);
     expect(result.content).toContain('Delegation successful');
@@ -50,12 +53,15 @@ describe('delegate_to_bot tool', () => {
   test('returns helpful error when no chat context (autonomous mode)', async () => {
     const tool = createDelegationTool(() => createMockHandler());
 
-    const result = await tool.execute({
-      targetBotId: 'bot-2',
-      message: 'Handle this',
-      _chatId: 0,
-      _botId: 'bot-1',
-    }, logger);
+    const result = await tool.execute(
+      {
+        targetBotId: 'bot-2',
+        message: 'Handle this',
+        _chatId: 0,
+        _botId: 'bot-1',
+      },
+      logger
+    );
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('collaborate');
@@ -66,12 +72,15 @@ describe('delegate_to_bot tool', () => {
   test('returns error when chatId is undefined', async () => {
     const tool = createDelegationTool(() => createMockHandler());
 
-    const result = await tool.execute({
-      targetBotId: 'bot-2',
-      message: 'Handle this',
-      _botId: 'bot-1',
-      // _chatId not set
-    }, logger);
+    const result = await tool.execute(
+      {
+        targetBotId: 'bot-2',
+        message: 'Handle this',
+        _botId: 'bot-1',
+        // _chatId not set
+      },
+      logger
+    );
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('collaborate');
@@ -80,11 +89,14 @@ describe('delegate_to_bot tool', () => {
   test('missing bot context returns error', async () => {
     const tool = createDelegationTool(() => createMockHandler());
 
-    const result = await tool.execute({
-      targetBotId: 'bot-2',
-      message: 'Handle this',
-      _chatId: 12345,
-    }, logger);
+    const result = await tool.execute(
+      {
+        targetBotId: 'bot-2',
+        message: 'Handle this',
+        _chatId: 12345,
+      },
+      logger
+    );
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('missing bot context');
@@ -93,12 +105,15 @@ describe('delegate_to_bot tool', () => {
   test('cannot delegate to yourself', async () => {
     const tool = createDelegationTool(() => createMockHandler());
 
-    const result = await tool.execute({
-      targetBotId: 'bot-1',
-      message: 'Handle this',
-      _chatId: 12345,
-      _botId: 'bot-1',
-    }, logger);
+    const result = await tool.execute(
+      {
+        targetBotId: 'bot-1',
+        message: 'Handle this',
+        _chatId: 12345,
+        _botId: 'bot-1',
+      },
+      logger
+    );
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('Cannot delegate to yourself');
@@ -107,11 +122,14 @@ describe('delegate_to_bot tool', () => {
   test('requires message', async () => {
     const tool = createDelegationTool(() => createMockHandler());
 
-    const result = await tool.execute({
-      targetBotId: 'bot-2',
-      _chatId: 12345,
-      _botId: 'bot-1',
-    }, logger);
+    const result = await tool.execute(
+      {
+        targetBotId: 'bot-2',
+        _chatId: 12345,
+        _botId: 'bot-1',
+      },
+      logger
+    );
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('message is required');
@@ -119,16 +137,21 @@ describe('delegate_to_bot tool', () => {
 
   test('handles delegation failure', async () => {
     const handler = createMockHandler({
-      handleDelegation: async () => { throw new Error('Target bot unavailable'); },
+      handleDelegation: async () => {
+        throw new Error('Target bot unavailable');
+      },
     });
     const tool = createDelegationTool(() => handler);
 
-    const result = await tool.execute({
-      targetBotId: 'bot-2',
-      message: 'Handle this',
-      _chatId: 12345,
-      _botId: 'bot-1',
-    }, logger);
+    const result = await tool.execute(
+      {
+        targetBotId: 'bot-2',
+        message: 'Handle this',
+        _chatId: 12345,
+        _botId: 'bot-1',
+      },
+      logger
+    );
 
     expect(result.success).toBe(false);
     expect(result.content).toContain('Delegation failed');

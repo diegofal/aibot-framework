@@ -1,8 +1,8 @@
-import { describe, test, expect, vi } from 'bun:test';
+import { describe, expect, test, vi } from 'bun:test';
 import { Hono } from 'hono';
-import { agentLoopRoutes } from '../../../src/web/routes/agent-loop';
 import type { Config } from '../../../src/config';
 import type { Logger } from '../../../src/logger';
+import { agentLoopRoutes } from '../../../src/web/routes/agent-loop';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -56,7 +56,10 @@ describe('agent-loop routes', () => {
     });
 
     const app = new Hono();
-    app.route('/api/agent-loop', agentLoopRoutes({ config: makeConfig(), botManager, logger: noopLogger }));
+    app.route(
+      '/api/agent-loop',
+      agentLoopRoutes({ config: makeConfig(), botManager, logger: noopLogger })
+    );
 
     const res = await app.request('/api/agent-loop');
     expect(res.status).toBe(200);
@@ -68,7 +71,10 @@ describe('agent-loop routes', () => {
   test('POST /stop-safe calls gracefulStopAll and returns ok', async () => {
     const botManager = makeBotManager();
     const app = new Hono();
-    app.route('/api/agent-loop', agentLoopRoutes({ config: makeConfig(), botManager, logger: noopLogger }));
+    app.route(
+      '/api/agent-loop',
+      agentLoopRoutes({ config: makeConfig(), botManager, logger: noopLogger })
+    );
 
     const res = await app.request('/api/agent-loop/stop-safe', { method: 'POST' });
     expect(res.status).toBe(200);
@@ -82,7 +88,10 @@ describe('agent-loop routes', () => {
       gracefulStopAll: vi.fn().mockRejectedValue(new Error('boom')),
     });
     const app = new Hono();
-    app.route('/api/agent-loop', agentLoopRoutes({ config: makeConfig(), botManager, logger: noopLogger }));
+    app.route(
+      '/api/agent-loop',
+      agentLoopRoutes({ config: makeConfig(), botManager, logger: noopLogger })
+    );
 
     const res = await app.request('/api/agent-loop/stop-safe', { method: 'POST' });
     expect(res.status).toBe(500);
@@ -93,7 +102,10 @@ describe('agent-loop routes', () => {
   test('POST /run triggers runAgentLoopAll', async () => {
     const botManager = makeBotManager();
     const app = new Hono();
-    app.route('/api/agent-loop', agentLoopRoutes({ config: makeConfig(), botManager, logger: noopLogger }));
+    app.route(
+      '/api/agent-loop',
+      agentLoopRoutes({ config: makeConfig(), botManager, logger: noopLogger })
+    );
 
     const res = await app.request('/api/agent-loop/run', { method: 'POST' });
     expect(res.status).toBe(200);

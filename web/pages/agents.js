@@ -1,4 +1,4 @@
-import { showModal, closeModal, api, escapeHtml, timeAgo } from './shared.js';
+import { api, closeModal, escapeHtml, showModal, timeAgo } from './shared.js';
 
 function formatDuration(ms) {
   if (ms < 1000) return `${ms}ms`;
@@ -7,9 +7,8 @@ function formatDuration(ms) {
 }
 
 function statusBadge(status) {
-  const cls = status === 'completed' ? 'badge-ok'
-    : status === 'error' ? 'badge-error'
-    : 'badge-disabled';
+  const cls =
+    status === 'completed' ? 'badge-ok' : status === 'error' ? 'badge-error' : 'badge-disabled';
   return `<span class="badge ${cls}">${status}</span>`;
 }
 
@@ -24,8 +23,7 @@ function karmaCompact(score, trend) {
   const color = karmaScoreColor(score);
   const arrow = trend === 'rising' ? '&#8593;' : trend === 'falling' ? '&#8595;' : '';
   const arrowColor = trend === 'rising' ? 'var(--green)' : trend === 'falling' ? 'var(--red)' : '';
-  return `<span style="font-weight:600;color:${color}">${score}</span>`
-    + (arrow ? `<span style="color:${arrowColor};margin-left:2px">${arrow}</span>` : '');
+  return `<span style="font-weight:600;color:${color}">${score}</span>${arrow ? `<span style="color:${arrowColor};margin-left:2px">${arrow}</span>` : ''}`;
 }
 
 function karmaTrendBadge(trend) {
@@ -55,19 +53,20 @@ function renderAgentLoopResult(r) {
   if (r.plan && r.plan.length > 0) {
     sections.push(`<div class="result-section">
       <div class="result-section-title">Plan</div>
-      <ol style="margin:0;padding-left:20px;font-size:13px">${r.plan.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+      <ol style="margin:0;padding-left:20px;font-size:13px">${r.plan.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
     </div>`);
   }
 
   if (r.toolCalls && r.toolCalls.length > 0) {
     sections.push(`<div class="result-section">
       <div class="result-section-title">Tool Calls (${r.toolCalls.length})</div>
-      ${r.toolCalls.map(tc => {
-        const badge = tc.success
-          ? '<span class="badge badge-ok">OK</span>'
-          : '<span class="badge badge-error">FAIL</span>';
-        const argsStr = JSON.stringify(tc.args || {}, null, 2);
-        return `<div class="tool-call-item">
+      ${r.toolCalls
+        .map((tc) => {
+          const badge = tc.success
+            ? '<span class="badge badge-ok">OK</span>'
+            : '<span class="badge badge-error">FAIL</span>';
+          const argsStr = JSON.stringify(tc.args || {}, null, 2);
+          return `<div class="tool-call-item">
           <div class="tool-call-header">
             <span style="font-family:monospace;font-weight:600">${escapeHtml(tc.name)}</span> ${badge}
           </div>
@@ -80,7 +79,8 @@ function renderAgentLoopResult(r) {
             <pre>${escapeHtml(tc.result || '')}</pre>
           </details>
         </div>`;
-      }).join('')}
+        })
+        .join('')}
     </div>`);
   }
 
@@ -128,9 +128,10 @@ export async function renderAgents(el) {
   const tbody = document.getElementById('agents-tbody');
   for (const agent of agents) {
     const isExecuting = executingMap[agent.id];
-    const executingDot = agent.running && isExecuting
-      ? ' <span class="processing-pulse" style="margin-left:4px" title="Executing loop cycle"></span>'
-      : '';
+    const executingDot =
+      agent.running && isExecuting
+        ? ' <span class="processing-pulse" style="margin-left:4px" title="Executing loop cycle"></span>'
+        : '';
     const statusBadge = agent.running
       ? `<span class="badge badge-running">Running</span>${executingDot}`
       : '<span class="badge badge-stopped">Stopped</span>';
@@ -144,13 +145,15 @@ export async function renderAgents(el) {
       <td><a href="#/karma/${encodeURIComponent(agent.id)}" style="text-decoration:none">${karmaCompact(karma?.current, karma?.trend)}</a></td>
       <td class="text-dim">${agent.skills.length}</td>
       <td class="actions">
-        ${agent.running
-          ? `<button class="btn btn-sm btn-danger" data-action="stop" data-id="${agent.id}">Stop</button>`
-          : `<button class="btn btn-sm" data-action="start" data-id="${agent.id}">Start</button>`
+        ${
+          agent.running
+            ? `<button class="btn btn-sm btn-danger" data-action="stop" data-id="${agent.id}">Stop</button>`
+            : `<button class="btn btn-sm" data-action="start" data-id="${agent.id}">Start</button>`
         }
-        ${agent.running
-          ? `<button class="btn btn-sm" data-action="run-loop" data-id="${agent.id}">Run Loop</button>`
-          : ''
+        ${
+          agent.running
+            ? `<button class="btn btn-sm" data-action="run-loop" data-id="${agent.id}">Run Loop</button>`
+            : ''
         }
         <button class="btn btn-sm" data-action="edit" data-id="${agent.id}">Edit</button>
         <button class="btn btn-sm" data-action="clone" data-id="${agent.id}">Clone</button>
@@ -211,7 +214,11 @@ export async function renderAgents(el) {
     } else if (action === 'clone') {
       showCloneModal(id, el);
     } else if (action === 'reset') {
-      if (confirm(`Reset agent "${id}"? This will fully reset the agent to its original state: all conversations, memory, goals, and learned facts will be cleared, and soul files will be restored to their generated baseline. This cannot be undone.`)) {
+      if (
+        confirm(
+          `Reset agent "${id}"? This will fully reset the agent to its original state: all conversations, memory, goals, and learned facts will be cleared, and soul files will be restored to their generated baseline. This cannot be undone.`
+        )
+      ) {
         btn.disabled = true;
         btn.textContent = 'Resetting...';
         const res = await api(`/api/agents/${id}/reset`, { method: 'POST' });
@@ -241,11 +248,11 @@ export async function renderAgentDetail(el, id) {
   ]);
 
   // Find this bot's schedule info
-  const botSchedule = loopState.botSchedules?.find(s => s.botId === id);
+  const botSchedule = loopState.botSchedules?.find((s) => s.botId === id);
   const isExecutingLoop = botSchedule?.isExecutingLoop ?? false;
 
   if (agent.error) {
-    el.innerHTML = `<p>Agent not found.</p>`;
+    el.innerHTML = '<p>Agent not found.</p>';
     return;
   }
 
@@ -264,7 +271,7 @@ export async function renderAgentDetail(el, id) {
 
   const workDirDisplay = agent.workDir
     ? escapeHtml(agent.workDir)
-    : `<span class="text-dim">${escapeHtml((defaults.productionsBaseDir || './productions') + '/' + agent.id)} (default)</span>`;
+    : `<span class="text-dim">${escapeHtml(`${defaults.productionsBaseDir || './productions'}/${agent.id}`)} (default)</span>`;
 
   const agentLoopEvery = agent.agentLoop?.every;
   const loopIntervalDisplay = agentLoopEvery
@@ -272,16 +279,19 @@ export async function renderAgentDetail(el, id) {
     : `<span class="text-dim">${escapeHtml(defaults.agentLoopInterval || '6h')} (global)</span>`;
 
   const systemPromptDisplay = agent.conversation?.systemPrompt
-    ? escapeHtml(agent.conversation.systemPrompt).substring(0, 120) + (agent.conversation.systemPrompt.length > 120 ? '...' : '')
+    ? escapeHtml(agent.conversation.systemPrompt).substring(0, 120) +
+      (agent.conversation.systemPrompt.length > 120 ? '...' : '')
     : `<span class="text-dim">Global default</span>`;
 
-  const tempDisplay = agent.conversation?.temperature !== undefined
-    ? agent.conversation.temperature
-    : `<span class="text-dim">${defaults.temperature} (global)</span>`;
+  const tempDisplay =
+    agent.conversation?.temperature !== undefined
+      ? agent.conversation.temperature
+      : `<span class="text-dim">${defaults.temperature} (global)</span>`;
 
-  const maxHistDisplay = agent.conversation?.maxHistory !== undefined
-    ? agent.conversation.maxHistory
-    : `<span class="text-dim">${defaults.maxHistory} (global)</span>`;
+  const maxHistDisplay =
+    agent.conversation?.maxHistory !== undefined
+      ? agent.conversation.maxHistory
+      : `<span class="text-dim">${defaults.maxHistory} (global)</span>`;
 
   el.innerHTML = `
     <div class="detail-header">
@@ -303,12 +313,20 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim">Allowed Users</td><td>${agent.allowedUsers?.length ? agent.allowedUsers.join(', ') : '<span class="text-dim">All</span>'}</td></tr>
         <tr><td class="text-dim">Mention Patterns</td><td>${agent.mentionPatterns?.length ? agent.mentionPatterns.join(', ') : '<span class="text-dim">None</span>'}</td></tr>
         <tr><td class="text-dim">Loop Interval</td><td>${loopIntervalDisplay}</td></tr>
-        ${agent.running ? `<tr><td class="text-dim">Loop Status</td><td>${isExecutingLoop
-          ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing cycle</span>'
-          : '<span class="text-dim">Idle</span>'}</td></tr>` : ''}
+        ${
+          agent.running
+            ? `<tr><td class="text-dim">Loop Status</td><td>${
+                isExecutingLoop
+                  ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing cycle</span>'
+                  : '<span class="text-dim">Idle</span>'
+              }</td></tr>`
+            : ''
+        }
       </table>
     </div>
-    ${!karmaData.error ? `
+    ${
+      !karmaData.error
+        ? `
     <div class="detail-card" style="margin-top:16px">
       <div class="flex-between mb-16">
         <div style="display:flex;align-items:center;gap:12px">
@@ -324,32 +342,44 @@ export async function renderAgentDetail(el, id) {
         </div>
         <span class="text-dim text-sm">/ 100</span>
       </div>
-      ${karmaData.recentEvents?.length ? `
+      ${
+        karmaData.recentEvents?.length
+          ? `
         <div class="text-dim text-sm" style="margin-bottom:4px">Recent events</div>
-        ${karmaData.recentEvents.slice(0, 15).map(evt => {
-          const sign = evt.delta >= 0 ? '+' : '';
-          const color = evt.delta > 0 ? 'var(--green)' : evt.delta < 0 ? 'var(--red)' : 'var(--text-dim)';
-          return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
+        ${karmaData.recentEvents
+          .slice(0, 15)
+          .map((evt) => {
+            const sign = evt.delta >= 0 ? '+' : '';
+            const color =
+              evt.delta > 0 ? 'var(--green)' : evt.delta < 0 ? 'var(--red)' : 'var(--text-dim)';
+            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
             <span style="font-weight:600;color:${color};min-width:36px;font-family:monospace">${sign}${evt.delta}</span>
             <span class="badge badge-disabled" style="font-size:11px">${escapeHtml(evt.source)}</span>
             <span style="flex:1">${escapeHtml(evt.reason)}</span>
             <span class="text-dim text-sm">${timeAgo(evt.timestamp)}</span>
           </div>`;
-        }).join('')}
-      ` : '<p class="text-dim text-sm">No karma events yet.</p>'}
+          })
+          .join('')}
+      `
+          : '<p class="text-dim text-sm">No karma events yet.</p>'
+      }
     </div>
-    ` : ''}
+    `
+        : ''
+    }
 
     <div class="actions">
-      ${agent.running
-        ? `<button class="btn btn-danger" id="btn-toggle">Stop</button>`
-        : `<button class="btn btn-primary" id="btn-toggle">Start</button>`
+      ${
+        agent.running
+          ? `<button class="btn btn-danger" id="btn-toggle">Stop</button>`
+          : `<button class="btn btn-primary" id="btn-toggle">Start</button>`
       }
       <a href="#/agents/${agent.id}/edit" class="btn">Edit</a>
       <button class="btn" id="btn-clone">Clone</button>
-      ${agent.running
-        ? `<button class="btn" id="btn-run-loop">Run Agent Loop</button>`
-        : `<button class="btn btn-danger" id="btn-reset">Reset</button>`
+      ${
+        agent.running
+          ? `<button class="btn" id="btn-run-loop">Run Agent Loop</button>`
+          : `<button class="btn btn-danger" id="btn-reset">Reset</button>`
       }
     </div>
     <div id="agent-loop-result"></div>
@@ -371,7 +401,12 @@ export async function renderAgentDetail(el, id) {
   const resetBtn = document.getElementById('btn-reset');
   if (resetBtn) {
     resetBtn.addEventListener('click', async () => {
-      if (!confirm(`Reset agent "${id}"? This will fully reset the agent to its original state: all conversations, memory, goals, and learned facts will be cleared, and soul files will be restored to their generated baseline. This cannot be undone.`)) return;
+      if (
+        !confirm(
+          `Reset agent "${id}"? This will fully reset the agent to its original state: all conversations, memory, goals, and learned facts will be cleared, and soul files will be restored to their generated baseline. This cannot be undone.`
+        )
+      )
+        return;
       resetBtn.disabled = true;
       resetBtn.textContent = 'Resetting...';
       try {
@@ -421,7 +456,7 @@ export async function renderAgentEdit(el, id) {
   ]);
 
   if (agent.error) {
-    el.innerHTML = `<p>Agent not found.</p>`;
+    el.innerHTML = '<p>Agent not found.</p>';
     return;
   }
 
@@ -449,12 +484,16 @@ export async function renderAgentEdit(el, id) {
       <div class="form-group">
         <label>Skills</label>
         <div class="checkbox-group" id="skills-group">
-          ${skills.map((s) => `
+          ${skills
+            .map(
+              (s) => `
             <label class="${agent.skills.includes(s.id) ? 'checked' : ''}">
               <input type="checkbox" name="skills" value="${s.id}" ${agent.skills.includes(s.id) ? 'checked' : ''}>
               ${escapeHtml(s.name)}
             </label>
-          `).join('')}
+          `
+            )
+            .join('')}
         </div>
       </div>
       <div class="form-group">
@@ -469,12 +508,19 @@ export async function renderAgentEdit(el, id) {
         <label>Model</label>
         <select name="model">
           <option value="">Global default (${escapeHtml(defaults.model)})</option>
-          ${(defaults.availableModels || []).map((m) => {
-            const selected = m === 'claude-cli'
-              ? agent.llmBackend === 'claude-cli' ? 'selected' : ''
-              : agent.model === m && agent.llmBackend !== 'claude-cli' ? 'selected' : '';
-            return `<option value="${escapeHtml(m)}" ${selected}>${escapeHtml(m)}</option>`;
-          }).join('')}
+          ${(defaults.availableModels || [])
+            .map((m) => {
+              const selected =
+                m === 'claude-cli'
+                  ? agent.llmBackend === 'claude-cli'
+                    ? 'selected'
+                    : ''
+                  : agent.model === m && agent.llmBackend !== 'claude-cli'
+                    ? 'selected'
+                    : '';
+              return `<option value="${escapeHtml(m)}" ${selected}>${escapeHtml(m)}</option>`;
+            })
+            .join('')}
         </select>
       </div>
       <div class="form-group">
@@ -500,7 +546,7 @@ export async function renderAgentEdit(el, id) {
       </div>
       <div class="form-group">
         <label>Working Directory</label>
-        <input type="text" name="workDir" value="${escapeHtml(agent.workDir || '')}" placeholder="${escapeHtml((defaults.productionsBaseDir || './productions') + '/' + agent.id)}">
+        <input type="text" name="workDir" value="${escapeHtml(agent.workDir || '')}" placeholder="${escapeHtml(`${defaults.productionsBaseDir || './productions'}/${agent.id}`)}">
         <span class="text-dim text-sm">File tools and exec operate within this directory. Default: productions/&lt;botId&gt;</span>
       </div>
 
@@ -513,7 +559,9 @@ export async function renderAgentEdit(el, id) {
         <span class="text-dim text-sm">How often this bot runs autonomously (e.g. 30m, 1h, 6h, 1d)</span>
       </div>
 
-      ${defaults.ttsEnabled ? `
+      ${
+        defaults.ttsEnabled
+          ? `
       <div class="form-separator"></div>
       <div class="form-section-title">Voice (TTS) <span class="text-dim text-sm">(empty = use global default)</span></div>
 
@@ -537,43 +585,57 @@ export async function renderAgentEdit(el, id) {
           <input type="number" name="ttsStability" min="0" max="1" step="0.1" value="${agent.tts?.voiceSettings?.stability ?? ''}" placeholder="0.5">
         </div>
       </div>
-      ` : ''}
+      `
+          : ''
+      }
 
-      ${(defaults.availableTools && defaults.availableTools.length) ? `
+      ${
+        defaults.availableTools?.length
+          ? `
       <div class="form-separator"></div>
       <div class="form-section-title">Tools <span class="text-dim text-sm">(uncheck to disable)</span></div>
 
       <div class="form-group">
         <div class="checkbox-group" id="tools-group">
-          ${defaults.availableTools.map((t) => {
-            const disabled = (agent.disabledTools || []).includes(t);
-            return `
+          ${defaults.availableTools
+            .map((t) => {
+              const disabled = (agent.disabledTools || []).includes(t);
+              return `
             <label class="${!disabled ? 'checked' : ''}">
               <input type="checkbox" name="tools" value="${escapeHtml(t)}" ${!disabled ? 'checked' : ''}>
               ${escapeHtml(t)}
             </label>`;
-          }).join('')}
+            })
+            .join('')}
         </div>
       </div>
-      ` : ''}
+      `
+          : ''
+      }
 
-      ${(defaults.availableSkills && defaults.availableSkills.length) ? `
+      ${
+        defaults.availableSkills?.length
+          ? `
       <div class="form-separator"></div>
       <div class="form-section-title">External Skills <span class="text-dim text-sm">(uncheck to disable all tools from a skill)</span></div>
 
       <div class="form-group">
         <div class="checkbox-group" id="ext-skills-group">
-          ${defaults.availableSkills.map((s) => {
-            const disabled = (agent.disabledSkills || []).includes(s);
-            return `
+          ${defaults.availableSkills
+            .map((s) => {
+              const disabled = (agent.disabledSkills || []).includes(s);
+              return `
             <label class="${!disabled ? 'checked' : ''}">
               <input type="checkbox" name="extSkills" value="${escapeHtml(s)}" ${!disabled ? 'checked' : ''}>
               ${escapeHtml(s)}
             </label>`;
-          }).join('')}
+            })
+            .join('')}
         </div>
       </div>
-      ` : ''}
+      `
+          : ''
+      }
 
       <div class="actions">
         <button type="submit" class="btn btn-primary">Save</button>
@@ -643,7 +705,9 @@ export async function renderAgentEdit(el, id) {
         alert(`Failed to load voices: ${err.message}`);
       } finally {
         loadVoicesBtn.disabled = false;
-        setTimeout(() => { loadVoicesBtn.textContent = 'Load Voices'; }, 2000);
+        setTimeout(() => {
+          loadVoicesBtn.textContent = 'Load Voices';
+        }, 2000);
       }
     });
   }
@@ -655,8 +719,13 @@ export async function renderAgentEdit(el, id) {
 
     if (form.token.value) patch.token = form.token.value;
 
-    patch.skills = Array.from(form.querySelectorAll('input[name="skills"]:checked')).map((i) => i.value);
-    patch.mentionPatterns = form.mentionPatterns.value.split(',').map((s) => s.trim()).filter(Boolean);
+    patch.skills = Array.from(form.querySelectorAll('input[name="skills"]:checked')).map(
+      (i) => i.value
+    );
+    patch.mentionPatterns = form.mentionPatterns.value
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     // Per-agent overrides (empty string = clear override)
     const selectedModel = form.model.value.trim();
@@ -672,8 +741,10 @@ export async function renderAgentEdit(el, id) {
 
     // Build conversation overrides
     const systemPrompt = form.systemPrompt.value.trim() || undefined;
-    const temperature = form.temperature.value !== '' ? parseFloat(form.temperature.value) : undefined;
-    const maxHistory = form.maxHistory.value !== '' ? parseInt(form.maxHistory.value, 10) : undefined;
+    const temperature =
+      form.temperature.value !== '' ? Number.parseFloat(form.temperature.value) : undefined;
+    const maxHistory =
+      form.maxHistory.value !== '' ? Number.parseInt(form.maxHistory.value, 10) : undefined;
 
     if (systemPrompt !== undefined || temperature !== undefined || maxHistory !== undefined) {
       patch.conversation = { systemPrompt, temperature, maxHistory };
@@ -682,15 +753,19 @@ export async function renderAgentEdit(el, id) {
     }
 
     // Disabled tools (unchecked = disabled)
-    if (defaults.availableTools && defaults.availableTools.length) {
-      const checkedTools = Array.from(form.querySelectorAll('input[name="tools"]:checked')).map((i) => i.value);
+    if (defaults.availableTools?.length) {
+      const checkedTools = Array.from(form.querySelectorAll('input[name="tools"]:checked')).map(
+        (i) => i.value
+      );
       const disabledTools = defaults.availableTools.filter((t) => !checkedTools.includes(t));
       patch.disabledTools = disabledTools.length > 0 ? disabledTools : [];
     }
 
     // Disabled external skills (unchecked = disabled)
-    if (defaults.availableSkills && defaults.availableSkills.length) {
-      const checkedSkills = Array.from(form.querySelectorAll('input[name="extSkills"]:checked')).map((i) => i.value);
+    if (defaults.availableSkills?.length) {
+      const checkedSkills = Array.from(
+        form.querySelectorAll('input[name="extSkills"]:checked')
+      ).map((i) => i.value);
       const disabledSkills = defaults.availableSkills.filter((s) => !checkedSkills.includes(s));
       patch.disabledSkills = disabledSkills.length > 0 ? disabledSkills : [];
     }
@@ -707,8 +782,10 @@ export async function renderAgentEdit(el, id) {
     // TTS overrides
     if (defaults.ttsEnabled) {
       const ttsVoiceId = form.ttsVoiceId?.value || undefined;
-      const ttsSpeed = form.ttsSpeed?.value !== '' ? parseFloat(form.ttsSpeed.value) : undefined;
-      const ttsStability = form.ttsStability?.value !== '' ? parseFloat(form.ttsStability.value) : undefined;
+      const ttsSpeed =
+        form.ttsSpeed?.value !== '' ? Number.parseFloat(form.ttsSpeed.value) : undefined;
+      const ttsStability =
+        form.ttsStability?.value !== '' ? Number.parseFloat(form.ttsStability.value) : undefined;
 
       if (ttsVoiceId || ttsSpeed !== undefined || ttsStability !== undefined) {
         patch.tts = { voiceId: ttsVoiceId };
@@ -752,7 +829,8 @@ function showCloneModal(sourceId, el, onDone) {
 
     await api(`/api/agents/${sourceId}/clone`, { method: 'POST', body: { id, name } });
     closeModal();
-    if (onDone) onDone(); else renderAgents(el);
+    if (onDone) onDone();
+    else renderAgents(el);
   });
 }
 
@@ -805,7 +883,13 @@ function showGenerateSoulModal(agentId, agentName, onComplete) {
     try {
       const result = await api(`/api/agents/${agentId}/generate-soul`, {
         method: 'POST',
-        body: { name: agentName, role, personalityDescription, language, emoji: emoji || undefined },
+        body: {
+          name: agentName,
+          role,
+          personalityDescription,
+          language,
+          emoji: emoji || undefined,
+        },
       });
 
       if (result.error) {
@@ -815,7 +899,13 @@ function showGenerateSoulModal(agentId, agentName, onComplete) {
         return;
       }
 
-      showSoulPreviewModal(agentId, agentName, result, { role, personalityDescription, language, emoji }, { onComplete });
+      showSoulPreviewModal(
+        agentId,
+        agentName,
+        result,
+        { role, personalityDescription, language, emoji },
+        { onComplete }
+      );
     } catch (err) {
       alert(`Generation failed: ${err.message || err}`);
       btn.disabled = false;
@@ -838,9 +928,10 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
       <pre class="code-block">${escapeHtml(soulData.motivations)}</pre>
     </div>
     <div class="modal-actions">
-      ${onComplete
-        ? '<button class="btn" id="preview-skip">Skip</button>'
-        : '<button class="btn" id="preview-cancel">Cancel</button>'
+      ${
+        onComplete
+          ? '<button class="btn" id="preview-skip">Skip</button>'
+          : '<button class="btn" id="preview-cancel">Cancel</button>'
       }
       <button class="btn" id="preview-regenerate">Regenerate</button>
       <button class="btn btn-primary" id="preview-apply">Apply</button>
@@ -982,7 +1073,10 @@ function showNewAgentModal(skills, el) {
     btn.textContent = 'Creating...';
 
     try {
-      const createResult = await api('/api/agents', { method: 'POST', body: { id, name, token, skills: [], enabled: false } });
+      const createResult = await api('/api/agents', {
+        method: 'POST',
+        body: { id, name, token, skills: [], enabled: false },
+      });
       if (createResult.error) {
         alert(`Failed to create agent: ${createResult.error}`);
         btn.disabled = false;
@@ -1006,7 +1100,9 @@ function showNewAgentModal(skills, el) {
 
       const inputData = { role, personalityDescription, language, emoji };
       showSoulPreviewModal(id, name, soulResult, inputData, {
-        onComplete: () => { location.hash = `#/agents/${id}/edit`; },
+        onComplete: () => {
+          location.hash = `#/agents/${id}/edit`;
+        },
       });
     } catch (err) {
       alert(`Failed: ${err.message || err}`);

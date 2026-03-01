@@ -1,4 +1,4 @@
-import { api, escapeHtml, timeAgo, renderThread } from './shared.js';
+import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
 function statusBadge(status) {
   if (status === 'applied') return '<span class="badge eval-badge-approved">Applied</span>';
@@ -26,9 +26,10 @@ export async function renderFeedback(el) {
     <div class="flex-between mb-16">
       <div class="page-title">Agent Feedback <span class="count">${total}</span>${totalPending > 0 ? ` <span class="badge eval-badge-unreviewed">${totalPending} pending</span>` : ''}</div>
     </div>
-    ${bots.length === 0
-      ? '<p class="text-dim">No feedback yet. Start a bot and submit feedback to guide its behavior.</p>'
-      : `<table>
+    ${
+      bots.length === 0
+        ? '<p class="text-dim">No feedback yet. Start a bot and submit feedback to guide its behavior.</p>'
+        : `<table>
           <thead><tr><th>Bot</th><th>Total</th><th>Pending</th><th>Applied</th><th>Dismissed</th></tr></thead>
           <tbody id="feedback-tbody"></tbody>
         </table>`
@@ -103,9 +104,11 @@ export async function renderBotFeedback(el, botId) {
       </div>
 
       <div id="feedback-list">
-        ${entries.length === 0
-          ? '<p class="text-dim">No feedback entries match the filter.</p>'
-          : ''}
+        ${
+          entries.length === 0
+            ? '<p class="text-dim">No feedback entries match the filter.</p>'
+            : ''
+        }
       </div>
     `;
 
@@ -181,13 +184,17 @@ export async function renderBotFeedback(el, botId) {
           <strong>Feedback:</strong>
           <div style="margin-top:4px;white-space:pre-wrap">${escapeHtml(entry.content)}</div>
         </div>
-        ${entry.status === 'applied' && entry.response && !(entry.thread && entry.thread.length > 0) ? `
+        ${
+          entry.status === 'applied' && entry.response && !(entry.thread && entry.thread.length > 0)
+            ? `
           <div style="background:var(--surface-2);padding:12px;border-radius:8px;border-left:3px solid var(--green)">
             <strong>Bot Response:</strong>
             <div style="margin-top:4px;white-space:pre-wrap">${escapeHtml(entry.response)}</div>
           </div>
           ${entry.appliedAt ? `<div class="text-dim text-sm" style="margin-top:8px">Applied ${timeAgo(entry.appliedAt)}</div>` : ''}
-        ` : ''}
+        `
+            : ''
+        }
         <div style="margin-top:8px;display:flex;gap:8px">
           <button class="btn btn-sm reply-btn" data-id="${entry.id}">Reply</button>
           ${entry.status === 'pending' ? `<button class="btn btn-sm btn-danger dismiss-btn" data-id="${entry.id}">Dismiss</button>` : ''}
@@ -218,7 +225,9 @@ export async function renderBotFeedback(el, botId) {
             renderCardThread();
             return;
           }
-          const statusRes = await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply-status`);
+          const statusRes = await api(
+            `/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply-status`
+          );
           if (statusRes.status === 'error') {
             clearInterval(pollInterval);
             threadGenerating = false;
@@ -230,7 +239,7 @@ export async function renderBotFeedback(el, botId) {
             clearInterval(pollInterval);
             if (statusRes.lastBotMessage) {
               if (!entry.thread) entry.thread = [];
-              if (!entry.thread.find(m => m.id === statusRes.lastBotMessage.id)) {
+              if (!entry.thread.find((m) => m.id === statusRes.lastBotMessage.id)) {
                 entry.thread.push(statusRes.lastBotMessage);
               }
             }
@@ -252,20 +261,30 @@ export async function renderBotFeedback(el, botId) {
             threadErrorMsg = null;
             threadGenerating = true;
             renderCardThread();
-            await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/retry-reply`, { method: 'POST' });
+            await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/retry-reply`, {
+              method: 'POST',
+            });
             startCardPolling();
           },
           onSend: async (text) => {
             if (!entry.thread) entry.thread = [];
-            entry.thread.push({ id: 'temp', role: 'human', content: text, createdAt: new Date().toISOString() });
+            entry.thread.push({
+              id: 'temp',
+              role: 'human',
+              content: text,
+              createdAt: new Date().toISOString(),
+            });
             threadGenerating = true;
             threadErrorMsg = null;
             renderCardThread();
 
-            const res = await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply`, {
-              method: 'POST',
-              body: { message: text },
-            });
+            const res = await api(
+              `/api/agent-feedback/${encodeURIComponent(botId)}/${entry.id}/reply`,
+              {
+                method: 'POST',
+                body: { message: text },
+              }
+            );
 
             if (res.error) {
               threadGenerating = false;

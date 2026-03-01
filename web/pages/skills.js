@@ -1,4 +1,4 @@
-import { showModal, closeModal, api, escapeHtml } from './shared.js';
+import { api, closeModal, escapeHtml, showModal } from './shared.js';
 
 function typeBadge(type) {
   return type === 'builtin'
@@ -51,18 +51,20 @@ export async function renderSkills(el) {
   const tbody = document.getElementById('skills-tbody');
   for (const skill of skills) {
     const tr = document.createElement('tr');
-    const countLabel = skill.type === 'builtin'
-      ? `${(skill.commands || []).length} cmds`
-      : `${skill.toolCount || 0} tools`;
+    const countLabel =
+      skill.type === 'builtin'
+        ? `${(skill.commands || []).length} cmds`
+        : `${skill.toolCount || 0} tools`;
 
     const warningBadge = skill.warnings?.length
       ? `<span class="badge badge-error">${skill.warnings.length}</span>`
       : '<span class="text-dim">--</span>';
 
-    const actions = skill.type === 'external'
-      ? `<a href="#/skills/${encodeURIComponent(skill.id)}/edit" class="btn btn-sm">Edit</a>
+    const actions =
+      skill.type === 'external'
+        ? `<a href="#/skills/${encodeURIComponent(skill.id)}/edit" class="btn btn-sm">Edit</a>
          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${escapeHtml(skill.id)}">Delete</button>`
-      : '';
+        : '';
 
     // Muted styling for disabled built-in skills
     if (skill.type === 'builtin' && skill.enabled === false) {
@@ -87,7 +89,12 @@ export async function renderSkills(el) {
     const id = btn.dataset.id;
 
     if (action === 'delete') {
-      if (!confirm(`Delete external skill "${id}"? The skill directory will be removed from disk. This cannot be undone.`)) return;
+      if (
+        !confirm(
+          `Delete external skill "${id}"? The skill directory will be removed from disk. This cannot be undone.`
+        )
+      )
+        return;
       btn.disabled = true;
       btn.textContent = 'Deleting...';
       const res = await api(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -189,14 +196,18 @@ export async function renderSkillDetail(el, id) {
           <h4 style="margin:0 0 12px">Tools (${skill.tools.length})</h4>
           <table>
             <thead><tr><th>Name</th><th>Description</th><th>Parameters</th></tr></thead>
-            <tbody>${skill.tools.map((t) => {
-              const paramKeys = t.parameters?.properties ? Object.keys(t.parameters.properties).join(', ') : '--';
-              return `<tr>
+            <tbody>${skill.tools
+              .map((t) => {
+                const paramKeys = t.parameters?.properties
+                  ? Object.keys(t.parameters.properties).join(', ')
+                  : '--';
+                return `<tr>
                 <td><code>${escapeHtml(t.name)}</code></td>
                 <td class="text-dim">${escapeHtml(t.description || '')}</td>
                 <td class="text-dim">${escapeHtml(paramKeys)}</td>
               </tr>`;
-            }).join('')}</tbody>
+              })
+              .join('')}</tbody>
           </table>
         </div>
       `;
@@ -324,7 +335,10 @@ export async function renderSkillEdit(el, id) {
   document.getElementById('btn-add-tool').addEventListener('click', () => {
     const container = document.getElementById('tools-container');
     const div = document.createElement('div');
-    div.innerHTML = renderToolForm({ name: '', description: '', parameters: { type: 'object', properties: {}, required: [] } }, toolIndex);
+    div.innerHTML = renderToolForm(
+      { name: '', description: '', parameters: { type: 'object', properties: {}, required: [] } },
+      toolIndex
+    );
     container.appendChild(div.firstElementChild);
     toolIndex++;
   });
@@ -350,8 +364,14 @@ export async function renderSkillEdit(el, id) {
       updatedTools.push({ name, description: desc, parameters });
     }
 
-    const bins = form.bins.value.split(',').map((s) => s.trim()).filter(Boolean);
-    const envVars = form.env.value.split(',').map((s) => s.trim()).filter(Boolean);
+    const bins = form.bins.value
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const envVars = form.env.value
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     const skillJson = {
       id: skill.id,

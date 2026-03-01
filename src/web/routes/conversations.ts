@@ -1,14 +1,14 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import type { Config } from '../../config';
-import type { Logger } from '../../logger';
-import type { ConversationsService } from '../../conversations/service';
-import type { ProductionsService } from '../../productions/service';
 import { claudeGenerate } from '../../claude-cli';
+import type { Config } from '../../config';
+import type { ConversationsService } from '../../conversations/service';
+import type { Logger } from '../../logger';
+import type { ProductionsService } from '../../productions/service';
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + '\n... [truncated]';
+  return `${text.slice(0, maxLen)}\n... [truncated]`;
 }
 
 const CONVERSATION_SYSTEM_PROMPT = `You are an AI bot having a direct conversation with your human operator through the web dashboard. This is a meta-conversation about yourself — your goals, motivations, work, and behavior.
@@ -51,7 +51,11 @@ export function conversationsRoutes(deps: {
   const generationState = new Map<string, { status: 'generating' | 'error'; error?: string }>();
 
   /** Extracted bot reply generation logic — shared by message send and retry. */
-  function generateBotReply(botId: string, id: string, conversation: { type: string; title: string }) {
+  function generateBotReply(
+    botId: string,
+    id: string,
+    conversation: { type: string; title: string }
+  ) {
     const key = `${botId}:${id}`;
     generationState.set(key, { status: 'generating' });
 
@@ -78,7 +82,9 @@ export function conversationsRoutes(deps: {
         if (conversation.type === 'productions' && productionsService) {
           const stats = productionsService.getStats(botId);
           const recent = productionsService.getChangelog(botId, { limit: 10 });
-          sections.push(`## Productions Stats\nTotal: ${stats.total} | Approved: ${stats.approved} | Rejected: ${stats.rejected} | Unreviewed: ${stats.unreviewed} | Avg Rating: ${stats.avgRating ?? 'N/A'}`);
+          sections.push(
+            `## Productions Stats\nTotal: ${stats.total} | Approved: ${stats.approved} | Rejected: ${stats.rejected} | Unreviewed: ${stats.unreviewed} | Avg Rating: ${stats.avgRating ?? 'N/A'}`
+          );
           if (recent.length > 0) {
             const lines = recent.map((e) => {
               let line = `- [${e.timestamp}] ${e.action} ${e.path}`;
@@ -94,16 +100,17 @@ export function conversationsRoutes(deps: {
           .map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`)
           .join('\n\n');
         sections.push(`## Conversation\n${threadText}`);
-        sections.push(`## Task\n\nRespond to the latest message. Be authentic and reflective.`);
+        sections.push('## Task\n\nRespond to the latest message. Be authentic and reflective.');
 
         const prompt = sections.join('\n\n');
         const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 120_000;
-        const systemPrompt = conversation.type === 'productions'
-          ? PRODUCTIONS_CHAT_SYSTEM_PROMPT
-          : conversation.type === 'inbox'
-            ? INBOX_CHAT_SYSTEM_PROMPT
-            : CONVERSATION_SYSTEM_PROMPT;
+        const timeout = config.improve?.timeout ?? 300_000;
+        const systemPrompt =
+          conversation.type === 'productions'
+            ? PRODUCTIONS_CHAT_SYSTEM_PROMPT
+            : conversation.type === 'inbox'
+              ? INBOX_CHAT_SYSTEM_PROMPT
+              : CONVERSATION_SYSTEM_PROMPT;
 
         const response = await claudeGenerate(prompt, {
           systemPrompt,
@@ -117,7 +124,7 @@ export function conversationsRoutes(deps: {
 
         // Write to daily memory
         soulLoader.appendDailyMemory(
-          `## Web Conversation\n- Type: ${conversation.type}\n- Topic: "${conversation.title}"\n- My response: "${truncate(response, 200)}"`,
+          `## Web Conversation\n- Type: ${conversation.type}\n- Topic: "${conversation.title}"\n- My response: "${truncate(response, 200)}"`
         );
 
         logger.info({ botId, conversationId: id }, 'Conversation bot reply generated');
@@ -125,7 +132,10 @@ export function conversationsRoutes(deps: {
       } catch (err) {
         logger.error({ err, botId, conversationId: id }, 'Failed to generate conversation reply');
         const message = err instanceof Error ? err.message : 'Unknown error';
-        generationState.set(key, { status: 'error', error: `Failed to generate reply: ${message}` });
+        generationState.set(key, {
+          status: 'error',
+          error: `Failed to generate reply: ${message}`,
+        });
       }
     })();
   }
@@ -167,10 +177,15 @@ export function conversationsRoutes(deps: {
   // Create conversation
   app.post('/:botId', async (c) => {
     const botId = c.req.param('botId');
-    const body = await c.req.json<{ type?: 'general' | 'productions' | 'inbox'; title?: string }>().catch(() => ({} as { type?: string; title?: string }));
+    const body = await c.req
+      .json<{ type?: 'general' | 'productions' | 'inbox'; title?: string }>()
+      .catch(() => ({}) as { type?: string; title?: string });
 
-    const validTypes = ['general', 'productions', 'inbox'] as const;
-    const type = validTypes.includes(body.type as any) ? (body.type as typeof validTypes[number]) : 'general';
+    const validTypes: readonly string[] = ['general', 'productions', 'inbox'];
+    const type = (body.type && validTypes.includes(body.type) ? body.type : 'general') as
+      | 'general'
+      | 'productions'
+      | 'inbox';
     const convo = conversationsService.createConversation(botId, type, body.title);
     return c.json(convo, 201);
   });
@@ -188,6 +203,19 @@ export function conversationsRoutes(deps: {
 
     const messages = conversationsService.getMessages(botId, id);
     return c.json({ conversation, messages });
+  });
+
+  // Delete all conversations across all bots
+  app.delete('/', (c) => {
+    const deleted = conversationsService.deleteAll();
+    return c.json({ ok: true, deleted });
+  });
+
+  // Delete all conversations for a specific bot
+  app.delete('/:botId', (c) => {
+    const botId = c.req.param('botId');
+    const deleted = conversationsService.deleteAllForBot(botId);
+    return c.json({ ok: true, deleted });
   });
 
   // Delete conversation
@@ -233,7 +261,10 @@ export function conversationsRoutes(deps: {
       conversation.inboxStatus === 'pending' &&
       conversation.askHumanQuestionId
     ) {
-      const answered = botManager.answerAskHuman(conversation.askHumanQuestionId, body.message.trim());
+      const answered = botManager.answerAskHuman(
+        conversation.askHumanQuestionId,
+        body.message.trim()
+      );
       if (answered) {
         // answerAskHuman already wrote the human message and marked as answered
         // Retrieve the written message to return to frontend

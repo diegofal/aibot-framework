@@ -1,13 +1,13 @@
-import { localDateStr } from '../../date-utils';
 import type { LLMClient } from '../../core/llm-client';
+import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type {
-  TrendData,
-  AnalysisResult,
   AnalysisConfig,
-  IntelData,
-  CategoryData,
+  AnalysisResult,
   CategoryConfig,
+  CategoryData,
+  IntelData,
+  TrendData,
 } from './types';
 
 export class IntelAnalyzer {
@@ -161,7 +161,10 @@ export class IntelAnalyzer {
         );
         sectionSummaries[cat.id] = summary.trim();
       } catch (err: any) {
-        this.logger.warn({ error: err.message, category: cat.id }, 'LLM summary failed for category');
+        this.logger.warn(
+          { error: err.message, category: cat.id },
+          'LLM summary failed for category'
+        );
       }
     }
 
@@ -179,7 +182,8 @@ export class IntelAnalyzer {
             {
               temperature,
               maxTokens: 800,
-              system: 'You are a concise tech intelligence analyst. Output only the digest, no preamble.',
+              system:
+                'You are a concise tech intelligence analyst. Output only the digest, no preamble.',
             }
           )
         ).trim();

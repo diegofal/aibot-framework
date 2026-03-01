@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationGate } from '../../src/bot/conversation-gate';
 
 function createMockCtx(overrides: Record<string, any> = {}) {
@@ -86,7 +86,7 @@ describe('ConversationGate', () => {
     const result = await gate.evaluate(
       createMockGrammyCtx({ message: { text: '/start', message_id: 1 } }),
       createMockConfig(),
-      mockLogger,
+      mockLogger
     );
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe('command');
@@ -148,7 +148,7 @@ describe('ConversationGate', () => {
     const result = await gate.evaluate(
       createMockGrammyCtx({ message: { text: 'hello world', message_id: 1 } }),
       createMockConfig(),
-      mockLogger,
+      mockLogger
     );
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe('collab_no_mention');
@@ -164,7 +164,7 @@ describe('ConversationGate', () => {
     const result = await gate.evaluate(
       createMockGrammyCtx({ message: { text: 'hello @testbot', message_id: 1 } }),
       createMockConfig(),
-      mockLogger,
+      mockLogger
     );
     expect(result.allowed).toBe(true);
     expect(result.isPeerBotMessage).toBe(true);
@@ -183,7 +183,7 @@ describe('ConversationGate', () => {
     const result = await gate.evaluate(
       createMockGrammyCtx({ message: { text: 'hello @testbot', message_id: 1 } }),
       createMockConfig(),
-      mockLogger,
+      mockLogger
     );
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe('collab_limit');
@@ -206,7 +206,7 @@ describe('ConversationGate', () => {
     const result = await gate.evaluate(
       createMockGrammyCtx({ chat: { id: 100, type: 'group' } }),
       createMockConfig(),
-      mockLogger,
+      mockLogger
     );
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe('group_inactive');
@@ -221,7 +221,7 @@ describe('ConversationGate', () => {
         chat: { id: 100, type: 'group' },
       }),
       createMockConfig(),
-      mockLogger,
+      mockLogger
     );
     expect(result.allowed).toBe(true);
     expect(result.strippedText).toBe('hello');

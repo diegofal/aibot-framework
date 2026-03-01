@@ -1,11 +1,17 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Bot } from 'grammy';
-import { AgentRegistry, type AgentInfo } from '../agent-registry';
+import { type AgentInfo, AgentRegistry } from '../agent-registry';
+import { CollaborationSessionManager } from '../collaboration-session';
+import { CollaborationTracker } from '../collaboration-tracker';
 import type { BotConfig, Config } from '../config';
 import { resolveAgentConfig } from '../config';
-import { CollaborationTracker } from '../collaboration-tracker';
-import { CollaborationSessionManager } from '../collaboration-session';
+import {
+  type LLMClient,
+  LLMClientWithFallback,
+  OllamaLLMClient,
+  createLLMClient,
+} from '../core/llm-client';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import type { Logger } from '../logger';
@@ -16,33 +22,37 @@ import type { OllamaClient } from '../ollama';
 import type { SessionManager } from '../session';
 import { SoulLoader } from '../soul';
 import type { Tool, ToolDefinition } from '../tools/types';
-import { createLLMClient, OllamaLLMClient, type LLMClient } from '../core/llm-client';
 
-import type { BotContext, SeenUser } from './types';
-import { ToolRegistry } from './tool-registry';
-import { SystemPromptBuilder } from './system-prompt-builder';
-import { sendLongMessage } from './telegram-utils';
-import { MemoryFlusher } from './memory-flush';
-import { GroupActivation } from './group-activation';
-import { ConversationPipeline } from './conversation-pipeline';
-import { CollaborationManager } from './collaboration';
-import { HandlerRegistrar } from './handler-registrar';
-import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
-import { AskHumanStore, type PendingQuestionInfo } from './ask-human-store';
-import { AskPermissionStore, type PermissionRequestInfo, type PermissionHistoryEntry } from './ask-permission-store';
-import { AgentFeedbackStore, type AgentFeedback } from './agent-feedback-store';
-import { TelegramPoller } from './telegram-poller';
-import { BotResetService } from './bot-reset';
-import { ToolAuditLog } from './tool-audit-log';
-import { ProductionsService } from '../productions/service';
 import { ConversationsService } from '../conversations/service';
 import { KarmaService } from '../karma/service';
-import { runStartupSoulCheck } from './soul-health-check';
-import { ActivityStream } from './activity-stream';
-import type { TenantManagerConfig } from '../tenant/manager';
+import { ProductionsService } from '../productions/service';
 import type { BillingProvider } from '../tenant/billing';
+import type { TenantManagerConfig } from '../tenant/manager';
 import type { Tenant, UsageEventType } from '../tenant/types';
+import { ActivityStream } from './activity-stream';
+import { type AgentFeedback, AgentFeedbackStore } from './agent-feedback-store';
+import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
+import { AskHumanStore, type PendingQuestionInfo } from './ask-human-store';
+import {
+  AskPermissionStore,
+  type PermissionHistoryEntry,
+  type PermissionRequestInfo,
+} from './ask-permission-store';
+import { BotResetService } from './bot-reset';
+import { CollaborationManager } from './collaboration';
+import { ContextCompactor } from './context-compaction';
+import { ConversationPipeline } from './conversation-pipeline';
+import { GroupActivation } from './group-activation';
+import { HandlerRegistrar } from './handler-registrar';
+import { MemoryFlusher } from './memory-flush';
+import { runStartupSoulCheck } from './soul-health-check';
+import { SystemPromptBuilder } from './system-prompt-builder';
+import { TelegramPoller } from './telegram-poller';
+import { sendLongMessage } from './telegram-utils';
 import { TenantFacade } from './tenant-facade';
+import { ToolAuditLog } from './tool-audit-log';
+import { ToolRegistry } from './tool-registry';
+import type { BotContext, SeenUser } from './types';
 
 export class BotManager {
   // Shared mutable state
@@ -97,7 +107,8 @@ export class BotManager {
     private sessionManager: SessionManager,
     soulLoader: SoulLoader,
     private cronService: CronService,
-    private memoryManager?: MemoryManager
+    private memoryManager?: MemoryManager,
+    private configPath = './config/config.json'
   ) {
     this.defaultSoulLoader = soulLoader;
     this.defaultLLMClient = new OllamaLLMClient(ollamaClient);
@@ -109,9 +120,12 @@ export class BotManager {
     this.collaborationTracker = new CollaborationTracker(
       collabConfig.maxRounds,
       collabConfig.cooldownMs,
-      collabDataDir,
+      collabDataDir
     );
-    this.collaborationSessions = new CollaborationSessionManager(collabConfig.sessionTtlMs, collabDataDir);
+    this.collaborationSessions = new CollaborationSessionManager(
+      collabConfig.sessionTtlMs,
+      collabDataDir
+    );
 
     if (config.media?.enabled) {
       this.mediaHandler = new MediaHandler(config.media, logger);
@@ -165,6 +179,9 @@ export class BotManager {
       startBot: (botConfig: BotConfig) => this.startBot(botConfig),
     });
 
+    // Initialize activity stream for real-time visibility
+    this.activityStream = new ActivityStream();
+
     // Initialize bot reset service
     this.botResetService = new BotResetService({
       sessionManager,
@@ -172,11 +189,18 @@ export class BotManager {
       agentFeedbackStore: this.agentFeedbackStore,
       askHumanStore: this.askHumanStore,
       askPermissionStore: this.askPermissionStore,
+      karmaService: this.karmaService,
+      conversationsService: this.conversationsService,
+      toolAuditLog: this.toolAuditLog,
+      collaborationTracker: this.collaborationTracker,
+      collaborationSessions: this.collaborationSessions,
+      activityStream: this.activityStream,
       logger,
+      config,
+      configPath: this.configPath,
+      builtinSkillsPath: config.paths.skills,
+      productionsBaseDir: config.productions?.baseDir ?? './productions',
     });
-
-    // Initialize activity stream for real-time visibility
-    this.activityStream = new ActivityStream();
 
     // Build shared BotContext
     const ctx: BotContext = {
@@ -225,14 +249,27 @@ export class BotManager {
     this.systemPromptBuilder = new SystemPromptBuilder(ctx, this.toolRegistry);
     this.memoryFlusher = new MemoryFlusher(ctx);
     this.groupActivation = new GroupActivation(ctx);
+    const contextCompactor = new ContextCompactor(ctx, this.memoryFlusher);
     this.conversationPipeline = new ConversationPipeline(
-      ctx, this.systemPromptBuilder, this.memoryFlusher, this.toolRegistry
+      ctx,
+      this.systemPromptBuilder,
+      this.memoryFlusher,
+      this.toolRegistry,
+      contextCompactor
     );
     this.collaborationManager = new CollaborationManager(
-      ctx, this.systemPromptBuilder, this.toolRegistry
+      ctx,
+      this.systemPromptBuilder,
+      this.toolRegistry
     );
     this.handlerRegistrar = new HandlerRegistrar(
-      ctx, this.conversationPipeline, this.groupActivation, this.memoryFlusher, this.toolRegistry, this.askHumanStore, this.conversationsService
+      ctx,
+      this.conversationPipeline,
+      this.groupActivation,
+      this.memoryFlusher,
+      this.toolRegistry,
+      this.askHumanStore,
+      this.conversationsService
     );
     this.agentLoop = new AgentLoop(ctx, this.systemPromptBuilder, this.toolRegistry);
 
@@ -248,11 +285,22 @@ export class BotManager {
     this.toolRegistry.initializeAll(
       () => this.collaborationManager,
       () => ({
-        discoverAgents: (excludeBotId: string) => this.collaborationManager.discoverAgents(excludeBotId),
-        collaborationStep: (sessionId: string | undefined, targetBotId: string, message: string, sourceBotId: string) =>
+        discoverAgents: (excludeBotId: string) =>
+          this.collaborationManager.discoverAgents(excludeBotId),
+        collaborationStep: (
+          sessionId: string | undefined,
+          targetBotId: string,
+          message: string,
+          sourceBotId: string
+        ) =>
           this.collaborationManager.collaborationStep(sessionId, targetBotId, message, sourceBotId),
         endSession: (sessionId: string) => this.collaborationSessions.end(sessionId),
-        sendVisibleMessage: (chatId: number, sourceBotId: string, targetBotId: string, message: string) =>
+        sendVisibleMessage: (
+          chatId: number,
+          sourceBotId: string,
+          targetBotId: string,
+          message: string
+        ) =>
           this.collaborationManager.sendVisibleMessage(chatId, sourceBotId, targetBotId, message),
       }),
       {
@@ -265,14 +313,27 @@ export class BotManager {
         store: this.askPermissionStore,
         getBotInstance: (botId: string) => this.bots.get(botId),
         getBotName: (botId: string) => this.config.bots.find((b) => b.id === botId)?.name ?? botId,
-      },
+      }
     );
+
+    // Wire dynamic tool registry, tool registry, and agent loop into reset service (available after initializeAll)
+    this.botResetService.setDynamicToolRegistry(this.toolRegistry.getDynamicToolRegistry());
+    this.botResetService.setToolRegistry(this.toolRegistry);
+    this.botResetService.setAgentLoop(this.agentLoop);
 
     // Create message buffer (needs handleConversation callback)
     this.messageBuffer = new MessageBuffer(
       config.buffer,
       async (gramCtx, botCfg, sessionKey, userText, images, sessionText, isVoice) => {
-        await this.conversationPipeline.handleConversation(gramCtx, botCfg, sessionKey, userText, images, sessionText, isVoice);
+        await this.conversationPipeline.handleConversation(
+          gramCtx,
+          botCfg,
+          sessionKey,
+          userText,
+          images,
+          sessionText,
+          isVoice
+        );
         this.requestImmediateAgentRun(botCfg.id);
       },
       this.logger
@@ -310,7 +371,10 @@ export class BotManager {
     const byUsername = this.agentRegistry.getByTelegramUsername(targetBotId);
     if (byUsername && this.runningBots.has(byUsername.botId)) return byUsername.botId;
     for (const botCfg of this.config.bots) {
-      if (botCfg.name.toLowerCase() === targetBotId.toLowerCase() && this.runningBots.has(botCfg.id)) {
+      if (
+        botCfg.name.toLowerCase() === targetBotId.toLowerCase() &&
+        this.runningBots.has(botCfg.id)
+      ) {
         return botCfg.id;
       }
     }
@@ -336,12 +400,26 @@ export class BotManager {
       const llmClient = createLLMClient(
         {
           llmBackend: resolved.llmBackend,
-          claudeTimeout: config.agentLoop?.claudeTimeout
-            ?? this.config.agentLoop.claudeTimeout,
+          claudeTimeout: config.agentLoop?.claudeTimeout ?? this.config.agentLoop.claudeTimeout,
         },
         this.ollamaClient,
-        botLogger,
+        botLogger
       );
+      if (llmClient instanceof LLMClientWithFallback) {
+        llmClient.onFallback = (event) => {
+          this.activityStream.publish({
+            type: 'llm:fallback',
+            botId: config.id,
+            timestamp: Date.now(),
+            data: {
+              primaryBackend: event.primaryBackend,
+              fallbackBackend: event.fallbackBackend,
+              error: event.error,
+              method: event.method,
+            },
+          });
+        };
+      }
       this.llmClients.set(config.id, llmClient);
       botLogger.info({ backend: llmClient.backend }, 'Per-agent LLM client initialized');
 
@@ -364,10 +442,10 @@ export class BotManager {
           soulDir: resolved.soulDir,
           cooldownMs: healthCheckConfig.cooldownMs,
           claudePath: this.config.improve?.claudePath ?? 'claude',
-          timeout: this.config.improve?.timeout ?? 120_000,
+          timeout: this.config.improve?.timeout ?? 300_000,
           logger: botLogger,
           consolidateMemory: healthCheckConfig.consolidateMemory,
-        }).catch(err => botLogger.warn({ err }, 'Soul health check failed (non-fatal)'));
+        }).catch((err) => botLogger.warn({ err }, 'Soul health check failed (non-fatal)'));
       }
 
       const token = config.token?.trim();
@@ -436,23 +514,28 @@ export class BotManager {
 
       // Track restart attempts (sliding 5-min window)
       const now = Date.now();
-      const recent = (this.restartAttempts.get(config.id) ?? [])
-        .filter(t => now - t < 5 * 60_000);
+      const recent = (this.restartAttempts.get(config.id) ?? []).filter(
+        (t) => now - t < 5 * 60_000
+      );
 
       if (recent.length >= 3) {
-        botLogger.error({ botId: config.id, attempts: recent.length },
-          'Max auto-restart attempts reached (3 in 5 min). Manual restart required.');
+        botLogger.error(
+          { botId: config.id, attempts: recent.length },
+          'Max auto-restart attempts reached (3 in 5 min). Manual restart required.'
+        );
         this.restartAttempts.delete(config.id);
         return;
       }
       this.restartAttempts.set(config.id, [...recent, now]);
 
       const delay = 10_000;
-      botLogger.info({ botId: config.id, delay, attempt: recent.length + 1 },
-        'Scheduling auto-restart...');
+      botLogger.info(
+        { botId: config.id, delay, attempt: recent.length + 1 },
+        'Scheduling auto-restart...'
+      );
       const timer = setTimeout(async () => {
         this.restartTimers.delete(config.id);
-        const botConfig = this.config.bots.find(b => b.id === config.id);
+        const botConfig = this.config.bots.find((b) => b.id === config.id);
         if (!botConfig || this.runningBots.has(config.id)) return;
         try {
           await this.startBot(botConfig);
@@ -494,13 +577,19 @@ export class BotManager {
   private async cleanupBot(botId: string): Promise<void> {
     // Cancel any pending auto-restart timer
     const restartTimer = this.restartTimers.get(botId);
-    if (restartTimer) { clearTimeout(restartTimer); this.restartTimers.delete(botId); }
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      this.restartTimers.delete(botId);
+    }
     // Drain pending collaboration tasks before unregistering
     await this.collaborationManager.drainPending(botId);
     // Abort the custom poll loop (if running) — we never called bot.start(),
     // so bot.stop() would either no-op or issue a getUpdates that could itself 409.
     const ac = this.pollAbortControllers.get(botId);
-    if (ac) { ac.abort(); this.pollAbortControllers.delete(botId); }
+    if (ac) {
+      ac.abort();
+      this.pollAbortControllers.delete(botId);
+    }
     this.bots.delete(botId);
     this.runningBots.delete(botId);
     this.activeModels.delete(botId);
@@ -514,7 +603,10 @@ export class BotManager {
 
     // Cancel any pending auto-restart timer
     const restartTimer = this.restartTimers.get(botId);
-    if (restartTimer) { clearTimeout(restartTimer); this.restartTimers.delete(botId); }
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      this.restartTimers.delete(botId);
+    }
     await this.cleanupBot(botId);
     this.restartAttempts.delete(botId);
     this.botLoggers.delete(botId);
@@ -537,7 +629,7 @@ export class BotManager {
   async sendMessage(chatId: number, text: string, botId: string): Promise<void> {
     const bot = this.bots.get(botId);
     if (!bot) throw new Error(`Bot not found: ${botId}`);
-    await sendLongMessage(t => bot.api.sendMessage(chatId, t), text);
+    await sendLongMessage((t) => bot.api.sendMessage(chatId, t), text);
   }
 
   isRunning(botId: string): boolean {
@@ -556,7 +648,9 @@ export class BotManager {
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
     // Cancel all pending restart timers
-    for (const [, timer] of this.restartTimers) { clearTimeout(timer); }
+    for (const [, timer] of this.restartTimers) {
+      clearTimeout(timer);
+    }
     this.restartTimers.clear();
     // Abort all custom poll loops
     for (const [botId, ac] of this.pollAbortControllers) {
@@ -582,7 +676,9 @@ export class BotManager {
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
     // Cancel all pending restart timers
-    for (const [, timer] of this.restartTimers) { clearTimeout(timer); }
+    for (const [, timer] of this.restartTimers) {
+      clearTimeout(timer);
+    }
     this.restartTimers.clear();
     for (const [botId, ac] of this.pollAbortControllers) {
       ac.abort();
@@ -710,7 +806,10 @@ export class BotManager {
     return entry;
   }
 
-  getAgentFeedback(botId: string, opts?: { status?: string; limit?: number; offset?: number }): AgentFeedback[] {
+  getAgentFeedback(
+    botId: string,
+    opts?: { status?: string; limit?: number; offset?: number }
+  ): AgentFeedback[] {
     return this.agentFeedbackStore.getAll(botId, opts);
   }
 
@@ -726,7 +825,12 @@ export class BotManager {
     return this.agentFeedbackStore.getById(botId, feedbackId);
   }
 
-  addAgentFeedbackThreadMessage(botId: string, feedbackId: string, role: 'human' | 'bot', content: string) {
+  addAgentFeedbackThreadMessage(
+    botId: string,
+    feedbackId: string,
+    role: 'human' | 'bot',
+    content: string
+  ) {
     return this.agentFeedbackStore.addThreadMessage(botId, feedbackId, role, content);
   }
 
@@ -775,6 +879,13 @@ export class BotManager {
     return this.activityStream;
   }
 
+  getLlmStats(botId?: string) {
+    if (botId) {
+      return this.activityStream.llmStats.getStats(botId) ?? null;
+    }
+    return this.activityStream.llmStats.getAllStats();
+  }
+
   getOllamaClient(): OllamaClient {
     return this.ollamaClient;
   }
@@ -784,11 +895,21 @@ export class BotManager {
   }
 
   // Collaboration delegates
-  async sendVisibleMessage(chatId: number, sourceBotId: string, targetBotId: string, message: string): Promise<void> {
+  async sendVisibleMessage(
+    chatId: number,
+    sourceBotId: string,
+    targetBotId: string,
+    message: string
+  ): Promise<void> {
     return this.collaborationManager.sendVisibleMessage(chatId, sourceBotId, targetBotId, message);
   }
 
-  async handleDelegation(targetBotId: string, chatId: number, message: string, sourceBotId: string): Promise<string> {
+  async handleDelegation(
+    targetBotId: string,
+    chatId: number,
+    message: string,
+    sourceBotId: string
+  ): Promise<string> {
     return this.collaborationManager.handleDelegation(targetBotId, chatId, message, sourceBotId);
   }
 
@@ -800,18 +921,28 @@ export class BotManager {
     sessionId: string | undefined,
     targetBotId: string,
     message: string,
-    sourceBotId: string,
+    sourceBotId: string
   ): Promise<{ sessionId: string; response: string }> {
-    return this.collaborationManager.collaborationStep(sessionId, targetBotId, message, sourceBotId);
+    return this.collaborationManager.collaborationStep(
+      sessionId,
+      targetBotId,
+      message,
+      sourceBotId
+    );
   }
 
   async initiateCollaboration(
     sourceBotId: string,
     targetBotId: string,
     topic: string,
-    maxTurns?: number,
+    maxTurns?: number
   ): Promise<{ sessionId: string; transcript: string; turns: number }> {
-    return this.collaborationManager.initiateCollaboration(sourceBotId, targetBotId, topic, maxTurns);
+    return this.collaborationManager.initiateCollaboration(
+      sourceBotId,
+      targetBotId,
+      topic,
+      maxTurns
+    );
   }
 
   // --- Tenant Management (delegates to TenantFacade) ---
@@ -820,30 +951,70 @@ export class BotManager {
     this.tenantFacade.initializeTenantManager(config, billing);
   }
 
-  getTenantManager() { return this.tenantFacade.getTenantManager(); }
-  isMultiTenant() { return this.tenantFacade.isMultiTenant(); }
-  createTenant(name: string, email: string, plan?: Tenant['plan']) { return this.tenantFacade.createTenant(name, email, plan); }
-  getTenant(tenantId: string) { return this.tenantFacade.getTenant(tenantId); }
-  getTenantByApiKey(apiKey: string) { return this.tenantFacade.getTenantByApiKey(apiKey); }
-  listTenants() { return this.tenantFacade.listTenants(); }
-  updateTenant(tenantId: string, updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>) { return this.tenantFacade.updateTenant(tenantId, updates); }
-  deleteTenant(tenantId: string) { return this.tenantFacade.deleteTenant(tenantId); }
-  regenerateTenantApiKey(tenantId: string) { return this.tenantFacade.regenerateTenantApiKey(tenantId); }
+  getTenantManager() {
+    return this.tenantFacade.getTenantManager();
+  }
+  isMultiTenant() {
+    return this.tenantFacade.isMultiTenant();
+  }
+  createTenant(name: string, email: string, plan?: Tenant['plan']) {
+    return this.tenantFacade.createTenant(name, email, plan);
+  }
+  getTenant(tenantId: string) {
+    return this.tenantFacade.getTenant(tenantId);
+  }
+  getTenantByApiKey(apiKey: string) {
+    return this.tenantFacade.getTenantByApiKey(apiKey);
+  }
+  listTenants() {
+    return this.tenantFacade.listTenants();
+  }
+  updateTenant(tenantId: string, updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>) {
+    return this.tenantFacade.updateTenant(tenantId, updates);
+  }
+  deleteTenant(tenantId: string) {
+    return this.tenantFacade.deleteTenant(tenantId);
+  }
+  regenerateTenantApiKey(tenantId: string) {
+    return this.tenantFacade.regenerateTenantApiKey(tenantId);
+  }
 
   // --- Usage Metering ---
 
-  recordUsage(tenantId: string, botId: string, type: UsageEventType, quantity?: number, metadata?: Record<string, unknown>) { this.tenantFacade.recordUsage(tenantId, botId, type, quantity, metadata); }
-  getTenantUsage(tenantId: string) { return this.tenantFacade.getTenantUsage(tenantId); }
-  checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount?: number) { return this.tenantFacade.checkQuota(tenantId, type, amount); }
+  recordUsage(
+    tenantId: string,
+    botId: string,
+    type: UsageEventType,
+    quantity?: number,
+    metadata?: Record<string, unknown>
+  ) {
+    this.tenantFacade.recordUsage(tenantId, botId, type, quantity, metadata);
+  }
+  getTenantUsage(tenantId: string) {
+    return this.tenantFacade.getTenantUsage(tenantId);
+  }
+  checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount?: number) {
+    return this.tenantFacade.checkQuota(tenantId, type, amount);
+  }
 
   // --- Bot Lifecycle with Tenant Awareness ---
 
-  startBotWithTenant(botConfig: BotConfig) { return this.tenantFacade.startBotWithTenant(botConfig); }
-  getTenantBots(tenantId: string) { return this.tenantFacade.getTenantBots(tenantId); }
-  getRunningTenantBots(tenantId: string) { return this.tenantFacade.getRunningTenantBots(tenantId); }
+  startBotWithTenant(botConfig: BotConfig) {
+    return this.tenantFacade.startBotWithTenant(botConfig);
+  }
+  getTenantBots(tenantId: string) {
+    return this.tenantFacade.getTenantBots(tenantId);
+  }
+  getRunningTenantBots(tenantId: string) {
+    return this.tenantFacade.getRunningTenantBots(tenantId);
+  }
 
   // --- Billing Integration ---
 
-  getBillingProvider() { return this.tenantFacade.getBillingProvider(); }
-  createBillingCustomer(tenantId: string) { return this.tenantFacade.createBillingCustomer(tenantId); }
+  getBillingProvider() {
+    return this.tenantFacade.getBillingProvider();
+  }
+  createBillingCustomer(tenantId: string) {
+    return this.tenantFacade.createBillingCustomer(tenantId);
+  }
 }

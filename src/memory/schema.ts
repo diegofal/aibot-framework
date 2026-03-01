@@ -53,13 +53,14 @@ END;
 -- Core Memory tables (MemGPT-style structured identity storage)
 CREATE TABLE IF NOT EXISTS core_memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot_id TEXT NOT NULL DEFAULT 'default',
   category TEXT NOT NULL,
   key TEXT NOT NULL,
   value TEXT NOT NULL,
   importance INTEGER NOT NULL DEFAULT 5,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(category, key)
+  UNIQUE(bot_id, category, key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_core_memory_category ON core_memory(category);
@@ -72,13 +73,46 @@ CREATE INDEX IF NOT EXISTS idx_core_memory_updated ON core_memory(updated_at DES
  */
 function migrateSchema(db: Database, logger: Logger): void {
   // Add source_type column to files table if missing
-  const columns = db.prepare("PRAGMA table_info(files)").all() as { name: string }[];
+  const columns = db.prepare('PRAGMA table_info(files)').all() as { name: string }[];
   const hasSourceType = columns.some((c) => c.name === 'source_type');
   if (!hasSourceType) {
     db.exec("ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'memory'");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_files_source_type ON files(source_type)");
+    db.exec('CREATE INDEX IF NOT EXISTS idx_files_source_type ON files(source_type)');
     logger.info('Migration: added source_type column to files table');
   }
+
+  // Add bot_id column to core_memory table if missing (per-bot memory isolation)
+  const coreColumns = db.prepare('PRAGMA table_info(core_memory)').all() as { name: string }[];
+  const hasBotId = coreColumns.some((c) => c.name === 'bot_id');
+  if (!hasBotId && coreColumns.length > 0) {
+    // Rebuild table to change UNIQUE constraint from (category, key) to (bot_id, category, key)
+    db.exec(`
+      CREATE TABLE core_memory_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id TEXT NOT NULL DEFAULT 'default',
+        category TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        importance INTEGER NOT NULL DEFAULT 5,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(bot_id, category, key)
+      );
+      INSERT INTO core_memory_new (id, bot_id, category, key, value, importance, created_at, updated_at)
+        SELECT id, 'default', category, key, value, importance, created_at, updated_at FROM core_memory;
+      DROP TABLE core_memory;
+      ALTER TABLE core_memory_new RENAME TO core_memory;
+      CREATE INDEX idx_core_memory_bot_id ON core_memory(bot_id);
+      CREATE INDEX idx_core_memory_category ON core_memory(category);
+      CREATE INDEX idx_core_memory_importance ON core_memory(importance DESC);
+      CREATE INDEX idx_core_memory_updated ON core_memory(updated_at DESC);
+    `);
+    logger.info('Migration: added bot_id column to core_memory table');
+  }
+
+  // Ensure bot_id index exists (runs after migration for existing DBs, and for new DBs
+  // where SCHEMA_SQL created the table with bot_id but the index isn't in SCHEMA_SQL)
+  db.exec('CREATE INDEX IF NOT EXISTS idx_core_memory_bot_id ON core_memory(bot_id)');
 }
 
 export function initializeMemoryDb(dbPath: string, logger: Logger): Database {

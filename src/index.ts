@@ -77,7 +77,7 @@ async function main() {
         config.soul.search,
         skillRegistry.getOllamaClient(),
         logger,
-        transcriptsDir,
+        transcriptsDir
       );
       await memoryManager.initialize();
       logger.info('Semantic memory search initialized');
@@ -122,7 +122,7 @@ async function main() {
               claudeTimeout: payload.claudeTimeout,
             },
             skillRegistry.getOllamaClient(),
-            context.logger,
+            context.logger
           );
           context = { ...context, llm };
         }

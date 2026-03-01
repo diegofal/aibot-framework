@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Logger } from '../logger';
 import type { KarmaEvent, KarmaScore, KarmaTrend } from './types';
 
@@ -22,7 +22,7 @@ export class KarmaService {
 
   constructor(
     private config: KarmaConfig,
-    private logger: Logger,
+    private logger: Logger
   ) {
     this.baseDir = config.baseDir;
     this.initialScore = config.initialScore;
@@ -72,7 +72,7 @@ export class KarmaService {
     delta: number,
     reason: string,
     source: KarmaEvent['source'],
-    metadata?: Record<string, unknown>,
+    metadata?: Record<string, unknown>
   ): KarmaEvent | null {
     // Only dedup negative events from automated sources
     if (delta < 0 && source !== 'manual' && source !== 'feedback') {
@@ -84,7 +84,7 @@ export class KarmaService {
         this.dedupMap.set(botId, botDedup);
       }
       const lastSeen = botDedup.get(dedupKey);
-      if (lastSeen !== undefined && (now - lastSeen) < this.dedupCooldownMs) {
+      if (lastSeen !== undefined && now - lastSeen < this.dedupCooldownMs) {
         this.logger.debug({ botId, delta, dedupKey }, 'Karma event deduped (cooldown)');
         return null;
       }
@@ -102,7 +102,7 @@ export class KarmaService {
     };
 
     const eventsPath = this.getEventsPath(botId);
-    appendFileSync(eventsPath, JSON.stringify(event) + '\n', 'utf-8');
+    appendFileSync(eventsPath, `${JSON.stringify(event)}\n`, 'utf-8');
     this.logger.debug({ botId, delta, reason, source }, 'Karma event recorded');
     return event;
   }
@@ -114,13 +114,17 @@ export class KarmaService {
     const content = readFileSync(eventsPath, 'utf-8').trim();
     if (!content) return [];
 
-    return content.split('\n').filter(Boolean).map((line) => {
-      try {
-        return JSON.parse(line) as KarmaEvent;
-      } catch {
-        return null;
-      }
-    }).filter((e): e is KarmaEvent => e !== null);
+    return content
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as KarmaEvent;
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is KarmaEvent => e !== null);
   }
 
   getRecentEvents(botId: string, limit = 25): KarmaEvent[] {
@@ -160,9 +164,7 @@ export class KarmaService {
   getTrend(botId: string): KarmaTrend {
     const events = this.getAllEvents(botId);
     const sevenDaysAgo = Date.now() - 7 * 86_400_000;
-    const recentEvents = events.filter(
-      (e) => new Date(e.timestamp).getTime() >= sevenDaysAgo,
-    );
+    const recentEvents = events.filter((e) => new Date(e.timestamp).getTime() >= sevenDaysAgo);
 
     if (recentEvents.length === 0) return 'stable';
 
@@ -238,7 +240,7 @@ Focus on actions that produce real, original, data-backed output.`;
    */
   getHistory(
     botId: string,
-    opts?: { limit?: number; offset?: number },
+    opts?: { limit?: number; offset?: number }
   ): { events: KarmaEvent[]; total: number } {
     const all = this.getAllEvents(botId).reverse(); // newest first
     const offset = opts?.offset ?? 0;

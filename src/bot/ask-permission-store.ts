@@ -74,7 +74,10 @@ export class AskPermissionStore {
   private static readonly HISTORY_MAX_ENTRIES = 100;
   private static readonly HISTORY_TTL_MS = 24 * 3_600_000;
 
-  constructor(private logger: Logger, private dataDir?: string) {
+  constructor(
+    private logger: Logger,
+    private dataDir?: string
+  ) {
     if (dataDir) this.loadFromDisk();
   }
 
@@ -106,7 +109,7 @@ export class AskPermissionStore {
 
       this.logger.debug(
         { historyCount: this.history.size, resolvedCount: this.resolved.size },
-        'AskPermission: loaded from disk',
+        'AskPermission: loaded from disk'
       );
     } catch (err) {
       this.logger.warn({ err }, 'AskPermission: failed to load from disk');
@@ -138,19 +141,28 @@ export class AskPermissionStore {
     resource: string,
     description: string,
     urgency: PermissionUrgency = 'normal',
-    timeoutMs: number = 60 * 60_000,
+    timeoutMs: number = 60 * 60_000
   ): { id: string; promise: Promise<'approved' | 'denied'> } {
     // Dedup check
     const existing = this.findPendingDuplicate(botId, action, resource);
     if (existing) {
-      this.logger.debug({ id: existing.request.id, botId }, 'AskPermission: duplicate request, returning existing');
+      this.logger.debug(
+        { id: existing.request.id, botId },
+        'AskPermission: duplicate request, returning existing'
+      );
       const promise = new Promise<'approved' | 'denied'>((resolve, reject) => {
         const orig = this.pending.get(existing.request.id);
         if (orig) {
           const origResolve = orig.resolve;
           const origReject = orig.reject;
-          orig.resolve = (decision) => { origResolve(decision); resolve(decision); };
-          orig.reject = (reason) => { origReject(reason); reject(reason); };
+          orig.resolve = (decision) => {
+            origResolve(decision);
+            resolve(decision);
+          };
+          orig.reject = (reason) => {
+            origReject(reason);
+            reject(reason);
+          };
         }
       });
       return { id: existing.request.id, promise };
@@ -348,7 +360,7 @@ export class AskPermissionStore {
     ids: string[],
     summary: string,
     toolCalls: Array<{ name: string; success: boolean }>,
-    success: boolean,
+    success: boolean
   ): void {
     const now = Date.now();
     for (const id of ids) {
@@ -388,10 +400,10 @@ export class AskPermissionStore {
 
     // Reset history entry fields
     hist.executionStatus = 'decided';
-    delete hist.consumedAt;
-    delete hist.executedAt;
-    delete hist.executionSummary;
-    delete hist.toolCalls;
+    hist.consumedAt = undefined;
+    hist.executedAt = undefined;
+    hist.executionSummary = undefined;
+    hist.toolCalls = undefined;
 
     this.persistToDisk();
     this.logger.info({ id, botId: hist.botId }, 'AskPermission: requeued failed/consumed entry');
@@ -431,8 +443,9 @@ export class AskPermissionStore {
     }
     // Size prune (remove oldest first)
     if (this.history.size > AskPermissionStore.HISTORY_MAX_ENTRIES) {
-      const sorted = Array.from(this.history.entries())
-        .sort((a, b) => a[1].resolvedAt - b[1].resolvedAt);
+      const sorted = Array.from(this.history.entries()).sort(
+        (a, b) => a[1].resolvedAt - b[1].resolvedAt
+      );
       const toRemove = sorted.length - AskPermissionStore.HISTORY_MAX_ENTRIES;
       for (let i = 0; i < toRemove; i++) {
         this.history.delete(sorted[i][0]);
@@ -441,7 +454,11 @@ export class AskPermissionStore {
     if (this.history.size !== sizeBefore) this.persistToDisk();
   }
 
-  private findPendingDuplicate(botId: string, action: string, resource: string): PendingEntry | undefined {
+  private findPendingDuplicate(
+    botId: string,
+    action: string,
+    resource: string
+  ): PendingEntry | undefined {
     for (const entry of this.pending.values()) {
       if (
         entry.request.botId === botId &&

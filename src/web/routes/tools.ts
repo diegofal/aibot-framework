@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
-import type { DynamicToolStore } from '../../tools/dynamic-tool-store';
-import type { DynamicToolRegistry } from '../../bot/dynamic-tool-registry';
 import type { BotManager } from '../../bot';
+import type { DynamicToolRegistry } from '../../bot/dynamic-tool-registry';
 import type { Logger } from '../../logger';
+import type { DynamicToolStore } from '../../tools/dynamic-tool-store';
 
 export function toolsRoutes(deps: {
   store: DynamicToolStore;
@@ -57,10 +57,13 @@ export function toolsRoutes(deps: {
         parameters: {
           type: 'object',
           properties: Object.fromEntries(
-            Object.entries(dt.parameters || {}).map(([k, v]) => [k, {
-              type: v.type,
-              description: v.description,
-            }])
+            Object.entries(dt.parameters || {}).map(([k, v]) => [
+              k,
+              {
+                type: v.type,
+                description: v.description,
+              },
+            ])
           ),
           required: Object.entries(dt.parameters || {})
             .filter(([, v]) => v.required)
@@ -76,8 +79,9 @@ export function toolsRoutes(deps: {
 
   // Execute a tool directly (no LLM)
   app.post('/execute', async (c) => {
-    const body = await c.req.json<{ name?: string; args?: Record<string, unknown> }>()
-      .catch(() => ({} as { name?: string; args?: Record<string, unknown> }));
+    const body = await c.req
+      .json<{ name?: string; args?: Record<string, unknown> }>()
+      .catch(() => ({}) as { name?: string; args?: Record<string, unknown> });
 
     if (!body.name) {
       return c.json({ error: 'Missing required field: name' }, 400);
@@ -95,10 +99,17 @@ export function toolsRoutes(deps: {
       return c.json({ error: `Tool not found: ${body.name}` }, 404);
     }
 
-    const logger = deps.logger ?? {
-      info: () => {}, warn: () => {}, debug: () => {}, error: () => {},
-      child: function () { return this as unknown as Logger; },
-    } as unknown as Logger;
+    const logger =
+      deps.logger ??
+      ({
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+        child: function () {
+          return this as unknown as Logger;
+        },
+      } as unknown as Logger);
 
     const start = Date.now();
     try {
@@ -148,7 +159,7 @@ export function toolsRoutes(deps: {
   // Reject a tool
   app.post('/:id/reject', async (c) => {
     const id = c.req.param('id');
-    const body = await c.req.json<{ note?: string }>().catch(() => ({} as { note?: string }));
+    const body = await c.req.json<{ note?: string }>().catch(() => ({}) as { note?: string });
     const meta = deps.registry.reject(id, body.note);
     if (!meta) return c.json({ error: 'Tool not found' }, 404);
     return c.json(meta);

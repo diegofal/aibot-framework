@@ -255,7 +255,7 @@
         <!-- Section 4: RAG Search Flow                                   -->
         <!-- ============================================================ -->
         <h2 id="rag-search">RAG Search Flow</h2>
-        <p>The <code>hybridSearch()</code> function in <code>search.ts</code> combines vector similarity with keyword matching for robust retrieval. Results are merged with Core Memory entries weighted by importance.</p>
+        <p>The <code>hybridSearch()</code> function in <code>search.ts</code> combines vector similarity with keyword matching for robust retrieval. Results are merged with Core Memory entries weighted by importance. When a <code>botId</code> is provided, all search paths filter by file path prefix (<code>{botId}/</code> or <code>sessions/bot-{botId}-</code>) and core memory filters by <code>bot_id</code> column, ensuring per-bot isolation.</p>
 
         <div class="card-grid cols-2">
           <div class="card">
@@ -334,7 +334,7 @@ score = 1 / (1 + |bm25_rank|)</code></pre>
         <!-- Section 6: Core Memory                                       -->
         <!-- ============================================================ -->
         <h2 id="core-memory">Core Memory</h2>
-        <p>Core Memory is a MemGPT-style structured key-value store in SQLite. It enables the bot to maintain explicit, categorized knowledge about itself and the people it interacts with. High-importance entries are automatically injected into the system prompt.</p>
+        <p>Core Memory is a MemGPT-style structured key-value store in SQLite. It enables the bot to maintain explicit, categorized knowledge about itself and the people it interacts with. High-importance entries are automatically injected into the system prompt. Entries are scoped per-bot via a <code>bot_id</code> column &mdash; each bot can only read and write its own core memory, and <code>clearCoreMemoryForBot()</code> only deletes entries for the target bot.</p>
 
         <h3>Categories</h3>
         <table>
@@ -531,14 +531,15 @@ created_at TEXT DEFAULT now()</code></pre>
           </div>
           <div class="card">
             <h3>core_memory</h3>
-            <p>Structured key-value store with importance scoring and category indexing.</p>
+            <p>Structured key-value store with importance scoring, category indexing, and per-bot isolation via <code>bot_id</code>.</p>
             <pre><code>id INTEGER PRIMARY KEY
+bot_id TEXT NOT NULL DEFAULT 'default'
 category TEXT NOT NULL
 key TEXT NOT NULL
 value TEXT NOT NULL
 importance INTEGER DEFAULT 5
 created_at / updated_at TEXT
-UNIQUE(category, key)</code></pre>
+UNIQUE(bot_id, category, key)</code></pre>
           </div>
         </div>
 

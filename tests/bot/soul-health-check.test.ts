@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runStartupSoulCheck } from '../../src/bot/soul-health-check';
 

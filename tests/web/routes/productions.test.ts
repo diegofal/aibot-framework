@@ -1,8 +1,8 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Hono } from 'hono';
-import { productionsRoutes } from '../../../src/web/routes/productions';
-import type { Logger } from '../../../src/logger';
 import type { Config } from '../../../src/config';
+import type { Logger } from '../../../src/logger';
+import { productionsRoutes } from '../../../src/web/routes/productions';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -13,9 +13,7 @@ const noopLogger: Logger = {
 };
 
 const mockConfig = {
-  bots: [
-    { id: 'bot1', name: 'TestBot' },
-  ],
+  bots: [{ id: 'bot1', name: 'TestBot' }],
   improve: {
     claudePath: 'claude',
     timeout: 30_000,
@@ -94,9 +92,15 @@ describe('productions routes', () => {
       deps.productionsService.getAllEntries = () => ({
         entries: [
           {
-            id: 'p1', timestamp: '2026-02-20T10:00:00Z', botId: 'bot1',
-            tool: 'file_write', path: '/output/article.md', action: 'create',
-            description: 'Wrote article', size: 500, trackOnly: false,
+            id: 'p1',
+            timestamp: '2026-02-20T10:00:00Z',
+            botId: 'bot1',
+            tool: 'file_write',
+            path: '/output/article.md',
+            action: 'create',
+            description: 'Wrote article',
+            size: 500,
+            trackOnly: false,
           },
         ],
         total: 1,
@@ -124,7 +128,9 @@ describe('productions routes', () => {
       const app = new Hono();
       app.route('/api/productions', productionsRoutes(deps));
 
-      await app.request('http://localhost/api/productions/all-entries?limit=50&offset=10&status=approved&botId=bot1');
+      await app.request(
+        'http://localhost/api/productions/all-entries?limit=50&offset=10&status=approved&botId=bot1'
+      );
       expect(receivedOpts).toBeTruthy();
       expect(receivedOpts.limit).toBe(50);
       expect(receivedOpts.offset).toBe(10);
@@ -157,9 +163,12 @@ describe('productions routes', () => {
       const app = new Hono();
       app.route('/api/productions', productionsRoutes(deps));
 
-      const res = await app.request('http://localhost/api/productions/unknown-bot/generate-summary', {
-        method: 'POST',
-      });
+      const res = await app.request(
+        'http://localhost/api/productions/unknown-bot/generate-summary',
+        {
+          method: 'POST',
+        }
+      );
 
       expect(res.status).toBe(404);
       const data = await res.json();
@@ -168,8 +177,11 @@ describe('productions routes', () => {
 
     test('returns { status: "generating" } immediately', async () => {
       let resolveGenerate: (v: string) => void;
-      const mockClaudeGenerate = mock(() =>
-        new Promise<string>((resolve) => { resolveGenerate = resolve; })
+      const mockClaudeGenerate = mock(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveGenerate = resolve;
+          })
       );
 
       mock.module('../../../src/claude-cli', () => ({
@@ -191,7 +203,7 @@ describe('productions routes', () => {
       expect(data.status).toBe('generating');
 
       // Resolve the pending generation so it doesn't leak
-      resolveGenerate!('done');
+      resolveGenerate?.('done');
       await tick();
 
       // Restore
@@ -226,7 +238,9 @@ describe('productions routes', () => {
       expect(deps.productionsService.writeSummary).toHaveBeenCalledTimes(1);
       const callArgs = deps.productionsService.writeSummary.mock.calls[0];
       expect(callArgs[0]).toBe('bot1');
-      expect(callArgs[1].summary).toBe('The bot is focused on writing articles about technology trends.');
+      expect(callArgs[1].summary).toBe(
+        'The bot is focused on writing articles about technology trends.'
+      );
       expect(callArgs[1].generatedAt).toBeTruthy();
 
       // Verify prompt contains key context
@@ -282,8 +296,11 @@ describe('productions routes', () => {
 
     test('guards against duplicate generation', async () => {
       let resolveGenerate: (v: string) => void;
-      const mockClaudeGenerate = mock(() =>
-        new Promise<string>((resolve) => { resolveGenerate = resolve; })
+      const mockClaudeGenerate = mock(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveGenerate = resolve;
+          })
       );
 
       mock.module('../../../src/claude-cli', () => ({
@@ -312,7 +329,7 @@ describe('productions routes', () => {
       expect(mockClaudeGenerate).toHaveBeenCalledTimes(1);
 
       // Resolve
-      resolveGenerate!('done');
+      resolveGenerate?.('done');
       await tick();
 
       // Restore
@@ -411,8 +428,11 @@ describe('productions routes', () => {
 
     test('returns generating when generation is in progress', async () => {
       let resolveGenerate: (v: string) => void;
-      const mockClaudeGenerate = mock(() =>
-        new Promise<string>((resolve) => { resolveGenerate = resolve; })
+      const mockClaudeGenerate = mock(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveGenerate = resolve;
+          })
       );
 
       mock.module('../../../src/claude-cli', () => ({
@@ -437,7 +457,7 @@ describe('productions routes', () => {
       expect(data.status).toBe('generating');
 
       // Resolve
-      resolveGenerate!('done');
+      resolveGenerate?.('done');
       await tick();
 
       // Restore
@@ -454,7 +474,9 @@ describe('productions routes', () => {
       const app = new Hono();
       app.route('/api/productions', productionsRoutes(deps));
 
-      const res = await app.request('http://localhost/api/productions/bot1/some-id/response-status');
+      const res = await app.request(
+        'http://localhost/api/productions/bot1/some-id/response-status'
+      );
       expect(res.status).toBe(404);
     });
 
@@ -470,7 +492,12 @@ describe('productions routes', () => {
         description: 'Wrote article',
         size: 500,
         trackOnly: false,
-        evaluation: { status: 'approved', rating: 4, feedback: 'Good', evaluatedAt: '2026-02-20T11:00:00Z' },
+        evaluation: {
+          status: 'approved',
+          rating: 4,
+          feedback: 'Good',
+          evaluatedAt: '2026-02-20T11:00:00Z',
+        },
       });
 
       const app = new Hono();
@@ -556,15 +583,29 @@ describe('productions routes', () => {
       const freshModule = await import('../../../src/web/routes/productions');
       const deps = makeMockDeps();
       const mockEntry = {
-        id: 'p1', botId: 'bot1', tool: 'file_write', path: '/output/test.md',
-        action: 'create', description: 'Test', size: 100, trackOnly: false,
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/test.md',
+        action: 'create',
+        description: 'Test',
+        size: 100,
+        trackOnly: false,
         timestamp: '2026-02-20T10:00:00Z',
       };
       deps.productionsService.getEntry = () => mockEntry;
-      deps.productionsService.addThreadMessage = mock((botId: string, id: string, role: string, content: string) => ({
-        message: { id: 'msg1', role, content, createdAt: new Date().toISOString() },
-        entry: { ...mockEntry, evaluation: { evaluatedAt: new Date().toISOString(), thread: [{ id: 'msg1', role, content, createdAt: new Date().toISOString() }] } },
-      }));
+      deps.productionsService.addThreadMessage = mock(
+        (botId: string, id: string, role: string, content: string) => ({
+          message: { id: 'msg1', role, content, createdAt: new Date().toISOString() },
+          entry: {
+            ...mockEntry,
+            evaluation: {
+              evaluatedAt: new Date().toISOString(),
+              thread: [{ id: 'msg1', role, content, createdAt: new Date().toISOString() }],
+            },
+          },
+        })
+      );
 
       const mockSoulLoader = {
         readIdentity: () => 'I am TestBot',
@@ -611,10 +652,21 @@ describe('productions routes', () => {
 
     test('returns idle with last bot message when not generating', async () => {
       const deps = makeMockDeps();
-      const botMsg = { id: 'bmsg1', role: 'bot', content: 'My reply', createdAt: '2026-02-22T10:00:00Z' };
+      const botMsg = {
+        id: 'bmsg1',
+        role: 'bot',
+        content: 'My reply',
+        createdAt: '2026-02-22T10:00:00Z',
+      };
       deps.productionsService.getEntry = () => ({
-        id: 'p1', botId: 'bot1', tool: 'file_write', path: '/test.md',
-        action: 'create', description: 'Test', size: 100, trackOnly: false,
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/test.md',
+        action: 'create',
+        description: 'Test',
+        size: 100,
+        trackOnly: false,
         timestamp: '2026-02-20T10:00:00Z',
         evaluation: {
           evaluatedAt: '2026-02-20T10:00:00Z',
@@ -639,12 +691,20 @@ describe('productions routes', () => {
     test('returns idle with null when no bot messages', async () => {
       const deps = makeMockDeps();
       deps.productionsService.getEntry = () => ({
-        id: 'p1', botId: 'bot1', tool: 'file_write', path: '/test.md',
-        action: 'create', description: 'Test', size: 100, trackOnly: false,
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/test.md',
+        action: 'create',
+        description: 'Test',
+        size: 100,
+        trackOnly: false,
         timestamp: '2026-02-20T10:00:00Z',
         evaluation: {
           evaluatedAt: '2026-02-20T10:00:00Z',
-          thread: [{ id: 'hmsg1', role: 'human', content: 'Hi', createdAt: '2026-02-22T09:00:00Z' }],
+          thread: [
+            { id: 'hmsg1', role: 'human', content: 'Hi', createdAt: '2026-02-22T09:00:00Z' },
+          ],
         },
       });
 
@@ -671,8 +731,14 @@ describe('productions routes', () => {
       const freshModule = await import('../../../src/web/routes/productions');
       const deps = makeMockDeps();
       const mockEntry = {
-        id: 'p1', botId: 'bot1', tool: 'file_write', path: '/output/test.md',
-        action: 'create', description: 'Test', size: 100, trackOnly: false,
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/test.md',
+        action: 'create',
+        description: 'Test',
+        size: 100,
+        trackOnly: false,
         timestamp: '2026-02-20T10:00:00Z',
         evaluation: {
           evaluatedAt: '2026-02-20T10:00:00Z',
@@ -682,10 +748,12 @@ describe('productions routes', () => {
         },
       };
       deps.productionsService.getEntry = () => mockEntry;
-      deps.productionsService.addThreadMessage = mock((_b: string, _i: string, role: string, content: string) => ({
-        message: { id: 'msg-new', role, content, createdAt: new Date().toISOString() },
-        entry: mockEntry,
-      }));
+      deps.productionsService.addThreadMessage = mock(
+        (_b: string, _i: string, role: string, content: string) => ({
+          message: { id: 'msg-new', role, content, createdAt: new Date().toISOString() },
+          entry: mockEntry,
+        })
+      );
 
       const mockSoulLoader = {
         readIdentity: () => 'I am TestBot',
@@ -712,7 +780,9 @@ describe('productions routes', () => {
       expect(statusData.error).toContain('First fail');
 
       // Retry
-      const retryRes = await app.request('http://localhost/api/productions/bot1/p1/retry-thread', { method: 'POST' });
+      const retryRes = await app.request('http://localhost/api/productions/bot1/p1/retry-thread', {
+        method: 'POST',
+      });
       expect(retryRes.status).toBe(200);
       expect((await retryRes.json()).status).toBe('generating');
 
@@ -732,7 +802,9 @@ describe('productions routes', () => {
       const app = new Hono();
       app.route('/api/productions', productionsRoutes(deps));
 
-      const res = await app.request('http://localhost/api/productions/bot1/p1/retry-thread', { method: 'POST' });
+      const res = await app.request('http://localhost/api/productions/bot1/p1/retry-thread', {
+        method: 'POST',
+      });
       expect(res.status).toBe(404);
     });
   });
@@ -757,7 +829,12 @@ describe('productions routes', () => {
         description: 'Wrote article',
         size: 500,
         trackOnly: false,
-        evaluation: { status: 'approved' as const, rating: 4, feedback: 'Great work', evaluatedAt: '2026-02-20T11:00:00Z' },
+        evaluation: {
+          status: 'approved' as const,
+          rating: 4,
+          feedback: 'Great work',
+          evaluatedAt: '2026-02-20T11:00:00Z',
+        },
       };
       deps.productionsService.evaluate = () => evaluatedEntry;
       deps.productionsService.getFileContent = () => '# Article content';

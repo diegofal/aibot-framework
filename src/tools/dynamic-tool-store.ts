@@ -1,4 +1,12 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 export interface DynamicToolMeta {
@@ -8,7 +16,7 @@ export interface DynamicToolMeta {
   type: 'typescript' | 'command';
   status: 'pending' | 'approved' | 'rejected';
   createdBy: string;
-  scope: 'all' | string;  // 'all' or specific botId
+  scope: 'all' | string; // 'all' or specific botId
   parameters: Record<string, { type: string; description: string; required?: boolean }>;
   createdAt: string;
   updatedAt: string;
@@ -68,7 +76,10 @@ export class DynamicToolStore {
     }
   }
 
-  create(meta: Omit<DynamicToolMeta, 'id' | 'createdAt' | 'updatedAt' | 'status'>, source: string): DynamicToolMeta {
+  create(
+    meta: Omit<DynamicToolMeta, 'id' | 'createdAt' | 'updatedAt' | 'status'>,
+    source: string
+  ): DynamicToolMeta {
     const id = meta.name; // use snake_case name as id
     const dir = this.toolDir(id);
 
@@ -105,7 +116,10 @@ export class DynamicToolStore {
     return entry.meta;
   }
 
-  updateMeta(id: string, patch: Partial<Pick<DynamicToolMeta, 'name' | 'description' | 'scope' | 'parameters'>>): DynamicToolMeta | null {
+  updateMeta(
+    id: string,
+    patch: Partial<Pick<DynamicToolMeta, 'name' | 'description' | 'scope' | 'parameters'>>
+  ): DynamicToolMeta | null {
     const entry = this.get(id);
     if (!entry) return null;
 
@@ -125,5 +139,17 @@ export class DynamicToolStore {
 
     rmSync(dir, { recursive: true, force: true });
     return true;
+  }
+
+  /** Delete all tools created by a specific bot. Returns count of deleted tools. */
+  deleteByCreator(botId: string): number {
+    const all = this.list();
+    let count = 0;
+    for (const meta of all) {
+      if (meta.createdBy === botId) {
+        if (this.delete(meta.id)) count++;
+      }
+    }
+    return count;
   }
 }

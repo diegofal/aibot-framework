@@ -35,8 +35,8 @@ export interface DeclaredTool {
 // ============================================================================
 
 export interface SkillRequirements {
-  anyBins?: string[];  // At least one must exist
-  allBins?: string[];  // All must exist
+  anyBins?: string[]; // At least one must exist
+  allBins?: string[]; // All must exist
 }
 
 export type SkillCategory =
@@ -76,9 +76,9 @@ export interface SkillManifest {
 // ============================================================================
 
 export interface SkillDocument extends SkillManifest {
-  instructions: string;        // Markdown body
+  instructions: string; // Markdown body
   declaredTools: DeclaredTool[];
-  sourcePath: string;        // Absolute path to SKILL.md
+  sourcePath: string; // Absolute path to SKILL.md
 }
 
 // ============================================================================
@@ -111,7 +111,7 @@ export interface Logger {
 export interface LoadedSkill {
   name: string;
   description: string;
-  tools: string[];        // Tool IDs (prefixed)
+  tools: string[]; // Tool IDs (prefixed)
   status: 'loaded' | 'error';
   sourcePath: string;
   error?: string;
@@ -163,7 +163,7 @@ export class SkillNotFoundError extends Error {
 
 export class SkillValidationError extends Error {
   constructor(public readonly errors: string[]) {
-    super(`Skill validation failed:\n${errors.map(e => `  - ${e}`).join('\n')}`);
+    super(`Skill validation failed:\n${errors.map((e) => `  - ${e}`).join('\n')}`);
     this.name = 'SkillValidationError';
   }
 }

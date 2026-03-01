@@ -1,7 +1,7 @@
+import type { Logger } from '../logger';
+import { TtlCache } from './cache';
 import type { Tool, ToolResult } from './types';
 import { wrapExternalContent } from './types';
-import { TtlCache } from './cache';
-import type { Logger } from '../logger';
 
 export interface WebFetchConfig {
   maxContentLength?: number;
@@ -82,10 +82,7 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const rawUrl = String(args.url ?? '').trim();
       if (!rawUrl) {
         return { success: false, content: 'Missing required parameter: url' };
@@ -103,7 +100,7 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
       if (!['http:', 'https:'].includes(parsed.protocol)) {
         return {
           success: false,
-          content: `Blocked: only http and https URLs are allowed`,
+          content: 'Blocked: only http and https URLs are allowed',
         };
       }
 
@@ -111,7 +108,7 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
       if (isBlockedHost(parsed.hostname)) {
         return {
           success: false,
-          content: `Blocked: cannot fetch private/local addresses`,
+          content: 'Blocked: cannot fetch private/local addresses',
         };
       }
 
@@ -153,23 +150,17 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
 
         // Truncate if needed
         if (text.length > maxContentLength) {
-          text = text.slice(0, maxContentLength) + '\n\n[Content truncated]';
+          text = `${text.slice(0, maxContentLength)}\n\n[Content truncated]`;
         }
 
-        const content = wrapExternalContent(
-          `Content from ${rawUrl}:\n\n${text}`
-        );
+        const content = wrapExternalContent(`Content from ${rawUrl}:\n\n${text}`);
 
         cache.set(rawUrl, content);
-        logger.debug(
-          { url: rawUrl, length: text.length },
-          'web_fetch completed'
-        );
+        logger.debug({ url: rawUrl, length: text.length }, 'web_fetch completed');
 
         return { success: true, content };
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : String(error);
+        const message = error instanceof Error ? error.message : String(error);
         logger.error({ error: message, url: rawUrl }, 'web_fetch failed');
         return { success: false, content: `Fetch failed: ${message}` };
       }

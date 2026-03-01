@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseLLMJson } from '../../src/bot/llm-json-parser';
 
 const mockLogger = { warn: vi.fn() };
@@ -86,7 +86,7 @@ describe('parseLLMJson', () => {
   });
 
   it('truncates raw in log to 300 chars for validation failures', () => {
-    const raw = '{"missing_fields": true, ' + '"x": "'.padEnd(400, 'a') + '"}';
+    const raw = `{"missing_fields": true, ${'"x": "'.padEnd(400, 'a')}"}`;
     parseLLMJson<TestResult>(raw, mockLogger, plannerOpts);
     expect(mockLogger.warn).toHaveBeenCalled();
     const loggedRaw = mockLogger.warn.mock.calls[0][0].raw;

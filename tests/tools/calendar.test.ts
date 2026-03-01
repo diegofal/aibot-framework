@@ -1,6 +1,10 @@
-import { describe, test, expect, mock, afterEach } from 'bun:test';
-import { createCalendarListTool, createCalendarAvailabilityTool, createCalendarScheduleTool } from '../../src/tools/calendar';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import type { CalendarConfig } from '../../src/config';
+import {
+  createCalendarAvailabilityTool,
+  createCalendarListTool,
+  createCalendarScheduleTool,
+} from '../../src/tools/calendar';
 
 const mockLogger = {
   info: mock(() => {}),
@@ -42,27 +46,29 @@ describe('calendar_list', () => {
 
   test('returns formatted events (Google)', async () => {
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response(
-        JSON.stringify({
-          items: [
-            {
-              id: 'evt1',
-              summary: 'Team Standup',
-              start: { dateTime: '2026-03-01T09:00:00-03:00' },
-              end: { dateTime: '2026-03-01T09:30:00-03:00' },
-              location: 'Office',
-            },
-            {
-              id: 'evt2',
-              summary: 'Lunch Meeting',
-              start: { dateTime: '2026-03-01T12:00:00-03:00' },
-              end: { dateTime: '2026-03-01T13:00:00-03:00' },
-              attendees: [{ email: 'bob@example.com' }],
-            },
-          ],
-        }),
-        { status: 200 },
-      )),
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: 'evt1',
+                summary: 'Team Standup',
+                start: { dateTime: '2026-03-01T09:00:00-03:00' },
+                end: { dateTime: '2026-03-01T09:30:00-03:00' },
+                location: 'Office',
+              },
+              {
+                id: 'evt2',
+                summary: 'Lunch Meeting',
+                start: { dateTime: '2026-03-01T12:00:00-03:00' },
+                end: { dateTime: '2026-03-01T13:00:00-03:00' },
+                attendees: [{ email: 'bob@example.com' }],
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+      )
     ) as typeof fetch;
 
     const tool = createCalendarListTool(googleConfig);
@@ -77,7 +83,7 @@ describe('calendar_list', () => {
 
   test('returns message for no events', async () => {
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 })),
+      Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }))
     ) as typeof fetch;
 
     const tool = createCalendarListTool(googleConfig);
@@ -88,7 +94,7 @@ describe('calendar_list', () => {
 
   test('handles API errors', async () => {
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response('Unauthorized', { status: 401, statusText: 'Unauthorized' })),
+      Promise.resolve(new Response('Unauthorized', { status: 401, statusText: 'Unauthorized' }))
     ) as typeof fetch;
 
     const tool = createCalendarListTool(googleConfig);
@@ -99,10 +105,21 @@ describe('calendar_list', () => {
 
   test('caches results', async () => {
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response(
-        JSON.stringify({ items: [{ id: '1', summary: 'Event', start: { dateTime: '2026-03-01T10:00:00Z' }, end: { dateTime: '2026-03-01T11:00:00Z' } }] }),
-        { status: 200 },
-      )),
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: '1',
+                summary: 'Event',
+                start: { dateTime: '2026-03-01T10:00:00Z' },
+                end: { dateTime: '2026-03-01T11:00:00Z' },
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+      )
     ) as typeof fetch;
 
     const tool = createCalendarListTool(googleConfig);
@@ -128,22 +145,28 @@ describe('calendar_list', () => {
     globalThis.fetch = mock((url: string) => {
       callCount++;
       if (url.includes('/users/me')) {
-        return Promise.resolve(new Response(
-          JSON.stringify({ resource: { uri: 'https://api.calendly.com/users/abc123' } }),
-          { status: 200 },
-        ));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ resource: { uri: 'https://api.calendly.com/users/abc123' } }),
+            { status: 200 }
+          )
+        );
       }
-      return Promise.resolve(new Response(
-        JSON.stringify({
-          collection: [{
-            uri: 'https://api.calendly.com/scheduled_events/evt1',
-            name: 'Calendly Meeting',
-            start_time: '2026-03-01T10:00:00Z',
-            end_time: '2026-03-01T10:30:00Z',
-          }],
-        }),
-        { status: 200 },
-      ));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            collection: [
+              {
+                uri: 'https://api.calendly.com/scheduled_events/evt1',
+                name: 'Calendly Meeting',
+                start_time: '2026-03-01T10:00:00Z',
+                end_time: '2026-03-01T10:30:00Z',
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+      );
     }) as typeof fetch;
 
     const tool = createCalendarListTool(calendlyConfig);
@@ -178,19 +201,21 @@ describe('calendar_availability', () => {
 
   test('returns busy slots (Google)', async () => {
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response(
-        JSON.stringify({
-          calendars: {
-            primary: {
-              busy: [
-                { start: '2026-03-01T09:00:00Z', end: '2026-03-01T10:00:00Z' },
-                { start: '2026-03-01T14:00:00Z', end: '2026-03-01T15:30:00Z' },
-              ],
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            calendars: {
+              primary: {
+                busy: [
+                  { start: '2026-03-01T09:00:00Z', end: '2026-03-01T10:00:00Z' },
+                  { start: '2026-03-01T14:00:00Z', end: '2026-03-01T15:30:00Z' },
+                ],
+              },
             },
-          },
-        }),
-        { status: 200 },
-      )),
+          }),
+          { status: 200 }
+        )
+      )
     ) as typeof fetch;
 
     const tool = createCalendarAvailabilityTool(googleConfig);
@@ -202,10 +227,9 @@ describe('calendar_availability', () => {
 
   test('returns all-free message when no busy slots', async () => {
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response(
-        JSON.stringify({ calendars: { primary: { busy: [] } } }),
-        { status: 200 },
-      )),
+      Promise.resolve(
+        new Response(JSON.stringify({ calendars: { primary: { busy: [] } } }), { status: 200 })
+      )
     ) as typeof fetch;
 
     const tool = createCalendarAvailabilityTool(googleConfig);
@@ -226,7 +250,10 @@ describe('calendar_schedule', () => {
 
   test('returns error for missing title', async () => {
     const tool = createCalendarScheduleTool(googleConfig);
-    const result = await tool.execute({ start_time: '2026-03-01T10:00:00Z', duration_minutes: 30 }, mockLogger);
+    const result = await tool.execute(
+      { start_time: '2026-03-01T10:00:00Z', duration_minutes: 30 },
+      mockLogger
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain('title');
   });
@@ -240,30 +267,38 @@ describe('calendar_schedule', () => {
 
   test('returns error for invalid start_time', async () => {
     const tool = createCalendarScheduleTool(googleConfig);
-    const result = await tool.execute({ title: 'Meeting', start_time: 'not-a-date', duration_minutes: 30 }, mockLogger);
+    const result = await tool.execute(
+      { title: 'Meeting', start_time: 'not-a-date', duration_minutes: 30 },
+      mockLogger
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain('Invalid');
   });
 
   test('schedules event successfully (Google)', async () => {
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response(
-        JSON.stringify({
-          id: 'new-evt-123',
-          summary: 'Team Sync',
-          start: { dateTime: '2026-03-01T14:00:00-03:00' },
-          end: { dateTime: '2026-03-01T14:30:00-03:00' },
-        }),
-        { status: 200 },
-      )),
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: 'new-evt-123',
+            summary: 'Team Sync',
+            start: { dateTime: '2026-03-01T14:00:00-03:00' },
+            end: { dateTime: '2026-03-01T14:30:00-03:00' },
+          }),
+          { status: 200 }
+        )
+      )
     ) as typeof fetch;
 
     const tool = createCalendarScheduleTool(googleConfig);
-    const result = await tool.execute({
-      title: 'Team Sync',
-      start_time: '2026-03-01T14:00:00-03:00',
-      duration_minutes: 30,
-    }, mockLogger);
+    const result = await tool.execute(
+      {
+        title: 'Team Sync',
+        start_time: '2026-03-01T14:00:00-03:00',
+        duration_minutes: 30,
+      },
+      mockLogger
+    );
     expect(result.success).toBe(true);
     expect(result.content).toContain('successfully');
     expect(result.content).toContain('Team Sync');
@@ -271,27 +306,32 @@ describe('calendar_schedule', () => {
   });
 
   test('sends attendees in request (Google)', async () => {
-    let capturedBody: string = '';
+    let capturedBody = '';
     globalThis.fetch = mock((_url: string, init?: RequestInit) => {
-      capturedBody = init?.body as string ?? '';
-      return Promise.resolve(new Response(
-        JSON.stringify({
-          id: 'evt-with-attendees',
-          summary: 'With Attendees',
-          start: { dateTime: '2026-03-01T14:00:00Z' },
-          end: { dateTime: '2026-03-01T15:00:00Z' },
-        }),
-        { status: 200 },
-      ));
+      capturedBody = (init?.body as string) ?? '';
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: 'evt-with-attendees',
+            summary: 'With Attendees',
+            start: { dateTime: '2026-03-01T14:00:00Z' },
+            end: { dateTime: '2026-03-01T15:00:00Z' },
+          }),
+          { status: 200 }
+        )
+      );
     }) as typeof fetch;
 
     const tool = createCalendarScheduleTool(googleConfig);
-    await tool.execute({
-      title: 'With Attendees',
-      start_time: '2026-03-01T14:00:00Z',
-      duration_minutes: 60,
-      attendees: ['alice@example.com', 'bob@example.com'],
-    }, mockLogger);
+    await tool.execute(
+      {
+        title: 'With Attendees',
+        start_time: '2026-03-01T14:00:00Z',
+        duration_minutes: 60,
+        attendees: ['alice@example.com', 'bob@example.com'],
+      },
+      mockLogger
+    );
 
     const body = JSON.parse(capturedBody);
     expect(body.attendees).toEqual([{ email: 'alice@example.com' }, { email: 'bob@example.com' }]);
@@ -300,33 +340,40 @@ describe('calendar_schedule', () => {
   test('handles Calendly schedule limitation gracefully', async () => {
     // Calendly's user/me endpoint must succeed first
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response(
-        JSON.stringify({ resource: { uri: 'https://api.calendly.com/users/abc' } }),
-        { status: 200 },
-      )),
+      Promise.resolve(
+        new Response(JSON.stringify({ resource: { uri: 'https://api.calendly.com/users/abc' } }), {
+          status: 200,
+        })
+      )
     ) as typeof fetch;
 
     const tool = createCalendarScheduleTool(calendlyConfig);
-    const result = await tool.execute({
-      title: 'Meeting',
-      start_time: '2026-03-01T10:00:00Z',
-      duration_minutes: 30,
-    }, mockLogger);
+    const result = await tool.execute(
+      {
+        title: 'Meeting',
+        start_time: '2026-03-01T10:00:00Z',
+        duration_minutes: 30,
+      },
+      mockLogger
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain('scheduling links');
   });
 
   test('handles API errors', async () => {
     globalThis.fetch = mock(() =>
-      Promise.resolve(new Response('Forbidden', { status: 403, statusText: 'Forbidden' })),
+      Promise.resolve(new Response('Forbidden', { status: 403, statusText: 'Forbidden' }))
     ) as typeof fetch;
 
     const tool = createCalendarScheduleTool(googleConfig);
-    const result = await tool.execute({
-      title: 'Meeting',
-      start_time: '2026-03-01T10:00:00Z',
-      duration_minutes: 30,
-    }, mockLogger);
+    const result = await tool.execute(
+      {
+        title: 'Meeting',
+        start_time: '2026-03-01T10:00:00Z',
+        duration_minutes: 30,
+      },
+      mockLogger
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain('failed');
   });

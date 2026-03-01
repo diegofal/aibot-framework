@@ -1,7 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, appendFileSync, readdirSync, rmSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ThreadMessage, FileRef } from '../types/thread';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
+import type { FileRef, ThreadMessage } from '../types/thread';
 
 export type ConversationType = 'general' | 'productions' | 'inbox';
 export type InboxStatus = 'pending' | 'answered' | 'dismissed' | 'timed_out';
@@ -44,8 +54,14 @@ export class ConversationsService {
   private safeParseJsonlLines<T>(lines: string[], context: string): T[] {
     const results: T[] = [];
     for (const line of lines) {
-      try { results.push(JSON.parse(line) as T); }
-      catch { console.warn(`[ConversationsService] Skipping corrupt JSONL line in ${context}:`, line.slice(0, 100)); }
+      try {
+        results.push(JSON.parse(line) as T);
+      } catch {
+        console.warn(
+          `[ConversationsService] Skipping corrupt JSONL line in ${context}:`,
+          line.slice(0, 100)
+        );
+      }
     }
     return results;
   }
@@ -60,8 +76,12 @@ export class ConversationsService {
   private writeConversations(botId: string, conversations: Conversation[]): void {
     this.ensureBotDir(botId);
     const path = this.conversationsPath(botId);
-    const tmp = path + '.tmp';
-    writeFileSync(tmp, conversations.map((c) => JSON.stringify(c)).join('\n') + (conversations.length ? '\n' : ''), 'utf-8');
+    const tmp = `${path}.tmp`;
+    writeFileSync(
+      tmp,
+      conversations.map((c) => JSON.stringify(c)).join('\n') + (conversations.length ? '\n' : ''),
+      'utf-8'
+    );
     renameSync(tmp, path);
   }
 
@@ -72,7 +92,10 @@ export class ConversationsService {
       .map((d) => d.name);
   }
 
-  listConversations(botId: string, opts?: { type?: string; limit?: number; offset?: number }): Conversation[] {
+  listConversations(
+    botId: string,
+    opts?: { type?: string; limit?: number; offset?: number }
+  ): Conversation[] {
     let convos = this.readConversations(botId);
 
     if (opts?.type) {
@@ -96,11 +119,16 @@ export class ConversationsService {
     botId: string,
     type: ConversationType = 'general',
     title?: string,
-    meta?: { askHumanQuestionId?: string; inboxStatus?: InboxStatus },
+    meta?: { askHumanQuestionId?: string; inboxStatus?: InboxStatus }
   ): Conversation {
     this.ensureBotDir(botId);
     const now = new Date().toISOString();
-    const defaultTitle = type === 'productions' ? 'Productions Chat' : type === 'inbox' ? 'Inbox Question' : 'New Conversation';
+    const defaultTitle =
+      type === 'productions'
+        ? 'Productions Chat'
+        : type === 'inbox'
+          ? 'Inbox Question'
+          : 'New Conversation';
     const convo: Conversation = {
       id: randomUUID(),
       botId,
@@ -112,7 +140,7 @@ export class ConversationsService {
       ...(meta?.askHumanQuestionId ? { askHumanQuestionId: meta.askHumanQuestionId } : {}),
       ...(meta?.inboxStatus ? { inboxStatus: meta.inboxStatus } : {}),
     };
-    appendFileSync(this.conversationsPath(botId), JSON.stringify(convo) + '\n', 'utf-8');
+    appendFileSync(this.conversationsPath(botId), `${JSON.stringify(convo)}\n`, 'utf-8');
     return convo;
   }
 
@@ -138,6 +166,22 @@ export class ConversationsService {
     return true;
   }
 
+  deleteAllForBot(botId: string): number {
+    const convos = this.readConversations(botId);
+    const count = convos.length;
+    const dir = this.botDir(botId);
+    if (existsSync(dir)) rmSync(dir, { recursive: true });
+    return count;
+  }
+
+  deleteAll(): number {
+    let total = 0;
+    for (const botId of this.getBotIds()) {
+      total += this.deleteAllForBot(botId);
+    }
+    return total;
+  }
+
   getMessages(botId: string, conversationId: string, opts?: { limit?: number }): ThreadMessage[] {
     const path = this.messagesPath(botId, conversationId);
     if (!existsSync(path)) return [];
@@ -149,7 +193,13 @@ export class ConversationsService {
     return messages;
   }
 
-  addMessage(botId: string, conversationId: string, role: 'human' | 'bot', content: string, files?: FileRef[]): ThreadMessage | null {
+  addMessage(
+    botId: string,
+    conversationId: string,
+    role: 'human' | 'bot',
+    content: string,
+    files?: FileRef[]
+  ): ThreadMessage | null {
     const convos = this.readConversations(botId);
     const idx = convos.findIndex((c) => c.id === conversationId);
     if (idx === -1) return null;
@@ -165,7 +215,7 @@ export class ConversationsService {
     };
 
     const msgPath = this.messagesPath(botId, conversationId);
-    appendFileSync(msgPath, JSON.stringify(message) + '\n', 'utf-8');
+    appendFileSync(msgPath, `${JSON.stringify(message)}\n`, 'utf-8');
 
     // Update conversation metadata
     convos[idx].messageCount += 1;
@@ -213,7 +263,11 @@ export class ConversationsService {
     let found = false;
     const updated = lines.map((line) => {
       let msg: ThreadMessage;
-      try { msg = JSON.parse(line); } catch { return line; }
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return line;
+      }
       if (msg.id === messageId) {
         found = true;
         msg.files = [...(msg.files ?? []), ...files];
@@ -222,8 +276,8 @@ export class ConversationsService {
       return line;
     });
     if (!found) return false;
-    const tmp = msgPath + '.tmp';
-    writeFileSync(tmp, updated.join('\n') + '\n', 'utf-8');
+    const tmp = `${msgPath}.tmp`;
+    writeFileSync(tmp, `${updated.join('\n')}\n`, 'utf-8');
     renameSync(tmp, msgPath);
     return true;
   }
@@ -233,6 +287,6 @@ export class ConversationsService {
     if (clean.length <= maxLen) return clean;
     const truncated = clean.slice(0, maxLen);
     const lastSpace = truncated.lastIndexOf(' ');
-    return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';
+    return `${lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated}...`;
   }
 }

@@ -1,20 +1,20 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Tool, ToolResult } from './types';
-import { wrapExternalContent } from './types';
-import type { Logger } from '../logger';
 import type { BrowserToolsConfig } from '../config';
+import type { Logger } from '../logger';
 import {
+  closeBrowser,
   ensureBrowser,
   getActivePage,
   getBrowserStatus,
   isRunning,
-  closeBrowser,
-  storeRefs,
   resolveRef,
+  storeRefs,
   touchActivity,
 } from './browser-session';
 import { takeSnapshot } from './browser-snapshot';
+import type { Tool, ToolResult } from './types';
+import { wrapExternalContent } from './types';
 
 // ─── URL Security ───────────────────────────────────────────
 
@@ -38,7 +38,7 @@ function isBlockedHost(hostname: string): boolean {
 
 function validateUrl(
   rawUrl: string,
-  config: BrowserToolsConfig,
+  config: BrowserToolsConfig
 ): { ok: true; url: URL } | { ok: false; reason: string } {
   let parsed: URL;
   try {
@@ -96,7 +96,7 @@ async function handleNavigate(
   botId: string,
   args: Record<string, unknown>,
   config: BrowserToolsConfig,
-  logger: Logger,
+  logger: Logger
 ): Promise<ToolResult> {
   const rawUrl = String(args.url ?? '').trim();
   if (!rawUrl) {
@@ -131,7 +131,7 @@ async function handleNavigate(
 async function handleSnapshot(
   botId: string,
   config: BrowserToolsConfig,
-  logger: Logger,
+  logger: Logger
 ): Promise<ToolResult> {
   if (!isRunning(botId)) {
     return { success: false, content: 'Browser is not running. Use navigate first.' };
@@ -154,7 +154,7 @@ async function handleAct(
   botId: string,
   args: Record<string, unknown>,
   config: BrowserToolsConfig,
-  logger: Logger,
+  logger: Logger
 ): Promise<ToolResult> {
   const kind = String(args.kind ?? '').trim();
   const ref = String(args.ref ?? '').trim();
@@ -189,9 +189,11 @@ async function handleAct(
 
   try {
     // Locate element by role + name
-    const locator = page.getByRole(element.role as any, {
-      name: element.name || undefined,
-    }).first();
+    const locator = page
+      .getByRole(element.role as any, {
+        name: element.name || undefined,
+      })
+      .first();
 
     switch (kind) {
       case 'click':
@@ -237,7 +239,7 @@ async function handleScreenshot(
   botId: string,
   args: Record<string, unknown>,
   config: BrowserToolsConfig,
-  logger: Logger,
+  logger: Logger
 ): Promise<ToolResult> {
   if (!isRunning(botId)) {
     return { success: false, content: 'Browser is not running. Use navigate first.' };

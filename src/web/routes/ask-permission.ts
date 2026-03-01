@@ -26,7 +26,7 @@ export function askPermissionRoutes(deps: {
   // Approve a pending request
   app.post('/:id/approve', async (c) => {
     const id = c.req.param('id');
-    const body = await c.req.json<{ note?: string }>().catch(() => ({} as { note?: string }));
+    const body = await c.req.json<{ note?: string }>().catch(() => ({}) as { note?: string });
     const note = typeof body.note === 'string' ? body.note : undefined;
 
     const ok = deps.botManager.approvePermission(id, note);
@@ -41,7 +41,7 @@ export function askPermissionRoutes(deps: {
   // Deny a pending request
   app.post('/:id/deny', async (c) => {
     const id = c.req.param('id');
-    const body = await c.req.json<{ note?: string }>().catch(() => ({} as { note?: string }));
+    const body = await c.req.json<{ note?: string }>().catch(() => ({}) as { note?: string });
     const note = typeof body.note === 'string' ? body.note : undefined;
 
     const ok = deps.botManager.denyPermission(id, note);
@@ -55,7 +55,7 @@ export function askPermissionRoutes(deps: {
 
   // History of resolved permission decisions
   app.get('/history', (c) => {
-    const limit = parseInt(c.req.query('limit') ?? '20', 10);
+    const limit = Number.parseInt(c.req.query('limit') ?? '20', 10);
     const entries = deps.botManager.getPermissionsHistory(limit);
     return c.json({ entries });
   });
@@ -65,7 +65,10 @@ export function askPermissionRoutes(deps: {
     const id = c.req.param('id');
     const ok = deps.botManager.requeuePermission(id);
     if (!ok) {
-      return c.json({ error: 'Entry not found or not requeueable (must be approved + failed/consumed)' }, 404);
+      return c.json(
+        { error: 'Entry not found or not requeueable (must be approved + failed/consumed)' },
+        404
+      );
     }
     deps.logger.info({ requestId: id }, 'Permission request requeued via web');
     return c.json({ ok: true });

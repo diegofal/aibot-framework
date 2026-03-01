@@ -1,9 +1,9 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createArchiveFileTool } from '../../src/tools/archive-file';
-import { ProductionsService } from '../../src/productions/service';
 import type { Config } from '../../src/config';
+import { ProductionsService } from '../../src/productions/service';
+import { createArchiveFileTool } from '../../src/tools/archive-file';
 
 const noopLogger = {
   info: () => {},
@@ -68,7 +68,7 @@ describe('archive_file tool', () => {
 
     const result = await tool.execute(
       { _botId: 'archivebot', path: 'old_report.md', reason: 'Superseded by new_report.md' },
-      noopLogger,
+      noopLogger
     );
 
     expect(result.success).toBe(true);
@@ -79,10 +79,7 @@ describe('archive_file tool', () => {
   });
 
   test('fails without _botId', async () => {
-    const result = await tool.execute(
-      { path: 'file.md', reason: 'test' },
-      noopLogger,
-    );
+    const result = await tool.execute({ path: 'file.md', reason: 'test' }, noopLogger);
     expect(result.success).toBe(false);
     expect(result.content).toContain('_botId');
   });
@@ -90,17 +87,14 @@ describe('archive_file tool', () => {
   test('fails when productions disabled', async () => {
     const result = await tool.execute(
       { _botId: 'disabled', path: 'file.md', reason: 'test' },
-      noopLogger,
+      noopLogger
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('not enabled');
   });
 
   test('fails without path or reason', async () => {
-    const result = await tool.execute(
-      { _botId: 'archivebot' },
-      noopLogger,
-    );
+    const result = await tool.execute({ _botId: 'archivebot' }, noopLogger);
     expect(result.success).toBe(false);
     expect(result.content).toContain('required');
   });
@@ -109,7 +103,7 @@ describe('archive_file tool', () => {
     service.resolveDir('archivebot');
     const result = await tool.execute(
       { _botId: 'archivebot', path: 'nonexistent.md', reason: 'test' },
-      noopLogger,
+      noopLogger
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('not found');
@@ -121,7 +115,7 @@ describe('archive_file tool', () => {
 
     const result = await tool.execute(
       { _botId: 'archivebot', path: 'draft.md', reason: 'Replaced by final version' },
-      noopLogger,
+      noopLogger
     );
 
     expect(result.success).toBe(true);

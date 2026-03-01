@@ -9,24 +9,35 @@
  * After execution, rebuilds INDEX.md for each production.
  */
 
-import { existsSync, mkdirSync, renameSync, rmSync, readdirSync, statSync, readFileSync } from 'node:fs';
-import { join, basename } from 'node:path';
-import { ProductionsService } from '../src/productions/service';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
+import { basename, join } from 'node:path';
 import type { Config } from '../src/config';
+import { ProductionsService } from '../src/productions/service';
 
 const PROD_BASE = join(import.meta.dir, '..', 'productions');
 const DRY_RUN = !process.argv.includes('--execute');
 
 const noopLogger = {
-  info: () => {}, warn: () => {}, debug: () => {}, error: () => {},
+  info: () => {},
+  warn: () => {},
+  debug: () => {},
+  error: () => {},
   child: () => noopLogger,
 } as any;
 
 interface MoveOp {
-  from: string;       // relative path from production root
-  to: string;         // relative destination path
+  from: string; // relative path from production root
+  to: string; // relative destination path
   type: 'move' | 'archive';
-  reason?: string;    // archive reason
+  reason?: string; // archive reason
 }
 
 let totalOps = 0;
@@ -79,9 +90,15 @@ function rootExists(botId: string, name: string): boolean {
 function getRootFiles(botId: string): string[] {
   const dir = join(PROD_BASE, botId);
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter(f => {
-    try { return statSync(join(dir, f)).isFile(); } catch { return false; }
-  }).filter(f => !['changelog.jsonl', 'summary.json', 'INDEX.md', '.gitignore'].includes(f));
+  return readdirSync(dir)
+    .filter((f) => {
+      try {
+        return statSync(join(dir, f)).isFile();
+      } catch {
+        return false;
+      }
+    })
+    .filter((f) => !['changelog.jsonl', 'summary.json', 'INDEX.md', '.gitignore'].includes(f));
 }
 
 // ──────────────────────────────────────────────
@@ -111,7 +128,10 @@ function planJobSeeker(): MoveOp[] {
     ['outreach_templates.md', 'Duplicate of methodology/outreach_templates.md'],
     ['discord_bio_template.md', 'Duplicate of community_materials/discord_bio_template.md'],
     ['python_espanol_posts.md', 'Duplicate of community_materials/python_espanol_posts.md'],
-    ['market_intelligence_shareable.md', 'Duplicate of methodology/market_intelligence_shareable.md'],
+    [
+      'market_intelligence_shareable.md',
+      'Duplicate of methodology/market_intelligence_shareable.md',
+    ],
   ];
 
   for (const [file, reason] of [...archives, ...duplicateArchives]) {
@@ -121,7 +141,7 @@ function planJobSeeker(): MoveOp[] {
   }
 
   // Categorize remaining root files
-  const categorized = new Set(ops.map(o => o.from));
+  const categorized = new Set(ops.map((o) => o.from));
 
   for (const file of rootFiles) {
     if (categorized.has(file)) continue;
@@ -131,7 +151,11 @@ function planJobSeeker(): MoveOp[] {
       ops.push({ from: file, to: `pipeline/${file}`, type: 'move' });
     }
     // Outreach
-    else if (/^(outreach_|cold_outreach_|hiring_manager_|personalized_dms_|dm_|target_intelligence_|LinkedIn_DM_)/.test(file)) {
+    else if (
+      /^(outreach_|cold_outreach_|hiring_manager_|personalized_dms_|dm_|target_intelligence_|LinkedIn_DM_)/.test(
+        file
+      )
+    ) {
       ops.push({ from: file, to: `outreach/${file}`, type: 'move' });
     }
     // Content
@@ -143,7 +167,11 @@ function planJobSeeker(): MoveOp[] {
       ops.push({ from: file, to: `prospects/${file}`, type: 'move' });
     }
     // Operations
-    else if (/^(calendly_|discovery_call_|ESCALATION_|emergency_|execution_|deployment_|checkpoint_|operator_|pivot_|MANUAL_|manual_|content_campaign_)/.test(file)) {
+    else if (
+      /^(calendly_|discovery_call_|ESCALATION_|emergency_|execution_|deployment_|checkpoint_|operator_|pivot_|MANUAL_|manual_|content_campaign_)/.test(
+        file
+      )
+    ) {
       ops.push({ from: file, to: `operations/${file}`, type: 'move' });
     }
     // Research
@@ -172,10 +200,22 @@ function planTherapist(): MoveOp[] {
 
   // Archive duplicates
   const archives: [string, string][] = [
-    ['capitulo_07_el_deseo_que_nos_averguenza.md', 'Duplicate: also exists as cap 07 extended version'],
-    ['capitulo_08_el_deseo_que_nos_averguenza.md', 'Duplicate: same title as cap 07, content moved to cap 08_el_duelo'],
-    ['capitulo_02_lo_que_heredamos.md', 'Superseded by capitulo_02_lo_que_heredamos_y_los_secretos.md (extended version)'],
-    ['capitulo_09_cuando_el_deseo_se_agota.md', 'Duplicate: topic covered in capitulo_07 extended version'],
+    [
+      'capitulo_07_el_deseo_que_nos_averguenza.md',
+      'Duplicate: also exists as cap 07 extended version',
+    ],
+    [
+      'capitulo_08_el_deseo_que_nos_averguenza.md',
+      'Duplicate: same title as cap 07, content moved to cap 08_el_duelo',
+    ],
+    [
+      'capitulo_02_lo_que_heredamos.md',
+      'Superseded by capitulo_02_lo_que_heredamos_y_los_secretos.md (extended version)',
+    ],
+    [
+      'capitulo_09_cuando_el_deseo_se_agota.md',
+      'Duplicate: topic covered in capitulo_07 extended version',
+    ],
     ['capitulo_divan_digital.md', 'Superseded by numbered digital chapters (13-15)'],
   ];
 
@@ -185,7 +225,7 @@ function planTherapist(): MoveOp[] {
     }
   }
 
-  const categorized = new Set(ops.map(o => o.from));
+  const categorized = new Set(ops.map((o) => o.from));
 
   for (const file of rootFiles) {
     if (categorized.has(file)) continue;
@@ -207,7 +247,12 @@ function planTherapist(): MoveOp[] {
       ops.push({ from: file, to: `manuscritos/${file}`, type: 'move' });
     }
     // Publishing
-    else if (/^(book_description_|guia_kdp_|substack_|calendario_editorial_|research_substack_|portada_|micro_posts_)/.test(file) || file === 'rss.xml') {
+    else if (
+      /^(book_description_|guia_kdp_|substack_|calendario_editorial_|research_substack_|portada_|micro_posts_)/.test(
+        file
+      ) ||
+      file === 'rss.xml'
+    ) {
       ops.push({ from: file, to: `publishing/${file}`, type: 'move' });
     }
     // Website
@@ -283,7 +328,9 @@ function planDefault(): MoveOp[] {
       ops.push({ from: file, to: `frameworks/${file}`, type: 'move' });
     }
     // Cultural
-    else if (/^(comfort_catalog_|modismos_argentinos_|pri_cultural_|finny_recommends_)/.test(file)) {
+    else if (
+      /^(comfort_catalog_|modismos_argentinos_|pri_cultural_|finny_recommends_)/.test(file)
+    ) {
       ops.push({ from: file, to: `cultural/${file}`, type: 'move' });
     }
     // Analysis
@@ -302,7 +349,11 @@ function planDefault(): MoveOp[] {
 
   // Move tauri-ntransformer-bridge into ntransformer/
   if (existsSync(join(PROD_BASE, 'default', 'tauri-ntransformer-bridge'))) {
-    ops.push({ from: 'tauri-ntransformer-bridge', to: 'ntransformer/tauri-ntransformer-bridge', type: 'move' });
+    ops.push({
+      from: 'tauri-ntransformer-bridge',
+      to: 'ntransformer/tauri-ntransformer-bridge',
+      type: 'move',
+    });
   }
 
   return ops;
@@ -337,7 +388,12 @@ function planCryptik(): MoveOp[] {
 // ──────────────────────────────────────────────
 function planMakemylifeeasier(): MoveOp[] {
   const ops: MoveOp[] = [];
-  const integrationFiles = ['FRAMEWORK_INTEGRATION_PACKAGE.md', 'INTEGRATION_GUIDE.md', 'INTEGRATION_VERIFICATION_REPORT.md', 'framework-integration.json'];
+  const integrationFiles = [
+    'FRAMEWORK_INTEGRATION_PACKAGE.md',
+    'INTEGRATION_GUIDE.md',
+    'INTEGRATION_VERIFICATION_REPORT.md',
+    'framework-integration.json',
+  ];
 
   for (const file of integrationFiles) {
     if (rootExists('makemylifeeasier', file)) {
@@ -417,7 +473,11 @@ function main(): void {
 
   // Build a minimal config for ProductionsService
   const bots = allPlans.map(([id]) => ({
-    id, name: id, token: '', enabled: true, skills: [],
+    id,
+    name: id,
+    token: '',
+    enabled: true,
+    skills: [],
     productions: { enabled: true, trackOnly: false },
   }));
 
@@ -438,7 +498,14 @@ function main(): void {
 
   // Delete venv in default/ntransformer/ (post-move) or default/tauri-ntransformer-bridge/
   const venvPaths = [
-    join(PROD_BASE, 'default', 'ntransformer', 'tauri-ntransformer-bridge', 'python_backend', 'venv'),
+    join(
+      PROD_BASE,
+      'default',
+      'ntransformer',
+      'tauri-ntransformer-bridge',
+      'python_backend',
+      'venv'
+    ),
     join(PROD_BASE, 'default', 'tauri-ntransformer-bridge', 'python_backend', 'venv'),
   ];
   for (const venvPath of venvPaths) {
@@ -451,8 +518,12 @@ function main(): void {
 
   // Rebuild INDEX.md for all productions
   console.log('\nRebuilding INDEX.md for all productions...');
-  const allBotIds = readdirSync(PROD_BASE).filter(f => {
-    try { return statSync(join(PROD_BASE, f)).isDirectory(); } catch { return false; }
+  const allBotIds = readdirSync(PROD_BASE).filter((f) => {
+    try {
+      return statSync(join(PROD_BASE, f)).isDirectory();
+    } catch {
+      return false;
+    }
   });
 
   // Skip openclone
@@ -460,9 +531,13 @@ function main(): void {
   for (const botId of allBotIds) {
     if (skipBots.has(botId)) continue;
     // Ensure bot is in config for service to work
-    if (!config.bots.find(b => b.id === botId)) {
+    if (!config.bots.find((b) => b.id === botId)) {
       (config.bots as any[]).push({
-        id: botId, name: botId, token: '', enabled: true, skills: [],
+        id: botId,
+        name: botId,
+        token: '',
+        enabled: true,
+        skills: [],
         productions: { enabled: true, trackOnly: false },
       });
     }

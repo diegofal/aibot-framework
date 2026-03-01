@@ -59,10 +59,7 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger,
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const action = String(args.action ?? '').trim();
       const botId = String(args._botId ?? '');
       const soulLoader = getSoulLoader(botId);
@@ -97,7 +94,10 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
           }
 
           default:
-            return { success: false, content: `Unknown action: ${action}. Use: list, add, update, complete` };
+            return {
+              success: false,
+              content: `Unknown action: ${action}. Use: list, add, update, complete`,
+            };
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -108,7 +108,10 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
   };
 }
 
-export function parseGoals(content: string | null): { active: GoalEntry[]; completed: GoalEntry[] } {
+export function parseGoals(content: string | null): {
+  active: GoalEntry[];
+  completed: GoalEntry[];
+} {
   const active: GoalEntry[] = [];
   const completed: GoalEntry[] = [];
 
@@ -205,18 +208,26 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
     }
   }
 
-  return lines.join('\n') + '\n';
+  return `${lines.join('\n')}\n`;
 }
 
 function listGoals(soulLoader: SoulLoader): ToolResult {
   const content = soulLoader.readGoals();
   if (!content) {
-    return { success: true, content: 'No goals file found. Use action "add" to create your first goal.' };
+    return {
+      success: true,
+      content: 'No goals file found. Use action "add" to create your first goal.',
+    };
   }
   return { success: true, content };
 }
 
-function addGoal(soulLoader: SoulLoader, goal: string, priority: string, notes?: string): ToolResult {
+function addGoal(
+  soulLoader: SoulLoader,
+  goal: string,
+  priority: string,
+  notes?: string
+): ToolResult {
   const content = soulLoader.readGoals();
   const { active, completed } = parseGoals(content);
 
@@ -234,7 +245,7 @@ function addGoal(soulLoader: SoulLoader, goal: string, priority: string, notes?:
 function updateGoal(
   soulLoader: SoulLoader,
   goalSubstring: string,
-  updates: { status?: string; notes?: string; priority?: string },
+  updates: { status?: string; notes?: string; priority?: string }
 ): ToolResult {
   const content = soulLoader.readGoals();
   const { active, completed } = parseGoals(content);

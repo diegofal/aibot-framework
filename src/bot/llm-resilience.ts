@@ -12,10 +12,10 @@ import type { Logger } from '../logger';
  * Categories of LLM errors for retry decisions.
  */
 export type LLMErrorCategory =
-  | 'transient'      // Retryable: timeouts, rate limits, temporary failures
-  | 'permanent'      // Non-retryable: auth errors, invalid requests
+  | 'transient' // Retryable: timeouts, rate limits, temporary failures
+  | 'permanent' // Non-retryable: auth errors, invalid requests
   | 'context_length' // Non-retryable: prompt too large
-  | 'unknown';       // Unknown, may retry with caution
+  | 'unknown'; // Unknown, may retry with caution
 
 /**
  * Structured error information from LLM calls.
@@ -70,9 +70,9 @@ type CircuitState = 'closed' | 'open' | 'half-open';
  * Circuit breaker configuration.
  */
 export interface CircuitBreakerConfig {
-  failureThreshold: number;      // Failures before opening
-  resetTimeoutMs: number;        // Time before half-open
-  halfOpenMaxCalls: number;      // Calls allowed in half-open
+  failureThreshold: number; // Failures before opening
+  resetTimeoutMs: number; // Time before half-open
+  halfOpenMaxCalls: number; // Calls allowed in half-open
 }
 
 /**
@@ -96,7 +96,7 @@ export class CircuitBreaker {
 
   constructor(
     private config: CircuitBreakerConfig = DEFAULT_CIRCUIT_CONFIG,
-    private logger?: Logger,
+    private logger?: Logger
   ) {}
 
   /**
@@ -311,7 +311,7 @@ export function classifyLLMError(error: unknown): LLMErrorInfo {
  * Calculate delay for retry with exponential backoff and jitter.
  */
 function calculateRetryDelay(attempt: number, config: RetryConfig): number {
-  const exponentialDelay = config.baseDelayMs * Math.pow(config.backoffMultiplier, attempt);
+  const exponentialDelay = config.baseDelayMs * config.backoffMultiplier ** attempt;
   const jitter = Math.random() * 0.3 * exponentialDelay; // 30% jitter
   const delay = Math.min(exponentialDelay + jitter, config.maxDelayMs);
   return Math.floor(delay);
@@ -321,7 +321,7 @@ function calculateRetryDelay(attempt: number, config: RetryConfig): number {
  * Sleep for a given duration.
  */
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -335,14 +335,9 @@ export async function executeWithResilience<T>(
     circuitBreaker?: CircuitBreaker;
     logger?: Logger;
     onRetry?: (attempt: number, delayMs: number, error: LLMErrorInfo) => void;
-  } = {},
+  } = {}
 ): Promise<ResilientResult<T>> {
-  const {
-    retryConfig: customRetry = {},
-    circuitBreaker,
-    logger,
-    onRetry,
-  } = options;
+  const { retryConfig: customRetry = {}, circuitBreaker, logger, onRetry } = options;
 
   const retryConfig = { ...DEFAULT_RETRY_CONFIG, ...customRetry };
   const startTime = Date.now();
@@ -383,13 +378,16 @@ export async function executeWithResilience<T>(
     } catch (error) {
       lastError = classifyLLMError(error);
 
-      logger?.warn({
-        attempt,
-        category: lastError.category,
-        retryable: lastError.retryable,
-        message: lastError.message,
-        operation: operationName,
-      }, 'LLM call failed');
+      logger?.warn(
+        {
+          attempt,
+          category: lastError.category,
+          retryable: lastError.retryable,
+          message: lastError.message,
+          operation: operationName,
+        },
+        'LLM call failed'
+      );
 
       // Don't retry permanent errors
       if (!lastError.retryable) {
@@ -417,12 +415,15 @@ export async function executeWithResilience<T>(
       const delayMs = calculateRetryDelay(attempt, retryConfig);
       onRetry?.(attempt + 1, delayMs, lastError);
 
-      logger?.info({
-        attempt,
-        delayMs,
-        nextAttempt: attempt + 2,
-        operation: operationName,
-      }, 'Retrying LLM call');
+      logger?.info(
+        {
+          attempt,
+          delayMs,
+          nextAttempt: attempt + 2,
+          operation: operationName,
+        },
+        'Retrying LLM call'
+      );
 
       await sleep(delayMs);
     }
@@ -453,7 +454,6 @@ export function formatLLMErrorForUser(error: LLMErrorInfo): string {
       return '❌ The AI service is temporarily unavailable. Please try again in a moment.';
     case 'permanent':
       return '❌ There was a problem with the request. Please check your settings or contact support.';
-    case 'unknown':
     default:
       return '❌ Failed to generate response. Please try again later.';
   }

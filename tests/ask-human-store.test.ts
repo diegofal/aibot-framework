@@ -1,9 +1,9 @@
-import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { AskHumanStore } from '../src/bot/ask-human-store';
-import { createAskHumanTool } from '../src/tools/ask-human';
 import { ConversationsService } from '../src/conversations/service';
+import { createAskHumanTool } from '../src/tools/ask-human';
 
 const CONV_TEST_DIR = join(import.meta.dir, '.tmp-ask-human-conv-test');
 
@@ -179,7 +179,7 @@ describe('AskHumanStore', () => {
     expect(answers[0].answer).toBe('Do X');
   });
 
-  test('getPendingForBot returns only that bot\'s questions', () => {
+  test("getPendingForBot returns only that bot's questions", () => {
     store.ask('bot1', 100, 'q1', 60_000);
     store.ask('bot2', 200, 'q2', 60_000);
     store.ask('bot1', 300, 'q3', 60_000);
@@ -247,7 +247,9 @@ describe('AskHumanStore', () => {
     let callbackArgs: any = null;
     const logger = makeLogger();
     const timedStore = new AskHumanStore(logger, undefined, {
-      onTimeout: (qId, botId, convId) => { callbackArgs = { qId, botId, convId }; },
+      onTimeout: (qId, botId, convId) => {
+        callbackArgs = { qId, botId, convId };
+      },
     });
 
     const { id, promise } = timedStore.ask('bot1', 100, 'q1', 50);
@@ -264,7 +266,9 @@ describe('AskHumanStore', () => {
     let callbackArgs: any = null;
     const logger = makeLogger();
     const dismissStore = new AskHumanStore(logger, undefined, {
-      onDismiss: (qId, botId, convId) => { callbackArgs = { qId, botId, convId }; },
+      onDismiss: (qId, botId, convId) => {
+        callbackArgs = { qId, botId, convId };
+      },
     });
 
     const { id, promise } = dismissStore.ask('bot1', 100, 'q1', 60_000);
@@ -303,7 +307,7 @@ describe('ask_human tool', () => {
     // Call returns immediately — no need to answer first
     const result = await tool.execute(
       { question: 'Which strategy?', _botId: 'bot1', _chatId: 0 },
-      makeLogger(),
+      makeLogger()
     );
 
     expect(result.success).toBe(true);
@@ -329,7 +333,7 @@ describe('ask_human tool', () => {
     // First call: queues normally (returns immediately)
     const firstResult = await tool.execute(
       { question: 'First question?', _botId: 'bot1', _chatId: 0 },
-      makeLogger(),
+      makeLogger()
     );
     expect(firstResult.success).toBe(true);
     expect(store.getPendingCount()).toBe(1);
@@ -337,7 +341,7 @@ describe('ask_human tool', () => {
     // Second call: should return dedup message without queuing
     const secondResult = await tool.execute(
       { question: 'Second question?', _botId: 'bot1', _chatId: 0 },
-      makeLogger(),
+      makeLogger()
     );
     expect(secondResult.success).toBe(true);
     expect(secondResult.content).toContain('already have a pending question');
@@ -356,10 +360,7 @@ describe('ask_human tool', () => {
       getBotName: () => 'TestBot',
     });
 
-    await tool.execute(
-      { question: 'Will be dismissed', _botId: 'bot1', _chatId: 0 },
-      logger,
-    );
+    await tool.execute({ question: 'Will be dismissed', _botId: 'bot1', _chatId: 0 }, logger);
 
     const pending = store.getAll();
     store.dismissById(pending[0].id);
@@ -368,8 +369,12 @@ describe('ask_human tool', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ questionId: pending[0].id, botId: 'bot1', reason: 'Question dismissed' }),
-      'ask_human: question closed without answer',
+      expect.objectContaining({
+        questionId: pending[0].id,
+        botId: 'bot1',
+        reason: 'Question dismissed',
+      }),
+      'ask_human: question closed without answer'
     );
   });
 
@@ -380,10 +385,7 @@ describe('ask_human tool', () => {
       getBotName: () => 'TestBot',
     });
 
-    const result = await tool.execute(
-      { question: 'test?' },
-      makeLogger(),
-    );
+    const result = await tool.execute({ question: 'test?' }, makeLogger());
     expect(result.success).toBe(false);
     expect(result.content).toContain('_botId');
   });
@@ -401,7 +403,7 @@ describe('ask_human tool', () => {
 
     const result = await tool.execute(
       { question: 'What should I prioritize today?', _botId: 'bot1', _chatId: 0 },
-      makeLogger(),
+      makeLogger()
     );
 
     expect(result.success).toBe(true);

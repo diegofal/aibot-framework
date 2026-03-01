@@ -1,6 +1,6 @@
 import type { Subprocess } from 'bun';
-import type { Tool, ToolResult } from './types';
 import type { Logger } from '../logger';
+import type { Tool, ToolResult } from './types';
 
 export interface ProcessToolConfig {
   maxSessions?: number;
@@ -42,14 +42,17 @@ let sweeperTimer: ReturnType<typeof setInterval> | null = null;
 
 function startSweeper(ttlMs: number): void {
   if (sweeperTimer) return;
-  sweeperTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [id, session] of finishedSessions) {
-      if (now - session.finishedAt > ttlMs) {
-        finishedSessions.delete(id);
+  sweeperTimer = setInterval(
+    () => {
+      const now = Date.now();
+      for (const [id, session] of finishedSessions) {
+        if (now - session.finishedAt > ttlMs) {
+          finishedSessions.delete(id);
+        }
       }
-    }
-  }, Math.min(ttlMs, 60_000));
+    },
+    Math.min(ttlMs, 60_000)
+  );
 }
 
 /**
@@ -61,7 +64,7 @@ export function registerProcess(
   command: string,
   proc: Subprocess,
   config: ProcessToolConfig,
-  logger: Logger,
+  logger: Logger
 ): { sessionId: string; pid: number } {
   const maxSessions = config.maxSessions ?? 10;
   const maxOutput = config.maxOutputChars ?? 200_000;
@@ -73,7 +76,9 @@ export function registerProcess(
     if (s.botId === botId) botActiveCount++;
   }
   if (botActiveCount >= maxSessions) {
-    throw new Error(`Max background sessions reached (${maxSessions}) for bot ${botId}. Kill or clear existing ones first.`);
+    throw new Error(
+      `Max background sessions reached (${maxSessions}) for bot ${botId}. Kill or clear existing ones first.`
+    );
   }
 
   const id = `${botId}_proc_${++idCounter}`;
@@ -219,9 +224,7 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
             if (s.botId !== botId) continue;
             hasAny = true;
             const elapsed = Math.round((Date.now() - s.startedAt) / 1000);
-            lines.push(
-              `[RUNNING] ${s.id} — PID ${s.pid} — ${elapsed}s — ${s.command}`
-            );
+            lines.push(`[RUNNING] ${s.id} — PID ${s.pid} — ${elapsed}s — ${s.command}`);
           }
 
           for (const s of finishedSessions.values()) {
@@ -339,7 +342,10 @@ export function createProcessTool(config: ProcessToolConfig = {}): Tool {
           }
 
           if (activeSessions.has(sessionId)) {
-            return { success: false, content: `Session ${sessionId} is still running. Kill it first.` };
+            return {
+              success: false,
+              content: `Session ${sessionId} is still running. Kill it first.`,
+            };
           }
 
           const finished = finishedSessions.get(sessionId);

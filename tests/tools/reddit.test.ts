@@ -1,6 +1,10 @@
-import { describe, test, expect, mock, afterEach } from 'bun:test';
-import { createRedditSearchTool, createRedditHotTool, createRedditReadTool } from '../../src/tools/reddit';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import type { RedditConfig } from '../../src/config';
+import {
+  createRedditHotTool,
+  createRedditReadTool,
+  createRedditSearchTool,
+} from '../../src/tools/reddit';
 
 const mockLogger = {
   info: mock(() => {}),
@@ -29,15 +33,20 @@ function mockRedditFetch(responseData: unknown, statusCode = 200) {
     callCount++;
     // First call is always the OAuth token request
     if (callCount === 1 || url.includes('access_token')) {
-      return Promise.resolve(new Response(
-        JSON.stringify({ access_token: 'mock-token', expires_in: 3600 }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ));
+      return Promise.resolve(
+        new Response(JSON.stringify({ access_token: 'mock-token', expires_in: 3600 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
     }
-    return Promise.resolve(new Response(
-      JSON.stringify(responseData),
-      { status: statusCode, statusText: statusCode === 200 ? 'OK' : 'Error', headers: { 'Content-Type': 'application/json' } },
-    ));
+    return Promise.resolve(
+      new Response(JSON.stringify(responseData), {
+        status: statusCode,
+        statusText: statusCode === 200 ? 'OK' : 'Error',
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
   }) as typeof fetch;
 }
 
@@ -157,16 +166,16 @@ describe('reddit_hot', () => {
     globalThis.fetch = mock((url: string) => {
       callCount++;
       if (callCount === 1) {
-        return Promise.resolve(new Response(
-          JSON.stringify({ access_token: 'mock-token', expires_in: 3600 }),
-          { status: 200 },
-        ));
+        return Promise.resolve(
+          new Response(JSON.stringify({ access_token: 'mock-token', expires_in: 3600 }), {
+            status: 200,
+          })
+        );
       }
       capturedUrl = url.toString();
-      return Promise.resolve(new Response(
-        JSON.stringify({ data: { children: [] } }),
-        { status: 200 },
-      ));
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: { children: [] } }), { status: 200 })
+      );
     }) as typeof fetch;
 
     const tool = createRedditHotTool(baseConfig);
@@ -225,19 +234,39 @@ describe('reddit_read', () => {
     globalThis.fetch = mock((url: string) => {
       callCount++;
       if (callCount === 1) {
-        return Promise.resolve(new Response(
-          JSON.stringify({ access_token: 'mock-token', expires_in: 3600 }),
-          { status: 200 },
-        ));
+        return Promise.resolve(
+          new Response(JSON.stringify({ access_token: 'mock-token', expires_in: 3600 }), {
+            status: 200,
+          })
+        );
       }
       capturedUrl = url.toString();
-      return Promise.resolve(new Response(
-        JSON.stringify([
-          { data: { children: [{ data: { title: 'Test', author: 'u', subreddit: 's', score: 1, num_comments: 0, url: '', permalink: '/r/s/comments/abc123/test', created_utc: 1700000000 } }] } },
-          { data: { children: [] } },
-        ]),
-        { status: 200 },
-      ));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              data: {
+                children: [
+                  {
+                    data: {
+                      title: 'Test',
+                      author: 'u',
+                      subreddit: 's',
+                      score: 1,
+                      num_comments: 0,
+                      url: '',
+                      permalink: '/r/s/comments/abc123/test',
+                      created_utc: 1700000000,
+                    },
+                  },
+                ],
+              },
+            },
+            { data: { children: [] } },
+          ]),
+          { status: 200 }
+        )
+      );
     }) as typeof fetch;
 
     const tool = createRedditReadTool(baseConfig);
@@ -249,19 +278,21 @@ describe('reddit_read', () => {
     mockRedditFetch([
       {
         data: {
-          children: [{
-            data: {
-              title: 'Read Test',
-              author: 'poster',
-              subreddit: 'test',
-              score: 100,
-              num_comments: 2,
-              url: 'https://example.com',
-              permalink: '/r/test/comments/abc/read_test',
-              selftext: 'Post body here',
-              created_utc: 1700000000,
+          children: [
+            {
+              data: {
+                title: 'Read Test',
+                author: 'poster',
+                subreddit: 'test',
+                score: 100,
+                num_comments: 2,
+                url: 'https://example.com',
+                permalink: '/r/test/comments/abc/read_test',
+                selftext: 'Post body here',
+                created_utc: 1700000000,
+              },
             },
-          }],
+          ],
         },
       },
       {
@@ -303,22 +334,24 @@ describe('Reddit auth', () => {
     globalThis.fetch = mock((url: string, init?: RequestInit) => {
       callCount++;
       if (callCount === 1) {
-        authHeader = (init?.headers as Record<string, string>)?.['Authorization'] || '';
-        return Promise.resolve(new Response(
-          JSON.stringify({ access_token: 'new-token', expires_in: 3600 }),
-          { status: 200 },
-        ));
+        authHeader = (init?.headers as Record<string, string>)?.Authorization || '';
+        return Promise.resolve(
+          new Response(JSON.stringify({ access_token: 'new-token', expires_in: 3600 }), {
+            status: 200,
+          })
+        );
       }
-      return Promise.resolve(new Response(
-        JSON.stringify({ data: { children: [] } }),
-        { status: 200 },
-      ));
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: { children: [] } }), { status: 200 })
+      );
     }) as typeof fetch;
 
     const tool = createRedditSearchTool(baseConfig);
     await tool.execute({ query: 'test' }, mockLogger);
 
-    const expected = Buffer.from(`${baseConfig.clientId}:${baseConfig.clientSecret}`).toString('base64');
+    const expected = Buffer.from(`${baseConfig.clientId}:${baseConfig.clientSecret}`).toString(
+      'base64'
+    );
     expect(authHeader).toBe(`Basic ${expected}`);
   });
 });

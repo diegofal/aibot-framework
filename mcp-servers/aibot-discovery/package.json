@@ -1,0 +1,14 @@
+{
+  "name": "@aibot/mcp-discovery",
+  "version": "0.1.0",
+  "mcpName": "io.github.GITHUB_USERNAME/aibot-agent-discovery",
+  "description": "MCP server for discovering AI agents in the aibot-framework ecosystem",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

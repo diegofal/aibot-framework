@@ -42,6 +42,21 @@ export function agentLoopRoutes(deps: {
     }
   });
 
+  // LLM diagnostics — per-bot stats
+  app.get('/llm-stats', (c) => {
+    const stats = deps.botManager.getLlmStats();
+    return c.json({ stats });
+  });
+
+  app.get('/llm-stats/:botId', (c) => {
+    const botId = c.req.param('botId');
+    const stats = deps.botManager.getLlmStats(botId);
+    if (!stats) {
+      return c.json({ error: 'No stats for this bot' }, 404);
+    }
+    return c.json({ stats });
+  });
+
   // Run agent loop for a single bot
   app.post('/run/:botId', async (c) => {
     const botId = c.req.param('botId');

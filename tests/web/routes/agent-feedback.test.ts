@@ -1,12 +1,12 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { Hono } from 'hono';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { agentFeedbackRoutes } from '../../../src/web/routes/agent-feedback';
+import { join } from 'node:path';
+import { Hono } from 'hono';
 import { AgentFeedbackStore } from '../../../src/bot/agent-feedback-store';
-import type { Logger } from '../../../src/logger';
 import type { Config } from '../../../src/config';
+import type { Logger } from '../../../src/logger';
+import { agentFeedbackRoutes } from '../../../src/web/routes/agent-feedback';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -29,7 +29,10 @@ describe('agent-feedback routes', () => {
   } as unknown as Config;
 
   beforeEach(() => {
-    tmpDir = join(tmpdir(), `feedback-route-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tmpDir = join(
+      tmpdir(),
+      `feedback-route-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
     const tmpDir2 = join(tmpDir, 'bot2');
     mkdirSync(tmpDir, { recursive: true });
     mkdirSync(tmpDir2, { recursive: true });
@@ -45,8 +48,12 @@ describe('agent-feedback routes', () => {
       submitAgentFeedback: (botId: string, content: string) => store.submit(botId, content),
       dismissAgentFeedback: (botId: string, id: string) => store.dismiss(botId, id),
       getAgentFeedbackById: (botId: string, feedbackId: string) => store.getById(botId, feedbackId),
-      addAgentFeedbackThreadMessage: (botId: string, feedbackId: string, role: 'human' | 'bot', content: string) =>
-        store.addThreadMessage(botId, feedbackId, role, content),
+      addAgentFeedbackThreadMessage: (
+        botId: string,
+        feedbackId: string,
+        role: 'human' | 'bot',
+        content: string
+      ) => store.addThreadMessage(botId, feedbackId, role, content),
       getSoulLoader: () => ({
         readIdentity: () => 'I am TestBot',
         readSoul: () => 'A helpful soul',
@@ -64,7 +71,7 @@ describe('agent-feedback routes', () => {
         config: mockConfig,
         botManager: mockBotManager as any,
         logger: noopLogger,
-      }),
+      })
     );
   });
 
@@ -73,9 +80,10 @@ describe('agent-feedback routes', () => {
   });
 
   function req(path: string, opts?: RequestInit) {
-    const url = path === '/'
-      ? 'http://localhost/api/agent-feedback'
-      : `http://localhost/api/agent-feedback${path}`;
+    const url =
+      path === '/'
+        ? 'http://localhost/api/agent-feedback'
+        : `http://localhost/api/agent-feedback${path}`;
     return app.request(url, opts);
   }
 
@@ -235,9 +243,14 @@ describe('agent-feedback routes', () => {
         getAgentFeedbackPendingCount: () => store.getPendingCount(),
         submitAgentFeedback: (botId: string, content: string) => store.submit(botId, content),
         dismissAgentFeedback: (botId: string, id: string) => store.dismiss(botId, id),
-        getAgentFeedbackById: (botId: string, feedbackId: string) => store.getById(botId, feedbackId),
-        addAgentFeedbackThreadMessage: (botId: string, feedbackId: string, role: 'human' | 'bot', content: string) =>
-          store.addThreadMessage(botId, feedbackId, role, content),
+        getAgentFeedbackById: (botId: string, feedbackId: string) =>
+          store.getById(botId, feedbackId),
+        addAgentFeedbackThreadMessage: (
+          botId: string,
+          feedbackId: string,
+          role: 'human' | 'bot',
+          content: string
+        ) => store.addThreadMessage(botId, feedbackId, role, content),
         getSoulLoader: () => ({
           readIdentity: () => 'I am TestBot',
           readSoul: () => 'A helpful soul',
@@ -255,14 +268,17 @@ describe('agent-feedback routes', () => {
           config: mockConfig,
           botManager: mockBotManager as any,
           logger: noopLogger,
-        }),
+        })
       );
 
-      const res = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Follow-up question' }),
-      });
+      const res = await testApp.request(
+        `http://localhost/api/agent-feedback/bot1/${entry.id}/reply`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Follow-up question' }),
+        }
+      );
 
       expect(res.status).toBe(200);
       const data = await res.json();
@@ -278,8 +294,8 @@ describe('agent-feedback routes', () => {
 
       // Verify thread was persisted
       const updated = store.getById('bot1', entry.id);
-      expect(updated!.thread).toBeTruthy();
-      expect(updated!.thread!.length).toBeGreaterThanOrEqual(1);
+      expect(updated?.thread).toBeTruthy();
+      expect(updated?.thread?.length).toBeGreaterThanOrEqual(1);
 
       // Restore
       const { claudeGenerate: orig } = await import('../../../src/claude-cli');
@@ -331,9 +347,14 @@ describe('agent-feedback routes', () => {
         getAgentFeedbackPendingCount: () => store.getPendingCount(),
         submitAgentFeedback: (botId: string, content: string) => store.submit(botId, content),
         dismissAgentFeedback: (botId: string, id: string) => store.dismiss(botId, id),
-        getAgentFeedbackById: (botId: string, feedbackId: string) => store.getById(botId, feedbackId),
-        addAgentFeedbackThreadMessage: (botId: string, feedbackId: string, role: 'human' | 'bot', content: string) =>
-          store.addThreadMessage(botId, feedbackId, role, content),
+        getAgentFeedbackById: (botId: string, feedbackId: string) =>
+          store.getById(botId, feedbackId),
+        addAgentFeedbackThreadMessage: (
+          botId: string,
+          feedbackId: string,
+          role: 'human' | 'bot',
+          content: string
+        ) => store.addThreadMessage(botId, feedbackId, role, content),
         getSoulLoader: () => ({
           readIdentity: () => 'I am TestBot',
           readSoul: () => null,
@@ -345,11 +366,14 @@ describe('agent-feedback routes', () => {
       };
 
       const testApp = new Hono();
-      testApp.route('/api/agent-feedback', freshModule.agentFeedbackRoutes({
-        config: mockConfig,
-        botManager: mockBotManager as any,
-        logger: noopLogger,
-      }));
+      testApp.route(
+        '/api/agent-feedback',
+        freshModule.agentFeedbackRoutes({
+          config: mockConfig,
+          botManager: mockBotManager as any,
+          logger: noopLogger,
+        })
+      );
 
       // Send a reply to trigger generation
       await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply`, {
@@ -362,7 +386,9 @@ describe('agent-feedback routes', () => {
       await new Promise((r) => setTimeout(r, 100));
 
       // Status should show error
-      const statusRes = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`);
+      const statusRes = await testApp.request(
+        `http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`
+      );
       const statusData = await statusRes.json();
       expect(statusData.status).toBe('error');
       expect(statusData.error).toContain('CLI exploded');
@@ -391,9 +417,14 @@ describe('agent-feedback routes', () => {
         getAgentFeedbackPendingCount: () => store.getPendingCount(),
         submitAgentFeedback: (botId: string, content: string) => store.submit(botId, content),
         dismissAgentFeedback: (botId: string, id: string) => store.dismiss(botId, id),
-        getAgentFeedbackById: (botId: string, feedbackId: string) => store.getById(botId, feedbackId),
-        addAgentFeedbackThreadMessage: (botId: string, feedbackId: string, role: 'human' | 'bot', content: string) =>
-          store.addThreadMessage(botId, feedbackId, role, content),
+        getAgentFeedbackById: (botId: string, feedbackId: string) =>
+          store.getById(botId, feedbackId),
+        addAgentFeedbackThreadMessage: (
+          botId: string,
+          feedbackId: string,
+          role: 'human' | 'bot',
+          content: string
+        ) => store.addThreadMessage(botId, feedbackId, role, content),
         getSoulLoader: () => ({
           readIdentity: () => 'I am TestBot',
           readSoul: () => null,
@@ -405,11 +436,14 @@ describe('agent-feedback routes', () => {
       };
 
       const testApp = new Hono();
-      testApp.route('/api/agent-feedback', freshModule.agentFeedbackRoutes({
-        config: mockConfig,
-        botManager: mockBotManager as any,
-        logger: noopLogger,
-      }));
+      testApp.route(
+        '/api/agent-feedback',
+        freshModule.agentFeedbackRoutes({
+          config: mockConfig,
+          botManager: mockBotManager as any,
+          logger: noopLogger,
+        })
+      );
 
       // First reply triggers generation failure
       await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply`, {
@@ -420,20 +454,27 @@ describe('agent-feedback routes', () => {
       await new Promise((r) => setTimeout(r, 100));
 
       // Confirm error
-      let statusRes = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`);
+      let statusRes = await testApp.request(
+        `http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`
+      );
       expect((await statusRes.json()).status).toBe('error');
 
       // Retry
-      const retryRes = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/retry-reply`, {
-        method: 'POST',
-      });
+      const retryRes = await testApp.request(
+        `http://localhost/api/agent-feedback/bot1/${entry.id}/retry-reply`,
+        {
+          method: 'POST',
+        }
+      );
       expect(retryRes.status).toBe(200);
       expect((await retryRes.json()).status).toBe('generating');
 
       await new Promise((r) => setTimeout(r, 100));
 
       // Should be idle now with bot reply
-      statusRes = await testApp.request(`http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`);
+      statusRes = await testApp.request(
+        `http://localhost/api/agent-feedback/bot1/${entry.id}/reply-status`
+      );
       const statusData = await statusRes.json();
       expect(statusData.status).toBe('idle');
       expect(statusData.lastBotMessage).toBeTruthy();
@@ -460,7 +501,9 @@ describe('agent-feedback routes', () => {
 
     test('returns generated feedback on success', async () => {
       // Build a separate app with claudeGenerate mocked via deps
-      const mockClaudeGenerate = mock(() => Promise.resolve('Stop writing templated garbage. Focus on original content.'));
+      const mockClaudeGenerate = mock(() =>
+        Promise.resolve('Stop writing templated garbage. Focus on original content.')
+      );
 
       // We need to create a route instance where claudeGenerate is mockable.
       // Since claudeGenerate is imported directly, we test via the full route
@@ -499,7 +542,7 @@ describe('agent-feedback routes', () => {
           config: mockConfig,
           botManager: mockBotManager as any,
           logger: noopLogger,
-        }),
+        })
       );
 
       const res = await testApp.request('http://localhost/api/agent-feedback/bot1/generate', {
@@ -549,7 +592,7 @@ describe('agent-feedback routes', () => {
           config: mockConfig,
           botManager: mockBotManager as any,
           logger: noopLogger,
-        }),
+        })
       );
 
       const res = await testApp.request('http://localhost/api/agent-feedback/bot1/generate', {
@@ -624,7 +667,7 @@ describe('agent-feedback routes', () => {
           botManager: mockBotManager as any,
           logger: noopLogger,
           productionsService: mockProductionsService as any,
-        }),
+        })
       );
 
       const res = await testApp.request('http://localhost/api/agent-feedback/bot1/generate', {

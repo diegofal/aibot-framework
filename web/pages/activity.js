@@ -28,7 +28,7 @@ let activeType = '';
 
 function formatTime(ts) {
   const d = new Date(ts);
-  return d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  return `${d.toLocaleTimeString('en-GB', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
 function matchesFilter(event) {
@@ -42,8 +42,10 @@ function formatData(data) {
   const parts = [];
   for (const [k, v] of Object.entries(data)) {
     const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
-    const truncated = val.length > 120 ? val.slice(0, 120) + '...' : val;
-    parts.push(`<span class="activity-prop"><span class="activity-prop-key">${escapeHtml(k)}</span>=${escapeHtml(truncated)}</span>`);
+    const truncated = val.length > 120 ? `${val.slice(0, 120)}...` : val;
+    parts.push(
+      `<span class="activity-prop"><span class="activity-prop-key">${escapeHtml(k)}</span>=${escapeHtml(truncated)}</span>`
+    );
   }
   return parts.join(' ');
 }
@@ -55,14 +57,11 @@ function createEventEl(event) {
   div.dataset.type = event.type;
 
   const color = TYPE_COLORS[event.type] || '#8b8d97';
-  const phaseLabel = event.phase ? ` <span class="activity-phase">${escapeHtml(event.phase)}</span>` : '';
+  const phaseLabel = event.phase
+    ? ` <span class="activity-phase">${escapeHtml(event.phase)}</span>`
+    : '';
 
-  div.innerHTML =
-    `<span class="activity-time">${formatTime(event.timestamp)}</span>` +
-    `<span class="activity-type-badge" style="background:${color}20;color:${color};border:1px solid ${color}40">${escapeHtml(event.type)}</span>` +
-    (event.botId ? `<span class="activity-bot-tag">${escapeHtml(event.botId)}</span>` : '') +
-    phaseLabel +
-    `<span class="activity-data">${formatData(event.data)}</span>`;
+  div.innerHTML = `<span class="activity-time">${formatTime(event.timestamp)}</span><span class="activity-type-badge" style="background:${color}20;color:${color};border:1px solid ${color}40">${escapeHtml(event.type)}</span>${event.botId ? `<span class="activity-bot-tag">${escapeHtml(event.botId)}</span>` : ''}${phaseLabel}<span class="activity-data">${formatData(event.data)}</span>`;
 
   // Expandable detail on click
   div.addEventListener('click', () => {
@@ -131,7 +130,9 @@ function connectWS() {
           appendEvents(events);
         }
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   };
 
   ws.onclose = () => {
@@ -155,15 +156,20 @@ export async function renderActivity(el) {
   try {
     const res = await fetch('/api/agents');
     agents = await res.json();
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
-  const agentOptions = agents.map(
-    (a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.id)})</option>`
-  ).join('');
+  const agentOptions = agents
+    .map(
+      (a) =>
+        `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.id)})</option>`
+    )
+    .join('');
 
-  const typeOptions = Object.keys(TYPE_COLORS).map(
-    (t) => `<option value="${t}">${t}</option>`
-  ).join('');
+  const typeOptions = Object.keys(TYPE_COLORS)
+    .map((t) => `<option value="${t}">${t}</option>`)
+    .join('');
 
   el.innerHTML = `
     <div class="flex-between mb-16">

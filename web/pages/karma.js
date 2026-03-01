@@ -7,10 +7,14 @@ function trendBadge(trend) {
 }
 
 function sourceBadge(source) {
-  const cls = source === 'manual' ? 'badge-disabled'
-    : source === 'feedback' ? 'eval-badge-approved'
-    : source === 'production' ? 'badge-ok'
-    : 'badge-disabled';
+  const cls =
+    source === 'manual'
+      ? 'badge-disabled'
+      : source === 'feedback'
+        ? 'eval-badge-approved'
+        : source === 'production'
+          ? 'badge-ok'
+          : 'badge-disabled';
   return `<span class="badge ${cls}">${escapeHtml(source)}</span>`;
 }
 
@@ -139,15 +143,17 @@ export async function renderBotKarma(el, botId) {
     <div class="detail-card">
       <div style="font-weight:600;margin-bottom:12px">Event History <span class="count">${total}</span></div>
       <div id="karma-events">
-        ${events.length === 0
-          ? '<p class="text-dim text-sm">No events recorded yet.</p>'
-          : ''}
+        ${events.length === 0 ? '<p class="text-dim text-sm">No events recorded yet.</p>' : ''}
       </div>
-      ${total > events.length ? `
+      ${
+        total > events.length
+          ? `
         <div style="text-align:center;margin-top:16px">
           <button class="btn btn-sm" id="karma-load-more">Load More</button>
         </div>
-      ` : ''}
+      `
+          : ''
+      }
     </div>
   `;
 
@@ -156,8 +162,10 @@ export async function renderBotKarma(el, botId) {
     for (const evt of eventList) {
       const row = document.createElement('div');
       const sign = evt.delta >= 0 ? '+' : '';
-      const deltaColor = evt.delta > 0 ? 'var(--green)' : evt.delta < 0 ? 'var(--red)' : 'var(--text-dim)';
-      row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)';
+      const deltaColor =
+        evt.delta > 0 ? 'var(--green)' : evt.delta < 0 ? 'var(--red)' : 'var(--text-dim)';
+      row.style.cssText =
+        'display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)';
       row.innerHTML = `
         <span style="font-weight:600;color:${deltaColor};min-width:48px;font-family:monospace;font-size:14px">${sign}${evt.delta}</span>
         ${sourceBadge(evt.source)}
@@ -195,7 +203,8 @@ export async function renderBotKarma(el, botId) {
 
   // Reset karma handler
   document.getElementById('karma-reset-btn').addEventListener('click', async () => {
-    if (!confirm(`Reset all karma events for "${botId}"? Score will return to initial value.`)) return;
+    if (!confirm(`Reset all karma events for "${botId}"? Score will return to initial value.`))
+      return;
 
     const btn = document.getElementById('karma-reset-btn');
     btn.disabled = true;
@@ -217,7 +226,9 @@ export async function renderBotKarma(el, botId) {
       loadMoreBtn.disabled = true;
       loadMoreBtn.textContent = 'Loading...';
 
-      const more = await api(`/api/karma/${encodeURIComponent(botId)}/history?limit=50&offset=${currentOffset}`);
+      const more = await api(
+        `/api/karma/${encodeURIComponent(botId)}/history?limit=50&offset=${currentOffset}`
+      );
       const moreEvents = more.events || [];
 
       renderEvents(eventsContainer, moreEvents);

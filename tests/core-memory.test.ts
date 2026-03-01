@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createCoreMemoryManager, type CoreMemoryManager } from '../src/memory/core-memory';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { Logger } from '../src/logger';
+import { type CoreMemoryManager, createCoreMemoryManager } from '../src/memory/core-memory';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -20,14 +20,16 @@ describe('CoreMemoryManager', () => {
     db.exec(`
       CREATE TABLE core_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id TEXT NOT NULL DEFAULT 'default',
         category TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         importance INTEGER NOT NULL DEFAULT 5,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(category, key)
+        UNIQUE(bot_id, category, key)
       );
+      CREATE INDEX idx_core_memory_bot_id ON core_memory(bot_id);
       CREATE INDEX idx_core_memory_category ON core_memory(category);
       CREATE INDEX idx_core_memory_importance ON core_memory(importance DESC);
       CREATE INDEX idx_core_memory_updated ON core_memory(updated_at DESC);
@@ -66,32 +68,28 @@ describe('CoreMemoryManager', () => {
     });
 
     test('rejects invalid category', async () => {
-      await expect(
-        manager.set('invalid_category', 'key', 'value')
-      ).rejects.toThrow(/Invalid category/);
+      await expect(manager.set('invalid_category', 'key', 'value')).rejects.toThrow(
+        /Invalid category/
+      );
     });
 
     test('rejects key too long', async () => {
       const longKey = 'a'.repeat(101);
-      await expect(
-        manager.set('identity', longKey, 'value')
-      ).rejects.toThrow(/Key too long/);
+      await expect(manager.set('identity', longKey, 'value')).rejects.toThrow(/Key too long/);
     });
 
     test('rejects value too long', async () => {
       const longValue = 'a'.repeat(2001);
-      await expect(
-        manager.set('identity', 'key', longValue)
-      ).rejects.toThrow(/Value too long/);
+      await expect(manager.set('identity', 'key', longValue)).rejects.toThrow(/Value too long/);
     });
 
     test('rejects invalid importance', async () => {
-      await expect(
-        manager.set('identity', 'key', 'value', 0)
-      ).rejects.toThrow(/Importance must be between/);
-      await expect(
-        manager.set('identity', 'key', 'value', 11)
-      ).rejects.toThrow(/Importance must be between/);
+      await expect(manager.set('identity', 'key', 'value', 0)).rejects.toThrow(
+        /Importance must be between/
+      );
+      await expect(manager.set('identity', 'key', 'value', 11)).rejects.toThrow(
+        /Importance must be between/
+      );
     });
   });
 
@@ -163,12 +161,12 @@ describe('CoreMemoryManager', () => {
     test('filters by category', async () => {
       const results = await manager.list('identity');
       expect(results).toHaveLength(2);
-      expect(results.every(r => r.category === 'identity')).toBe(true);
+      expect(results.every((r) => r.category === 'identity')).toBe(true);
     });
 
     test('filters by minimum importance', async () => {
       const results = await manager.list(undefined, 8);
-      expect(results.every(r => r.importance >= 8)).toBe(true);
+      expect(results.every((r) => r.importance >= 8)).toBe(true);
     });
 
     test('combines category and importance filters', async () => {
@@ -195,7 +193,12 @@ describe('CoreMemoryManager', () => {
 
     test('respects maxChars limit', async () => {
       await manager.set('identity', 'name', 'AutoForja', 10);
-      await manager.set('relationships', 'user_test', 'A very long description that takes up space', 9);
+      await manager.set(
+        'relationships',
+        'user_test',
+        'A very long description that takes up space',
+        9
+      );
 
       const output = manager.renderForSystemPrompt(100);
       expect(output.length).toBeLessThanOrEqual(100 + 50); // some tolerance for formatting

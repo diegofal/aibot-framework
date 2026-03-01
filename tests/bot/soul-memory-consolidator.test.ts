@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getUnconsolidatedLogs, consolidateMemory } from '../../src/bot/soul-memory-consolidator';
+import { consolidateMemory, getUnconsolidatedLogs } from '../../src/bot/soul-memory-consolidator';
 import { localDateStr } from '../../src/date-utils';
 
 const TEST_DIR = join(import.meta.dir, '..', '..', '.test-soul-consolidator');

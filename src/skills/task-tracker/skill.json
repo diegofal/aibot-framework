@@ -13,9 +13,20 @@
         "type": "object",
         "properties": {
           "title": { "type": "string", "description": "Task title/description" },
-          "priority": { "type": "string", "enum": ["low", "medium", "high"], "description": "Task priority level" },
-          "dueDate": { "type": "string", "description": "Optional due date (ISO 8601 or natural language like 'tomorrow')" },
-          "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags for categorization" }
+          "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "Task priority level"
+          },
+          "dueDate": {
+            "type": "string",
+            "description": "Optional due date (ISO 8601 or natural language like 'tomorrow')"
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional tags for categorization"
+          }
         },
         "required": ["title"]
       }
@@ -26,8 +37,16 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "status": { "type": "string", "enum": ["pending", "done", "all"], "description": "Filter by status" },
-          "priority": { "type": "string", "enum": ["low", "medium", "high", "all"], "description": "Filter by priority" },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "done", "all"],
+            "description": "Filter by status"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "all"],
+            "description": "Filter by priority"
+          },
           "tag": { "type": "string", "description": "Filter by tag" }
         },
         "required": []
@@ -62,7 +81,11 @@
         "type": "object",
         "properties": {
           "taskId": { "type": "string", "description": "ID of the task" },
-          "priority": { "type": "string", "enum": ["low", "medium", "high"], "description": "New priority level" }
+          "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "New priority level"
+          }
         },
         "required": ["taskId", "priority"]
       }

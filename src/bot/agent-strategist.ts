@@ -1,13 +1,13 @@
 import type { BotConfig } from '../config';
+import type { LLMClient } from '../core/llm-client';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
-import type { LLMClient } from '../core/llm-client';
-import type { BotContext } from './types';
-import { buildStrategistPrompt } from './agent-loop-prompts';
 import { parseGoals, serializeGoals } from '../tools/goals';
-import { parseLLMJson } from './llm-json-parser';
-import { logToMemory } from './agent-loop-utils';
 import { parseDurationMs } from './agent-loop';
+import { buildStrategistPrompt } from './agent-loop-prompts';
+import { logToMemory } from './agent-loop-utils';
+import { parseLLMJson } from './llm-json-parser';
+import type { BotContext } from './types';
 
 export interface GoalOperation {
   action: 'add' | 'complete' | 'update' | 'remove';
@@ -31,7 +31,10 @@ export interface StrategistResult {
 /**
  * Parse a strategist result from raw LLM output.
  */
-export function parseStrategistResult(raw: string, logger: Pick<Logger, 'warn'>): StrategistResult | null {
+export function parseStrategistResult(
+  raw: string,
+  logger: Pick<Logger, 'warn'>
+): StrategistResult | null {
   return parseLLMJson<StrategistResult>(raw, logger, {
     extractPattern: /\{[\s\S]*(?:"focus"|"single_deliverable")[\s\S]*\}/,
     validate: (parsed) => {
@@ -61,7 +64,7 @@ export function shouldRunStrategist(
   botId: string,
   botConfig: BotConfig,
   globalStrategistConfig: { enabled: boolean; everyCycles: number; minInterval: string },
-  schedule?: StrategistScheduleInfo,
+  schedule?: StrategistScheduleInfo
 ): boolean {
   const botOverride = botConfig.agentLoop?.strategist;
   const enabled = botOverride?.enabled ?? globalStrategistConfig.enabled;
@@ -72,8 +75,9 @@ export function shouldRunStrategist(
   const minInterval = botOverride?.minInterval ?? globalStrategistConfig.minInterval;
 
   const cyclesMet = schedule.strategistCycleCount >= everyCycles;
-  const intervalMet = schedule.lastStrategistAt === null ||
-    (Date.now() - schedule.lastStrategistAt) >= parseDurationMs(minInterval);
+  const intervalMet =
+    schedule.lastStrategistAt === null ||
+    Date.now() - schedule.lastStrategistAt >= parseDurationMs(minInterval);
 
   return cyclesMet && intervalMet;
 }
@@ -84,7 +88,7 @@ export function shouldRunStrategist(
 export function computeCyclesUntilStrategist(
   botConfig: BotConfig | undefined,
   globalStrategistConfig: { everyCycles: number },
-  schedule: { strategistCycleCount: number },
+  schedule: { strategistCycleCount: number }
 ): number {
   const botOverride = botConfig?.agentLoop?.strategist;
   const everyCycles = botOverride?.everyCycles ?? globalStrategistConfig.everyCycles;
@@ -99,7 +103,7 @@ export async function runStrategistWithRetry(
   input: { system: string; prompt: string },
   model: string,
   logger: Logger,
-  maxRetries = 1,
+  maxRetries = 1
 ): Promise<StrategistResult | null> {
   const temperatures = [0.4, 0];
 
@@ -121,7 +125,7 @@ export async function runStrategistWithRetry(
     if (attempt < maxRetries) {
       logger.warn(
         { attempt, raw: raw.slice(0, 200) },
-        'Agent loop: strategist failed to parse, retrying with temperature 0',
+        'Agent loop: strategist failed to parse, retrying with temperature 0'
       );
     }
   }
@@ -144,7 +148,7 @@ export async function runStrategist(
     goals: string;
     datetime: string;
     soulLoader: ReturnType<BotContext['getSoulLoader']>;
-  },
+  }
 ): Promise<StrategistResult | null> {
   const llmClient = ctx.getLLMClient(botId);
   const model = ctx.getActiveModel(botId);
@@ -165,7 +169,10 @@ export async function runStrategist(
 
   const result = await runStrategistWithRetry(llmClient, input, model, botLogger);
   if (!result) {
-    botLogger.warn({ botId }, 'Agent loop: strategist returned unparseable output, continuing without');
+    botLogger.warn(
+      { botId },
+      'Agent loop: strategist returned unparseable output, continuing without'
+    );
     return null;
   }
 
@@ -179,7 +186,7 @@ export async function runStrategist(
 
   botLogger.info(
     { botId, focus: deliverable, goalOps: result.goal_operations?.length ?? 0 },
-    'Agent loop: strategist completed',
+    'Agent loop: strategist completed'
   );
 
   return result;
@@ -192,7 +199,7 @@ export function applyGoalOperations(
   botId: string,
   operations: GoalOperation[],
   logger: Logger,
-  soulLoader: ReturnType<BotContext['getSoulLoader']>,
+  soulLoader: ReturnType<BotContext['getSoulLoader']>
 ): void {
   const content = soulLoader.readGoals?.() ?? null;
   const { active, completed } = parseGoals(content);

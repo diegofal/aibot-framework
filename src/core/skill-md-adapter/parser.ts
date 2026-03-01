@@ -3,14 +3,9 @@
  * Parses YAML frontmatter + Markdown body into structured SkillDocument
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-import type {
-  SkillDocument,
-  DeclaredTool,
-  SkillManifest,
-  ToolParameter
-} from './types';
+import type { DeclaredTool, SkillDocument, SkillManifest, ToolParameter } from './types';
 import { SkillParseError } from './types';
 
 export class SkillMdParser {
@@ -62,7 +57,7 @@ export class SkillMdParser {
       return {
         frontmatter: altMatch[1],
         body: altMatch[2].trim(),
-        frontmatterEndLine: lines
+        frontmatterEndLine: lines,
       };
     }
 
@@ -70,7 +65,7 @@ export class SkillMdParser {
     return {
       frontmatter: match[1],
       body: match[2].trim(),
-      frontmatterEndLine: lines
+      frontmatterEndLine: lines,
     };
   }
 
@@ -91,7 +86,8 @@ export class SkillMdParser {
     const tools: DeclaredTool[] = [];
 
     // Pattern matches ### tool-name sections with Description, Parameters, and optional Implementation
-    const toolSectionPattern = /###\s+([a-z][a-zA-Z0-9_-]*)\s*\n\n?\*\*Description:\*\*\s*(.+?)(?:\n\n|\n\*\*Parameters:\*\*)/s;
+    const toolSectionPattern =
+      /###\s+([a-z][a-zA-Z0-9_-]*)\s*\n\n?\*\*Description:\*\*\s*(.+?)(?:\n\n|\n\*\*Parameters:\*\*)/s;
 
     // Split body into potential tool sections
     const sections = body.split(/(?=###\s+[a-z][a-zA-Z0-9_-]*\s*\n)/);
@@ -146,7 +142,7 @@ export class SkillMdParser {
     // Match each parameter line
     // - `name` (type, required): description, default: `value`
     // - `name` (type, optional): description
-    const paramLines = paramsBlock.split('\n').filter(line => line.trim().startsWith('-'));
+    const paramLines = paramsBlock.split('\n').filter((line) => line.trim().startsWith('-'));
 
     for (const line of paramLines) {
       const param = this.parseParameterLine(line);
@@ -163,7 +159,8 @@ export class SkillMdParser {
    */
   private parseParameterLine(line: string): ToolParameter | null {
     // Pattern: - `name` (type, required|optional): description, default: value
-    const pattern = /^-\s+`([^`]+)`\s*\(\s*([^,)]+)\s*,\s*([^)]+)\)\s*:\s*(.+?)(?:,\s*default:\s*(.+))?$/i;
+    const pattern =
+      /^-\s+`([^`]+)`\s*\(\s*([^,)]+)\s*,\s*([^)]+)\)\s*:\s*(.+?)(?:,\s*default:\s*(.+))?$/i;
     const match = line.match(pattern);
 
     if (!match) {
@@ -173,7 +170,7 @@ export class SkillMdParser {
       if (!looseMatch) return null;
 
       const [_, name, typeAndReq, rest] = looseMatch;
-      const typeParts = typeAndReq.split(',').map(s => s.trim());
+      const typeParts = typeAndReq.split(',').map((s) => s.trim());
       const type = typeParts[0] as ToolParameter['type'];
       const required = typeParts[1]?.toLowerCase() === 'required';
 
@@ -230,23 +227,27 @@ export class SkillMdParser {
 
     // Number (integer)
     if (/^-?\d+$/.test(trimmed)) {
-      return parseInt(trimmed, 10);
+      return Number.parseInt(trimmed, 10);
     }
 
     // Number (float)
     if (/^-?\d+\.\d+$/.test(trimmed)) {
-      return parseFloat(trimmed);
+      return Number.parseFloat(trimmed);
     }
 
     // String with quotes
-    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-        (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    if (
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    ) {
       return trimmed.slice(1, -1);
     }
 
     // Array or object (JSON)
-    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) ||
-        (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+    if (
+      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+      (trimmed.startsWith('{') && trimmed.endsWith('}'))
+    ) {
       try {
         return JSON.parse(trimmed);
       } catch {

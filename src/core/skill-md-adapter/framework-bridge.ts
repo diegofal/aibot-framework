@@ -11,16 +11,12 @@ import type { Logger } from '../../logger';
 import type {
   ExternalSkillManifest,
   ExternalToolDef,
-  LoadedExternalSkill
+  LoadedExternalSkill,
 } from '../external-skill-loader';
-import {
-  SkillMdLoader,
-  DefaultToolGenerator,
-  DefaultRegistryBridge
-} from './loader';
+import { DefaultRegistryBridge, DefaultToolGenerator, SkillMdLoader } from './loader';
 import { SkillMdParser } from './parser';
-import { SkillValidator } from './validator';
 import type { DeclarativeSkill, Tool } from './types';
+import { SkillValidator } from './validator';
 
 /**
  * Check if a directory contains a SKILL.md file
@@ -37,7 +33,7 @@ function convertToManifest(skill: DeclarativeSkill): ExternalSkillManifest {
     id: skill.name,
     name: skill.name,
     description: skill.description,
-    tools: skill.tools.map(tool => convertToolToExternalDef(tool)),
+    tools: skill.tools.map((tool) => convertToolToExternalDef(tool)),
     config: skill.metadata || {},
   };
 }
@@ -103,7 +99,7 @@ export async function loadDeclarativeSkill(
       basePath: skillDir,
       defaultLogger: logger,
       validateOnLoad: true,
-      checkRequirements: false  // We handle this manually to produce warnings
+      checkRequirements: false, // We handle this manually to produce warnings
     }
   );
 
@@ -111,9 +107,11 @@ export async function loadDeclarativeSkill(
   const loaded = await loader.loadFromDirectory(skillDir);
 
   // Get the registered skill from the bridge
-  const bridge = (loader as unknown as {
-    ['registryBridge']: DefaultRegistryBridge
-  }).registryBridge;
+  const bridge = (
+    loader as unknown as {
+      registryBridge: DefaultRegistryBridge;
+    }
+  ).registryBridge;
 
   const declarativeSkill = bridge.getRegisteredSkill(loaded.name);
 

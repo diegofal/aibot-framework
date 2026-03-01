@@ -1,8 +1,8 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { ToolExecutor } from '../../src/bot/tool-executor';
-import { resolveAgentConfig, type Config, type BotConfig } from '../../src/config';
 import type { BotContext } from '../../src/bot/types';
+import { type BotConfig, type Config, resolveAgentConfig } from '../../src/config';
 import type { Tool, ToolResult } from '../../src/tools/types';
 
 const noopLogger = {
@@ -17,14 +17,29 @@ function createMinimalConfig(overrides: Partial<Config> = {}): Config {
   return {
     bots: [],
     productions: { enabled: true, baseDir: './productions' },
-    soul: { enabled: true, dir: './config/soul', search: { enabled: false } as any, memoryFlush: { enabled: true, messageThreshold: 30 }, sessionMemory: { enabled: false, indexOnStartup: false }, versioning: { enabled: true, maxVersionsPerFile: 10 } },
+    soul: {
+      enabled: true,
+      dir: './config/soul',
+      search: { enabled: false } as any,
+      memoryFlush: { enabled: true, messageThreshold: 30 },
+      sessionMemory: { enabled: false, indexOnStartup: false },
+      versioning: { enabled: true, maxVersionsPerFile: 10 },
+    },
     ollama: { baseUrl: 'http://localhost:11434', models: { primary: 'llama3' } },
-    conversation: { enabled: true, systemPrompt: 'You are a helpful assistant.', temperature: 0.7, maxHistory: 20 },
+    conversation: {
+      enabled: true,
+      systemPrompt: 'You are a helpful assistant.',
+      temperature: 0.7,
+      maxHistory: 20,
+    },
     ...overrides,
   } as Config;
 }
 
-function createCaptureTool(name: string): { tool: Tool; getCapturedArgs: () => Record<string, unknown> } {
+function createCaptureTool(name: string): {
+  tool: Tool;
+  getCapturedArgs: () => Record<string, unknown>;
+} {
   let capturedArgs: Record<string, unknown> = {};
   const tool: Tool = {
     definition: {
@@ -47,21 +62,40 @@ describe('workDir', () => {
   describe('resolveAgentConfig', () => {
     test('defaults workDir to productions/<botId>', () => {
       const config = createMinimalConfig();
-      const botConfig: BotConfig = { id: 'mybot', name: 'My Bot', skills: [], token: '', enabled: true };
+      const botConfig: BotConfig = {
+        id: 'mybot',
+        name: 'My Bot',
+        skills: [],
+        token: '',
+        enabled: true,
+      };
       const resolved = resolveAgentConfig(config, botConfig);
       expect(resolved.workDir).toBe('./productions/mybot');
     });
 
     test('uses explicit workDir when configured', () => {
       const config = createMinimalConfig();
-      const botConfig: BotConfig = { id: 'selfimprove', name: 'Self Improve', skills: [], token: '', enabled: true, workDir: '/home/user/project' };
+      const botConfig: BotConfig = {
+        id: 'selfimprove',
+        name: 'Self Improve',
+        skills: [],
+        token: '',
+        enabled: true,
+        workDir: '/home/user/project',
+      };
       const resolved = resolveAgentConfig(config, botConfig);
       expect(resolved.workDir).toBe('/home/user/project');
     });
 
     test('uses custom productions baseDir in default', () => {
       const config = createMinimalConfig({ productions: { enabled: true, baseDir: './output' } });
-      const botConfig: BotConfig = { id: 'bot1', name: 'Bot 1', skills: [], token: '', enabled: true };
+      const botConfig: BotConfig = {
+        id: 'bot1',
+        name: 'Bot 1',
+        skills: [],
+        token: '',
+        enabled: true,
+      };
       const resolved = resolveAgentConfig(config, botConfig);
       expect(resolved.workDir).toBe('./output/bot1');
     });
@@ -71,7 +105,16 @@ describe('workDir', () => {
     test('resolves file_read path relative to workDir', async () => {
       const { tool, getCapturedArgs } = createCaptureTool('file_read');
       const config = createMinimalConfig({
-        bots: [{ id: 'test-bot', name: 'Test', skills: [], token: '', enabled: true, workDir: '/tmp/test-workdir' } as BotConfig],
+        bots: [
+          {
+            id: 'test-bot',
+            name: 'Test',
+            skills: [],
+            token: '',
+            enabled: true,
+            workDir: '/tmp/test-workdir',
+          } as BotConfig,
+        ],
       });
       const ctx = {
         config,
@@ -89,7 +132,16 @@ describe('workDir', () => {
     test('resolves file_write path relative to workDir', async () => {
       const { tool, getCapturedArgs } = createCaptureTool('file_write');
       const config = createMinimalConfig({
-        bots: [{ id: 'test-bot', name: 'Test', skills: [], token: '', enabled: true, workDir: '/tmp/test-workdir' } as BotConfig],
+        bots: [
+          {
+            id: 'test-bot',
+            name: 'Test',
+            skills: [],
+            token: '',
+            enabled: true,
+            workDir: '/tmp/test-workdir',
+          } as BotConfig,
+        ],
       });
       const ctx = {
         config,
@@ -107,7 +159,16 @@ describe('workDir', () => {
     test('resolves file_edit path relative to workDir', async () => {
       const { tool, getCapturedArgs } = createCaptureTool('file_edit');
       const config = createMinimalConfig({
-        bots: [{ id: 'test-bot', name: 'Test', skills: [], token: '', enabled: true, workDir: '/tmp/test-workdir' } as BotConfig],
+        bots: [
+          {
+            id: 'test-bot',
+            name: 'Test',
+            skills: [],
+            token: '',
+            enabled: true,
+            workDir: '/tmp/test-workdir',
+          } as BotConfig,
+        ],
       });
       const ctx = {
         config,
@@ -125,7 +186,16 @@ describe('workDir', () => {
     test('sets exec workdir to bot workDir when not specified', async () => {
       const { tool, getCapturedArgs } = createCaptureTool('exec');
       const config = createMinimalConfig({
-        bots: [{ id: 'test-bot', name: 'Test', skills: [], token: '', enabled: true, workDir: '/tmp/test-workdir' } as BotConfig],
+        bots: [
+          {
+            id: 'test-bot',
+            name: 'Test',
+            skills: [],
+            token: '',
+            enabled: true,
+            workDir: '/tmp/test-workdir',
+          } as BotConfig,
+        ],
       });
       const ctx = {
         config,
@@ -143,7 +213,16 @@ describe('workDir', () => {
     test('does not override exec workdir when LLM provides one', async () => {
       const { tool, getCapturedArgs } = createCaptureTool('exec');
       const config = createMinimalConfig({
-        bots: [{ id: 'test-bot', name: 'Test', skills: [], token: '', enabled: true, workDir: '/tmp/test-workdir' } as BotConfig],
+        bots: [
+          {
+            id: 'test-bot',
+            name: 'Test',
+            skills: [],
+            token: '',
+            enabled: true,
+            workDir: '/tmp/test-workdir',
+          } as BotConfig,
+        ],
       });
       const ctx = {
         config,

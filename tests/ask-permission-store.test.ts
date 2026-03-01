@@ -1,7 +1,7 @@
-import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AskPermissionStore } from '../src/bot/ask-permission-store';
 import { createAskPermissionTool } from '../src/tools/ask-permission';
 
@@ -31,7 +31,12 @@ describe('AskPermissionStore', () => {
   });
 
   test('request() creates pending with correct fields', () => {
-    const { id, promise } = store.request('bot1', 'file_write', '/tmp/test.txt', 'Need to save results');
+    const { id, promise } = store.request(
+      'bot1',
+      'file_write',
+      '/tmp/test.txt',
+      'Need to save results'
+    );
     promise.catch(() => {});
     const all = store.getAll();
     expect(all).toHaveLength(1);
@@ -127,13 +132,13 @@ describe('AskPermissionStore', () => {
     const decisions = store.consumeDecisionsForBot('bot1');
     expect(decisions).toHaveLength(2);
 
-    const approved = decisions.find(d => d.status === 'approved')!;
+    const approved = decisions.find((d) => d.status === 'approved')!;
     expect(approved).toBeDefined();
     expect(approved.action).toBe('file_write');
     expect(approved.resource).toBe('/a');
     expect(approved.note).toBe('ok');
 
-    const denied = decisions.find(d => d.status === 'denied')!;
+    const denied = decisions.find((d) => d.status === 'denied')!;
     expect(denied).toBeDefined();
     expect(denied.action).toBe('exec');
     expect(denied.note).toBe('no');
@@ -153,11 +158,13 @@ describe('AskPermissionStore', () => {
     const { promise: p1 } = store.request('bot1', 'file_write', '/a', 'desc1');
     const { promise: p2 } = store.request('bot2', 'exec', 'cmd', 'desc2');
     const { promise: p3 } = store.request('bot1', 'api_call', 'url', 'desc3');
-    p1.catch(() => {}); p2.catch(() => {}); p3.catch(() => {});
+    p1.catch(() => {});
+    p2.catch(() => {});
+    p3.catch(() => {});
 
     const bot1Pending = store.getPendingForBot('bot1');
     expect(bot1Pending).toHaveLength(2);
-    expect(bot1Pending.every(r => r.botId === 'bot1')).toBe(true);
+    expect(bot1Pending.every((r) => r.botId === 'bot1')).toBe(true);
 
     const bot2Pending = store.getPendingForBot('bot2');
     expect(bot2Pending).toHaveLength(1);
@@ -171,7 +178,7 @@ describe('AskPermissionStore', () => {
     const { promise } = store.request('bot1', 'file_write', '/x', 'test', 'normal', 50);
     promise.catch(() => {}); // prevent unhandled rejection
 
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 100));
     expect(store.getPendingCount()).toBe(0);
     await expect(promise).rejects.toThrow('timed out');
   });
@@ -246,8 +253,8 @@ describe('AskPermissionStore history', () => {
 
     const entry = store.getHistoryById(id);
     expect(entry).toBeDefined();
-    expect(entry!.executionStatus).toBe('consumed');
-    expect(typeof entry!.consumedAt).toBe('number');
+    expect(entry?.executionStatus).toBe('consumed');
+    expect(typeof entry?.consumedAt).toBe('number');
   });
 
   test('reportExecution updates to executed', async () => {
@@ -259,10 +266,10 @@ describe('AskPermissionStore history', () => {
     store.reportExecution([id], 'Action completed', [{ name: 'file_write', success: true }], true);
 
     const entry = store.getHistoryById(id);
-    expect(entry!.executionStatus).toBe('executed');
-    expect(entry!.executionSummary).toBe('Action completed');
-    expect(entry!.toolCalls).toEqual([{ name: 'file_write', success: true }]);
-    expect(typeof entry!.executedAt).toBe('number');
+    expect(entry?.executionStatus).toBe('executed');
+    expect(entry?.executionSummary).toBe('Action completed');
+    expect(entry?.toolCalls).toEqual([{ name: 'file_write', success: true }]);
+    expect(typeof entry?.executedAt).toBe('number');
   });
 
   test('reportExecution updates to failed', async () => {
@@ -274,8 +281,8 @@ describe('AskPermissionStore history', () => {
     store.reportExecution([id], 'Executor crashed', [], false);
 
     const entry = store.getHistoryById(id);
-    expect(entry!.executionStatus).toBe('failed');
-    expect(entry!.executionSummary).toBe('Executor crashed');
+    expect(entry?.executionStatus).toBe('failed');
+    expect(entry?.executionSummary).toBe('Executor crashed');
   });
 
   test('getHistoryById returns undefined for unknown ID', () => {
@@ -294,7 +301,7 @@ describe('AskPermissionStore history', () => {
     const all = store.getHistory(10);
     expect(all).toHaveLength(5);
     // All IDs should be present
-    const allIds = new Set(all.map(e => e.id));
+    const allIds = new Set(all.map((e) => e.id));
     for (const id of ids) {
       expect(allIds.has(id)).toBe(true);
     }
@@ -335,18 +342,18 @@ describe('AskPermissionStore requeueById', () => {
     store.reportExecution([id], 'Crashed', [], false);
 
     const entry = store.getHistoryById(id);
-    expect(entry!.executionStatus).toBe('failed');
+    expect(entry?.executionStatus).toBe('failed');
 
     const ok = store.requeueById(id);
     expect(ok).toBe(true);
 
     // History entry should be reset
     const updated = store.getHistoryById(id);
-    expect(updated!.executionStatus).toBe('decided');
-    expect(updated!.consumedAt).toBeUndefined();
-    expect(updated!.executedAt).toBeUndefined();
-    expect(updated!.executionSummary).toBeUndefined();
-    expect(updated!.toolCalls).toBeUndefined();
+    expect(updated?.executionStatus).toBe('decided');
+    expect(updated?.consumedAt).toBeUndefined();
+    expect(updated?.executedAt).toBeUndefined();
+    expect(updated?.executionSummary).toBeUndefined();
+    expect(updated?.toolCalls).toBeUndefined();
   });
 
   test('requeued entry appears in consumeDecisionsForBot', async () => {
@@ -394,7 +401,7 @@ describe('AskPermissionStore requeueById', () => {
 
     // Entry is consumed but never reported — stuck
     const entry = store.getHistoryById(id);
-    expect(entry!.executionStatus).toBe('consumed');
+    expect(entry?.executionStatus).toBe('consumed');
 
     const ok = store.requeueById(id);
     expect(ok).toBe(true);
@@ -409,7 +416,7 @@ describe('AskPermissionStore requeueById', () => {
     await promise;
     // Don't consume — entry is still 'decided' and sitting in resolved queue
     const entry = store.getHistoryById(id);
-    expect(entry!.executionStatus).toBe('decided');
+    expect(entry?.executionStatus).toBe('decided');
 
     expect(store.requeueById(id)).toBe(false);
   });
@@ -430,8 +437,14 @@ describe('ask_permission tool', () => {
     });
 
     const result = await tool.execute(
-      { action: 'file_write', resource: '/tmp/out.txt', description: 'Save results', _botId: 'bot1', _chatId: 0 },
-      makeLogger(),
+      {
+        action: 'file_write',
+        resource: '/tmp/out.txt',
+        description: 'Save results',
+        _botId: 'bot1',
+        _chatId: 0,
+      },
+      makeLogger()
     );
 
     expect(result.success).toBe(true);
@@ -456,15 +469,27 @@ describe('ask_permission tool', () => {
 
     // First call
     await tool.execute(
-      { action: 'file_write', resource: '/tmp/out.txt', description: 'Save', _botId: 'bot1', _chatId: 0 },
-      makeLogger(),
+      {
+        action: 'file_write',
+        resource: '/tmp/out.txt',
+        description: 'Save',
+        _botId: 'bot1',
+        _chatId: 0,
+      },
+      makeLogger()
     );
     expect(store.getPendingCount()).toBe(1);
 
     // Second call with same action+resource
     const result = await tool.execute(
-      { action: 'file_write', resource: '/tmp/out.txt', description: 'Save again', _botId: 'bot1', _chatId: 0 },
-      makeLogger(),
+      {
+        action: 'file_write',
+        resource: '/tmp/out.txt',
+        description: 'Save again',
+        _botId: 'bot1',
+        _chatId: 0,
+      },
+      makeLogger()
     );
 
     expect(result.success).toBe(true);
@@ -482,7 +507,7 @@ describe('ask_permission tool', () => {
 
     const result = await tool.execute(
       { action: 'file_write', resource: '/tmp/x', description: 'test' },
-      makeLogger(),
+      makeLogger()
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('_botId');
@@ -497,7 +522,7 @@ describe('ask_permission tool', () => {
 
     const result = await tool.execute(
       { action: 'file_write', _botId: 'bot1', _chatId: 0 },
-      makeLogger(),
+      makeLogger()
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('Missing required parameters');
@@ -512,17 +537,23 @@ describe('ask_permission tool', () => {
     });
 
     await tool.execute(
-      { action: 'exec', resource: 'npm test', description: 'Run tests', _botId: 'bot1', _chatId: 0 },
-      logger,
+      {
+        action: 'exec',
+        resource: 'npm test',
+        description: 'Run tests',
+        _botId: 'bot1',
+        _chatId: 0,
+      },
+      logger
     );
 
     // Expire/dispose — the tool attaches .catch() internally so no unhandled rejection
     store.dispose();
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({ requestId: expect.any(String), botId: 'bot1' }),
-      'ask_permission: request closed without decision',
+      'ask_permission: request closed without decision'
     );
   });
 });
@@ -576,8 +607,8 @@ describe('AskPermissionStore persistence', () => {
     const store2 = new AskPermissionStore(makeLogger(), tmpDir);
     const entry = store2.getHistoryById(id);
     expect(entry).toBeDefined();
-    expect(entry!.executionStatus).toBe('executed');
-    expect(entry!.executionSummary).toBe('Done');
+    expect(entry?.executionStatus).toBe('executed');
+    expect(entry?.executionSummary).toBe('Done');
   });
 
   test('backward compat: no dataDir means no persistence', () => {
@@ -603,7 +634,7 @@ describe('AskPermissionStore persistence', () => {
 
     // History entry should show 'decided'
     const entry = store2.getHistoryById(id);
-    expect(entry!.executionStatus).toBe('decided');
+    expect(entry?.executionStatus).toBe('decided');
 
     // Resolved decision should be consumable
     const decisions = store2.consumeDecisionsForBot('bot1');

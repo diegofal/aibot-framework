@@ -1,8 +1,22 @@
-import { describe, test, expect } from 'bun:test';
-import { parseDurationMs, parseStrategistResult, isRetryableError, computeRetryDelay } from '../src/bot/agent-loop';
+import { describe, expect, test } from 'bun:test';
+import {
+  computeRetryDelay,
+  isRetryableError,
+  parseDurationMs,
+  parseStrategistResult,
+} from '../src/bot/agent-loop';
+import {
+  buildContinuousPlannerPrompt,
+  buildExecutorPrompt,
+  buildPlannerPrompt,
+  buildStrategistPrompt,
+} from '../src/bot/agent-loop-prompts';
+import {
+  AgentLoopRetryConfigSchema,
+  BotAgentLoopOverrideSchema,
+  GlobalAgentLoopConfigSchema,
+} from '../src/config';
 import { parseGoals, serializeGoals } from '../src/tools/goals';
-import { buildStrategistPrompt, buildContinuousPlannerPrompt, buildPlannerPrompt, buildExecutorPrompt } from '../src/bot/agent-loop-prompts';
-import { BotAgentLoopOverrideSchema, GlobalAgentLoopConfigSchema, AgentLoopRetryConfigSchema } from '../src/config';
 
 describe('parseDurationMs', () => {
   test('parses milliseconds', () => {
@@ -123,9 +137,11 @@ describe('planner prompt — novelty imperative', () => {
 
   test('HUMAN COLLABORATION uses proactive language, not "cannot determine on your own"', () => {
     const { system } = buildPlannerPrompt(baseInput);
-    expect(system).toContain('proactively ask when the human\'s preference matters');
+    expect(system).toContain("proactively ask when the human's preference matters");
     expect(system).not.toContain('you cannot determine on your own');
-    expect(system).toContain('When unsure between two approaches, ask the human instead of guessing');
+    expect(system).toContain(
+      'When unsure between two approaches, ask the human instead of guessing'
+    );
   });
 
   test('priority "none" definition requires having already called ask_human', () => {
@@ -174,7 +190,8 @@ describe('planner prompt — novelty imperative', () => {
   test('injects autonomousCyclesNote when provided', () => {
     const { system } = buildPlannerPrompt({
       ...baseInput,
-      autonomousCyclesNote: '## Autonomous Run Notice\n\nYou have been running autonomously for 7 cycles without checking in with your human operator.',
+      autonomousCyclesNote:
+        '## Autonomous Run Notice\n\nYou have been running autonomously for 7 cycles without checking in with your human operator.',
     });
     expect(system).toContain('## Autonomous Run Notice');
     expect(system).toContain('7 cycles');
@@ -410,7 +427,13 @@ describe('parseGoals / serializeGoals exports', () => {
       { text: 'Goal B', status: 'in_progress', priority: 'low' },
     ];
     const completed = [
-      { text: 'Goal C', status: 'completed', priority: 'medium', completed: '2026-01-10', outcome: 'Shipped' },
+      {
+        text: 'Goal C',
+        status: 'completed',
+        priority: 'medium',
+        completed: '2026-01-10',
+        outcome: 'Shipped',
+      },
     ];
     const serialized = serializeGoals(active, completed);
     const parsed = parseGoals(serialized);
@@ -434,17 +457,17 @@ describe('strategist cycle counting logic', () => {
 
     // Case 1: enough cycles but not enough time
     const cyclesMet1 = 5 >= everyCycles;
-    const intervalMet1 = (Date.now() - (Date.now() - 3_600_000)) >= minIntervalMs; // 1h ago
+    const intervalMet1 = Date.now() - (Date.now() - 3_600_000) >= minIntervalMs; // 1h ago
     expect(cyclesMet1 && intervalMet1).toBe(false);
 
     // Case 2: enough time but not enough cycles
     const cyclesMet2 = 2 >= everyCycles;
-    const intervalMet2 = (Date.now() - (Date.now() - 5 * 3_600_000)) >= minIntervalMs; // 5h ago
+    const intervalMet2 = Date.now() - (Date.now() - 5 * 3_600_000) >= minIntervalMs; // 5h ago
     expect(cyclesMet2 && intervalMet2).toBe(false);
 
     // Case 3: both met
     const cyclesMet3 = 4 >= everyCycles;
-    const intervalMet3 = (Date.now() - (Date.now() - 5 * 3_600_000)) >= minIntervalMs; // 5h ago
+    const intervalMet3 = Date.now() - (Date.now() - 5 * 3_600_000) >= minIntervalMs; // 5h ago
     expect(cyclesMet3 && intervalMet3).toBe(true);
   });
 
@@ -466,9 +489,9 @@ describe('parseStrategistResult', () => {
     });
     const result = parseStrategistResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.focus).toBe('Write unit tests');
-    expect(result!.single_deliverable).toBe('Write unit tests');
-    expect(result!.reflection).toBe('Tests are lacking');
+    expect(result?.focus).toBe('Write unit tests');
+    expect(result?.single_deliverable).toBe('Write unit tests');
+    expect(result?.reflection).toBe('Tests are lacking');
   });
 
   test('parses result with single_deliverable field', () => {
@@ -479,9 +502,9 @@ describe('parseStrategistResult', () => {
     });
     const result = parseStrategistResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.single_deliverable).toBe('Deploy the API endpoint');
-    expect(result!.focus).toBe('Deploy the API endpoint');
-    expect(result!.reflection).toBe('API is ready');
+    expect(result?.single_deliverable).toBe('Deploy the API endpoint');
+    expect(result?.focus).toBe('Deploy the API endpoint');
+    expect(result?.reflection).toBe('API is ready');
   });
 
   test('prefers single_deliverable over focus when both present', () => {
@@ -493,8 +516,8 @@ describe('parseStrategistResult', () => {
     });
     const result = parseStrategistResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.single_deliverable).toBe('New deliverable');
-    expect(result!.focus).toBe('New deliverable');
+    expect(result?.single_deliverable).toBe('New deliverable');
+    expect(result?.focus).toBe('New deliverable');
   });
 
   test('returns null when neither focus nor single_deliverable present', () => {
@@ -516,14 +539,14 @@ describe('parseStrategistResult', () => {
   });
 
   test('strips markdown fences', () => {
-    const raw = '```json\n' + JSON.stringify({
+    const raw = `\`\`\`json\n${JSON.stringify({
       goal_operations: [],
       single_deliverable: 'Fenced result',
       reflection: 'Was fenced',
-    }) + '\n```';
+    })}\n\`\`\``;
     const result = parseStrategistResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.single_deliverable).toBe('Fenced result');
+    expect(result?.single_deliverable).toBe('Fenced result');
   });
 
   test('extracts JSON from surrounding prose with single_deliverable', () => {
@@ -535,7 +558,7 @@ describe('parseStrategistResult', () => {
     const raw = `Here is my analysis:\n${json}\nThat's my plan.`;
     const result = parseStrategistResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.single_deliverable).toBe('Embedded result');
+    expect(result?.single_deliverable).toBe('Embedded result');
   });
 
   test('returns null for invalid JSON', () => {
@@ -552,9 +575,9 @@ describe('parseStrategistResult', () => {
     });
     const result = parseStrategistResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.goal_operations).toHaveLength(1);
-    expect(result!.goal_operations[0].action).toBe('add');
-    expect(result!.next_strategy_in).toBe('2h');
+    expect(result?.goal_operations).toHaveLength(1);
+    expect(result?.goal_operations[0].action).toBe('add');
+    expect(result?.next_strategy_in).toBe('2h');
   });
 });
 
@@ -646,7 +669,8 @@ describe('buildContinuousPlannerPrompt', () => {
   test('injects autonomousCyclesNote when provided', () => {
     const { system } = buildContinuousPlannerPrompt({
       ...baseInput,
-      autonomousCyclesNote: '## Autonomous Run Notice\n\nYou have been running autonomously for 10 cycles.',
+      autonomousCyclesNote:
+        '## Autonomous Run Notice\n\nYou have been running autonomously for 10 cycles.',
     });
     expect(system).toContain('## Autonomous Run Notice');
     expect(system).toContain('10 cycles');
@@ -659,7 +683,7 @@ describe('buildContinuousPlannerPrompt', () => {
 
   test('HUMAN COLLABORATION uses proactive language in continuous mode', () => {
     const { system } = buildContinuousPlannerPrompt(baseInput);
-    expect(system).toContain('proactively ask when the human\'s preference matters');
+    expect(system).toContain("proactively ask when the human's preference matters");
     expect(system).not.toContain('you cannot determine on your own');
   });
 
@@ -721,8 +745,8 @@ describe('memory throttling logic', () => {
 
   test('logs on cycle that matches memoryEvery', () => {
     // With memoryEvery=5, logs on cycles 4, 9, 14... (0-indexed, +1 inside)
-    expect(shouldLogMemory(4, 5)).toBe(true);  // cycle 5 (1-indexed)
-    expect(shouldLogMemory(9, 5)).toBe(true);  // cycle 10
+    expect(shouldLogMemory(4, 5)).toBe(true); // cycle 5 (1-indexed)
+    expect(shouldLogMemory(9, 5)).toBe(true); // cycle 10
     expect(shouldLogMemory(14, 5)).toBe(true); // cycle 15
   });
 
@@ -745,20 +769,21 @@ describe('interruptibleSleep concurrency', () => {
   // Since interruptibleSleep is private, we replicate the same Set<AbortController> pattern
   // to verify the concurrency fix works correctly.
 
-  function interruptibleSleep(
-    controllers: Set<AbortController>,
-    ms: number,
-  ): Promise<void> {
+  function interruptibleSleep(controllers: Set<AbortController>, ms: number): Promise<void> {
     const controller = new AbortController();
     controllers.add(controller);
     const { signal } = controller;
 
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => resolve(), ms);
-      signal.addEventListener('abort', () => {
-        clearTimeout(timer);
-        resolve();
-      }, { once: true });
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true }
+      );
     }).finally(() => {
       controllers.delete(controller);
     });
@@ -800,8 +825,12 @@ describe('interruptibleSleep concurrency', () => {
     let resolved1 = false;
     let resolved2 = false;
 
-    const p1 = interruptibleSleep(controllers, 60_000).then(() => { resolved1 = true; });
-    const p2 = interruptibleSleep(controllers, 60_000).then(() => { resolved2 = true; });
+    const p1 = interruptibleSleep(controllers, 60_000).then(() => {
+      resolved1 = true;
+    });
+    const p2 = interruptibleSleep(controllers, 60_000).then(() => {
+      resolved2 = true;
+    });
 
     expect(controllers.size).toBe(2);
 
@@ -925,7 +954,7 @@ describe('computeBotSleepMs — simplified', () => {
   function computeSleep(
     botEvery: string | undefined,
     globalEvery: string,
-    isError: boolean,
+    isError: boolean
   ): number {
     if (isError) {
       const normalMs = parseDurationMs(botEvery ?? globalEvery);
@@ -983,9 +1012,7 @@ describe('planner prompt — human questions injection', () => {
   test('includes pending questions when provided', () => {
     const { system } = buildPlannerPrompt({
       ...baseInput,
-      pendingQuestions: [
-        { question: 'Should I pivot to NFTs?' },
-      ],
+      pendingQuestions: [{ question: 'Should I pivot to NFTs?' }],
     });
     expect(system).toContain('## Pending Questions');
     expect(system).toContain('Should I pivot to NFTs?');
@@ -995,12 +1022,8 @@ describe('planner prompt — human questions injection', () => {
   test('includes both answered and pending questions', () => {
     const { system } = buildPlannerPrompt({
       ...baseInput,
-      answeredQuestions: [
-        { question: 'Q1?', answer: 'A1' },
-      ],
-      pendingQuestions: [
-        { question: 'Q2?' },
-      ],
+      answeredQuestions: [{ question: 'Q1?', answer: 'A1' }],
+      pendingQuestions: [{ question: 'Q2?' }],
     });
     expect(system).toContain('## Human Responses');
     expect(system).toContain('## Pending Questions');
@@ -1038,9 +1061,7 @@ describe('continuous planner prompt — human questions injection', () => {
   test('includes answered questions in continuous mode', () => {
     const { system } = buildContinuousPlannerPrompt({
       ...baseInput,
-      answeredQuestions: [
-        { question: 'Budget?', answer: '$10k' },
-      ],
+      answeredQuestions: [{ question: 'Budget?', answer: '$10k' }],
     });
     expect(system).toContain('## Human Responses');
     expect(system).toContain('Budget?');
@@ -1095,7 +1116,9 @@ describe('per-bot running state logic', () => {
 
 describe('planner result parsing — empty plan + priority none', () => {
   // Replicates the parsePlannerResult logic from AgentLoop
-  function parsePlannerResult(raw: string): { reasoning: string; plan: string[]; priority: string } | null {
+  function parsePlannerResult(
+    raw: string
+  ): { reasoning: string; plan: string[]; priority: string } | null {
     let cleaned = raw.trim();
     if (cleaned.startsWith('```')) {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
@@ -1107,7 +1130,9 @@ describe('planner result parsing — empty plan + priority none', () => {
     try {
       const parsed = JSON.parse(cleaned);
       if (!parsed.reasoning || !Array.isArray(parsed.plan)) return null;
-      const priority = ['high', 'medium', 'low', 'none'].includes(parsed.priority) ? parsed.priority : 'medium';
+      const priority = ['high', 'medium', 'low', 'none'].includes(parsed.priority)
+        ? parsed.priority
+        : 'medium';
       if (parsed.plan.length === 0 && priority !== 'none') return null;
       return { reasoning: String(parsed.reasoning), plan: parsed.plan.map(String), priority };
     } catch {
@@ -1119,8 +1144,8 @@ describe('planner result parsing — empty plan + priority none', () => {
     const raw = '{"reasoning":"Nothing novel to do","plan":[],"priority":"none"}';
     const result = parsePlannerResult(raw);
     expect(result).not.toBeNull();
-    expect(result!.plan).toEqual([]);
-    expect(result!.priority).toBe('none');
+    expect(result?.plan).toEqual([]);
+    expect(result?.priority).toBe('none');
   });
 
   test('rejects empty plan without priority "none"', () => {
@@ -1133,7 +1158,7 @@ describe('planner result parsing — empty plan + priority none', () => {
     const raw = '{"reasoning":"Do stuff","plan":["Step 1"],"priority":"low"}';
     const result = parsePlannerResult(raw);
     expect(result).not.toBeNull();
-    expect(result!.plan).toEqual(['Step 1']);
+    expect(result?.plan).toEqual(['Step 1']);
   });
 
   test('accepts priority "none" with plan', () => {
@@ -1147,7 +1172,7 @@ describe('planner result parsing — empty plan + priority none', () => {
     const raw = '{"reasoning":"Do stuff","plan":["Step 1"],"priority":"urgent"}';
     const result = parsePlannerResult(raw);
     expect(result).not.toBeNull();
-    expect(result!.priority).toBe('medium');
+    expect(result?.priority).toBe('medium');
   });
 });
 
@@ -1156,7 +1181,8 @@ describe('isSimilarSummary — memory dedup', () => {
   function isSimilarSummary(a: string, b: string): boolean {
     if (!a || !b) return false;
     const normalize = (s: string) =>
-      s.replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/gi, '')
+      s
+        .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/gi, '')
         .toLowerCase()
         .replace(/\s+/g, ' ')
         .trim();
@@ -1164,7 +1190,9 @@ describe('isSimilarSummary — memory dedup', () => {
   }
 
   test('detects identical summaries', () => {
-    expect(isSimilarSummary('Reviewed goals and saved memory.', 'Reviewed goals and saved memory.')).toBe(true);
+    expect(
+      isSimilarSummary('Reviewed goals and saved memory.', 'Reviewed goals and saved memory.')
+    ).toBe(true);
   });
 
   test('ignores timestamp differences', () => {
@@ -1174,7 +1202,9 @@ describe('isSimilarSummary — memory dedup', () => {
   });
 
   test('ignores whitespace differences', () => {
-    expect(isSimilarSummary('Reviewed  goals  and  saved.', 'Reviewed goals and saved.')).toBe(true);
+    expect(isSimilarSummary('Reviewed  goals  and  saved.', 'Reviewed goals and saved.')).toBe(
+      true
+    );
   });
 
   test('returns false for different summaries', () => {
@@ -1189,7 +1219,9 @@ describe('isSimilarSummary — memory dedup', () => {
 
 describe('repetition tracking', () => {
   // Replicates the buildRecentActionsDigest pattern
-  function buildDigest(actions: Array<{ timestamp: number; planSummary: string; tools: string[] }>): string {
+  function buildDigest(
+    actions: Array<{ timestamp: number; planSummary: string; tools: string[] }>
+  ): string {
     if (actions.length === 0) return '';
     const now = Date.now();
     const lines: string[] = ['## Recent Actions (last 24h)'];
@@ -1223,7 +1255,11 @@ describe('repetition tracking', () => {
   test('lists recent actions without repeat tags', () => {
     const now = Date.now();
     const digest = buildDigest([
-      { timestamp: now - 2 * 3_600_000, planSummary: 'Research DeFi trends', tools: ['web_search'] },
+      {
+        timestamp: now - 2 * 3_600_000,
+        planSummary: 'Research DeFi trends',
+        tools: ['web_search'],
+      },
       { timestamp: now - 1 * 3_600_000, planSummary: 'Update goals', tools: ['manage_goals'] },
     ]);
     expect(digest).toContain('Research DeFi trends');
@@ -1309,12 +1345,13 @@ describe('cyclesSinceAskHuman tracking', () => {
   function trackCycle(
     cyclesSinceAskHuman: number,
     toolCalls: { name: string }[],
-    isIdle: boolean,
+    isIdle: boolean
   ): number {
     const usedAskHuman = toolCalls.some((t) => t.name === 'ask_human');
     if (usedAskHuman) {
       return 0;
-    } else if (!isIdle) {
+    }
+    if (!isIdle) {
       return cyclesSinceAskHuman + 1;
     }
     return cyclesSinceAskHuman;
@@ -1356,12 +1393,14 @@ describe('cyclesSinceAskHuman tracking', () => {
 describe('config schema — karma and idleSuppression', () => {
   test('karma config has sensible defaults', () => {
     const { z } = require('zod');
-    const KarmaConfigSchema = z.object({
-      enabled: z.boolean().default(true),
-      baseDir: z.string().default('./data/karma'),
-      initialScore: z.number().default(50),
-      decayDays: z.number().default(30),
-    }).default({});
+    const KarmaConfigSchema = z
+      .object({
+        enabled: z.boolean().default(true),
+        baseDir: z.string().default('./data/karma'),
+        initialScore: z.number().default(50),
+        decayDays: z.number().default(30),
+      })
+      .default({});
     const result = KarmaConfigSchema.parse({});
     expect(result.enabled).toBe(true);
     expect(result.baseDir).toBe('./data/karma');
@@ -1471,7 +1510,9 @@ describe('buildExecutorPrompt — file tree context', () => {
 
 describe('isRetryableError', () => {
   test('classifies timeout errors as retryable', () => {
-    expect(isRetryableError(new Error('Executor phase timed out after 193660ms (session timeout guard)'))).toBe(true);
+    expect(
+      isRetryableError(new Error('Executor phase timed out after 193660ms (session timeout guard)'))
+    ).toBe(true);
     expect(isRetryableError(new Error('Agent loop timed out after 300000ms'))).toBe(true);
     expect(isRetryableError('Request timeout')).toBe(true);
   });
@@ -1601,9 +1642,9 @@ describe('staggered bot startup', () => {
     registerBot('bot-b');
     registerBot('bot-c');
 
-    expect(botSchedules.get('bot-a')!.nextRunAt).toBe(now);
-    expect(botSchedules.get('bot-b')!.nextRunAt).toBe(now + 30_000);
-    expect(botSchedules.get('bot-c')!.nextRunAt).toBe(now + 60_000);
+    expect(botSchedules.get('bot-a')?.nextRunAt).toBe(now);
+    expect(botSchedules.get('bot-b')?.nextRunAt).toBe(now + 30_000);
+    expect(botSchedules.get('bot-c')?.nextRunAt).toBe(now + 60_000);
   });
 
   test('re-registering existing bot does not change stagger', () => {
@@ -1618,11 +1659,11 @@ describe('staggered bot startup', () => {
 
     registerBot('bot-a');
     registerBot('bot-b');
-    const originalB = botSchedules.get('bot-b')!.nextRunAt;
+    const originalB = botSchedules.get('bot-b')?.nextRunAt;
 
     // Re-register should be no-op
     registerBot('bot-b');
-    expect(botSchedules.get('bot-b')!.nextRunAt).toBe(originalB);
+    expect(botSchedules.get('bot-b')?.nextRunAt).toBe(originalB);
   });
 
   test('stagger accounts for already-registered bots when adding later', () => {
@@ -1639,7 +1680,7 @@ describe('staggered bot startup', () => {
     registerBot('bot-b');
     // Later, a third bot joins — it should get offset based on current size (2)
     registerBot('bot-c');
-    expect(botSchedules.get('bot-c')!.nextRunAt).toBe(now + 60_000);
+    expect(botSchedules.get('bot-c')?.nextRunAt).toBe(now + 60_000);
   });
 });
 
@@ -1679,7 +1720,9 @@ describe('concurrency semaphore', () => {
 
     // Third acquire should queue
     let thirdResolved = false;
-    const p3 = sem.acquire().then(() => { thirdResolved = true; });
+    const p3 = sem.acquire().then(() => {
+      thirdResolved = true;
+    });
     // Give microtask a chance
     await new Promise((r) => setTimeout(r, 10));
     expect(thirdResolved).toBe(false);
@@ -1698,8 +1741,12 @@ describe('concurrency semaphore', () => {
 
     await sem.acquire();
 
-    const p1 = sem.acquire().then(() => { order.push('first'); });
-    const p2 = sem.acquire().then(() => { order.push('second'); });
+    const p1 = sem.acquire().then(() => {
+      order.push('first');
+    });
+    const p2 = sem.acquire().then(() => {
+      order.push('second');
+    });
 
     sem.release();
     await p1;

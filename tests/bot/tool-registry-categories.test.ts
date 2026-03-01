@@ -1,11 +1,11 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import {
+  ALWAYS_INCLUDED_TOOLS,
   TOOL_CATEGORIES,
   TOOL_CATEGORY_NAMES,
   TOOL_TO_CATEGORY,
-  ALWAYS_INCLUDED_TOOLS,
-  ToolRegistry,
   type ToolCategory,
+  ToolRegistry,
 } from '../../src/bot/tool-registry';
 import type { BotContext } from '../../src/bot/types';
 import type { Tool, ToolDefinition } from '../../src/tools/types';
@@ -32,7 +32,10 @@ function createMockTool(name: string): Tool {
   };
 }
 
-function createMockContext(tools: Tool[], bots: { id: string; disabledTools?: string[] }[] = [{ id: 'bot-1' }]): BotContext {
+function createMockContext(
+  tools: Tool[],
+  bots: { id: string; disabledTools?: string[] }[] = [{ id: 'bot-1' }]
+): BotContext {
   return {
     config: {
       bots,
@@ -91,7 +94,10 @@ describe('Tool category constants', () => {
 // ─── getDefinitionsByCategories ───
 
 describe('ToolRegistry.getDefinitionsByCategories', () => {
-  function setupRegistry(toolNames: string[], bots: { id: string; disabledTools?: string[] }[] = [{ id: 'bot-1' }]) {
+  function setupRegistry(
+    toolNames: string[],
+    bots: { id: string; disabledTools?: string[] }[] = [{ id: 'bot-1' }]
+  ) {
     const tools = toolNames.map(createMockTool);
     const ctx = createMockContext(tools, bots);
     const registry = new ToolRegistry(ctx);
@@ -101,7 +107,12 @@ describe('ToolRegistry.getDefinitionsByCategories', () => {
   test('undefined categories returns all tools (fallback)', () => {
     const { registry } = setupRegistry(['web_search', 'exec', 'file_read', 'ask_human']);
     const defs = registry.getDefinitionsByCategories(undefined, 'bot-1');
-    expect(defs.map((d) => d.function.name).sort()).toEqual(['ask_human', 'exec', 'file_read', 'web_search']);
+    expect(defs.map((d) => d.function.name).sort()).toEqual([
+      'ask_human',
+      'exec',
+      'file_read',
+      'web_search',
+    ]);
   });
 
   test('empty categories array returns all tools (fallback)', () => {
@@ -111,15 +122,36 @@ describe('ToolRegistry.getDefinitionsByCategories', () => {
   });
 
   test('selecting ["web"] returns only web tools + always-included', () => {
-    const { registry } = setupRegistry(['web_search', 'web_fetch', 'exec', 'file_read', 'get_datetime', 'ask_human', 'ask_permission']);
+    const { registry } = setupRegistry([
+      'web_search',
+      'web_fetch',
+      'exec',
+      'file_read',
+      'get_datetime',
+      'ask_human',
+      'ask_permission',
+    ]);
     const defs = registry.getDefinitionsByCategories(['web'], 'bot-1');
     const names = defs.map((d) => d.function.name).sort();
     // web_search, web_fetch (web category) + get_datetime, ask_human, ask_permission (always-included)
-    expect(names).toEqual(['ask_human', 'ask_permission', 'get_datetime', 'web_fetch', 'web_search']);
+    expect(names).toEqual([
+      'ask_human',
+      'ask_permission',
+      'get_datetime',
+      'web_fetch',
+      'web_search',
+    ]);
   });
 
   test('selecting ["files", "system"] returns files + system tools + always-included', () => {
-    const { registry } = setupRegistry(['file_read', 'file_write', 'exec', 'get_datetime', 'web_search', 'ask_human']);
+    const { registry } = setupRegistry([
+      'file_read',
+      'file_write',
+      'exec',
+      'get_datetime',
+      'web_search',
+      'ask_human',
+    ]);
     const defs = registry.getDefinitionsByCategories(['files', 'system'], 'bot-1');
     const names = defs.map((d) => d.function.name).sort();
     // file_read, file_write (files), exec, get_datetime (system), ask_human (always-included)
@@ -129,7 +161,13 @@ describe('ToolRegistry.getDefinitionsByCategories', () => {
   test('ALWAYS_INCLUDED_TOOLS are present even when their category is not selected', () => {
     // get_datetime is in "system", ask_human & ask_permission are in "communication"
     // Select only "web" — always-included should still appear
-    const { registry } = setupRegistry(['web_search', 'get_datetime', 'ask_human', 'ask_permission', 'exec']);
+    const { registry } = setupRegistry([
+      'web_search',
+      'get_datetime',
+      'ask_human',
+      'ask_permission',
+      'exec',
+    ]);
     const defs = registry.getDefinitionsByCategories(['web'], 'bot-1');
     const names = new Set(defs.map((d) => d.function.name));
     expect(names.has('get_datetime')).toBe(true);
@@ -153,7 +191,7 @@ describe('ToolRegistry.getDefinitionsByCategories', () => {
   test('respects disabledTools on top of category filtering', () => {
     const { registry } = setupRegistry(
       ['web_search', 'web_fetch', 'get_datetime', 'ask_human'],
-      [{ id: 'bot-1', disabledTools: ['web_fetch'] }],
+      [{ id: 'bot-1', disabledTools: ['web_fetch'] }]
     );
     const defs = registry.getDefinitionsByCategories(['web'], 'bot-1');
     const names = defs.map((d) => d.function.name);
@@ -179,7 +217,7 @@ describe('parsePlannerResult toolCategories', () => {
     });
     const result = parsePlannerResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.toolCategories).toEqual(['web', 'memory']);
+    expect(result?.toolCategories).toEqual(['web', 'memory']);
   });
 
   test('filters out invalid category names', () => {
@@ -191,7 +229,7 @@ describe('parsePlannerResult toolCategories', () => {
     });
     const result = parsePlannerResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.toolCategories).toEqual(['web', 'soul']);
+    expect(result?.toolCategories).toEqual(['web', 'soul']);
   });
 
   test('returns undefined when toolCategories is absent', () => {
@@ -202,7 +240,7 @@ describe('parsePlannerResult toolCategories', () => {
     });
     const result = parsePlannerResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.toolCategories).toBeUndefined();
+    expect(result?.toolCategories).toBeUndefined();
   });
 
   test('returns undefined when toolCategories is empty array', () => {
@@ -214,7 +252,7 @@ describe('parsePlannerResult toolCategories', () => {
     });
     const result = parsePlannerResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.toolCategories).toBeUndefined();
+    expect(result?.toolCategories).toBeUndefined();
   });
 
   test('returns undefined when all categories are invalid', () => {
@@ -226,7 +264,7 @@ describe('parsePlannerResult toolCategories', () => {
     });
     const result = parsePlannerResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.toolCategories).toBeUndefined();
+    expect(result?.toolCategories).toBeUndefined();
   });
 
   test('handles non-array toolCategories gracefully', () => {
@@ -238,14 +276,17 @@ describe('parsePlannerResult toolCategories', () => {
     });
     const result = parsePlannerResult(raw, noopLogger);
     expect(result).not.toBeNull();
-    expect(result!.toolCategories).toBeUndefined();
+    expect(result?.toolCategories).toBeUndefined();
   });
 });
 
 // ─── Planner prompt tool category section ───
 
 describe('buildPlannerPrompt toolCategoryList', () => {
-  const { buildPlannerPrompt, buildContinuousPlannerPrompt } = require('../../src/bot/agent-loop-prompts');
+  const {
+    buildPlannerPrompt,
+    buildContinuousPlannerPrompt,
+  } = require('../../src/bot/agent-loop-prompts');
 
   const baseInput = {
     identity: 'Test bot',
@@ -259,7 +300,10 @@ describe('buildPlannerPrompt toolCategoryList', () => {
   };
 
   test('includes category section when toolCategoryList is provided', () => {
-    const { system } = buildPlannerPrompt({ ...baseInput, toolCategoryList: ['web', 'memory', 'files'] });
+    const { system } = buildPlannerPrompt({
+      ...baseInput,
+      toolCategoryList: ['web', 'memory', 'files'],
+    });
     expect(system).toContain('## Tool Categories');
     expect(system).toContain('**web**');
     expect(system).toContain('**memory**');
@@ -288,7 +332,10 @@ describe('buildPlannerPrompt toolCategoryList', () => {
   });
 
   test('continuous planner also includes category section', () => {
-    const { system } = buildContinuousPlannerPrompt({ ...baseInput, toolCategoryList: ['soul', 'communication'] });
+    const { system } = buildContinuousPlannerPrompt({
+      ...baseInput,
+      toolCategoryList: ['soul', 'communication'],
+    });
     expect(system).toContain('## Tool Categories');
     expect(system).toContain('**soul**');
     expect(system).toContain('**communication**');

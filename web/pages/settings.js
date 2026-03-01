@@ -203,7 +203,7 @@ export async function renderSettings(el) {
   `;
 
   // --- Skill Folders UI logic ---
-  let currentSfPaths = [...sfPaths];
+  const currentSfPaths = [...sfPaths];
 
   function renderSfList() {
     const listEl = document.getElementById('sf-list');
@@ -234,7 +234,7 @@ export async function renderSettings(el) {
     // Wire remove buttons
     listEl.querySelectorAll('.sf-remove-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
-        currentSfPaths.splice(parseInt(btn.dataset.idx, 10), 1);
+        currentSfPaths.splice(Number.parseInt(btn.dataset.idx, 10), 1);
         renderSfList();
       });
     });
@@ -258,7 +258,10 @@ export async function renderSettings(el) {
     btn.disabled = true;
     btn.textContent = 'Saving...';
 
-    const res = await api('/api/settings/skills-folders', { method: 'PATCH', body: { paths: currentSfPaths } });
+    const res = await api('/api/settings/skills-folders', {
+      method: 'PATCH',
+      body: { paths: currentSfPaths },
+    });
 
     btn.disabled = false;
     btn.textContent = 'Save Folders';
@@ -269,7 +272,9 @@ export async function renderSettings(el) {
     } else {
       status.textContent = 'Saved (restart to apply)';
       status.style.color = 'var(--green)';
-      setTimeout(() => { status.textContent = ''; }, 4000);
+      setTimeout(() => {
+        status.textContent = '';
+      }, 4000);
     }
   });
 
@@ -284,36 +289,36 @@ export async function renderSettings(el) {
 
     const sessionPatch = {
       groupActivation: form.groupActivation.value,
-      replyWindow: parseInt(form.replyWindow.value, 10),
+      replyWindow: Number.parseInt(form.replyWindow.value, 10),
       forumTopicIsolation: form.forumTopicIsolation.checked,
       resetPolicy: {
         daily: {
           enabled: form.dailyEnabled.checked,
-          hour: parseInt(form.dailyHour.value, 10),
+          hour: Number.parseInt(form.dailyHour.value, 10),
         },
         idle: {
           enabled: form.idleEnabled.checked,
-          minutes: parseInt(form.idleMinutes.value, 10),
+          minutes: Number.parseInt(form.idleMinutes.value, 10),
         },
       },
       llmRelevanceCheck: {
         enabled: form.rlcEnabled.checked,
-        temperature: parseFloat(form.rlcTemperature.value),
-        timeout: parseInt(form.rlcTimeout.value, 10),
-        contextMessages: parseInt(form.rlcContextMessages.value, 10),
+        temperature: Number.parseFloat(form.rlcTemperature.value),
+        timeout: Number.parseInt(form.rlcTimeout.value, 10),
+        contextMessages: Number.parseInt(form.rlcContextMessages.value, 10),
         broadcastCheck: form.rlcBroadcastCheck.checked,
       },
     };
 
     const collabPatch = {
       enabled: form.collabEnabled.checked,
-      maxRounds: parseInt(form.collabMaxRounds.value, 10),
-      cooldownMs: parseInt(form.collabCooldownMs.value, 10),
-      internalQueryTimeout: parseInt(form.collabInternalQueryTimeout.value, 10),
+      maxRounds: Number.parseInt(form.collabMaxRounds.value, 10),
+      cooldownMs: Number.parseInt(form.collabCooldownMs.value, 10),
+      internalQueryTimeout: Number.parseInt(form.collabInternalQueryTimeout.value, 10),
       enableTargetTools: form.collabEnableTargetTools.checked,
-      maxConverseTurns: parseInt(form.collabMaxConverseTurns.value, 10),
-      sessionTtlMs: parseInt(form.collabSessionTtlMs.value, 10),
-      visibleMaxTurns: parseInt(form.collabVisibleMaxTurns.value, 10),
+      maxConverseTurns: Number.parseInt(form.collabMaxConverseTurns.value, 10),
+      sessionTtlMs: Number.parseInt(form.collabSessionTtlMs.value, 10),
+      visibleMaxTurns: Number.parseInt(form.collabVisibleMaxTurns.value, 10),
     };
 
     const [result, collabResult] = await Promise.all([
@@ -330,7 +335,9 @@ export async function renderSettings(el) {
     } else {
       status.textContent = 'Saved';
       status.style.color = 'var(--green)';
-      setTimeout(() => { status.textContent = ''; }, 3000);
+      setTimeout(() => {
+        status.textContent = '';
+      }, 3000);
     }
   });
 }

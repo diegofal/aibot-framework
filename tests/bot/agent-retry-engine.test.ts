@@ -1,12 +1,12 @@
-import { describe, test, expect, beforeEach, vi } from 'bun:test';
+import { beforeEach, describe, expect, test, vi } from 'bun:test';
+import type { AgentLoopResult } from '../../src/bot/agent-loop';
 import {
-  isRetryableError,
   computeRetryDelay,
-  resolveRetryConfig,
   executeSingleBotWithRetry,
+  isRetryableError,
+  resolveRetryConfig,
 } from '../../src/bot/agent-retry-engine';
 import type { AgentLoopRetryConfig, BotConfig } from '../../src/config';
-import type { AgentLoopResult } from '../../src/bot/agent-loop';
 import type { Logger } from '../../src/logger';
 
 const noopLogger: Logger = {
@@ -66,13 +66,12 @@ const defaultRetryConfig: AgentLoopRetryConfig = {
 // ---------------------------------------------------------------------------
 describe('isRetryableError', () => {
   describe('timeout patterns', () => {
-    test.each([
-      'Request timed out',
-      'Connection TIMEOUT after 30s',
-      'ETIMEDOUT: connect failed',
-    ])('returns true for timeout: %s', (msg) => {
-      expect(isRetryableError(new Error(msg))).toBe(true);
-    });
+    test.each(['Request timed out', 'Connection TIMEOUT after 30s', 'ETIMEDOUT: connect failed'])(
+      'returns true for timeout: %s',
+      (msg) => {
+        expect(isRetryableError(new Error(msg))).toBe(true);
+      }
+    );
   });
 
   describe('network patterns', () => {
@@ -320,7 +319,11 @@ describe('executeSingleBotWithRetry', () => {
     mockOpts.executeFn.mockResolvedValueOnce(successResult);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     expect(result.status).toBe('completed');
@@ -335,12 +338,14 @@ describe('executeSingleBotWithRetry', () => {
     const errorResult = makeErrorResult('Connection ETIMEDOUT');
     const successResult = makeResult();
 
-    mockOpts.executeFn
-      .mockResolvedValueOnce(errorResult)
-      .mockResolvedValueOnce(successResult);
+    mockOpts.executeFn.mockResolvedValueOnce(errorResult).mockResolvedValueOnce(successResult);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     expect(result.status).toBe('completed');
@@ -357,7 +362,11 @@ describe('executeSingleBotWithRetry', () => {
     mockOpts.executeFn.mockResolvedValueOnce(authError);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     expect(result.status).toBe('error');
@@ -373,7 +382,11 @@ describe('executeSingleBotWithRetry', () => {
     mockOpts.executeFn.mockResolvedValue(errorResult);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     expect(result.status).toBe('error');
@@ -397,7 +410,11 @@ describe('executeSingleBotWithRetry', () => {
     mockOpts.executeFn.mockResolvedValueOnce(errorResult);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     // First attempt: bot running, execute returns error
@@ -418,7 +435,11 @@ describe('executeSingleBotWithRetry', () => {
     mockOpts.executeFn.mockResolvedValueOnce(errorResult);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     // lastResult exists from attempt 0, so it returns that instead of default skipped
@@ -431,13 +452,11 @@ describe('executeSingleBotWithRetry', () => {
     const successResult = makeResult();
 
     mockOpts.executeFn
-      .mockResolvedValueOnce(errorResult)   // attempt 0
-      .mockResolvedValueOnce(errorResult)   // attempt 1 (intermediate)
+      .mockResolvedValueOnce(errorResult) // attempt 0
+      .mockResolvedValueOnce(errorResult) // attempt 1 (intermediate)
       .mockResolvedValueOnce(successResult); // attempt 2 (last)
 
-    await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
-    );
+    await executeSingleBotWithRetry('bot1', botConfig, retryConfig, noopLogger, mockOpts);
 
     // Check the suppressSideEffects argument per call
     // attempt 0: suppressSideEffects = (0 < 2 && 0 > 0) = false
@@ -452,9 +471,7 @@ describe('executeSingleBotWithRetry', () => {
     const errorResult = makeErrorResult('fetch failed');
     mockOpts.executeFn.mockResolvedValue(errorResult);
 
-    await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
-    );
+    await executeSingleBotWithRetry('bot1', botConfig, retryConfig, noopLogger, mockOpts);
 
     // After exhaustion: retryCount = maxRetries
     expect(schedule.retryCount).toBe(2);
@@ -467,7 +484,11 @@ describe('executeSingleBotWithRetry', () => {
     mockOpts.executeFn.mockResolvedValueOnce(successResult);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     expect(result.status).toBe('completed');
@@ -479,12 +500,16 @@ describe('executeSingleBotWithRetry', () => {
     const successResult = makeResult();
 
     mockOpts.executeFn
-      .mockResolvedValueOnce(errorResult)   // attempt 0
-      .mockResolvedValueOnce(errorResult)   // attempt 1
+      .mockResolvedValueOnce(errorResult) // attempt 0
+      .mockResolvedValueOnce(errorResult) // attempt 1
       .mockResolvedValueOnce(successResult); // attempt 2
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     expect(result.status).toBe('completed');
@@ -499,7 +524,11 @@ describe('executeSingleBotWithRetry', () => {
     mockOpts.executeFn.mockResolvedValueOnce(errorResult);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     expect(result.status).toBe('error');
@@ -512,7 +541,11 @@ describe('executeSingleBotWithRetry', () => {
     mockOpts.isBotRunning.mockReturnValue(false);
 
     const result = await executeSingleBotWithRetry(
-      'bot1', botConfig, retryConfig, noopLogger, mockOpts,
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
     );
 
     expect(result.status).toBe('skipped');

@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
-import type { OllamaClient } from '../ollama';
 import type { Logger } from '../logger';
-import { serializeEmbedding, deserializeEmbedding } from './schema';
+import type { OllamaClient } from '../ollama';
+import { deserializeEmbedding, serializeEmbedding } from './schema';
 
 export interface EmbeddingService {
   getEmbedding(hash: string, text: string): Promise<number[]>;
@@ -13,14 +13,14 @@ export function createEmbeddingService(
   ollama: OllamaClient,
   model: string,
   concurrency: number,
-  logger: Logger,
+  logger: Logger
 ): EmbeddingService {
   const getCached = db.prepare<{ embedding: Buffer }, [string]>(
     'SELECT embedding FROM embedding_cache WHERE content_hash = ?'
   );
 
   const insertCache = db.prepare(
-    'INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, model, created_at) VALUES (?, ?, ?, datetime(\'now\'))'
+    "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, model, created_at) VALUES (?, ?, ?, datetime('now'))"
   );
 
   async function getEmbedding(hash: string, text: string): Promise<number[]> {
@@ -41,7 +41,9 @@ export function createEmbeddingService(
     return embedding;
   }
 
-  async function embedBatch(items: { hash: string; text: string }[]): Promise<Map<string, number[]>> {
+  async function embedBatch(
+    items: { hash: string; text: string }[]
+  ): Promise<Map<string, number[]>> {
     const results = new Map<string, number[]>();
     let running = 0;
     let idx = 0;

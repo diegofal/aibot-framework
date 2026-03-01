@@ -1,6 +1,6 @@
-import type { Logger } from '../logger';
 import type { LLMClient } from '../core/llm-client';
-import type { PlannerResult, ContinuousPlannerResult } from './agent-loop-prompts';
+import type { Logger } from '../logger';
+import type { ContinuousPlannerResult, PlannerResult } from './agent-loop-prompts';
 import { parseLLMJson } from './llm-json-parser';
 import { TOOL_CATEGORY_NAMES } from './tool-registry';
 
@@ -9,7 +9,10 @@ import { TOOL_CATEGORY_NAMES } from './tool-registry';
  */
 const validCategorySet = new Set<string>(TOOL_CATEGORY_NAMES);
 
-export function parsePlannerResult(raw: string, logger: Pick<Logger, 'warn'>): PlannerResult | null {
+export function parsePlannerResult(
+  raw: string,
+  logger: Pick<Logger, 'warn'>
+): PlannerResult | null {
   return parseLLMJson<PlannerResult>(raw, logger, {
     extractPattern: /\{[\s\S]*"plan"[\s\S]*\}/,
     validate: (parsed) => {
@@ -22,8 +25,9 @@ export function parsePlannerResult(raw: string, logger: Pick<Logger, 'warn'>): P
       // Extract and validate toolCategories
       let toolCategories: string[] | undefined;
       if (Array.isArray(parsed.toolCategories)) {
-        const valid = parsed.toolCategories
-          .filter((c: unknown): c is string => typeof c === 'string' && validCategorySet.has(c));
+        const valid = parsed.toolCategories.filter(
+          (c: unknown): c is string => typeof c === 'string' && validCategorySet.has(c)
+        );
         toolCategories = valid.length > 0 ? valid : undefined;
       }
 
@@ -47,7 +51,7 @@ export async function runPlannerWithRetry(
   plannerInput: { system: string; prompt: string },
   model: string,
   logger: Logger,
-  maxRetries = 1,
+  maxRetries = 1
 ): Promise<PlannerResult> {
   const temperatures = [0.3, 0];
 
@@ -69,7 +73,7 @@ export async function runPlannerWithRetry(
     if (attempt < maxRetries) {
       logger.warn(
         { attempt, raw: raw.slice(0, 200) },
-        'Agent loop: planner failed to parse, retrying with temperature 0',
+        'Agent loop: planner failed to parse, retrying with temperature 0'
       );
     }
   }

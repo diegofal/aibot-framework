@@ -1,6 +1,6 @@
-import type { Tool, ToolResult } from './types';
 import type { Logger } from '../logger';
-import { registerProcess, type ProcessToolConfig } from './process';
+import { type ProcessToolConfig, registerProcess } from './process';
+import type { Tool, ToolResult } from './types';
 
 export interface ExecToolConfig {
   timeout?: number;
@@ -13,10 +13,10 @@ export interface ExecToolConfig {
 
 /** Commands that are always blocked regardless of config */
 const BUILTIN_DENIED = [
-  /\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?\/\s*$/,  // rm -rf / or rm /
+  /\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?\/\s*$/, // rm -rf / or rm /
   /\bmkfs\b/,
   /\bdd\s+.*of=\/dev\//,
-  /:(){ :|:& };:/,                                // fork bomb
+  /:(){ :|:& };:/, // fork bomb
   /\b>\s*\/dev\/sd[a-z]/,
   /\bchmod\s+(-[a-zA-Z]+\s+)?777\s+\//,
   /\bshutdown\b/,
@@ -70,11 +70,13 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
             },
             workdir: {
               type: 'string',
-              description: 'Working directory for the command. Optional, defaults to the bot\'s working directory.',
+              description:
+                "Working directory for the command. Optional, defaults to the bot's working directory.",
             },
             background: {
               type: 'boolean',
-              description: 'If true, run the command in background and return a session ID. Use the process tool to poll output, send input, or kill it. Default: false.',
+              description:
+                'If true, run the command in background and return a session ID. Use the process tool to poll output, send input, or kill it. Default: false.',
             },
           },
           required: ['command'],
@@ -82,10 +84,7 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const command = String(args.command ?? '').trim();
       if (!command) {
         return { success: false, content: 'Missing required parameter: command' };
@@ -124,7 +123,7 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
             command,
             proc,
             config.processToolConfig,
-            logger,
+            logger
           );
 
           return {
@@ -150,7 +149,9 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
 
         // Enforce timeout
         const timer = setTimeout(() => {
-          try { proc.kill(); } catch {}
+          try {
+            proc.kill();
+          } catch {}
         }, timeout);
 
         const [stdout, stderr] = await Promise.all([
@@ -168,15 +169,12 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
 
         // Truncate if too long
         if (output.length > maxOutput) {
-          output = output.slice(0, maxOutput) + `\n... (truncated, ${output.length} total chars)`;
+          output = `${output.slice(0, maxOutput)}\n... (truncated, ${output.length} total chars)`;
         }
 
         const content = `Exit code: ${exitCode}\n\n${output}`;
 
-        logger.info(
-          { command, exitCode, outputLength: output.length },
-          'exec: command completed'
-        );
+        logger.info({ command, exitCode, outputLength: output.length }, 'exec: command completed');
 
         return { success: exitCode === 0, content };
       } catch (error) {

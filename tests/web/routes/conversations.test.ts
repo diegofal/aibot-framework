@@ -1,11 +1,11 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
-import { conversationsRoutes } from '../../../src/web/routes/conversations';
+import type { Config } from '../../../src/config';
 import { ConversationsService } from '../../../src/conversations/service';
 import type { Logger } from '../../../src/logger';
-import type { Config } from '../../../src/config';
+import { conversationsRoutes } from '../../../src/web/routes/conversations';
 
 const TEST_DIR = join(import.meta.dir, '.tmp-conversations-routes-test');
 
@@ -44,7 +44,12 @@ function makeDeps(overrides?: Record<string, unknown>) {
   const mockProductionsService = {
     getStats: () => ({ total: 5, approved: 3, rejected: 1, unreviewed: 1, avgRating: 4 }),
     getChangelog: () => [
-      { timestamp: '2026-02-20T10:00:00Z', action: 'create', path: '/output/file.md', description: 'Wrote file' },
+      {
+        timestamp: '2026-02-20T10:00:00Z',
+        action: 'create',
+        path: '/output/file.md',
+        description: 'Wrote file',
+      },
     ],
   };
 
@@ -227,6 +232,80 @@ describe('conversations routes', () => {
     });
   });
 
+  describe('DELETE /:botId (all for bot)', () => {
+    test('deletes all conversations for a bot', async () => {
+      const deps = makeDeps();
+      const app = makeApp(deps);
+
+      deps.conversationsService.createConversation('bot1', 'general', 'C1');
+      deps.conversationsService.createConversation('bot1', 'general', 'C2');
+
+      const res = await app.request('http://localhost/api/conversations/bot1', {
+        method: 'DELETE',
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.ok).toBe(true);
+      expect(data.deleted).toBe(2);
+
+      // Verify they're gone
+      const listRes = await app.request('http://localhost/api/conversations/bot1');
+      const listData = await listRes.json();
+      expect(listData).toEqual([]);
+    });
+
+    test('returns 0 deleted for bot with no conversations', async () => {
+      const deps = makeDeps();
+      const app = makeApp(deps);
+
+      const res = await app.request('http://localhost/api/conversations/bot1', {
+        method: 'DELETE',
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.ok).toBe(true);
+      expect(data.deleted).toBe(0);
+    });
+  });
+
+  describe('DELETE / (all conversations)', () => {
+    test('deletes all conversations across all bots', async () => {
+      const deps = makeDeps();
+      const app = makeApp(deps);
+
+      deps.conversationsService.createConversation('bot1', 'general', 'C1');
+      deps.conversationsService.createConversation('bot1', 'general', 'C2');
+      deps.conversationsService.createConversation('bot2', 'general', 'C3');
+
+      const res = await app.request('http://localhost/api/conversations', {
+        method: 'DELETE',
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.ok).toBe(true);
+      expect(data.deleted).toBe(3);
+
+      // Verify all gone
+      const listRes1 = await app.request('http://localhost/api/conversations/bot1');
+      expect(await listRes1.json()).toEqual([]);
+      const listRes2 = await app.request('http://localhost/api/conversations/bot2');
+      expect(await listRes2.json()).toEqual([]);
+    });
+
+    test('returns 0 deleted when no conversations exist', async () => {
+      const deps = makeDeps();
+      const app = makeApp(deps);
+
+      const res = await app.request('http://localhost/api/conversations', {
+        method: 'DELETE',
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.ok).toBe(true);
+      expect(data.deleted).toBe(0);
+    });
+  });
+
   describe('POST /:botId/:id/messages', () => {
     test('adds human message and returns it', async () => {
       const deps = makeDeps();
@@ -239,11 +318,14 @@ describe('conversations routes', () => {
 
       const convo = deps.conversationsService.createConversation('bot1');
 
-      const res = await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Hello bot' }),
-      });
+      const res = await app.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Hello bot' }),
+        }
+      );
       expect(res.status).toBe(200);
       const data = await res.json();
       expect(data.message.role).toBe('human');
@@ -256,11 +338,14 @@ describe('conversations routes', () => {
 
       const convo = deps.conversationsService.createConversation('bot1');
 
-      const res = await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
+      const res = await app.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        }
+      );
       expect(res.status).toBe(400);
     });
 
@@ -268,11 +353,14 @@ describe('conversations routes', () => {
       const deps = makeDeps();
       const app = makeApp(deps);
 
-      const res = await app.request('http://localhost/api/conversations/bot1/nonexistent/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Hello' }),
-      });
+      const res = await app.request(
+        'http://localhost/api/conversations/bot1/nonexistent/messages',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Hello' }),
+        }
+      );
       expect(res.status).toBe(404);
     });
   });
@@ -314,19 +402,27 @@ describe('conversations routes', () => {
         return true;
       });
 
-      const convo = deps.conversationsService.createConversation('bot1', 'inbox', 'What strategy?', {
-        askHumanQuestionId: 'q-test-123',
-        inboxStatus: 'pending',
-      });
+      const convo = deps.conversationsService.createConversation(
+        'bot1',
+        'inbox',
+        'What strategy?',
+        {
+          askHumanQuestionId: 'q-test-123',
+          inboxStatus: 'pending',
+        }
+      );
       deps.conversationsService.addMessage('bot1', convo.id, 'bot', 'What strategy should I use?');
 
       const app = makeApp(deps);
 
-      const res = await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Go with DeFi' }),
-      });
+      const res = await app.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Go with DeFi' }),
+        }
+      );
       expect(res.status).toBe(200);
       const data = await res.json();
       expect(data.inboxResolved).toBe(true);
@@ -343,7 +439,9 @@ describe('conversations routes', () => {
       expect(botMsgs[1].content).toBe('Thanks for the direction!');
 
       // Status should be back to idle after completion
-      const statusRes = await app.request(`http://localhost/api/conversations/bot1/${convo.id}/status`);
+      const statusRes = await app.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/status`
+      );
       const statusData = await statusRes.json();
       expect(statusData.status).toBe('idle');
       expect(statusData.lastBotMessage.content).toBe('Thanks for the direction!');
@@ -364,11 +462,14 @@ describe('conversations routes', () => {
 
       const app = makeApp(deps);
 
-      const res = await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Follow up question' }),
-      });
+      const res = await app.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Follow up question' }),
+        }
+      );
       expect(res.status).toBe(200);
       const data = await res.json();
       // Should not be inbox resolved since status is already 'answered'
@@ -383,8 +484,12 @@ describe('conversations routes', () => {
       const app = makeApp(deps);
 
       deps.conversationsService.createConversation('bot1', 'general', 'Gen');
-      deps.conversationsService.createConversation('bot1', 'inbox', 'Q1', { inboxStatus: 'pending' });
-      deps.conversationsService.createConversation('bot1', 'inbox', 'Q2', { inboxStatus: 'answered' });
+      deps.conversationsService.createConversation('bot1', 'inbox', 'Q1', {
+        inboxStatus: 'pending',
+      });
+      deps.conversationsService.createConversation('bot1', 'inbox', 'Q2', {
+        inboxStatus: 'answered',
+      });
 
       const res = await app.request('http://localhost/api/conversations/bot1?type=inbox');
       expect(res.status).toBe(200);
@@ -454,7 +559,9 @@ describe('conversations routes', () => {
       await tick(100);
 
       // Status should return error
-      const statusRes = await freshApp.request(`http://localhost/api/conversations/bot1/${convo.id}/status`);
+      const statusRes = await freshApp.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/status`
+      );
       const statusData = await statusRes.json();
       expect(statusData.status).toBe('error');
       expect(statusData.error).toContain('CLI crashed');
@@ -491,14 +598,19 @@ describe('conversations routes', () => {
       await tick(100);
 
       // Status should be error
-      let statusRes = await freshApp.request(`http://localhost/api/conversations/bot1/${convo.id}/status`);
+      let statusRes = await freshApp.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/status`
+      );
       let statusData = await statusRes.json();
       expect(statusData.status).toBe('error');
 
       // Retry
-      const retryRes = await freshApp.request(`http://localhost/api/conversations/bot1/${convo.id}/retry`, {
-        method: 'POST',
-      });
+      const retryRes = await freshApp.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/retry`,
+        {
+          method: 'POST',
+        }
+      );
       expect(retryRes.status).toBe(200);
       const retryData = await retryRes.json();
       expect(retryData.status).toBe('generating');
@@ -507,7 +619,9 @@ describe('conversations routes', () => {
       await tick(100);
 
       // Status should be idle with bot message
-      statusRes = await freshApp.request(`http://localhost/api/conversations/bot1/${convo.id}/status`);
+      statusRes = await freshApp.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/status`
+      );
       statusData = await statusRes.json();
       expect(statusData.status).toBe('idle');
       expect(statusData.lastBotMessage).toBeTruthy();
@@ -520,8 +634,11 @@ describe('conversations routes', () => {
 
     test('returns 409 when already generating', async () => {
       let resolveGenerate: (v: string) => void;
-      const mockClaudeGenerate = mock(() =>
-        new Promise<string>((resolve) => { resolveGenerate = resolve; })
+      const mockClaudeGenerate = mock(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveGenerate = resolve;
+          })
       );
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
@@ -540,13 +657,16 @@ describe('conversations routes', () => {
       });
 
       // Try retry while generating
-      const retryRes = await freshApp.request(`http://localhost/api/conversations/bot1/${convo.id}/retry`, {
-        method: 'POST',
-      });
+      const retryRes = await freshApp.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/retry`,
+        {
+          method: 'POST',
+        }
+      );
       expect(retryRes.status).toBe(409);
 
       // Cleanup
-      resolveGenerate!('done');
+      resolveGenerate?.('done');
       await tick();
 
       const { claudeGenerate: orig } = await import('../../../src/claude-cli');
@@ -588,7 +708,9 @@ describe('conversations routes', () => {
       await tick(100);
 
       // Confirm error
-      let statusRes = await freshApp.request(`http://localhost/api/conversations/bot1/${convo.id}/status`);
+      let statusRes = await freshApp.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/status`
+      );
       expect((await statusRes.json()).status).toBe('error');
 
       // Send another message (should clear error and succeed)
@@ -599,7 +721,9 @@ describe('conversations routes', () => {
       });
       await tick(100);
 
-      statusRes = await freshApp.request(`http://localhost/api/conversations/bot1/${convo.id}/status`);
+      statusRes = await freshApp.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/status`
+      );
       const statusData = await statusRes.json();
       expect(statusData.status).toBe('idle');
       expect(statusData.lastBotMessage.content).toBe('Second works!');

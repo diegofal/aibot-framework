@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { MessageBuffer, type BufferEntry, type ConversationProcessor } from '../src/message-buffer';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { BufferConfig } from '../src/config';
+import { type BufferEntry, type ConversationProcessor, MessageBuffer } from '../src/message-buffer';
 
 // ─── Test Helpers ────────────────────────────────────────────────
 
@@ -215,9 +215,8 @@ describe('MessageBuffer', () => {
   describe('error handling', () => {
     test('logs error when processor throws', async () => {
       config.inboundDebounceMs = 0;
-      const failingProcessor = mock(
-        (() => Promise.reject(new Error('boom'))) as ConversationProcessor
-      );
+      const failingProcessor = mock((() =>
+        Promise.reject(new Error('boom'))) as ConversationProcessor);
 
       buffer = new MessageBuffer(config, failingProcessor, logger);
       buffer.enqueue(createEntry());

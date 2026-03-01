@@ -1,9 +1,6 @@
+import { claudeGenerate, claudeGenerateWithTools } from '../claude-cli';
 import type { Logger } from '../logger';
-import type { OllamaClient, ChatMessage, ChatOptions } from '../ollama';
-import { claudeGenerate } from '../claude-cli';
-import { runToolLoop } from './tool-runner';
-import { TextToolStrategy } from './text-tool-strategy';
-import { createLoopDetector } from './loop-detector';
+import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
 
 export interface LLMGenerateOptions {
   model?: string;
@@ -39,7 +36,7 @@ export class OllamaLLMClient implements LLMClient {
 
 /**
  * Wraps claudeGenerate(). chat() formats messages into a single prompt.
- * Supports tool calling via text-based <tool_call> protocol.
+ * Tool calling handled natively via MCP bridge (claudeGenerateWithTools).
  */
 export class ClaudeCliLLMClient implements LLMClient {
   readonly backend = 'claude-cli' as const;
@@ -47,7 +44,7 @@ export class ClaudeCliLLMClient implements LLMClient {
   constructor(
     private claudePath: string,
     private timeout: number,
-    private logger: Logger,
+    private logger: Logger
   ) {}
 
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<string> {
@@ -63,15 +60,31 @@ export class ClaudeCliLLMClient implements LLMClient {
     const hasTools = opts?.tools && opts.tools.length > 0 && opts.toolExecutor;
 
     if (hasTools) {
-      const strategy = new TextToolStrategy(this.claudePath, this.timeout, this.logger);
-      const maxRounds = opts.maxToolRounds ?? 5;
-      return runToolLoop(strategy, messages, {
-        maxRounds,
-        tools: opts.tools!,
-        toolExecutor: opts.toolExecutor!,
+      // Build a single prompt from the conversation for Claude CLI
+      const parts: string[] = [];
+      let system: string | undefined;
+
+      for (const msg of messages) {
+        if (msg.role === 'system') {
+          system = msg.content;
+        } else if (msg.role === 'tool') {
+          parts.push(`Tool Result: ${msg.content}`);
+        } else {
+          const label = msg.role === 'user' ? 'User' : 'Assistant';
+          parts.push(`${label}: ${msg.content}`);
+        }
+      }
+
+      const result = await claudeGenerateWithTools(parts.join('\n\n'), {
+        claudePath: this.claudePath,
+        timeout: this.timeout,
         logger: this.logger,
-        loopDetector: createLoopDetector(maxRounds),
-      }, opts);
+        systemPrompt: system,
+        tools: opts.tools ?? [],
+        toolExecutor: opts.toolExecutor ?? (async () => ''),
+      });
+
+      return result.response;
     }
 
     // Simple path: no tools, single generate call
@@ -82,7 +95,8 @@ export class ClaudeCliLLMClient implements LLMClient {
       if (msg.role === 'system') {
         system = msg.content;
       } else {
-        const label = msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Assistant' : 'Tool';
+        const label =
+          msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Assistant' : 'Tool';
         parts.push(`${label}: ${msg.content}`);
       }
     }
@@ -91,17 +105,24 @@ export class ClaudeCliLLMClient implements LLMClient {
   }
 }
 
+export interface FallbackEvent {
+  primaryBackend: 'ollama' | 'claude-cli';
+  fallbackBackend: 'ollama' | 'claude-cli';
+  error: string;
+  method: 'generate' | 'chat';
+}
+
 /**
  * Tries primary, catches error → falls back.
- * If tools are requested and primary is claude-cli, routes directly to fallback.
  */
 export class LLMClientWithFallback implements LLMClient {
   readonly backend: 'ollama' | 'claude-cli';
+  onFallback?: (event: FallbackEvent) => void;
 
   constructor(
     private primary: LLMClient,
     private fallback: LLMClient,
-    private logger: Logger,
+    private logger: Logger
   ) {
     this.backend = primary.backend;
   }
@@ -111,27 +132,30 @@ export class LLMClientWithFallback implements LLMClient {
       return await this.primary.generate(prompt, opts);
     } catch (err) {
       this.logger.warn({ err, backend: this.primary.backend }, 'LLM primary failed, falling back');
+      this.onFallback?.({
+        primaryBackend: this.primary.backend,
+        fallbackBackend: this.fallback.backend,
+        error: err instanceof Error ? err.message : String(err),
+        method: 'generate',
+      });
       return this.fallback.generate(prompt, opts);
     }
   }
 
   async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<string> {
-    // Route tool-based chat directly to fallback when primary is Claude CLI.
-    // Claude CLI uses a text-based <tool_call> XML protocol that produces huge prompts
-    // and regularly times out. Ollama supports native tool calling efficiently.
-    const hasTools = opts?.tools && opts.tools.length > 0 && opts?.toolExecutor;
-    if (hasTools && this.primary.backend === 'claude-cli') {
-      this.logger.info(
-        { backend: this.primary.backend, fallback: this.fallback.backend, toolCount: opts!.tools!.length },
-        'Bypassing Claude CLI for tool-based chat, routing to fallback',
-      );
-      return this.fallback.chat(messages, opts);
-    }
-
     try {
       return await this.primary.chat(messages, opts);
     } catch (err) {
-      this.logger.warn({ err, backend: this.primary.backend }, 'LLM chat primary failed, falling back');
+      this.logger.warn(
+        { err, backend: this.primary.backend },
+        'LLM chat primary failed, falling back'
+      );
+      this.onFallback?.({
+        primaryBackend: this.primary.backend,
+        fallbackBackend: this.fallback.backend,
+        error: err instanceof Error ? err.message : String(err),
+        method: 'chat',
+      });
       return this.fallback.chat(messages, opts);
     }
   }
@@ -151,15 +175,15 @@ export interface CreateLLMClientOptions {
 export function createLLMClient(
   opts: CreateLLMClientOptions,
   ollamaClient: OllamaClient,
-  logger: Logger,
+  logger: Logger
 ): LLMClient {
   const ollamaLLM = new OllamaLLMClient(ollamaClient);
 
   if (opts.llmBackend === 'claude-cli') {
     const claudeLLM = new ClaudeCliLLMClient(
       opts.claudePath || 'claude',
-      opts.claudeTimeout ?? 90_000,
-      logger,
+      opts.claudeTimeout ?? 300_000,
+      logger
     );
     return new LLMClientWithFallback(claudeLLM, ollamaLLM, logger);
   }

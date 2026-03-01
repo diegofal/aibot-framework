@@ -6,11 +6,11 @@ import type { BillingProvider, Tenant, WebhookResult } from './types';
  */
 export class NoOpBillingProvider implements BillingProvider {
   async createCustomer(_tenant: Tenant): Promise<string> {
-    return 'noop_customer_' + Date.now();
+    return `noop_customer_${Date.now()}`;
   }
 
   async createSubscription(_tenantId: string, _plan: string): Promise<string> {
-    return 'noop_subscription_' + Date.now();
+    return `noop_subscription_${Date.now()}`;
   }
 
   async cancelSubscription(_tenantId: string): Promise<void> {
@@ -41,7 +41,7 @@ export class StripeBillingProvider implements BillingProvider {
   constructor(stripeSecretKey: string, webhookSecret: string) {
     // Dynamic import to avoid requiring stripe in self-hosted mode
     this.webhookSecret = webhookSecret;
-    
+
     // Lazy load stripe SDK
     try {
       const Stripe = require('stripe');
@@ -150,7 +150,8 @@ export class StripeBillingProvider implements BillingProvider {
       switch (event.type) {
         case 'invoice.payment_succeeded': {
           const invoice = event.data.object;
-          const tenantId = invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId;
+          const tenantId =
+            invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId;
           return {
             type: 'payment_succeeded',
             tenantId,
@@ -161,7 +162,8 @@ export class StripeBillingProvider implements BillingProvider {
         }
         case 'invoice.payment_failed': {
           const invoice = event.data.object;
-          const tenantId = invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId;
+          const tenantId =
+            invoice.metadata?.tenantId || invoice.subscription_details?.metadata?.tenantId;
           return {
             type: 'payment_failed',
             tenantId,

@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, Page } from 'playwright';
-import type { ElementRef } from './browser-snapshot';
 import type { BrowserToolsConfig } from '../config';
+import type { ElementRef } from './browser-snapshot';
 
 // ─── Per-Bot Session State ──────────────────────────────────
 
@@ -111,7 +111,11 @@ export async function ensureBrowser(botId: string, config: BrowserToolsConfig): 
   return session.activePage!;
 }
 
-async function doLaunch(botId: string, session: BrowserSession, config: BrowserToolsConfig): Promise<void> {
+async function doLaunch(
+  botId: string,
+  session: BrowserSession,
+  config: BrowserToolsConfig
+): Promise<void> {
   const pw = await import('playwright');
 
   const launchOptions: Record<string, unknown> = {

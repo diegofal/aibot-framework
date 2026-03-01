@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import type { Tool, ToolResult } from './types';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Logger } from '../logger';
+import type { Tool, ToolResult } from './types';
 
 export interface PhoneCallToolConfig {
   accountSid: string;
@@ -24,7 +24,7 @@ function loadContacts(filePath: string): Contacts {
 }
 
 function saveContacts(filePath: string, contacts: Contacts): void {
-  writeFileSync(filePath, JSON.stringify(contacts, null, 2) + '\n');
+  writeFileSync(filePath, `${JSON.stringify(contacts, null, 2)}\n`);
 }
 
 function escapeXml(text: string): string {
@@ -61,7 +61,7 @@ async function twilioCall(
     }
   );
 
-  const data = await response.json() as Record<string, unknown>;
+  const data = (await response.json()) as Record<string, unknown>;
 
   if (!response.ok) {
     const errorMsg = (data as { message?: string }).message || `HTTP ${response.status}`;
@@ -89,11 +89,13 @@ export function createPhoneCallTool(config: PhoneCallToolConfig): Tool {
           properties: {
             action: {
               type: 'string',
-              description: 'The action: "call", "add_contact", "list_contacts", or "remove_contact"',
+              description:
+                'The action: "call", "add_contact", "list_contacts", or "remove_contact"',
             },
             contact: {
               type: 'string',
-              description: 'Contact name to call or manage (e.g. "pri", "diego"). For "call" action, can also be a phone number directly.',
+              description:
+                'Contact name to call or manage (e.g. "pri", "diego"). For "call" action, can also be a phone number directly.',
             },
             message: {
               type: 'string',
@@ -101,11 +103,13 @@ export function createPhoneCallTool(config: PhoneCallToolConfig): Tool {
             },
             phone_number: {
               type: 'string',
-              description: 'Phone number in E.164 format, e.g. "+5491112345678" (for "add_contact" action, or "call" with a direct number)',
+              description:
+                'Phone number in E.164 format, e.g. "+5491112345678" (for "add_contact" action, or "call" with a direct number)',
             },
             loop: {
               type: 'number',
-              description: 'How many times to repeat the message (default: 1, use 3 for emergencies)',
+              description:
+                'How many times to repeat the message (default: 1, use 3 for emergencies)',
             },
           },
           required: ['action'],
@@ -127,7 +131,9 @@ export function createPhoneCallTool(config: PhoneCallToolConfig): Tool {
       }
 
       if (action === 'add_contact') {
-        const name = String(args.contact ?? '').trim().toLowerCase();
+        const name = String(args.contact ?? '')
+          .trim()
+          .toLowerCase();
         const phone = String(args.phone_number ?? '').trim();
         if (!name) return { success: false, content: 'Falta el nombre del contacto.' };
         if (!phone) return { success: false, content: 'Falta el número de teléfono.' };
@@ -140,7 +146,9 @@ export function createPhoneCallTool(config: PhoneCallToolConfig): Tool {
       }
 
       if (action === 'remove_contact') {
-        const name = String(args.contact ?? '').trim().toLowerCase();
+        const name = String(args.contact ?? '')
+          .trim()
+          .toLowerCase();
         if (!name) return { success: false, content: 'Falta el nombre del contacto.' };
 
         const contacts = loadContacts(config.contactsFile);
@@ -172,9 +180,10 @@ export function createPhoneCallTool(config: PhoneCallToolConfig): Tool {
           toNumber = contacts[key] ?? '';
           if (!toNumber) {
             const available = Object.keys(contacts);
-            const hint = available.length > 0
-              ? ` Contactos disponibles: ${available.join(', ')}`
-              : ' No hay contactos guardados aún.';
+            const hint =
+              available.length > 0
+                ? ` Contactos disponibles: ${available.join(', ')}`
+                : ' No hay contactos guardados aún.';
             return {
               success: false,
               content: `No encontré el número de "${contactArg}".${hint} Pedile el número al usuario y guardalo con add_contact.`,
@@ -186,20 +195,32 @@ export function createPhoneCallTool(config: PhoneCallToolConfig): Tool {
         }
 
         if (!toNumber) {
-          return { success: false, content: 'No se especificó un contacto ni hay número por defecto configurado.' };
+          return {
+            success: false,
+            content: 'No se especificó un contacto ni hay número por defecto configurado.',
+          };
         }
 
         try {
           const sid = await twilioCall(config, toNumber, message, loop, logger);
-          logger.info({ sid, to: toNumber, message: message.substring(0, 50) }, 'Call initiated via tool');
-          return { success: true, content: `Llamada iniciada a ${toNumber} (SID: ${sid}). Mensaje: "${message}"` };
+          logger.info(
+            { sid, to: toNumber, message: message.substring(0, 50) },
+            'Call initiated via tool'
+          );
+          return {
+            success: true,
+            content: `Llamada iniciada a ${toNumber} (SID: ${sid}). Mensaje: "${message}"`,
+          };
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           return { success: false, content: `Error al llamar: ${msg}` };
         }
       }
 
-      return { success: false, content: `Acción desconocida: "${action}". Usar: call, add_contact, list_contacts, remove_contact.` };
+      return {
+        success: false,
+        content: `Acción desconocida: "${action}". Usar: call, add_contact, list_contacts, remove_contact.`,
+      };
     },
   };
 }

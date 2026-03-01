@@ -1,11 +1,12 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { SessionManager } from '../../src/session';
-import { BotResetService, type BotResetDeps } from '../../src/bot/bot-reset';
+import { join } from 'node:path';
+import { type BotResetDeps, BotResetService } from '../../src/bot/bot-reset';
 import type { SessionConfig } from '../../src/config';
 import type { Logger } from '../../src/logger';
+import { SessionManager } from '../../src/session';
+import { DynamicToolStore } from '../../src/tools/dynamic-tool-store';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -103,7 +104,12 @@ describe('BotResetService', () => {
   function createResetService(overrides: Partial<BotResetDeps> = {}): BotResetService {
     const deps: BotResetDeps = {
       sessionManager: { clearBotSessions: mock(() => 0) } as any,
-      memoryManager: { clearCoreMemory: mock(() => {}), clearIndex: mock(() => {}) } as any,
+      memoryManager: {
+        clearCoreMemory: mock(() => {}),
+        clearIndex: mock(() => {}),
+        clearCoreMemoryForBot: mock(() => 0),
+        clearIndexForBot: mock(() => 0),
+      } as any,
       agentFeedbackStore: { clearForBot: mock(() => {}) } as any,
       askHumanStore: { clearForBot: mock(() => {}) } as any,
       askPermissionStore: { clearForBot: mock(() => {}) } as any,
@@ -231,19 +237,24 @@ describe('BotResetService', () => {
     expect(askPermissionClear).toHaveBeenCalledWith('test-bot');
   });
 
-  test('clears core memory and index', async () => {
-    const clearCoreMemory = mock(() => {});
-    const clearIndex = mock(() => {});
+  test('clears core memory and index using per-bot methods', async () => {
+    const clearCoreMemoryForBot = mock(() => 5);
+    const clearIndexForBot = mock(() => 3);
 
     const service = createResetService({
-      memoryManager: { clearCoreMemory, clearIndex } as any,
+      memoryManager: {
+        clearCoreMemory: mock(() => {}),
+        clearIndex: mock(() => {}),
+        clearCoreMemoryForBot,
+        clearIndexForBot,
+      } as any,
     });
     const result = await service.reset('test-bot', soulDir);
 
     expect(result.cleared.coreMemory).toBe(true);
     expect(result.cleared.index).toBe(true);
-    expect(clearCoreMemory).toHaveBeenCalled();
-    expect(clearIndex).toHaveBeenCalled();
+    expect(clearCoreMemoryForBot).toHaveBeenCalledWith('test-bot');
+    expect(clearIndexForBot).toHaveBeenCalledWith('test-bot');
   });
 
   test('handles missing memoryManager gracefully', async () => {
@@ -252,6 +263,486 @@ describe('BotResetService', () => {
 
     expect(result.cleared.coreMemory).toBe(false);
     expect(result.cleared.index).toBe(false);
+  });
+
+  test('clears dynamic tools created by the bot', async () => {
+    const clearForBot = mock(() => 3);
+    const service = createResetService({
+      dynamicToolRegistry: { clearForBot } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(clearForBot).toHaveBeenCalledWith('test-bot');
+    expect(result.cleared.dynamicTools).toBe(3);
+  });
+
+  test('handles missing dynamicToolRegistry gracefully', async () => {
+    const service = createResetService({ dynamicToolRegistry: undefined });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.dynamicTools).toBe(0);
+  });
+
+  test('handles null dynamicToolRegistry gracefully', async () => {
+    const service = createResetService({ dynamicToolRegistry: null });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.dynamicTools).toBe(0);
+  });
+
+  test('clears karma events for the bot', async () => {
+    const clearEvents = mock(() => {});
+    const service = createResetService({
+      karmaService: { clearEvents } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(clearEvents).toHaveBeenCalledWith('test-bot');
+    expect(result.cleared.karma).toBe(true);
+  });
+
+  test('handles missing karmaService gracefully', async () => {
+    const service = createResetService({ karmaService: undefined });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.karma).toBe(false);
+  });
+});
+
+// --- BotResetService extended steps (16-22) ---
+
+describe('BotResetService extended reset steps', () => {
+  let tmpDir: string;
+  let soulDir: string;
+  let productionsBaseDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `reset-extended-${Date.now()}`);
+    soulDir = join(tmpDir, 'soul', 'test-bot');
+    productionsBaseDir = join(tmpDir, 'productions');
+    mkdirSync(join(soulDir, 'memory'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function createExtendedResetService(
+    overrides: Partial<import('../../src/bot/bot-reset').BotResetDeps> = {}
+  ): BotResetService {
+    return new BotResetService({
+      sessionManager: { clearBotSessions: mock(() => 0) } as any,
+      agentFeedbackStore: { clearForBot: mock(() => {}) } as any,
+      askHumanStore: { clearForBot: mock(() => {}) } as any,
+      askPermissionStore: { clearForBot: mock(() => {}) } as any,
+      logger: noopLogger,
+      productionsBaseDir,
+      ...overrides,
+    });
+  }
+
+  test('clears conversations via deleteAllForBot', async () => {
+    const deleteAllForBot = mock(() => 5);
+    const service = createExtendedResetService({
+      conversationsService: { deleteAllForBot } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(deleteAllForBot).toHaveBeenCalledWith('test-bot');
+    expect(result.cleared.conversations).toBe(5);
+  });
+
+  test('clears tool audit log directory', async () => {
+    // Create tool audit log dir with some files
+    const auditDir = join(tmpDir, 'tool-audit', 'test-bot');
+    mkdirSync(auditDir, { recursive: true });
+    writeFileSync(join(auditDir, '2026-02-28.jsonl'), '{"entry": true}\n', 'utf-8');
+
+    const clearForBot = mock(() => true);
+    const service = createExtendedResetService({
+      toolAuditLog: { clearForBot } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(clearForBot).toHaveBeenCalledWith('test-bot');
+    expect(result.cleared.toolAuditLog).toBe(true);
+  });
+
+  test('deletes entire productions directory for bot', async () => {
+    // Create productions dir with various files
+    const botProdDir = join(productionsBaseDir, 'test-bot');
+    mkdirSync(join(botProdDir, 'src', 'skills', 'my-skill'), { recursive: true });
+    writeFileSync(join(botProdDir, 'changelog.json'), '[]', 'utf-8');
+    writeFileSync(join(botProdDir, 'summary.json'), '{}', 'utf-8');
+
+    const service = createExtendedResetService();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.productions).toBe(true);
+    expect(existsSync(botProdDir)).toBe(false);
+  });
+
+  test('productions cleared = false when dir does not exist', async () => {
+    const service = createExtendedResetService();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.productions).toBe(false);
+  });
+
+  test('clears agent scheduler state for bot', async () => {
+    const clearScheduleForBot = mock(() => true);
+    const service = createExtendedResetService();
+    service.setAgentLoop({ clearScheduleForBot });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(clearScheduleForBot).toHaveBeenCalledWith('test-bot');
+    expect(result.cleared.agentSchedule).toBe(true);
+  });
+
+  test('clears collaboration tracker entries involving bot', async () => {
+    const clearForBot = mock(() => 3);
+    const service = createExtendedResetService({
+      collaborationTracker: { clearForBot } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(clearForBot).toHaveBeenCalledWith('test-bot');
+    expect(result.cleared.collaborationRecords).toBe(3);
+  });
+
+  test('clears collaboration sessions involving bot', async () => {
+    const clearForBot = mock(() => 2);
+    const service = createExtendedResetService({
+      collaborationSessions: { clearForBot } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(clearForBot).toHaveBeenCalledWith('test-bot');
+    expect(result.cleared.collaborationSessions).toBe(2);
+  });
+
+  test('clears activity stream events for bot', async () => {
+    const clearForBot = mock(() => 10);
+    const service = createExtendedResetService({
+      activityStream: { clearForBot } as any,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(clearForBot).toHaveBeenCalledWith('test-bot');
+    expect(result.cleared.activityEvents).toBe(10);
+  });
+
+  test('all new steps skip gracefully when deps not provided', async () => {
+    const service = new BotResetService({
+      sessionManager: { clearBotSessions: mock(() => 0) } as any,
+      agentFeedbackStore: { clearForBot: mock(() => {}) } as any,
+      askHumanStore: { clearForBot: mock(() => {}) } as any,
+      askPermissionStore: { clearForBot: mock(() => {}) } as any,
+      logger: noopLogger,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.conversations).toBe(0);
+    expect(result.cleared.toolAuditLog).toBe(false);
+    expect(result.cleared.productions).toBe(false);
+    expect(result.cleared.agentSchedule).toBe(false);
+    expect(result.cleared.collaborationRecords).toBe(0);
+    expect(result.cleared.collaborationSessions).toBe(0);
+    expect(result.cleared.activityEvents).toBe(0);
+  });
+});
+
+// --- DynamicToolStore.deleteByCreator ---
+
+describe('DynamicToolStore.deleteByCreator', () => {
+  let tmpDir: string;
+  let store: DynamicToolStore;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `dyn-tool-store-${Date.now()}`);
+    store = new DynamicToolStore(tmpDir);
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('deletes only tools created by the specified bot', () => {
+    store.create(
+      {
+        name: 'tool_alpha',
+        description: 'Tool by alpha',
+        type: 'typescript',
+        createdBy: 'alpha',
+        scope: 'all',
+        parameters: {},
+      },
+      'export default () => {}'
+    );
+
+    store.create(
+      {
+        name: 'tool_beta',
+        description: 'Tool by beta',
+        type: 'typescript',
+        createdBy: 'beta',
+        scope: 'all',
+        parameters: {},
+      },
+      'export default () => {}'
+    );
+
+    store.create(
+      {
+        name: 'tool_alpha2',
+        description: 'Another tool by alpha',
+        type: 'typescript',
+        createdBy: 'alpha',
+        scope: 'all',
+        parameters: {},
+      },
+      'export default () => {}'
+    );
+
+    const deleted = store.deleteByCreator('alpha');
+
+    expect(deleted).toBe(2);
+    // Only beta's tool remains
+    const remaining = store.list();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].name).toBe('tool_beta');
+  });
+
+  test('returns 0 when no tools match', () => {
+    store.create(
+      {
+        name: 'tool_beta',
+        description: 'Tool by beta',
+        type: 'typescript',
+        createdBy: 'beta',
+        scope: 'all',
+        parameters: {},
+      },
+      'export default () => {}'
+    );
+
+    const deleted = store.deleteByCreator('nonexistent');
+    expect(deleted).toBe(0);
+    expect(store.list()).toHaveLength(1);
+  });
+
+  test('returns 0 when store is empty', () => {
+    const deleted = store.deleteByCreator('alpha');
+    expect(deleted).toBe(0);
+  });
+});
+
+// --- Production skills cleanup ---
+
+describe('BotResetService production skills cleanup', () => {
+  let tmpDir: string;
+  let soulDir: string;
+  let configPath: string;
+  let builtinSkillsPath: string;
+  let productionsBaseDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `reset-prod-skills-${Date.now()}`);
+    soulDir = join(tmpDir, 'soul', 'test-bot');
+    configPath = join(tmpDir, 'config.json');
+    builtinSkillsPath = join(tmpDir, 'src', 'skills');
+    productionsBaseDir = join(tmpDir, 'productions');
+    mkdirSync(join(soulDir, 'memory'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function setupProductionSkills(skills: string[]): void {
+    const prodSkillsDir = join(productionsBaseDir, 'test-bot', 'src', 'skills');
+    for (const skill of skills) {
+      const dir = join(prodSkillsDir, skill);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'skill.json'), JSON.stringify({ id: skill }), 'utf-8');
+      writeFileSync(join(dir, 'index.ts'), 'export default {}', 'utf-8');
+    }
+  }
+
+  function setupBuiltinSkills(skills: string[]): void {
+    for (const skill of skills) {
+      const dir = join(builtinSkillsPath, skill);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'skill.json'), JSON.stringify({ id: skill }), 'utf-8');
+    }
+  }
+
+  function writeConfig(config: Record<string, unknown>): void {
+    mkdirSync(join(tmpDir), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  }
+
+  function createResetServiceWithConfig(
+    configOverrides: Record<string, unknown> = {}
+  ): BotResetService {
+    const config = {
+      bots: [
+        { id: 'test-bot', name: 'Test Bot', skills: ['reminders', 'streak-tracking', 'bookmarks'] },
+      ],
+      skills: {
+        enabled: ['reminders', 'streak-tracking', 'bookmarks'],
+        config: { 'streak-tracking': { interval: 7 }, bookmarks: { maxItems: 100 } },
+      },
+      ...configOverrides,
+    };
+    return new BotResetService({
+      sessionManager: { clearBotSessions: mock(() => 0) } as any,
+      agentFeedbackStore: { clearForBot: mock(() => {}) } as any,
+      askHumanStore: { clearForBot: mock(() => {}) } as any,
+      askPermissionStore: { clearForBot: mock(() => {}) } as any,
+      logger: noopLogger,
+      config: config as any,
+      configPath,
+      builtinSkillsPath,
+      productionsBaseDir,
+    });
+  }
+
+  test('deletes production skills directory', async () => {
+    setupProductionSkills(['streak-tracking', 'bookmarks']);
+    setupBuiltinSkills(['reminders']);
+    writeConfig({
+      bots: [
+        { id: 'test-bot', name: 'Test Bot', skills: ['reminders', 'streak-tracking', 'bookmarks'] },
+      ],
+      skills: { enabled: ['reminders', 'streak-tracking', 'bookmarks'], config: {} },
+    });
+
+    const service = createResetServiceWithConfig();
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(existsSync(join(productionsBaseDir, 'test-bot', 'src', 'skills'))).toBe(false);
+    expect(result.cleared.productionSkills).toContain('streak-tracking');
+    expect(result.cleared.productionSkills).toContain('bookmarks');
+  });
+
+  test('removes production-only skills from config.skills.enabled', async () => {
+    setupProductionSkills(['streak-tracking', 'bookmarks']);
+    setupBuiltinSkills(['reminders']);
+    const rawConfig = {
+      bots: [
+        { id: 'test-bot', name: 'Test Bot', skills: ['reminders', 'streak-tracking', 'bookmarks'] },
+      ],
+      skills: {
+        enabled: ['reminders', 'streak-tracking', 'bookmarks'],
+        config: { 'streak-tracking': { interval: 7 } },
+      },
+    };
+    writeConfig(rawConfig);
+
+    const service = createResetServiceWithConfig();
+    const result = await service.reset('test-bot', soulDir);
+
+    // Check persisted config on disk
+    const persisted = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(persisted.skills.enabled).toEqual(['reminders']);
+    expect(persisted.skills.config['streak-tracking']).toBeUndefined();
+    expect(result.cleared.productionSkills).toHaveLength(2);
+  });
+
+  test('preserves skills that exist in built-in path', async () => {
+    setupProductionSkills(['reminders', 'streak-tracking']);
+    setupBuiltinSkills(['reminders']);
+    writeConfig({
+      bots: [{ id: 'test-bot', name: 'Test Bot', skills: ['reminders', 'streak-tracking'] }],
+      skills: { enabled: ['reminders', 'streak-tracking'], config: {} },
+    });
+
+    const service = createResetServiceWithConfig({
+      bots: [{ id: 'test-bot', name: 'Test Bot', skills: ['reminders', 'streak-tracking'] }],
+      skills: { enabled: ['reminders', 'streak-tracking'], config: {} },
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    // reminders is built-in, so it should NOT be in productionOnlySkills
+    expect(result.cleared.productionSkills).not.toContain('reminders');
+    expect(result.cleared.productionSkills).toContain('streak-tracking');
+
+    // Check persisted config still has reminders
+    const persisted = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(persisted.skills.enabled).toContain('reminders');
+  });
+
+  test('removes from botConfig.skills array', async () => {
+    setupProductionSkills(['bookmarks']);
+    setupBuiltinSkills(['reminders']);
+    writeConfig({
+      bots: [{ id: 'test-bot', name: 'Test Bot', skills: ['reminders', 'bookmarks'] }],
+      skills: { enabled: ['reminders', 'bookmarks'], config: {} },
+    });
+
+    const service = createResetServiceWithConfig({
+      bots: [{ id: 'test-bot', name: 'Test Bot', skills: ['reminders', 'bookmarks'] }],
+      skills: { enabled: ['reminders', 'bookmarks'], config: {} },
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    const persisted = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(persisted.bots[0].skills).toEqual(['reminders']);
+    expect(result.cleared.productionSkills).toEqual(['bookmarks']);
+  });
+
+  test('skips gracefully when no production dir exists', async () => {
+    // Don't create any production skills dir
+    setupBuiltinSkills(['reminders']);
+    writeConfig({
+      bots: [{ id: 'test-bot', name: 'Test Bot', skills: ['reminders'] }],
+      skills: { enabled: ['reminders'], config: {} },
+    });
+
+    const service = createResetServiceWithConfig({
+      bots: [{ id: 'test-bot', name: 'Test Bot', skills: ['reminders'] }],
+      skills: { enabled: ['reminders'], config: {} },
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.productionSkills).toEqual([]);
+  });
+
+  test('skips gracefully when deps not provided (backward compat)', async () => {
+    setupProductionSkills(['streak-tracking']);
+
+    // Create service WITHOUT the new deps
+    const service = new BotResetService({
+      sessionManager: { clearBotSessions: mock(() => 0) } as any,
+      agentFeedbackStore: { clearForBot: mock(() => {}) } as any,
+      askHumanStore: { clearForBot: mock(() => {}) } as any,
+      askPermissionStore: { clearForBot: mock(() => {}) } as any,
+      logger: noopLogger,
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.productionSkills).toEqual([]);
+    // Production dir should still exist (not cleaned)
+    expect(existsSync(join(productionsBaseDir, 'test-bot', 'src', 'skills'))).toBe(true);
+  });
+
+  test('handles empty production skills directory', async () => {
+    // Create empty production skills dir
+    mkdirSync(join(productionsBaseDir, 'test-bot', 'src', 'skills'), { recursive: true });
+    setupBuiltinSkills(['reminders']);
+    writeConfig({
+      bots: [{ id: 'test-bot', name: 'Test Bot', skills: ['reminders'] }],
+      skills: { enabled: ['reminders'], config: {} },
+    });
+
+    const service = createResetServiceWithConfig({
+      bots: [{ id: 'test-bot', name: 'Test Bot', skills: ['reminders'] }],
+      skills: { enabled: ['reminders'], config: {} },
+    });
+    const result = await service.reset('test-bot', soulDir);
+
+    expect(result.cleared.productionSkills).toEqual([]);
   });
 });
 
@@ -283,7 +774,12 @@ describe('BotManager.resetBot preconditions', () => {
     manager.runningBots = new Set();
     manager.botResetService = new BotResetService({
       sessionManager: { clearBotSessions: mock(() => 0) } as any,
-      memoryManager: { clearCoreMemory: mock(() => {}), clearIndex: mock(() => {}) } as any,
+      memoryManager: {
+        clearCoreMemory: mock(() => {}),
+        clearIndex: mock(() => {}),
+        clearCoreMemoryForBot: mock(() => 0),
+        clearIndexForBot: mock(() => 0),
+      } as any,
       agentFeedbackStore: { clearForBot: mock(() => {}) } as any,
       askHumanStore: { clearForBot: mock(() => {}) } as any,
       askPermissionStore: { clearForBot: mock(() => {}) } as any,

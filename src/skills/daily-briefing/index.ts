@@ -14,7 +14,10 @@ interface Goal {
   notes?: string;
 }
 
-export const handlers: Record<string, (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>> = {
+export const handlers: Record<
+  string,
+  (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>
+> = {
   async generate_brief(args: Record<string, unknown>, ctx: SkillContext): Promise<unknown> {
     const config: BriefConfig = {
       format: (args.format as 'markdown' | 'text' | 'json') || 'markdown',
@@ -60,12 +63,16 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
 
     let content: string;
     if (config.format === 'json') {
-      content = JSON.stringify({
-        headline,
-        goals: limitedGoals,
-        temporal,
-        generatedAt: new Date().toISOString(),
-      }, null, 2);
+      content = JSON.stringify(
+        {
+          headline,
+          goals: limitedGoals,
+          temporal,
+          generatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      );
     } else if (config.format === 'text') {
       content = formatAsText(headline, limitedGoals, temporal);
     } else {
@@ -77,7 +84,7 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
       brief: content,
       metrics: {
         goalsCount: limitedGoals.length,
-        highPriorityCount: limitedGoals.filter(g => g.priority === 'high').length,
+        highPriorityCount: limitedGoals.filter((g) => g.priority === 'high').length,
       },
     };
   },
@@ -99,16 +106,20 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
 
     try {
       // Usar cron tool para programar
-      const result = await ctx.tools.execute?.('cron', {
-        action: 'add',
-        name: 'Daily Briefing',
-        schedule: {
-          kind: 'cron',
-          expr: cronExpr,
-          tz: timezone,
+      const result = await ctx.tools.execute?.(
+        'cron',
+        {
+          action: 'add',
+          name: 'Daily Briefing',
+          schedule: {
+            kind: 'cron',
+            expr: cronExpr,
+            tz: timezone,
+          },
+          text: 'daily-briefing scheduled',
         },
-        text: 'daily-briefing scheduled',
-      }, ctx);
+        ctx
+      );
 
       return {
         success: true,
@@ -142,8 +153,10 @@ function getTemporalContext() {
 }
 
 function generateHeadline(temporal: ReturnType<typeof getTemporalContext>, goals: Goal[]): string {
-  const blockedCount = goals.filter(g => g.status === 'blocked').length;
-  const highPriorityCount = goals.filter(g => g.priority === 'high' && g.status !== 'completed').length;
+  const blockedCount = goals.filter((g) => g.status === 'blocked').length;
+  const highPriorityCount = goals.filter(
+    (g) => g.priority === 'high' && g.status !== 'completed'
+  ).length;
 
   if (blockedCount > 0) {
     return `🚨 Tenés ${blockedCount} ${blockedCount === 1 ? 'bloqueo' : 'bloqueos'} que necesitan atención`;
@@ -161,7 +174,11 @@ function generateHeadline(temporal: ReturnType<typeof getTemporalContext>, goals
   return `📋 ${temporal.dayOfWeek}: ${goals.length} ${goals.length === 1 ? 'tarea activa' : 'tareas activas'}`;
 }
 
-function formatAsMarkdown(headline: string, goals: Goal[], temporal: ReturnType<typeof getTemporalContext>): string {
+function formatAsMarkdown(
+  headline: string,
+  goals: Goal[],
+  temporal: ReturnType<typeof getTemporalContext>
+): string {
   const lines: string[] = [
     `# 🌅 Daily Brief — ${temporal.today}`,
     '',
@@ -186,14 +203,12 @@ function formatAsMarkdown(headline: string, goals: Goal[], temporal: ReturnType<
   return lines.join('\n');
 }
 
-function formatAsText(headline: string, goals: Goal[], temporal: ReturnType<typeof getTemporalContext>): string {
-  const lines: string[] = [
-    `🌅 Daily Brief — ${temporal.today}`,
-    '',
-    headline,
-    '',
-    '🎯 Goals:',
-  ];
+function formatAsText(
+  headline: string,
+  goals: Goal[],
+  temporal: ReturnType<typeof getTemporalContext>
+): string {
+  const lines: string[] = [`🌅 Daily Brief — ${temporal.today}`, '', headline, '', '🎯 Goals:'];
 
   if (goals.length === 0) {
     lines.push('  Sin goals pendientes.');
@@ -225,7 +240,11 @@ const skill: Skill = {
     brief: {
       description: 'Genera un daily briefing',
       async handler(args: string[], ctx: SkillContext) {
-        const format = args.includes('--json') ? 'json' : args.includes('--text') ? 'text' : 'markdown';
+        const format = args.includes('--json')
+          ? 'json'
+          : args.includes('--text')
+            ? 'text'
+            : 'markdown';
         const result = await handlers.generate_brief({ format }, ctx);
         return (result as { brief?: string })?.brief || 'Error generando brief';
       },

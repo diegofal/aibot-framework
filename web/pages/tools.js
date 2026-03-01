@@ -23,9 +23,10 @@ export async function renderTools(el) {
     <div class="flex-between mb-16">
       <div class="page-title">Dynamic Tools <span class="count">${tools.length}</span></div>
     </div>
-    ${tools.length === 0
-      ? '<p class="text-dim">No dynamic tools created yet. Bots can create tools using the <code>create_tool</code> tool during conversations or agent loop runs.</p>'
-      : `<table>
+    ${
+      tools.length === 0
+        ? '<p class="text-dim">No dynamic tools created yet. Bots can create tools using the <code>create_tool</code> tool during conversations or agent loop runs.</p>'
+        : `<table>
           <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Created By</th><th>Created</th><th>Actions</th></tr></thead>
           <tbody id="tools-tbody"></tbody>
         </table>`
@@ -44,10 +45,14 @@ export async function renderTools(el) {
       <td class="text-dim">${escapeHtml(tool.createdBy)}</td>
       <td class="text-dim">${timeAgo(tool.createdAt)}</td>
       <td class="actions">
-        ${tool.status === 'pending' ? `
+        ${
+          tool.status === 'pending'
+            ? `
           <button class="btn btn-sm btn-primary" data-action="approve" data-id="${tool.id}">Approve</button>
           <button class="btn btn-sm btn-danger" data-action="reject" data-id="${tool.id}">Reject</button>
-        ` : ''}
+        `
+            : ''
+        }
         <button class="btn btn-sm btn-danger" data-action="delete" data-id="${tool.id}">Delete</button>
       </td>
     `;
@@ -96,21 +101,26 @@ export async function renderToolDetail(el, toolId) {
 
   const { meta, source } = data;
 
-  const paramsHtml = Object.keys(meta.parameters || {}).length > 0
-    ? `<table class="params-table">
+  const paramsHtml =
+    Object.keys(meta.parameters || {}).length > 0
+      ? `<table class="params-table">
         <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
         <tbody>
-          ${Object.entries(meta.parameters).map(([name, p]) => `
+          ${Object.entries(meta.parameters)
+            .map(
+              ([name, p]) => `
             <tr>
               <td><code>${escapeHtml(name)}</code></td>
               <td class="text-dim">${escapeHtml(p.type)}</td>
               <td>${p.required ? 'Yes' : 'No'}</td>
               <td class="text-dim">${escapeHtml(p.description)}</td>
             </tr>
-          `).join('')}
+          `
+            )
+            .join('')}
         </tbody>
       </table>`
-    : '<p class="text-dim">No parameters defined.</p>';
+      : '<p class="text-dim">No parameters defined.</p>';
 
   el.innerHTML = `
     <div class="flex-between mb-16">
@@ -139,16 +149,28 @@ export async function renderToolDetail(el, toolId) {
     <pre class="code-block">${escapeHtml(source)}</pre>
 
     <div class="actions mt-16" id="tool-actions">
-      ${meta.status === 'pending' ? `
+      ${
+        meta.status === 'pending'
+          ? `
         <button class="btn btn-primary" data-action="approve">Approve</button>
         <button class="btn btn-danger" data-action="reject">Reject</button>
-      ` : ''}
-      ${meta.status === 'approved' ? `
+      `
+          : ''
+      }
+      ${
+        meta.status === 'approved'
+          ? `
         <button class="btn btn-danger" data-action="reject">Revoke (Reject)</button>
-      ` : ''}
-      ${meta.status === 'rejected' ? `
+      `
+          : ''
+      }
+      ${
+        meta.status === 'rejected'
+          ? `
         <button class="btn btn-primary" data-action="approve">Approve</button>
-      ` : ''}
+      `
+          : ''
+      }
       <button class="btn btn-danger" data-action="delete">Delete</button>
     </div>
   `;
@@ -167,7 +189,10 @@ export async function renderToolDetail(el, toolId) {
       const note = prompt('Rejection note (optional):');
       btn.disabled = true;
       btn.textContent = 'Rejecting...';
-      await api(`/api/tools/${meta.id}/reject`, { method: 'POST', body: { note: note || undefined } });
+      await api(`/api/tools/${meta.id}/reject`, {
+        method: 'POST',
+        body: { note: note || undefined },
+      });
       renderToolDetail(el, toolId);
     } else if (action === 'delete') {
       if (confirm('Delete this tool? This cannot be undone.')) {

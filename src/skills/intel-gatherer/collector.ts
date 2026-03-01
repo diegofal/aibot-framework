@@ -1,14 +1,14 @@
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type {
-  RedditPost,
-  RedditSource,
-  HNStory,
-  HNSource,
+  CategoryData,
   GitHubRelease,
   GitHubSource,
+  HNSource,
+  HNStory,
   IntelData,
-  CategoryData,
+  RedditPost,
+  RedditSource,
   SourcesConfig,
 } from './types';
 
@@ -98,9 +98,7 @@ export class IntelCollector {
         const batchResults = await Promise.all(
           batch.map(async (id) => {
             try {
-              const res = await fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${id}.json`
-              );
+              const res = await fetch(`https://hacker-news.firebaseio.com/v0/item/${id}.json`);
               if (!res.ok) return null;
               const story = await res.json();
 
@@ -156,10 +154,9 @@ export class IntelCollector {
         headers.Authorization = `token ${this.githubToken}`;
       }
 
-      const res = await fetch(
-        `https://api.github.com/repos/${source.repo}/releases/latest`,
-        { headers }
-      );
+      const res = await fetch(`https://api.github.com/repos/${source.repo}/releases/latest`, {
+        headers,
+      });
 
       if (!res.ok) {
         if (res.status === 404) return null;

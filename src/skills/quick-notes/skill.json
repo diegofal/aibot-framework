@@ -13,7 +13,11 @@
         "type": "object",
         "properties": {
           "content": { "type": "string", "description": "The note content" },
-          "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for categorization" },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Tags for categorization"
+          },
           "source": { "type": "string", "description": "Where the note came from" }
         },
         "required": ["content"]

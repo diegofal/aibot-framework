@@ -1,12 +1,12 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import type { Skill, SkillContext } from '../../core/types';
 import { localDateStr } from '../../date-utils';
-import type { IntelConfig, SourcesConfig, TriggerInfo } from './types';
-import { IntelCollector } from './collector';
 import { IntelAnalyzer } from './analyzer';
+import { IntelCollector } from './collector';
 import { IntelFormatter } from './formatter';
+import type { IntelConfig, SourcesConfig, TriggerInfo } from './types';
 
 // ── Helpers ──
 
@@ -76,10 +76,7 @@ async function runCollection(ctx: SkillContext, trigger?: TriggerInfo): Promise<
 
     // Resolve GitHub token: config > sources.yml > env
     const githubToken =
-      config.githubToken ||
-      sources.settings.github_token ||
-      process.env.GITHUB_TOKEN ||
-      undefined;
+      config.githubToken || sources.settings.github_token || process.env.GITHUB_TOKEN || undefined;
 
     // 1. Collect data
     const collector = new IntelCollector(ctx.logger, githubToken);

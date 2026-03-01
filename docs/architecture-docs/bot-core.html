@@ -34,13 +34,13 @@
 
       <div class="page-header">
         <h1>Bot Core Modules</h1>
-        <p>Deep dive into all 29 modules in <code>src/bot/</code></p>
+        <p>Deep dive into all 30 modules in <code>src/bot/</code></p>
       </div>
 
       <!-- Stats -->
       <div class="stat-row">
         <div class="stat">
-          <div class="number">29</div>
+          <div class="number">30</div>
           <div class="label">Modules</div>
         </div>
         <div class="stat">
@@ -174,7 +174,7 @@
           </tbody>
         </table>
         <h4>Dependencies</h4>
-        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./telegram-utils</code> (sendLongMessage)</p>
+        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./context-compaction</code> (ContextCompactor), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./telegram-utils</code> (sendLongMessage)</p>
       </div>
 
       <!-- handler-registrar.ts -->
@@ -362,6 +362,7 @@
             <tr><td>getToolsForBot</td><td>botId: string</td><td>Returns Tool instances filtered for a specific bot</td></tr>
             <tr><td>getCollaborationToolsForBot</td><td>botId: string</td><td>Returns tools excluding collaborate/delegate, respecting per-bot disabled set</td></tr>
             <tr><td>getCollaborationTools</td><td>(none)</td><td>Returns all tools minus collaborate/delegate_to_bot</td></tr>
+            <tr><td>clearExternalSkillsForBot</td><td>botId: string</td><td>Removes all external skill tools belonging to a bot from runtime (ctx.tools[], toolDefinitions[], maps). Returns removed skill IDs.</td></tr>
             <tr><td>createExecutor</td><td>chatId: number, botId: string</td><td>Creates a ToolExecutor callback for Ollama/LLM client chat calls</td></tr>
             <tr><td>getDynamicToolStore</td><td>(none)</td><td>Returns the DynamicToolStore instance (for web API)</td></tr>
             <tr><td>getDynamicToolRegistry</td><td>(none)</td><td>Returns the DynamicToolRegistry instance (for web API approve/reject)</td></tr>
@@ -451,7 +452,7 @@
       <!-- ================================================================ -->
       <div class="category-header">
         <h2>Memory &amp; Soul</h2>
-        <span class="count">5 modules</span>
+        <span class="count">6 modules</span>
       </div>
 
       <!-- memory-flush.ts -->
@@ -489,6 +490,24 @@
         </table>
         <h4>Dependencies</h4>
         <p><code>./types</code>, <code>../ollama</code> (ChatMessage), <code>../claude-cli</code> (claudeGenerate)</p>
+      </div>
+
+      <!-- context-compaction.ts -->
+      <div class="module-section" id="context-compaction">
+        <h3>context-compaction.ts</h3>
+        <div class="file-path">src/bot/context-compaction.ts</div>
+        <p class="responsibility">
+          LLM-based context compaction: token estimation, truncation, summarization, overflow retry.
+          Manages conversation context size by estimating token counts, truncating older messages when
+          limits are approached, and using LLM-based summarization to compress history while preserving
+          key information. Handles overflow retry by compacting context and re-attempting the LLM call.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>ContextCompactor</code> (class)</li>
+        </ul>
+        <h4>Dependencies</h4>
+        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>../core/llm-client</code> (LLMClient), <code>../session</code> (SessionManager)</p>
       </div>
 
       <!-- soul-health-check.ts -->
@@ -712,7 +731,7 @@
           </tbody>
         </table>
         <h4>Dependencies</h4>
-        <p><code>./types</code>, <code>./agent-scheduler</code>, <code>./agent-planner</code>, <code>./agent-strategist</code>, <code>./agent-retry-engine</code>, <code>./agent-loop-utils</code>, <code>./system-prompt-builder</code>, <code>./tool-registry</code>, <code>./tool-executor</code>, <code>./agent-loop-prompts</code>, <code>./telegram-utils</code>, <code>../config</code>, <code>../core/llm-client</code>, <code>../tools/goals</code>, <code>../karma/service</code></p>
+        <p><code>./types</code>, <code>./agent-scheduler</code>, <code>./agent-planner</code>, <code>./agent-strategist</code>, <code>./agent-retry-engine</code>, <code>./agent-loop-utils</code>, <code>./system-prompt-builder</code>, <code>./tool-registry</code>, <code>./tool-executor</code>, <code>./agent-loop-prompts</code>, <code>./telegram-utils</code>, <code>../config</code>, <code>../tools/goals</code>, <code>../karma/service</code></p>
       </div>
 
       <!-- agent-scheduler.ts -->
@@ -1039,11 +1058,12 @@
             <tr><td>1</td><td>ToolRegistry</td></tr>
             <tr><td>2</td><td>SystemPromptBuilder (reads ToolRegistry.getDefinitions)</td></tr>
             <tr><td>3</td><td>MemoryFlusher</td></tr>
-            <tr><td>4</td><td>GroupActivation</td></tr>
-            <tr><td>5</td><td>ConversationPipeline (uses 2, 3, 1)</td></tr>
-            <tr><td>6</td><td>CollaborationManager (uses 2, 1)</td></tr>
-            <tr><td>7</td><td>HandlerRegistrar (uses 5, 4, 3, 1)</td></tr>
-            <tr><td>8</td><td>AgentLoop (uses 2, 1)</td></tr>
+            <tr><td>4</td><td>ContextCompactor (uses MemoryFlusher, LLMClient, SessionManager)</td></tr>
+            <tr><td>5</td><td>GroupActivation</td></tr>
+            <tr><td>6</td><td>ConversationPipeline (uses 2, 3, 4, 1)</td></tr>
+            <tr><td>7</td><td>CollaborationManager (uses 2, 1)</td></tr>
+            <tr><td>8</td><td>HandlerRegistrar (uses 6, 5, 3, 1)</td></tr>
+            <tr><td>9</td><td>AgentLoop (uses 2, 1)</td></tr>
           </tbody>
         </table>
         <h4>Key Public Methods</h4>
@@ -1052,7 +1072,7 @@
           <tbody>
             <tr><td>startBot</td><td>config: BotConfig</td><td>Starts a bot: sets up LLM client, soul loader, feedback loading, soul health check, Telegram polling or headless mode, registers in agent registry</td></tr>
             <tr><td>stopBot</td><td>botId: string</td><td>Stops polling and cleans up all bot state</td></tr>
-            <tr><td>resetBot</td><td>botId: string</td><td>Full reset: clears sessions, goals, memory logs, versions, core memory, index</td></tr>
+            <tr><td>resetBot</td><td>botId: string</td><td>Full reset (22 steps): clears sessions, soul files (baseline restore), goals, memory, versions, feedback, core memory, index, ask-human/ask-permission stores, dynamic tools, karma, production skill tools (runtime + disk + config refs), conversations, tool audit logs, entire productions directory, agent scheduler state, collaboration tracker records, collaboration sessions, and activity stream events</td></tr>
             <tr><td>sendMessage</td><td>chatId, text, botId</td><td>Sends a message via a bot's Telegram instance</td></tr>
             <tr><td>startAgentLoop</td><td>(none)</td><td>Starts the autonomous agent loop</td></tr>
             <tr><td>runAgentLoopAll</td><td>(none)</td><td>Manually triggers all periodic bots</td></tr>
@@ -1128,6 +1148,22 @@
           daily JSONL files. Subscribes to <code>tool:end</code> events from <code>ToolExecutor</code>
           in the agent loop. Each entry records timestamp, botId, chatId, toolName, args, success,
           result (truncated to 500 chars), durationMs, and retryAttempts.
+        </p>
+
+        <h4>New Module: activity-stream.ts &mdash; LLM Diagnostics</h4>
+        <p>
+          <code>src/bot/activity-stream.ts</code> &mdash; The <code>ActivityStream</code> is an
+          <code>EventEmitter</code> with a circular buffer that receives real-time events from
+          agent-loop, conversation-pipeline, memory, and collaboration modules. It now includes
+          <code>LlmStatsTracker</code> (accessible via <code>activityStream.llmStats</code>) which
+          subscribes to <code>llm:end</code>, <code>llm:error</code>, and <code>llm:fallback</code>
+          events, maintaining per-bot aggregate counters: <code>totalCalls</code>,
+          <code>successCount</code>, <code>failCount</code>, <code>fallbackCount</code>,
+          <code>avgDurationMs</code>, <code>lastCallAt</code>, <code>lastError</code>, and a
+          <code>callerBreakdown</code> (per-caller counts, durations, errors for conversation,
+          planner, strategist, executor, feedback). Stats are in-memory only and reset on restart.
+          The <code>clearForBot()</code> method also clears LLM stats. API endpoints at
+          <code>GET /api/agent-loop/llm-stats[/:botId]</code>.
         </p>
 
         <h4>Data NOT Persisted</h4>

@@ -1,6 +1,6 @@
+import { existsSync, lstatSync, readlinkSync, statSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import { Hono } from 'hono';
-import { resolve, relative } from 'node:path';
-import { existsSync, statSync, lstatSync, readlinkSync } from 'node:fs';
 import type { Config } from '../../config';
 import { resolveAgentConfig } from '../../config';
 import type { Logger } from '../../logger';
@@ -59,7 +59,10 @@ export function filesRoutes(deps: { config: Config; logger: Logger }) {
     // Check denied patterns
     for (const pattern of DENIED_PATTERNS) {
       if (pattern.test(resolvedPath) || pattern.test(rawPath)) {
-        logger.warn({ botId, path: rawPath, pattern: String(pattern) }, 'files: denied pattern blocked');
+        logger.warn(
+          { botId, path: rawPath, pattern: String(pattern) },
+          'files: denied pattern blocked'
+        );
         return c.json({ error: 'Access denied: file matches blocked pattern' }, 403);
       }
     }

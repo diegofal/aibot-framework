@@ -1,10 +1,10 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, basename } from 'node:path';
 import type { Database } from 'bun:sqlite';
-import type { Logger } from '../logger';
+import { readFileSync, readdirSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import type { MemorySearchConfig } from '../config';
+import type { Logger } from '../logger';
+import { chunkMarkdown, contentHash } from './chunker';
 import type { EmbeddingService } from './embeddings';
-import { contentHash, chunkMarkdown } from './chunker';
 import { serializeEmbedding } from './schema';
 
 /**
@@ -49,7 +49,7 @@ export async function indexSessionTranscript(
   sessionKey: string,
   embeddingService: EmbeddingService,
   config: MemorySearchConfig,
-  logger: Logger,
+  logger: Logger
 ): Promise<number> {
   const text = transcriptToText(transcriptPath);
   if (!text) return 0;
@@ -58,9 +58,9 @@ export async function indexSessionTranscript(
   const relPath = `sessions/${sessionKey}`;
 
   // Check if already indexed with same hash
-  const existing = db.prepare<{ content_hash: string }, [string]>(
-    'SELECT content_hash FROM files WHERE path = ?'
-  ).get(relPath);
+  const existing = db
+    .prepare<{ content_hash: string }, [string]>('SELECT content_hash FROM files WHERE path = ?')
+    .get(relPath);
 
   if (existing && existing.content_hash === hash) {
     logger.debug({ path: relPath }, 'Session transcript unchanged, skipping');
@@ -69,7 +69,9 @@ export async function indexSessionTranscript(
 
   // Remove old data if re-indexing
   if (existing) {
-    const fileRow = db.prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?').get(relPath);
+    const fileRow = db
+      .prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?')
+      .get(relPath);
     if (fileRow) {
       db.prepare('DELETE FROM chunks WHERE file_id = ?').run(fileRow.id);
       db.prepare('DELETE FROM files WHERE id = ?').run(fileRow.id);
@@ -94,7 +96,9 @@ export async function indexSessionTranscript(
   );
   insertFile.run(relPath, hash, chunks.length);
 
-  const fileRow = db.prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?').get(relPath);
+  const fileRow = db
+    .prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?')
+    .get(relPath);
   if (!fileRow) {
     throw new Error(`Failed to insert file record for ${relPath}`);
   }
@@ -117,7 +121,7 @@ export async function indexSessionTranscript(
         chunk.endLine,
         chunk.tokenEstimate,
         chunk.contentHash,
-        embedding ? serializeEmbedding(embedding) : null,
+        embedding ? serializeEmbedding(embedding) : null
       );
     }
   });
@@ -135,7 +139,7 @@ export async function indexAllSessions(
   transcriptsDir: string,
   embeddingService: EmbeddingService,
   config: MemorySearchConfig,
-  logger: Logger,
+  logger: Logger
 ): Promise<{ indexed: number; totalChunks: number }> {
   let files: string[];
   try {
@@ -153,7 +157,14 @@ export async function indexAllSessions(
     // Derive session key from filename (strip .jsonl extension)
     const sessionKey = basename(file, '.jsonl');
     try {
-      const chunks = await indexSessionTranscript(db, fullPath, sessionKey, embeddingService, config, logger);
+      const chunks = await indexSessionTranscript(
+        db,
+        fullPath,
+        sessionKey,
+        embeddingService,
+        config,
+        logger
+      );
       if (chunks > 0) {
         indexed++;
         totalChunks += chunks;
@@ -163,6 +174,9 @@ export async function indexAllSessions(
     }
   }
 
-  logger.info({ indexed, totalChunks, files: files.length }, 'Session transcript indexing complete');
+  logger.info(
+    { indexed, totalChunks, files: files.length },
+    'Session transcript indexing complete'
+  );
   return { indexed, totalChunks };
 }

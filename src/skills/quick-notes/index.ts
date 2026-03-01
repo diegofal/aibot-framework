@@ -28,7 +28,10 @@ function saveNotes(ctx: SkillContext, data: NotesData): void {
   ctx.data.set(DATA_KEY, data);
 }
 
-export const handlers: Record<string, (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>> = {
+export const handlers: Record<
+  string,
+  (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>
+> = {
   async quick_notes_save(args: Record<string, unknown>, ctx: SkillContext): Promise<unknown> {
     const content = String(args.content || '');
     const tags = Array.isArray(args.tags) ? args.tags.map(String) : [];
@@ -72,7 +75,7 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
     let notes = data.notes;
 
     if (tagFilter) {
-      notes = notes.filter(n => n.tags.includes(tagFilter));
+      notes = notes.filter((n) => n.tags.includes(tagFilter));
     }
 
     const result = notes.slice(0, limit);
@@ -81,7 +84,7 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
       success: true,
       count: result.length,
       total: data.notes.length,
-      notes: result.map(n => ({
+      notes: result.map((n) => ({
         id: n.id,
         content: n.content.slice(0, 150) + (n.content.length > 150 ? '...' : ''),
         tags: n.tags,
@@ -100,14 +103,14 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
 
     const data = getNotes(ctx);
     const results = data.notes
-      .filter(n => n.content.toLowerCase().includes(query))
+      .filter((n) => n.content.toLowerCase().includes(query))
       .slice(0, limit);
 
     return {
       success: true,
       query,
       count: results.length,
-      notes: results.map(n => ({
+      notes: results.map((n) => ({
         id: n.id,
         content: n.content.slice(0, 150) + (n.content.length > 150 ? '...' : ''),
         tags: n.tags,
@@ -124,7 +127,7 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
     }
 
     const data = getNotes(ctx);
-    const index = data.notes.findIndex(n => n.id === id);
+    const index = data.notes.findIndex((n) => n.id === id);
 
     if (index === -1) {
       return { success: false, message: `Note not found: ${id}` };
@@ -173,18 +176,20 @@ const skill: Skill = {
 
           // Extract tags: words starting with #
           const tags: string[] = [];
-          const cleanContent = content.replace(/#(\w+)/g, (match, tag) => {
-            tags.push(tag);
-            return '';
-          }).trim();
+          const cleanContent = content
+            .replace(/#(\w+)/g, (match, tag) => {
+              tags.push(tag);
+              return '';
+            })
+            .trim();
 
-          const result = await handlers.quick_notes_save(
+          const result = (await handlers.quick_notes_save(
             { content: cleanContent, tags },
             ctx
-          ) as { success: boolean; note?: { id: string }; message?: string };
+          )) as { success: boolean; note?: { id: string }; message?: string };
 
           if (result.success) {
-            const tagStr = tags.length > 0 ? ` Tags: ${tags.map(t => `#${t}`).join(' ')}` : '';
+            const tagStr = tags.length > 0 ? ` Tags: ${tags.map((t) => `#${t}`).join(' ')}` : '';
             return `✅ Note saved.${tagStr}\nID: \`${result.note?.id}\``;
           }
           return `❌ Failed: ${result.message}`;
@@ -193,10 +198,11 @@ const skill: Skill = {
         // /note list [tag]
         if (subcommand === 'list' || subcommand === 'ls') {
           const tag = rest || undefined;
-          const result = await handlers.quick_notes_list(
-            { limit: 10, tag },
-            ctx
-          ) as { success: boolean; notes: Array<{ id: string; content: string; tags: string[]; createdAt: string }>; total: number };
+          const result = (await handlers.quick_notes_list({ limit: 10, tag }, ctx)) as {
+            success: boolean;
+            notes: Array<{ id: string; content: string; tags: string[]; createdAt: string }>;
+            total: number;
+          };
 
           if (!result.success || result.notes.length === 0) {
             return tag
@@ -205,9 +211,12 @@ const skill: Skill = {
           }
 
           const header = tag ? `📝 Notes tagged "${tag}"` : '📝 Recent notes';
-          const lines = result.notes.map(n => {
-            const tagStr = n.tags.length > 0 ? ` ${n.tags.map(t => `#${t}`).join(' ')}` : '';
-            const date = new Date(n.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          const lines = result.notes.map((n) => {
+            const tagStr = n.tags.length > 0 ? ` ${n.tags.map((t) => `#${t}`).join(' ')}` : '';
+            const date = new Date(n.createdAt).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+            });
             return `• ${n.content.slice(0, 80)}${n.content.length > 80 ? '...' : ''}${tagStr}\n  \`${n.id}\` · ${date}`;
           });
 
@@ -220,18 +229,22 @@ const skill: Skill = {
             return '🔍 Usage: /note search <query>';
           }
 
-          const result = await handlers.quick_notes_search(
-            { query: rest, limit: 10 },
-            ctx
-          ) as { success: boolean; notes: Array<{ id: string; content: string; tags: string[]; createdAt: string }>; count: number };
+          const result = (await handlers.quick_notes_search({ query: rest, limit: 10 }, ctx)) as {
+            success: boolean;
+            notes: Array<{ id: string; content: string; tags: string[]; createdAt: string }>;
+            count: number;
+          };
 
           if (!result.success || result.count === 0) {
             return `🔍 No notes found for "${rest}".`;
           }
 
-          const lines = result.notes.map(n => {
-            const tagStr = n.tags.length > 0 ? ` ${n.tags.map(t => `#${t}`).join(' ')}` : '';
-            const date = new Date(n.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          const lines = result.notes.map((n) => {
+            const tagStr = n.tags.length > 0 ? ` ${n.tags.map((t) => `#${t}`).join(' ')}` : '';
+            const date = new Date(n.createdAt).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+            });
             return `• ${n.content.slice(0, 80)}${n.content.length > 80 ? '...' : ''}${tagStr}\n  \`${n.id}\` · ${date}`;
           });
 
@@ -244,10 +257,11 @@ const skill: Skill = {
             return '🗑️ Usage: /note delete <id>';
           }
 
-          const result = await handlers.quick_notes_delete(
-            { id: rest },
-            ctx
-          ) as { success: boolean; deleted?: { id: string }; message?: string };
+          const result = (await handlers.quick_notes_delete({ id: rest }, ctx)) as {
+            success: boolean;
+            deleted?: { id: string };
+            message?: string;
+          };
 
           if (result.success) {
             return `🗑️ Deleted: ${result.deleted?.id}`;
@@ -259,15 +273,15 @@ const skill: Skill = {
         if (subcommand === 'tags') {
           const data = getNotes(ctx);
           const allTags = new Set<string>();
-          data.notes.forEach(n => n.tags.forEach(t => allTags.add(t)));
+          data.notes.forEach((n) => n.tags.forEach((t) => allTags.add(t)));
 
           if (allTags.size === 0) {
             return '🏷️ No tags yet. Add tags with #hashtag in your notes.';
           }
 
           const tagCounts: Record<string, number> = {};
-          data.notes.forEach(n => {
-            n.tags.forEach(t => {
+          data.notes.forEach((n) => {
+            n.tags.forEach((t) => {
               tagCounts[t] = (tagCounts[t] || 0) + 1;
             });
           });

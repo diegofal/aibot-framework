@@ -1,7 +1,7 @@
-import { resolve, relative } from 'node:path';
-import { mkdir, lstat } from 'node:fs/promises';
-import type { Tool, ToolResult } from './types';
+import { lstat, mkdir } from 'node:fs/promises';
+import { relative, resolve } from 'node:path';
 import type { Logger } from '../logger';
+import type { Tool, ToolResult } from './types';
 
 export interface FileToolsConfig {
   basePath: string;
@@ -30,10 +30,7 @@ const BUILTIN_DENIED = [
  * Check denied patterns against a resolved path.
  * Returns an error string if blocked, or undefined if OK.
  */
-function checkDeniedPatterns(
-  resolved: string,
-  deniedPatterns: RegExp[],
-): string | undefined {
+function checkDeniedPatterns(resolved: string, deniedPatterns: RegExp[]): string | undefined {
   for (const pattern of BUILTIN_DENIED) {
     if (pattern.test(resolved)) {
       return `Access denied: file matches blocked pattern (${pattern})`;
@@ -54,7 +51,7 @@ function checkDeniedPatterns(
 async function checkSymlink(
   resolved: string,
   root: string,
-  rawPath: string,
+  rawPath: string
 ): Promise<string | undefined> {
   try {
     const stat = await lstat(resolved);
@@ -82,7 +79,7 @@ async function validatePath(
   rawPath: string,
   basePath: string,
   deniedPatterns: RegExp[],
-  allowedPaths: string[] = [],
+  allowedPaths: string[] = []
 ): Promise<string | { error: string }> {
   const resolved = resolve(basePath, rawPath);
 
@@ -218,7 +215,7 @@ export function createFileWriteTool(config: FileToolsConfig): Tool {
       function: {
         name: 'file_write',
         description:
-          'Write content to a file. Creates the file if it doesn\'t exist, or overwrites it. ' +
+          "Write content to a file. Creates the file if it doesn't exist, or overwrites it. " +
           'Set append=true to append instead of overwriting. Creates intermediate directories automatically.',
         parameters: {
           type: 'object',
@@ -233,7 +230,8 @@ export function createFileWriteTool(config: FileToolsConfig): Tool {
             },
             append: {
               type: 'boolean',
-              description: 'If true, append to existing file instead of overwriting. Default: false.',
+              description:
+                'If true, append to existing file instead of overwriting. Default: false.',
             },
           },
           required: ['path', 'content'],
@@ -330,7 +328,8 @@ export function createFileEditTool(config: FileToolsConfig): Tool {
             },
             replace_all: {
               type: 'boolean',
-              description: 'If true, replace all occurrences. Default: false (requires unique match).',
+              description:
+                'If true, replace all occurrences. Default: false (requires unique match).',
             },
           },
           required: ['path', 'old_text', 'new_text'],
@@ -372,7 +371,8 @@ export function createFileEditTool(config: FileToolsConfig): Tool {
         if (count === 0) {
           return {
             success: false,
-            content: 'old_text not found in file. Make sure the text matches exactly (including whitespace).',
+            content:
+              'old_text not found in file. Make sure the text matches exactly (including whitespace).',
           };
         }
 
@@ -389,15 +389,13 @@ export function createFileEditTool(config: FileToolsConfig): Tool {
         } else {
           // Replace first (and only) occurrence
           const pos = content.indexOf(oldText);
-          newContent = content.substring(0, pos) + newText + content.substring(pos + oldText.length);
+          newContent =
+            content.substring(0, pos) + newText + content.substring(pos + oldText.length);
         }
 
         await Bun.write(validated, newContent);
 
-        logger.info(
-          { path: rawPath, replacements: replaceAll ? count : 1 },
-          'file_edit: success'
-        );
+        logger.info({ path: rawPath, replacements: replaceAll ? count : 1 }, 'file_edit: success');
         return {
           success: true,
           content: `Successfully edited ${rawPath} (${replaceAll ? count : 1} replacement${count > 1 && replaceAll ? 's' : ''})`,

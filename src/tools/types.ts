@@ -1,5 +1,5 @@
-import type { Logger } from '../logger';
 import type { z } from 'zod';
+import type { Logger } from '../logger';
 
 /**
  * OpenAI-compatible function/tool definition (what Ollama expects)
@@ -62,10 +62,7 @@ export interface Tool {
 /**
  * Callback type used by the Ollama client to execute tool calls
  */
-export type ToolExecutor = (
-  name: string,
-  args: Record<string, unknown>
-) => Promise<ToolResult>;
+export type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
 
 /**
  * Wrap tool output with markers so the LLM knows it's external/untrusted content

@@ -1,5 +1,5 @@
 import type { DataStore } from '../../core/types';
-import type { CalibrationSession, CalibrateScope, ClaimBatch } from './types';
+import type { CalibrateScope, CalibrationSession, ClaimBatch } from './types';
 
 const SESSION_PREFIX = 'cal-session:';
 
@@ -7,7 +7,11 @@ function sessionKey(chatId: number, userId: number): string {
   return `${SESSION_PREFIX}${chatId}:${userId}`;
 }
 
-export function getSession(data: DataStore, chatId: number, userId: number): CalibrationSession | undefined {
+export function getSession(
+  data: DataStore,
+  chatId: number,
+  userId: number
+): CalibrationSession | undefined {
   return data.get<CalibrationSession>(sessionKey(chatId, userId));
 }
 
@@ -16,7 +20,7 @@ export function createSession(
   chatId: number,
   userId: number,
   scope: CalibrateScope,
-  batches: ClaimBatch[],
+  batches: ClaimBatch[]
 ): CalibrationSession {
   const session: CalibrationSession = {
     phase: 'reviewing',

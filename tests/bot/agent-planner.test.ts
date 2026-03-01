@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, test, vi } from 'bun:test';
 import { parsePlannerResult, runPlannerWithRetry } from '../../src/bot/agent-planner';
 
 const mockLogger = {
@@ -154,7 +154,7 @@ describe('runPlannerWithRetry', () => {
       mockClient as any,
       plannerInput,
       model,
-      mockLogger as any,
+      mockLogger as any
     );
 
     expect(result).toEqual({
@@ -178,15 +178,13 @@ describe('runPlannerWithRetry', () => {
       plan: ['retried action'],
       priority: 'medium',
     });
-    mockClient.generate
-      .mockResolvedValueOnce(invalidResponse)
-      .mockResolvedValueOnce(validResponse);
+    mockClient.generate.mockResolvedValueOnce(invalidResponse).mockResolvedValueOnce(validResponse);
 
     const result = await runPlannerWithRetry(
       mockClient as any,
       plannerInput,
       model,
-      mockLogger as any,
+      mockLogger as any
     );
 
     expect(result).toEqual({
@@ -210,20 +208,18 @@ describe('runPlannerWithRetry', () => {
     expect(mockLogger.warn).toHaveBeenCalled();
     expect(mockLogger.info).toHaveBeenCalledWith(
       { attempt: 1 },
-      'Agent loop: planner succeeded on retry',
+      'Agent loop: planner succeeded on retry'
     );
   });
 
   test('returns fallback idle plan after all retries fail', async () => {
-    mockClient.generate
-      .mockResolvedValueOnce('garbage1')
-      .mockResolvedValueOnce('garbage2');
+    mockClient.generate.mockResolvedValueOnce('garbage1').mockResolvedValueOnce('garbage2');
 
     const result = await runPlannerWithRetry(
       mockClient as any,
       plannerInput,
       model,
-      mockLogger as any,
+      mockLogger as any
     );
 
     expect(result).toEqual({

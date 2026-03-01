@@ -1,12 +1,12 @@
-import { describe, test, expect, afterEach } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import {
+  closeAllBrowsers,
+  closeBrowser,
   getActivePage,
   getBrowserStatus,
   isRunning,
-  storeRefs,
   resolveRef,
-  closeBrowser,
-  closeAllBrowsers,
+  storeRefs,
 } from '../../src/tools/browser-session';
 import type { ElementRef } from '../../src/tools/browser-snapshot';
 
@@ -34,9 +34,7 @@ describe('browser-session per-bot isolation', () => {
       ['e1', { role: 'button', name: 'Submit' }],
       ['e2', { role: 'link', name: 'Home' }],
     ]);
-    const refsB = new Map<string, ElementRef>([
-      ['e1', { role: 'textbox', name: 'Search' }],
-    ]);
+    const refsB = new Map<string, ElementRef>([['e1', { role: 'textbox', name: 'Search' }]]);
 
     storeRefs('botA', refsA);
     storeRefs('botB', refsB);

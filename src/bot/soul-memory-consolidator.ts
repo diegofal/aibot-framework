@@ -1,4 +1,11 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
@@ -34,14 +41,14 @@ export function getUnconsolidatedLogs(soulDir: string): string[] {
 function buildConsolidationPrompt(
   soulDir: string,
   existingMemory: string | null,
-  dailyLogContents: Array<{ date: string; content: string }>,
+  dailyLogContents: Array<{ date: string; content: string }>
 ): string {
   const parts = [
     'You are a memory consolidation agent for an AI bot.',
     'Your job is to merge daily memory logs into a single unified MEMORY.md file.',
     '',
     '## Instructions',
-    '1. Merge the daily facts into the existing MEMORY.md structure (or create a new one if it doesn\'t exist).',
+    "1. Merge the daily facts into the existing MEMORY.md structure (or create a new one if it doesn't exist).",
     '2. Deduplicate: if the same fact appears across multiple days, keep only one instance.',
     '3. Remove noise:',
     '   - Lines containing "[agent-loop] (no response from executor)" or similar agent-loop noise',
@@ -62,13 +69,7 @@ function buildConsolidationPrompt(
   ];
 
   if (existingMemory) {
-    parts.push(
-      '## Existing MEMORY.md',
-      '```',
-      existingMemory,
-      '```',
-      '',
-    );
+    parts.push('## Existing MEMORY.md', '```', existingMemory, '```', '');
   }
 
   parts.push('## Daily Logs to Merge');
@@ -79,7 +80,7 @@ function buildConsolidationPrompt(
   parts.push(
     '## Output',
     'Output ONLY the new MEMORY.md content. No preamble, no explanation, just the file content.',
-    'Start with the <!-- last-consolidated: YYYY-MM-DD --> comment using today\'s date.',
+    "Start with the <!-- last-consolidated: YYYY-MM-DD --> comment using today's date."
   );
 
   return parts.join('\n');
@@ -112,14 +113,18 @@ export async function consolidateMemory(opts: {
     try {
       const content = readFileSync(memoryMdPath, 'utf-8').trim();
       if (content) existingMemory = content;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   if (!existingMemory && existsSync(legacyPath)) {
     try {
       const content = readFileSync(legacyPath, 'utf-8').trim();
       if (content) existingMemory = content;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   // Read daily log contents
@@ -130,7 +135,9 @@ export async function consolidateMemory(opts: {
       if (content) {
         dailyLogContents.push({ date: file.replace('.md', ''), content });
       }
-    } catch { /* skip unreadable */ }
+    } catch {
+      /* skip unreadable */
+    }
   }
 
   if (dailyLogContents.length === 0) {
@@ -142,11 +149,11 @@ export async function consolidateMemory(opts: {
 
   logger.info(
     { logCount: dailyLogContents.length, hasExisting: !!existingMemory },
-    'Memory consolidation: running Claude CLI',
+    'Memory consolidation: running Claude CLI'
   );
 
   const env = { ...process.env };
-  delete env.CLAUDECODE;
+  env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
   const proc = Bun.spawn([claudePath, '-p', prompt, '--output-format', 'text'], {
@@ -157,7 +164,9 @@ export async function consolidateMemory(opts: {
   });
 
   const timer = setTimeout(() => {
-    try { proc.kill(); } catch {}
+    try {
+      proc.kill();
+    } catch {}
   }, timeout);
 
   try {
@@ -171,7 +180,7 @@ export async function consolidateMemory(opts: {
     if (exitCode !== 0) {
       logger.warn(
         { exitCode, stderr: stderr.slice(0, 500) },
-        'Memory consolidation: Claude CLI failed',
+        'Memory consolidation: Claude CLI failed'
       );
       return { merged: 0, archived: 0 };
     }
@@ -208,10 +217,7 @@ export async function consolidateMemory(opts: {
       }
     }
 
-    logger.info(
-      { merged: dailyLogContents.length, archived },
-      'Memory consolidation: complete',
-    );
+    logger.info({ merged: dailyLogContents.length, archived }, 'Memory consolidation: complete');
 
     return { merged: dailyLogContents.length, archived };
   } catch (err) {

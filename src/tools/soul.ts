@@ -1,6 +1,6 @@
-import type { Tool, ToolResult } from './types';
-import type { SoulLoader } from '../soul';
 import type { Logger } from '../logger';
+import type { SoulLoader } from '../soul';
+import type { Tool, ToolResult } from './types';
 
 type SoulLoaderResolver = (botId: string) => SoulLoader;
 
@@ -30,17 +30,14 @@ export function createSaveMemoryTool(getSoulLoader: SoulLoaderResolver): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const MAX_MEMORY_LENGTH = 2000;
       let fact = String(args.fact ?? '').trim();
       if (!fact) {
         return { success: false, content: 'Missing required parameter: fact' };
       }
       if (fact.length > MAX_MEMORY_LENGTH) {
-        fact = fact.slice(0, MAX_MEMORY_LENGTH) + '\n...(truncated)';
+        fact = `${fact.slice(0, MAX_MEMORY_LENGTH)}\n...(truncated)`;
       }
 
       try {
@@ -76,8 +73,7 @@ export function createUpdateSoulTool(getSoulLoader: SoulLoaderResolver): Tool {
           properties: {
             content: {
               type: 'string',
-              description:
-                'The full new soul content (personality, tone, style rules)',
+              description: 'The full new soul content (personality, tone, style rules)',
             },
           },
           required: ['content'],
@@ -85,10 +81,7 @@ export function createUpdateSoulTool(getSoulLoader: SoulLoaderResolver): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const content = String(args.content ?? '').trim();
       if (!content) {
         return { success: false, content: 'Missing required parameter: content' };
@@ -141,10 +134,7 @@ export function createUpdateIdentityTool(getSoulLoader: SoulLoaderResolver): Too
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const fields: { name?: string; emoji?: string; vibe?: string } = {};
       if (args.name !== undefined) fields.name = String(args.name);
       if (args.emoji !== undefined) fields.emoji = String(args.emoji);

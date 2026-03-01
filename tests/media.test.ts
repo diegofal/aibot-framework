@@ -1,6 +1,6 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { MediaHandler, MediaError } from '../src/media';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { MediaConfig } from '../src/config';
+import { MediaError, MediaHandler } from '../src/media';
 
 const originalFetch = globalThis.fetch;
 
@@ -49,13 +49,15 @@ describe('MediaHandler.processVoice', () => {
    * Helper: sets up fetch mock that handles both the download call (first)
    * and the whisper call (second) based on URL matching.
    */
-  function setupFetchMock(opts: {
-    whisperResponse?: object;
-    whisperStatus?: number;
-    downloadBuffer?: Uint8Array;
-    downloadStatus?: number;
-    whisperAbort?: boolean;
-  } = {}) {
+  function setupFetchMock(
+    opts: {
+      whisperResponse?: object;
+      whisperStatus?: number;
+      downloadBuffer?: Uint8Array;
+      downloadStatus?: number;
+      whisperAbort?: boolean;
+    } = {}
+  ) {
     const {
       whisperResponse = { text: 'hello world' },
       whisperStatus = 200,
@@ -74,10 +76,12 @@ describe('MediaHandler.processVoice', () => {
             reject(new DOMException('The operation was aborted.', 'AbortError'));
           });
         }
-        return Promise.resolve(new Response(JSON.stringify(whisperResponse), {
-          status: whisperStatus,
-          headers: { 'Content-Type': 'application/json' },
-        }));
+        return Promise.resolve(
+          new Response(JSON.stringify(whisperResponse), {
+            status: whisperStatus,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        );
       }
 
       // Download (file URL)
@@ -136,11 +140,11 @@ describe('MediaHandler.processVoice', () => {
     await handler.processVoice('https://tg.file/voice.ogg', 3);
 
     // The second call is to whisper — inspect its body (FormData)
-    const whisperCall = fetchMock.mock.calls.find(
-      (c: any[]) => String(c[0]).includes('audio/transcriptions'),
+    const whisperCall = fetchMock.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('audio/transcriptions')
     );
     expect(whisperCall).toBeDefined();
-    const body = whisperCall![1]?.body as FormData;
+    const body = whisperCall?.[1]?.body as FormData;
     expect(body.get('language')).toBe('es');
   });
 
@@ -151,10 +155,10 @@ describe('MediaHandler.processVoice', () => {
 
     await handler.processVoice('https://tg.file/voice.ogg', 3);
 
-    const whisperCall = fetchMock.mock.calls.find(
-      (c: any[]) => String(c[0]).includes('audio/transcriptions'),
+    const whisperCall = fetchMock.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('audio/transcriptions')
     );
-    const body = whisperCall![1]?.body as FormData;
+    const body = whisperCall?.[1]?.body as FormData;
     expect(body.get('language')).toBeNull();
   });
 
@@ -172,12 +176,12 @@ describe('MediaHandler.processVoice', () => {
 
     await handler.processVoice('https://tg.file/voice.ogg', 5);
 
-    const whisperCall = fetchMock.mock.calls.find(
-      (c: any[]) => String(c[0]).includes('audio/transcriptions'),
+    const whisperCall = fetchMock.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('audio/transcriptions')
     );
     expect(whisperCall).toBeDefined();
-    const headers = whisperCall![1]?.headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('Bearer sk-test-key-123');
+    const headers = whisperCall?.[1]?.headers as Record<string, string>;
+    expect(headers.Authorization).toBe('Bearer sk-test-key-123');
   });
 
   test('does not send Authorization header when apiKey is not configured', async () => {
@@ -187,25 +191,23 @@ describe('MediaHandler.processVoice', () => {
 
     await handler.processVoice('https://tg.file/voice.ogg', 5);
 
-    const whisperCall = fetchMock.mock.calls.find(
-      (c: any[]) => String(c[0]).includes('audio/transcriptions'),
+    const whisperCall = fetchMock.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('audio/transcriptions')
     );
     expect(whisperCall).toBeDefined();
-    const headers = whisperCall![1]?.headers as Record<string, string>;
-    expect(headers['Authorization']).toBeUndefined();
+    const headers = whisperCall?.[1]?.headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
   });
 
   test('throws MediaError when whisper is not configured', async () => {
     const config = makeConfig({ whisper: undefined });
     handler = new MediaHandler(config, mockLogger());
 
-    await expect(
-      handler.processVoice('https://tg.file/voice.ogg', 5),
-    ).rejects.toThrow(MediaError);
+    await expect(handler.processVoice('https://tg.file/voice.ogg', 5)).rejects.toThrow(MediaError);
 
-    await expect(
-      handler.processVoice('https://tg.file/voice.ogg', 5),
-    ).rejects.toThrow('not configured');
+    await expect(handler.processVoice('https://tg.file/voice.ogg', 5)).rejects.toThrow(
+      'not configured'
+    );
   });
 
   test('throws MediaError on HTTP error from whisper', async () => {
@@ -213,9 +215,7 @@ describe('MediaHandler.processVoice', () => {
     handler = new MediaHandler(config, mockLogger());
     setupFetchMock({ whisperStatus: 429 });
 
-    await expect(
-      handler.processVoice('https://tg.file/voice.ogg', 5),
-    ).rejects.toThrow('HTTP 429');
+    await expect(handler.processVoice('https://tg.file/voice.ogg', 5)).rejects.toThrow('HTTP 429');
   });
 
   test('throws MediaError on empty transcription', async () => {
@@ -223,9 +223,9 @@ describe('MediaHandler.processVoice', () => {
     handler = new MediaHandler(config, mockLogger());
     setupFetchMock({ whisperResponse: { text: '   ' } });
 
-    await expect(
-      handler.processVoice('https://tg.file/voice.ogg', 5),
-    ).rejects.toThrow('empty result');
+    await expect(handler.processVoice('https://tg.file/voice.ogg', 5)).rejects.toThrow(
+      'empty result'
+    );
   });
 
   test('throws MediaError on whisper timeout', async () => {
@@ -239,9 +239,7 @@ describe('MediaHandler.processVoice', () => {
     handler = new MediaHandler(config, mockLogger());
     setupFetchMock({ whisperAbort: true });
 
-    await expect(
-      handler.processVoice('https://tg.file/voice.ogg', 5),
-    ).rejects.toThrow('timed out');
+    await expect(handler.processVoice('https://tg.file/voice.ogg', 5)).rejects.toThrow('timed out');
   });
 
   test('throws MediaError when download fails with HTTP error', async () => {
@@ -249,9 +247,7 @@ describe('MediaHandler.processVoice', () => {
     handler = new MediaHandler(config, mockLogger());
     setupFetchMock({ downloadStatus: 404 });
 
-    await expect(
-      handler.processVoice('https://tg.file/voice.ogg', 5),
-    ).rejects.toThrow('HTTP 404');
+    await expect(handler.processVoice('https://tg.file/voice.ogg', 5)).rejects.toThrow('HTTP 404');
   });
 
   test('throws MediaError when file is too large (pre-check)', async () => {
@@ -259,8 +255,8 @@ describe('MediaHandler.processVoice', () => {
     handler = new MediaHandler(config, mockLogger());
 
     const twoMb = 2 * 1024 * 1024;
-    await expect(
-      handler.processVoice('https://tg.file/voice.ogg', 5, twoMb),
-    ).rejects.toThrow('too large');
+    await expect(handler.processVoice('https://tg.file/voice.ogg', 5, twoMb)).rejects.toThrow(
+      'too large'
+    );
   });
 });

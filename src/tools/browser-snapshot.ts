@@ -47,7 +47,7 @@ const LINE_RE = /^(\s*-\s+)(\w+)(?:\s+"([^"]*)")?(.*)$/;
  */
 export function addRefsToSnapshot(
   raw: string,
-  maxChars: number,
+  maxChars: number
 ): { text: string; refs: Map<string, ElementRef> } {
   const refs = new Map<string, ElementRef>();
   let refCounter = 0;
@@ -105,10 +105,7 @@ export function addRefsToSnapshot(
  * Uses Playwright's ariaSnapshot() which returns an indented text
  * representation of the accessibility tree.
  */
-export async function takeSnapshot(
-  page: Page,
-  maxChars: number,
-): Promise<SnapshotResult> {
+export async function takeSnapshot(page: Page, maxChars: number): Promise<SnapshotResult> {
   const url = page.url();
   const title = await page.title();
 

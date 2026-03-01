@@ -1,8 +1,8 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Hono } from 'hono';
-import { integrationsRoutes } from '../../../src/web/routes/integrations';
 import type { Config } from '../../../src/config';
 import type { Logger } from '../../../src/logger';
+import { integrationsRoutes } from '../../../src/web/routes/integrations';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -61,11 +61,14 @@ const mockBotManager = {
 
 function makeApp(config: Partial<Config>, botManager = mockBotManager) {
   const app = new Hono();
-  app.route('/api/integrations', integrationsRoutes({
-    config: config as Config,
-    botManager,
-    logger: noopLogger,
-  }));
+  app.route(
+    '/api/integrations',
+    integrationsRoutes({
+      config: config as Config,
+      botManager,
+      logger: noopLogger,
+    })
+  );
   return app;
 }
 
@@ -205,7 +208,9 @@ describe('integrations routes - POST /ollama/chat-with-tools', () => {
     const bm = {
       ...mockBotManager,
       getOllamaClient: () => ({
-        chat: async () => { throw new Error('503 Service Unavailable'); },
+        chat: async () => {
+          throw new Error('503 Service Unavailable');
+        },
       }),
     } as any;
     const app = makeApp(baseConfig, bm);
@@ -276,23 +281,26 @@ describe('integrations routes - ElevenLabs voices', () => {
   test('returns simplified voice list on success', async () => {
     globalThis.fetch = (async (url: string) => {
       if (url.includes('elevenlabs.io')) {
-        return new Response(JSON.stringify({
-          voices: [
-            {
-              voice_id: 'abc123',
-              name: 'Rachel',
-              labels: { gender: 'female', accent: 'american', age: 'young' },
-              preview_url: 'https://example.com/preview.mp3',
-              extra_field: 'should be stripped',
-            },
-            {
-              voice_id: 'def456',
-              name: 'Adam',
-              labels: { gender: 'male', accent: 'british' },
-              preview_url: 'https://example.com/adam.mp3',
-            },
-          ],
-        }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            voices: [
+              {
+                voice_id: 'abc123',
+                name: 'Rachel',
+                labels: { gender: 'female', accent: 'american', age: 'young' },
+                preview_url: 'https://example.com/preview.mp3',
+                extra_field: 'should be stripped',
+              },
+              {
+                voice_id: 'def456',
+                name: 'Adam',
+                labels: { gender: 'male', accent: 'british' },
+                preview_url: 'https://example.com/adam.mp3',
+              },
+            ],
+          }),
+          { status: 200 }
+        );
       }
       return originalFetch(url);
     }) as any;

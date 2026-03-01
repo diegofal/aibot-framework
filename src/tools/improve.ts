@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
-import { backupSoulFile } from '../soul';
+import { join, resolve } from 'node:path';
 import type { Logger } from '../logger';
+import { backupSoulFile } from '../soul';
 import type { Tool, ToolResult } from './types';
 
 export interface ImproveToolConfig {
@@ -18,52 +18,23 @@ export type FocusArea = (typeof VALID_FOCUS)[number];
 function buildFileScope(absDir: string, focus: FocusArea): string {
   switch (focus) {
     case 'memory':
-      return (
-        `Focus ONLY on the daily memory log files in ${absDir}/memory/*.md. ` +
-        'Review them for: redundancy, over-verbosity, credential leaks, disorganization. ' +
-        'Consolidate duplicate entries, improve clarity, remove noise.'
-      );
+      return `Focus ONLY on the daily memory log files in ${absDir}/memory/*.md. Review them for: redundancy, over-verbosity, credential leaks, disorganization. Consolidate duplicate entries, improve clarity, remove noise.`;
     case 'soul':
-      return (
-        `Focus ONLY on ${absDir}/SOUL.md. ` +
-        'Review the personality definition for: internal contradictions, vague rules, missing nuance, tone drift. ' +
-        'Refine and sharpen while preserving the core voice.'
-      );
+      return `Focus ONLY on ${absDir}/SOUL.md. Review the personality definition for: internal contradictions, vague rules, missing nuance, tone drift. Refine and sharpen while preserving the core voice.`;
     case 'motivations':
-      return (
-        `Focus ONLY on ${absDir}/MOTIVATIONS.md. ` +
-        'Review drives, focus areas, open questions, and self-observations for: staleness, resolved questions still listed, missing patterns, vague entries. ' +
-        'Update to reflect current reality.'
-      );
+      return `Focus ONLY on ${absDir}/MOTIVATIONS.md. Review drives, focus areas, open questions, and self-observations for: staleness, resolved questions still listed, missing patterns, vague entries. Update to reflect current reality.`;
     case 'identity':
-      return (
-        `Focus ONLY on ${absDir}/IDENTITY.md. ` +
-        'Review name, emoji, and vibe for coherence with the soul and motivations. ' +
-        'Suggest refinements if the vibe has drifted from the actual personality.'
-      );
+      return `Focus ONLY on ${absDir}/IDENTITY.md. Review name, emoji, and vibe for coherence with the soul and motivations. Suggest refinements if the vibe has drifted from the actual personality.`;
     case 'all':
-      return (
-        `Review ALL soul files in ${absDir}/ AND all bot subdirectories:\n` +
-        '- IDENTITY.md (name, emoji, vibe)\n' +
-        '- SOUL.md (personality, tone, rules)\n' +
-        '- MOTIVATIONS.md (drives, focus, questions, self-observations)\n' +
-        '- memory/*.md (daily memory logs)\n\n' +
-        'Use Glob to discover all bots, then review each one independently.\n' +
-        'Look for: contradictions between files, outdated information, redundancy in memory logs, ' +
-        'personality drift, stale motivations, and opportunities to sharpen overall coherence.'
-      );
+      return `Review ALL soul files in ${absDir}/ AND all bot subdirectories:\n- IDENTITY.md (name, emoji, vibe)\n- SOUL.md (personality, tone, rules)\n- MOTIVATIONS.md (drives, focus, questions, self-observations)\n- memory/*.md (daily memory logs)\n\nUse Glob to discover all bots, then review each one independently.\nLook for: contradictions between files, outdated information, redundancy in memory logs, personality drift, stale motivations, and opportunities to sharpen overall coherence.`;
   }
 }
 
-function buildClaudePrompt(
-  absDir: string,
-  focus: FocusArea,
-  context?: string,
-): string {
+function buildClaudePrompt(absDir: string, focus: FocusArea, context?: string): string {
   const fileScope = buildFileScope(absDir, focus);
 
   const parts = [
-    'You are a soul editor for a multi-bot AI system. Your job is to review and improve each bot\'s personality and memory files.',
+    "You are a soul editor for a multi-bot AI system. Your job is to review and improve each bot's personality and memory files.",
     '',
     '## File Structure',
     `The soul root directory is: ${absDir}`,
@@ -74,7 +45,7 @@ function buildClaudePrompt(
     '- MOTIVATIONS.md — core drives, current focus, open questions, self-observations, last reflection date',
     '- memory/*.md — daily memory logs (YYYY-MM-DD.md format), each line is a timestamped fact',
     '',
-    'Use Glob to discover all bot directories: ' + absDir + '/**/IDENTITY.md',
+    `Use Glob to discover all bot directories: ${absDir}/**/IDENTITY.md`,
     'Each bot is a separate personality — treat them independently, do NOT merge or mix their content.',
     '',
     '## Your Task',
@@ -98,14 +69,14 @@ function buildClaudePrompt(
       '',
       '## Additional Context',
       'The user/bot provided this guidance for the improvement:',
-      context,
+      context
     );
   }
 
   parts.push(
     '',
     '## Output',
-    'After making all edits, output ONLY a concise summary (max 10 bullet points) of what you changed and why. No preamble.',
+    'After making all edits, output ONLY a concise summary (max 10 bullet points) of what you changed and why. No preamble.'
   );
 
   return parts.join('\n');
@@ -142,25 +113,23 @@ export async function runImprove(opts: {
   const filesToBackup: string[] = [];
   if (focus === 'soul' || focus === 'all') filesToBackup.push(join(targetDir, 'SOUL.md'));
   if (focus === 'identity' || focus === 'all') filesToBackup.push(join(targetDir, 'IDENTITY.md'));
-  if (focus === 'motivations' || focus === 'all') filesToBackup.push(join(targetDir, 'MOTIVATIONS.md'));
+  if (focus === 'motivations' || focus === 'all')
+    filesToBackup.push(join(targetDir, 'MOTIVATIONS.md'));
   for (const f of filesToBackup) {
     backupSoulFile(f, logger);
   }
 
   logger.info(
     { focus, hasContext: !!context, botId, targetDir },
-    'improve: spawning Claude Code session',
+    'improve: spawning Claude Code session'
   );
 
   try {
-    const claudeArgs = [
-      '-p', prompt,
-      '--allowedTools', 'Read,Edit,Write,Glob,Grep',
-    ];
+    const claudeArgs = ['-p', prompt, '--allowedTools', 'Read,Edit,Write,Glob,Grep'];
 
     // Clear CLAUDECODE env to avoid nested session detection
     const env = { ...process.env };
-    delete env.CLAUDECODE;
+    env.CLAUDECODE = undefined;
     env.TERM = 'dumb';
 
     const proc = Bun.spawn([claudePath, ...claudeArgs], {
@@ -171,7 +140,9 @@ export async function runImprove(opts: {
     });
 
     const timer = setTimeout(() => {
-      try { proc.kill(); } catch {}
+      try {
+        proc.kill();
+      } catch {}
     }, timeout);
 
     const [stdout, stderr] = await Promise.all([
@@ -190,14 +161,12 @@ export async function runImprove(opts: {
     }
 
     if (output.length > maxOutputLength) {
-      output =
-        output.slice(0, maxOutputLength) +
-        `\n... (truncated, ${output.length} total chars)`;
+      output = `${output.slice(0, maxOutputLength)}\n... (truncated, ${output.length} total chars)`;
     }
 
     logger.info(
       { focus, exitCode, outputLength: output.length, output },
-      'improve: Claude Code session completed',
+      'improve: Claude Code session completed'
     );
 
     if (exitCode !== 0) {
@@ -228,7 +197,7 @@ export function createImproveTool(config: ImproveToolConfig): Tool {
       function: {
         name: 'improve',
         description:
-          'Spawn a Claude Code session to review and improve the bot\'s soul/personality/memory files. ' +
+          "Spawn a Claude Code session to review and improve the bot's soul/personality/memory files. " +
           'Use this when the user asks to refine personality, clean up memory, sharpen motivations, or improve coherence across soul files. ' +
           'This is a powerful editing operation — Claude Code will read and edit the actual files on disk.',
         parameters: {
@@ -252,10 +221,7 @@ export function createImproveTool(config: ImproveToolConfig): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger,
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const rawFocus = String(args.focus || 'all').toLowerCase();
       const focus: FocusArea = (VALID_FOCUS as readonly string[]).includes(rawFocus)
         ? (rawFocus as FocusArea)

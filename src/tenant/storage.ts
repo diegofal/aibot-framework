@@ -1,4 +1,11 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type { Tenant, TenantStorage, UsageEvent } from './types';
 
@@ -10,10 +17,10 @@ export class FileTenantStorage implements TenantStorage {
   private dataDir: string;
   private usageDir: string;
 
-  constructor(baseDir: string = './data/tenants') {
+  constructor(baseDir = './data/tenants') {
     this.dataDir = baseDir;
     this.usageDir = join(baseDir, 'usage');
-    
+
     // Ensure directories exist
     mkdirSync(this.dataDir, { recursive: true });
     mkdirSync(this.usageDir, { recursive: true });
@@ -28,20 +35,26 @@ export class FileTenantStorage implements TenantStorage {
   }
 
   private serializeTenant(tenant: Tenant): string {
-    return JSON.stringify({
-      ...tenant,
-      createdAt: tenant.createdAt.toISOString(),
-      updatedAt: tenant.updatedAt.toISOString(),
-      usage: {
-        ...tenant.usage,
-        lastResetAt: tenant.usage.lastResetAt.toISOString(),
+    return JSON.stringify(
+      {
+        ...tenant,
+        createdAt: tenant.createdAt.toISOString(),
+        updatedAt: tenant.updatedAt.toISOString(),
+        usage: {
+          ...tenant.usage,
+          lastResetAt: tenant.usage.lastResetAt.toISOString(),
+        },
+        billing: tenant.billing
+          ? {
+              ...tenant.billing,
+              currentPeriodStart: tenant.billing.currentPeriodStart.toISOString(),
+              currentPeriodEnd: tenant.billing.currentPeriodEnd.toISOString(),
+            }
+          : undefined,
       },
-      billing: tenant.billing ? {
-        ...tenant.billing,
-        currentPeriodStart: tenant.billing.currentPeriodStart.toISOString(),
-        currentPeriodEnd: tenant.billing.currentPeriodEnd.toISOString(),
-      } : undefined,
-    }, null, 2);
+      null,
+      2
+    );
   }
 
   private parseTenant(data: string): Tenant {
@@ -54,11 +67,13 @@ export class FileTenantStorage implements TenantStorage {
         ...parsed.usage,
         lastResetAt: new Date(parsed.usage.lastResetAt),
       },
-      billing: parsed.billing ? {
-        ...parsed.billing,
-        currentPeriodStart: new Date(parsed.billing.currentPeriodStart),
-        currentPeriodEnd: new Date(parsed.billing.currentPeriodEnd),
-      } : undefined,
+      billing: parsed.billing
+        ? {
+            ...parsed.billing,
+            currentPeriodStart: new Date(parsed.billing.currentPeriodStart),
+            currentPeriodEnd: new Date(parsed.billing.currentPeriodEnd),
+          }
+        : undefined,
     };
   }
 
@@ -70,7 +85,7 @@ export class FileTenantStorage implements TenantStorage {
   async getById(id: string): Promise<Tenant | undefined> {
     const path = this.getTenantPath(id);
     if (!existsSync(path)) return undefined;
-    
+
     try {
       const data = readFileSync(path, 'utf-8');
       return this.parseTenant(data);
@@ -83,20 +98,20 @@ export class FileTenantStorage implements TenantStorage {
     // In production, this should use a database index
     // For file storage, we iterate (inefficient but simple)
     const all = await this.list();
-    return all.find(t => t.apiKey === apiKey);
+    return all.find((t) => t.apiKey === apiKey);
   }
 
   async getByEmail(email: string): Promise<Tenant | undefined> {
     const all = await this.list();
-    return all.find(t => t.email.toLowerCase() === email.toLowerCase());
+    return all.find((t) => t.email.toLowerCase() === email.toLowerCase());
   }
 
   async list(): Promise<Tenant[]> {
     if (!existsSync(this.dataDir)) return [];
-    
-    const files = readdirSync(this.dataDir).filter(f => f.endsWith('.json'));
+
+    const files = readdirSync(this.dataDir).filter((f) => f.endsWith('.json'));
     const tenants: Tenant[] = [];
-    
+
     for (const file of files) {
       try {
         const data = readFileSync(join(this.dataDir, file), 'utf-8');
@@ -105,7 +120,7 @@ export class FileTenantStorage implements TenantStorage {
         // Skip invalid files
       }
     }
-    
+
     return tenants;
   }
 
@@ -119,22 +134,22 @@ export class FileTenantStorage implements TenantStorage {
   async recordUsage(event: UsageEvent): Promise<void> {
     const now = new Date();
     const path = this.getUsagePath(event.tenantId, now.getFullYear(), now.getMonth() + 1);
-    
-    const line = JSON.stringify({
+
+    const line = `${JSON.stringify({
       ...event,
       timestamp: event.timestamp.toISOString(),
-    }) + '\n';
-    
+    })}\n`;
+
     writeFileSync(path, line, { flag: 'a' });
   }
 
   async getUsageHistory(tenantId: string, start: Date, end: Date): Promise<UsageEvent[]> {
     const events: UsageEvent[] = [];
-    
+
     // Collect all relevant files
     const files: string[] = [];
     const current = new Date(start);
-    
+
     while (current <= end) {
       const path = this.getUsagePath(tenantId, current.getFullYear(), current.getMonth() + 1);
       if (existsSync(path)) {
@@ -142,12 +157,12 @@ export class FileTenantStorage implements TenantStorage {
       }
       current.setMonth(current.getMonth() + 1);
     }
-    
+
     // Read and filter events
     for (const file of files) {
       const content = readFileSync(file, 'utf-8');
-      const lines = content.split('\n').filter(l => l.trim());
-      
+      const lines = content.split('\n').filter((l) => l.trim());
+
       for (const line of lines) {
         try {
           const event = JSON.parse(line);
@@ -163,21 +178,21 @@ export class FileTenantStorage implements TenantStorage {
         }
       }
     }
-    
+
     return events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
   }
 
   async resetMonthlyUsage(tenantId: string): Promise<void> {
     const tenant = await this.getById(tenantId);
     if (!tenant) throw new Error(`Tenant not found: ${tenantId}`);
-    
+
     tenant.usage.messagesThisMonth = 0;
     tenant.usage.apiCallsThisMonth = 0;
     tenant.usage.storageBytesUsed = 0;
     tenant.usage.collaborationsToday = 0;
     tenant.usage.lastResetAt = new Date();
     tenant.updatedAt = new Date();
-    
+
     await this.save(tenant);
   }
 }

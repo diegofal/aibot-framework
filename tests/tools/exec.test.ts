@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { createExecTool } from '../../src/tools/exec';
 
 function createMockLogger() {
@@ -170,8 +170,8 @@ describe('exec tool', () => {
 
     test('deny takes precedence over allow', async () => {
       const tool = createExecTool({
-        allowedPatterns: ['.*'],  // allow everything
-        deniedPatterns: ['\\becho\\b'],  // but deny echo
+        allowedPatterns: ['.*'], // allow everything
+        deniedPatterns: ['\\becho\\b'], // but deny echo
       });
       const result = await tool.execute({ command: 'echo hello' }, logger);
       expect(result.success).toBe(false);
@@ -180,7 +180,7 @@ describe('exec tool', () => {
 
     test('builtin deny takes precedence over allow', async () => {
       const tool = createExecTool({
-        allowedPatterns: ['.*'],  // allow everything
+        allowedPatterns: ['.*'], // allow everything
       });
       const result = await tool.execute({ command: 'reboot' }, logger);
       expect(result.success).toBe(false);
@@ -238,10 +238,7 @@ describe('exec tool', () => {
   describe('output truncation', () => {
     test('truncates output exceeding maxOutputLength', async () => {
       const tool = createExecTool({ maxOutputLength: 50 });
-      const result = await tool.execute(
-        { command: 'python3 -c "print(\'x\' * 200)"' },
-        logger,
-      );
+      const result = await tool.execute({ command: 'python3 -c "print(\'x\' * 200)"' }, logger);
       expect(result.success).toBe(true);
       expect(result.content).toContain('truncated');
       expect(result.content).toContain('total chars');

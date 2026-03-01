@@ -57,12 +57,10 @@ export class MediaHandler {
 
   constructor(
     private config: MediaConfig,
-    private logger: Logger,
+    private logger: Logger
   ) {
     this.maxFileSizeBytes = config.maxFileSizeMb * 1024 * 1024;
-    this.supportedDocTypes = new Set(
-      config.supportedDocTypes ?? DEFAULT_SUPPORTED_DOC_TYPES,
-    );
+    this.supportedDocTypes = new Set(config.supportedDocTypes ?? DEFAULT_SUPPORTED_DOC_TYPES);
   }
 
   /**
@@ -72,7 +70,7 @@ export class MediaHandler {
     // Pre-check size if known
     if (fileSize && fileSize > this.maxFileSizeBytes) {
       throw new MediaError(
-        `File is too large (${(fileSize / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is ${this.config.maxFileSizeMb} MB.`,
+        `File is too large (${(fileSize / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is ${this.config.maxFileSizeMb} MB.`
       );
     }
 
@@ -91,7 +89,7 @@ export class MediaHandler {
       // Post-check actual size
       if (buffer.length > this.maxFileSizeBytes) {
         throw new MediaError(
-          `File is too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is ${this.config.maxFileSizeMb} MB.`,
+          `File is too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is ${this.config.maxFileSizeMb} MB.`
         );
       }
 
@@ -110,11 +108,7 @@ export class MediaHandler {
   /**
    * Process a photo message. Returns base64 image for vision models.
    */
-  async processPhoto(
-    fileUrl: string,
-    caption?: string,
-    fileSize?: number,
-  ): Promise<MediaResult> {
+  async processPhoto(fileUrl: string, caption?: string, fileSize?: number): Promise<MediaResult> {
     this.logger.debug({ fileUrl, caption }, 'Processing photo');
 
     const buffer = await this.downloadFile(fileUrl, fileSize);
@@ -134,7 +128,7 @@ export class MediaHandler {
     mimeType: string | undefined,
     fileName: string | undefined,
     caption?: string,
-    fileSize?: number,
+    fileSize?: number
   ): Promise<MediaResult> {
     this.logger.debug({ fileUrl, mimeType, fileName, caption }, 'Processing document');
 
@@ -148,7 +142,7 @@ export class MediaHandler {
     if (!this.supportedDocTypes.has(effectiveMime)) {
       const supported = [...this.supportedDocTypes].join(', ');
       throw new MediaError(
-        `Unsupported document type: ${effectiveMime}. Supported types: ${supported}`,
+        `Unsupported document type: ${effectiveMime}. Supported types: ${supported}`
       );
     }
 
@@ -165,15 +159,13 @@ export class MediaHandler {
 
     // Truncate long documents
     if (extractedText.length > MAX_DOC_CHARS) {
-      extractedText = extractedText.substring(0, MAX_DOC_CHARS) + '\n\n[Document truncated]';
+      extractedText = `${extractedText.substring(0, MAX_DOC_CHARS)}\n\n[Document truncated]`;
     }
 
     const label = fileName || 'document';
     const prefix = caption ? `${caption}\n\n` : '';
     const text = `${prefix}Content of "${label}":\n\n${extractedText}`;
-    const sessionText = caption
-      ? `[Document: ${label}] ${caption}`
-      : `[Document: ${label}]`;
+    const sessionText = caption ? `[Document: ${label}] ${caption}` : `[Document: ${label}]`;
 
     return { text, sessionText };
   }
@@ -181,14 +173,10 @@ export class MediaHandler {
   /**
    * Process a voice message by sending it to a Whisper-compatible endpoint.
    */
-  async processVoice(
-    fileUrl: string,
-    duration?: number,
-    fileSize?: number,
-  ): Promise<MediaResult> {
+  async processVoice(fileUrl: string, duration?: number, fileSize?: number): Promise<MediaResult> {
     if (!this.config.whisper) {
       throw new MediaError(
-        'Voice transcription is not configured. Please ask the bot administrator to set up a Whisper endpoint.',
+        'Voice transcription is not configured. Please ask the bot administrator to set up a Whisper endpoint.'
       );
     }
 
@@ -209,7 +197,7 @@ export class MediaHandler {
 
     const headers: Record<string, string> = {};
     if (whisperConfig.apiKey) {
-      headers['Authorization'] = `Bearer ${whisperConfig.apiKey}`;
+      headers.Authorization = `Bearer ${whisperConfig.apiKey}`;
     }
 
     try {
@@ -224,7 +212,7 @@ export class MediaHandler {
         throw new MediaError(`Voice transcription failed (HTTP ${response.status}).`);
       }
 
-      const data = await response.json() as { text?: string };
+      const data = (await response.json()) as { text?: string };
       const transcription = (data.text ?? '').trim();
 
       if (!transcription) {
@@ -253,7 +241,7 @@ export class MediaHandler {
     try {
       // @ts-ignore -- pdf-parse has no type declarations
       const pdfParse = (await import('pdf-parse')).default;
-      const data = await pdfParse(buffer) as { text: string };
+      const data = (await pdfParse(buffer)) as { text: string };
       return data.text;
     } catch (error) {
       this.logger.warn({ error }, 'PDF text extraction failed');

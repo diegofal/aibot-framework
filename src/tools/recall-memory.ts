@@ -1,11 +1,14 @@
-import type { CoreMemoryManager, CoreMemoryEntry } from '../memory/core-memory';
+import type { CoreMemoryEntry, CoreMemoryManager } from '../memory/core-memory';
 import type { Tool, ToolResult } from './types';
 
-type ToolLogger = { info: (msg: Record<string, unknown>) => void; error: (msg: Record<string, unknown>) => void };
+type ToolLogger = {
+  info: (msg: Record<string, unknown>) => void;
+  error: (msg: Record<string, unknown>) => void;
+};
 
 /**
  * Create the recall_memory tool for self-directed memory retrieval.
- * 
+ *
  * This tool allows the agent to actively search and retrieve relevant memories
  * from its structured core memory without relying on automatic prefetch.
  * Use cases: remembering user preferences, recalling goals, retrieving constraints.
@@ -27,7 +30,8 @@ export function createRecallMemoryTool(coreMemory: CoreMemoryManager): Tool {
           properties: {
             topic: {
               type: 'string',
-              description: 'Tema, concepto o palabra clave a recordar (ej: "Diego", "preferencias de trabajo", "objetivos Q1")',
+              description:
+                'Tema, concepto o palabra clave a recordar (ej: "Diego", "preferencias de trabajo", "objetivos Q1")',
             },
             context: {
               type: 'string',
@@ -40,7 +44,8 @@ export function createRecallMemoryTool(coreMemory: CoreMemoryManager): Tool {
             },
             min_importance: {
               type: 'number',
-              description: 'Importancia mínima (1-10). Solo retorna hechos con importance >= este valor',
+              description:
+                'Importancia mínima (1-10). Solo retorna hechos con importance >= este valor',
               minimum: 1,
               maximum: 10,
             },
@@ -59,30 +64,32 @@ export function createRecallMemoryTool(coreMemory: CoreMemoryManager): Tool {
       const topic = String(args.topic);
       const context = args.context ? String(args.context) : undefined;
       const category = args.category ? String(args.category) : undefined;
-      const minImportance = typeof args.min_importance === 'number' ? args.min_importance : undefined;
+      const minImportance =
+        typeof args.min_importance === 'number' ? args.min_importance : undefined;
       const maxResults = typeof args.max_results === 'number' ? args.max_results : 5;
 
       try {
         // Build search query: combine topic + context if provided
         const searchQuery = context ? `${topic} ${context}` : topic;
-        
+        const botId = typeof args._botId === 'string' ? args._botId : undefined;
+
         // Search core memory
-        let results = await coreMemory.search(searchQuery, category, maxResults * 2);
-        
+        let results = await coreMemory.search(searchQuery, category, maxResults * 2, botId);
+
         // Filter by minimum importance if specified
         if (minImportance !== undefined) {
-          results = results.filter(r => r.importance >= minImportance);
+          results = results.filter((r) => r.importance >= minImportance);
         }
-        
+
         // Limit to max_results
         results = results.slice(0, maxResults);
 
-        logger?.info({ 
-          topic, 
-          category, 
-          minImportance, 
+        logger?.info({
+          topic,
+          category,
+          minImportance,
           found: results.length,
-          query: searchQuery 
+          query: searchQuery,
         });
 
         if (results.length === 0) {

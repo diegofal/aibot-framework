@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
+import type { BrowserToolsConfig } from '../src/config';
 import { createBrowserTool } from '../src/tools/browser';
 import { addRefsToSnapshot } from '../src/tools/browser-snapshot';
-import type { BrowserToolsConfig } from '../src/config';
 import type { Tool } from '../src/tools/types';
 
 const noopLogger = {
@@ -81,7 +81,10 @@ describe('browser tool — navigate validation', () => {
   });
 
   test('file scheme is rejected', async () => {
-    const result = await tool.execute({ action: 'navigate', url: 'file:///etc/passwd' }, noopLogger);
+    const result = await tool.execute(
+      { action: 'navigate', url: 'file:///etc/passwd' },
+      noopLogger
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain('Only http and https');
   });
@@ -111,7 +114,10 @@ describe('browser tool — SSRF protection', () => {
 
   test('allows public URL format (does not block valid domains)', async () => {
     // URL validation passes, but browser launch fails (no Chromium in test env)
-    const result = await tool.execute({ action: 'navigate', url: 'https://example.com' }, noopLogger);
+    const result = await tool.execute(
+      { action: 'navigate', url: 'https://example.com' },
+      noopLogger
+    );
     expect(result.success).toBe(false);
     // Should fail at navigation/launch level, not URL validation
     expect(result.content).toContain('Navigation failed');
@@ -122,37 +128,54 @@ describe('browser tool — SSRF protection', () => {
 
 describe('browser tool — blockedUrlPatterns / allowedUrlPatterns', () => {
   test('blockedUrlPatterns rejects matching URL', async () => {
-    const t = createBrowserTool(makeConfig({
-      blockedUrlPatterns: ['evil\\.com'],
-    }));
-    const result = await t.execute({ action: 'navigate', url: 'https://evil.com/page' }, noopLogger);
+    const t = createBrowserTool(
+      makeConfig({
+        blockedUrlPatterns: ['evil\\.com'],
+      })
+    );
+    const result = await t.execute(
+      { action: 'navigate', url: 'https://evil.com/page' },
+      noopLogger
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain('blocked by pattern');
   });
 
   test('blockedUrlPatterns allows non-matching URL (fails at browser level)', async () => {
-    const t = createBrowserTool(makeConfig({
-      blockedUrlPatterns: ['evil\\.com'],
-    }));
-    const result = await t.execute({ action: 'navigate', url: 'https://good.com/page' }, noopLogger);
+    const t = createBrowserTool(
+      makeConfig({
+        blockedUrlPatterns: ['evil\\.com'],
+      })
+    );
+    const result = await t.execute(
+      { action: 'navigate', url: 'https://good.com/page' },
+      noopLogger
+    );
     expect(result.content).not.toContain('blocked by pattern');
     expect(result.content).toContain('Navigation failed');
   });
 
   test('allowedUrlPatterns rejects URL not matching any pattern', async () => {
-    const t = createBrowserTool(makeConfig({
-      allowedUrlPatterns: ['example\\.com'],
-    }));
+    const t = createBrowserTool(
+      makeConfig({
+        allowedUrlPatterns: ['example\\.com'],
+      })
+    );
     const result = await t.execute({ action: 'navigate', url: 'https://other.com' }, noopLogger);
     expect(result.success).toBe(false);
     expect(result.content).toContain('not in allowedUrlPatterns');
   });
 
   test('allowedUrlPatterns allows matching URL (fails at browser level)', async () => {
-    const t = createBrowserTool(makeConfig({
-      allowedUrlPatterns: ['example\\.com'],
-    }));
-    const result = await t.execute({ action: 'navigate', url: 'https://example.com/page' }, noopLogger);
+    const t = createBrowserTool(
+      makeConfig({
+        allowedUrlPatterns: ['example\\.com'],
+      })
+    );
+    const result = await t.execute(
+      { action: 'navigate', url: 'https://example.com/page' },
+      noopLogger
+    );
     expect(result.content).not.toContain('not in allowedUrlPatterns');
     expect(result.content).toContain('Navigation failed');
   });
@@ -259,11 +282,7 @@ describe('addRefsToSnapshot', () => {
   });
 
   test('preserves non-interactive elements unchanged', () => {
-    const raw = [
-      '- main:',
-      '  - paragraph "Some text"',
-      '  - img "Logo"',
-    ].join('\n');
+    const raw = ['- main:', '  - paragraph "Some text"', '  - img "Logo"'].join('\n');
 
     const { text, refs } = addRefsToSnapshot(raw, 10_000);
     expect(refs.size).toBe(0);
@@ -283,10 +302,9 @@ describe('addRefsToSnapshot', () => {
   });
 
   test('handles checkbox properties', () => {
-    const raw = [
-      '- checkbox "Accept terms" [checked]',
-      '- checkbox "Newsletter" [unchecked]',
-    ].join('\n');
+    const raw = ['- checkbox "Accept terms" [checked]', '- checkbox "Newsletter" [unchecked]'].join(
+      '\n'
+    );
 
     const { text, refs } = addRefsToSnapshot(raw, 10_000);
     expect(refs.size).toBe(2);
@@ -341,7 +359,12 @@ describe('browser tool definition', () => {
     expect(def.function.name).toBe('browser');
     expect(def.function.parameters.properties.action).toBeDefined();
     expect((def.function.parameters.properties.action as any).enum).toEqual([
-      'status', 'navigate', 'snapshot', 'act', 'screenshot', 'close',
+      'status',
+      'navigate',
+      'snapshot',
+      'act',
+      'screenshot',
+      'close',
     ]);
   });
 

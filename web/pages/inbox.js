@@ -1,4 +1,4 @@
-import { api, escapeHtml, timeAgo, renderThread } from './shared.js';
+import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
 let refreshTimer = null;
 
@@ -61,19 +61,21 @@ async function render(el) {
   pending.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   previous.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
-  const pendingHtml = pending.length > 0
-    ? `<table>
+  const pendingHtml =
+    pending.length > 0
+      ? `<table>
         <thead><tr><th>Bot</th><th>Question</th><th>Status</th><th>Messages</th><th>Time</th></tr></thead>
         <tbody>${pending.map((c) => renderConversationRow(c, c._botName)).join('')}</tbody>
       </table>`
-    : '<p class="text-dim text-sm">No pending questions</p>';
+      : '<p class="text-dim text-sm">No pending questions</p>';
 
-  const previousHtml = previous.length > 0
-    ? `<table>
+  const previousHtml =
+    previous.length > 0
+      ? `<table>
         <thead><tr><th>Bot</th><th>Question</th><th>Status</th><th>Messages</th><th>Time</th></tr></thead>
         <tbody>${previous.map((c) => renderConversationRow(c, c._botName)).join('')}</tbody>
       </table>`
-    : '<p class="text-dim text-sm">No previous questions</p>';
+      : '<p class="text-dim text-sm">No previous questions</p>';
 
   el.innerHTML = `
     <div class="page-title">Inbox <span class="count">${pending.length} pending</span></div>
@@ -122,7 +124,7 @@ export async function renderInboxChat(el, botId, conversationId) {
   }
 
   const { conversation, messages } = data;
-  let threadMessages = messages;
+  const threadMessages = messages;
   let generating = false;
   let errorMsg = null;
   const MAX_POLLS = 90;
@@ -142,7 +144,9 @@ export async function renderInboxChat(el, botId, conversationId) {
         renderThreadUI();
         return;
       }
-      const statusRes = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}/status`);
+      const statusRes = await api(
+        `/api/conversations/${encodeURIComponent(botId)}/${conversationId}/status`
+      );
       if (statusRes.status === 'error') {
         clearInterval(pollInterval);
         generating = false;
@@ -162,7 +166,9 @@ export async function renderInboxChat(el, botId, conversationId) {
         renderThreadUI();
 
         // Refresh conversation title
-        const convData = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`);
+        const convData = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${conversationId}`
+        );
         if (convData.conversation) {
           conversation.title = convData.conversation.title;
           const titleEl = el.querySelector('.page-title');
@@ -192,7 +198,9 @@ export async function renderInboxChat(el, botId, conversationId) {
     // Wire delete
     document.getElementById('inbox-delete-btn')?.addEventListener('click', async () => {
       if (!confirm('Delete this conversation? This cannot be undone.')) return;
-      await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`, { method: 'DELETE' });
+      await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`, {
+        method: 'DELETE',
+      });
       location.hash = '#/inbox';
     });
 
@@ -212,13 +220,15 @@ export async function renderInboxChat(el, botId, conversationId) {
         errorMsg = null;
         generating = true;
         renderThreadUI();
-        await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}/retry`, { method: 'POST' });
+        await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}/retry`, {
+          method: 'POST',
+        });
         startPolling();
       },
       onSend: async (text) => {
         // Optimistic add
         threadMessages.push({
-          id: 'temp-' + Date.now(),
+          id: `temp-${Date.now()}`,
           role: 'human',
           content: text,
           createdAt: new Date().toISOString(),
@@ -227,10 +237,13 @@ export async function renderInboxChat(el, botId, conversationId) {
         errorMsg = null;
         renderThreadUI();
 
-        const res = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}/messages`, {
-          method: 'POST',
-          body: { message: text },
-        });
+        const res = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${conversationId}/messages`,
+          {
+            method: 'POST',
+            body: { message: text },
+          }
+        );
 
         if (res.error) {
           generating = false;

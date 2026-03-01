@@ -26,7 +26,7 @@ export interface ProductionEntry {
   description: string;
   size: number;
   trackOnly: boolean;
-  archivedFrom?: string;   // Original path before archiving
-  archiveReason?: string;  // Why it was archived
+  archivedFrom?: string; // Original path before archiving
+  archiveReason?: string; // Why it was archived
   evaluation?: ProductionEvaluation;
 }

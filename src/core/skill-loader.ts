@@ -21,9 +21,7 @@ export class SkillLoader {
 
       // Validate manifest
       if (manifest.id !== skillId) {
-        throw new Error(
-          `Skill ID mismatch: expected ${skillId}, got ${manifest.id}`
-        );
+        throw new Error(`Skill ID mismatch: expected ${skillId}, got ${manifest.id}`);
       }
 
       // Load skill module
@@ -45,10 +43,7 @@ export class SkillLoader {
       skill.version = manifest.version;
       skill.description = manifest.description;
 
-      this.logger.info(
-        { skillId: skill.id, version: skill.version },
-        'Skill loaded successfully'
-      );
+      this.logger.info({ skillId: skill.id, version: skill.version }, 'Skill loaded successfully');
 
       return skill;
     } catch (error) {

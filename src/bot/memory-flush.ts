@@ -1,5 +1,5 @@
-import type { ChatMessage } from '../ollama';
 import { claudeGenerate } from '../claude-cli';
+import type { ChatMessage } from '../ollama';
 import type { BotContext } from './types';
 
 export interface ScoredFact {
@@ -43,16 +43,23 @@ export class MemoryFlusher {
           const fullPrompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
           summary = await claudeGenerate(fullPrompt, {
             claudePath,
-            timeout: 60_000,
+            timeout: 300_000,
             logger: this.ctx.logger,
           });
         } catch (err) {
-          this.ctx.logger.warn({ err }, 'Claude CLI failed for memory flush, falling back to Ollama');
-          const model = botId ? this.ctx.getActiveModel(botId) : this.ctx.config.ollama.models.primary;
+          this.ctx.logger.warn(
+            { err },
+            'Claude CLI failed for memory flush, falling back to Ollama'
+          );
+          const model = botId
+            ? this.ctx.getActiveModel(botId)
+            : this.ctx.config.ollama.models.primary;
           summary = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
         }
       } else {
-        const model = botId ? this.ctx.getActiveModel(botId) : this.ctx.config.ollama.models.primary;
+        const model = botId
+          ? this.ctx.getActiveModel(botId)
+          : this.ctx.config.ollama.models.primary;
         summary = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
       }
 
@@ -71,7 +78,13 @@ export class MemoryFlusher {
    * High-importance facts are weighted more heavily in searches.
    */
   async flushWithScoring(history: ChatMessage[], botId?: string): Promise<ScoredFact[]> {
-    this.ctx.activityStream?.publish({ type: 'memory:flush', botId: botId || '', timestamp: Date.now(), phase: 'start', data: { messageCount: history.length } });
+    this.ctx.activityStream?.publish({
+      type: 'memory:flush',
+      botId: botId || '',
+      timestamp: Date.now(),
+      phase: 'start',
+      data: { messageCount: history.length },
+    });
     try {
       const transcript = history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -101,11 +114,14 @@ export class MemoryFlusher {
           const fullPrompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
           response = await claudeGenerate(fullPrompt, {
             claudePath,
-            timeout: 60_000,
+            timeout: 300_000,
             logger: this.ctx.logger,
           });
         } catch (err) {
-          this.ctx.logger.warn({ err }, 'Claude CLI failed for memory scoring, falling back to Ollama');
+          this.ctx.logger.warn(
+            { err },
+            'Claude CLI failed for memory scoring, falling back to Ollama'
+          );
           response = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
         }
       } else {
@@ -119,16 +135,28 @@ export class MemoryFlusher {
       if (coreMemory && facts.length > 0) {
         for (const fact of facts) {
           const key = this.generateFactKey(fact);
-          await coreMemory.set(fact.category, key, fact.fact, fact.importance);
+          await coreMemory.set(fact.category, key, fact.fact, fact.importance, botId);
         }
-        this.ctx.logger.info({ count: facts.length }, 'Conversation flushed to Core Memory with scoring');
-        this.ctx.activityStream?.publish({ type: 'memory:flush', botId: botId || '', timestamp: Date.now(), phase: 'end', data: { factCount: facts.length } });
+        this.ctx.logger.info(
+          { count: facts.length },
+          'Conversation flushed to Core Memory with scoring'
+        );
+        this.ctx.activityStream?.publish({
+          type: 'memory:flush',
+          botId: botId || '',
+          timestamp: Date.now(),
+          phase: 'end',
+          data: { factCount: facts.length },
+        });
       } else if (facts.length > 0) {
         // Fallback to daily log if Core Memory not available
         const soulLoader = botId ? this.ctx.getSoulLoader(botId) : this.ctx.defaultSoulLoader;
-        const summary = facts.map(f => `[${f.importance}/10] ${f.fact}`).join('\n');
+        const summary = facts.map((f) => `[${f.importance}/10] ${f.fact}`).join('\n');
         soulLoader.appendDailyMemory(summary);
-        this.ctx.logger.info({ count: facts.length }, 'Conversation flushed to daily log (Core Memory unavailable)');
+        this.ctx.logger.info(
+          { count: facts.length },
+          'Conversation flushed to daily log (Core Memory unavailable)'
+        );
       }
 
       return facts;
@@ -168,11 +196,11 @@ export class MemoryFlusher {
     }
 
     // Fallback: parse lines like "- [8] Fact here" or "[7/10] Fact here"
-    const lines = response.split('\n').filter(l => l.trim());
+    const lines = response.split('\n').filter((l) => l.trim());
     for (const line of lines) {
       const match = line.match(/\[(\d+)(?:\/(?:10))?\]\s*(.+)/);
       if (match) {
-        const importance = Math.max(1, Math.min(10, parseInt(match[1], 10)));
+        const importance = Math.max(1, Math.min(10, Number.parseInt(match[1], 10)));
         facts.push({
           fact: match[2].trim(),
           importance,
@@ -184,8 +212,17 @@ export class MemoryFlusher {
     return facts;
   }
 
-  private isValidScoredFact(item: unknown): item is { fact: string; importance: number; category: ScoredFact['category'] } {
-    const validCategories: ScoredFact['category'][] = ['identity', 'relationships', 'preferences', 'goals', 'constraints', 'general'];
+  private isValidScoredFact(
+    item: unknown
+  ): item is { fact: string; importance: number; category: ScoredFact['category'] } {
+    const validCategories: ScoredFact['category'][] = [
+      'identity',
+      'relationships',
+      'preferences',
+      'goals',
+      'constraints',
+      'general',
+    ];
     return (
       typeof item === 'object' &&
       item !== null &&
@@ -206,7 +243,7 @@ export class MemoryFlusher {
       .trim()
       .slice(0, 50)
       .replace(/\s+/g, '_');
-    return normalized || 'fact_' + Date.now();
+    return normalized || `fact_${Date.now()}`;
   }
 
   /**

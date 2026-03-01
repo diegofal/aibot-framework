@@ -1,6 +1,9 @@
 import type { Skill, SkillContext } from '../../core/types';
 
-export const handlers: Record<string, (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>> = {
+export const handlers: Record<
+  string,
+  (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>
+> = {
   async calendar_list(args: Record<string, unknown>, ctx: SkillContext): Promise<unknown> {
     const result = await ctx.tools.execute?.('calendar_list', args, ctx);
     return result ?? { success: false, message: 'calendar_list tool not available' };
@@ -49,7 +52,7 @@ const skill: Skill = {
         }
 
         if (subcommand === 'schedule') {
-          return 'To schedule an event, provide details in natural language and I\'ll use the calendar_schedule tool.';
+          return "To schedule an event, provide details in natural language and I'll use the calendar_schedule tool.";
         }
 
         return 'Usage: /cal today | /cal availability <YYYY-MM-DD> | /cal schedule';

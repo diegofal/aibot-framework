@@ -75,10 +75,7 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
 
   // Step 1: Structural lint (instant, no LLM)
   const issues = lintSoulDirectory(soulDir);
-  logger.info(
-    { botId, issueCount: issues.length, issues },
-    'Soul health check: lint complete',
-  );
+  logger.info({ botId, issueCount: issues.length, issues }, 'Soul health check: lint complete');
 
   // Steps 2 & 3: Memory consolidation + quality review (run concurrently)
   const tasks: Array<Promise<void>> = [];
@@ -89,12 +86,12 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
         .then((result) => {
           logger.info(
             { botId, merged: result.merged, archived: result.archived },
-            'Soul health check: memory consolidation complete',
+            'Soul health check: memory consolidation complete'
           );
         })
         .catch((err) => {
           logger.warn({ botId, err }, 'Soul health check: memory consolidation failed (non-fatal)');
-        }),
+        })
     );
   }
 
@@ -107,11 +104,14 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
       logger,
     })
       .then((reviewResult) => {
-        logger.info({ botId, review: reviewResult.slice(0, 500) }, 'Soul health check: quality review complete');
+        logger.info(
+          { botId, review: reviewResult.slice(0, 500) },
+          'Soul health check: quality review complete'
+        );
       })
       .catch((err) => {
         logger.warn({ botId, err }, 'Soul health check: quality review failed (non-fatal)');
-      }),
+      })
   );
 
   await Promise.allSettled(tasks);

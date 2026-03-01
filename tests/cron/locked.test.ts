@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { locked } from '../../src/cron/locked';
 import type { CronServiceState } from '../../src/cron/service';
 
@@ -38,7 +38,11 @@ describe('locked()', () => {
 
   it('propagates fn() errors to caller', async () => {
     const state = createState();
-    await expect(locked(state, async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    await expect(
+      locked(state, async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
   });
 
   it('resolveChain logs errors but does not reject', async () => {
@@ -46,8 +50,12 @@ describe('locked()', () => {
 
     // First call fails — the chain error is swallowed but logged
     try {
-      await locked(state, async () => { throw new Error('first-fail'); });
-    } catch { /* expected */ }
+      await locked(state, async () => {
+        throw new Error('first-fail');
+      });
+    } catch {
+      /* expected */
+    }
 
     // Wait a tick for resolveChain to fire
     await new Promise((r) => setTimeout(r, 10));

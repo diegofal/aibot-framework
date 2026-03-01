@@ -1,10 +1,10 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
 import type { Database } from 'bun:sqlite';
-import type { Logger } from '../logger';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import type { MemorySearchConfig } from '../config';
+import type { Logger } from '../logger';
+import { chunkMarkdown, contentHash } from './chunker';
 import type { EmbeddingService } from './embeddings';
-import { contentHash, chunkMarkdown } from './chunker';
 import { serializeEmbedding } from './schema';
 
 /**
@@ -40,7 +40,7 @@ export async function indexFile(
   embeddingService: EmbeddingService,
   config: MemorySearchConfig,
   logger: Logger,
-  sourceType: string = 'memory',
+  sourceType = 'memory'
 ): Promise<number> {
   const fullPath = join(soulDir, relPath);
 
@@ -61,9 +61,9 @@ export async function indexFile(
   const hash = contentHash(content);
 
   // Check if file is already indexed with the same hash
-  const existing = db.prepare<{ content_hash: string }, [string]>(
-    'SELECT content_hash FROM files WHERE path = ?'
-  ).get(relPath);
+  const existing = db
+    .prepare<{ content_hash: string }, [string]>('SELECT content_hash FROM files WHERE path = ?')
+    .get(relPath);
 
   if (existing && existing.content_hash === hash) {
     logger.debug({ path: relPath }, 'File unchanged, skipping');
@@ -86,16 +86,18 @@ export async function indexFile(
   }
 
   // Generate embeddings for all chunks
-  const embedItems = chunks.map(c => ({ hash: c.contentHash, text: c.content }));
+  const embedItems = chunks.map((c) => ({ hash: c.contentHash, text: c.content }));
   const embeddings = await embeddingService.embedBatch(embedItems);
 
   // Insert file record
   const insertFile = db.prepare(
-    'INSERT INTO files (path, content_hash, last_indexed_at, chunk_count, source_type) VALUES (?, ?, datetime(\'now\'), ?, ?)'
+    "INSERT INTO files (path, content_hash, last_indexed_at, chunk_count, source_type) VALUES (?, ?, datetime('now'), ?, ?)"
   );
   insertFile.run(relPath, hash, chunks.length, sourceType);
 
-  const fileRow = db.prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?').get(relPath);
+  const fileRow = db
+    .prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?')
+    .get(relPath);
   if (!fileRow) {
     throw new Error(`Failed to insert file record for ${relPath}`);
   }
@@ -118,7 +120,7 @@ export async function indexFile(
         chunk.endLine,
         chunk.tokenEstimate,
         chunk.contentHash,
-        embedding ? serializeEmbedding(embedding) : null,
+        embedding ? serializeEmbedding(embedding) : null
       );
     }
   });
@@ -133,7 +135,9 @@ export async function indexFile(
  * Remove a file and its chunks from the database
  */
 export function removeFile(db: Database, relPath: string, logger: Logger): void {
-  const fileRow = db.prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?').get(relPath);
+  const fileRow = db
+    .prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?')
+    .get(relPath);
   if (!fileRow) return;
 
   db.prepare('DELETE FROM chunks WHERE file_id = ?').run(fileRow.id);
@@ -149,7 +153,7 @@ export async function fullReindex(
   soulDir: string,
   embeddingService: EmbeddingService,
   config: MemorySearchConfig,
-  logger: Logger,
+  logger: Logger
 ): Promise<{ indexed: number; removed: number; total: number }> {
   const discoveredFiles = discoverFiles(soulDir);
   let indexed = 0;
@@ -171,6 +175,9 @@ export async function fullReindex(
     }
   }
 
-  logger.info({ indexed, removed, totalChunks: total, files: discoveredFiles.length }, 'Full reindex complete');
+  logger.info(
+    { indexed, removed, totalChunks: total, files: discoveredFiles.length },
+    'Full reindex complete'
+  );
   return { indexed, removed, total };
 }

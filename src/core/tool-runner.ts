@@ -1,6 +1,6 @@
 import type { Logger } from '../logger';
-import type { ToolDefinition, ToolCall, ToolExecutor } from '../tools/types';
 import type { ChatMessage, ChatOptions } from '../ollama';
+import type { ToolCall, ToolDefinition, ToolExecutor } from '../tools/types';
 import type { LoopDetector } from './loop-detector';
 
 /**
@@ -10,7 +10,7 @@ import type { LoopDetector } from './loop-detector';
 export interface ToolCallingStrategy {
   chat(
     messages: ChatMessage[],
-    opts: ChatOptions,
+    opts: ChatOptions
   ): Promise<{ content: string; toolCalls?: ToolCall[] }>;
 }
 
@@ -37,7 +37,7 @@ export async function runToolLoop(
   strategy: ToolCallingStrategy,
   messages: ChatMessage[],
   opts: ToolRunnerOptions,
-  chatOptions: ChatOptions,
+  chatOptions: ChatOptions
 ): Promise<string> {
   const workingMessages = [...messages];
 
@@ -62,10 +62,8 @@ export async function runToolLoop(
       const check = opts.loopDetector.check();
       if (check.action === 'break') {
         opts.logger.warn({ round, message: check.message }, 'Tool loop detector: breaking');
-        const lastContent = workingMessages
-          .filter((m) => m.role === 'assistant')
-          .pop()?.content;
-        return (lastContent || '') + `\n\n[Loop stopped: ${check.message}]`;
+        const lastContent = workingMessages.filter((m) => m.role === 'assistant').pop()?.content;
+        return `${lastContent || ''}\n\n[Loop stopped: ${check.message}]`;
       }
       if (check.action === 'warn' && check.message) {
         workingMessages.push({
@@ -81,7 +79,7 @@ export async function runToolLoop(
     if (!isLastRound && result.toolCalls && result.toolCalls.length > 0) {
       opts.logger.info(
         { round, toolCalls: result.toolCalls.map((tc) => tc.function.name) },
-        'LLM requested tool calls',
+        'LLM requested tool calls'
       );
 
       // Push assistant message with tool_calls
@@ -100,7 +98,7 @@ export async function runToolLoop(
 
         opts.logger.debug(
           { tool: name, success: toolResult.success, contentLength: toolResult.content.length },
-          'Tool call result',
+          'Tool call result'
         );
 
         workingMessages.push({

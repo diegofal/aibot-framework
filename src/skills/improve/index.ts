@@ -1,5 +1,5 @@
 import type { Skill, SkillContext } from '../../core/types';
-import { runImprove, VALID_FOCUS, type FocusArea } from '../../tools/improve';
+import { type FocusArea, VALID_FOCUS, runImprove } from '../../tools/improve';
 
 interface ImproveConfig {
   soulDir?: string;
@@ -29,7 +29,8 @@ const skill: Skill = {
 
   commands: {
     improve: {
-      description: 'Run Claude Code to improve soul files. Usage: /improve [focus] [context]. Focus: memory, soul, motivations, identity, all (default)',
+      description:
+        'Run Claude Code to improve soul files. Usage: /improve [focus] [context]. Focus: memory, soul, motivations, identity, all (default)',
       async handler(args: string[], ctx: SkillContext) {
         // Concurrency guard — only one session at a time across all bots
         if (running) {
@@ -60,8 +61,11 @@ const skill: Skill = {
           ctx.logger.info({ focus, context }, 'Improve command invoked');
 
           // Send immediate feedback
-          const chatId = ctx.session!.chatId;
-          await ctx.telegram.sendMessage(chatId, `🔧 Starting soul improvement (focus: ${focus})... This may take a few minutes.`);
+          const chatId = ctx.session?.chatId;
+          await ctx.telegram.sendMessage(
+            chatId,
+            `🔧 Starting soul improvement (focus: ${focus})... This may take a few minutes.`
+          );
 
           const result = await runImprove({
             claudePath,

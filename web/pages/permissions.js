@@ -1,7 +1,7 @@
 import { api, escapeHtml } from './shared.js';
 
 let refreshTimer = null;
-let pollTimers = new Map();
+const pollTimers = new Map();
 
 function formatRemaining(ms) {
   if (ms <= 0) return 'Expired';
@@ -79,19 +79,23 @@ function renderRequestCard(r) {
 }
 
 function renderHistoryCard(entry) {
-  const borderColor = {
-    decided: 'var(--accent)',
-    consumed: 'var(--orange)',
-    executed: 'var(--green)',
-    failed: 'var(--red)',
-  }[entry.executionStatus] || 'var(--border)';
+  const borderColor =
+    {
+      decided: 'var(--accent)',
+      consumed: 'var(--orange)',
+      executed: 'var(--green)',
+      failed: 'var(--red)',
+    }[entry.executionStatus] || 'var(--border)';
 
   const toolCallsHtml = entry.toolCalls?.length
     ? `<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">
         <strong>Tool calls:</strong>
-        ${entry.toolCalls.map(t =>
-          `<span style="margin-left:6px">${t.success ? '\u2705' : '\u274C'} <code>${escapeHtml(t.name)}</code></span>`
-        ).join('')}
+        ${entry.toolCalls
+          .map(
+            (t) =>
+              `<span style="margin-left:6px">${t.success ? '\u2705' : '\u274C'} <code>${escapeHtml(t.name)}</code></span>`
+          )
+          .join('')}
       </div>`
     : '';
 
@@ -101,11 +105,12 @@ function renderHistoryCard(entry) {
       </div>`
     : '';
 
-  const retryHtml = entry.executionStatus === 'failed'
-    ? `<div style="margin-top:8px;text-align:right">
+  const retryHtml =
+    entry.executionStatus === 'failed'
+      ? `<div style="margin-top:8px;text-align:right">
         <button class="btn btn-primary btn-retry" style="font-size:12px;padding:4px 12px">Retry</button>
       </div>`
-    : '';
+      : '';
 
   return `<div class="history-card" style="border-left:3px solid ${borderColor}" data-id="${escapeHtml(entry.id)}">
     <div class="inbox-card-header">
@@ -166,13 +171,15 @@ async function render(el) {
   const { requests } = pendingData;
   const historyEntries = historyData.entries || [];
 
-  const pendingHtml = requests.length > 0
-    ? requests.map(renderRequestCard).join('')
-    : '<p class="text-dim text-sm">No pending permission requests</p>';
+  const pendingHtml =
+    requests.length > 0
+      ? requests.map(renderRequestCard).join('')
+      : '<p class="text-dim text-sm">No pending permission requests</p>';
 
-  const historyHtml = historyEntries.length > 0
-    ? historyEntries.map(renderHistoryCard).join('')
-    : '<p class="text-dim text-sm">No recent decisions</p>';
+  const historyHtml =
+    historyEntries.length > 0
+      ? historyEntries.map(renderHistoryCard).join('')
+      : '<p class="text-dim text-sm">No recent decisions</p>';
 
   el.innerHTML = `
     <div class="page-title">Permissions <span class="count">${requests.length} pending</span></div>

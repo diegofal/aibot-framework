@@ -7,10 +7,15 @@ export interface CollaborateHandler {
     sessionId: string | undefined,
     targetBotId: string,
     message: string,
-    sourceBotId: string,
+    sourceBotId: string
   ): Promise<{ sessionId: string; response: string }>;
   endSession(sessionId: string): void;
-  sendVisibleMessage(chatId: number, sourceBotId: string, targetBotId: string, message: string): Promise<void>;
+  sendVisibleMessage(
+    chatId: number,
+    sourceBotId: string,
+    targetBotId: string,
+    message: string
+  ): Promise<void>;
 }
 
 export function createCollaborateTool(getHandler: () => CollaborateHandler): Tool {
@@ -30,7 +35,8 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
             action: {
               type: 'string',
               enum: ['discover', 'send', 'end_session'],
-              description: '"discover" to see agents and capabilities, "send" to message one, "end_session" to close a session',
+              description:
+                '"discover" to see agents and capabilities, "send" to message one, "end_session" to close a session',
             },
             targetBotId: {
               type: 'string',
@@ -42,11 +48,13 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
             },
             sessionId: {
               type: 'string',
-              description: 'Session ID to continue a multi-turn conversation (optional for "send", required for "end_session")',
+              description:
+                'Session ID to continue a multi-turn conversation (optional for "send", required for "end_session")',
             },
             visible: {
               type: 'boolean',
-              description: 'If true, sends the message visibly in the group chat (target bot responds publicly). If false (default), the exchange is internal and invisible.',
+              description:
+                'If true, sends the message visibly in the group chat (target bot responds publicly). If false (default), the exchange is internal and invisible.',
             },
           },
           required: ['action'],
@@ -71,14 +79,16 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
           return { success: true, content: 'No other agents available.' };
         }
 
-        const list = agents.map((a) => {
-          const parts = [`- **${a.botId}** (${a.name}, @${a.telegramUsername})`];
-          if (a.description) parts.push(`  Description: ${a.description}`);
-          if (a.skills.length > 0) parts.push(`  Skills: ${a.skills.join(', ')}`);
-          if (a.tools && a.tools.length > 0) parts.push(`  Tools: ${a.tools.join(', ')}`);
-          if (a.model) parts.push(`  Model: ${a.model}`);
-          return parts.join('\n');
-        }).join('\n\n');
+        const list = agents
+          .map((a) => {
+            const parts = [`- **${a.botId}** (${a.name}, @${a.telegramUsername})`];
+            if (a.description) parts.push(`  Description: ${a.description}`);
+            if (a.skills.length > 0) parts.push(`  Skills: ${a.skills.join(', ')}`);
+            if (a.tools && a.tools.length > 0) parts.push(`  Tools: ${a.tools.join(', ')}`);
+            if (a.model) parts.push(`  Model: ${a.model}`);
+            return parts.join('\n');
+          })
+          .join('\n\n');
 
         return { success: true, content: `Available agents:\n\n${list}` };
       }
@@ -104,23 +114,35 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
           const chatId = args._chatId as number;
           if (!chatId || chatId === 0) {
             // No chat context (e.g. agent loop autonomous mode) — fall back to invisible collaboration
-            logger.info({ targetBotId, sourceBotId }, 'No chat context for visible collaboration, falling back to invisible mode');
+            logger.info(
+              { targetBotId, sourceBotId },
+              'No chat context for visible collaboration, falling back to invisible mode'
+            );
           } else {
             try {
               await handler.sendVisibleMessage(chatId, sourceBotId, targetBotId, message);
               return {
                 success: true,
-                content: 'Message sent visibly to the group chat. The target bot will respond publicly. Do NOT repeat the message content in your reply — just let the user know you asked.',
+                content:
+                  'Message sent visibly to the group chat. The target bot will respond publicly. Do NOT repeat the message content in your reply — just let the user know you asked.',
               };
             } catch (err) {
-              logger.error({ err, targetBotId, sourceBotId, chatId }, 'visible collaborate send failed');
+              logger.error(
+                { err, targetBotId, sourceBotId, chatId },
+                'visible collaborate send failed'
+              );
               return { success: false, content: `Visible collaboration failed: ${String(err)}` };
             }
           }
         }
 
         try {
-          const result = await handler.collaborationStep(sessionId, targetBotId, message, sourceBotId);
+          const result = await handler.collaborationStep(
+            sessionId,
+            targetBotId,
+            message,
+            sourceBotId
+          );
           return {
             success: true,
             content: JSON.stringify({
@@ -143,7 +165,10 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
         return { success: true, content: `Session ${sessionId} ended.` };
       }
 
-      return { success: false, content: `Unknown action: ${action}. Use "discover", "send", or "end_session".` };
+      return {
+        success: false,
+        content: `Unknown action: ${action}. Use "discover", "send", or "end_session".`,
+      };
     },
   };
 }

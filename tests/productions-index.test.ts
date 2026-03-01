@@ -1,8 +1,8 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ProductionsService } from '../src/productions/service';
 import type { Config } from '../src/config';
+import { ProductionsService } from '../src/productions/service';
 
 const noopLogger = {
   info: () => {},
@@ -144,7 +144,9 @@ describe('ProductionsService — rebuildIndex', () => {
     expect(content).toContain('real_file.md');
     // INDEX.md, changelog.jsonl, summary.json should NOT appear as table rows
     const lines = content.split('\n');
-    const tableRows = lines.filter(l => l.startsWith('|') && !l.startsWith('|--') && !l.includes('File'));
+    const tableRows = lines.filter(
+      (l) => l.startsWith('|') && !l.startsWith('|--') && !l.includes('File')
+    );
     for (const row of tableRows) {
       expect(row).not.toContain('| INDEX.md');
       expect(row).not.toContain('| changelog.jsonl');
@@ -267,11 +269,11 @@ describe('ProductionsService — archiveFile', () => {
     service.archiveFile('testbot', 'stale.md', 'Content is stale');
 
     const entries = service.getChangelog('testbot');
-    const archiveEntry = entries.find(e => e.action === 'archive');
+    const archiveEntry = entries.find((e) => e.action === 'archive');
     expect(archiveEntry).toBeTruthy();
-    expect(archiveEntry!.path).toBe('archived/stale.md');
-    expect(archiveEntry!.archivedFrom).toBe('stale.md');
-    expect(archiveEntry!.archiveReason).toBe('Content is stale');
+    expect(archiveEntry?.path).toBe('archived/stale.md');
+    expect(archiveEntry?.archivedFrom).toBe('stale.md');
+    expect(archiveEntry?.archiveReason).toBe('Content is stale');
   });
 
   test('returns false for non-existent file', () => {
@@ -326,10 +328,10 @@ describe('ProductionsService — archiveFile', () => {
     service.archiveFile('testbot', 'test.md', 'Test archive');
 
     const entries = service.getChangelog('testbot');
-    const archiveEntry = entries.find(e => e.action === 'archive');
+    const archiveEntry = entries.find((e) => e.action === 'archive');
     expect(archiveEntry).toBeTruthy();
-    expect(archiveEntry!.action).toBe('archive');
-    expect(archiveEntry!.archivedFrom).toBe('test.md');
-    expect(archiveEntry!.archiveReason).toBe('Test archive');
+    expect(archiveEntry?.action).toBe('archive');
+    expect(archiveEntry?.archivedFrom).toBe('test.md');
+    expect(archiveEntry?.archiveReason).toBe('Test archive');
   });
 });

@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeEach, vi } from 'bun:test';
-import { AgentScheduler, type BotSchedule } from '../../src/bot/agent-scheduler';
+import { beforeEach, describe, expect, test, vi } from 'bun:test';
 import type { AgentLoopResult } from '../../src/bot/agent-loop';
+import { AgentScheduler, type BotSchedule } from '../../src/bot/agent-scheduler';
 
 // ---------------------------------------------------------------------------
 // Note: We don't mock agent-strategist here because:
@@ -108,7 +108,7 @@ describe('AgentScheduler', () => {
       const before = scheduler.getSchedule('bot1')!;
       before.lastFocus = 'focused';
       scheduler.syncSchedules();
-      expect(scheduler.getSchedule('bot1')!.lastFocus).toBe('focused');
+      expect(scheduler.getSchedule('bot1')?.lastFocus).toBe('focused');
     });
 
     test('removes schedules for bots no longer in runningBots', () => {
@@ -125,14 +125,14 @@ describe('AgentScheduler', () => {
       scheduler.syncSchedules();
       expect(ctx.logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({ botId: 'bot1' }),
-        expect.stringContaining('added new bot'),
+        expect.stringContaining('added new bot')
       );
 
       ctx.runningBots.delete('bot2');
       scheduler.syncSchedules();
       expect(ctx.logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({ botId: 'bot2' }),
-        expect.stringContaining('removed stopped bot'),
+        expect.stringContaining('removed stopped bot')
       );
     });
   });
@@ -293,10 +293,14 @@ describe('AgentScheduler', () => {
       // Run 2 cycles without strategist
       scheduler.updateBotSchedule('bot1', bot1Config, makeResult({ strategistRan: false }));
       scheduler.updateBotSchedule('bot1', bot1Config, makeResult({ strategistRan: false }));
-      expect(scheduler.getSchedule('bot1')!.strategistCycleCount).toBe(2);
+      expect(scheduler.getSchedule('bot1')?.strategistCycleCount).toBe(2);
 
       // Run with strategist
-      scheduler.updateBotSchedule('bot1', bot1Config, makeResult({ strategistRan: true, focus: 'new focus' }));
+      scheduler.updateBotSchedule(
+        'bot1',
+        bot1Config,
+        makeResult({ strategistRan: true, focus: 'new focus' })
+      );
       const s = scheduler.getSchedule('bot1')!;
       expect(s.strategistCycleCount).toBe(0);
       expect(s.lastStrategistAt).toBeGreaterThan(0);
@@ -318,7 +322,7 @@ describe('AgentScheduler', () => {
       scheduler.syncSchedules();
       scheduler.updateBotSchedule('bot2', bot2Config, makeResult({ botId: 'bot2' }));
       scheduler.updateBotSchedule('bot2', bot2Config, makeResult({ botId: 'bot2' }));
-      expect(scheduler.getSchedule('bot2')!.continuousCycleCount).toBe(2);
+      expect(scheduler.getSchedule('bot2')?.continuousCycleCount).toBe(2);
     });
 
     test('clears retryCount and lastErrorMessage on non-error result', () => {
@@ -329,8 +333,8 @@ describe('AgentScheduler', () => {
       s.lastErrorMessage = 'boom';
 
       scheduler.updateBotSchedule('bot1', bot1Config, makeResult({ status: 'completed' }));
-      expect(scheduler.getSchedule('bot1')!.retryCount).toBe(0);
-      expect(scheduler.getSchedule('bot1')!.lastErrorMessage).toBeNull();
+      expect(scheduler.getSchedule('bot1')?.retryCount).toBe(0);
+      expect(scheduler.getSchedule('bot1')?.lastErrorMessage).toBeNull();
     });
 
     test('preserves retryCount on error result', () => {
@@ -341,8 +345,8 @@ describe('AgentScheduler', () => {
 
       // Error result — retryCount/lastErrorMessage not cleared by updateBotSchedule
       scheduler.updateBotSchedule('bot1', bot1Config, makeResult({ status: 'error' }));
-      expect(scheduler.getSchedule('bot1')!.retryCount).toBe(2);
-      expect(scheduler.getSchedule('bot1')!.lastErrorMessage).toBe('old error');
+      expect(scheduler.getSchedule('bot1')?.retryCount).toBe(2);
+      expect(scheduler.getSchedule('bot1')?.lastErrorMessage).toBe('old error');
     });
 
     test('uses bot-specific every when configured', () => {
@@ -351,7 +355,7 @@ describe('AgentScheduler', () => {
       scheduler.syncSchedules();
 
       scheduler.updateBotSchedule('bot1', botWithEvery, makeResult());
-      expect(scheduler.getSchedule('bot1')!.nextCheckIn).toBe('10m');
+      expect(scheduler.getSchedule('bot1')?.nextCheckIn).toBe('10m');
     });
   });
 
@@ -451,7 +455,12 @@ describe('AgentScheduler', () => {
       scheduler.syncSchedules();
       const s = scheduler.getSchedule('bot1')!;
       for (let i = 0; i < 7; i++) {
-        s.recentActions.push({ cycle: i, timestamp: Date.now(), tools: [], planSummary: `action-${i}` });
+        s.recentActions.push({
+          cycle: i,
+          timestamp: Date.now(),
+          tools: [],
+          planSummary: `action-${i}`,
+        });
       }
       const infos = scheduler.buildScheduleInfos();
       const bot1Info = infos.find((i) => i.botId === 'bot1')!;

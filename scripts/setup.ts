@@ -3,7 +3,7 @@
  * Interactive setup wizard for AIBot Framework
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const BOLD = '\x1b[1m';
@@ -56,7 +56,9 @@ async function main() {
 
   const allowedUsers = await prompt('Allowed user IDs (comma-separated, or leave empty for all):');
   if (allowedUsers) {
-    exampleConfig.bots[0].allowedUsers = allowedUsers.split(',').map((id) => parseInt(id.trim()));
+    exampleConfig.bots[0].allowedUsers = allowedUsers
+      .split(',')
+      .map((id) => Number.parseInt(id.trim()));
   }
 
   // Ollama Configuration
@@ -82,7 +84,7 @@ async function main() {
       log(`⚠️  Ollama not responding (${res.status})`, YELLOW);
     }
   } catch (error) {
-    log('⚠️  Could not connect to Ollama. Make sure it\'s running.', YELLOW);
+    log("⚠️  Could not connect to Ollama. Make sure it's running.", YELLOW);
   }
 
   // Skills Configuration
@@ -102,7 +104,7 @@ async function main() {
     log('\n═══ Intel-Gatherer Configuration ═══', BOLD);
     const intelChatId = await prompt('Telegram chat ID for daily reports (optional):');
     if (intelChatId) {
-      exampleConfig.skills.config['intel-gatherer'].telegramChatId = parseInt(intelChatId);
+      exampleConfig.skills.config['intel-gatherer'].telegramChatId = Number.parseInt(intelChatId);
     }
   }
 

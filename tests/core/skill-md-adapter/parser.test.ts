@@ -2,10 +2,10 @@
  * Tests for SkillMdParser
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SkillMdParser } from '../../../src/core/skill-md-adapter/parser';
 import { SkillParseError } from '../../../src/core/skill-md-adapter/types';
 

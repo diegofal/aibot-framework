@@ -1,5 +1,5 @@
-import { describe, test, expect, mock } from 'bun:test';
-import { createCollaborateTool, type CollaborateHandler } from '../../src/tools/collaborate';
+import { describe, expect, mock, test } from 'bun:test';
+import { type CollaborateHandler, createCollaborateTool } from '../../src/tools/collaborate';
 
 function createMockLogger() {
   return {
@@ -20,7 +20,8 @@ const logger = createMockLogger();
 function createMockHandler(overrides: Partial<CollaborateHandler> = {}): CollaborateHandler {
   return {
     discoverAgents: overrides.discoverAgents ?? (() => []),
-    collaborationStep: overrides.collaborationStep ?? (async () => ({ sessionId: 'sess-1', response: 'ok' })),
+    collaborationStep:
+      overrides.collaborationStep ?? (async () => ({ sessionId: 'sess-1', response: 'ok' })),
     endSession: overrides.endSession ?? (() => {}),
     sendVisibleMessage: overrides.sendVisibleMessage ?? (async () => {}),
   };
@@ -35,9 +36,16 @@ describe('collaborate tool', () => {
 
   test('discover returns available agents', async () => {
     const handler = createMockHandler({
-      discoverAgents: () => [
-        { botId: 'bot-2', name: 'Helper', telegramUsername: 'helper_bot', skills: ['search'], description: 'A helper' },
-      ] as any,
+      discoverAgents: () =>
+        [
+          {
+            botId: 'bot-2',
+            name: 'Helper',
+            telegramUsername: 'helper_bot',
+            skills: ['search'],
+            description: 'A helper',
+          },
+        ] as any,
     });
     const tool = createCollaborateTool(() => handler);
     const result = await tool.execute({ action: 'discover', _botId: 'bot-1' }, logger);
@@ -58,13 +66,16 @@ describe('collaborate tool', () => {
     const handler = createMockHandler({ collaborationStep: stepFn });
     const tool = createCollaborateTool(() => handler);
 
-    const result = await tool.execute({
-      action: 'send',
-      targetBotId: 'bot-2',
-      message: 'Hi there',
-      _botId: 'bot-1',
-      _chatId: 0,  // no chat context (agent loop)
-    }, logger);
+    const result = await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'bot-2',
+        message: 'Hi there',
+        _botId: 'bot-1',
+        _chatId: 0, // no chat context (agent loop)
+      },
+      logger
+    );
 
     expect(result.success).toBe(true);
     const parsed = JSON.parse(result.content);
@@ -78,14 +89,17 @@ describe('collaborate tool', () => {
     const handler = createMockHandler({ sendVisibleMessage: visibleFn });
     const tool = createCollaborateTool(() => handler);
 
-    const result = await tool.execute({
-      action: 'send',
-      targetBotId: 'bot-2',
-      message: 'Hi group',
-      visible: true,
-      _botId: 'bot-1',
-      _chatId: 12345,
-    }, logger);
+    const result = await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'bot-2',
+        message: 'Hi group',
+        visible: true,
+        _botId: 'bot-1',
+        _chatId: 12345,
+      },
+      logger
+    );
 
     expect(result.success).toBe(true);
     expect(result.content).toContain('visibly');
@@ -101,14 +115,17 @@ describe('collaborate tool', () => {
     });
     const tool = createCollaborateTool(() => handler);
 
-    const result = await tool.execute({
-      action: 'send',
-      targetBotId: 'bot-2',
-      message: 'Hi from agent loop',
-      visible: true,
-      _botId: 'bot-1',
-      _chatId: 0,  // no chat context
-    }, logger);
+    const result = await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'bot-2',
+        message: 'Hi from agent loop',
+        visible: true,
+        _botId: 'bot-1',
+        _chatId: 0, // no chat context
+      },
+      logger
+    );
 
     expect(result.success).toBe(true);
     // Should NOT have called sendVisibleMessage
@@ -124,14 +141,17 @@ describe('collaborate tool', () => {
     const handler = createMockHandler({ collaborationStep: stepFn });
     const tool = createCollaborateTool(() => handler);
 
-    const result = await tool.execute({
-      action: 'send',
-      targetBotId: 'bot-2',
-      message: 'Hello',
-      visible: true,
-      _botId: 'bot-1',
-      // _chatId not set at all
-    }, logger);
+    const result = await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'bot-2',
+        message: 'Hello',
+        visible: true,
+        _botId: 'bot-1',
+        // _chatId not set at all
+      },
+      logger
+    );
 
     expect(result.success).toBe(true);
     expect(stepFn).toHaveBeenCalled();
@@ -146,19 +166,25 @@ describe('collaborate tool', () => {
 
   test('send requires message', async () => {
     const tool = createCollaborateTool(() => createMockHandler());
-    const result = await tool.execute({ action: 'send', targetBotId: 'bot-2', _botId: 'bot-1' }, logger);
+    const result = await tool.execute(
+      { action: 'send', targetBotId: 'bot-2', _botId: 'bot-1' },
+      logger
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain('message is required');
   });
 
   test('cannot collaborate with yourself', async () => {
     const tool = createCollaborateTool(() => createMockHandler());
-    const result = await tool.execute({
-      action: 'send',
-      targetBotId: 'bot-1',
-      message: 'hi me',
-      _botId: 'bot-1',
-    }, logger);
+    const result = await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'bot-1',
+        message: 'hi me',
+        _botId: 'bot-1',
+      },
+      logger
+    );
     expect(result.success).toBe(false);
     expect(result.content).toContain('Cannot collaborate with yourself');
   });
@@ -175,11 +201,14 @@ describe('collaborate tool', () => {
     const handler = createMockHandler({ endSession: endFn });
     const tool = createCollaborateTool(() => handler);
 
-    const result = await tool.execute({
-      action: 'end_session',
-      sessionId: 'sess-1',
-      _botId: 'bot-1',
-    }, logger);
+    const result = await tool.execute(
+      {
+        action: 'end_session',
+        sessionId: 'sess-1',
+        _botId: 'bot-1',
+      },
+      logger
+    );
 
     expect(result.success).toBe(true);
     expect(endFn).toHaveBeenCalledWith('sess-1');
@@ -204,13 +233,16 @@ describe('collaborate tool', () => {
     const handler = createMockHandler({ collaborationStep: stepFn });
     const tool = createCollaborateTool(() => handler);
 
-    const result = await tool.execute({
-      action: 'send',
-      targetBotId: 'bot-2',
-      message: 'Follow-up',
-      sessionId: 'sess-1',
-      _botId: 'bot-1',
-    }, logger);
+    const result = await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'bot-2',
+        message: 'Follow-up',
+        sessionId: 'sess-1',
+        _botId: 'bot-1',
+      },
+      logger
+    );
 
     expect(result.success).toBe(true);
     expect(stepFn).toHaveBeenCalledWith('sess-1', 'bot-2', 'Follow-up', 'bot-1');

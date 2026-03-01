@@ -1,14 +1,14 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { MemoryFlusher, type ScoredFact } from '../src/bot/memory-flush';
-import { createCoreMemoryManager } from '../src/memory/core-memory';
 import type { BotContext } from '../src/bot/types';
-import type { ChatMessage } from '../src/ollama';
-import type { Logger } from '../src/logger';
-import type { MemoryManager } from '../src/memory/manager';
-import type { SoulLoader } from '../src/soul-loader';
 import type { Config } from '../src/config';
+import type { Logger } from '../src/logger';
+import { createCoreMemoryManager } from '../src/memory/core-memory';
+import type { MemoryManager } from '../src/memory/manager';
+import type { ChatMessage } from '../src/ollama';
 import type { OllamaClient } from '../src/ollama';
+import type { SoulLoader } from '../src/soul-loader';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -21,7 +21,7 @@ const noopLogger: Logger = {
 // Mock BotContext
 function createMockContext(db: Database): BotContext {
   const coreMemory = createCoreMemoryManager(db, noopLogger);
-  
+
   return {
     config: { ollama: { models: { primary: 'test-model' } } } as Config,
     logger: noopLogger,
@@ -45,13 +45,14 @@ describe('MemoryFlusher', () => {
     db.exec(`
       CREATE TABLE core_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id TEXT NOT NULL DEFAULT 'default',
         category TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         importance INTEGER NOT NULL DEFAULT 5,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(category, key)
+        UNIQUE(bot_id, category, key)
       );
     `);
     const ctx = createMockContext(db);
@@ -70,10 +71,16 @@ describe('MemoryFlusher', () => {
       ]);
 
       // Access private method via type assertion
-      const facts = (flusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }).parseScoredFacts(response);
+      const facts = (
+        flusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }
+      ).parseScoredFacts(response);
 
       expect(facts).toHaveLength(2);
-      expect(facts[0]).toEqual({ fact: 'User likes pizza', importance: 8, category: 'preferences' });
+      expect(facts[0]).toEqual({
+        fact: 'User likes pizza',
+        importance: 8,
+        category: 'preferences',
+      });
       expect(facts[1]).toEqual({ fact: 'User works in AI', importance: 9, category: 'identity' });
     });
 
@@ -83,7 +90,9 @@ describe('MemoryFlusher', () => {
         { fact: 'Test 2', importance: -3, category: 'general' },
       ]);
 
-      const facts = (flusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }).parseScoredFacts(response);
+      const facts = (
+        flusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }
+      ).parseScoredFacts(response);
 
       expect(facts[0].importance).toBe(10);
       expect(facts[1].importance).toBe(1);
@@ -96,7 +105,9 @@ describe('MemoryFlusher', () => {
         - [9/10] Critical security issue discussed
       `;
 
-      const facts = (flusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }).parseScoredFacts(response);
+      const facts = (
+        flusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }
+      ).parseScoredFacts(response);
 
       expect(facts).toHaveLength(3);
       expect(facts[0].importance).toBe(8);
@@ -108,7 +119,9 @@ describe('MemoryFlusher', () => {
 
     test('returns empty array for invalid input', () => {
       const response = 'This is just random text without any structured data';
-      const facts = (flusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }).parseScoredFacts(response);
+      const facts = (
+        flusher as unknown as { parseScoredFacts: (r: string) => ScoredFact[] }
+      ).parseScoredFacts(response);
       expect(facts).toHaveLength(0);
     });
   });
@@ -121,7 +134,9 @@ describe('MemoryFlusher', () => {
         category: 'preferences',
       };
 
-      const key = (flusher as unknown as { generateFactKey: (f: ScoredFact) => string }).generateFactKey(fact);
+      const key = (
+        flusher as unknown as { generateFactKey: (f: ScoredFact) => string }
+      ).generateFactKey(fact);
 
       expect(key).toBe('user_likes_pizza_with_pepperoni');
     });
@@ -133,7 +148,9 @@ describe('MemoryFlusher', () => {
         category: 'general',
       };
 
-      const key = (flusher as unknown as { generateFactKey: (f: ScoredFact) => string }).generateFactKey(fact);
+      const key = (
+        flusher as unknown as { generateFactKey: (f: ScoredFact) => string }
+      ).generateFactKey(fact);
 
       expect(key).toBe('users_favorite_color_is_blue');
     });
@@ -145,7 +162,9 @@ describe('MemoryFlusher', () => {
         category: 'general',
       };
 
-      const key = (flusher as unknown as { generateFactKey: (f: ScoredFact) => string }).generateFactKey(fact);
+      const key = (
+        flusher as unknown as { generateFactKey: (f: ScoredFact) => string }
+      ).generateFactKey(fact);
 
       expect(key.length).toBeLessThanOrEqual(50);
     });
@@ -158,13 +177,14 @@ describe('Importance scoring integration', () => {
     db.exec(`
       CREATE TABLE core_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id TEXT NOT NULL DEFAULT 'default',
         category TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         importance INTEGER NOT NULL DEFAULT 5,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(category, key)
+        UNIQUE(bot_id, category, key)
       );
     `);
 
@@ -177,7 +197,7 @@ describe('Importance scoring integration', () => {
 
     // Search should find the high-importance facts
     const results = await coreMemory.search('user likes');
-    
+
     // Results should be sorted by importance
     expect(results.length).toBeGreaterThan(0);
     if (results.length > 0) {

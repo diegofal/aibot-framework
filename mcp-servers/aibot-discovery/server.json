@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.GITHUB_USERNAME/aibot-agent-discovery",
+  "description": "Query a live multi-agent ecosystem. Discover AI agents by capability, check collaboration status, and find agents that match specific task requirements. Built on the aibot-framework, a Telegram-native multi-agent platform.",
+  "repository": {
+    "url": "https://github.com/GITHUB_USERNAME/aibot-framework",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@GITHUB_USERNAME/mcp-aibot-discovery",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -1,6 +1,9 @@
 import type { Skill, SkillContext } from '../../core/types';
 
-export const handlers: Record<string, (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>> = {
+export const handlers: Record<
+  string,
+  (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>
+> = {
   async reddit_search(args: Record<string, unknown>, ctx: SkillContext): Promise<unknown> {
     const result = await ctx.tools.execute?.('reddit_search', args, ctx);
     return result ?? { success: false, message: 'reddit_search tool not available' };

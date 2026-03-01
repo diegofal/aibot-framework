@@ -1,6 +1,6 @@
-import type { Tool, ToolResult } from './types';
-import type { MemoryManager } from '../memory/manager';
 import type { Logger } from '../logger';
+import type { MemoryManager } from '../memory/manager';
+import type { Tool, ToolResult } from './types';
 
 export function createMemorySearchTool(memoryManager: MemoryManager): Tool {
   return {
@@ -32,10 +32,7 @@ export function createMemorySearchTool(memoryManager: MemoryManager): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger,
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const query = String(args.query ?? '').trim();
       if (!query) {
         return { success: false, content: 'Missing required parameter: query' };
@@ -45,17 +42,20 @@ export function createMemorySearchTool(memoryManager: MemoryManager): Tool {
       const minScore = typeof args.minScore === 'number' ? args.minScore : undefined;
 
       try {
-        const results = await memoryManager.search(query, maxResults, minScore);
+        const botId = typeof args._botId === 'string' ? args._botId : undefined;
+        const results = await memoryManager.search(query, maxResults, minScore, botId);
 
         if (results.length === 0) {
           return { success: true, content: 'No relevant memories found.' };
         }
 
-        const formatted = results.map((r, i) => {
-          const typeLabel = r.sourceType ?? 'memory';
-          const header = `[${i + 1}] ${r.filePath} (${typeLabel}, lines ${r.startLine}-${r.endLine}, score: ${r.score}, via: ${r.source})`;
-          return `${header}\n${r.content}`;
-        }).join('\n\n---\n\n');
+        const formatted = results
+          .map((r, i) => {
+            const typeLabel = r.sourceType ?? 'memory';
+            const header = `[${i + 1}] ${r.filePath} (${typeLabel}, lines ${r.startLine}-${r.endLine}, score: ${r.score}, via: ${r.source})`;
+            return `${header}\n${r.content}`;
+          })
+          .join('\n\n---\n\n');
 
         logger.info({ query, results: results.length }, 'memory_search executed');
         return { success: true, content: formatted };

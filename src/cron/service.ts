@@ -9,17 +9,31 @@ import {
   recomputeNextRuns,
 } from './jobs';
 import { locked } from './locked';
-import { clearCronRunLog, deleteCronRunLogEntries, readCronRunLogEntries, resolveCronRunLogPath } from './run-log';
+import {
+  clearCronRunLog,
+  deleteCronRunLogEntries,
+  readCronRunLogEntries,
+  resolveCronRunLogPath,
+} from './run-log';
 import { loadCronStore, saveCronStore } from './store';
 import { armTimer, executeJob, isJobDue, stopTimer } from './timer';
-import type { CronEvent, CronJob, CronJobCreate, CronJobPatch, CronPayload, CronStoreFile } from './types';
+import type {
+  CronEvent,
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronPayload,
+  CronStoreFile,
+} from './types';
 
 export type CronServiceDeps = {
   logger: Logger;
   storePath: string;
   cronEnabled: boolean;
   sendMessage: (chatId: number, text: string, botId: string) => Promise<void>;
-  resolveSkillHandler: (payload: Extract<CronPayload, { kind: 'skillJob' }>) => (() => Promise<string | void>) | undefined;
+  resolveSkillHandler: (
+    payload: Extract<CronPayload, { kind: 'skillJob' }>
+  ) => (() => Promise<string | undefined>) | undefined;
   onEvent?: (evt: CronEvent) => void;
 };
 

@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import type { Tool, ToolResult } from './types';
+import { dirname, join } from 'node:path';
 import type { Logger } from '../logger';
+import type { Tool, ToolResult } from './types';
 
 const CREDENTIALS_PATH = join(homedir(), '.config', 'moltbook', 'credentials.json');
 const REGISTER_URL = 'https://www.moltbook.com/api/v1/agents/register';
@@ -45,7 +45,9 @@ export function createMoltbookRegisterTool(): Tool {
       // Check if already registered
       if (existsSync(CREDENTIALS_PATH)) {
         try {
-          const existing = JSON.parse(readFileSync(CREDENTIALS_PATH, 'utf-8')) as MoltbookCredentials;
+          const existing = JSON.parse(
+            readFileSync(CREDENTIALS_PATH, 'utf-8')
+          ) as MoltbookCredentials;
           if (existing.api_key && existing.claim_url) {
             return {
               success: true,
@@ -66,19 +68,28 @@ export function createMoltbookRegisterTool(): Tool {
 
         if (!response.ok) {
           const errorText = await response.text();
-          logger.error({ status: response.status, body: errorText }, 'Moltbook registration failed');
-          return { success: false, content: `Moltbook registration failed (HTTP ${response.status}): ${errorText}` };
+          logger.error(
+            { status: response.status, body: errorText },
+            'Moltbook registration failed'
+          );
+          return {
+            success: false,
+            content: `Moltbook registration failed (HTTP ${response.status}): ${errorText}`,
+          };
         }
 
-        const data = await response.json() as MoltbookCredentials;
-        logger.info({ name: AGENT_NAME, claimUrl: data.claim_url }, 'Moltbook registration successful');
+        const data = (await response.json()) as MoltbookCredentials;
+        logger.info(
+          { name: AGENT_NAME, claimUrl: data.claim_url },
+          'Moltbook registration successful'
+        );
 
         // Save credentials
         const dir = dirname(CREDENTIALS_PATH);
         mkdirSync(dir, { recursive: true });
         writeFileSync(
           CREDENTIALS_PATH,
-          JSON.stringify({ ...data, registered_at: new Date().toISOString() }, null, 2),
+          JSON.stringify({ ...data, registered_at: new Date().toISOString() }, null, 2)
         );
 
         return {

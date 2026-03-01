@@ -43,10 +43,16 @@ export function createLoopDetector(maxToolRounds: number): LoopDetector {
       // Repeat detector: same call 4+ times → break, 3 times → warn
       for (const [, count] of callHashes) {
         if (count >= 4) {
-          return { action: 'break', message: 'Same tool call repeated 4+ times with identical arguments' };
+          return {
+            action: 'break',
+            message: 'Same tool call repeated 4+ times with identical arguments',
+          };
         }
         if (count >= 3) {
-          return { action: 'warn', message: 'You appear to be repeating the same tool call. Try a different approach' };
+          return {
+            action: 'warn',
+            message: 'You appear to be repeating the same tool call. Try a different approach',
+          };
         }
       }
 
@@ -56,7 +62,11 @@ export function createLoopDetector(maxToolRounds: number): LoopDetector {
           return { action: 'break', message: 'Same tool returning identical results repeatedly' };
         }
         if (count >= 2) {
-          return { action: 'warn', message: 'A tool is returning the same result as before — you may not be making progress' };
+          return {
+            action: 'warn',
+            message:
+              'A tool is returning the same result as before — you may not be making progress',
+          };
         }
       }
 

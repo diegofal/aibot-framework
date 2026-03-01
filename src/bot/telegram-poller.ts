@@ -1,4 +1,4 @@
-import { Bot, GrammyError } from 'grammy';
+import { type Bot, GrammyError } from 'grammy';
 import type { Logger } from '../logger';
 
 /** Brief pause between polls to prevent Telegram server-side session overlap → 409 */
@@ -6,9 +6,19 @@ const POLL_INTERVAL_MS = 500;
 
 export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
-    if (signal.aborted) { resolve(); return; }
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
     const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
   });
 }
 
@@ -22,7 +32,10 @@ export type SleepFn = (ms: number, signal: AbortSignal) => Promise<void>;
 export class TelegramPoller {
   private sleep: SleepFn;
 
-  constructor(private logger: Logger, opts?: { sleep?: SleepFn }) {
+  constructor(
+    private logger: Logger,
+    opts?: { sleep?: SleepFn }
+  ) {
     this.sleep = opts?.sleep ?? abortableSleep;
   }
 
@@ -57,7 +70,10 @@ export class TelegramPoller {
           try {
             await bot.handleUpdate(update);
           } catch (err) {
-            this.logger.error({ err, updateId: update.update_id, botId }, 'Error handling update (non-fatal)');
+            this.logger.error(
+              { err, updateId: update.update_id, botId },
+              'Error handling update (non-fatal)'
+            );
           }
         }
       } catch (err) {
@@ -78,23 +94,33 @@ export class TelegramPoller {
 
           const elapsed = Date.now() - first409At;
           if (consecutive409 >= MAX_409_CONSECUTIVE || elapsed >= MAX_409_DURATION_MS) {
-            this.logger.error({ botId, consecutive409, elapsedMs: elapsed },
-              'Sustained 409 conflict — giving up');
+            this.logger.error(
+              { botId, consecutive409, elapsedMs: elapsed },
+              'Sustained 409 conflict — giving up'
+            );
             throw err;
           }
 
           const delay = Math.min(3_000 * consecutive409, 30_000);
           if (consecutive409 <= 2) {
-            this.logger.debug({ botId, attempt: consecutive409, delay }, 'getUpdates 409 — backing off');
+            this.logger.debug(
+              { botId, attempt: consecutive409, delay },
+              'getUpdates 409 — backing off'
+            );
           } else {
-            this.logger.warn({ botId, attempt: consecutive409, delay }, 'getUpdates 409 — backing off');
+            this.logger.warn(
+              { botId, attempt: consecutive409, delay },
+              'getUpdates 409 — backing off'
+            );
           }
           await this.sleep(delay, signal);
           continue;
         }
 
         if (is429) {
-          const retryAfter = (err as GrammyError & { parameters?: { retry_after?: number } }).parameters?.retry_after ?? 10;
+          const retryAfter =
+            (err as GrammyError & { parameters?: { retry_after?: number } }).parameters
+              ?.retry_after ?? 10;
           this.logger.warn({ botId, retryAfter }, 'Rate limited — respecting retry_after');
           await this.sleep(retryAfter * 1000, signal);
           continue;

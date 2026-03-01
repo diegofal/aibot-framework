@@ -23,7 +23,7 @@ export function trackUser(ctx: BotContext, telegramCtx: Context): void {
   if (!ctx.seenUsers.has(chatId)) {
     ctx.seenUsers.set(chatId, new Map());
   }
-  ctx.seenUsers.get(chatId)!.set(from.id, {
+  ctx.seenUsers.get(chatId)?.set(from.id, {
     id: from.id,
     firstName: from.first_name,
     username: from.username,
@@ -34,7 +34,11 @@ export function trackUser(ctx: BotContext, telegramCtx: Context): void {
 /**
  * Check if user is authorized for this bot
  */
-export function isAuthorized(ctx: BotContext, userId: number | undefined, config: BotConfig): boolean {
+export function isAuthorized(
+  ctx: BotContext,
+  userId: number | undefined,
+  config: BotConfig
+): boolean {
   if (!userId) return false;
   if (!config.allowedUsers || config.allowedUsers.length === 0) return true;
   return config.allowedUsers.includes(userId);
@@ -50,11 +54,7 @@ export function buildFileUrl(config: BotConfig, filePath: string): string {
 /**
  * Register all media handlers (photo, document, voice)
  */
-export function registerMediaHandlers(
-  bot: Bot,
-  config: BotConfig,
-  deps: MediaHandlerDeps
-): void {
+export function registerMediaHandlers(bot: Bot, config: BotConfig, deps: MediaHandlerDeps): void {
   const { ctx } = deps;
   const sessionConfig = ctx.config.session;
   const mediaHandler = ctx.mediaHandler!;
@@ -69,7 +69,14 @@ export function registerMediaHandlers(
     const botUsername = telegramCtx.me?.username;
 
     if (isGroup && sessionConfig.enabled) {
-      if (!ctx.sessionManager.shouldRespondInGroup(telegramCtx, botUsername, config.id, config.mentionPatterns)) {
+      if (
+        !ctx.sessionManager.shouldRespondInGroup(
+          telegramCtx,
+          botUsername,
+          config.id,
+          config.mentionPatterns
+        )
+      ) {
         return;
       }
     }
@@ -85,17 +92,21 @@ export function registerMediaHandlers(
         caption = ctx.sessionManager.stripBotMention(caption, botUsername, config.mentionPatterns);
       }
 
-      const result = await mediaHandler.processPhoto(fileUrl, caption ?? undefined, photo.file_size);
+      const result = await mediaHandler.processPhoto(
+        fileUrl,
+        caption ?? undefined,
+        photo.file_size
+      );
       const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
       const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
-      ctx.messageBuffer!.enqueue({
+      ctx.messageBuffer?.enqueue({
         sessionKey: serializedKey,
         ctx: telegramCtx,
         config,
         userText: result.text,
         images: result.images,
         sessionText: result.sessionText,
-        messageId: telegramCtx.message!.message_id,
+        messageId: telegramCtx.message?.message_id,
         isMedia: true,
         timestamp: Date.now(),
       });
@@ -118,7 +129,14 @@ export function registerMediaHandlers(
     const botUsername = telegramCtx.me?.username;
 
     if (isGroup && sessionConfig.enabled) {
-      if (!ctx.sessionManager.shouldRespondInGroup(telegramCtx, botUsername, config.id, config.mentionPatterns)) {
+      if (
+        !ctx.sessionManager.shouldRespondInGroup(
+          telegramCtx,
+          botUsername,
+          config.id,
+          config.mentionPatterns
+        )
+      ) {
         return;
       }
     }
@@ -142,14 +160,14 @@ export function registerMediaHandlers(
       );
       const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
       const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
-      ctx.messageBuffer!.enqueue({
+      ctx.messageBuffer?.enqueue({
         sessionKey: serializedKey,
         ctx: telegramCtx,
         config,
         userText: result.text,
         images: result.images,
         sessionText: result.sessionText,
-        messageId: telegramCtx.message!.message_id,
+        messageId: telegramCtx.message?.message_id,
         isMedia: true,
         timestamp: Date.now(),
       });
@@ -172,7 +190,14 @@ export function registerMediaHandlers(
     const botUsername = telegramCtx.me?.username;
 
     if (isGroup && sessionConfig.enabled) {
-      if (!ctx.sessionManager.shouldRespondInGroup(telegramCtx, botUsername, config.id, config.mentionPatterns)) {
+      if (
+        !ctx.sessionManager.shouldRespondInGroup(
+          telegramCtx,
+          botUsername,
+          config.id,
+          config.mentionPatterns
+        )
+      ) {
         return;
       }
     }
@@ -185,13 +210,13 @@ export function registerMediaHandlers(
       const result = await mediaHandler.processVoice(fileUrl, voice.duration, voice.file_size);
       const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
       const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
-      ctx.messageBuffer!.enqueue({
+      ctx.messageBuffer?.enqueue({
         sessionKey: serializedKey,
         ctx: telegramCtx,
         config,
         userText: result.text,
         sessionText: result.sessionText,
-        messageId: telegramCtx.message!.message_id,
+        messageId: telegramCtx.message?.message_id,
         isMedia: true,
         isVoice: true,
         timestamp: Date.now(),

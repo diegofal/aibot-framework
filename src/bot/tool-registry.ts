@@ -1,60 +1,107 @@
 import { resolve } from 'node:path';
-import type { Logger } from '../logger';
-import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
-import type { BotContext } from './types';
-import { ToolExecutor } from './tool-executor';
-import { discoverSkillDirs, discoverProductionSkillPaths, loadExternalSkill, type LoadedExternalSkill } from '../core/external-skill-loader';
+import {
+  type LoadedExternalSkill,
+  discoverProductionSkillPaths,
+  discoverSkillDirs,
+  loadExternalSkill,
+} from '../core/external-skill-loader';
 import { adaptExternalTool } from '../core/external-tool-adapter';
 import type { KarmaService } from '../karma/service';
+import type { Logger } from '../logger';
+import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
+import { ToolExecutor } from './tool-executor';
+import type { BotContext } from './types';
 
+import { createArchiveFileTool } from '../tools/archive-file';
+import { type AskHumanDeps, createAskHumanTool } from '../tools/ask-human';
+import { type AskPermissionDeps, createAskPermissionTool } from '../tools/ask-permission';
+import { createBrowserTool } from '../tools/browser';
+import {
+  createCalendarAvailabilityTool,
+  createCalendarListTool,
+  createCalendarScheduleTool,
+} from '../tools/calendar';
 import { createCollaborateTool } from '../tools/collaborate';
+import { createCoreMemoryTools } from '../tools/core-memory';
+import { createCreateToolTool } from '../tools/create-tool';
 import { createCronTool } from '../tools/cron';
 import { createDatetimeTool } from '../tools/datetime';
 import { createDelegationTool } from '../tools/delegate';
-import { createExecTool } from '../tools/exec';
-import { createImproveTool } from '../tools/improve';
-import { createFileEditTool, createFileReadTool, createFileWriteTool } from '../tools/file';
-import { createMemoryGetTool } from '../tools/memory-get';
-import { createPhoneCallTool } from '../tools/phone-call';
-import { createMemorySearchTool } from '../tools/memory-search';
-import { createProcessTool } from '../tools/process';
-import { createCreateToolTool } from '../tools/create-tool';
 import { DynamicToolStore } from '../tools/dynamic-tool-store';
-import { DynamicToolRegistry } from './dynamic-tool-registry';
+import { createExecTool } from '../tools/exec';
+import { createFileEditTool, createFileReadTool, createFileWriteTool } from '../tools/file';
 import { createGoalsTool } from '../tools/goals';
-import { createSaveMemoryTool, createUpdateIdentityTool, createUpdateSoulTool } from '../tools/soul';
-import { createWebFetchTool } from '../tools/web-fetch';
-import { createCoreMemoryTools } from '../tools/core-memory';
-import { createRecallMemoryTool } from '../tools/recall-memory';
-import { createWebSearchTool } from '../tools/web-search';
-import { createAskHumanTool, type AskHumanDeps } from '../tools/ask-human';
-import { createAskPermissionTool, type AskPermissionDeps } from '../tools/ask-permission';
-import { createBrowserTool } from '../tools/browser';
-import { createProductionLogTool } from '../tools/production-log';
-import { createArchiveFileTool } from '../tools/archive-file';
-import { createRedditSearchTool, createRedditHotTool, createRedditReadTool } from '../tools/reddit';
-import { createTwitterSearchTool, createTwitterPostTool, createTwitterReadTool } from '../tools/twitter';
-import { createCalendarListTool, createCalendarAvailabilityTool, createCalendarScheduleTool } from '../tools/calendar';
+import { createImproveTool } from '../tools/improve';
+import { createMemoryGetTool } from '../tools/memory-get';
+import { createMemorySearchTool } from '../tools/memory-search';
 import { createMoltbookRegisterTool } from '../tools/moltbook';
+import { createPhoneCallTool } from '../tools/phone-call';
+import { createProcessTool } from '../tools/process';
+import { createProductionLogTool } from '../tools/production-log';
+import { createRecallMemoryTool } from '../tools/recall-memory';
+import { createRedditHotTool, createRedditReadTool, createRedditSearchTool } from '../tools/reddit';
+import {
+  createSaveMemoryTool,
+  createUpdateIdentityTool,
+  createUpdateSoulTool,
+} from '../tools/soul';
+import {
+  createTwitterPostTool,
+  createTwitterReadTool,
+  createTwitterSearchTool,
+} from '../tools/twitter';
+import { createWebFetchTool } from '../tools/web-fetch';
+import { createWebSearchTool } from '../tools/web-search';
+import { DynamicToolRegistry } from './dynamic-tool-registry';
 
 // ─── Tool Category System ───
 
 export const TOOL_CATEGORY_NAMES = [
-  'web', 'memory', 'soul', 'files', 'system',
-  'social', 'calendar', 'communication', 'browser', 'production',
+  'web',
+  'memory',
+  'soul',
+  'files',
+  'system',
+  'social',
+  'calendar',
+  'communication',
+  'browser',
+  'production',
 ] as const;
 
 export type ToolCategory = (typeof TOOL_CATEGORY_NAMES)[number];
 
 export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   web: ['web_search', 'web_fetch'],
-  memory: ['memory_search', 'memory_get', 'recall_memory', 'core_memory_append', 'core_memory_replace', 'core_memory_search', 'save_memory'],
+  memory: [
+    'memory_search',
+    'memory_get',
+    'recall_memory',
+    'core_memory_append',
+    'core_memory_replace',
+    'core_memory_search',
+    'save_memory',
+  ],
   soul: ['update_soul', 'update_identity', 'manage_goals', 'improve'],
   files: ['file_read', 'file_write', 'file_edit'],
   system: ['exec', 'process', 'get_datetime', 'cron'],
-  social: ['reddit_search', 'reddit_hot', 'reddit_read', 'twitter_search', 'twitter_read', 'twitter_post'],
+  social: [
+    'reddit_search',
+    'reddit_hot',
+    'reddit_read',
+    'twitter_search',
+    'twitter_read',
+    'twitter_post',
+  ],
   calendar: ['calendar_list', 'calendar_availability', 'calendar_schedule'],
-  communication: ['ask_human', 'ask_permission', 'phone_call', 'delegate_to_bot', 'collaborate', 'moltbook_register'],
+  communication: [
+    'ask_human',
+    'ask_permission',
+    'phone_call',
+    'delegate_to_bot',
+    'collaborate',
+    'moltbook_register',
+  ],
   browser: ['browser'],
   production: ['read_production_log', 'archive_file', 'create_tool', 'signal_completion'],
 };
@@ -96,7 +143,7 @@ export class ToolRegistry {
     getDelegationHandler: () => import('../tools/delegate').DelegationHandler,
     getCollaborateHandler: () => import('../tools/collaborate').CollaborateHandler,
     askHumanDeps?: AskHumanDeps,
-    askPermissionDeps?: AskPermissionDeps,
+    askPermissionDeps?: AskPermissionDeps
   ): void {
     const { config, logger } = this.ctx;
     const tools = this.ctx.tools;
@@ -105,21 +152,25 @@ export class ToolRegistry {
     const webToolsConfig = config.webTools;
     if (webToolsConfig?.enabled) {
       if (webToolsConfig.search?.apiKey) {
-        tools.push(createWebSearchTool({
-          apiKey: webToolsConfig.search.apiKey,
-          maxResults: webToolsConfig.search.maxResults,
-          timeout: webToolsConfig.search.timeout,
-          cacheTtlMs: webToolsConfig.search.cacheTtlMs,
-        }));
+        tools.push(
+          createWebSearchTool({
+            apiKey: webToolsConfig.search.apiKey,
+            maxResults: webToolsConfig.search.maxResults,
+            timeout: webToolsConfig.search.timeout,
+            cacheTtlMs: webToolsConfig.search.cacheTtlMs,
+          })
+        );
         logger.info('Web search tool initialized');
       }
 
       if (webToolsConfig.fetch) {
-        tools.push(createWebFetchTool({
-          maxContentLength: webToolsConfig.fetch.maxContentLength,
-          timeout: webToolsConfig.fetch.timeout,
-          cacheTtlMs: webToolsConfig.fetch.cacheTtlMs,
-        }));
+        tools.push(
+          createWebFetchTool({
+            maxContentLength: webToolsConfig.fetch.maxContentLength,
+            timeout: webToolsConfig.fetch.timeout,
+            cacheTtlMs: webToolsConfig.fetch.cacheTtlMs,
+          })
+        );
         logger.info('Web fetch tool initialized');
       }
     } else {
@@ -161,20 +212,22 @@ export class ToolRegistry {
 
     // Exec tool
     if (config.exec.enabled) {
-      tools.push(createExecTool({
-        timeout: config.exec.timeout,
-        maxOutputLength: config.exec.maxOutputLength,
-        workdir: config.exec.workdir,
-        allowedPatterns: config.exec.allowedPatterns,
-        deniedPatterns: config.exec.deniedPatterns,
-        processToolConfig: config.processTools.enabled
-          ? {
-              maxSessions: config.processTools.maxSessions,
-              finishedTtlMs: config.processTools.finishedTtlMs,
-              maxOutputChars: config.processTools.maxOutputChars,
-            }
-          : undefined,
-      }));
+      tools.push(
+        createExecTool({
+          timeout: config.exec.timeout,
+          maxOutputLength: config.exec.maxOutputLength,
+          workdir: config.exec.workdir,
+          allowedPatterns: config.exec.allowedPatterns,
+          deniedPatterns: config.exec.deniedPatterns,
+          processToolConfig: config.processTools.enabled
+            ? {
+                maxSessions: config.processTools.maxSessions,
+                finishedTtlMs: config.processTools.finishedTtlMs,
+                maxOutputChars: config.processTools.maxOutputChars,
+              }
+            : undefined,
+        })
+      );
       logger.info('Exec tool initialized');
     }
 
@@ -195,11 +248,13 @@ export class ToolRegistry {
 
     // Process tool
     if (config.processTools.enabled) {
-      tools.push(createProcessTool({
-        maxSessions: config.processTools.maxSessions,
-        finishedTtlMs: config.processTools.finishedTtlMs,
-        maxOutputChars: config.processTools.maxOutputChars,
-      }));
+      tools.push(
+        createProcessTool({
+          maxSessions: config.processTools.maxSessions,
+          finishedTtlMs: config.processTools.finishedTtlMs,
+          maxOutputChars: config.processTools.maxOutputChars,
+        })
+      );
       logger.info('Process tool initialized');
     }
 
@@ -211,24 +266,28 @@ export class ToolRegistry {
 
     // Datetime tool
     if (config.datetime.enabled) {
-      tools.push(createDatetimeTool({
-        timezone: config.datetime.timezone,
-        locale: config.datetime.locale,
-      }));
+      tools.push(
+        createDatetimeTool({
+          timezone: config.datetime.timezone,
+          locale: config.datetime.locale,
+        })
+      );
       logger.info('Datetime tool initialized');
     }
 
     // Phone call tool
     if (config.phoneCall?.enabled) {
-      tools.push(createPhoneCallTool({
-        accountSid: config.phoneCall.accountSid,
-        authToken: config.phoneCall.authToken,
-        fromNumber: config.phoneCall.fromNumber,
-        defaultNumber: config.phoneCall.defaultNumber,
-        language: config.phoneCall.language,
-        voice: config.phoneCall.voice,
-        contactsFile: config.phoneCall.contactsFile,
-      }));
+      tools.push(
+        createPhoneCallTool({
+          accountSid: config.phoneCall.accountSid,
+          authToken: config.phoneCall.authToken,
+          fromNumber: config.phoneCall.fromNumber,
+          defaultNumber: config.phoneCall.defaultNumber,
+          language: config.phoneCall.language,
+          voice: config.phoneCall.voice,
+          contactsFile: config.phoneCall.contactsFile,
+        })
+      );
       logger.info('Phone call tool initialized');
     }
 
@@ -237,23 +296,22 @@ export class ToolRegistry {
       tools.push(
         createRedditSearchTool(config.reddit),
         createRedditHotTool(config.reddit),
-        createRedditReadTool(config.reddit),
+        createRedditReadTool(config.reddit)
       );
       logger.info('Reddit tools initialized (search, hot, read)');
     }
 
     // Twitter tools
     if (config.twitter?.enabled) {
-      tools.push(
-        createTwitterSearchTool(config.twitter),
-        createTwitterReadTool(config.twitter),
-      );
+      tools.push(createTwitterSearchTool(config.twitter), createTwitterReadTool(config.twitter));
       // Post tool only when write credentials are present
       if (config.twitter.accessToken && config.twitter.accessSecret) {
         tools.push(createTwitterPostTool(config.twitter));
         logger.info('Twitter tools initialized (search, read, post)');
       } else {
-        logger.info('Twitter tools initialized (search, read — post disabled: no write credentials)');
+        logger.info(
+          'Twitter tools initialized (search, read — post disabled: no write credentials)'
+        );
       }
     }
 
@@ -262,9 +320,12 @@ export class ToolRegistry {
       tools.push(
         createCalendarListTool(config.calendar),
         createCalendarAvailabilityTool(config.calendar),
-        createCalendarScheduleTool(config.calendar),
+        createCalendarScheduleTool(config.calendar)
       );
-      logger.info({ provider: config.calendar.provider }, 'Calendar tools initialized (list, availability, schedule)');
+      logger.info(
+        { provider: config.calendar.provider },
+        'Calendar tools initialized (list, availability, schedule)'
+      );
     }
 
     // Cron tool
@@ -287,13 +348,15 @@ export class ToolRegistry {
 
     // Improve tool
     if (config.improve.enabled) {
-      tools.push(createImproveTool({
-        claudePath: config.improve.claudePath,
-        timeout: config.improve.timeout,
-        maxOutputLength: config.improve.maxOutputLength,
-        soulDir: config.improve.soulDir,
-        allowedFocus: config.improve.allowedFocus,
-      }));
+      tools.push(
+        createImproveTool({
+          claudePath: config.improve.claudePath,
+          timeout: config.improve.timeout,
+          maxOutputLength: config.improve.maxOutputLength,
+          soulDir: config.improve.soulDir,
+          allowedFocus: config.improve.allowedFocus,
+        })
+      );
       logger.info('Improve tool initialized');
     }
 
@@ -355,7 +418,9 @@ export class ToolRegistry {
     const configuredDirs = discoverSkillDirs(configuredPaths);
 
     // Collect from auto-discovered production directories
-    const productionEntries = discoverProductionSkillPaths(config.productions?.baseDir ?? './productions');
+    const productionEntries = discoverProductionSkillPaths(
+      config.productions?.baseDir ?? './productions'
+    );
     const productionDirs = discoverSkillDirs(productionEntries.map((e) => e.path));
 
     // Build botName lookup: resolved dir → botName
@@ -382,12 +447,22 @@ export class ToolRegistry {
 
     if (allDirs.length === 0) {
       if (configuredPaths.length > 0 || productionEntries.length > 0) {
-        logger.info({ configuredPaths, productionPaths: productionEntries.map((e) => e.path) }, 'No external skills found');
+        logger.info(
+          { configuredPaths, productionPaths: productionEntries.map((e) => e.path) },
+          'No external skills found'
+        );
       }
       return;
     }
 
-    logger.info({ count: allDirs.length, configuredPaths, productionPaths: productionEntries.map((e) => e.path) }, 'Discovered external skill directories');
+    logger.info(
+      {
+        count: allDirs.length,
+        configuredPaths,
+        productionPaths: productionEntries.map((e) => e.path),
+      },
+      'Discovered external skill directories'
+    );
 
     for (const dir of allDirs) {
       try {
@@ -401,10 +476,13 @@ export class ToolRegistry {
         }
 
         if (warnings.length > 0) {
-          const hasMissingEnv = warnings.some(w => w.startsWith('Missing env var'));
-          const hasMissingBin = warnings.some(w => w.startsWith('Missing binary'));
+          const hasMissingEnv = warnings.some((w) => w.startsWith('Missing env var'));
+          const hasMissingBin = warnings.some((w) => w.startsWith('Missing binary'));
           if (hasMissingEnv || hasMissingBin) {
-            logger.info({ skillId: manifest.id, warnings }, 'Skipping external skill due to missing requirements');
+            logger.info(
+              { skillId: manifest.id, warnings },
+              'Skipping external skill due to missing requirements'
+            );
             continue;
           }
           logger.warn({ skillId: manifest.id, warnings }, 'External skill loaded with warnings');
@@ -431,7 +509,7 @@ export class ToolRegistry {
             handler,
             skillConfig,
             skillState,
-            logger,
+            logger
           );
 
           this.ctx.tools.push(tool);
@@ -440,10 +518,7 @@ export class ToolRegistry {
         }
 
         this.externalSkills.push(loaded);
-        logger.info(
-          { skillId: manifest.id, toolCount, dir },
-          'External skill loaded',
-        );
+        logger.info({ skillId: manifest.id, toolCount, dir }, 'External skill loaded');
       } catch (err) {
         logger.error({ dir, err }, 'Failed to load external skill');
       }
@@ -455,7 +530,7 @@ export class ToolRegistry {
 
     logger.info(
       { externalSkillCount: this.externalSkills.length, totalTools: this.ctx.tools.length },
-      'External skills initialization complete',
+      'External skills initialization complete'
     );
   }
 
@@ -529,7 +604,10 @@ export class ToolRegistry {
    * Uncategorized tools (external/dynamic) always pass through.
    * Falls back to getDefinitionsForBot() when categories is empty/undefined.
    */
-  getDefinitionsByCategories(categories: ToolCategory[] | undefined, botId: string): ToolDefinition[] {
+  getDefinitionsByCategories(
+    categories: ToolCategory[] | undefined,
+    botId: string
+  ): ToolDefinition[] {
     if (!categories || categories.length === 0) {
       return this.getDefinitionsForBot(botId);
     }
@@ -599,6 +677,41 @@ export class ToolRegistry {
    */
   getDynamicToolRegistry(): DynamicToolRegistry | null {
     return this.dynamicToolRegistry;
+  }
+
+  /**
+   * Remove all external skills belonging to a specific bot from runtime.
+   * Clears tools from ctx.tools[], ctx.toolDefinitions[], externalSkills[], and externalToolToSkill.
+   * Returns the list of removed skill IDs.
+   */
+  clearExternalSkillsForBot(botId: string): string[] {
+    const toRemove = this.externalSkills.filter((s) => s.botName === botId);
+    if (toRemove.length === 0) return [];
+
+    const removedSkillIds = toRemove.map((s) => s.manifest.id);
+    const removedToolNames = new Set<string>();
+
+    for (const [toolName, skillId] of this.externalToolToSkill) {
+      if (removedSkillIds.includes(skillId)) {
+        removedToolNames.add(toolName);
+        this.externalToolToSkill.delete(toolName);
+      }
+    }
+
+    this.ctx.tools = this.ctx.tools.filter(
+      (t) => !removedToolNames.has(t.definition.function.name)
+    );
+    this.ctx.toolDefinitions.length = 0;
+    this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
+
+    this.externalSkills = this.externalSkills.filter((s) => s.botName !== botId);
+
+    this.ctx.logger.info(
+      { botId, removedSkillIds, removedToolCount: removedToolNames.size },
+      'Cleared external skills for bot'
+    );
+
+    return removedSkillIds;
   }
 
   /**

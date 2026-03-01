@@ -1,14 +1,14 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
+import { claudeGenerate } from '../../claude-cli';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
-import { claudeGenerate } from '../../claude-cli';
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + '\n... [truncated]';
+  return `${text.slice(0, maxLen)}\n... [truncated]`;
 }
 
 const RESPONSE_SYSTEM_PROMPT = `You are an AI bot responding to human feedback on one of your productions (a file you created or edited). Your job is to acknowledge the feedback, explain what you understood from it, and describe what you will change or improve going forward.
@@ -52,7 +52,7 @@ export function productionsRoutes(deps: {
     botId: string,
     id: string,
     updated: { path: string; action: string; description: string },
-    feedback: { status: string; rating?: number; feedback: string },
+    feedback: { status: string; rating?: number; feedback: string }
   ) {
     const key = `${botId}:${id}`;
     generationState.set(key, { status: 'generating' });
@@ -64,24 +64,30 @@ export function productionsRoutes(deps: {
         const goals = soulLoaderForResponse.readGoals();
 
         const sections: string[] = [];
-        sections.push(`# Production Feedback Response`);
-        sections.push(`## Production\n- Path: ${updated.path}\n- Action: ${updated.action}\n- Description: ${updated.description}`);
+        sections.push('# Production Feedback Response');
+        sections.push(
+          `## Production\n- Path: ${updated.path}\n- Action: ${updated.action}\n- Description: ${updated.description}`
+        );
 
         const content = productionsService.getFileContent(botId, id);
         if (content) {
           sections.push(`## Content Preview\n${truncate(content, 3000)}`);
         }
 
-        sections.push(`## Evaluation\n- Status: ${feedback.status}\n- Rating: ${feedback.rating ?? 'N/A'}/5\n- Feedback: "${feedback.feedback}"`);
+        sections.push(
+          `## Evaluation\n- Status: ${feedback.status}\n- Rating: ${feedback.rating ?? 'N/A'}/5\n- Feedback: "${feedback.feedback}"`
+        );
 
         if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
         if (goals) sections.push(`## Bot Goals\n${truncate(goals, 1000)}`);
 
-        sections.push(`## Task\n\nRespond to this feedback. Acknowledge what the human said, explain what you understand from it, and describe what you will improve.`);
+        sections.push(
+          '## Task\n\nRespond to this feedback. Acknowledge what the human said, explain what you understand from it, and describe what you will improve.'
+        );
 
         const prompt = sections.join('\n\n');
         const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 120_000;
+        const timeout = config.improve?.timeout ?? 300_000;
 
         const response = await claudeGenerate(prompt, {
           systemPrompt: RESPONSE_SYSTEM_PROMPT,
@@ -96,7 +102,7 @@ export function productionsRoutes(deps: {
         // Also write response to bot memory
         if (soulLoaderForResponse) {
           soulLoaderForResponse.appendDailyMemory(
-            `## AI Response to Production Feedback\n- File: ${updated.path}\n- My response: "${truncate(response, 200)}"`,
+            `## AI Response to Production Feedback\n- File: ${updated.path}\n- My response: "${truncate(response, 200)}"`
           );
         }
 
@@ -105,13 +111,20 @@ export function productionsRoutes(deps: {
       } catch (err) {
         logger.error({ err, botId, id }, 'Failed to generate AI response for production feedback');
         const message = err instanceof Error ? err.message : 'Unknown error';
-        generationState.set(key, { status: 'error', error: `Failed to generate response: ${message}` });
+        generationState.set(key, {
+          status: 'error',
+          error: `Failed to generate response: ${message}`,
+        });
       }
     })();
   }
 
   /** Extracted thread reply generation — shared by thread send and retry. */
-  function generateThreadReply(botId: string, id: string, entry: { path: string; action: string; description: string }) {
+  function generateThreadReply(
+    botId: string,
+    id: string,
+    entry: { path: string; action: string; description: string }
+  ) {
     const key = `${botId}:${id}:thread`;
     generationState.set(key, { status: 'generating' });
 
@@ -126,21 +139,27 @@ export function productionsRoutes(deps: {
         const thread = current?.evaluation?.thread ?? [];
 
         const sections: string[] = [];
-        sections.push(`# Production Discussion Thread`);
-        sections.push(`## Production\n- Path: ${entry.path}\n- Action: ${entry.action}\n- Description: ${entry.description}`);
+        sections.push('# Production Discussion Thread');
+        sections.push(
+          `## Production\n- Path: ${entry.path}\n- Action: ${entry.action}\n- Description: ${entry.description}`
+        );
 
         if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
         if (goals) sections.push(`## Bot Goals\n${truncate(goals, 1000)}`);
 
         // Format thread (last 10 messages)
         const recent = thread.slice(-10);
-        const threadText = recent.map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`).join('\n\n');
+        const threadText = recent
+          .map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`)
+          .join('\n\n');
         sections.push(`## Conversation Thread\n${threadText}`);
-        sections.push(`## Task\n\nRespond to the latest message in this thread. Be specific and concise.`);
+        sections.push(
+          '## Task\n\nRespond to the latest message in this thread. Be specific and concise.'
+        );
 
         const prompt = sections.join('\n\n');
         const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 120_000;
+        const timeout = config.improve?.timeout ?? 300_000;
 
         const response = await claudeGenerate(prompt, {
           systemPrompt: THREAD_SYSTEM_PROMPT,
@@ -155,7 +174,7 @@ export function productionsRoutes(deps: {
         // Write to bot memory
         if (soulLoader) {
           soulLoader.appendDailyMemory(
-            `## Production Thread Reply\n- File: ${entry.path}\n- My response: "${truncate(response, 200)}"`,
+            `## Production Thread Reply\n- File: ${entry.path}\n- My response: "${truncate(response, 200)}"`
           );
         }
 
@@ -164,7 +183,10 @@ export function productionsRoutes(deps: {
       } catch (err) {
         logger.error({ err, botId, id }, 'Failed to generate thread reply for production');
         const message = err instanceof Error ? err.message : 'Unknown error';
-        generationState.set(key, { status: 'error', error: `Failed to generate reply: ${message}` });
+        generationState.set(key, {
+          status: 'error',
+          error: `Failed to generate reply: ${message}`,
+        });
       }
     })();
   }
@@ -238,9 +260,10 @@ export function productionsRoutes(deps: {
           let line = `- [${entry.timestamp}] ${entry.action} ${entry.path}`;
           if (entry.description) line += ` — ${entry.description}`;
           if (entry.evaluation) {
-            line += ` (${entry.evaluation.status}`;
+            line += ` (${entry.evaluation.status ?? 'unknown'}`;
             if (entry.evaluation.rating) line += `, ${entry.evaluation.rating}/5`;
-            if (entry.evaluation.feedback) line += `: "${truncate(entry.evaluation.feedback, 100)}"`;
+            if (entry.evaluation.feedback)
+              line += `: "${truncate(entry.evaluation.feedback, 100)}"`;
             line += ')';
           }
           productionParts.push(line);
@@ -248,7 +271,9 @@ export function productionsRoutes(deps: {
           if (i < 5) {
             const content = productionsService.getFileContent(botId, entry.id);
             if (content) {
-              productionParts.push(`  Content preview:\n  ${truncate(content, 2000).split('\n').join('\n  ')}`);
+              productionParts.push(
+                `  Content preview:\n  ${truncate(content, 2000).split('\n').join('\n  ')}`
+              );
             }
           }
         }
@@ -274,18 +299,24 @@ export function productionsRoutes(deps: {
           sections.push(`## Recent Memory (last 7 days)\n${truncate(recentMemory, 4000)}`);
         }
 
-        sections.push(`## Productions Stats\nTotal: ${stats.total} | Approved: ${stats.approved} | Rejected: ${stats.rejected} | Unreviewed: ${stats.unreviewed} | Avg Rating: ${stats.avgRating ?? 'N/A'}`);
+        sections.push(
+          `## Productions Stats\nTotal: ${stats.total} | Approved: ${stats.approved} | Rejected: ${stats.rejected} | Unreviewed: ${stats.unreviewed} | Avg Rating: ${stats.avgRating ?? 'N/A'}`
+        );
 
         if (productionParts.length > 0) {
-          sections.push(`## Recent Productions (last 20)\n${truncate(productionParts.join('\n'), 15000)}`);
+          sections.push(
+            `## Recent Productions (last 20)\n${truncate(productionParts.join('\n'), 15000)}`
+          );
         }
 
-        sections.push(`## Task\n\nSummarize what this bot is currently working on. Identify themes, projects, and patterns in its outputs. Note quality trends if rating data exists. Be specific and concise.`);
+        sections.push(
+          '## Task\n\nSummarize what this bot is currently working on. Identify themes, projects, and patterns in its outputs. Note quality trends if rating data exists. Be specific and concise.'
+        );
 
         const prompt = sections.join('\n\n');
 
         const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 120_000;
+        const timeout = config.improve?.timeout ?? 300_000;
 
         const summary = await claudeGenerate(prompt, {
           systemPrompt: SUMMARY_SYSTEM_PROMPT,
@@ -393,7 +424,9 @@ export function productionsRoutes(deps: {
     }
 
     // Get soul loader for feedback-to-memory
-    const soulLoaders = (botManager as any).soulLoaders as Map<string, any> | undefined;
+    const soulLoaders = (botManager as Record<string, unknown>).soulLoaders as
+      | Map<string, unknown>
+      | undefined;
     const soulLoader = soulLoaders?.get(botId);
 
     const updated = productionsService.evaluate(botId, id, body, soulLoader);

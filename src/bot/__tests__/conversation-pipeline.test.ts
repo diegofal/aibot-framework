@@ -2,38 +2,40 @@
  * Integration tests for ConversationPipeline
  * Tests the full flow: message in → response out with mocked LLM
  */
-import { describe, it, expect, beforeEach, afterEach, jest } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import type { Context } from 'grammy';
-import { ConversationPipeline } from '../conversation-pipeline';
-import type { BotContext } from '../types';
-import type { SystemPromptBuilder } from '../system-prompt-builder';
-import type { MemoryFlusher } from '../memory-flush';
-import type { ToolRegistry } from '../tool-registry';
 import type { BotConfig } from '../../config';
-import type { LLMClient, ChatMessage } from '../../ollama';
-import type { SessionManager } from '../session-manager';
-import type { MemoryManager } from '../../memory/memory-manager';
 import type { Logger } from '../../logger';
 import type { CoreMemoryManager } from '../../memory/core-memory';
+import type { MemoryManager } from '../../memory/memory-manager';
+import type { ChatMessage, LLMClient } from '../../ollama';
+import { ContextCompactor } from '../context-compaction';
+import { ConversationPipeline } from '../conversation-pipeline';
+import type { MemoryFlusher } from '../memory-flush';
+import type { SessionManager } from '../session-manager';
+import type { SystemPromptBuilder } from '../system-prompt-builder';
+import type { ToolRegistry } from '../tool-registry';
+import type { BotContext } from '../types';
 
 describe('ConversationPipeline', () => {
   // Mock factories
-  const createMockLogger = (): Logger => ({
-    info: jest.fn(),
-    error: jest.fn(),
-    warn: jest.fn(),
-    debug: jest.fn(),
-    trace: jest.fn(),
-    child: jest.fn().mockReturnThis(),
-    bindings: () => ({}),
-    flush: jest.fn(),
-    level: 'info',
-  }) as unknown as Logger;
+  const createMockLogger = (): Logger =>
+    ({
+      info: jest.fn(),
+      error: jest.fn(),
+      warn: jest.fn(),
+      debug: jest.fn(),
+      trace: jest.fn(),
+      child: jest.fn().mockReturnThis(),
+      bindings: () => ({}),
+      flush: jest.fn(),
+      level: 'info',
+    }) as unknown as Logger;
 
   const createMockContext = (overrides?: Partial<Context>): Context => {
     const chat = { id: 123456, type: 'private' as const };
     const from = { id: 789, first_name: 'TestUser', username: 'testuser' };
-    
+
     return {
       chat,
       from,
@@ -43,15 +45,16 @@ describe('ConversationPipeline', () => {
     } as unknown as Context;
   };
 
-  const createMockBotConfig = (overrides?: Partial<BotConfig>): BotConfig => ({
-    id: 'test-bot',
-    name: 'TestBot',
-    model: 'llama3.1',
-    temperature: 0.7,
-    maxHistory: 10,
-    systemPrompt: { text: 'You are a test bot' },
-    ...overrides,
-  }) as BotConfig;
+  const createMockBotConfig = (overrides?: Partial<BotConfig>): BotConfig =>
+    ({
+      id: 'test-bot',
+      name: 'TestBot',
+      model: 'llama3.1',
+      temperature: 0.7,
+      maxHistory: 10,
+      systemPrompt: { text: 'You are a test bot' },
+      ...overrides,
+    }) as BotConfig;
 
   // Test fixtures
   let mockBotContext: BotContext;
@@ -67,8 +70,9 @@ describe('ConversationPipeline', () => {
 
   beforeEach(() => {
     mockLogger = createMockLogger();
-    
+
     mockLLMClient = {
+      backend: 'ollama' as const,
       chat: jest.fn().mockResolvedValue('Mocked LLM response'),
       stream: jest.fn(),
     } as unknown as LLMClient;
@@ -118,6 +122,14 @@ describe('ConversationPipeline', () => {
         },
         conversation: {
           systemPrompt: 'Test system prompt',
+          compaction: {
+            enabled: true,
+            contextWindows: { ollamaTokens: 8192, claudeCliTokens: 180_000 },
+            thresholdRatio: 0.75,
+            keepRecentMessages: 6,
+            maxMessageChars: 15_000,
+            maxOverflowRetries: 2,
+          },
         },
         ollama: {
           models: {
@@ -148,11 +160,13 @@ describe('ConversationPipeline', () => {
       createExecutor: jest.fn().mockReturnValue({ execute: jest.fn() }),
     } as unknown as ToolRegistry;
 
+    const contextCompactor = new ContextCompactor(mockBotContext, mockMemoryFlusher as any);
     pipeline = new ConversationPipeline(
       mockBotContext,
       mockSystemPromptBuilder,
       mockMemoryFlusher,
-      mockToolRegistry
+      mockToolRegistry,
+      contextCompactor
     );
   });
 
@@ -197,7 +211,7 @@ describe('ConversationPipeline', () => {
 
     it('should handle empty LLM response with checkmark', async () => {
       (mockLLMClient.chat as jest.Mock).mockResolvedValue('   ');
-      
+
       const ctx = createMockContext();
       const config = createMockBotConfig();
 
@@ -224,7 +238,7 @@ describe('ConversationPipeline', () => {
         { role: 'user', content: 'Old message' },
         { role: 'assistant', content: 'Old response' },
       ] as ChatMessage[];
-      
+
       (mockSessionManager.isExpired as jest.Mock).mockReturnValue(true);
       (mockSessionManager.getFullHistory as jest.Mock).mockReturnValue(expiredHistory);
 
@@ -234,7 +248,10 @@ describe('ConversationPipeline', () => {
       await pipeline.handleConversation(ctx, config, 'user:123', 'New message');
 
       expect(mockSessionManager.isExpired).toHaveBeenCalledWith('user:123');
-      expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalledWith(expiredHistory, 'test-bot');
+      expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalledWith(
+        expiredHistory,
+        'test-bot'
+      );
       expect(mockSessionManager.clearSession).toHaveBeenCalledWith('user:123');
     });
 
@@ -257,8 +274,9 @@ describe('ConversationPipeline', () => {
       await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
 
       expect(mockSessionManager.appendMessages).toHaveBeenCalledTimes(1);
-      const [, messages, maxHistory] = (mockSessionManager.appendMessages as jest.Mock).mock.calls[0];
-      
+      const [, messages, maxHistory] = (mockSessionManager.appendMessages as jest.Mock).mock
+        .calls[0];
+
       expect(messages).toHaveLength(2);
       expect(messages[0].role).toBe('user');
       expect(messages[1].role).toBe('assistant');
@@ -322,7 +340,7 @@ describe('ConversationPipeline', () => {
     it('should inject RAG context when results found', async () => {
       // Enable RAG
       (mockBotContext.config.soul.search.autoRag as any).enabled = true;
-      
+
       (mockMemoryManager.search as jest.Mock).mockResolvedValue([
         {
           content: 'Relevant memory content',
@@ -340,7 +358,8 @@ describe('ConversationPipeline', () => {
       expect(mockMemoryManager.search).toHaveBeenCalledWith(
         'Tell me about my preferences',
         5, // maxResults
-        0.5 // minScore
+        0.5, // minScore
+        'test-bot' // botId
       );
       expect(mockSystemPromptBuilder.build).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -352,9 +371,9 @@ describe('ConversationPipeline', () => {
     it('should filter out recent daily logs from RAG results', async () => {
       // Enable RAG
       (mockBotContext.config.soul.search.autoRag as any).enabled = true;
-      
+
       const today = new Date().toLocaleDateString('sv-SE');
-      
+
       (mockMemoryManager.search as jest.Mock).mockResolvedValue([
         {
           content: 'Today log content',
@@ -406,7 +425,7 @@ describe('ConversationPipeline', () => {
       // Enable proactive flush
       (mockBotContext.config.soul.memoryFlush as any).enabled = true;
       (mockBotContext.config.soul.memoryFlush as any).messageThreshold = 5;
-      
+
       (mockSessionManager.getSessionMeta as jest.Mock).mockReturnValue({
         messageCount: 10,
         lastFlushCompactionIndex: 0,
@@ -426,7 +445,7 @@ describe('ConversationPipeline', () => {
       // Enable proactive flush
       (mockBotContext.config.soul.memoryFlush as any).enabled = true;
       (mockBotContext.config.soul.memoryFlush as any).messageThreshold = 5;
-      
+
       (mockSessionManager.getSessionMeta as jest.Mock).mockReturnValue({
         messageCount: 10,
         lastFlushCompactionIndex: 1,
@@ -474,7 +493,9 @@ describe('ConversationPipeline', () => {
 
       await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
 
-      expect(ctx.reply).toHaveBeenCalledWith('❌ Failed to generate response. Please try again later.');
+      expect(ctx.reply).toHaveBeenCalledWith(
+        '❌ Failed to generate response. Please try again later.'
+      );
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ error: expect.any(Error) }),
         'Conversation handler failed'
@@ -502,7 +523,9 @@ describe('ConversationPipeline', () => {
       // appendMessages throws → caught by outer catch → error reply sent
       await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
 
-      expect(ctx.reply).toHaveBeenCalledWith('❌ Failed to generate response. Please try again later.');
+      expect(ctx.reply).toHaveBeenCalledWith(
+        '❌ Failed to generate response. Please try again later.'
+      );
     });
 
     it('should retry transient LLM errors and eventually succeed', async () => {
@@ -531,24 +554,32 @@ describe('ConversationPipeline', () => {
       );
     });
 
-    it('should fail after max retries exceeded', async () => {
-      // All calls fail with transient error
-      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('timeout'));
+    it(
+      'should fail after max retries exceeded',
+      async () => {
+        // All calls fail with transient error
+        (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('timeout'));
 
-      const ctx = createMockContext();
-      const config = createMockBotConfig();
+        const ctx = createMockContext();
+        const config = createMockBotConfig();
 
-      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
+        await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
 
-      // Should have tried 4 times (initial + 3 retries)
-      expect(mockLLMClient.chat).toHaveBeenCalledTimes(4);
-      // Should send user-friendly error message
-      expect(ctx.reply).toHaveBeenCalledWith('⏱️ The request took too long. The service might be busy. Please try again.');
-    }, { timeout: 30000 });
+        // Should have tried 4 times (initial + 3 retries)
+        expect(mockLLMClient.chat).toHaveBeenCalledTimes(4);
+        // Should send user-friendly error message
+        expect(ctx.reply).toHaveBeenCalledWith(
+          '⏱️ The request took too long. The service might be busy. Please try again.'
+        );
+      },
+      { timeout: 30000 }
+    );
 
     it('should not retry permanent errors', async () => {
       // Auth error is permanent, should not retry
-      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('unauthorized: invalid api key'));
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(
+        new Error('unauthorized: invalid api key')
+      );
 
       const ctx = createMockContext();
       const config = createMockBotConfig();
@@ -571,48 +602,56 @@ describe('ConversationPipeline', () => {
 
       await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
 
-      expect(ctx.reply).toHaveBeenCalledWith('📏 The conversation is too long. Try /reset to start fresh.');
+      expect(ctx.reply).toHaveBeenCalledWith(
+        '📏 The conversation is too long. Try /reset to start fresh.'
+      );
     });
 
-    it('should handle circuit breaker open state', async () => {
-      // Circuit breaker has failureThreshold: 5
-      // Each failed call records 1 failure when retries are exhausted (for retryable errors)
-      // OR 1 failure immediately (for permanent errors)
-      // Use permanent errors to avoid retry delays making test slow
-      
-      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('unauthorized: invalid api key'));
+    it(
+      'should handle circuit breaker open state',
+      async () => {
+        // Circuit breaker has failureThreshold: 5
+        // Each failed call records 1 failure when retries are exhausted (for retryable errors)
+        // OR 1 failure immediately (for permanent errors)
+        // Use permanent errors to avoid retry delays making test slow
 
-      const config = createMockBotConfig();
+        (mockLLMClient.chat as jest.Mock).mockRejectedValue(
+          new Error('unauthorized: invalid api key')
+        );
 
-      // First 4 calls - circuit still closed (4 failures < 5 threshold)
-      for (let i = 0; i < 4; i++) {
-        const ctx = createMockContext();
-        await pipeline.handleConversation(ctx, config, `user:${i}`, `Hello ${i}`);
-      }
-      
-      // 5th call - circuit opens after this failure (5 failures >= 5 threshold)
-      const ctx5 = createMockContext();
-      await pipeline.handleConversation(ctx5, config, 'user:5', 'Fifth hello');
-      
-      // 6th call - circuit is now open, should fail immediately
-      const ctx6 = createMockContext();
-      await pipeline.handleConversation(ctx6, config, 'user:6', 'Sixth hello');
+        const config = createMockBotConfig();
 
-      // Circuit open message should be sent
-      expect(ctx6.reply).toHaveBeenCalledWith('⏳ The AI service is temporarily overloaded. Please wait a moment and try again.');
-      
-      // Verify the 6th call didn't reach LLM (circuit blocked it)
-      // Total LLM calls: 5 (first 5 calls, 6th was blocked by circuit)
-      expect(mockLLMClient.chat).toHaveBeenCalledTimes(5);
-    }, { timeout: 10000 });
+        // First 4 calls - circuit still closed (4 failures < 5 threshold)
+        for (let i = 0; i < 4; i++) {
+          const ctx = createMockContext();
+          await pipeline.handleConversation(ctx, config, `user:${i}`, `Hello ${i}`);
+        }
+
+        // 5th call - circuit opens after this failure (5 failures >= 5 threshold)
+        const ctx5 = createMockContext();
+        await pipeline.handleConversation(ctx5, config, 'user:5', 'Fifth hello');
+
+        // 6th call - circuit is now open, should fail immediately
+        const ctx6 = createMockContext();
+        await pipeline.handleConversation(ctx6, config, 'user:6', 'Sixth hello');
+
+        // Circuit open message should be sent
+        expect(ctx6.reply).toHaveBeenCalledWith(
+          '⏳ The AI service is temporarily overloaded. Please wait a moment and try again.'
+        );
+
+        // Verify the 6th call didn't reach LLM (circuit blocked it)
+        // Total LLM calls: 5 (first 5 calls, 6th was blocked by circuit)
+        expect(mockLLMClient.chat).toHaveBeenCalledTimes(5);
+      },
+      { timeout: 10000 }
+    );
   });
 
   describe('tools integration', () => {
     it('should pass tools to LLM when bot has tools', async () => {
-      const toolDefs = [
-        { name: 'web_search', description: 'Search the web' },
-      ];
-      
+      const toolDefs = [{ name: 'web_search', description: 'Search the web' }];
+
       (mockToolRegistry.getDefinitionsForBot as jest.Mock).mockReturnValue(toolDefs as any);
 
       const ctx = createMockContext();
@@ -673,14 +712,14 @@ describe('ConversationPipeline', () => {
 
     it('should return null for short queries', async () => {
       (mockBotContext.config.soul.search.autoRag as any).enabled = true;
-      
+
       const result = await pipeline.prefetchMemoryContext('Hi', false, mockLogger);
       expect(result).toBeNull();
     });
 
     it('should return formatted context when results found', async () => {
       (mockBotContext.config.soul.search.autoRag as any).enabled = true;
-      
+
       (mockMemoryManager.search as jest.Mock).mockResolvedValue([
         {
           content: 'Memory about user preferences',
@@ -709,11 +748,12 @@ describe('ConversationPipeline', () => {
 
       await pipeline.prefetchMemoryContext('[Alice]: Hello everyone', true, mockLogger);
 
-      // Should search with stripped query
+      // Should search with stripped query (4th arg is botId, undefined when not passed)
       expect(mockMemoryManager.search).toHaveBeenCalledWith(
         'Hello everyone',
         expect.any(Number),
-        expect.any(Number)
+        expect.any(Number),
+        undefined
       );
     });
   });
@@ -760,7 +800,15 @@ describe('ConversationPipeline', () => {
       (ctx as any).replyWithVoice = jest.fn().mockResolvedValue(undefined);
 
       const config = createMockBotConfig();
-      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, true);
+      await pipeline.handleConversation(
+        ctx,
+        config,
+        'user:123',
+        'Hello',
+        undefined,
+        undefined,
+        true
+      );
 
       // Should have called replyWithVoice instead of reply with text
       expect((ctx as any).replyWithVoice).toHaveBeenCalledTimes(1);
@@ -793,7 +841,15 @@ describe('ConversationPipeline', () => {
       (ctx as any).replyWithVoice = jest.fn();
 
       const config = createMockBotConfig();
-      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, false);
+      await pipeline.handleConversation(
+        ctx,
+        config,
+        'user:123',
+        'Hello',
+        undefined,
+        undefined,
+        false
+      );
 
       // Should send text, not voice
       expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
@@ -830,7 +886,15 @@ describe('ConversationPipeline', () => {
       (ctx as any).replyWithVoice = jest.fn();
 
       const config = createMockBotConfig();
-      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, true);
+      await pipeline.handleConversation(
+        ctx,
+        config,
+        'user:123',
+        'Hello',
+        undefined,
+        undefined,
+        true
+      );
 
       // Should fall back to text reply
       expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
@@ -838,7 +902,7 @@ describe('ConversationPipeline', () => {
       // Should log warning
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ err: expect.any(Error) }),
-        'TTS failed, falling back to text',
+        'TTS failed, falling back to text'
       );
     });
 
@@ -850,7 +914,15 @@ describe('ConversationPipeline', () => {
       (ctx as any).replyWithVoice = jest.fn();
 
       const config = createMockBotConfig();
-      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, true);
+      await pipeline.handleConversation(
+        ctx,
+        config,
+        'user:123',
+        'Hello',
+        undefined,
+        undefined,
+        true
+      );
 
       // Should send text reply since TTS is not configured
       expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
@@ -889,7 +961,15 @@ describe('ConversationPipeline', () => {
 
       // Bot with per-bot TTS override
       const config = createMockBotConfig({ tts: { voiceId: 'bot-specific-voice' } } as any);
-      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello', undefined, undefined, true);
+      await pipeline.handleConversation(
+        ctx,
+        config,
+        'user:123',
+        'Hello',
+        undefined,
+        undefined,
+        true
+      );
 
       // Verify the fetch was called with the bot-specific voiceId in the URL
       const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];

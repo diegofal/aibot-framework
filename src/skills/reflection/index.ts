@@ -1,13 +1,19 @@
-import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Skill, SkillContext } from '../../core/types';
 import { localDateStr, localTimeStr } from '../../date-utils';
-import { buildAnalysisPrompt, buildExplorationPrompt, buildImprovementPrompt, buildJsonFixPrompt, buildCompactionPrompt } from './prompts';
-import { createWebSearchTool } from '../../tools/web-search';
-import { createWebFetchTool } from '../../tools/web-fetch';
-import { backupSoulFile } from '../../soul';
 import type { ChatMessage } from '../../ollama';
+import { backupSoulFile } from '../../soul';
 import type { Tool, ToolResult } from '../../tools/types';
+import { createWebFetchTool } from '../../tools/web-fetch';
+import { createWebSearchTool } from '../../tools/web-search';
+import {
+  buildAnalysisPrompt,
+  buildCompactionPrompt,
+  buildExplorationPrompt,
+  buildImprovementPrompt,
+  buildJsonFixPrompt,
+} from './prompts';
 
 interface ReflectionConfig {
   soulDir?: string;
@@ -95,7 +101,10 @@ const skill: Skill = {
         // Send notification if configured
         if (config.notifyOnReflection && config.telegramChatId) {
           try {
-            await ctx.telegram.sendMessage(config.telegramChatId, `🪞 Nightly Reflection\n\n${result}`);
+            await ctx.telegram.sendMessage(
+              config.telegramChatId,
+              `🪞 Nightly Reflection\n\n${result}`
+            );
           } catch (err) {
             ctx.logger.warn({ err }, 'Failed to send reflection notification');
           }
@@ -279,19 +288,28 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
         const lineCount = yesterdayContent.split('\n').filter((l) => l.trim()).length;
 
         if (lineCount > lineThreshold) {
-          ctx.logger.info({ yesterday, lineCount, lineThreshold }, 'Reflection: compacting yesterday\'s log');
+          ctx.logger.info(
+            { yesterday, lineCount, lineThreshold },
+            "Reflection: compacting yesterday's log"
+          );
           const compactionInput = buildCompactionPrompt(yesterdayContent);
           const compacted = await ctx.llm.generate(compactionInput.prompt, {
             system: compactionInput.system,
             temperature: 0.2,
           });
 
-          if (compacted && compacted.trim()) {
-            writeFileSync(yesterdayPath, compacted.trim() + '\n', 'utf-8');
-            ctx.logger.info({ yesterday, before: lineCount, after: compacted.split('\n').length }, 'Yesterday\'s log compacted');
+          if (compacted?.trim()) {
+            writeFileSync(yesterdayPath, `${compacted.trim()}\n`, 'utf-8');
+            ctx.logger.info(
+              { yesterday, before: lineCount, after: compacted.split('\n').length },
+              "Yesterday's log compacted"
+            );
           }
         } else {
-          ctx.logger.debug({ yesterday, lineCount }, 'Reflection: yesterday\'s log below threshold, skipping compaction');
+          ctx.logger.debug(
+            { yesterday, lineCount },
+            "Reflection: yesterday's log below threshold, skipping compaction"
+          );
         }
       }
     } catch (err) {
@@ -425,7 +443,7 @@ function formatSummary(
   lines.push(
     `**Journal:** ${improvement.journal_entry}`,
     '',
-    `**Changes:** Motivations updated${soulUpdated ? ', Soul updated' : ''}`,
+    `**Changes:** Motivations updated${soulUpdated ? ', Soul updated' : ''}`
   );
 
   return lines.join('\n');

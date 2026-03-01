@@ -13,26 +13,38 @@ export interface CoreMemoryEntry {
 
 export interface CoreMemoryManager {
   /** Get a single entry by category and key */
-  get(category: string, key: string): Promise<CoreMemoryEntry | null>;
+  get(category: string, key: string, botId?: string): Promise<CoreMemoryEntry | null>;
 
   /** Set (insert or update) an entry */
-  set(category: string, key: string, value: string, importance?: number): Promise<void>;
+  set(
+    category: string,
+    key: string,
+    value: string,
+    importance?: number,
+    botId?: string
+  ): Promise<void>;
 
   /** Delete an entry */
-  delete(category: string, key: string): Promise<boolean>;
+  delete(category: string, key: string, botId?: string): Promise<boolean>;
 
   /** Search entries by query string (matches key or value) */
-  search(query: string, category?: string, limit?: number): Promise<CoreMemoryEntry[]>;
+  search(
+    query: string,
+    category?: string,
+    limit?: number,
+    botId?: string
+  ): Promise<CoreMemoryEntry[]>;
 
   /** List entries, optionally filtered by category and minimum importance */
-  list(category?: string, minImportance?: number): Promise<CoreMemoryEntry[]>;
+  list(category?: string, minImportance?: number, botId?: string): Promise<CoreMemoryEntry[]>;
 
   /** Render formatted core memory block for system prompt injection */
-  renderForSystemPrompt(maxChars?: number): string;
+  renderForSystemPrompt(maxChars?: number, botId?: string): string;
 }
 
 type CoreMemoryRow = {
   id: number;
+  bot_id: string;
   category: string;
   key: string;
   value: string;
@@ -42,28 +54,17 @@ type CoreMemoryRow = {
 };
 
 const VALID_CATEGORIES = new Set([
-  'identity',      // Who the bot is (name, description, values, style)
+  'identity', // Who the bot is (name, description, values, style)
   'relationships', // Data about specific users
-  'preferences',   // Bot's own preferences
-  'goals',         // Long-term objectives
-  'constraints',   // Self-imposed limits
+  'preferences', // Bot's own preferences
+  'goals', // Long-term objectives
+  'constraints', // Self-imposed limits
+  'general', // General-purpose facts that don't fit other categories
 ]);
 
 export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemoryManager {
-  // Prepared statements (created lazily)
-  let stmtGet: ReturnType<Database['prepare']> | null = null;
-  let stmtInsert: ReturnType<Database['prepare']> | null = null;
-  let stmtUpdate: ReturnType<Database['prepare']> | null = null;
-  let stmtDelete: ReturnType<Database['prepare']> | null = null;
-  let stmtSearch: ReturnType<Database['prepare']> | null = null;
-  let stmtList: ReturnType<Database['prepare']> | null = null;
-  let stmtListByCategory: ReturnType<Database['prepare']> | null = null;
-  let stmtListByImportance: ReturnType<Database['prepare']> | null = null;
-  let stmtListByCategoryAndImportance: ReturnType<Database['prepare']> | null = null;
-
-  function getStmt(sql: string): ReturnType<Database['prepare']> {
-    return db.prepare(sql);
-  }
+  const DEFAULT_BOT = 'default';
+  const SELECT_COLS = 'id, bot_id, category, key, value, importance, created_at, updated_at';
 
   function rowToEntry(row: CoreMemoryRow): CoreMemoryEntry {
     return {
@@ -81,7 +82,8 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
   function formatCategory(items: CoreMemoryEntry[], maxChars: number): string {
     let content = '';
 
-    for (const item of items.slice(0, 5)) { // max 5 items per category
+    for (const item of items.slice(0, 5)) {
+      // max 5 items per category
       const line = `- ${item.key}: ${item.value}\n`;
       if (content.length + line.length > maxChars) {
         break;
@@ -93,20 +95,28 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
   }
 
   return {
-    async get(category: string, key: string): Promise<CoreMemoryEntry | null> {
-      if (!stmtGet) {
-        stmtGet = getStmt(
-          'SELECT id, category, key, value, importance, created_at, updated_at FROM core_memory WHERE category = ? AND key = ?'
-        );
-      }
-      const row = stmtGet.get(category, key) as CoreMemoryRow | undefined;
+    async get(category: string, key: string, botId?: string): Promise<CoreMemoryEntry | null> {
+      const bid = botId ?? DEFAULT_BOT;
+      const row = db
+        .prepare(
+          `SELECT ${SELECT_COLS} FROM core_memory WHERE bot_id = ? AND category = ? AND key = ?`
+        )
+        .get(bid, category, key) as CoreMemoryRow | undefined;
       return row ? rowToEntry(row) : null;
     },
 
-    async set(category: string, key: string, value: string, importance = 5): Promise<void> {
+    async set(
+      category: string,
+      key: string,
+      value: string,
+      importance = 5,
+      botId?: string
+    ): Promise<void> {
       if (!VALID_CATEGORIES.has(category)) {
         logger.warn({ category, valid: [...VALID_CATEGORIES] }, 'Invalid core memory category');
-        throw new Error(`Invalid category: ${category}. Must be one of: ${[...VALID_CATEGORIES].join(', ')}`);
+        throw new Error(
+          `Invalid category: ${category}. Must be one of: ${[...VALID_CATEGORIES].join(', ')}`
+        );
       }
       if (key.length > 100) {
         throw new Error('Key too long (max 100 characters)');
@@ -118,115 +128,115 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
         throw new Error('Importance must be between 1 and 10');
       }
 
-      const existing = await this.get(category, key);
+      const bid = botId ?? DEFAULT_BOT;
+      const existing = await this.get(category, key, bid);
 
       if (existing) {
-        if (!stmtUpdate) {
-          stmtUpdate = getStmt(
-            'UPDATE core_memory SET value = ?, importance = ?, updated_at = datetime("now") WHERE id = ?'
-          );
-        }
-        stmtUpdate.run(value, importance, existing.id);
-        logger.debug({ category, key, importance }, 'Core memory updated');
+        db.prepare(
+          'UPDATE core_memory SET value = ?, importance = ?, updated_at = datetime("now") WHERE id = ?'
+        ).run(value, importance, existing.id);
+        logger.debug({ category, key, importance, botId: bid }, 'Core memory updated');
       } else {
-        if (!stmtInsert) {
-          stmtInsert = getStmt(
-            'INSERT INTO core_memory (category, key, value, importance) VALUES (?, ?, ?, ?)'
-          );
-        }
-        stmtInsert.run(category, key, value, importance);
-        logger.debug({ category, key, importance }, 'Core memory created');
+        db.prepare(
+          'INSERT INTO core_memory (bot_id, category, key, value, importance) VALUES (?, ?, ?, ?, ?)'
+        ).run(bid, category, key, value, importance);
+        logger.debug({ category, key, importance, botId: bid }, 'Core memory created');
       }
     },
 
-    async delete(category: string, key: string): Promise<boolean> {
-      if (!stmtDelete) {
-        stmtDelete = getStmt('DELETE FROM core_memory WHERE category = ? AND key = ?');
-      }
-      const result = stmtDelete.run(category, key);
+    async delete(category: string, key: string, botId?: string): Promise<boolean> {
+      const bid = botId ?? DEFAULT_BOT;
+      const result = db
+        .prepare('DELETE FROM core_memory WHERE bot_id = ? AND category = ? AND key = ?')
+        .run(bid, category, key);
       const deleted = result.changes > 0;
       if (deleted) {
-        logger.debug({ category, key }, 'Core memory deleted');
+        logger.debug({ category, key, botId: bid }, 'Core memory deleted');
       }
       return deleted;
     },
 
-    async search(query: string, category?: string, limit = 10): Promise<CoreMemoryEntry[]> {
+    async search(
+      query: string,
+      category?: string,
+      limit = 10,
+      botId?: string
+    ): Promise<CoreMemoryEntry[]> {
+      const bid = botId ?? DEFAULT_BOT;
       const pattern = `%${query.replace(/[%_]/g, '\\$&')}%`;
 
       if (category) {
-        if (!stmtListByCategory) {
-          stmtListByCategory = getStmt(
-            'SELECT id, category, key, value, importance, created_at, updated_at FROM core_memory ' +
-            'WHERE category = ? AND (key LIKE ? OR value LIKE ?) ' +
-            'ORDER BY importance DESC, updated_at DESC LIMIT ?'
-          );
-        }
-        const rows = stmtListByCategory.all(category, pattern, pattern, limit) as CoreMemoryRow[];
+        const rows = db
+          .prepare(
+            `SELECT ${SELECT_COLS} FROM core_memory ` +
+              'WHERE bot_id = ? AND category = ? AND (key LIKE ? OR value LIKE ?) ' +
+              'ORDER BY importance DESC, updated_at DESC LIMIT ?'
+          )
+          .all(bid, category, pattern, pattern, limit) as CoreMemoryRow[];
         return rows.map(rowToEntry);
       }
 
-      if (!stmtSearch) {
-        stmtSearch = getStmt(
-          'SELECT id, category, key, value, importance, created_at, updated_at FROM core_memory ' +
-          'WHERE key LIKE ? OR value LIKE ? ' +
-          'ORDER BY importance DESC, updated_at DESC LIMIT ?'
-        );
-      }
-      const rows = stmtSearch.all(pattern, pattern, limit) as CoreMemoryRow[];
+      const rows = db
+        .prepare(
+          `SELECT ${SELECT_COLS} FROM core_memory ` +
+            'WHERE bot_id = ? AND (key LIKE ? OR value LIKE ?) ' +
+            'ORDER BY importance DESC, updated_at DESC LIMIT ?'
+        )
+        .all(bid, pattern, pattern, limit) as CoreMemoryRow[];
       return rows.map(rowToEntry);
     },
 
-    async list(category?: string, minImportance?: number): Promise<CoreMemoryEntry[]> {
+    async list(
+      category?: string,
+      minImportance?: number,
+      botId?: string
+    ): Promise<CoreMemoryEntry[]> {
+      const bid = botId ?? DEFAULT_BOT;
       let rows: CoreMemoryRow[];
 
       if (category && minImportance !== undefined) {
-        if (!stmtListByCategoryAndImportance) {
-          stmtListByCategoryAndImportance = getStmt(
-            'SELECT id, category, key, value, importance, created_at, updated_at FROM core_memory ' +
-            'WHERE category = ? AND importance >= ? ' +
-            'ORDER BY importance DESC, updated_at DESC'
-          );
-        }
-        rows = stmtListByCategoryAndImportance.all(category, minImportance) as CoreMemoryRow[];
+        rows = db
+          .prepare(
+            `SELECT ${SELECT_COLS} FROM core_memory ` +
+              'WHERE bot_id = ? AND category = ? AND importance >= ? ' +
+              'ORDER BY importance DESC, updated_at DESC'
+          )
+          .all(bid, category, minImportance) as CoreMemoryRow[];
       } else if (category) {
-        if (!stmtListByCategory) {
-          stmtListByCategory = getStmt(
-            'SELECT id, category, key, value, importance, created_at, updated_at FROM core_memory ' +
-            'WHERE category = ? ORDER BY importance DESC, updated_at DESC'
-          );
-        }
-        rows = stmtListByCategory.all(category) as CoreMemoryRow[];
+        rows = db
+          .prepare(
+            `SELECT ${SELECT_COLS} FROM core_memory ` +
+              'WHERE bot_id = ? AND category = ? ORDER BY importance DESC, updated_at DESC'
+          )
+          .all(bid, category) as CoreMemoryRow[];
       } else if (minImportance !== undefined) {
-        if (!stmtListByImportance) {
-          stmtListByImportance = getStmt(
-            'SELECT id, category, key, value, importance, created_at, updated_at FROM core_memory ' +
-            'WHERE importance >= ? ORDER BY importance DESC, updated_at DESC'
-          );
-        }
-        rows = stmtListByImportance.all(minImportance) as CoreMemoryRow[];
+        rows = db
+          .prepare(
+            `SELECT ${SELECT_COLS} FROM core_memory ` +
+              'WHERE bot_id = ? AND importance >= ? ORDER BY importance DESC, updated_at DESC'
+          )
+          .all(bid, minImportance) as CoreMemoryRow[];
       } else {
-        if (!stmtList) {
-          stmtList = getStmt(
-            'SELECT id, category, key, value, importance, created_at, updated_at FROM core_memory ' +
-            'ORDER BY importance DESC, updated_at DESC'
-          );
-        }
-        rows = stmtList.all() as CoreMemoryRow[];
+        rows = db
+          .prepare(
+            `SELECT ${SELECT_COLS} FROM core_memory ` +
+              'WHERE bot_id = ? ORDER BY importance DESC, updated_at DESC'
+          )
+          .all(bid) as CoreMemoryRow[];
       }
 
       return rows.map(rowToEntry);
     },
 
-    renderForSystemPrompt(maxChars = 800): string {
+    renderForSystemPrompt(maxChars = 800, botId?: string): string {
       try {
-        // Get entries ordered by importance, limit to fit maxChars
-        // Note: This is synchronous for system prompt building, so we use a synchronous query
-        const stmt = db.prepare(
-          'SELECT id, category, key, value, importance, created_at, updated_at FROM core_memory ' +
-          'WHERE importance >= 5 ORDER BY importance DESC, updated_at DESC LIMIT 20'
-        );
-        const rows = stmt.all() as CoreMemoryRow[];
+        const bid = botId ?? DEFAULT_BOT;
+        const rows = db
+          .prepare(
+            `SELECT ${SELECT_COLS} FROM core_memory ` +
+              'WHERE bot_id = ? AND importance >= 5 ORDER BY importance DESC, updated_at DESC LIMIT 20'
+          )
+          .all(bid) as CoreMemoryRow[];
         const entries = rows.map(rowToEntry);
 
         if (entries.length === 0) {
@@ -247,7 +257,7 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
           const header = `**${category.charAt(0).toUpperCase() + category.slice(1)}**:\n`;
           const content = formatCategory(items, remaining - header.length - 2);
           if (!content) continue;
-          const section = header + content + '\n';
+          const section = `${header + content}\n`;
           if (section.length <= remaining) {
             output += section;
             remaining -= section.length;
@@ -262,7 +272,5 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
         return '';
       }
     },
-
-
   };
 }

@@ -14,17 +14,26 @@ interface TscLogger {
 
 /**
  * TSC SkillContext passed to tool handlers.
+ * Includes `data` (DataStore-compatible wrapper over state) so internal skills
+ * that use ctx.data.get/set work correctly through the adapter.
  */
 interface TscSkillContext {
   state: Map<string, unknown>;
   config: Record<string, unknown>;
   logger: TscLogger;
+  data: {
+    get<T = unknown>(key: string): T | undefined;
+    set(key: string, value: unknown): void;
+    delete(key: string): boolean;
+    has(key: string): boolean;
+  };
+  cron: {
+    add(opts: Record<string, unknown>): Promise<void>;
+    remove(opts: Record<string, unknown>): Promise<void>;
+  };
 }
 
-type TscToolHandler = (
-  args: Record<string, unknown>,
-  context: TscSkillContext,
-) => Promise<unknown>;
+type TscToolHandler = (args: Record<string, unknown>, context: TscSkillContext) => Promise<unknown>;
 
 /**
  * Wrap a pino Logger to match the TSC single-arg Logger interface.
@@ -62,7 +71,7 @@ export function adaptExternalTool(
   handler: TscToolHandler,
   skillConfig: Record<string, unknown>,
   state: Map<string, unknown>,
-  logger: Logger,
+  logger: Logger
 ): Tool {
   const namespacedName = `${skillId}_${toolDef.name}`;
   const tscLogger = wrapLogger(logger, skillId);
@@ -85,6 +94,26 @@ export function adaptExternalTool(
         state,
         config: skillConfig,
         logger: tscLogger,
+        data: {
+          get: <T = unknown>(key: string) => state.get(key) as T | undefined,
+          set: (key: string, value: unknown) => {
+            state.set(key, value);
+          },
+          delete: (key: string) => state.delete(key),
+          has: (key: string) => state.has(key),
+        },
+        cron: {
+          add: async (opts: Record<string, unknown>) => {
+            tscLogger.warn(
+              `Cron add called from external tool adapter (job: ${opts.name ?? 'unknown'}) — not supported in this context`
+            );
+          },
+          remove: async (opts: Record<string, unknown>) => {
+            tscLogger.warn(
+              `Cron remove called from external tool adapter (job: ${opts.jobId ?? 'unknown'}) — not supported in this context`
+            );
+          },
+        },
       };
 
       try {

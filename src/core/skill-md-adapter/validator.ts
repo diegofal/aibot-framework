@@ -4,13 +4,13 @@
  */
 
 import { z } from 'zod';
-import type { SkillDocument, ValidationResult } from './types';
 import {
+  DeclaredToolSchema,
   SkillDocumentSchema,
   SkillManifestSchema,
-  DeclaredToolSchema,
   ToolParameterSchema,
 } from './schema';
+import type { SkillDocument, ValidationResult } from './types';
 import { SkillValidationError } from './types';
 
 export class SkillValidator {
@@ -42,9 +42,7 @@ export class SkillValidator {
     // Validate tool implementations exist if specified
     for (const tool of doc.declaredTools) {
       if (tool.implementation && !this.isValidImplementationPath(tool.implementation)) {
-        errors.push(
-          `Tool "${tool.name}": Invalid implementation path "${tool.implementation}"`
-        );
+        errors.push(`Tool "${tool.name}": Invalid implementation path "${tool.implementation}"`);
       }
     }
 
@@ -71,7 +69,7 @@ export class SkillValidator {
 
     return {
       valid: false,
-      errors: result.error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
+      errors: result.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
     };
   }
 
@@ -87,7 +85,7 @@ export class SkillValidator {
 
     return {
       valid: false,
-      errors: result.error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
+      errors: result.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
     };
   }
 
@@ -103,7 +101,7 @@ export class SkillValidator {
 
     return {
       valid: false,
-      errors: result.error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
+      errors: result.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
     };
   }
 

@@ -19,9 +19,9 @@ export class CollaborationTracker {
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
-    private maxRounds: number = 5,
-    private cooldownMs: number = 30_000,
-    private dataDir?: string,
+    private maxRounds = 5,
+    private cooldownMs = 30_000,
+    private dataDir?: string
   ) {
     if (dataDir) this.loadFromDisk();
     // Periodic cleanup every 60 s
@@ -67,7 +67,7 @@ export class CollaborationTracker {
   shouldAllowResponse(
     fromBotId: string,
     toBotId: string,
-    chatId: number,
+    chatId: number
   ): { allowed: boolean; reason?: string } {
     const key = this.pairKey(fromBotId, toBotId, chatId);
     const record = this.records.get(key);
@@ -80,7 +80,10 @@ export class CollaborationTracker {
     if (record.depth >= this.maxRounds) {
       const elapsed = Date.now() - record.lastMessageAt;
       if (elapsed < this.cooldownMs) {
-        return { allowed: false, reason: `cooldown (${Math.ceil((this.cooldownMs - elapsed) / 1000)}s remaining)` };
+        return {
+          allowed: false,
+          reason: `cooldown (${Math.ceil((this.cooldownMs - elapsed) / 1000)}s remaining)`,
+        };
       }
       // Cooldown expired — reset the record
       this.records.delete(key);
@@ -97,7 +100,7 @@ export class CollaborationTracker {
   checkAndRecord(
     fromBotId: string,
     toBotId: string,
-    chatId: number,
+    chatId: number
   ): { allowed: boolean; reason?: string } {
     const check = this.shouldAllowResponse(fromBotId, toBotId, chatId);
     if (check.allowed) {
@@ -124,6 +127,19 @@ export class CollaborationTracker {
       });
     }
     this.persistToDisk();
+  }
+
+  /** Remove all records involving a specific bot. Returns the number of records removed. */
+  clearForBot(botId: string): number {
+    let removed = 0;
+    for (const [key, record] of this.records) {
+      if (record.initiatorBotId === botId || record.responderBotId === botId) {
+        this.records.delete(key);
+        removed++;
+      }
+    }
+    if (removed > 0) this.persistToDisk();
+    return removed;
   }
 
   /** Remove stale records older than 5 minutes past cooldown */

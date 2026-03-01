@@ -1,6 +1,6 @@
 export interface FileRef {
-  path: string;    // Relative to bot's workDir
-  size?: number;   // Bytes
+  path: string; // Relative to bot's workDir
+  size?: number; // Bytes
 }
 
 export interface ThreadMessage {

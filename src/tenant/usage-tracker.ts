@@ -4,13 +4,13 @@ import type { UsageEventType } from './types';
 
 /**
  * UsageTracker provides fine-grained usage metering for the multi-tenant system.
- * 
+ *
  * It tracks:
  * - Message processing
  * - API calls (tool executions, LLM requests)
  * - Storage writes
  * - Collaboration initiations
- * 
+ *
  * Usage is recorded in-memory with periodic flush to persistent storage.
  */
 export interface UsageTrackerConfig {
@@ -39,7 +39,7 @@ export class UsageTracker {
   constructor(
     private tenantManager: TenantManager,
     private logger: Logger,
-    config: UsageTrackerConfig = {},
+    config: UsageTrackerConfig = {}
   ) {
     this.config = {
       flushIntervalMs: config.flushIntervalMs ?? 5000,
@@ -61,8 +61,8 @@ export class UsageTracker {
     tenantId: string,
     botId: string,
     type: UsageEventType,
-    quantity: number = 1,
-    metadata?: Record<string, unknown>,
+    quantity = 1,
+    metadata?: Record<string, unknown>
   ): void {
     const event: PendingUsage = {
       tenantId,
@@ -79,7 +79,7 @@ export class UsageTracker {
     } else {
       // Queue for batch processing
       this.pending.push(event);
-      
+
       // Flush if batch size reached
       if (this.pending.length >= this.config.batchSize) {
         this.flush();
@@ -90,14 +90,22 @@ export class UsageTracker {
   /**
    * Track message processing.
    */
-  trackMessage(tenantId: string, botId: string, metadata?: { chatId?: number; messageLength?: number }): void {
+  trackMessage(
+    tenantId: string,
+    botId: string,
+    metadata?: { chatId?: number; messageLength?: number }
+  ): void {
     this.track(tenantId, botId, 'message_processed', 1, metadata);
   }
 
   /**
    * Track API/tool call.
    */
-  trackApiCall(tenantId: string, botId: string, metadata?: { toolName?: string; durationMs?: number }): void {
+  trackApiCall(
+    tenantId: string,
+    botId: string,
+    metadata?: { toolName?: string; durationMs?: number }
+  ): void {
     this.track(tenantId, botId, 'api_call', 1, metadata);
   }
 
@@ -105,14 +113,13 @@ export class UsageTracker {
    * Track LLM request.
    */
   trackLLMRequest(
-    tenantId: string, 
-    botId: string, 
+    tenantId: string,
+    botId: string,
     metadata?: { model?: string; tokensIn?: number; tokensOut?: number }
   ): void {
     // Count tokens as quantity if available
-    const quantity = metadata?.tokensIn && metadata?.tokensOut 
-      ? metadata.tokensIn + metadata.tokensOut 
-      : 1;
+    const quantity =
+      metadata?.tokensIn && metadata?.tokensOut ? metadata.tokensIn + metadata.tokensOut : 1;
     this.track(tenantId, botId, 'llm_request', quantity, metadata);
   }
 
@@ -120,9 +127,9 @@ export class UsageTracker {
    * Track tool execution.
    */
   trackToolExecution(
-    tenantId: string, 
-    botId: string, 
-    toolName: string, 
+    tenantId: string,
+    botId: string,
+    toolName: string,
     metadata?: { durationMs?: number; success?: boolean }
   ): void {
     this.track(tenantId, botId, 'tool_execution', 1, { toolName, ...metadata });
@@ -132,8 +139,8 @@ export class UsageTracker {
    * Track collaboration initiation.
    */
   trackCollaboration(
-    tenantId: string, 
-    botId: string, 
+    tenantId: string,
+    botId: string,
     metadata?: { targetBotId?: string; sessionId?: string }
   ): void {
     this.track(tenantId, botId, 'collaboration_initiated', 1, metadata);
@@ -142,7 +149,12 @@ export class UsageTracker {
   /**
    * Track storage write.
    */
-  trackStorage(tenantId: string, botId: string, bytesWritten: number, metadata?: { path?: string }): void {
+  trackStorage(
+    tenantId: string,
+    botId: string,
+    bytesWritten: number,
+    metadata?: { path?: string }
+  ): void {
     this.track(tenantId, botId, 'storage_write', bytesWritten, metadata);
   }
 
@@ -291,7 +303,7 @@ export class UsageTracker {
 export function createUsageTracker(
   tenantManager: TenantManager,
   logger: Logger,
-  realtime: boolean = false,
+  realtime = false
 ): UsageTracker {
   return new UsageTracker(tenantManager, logger, {
     flushIntervalMs: realtime ? 1000 : 10000,

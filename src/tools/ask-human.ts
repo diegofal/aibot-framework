@@ -1,11 +1,11 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Tool, ToolResult } from './types';
-import type { Logger } from '../logger';
+import type { Bot } from 'grammy';
 import type { AskHumanStore } from '../bot/ask-human-store';
 import type { ConversationsService } from '../conversations/service';
+import type { Logger } from '../logger';
 import type { FileRef } from '../types/thread';
-import type { Bot } from 'grammy';
+import type { Tool, ToolResult } from './types';
 
 const MAX_TIMEOUT_MINUTES = 120;
 const DEFAULT_TIMEOUT_MINUTES = 30;
@@ -46,7 +46,8 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
             files: {
               type: 'array',
               items: { type: 'string' },
-              description: 'File paths relevant to this question (relative to your working directory)',
+              description:
+                'File paths relevant to this question (relative to your working directory)',
             },
           },
           required: ['question'],
@@ -63,30 +64,37 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
         return { success: false, content: 'Missing required parameter: question' };
       }
       if (!botId) {
-        return { success: false, content: 'ask_human requires _botId (only available in agent loop)' };
+        return {
+          success: false,
+          content: 'ask_human requires _botId (only available in agent loop)',
+        };
       }
 
       if (deps.store.hasPendingForBot(botId)) {
         return {
           success: true,
-          content: 'You already have a pending question in the inbox. Wait for the human to respond before asking again.',
+          content:
+            'You already have a pending question in the inbox. Wait for the human to respond before asking again.',
         };
       }
 
       const timeoutMinutes = Math.min(
         Math.max(1, Number(args.timeout_minutes) || DEFAULT_TIMEOUT_MINUTES),
-        MAX_TIMEOUT_MINUTES,
+        MAX_TIMEOUT_MINUTES
       );
       const timeoutMs = timeoutMinutes * 60_000;
 
       // Register the question in the store (always works — visible in web inbox)
       const { id, promise } = deps.store.ask(botId, chatId, question, timeoutMs);
       promise.catch((err) => {
-        logger.info({ questionId: id, botId, reason: err.message }, 'ask_human: question closed without answer');
+        logger.info(
+          { questionId: id, botId, reason: err.message },
+          'ask_human: question closed without answer'
+        );
       });
 
       // Resolve file references
-      const rawFiles = Array.isArray(args.files) ? args.files as string[] : [];
+      const rawFiles = Array.isArray(args.files) ? (args.files as string[]) : [];
       const workDir = args._workDir as string | undefined;
       const fileRefs: FileRef[] = [];
       for (const filePath of rawFiles) {
@@ -107,18 +115,33 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
       // Create inbox conversation so the question persists as a thread
       if (deps.conversationsService) {
         try {
-          const truncatedQuestion = question.length > 60
-            ? question.slice(0, 57) + '...'
-            : question;
-          const conv = deps.conversationsService.createConversation(botId, 'inbox', truncatedQuestion, {
-            askHumanQuestionId: id,
-            inboxStatus: 'pending',
-          });
-          deps.conversationsService.addMessage(botId, conv.id, 'bot', question, fileRefs.length > 0 ? fileRefs : undefined);
+          const truncatedQuestion = question.length > 60 ? `${question.slice(0, 57)}...` : question;
+          const conv = deps.conversationsService.createConversation(
+            botId,
+            'inbox',
+            truncatedQuestion,
+            {
+              askHumanQuestionId: id,
+              inboxStatus: 'pending',
+            }
+          );
+          deps.conversationsService.addMessage(
+            botId,
+            conv.id,
+            'bot',
+            question,
+            fileRefs.length > 0 ? fileRefs : undefined
+          );
           deps.store.setConversationId(id, conv.id);
-          logger.debug({ questionId: id, conversationId: conv.id, files: fileRefs.length }, 'ask_human: inbox conversation created');
+          logger.debug(
+            { questionId: id, conversationId: conv.id, files: fileRefs.length },
+            'ask_human: inbox conversation created'
+          );
         } catch (err) {
-          logger.warn({ err, questionId: id }, 'ask_human: failed to create inbox conversation (non-fatal)');
+          logger.warn(
+            { err, questionId: id },
+            'ask_human: failed to create inbox conversation (non-fatal)'
+          );
         }
       }
 
@@ -127,25 +150,28 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
         const bot = deps.getBotInstance(botId);
         if (bot) {
           const botName = deps.getBotName(botId);
-          const messageText =
-            `🤖 **${botName} needs your input:**\n\n${question}\n\n_Reply to this message to answer._`;
+          const messageText = `🤖 **${botName} needs your input:**\n\n${question}\n\n_Reply to this message to answer._`;
           try {
             const sent = await bot.api.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
             deps.store.setMessageId(id, sent.message_id);
           } catch (telegramErr) {
-            logger.warn({ botId, chatId, err: telegramErr }, 'ask_human: failed to send Telegram notification, question still queued in inbox');
+            logger.warn(
+              { botId, chatId, err: telegramErr },
+              'ask_human: failed to send Telegram notification, question still queued in inbox'
+            );
           }
         }
       }
 
       logger.info(
         { questionId: id, botId, chatId: chatId || null, timeoutMinutes },
-        'ask_human: question queued to inbox (non-blocking)',
+        'ask_human: question queued to inbox (non-blocking)'
       );
 
       return {
         success: true,
-        content: 'Question has been queued to the human inbox. ' +
+        content:
+          'Question has been queued to the human inbox. ' +
           'The answer will be available in your next cycle. ' +
           'Continue with other tasks in the meantime.',
       };

@@ -1,5 +1,16 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync, copyFileSync, unlinkSync, renameSync, statSync } from 'node:fs';
-import { join, basename, dirname } from 'node:path';
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import type { SoulConfig } from './config';
 import { localDateStr, localTimeStr } from './date-utils';
 import type { Logger } from './logger';
@@ -49,7 +60,10 @@ export function backupSoulFile(filepath: string, logger: Logger, maxVersions = 1
     mkdirSync(versionsDir, { recursive: true });
   }
 
-  const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, '');
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/:/g, '-')
+    .replace(/\.\d+Z$/, '');
   const backupName = `${name}.${timestamp}.bak`;
   const backupPath = join(versionsDir, backupName);
 
@@ -277,7 +291,10 @@ export class SoulLoader {
   appendDailyMemory(fact: string): void {
     const sanitized = sanitizeFact(fact);
     if (!sanitized) {
-      this.logger.warn({ fact: fact.slice(0, 80) }, 'Daily memory skipped: credential content detected');
+      this.logger.warn(
+        { fact: fact.slice(0, 80) },
+        'Daily memory skipped: credential content detected'
+      );
       return;
     }
 
@@ -471,7 +488,7 @@ export class SoulLoader {
 
     // Write back as key: value lines
     const lines = Object.entries(existing).map(([k, v]) => `${k}: ${v}`);
-    writeFileSync(identityPath, lines.join('\n') + '\n', 'utf-8');
+    writeFileSync(identityPath, `${lines.join('\n')}\n`, 'utf-8');
     this.logger.info({ fields: Object.keys(fields) }, 'Identity updated');
   }
 }
@@ -481,7 +498,11 @@ export class SoulLoader {
  * Detects IDENTITY.md at root level and moves soul files into {root}/{defaultBotId}/.
  * Idempotent — skips if target already exists.
  */
-export function migrateSoulRootToPerBot(rootDir: string, defaultBotId: string, logger: Logger): void {
+export function migrateSoulRootToPerBot(
+  rootDir: string,
+  defaultBotId: string,
+  logger: Logger
+): void {
   const targetDir = join(rootDir, defaultBotId);
   const identityAtRoot = join(rootDir, 'IDENTITY.md');
 

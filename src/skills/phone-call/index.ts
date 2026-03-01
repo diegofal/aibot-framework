@@ -19,7 +19,7 @@ function escapeXml(text: string): string {
     .replace(/'/g, '&apos;');
 }
 
-async function twilioCall(config: PhoneCallConfig, message: string, loop: number = 1): Promise<string> {
+async function twilioCall(config: PhoneCallConfig, message: string, loop = 1): Promise<string> {
   const twiml = `<Response><Say language="${config.language}" voice="${config.voice}" loop="${loop}">${escapeXml(message)}</Say></Response>`;
 
   const response = await fetch(
@@ -38,7 +38,7 @@ async function twilioCall(config: PhoneCallConfig, message: string, loop: number
     }
   );
 
-  const data = await response.json() as Record<string, unknown>;
+  const data = (await response.json()) as Record<string, unknown>;
 
   if (!response.ok) {
     const errorMsg = (data as { message?: string }).message || `HTTP ${response.status}`;
@@ -70,7 +70,7 @@ const skill: Skill = {
 
         try {
           const sid = await twilioCall(config, config.maydayMessage, 3);
-          const masked = config.toNumber.slice(0, 4) + '...' + config.toNumber.slice(-2);
+          const masked = `${config.toNumber.slice(0, 4)}...${config.toNumber.slice(-2)}`;
           ctx.logger.info({ sid, to: config.toNumber }, 'Mayday call initiated');
           return `Llamada de emergencia iniciada a ${masked} (SID: ${sid})`;
         } catch (error) {
@@ -98,7 +98,7 @@ const skill: Skill = {
 
         try {
           const sid = await twilioCall(config, message, 1);
-          const masked = config.toNumber.slice(0, 4) + '...' + config.toNumber.slice(-2);
+          const masked = `${config.toNumber.slice(0, 4)}...${config.toNumber.slice(-2)}`;
           ctx.logger.info({ sid, to: config.toNumber }, 'Call initiated');
           return `Llamando a ${masked}... Mensaje: "${message}" (SID: ${sid})`;
         } catch (error) {

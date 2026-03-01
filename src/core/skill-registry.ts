@@ -1,15 +1,9 @@
 import type { Config } from '../config';
 import type { Logger } from '../logger';
 import { OllamaClient } from '../ollama';
-import { SkillLoader } from './skill-loader';
 import { createLLMClient } from './llm-client';
-import type {
-  DataStore,
-  Skill,
-  SkillContext,
-  SkillManifest,
-  TelegramClient,
-} from './types';
+import { SkillLoader } from './skill-loader';
+import type { DataStore, Skill, SkillContext, SkillManifest, TelegramClient } from './types';
 
 export class SkillRegistry {
   private skills: Map<string, Skill> = new Map();
@@ -33,7 +27,7 @@ export class SkillRegistry {
       try {
         await this.loadSkill(skillId);
       } catch (error) {
-        this.logger.error({ error, skillId }, 'Failed to load skill');
+        this.logger.warn({ error, skillId }, 'Skill not found or failed to load, skipping');
       }
     }
   }
@@ -159,7 +153,7 @@ export class SkillRegistry {
         claudeTimeout: cfg.claudeTimeout as number | undefined,
       },
       this.ollamaClient,
-      skillLogger,
+      skillLogger
     );
 
     return {

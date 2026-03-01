@@ -1,35 +1,35 @@
 import { join } from 'node:path';
 import { type BotConfig, resolveAgentConfig } from '../config';
+import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
-import { ClaudeCliLLMClient } from '../core/llm-client';
-import type { BotContext } from './types';
-import type { SystemPromptBuilder } from './system-prompt-builder';
-import { TOOL_CATEGORY_NAMES, type ToolCategory, type ToolRegistry } from './tool-registry';
-import { buildPlannerPrompt, buildContinuousPlannerPrompt, buildExecutorPrompt, buildFeedbackProcessorPrompt } from './agent-loop-prompts';
-import type { PlannerResult } from './agent-loop-prompts';
 import type { AgentFeedback } from './agent-feedback-store';
-import { ToolExecutor, type ToolExecutionRecord } from './tool-executor';
-import type { KarmaService } from '../karma/service';
+import {
+  buildContinuousPlannerPrompt,
+  buildExecutorPrompt,
+  buildFeedbackProcessorPrompt,
+  buildPlannerPrompt,
+} from './agent-loop-prompts';
+import type { PlannerResult } from './agent-loop-prompts';
 import {
   buildRecentActionsDigest,
-  isSimilarSummary,
   isRepetitiveAction,
-  scanFileTree,
+  isSimilarSummary,
   logToMemory,
+  scanFileTree,
   sendReport,
 } from './agent-loop-utils';
-import {
-  resolveRetryConfig,
-  executeSingleBotWithRetry as _executeSingleBotWithRetry,
-} from './agent-retry-engine';
 import { runPlannerWithRetry } from './agent-planner';
 import {
-  shouldRunStrategist,
-  runStrategist,
-  type StrategistResult,
-} from './agent-strategist';
+  executeSingleBotWithRetry as _executeSingleBotWithRetry,
+  resolveRetryConfig,
+} from './agent-retry-engine';
 import { AgentScheduler } from './agent-scheduler';
+import { type StrategistResult, runStrategist, shouldRunStrategist } from './agent-strategist';
+import type { SystemPromptBuilder } from './system-prompt-builder';
+import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
+import { TOOL_CATEGORY_NAMES, type ToolCategory, type ToolRegistry } from './tool-registry';
+import type { BotContext } from './types';
 
 // Backward-compat re-exports — consumers may import these from agent-loop
 export { isRetryableError, computeRetryDelay } from './agent-retry-engine';
@@ -81,6 +81,7 @@ export interface BotScheduleInfo {
   botId: string;
   botName: string;
   mode: 'periodic' | 'continuous';
+  backend: 'ollama' | 'claude-cli' | null;
   nextRunAt: number | null;
   lastRunAt: number | null;
   nextCheckIn: string | null;
@@ -110,9 +111,15 @@ export interface AgentLoopState {
 export function parseDurationMs(duration: string): number {
   const match = duration.match(/^(\d+)\s*(ms|s|m|h|d)$/i);
   if (!match) throw new Error(`Invalid duration: ${duration}`);
-  const value = parseInt(match[1], 10);
+  const value = Number.parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
-  const multipliers: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+  const multipliers: Record<string, number> = {
+    ms: 1,
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+  };
   return value * multipliers[unit];
 }
 
@@ -123,17 +130,22 @@ export class AgentLoop {
   constructor(
     private ctx: BotContext,
     private systemPromptBuilder: SystemPromptBuilder,
-    private toolRegistry: ToolRegistry,
+    private toolRegistry: ToolRegistry
   ) {
     this.scheduler = new AgentScheduler(
       ctx,
       (botId, botConfig) => this.executeBotWithRetry(botId, botConfig),
-      join(ctx.config.paths.data, 'agent-scheduler'),
+      join(ctx.config.paths.data, 'agent-scheduler')
     );
   }
 
   setKarmaService(karmaService: KarmaService): void {
     this.karmaService = karmaService;
+  }
+
+  /** Delegate: clear scheduler state for a specific bot (used by BotResetService). */
+  clearScheduleForBot(botId: string): boolean {
+    return this.scheduler.clearForBot(botId);
   }
 
   /** Start the continuous run loop */
@@ -178,7 +190,7 @@ export class AgentLoop {
             this.scheduler.updateBotSchedule(botId, botConfig, result);
             return result;
           })
-          .finally(() => runningBotIds.delete(botId)),
+          .finally(() => runningBotIds.delete(botId))
       );
     }
 
@@ -195,14 +207,44 @@ export class AgentLoop {
   async runOne(botId: string): Promise<AgentLoopResult> {
     const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
     if (!botConfig) {
-      return { botId, botName: botId, status: 'error', summary: `Bot config not found: ${botId}`, durationMs: 0, plannerReasoning: '', plan: [], toolCalls: [], strategistRan: false };
+      return {
+        botId,
+        botName: botId,
+        status: 'error',
+        summary: `Bot config not found: ${botId}`,
+        durationMs: 0,
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        strategistRan: false,
+      };
     }
     if (!this.ctx.runningBots.has(botId)) {
-      return { botId, botName: botConfig.name, status: 'skipped', summary: 'Bot not running', durationMs: 0, plannerReasoning: '', plan: [], toolCalls: [], strategistRan: false };
+      return {
+        botId,
+        botName: botConfig.name,
+        status: 'skipped',
+        summary: 'Bot not running',
+        durationMs: 0,
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        strategistRan: false,
+      };
     }
     const runningBotIds = this.scheduler.getRunningBotIds();
     if (runningBotIds.has(botId)) {
-      return { botId, botName: botConfig.name, status: 'skipped', summary: 'Bot already running', durationMs: 0, plannerReasoning: '', plan: [], toolCalls: [], strategistRan: false };
+      return {
+        botId,
+        botName: botConfig.name,
+        status: 'skipped',
+        summary: 'Bot already running',
+        durationMs: 0,
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        strategistRan: false,
+      };
     }
     runningBotIds.add(botId);
     try {
@@ -241,7 +283,11 @@ export class AgentLoop {
     });
   }
 
-  private async executeSingleBot(botId: string, botConfig: BotConfig, options?: { suppressSideEffects?: boolean }): Promise<AgentLoopResult> {
+  private async executeSingleBot(
+    botId: string,
+    botConfig: BotConfig,
+    options?: { suppressSideEffects?: boolean }
+  ): Promise<AgentLoopResult> {
     const startMs = Date.now();
     const botLogger = this.ctx.getBotLogger(botId);
     const globalConfig = this.ctx.config.agentLoop;
@@ -271,7 +317,12 @@ export class AgentLoop {
     };
 
     botLogger.info({ botId }, 'Agent loop starting for bot');
-    this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'start' });
+    this.ctx.activityStream?.publish({
+      type: 'agent:phase',
+      botId,
+      timestamp: Date.now(),
+      phase: 'start',
+    });
 
     try {
       const startMs = Date.now();
@@ -286,7 +337,7 @@ export class AgentLoop {
         new Promise<ExecuteLoopDetail>((_, reject) => {
           setTimeout(
             () => reject(new Error(`Agent loop timed out after ${globalConfig.maxDurationMs}ms`)),
-            globalConfig.maxDurationMs,
+            globalConfig.maxDurationMs
           );
         }),
       ]);
@@ -303,7 +354,11 @@ export class AgentLoop {
           schedule.consecutiveIdleCycles++;
         } else {
           if (schedule.consecutiveIdleCycles > 0) {
-            logToMemory(this.ctx, botId, `[agent-loop] Resuming after ${schedule.consecutiveIdleCycles} idle cycles.`);
+            logToMemory(
+              this.ctx,
+              botId,
+              `[agent-loop] Resuming after ${schedule.consecutiveIdleCycles} idle cycles.`
+            );
           }
           schedule.consecutiveIdleCycles = 0;
         }
@@ -338,22 +393,38 @@ export class AgentLoop {
         const planSummary = detail.plan.join('; ').slice(0, 200);
         const isRepetitive = isRepetitiveAction(schedule.recentActions, planSummary);
         if (isRepetitive) {
-          this.karmaService.addEvent(botId, -2, `Repeated action: ${planSummary.slice(0, 80)}`, 'agent-loop');
+          this.karmaService.addEvent(
+            botId,
+            -2,
+            `Repeated action: ${planSummary.slice(0, 80)}`,
+            'agent-loop'
+          );
         } else {
-          this.karmaService.addEvent(botId, 1, `Novel action: ${planSummary.slice(0, 80)}`, 'agent-loop');
+          this.karmaService.addEvent(
+            botId,
+            1,
+            `Novel action: ${planSummary.slice(0, 80)}`,
+            'agent-loop'
+          );
         }
       }
 
       // Memory logging with dedup and idle suppression
       if (idleSuppression && isIdle) {
         if (schedule && schedule.consecutiveIdleCycles === 1) {
-          logToMemory(this.ctx, botId, '[agent-loop] Idle — no novel action found. Awaiting next trigger.');
+          logToMemory(
+            this.ctx,
+            botId,
+            '[agent-loop] Idle — no novel action found. Awaiting next trigger.'
+          );
         }
       } else {
         const memoryEvery = botConfig.agentLoop?.continuousMemoryEvery ?? 5;
-        const shouldLog = !isContinuous || ((schedule?.continuousCycleCount ?? 0) + 1) % memoryEvery === 0;
+        const shouldLog =
+          !isContinuous || ((schedule?.continuousCycleCount ?? 0) + 1) % memoryEvery === 0;
         if (shouldLog) {
-          const shouldDedup = schedule && isSimilarSummary(detail.summary, schedule.lastLoggedSummary ?? '');
+          const shouldDedup =
+            schedule && isSimilarSummary(detail.summary, schedule.lastLoggedSummary ?? '');
           if (!shouldDedup) {
             logToMemory(this.ctx, botId, detail.summary);
             if (schedule) schedule.lastLoggedSummary = detail.summary;
@@ -366,7 +437,10 @@ export class AgentLoop {
         await sendReport(this.ctx, botId, botOverride.reportChatId, detail.summary);
       }
 
-      botLogger.info({ botId, durationMs, priority: detail.priority, isIdle }, 'Agent loop completed for bot');
+      botLogger.info(
+        { botId, durationMs, priority: detail.priority, isIdle },
+        'Agent loop completed for bot'
+      );
       return {
         botId,
         botName: botConfig.name,
@@ -398,7 +472,17 @@ export class AgentLoop {
         }
       }
 
-      return { botId, botName: botConfig.name, status: 'error', summary: errorMsg, durationMs, plannerReasoning: '', plan: [], toolCalls: [], strategistRan: false };
+      return {
+        botId,
+        botName: botConfig.name,
+        status: 'error',
+        summary: errorMsg,
+        durationMs,
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        strategistRan: false,
+      };
     }
   }
 
@@ -407,7 +491,7 @@ export class AgentLoop {
     botConfig: BotConfig,
     botLogger: Logger,
     checkTimeout?: (operation: string) => boolean,
-    remainingTimeMs?: () => number,
+    remainingTimeMs?: () => number
   ): Promise<ExecuteLoopDetail> {
     const globalConfig = this.ctx.config.agentLoop;
     const botOverride = botConfig.agentLoop;
@@ -427,7 +511,7 @@ export class AgentLoop {
     const withTimeout = async <T>(
       operation: () => Promise<T>,
       operationName: string,
-      minTimeMs: number = 5000,
+      minTimeMs = 5000
     ): Promise<T> => {
       const remaining = remainingTimeMs ? remainingTimeMs() : globalConfig.maxDurationMs;
       const timeoutMs = Math.max(minTimeMs, remaining - 5000);
@@ -436,7 +520,9 @@ export class AgentLoop {
         operation(),
         new Promise<T>((_, reject) => {
           setTimeout(() => {
-            reject(new Error(`${operationName} timed out after ${timeoutMs}ms (session timeout guard)`));
+            reject(
+              new Error(`${operationName} timed out after ${timeoutMs}ms (session timeout guard)`)
+            );
           }, timeoutMs);
         }),
       ]);
@@ -452,14 +538,21 @@ export class AgentLoop {
 
     // Phase -1: Process pending human feedback
     if (checkTimeout && !checkTimeout('before_feedback')) {
-      return { summary: 'Session timeout guard triggered before feedback processing', plannerReasoning: '', plan: [], toolCalls: [], priority: 'high', strategistRan: false };
+      return {
+        summary: 'Session timeout guard triggered before feedback processing',
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        priority: 'high',
+        strategistRan: false,
+      };
     }
     const pendingFeedback = this.ctx.agentFeedbackStore.getPending(botId);
     if (pendingFeedback.length > 0) {
       await withTimeout(
         () => this.processFeedback(botId, botConfig, botLogger, pendingFeedback, soulLoader),
         'Feedback processing',
-        feedbackTimeoutMs,
+        feedbackTimeoutMs
       );
       identity = soulLoader.readIdentity() || '(no identity)';
       soul = soulLoader.readSoul() || '(no soul)';
@@ -469,7 +562,14 @@ export class AgentLoop {
 
     // Phase 0: Strategist (conditional)
     if (checkTimeout && !checkTimeout('before_strategist')) {
-      return { summary: 'Session timeout guard triggered before strategist', plannerReasoning: '', plan: [], toolCalls: [], priority: 'high', strategistRan: false };
+      return {
+        summary: 'Session timeout guard triggered before strategist',
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        priority: 'high',
+        strategistRan: false,
+      };
     }
     let strategistRan = false;
     let strategistReflection: string | undefined;
@@ -477,21 +577,71 @@ export class AgentLoop {
 
     const schedule = this.scheduler.getSchedule(botId);
     if (shouldRunStrategist(botId, botConfig, globalConfig.strategist, schedule)) {
-      this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'strategist:start' });
-      const strategistResult = await withTimeout(
-        () => runStrategist(this.ctx, botId, botConfig, botLogger, {
-          identity, soul, motivations, goals, datetime, soulLoader,
-        }),
-        'Strategist',
-        strategistTimeoutMs,
-      );
+      this.ctx.activityStream?.publish({
+        type: 'agent:phase',
+        botId,
+        timestamp: Date.now(),
+        phase: 'strategist:start',
+      });
+      const strategistStartMs = Date.now();
+      this.ctx.activityStream?.publish({
+        type: 'llm:start',
+        botId,
+        timestamp: strategistStartMs,
+        data: { caller: 'strategist', backend: llmClient.backend },
+      });
+      let strategistResult: StrategistResult | null;
+      try {
+        strategistResult = await withTimeout(
+          () =>
+            runStrategist(this.ctx, botId, botConfig, botLogger, {
+              identity,
+              soul,
+              motivations,
+              goals,
+              datetime,
+              soulLoader,
+            }),
+          'Strategist',
+          strategistTimeoutMs
+        );
+        this.ctx.activityStream?.publish({
+          type: 'llm:end',
+          botId,
+          timestamp: Date.now(),
+          data: {
+            caller: 'strategist',
+            backend: llmClient.backend,
+            durationMs: Date.now() - strategistStartMs,
+          },
+        });
+      } catch (err) {
+        this.ctx.activityStream?.publish({
+          type: 'llm:error',
+          botId,
+          timestamp: Date.now(),
+          data: {
+            caller: 'strategist',
+            backend: llmClient.backend,
+            durationMs: Date.now() - strategistStartMs,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        });
+        throw err;
+      }
       if (strategistResult) {
         strategistRan = true;
         strategistReflection = strategistResult.reflection;
         focus = strategistResult.focus;
         goals = soulLoader.readGoals?.() || '';
       }
-      this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'strategist:end', data: { focus, reflection: strategistReflection?.slice(0, 200) } });
+      this.ctx.activityStream?.publish({
+        type: 'agent:phase',
+        botId,
+        timestamp: Date.now(),
+        phase: 'strategist:end',
+        data: { focus, reflection: strategistReflection?.slice(0, 200) },
+      });
     }
 
     // If strategist didn't run this cycle, use lastFocus from schedule
@@ -506,19 +656,19 @@ export class AgentLoop {
     if (answeredQuestions.length > 0) {
       botLogger.info(
         { botId, count: answeredQuestions.length },
-        'Agent loop: injecting answered questions into planner',
+        'Agent loop: injecting answered questions into planner'
       );
     }
 
     // Check for permission decisions from previous cycles
     const resolvedPermissions = this.ctx.askPermissionStore.consumeDecisionsForBot(botId);
-    const consumedPermissionIds = resolvedPermissions.map(p => p.id);
+    const consumedPermissionIds = resolvedPermissions.map((p) => p.id);
     const pendingPermissions = this.ctx.askPermissionStore.getPendingForBot(botId);
 
     if (resolvedPermissions.length > 0) {
       botLogger.info(
         { botId, count: resolvedPermissions.length },
-        'Agent loop: injecting permission decisions into planner',
+        'Agent loop: injecting permission decisions into planner'
       );
     }
 
@@ -529,18 +679,34 @@ export class AgentLoop {
       ...(botOverride?.disabledTools ?? []),
     ]);
     const baseDefs = this.toolRegistry.getDefinitionsForBot(botId);
-    const defs = baseDefs.filter(
-      (d) => !allDisabled.has(d.function.name),
-    );
+    const defs = baseDefs.filter((d) => !allDisabled.has(d.function.name));
     const availableToolNames = defs.map((d) => d.function.name);
 
     // Phase 1: Planner
     if (checkTimeout && !checkTimeout('before_planner')) {
-      return { summary: 'Session timeout guard triggered before planner', plannerReasoning: '', plan: [], toolCalls: [], priority: 'high', strategistRan, strategistReflection, focus };
+      return {
+        summary: 'Session timeout guard triggered before planner',
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        priority: 'high',
+        strategistRan,
+        strategistReflection,
+        focus,
+      };
     }
     const isContinuous = this.scheduler.isContinuousBot(botId);
-    botLogger.info({ botId, toolCount: defs.length, focus, mode: isContinuous ? 'continuous' : 'periodic' }, 'Agent loop: running planner');
-    this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'planner:start', data: { mode: isContinuous ? 'continuous' : 'periodic', toolCount: defs.length } });
+    botLogger.info(
+      { botId, toolCount: defs.length, focus, mode: isContinuous ? 'continuous' : 'periodic' },
+      'Agent loop: running planner'
+    );
+    this.ctx.activityStream?.publish({
+      type: 'agent:phase',
+      botId,
+      timestamp: Date.now(),
+      phase: 'planner:start',
+      data: { mode: isContinuous ? 'continuous' : 'periodic', toolCount: defs.length },
+    });
 
     const hasCreateTool = availableToolNames.includes('create_tool');
 
@@ -555,16 +721,18 @@ export class AgentLoop {
 
     // Build recent actions digest and karma block for planner context
     const recentActionsDigest = schedule ? buildRecentActionsDigest(schedule.recentActions) : null;
-    const karmaBlock = this.karmaService && this.ctx.config.karma?.enabled
-      ? this.karmaService.renderForPrompt(botId)
-      : undefined;
+    const karmaBlock =
+      this.karmaService && this.ctx.config.karma?.enabled
+        ? this.karmaService.renderForPrompt(botId)
+        : undefined;
 
     // Build autonomous cycles note if bot hasn't used ask_human recently
     const askHumanCheckInThreshold = globalConfig.askHumanCheckInCycles ?? 5;
     const cyclesSinceAskHuman = schedule?.cyclesSinceAskHuman ?? 0;
-    const autonomousCyclesNote = cyclesSinceAskHuman >= askHumanCheckInThreshold
-      ? `## Autonomous Run Notice\n\nYou have been running autonomously for ${cyclesSinceAskHuman} cycles without checking in with your human operator. Consider using ask_human to check in — ask for feedback on recent work, confirm priorities, or request direction.`
-      : undefined;
+    const autonomousCyclesNote =
+      cyclesSinceAskHuman >= askHumanCheckInThreshold
+        ? `## Autonomous Run Notice\n\nYou have been running autonomously for ${cyclesSinceAskHuman} cycles without checking in with your human operator. Consider using ask_human to check in — ask for feedback on recent work, confirm priorities, or request direction.`
+        : undefined;
 
     if (isContinuous) {
       const lastCycleSummary = schedule?.lastResult?.summary;
@@ -579,21 +747,65 @@ export class AgentLoop {
         hasCreateTool,
         focus,
         lastCycleSummary: lastCycleSummary || undefined,
-        answeredQuestions: answeredQuestions.map((q) => ({ question: q.question, answer: q.answer })),
+        answeredQuestions: answeredQuestions.map((q) => ({
+          question: q.question,
+          answer: q.answer,
+        })),
         pendingQuestions: pendingQuestions.map((q) => ({ question: q.question })),
-        resolvedPermissions: resolvedPermissions.map((p) => ({ action: p.action, resource: p.resource, status: p.status, note: p.note })),
-        pendingPermissions: pendingPermissions.map((p) => ({ action: p.action, resource: p.resource })),
+        resolvedPermissions: resolvedPermissions.map((p) => ({
+          action: p.action,
+          resource: p.resource,
+          status: p.status,
+          note: p.note,
+        })),
+        pendingPermissions: pendingPermissions.map((p) => ({
+          action: p.action,
+          resource: p.resource,
+        })),
         recentActionsDigest: recentActionsDigest || undefined,
         karmaBlock,
         autonomousCyclesNote,
         toolCategoryList,
       });
 
-      const continuousResult = await withTimeout(
-        () => runPlannerWithRetry(llmClient, continuousInput, model, botLogger),
-        'Continuous planner',
-        plannerTimeoutMs,
-      );
+      const plannerStartMs = Date.now();
+      this.ctx.activityStream?.publish({
+        type: 'llm:start',
+        botId,
+        timestamp: plannerStartMs,
+        data: { caller: 'planner', backend: llmClient.backend, mode: 'continuous' },
+      });
+      let continuousResult: PlannerResult;
+      try {
+        continuousResult = await withTimeout(
+          () => runPlannerWithRetry(llmClient, continuousInput, model, botLogger),
+          'Continuous planner',
+          plannerTimeoutMs
+        );
+        this.ctx.activityStream?.publish({
+          type: 'llm:end',
+          botId,
+          timestamp: Date.now(),
+          data: {
+            caller: 'planner',
+            backend: llmClient.backend,
+            durationMs: Date.now() - plannerStartMs,
+          },
+        });
+      } catch (err) {
+        this.ctx.activityStream?.publish({
+          type: 'llm:error',
+          botId,
+          timestamp: Date.now(),
+          data: {
+            caller: 'planner',
+            backend: llmClient.backend,
+            durationMs: Date.now() - plannerStartMs,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        });
+        throw err;
+      }
 
       plan = continuousResult.plan;
       plannerReasoning = continuousResult.reasoning;
@@ -610,21 +822,65 @@ export class AgentLoop {
         availableTools: availableToolNames,
         hasCreateTool,
         focus,
-        answeredQuestions: answeredQuestions.map((q) => ({ question: q.question, answer: q.answer })),
+        answeredQuestions: answeredQuestions.map((q) => ({
+          question: q.question,
+          answer: q.answer,
+        })),
         pendingQuestions: pendingQuestions.map((q) => ({ question: q.question })),
-        resolvedPermissions: resolvedPermissions.map((p) => ({ action: p.action, resource: p.resource, status: p.status, note: p.note })),
-        pendingPermissions: pendingPermissions.map((p) => ({ action: p.action, resource: p.resource })),
+        resolvedPermissions: resolvedPermissions.map((p) => ({
+          action: p.action,
+          resource: p.resource,
+          status: p.status,
+          note: p.note,
+        })),
+        pendingPermissions: pendingPermissions.map((p) => ({
+          action: p.action,
+          resource: p.resource,
+        })),
         recentActionsDigest: recentActionsDigest || undefined,
         karmaBlock,
         autonomousCyclesNote,
         toolCategoryList,
       });
 
-      const plannerResult = await withTimeout(
-        () => runPlannerWithRetry(llmClient, plannerInput, model, botLogger),
-        'Planner',
-        plannerTimeoutMs,
-      );
+      const plannerStartMs = Date.now();
+      this.ctx.activityStream?.publish({
+        type: 'llm:start',
+        botId,
+        timestamp: plannerStartMs,
+        data: { caller: 'planner', backend: llmClient.backend, mode: 'periodic' },
+      });
+      let plannerResult: PlannerResult;
+      try {
+        plannerResult = await withTimeout(
+          () => runPlannerWithRetry(llmClient, plannerInput, model, botLogger),
+          'Planner',
+          plannerTimeoutMs
+        );
+        this.ctx.activityStream?.publish({
+          type: 'llm:end',
+          botId,
+          timestamp: Date.now(),
+          data: {
+            caller: 'planner',
+            backend: llmClient.backend,
+            durationMs: Date.now() - plannerStartMs,
+          },
+        });
+      } catch (err) {
+        this.ctx.activityStream?.publish({
+          type: 'llm:error',
+          botId,
+          timestamp: Date.now(),
+          data: {
+            caller: 'planner',
+            backend: llmClient.backend,
+            durationMs: Date.now() - plannerStartMs,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        });
+        throw err;
+      }
 
       plan = plannerResult.plan;
       plannerReasoning = plannerResult.reasoning;
@@ -632,25 +888,56 @@ export class AgentLoop {
       selectedToolCategories = plannerResult.toolCategories;
     }
 
-    this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'planner:end', data: { planSteps: plan.length, priority, categories: selectedToolCategories } });
+    this.ctx.activityStream?.publish({
+      type: 'agent:phase',
+      botId,
+      timestamp: Date.now(),
+      phase: 'planner:end',
+      data: { planSteps: plan.length, priority, categories: selectedToolCategories },
+    });
 
     if (plan.length === 0 || priority === 'none') {
-      this.ctx.activityStream?.publish({ type: 'agent:idle', botId, timestamp: Date.now(), data: { reasoning: plannerReasoning.slice(0, 200) } });
+      this.ctx.activityStream?.publish({
+        type: 'agent:idle',
+        botId,
+        timestamp: Date.now(),
+        data: { reasoning: plannerReasoning.slice(0, 200) },
+      });
       if (consumedPermissionIds.length > 0) {
-        const idleSummary = priority === 'none' ? `Idle: ${plannerReasoning}` : 'Planner produced no plan steps.';
+        const idleSummary =
+          priority === 'none' ? `Idle: ${plannerReasoning}` : 'Planner produced no plan steps.';
         this.ctx.askPermissionStore.reportExecution(consumedPermissionIds, idleSummary, [], true);
       }
-      return { summary: priority === 'none' ? `Idle: ${plannerReasoning}` : 'Planner produced no plan steps.', plannerReasoning, plan: [], toolCalls: [], priority, strategistRan, strategistReflection, focus };
+      return {
+        summary:
+          priority === 'none' ? `Idle: ${plannerReasoning}` : 'Planner produced no plan steps.',
+        plannerReasoning,
+        plan: [],
+        toolCalls: [],
+        priority,
+        strategistRan,
+        strategistReflection,
+        focus,
+      };
     }
 
     botLogger.info(
       { botId, planSteps: plan.length, reasoning: plannerReasoning },
-      'Agent loop: executing plan',
+      'Agent loop: executing plan'
     );
 
     // Phase 2: Executor
     if (checkTimeout && !checkTimeout('before_executor')) {
-      return { summary: 'Session timeout guard triggered before executor', plannerReasoning, plan: [], toolCalls: [], priority, strategistRan, strategistReflection, focus };
+      return {
+        summary: 'Session timeout guard triggered before executor',
+        plannerReasoning,
+        plan: [],
+        toolCalls: [],
+        priority,
+        strategistRan,
+        strategistReflection,
+        focus,
+      };
     }
 
     const executorSystem = this.systemPromptBuilder.build({
@@ -709,9 +996,35 @@ export class AgentLoop {
     // Bridge tool events to activity stream
     if (this.ctx.activityStream) {
       const stream = this.ctx.activityStream;
-      executor.on('tool:start', (e) => stream.publish({ type: 'tool:start', botId, timestamp: e.timestamp, data: { toolName: e.toolName, args: e.args } }));
-      executor.on('tool:end', (e) => stream.publish({ type: 'tool:end', botId, timestamp: e.timestamp, data: { toolName: e.toolName, success: e.success, durationMs: e.durationMs, result: e.result.slice(0, 300) } }));
-      executor.on('tool:error', (e) => stream.publish({ type: 'tool:error', botId, timestamp: e.timestamp, data: { toolName: e.toolName, error: e.error.slice(0, 300), phase: e.phase } }));
+      executor.on('tool:start', (e) =>
+        stream.publish({
+          type: 'tool:start',
+          botId,
+          timestamp: e.timestamp,
+          data: { toolName: e.toolName, args: e.args },
+        })
+      );
+      executor.on('tool:end', (e) =>
+        stream.publish({
+          type: 'tool:end',
+          botId,
+          timestamp: e.timestamp,
+          data: {
+            toolName: e.toolName,
+            success: e.success,
+            durationMs: e.durationMs,
+            result: e.result.slice(0, 300),
+          },
+        })
+      );
+      executor.on('tool:error', (e) =>
+        stream.publish({
+          type: 'tool:error',
+          botId,
+          timestamp: e.timestamp,
+          data: { toolName: e.toolName, error: e.error.slice(0, 300), phase: e.phase },
+        })
+      );
     }
 
     // Tool pre-selection: narrow executor tools based on planner's category picks
@@ -719,38 +1032,64 @@ export class AgentLoop {
     if (toolPreSelectionEnabled && selectedToolCategories && selectedToolCategories.length > 0) {
       const categoryFiltered = this.toolRegistry.getDefinitionsByCategories(
         selectedToolCategories as ToolCategory[],
-        botId,
+        botId
       );
       // Apply the same allDisabled filter on top of category filtering
       executorDefs = categoryFiltered.filter((d) => !allDisabled.has(d.function.name));
       botLogger.info(
-        { botId, selectedCategories: selectedToolCategories, fullToolCount: defs.length, filteredToolCount: executorDefs.length },
-        'Agent loop: tool pre-selection active',
+        {
+          botId,
+          selectedCategories: selectedToolCategories,
+          fullToolCount: defs.length,
+          filteredToolCount: executorDefs.length,
+        },
+        'Agent loop: tool pre-selection active'
       );
     }
 
     // Per-bot override → global config → default 30. Session timeout guard (80% of maxDurationMs)
     // and per-operation withTimeout already prevent runaway execution.
     const maxToolRounds = botOverride?.maxToolRounds ?? globalConfig.maxToolRounds;
-    this.ctx.activityStream?.publish({ type: 'agent:phase', botId, timestamp: Date.now(), phase: 'executor:start', data: { planSteps: plan.length, toolCount: executorDefs.length } });
-    botLogger.info(
-      { botId, maxToolRounds },
-      'Agent loop: starting executor phase',
-    );
+    this.ctx.activityStream?.publish({
+      type: 'agent:phase',
+      botId,
+      timestamp: Date.now(),
+      phase: 'executor:start',
+      data: { planSteps: plan.length, toolCount: executorDefs.length },
+    });
+    botLogger.info({ botId, maxToolRounds }, 'Agent loop: starting executor phase');
 
     let response: string;
+    const executorStartMs = Date.now();
+    this.ctx.activityStream?.publish({
+      type: 'llm:start',
+      botId,
+      timestamp: executorStartMs,
+      data: { caller: 'executor', backend: llmClient.backend, toolCount: executorDefs.length },
+    });
     try {
       response = await withTimeout(
-        () => llmClient.chat(messages, {
-          model,
-          temperature: 0.7,
-          tools: executorDefs,
-          toolExecutor: executor.createCallback(),
-          maxToolRounds,
-        }),
+        () =>
+          llmClient.chat(messages, {
+            model,
+            temperature: 0.7,
+            tools: executorDefs,
+            toolExecutor: executor.createCallback(),
+            maxToolRounds,
+          }),
         'Executor phase',
-        executorTimeoutMs,
+        executorTimeoutMs
       );
+      this.ctx.activityStream?.publish({
+        type: 'llm:end',
+        botId,
+        timestamp: Date.now(),
+        data: {
+          caller: 'executor',
+          backend: llmClient.backend,
+          durationMs: Date.now() - executorStartMs,
+        },
+      });
 
       toolCallLog.push(...executor.getExecutionLog());
 
@@ -759,31 +1098,51 @@ export class AgentLoop {
 
       // Report successful execution for consumed permissions
       if (consumedPermissionIds.length > 0) {
-        const toolCallSummary = toolCallLog.map(t => ({ name: t.name, success: t.success }));
+        const toolCallSummary = toolCallLog.map((t) => ({ name: t.name, success: t.success }));
         this.ctx.askPermissionStore.reportExecution(
           consumedPermissionIds,
           response || '(no response from executor)',
           toolCallSummary,
-          true,
+          true
         );
       }
     } catch (err) {
+      this.ctx.activityStream?.publish({
+        type: 'llm:error',
+        botId,
+        timestamp: Date.now(),
+        data: {
+          caller: 'executor',
+          backend: llmClient.backend,
+          durationMs: Date.now() - executorStartMs,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
       toolCallLog.push(...executor.getExecutionLog());
 
       // Report failed execution for consumed permissions
       if (consumedPermissionIds.length > 0) {
-        const toolCallSummary = toolCallLog.map(t => ({ name: t.name, success: t.success }));
+        const toolCallSummary = toolCallLog.map((t) => ({ name: t.name, success: t.success }));
         this.ctx.askPermissionStore.reportExecution(
           consumedPermissionIds,
           `Executor failed: ${err instanceof Error ? err.message : String(err)}`,
           toolCallSummary,
-          false,
+          false
         );
       }
       throw err;
     }
 
-    this.ctx.activityStream?.publish({ type: 'agent:result', botId, timestamp: Date.now(), data: { toolCallCount: toolCallLog.length, priority, summary: (response || '').slice(0, 200) } });
+    this.ctx.activityStream?.publish({
+      type: 'agent:result',
+      botId,
+      timestamp: Date.now(),
+      data: {
+        toolCallCount: toolCallLog.length,
+        priority,
+        summary: (response || '').slice(0, 200),
+      },
+    });
 
     return {
       summary: response || '(no response from executor)',
@@ -807,7 +1166,7 @@ export class AgentLoop {
     botId: string,
     executor: ToolExecutor,
     toolCallLog: ToolExecutionRecord[],
-    botLogger: Logger,
+    botLogger: Logger
   ): void {
     const askHumanCall = toolCallLog.find((t) => t.name === 'ask_human' && t.success);
     if (!askHumanCall) return;
@@ -842,7 +1201,7 @@ export class AgentLoop {
     if (attached) {
       botLogger.info(
         { botId, conversationId, fileCount: newFiles.length },
-        'Agent loop: auto-attached files to ask_human inbox message',
+        'Agent loop: auto-attached files to ask_human inbox message'
       );
     }
   }
@@ -852,15 +1211,18 @@ export class AgentLoop {
     botConfig: BotConfig,
     botLogger: Logger,
     pendingFeedback: AgentFeedback[],
-    soulLoader: ReturnType<BotContext['getSoulLoader']>,
+    soulLoader: ReturnType<BotContext['getSoulLoader']>
   ): Promise<void> {
-    const claudePath = this.ctx.config.improve?.claudePath ?? 'claude';
-    const claudeTimeout = botConfig.agentLoop?.claudeTimeout ?? this.ctx.config.agentLoop.claudeTimeout;
-    const feedbackLLM = new ClaudeCliLLMClient(claudePath, claudeTimeout, botLogger);
+    const feedbackLLM = this.ctx.getLLMClient(botId);
     const globalConfig = this.ctx.config.agentLoop;
     const botOverride = botConfig.agentLoop;
 
-    const feedbackToolNames = new Set(['manage_goals', 'update_soul', 'update_identity', 'save_memory']);
+    const feedbackToolNames = new Set([
+      'manage_goals',
+      'update_soul',
+      'update_identity',
+      'save_memory',
+    ]);
     const allDisabled = new Set([
       ...(botConfig.disabledTools ?? []),
       ...(globalConfig.disabledTools ?? []),
@@ -868,12 +1230,12 @@ export class AgentLoop {
     ]);
     const baseDefs = this.toolRegistry.getDefinitionsForBot(botId);
     const defs = baseDefs.filter(
-      (d) => feedbackToolNames.has(d.function.name) && !allDisabled.has(d.function.name),
+      (d) => feedbackToolNames.has(d.function.name) && !allDisabled.has(d.function.name)
     );
 
     botLogger.info(
       { botId, count: pendingFeedback.length, tools: defs.map((d) => d.function.name) },
-      'Agent loop: processing pending feedback',
+      'Agent loop: processing pending feedback'
     );
 
     for (const feedback of pendingFeedback) {
@@ -923,23 +1285,59 @@ export class AgentLoop {
           });
         }
 
-        const response = await feedbackLLM.chat(messages, {
-          temperature: 0.5,
-          tools: defs,
-          toolExecutor: executor.createCallback(),
-          maxToolRounds: 5,
+        const feedbackStartMs = Date.now();
+        this.ctx.activityStream?.publish({
+          type: 'llm:start',
+          botId,
+          timestamp: feedbackStartMs,
+          data: { caller: 'feedback', backend: feedbackLLM.backend },
         });
+        let response: string;
+        try {
+          response = await feedbackLLM.chat(messages, {
+            temperature: 0.5,
+            tools: defs,
+            toolExecutor: executor.createCallback(),
+            maxToolRounds: 5,
+          });
+          this.ctx.activityStream?.publish({
+            type: 'llm:end',
+            botId,
+            timestamp: Date.now(),
+            data: {
+              caller: 'feedback',
+              backend: feedbackLLM.backend,
+              durationMs: Date.now() - feedbackStartMs,
+            },
+          });
+        } catch (feedbackErr) {
+          this.ctx.activityStream?.publish({
+            type: 'llm:error',
+            botId,
+            timestamp: Date.now(),
+            data: {
+              caller: 'feedback',
+              backend: feedbackLLM.backend,
+              durationMs: Date.now() - feedbackStartMs,
+              error: feedbackErr instanceof Error ? feedbackErr.message : String(feedbackErr),
+            },
+          });
+          throw feedbackErr;
+        }
 
         const responseText = response || '(no response)';
         this.ctx.agentFeedbackStore.markApplied(botId, feedback.id, responseText);
         logToMemory(this.ctx, botId, `[feedback] Applied: "${feedback.content}" → ${responseText}`);
         botLogger.info({ botId, feedbackId: feedback.id }, 'Agent loop: feedback processed');
       } catch (err) {
-        botLogger.error({ botId, feedbackId: feedback.id, error: err }, 'Agent loop: failed to process feedback');
+        botLogger.error(
+          { botId, feedbackId: feedback.id, error: err },
+          'Agent loop: failed to process feedback'
+        );
         this.ctx.agentFeedbackStore.markApplied(
           botId,
           feedback.id,
-          `Error processing feedback: ${err instanceof Error ? err.message : String(err)}`,
+          `Error processing feedback: ${err instanceof Error ? err.message : String(err)}`
         );
       }
     }

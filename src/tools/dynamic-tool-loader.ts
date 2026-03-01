@@ -1,7 +1,7 @@
 import { join } from 'node:path';
-import type { Tool, ToolResult } from './types';
-import type { DynamicToolMeta } from './dynamic-tool-store';
 import type { Logger } from '../logger';
+import type { DynamicToolMeta } from './dynamic-tool-store';
+import type { Tool, ToolResult } from './types';
 
 const TOOL_TIMEOUT_MS = 30_000;
 
@@ -10,11 +10,7 @@ const TOOL_TIMEOUT_MS = 30_000;
  * TypeScript tools: run via Bun subprocess.
  * Command tools: interpolate parameters and run via shell.
  */
-export function loadDynamicTool(
-  meta: DynamicToolMeta,
-  source: string,
-  storePath: string,
-): Tool {
+export function loadDynamicTool(meta: DynamicToolMeta, source: string, storePath: string): Tool {
   // Build parameter schema from meta.parameters
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
@@ -53,9 +49,8 @@ export function loadDynamicTool(
       try {
         if (meta.type === 'typescript') {
           return await executeTypeScript(meta, cleanArgs, storePath, logger);
-        } else {
-          return await executeCommand(meta, source, cleanArgs, logger);
         }
+        return await executeCommand(meta, source, cleanArgs, logger);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error({ tool: meta.name, error: msg }, 'Dynamic tool execution failed');
@@ -69,7 +64,7 @@ async function executeTypeScript(
   meta: DynamicToolMeta,
   args: Record<string, unknown>,
   storePath: string,
-  logger: Logger,
+  logger: Logger
 ): Promise<ToolResult> {
   const toolPath = join(storePath, meta.id, 'tool.ts');
 
@@ -92,7 +87,10 @@ async function executeTypeScript(
     const exitCode = await proc.exited;
 
     if (exitCode !== 0) {
-      logger.warn({ tool: meta.name, exitCode, stderr: stderr.slice(0, 500) }, 'Dynamic tool non-zero exit');
+      logger.warn(
+        { tool: meta.name, exitCode, stderr: stderr.slice(0, 500) },
+        'Dynamic tool non-zero exit'
+      );
       return { success: false, content: stderr || `Exit code: ${exitCode}` };
     }
 
@@ -116,7 +114,7 @@ async function executeCommand(
   meta: DynamicToolMeta,
   template: string,
   args: Record<string, unknown>,
-  logger: Logger,
+  logger: Logger
 ): Promise<ToolResult> {
   // Interpolate {{param}} placeholders
   let command = template;

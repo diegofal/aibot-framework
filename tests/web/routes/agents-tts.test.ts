@@ -1,10 +1,10 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
-import { agentsRoutes } from '../../../src/web/routes/agents';
 import type { BotConfig, Config } from '../../../src/config';
 import type { Logger } from '../../../src/logger';
+import { agentsRoutes } from '../../../src/web/routes/agents';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -51,26 +51,31 @@ function makeConfig(bots: BotConfig[], mediaTts?: any): Config {
       enabled: false,
       every: '6h',
     },
-    media: mediaTts ? {
-      enabled: true,
-      maxFileSizeMb: 10,
-      tts: mediaTts,
-    } : undefined,
+    media: mediaTts
+      ? {
+          enabled: true,
+          maxFileSizeMb: 10,
+          tts: mediaTts,
+        }
+      : undefined,
   } as unknown as Config;
 }
 
 function makeApp(config: Config, configPath: string) {
   const app = new Hono();
-  app.route('/api/agents', agentsRoutes({
-    config,
-    botManager: {
-      isRunning: () => false,
-      getAvailableToolNames: () => ['file_read', 'file_write'],
-      getExternalSkillNames: () => [],
-    } as any,
-    configPath,
-    logger: noopLogger,
-  }));
+  app.route(
+    '/api/agents',
+    agentsRoutes({
+      config,
+      botManager: {
+        isRunning: () => false,
+        getAvailableToolNames: () => ['file_read', 'file_write'],
+        getExternalSkillNames: () => [],
+      } as any,
+      configPath,
+      logger: noopLogger,
+    })
+  );
   return app;
 }
 

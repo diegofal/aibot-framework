@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeEach, vi } from 'bun:test';
-import { AgentScheduler } from '../../src/bot/agent-scheduler';
+import { beforeEach, describe, expect, test, vi } from 'bun:test';
 import type { AgentLoopResult } from '../../src/bot/agent-loop';
+import { AgentScheduler } from '../../src/bot/agent-scheduler';
 
 // ---------------------------------------------------------------------------
 // Helpers (same pattern as agent-scheduler.test.ts)
@@ -69,7 +69,7 @@ describe('AgentScheduler — immediate run', () => {
       // No wake or pending should happen
       expect(ctx.logger.info).not.toHaveBeenCalledWith(
         expect.objectContaining({ botId: 'bot1' }),
-        expect.stringContaining('immediate run'),
+        expect.stringContaining('immediate run')
       );
     });
 
@@ -79,7 +79,7 @@ describe('AgentScheduler — immediate run', () => {
       scheduler.requestImmediateRun('nonexistent');
       expect(ctx.logger.info).not.toHaveBeenCalledWith(
         expect.objectContaining({ botId: 'nonexistent' }),
-        expect.stringContaining('immediate run'),
+        expect.stringContaining('immediate run')
       );
       scheduler.stop();
     });
@@ -109,7 +109,7 @@ describe('AgentScheduler — immediate run', () => {
 
       expect(ctx.logger.info).toHaveBeenCalledWith(
         expect.objectContaining({ botId: 'bot1' }),
-        expect.stringContaining('immediate run triggered'),
+        expect.stringContaining('immediate run triggered')
       );
     });
 
@@ -144,7 +144,7 @@ describe('AgentScheduler — immediate run', () => {
 
       expect(ctx.logger.info).toHaveBeenCalledWith(
         expect.objectContaining({ botId: 'bot1' }),
-        expect.stringContaining('queued pending wake'),
+        expect.stringContaining('queued pending wake')
       );
     });
 

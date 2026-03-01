@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { claudeGenerate } from './claude-cli';
 import type { Logger } from './logger';
@@ -80,18 +80,18 @@ function buildPrompt(input: SoulGenerationInput, soulDir: string): string {
     '',
     '### IDENTITY.md',
     'Key-value format, one per line. Required fields:',
-    '- name: the bot\'s display name',
+    "- name: the bot's display name",
     '- emoji: a single emoji representing the bot',
-    '- vibe: a short description of the bot\'s personality (one sentence)',
+    "- vibe: a short description of the bot's personality (one sentence)",
     '',
     '### SOUL.md',
     'Markdown with these sections:',
     '- ## Personality Foundation — bullet points defining core traits',
     '- ## Communication Style — how the bot talks',
-    '- ## Boundaries — what the bot won\'t do. IMPORTANT: Include a sub-section ### Permission Protocol:',
+    "- ## Boundaries — what the bot won't do. IMPORTANT: Include a sub-section ### Permission Protocol:",
     '  the bot must use ask_permission before performing sensitive actions (writing files,',
     '  running commands, accessing external services, modifying protected resources).',
-    '  Frame this naturally within the bot\'s personality — not as a rule, but as a value.',
+    "  Frame this naturally within the bot's personality — not as a rule, but as a value.",
     'Additional sections are welcome if the role demands them (e.g. ## Therapeutic Approach).',
     '',
     '### MOTIVATIONS.md',
@@ -102,7 +102,7 @@ function buildPrompt(input: SoulGenerationInput, soulDir: string): string {
     '- ## Self-Observations — behavioral patterns',
     '- ## Last Reflection — date: (none yet), trigger: (none), changes: (none)',
     '',
-    `## Language`,
+    '## Language',
     `Write ALL content in ${language}. Use culturally appropriate idioms and tone.`,
     '',
   ];
@@ -115,7 +115,7 @@ function buildPrompt(input: SoulGenerationInput, soulDir: string): string {
     '## Bot to Create',
     `- **Name:** ${input.name}`,
     `- **Role:** ${input.role}`,
-    `- **Personality:** ${input.personalityDescription}`,
+    `- **Personality:** ${input.personalityDescription}`
   );
 
   if (input.emoji) {
@@ -130,10 +130,10 @@ function buildPrompt(input: SoulGenerationInput, soulDir: string): string {
     '- Create a rich, distinctive personality — not a generic assistant.',
     '- The soul should feel like a real character with depth, quirks, and opinions.',
     '- Match the voice and tone to the role. A therapist sounds different from a coach, which sounds different from a comedian.',
-    '- The motivations should be aspirational but specific to this bot\'s purpose.',
+    "- The motivations should be aspirational but specific to this bot's purpose.",
     '- Make the personality coherent across all three files.',
     '',
-    'Respond with the JSON now.',
+    'Respond with the JSON now.'
   );
 
   return parts.join('\n');
@@ -144,18 +144,15 @@ function buildPrompt(input: SoulGenerationInput, soulDir: string): string {
  */
 export async function generateSoul(
   input: SoulGenerationInput,
-  opts: { claudePath?: string; timeout?: number; soulDir: string; logger: Logger },
+  opts: { claudePath?: string; timeout?: number; soulDir: string; logger: Logger }
 ): Promise<GeneratedSoul> {
   const prompt = buildPrompt(input, opts.soulDir);
 
-  opts.logger.info(
-    { name: input.name, role: input.role },
-    'soul-generator: calling Claude CLI',
-  );
+  opts.logger.info({ name: input.name, role: input.role }, 'soul-generator: calling Claude CLI');
 
   const raw = await claudeGenerate(prompt, {
     claudePath: opts.claudePath,
-    timeout: opts.timeout ?? 90_000,
+    timeout: opts.timeout ?? 300_000,
     maxLength: 30_000,
     logger: opts.logger,
   });
@@ -183,8 +180,13 @@ export async function generateSoul(
   }
 
   opts.logger.info(
-    { name: input.name, identityLen: identity.length, soulLen: soul.length, motivationsLen: motivations.length },
-    'soul-generator: generation complete',
+    {
+      name: input.name,
+      identityLen: identity.length,
+      soulLen: soul.length,
+      motivationsLen: motivations.length,
+    },
+    'soul-generator: generation complete'
   );
 
   return { identity, soul, motivations };

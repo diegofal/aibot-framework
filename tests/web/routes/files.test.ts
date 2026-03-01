@@ -1,10 +1,10 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
-import { filesRoutes } from '../../../src/web/routes/files';
 import type { Config } from '../../../src/config';
 import type { Logger } from '../../../src/logger';
+import { filesRoutes } from '../../../src/web/routes/files';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -18,9 +18,7 @@ const TEST_DIR = join(process.cwd(), '.test-files-routes');
 const BOT_WORK_DIR = join(TEST_DIR, 'bot1');
 
 const mockConfig = {
-  bots: [
-    { id: 'bot1', name: 'TestBot', workDir: BOT_WORK_DIR },
-  ],
+  bots: [{ id: 'bot1', name: 'TestBot', workDir: BOT_WORK_DIR }],
   ollama: { models: { primary: 'test' } },
   soul: { dir: join(TEST_DIR, 'soul') },
   productions: { baseDir: TEST_DIR },

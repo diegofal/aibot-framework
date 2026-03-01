@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { claudeGenerate } from './claude-cli';
 import type { Logger } from './logger';
@@ -53,7 +53,8 @@ function gatherExamples(skillsFolderPaths: string[]): string {
       parts.push(`**skill.json:**\n\`\`\`json\n${manifest}\n\`\`\``);
       if (handler) {
         // Truncate long handlers
-        const truncated = handler.length > 2000 ? handler.slice(0, 2000) + '\n// ... truncated' : handler;
+        const truncated =
+          handler.length > 2000 ? `${handler.slice(0, 2000)}\n// ... truncated` : handler;
         parts.push(`**index.ts:**\n\`\`\`typescript\n${truncated}\n\`\`\``);
       }
 
@@ -73,7 +74,7 @@ function buildPrompt(input: SkillGenerationInput, skillsFolderPaths: string[]): 
   const examples = gatherExamples(skillsFolderPaths);
 
   const parts = [
-    'You are an external skill designer for the AIBot Framework. Generate a skill package (skill.json + index.ts) based on the user\'s requirements.',
+    "You are an external skill designer for the AIBot Framework. Generate a skill package (skill.json + index.ts) based on the user's requirements.",
     '',
     '## Output Format',
     'Respond with ONLY a JSON object containing two fields:',
@@ -145,7 +146,7 @@ function buildPrompt(input: SkillGenerationInput, skillsFolderPaths: string[]): 
     `- **Description:** ${input.description}`,
     `- **Purpose:** ${input.purpose}`,
     '',
-    'Respond with the JSON now.',
+    'Respond with the JSON now.'
   );
 
   return parts.join('\n');
@@ -161,18 +162,15 @@ export async function generateSkill(
     timeout?: number;
     skillsFolderPaths: string[];
     logger: Logger;
-  },
+  }
 ): Promise<GeneratedSkill> {
   const prompt = buildPrompt(input, opts.skillsFolderPaths);
 
-  opts.logger.info(
-    { id: input.id, name: input.name },
-    'skill-generator: calling Claude CLI',
-  );
+  opts.logger.info({ id: input.id, name: input.name }, 'skill-generator: calling Claude CLI');
 
   const raw = await claudeGenerate(prompt, {
     claudePath: opts.claudePath,
-    timeout: opts.timeout ?? 90_000,
+    timeout: opts.timeout ?? 300_000,
     maxLength: 50_000,
     logger: opts.logger,
   });
@@ -203,7 +201,7 @@ export async function generateSkill(
 
   opts.logger.info(
     { id: input.id, handlerLen: (handlerCode as string).length },
-    'skill-generator: generation complete',
+    'skill-generator: generation complete'
   );
 
   return {

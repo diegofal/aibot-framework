@@ -1,8 +1,8 @@
 import type { Bot, Context } from 'grammy';
 import type { BotConfig } from '../config';
-import type { BotContext, SeenUser } from './types';
 import type { MemoryFlusher } from './memory-flush';
 import { sendLongMessage } from './telegram-utils';
+import type { BotContext, SeenUser } from './types';
 
 /**
  * Built-in command handlers for Telegram bot
@@ -58,7 +58,10 @@ export function registerBuiltinCommands(
       clearedBots.push(botId);
     }
 
-    ctx.logger.info({ chatId: telegramCtx.chat.id, clearedBots, noFlush }, 'Sessions cleared for all bots');
+    ctx.logger.info(
+      { chatId: telegramCtx.chat.id, clearedBots, noFlush },
+      'Sessions cleared for all bots'
+    );
     await telegramCtx.reply(
       noFlush
         ? '🗑️ Conversation history cleared for all bots. Memory flush skipped.'
@@ -124,7 +127,7 @@ export function registerBuiltinCommands(
 
     const dump = ctx.getSoulLoader(config.id).dumpMemory();
 
-    await sendLongMessage(t => telegramCtx.reply(t), dump);
+    await sendLongMessage((t) => telegramCtx.reply(t), dump);
   });
 }
 
@@ -147,7 +150,11 @@ Use /help to see available commands.`;
 export async function handleHelp(
   ctx: Context,
   config: BotConfig,
-  skillRegistry: { get(skillId: string): { name: string; commands?: Record<string, { description: string }> } | undefined }
+  skillRegistry: {
+    get(
+      skillId: string
+    ): { name: string; commands?: Record<string, { description: string }> } | undefined;
+  }
 ): Promise<void> {
   const lines: string[] = [
     `🤖 *${config.name} - Available Commands*\n`,

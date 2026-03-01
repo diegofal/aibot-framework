@@ -1,8 +1,12 @@
-import { describe, it, expect, beforeEach, jest } from 'bun:test';
-import { ToolExecutor, createToolExecutor, createCollaborationToolExecutor } from '../tool-executor';
+import { beforeEach, describe, expect, it, jest } from 'bun:test';
 import { z } from 'zod';
-import type { Tool, BotContext } from '../types';
 import type { Logger } from '../../logger';
+import {
+  ToolExecutor,
+  createCollaborationToolExecutor,
+  createToolExecutor,
+} from '../tool-executor';
+import type { BotContext, Tool } from '../types';
 
 // Mock logger factory
 const createMockLogger = (): Logger => {
@@ -36,14 +40,15 @@ const createMockTool = (overrides: Partial<Tool> = {}): Tool => ({
 });
 
 // Mock context factory
-const createMockContext = (overrides: Partial<BotContext> = {}): BotContext => ({
-  config: {
-    bots: [{ id: 'test-bot', disabledTools: [] }],
-  },
-  tools: [],
-  logger: createMockLogger(),
-  ...overrides,
-} as unknown as BotContext);
+const createMockContext = (overrides: Partial<BotContext> = {}): BotContext =>
+  ({
+    config: {
+      bots: [{ id: 'test-bot', disabledTools: [] }],
+    },
+    tools: [],
+    logger: createMockLogger(),
+    ...overrides,
+  }) as unknown as BotContext;
 
 describe('ToolExecutor', () => {
   let ctx: BotContext;
@@ -247,10 +252,12 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string(), age: z.number() }),
         },
-        execute: jest.fn(() => Promise.resolve({
-          success: true,
-          content: '{"name": "John", "age": 30}',
-        })),
+        execute: jest.fn(() =>
+          Promise.resolve({
+            success: true,
+            content: '{"name": "John", "age": 30}',
+          })
+        ),
       });
       ctx.tools = [tool];
 
@@ -271,10 +278,12 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string(), age: z.number() }),
         },
-        execute: jest.fn(() => Promise.resolve({
-          success: true,
-          content: '{"name": "John", "age": "not a number"}',
-        })),
+        execute: jest.fn(() =>
+          Promise.resolve({
+            success: true,
+            content: '{"name": "John", "age": "not a number"}',
+          })
+        ),
       });
       ctx.tools = [tool];
 
@@ -296,10 +305,12 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string() }),
         },
-        execute: jest.fn(() => Promise.resolve({
-          success: true,
-          content: '{"invalid": true}',
-        })),
+        execute: jest.fn(() =>
+          Promise.resolve({
+            success: true,
+            content: '{"invalid": true}',
+          })
+        ),
       });
       ctx.tools = [tool];
 
@@ -327,10 +338,12 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string() }),
         },
-        execute: jest.fn(() => Promise.resolve({
-          success: false,
-          content: 'some error',
-        })),
+        execute: jest.fn(() =>
+          Promise.resolve({
+            success: false,
+            content: 'some error',
+          })
+        ),
       });
       ctx.tools = [tool];
 
@@ -343,10 +356,12 @@ describe('ToolExecutor', () => {
 
     it('should skip validation when no schema defined', async () => {
       const tool = createMockTool({
-        execute: jest.fn(() => Promise.resolve({
-          success: true,
-          content: 'any content',
-        })),
+        execute: jest.fn(() =>
+          Promise.resolve({
+            success: true,
+            content: 'any content',
+          })
+        ),
       });
       ctx.tools = [tool];
 
@@ -367,10 +382,12 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.string(),
         },
-        execute: jest.fn(() => Promise.resolve({
-          success: true,
-          content: 'plain text response',
-        })),
+        execute: jest.fn(() =>
+          Promise.resolve({
+            success: true,
+            content: 'plain text response',
+          })
+        ),
       });
       ctx.tools = [tool];
 
@@ -443,7 +460,8 @@ describe('ToolExecutor', () => {
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       await executor.execute('test_tool', {});
 
-      expect(execute).toHaveBeenNthCalledWith(2, 
+      expect(execute).toHaveBeenNthCalledWith(
+        2,
         expect.objectContaining({
           _retryAttempt: 1,
           _previousError: expect.any(String),
@@ -453,10 +471,12 @@ describe('ToolExecutor', () => {
     });
 
     it('should return error after exhausting retries', async () => {
-      const execute = jest.fn(() => Promise.resolve({
-        success: true,
-        content: '{"invalid": true}',
-      }));
+      const execute = jest.fn(() =>
+        Promise.resolve({
+          success: true,
+          content: '{"invalid": true}',
+        })
+      );
 
       const tool = createMockTool({
         definition: {
@@ -538,10 +558,12 @@ describe('ToolExecutor', () => {
     });
 
     it('should not retry tool execution failures (only validation failures)', async () => {
-      const execute = jest.fn(() => Promise.resolve({
-        success: false,
-        content: 'tool returned error',
-      }));
+      const execute = jest.fn(() =>
+        Promise.resolve({
+          success: false,
+          content: 'tool returned error',
+        })
+      );
 
       const tool = createMockTool({
         definition: {
@@ -623,10 +645,12 @@ describe('ToolExecutor', () => {
 
     it('should truncate long results in logs', async () => {
       const tool = createMockTool({
-        execute: jest.fn(() => Promise.resolve({
-          success: true,
-          content: 'x'.repeat(3000),
-        })),
+        execute: jest.fn(() =>
+          Promise.resolve({
+            success: true,
+            content: 'x'.repeat(3000),
+          })
+        ),
       });
       ctx.tools = [tool];
 
@@ -667,13 +691,21 @@ describe('ToolExecutor', () => {
       const tool1 = createMockTool({
         definition: {
           type: 'function',
-          function: { name: 'tool1', description: 'Tool 1', parameters: { type: 'object', properties: {} } },
+          function: {
+            name: 'tool1',
+            description: 'Tool 1',
+            parameters: { type: 'object', properties: {} },
+          },
         },
       });
       const tool2 = createMockTool({
         definition: {
           type: 'function',
-          function: { name: 'tool2', description: 'Tool 2', parameters: { type: 'object', properties: {} } },
+          function: {
+            name: 'tool2',
+            description: 'Tool 2',
+            parameters: { type: 'object', properties: {} },
+          },
         },
       });
       ctx.tools = [tool1, tool2];
@@ -733,19 +765,31 @@ describe('ToolExecutor', () => {
       const delegateTool = createMockTool({
         definition: {
           type: 'function',
-          function: { name: 'delegate_to_bot', description: 'Delegate', parameters: { type: 'object', properties: {} } },
+          function: {
+            name: 'delegate_to_bot',
+            description: 'Delegate',
+            parameters: { type: 'object', properties: {} },
+          },
         },
       });
       const collaborateTool = createMockTool({
         definition: {
           type: 'function',
-          function: { name: 'collaborate', description: 'Collaborate', parameters: { type: 'object', properties: {} } },
+          function: {
+            name: 'collaborate',
+            description: 'Collaborate',
+            parameters: { type: 'object', properties: {} },
+          },
         },
       });
       const normalTool = createMockTool({
         definition: {
           type: 'function',
-          function: { name: 'normal_tool', description: 'Normal', parameters: { type: 'object', properties: {} } },
+          function: {
+            name: 'normal_tool',
+            description: 'Normal',
+            parameters: { type: 'object', properties: {} },
+          },
         },
       });
       ctx.tools = [delegateTool, collaborateTool, normalTool];
@@ -768,9 +812,7 @@ describe('ToolExecutor', () => {
 
       await executor.execute('test_tool', {});
 
-      expect(errorHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ phase: 'lookup' })
-      );
+      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({ phase: 'lookup' }));
     });
 
     it('should classify validation failure as validation phase', async () => {
@@ -784,10 +826,12 @@ describe('ToolExecutor', () => {
           },
           outputSchema: z.object({ name: z.string() }),
         },
-        execute: jest.fn(() => Promise.resolve({
-          success: true,
-          content: '{"invalid": true}',
-        })),
+        execute: jest.fn(() =>
+          Promise.resolve({
+            success: true,
+            content: '{"invalid": true}',
+          })
+        ),
       });
       ctx.tools = [tool];
 
@@ -797,9 +841,7 @@ describe('ToolExecutor', () => {
 
       await executor.execute('test_tool', {});
 
-      expect(errorHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ phase: 'validation' })
-      );
+      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({ phase: 'validation' }));
     });
 
     it('should classify execution error as execution phase', async () => {
@@ -814,9 +856,7 @@ describe('ToolExecutor', () => {
 
       await executor.execute('test_tool', {});
 
-      expect(errorHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ phase: 'execution' })
-      );
+      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({ phase: 'execution' }));
     });
   });
 });

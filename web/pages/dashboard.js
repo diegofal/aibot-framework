@@ -7,9 +7,8 @@ function formatDuration(ms) {
 }
 
 function statusBadge(status) {
-  const cls = status === 'completed' ? 'badge-ok'
-    : status === 'error' ? 'badge-error'
-    : 'badge-disabled';
+  const cls =
+    status === 'completed' ? 'badge-ok' : status === 'error' ? 'badge-error' : 'badge-disabled';
   return `<span class="badge ${cls}">${status}</span>`;
 }
 
@@ -22,12 +21,13 @@ function modeBadge(mode) {
 
 function renderToolCallsTable(toolCalls) {
   if (!toolCalls || toolCalls.length === 0) return '';
-  return toolCalls.map(tc => {
-    const badge = tc.success
-      ? '<span class="badge badge-ok">OK</span>'
-      : '<span class="badge badge-error">FAIL</span>';
-    const argsStr = JSON.stringify(tc.args || {}, null, 2);
-    return `<div class="tool-call-item">
+  return toolCalls
+    .map((tc) => {
+      const badge = tc.success
+        ? '<span class="badge badge-ok">OK</span>'
+        : '<span class="badge badge-error">FAIL</span>';
+      const argsStr = JSON.stringify(tc.args || {}, null, 2);
+      return `<div class="tool-call-item">
       <div class="tool-call-header">
         <span style="font-family:monospace;font-weight:600">${escapeHtml(tc.name)}</span> ${badge}
       </div>
@@ -40,7 +40,8 @@ function renderToolCallsTable(toolCalls) {
         <pre>${escapeHtml(tc.result || '')}</pre>
       </details>
     </div>`;
-  }).join('');
+    })
+    .join('');
 }
 
 function renderDetailRow(r, colspan) {
@@ -64,7 +65,7 @@ function renderDetailRow(r, colspan) {
   if (r.plan && r.plan.length > 0) {
     sections.push(`<div class="result-section">
       <div class="result-section-title">Plan</div>
-      <ol style="margin:0;padding-left:20px;font-size:13px">${r.plan.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+      <ol style="margin:0;padding-left:20px;font-size:13px">${r.plan.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
     </div>`);
   }
 
@@ -91,7 +92,9 @@ function renderResultsTable(results) {
     <table class="results-table">
       <thead><tr><th>Bot</th><th>Status</th><th>Time</th><th>Summary</th><th></th></tr></thead>
       <tbody>
-        ${results.map((r, i) => `
+        ${results
+          .map(
+            (r, i) => `
           <tr class="result-row" data-idx="${i}" data-bot-id="${escapeHtml(r.botId || '')}">
             <td>${escapeHtml(r.botName)}</td>
             <td>${statusBadge(r.status)}${r.retryAttempt > 0 ? ` <span class="badge badge-error" style="font-size:10px">retry #${r.retryAttempt}</span>` : ''}</td>
@@ -99,7 +102,9 @@ function renderResultsTable(results) {
             <td class="text-dim text-sm" style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.summary?.slice(0, 120) || '')}</td>
             <td>${r.status === 'error' ? '<button class="btn btn-sm btn-retry">Retry</button>' : ''}</td>
           </tr>
-        `).join('')}
+        `
+          )
+          .join('')}
       </tbody>
     </table>
   `;
@@ -121,20 +126,21 @@ function updateResultRow(tr, result, idx) {
   cells[1].innerHTML = statusBadge(result.status);
   cells[2].textContent = formatDuration(result.durationMs);
   cells[3].textContent = result.summary?.slice(0, 120) || '';
-  cells[4].innerHTML = result.status === 'error' ? '<button class="btn btn-sm btn-retry">Retry</button>' : '';
+  cells[4].innerHTML =
+    result.status === 'error' ? '<button class="btn btn-sm btn-retry">Retry</button>' : '';
 }
 
 function attachResultRowListeners(container, results) {
   const rows = container.querySelectorAll('.result-row');
-  rows.forEach(row => {
+  rows.forEach((row) => {
     row.addEventListener('click', (e) => {
       if (e.target.closest('.btn-retry')) return;
-      const idx = parseInt(row.dataset.idx, 10);
+      const idx = Number.parseInt(row.dataset.idx, 10);
       const existing = row.nextElementSibling;
-      const isOpen = existing && existing.classList.contains('result-detail');
+      const isOpen = existing?.classList.contains('result-detail');
 
       // Collapse any open detail row
-      container.querySelectorAll('.result-detail').forEach(el => el.remove());
+      container.querySelectorAll('.result-detail').forEach((el) => el.remove());
 
       // If clicking the same row that was open, just close it
       if (isOpen) return;
@@ -151,7 +157,7 @@ function attachRetryListeners(container, results) {
     if (!btn) return;
     const row = btn.closest('tr.result-row');
     if (!row) return;
-    const idx = parseInt(row.dataset.idx, 10);
+    const idx = Number.parseInt(row.dataset.idx, 10);
     const botId = row.dataset.botId;
     if (!botId) return;
 
@@ -160,7 +166,7 @@ function attachRetryListeners(container, results) {
 
     // Remove any existing error rows for this row
     const nextEl = row.nextElementSibling;
-    if (nextEl && nextEl.classList.contains('retry-error-row')) nextEl.remove();
+    if (nextEl?.classList.contains('retry-error-row')) nextEl.remove();
 
     try {
       const res = await api(`/api/agent-loop/run/${encodeURIComponent(botId)}`, { method: 'POST' });
@@ -176,7 +182,7 @@ function attachRetryListeners(container, results) {
 
       // Collapse any open detail row for this result
       const detail = row.nextElementSibling;
-      if (detail && detail.classList.contains('result-detail')) detail.remove();
+      if (detail?.classList.contains('result-detail')) detail.remove();
     } catch (err) {
       btn.disabled = false;
       btn.textContent = 'Retry';
@@ -198,9 +204,7 @@ export async function renderDashboard(el) {
     ? '<span class="badge badge-running">Enabled</span>'
     : '<span class="badge badge-stopped">Disabled</span>';
 
-  const nextRunText = loopState.nextRunAt
-    ? timeAgo(loopState.nextRunAt, true)
-    : '--';
+  const nextRunText = loopState.nextRunAt ? timeAgo(loopState.nextRunAt, true) : '--';
 
   const lastRunText = loopState.lastRunAt
     ? new Date(loopState.lastRunAt).toLocaleString()
@@ -215,12 +219,13 @@ export async function renderDashboard(el) {
     : '';
 
   const inboxCount = inboxData.count ?? 0;
-  const inboxBanner = inboxCount > 0
-    ? `<div class="inbox-pending-banner">
+  const inboxBanner =
+    inboxCount > 0
+      ? `<div class="inbox-pending-banner">
         <span>Pending Input (${inboxCount}) — Bots are waiting for your input.</span>
         <a href="#/inbox" class="btn btn-sm">View Inbox</a>
       </div>`
-    : '';
+      : '';
 
   el.innerHTML = `
     <div class="page-title">Dashboard</div>
@@ -246,26 +251,32 @@ export async function renderDashboard(el) {
         <span>Last run: <strong style="color:var(--text)">${lastRunText}</strong></span>
       </div>
 
-      ${loopState.botSchedules?.length ? `
+      ${
+        loopState.botSchedules?.length
+          ? `
         <div class="text-dim text-sm mb-16" style="font-weight:500">Bot Schedules</div>
         <table class="results-table" style="margin-bottom:16px">
           <thead><tr><th>Bot</th><th>Mode</th><th>Activity</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Retries</th><th>Strategist</th></tr></thead>
           <tbody>
-            ${loopState.botSchedules.map(s => {
-              const isContinuous = s.mode === 'continuous';
-              const stratInfo = s.lastFocus
-                ? `<span class="text-dim text-sm" title="${escapeHtml(s.lastFocus)}" style="cursor:help;max-width:180px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.lastFocus.slice(0, 60))}</span>`
-                : '<span class="text-dim">--</span>';
-              const cyclesLeft = s.strategistCyclesUntilNext != null
-                ? `<span class="text-dim text-sm" style="margin-left:4px">(${s.strategistCyclesUntilNext} cycles left)</span>`
-                : '';
-              const nextRunCell = isContinuous
-                ? `<span class="text-dim text-sm">Cycle #${s.continuousCycleCount || 0}</span>`
-                : (s.nextRunAt ? timeAgo(s.nextRunAt, true) : '--');
-              const activityCell = s.isExecutingLoop
-                ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing</span>'
-                : '<span class="text-dim">Idle</span>';
-              return `
+            ${loopState.botSchedules
+              .map((s) => {
+                const isContinuous = s.mode === 'continuous';
+                const stratInfo = s.lastFocus
+                  ? `<span class="text-dim text-sm" title="${escapeHtml(s.lastFocus)}" style="cursor:help;max-width:180px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.lastFocus.slice(0, 60))}</span>`
+                  : '<span class="text-dim">--</span>';
+                const cyclesLeft =
+                  s.strategistCyclesUntilNext != null
+                    ? `<span class="text-dim text-sm" style="margin-left:4px">(${s.strategistCyclesUntilNext} cycles left)</span>`
+                    : '';
+                const nextRunCell = isContinuous
+                  ? `<span class="text-dim text-sm">Cycle #${s.continuousCycleCount || 0}</span>`
+                  : s.nextRunAt
+                    ? timeAgo(s.nextRunAt, true)
+                    : '--';
+                const activityCell = s.isExecutingLoop
+                  ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing</span>'
+                  : '<span class="text-dim">Idle</span>';
+                return `
               <tr>
                 <td>${escapeHtml(s.botName)}</td>
                 <td>${modeBadge(s.mode || 'periodic')}</td>
@@ -277,15 +288,19 @@ export async function renderDashboard(el) {
                 <td>${s.retryCount > 0 ? `<span class="badge badge-error">${s.retryCount} retries</span>` : '<span class="text-dim">0</span>'}</td>
                 <td>${stratInfo}${cyclesLeft}</td>
               </tr>`;
-            }).join('')}
+              })
+              .join('')}
           </tbody>
         </table>
-      ` : ''}
+      `
+          : ''
+      }
 
       <div id="loop-results">
-        ${loopState.lastResults?.length
-          ? `<div class="text-dim text-sm mb-16" style="font-weight:500">Last Results</div>${renderResultsTable(loopState.lastResults)}`
-          : '<p class="text-dim text-sm">No runs recorded yet</p>'
+        ${
+          loopState.lastResults?.length
+            ? `<div class="text-dim text-sm mb-16" style="font-weight:500">Last Results</div>${renderResultsTable(loopState.lastResults)}`
+            : '<p class="text-dim text-sm">No runs recorded yet</p>'
         }
       </div>
     </div>
@@ -319,9 +334,7 @@ export async function renderDashboard(el) {
       if (res.error) {
         resultsDiv.innerHTML = `<p class="text-dim text-sm" style="color:var(--red)">Error: ${escapeHtml(res.error)}</p>`;
       } else {
-        resultsDiv.innerHTML =
-          `<div class="text-dim text-sm mb-16" style="font-weight:500">Last Results</div>` +
-          renderResultsTable(res.results);
+        resultsDiv.innerHTML = `<div class="text-dim text-sm mb-16" style="font-weight:500">Last Results</div>${renderResultsTable(res.results)}`;
         attachResultRowListeners(resultsDiv, res.results);
         attachRetryListeners(resultsDiv, res.results);
       }
@@ -379,11 +392,18 @@ export async function renderDashboard(el) {
             }
           }
         }
-      } catch (_) { /* ignore refresh errors */ }
+      } catch (_) {
+        /* ignore refresh errors */
+      }
     }, 5000);
   }
   if (loopState.running || loopState.draining) startAutoRefresh();
 
   // Cleanup on navigation (el gets replaced, timer becomes orphan)
-  el._dashboardCleanup = () => { if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; } };
+  el._dashboardCleanup = () => {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  };
 }

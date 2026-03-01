@@ -46,7 +46,8 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `system-prompt-builder.ts` | Composición unificada de system prompts (modo `conversation` y `collaboration`) |
 | `memory-flush.ts` | Flush de sesión a daily memory log |
 | `group-activation.ts` | Checks de relevancia en grupos: deference, LLM relevance, broadcast |
-| `conversation-pipeline.ts` | Pipeline core: session expiry, RAG prefetch, LLM call, persist, reply |
+| `context-compaction.ts` | LLM-based context compaction: token estimation, truncation, summarization, overflow retry |
+| `conversation-pipeline.ts` | Pipeline core: session expiry, RAG prefetch, compaction, LLM call, persist, reply |
 | `conversation-gate.ts` | Pre-condiciones de mensajes: auth, grupo, bot-to-bot, ask_human |
 | `ask-permission-store.ts` | Cola de permisos: request → approve/deny → consume en agent loop |
 | `collaboration.ts` | Bot-to-bot: visible, internal, delegation, multi-turn |
@@ -81,7 +82,8 @@ BotManager (facade)
   ├── SystemPromptBuilder     (lee ToolRegistry.getDefinitions())
   ├── MemoryFlusher           (sin deps de módulo)
   ├── GroupActivation         (sin deps de módulo)
-  ├── ConversationPipeline    (usa SystemPromptBuilder, MemoryFlusher, ToolRegistry)
+  ├── ContextCompactor        (usa MemoryFlusher, LLMClient, SessionManager)
+  ├── ConversationPipeline    (usa SystemPromptBuilder, MemoryFlusher, ToolRegistry, ContextCompactor)
   ├── CollaborationManager    (usa SystemPromptBuilder, ToolRegistry)
   ├── TelegramPoller          (polling loop, inyectado en startTelegramBot)
   ├── BotResetService         (reset soul/memory/sessions/stores)

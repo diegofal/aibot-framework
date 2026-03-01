@@ -1,6 +1,6 @@
-import type { Tool, ToolResult } from './types';
-import type { MemoryManager } from '../memory/manager';
 import type { Logger } from '../logger';
+import type { MemoryManager } from '../memory/manager';
+import type { Tool, ToolResult } from './types';
 
 export function createMemoryGetTool(memoryManager: MemoryManager): Tool {
   return {
@@ -32,10 +32,7 @@ export function createMemoryGetTool(memoryManager: MemoryManager): Tool {
       },
     },
 
-    async execute(
-      args: Record<string, unknown>,
-      logger: Logger,
-    ): Promise<ToolResult> {
+    async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const path = String(args.path ?? '').trim();
       if (!path) {
         return { success: false, content: 'Missing required parameter: path' };
@@ -50,7 +47,8 @@ export function createMemoryGetTool(memoryManager: MemoryManager): Tool {
       const lines = typeof args.lines === 'number' ? args.lines : undefined;
 
       try {
-        const content = memoryManager.getFileLines(path, from, lines);
+        const botId = typeof args._botId === 'string' ? args._botId : undefined;
+        const content = memoryManager.getFileLines(path, from, lines, botId);
 
         if (content === null) {
           return { success: true, content: `File not found: ${path}` };

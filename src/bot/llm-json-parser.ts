@@ -23,7 +23,7 @@ export interface ParseLLMJsonOptions<T> {
 export function parseLLMJson<T>(
   raw: string,
   logger: Pick<Logger, 'warn'>,
-  opts: ParseLLMJsonOptions<T>,
+  opts: ParseLLMJsonOptions<T>
 ): T | null {
   let cleaned = raw.trim();
 
@@ -46,15 +46,12 @@ export function parseLLMJson<T>(
     if (result === null) {
       logger.warn(
         { raw: raw.slice(0, 300) },
-        `Agent loop: ${opts.label} result missing required fields`,
+        `Agent loop: ${opts.label} result missing required fields`
       );
     }
     return result;
   } catch {
-    logger.warn(
-      { raw: raw.slice(0, 500) },
-      `Agent loop: failed to parse ${opts.label} JSON`,
-    );
+    logger.warn({ raw: raw.slice(0, 500) }, `Agent loop: failed to parse ${opts.label} JSON`);
     return null;
   }
 }

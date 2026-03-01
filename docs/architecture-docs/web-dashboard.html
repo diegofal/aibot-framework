@@ -325,6 +325,18 @@
               <td>Manually trigger agent loop for a single bot (must be running)</td>
               <td><code>agent-loop.ts</code></td>
             </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agent-loop/llm-stats</code></td>
+              <td>Per-bot LLM diagnostics: success/fail/fallback counts, avg duration, caller breakdown</td>
+              <td><code>agent-loop.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agent-loop/llm-stats/:botId</code></td>
+              <td>LLM diagnostics for a single bot</td>
+              <td><code>agent-loop.ts</code></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -911,6 +923,24 @@
               <td>Proxy a test chat through OllamaClient (body: <code>{ message, model? }</code>)</td>
               <td><code>integrations.ts</code></td>
             </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/integrations/claude-cli/status</code></td>
+              <td>Claude CLI health check: version, path, latency</td>
+              <td><code>integrations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/integrations/claude-cli/chat</code></td>
+              <td>Test chat through Claude CLI without tools (body: <code>{ message }</code>)</td>
+              <td><code>integrations.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/integrations/claude-cli/chat-with-tools</code></td>
+              <td>Test chat through Claude CLI with MCP tool bridge (body: <code>{ message, tools? }</code>)</td>
+              <td><code>integrations.ts</code></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1040,13 +1070,23 @@
 
       <pre><code>// Activity event types
 tool:start | tool:end | tool:error    // Tool execution lifecycle
-llm:start | llm:end                   // LLM call lifecycle
+llm:start | llm:end                   // LLM call lifecycle (include backend + caller fields)
+llm:error | llm:fallback              // LLM failure and primary→fallback transitions
 agent:phase | agent:idle | agent:result // Agent loop phases
 memory:flush | memory:rag             // Memory operations
 collab:start | collab:end             // Bot-to-bot collaboration
+compaction                            // Context compaction
 
 // ActivityEvent interface
-{ type, botId, timestamp, phase?, data? }</code></pre>
+{ type, botId, timestamp, phase?, data? }
+
+// LLM event data fields (llm:start/end/error)
+{ backend: 'ollama'|'claude-cli', caller: 'conversation'|'planner'|'strategist'|'executor'|'feedback', durationMs? }
+
+// LlmStatsTracker (ActivityStream.llmStats)
+// Per-bot aggregate: totalCalls, successCount, failCount, fallbackCount,
+//   avgDurationMs, lastCallAt, lastError, callerBreakdown
+// API: GET /api/agent-loop/llm-stats[/:botId]</code></pre>
 
       <!-- ============================================================
            Section 4: SPA Frontend Pages

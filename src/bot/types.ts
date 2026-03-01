@@ -1,8 +1,10 @@
 import type { Bot, Context } from 'grammy';
 import type { AgentRegistry } from '../agent-registry';
-import type { CollaborationTracker } from '../collaboration-tracker';
 import type { CollaborationSessionManager } from '../collaboration-session';
+import type { CollaborationTracker } from '../collaboration-tracker';
 import type { BotConfig, Config } from '../config';
+import type { ConversationsService } from '../conversations/service';
+import type { LLMClient } from '../core/llm-client';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import type { Logger } from '../logger';
@@ -10,17 +12,15 @@ import type { MediaHandler } from '../media';
 import type { MemoryManager } from '../memory/manager';
 import type { MessageBuffer } from '../message-buffer';
 import type { OllamaClient } from '../ollama';
+import type { ProductionsService } from '../productions/service';
 import type { SessionManager } from '../session';
 import type { SoulLoader } from '../soul';
 import type { Tool, ToolDefinition } from '../tools/types';
-import type { LLMClient } from '../core/llm-client';
+import type { ActivityStream } from './activity-stream';
+import type { AgentFeedbackStore } from './agent-feedback-store';
 import type { AskHumanStore } from './ask-human-store';
 import type { AskPermissionStore } from './ask-permission-store';
-import type { AgentFeedbackStore } from './agent-feedback-store';
 import type { ToolAuditLog } from './tool-audit-log';
-import type { ProductionsService } from '../productions/service';
-import type { ConversationsService } from '../conversations/service';
-import type { ActivityStream } from './activity-stream';
 
 export interface SeenUser {
   id: number;

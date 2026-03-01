@@ -3,14 +3,14 @@
  * Verifies integration between SkillMdLoader and external-skill-loader
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  discoverSkillDirsExtended,
   hasSkillMd,
   loadDeclarativeSkill,
-  discoverSkillDirsExtended,
 } from '../../../src/core/skill-md-adapter/framework-bridge';
 
 const mockLogger = {
@@ -100,8 +100,9 @@ Test skill instructions.
       const skillDir = join(tempDir, 'empty');
       mkdirSync(skillDir, { recursive: true });
 
-      expect(loadDeclarativeSkill(skillDir, mockLogger as any))
-        .rejects.toThrow('SKILL.md not found');
+      expect(loadDeclarativeSkill(skillDir, mockLogger as any)).rejects.toThrow(
+        'SKILL.md not found'
+      );
     });
 
     it('should include binary requirements in warnings', async () => {
@@ -155,8 +156,8 @@ metadata:
 
       expect(results).toHaveLength(2);
 
-      const jsonResult = results.find(r => r.dir === jsonSkill);
-      const mdResult = results.find(r => r.dir === mdSkill);
+      const jsonResult = results.find((r) => r.dir === jsonSkill);
+      const mdResult = results.find((r) => r.dir === mdSkill);
 
       expect(jsonResult?.type).toBe('json');
       expect(mdResult?.type).toBe('skillmd');
@@ -168,10 +169,7 @@ metadata:
       mkdirSync(bothSkill, { recursive: true });
 
       // Create both files
-      writeFileSync(
-        join(bothSkill, 'skill.json'),
-        JSON.stringify({ id: 'both', tools: [] })
-      );
+      writeFileSync(join(bothSkill, 'skill.json'), JSON.stringify({ id: 'both', tools: [] }));
       writeFileSync(join(bothSkill, 'SKILL.md'), '---\nname: both\n---\n');
 
       const results = discoverSkillDirsExtended([parentDir]);

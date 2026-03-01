@@ -1,7 +1,7 @@
 import type { Logger } from '../logger';
-import type { Tool } from '../tools/types';
-import { DynamicToolStore, type DynamicToolMeta } from '../tools/dynamic-tool-store';
 import { loadDynamicTool } from '../tools/dynamic-tool-loader';
+import type { DynamicToolMeta, DynamicToolStore } from '../tools/dynamic-tool-store';
+import type { Tool } from '../tools/types';
 import type { BotContext } from './types';
 
 /**
@@ -15,7 +15,7 @@ export class DynamicToolRegistry {
   constructor(
     private ctx: BotContext,
     private store: DynamicToolStore,
-    private logger: Logger,
+    private logger: Logger
   ) {}
 
   /**
@@ -32,7 +32,7 @@ export class DynamicToolRegistry {
     if (approved.length > 0) {
       this.logger.info(
         { count: approved.length, names: approved.map((m) => m.name) },
-        'Dynamic tools loaded',
+        'Dynamic tools loaded'
       );
     }
   }
@@ -72,7 +72,11 @@ export class DynamicToolRegistry {
     for (const [id, tool] of this.loadedTools) {
       const entry = this.store.get(id);
       if (!entry) continue;
-      if (entry.meta.scope === 'all' || entry.meta.scope === botId || entry.meta.createdBy === botId) {
+      if (
+        entry.meta.scope === 'all' ||
+        entry.meta.scope === botId ||
+        entry.meta.createdBy === botId
+      ) {
         result.push(tool);
       }
     }
@@ -98,6 +102,30 @@ export class DynamicToolRegistry {
   }
 
   /**
+   * Remove all dynamic tools created by a specific bot from runtime and disk.
+   * Used during bot reset to ensure a clean slate.
+   */
+  clearForBot(botId: string): number {
+    // 1. Remove from runtime (loadedTools + ctx arrays)
+    const toRemove: string[] = [];
+    for (const [id] of this.loadedTools) {
+      const entry = this.store.get(id);
+      if (entry && entry.meta.createdBy === botId) {
+        toRemove.push(id);
+      }
+    }
+    for (const id of toRemove) {
+      this.removeTool(id);
+    }
+
+    // 2. Remove from disk (covers tools not currently loaded, e.g. pending/rejected)
+    const diskCount = this.store.deleteByCreator(botId);
+
+    this.logger.info({ botId, removed: diskCount }, 'Dynamic tools cleared for bot');
+    return diskCount;
+  }
+
+  /**
    * Get definitions for a specific bot.
    */
   getDefinitionsForBot(botId: string): import('../tools/types').ToolDefinition[] {
@@ -109,7 +137,10 @@ export class DynamicToolRegistry {
     if (!entry) return;
 
     try {
-      const storePath = (this.ctx.config as any).dynamicTools?.storePath ?? './data/tools';
+      const storePath = (this.ctx.config as Record<string, unknown>).dynamicTools
+        ? (((this.ctx.config as Record<string, unknown>).dynamicTools as Record<string, string>)
+            .storePath ?? './data/tools')
+        : './data/tools';
       const tool = loadDynamicTool(meta, entry.source, storePath);
       this.loadedTools.set(meta.id, tool);
 
@@ -119,7 +150,7 @@ export class DynamicToolRegistry {
     } catch (err) {
       this.logger.error(
         { toolId: meta.id, error: err instanceof Error ? err.message : String(err) },
-        'Failed to load dynamic tool',
+        'Failed to load dynamic tool'
       );
     }
   }

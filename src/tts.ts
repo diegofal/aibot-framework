@@ -12,9 +12,9 @@ export interface TtsResult {
  */
 export function stripMarkdown(text: string): string {
   return text
-    .replace(/^#{1,6}\s+/gm, '')        // headers
+    .replace(/^#{1,6}\s+/gm, '') // headers
     .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1') // bold/italic
-    .replace(/`{1,3}[^`]*`{1,3}/g, '')  // inline code & code blocks
+    .replace(/`{1,3}[^`]*`{1,3}/g, '') // inline code & code blocks
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // images → keep alt (before links)
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links → keep label
     .trim();
@@ -25,7 +25,7 @@ export function stripMarkdown(text: string): string {
  */
 export function truncateText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength - 3) + '...';
+  return `${text.slice(0, maxLength - 3)}...`;
 }
 
 /**
@@ -35,7 +35,7 @@ export function truncateText(text: string, maxLength: number): string {
 export async function generateSpeech(
   text: string,
   config: TtsConfig,
-  logger: Logger,
+  logger: Logger
 ): Promise<TtsResult> {
   const start = Date.now();
 
@@ -88,7 +88,7 @@ export async function generateSpeech(
 
     logger.info(
       { latencyMs, textLength: processedText.length, audioBytes: audioBuffer.length },
-      'TTS audio generated',
+      'TTS audio generated'
     );
 
     return { audioBuffer, latencyMs };

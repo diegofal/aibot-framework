@@ -1,17 +1,17 @@
+import type { CalendarConfig } from '../config';
+import type { Logger } from '../logger';
+import { apiRequest } from './api-client';
+import { TtlCache } from './cache';
 import type { Tool, ToolResult } from './types';
 import { wrapExternalContent } from './types';
-import { TtlCache } from './cache';
-import { apiRequest } from './api-client';
-import type { Logger } from '../logger';
-import type { CalendarConfig } from '../config';
 
 // --- Provider abstraction ---
 
 interface CalendarEvent {
   id: string;
   title: string;
-  start: string;   // ISO 8601
-  end: string;      // ISO 8601
+  start: string; // ISO 8601
+  end: string; // ISO 8601
   description?: string;
   location?: string;
   attendees?: string[];
@@ -41,16 +41,16 @@ interface CalendarProvider {
 class CalendlyProvider implements CalendarProvider {
   constructor(
     private apiKey: string,
-    private timeout: number,
+    private timeout: number
   ) {}
 
   private async getUserUri(): Promise<string> {
     const result = await apiRequest<{ resource: { uri: string } }>(
       'https://api.calendly.com/users/me',
       {
-        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        headers: { Authorization: `Bearer ${this.apiKey}` },
         timeout: this.timeout,
-      },
+      }
     );
     if (!result.ok) throw new Error(`Calendly auth failed: ${result.status}`);
     return result.data.resource.uri;
@@ -75,7 +75,7 @@ class CalendlyProvider implements CalendarProvider {
         location?: { location?: string };
       }>;
     }>(url.toString(), {
-      headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       timeout: this.timeout,
     });
 
@@ -100,7 +100,7 @@ class CalendlyProvider implements CalendarProvider {
     const result = await apiRequest<{
       collection: Array<{ start_time: string; end_time: string }>;
     }>(url.toString(), {
-      headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       timeout: this.timeout,
     });
 
@@ -116,7 +116,9 @@ class CalendlyProvider implements CalendarProvider {
   async scheduleEvent(_event: NewEvent): Promise<CalendarEvent> {
     // Calendly doesn't support creating events via API — it's a scheduling link platform.
     // Return a helpful message directing to use scheduling links.
-    throw new Error('Calendly does not support direct event creation via API. Use scheduling links instead.');
+    throw new Error(
+      'Calendly does not support direct event creation via API. Use scheduling links instead.'
+    );
   }
 }
 
@@ -128,7 +130,7 @@ class GoogleCalendarProvider implements CalendarProvider {
   constructor(
     private apiKey: string,
     calendarId: string | undefined,
-    private timeout: number,
+    private timeout: number
   ) {
     this.calendarId = calendarId || 'primary';
   }
@@ -156,11 +158,12 @@ class GoogleCalendarProvider implements CalendarProvider {
         attendees?: Array<{ email: string }>;
       }>;
     }>(url.toString(), {
-      headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       timeout: this.timeout,
     });
 
-    if (!result.ok) throw new Error(`Google Calendar API error: ${result.status} ${result.message}`);
+    if (!result.ok)
+      throw new Error(`Google Calendar API error: ${result.status} ${result.message}`);
 
     return (result.data.items ?? []).map((e) => ({
       id: e.id,
@@ -180,7 +183,7 @@ class GoogleCalendarProvider implements CalendarProvider {
       calendars?: Record<string, { busy?: Array<{ start: string; end: string }> }>;
     }>(url, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       body: {
         timeMin: start,
         timeMax: end,
@@ -189,7 +192,8 @@ class GoogleCalendarProvider implements CalendarProvider {
       timeout: this.timeout,
     });
 
-    if (!result.ok) throw new Error(`Google Calendar API error: ${result.status} ${result.message}`);
+    if (!result.ok)
+      throw new Error(`Google Calendar API error: ${result.status} ${result.message}`);
 
     const calData = result.data.calendars?.[this.calendarId];
     return (calData?.busy ?? []).map((b) => ({ start: b.start, end: b.end }));
@@ -217,12 +221,13 @@ class GoogleCalendarProvider implements CalendarProvider {
       htmlLink?: string;
     }>(`${this.baseUrl}/events`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       body,
       timeout: this.timeout,
     });
 
-    if (!result.ok) throw new Error(`Google Calendar API error: ${result.status} ${result.message}`);
+    if (!result.ok)
+      throw new Error(`Google Calendar API error: ${result.status} ${result.message}`);
 
     return {
       id: result.data.id,
@@ -250,7 +255,8 @@ function formatEvent(event: CalendarEvent, index: number): string {
   const lines = [`${index + 1}. ${event.title}`, `   ${start} — ${end}`];
   if (event.location) lines.push(`   Location: ${event.location}`);
   if (event.description) {
-    const desc = event.description.length > 150 ? event.description.slice(0, 150) + '...' : event.description;
+    const desc =
+      event.description.length > 150 ? `${event.description.slice(0, 150)}...` : event.description;
     lines.push(`   ${desc}`);
   }
   if (event.attendees?.length) {
@@ -358,7 +364,8 @@ export function createCalendarAvailabilityTool(config: CalendarConfig): Tool {
       type: 'function',
       function: {
         name: 'calendar_availability',
-        description: 'Check calendar availability for a specific date. Returns busy time slots so you can identify free times.',
+        description:
+          'Check calendar availability for a specific date. Returns busy time slots so you can identify free times.',
         parameters: {
           type: 'object',
           properties: {
@@ -380,7 +387,10 @@ export function createCalendarAvailabilityTool(config: CalendarConfig): Tool {
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const date = String(args.date ?? '').trim();
       if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        return { success: false, content: 'Missing or invalid date parameter (expected YYYY-MM-DD)' };
+        return {
+          success: false,
+          content: 'Missing or invalid date parameter (expected YYYY-MM-DD)',
+        };
       }
 
       const durationMinutes = Number(args.duration_minutes) || 30;
@@ -403,7 +413,7 @@ export function createCalendarAvailabilityTool(config: CalendarConfig): Tool {
 
         if (busySlots.length === 0) {
           const content = wrapExternalContent(
-            `Availability for ${date}: Entire day is free (timezone: ${tz}).`,
+            `Availability for ${date}: Entire day is free (timezone: ${tz}).`
           );
           cache.set(cacheKey, content);
           return { success: true, content };
@@ -411,7 +421,7 @@ export function createCalendarAvailabilityTool(config: CalendarConfig): Tool {
 
         const formatted = busySlots.map((s, i) => formatBusySlot(s, i)).join('\n');
         const content = wrapExternalContent(
-          `Busy slots for ${date} (timezone: ${tz}):\n\n${formatted}\n\nLooking for ${durationMinutes}-minute slots. Free times are outside the busy periods listed above.`,
+          `Busy slots for ${date} (timezone: ${tz}):\n\n${formatted}\n\nLooking for ${durationMinutes}-minute slots. Free times are outside the busy periods listed above.`
         );
 
         cache.set(cacheKey, content);
@@ -470,8 +480,11 @@ export function createCalendarScheduleTool(config: CalendarConfig): Tool {
 
       // Validate ISO date
       const parsed = new Date(startTime);
-      if (isNaN(parsed.getTime())) {
-        return { success: false, content: 'Invalid start_time format. Use ISO 8601 (e.g. 2026-03-01T14:00:00-03:00)' };
+      if (Number.isNaN(parsed.getTime())) {
+        return {
+          success: false,
+          content: 'Invalid start_time format. Use ISO 8601 (e.g. 2026-03-01T14:00:00-03:00)',
+        };
       }
 
       try {

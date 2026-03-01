@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Logger } from '../logger';
 
 export interface Tenant {
@@ -73,7 +73,7 @@ export class TenantManager {
 
   constructor(
     private config: TenantManagerConfig,
-    private logger: Logger,
+    private logger: Logger
   ) {
     this.tenantsPath = join(config.dataDir, 'tenants.json');
     this.usagePath = join(config.dataDir, 'usage.jsonl');
@@ -112,7 +112,7 @@ export class TenantManager {
   createTenant(name: string, email: string, plan: Tenant['plan'] = 'free'): Tenant {
     const id = randomUUID();
     const limits = PLAN_LIMITS[plan];
-    
+
     const tenant: Tenant = {
       id,
       name,
@@ -132,7 +132,7 @@ export class TenantManager {
     this.tenants.set(id, tenant);
     this.apiKeyIndex.set(tenant.apiKey, id);
     this.saveTenants();
-    
+
     this.logger.info({ tenantId: id, plan }, 'Created tenant');
     return tenant;
   }
@@ -181,7 +181,7 @@ export class TenantManager {
     this.apiKeyIndex.delete(tenant.apiKey);
     this.tenants.delete(id);
     this.saveTenants();
-    
+
     this.logger.info({ tenantId: id }, 'Deleted tenant');
     return true;
   }
@@ -199,7 +199,7 @@ export class TenantManager {
     tenant.updatedAt = new Date().toISOString();
     this.apiKeyIndex.set(tenant.apiKey, id);
     this.saveTenants();
-    
+
     this.logger.info({ tenantId: id }, 'Regenerated API key');
     return tenant.apiKey;
   }
@@ -214,31 +214,33 @@ export class TenantManager {
       ...record,
       timestamp: new Date().toISOString(),
     };
-    
-    const line = JSON.stringify(entry) + '\n';
+
+    const line = `${JSON.stringify(entry)}\n`;
     writeFileSync(this.usagePath, line, { flag: 'a' });
   }
 
   getUsageForPeriod(tenantId: string, startDate: string, endDate: string): UsageRecord[] {
     if (!existsSync(this.usagePath)) return [];
-    
+
     const records: UsageRecord[] = [];
     const content = readFileSync(this.usagePath, 'utf-8');
-    
+
     for (const line of content.split('\n')) {
       if (!line.trim()) continue;
       try {
         const record: UsageRecord = JSON.parse(line);
-        if (record.tenantId === tenantId && 
-            record.timestamp >= startDate && 
-            record.timestamp <= endDate) {
+        if (
+          record.tenantId === tenantId &&
+          record.timestamp >= startDate &&
+          record.timestamp <= endDate
+        ) {
           records.push(record);
         }
       } catch {
         // Skip malformed lines
       }
     }
-    
+
     return records;
   }
 
@@ -246,14 +248,17 @@ export class TenantManager {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
-    
+
     const records = this.getUsageForPeriod(tenantId, startOfMonth, endOfMonth);
-    
-    return records.reduce((acc, r) => ({
-      messages: acc.messages + r.messageCount,
-      apiCalls: acc.apiCalls + r.apiCallCount,
-      storage: acc.storage + r.storageBytesUsed,
-    }), { messages: 0, apiCalls: 0, storage: 0 });
+
+    return records.reduce(
+      (acc, r) => ({
+        messages: acc.messages + r.messageCount,
+        apiCalls: acc.apiCalls + r.apiCallCount,
+        storage: acc.storage + r.storageBytesUsed,
+      }),
+      { messages: 0, apiCalls: 0, storage: 0 }
+    );
   }
 
   checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount: number): boolean {
@@ -261,7 +266,7 @@ export class TenantManager {
     if (!tenant) return false;
 
     const usage = this.getCurrentMonthUsage(tenantId);
-    
+
     switch (type) {
       case 'messages':
         return usage.messages + amount <= tenant.usageQuota.messagesPerMonth;
@@ -275,17 +280,23 @@ export class TenantManager {
   }
 
   // Bot counting for plan limits
-  getBotCount(tenantId: string, botManager: { getBotIds(): string[]; config: { bots: Array<{ tenantId?: string }> } }): number {
-    return botManager.config.bots.filter(b => b.tenantId === tenantId).length;
+  getBotCount(
+    tenantId: string,
+    botManager: { getBotIds(): string[]; config: { bots: Array<{ tenantId?: string }> } }
+  ): number {
+    return botManager.config.bots.filter((b) => b.tenantId === tenantId).length;
   }
 
-  canCreateBot(tenantId: string, botManager: { getBotIds(): string[]; config: { bots: Array<{ tenantId?: string }> } }): boolean {
+  canCreateBot(
+    tenantId: string,
+    botManager: { getBotIds(): string[]; config: { bots: Array<{ tenantId?: string }> } }
+  ): boolean {
     const tenant = this.tenants.get(tenantId);
     if (!tenant) return false;
-    
+
     const limits = PLAN_LIMITS[tenant.plan];
     const currentCount = this.getBotCount(tenantId, botManager);
-    
+
     return currentCount < limits.maxBots;
   }
 }

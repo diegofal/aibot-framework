@@ -1,9 +1,9 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { DynamicToolRegistry } from '../../src/bot/dynamic-tool-registry';
 import { ToolRegistry } from '../../src/bot/tool-registry';
 import type { BotContext } from '../../src/bot/types';
+import type { DynamicToolMeta, DynamicToolStore } from '../../src/tools/dynamic-tool-store';
 import type { Tool, ToolDefinition } from '../../src/tools/types';
-import type { DynamicToolStore, DynamicToolMeta } from '../../src/tools/dynamic-tool-store';
 
 const noopLogger = {
   info: () => {},
@@ -27,14 +27,23 @@ function createMockTool(name: string): Tool {
   };
 }
 
-function createMockStore(entries: Map<string, { meta: DynamicToolMeta; source: string }>): DynamicToolStore {
+function createMockStore(
+  entries: Map<string, { meta: DynamicToolMeta; source: string }>
+): DynamicToolStore {
   return {
     get: (id: string) => entries.get(id) ?? null,
     list: () => [...entries.values()].map((e) => e.meta),
   } as unknown as DynamicToolStore;
 }
 
-function createMockMeta(overrides: Partial<DynamicToolMeta> & { id: string; name: string; createdBy: string; scope: string }): DynamicToolMeta {
+function createMockMeta(
+  overrides: Partial<DynamicToolMeta> & {
+    id: string;
+    name: string;
+    createdBy: string;
+    scope: string;
+  }
+): DynamicToolMeta {
   return {
     type: 'typescript',
     status: 'approved',
@@ -46,7 +55,10 @@ function createMockMeta(overrides: Partial<DynamicToolMeta> & { id: string; name
   };
 }
 
-function createMockContext(tools: Tool[] = [], bots: { id: string; disabledTools?: string[] }[] = []): BotContext {
+function createMockContext(
+  tools: Tool[] = [],
+  bots: { id: string; disabledTools?: string[] }[] = []
+): BotContext {
   return {
     config: {
       bots: bots.length > 0 ? bots : [{ id: 'bot-1' }, { id: 'bot-2' }],
@@ -63,7 +75,12 @@ function createMockContext(tools: Tool[] = [], bots: { id: string; disabledTools
 describe('DynamicToolRegistry.getExcludedNamesForBot', () => {
   test('tool with scope "all" is never excluded', () => {
     const tool = createMockTool('global_tool');
-    const meta = createMockMeta({ id: 'global_tool', name: 'global_tool', createdBy: 'bot-1', scope: 'all' });
+    const meta = createMockMeta({
+      id: 'global_tool',
+      name: 'global_tool',
+      createdBy: 'bot-1',
+      scope: 'all',
+    });
     const store = createMockStore(new Map([['global_tool', { meta, source: '' }]]));
     const ctx = createMockContext([tool]);
 
@@ -78,7 +95,12 @@ describe('DynamicToolRegistry.getExcludedNamesForBot', () => {
 
   test('tool scoped to bot-1 is excluded for bot-2', () => {
     const tool = createMockTool('scoped_tool');
-    const meta = createMockMeta({ id: 'scoped_tool', name: 'scoped_tool', createdBy: 'bot-1', scope: 'bot-1' });
+    const meta = createMockMeta({
+      id: 'scoped_tool',
+      name: 'scoped_tool',
+      createdBy: 'bot-1',
+      scope: 'bot-1',
+    });
     const store = createMockStore(new Map([['scoped_tool', { meta, source: '' }]]));
     const ctx = createMockContext([tool]);
 
@@ -91,7 +113,12 @@ describe('DynamicToolRegistry.getExcludedNamesForBot', () => {
 
   test('tool created by bot-1 is visible to bot-1 regardless of scope', () => {
     const tool = createMockTool('creator_tool');
-    const meta = createMockMeta({ id: 'creator_tool', name: 'creator_tool', createdBy: 'bot-1', scope: 'bot-3' });
+    const meta = createMockMeta({
+      id: 'creator_tool',
+      name: 'creator_tool',
+      createdBy: 'bot-1',
+      scope: 'bot-3',
+    });
     const store = createMockStore(new Map([['creator_tool', { meta, source: '' }]]));
     const ctx = createMockContext([tool]);
 
@@ -122,7 +149,7 @@ describe('ToolRegistry scope filtering', () => {
   function setupRegistry(
     staticTools: Tool[],
     dynamicTools: { tool: Tool; meta: DynamicToolMeta }[],
-    bots: { id: string; disabledTools?: string[] }[] = [{ id: 'bot-1' }, { id: 'bot-2' }],
+    bots: { id: string; disabledTools?: string[] }[] = [{ id: 'bot-1' }, { id: 'bot-2' }]
   ) {
     const allTools = [...staticTools, ...dynamicTools.map((d) => d.tool)];
     const ctx = createMockContext(allTools, bots);
@@ -148,7 +175,12 @@ describe('ToolRegistry scope filtering', () => {
   test('getDefinitionsForBot excludes scoped dynamic tool for wrong bot', () => {
     const staticTool = createMockTool('datetime');
     const dynamicTool = createMockTool('bot1_only');
-    const meta = createMockMeta({ id: 'bot1_only', name: 'bot1_only', createdBy: 'bot-1', scope: 'bot-1' });
+    const meta = createMockMeta({
+      id: 'bot1_only',
+      name: 'bot1_only',
+      createdBy: 'bot-1',
+      scope: 'bot-1',
+    });
 
     const { toolRegistry } = setupRegistry([staticTool], [{ tool: dynamicTool, meta }]);
 
@@ -165,7 +197,12 @@ describe('ToolRegistry scope filtering', () => {
   test('getToolsForBot excludes scoped dynamic tool for wrong bot', () => {
     const staticTool = createMockTool('datetime');
     const dynamicTool = createMockTool('bot1_only');
-    const meta = createMockMeta({ id: 'bot1_only', name: 'bot1_only', createdBy: 'bot-1', scope: 'bot-1' });
+    const meta = createMockMeta({
+      id: 'bot1_only',
+      name: 'bot1_only',
+      createdBy: 'bot-1',
+      scope: 'bot-1',
+    });
 
     const { toolRegistry } = setupRegistry([staticTool], [{ tool: dynamicTool, meta }]);
 
@@ -181,11 +218,16 @@ describe('ToolRegistry scope filtering', () => {
     const delegateTool = createMockTool('delegate_to_bot');
     const staticTool = createMockTool('exec');
     const dynamicTool = createMockTool('bot1_only');
-    const meta = createMockMeta({ id: 'bot1_only', name: 'bot1_only', createdBy: 'bot-1', scope: 'bot-1' });
+    const meta = createMockMeta({
+      id: 'bot1_only',
+      name: 'bot1_only',
+      createdBy: 'bot-1',
+      scope: 'bot-1',
+    });
 
     const { toolRegistry } = setupRegistry(
       [collaborateTool, delegateTool, staticTool],
-      [{ tool: dynamicTool, meta }],
+      [{ tool: dynamicTool, meta }]
     );
 
     const bot1Collab = toolRegistry.getCollaborationToolsForBot('bot-1');
@@ -209,15 +251,17 @@ describe('ToolRegistry scope filtering', () => {
     const toolA = createMockTool('tool_a');
     const toolB = createMockTool('tool_b');
     const dynamicTool = createMockTool('dynamic_scoped');
-    const meta = createMockMeta({ id: 'dynamic_scoped', name: 'dynamic_scoped', createdBy: 'bot-2', scope: 'bot-2' });
+    const meta = createMockMeta({
+      id: 'dynamic_scoped',
+      name: 'dynamic_scoped',
+      createdBy: 'bot-2',
+      scope: 'bot-2',
+    });
 
     const { toolRegistry } = setupRegistry(
       [toolA, toolB],
       [{ tool: dynamicTool, meta }],
-      [
-        { id: 'bot-1', disabledTools: ['tool_a'] },
-        { id: 'bot-2' },
-      ],
+      [{ id: 'bot-1', disabledTools: ['tool_a'] }, { id: 'bot-2' }]
     );
 
     const bot1Defs = toolRegistry.getDefinitionsForBot('bot-1');

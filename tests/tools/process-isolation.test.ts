@@ -1,7 +1,11 @@
-import { describe, test, expect, vi, afterEach } from 'bun:test';
-import { registerProcess, createProcessTool, type ProcessToolConfig } from '../../src/tools/process';
-import type { Logger } from '../../src/logger';
+import { afterEach, describe, expect, test, vi } from 'bun:test';
 import type { Subprocess } from 'bun';
+import type { Logger } from '../../src/logger';
+import {
+  type ProcessToolConfig,
+  createProcessTool,
+  registerProcess,
+} from '../../src/tools/process';
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -20,7 +24,9 @@ function makeLogger(): Logger {
  */
 function mockProc(exitCode = 0): Subprocess {
   let resolveExited: (code: number) => void;
-  const exitedPromise = new Promise<number>((r) => { resolveExited = r; });
+  const exitedPromise = new Promise<number>((r) => {
+    resolveExited = r;
+  });
 
   const proc = {
     pid: Math.floor(Math.random() * 100000),
@@ -28,7 +34,9 @@ function mockProc(exitCode = 0): Subprocess {
     stderr: null,
     stdin: null,
     exited: exitedPromise,
-    kill: vi.fn(() => { resolveExited(exitCode); }),
+    kill: vi.fn(() => {
+      resolveExited(exitCode);
+    }),
     killed: false,
     exitCode: null,
     signalCode: null,
@@ -103,7 +111,7 @@ describe('process tool per-bot isolation', () => {
     // Try to poll from beta
     const result = await tool.execute(
       { action: 'poll', session_id: sessionId, _botId: 'beta' },
-      logger,
+      logger
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('belongs to another bot');
@@ -123,7 +131,7 @@ describe('process tool per-bot isolation', () => {
     // Try to kill from beta
     const result = await tool.execute(
       { action: 'kill', session_id: sessionId, _botId: 'beta' },
-      logger,
+      logger
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('belongs to another bot');
@@ -140,7 +148,7 @@ describe('process tool per-bot isolation', () => {
 
     const result = await tool.execute(
       { action: 'write', session_id: sessionId, input: 'hello', _botId: 'beta' },
-      logger,
+      logger
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('belongs to another bot');
@@ -158,7 +166,7 @@ describe('process tool per-bot isolation', () => {
     // Try to clear from beta
     const result = await tool.execute(
       { action: 'clear', session_id: sessionId, _botId: 'beta' },
-      logger,
+      logger
     );
     expect(result.success).toBe(false);
     expect(result.content).toContain('belongs to another bot');
@@ -166,7 +174,11 @@ describe('process tool per-bot isolation', () => {
 
   test('max sessions limit is per-bot', () => {
     const logger = makeLogger();
-    const limitedConfig: ProcessToolConfig = { maxSessions: 2, maxOutputChars: 10000, finishedTtlMs: 60000 };
+    const limitedConfig: ProcessToolConfig = {
+      maxSessions: 2,
+      maxOutputChars: 10000,
+      finishedTtlMs: 60000,
+    };
 
     // Use unique bot names to avoid leakage from other tests
     const botA = `limit-testA-${Date.now()}`;

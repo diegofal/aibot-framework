@@ -1,5 +1,5 @@
-import { describe, expect, test, beforeEach, mock } from 'bun:test';
-import { ActivityStream, type ActivityEvent } from '../src/bot/activity-stream';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { type ActivityEvent, ActivityStream, type LlmBotStats } from '../src/bot/activity-stream';
 
 describe('ActivityStream', () => {
   let stream: ActivityStream;
@@ -115,5 +115,194 @@ describe('ActivityStream', () => {
     expect(stored.timestamp).toBe(1234567890);
     expect(stored.phase).toBe('start');
     expect(stored.data).toEqual({ messageCount: 42 });
+  });
+});
+
+describe('LlmStatsTracker', () => {
+  let stream: ActivityStream;
+
+  beforeEach(() => {
+    stream = new ActivityStream();
+  });
+
+  test('tracks successful LLM calls', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 500, caller: 'planner' },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalCalls).toBe(1);
+    expect(stats.successCount).toBe(1);
+    expect(stats.failCount).toBe(0);
+    expect(stats.totalDurationMs).toBe(500);
+    expect(stats.avgDurationMs).toBe(500);
+    expect(stats.lastCallAt).toBe(1000);
+    expect(stats.lastError).toBeNull();
+  });
+
+  test('tracks multiple success calls with correct avg', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 200, caller: 'planner' },
+    });
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 2000,
+      data: { durationMs: 400, caller: 'executor' },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalCalls).toBe(2);
+    expect(stats.successCount).toBe(2);
+    expect(stats.totalDurationMs).toBe(600);
+    expect(stats.avgDurationMs).toBe(300);
+    expect(stats.lastCallAt).toBe(2000);
+  });
+
+  test('tracks error calls', () => {
+    stream.publish({
+      type: 'llm:error',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 100, caller: 'executor', error: 'timeout' },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalCalls).toBe(1);
+    expect(stats.successCount).toBe(0);
+    expect(stats.failCount).toBe(1);
+    expect(stats.lastError).toBe('timeout');
+    expect(stats.totalDurationMs).toBe(100);
+  });
+
+  test('tracks fallback count', () => {
+    stream.publish({
+      type: 'llm:fallback',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { primaryBackend: 'claude-cli', fallbackBackend: 'ollama' },
+    });
+    stream.publish({
+      type: 'llm:fallback',
+      botId: 'bot1',
+      timestamp: 2000,
+      data: { primaryBackend: 'claude-cli', fallbackBackend: 'ollama' },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.fallbackCount).toBe(2);
+    // Fallbacks don't count as calls (they just tag that a fallback happened)
+    expect(stats.totalCalls).toBe(0);
+  });
+
+  test('tracks caller breakdown', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 200, caller: 'planner' },
+    });
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 2000,
+      data: { durationMs: 300, caller: 'planner' },
+    });
+    stream.publish({
+      type: 'llm:error',
+      botId: 'bot1',
+      timestamp: 3000,
+      data: { durationMs: 50, caller: 'executor', error: 'fail' },
+    });
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 4000,
+      data: { durationMs: 1000, caller: 'executor' },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.callerBreakdown.planner).toEqual({
+      calls: 2,
+      totalDurationMs: 500,
+      errors: 0,
+    });
+    expect(stats.callerBreakdown.executor).toEqual({
+      calls: 2,
+      totalDurationMs: 1050,
+      errors: 1,
+    });
+  });
+
+  test('clearForBot removes stats for that bot', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 100, caller: 'planner' },
+    });
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot2',
+      timestamp: 2000,
+      data: { durationMs: 200, caller: 'planner' },
+    });
+
+    stream.clearForBot('bot1');
+
+    expect(stream.llmStats.getStats('bot1')).toBeUndefined();
+    expect(stream.llmStats.getStats('bot2')).toBeDefined();
+  });
+
+  test('getAllStats returns stats for all bots', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 100, caller: 'planner' },
+    });
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot2',
+      timestamp: 2000,
+      data: { durationMs: 200, caller: 'executor' },
+    });
+
+    const all = stream.llmStats.getAllStats();
+    expect(all).toHaveLength(2);
+    expect(all.map((s) => s.botId).sort()).toEqual(['bot1', 'bot2']);
+  });
+
+  test('getStats returns undefined for unknown bot', () => {
+    expect(stream.llmStats.getStats('nonexistent')).toBeUndefined();
+  });
+
+  test('keeps separate stats per bot', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 100, caller: 'planner' },
+    });
+    stream.publish({
+      type: 'llm:error',
+      botId: 'bot2',
+      timestamp: 2000,
+      data: { durationMs: 50, caller: 'executor', error: 'err' },
+    });
+
+    const s1 = stream.llmStats.getStats('bot1')!;
+    const s2 = stream.llmStats.getStats('bot2')!;
+
+    expect(s1.successCount).toBe(1);
+    expect(s1.failCount).toBe(0);
+    expect(s2.successCount).toBe(0);
+    expect(s2.failCount).toBe(1);
   });
 });

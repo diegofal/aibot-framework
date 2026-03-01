@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConversationsService } from '../src/conversations/service';
 
@@ -93,7 +93,7 @@ describe('ConversationsService', () => {
       const created = svc.createConversation('bot1');
       const found = svc.getConversation('bot1', created.id);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(created.id);
+      expect(found?.id).toBe(created.id);
     });
   });
 
@@ -102,7 +102,7 @@ describe('ConversationsService', () => {
       const created = svc.createConversation('bot1');
       const updated = svc.updateTitle('bot1', created.id, 'Renamed');
       expect(updated).not.toBeNull();
-      expect(updated!.title).toBe('Renamed');
+      expect(updated?.title).toBe('Renamed');
     });
 
     test('returns null for non-existent conversation', () => {
@@ -129,14 +129,14 @@ describe('ConversationsService', () => {
       const convo = svc.createConversation('bot1');
       const msg = svc.addMessage('bot1', convo.id, 'human', 'Hello');
       expect(msg).not.toBeNull();
-      expect(msg!.role).toBe('human');
-      expect(msg!.content).toBe('Hello');
+      expect(msg?.role).toBe('human');
+      expect(msg?.content).toBe('Hello');
 
       const messages = svc.getMessages('bot1', convo.id);
       expect(messages.length).toBe(1);
 
       const updated = svc.getConversation('bot1', convo.id);
-      expect(updated!.messageCount).toBe(1);
+      expect(updated?.messageCount).toBe(1);
     });
 
     test('returns null when conversation does not exist', () => {
@@ -163,23 +163,24 @@ describe('ConversationsService', () => {
       const convo = svc.createConversation('bot1');
       svc.addMessage('bot1', convo.id, 'human', 'What are your current goals and motivations?');
       const updated = svc.getConversation('bot1', convo.id);
-      expect(updated!.title).toBe('What are your current goals and motivations?');
+      expect(updated?.title).toBe('What are your current goals and motivations?');
     });
 
     test('truncates long messages at word boundary', () => {
       const convo = svc.createConversation('bot1');
-      const longMsg = 'This is a very long message that should be truncated at a word boundary because it exceeds sixty characters';
+      const longMsg =
+        'This is a very long message that should be truncated at a word boundary because it exceeds sixty characters';
       svc.addMessage('bot1', convo.id, 'human', longMsg);
       const updated = svc.getConversation('bot1', convo.id);
-      expect(updated!.title.length).toBeLessThanOrEqual(63); // 60 + '...'
-      expect(updated!.title.endsWith('...')).toBe(true);
+      expect(updated?.title.length).toBeLessThanOrEqual(63); // 60 + '...'
+      expect(updated?.title.endsWith('...')).toBe(true);
     });
 
     test('does not overwrite custom title', () => {
       const convo = svc.createConversation('bot1', 'general', 'Custom Title');
       svc.addMessage('bot1', convo.id, 'human', 'Hello there');
       const updated = svc.getConversation('bot1', convo.id);
-      expect(updated!.title).toBe('Custom Title');
+      expect(updated?.title).toBe('Custom Title');
     });
 
     test('does not update title on bot messages', () => {
@@ -187,7 +188,7 @@ describe('ConversationsService', () => {
       svc.addMessage('bot1', convo.id, 'bot', 'Hello from bot');
       // messageCount is 1 but role is bot, so title should not change
       const updated = svc.getConversation('bot1', convo.id);
-      expect(updated!.title).toBe('New Conversation');
+      expect(updated?.title).toBe('New Conversation');
     });
   });
 
@@ -223,7 +224,7 @@ describe('ConversationsService', () => {
       const convo = svc.createConversation('bot1', 'inbox');
       svc.addMessage('bot1', convo.id, 'human', 'My custom response');
       const updated = svc.getConversation('bot1', convo.id);
-      expect(updated!.title).toBe('My custom response');
+      expect(updated?.title).toBe('My custom response');
     });
   });
 
@@ -232,11 +233,11 @@ describe('ConversationsService', () => {
       const convo = svc.createConversation('bot1', 'inbox', 'Q', { inboxStatus: 'pending' });
       const updated = svc.markInboxStatus('bot1', convo.id, 'answered');
       expect(updated).not.toBeNull();
-      expect(updated!.inboxStatus).toBe('answered');
+      expect(updated?.inboxStatus).toBe('answered');
 
       // Verify persistence
       const reloaded = svc.getConversation('bot1', convo.id);
-      expect(reloaded!.inboxStatus).toBe('answered');
+      expect(reloaded?.inboxStatus).toBe('answered');
     });
 
     test('returns null for non-existent conversation', () => {
@@ -268,8 +269,8 @@ describe('ConversationsService', () => {
 
       const found = svc.findByQuestionId('bot1', 'q-abc');
       expect(found).not.toBeNull();
-      expect(found!.title).toBe('Q1');
-      expect(found!.askHumanQuestionId).toBe('q-abc');
+      expect(found?.title).toBe('Q1');
+      expect(found?.askHumanQuestionId).toBe('q-abc');
     });
 
     test('returns null when not found', () => {
@@ -319,7 +320,7 @@ describe('ConversationsService', () => {
       const content = readFileSync(msgPath, 'utf-8');
       const lines = content.trim().split('\n');
       // Insert corrupt line between valid lines
-      const corrupted = [lines[0], 'NOT VALID JSON {{{{', lines[1]].join('\n') + '\n';
+      const corrupted = `${[lines[0], 'NOT VALID JSON {{{{', lines[1]].join('\n')}\n`;
       writeFileSync(msgPath, corrupted, 'utf-8');
 
       const messages = svc.getMessages('bot1', convo.id);
@@ -338,7 +339,7 @@ describe('ConversationsService', () => {
       writeFileSync(msgPath, `CORRUPT_LINE\n${validLine}\n`, 'utf-8');
 
       // Attach files to the valid message
-      const result = svc.attachFiles('bot1', convo.id, msg!.id, [
+      const result = svc.attachFiles('bot1', convo.id, msg?.id, [
         { type: 'image', url: 'https://example.com/img.png', name: 'img.png' },
       ]);
       expect(result).toBe(true);
@@ -368,7 +369,7 @@ describe('ConversationsService', () => {
       const convo = svc.createConversation('bot1');
       const msg = svc.addMessage('bot1', convo.id, 'human', 'Check this out');
 
-      const result = svc.attachFiles('bot1', convo.id, msg!.id, [
+      const result = svc.attachFiles('bot1', convo.id, msg?.id, [
         { type: 'image', url: 'https://example.com/a.png', name: 'a.png' },
         { type: 'document', url: 'https://example.com/b.pdf', name: 'b.pdf' },
       ]);
@@ -376,14 +377,16 @@ describe('ConversationsService', () => {
 
       const messages = svc.getMessages('bot1', convo.id);
       expect(messages[0].files).toHaveLength(2);
-      expect(messages[0].files![0].name).toBe('a.png');
-      expect(messages[0].files![1].name).toBe('b.pdf');
+      expect(messages[0].files?.[0].name).toBe('a.png');
+      expect(messages[0].files?.[1].name).toBe('b.pdf');
     });
 
     test('returns false for non-existent conversation', () => {
-      expect(svc.attachFiles('bot1', 'no-such-convo', 'msg-1', [
-        { type: 'image', url: 'https://example.com/x.png', name: 'x.png' },
-      ])).toBe(false);
+      expect(
+        svc.attachFiles('bot1', 'no-such-convo', 'msg-1', [
+          { type: 'image', url: 'https://example.com/x.png', name: 'x.png' },
+        ])
+      ).toBe(false);
     });
 
     test('returns false for non-existent message', () => {
@@ -400,7 +403,7 @@ describe('ConversationsService', () => {
       const convo = svc.createConversation('bot1');
       const msg = svc.addMessage('bot1', convo.id, 'human', 'Hello');
 
-      expect(svc.attachFiles('bot1', convo.id, msg!.id, [])).toBe(false);
+      expect(svc.attachFiles('bot1', convo.id, msg?.id, [])).toBe(false);
     });
 
     test('appends to existing files on a message', () => {
@@ -409,14 +412,54 @@ describe('ConversationsService', () => {
         { type: 'image', url: 'https://example.com/first.png', name: 'first.png' },
       ]);
 
-      svc.attachFiles('bot1', convo.id, msg!.id, [
+      svc.attachFiles('bot1', convo.id, msg?.id, [
         { type: 'image', url: 'https://example.com/second.png', name: 'second.png' },
       ]);
 
       const messages = svc.getMessages('bot1', convo.id);
       expect(messages[0].files).toHaveLength(2);
-      expect(messages[0].files![0].name).toBe('first.png');
-      expect(messages[0].files![1].name).toBe('second.png');
+      expect(messages[0].files?.[0].name).toBe('first.png');
+      expect(messages[0].files?.[1].name).toBe('second.png');
+    });
+  });
+
+  describe('deleteAllForBot', () => {
+    test('deletes all conversations and returns count', () => {
+      svc.createConversation('bot1', 'general', 'C1');
+      svc.createConversation('bot1', 'general', 'C2');
+      svc.createConversation('bot1', 'productions', 'P1');
+
+      const deleted = svc.deleteAllForBot('bot1');
+      expect(deleted).toBe(3);
+      expect(svc.listConversations('bot1')).toEqual([]);
+      expect(svc.getBotIds()).not.toContain('bot1');
+    });
+
+    test('returns 0 for bot with no conversations', () => {
+      expect(svc.deleteAllForBot('unknown')).toBe(0);
+    });
+
+    test('removes messages along with conversations', () => {
+      const c = svc.createConversation('bot1');
+      svc.addMessage('bot1', c.id, 'human', 'Hello');
+      svc.deleteAllForBot('bot1');
+      expect(svc.getMessages('bot1', c.id)).toEqual([]);
+    });
+  });
+
+  describe('deleteAll', () => {
+    test('deletes conversations across all bots', () => {
+      svc.createConversation('bot1', 'general', 'A');
+      svc.createConversation('bot1', 'general', 'B');
+      svc.createConversation('bot2', 'general', 'C');
+
+      const deleted = svc.deleteAll();
+      expect(deleted).toBe(3);
+      expect(svc.getBotIds()).toEqual([]);
+    });
+
+    test('returns 0 when no conversations exist', () => {
+      expect(svc.deleteAll()).toBe(0);
     });
   });
 
@@ -431,13 +474,13 @@ describe('ConversationsService', () => {
 
       // Data should be intact
       const updated = svc.getConversation('bot1', convo.id);
-      expect(updated!.title).toBe('Updated');
+      expect(updated?.title).toBe('Updated');
     });
 
     test('attachFiles write is atomic (no .tmp left behind)', () => {
       const convo = svc.createConversation('bot1');
       const msg = svc.addMessage('bot1', convo.id, 'human', 'Hello');
-      svc.attachFiles('bot1', convo.id, msg!.id, [
+      svc.attachFiles('bot1', convo.id, msg?.id, [
         { type: 'image', url: 'https://example.com/x.png', name: 'x.png' },
       ]);
 

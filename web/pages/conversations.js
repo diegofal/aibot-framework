@@ -1,4 +1,4 @@
-import { api, escapeHtml, timeAgo, renderThread } from './shared.js';
+import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
 /**
  * #/conversations — List bots with conversation counts
@@ -17,14 +17,26 @@ export async function renderConversations(el) {
   const total = data.reduce((s, b) => s + b.conversationCount, 0);
 
   el.innerHTML = `
-    <div class="page-title">Conversations <span class="count">${total}</span></div>
-    ${data.length === 0
-      ? '<p class="text-dim">No bots configured.</p>'
-      : `<table>
-          <thead><tr><th>Bot</th><th>Conversations</th></tr></thead>
+    <div class="flex-between mb-16">
+      <div class="page-title">Conversations <span class="count">${total}</span></div>
+      ${total > 0 ? '<button class="btn btn-danger btn-sm" id="conv-delete-all-btn">Delete All</button>' : ''}
+    </div>
+    ${
+      data.length === 0
+        ? '<p class="text-dim">No bots configured.</p>'
+        : `<table>
+          <thead><tr><th>Bot</th><th>Conversations</th><th>Actions</th></tr></thead>
           <tbody id="conv-bots-tbody"></tbody>
         </table>`
     }`;
+
+  // Wire "Delete All" button
+  document.getElementById('conv-delete-all-btn')?.addEventListener('click', async () => {
+    if (!confirm(`Delete all ${total} conversations across all bots? This cannot be undone.`))
+      return;
+    await api('/api/conversations', { method: 'DELETE' });
+    renderConversations(el);
+  });
 
   if (data.length === 0) return;
 
@@ -34,12 +46,27 @@ export async function renderConversations(el) {
     tr.style.cursor = 'pointer';
     tr.innerHTML = `
       <td><a href="#/conversations/${encodeURIComponent(bot.botId)}">${escapeHtml(bot.name)}</a></td>
-      <td>${bot.conversationCount}</td>`;
+      <td>${bot.conversationCount}</td>
+      <td><button class="btn btn-danger btn-sm conv-del-bot-btn" data-bot-id="${escapeHtml(bot.botId)}" data-bot-name="${escapeHtml(bot.name)}" data-count="${bot.conversationCount}">Delete</button></td>`;
     tr.addEventListener('click', (e) => {
-      if (e.target.tagName === 'A') return;
+      if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
       location.hash = `#/conversations/${encodeURIComponent(bot.botId)}`;
     });
     tbody.appendChild(tr);
+  }
+
+  // Wire per-bot delete buttons
+  for (const btn of document.querySelectorAll('.conv-del-bot-btn')) {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const botId = btn.dataset.botId;
+      const botName = btn.dataset.botName;
+      const count = btn.dataset.count;
+      if (!confirm(`Delete all ${count} conversations for ${botName}? This cannot be undone.`))
+        return;
+      await api(`/api/conversations/${encodeURIComponent(botId)}`, { method: 'DELETE' });
+      renderConversations(el);
+    });
   }
 }
 
@@ -66,9 +93,10 @@ export async function renderBotConversations(el, botId) {
         <a href="#/conversations" class="btn btn-sm">&larr; Back</a>
       </div>
     </div>
-    ${data.length === 0
-      ? '<p class="text-dim">No conversations yet. Click "New Conversation" to start one.</p>'
-      : `<table>
+    ${
+      data.length === 0
+        ? '<p class="text-dim">No conversations yet. Click "New Conversation" to start one.</p>'
+        : `<table>
           <thead><tr><th>Title</th><th>Type</th><th>Messages</th><th>Last Activity</th></tr></thead>
           <tbody id="conv-list-tbody"></tbody>
         </table>`
@@ -120,7 +148,7 @@ export async function renderConversationChat(el, botId, conversationId) {
   }
 
   const { conversation, messages } = data;
-  let threadMessages = messages;
+  const threadMessages = messages;
   let generating = false;
   let errorMsg = null;
   const MAX_POLLS = 90; // 3 min at 2s interval
@@ -140,7 +168,9 @@ export async function renderConversationChat(el, botId, conversationId) {
         renderThreadUI();
         return;
       }
-      const statusRes = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}/status`);
+      const statusRes = await api(
+        `/api/conversations/${encodeURIComponent(botId)}/${conversationId}/status`
+      );
       if (statusRes.status === 'error') {
         clearInterval(pollInterval);
         generating = false;
@@ -160,7 +190,9 @@ export async function renderConversationChat(el, botId, conversationId) {
         renderThreadUI();
 
         // Refresh conversation title (may have been auto-updated)
-        const convData = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`);
+        const convData = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${conversationId}`
+        );
         if (convData.conversation) {
           conversation.title = convData.conversation.title;
           const titleEl = el.querySelector('.page-title');
@@ -185,7 +217,9 @@ export async function renderConversationChat(el, botId, conversationId) {
     // Wire delete
     document.getElementById('conv-delete-btn')?.addEventListener('click', async () => {
       if (!confirm('Delete this conversation? This cannot be undone.')) return;
-      await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`, { method: 'DELETE' });
+      await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`, {
+        method: 'DELETE',
+      });
       location.hash = `#/conversations/${encodeURIComponent(botId)}`;
     });
 
@@ -205,13 +239,15 @@ export async function renderConversationChat(el, botId, conversationId) {
         errorMsg = null;
         generating = true;
         renderThreadUI();
-        await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}/retry`, { method: 'POST' });
+        await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}/retry`, {
+          method: 'POST',
+        });
         startPolling();
       },
       onSend: async (text) => {
         // Optimistic add
         threadMessages.push({
-          id: 'temp-' + Date.now(),
+          id: `temp-${Date.now()}`,
           role: 'human',
           content: text,
           createdAt: new Date().toISOString(),
@@ -220,10 +256,13 @@ export async function renderConversationChat(el, botId, conversationId) {
         errorMsg = null;
         renderThreadUI();
 
-        const res = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}/messages`, {
-          method: 'POST',
-          body: { message: text },
-        });
+        const res = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${conversationId}/messages`,
+          {
+            method: 'POST',
+            body: { message: text },
+          }
+        );
 
         if (res.error) {
           generating = false;

@@ -1,20 +1,29 @@
+import { destroyActivity, renderActivity } from './pages/activity.js';
+import { renderAgentDetail, renderAgentEdit, renderAgents } from './pages/agents.js';
+import {
+  renderBotConversations,
+  renderConversationChat,
+  renderConversations,
+} from './pages/conversations.js';
+import { renderCron, renderCronCreate, renderCronDetail } from './pages/cron.js';
 import { renderDashboard } from './pages/dashboard.js';
-import { renderAgents, renderAgentDetail, renderAgentEdit } from './pages/agents.js';
-import { renderSessions, renderSessionTranscript } from './pages/sessions.js';
-import { renderCron, renderCronDetail, renderCronCreate } from './pages/cron.js';
-import { renderTools, renderToolDetail } from './pages/tools.js';
-import { renderLogs, destroyLogs } from './pages/logs.js';
-import { renderSettings } from './pages/settings.js';
-import { renderInbox, destroyInbox, renderInboxChat } from './pages/inbox.js';
-import { renderPermissions, destroyPermissions } from './pages/permissions.js';
-import { renderProductions, renderBotProductions } from './pages/productions.js';
-import { renderConversations, renderBotConversations, renderConversationChat } from './pages/conversations.js';
-import { renderFeedback, renderBotFeedback } from './pages/feedback.js';
-import { renderKarma, renderBotKarma } from './pages/karma.js';
-import { renderSkills, renderSkillDetail, renderSkillEdit, renderSkillCreate } from './pages/skills.js';
+import { renderBotFeedback, renderFeedback } from './pages/feedback.js';
+import { destroyInbox, renderInbox, renderInboxChat } from './pages/inbox.js';
 import { renderIntegrations } from './pages/integrations.js';
+import { renderBotKarma, renderKarma } from './pages/karma.js';
+import { destroyLogs, renderLogs } from './pages/logs.js';
+import { destroyPermissions, renderPermissions } from './pages/permissions.js';
+import { renderBotProductions, renderProductions } from './pages/productions.js';
+import { renderSessionTranscript, renderSessions } from './pages/sessions.js';
+import { renderSettings } from './pages/settings.js';
+import {
+  renderSkillCreate,
+  renderSkillDetail,
+  renderSkillEdit,
+  renderSkills,
+} from './pages/skills.js';
 import { renderToolRunner } from './pages/tool-runner.js';
-import { renderActivity, destroyActivity } from './pages/activity.js';
+import { renderToolDetail, renderTools } from './pages/tools.js';
 
 const content = document.getElementById('content');
 
@@ -24,33 +33,45 @@ const routes = [
   { pattern: /^#\/inbox$/, handler: () => renderInbox(content) },
   { pattern: /^#\/permissions$/, handler: () => renderPermissions(content) },
   { pattern: /^#\/agents\/([^/]+)\/edit$/, handler: (m) => renderAgentEdit(content, m[1]) },
-  { pattern: /^#\/agents\/([^/]+)$/,        handler: (m) => renderAgentDetail(content, m[1]) },
-  { pattern: /^#\/agents$/,                  handler: () => renderAgents(content) },
-  { pattern: /^#\/sessions\/(.+)$/,          handler: (m) => renderSessionTranscript(content, decodeURIComponent(m[1])) },
-  { pattern: /^#\/sessions$/,                handler: () => renderSessions(content) },
-  { pattern: /^#\/cron\/new$/,               handler: () => renderCronCreate(content) },
-  { pattern: /^#\/cron\/([^/]+)$/,           handler: (m) => renderCronDetail(content, m[1]) },
-  { pattern: /^#\/cron$/,                    handler: () => renderCron(content) },
-  { pattern: /^#\/conversations\/([^/]+)\/([^/]+)$/, handler: (m) => renderConversationChat(content, m[1], m[2]) },
-  { pattern: /^#\/conversations\/([^/]+)$/,  handler: (m) => renderBotConversations(content, m[1]) },
-  { pattern: /^#\/conversations$/,           handler: () => renderConversations(content) },
-  { pattern: /^#\/productions\/([^/]+)$/,     handler: (m) => renderBotProductions(content, m[1]) },
-  { pattern: /^#\/productions$/,             handler: () => renderProductions(content) },
-  { pattern: /^#\/feedback\/([^/]+)$/,       handler: (m) => renderBotFeedback(content, m[1]) },
-  { pattern: /^#\/feedback$/,                handler: () => renderFeedback(content) },
-  { pattern: /^#\/karma\/([^/]+)$/,          handler: (m) => renderBotKarma(content, m[1]) },
-  { pattern: /^#\/karma$/,                   handler: () => renderKarma(content) },
-  { pattern: /^#\/skills\/new$/,              handler: () => renderSkillCreate(content) },
-  { pattern: /^#\/skills\/([^/]+)\/edit$/,   handler: (m) => renderSkillEdit(content, decodeURIComponent(m[1])) },
-  { pattern: /^#\/skills\/([^/]+)$/,         handler: (m) => renderSkillDetail(content, decodeURIComponent(m[1])) },
-  { pattern: /^#\/skills$/,                  handler: () => renderSkills(content) },
-  { pattern: /^#\/tool-runner$/,              handler: () => renderToolRunner(content) },
-  { pattern: /^#\/tools\/([^/]+)$/,          handler: (m) => renderToolDetail(content, m[1]) },
-  { pattern: /^#\/tools$/,                   handler: () => renderTools(content) },
-  { pattern: /^#\/activity$/,                 handler: () => renderActivity(content) },
-  { pattern: /^#\/logs$/,                    handler: () => renderLogs(content) },
-  { pattern: /^#\/integrations$/,            handler: () => renderIntegrations(content) },
-  { pattern: /^#\/settings$/,               handler: () => renderSettings(content) },
+  { pattern: /^#\/agents\/([^/]+)$/, handler: (m) => renderAgentDetail(content, m[1]) },
+  { pattern: /^#\/agents$/, handler: () => renderAgents(content) },
+  {
+    pattern: /^#\/sessions\/(.+)$/,
+    handler: (m) => renderSessionTranscript(content, decodeURIComponent(m[1])),
+  },
+  { pattern: /^#\/sessions$/, handler: () => renderSessions(content) },
+  { pattern: /^#\/cron\/new$/, handler: () => renderCronCreate(content) },
+  { pattern: /^#\/cron\/([^/]+)$/, handler: (m) => renderCronDetail(content, m[1]) },
+  { pattern: /^#\/cron$/, handler: () => renderCron(content) },
+  {
+    pattern: /^#\/conversations\/([^/]+)\/([^/]+)$/,
+    handler: (m) => renderConversationChat(content, m[1], m[2]),
+  },
+  { pattern: /^#\/conversations\/([^/]+)$/, handler: (m) => renderBotConversations(content, m[1]) },
+  { pattern: /^#\/conversations$/, handler: () => renderConversations(content) },
+  { pattern: /^#\/productions\/([^/]+)$/, handler: (m) => renderBotProductions(content, m[1]) },
+  { pattern: /^#\/productions$/, handler: () => renderProductions(content) },
+  { pattern: /^#\/feedback\/([^/]+)$/, handler: (m) => renderBotFeedback(content, m[1]) },
+  { pattern: /^#\/feedback$/, handler: () => renderFeedback(content) },
+  { pattern: /^#\/karma\/([^/]+)$/, handler: (m) => renderBotKarma(content, m[1]) },
+  { pattern: /^#\/karma$/, handler: () => renderKarma(content) },
+  { pattern: /^#\/skills\/new$/, handler: () => renderSkillCreate(content) },
+  {
+    pattern: /^#\/skills\/([^/]+)\/edit$/,
+    handler: (m) => renderSkillEdit(content, decodeURIComponent(m[1])),
+  },
+  {
+    pattern: /^#\/skills\/([^/]+)$/,
+    handler: (m) => renderSkillDetail(content, decodeURIComponent(m[1])),
+  },
+  { pattern: /^#\/skills$/, handler: () => renderSkills(content) },
+  { pattern: /^#\/tool-runner$/, handler: () => renderToolRunner(content) },
+  { pattern: /^#\/tools\/([^/]+)$/, handler: (m) => renderToolDetail(content, m[1]) },
+  { pattern: /^#\/tools$/, handler: () => renderTools(content) },
+  { pattern: /^#\/activity$/, handler: () => renderActivity(content) },
+  { pattern: /^#\/logs$/, handler: () => renderLogs(content) },
+  { pattern: /^#\/integrations$/, handler: () => renderIntegrations(content) },
+  { pattern: /^#\/settings$/, handler: () => renderSettings(content) },
 ];
 
 function navigate() {
@@ -59,20 +80,24 @@ function navigate() {
   destroyPermissions();
   destroyActivity();
   const hash = location.hash || '#/';
-  if (hash === '#') { location.hash = '#/'; return; }
+  if (hash === '#') {
+    location.hash = '#/';
+    return;
+  }
 
   // Update active nav link
   document.querySelectorAll('.nav-link').forEach((el) => {
     const page = el.dataset.page;
-    const isActive = page === ''
-      ? hash === '#/' || hash === '#'
-      : hash.startsWith(`#/${page}`);
+    const isActive = page === '' ? hash === '#/' || hash === '#' : hash.startsWith(`#/${page}`);
     el.classList.toggle('active', isActive);
   });
 
   for (const route of routes) {
     const m = hash.match(route.pattern);
-    if (m) { route.handler(m); return; }
+    if (m) {
+      route.handler(m);
+      return;
+    }
   }
 
   // Default fallback
@@ -88,7 +113,9 @@ async function loadStatus() {
     const data = await res.json();
     document.getElementById('nav-status').textContent =
       `${data.bots.running}/${data.bots.configured} bots`;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 loadStatus();
@@ -108,7 +135,9 @@ async function loadInboxBadge() {
         badge.style.display = 'none';
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 loadInboxBadge();
@@ -128,7 +157,9 @@ async function loadFeedbackBadge() {
         badge.style.display = 'none';
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 loadFeedbackBadge();
@@ -148,7 +179,9 @@ async function loadPermissionsBadge() {
         badge.style.display = 'none';
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 loadPermissionsBadge();

@@ -1,7 +1,7 @@
-import type { Tool, ToolResult } from './types';
-import type { Logger } from '../logger';
-import type { AskPermissionStore } from '../bot/ask-permission-store';
 import type { Bot } from 'grammy';
+import type { AskPermissionStore } from '../bot/ask-permission-store';
+import type { Logger } from '../logger';
+import type { Tool, ToolResult } from './types';
 
 const MAX_TIMEOUT_MINUTES = 480;
 const DEFAULT_TIMEOUT_MINUTES = 60;
@@ -33,7 +33,8 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
           properties: {
             action: {
               type: 'string',
-              description: 'The type of action: "file_write", "exec", "api_call", "resource_modify", etc.',
+              description:
+                'The type of action: "file_write", "exec", "api_call", "resource_modify", etc.',
             },
             resource: {
               type: 'string',
@@ -41,7 +42,8 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
             },
             description: {
               type: 'string',
-              description: 'Human-readable explanation of why you need to do this and what will happen.',
+              description:
+                'Human-readable explanation of why you need to do this and what will happen.',
             },
             urgency: {
               type: 'string',
@@ -66,10 +68,16 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
       const chatId = (args._chatId as number) || 0;
 
       if (!action || !resource || !description) {
-        return { success: false, content: 'Missing required parameters: action, resource, description' };
+        return {
+          success: false,
+          content: 'Missing required parameters: action, resource, description',
+        };
       }
       if (!botId) {
-        return { success: false, content: 'ask_permission requires _botId (only available in agent loop)' };
+        return {
+          success: false,
+          content: 'ask_permission requires _botId (only available in agent loop)',
+        };
       }
 
       // Dedup check
@@ -80,20 +88,30 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
         };
       }
 
-      const urgency = (['low', 'normal', 'high'].includes(args.urgency as string)
-        ? args.urgency as 'low' | 'normal' | 'high'
-        : 'normal');
+      const urgency = ['low', 'normal', 'high'].includes(args.urgency as string)
+        ? (args.urgency as 'low' | 'normal' | 'high')
+        : 'normal';
 
       const timeoutMinutes = Math.min(
         Math.max(1, Number(args.timeout_minutes) || DEFAULT_TIMEOUT_MINUTES),
-        MAX_TIMEOUT_MINUTES,
+        MAX_TIMEOUT_MINUTES
       );
       const timeoutMs = timeoutMinutes * 60_000;
 
       // Register in store
-      const { id, promise } = deps.store.request(botId, action, resource, description, urgency, timeoutMs);
+      const { id, promise } = deps.store.request(
+        botId,
+        action,
+        resource,
+        description,
+        urgency,
+        timeoutMs
+      );
       promise.catch((err) => {
-        logger.info({ requestId: id, botId, reason: err.message }, 'ask_permission: request closed without decision');
+        logger.info(
+          { requestId: id, botId, reason: err.message },
+          'ask_permission: request closed without decision'
+        );
       });
 
       // Send Telegram notification if possible
@@ -102,31 +120,26 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
         if (bot) {
           const botName = deps.getBotName(botId);
           const urgencyEmoji = urgency === 'high' ? '🔴' : urgency === 'low' ? '🟢' : '🟡';
-          const messageText =
-            `${urgencyEmoji} **${botName} requests permission:**\n\n` +
-            `**Action:** ${action}\n` +
-            `**Resource:** ${resource}\n` +
-            `**Reason:** ${description}\n\n` +
-            `_Approve or deny in the web dashboard._`;
+          const messageText = `${urgencyEmoji} **${botName} requests permission:**\n\n**Action:** ${action}\n**Resource:** ${resource}\n**Reason:** ${description}\n\n_Approve or deny in the web dashboard._`;
           try {
             await bot.api.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
           } catch (telegramErr) {
-            logger.warn({ botId, chatId, err: telegramErr }, 'ask_permission: failed to send Telegram notification');
+            logger.warn(
+              { botId, chatId, err: telegramErr },
+              'ask_permission: failed to send Telegram notification'
+            );
           }
         }
       }
 
       logger.info(
         { requestId: id, botId, action, resource, urgency, timeoutMinutes },
-        'ask_permission: request queued to dashboard (non-blocking)',
+        'ask_permission: request queued to dashboard (non-blocking)'
       );
 
       return {
         success: true,
-        content: `Permission request queued (${action} on ${resource}). ` +
-          'The decision will be available in your next cycle. ' +
-          'Continue with other tasks in the meantime. ' +
-          'Do NOT proceed with this action until you receive approval.',
+        content: `Permission request queued (${action} on ${resource}). The decision will be available in your next cycle. Continue with other tasks in the meantime. Do NOT proceed with this action until you receive approval.`,
       };
     },
   };

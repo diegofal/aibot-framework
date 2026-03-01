@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
-import type { TenantManager, Tenant } from '../tenant/manager';
-import type { Logger } from '../logger';
-import type { Config } from '../config';
 import type { BotManager } from '../bot';
+import type { Config } from '../config';
+import type { Logger } from '../logger';
+import type { Tenant, TenantManager } from '../tenant/manager';
 
 export interface TenantRoutesDeps {
   tenantManager: TenantManager;
@@ -41,18 +41,21 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
 
       logger.info({ tenantId: tenant.id, email }, 'Tenant created via API');
 
-      return c.json({
-        success: true,
-        tenant: {
-          id: tenant.id,
-          name: tenant.name,
-          email: tenant.email,
-          plan: tenant.plan,
-          apiKey: tenant.apiKey,
-          createdAt: tenant.createdAt,
-          usageQuota: tenant.usageQuota,
+      return c.json(
+        {
+          success: true,
+          tenant: {
+            id: tenant.id,
+            name: tenant.name,
+            email: tenant.email,
+            plan: tenant.plan,
+            apiKey: tenant.apiKey,
+            createdAt: tenant.createdAt,
+            usageQuota: tenant.usageQuota,
+          },
         },
-      }, 201);
+        201
+      );
     } catch (error) {
       logger.error({ error }, 'Failed to create tenant');
       return c.json({ error: 'Failed to create tenant' }, 500);
@@ -62,7 +65,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
   // Get tenant by ID (requires API key)
   app.get('/me', async (c) => {
     const tenant = c.get('tenant') as { tenantId: string } | undefined;
-    
+
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
     }
@@ -90,7 +93,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
   // Update tenant
   app.patch('/me', async (c) => {
     const tenant = c.get('tenant') as { tenantId: string } | undefined;
-    
+
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
     }
@@ -128,7 +131,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
   // Regenerate API key
   app.post('/me/api-key/regenerate', async (c) => {
     const tenant = c.get('tenant') as { tenantId: string } | undefined;
-    
+
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
     }
@@ -151,7 +154,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
   // Get usage stats
   app.get('/me/usage', async (c) => {
     const tenant = c.get('tenant') as { tenantId: string } | undefined;
-    
+
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
     }
@@ -164,9 +167,15 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
     const currentUsage = tenantManager.getCurrentMonthUsage(tenant.tenantId);
 
     // Calculate percentages
-    const messagePercent = Math.round((currentUsage.messages / tenantData.usageQuota.messagesPerMonth) * 100);
-    const apiCallPercent = Math.round((currentUsage.apiCalls / tenantData.usageQuota.apiCallsPerMonth) * 100);
-    const storagePercent = Math.round((currentUsage.storage / tenantData.usageQuota.storageBytes) * 100);
+    const messagePercent = Math.round(
+      (currentUsage.messages / tenantData.usageQuota.messagesPerMonth) * 100
+    );
+    const apiCallPercent = Math.round(
+      (currentUsage.apiCalls / tenantData.usageQuota.apiCallsPerMonth) * 100
+    );
+    const storagePercent = Math.round(
+      (currentUsage.storage / tenantData.usageQuota.storageBytes) * 100
+    );
 
     return c.json({
       currentPeriod: {
@@ -197,7 +206,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
 
   // Admin: List all tenants (should be protected by admin auth in production)
   app.get('/', async (c) => {
-    const tenants = tenantManager.listTenants().map(t => ({
+    const tenants = tenantManager.listTenants().map((t) => ({
       id: t.id,
       name: t.name,
       email: t.email,
@@ -235,7 +244,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
   // Admin: Update tenant plan
   app.patch('/:id/plan', async (c) => {
     const id = c.req.param('id');
-    
+
     try {
       const body = await c.req.json();
       const { plan } = body;
@@ -271,7 +280,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
   // Admin: Delete tenant
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
-    
+
     const deleted = tenantManager.deleteTenant(id);
 
     if (!deleted) {
@@ -291,5 +300,5 @@ function formatBytes(bytes: number): string {
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  return `${Number.parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
 }

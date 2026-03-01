@@ -1,11 +1,18 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
-import { GlobalAgentLoopConfigSchema, BotAgentLoopOverrideSchema, RedditConfigSchema, TwitterConfigSchema, CalendarConfigSchema } from '../src/config';
+import {
+  BotAgentLoopOverrideSchema,
+  CalendarConfigSchema,
+  CompactionConfigSchema,
+  GlobalAgentLoopConfigSchema,
+  RedditConfigSchema,
+  TwitterConfigSchema,
+} from '../src/config';
 
 describe('GlobalAgentLoopConfigSchema', () => {
-  test('defaults claudeTimeout to 120_000', () => {
+  test('defaults claudeTimeout to 300_000', () => {
     const result = GlobalAgentLoopConfigSchema.parse({});
-    expect(result.claudeTimeout).toBe(120_000);
+    expect(result.claudeTimeout).toBe(300_000);
   });
 
   test('accepts custom claudeTimeout', () => {
@@ -39,7 +46,7 @@ describe('GlobalAgentLoopConfigSchema', () => {
 describe('BotAgentLoopOverrideSchema', () => {
   test('accepts claudeTimeout override', () => {
     const result = BotAgentLoopOverrideSchema.parse({ claudeTimeout: 600_000 });
-    expect(result!.claudeTimeout).toBe(600_000);
+    expect(result?.claudeTimeout).toBe(600_000);
   });
 
   test('accepts undefined (all optional)', () => {
@@ -50,7 +57,7 @@ describe('BotAgentLoopOverrideSchema', () => {
   test('accepts empty object', () => {
     const result = BotAgentLoopOverrideSchema.parse({});
     expect(result).toBeDefined();
-    expect(result!.claudeTimeout).toBeUndefined();
+    expect(result?.claudeTimeout).toBeUndefined();
   });
 
   test('rejects invalid claudeTimeout', () => {
@@ -63,18 +70,18 @@ describe('BotAgentLoopOverrideSchema', () => {
       reportChatId: 12345,
       claudeTimeout: 300_000,
     });
-    expect(result!.reportChatId).toBe(12345);
-    expect(result!.claudeTimeout).toBe(300_000);
+    expect(result?.reportChatId).toBe(12345);
+    expect(result?.claudeTimeout).toBe(300_000);
   });
 
   test('accepts maxToolRounds override', () => {
     const result = BotAgentLoopOverrideSchema.parse({ maxToolRounds: 15 });
-    expect(result!.maxToolRounds).toBe(15);
+    expect(result?.maxToolRounds).toBe(15);
   });
 
   test('maxToolRounds defaults to undefined (uses global)', () => {
     const result = BotAgentLoopOverrideSchema.parse({});
-    expect(result!.maxToolRounds).toBeUndefined();
+    expect(result?.maxToolRounds).toBeUndefined();
   });
 
   test('rejects invalid maxToolRounds', () => {
@@ -168,10 +175,12 @@ describe('CalendarConfigSchema', () => {
   });
 
   test('rejects invalid provider', () => {
-    expect(() => CalendarConfigSchema.parse({
-      provider: 'outlook',
-      apiKey: 'key',
-    })).toThrow();
+    expect(() =>
+      CalendarConfigSchema.parse({
+        provider: 'outlook',
+        apiKey: 'key',
+      })
+    ).toThrow();
   });
 
   test('rejects missing provider', () => {
@@ -185,5 +194,53 @@ describe('CalendarConfigSchema', () => {
       calendarId: 'my-cal@group.calendar.google.com',
     });
     expect(result.calendarId).toBe('my-cal@group.calendar.google.com');
+  });
+});
+
+describe('CompactionConfigSchema', () => {
+  test('provides all defaults from empty object', () => {
+    const result = CompactionConfigSchema.parse({});
+    expect(result.enabled).toBe(true);
+    expect(result.contextWindows.ollamaTokens).toBe(8192);
+    expect(result.contextWindows.claudeCliTokens).toBe(180_000);
+    expect(result.thresholdRatio).toBe(0.75);
+    expect(result.keepRecentMessages).toBe(6);
+    expect(result.maxMessageChars).toBe(15_000);
+    expect(result.maxOverflowRetries).toBe(2);
+  });
+
+  test('accepts custom values', () => {
+    const result = CompactionConfigSchema.parse({
+      enabled: false,
+      thresholdRatio: 0.5,
+      keepRecentMessages: 10,
+      maxMessageChars: 20_000,
+      maxOverflowRetries: 1,
+      contextWindows: { ollamaTokens: 4096, claudeCliTokens: 100_000 },
+    });
+    expect(result.enabled).toBe(false);
+    expect(result.thresholdRatio).toBe(0.5);
+    expect(result.keepRecentMessages).toBe(10);
+    expect(result.maxMessageChars).toBe(20_000);
+    expect(result.maxOverflowRetries).toBe(1);
+    expect(result.contextWindows.ollamaTokens).toBe(4096);
+  });
+
+  test('rejects thresholdRatio out of range', () => {
+    expect(() => CompactionConfigSchema.parse({ thresholdRatio: 0.05 })).toThrow();
+    expect(() => CompactionConfigSchema.parse({ thresholdRatio: 0.96 })).toThrow();
+  });
+
+  test('rejects keepRecentMessages below minimum', () => {
+    expect(() => CompactionConfigSchema.parse({ keepRecentMessages: 1 })).toThrow();
+  });
+
+  test('rejects maxOverflowRetries out of range', () => {
+    expect(() => CompactionConfigSchema.parse({ maxOverflowRetries: -1 })).toThrow();
+    expect(() => CompactionConfigSchema.parse({ maxOverflowRetries: 4 })).toThrow();
+  });
+
+  test('rejects non-positive maxMessageChars', () => {
+    expect(() => CompactionConfigSchema.parse({ maxMessageChars: 0 })).toThrow();
   });
 });

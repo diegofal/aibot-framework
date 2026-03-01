@@ -2,20 +2,20 @@
  * Tests for SkillMdLoader
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
-  SkillMdLoader,
-  DefaultToolGenerator,
   DefaultRegistryBridge,
+  DefaultToolGenerator,
+  SkillMdLoader,
   loadSkill,
-  loadSkillsFromDirectory
+  loadSkillsFromDirectory,
 } from '../../../src/core/skill-md-adapter/loader';
 import { SkillMdParser } from '../../../src/core/skill-md-adapter/parser';
-import { SkillValidator } from '../../../src/core/skill-md-adapter/validator';
 import { SkillNotFoundError, SkillValidationError } from '../../../src/core/skill-md-adapter/types';
+import { SkillValidator } from '../../../src/core/skill-md-adapter/validator';
 
 describe('SkillMdLoader', () => {
   let tempDir: string;
@@ -92,7 +92,10 @@ Skill with tools.
 **Implementation:** \`scripts/do-something.ts\`
 `;
       writeFileSync(join(skillDir, 'SKILL.md'), content);
-      writeFileSync(join(skillDir, 'scripts', 'do-something.ts'), 'export default async () => ({ success: true })');
+      writeFileSync(
+        join(skillDir, 'scripts', 'do-something.ts'),
+        'export default async () => ({ success: true })'
+      );
 
       const result = await loader.loadFromDirectory(skillDir);
 
@@ -202,26 +205,32 @@ Skill with metadata.
       // Create skill 1
       const skill1Dir = join(parentDir, 'skill-one');
       mkdirSync(skill1Dir, { recursive: true });
-      writeFileSync(join(skill1Dir, 'SKILL.md'), `---
+      writeFileSync(
+        join(skill1Dir, 'SKILL.md'),
+        `---
 name: skill-one
 version: 1.0.0
 description: First skill
 ---
 
 # Skill One
-`);
+`
+      );
 
       // Create skill 2
       const skill2Dir = join(parentDir, 'skill-two');
       mkdirSync(skill2Dir, { recursive: true });
-      writeFileSync(join(skill2Dir, 'SKILL.md'), `---
+      writeFileSync(
+        join(skill2Dir, 'SKILL.md'),
+        `---
 name: skill-two
 version: 1.0.0
 description: Second skill
 ---
 
 # Skill Two
-`);
+`
+      );
 
       // Create non-skill directory
       const notSkillDir = join(parentDir, 'not-a-skill');
@@ -241,33 +250,39 @@ description: Second skill
       // Create valid skill
       const validDir = join(parentDir, 'valid-skill');
       mkdirSync(validDir, { recursive: true });
-      writeFileSync(join(validDir, 'SKILL.md'), `---
+      writeFileSync(
+        join(validDir, 'SKILL.md'),
+        `---
 name: valid-skill
 version: 1.0.0
 description: Valid skill
 ---
 
 # Valid
-`);
+`
+      );
 
       // Create invalid skill
       const invalidDir = join(parentDir, 'invalid-skill');
       mkdirSync(invalidDir, { recursive: true });
-      writeFileSync(join(invalidDir, 'SKILL.md'), `---
+      writeFileSync(
+        join(invalidDir, 'SKILL.md'),
+        `---
 name: bad
 version: not-semver
 description: x
 ---
 
 # Bad
-`);
+`
+      );
 
       const results = await loader.loadFromParentDirectory(parentDir);
 
       expect(results).toHaveLength(2);
 
-      const valid = results.find(r => r.name === 'valid-skill');
-      const invalid = results.find(r => r.name === 'invalid-skill');
+      const valid = results.find((r) => r.name === 'valid-skill');
+      const invalid = results.find((r) => r.name === 'invalid-skill');
 
       expect(valid?.status).toBe('loaded');
       expect(invalid?.status).toBe('error');
@@ -279,14 +294,17 @@ description: x
       const skillDir = join(tempDir, 'convenience');
       mkdirSync(skillDir, { recursive: true });
 
-      writeFileSync(join(skillDir, 'SKILL.md'), `---
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        `---
 name: convenience-skill
 version: 1.0.0
 description: Convenience test
 ---
 
 # Convenience
-`);
+`
+      );
 
       const result = await loadSkill(skillDir, { checkRequirements: false });
 
@@ -299,14 +317,17 @@ description: Convenience test
 
       const skillDir = join(parentDir, 'my-skill');
       mkdirSync(skillDir, { recursive: true });
-      writeFileSync(join(skillDir, 'SKILL.md'), `---
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        `---
 name: my-skill
 version: 1.0.0
 description: My skill
 ---
 
 # My Skill
-`);
+`
+      );
 
       const results = await loadSkillsFromDirectory(parentDir, { checkRequirements: false });
 
@@ -324,7 +345,13 @@ description: My skill
         description: 'A test tool',
         parameters: [
           { name: 'arg1', type: 'string' as const, description: 'First arg', required: true },
-          { name: 'arg2', type: 'number' as const, description: 'Second arg', required: false, default: 42 },
+          {
+            name: 'arg2',
+            type: 'number' as const,
+            description: 'Second arg',
+            required: false,
+            default: 42,
+          },
         ],
         implementation: 'scripts/test.ts',
       };

@@ -1,15 +1,15 @@
 import type { OllamaConfig } from './config';
-import type { Logger } from './logger';
-import type { ToolDefinition, ToolCall, ToolExecutor } from './tools/types';
-import { runToolLoop } from './core/tool-runner';
-import { NativeToolStrategy } from './core/native-tool-strategy';
 import { createLoopDetector } from './core/loop-detector';
+import { NativeToolStrategy } from './core/native-tool-strategy';
+import { runToolLoop } from './core/tool-runner';
+import type { Logger } from './logger';
+import type { ToolCall, ToolDefinition, ToolExecutor } from './tools/types';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   tool_calls?: ToolCall[];
-  images?: string[];  // base64 images for vision models
+  images?: string[]; // base64 images for vision models
 }
 
 export interface ChatOptions {
@@ -62,7 +62,10 @@ export class OllamaClient {
     const startMs = Date.now();
 
     try {
-      this.logger.debug({ model, prompt: prompt.slice(0, 100), timeoutMs: this.config.timeout }, 'Generating with Ollama');
+      this.logger.debug(
+        { model, prompt: prompt.slice(0, 100), timeoutMs: this.config.timeout },
+        'Generating with Ollama'
+      );
 
       const response = await fetch(`${this.config.baseUrl}/api/generate`, {
         method: 'POST',
@@ -85,7 +88,10 @@ export class OllamaClient {
       }
 
       const data: OllamaResponse = await response.json();
-      this.logger.debug({ model, response: data.response.slice(0, 100), elapsedMs: Date.now() - startMs }, 'Generated response');
+      this.logger.debug(
+        { model, response: data.response.slice(0, 100), elapsedMs: Date.now() - startMs },
+        'Generated response'
+      );
 
       return data.response;
     } catch (error) {
@@ -96,7 +102,10 @@ export class OllamaClient {
         throw error;
       }
 
-      this.logger.warn({ err: error, model, elapsedMs, configuredTimeoutMs: this.config.timeout }, 'Primary model failed, trying fallbacks');
+      this.logger.warn(
+        { err: error, model, elapsedMs, configuredTimeoutMs: this.config.timeout },
+        'Primary model failed, trying fallbacks'
+      );
 
       // Try fallback models with reduced timeout
       const fallbacks = this.config.models.fallbacks || [];
@@ -106,12 +115,15 @@ export class OllamaClient {
           this.logger.debug({ fallback }, 'Trying fallback model');
           const fallbackTimeout = Math.min(this.config.timeout, 60_000);
           this.config.timeout = fallbackTimeout;
-          const result = await this.generate(prompt, { ...options, model: fallback, _skipFallbacks: true });
+          const result = await this.generate(prompt, {
+            ...options,
+            model: fallback,
+            _skipFallbacks: true,
+          });
           this.config.timeout = savedTimeout;
           return result;
         } catch (fallbackError) {
           this.logger.debug({ err: fallbackError, fallback }, 'Fallback model failed');
-          continue;
         }
       }
       this.config.timeout = savedTimeout;
@@ -131,25 +143,46 @@ export class OllamaClient {
     const startMs = Date.now();
 
     try {
-      this.logger.debug({ model, messageCount: messages.length, hasTools, timeoutMs: this.config.timeout }, 'Chat with Ollama');
+      this.logger.debug(
+        { model, messageCount: messages.length, hasTools, timeoutMs: this.config.timeout },
+        'Chat with Ollama'
+      );
 
       // If tools are provided, delegate to the generic tool loop
       if (hasTools) {
         const maxRounds = options.maxToolRounds ?? 5;
-        const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger, this.config.timeout);
-        return await runToolLoop(strategy, messages, {
-          maxRounds,
-          tools: options.tools!,
-          toolExecutor: options.toolExecutor!,
-          logger: this.logger,
-          loopDetector: createLoopDetector(maxRounds),
-        }, options);
+        const strategy = new NativeToolStrategy(
+          this,
+          this.config.baseUrl,
+          this.logger,
+          this.config.timeout
+        );
+        return await runToolLoop(
+          strategy,
+          messages,
+          {
+            maxRounds,
+            tools: options.tools!,
+            toolExecutor: options.toolExecutor!,
+            logger: this.logger,
+            loopDetector: createLoopDetector(maxRounds),
+          },
+          options
+        );
       }
 
       // Simple path: no tools, single chat call
-      const strategy = new NativeToolStrategy(this, this.config.baseUrl, this.logger, this.config.timeout);
+      const strategy = new NativeToolStrategy(
+        this,
+        this.config.baseUrl,
+        this.logger,
+        this.config.timeout
+      );
       const result = await strategy.chat(messages, options);
-      this.logger.debug({ model, response: (result.content || '').slice(0, 100), elapsedMs: Date.now() - startMs }, 'Chat response');
+      this.logger.debug(
+        { model, response: (result.content || '').slice(0, 100), elapsedMs: Date.now() - startMs },
+        'Chat response'
+      );
       return result.content || '';
     } catch (error) {
       const elapsedMs = Date.now() - startMs;
@@ -159,7 +192,10 @@ export class OllamaClient {
         throw error;
       }
 
-      this.logger.warn({ err: error, model, elapsedMs, configuredTimeoutMs: this.config.timeout }, 'Primary model failed for chat, trying fallbacks');
+      this.logger.warn(
+        { err: error, model, elapsedMs, configuredTimeoutMs: this.config.timeout },
+        'Primary model failed for chat, trying fallbacks'
+      );
 
       const fallbacks = this.config.models.fallbacks || [];
       const savedTimeout = this.config.timeout;
@@ -168,12 +204,15 @@ export class OllamaClient {
           this.logger.debug({ fallback }, 'Trying fallback model for chat');
           const fallbackTimeout = Math.min(this.config.timeout, 60_000);
           this.config.timeout = fallbackTimeout;
-          const result = await this.chat(messages, { ...options, model: fallback, _skipFallbacks: true });
+          const result = await this.chat(messages, {
+            ...options,
+            model: fallback,
+            _skipFallbacks: true,
+          });
           this.config.timeout = savedTimeout;
           return result;
         } catch (fallbackError) {
           this.logger.debug({ err: fallbackError, fallback }, 'Fallback model failed for chat');
-          continue;
         }
       }
       this.config.timeout = savedTimeout;
@@ -210,7 +249,7 @@ export class OllamaClient {
         throw new Error(`Ollama embed API error: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json() as { model: string; embeddings: number[][] };
+      const data = (await response.json()) as { model: string; embeddings: number[][] };
       const embedding = data.embeddings[0];
 
       if (!embedding || embedding.length === 0) {
@@ -220,7 +259,10 @@ export class OllamaClient {
       return { embedding, model: data.model };
     } catch (error) {
       const elapsedMs = Date.now() - startMs;
-      this.logger.error({ err: error, model: embeddingModel, elapsedMs }, 'Failed to generate embedding');
+      this.logger.error(
+        { err: error, model: embeddingModel, elapsedMs },
+        'Failed to generate embedding'
+      );
       throw error;
     }
   }

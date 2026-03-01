@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Logger } from '../logger';
 import { hasSkillMd, loadDeclarativeSkill } from './skill-md-adapter';
@@ -143,7 +143,7 @@ export function normalizeToolDefs(manifest: ExternalSkillManifest): ExternalTool
  */
 export async function loadExternalSkill(
   skillDir: string,
-  logger: Logger,
+  logger: Logger
 ): Promise<LoadedExternalSkill> {
   // Check for SKILL.md first (declarative format)
   if (hasSkillMd(skillDir)) {
@@ -199,7 +199,7 @@ export async function loadExternalSkill(
   const extraHandlers = Object.keys(handlers).filter((k) => !toolNames.has(k));
   if (extraHandlers.length > 0) {
     logger.debug(
-      `Skill "${manifest.id}" has extra handler keys not in manifest: ${extraHandlers.join(', ')}`,
+      `Skill "${manifest.id}" has extra handler keys not in manifest: ${extraHandlers.join(', ')}`
     );
   }
 
@@ -212,7 +212,7 @@ export async function loadExternalSkill(
  * and botName is the production directory name.
  */
 export function discoverProductionSkillPaths(
-  baseDir: string,
+  baseDir: string
 ): Array<{ path: string; botName: string }> {
   const absBase = resolve(baseDir);
   if (!existsSync(absBase)) return [];

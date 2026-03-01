@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
-import { SkillRegistry } from '../../src/core/skill-registry';
-import { SkillLoader } from '../../src/core/skill-loader';
 import type { Config } from '../../src/config';
+import { SkillLoader } from '../../src/core/skill-loader';
+import { SkillRegistry } from '../../src/core/skill-registry';
 import type { Logger } from '../../src/logger';
 
 // Get absolute path to skills directory from project root
@@ -11,7 +11,7 @@ const SKILLS_PATH = join(PROJECT_ROOT, 'src', 'skills');
 
 /**
  * Integration tests for Skill Loading
- * 
+ *
  * This test verifies:
  * 1. Skills listed in config.skills.enabled are loaded from disk
  * 2. Skill manifests are read correctly
@@ -57,7 +57,7 @@ describe('Skill Loading Integration', () => {
       const available = await registry.listAvailable();
 
       // Should find our productivity skills
-      const skillIds = available.map(s => s.id);
+      const skillIds = available.map((s) => s.id);
       expect(skillIds).toContain('quick-notes');
       expect(skillIds).toContain('task-tracker');
       expect(skillIds).toContain('daily-priorities');
@@ -167,7 +167,7 @@ describe('Skill Loading Integration', () => {
       } as Config;
 
       skillRegistry = new SkillRegistry(config, logger);
-      
+
       // Should not throw, just log error
       await skillRegistry.loadSkills(config.skills.enabled);
 
@@ -187,7 +187,7 @@ describe('Skill Loading Integration', () => {
       } as Config;
 
       skillRegistry = new SkillRegistry(config, logger);
-      
+
       // Load first time
       await skillRegistry.loadSkills(['quick-notes']);
       expect(skillRegistry.getAll().length).toBe(1);
@@ -214,7 +214,7 @@ describe('Skill Loading Integration', () => {
 
       const skill = skillRegistry.get('quick-notes');
       expect(skill?.commands).toBeDefined();
-      
+
       // Check specific commands exist
       const commands = Object.keys(skill?.commands || {});
       expect(commands).toContain('note');

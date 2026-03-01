@@ -32,10 +32,10 @@ function saveData(ctx: SkillContext, data: TaskData): void {
 
 function parseDueDate(input?: string): string | undefined {
   if (!input) return undefined;
-  
+
   const lower = input.toLowerCase();
   const today = new Date();
-  
+
   if (lower === 'today') {
     return today.toISOString().split('T')[0];
   }
@@ -49,13 +49,13 @@ function parseDueDate(input?: string): string | undefined {
     next.setDate(next.getDate() + 7);
     return next.toISOString().split('T')[0];
   }
-  
+
   // Try to parse as date
   const parsed = new Date(input);
-  if (!isNaN(parsed.getTime())) {
+  if (!Number.isNaN(parsed.getTime())) {
     return parsed.toISOString().split('T')[0];
   }
-  
+
   return undefined;
 }
 
@@ -63,7 +63,7 @@ function getPriorityEmoji(priority: string): string {
   const emojis: Record<string, string> = {
     high: '🔴',
     medium: '🟡',
-    low: '🟢'
+    low: '🟢',
   };
   return emojis[priority] || '⚪';
 }
@@ -72,12 +72,15 @@ function formatTask(task: Task): string {
   const status = task.status === 'done' ? '✅' : '⬜';
   const priority = getPriorityEmoji(task.priority);
   const due = task.dueDate ? ` (📅 ${task.dueDate})` : '';
-  const tags = task.tags.length > 0 ? ` ${task.tags.map(t => `#${t}`).join(' ')}` : '';
+  const tags = task.tags.length > 0 ? ` ${task.tags.map((t) => `#${t}`).join(' ')}` : '';
   return `${status} ${priority} \`${task.id}\` ${task.title}${due}${tags}`;
 }
 
 // Tool handlers
-export const handlers: Record<string, (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>> = {
+export const handlers: Record<
+  string,
+  (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>
+> = {
   async task_add(args, ctx) {
     const title = String(args.title || '');
     if (!title.trim()) {
@@ -92,7 +95,7 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
       status: 'pending',
       dueDate: parseDueDate(args.dueDate as string),
       tags: Array.isArray(args.tags) ? (args.tags as string[]) : [],
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     data.tasks.push(task);
@@ -109,19 +112,19 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
     // Filter by status
     const status = (args.status as string) || 'pending';
     if (status !== 'all') {
-      tasks = tasks.filter(t => t.status === status);
+      tasks = tasks.filter((t) => t.status === status);
     }
 
     // Filter by priority
     const priority = args.priority as string;
     if (priority && priority !== 'all') {
-      tasks = tasks.filter(t => t.priority === priority);
+      tasks = tasks.filter((t) => t.priority === priority);
     }
 
     // Filter by tag
     const tag = args.tag as string;
     if (tag) {
-      tasks = tasks.filter(t => t.tags.includes(tag.toLowerCase()));
+      tasks = tasks.filter((t) => t.tags.includes(tag.toLowerCase()));
     }
 
     // Sort: high priority first, then by due date
@@ -142,8 +145,8 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
   async task_complete(args, ctx) {
     const taskId = String(args.taskId || '');
     const data = getData(ctx);
-    
-    const task = data.tasks.find(t => t.id === taskId);
+
+    const task = data.tasks.find((t) => t.id === taskId);
     if (!task) {
       return { success: false, message: `Task ${taskId} not found` };
     }
@@ -159,8 +162,8 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
   async task_delete(args, ctx) {
     const taskId = String(args.taskId || '');
     const data = getData(ctx);
-    
-    const index = data.tasks.findIndex(t => t.id === taskId);
+
+    const index = data.tasks.findIndex((t) => t.id === taskId);
     if (index === -1) {
       return { success: false, message: `Task ${taskId} not found` };
     }
@@ -175,10 +178,10 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
   async task_prioritize(args, ctx) {
     const taskId = String(args.taskId || '');
     const priority = args.priority as Task['priority'];
-    
+
     const data = getData(ctx);
-    const task = data.tasks.find(t => t.id === taskId);
-    
+    const task = data.tasks.find((t) => t.id === taskId);
+
     if (!task) {
       return { success: false, message: `Task ${taskId} not found` };
     }
@@ -188,7 +191,7 @@ export const handlers: Record<string, (args: Record<string, unknown>, context: S
 
     ctx.logger.info({ taskId, priority }, 'Task priority updated');
     return { success: true, task };
-  }
+  },
 };
 
 // Skill definition
@@ -206,7 +209,8 @@ const skill: Skill = {
 
   commands: {
     task: {
-      description: 'Task management: add <title>, list [status], done <id>, delete <id>, priority <id> <level>',
+      description:
+        'Task management: add <title>, list [status], done <id>, delete <id>, priority <id> <level>',
       async handler(args: string[], ctx) {
         const subcommand = args[0]?.toLowerCase();
         const rest = args.slice(1).join(' ').trim();
@@ -231,7 +235,7 @@ const skill: Skill = {
           // Extract #tags
           const tagMatches = rest.match(/#(\w+)/g);
           if (tagMatches) {
-            tagMatches.forEach(tag => {
+            tagMatches.forEach((tag) => {
               tags.push(tag.slice(1).toLowerCase());
               title = title.replace(tag, '').trim();
             });
@@ -262,7 +266,7 @@ const skill: Skill = {
         // List tasks
         if (subcommand === 'list' || subcommand === 'ls') {
           const listArgs: Record<string, string> = {};
-          
+
           // Parse filters from remaining args
           const filters = rest.split(/\s+/).filter(Boolean);
           for (const filter of filters) {
@@ -284,10 +288,7 @@ const skill: Skill = {
             return '📭 No tasks found.';
           }
 
-          const lines = [
-            `📋 ${count} task${count === 1 ? '' : 's'}:`,
-            ...tasks.map(formatTask)
-          ];
+          const lines = [`📋 ${count} task${count === 1 ? '' : 's'}:`, ...tasks.map(formatTask)];
           return lines.join('\n');
         }
 
@@ -326,7 +327,7 @@ const skill: Skill = {
           const parts = rest.split(/\s+/).filter(Boolean);
           const taskId = parts[0];
           const priority = parts[1]?.toLowerCase() as Task['priority'];
-          
+
           if (!taskId || !['high', 'medium', 'low'].includes(priority)) {
             return 'Usage: /task priority <task-id> <high|medium|low>';
           }
@@ -341,9 +342,9 @@ const skill: Skill = {
 
         // Unknown command
         return 'Unknown command. Try: add, list, done, delete, priority';
-      }
-    }
-  }
+      },
+    },
+  },
 };
 
 export default skill;

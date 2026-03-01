@@ -1,7 +1,9 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { backupSoulFile } from '../../soul';
 import type { CallbackQueryData, Skill, SkillContext, TelegramMessage } from '../../core/types';
+import { backupSoulFile } from '../../soul';
+import { buildExtractionPrompt, buildJsonFixPrompt, buildRewritePrompt } from './prompts';
+import { createSession, deleteSession, getSession, isSessionExpired, saveSession } from './session';
 import type {
   CalibrateConfig,
   CalibrateScope,
@@ -11,8 +13,6 @@ import type {
   FileRewrite,
   RewriteResult,
 } from './types';
-import { createSession, deleteSession, getSession, isSessionExpired, saveSession } from './session';
-import { buildExtractionPrompt, buildJsonFixPrompt, buildRewritePrompt } from './prompts';
 
 const VALID_SCOPES: CalibrateScope[] = ['all', 'identity', 'soul', 'motivations', 'memory'];
 const DEFAULT_SOUL_DIR = './config/soul';
@@ -42,8 +42,8 @@ const skill: Skill = {
         const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
         const maxBatches = config.maxBatches || DEFAULT_MAX_BATCHES;
         const timeoutMs = config.sessionTimeoutMs || DEFAULT_TIMEOUT_MS;
-        const chatId = ctx.session!.chatId;
-        const userId = ctx.session!.userId!;
+        const chatId = ctx.session?.chatId;
+        const userId = ctx.session?.userId!;
 
         // Concurrency guard
         const existing = getSession(ctx.data, chatId, userId);
@@ -211,7 +211,7 @@ const skill: Skill = {
 async function handleVerdict(
   ctx: SkillContext,
   session: CalibrationSession,
-  verdict: 'correct' | 'remove' | 'skip',
+  verdict: 'correct' | 'remove' | 'skip'
 ): Promise<void> {
   const batch = session.batches[session.currentBatchIndex];
   for (const claim of batch.claims) {
@@ -237,7 +237,7 @@ async function handleEditRequest(ctx: SkillContext, session: CalibrationSession)
 
   await ctx.telegram.sendMessage(
     session.chatId,
-    `✏️ ${batch.title}\n\n${claimsText}\n\nType your correction (replaces ALL claims in this batch):`,
+    `✏️ ${batch.title}\n\n${claimsText}\n\nType your correction (replaces ALL claims in this batch):`
   );
 }
 
@@ -250,7 +250,7 @@ async function handleCancel(ctx: SkillContext, session: CalibrationSession): Pro
       await ctx.telegram.editMessageText(
         session.chatId,
         session.reviewMessageId,
-        '🚫 Calibration cancelled.',
+        '🚫 Calibration cancelled.'
       );
     } catch {
       await ctx.telegram.sendMessage(session.chatId, '🚫 Calibration cancelled.');
@@ -279,10 +279,7 @@ async function handleApply(ctx: SkillContext, session: CalibrationSession): Prom
   deleteSession(ctx.data, session.chatId, session.userId);
 
   const fileList = session.rewrites.map((r) => r.filename).join(', ');
-  await ctx.telegram.sendMessage(
-    session.chatId,
-    `✅ Calibration applied! Updated: ${fileList}`,
-  );
+  await ctx.telegram.sendMessage(session.chatId, `✅ Calibration applied! Updated: ${fileList}`);
 }
 
 async function handleDiscard(ctx: SkillContext, session: CalibrationSession): Promise<void> {
@@ -299,7 +296,8 @@ async function sendBatchReview(ctx: SkillContext, session: CalibrationSession): 
 
   const claimsText = batch.claims.map((c, i) => `  ${i + 1}. ${c.text}`).join('\n');
 
-  const text = `📋 Batch ${idx + 1}/${total}: ${batch.title}\n` +
+  const text =
+    `📋 Batch ${idx + 1}/${total}: ${batch.title}\n` +
     `📁 Source: ${batch.sourceFile}\n\n` +
     `${claimsText}`;
 
@@ -332,7 +330,12 @@ async function sendBatchReview(ctx: SkillContext, session: CalibrationSession): 
 
 async function finalizeBatches(ctx: SkillContext, session: CalibrationSession): Promise<void> {
   // Collect all corrections (edits and removals)
-  const corrections: { claim: string; action: 'edit' | 'remove'; correction?: string; sourceFile: string }[] = [];
+  const corrections: {
+    claim: string;
+    action: 'edit' | 'remove';
+    correction?: string;
+    sourceFile: string;
+  }[] = [];
 
   for (const batch of session.batches) {
     for (const claim of batch.claims) {
@@ -363,7 +366,10 @@ async function finalizeBatches(ctx: SkillContext, session: CalibrationSession): 
   session.phase = 'rewriting';
   saveSession(ctx.data, session);
 
-  await ctx.telegram.sendMessage(session.chatId, `🔄 Rewriting ${corrections.length} correction(s)...`);
+  await ctx.telegram.sendMessage(
+    session.chatId,
+    `🔄 Rewriting ${corrections.length} correction(s)...`
+  );
 
   try {
     const config = ctx.config as CalibrateConfig;
@@ -399,9 +405,10 @@ async function finalizeBatches(ctx: SkillContext, session: CalibrationSession): 
 async function sendRewriteProposal(ctx: SkillContext, session: CalibrationSession): Promise<void> {
   // Show each proposed rewrite
   for (const rewrite of session.rewrites) {
-    const preview = rewrite.content.length > 3500
-      ? rewrite.content.slice(0, 3500) + '\n\n... (truncated)'
-      : rewrite.content;
+    const preview =
+      rewrite.content.length > 3500
+        ? `${rewrite.content.slice(0, 3500)}\n\n... (truncated)`
+        : rewrite.content;
 
     const chunks = splitMessage(`📄 ${rewrite.filename}\n\n${preview}`);
     for (const chunk of chunks) {
@@ -422,13 +429,16 @@ async function sendRewriteProposal(ctx: SkillContext, session: CalibrationSessio
   await ctx.telegram.sendMessage(
     session.chatId,
     `🔎 Review the proposed changes above.\n\n${session.rewrites.length} file(s) will be modified.`,
-    { reply_markup: keyboard },
+    { reply_markup: keyboard }
   );
 }
 
 // --- Helpers ---
 
-function readSoulFiles(soulDir: string, filenames: string[]): { filename: string; content: string }[] {
+function readSoulFiles(
+  soulDir: string,
+  filenames: string[]
+): { filename: string; content: string }[] {
   const files: { filename: string; content: string }[] = [];
   for (const filename of filenames) {
     const filepath = join(soulDir, filename);
@@ -516,6 +526,5 @@ function splitMessage(text: string, maxLen = 4096): string[] {
   }
   return chunks;
 }
-
 
 export default skill;

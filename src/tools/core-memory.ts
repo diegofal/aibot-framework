@@ -1,7 +1,10 @@
-import type { CoreMemoryManager, CoreMemoryEntry } from '../memory/core-memory';
+import type { CoreMemoryEntry, CoreMemoryManager } from '../memory/core-memory';
 import type { Tool, ToolResult } from './types';
 
-type ToolLogger = { info: (msg: Record<string, unknown>) => void; error: (msg: Record<string, unknown>) => void };
+type ToolLogger = {
+  info: (msg: Record<string, unknown>) => void;
+  error: (msg: Record<string, unknown>) => void;
+};
 
 export function createCoreMemoryTools(coreMemory: CoreMemoryManager): Tool[] {
   return [
@@ -18,22 +21,24 @@ function createCoreMemoryAppendTool(coreMemory: CoreMemoryManager): Tool {
       function: {
         name: 'core_memory_append',
         description:
-          'Add or update a structured memory fact about identity, relationships, preferences, goals, or constraints. ' +
+          'Add or update a structured memory fact about identity, relationships, preferences, goals, constraints, or general topics. ' +
           'Use this to remember important things that should persist across conversations. ' +
           'Categories: identity (who you are), relationships (info about users), preferences (your own preferences), ' +
-          'goals (long-term objectives), constraints (self-imposed limits). ' +
+          'goals (long-term objectives), constraints (self-imposed limits), general (other useful facts). ' +
           'Importance: 1-10 scale (10 = critical, 1 = minor).',
         parameters: {
           type: 'object',
           properties: {
             category: {
               type: 'string',
-              description: 'Memory category: identity, relationships, preferences, goals, or constraints',
-              enum: ['identity', 'relationships', 'preferences', 'goals', 'constraints'],
+              description:
+                'Memory category: identity, relationships, preferences, goals, constraints, or general',
+              enum: ['identity', 'relationships', 'preferences', 'goals', 'constraints', 'general'],
             },
             key: {
               type: 'string',
-              description: 'Short identifier for this fact (e.g., "user_diego_work", "personal_style")',
+              description:
+                'Short identifier for this fact (e.g., "user_diego_work", "personal_style")',
             },
             value: {
               type: 'string',
@@ -51,16 +56,22 @@ function createCoreMemoryAppendTool(coreMemory: CoreMemoryManager): Tool {
       },
     },
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
-      const category = String(args.category);
+      const VALID = ['identity', 'relationships', 'preferences', 'goals', 'constraints', 'general'];
+      const rawCategory = String(args.category);
+      // Gracefully fall back to 'general' if LLM sends a non-standard category
+      const category = VALID.includes(rawCategory) ? rawCategory : 'general';
       const key = String(args.key);
       const value = String(args.value);
       const importance = typeof args.importance === 'number' ? args.importance : 5;
+      const botId = typeof args._botId === 'string' ? args._botId : undefined;
 
       try {
-        await coreMemory.set(category, key, value, importance);
+        await coreMemory.set(category, key, value, importance, botId);
+        const remapped =
+          category !== rawCategory ? ` (category "${rawCategory}" mapped to "general")` : '';
         return {
           success: true,
-          content: `Memory saved: [${category}] ${key} = "${value}" (importance: ${importance})`,
+          content: `Memory saved: [${category}] ${key} = "${value}" (importance: ${importance})${remapped}`,
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -89,7 +100,7 @@ function createCoreMemoryReplaceTool(coreMemory: CoreMemoryManager): Tool {
             category: {
               type: 'string',
               description: 'Memory category',
-              enum: ['identity', 'relationships', 'preferences', 'goals', 'constraints'],
+              enum: ['identity', 'relationships', 'preferences', 'goals', 'constraints', 'general'],
             },
             key: {
               type: 'string',
@@ -120,9 +131,10 @@ function createCoreMemoryReplaceTool(coreMemory: CoreMemoryManager): Tool {
       const oldValue = String(args.old_value);
       const newValue = String(args.new_value);
       const newImportance = typeof args.importance === 'number' ? args.importance : undefined;
+      const botId = typeof args._botId === 'string' ? args._botId : undefined;
 
       try {
-        const existing = await coreMemory.get(category, key);
+        const existing = await coreMemory.get(category, key, botId);
 
         if (!existing) {
           return {
@@ -134,14 +146,12 @@ function createCoreMemoryReplaceTool(coreMemory: CoreMemoryManager): Tool {
         if (existing.value !== oldValue) {
           return {
             success: false,
-            content:
-              `Value mismatch. Expected: "${oldValue}" but found: "${existing.value}". ` +
-              `Use core_memory_search to verify current value.`,
+            content: `Value mismatch. Expected: "${oldValue}" but found: "${existing.value}". Use core_memory_search to verify current value.`,
           };
         }
 
         const importance = newImportance ?? existing.importance;
-        await coreMemory.set(category, key, newValue, importance);
+        await coreMemory.set(category, key, newValue, importance, botId);
 
         return {
           success: true,
@@ -165,7 +175,7 @@ function createCoreMemorySearchTool(coreMemory: CoreMemoryManager): Tool {
       function: {
         name: 'core_memory_search',
         description:
-          'Search your structured core memory for facts about identity, relationships, preferences, goals, or constraints. ' +
+          'Search your structured core memory for facts about identity, relationships, preferences, goals, constraints, or general topics. ' +
           'Use this before claiming you know something about a person or yourself. ' +
           'Returns facts ordered by importance.',
         parameters: {
@@ -178,7 +188,7 @@ function createCoreMemorySearchTool(coreMemory: CoreMemoryManager): Tool {
             category: {
               type: 'string',
               description: 'Optional: filter to specific category',
-              enum: ['identity', 'relationships', 'preferences', 'goals', 'constraints'],
+              enum: ['identity', 'relationships', 'preferences', 'goals', 'constraints', 'general'],
             },
             limit: {
               type: 'number',
@@ -195,9 +205,10 @@ function createCoreMemorySearchTool(coreMemory: CoreMemoryManager): Tool {
       const query = String(args.query);
       const category = args.category ? String(args.category) : undefined;
       const limit = typeof args.limit === 'number' ? args.limit : 10;
+      const botId = typeof args._botId === 'string' ? args._botId : undefined;
 
       try {
-        const results = await coreMemory.search(query, category, limit);
+        const results = await coreMemory.search(query, category, limit, botId);
 
         if (results.length === 0) {
           return {

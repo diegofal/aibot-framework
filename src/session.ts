@@ -1,12 +1,26 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, appendFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Context } from 'grammy';
 import type { SessionConfig } from './config';
-import type { ChatMessage } from './ollama';
 import type { SessionInfo } from './core/types';
 import type { Logger } from './logger';
+import type { ChatMessage } from './ollama';
 
-export type GroupResponseReason = false | 'always' | 'replyToBot' | 'mention' | 'mentionPattern' | 'replyWindow' | 'broadcast';
+export type GroupResponseReason =
+  | false
+  | 'always'
+  | 'replyToBot'
+  | 'mention'
+  | 'mentionPattern'
+  | 'replyWindow'
+  | 'broadcast';
 
 interface SessionMeta {
   key: string;
@@ -74,7 +88,10 @@ export class SessionManager {
     // Load persisted active conversations
     if (existsSync(this.activeConvPath)) {
       try {
-        const raw = JSON.parse(readFileSync(this.activeConvPath, 'utf-8')) as Record<string, number>;
+        const raw = JSON.parse(readFileSync(this.activeConvPath, 'utf-8')) as Record<
+          string,
+          number
+        >;
         const now = Date.now();
         for (const [key, ts] of Object.entries(raw)) {
           if (this.config.replyWindow > 0) {
@@ -163,7 +180,7 @@ export class SessionManager {
    */
   private transcriptPath(serializedKey: string): string {
     // Replace colons with dashes for filesystem safety
-    const filename = serializedKey.replace(/:/g, '-') + '.jsonl';
+    const filename = `${serializedKey.replace(/:/g, '-')}.jsonl`;
     return join(this.transcriptsDir, filename);
   }
 
@@ -207,6 +224,7 @@ export class SessionManager {
 
   /**
    * Load history from JSONL, return last N messages.
+   * If a [CONTEXT_SUMMARY] message exists, returns [lastSummary, ...last N regular messages].
    * Does NOT auto-clear expired sessions — caller must check isExpired() first.
    */
   getHistory(serializedKey: string, maxHistory: number): ChatMessage[] {
@@ -220,15 +238,21 @@ export class SessionManager {
       if (!content) return [];
 
       const lines = content.split('\n');
-      const messages: ChatMessage[] = [];
+      let lastSummary: ChatMessage | null = null;
+      const regular: ChatMessage[] = [];
+
       for (const line of lines) {
-        if (line.trim()) {
-          messages.push(JSON.parse(line));
+        if (!line.trim()) continue;
+        const msg: ChatMessage = JSON.parse(line);
+        if (msg.role === 'system' && msg.content.startsWith('[CONTEXT_SUMMARY]')) {
+          lastSummary = msg;
+        } else {
+          regular.push(msg);
         }
       }
 
-      // Return only the last maxHistory messages
-      return messages.slice(-maxHistory);
+      const recent = regular.slice(-maxHistory);
+      return lastSummary ? [lastSummary, ...recent] : recent;
     } catch (err) {
       this.logger.warn({ err, key: serializedKey }, 'Failed to read transcript');
       return [];
@@ -244,7 +268,7 @@ export class SessionManager {
     // Ensure parent dir exists (should already from initialize, but be safe)
     mkdirSync(dirname(filePath), { recursive: true });
 
-    const lines = messages.map((m) => JSON.stringify(m)).join('\n') + '\n';
+    const lines = `${messages.map((m) => JSON.stringify(m)).join('\n')}\n`;
     appendFileSync(filePath, lines, 'utf-8');
 
     // Update metadata
@@ -263,6 +287,42 @@ export class SessionManager {
 
     // Compact if file has grown too large
     this.maybeCompact(serializedKey, maxHistory);
+  }
+
+  /**
+   * Rewrite the transcript with a compaction summary + recent messages.
+   * Used by ContextCompactor to persist LLM-summarized history.
+   */
+  rewriteWithSummary(
+    serializedKey: string,
+    summaryMsg: ChatMessage,
+    recentMessages: ChatMessage[]
+  ): void {
+    const filePath = this.transcriptPath(serializedKey);
+    mkdirSync(dirname(filePath), { recursive: true });
+
+    const allMessages = [summaryMsg, ...recentMessages];
+    const newLines = allMessages.map((m) => JSON.stringify(m));
+    writeFileSync(filePath, `${newLines.join('\n')}\n`, 'utf-8');
+
+    // Update metadata
+    const now = new Date().toISOString();
+    const existing = this.metadata.get(serializedKey);
+    const meta: SessionMeta = {
+      key: serializedKey,
+      createdAt: existing?.createdAt ?? now,
+      lastActivityAt: existing?.lastActivityAt ?? now,
+      messageCount: allMessages.length,
+      compactionCount: (existing?.compactionCount ?? 0) + 1,
+      lastFlushCompactionIndex: existing?.lastFlushCompactionIndex,
+    };
+    this.metadata.set(serializedKey, meta);
+    this.dirty = true;
+
+    this.logger.debug(
+      { key: serializedKey, messages: allMessages.length },
+      'Transcript rewritten with compaction summary'
+    );
   }
 
   /**
@@ -380,7 +440,7 @@ export class SessionManager {
     ctx: Context,
     botUsername?: string,
     botId?: string,
-    mentionPatterns?: string[],
+    mentionPatterns?: string[]
   ): GroupResponseReason {
     if (this.config.groupActivation === 'always') {
       return 'always';
@@ -425,7 +485,7 @@ export class SessionManager {
     }
 
     // Check active reply window for this user
-    if (botId && this.isActive(botId, ctx.chat!.id, ctx.from?.id)) {
+    if (botId && this.isActive(botId, ctx.chat?.id, ctx.from?.id)) {
       return 'replyWindow';
     }
 
@@ -454,7 +514,8 @@ export class SessionManager {
   }
 
   /**
-   * Rewrite transcript file if it exceeds 2x maxHistory lines
+   * Rewrite transcript file if it exceeds 2x maxHistory lines.
+   * [CONTEXT_SUMMARY] lines are preserved and not counted toward the threshold.
    */
   private maybeCompact(serializedKey: string, maxHistory: number): void {
     const filePath = this.transcriptPath(serializedKey);
@@ -465,9 +526,25 @@ export class SessionManager {
       if (!content) return;
 
       const lines = content.split('\n').filter((l) => l.trim());
-      if (lines.length > maxHistory * 2) {
-        const kept = lines.slice(-maxHistory);
-        writeFileSync(filePath, kept.join('\n') + '\n', 'utf-8');
+
+      // Separate summary lines from regular lines
+      const summaryLines: string[] = [];
+      const regularLines: string[] = [];
+      for (const line of lines) {
+        if (line.includes('[CONTEXT_SUMMARY]')) {
+          summaryLines.push(line);
+        } else {
+          regularLines.push(line);
+        }
+      }
+
+      // Only count regular lines for the threshold
+      if (regularLines.length > maxHistory * 2) {
+        const keptRegular = regularLines.slice(-maxHistory);
+        // Keep the last summary (if any) + recent regular messages
+        const lastSummary = summaryLines.length > 0 ? [summaryLines[summaryLines.length - 1]] : [];
+        const kept = [...lastSummary, ...keptRegular];
+        writeFileSync(filePath, `${kept.join('\n')}\n`, 'utf-8');
 
         // Update metadata message count and compaction counter
         const meta = this.metadata.get(serializedKey);

@@ -1,8 +1,8 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ProductionsService } from '../src/productions/service';
 import type { Config } from '../src/config';
+import { ProductionsService } from '../src/productions/service';
 
 const noopLogger = {
   info: () => {},
@@ -217,7 +217,7 @@ describe('ProductionsService', () => {
 
       const found = service.getEntry('bot1', created.id);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(created.id);
+      expect(found?.id).toBe(created.id);
     });
 
     test('returns null for non-existent entry', () => {
@@ -245,14 +245,14 @@ describe('ProductionsService', () => {
       });
 
       expect(updated).not.toBeNull();
-      expect(updated!.evaluation!.status).toBe('approved');
-      expect(updated!.evaluation!.rating).toBe(4);
-      expect(updated!.evaluation!.feedback).toBe('Good work');
-      expect(updated!.evaluation!.evaluatedAt).toBeTruthy();
+      expect(updated?.evaluation?.status).toBe('approved');
+      expect(updated?.evaluation?.rating).toBe(4);
+      expect(updated?.evaluation?.feedback).toBe('Good work');
+      expect(updated?.evaluation?.evaluatedAt).toBeTruthy();
 
       // Verify persisted
       const refetched = service.getEntry('bot1', created.id);
-      expect(refetched!.evaluation!.status).toBe('approved');
+      expect(refetched?.evaluation?.status).toBe('approved');
     });
 
     test('returns null for non-existent entry', () => {
@@ -276,11 +276,16 @@ describe('ProductionsService', () => {
         appendDailyMemory: (fact: string) => memoryFacts.push(fact),
       } as any;
 
-      service.evaluate('bot1', created.id, {
-        status: 'rejected',
-        rating: 2,
-        feedback: 'Needs improvement',
-      }, mockSoulLoader);
+      service.evaluate(
+        'bot1',
+        created.id,
+        {
+          status: 'rejected',
+          rating: 2,
+          feedback: 'Needs improvement',
+        },
+        mockSoulLoader
+      );
 
       expect(memoryFacts.length).toBe(1);
       expect(memoryFacts[0]).toContain('rejected');
@@ -308,14 +313,18 @@ describe('ProductionsService', () => {
         feedback: 'Good work',
       });
 
-      const updated = service.setAiResponse('bot1', created.id, 'Thank you for the positive feedback!');
+      const updated = service.setAiResponse(
+        'bot1',
+        created.id,
+        'Thank you for the positive feedback!'
+      );
       expect(updated).not.toBeNull();
-      expect(updated!.evaluation!.aiResponse).toBe('Thank you for the positive feedback!');
-      expect(updated!.evaluation!.aiResponseAt).toBeTruthy();
+      expect(updated?.evaluation?.aiResponse).toBe('Thank you for the positive feedback!');
+      expect(updated?.evaluation?.aiResponseAt).toBeTruthy();
 
       // Verify persisted to JSONL
       const refetched = service.getEntry('bot1', created.id);
-      expect(refetched!.evaluation!.aiResponse).toBe('Thank you for the positive feedback!');
+      expect(refetched?.evaluation?.aiResponse).toBe('Thank you for the positive feedback!');
     });
 
     test('returns null for unevaluated entry', () => {
@@ -368,18 +377,33 @@ describe('ProductionsService', () => {
       // Create entries with different statuses
       const e1 = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'a.ts', action: 'create',
-        description: 'a', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'a.ts',
+        action: 'create',
+        description: 'a',
+        size: 10,
+        trackOnly: false,
       });
       const e2 = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'b.ts', action: 'create',
-        description: 'b', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'b.ts',
+        action: 'create',
+        description: 'b',
+        size: 10,
+        trackOnly: false,
       });
       service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'c.ts', action: 'create',
-        description: 'c', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'c.ts',
+        action: 'create',
+        description: 'c',
+        size: 10,
+        trackOnly: false,
       });
 
       service.evaluate('bot1', e1.id, { status: 'approved', rating: 5 });
@@ -403,8 +427,13 @@ describe('ProductionsService', () => {
       // Create a valid entry first
       service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'valid.ts', action: 'create',
-        description: 'valid', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'valid.ts',
+        action: 'create',
+        description: 'valid',
+        size: 10,
+        trackOnly: false,
       });
 
       // Inject corrupt lines into changelog (simulates bot writing markdown to JSONL)
@@ -425,13 +454,23 @@ describe('ProductionsService', () => {
     test('filters by evaluation status', () => {
       const e1 = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'a.ts', action: 'create',
-        description: 'a', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'a.ts',
+        action: 'create',
+        description: 'a',
+        size: 10,
+        trackOnly: false,
       });
       service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'b.ts', action: 'create',
-        description: 'b', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'b.ts',
+        action: 'create',
+        description: 'b',
+        size: 10,
+        trackOnly: false,
       });
 
       service.evaluate('bot1', e1.id, { status: 'approved' });
@@ -559,8 +598,13 @@ describe('ProductionsService', () => {
     test('returns stats for all enabled bots', () => {
       service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'a.ts', action: 'create',
-        description: 'a', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'a.ts',
+        action: 'create',
+        description: 'a',
+        size: 10,
+        trackOnly: false,
       });
 
       const allStats = service.getAllBotStats();
@@ -568,7 +612,7 @@ describe('ProductionsService', () => {
       expect(allStats.length).toBeGreaterThanOrEqual(1);
       const bot1 = allStats.find((s) => s.botId === 'bot1');
       expect(bot1).toBeTruthy();
-      expect(bot1!.total).toBe(1);
+      expect(bot1?.total).toBe(1);
     });
   });
 
@@ -585,9 +629,9 @@ describe('ProductionsService', () => {
 
       const data = service.readSummary('bot1');
       expect(data).not.toBeNull();
-      expect(data!.summary).toBe('The bot is focused on writing articles.');
-      expect(data!.generatedAt).toBe('2026-02-22T10:00:00Z');
-      expect(data!.error).toBeUndefined();
+      expect(data?.summary).toBe('The bot is focused on writing articles.');
+      expect(data?.generatedAt).toBe('2026-02-22T10:00:00Z');
+      expect(data?.error).toBeUndefined();
     });
 
     test('writeSummary persists error state', () => {
@@ -598,8 +642,8 @@ describe('ProductionsService', () => {
 
       const data = service.readSummary('bot1');
       expect(data).not.toBeNull();
-      expect(data!.error).toBe('CLI timeout');
-      expect(data!.summary).toBeUndefined();
+      expect(data?.error).toBe('CLI timeout');
+      expect(data?.summary).toBeUndefined();
     });
 
     test('writeSummary overwrites previous summary', () => {
@@ -614,8 +658,8 @@ describe('ProductionsService', () => {
       });
 
       const data = service.readSummary('bot1');
-      expect(data!.summary).toBe('New summary');
-      expect(data!.generatedAt).toBe('2026-02-22T10:00:00Z');
+      expect(data?.summary).toBe('New summary');
+      expect(data?.generatedAt).toBe('2026-02-22T10:00:00Z');
     });
 
     test('readSummary returns null for corrupt file', () => {
@@ -630,42 +674,62 @@ describe('ProductionsService', () => {
     test('adds a thread message to an existing entry', () => {
       const created = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'test.ts', action: 'create',
-        description: 'test', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'test.ts',
+        action: 'create',
+        description: 'test',
+        size: 10,
+        trackOnly: false,
       });
 
-      const result = service.addThreadMessage('bot1', created.id, 'human', 'What was your reasoning?');
+      const result = service.addThreadMessage(
+        'bot1',
+        created.id,
+        'human',
+        'What was your reasoning?'
+      );
       expect(result).not.toBeNull();
-      expect(result!.message.role).toBe('human');
-      expect(result!.message.content).toBe('What was your reasoning?');
-      expect(result!.message.id).toBeTruthy();
+      expect(result?.message.role).toBe('human');
+      expect(result?.message.content).toBe('What was your reasoning?');
+      expect(result?.message.id).toBeTruthy();
 
       // Verify persisted
       const refetched = service.getEntry('bot1', created.id);
-      expect(refetched!.evaluation).toBeTruthy();
-      expect(refetched!.evaluation!.thread).toHaveLength(1);
-      expect(refetched!.evaluation!.thread![0].content).toBe('What was your reasoning?');
+      expect(refetched?.evaluation).toBeTruthy();
+      expect(refetched?.evaluation?.thread).toHaveLength(1);
+      expect(refetched?.evaluation?.thread?.[0].content).toBe('What was your reasoning?');
     });
 
     test('creates evaluation stub if none exists', () => {
       const created = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'test.ts', action: 'create',
-        description: 'test', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'test.ts',
+        action: 'create',
+        description: 'test',
+        size: 10,
+        trackOnly: false,
       });
 
       service.addThreadMessage('bot1', created.id, 'human', 'Hello');
       const refetched = service.getEntry('bot1', created.id);
-      expect(refetched!.evaluation).toBeTruthy();
-      expect(refetched!.evaluation!.evaluatedAt).toBeTruthy();
-      expect(refetched!.evaluation!.status).toBeUndefined();
+      expect(refetched?.evaluation).toBeTruthy();
+      expect(refetched?.evaluation?.evaluatedAt).toBeTruthy();
+      expect(refetched?.evaluation?.status).toBeUndefined();
     });
 
     test('appends multiple messages to thread', () => {
       const created = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'test.ts', action: 'create',
-        description: 'test', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'test.ts',
+        action: 'create',
+        description: 'test',
+        size: 10,
+        trackOnly: false,
       });
 
       service.addThreadMessage('bot1', created.id, 'human', 'Question 1');
@@ -673,10 +737,10 @@ describe('ProductionsService', () => {
       service.addThreadMessage('bot1', created.id, 'human', 'Question 2');
 
       const refetched = service.getEntry('bot1', created.id);
-      expect(refetched!.evaluation!.thread).toHaveLength(3);
-      expect(refetched!.evaluation!.thread![0].role).toBe('human');
-      expect(refetched!.evaluation!.thread![1].role).toBe('bot');
-      expect(refetched!.evaluation!.thread![2].role).toBe('human');
+      expect(refetched?.evaluation?.thread).toHaveLength(3);
+      expect(refetched?.evaluation?.thread?.[0].role).toBe('human');
+      expect(refetched?.evaluation?.thread?.[1].role).toBe('bot');
+      expect(refetched?.evaluation?.thread?.[2].role).toBe('human');
     });
 
     test('returns null for non-existent entry', () => {
@@ -686,17 +750,22 @@ describe('ProductionsService', () => {
     test('preserves existing evaluation when adding thread messages', () => {
       const created = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'test.ts', action: 'create',
-        description: 'test', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'test.ts',
+        action: 'create',
+        description: 'test',
+        size: 10,
+        trackOnly: false,
       });
 
       service.evaluate('bot1', created.id, { status: 'approved', rating: 4, feedback: 'Good' });
       service.addThreadMessage('bot1', created.id, 'human', 'Follow-up question');
 
       const refetched = service.getEntry('bot1', created.id);
-      expect(refetched!.evaluation!.status).toBe('approved');
-      expect(refetched!.evaluation!.rating).toBe(4);
-      expect(refetched!.evaluation!.thread).toHaveLength(1);
+      expect(refetched?.evaluation?.status).toBe('approved');
+      expect(refetched?.evaluation?.rating).toBe(4);
+      expect(refetched?.evaluation?.thread).toHaveLength(1);
     });
   });
 
@@ -704,8 +773,13 @@ describe('ProductionsService', () => {
     test('counts entries with thread-only evaluation as unreviewed', () => {
       const created = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'test.ts', action: 'create',
-        description: 'test', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'test.ts',
+        action: 'create',
+        description: 'test',
+        size: 10,
+        trackOnly: false,
       });
 
       // Add thread message without approve/reject
@@ -720,8 +794,13 @@ describe('ProductionsService', () => {
     test('getChangelog unreviewed filter includes thread-only entries', () => {
       const created = service.logProduction({
         timestamp: new Date().toISOString(),
-        botId: 'bot1', tool: 'file_write', path: 'test.ts', action: 'create',
-        description: 'test', size: 10, trackOnly: false,
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'test.ts',
+        action: 'create',
+        description: 'test',
+        size: 10,
+        trackOnly: false,
       });
 
       service.addThreadMessage('bot1', created.id, 'human', 'Comment without decision');
@@ -737,8 +816,13 @@ describe('ProductionsService', () => {
       for (let i = 0; i < 3; i++) {
         const entry = service.logProduction({
           timestamp: new Date(Date.now() - (5 - i) * 60000).toISOString(),
-          botId: 'bot1', tool: 'file_write', path: `bot1-file${i}.ts`, action: 'create',
-          description: `bot1 file ${i}`, size: 50, trackOnly: false,
+          botId: 'bot1',
+          tool: 'file_write',
+          path: `bot1-file${i}.ts`,
+          action: 'create',
+          description: `bot1 file ${i}`,
+          size: 50,
+          trackOnly: false,
         });
         if (i === 0) {
           service.evaluate('bot1', entry.id, { status: 'approved', rating: 4 });
@@ -748,8 +832,13 @@ describe('ProductionsService', () => {
       for (let i = 0; i < 2; i++) {
         const entry = service.logProduction({
           timestamp: new Date(Date.now() - (3 - i) * 60000).toISOString(),
-          botId: 'bot2', tool: 'file_edit', path: `bot2-file${i}.md`, action: 'edit',
-          description: `bot2 file ${i}`, size: 30, trackOnly: true,
+          botId: 'bot2',
+          tool: 'file_edit',
+          path: `bot2-file${i}.md`,
+          action: 'edit',
+          description: `bot2 file ${i}`,
+          size: 30,
+          trackOnly: true,
         });
         if (i === 1) {
           service.evaluate('bot2', entry.id, { status: 'rejected', rating: 2 });
@@ -766,8 +855,9 @@ describe('ProductionsService', () => {
     test('sorts entries by timestamp descending (newest first)', () => {
       const result = service.getAllEntries();
       for (let i = 1; i < result.entries.length; i++) {
-        expect(new Date(result.entries[i - 1].timestamp).getTime())
-          .toBeGreaterThanOrEqual(new Date(result.entries[i].timestamp).getTime());
+        expect(new Date(result.entries[i - 1].timestamp).getTime()).toBeGreaterThanOrEqual(
+          new Date(result.entries[i].timestamp).getTime()
+        );
       }
     });
 

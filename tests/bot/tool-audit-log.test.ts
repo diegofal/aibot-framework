@@ -1,8 +1,8 @@
-import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { ToolAuditLog, type ToolAuditEntry } from '../../src/bot/tool-audit-log';
+import { join } from 'node:path';
+import { type ToolAuditEntry, ToolAuditLog } from '../../src/bot/tool-audit-log';
 
 function makeLogger() {
   return {

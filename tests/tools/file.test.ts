@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeAll } from 'bun:test';
-import { createFileReadTool, createFileWriteTool, createFileEditTool } from '../../src/tools/file';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { beforeAll, describe, expect, test } from 'bun:test';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createFileEditTool, createFileReadTool, createFileWriteTool } from '../../src/tools/file';
 
 function createMockLogger() {
   return {
@@ -159,10 +159,7 @@ describe('file_write tool', () => {
 
   test('blocks path traversal on write', async () => {
     setupTestDir();
-    const result = await tool.execute(
-      { path: '../../etc/crontab', content: 'evil' },
-      logger
-    );
+    const result = await tool.execute({ path: '../../etc/crontab', content: 'evil' }, logger);
     expect(result.success).toBe(false);
     expect(result.content).toContain('outside allowed directory');
   });
@@ -206,10 +203,7 @@ describe('file_edit tool', () => {
 
   test('blocks editing sensitive files', async () => {
     setupTestDir();
-    const result = await tool.execute(
-      { path: '.env', old_text: 'x', new_text: 'y' },
-      logger
-    );
+    const result = await tool.execute({ path: '.env', old_text: 'x', new_text: 'y' }, logger);
     expect(result.success).toBe(false);
   });
 });

@@ -1,15 +1,18 @@
 import crypto from 'node:crypto';
+import type { TwitterConfig } from '../config';
+import type { Logger } from '../logger';
+import { RateLimiter, apiRequest } from './api-client';
+import { TtlCache } from './cache';
 import type { Tool, ToolResult } from './types';
 import { wrapExternalContent } from './types';
-import { TtlCache } from './cache';
-import { apiRequest, RateLimiter } from './api-client';
-import type { Logger } from '../logger';
-import type { TwitterConfig } from '../config';
 
 // --- OAuth 1.0a signature ---
 
 function percentEncode(str: string): string {
-  return encodeURIComponent(str).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return encodeURIComponent(str).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`
+  );
 }
 
 function generateOAuthSignature(
@@ -17,16 +20,16 @@ function generateOAuthSignature(
   url: string,
   params: Record<string, string>,
   consumerSecret: string,
-  tokenSecret: string,
+  tokenSecret: string
 ): string {
   const sortedKeys = Object.keys(params).sort();
-  const paramString = sortedKeys.map((k) => `${percentEncode(k)}=${percentEncode(params[k])}`).join('&');
+  const paramString = sortedKeys
+    .map((k) => `${percentEncode(k)}=${percentEncode(params[k])}`)
+    .join('&');
 
-  const baseString = [
-    method.toUpperCase(),
-    percentEncode(url),
-    percentEncode(paramString),
-  ].join('&');
+  const baseString = [method.toUpperCase(), percentEncode(url), percentEncode(paramString)].join(
+    '&'
+  );
 
   const signingKey = `${percentEncode(consumerSecret)}&${percentEncode(tokenSecret)}`;
   const hmac = crypto.createHmac('sha1', signingKey);
@@ -38,7 +41,7 @@ function buildOAuthHeader(
   method: string,
   url: string,
   config: TwitterConfig,
-  extraParams?: Record<string, string>,
+  extraParams?: Record<string, string>
 ): string {
   const oauthParams: Record<string, string> = {
     oauth_consumer_key: config.apiKey,
@@ -50,8 +53,14 @@ function buildOAuthHeader(
   };
 
   const allParams = { ...oauthParams, ...(extraParams ?? {}) };
-  const signature = generateOAuthSignature(method, url, allParams, config.apiSecret, config.accessSecret!);
-  oauthParams['oauth_signature'] = signature;
+  const signature = generateOAuthSignature(
+    method,
+    url,
+    allParams,
+    config.apiSecret,
+    config.accessSecret!
+  );
+  oauthParams.oauth_signature = signature;
 
   const header = Object.keys(oauthParams)
     .sort()
@@ -115,11 +124,15 @@ export function createTwitterSearchTool(config: TwitterConfig): Tool {
       type: 'function',
       function: {
         name: 'twitter_search',
-        description: 'Search recent tweets on Twitter/X. Returns tweet text, author, metrics, and links.',
+        description:
+          'Search recent tweets on Twitter/X. Returns tweet text, author, metrics, and links.',
         parameters: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: 'Search query (supports Twitter search operators)' },
+            query: {
+              type: 'string',
+              description: 'Search query (supports Twitter search operators)',
+            },
             max_results: {
               type: 'number',
               description: 'Number of results (10-100, default 10)',
@@ -162,12 +175,15 @@ export function createTwitterSearchTool(config: TwitterConfig): Tool {
           includes?: { users?: TwitterUser[] };
           meta?: { result_count: number };
         }>(url.toString(), {
-          headers: { 'Authorization': `Bearer ${config.bearerToken}` },
+          headers: { Authorization: `Bearer ${config.bearerToken}` },
           timeout: config.timeout,
         });
 
         if (!result.ok) {
-          return { success: false, content: `Twitter API error: ${result.status} ${result.message}` };
+          return {
+            success: false,
+            content: `Twitter API error: ${result.status} ${result.message}`,
+          };
         }
 
         const tweets = result.data.data ?? [];
@@ -182,7 +198,9 @@ export function createTwitterSearchTool(config: TwitterConfig): Tool {
         }
 
         const formatted = tweets.map((t, i) => formatTweet(t, users, i)).join('\n\n');
-        const content = wrapExternalContent(`Twitter search results for "${query}":\n\n${formatted}`);
+        const content = wrapExternalContent(
+          `Twitter search results for "${query}":\n\n${formatted}`
+        );
 
         cache.set(cacheKey, content);
         logger.debug({ query, resultCount: tweets.length }, 'twitter_search completed');
@@ -208,7 +226,10 @@ export function createTwitterReadTool(config: TwitterConfig): Tool {
         parameters: {
           type: 'object',
           properties: {
-            username: { type: 'string', description: 'Twitter username (without @) to read recent tweets' },
+            username: {
+              type: 'string',
+              description: 'Twitter username (without @) to read recent tweets',
+            },
             tweet_id: { type: 'string', description: 'Specific tweet ID to read' },
           },
         },
@@ -246,12 +267,15 @@ export function createTwitterReadTool(config: TwitterConfig): Tool {
             data?: Tweet;
             includes?: { users?: TwitterUser[] };
           }>(url.toString(), {
-            headers: { 'Authorization': `Bearer ${config.bearerToken}` },
+            headers: { Authorization: `Bearer ${config.bearerToken}` },
             timeout: config.timeout,
           });
 
           if (!result.ok) {
-            return { success: false, content: `Twitter API error: ${result.status} ${result.message}` };
+            return {
+              success: false,
+              content: `Twitter API error: ${result.status} ${result.message}`,
+            };
           }
 
           if (!result.data.data) {
@@ -273,13 +297,12 @@ export function createTwitterReadTool(config: TwitterConfig): Tool {
         const userUrl = `${TWITTER_API_BASE}/2/users/by/username/${encodeURIComponent(username!)}`;
         logger.info({ username }, 'Executing twitter_read (user timeline)');
 
-        const userResult = await apiRequest<{ data?: { id: string; name: string; username: string } }>(
-          userUrl,
-          {
-            headers: { 'Authorization': `Bearer ${config.bearerToken}` },
-            timeout: config.timeout,
-          },
-        );
+        const userResult = await apiRequest<{
+          data?: { id: string; name: string; username: string };
+        }>(userUrl, {
+          headers: { Authorization: `Bearer ${config.bearerToken}` },
+          timeout: config.timeout,
+        });
 
         if (!userResult.ok || !userResult.data.data) {
           return { success: false, content: `User @${username} not found` };
@@ -293,12 +316,15 @@ export function createTwitterReadTool(config: TwitterConfig): Tool {
         await searchLimiter.acquire();
 
         const tweetsResult = await apiRequest<{ data?: Tweet[] }>(tweetsUrl.toString(), {
-          headers: { 'Authorization': `Bearer ${config.bearerToken}` },
+          headers: { Authorization: `Bearer ${config.bearerToken}` },
           timeout: config.timeout,
         });
 
         if (!tweetsResult.ok) {
-          return { success: false, content: `Twitter API error: ${tweetsResult.status} ${tweetsResult.message}` };
+          return {
+            success: false,
+            content: `Twitter API error: ${tweetsResult.status} ${tweetsResult.message}`,
+          };
         }
 
         const tweets = tweetsResult.data.data ?? [];
@@ -357,7 +383,10 @@ export function createTwitterPostTool(config: TwitterConfig): Tool {
         return { success: false, content: `Tweet too long: ${text.length}/280 characters` };
       }
       if (!config.accessToken || !config.accessSecret) {
-        return { success: false, content: 'Twitter write credentials not configured (accessToken, accessSecret)' };
+        return {
+          success: false,
+          content: 'Twitter write credentials not configured (accessToken, accessSecret)',
+        };
       }
 
       try {
@@ -371,7 +400,7 @@ export function createTwitterPostTool(config: TwitterConfig): Tool {
         const response = await fetch(postUrl, {
           method: 'POST',
           headers: {
-            'Authorization': authHeader,
+            Authorization: authHeader,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ text }),
@@ -380,8 +409,14 @@ export function createTwitterPostTool(config: TwitterConfig): Tool {
 
         if (!response.ok) {
           const body = await response.text().catch(() => '');
-          logger.error({ status: response.status, body: body.slice(0, 200) }, 'twitter_post API error');
-          return { success: false, content: `Twitter API error: ${response.status} ${body.slice(0, 200)}` };
+          logger.error(
+            { status: response.status, body: body.slice(0, 200) },
+            'twitter_post API error'
+          );
+          return {
+            success: false,
+            content: `Twitter API error: ${response.status} ${body.slice(0, 200)}`,
+          };
         }
 
         const data = (await response.json()) as { data?: { id: string; text: string } };

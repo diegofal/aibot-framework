@@ -1,9 +1,9 @@
+import type { RedditConfig } from '../config';
+import type { Logger } from '../logger';
+import { RateLimiter, apiRequest } from './api-client';
+import { TtlCache } from './cache';
 import type { Tool, ToolResult } from './types';
 import { wrapExternalContent } from './types';
-import { TtlCache } from './cache';
-import { apiRequest, RateLimiter } from './api-client';
-import type { Logger } from '../logger';
-import type { RedditConfig } from '../config';
 
 // --- Reddit OAuth2 token management ---
 
@@ -35,9 +35,9 @@ class RedditAuth {
   }
 
   private async refresh(): Promise<void> {
-    const credentials = Buffer.from(
-      `${this.config.clientId}:${this.config.clientSecret}`,
-    ).toString('base64');
+    const credentials = Buffer.from(`${this.config.clientId}:${this.config.clientSecret}`).toString(
+      'base64'
+    );
 
     const body = new URLSearchParams({
       grant_type: 'password',
@@ -48,7 +48,7 @@ class RedditAuth {
     const response = await fetch('https://www.reddit.com/api/v1/access_token', {
       method: 'POST',
       headers: {
-        'Authorization': `Basic ${credentials}`,
+        Authorization: `Basic ${credentials}`,
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': this.config.userAgent,
       },
@@ -96,18 +96,14 @@ function formatPost(post: RedditPost, index?: number): string {
     `   https://reddit.com${post.permalink}`,
   ];
   if (post.selftext) {
-    const text = post.selftext.length > 300
-      ? post.selftext.slice(0, 300) + '...'
-      : post.selftext;
+    const text = post.selftext.length > 300 ? `${post.selftext.slice(0, 300)}...` : post.selftext;
     lines.push(`   ${text}`);
   }
   return lines.join('\n');
 }
 
 function formatComment(comment: RedditComment, index: number): string {
-  const body = comment.body.length > 200
-    ? comment.body.slice(0, 200) + '...'
-    : comment.body;
+  const body = comment.body.length > 200 ? `${comment.body.slice(0, 200)}...` : comment.body;
   return `${index + 1}. u/${comment.author} (${comment.score} pts)\n   ${body}`;
 }
 
@@ -131,7 +127,10 @@ export function createRedditSearchTool(config: RedditConfig): Tool {
           type: 'object',
           properties: {
             query: { type: 'string', description: 'Search query' },
-            subreddit: { type: 'string', description: 'Limit search to a specific subreddit (optional)' },
+            subreddit: {
+              type: 'string',
+              description: 'Limit search to a specific subreddit (optional)',
+            },
             sort: {
               type: 'string',
               enum: ['hot', 'new', 'top', 'relevance'],
@@ -176,16 +175,22 @@ export function createRedditSearchTool(config: RedditConfig): Tool {
 
         logger.info({ query, subreddit, sort, limit }, 'Executing reddit_search');
 
-        const result = await apiRequest<{ data: { children: Array<{ data: RedditPost }> } }>(url.toString(), {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'User-Agent': config.userAgent,
-          },
-          timeout: config.timeout,
-        });
+        const result = await apiRequest<{ data: { children: Array<{ data: RedditPost }> } }>(
+          url.toString(),
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'User-Agent': config.userAgent,
+            },
+            timeout: config.timeout,
+          }
+        );
 
         if (!result.ok) {
-          return { success: false, content: `Reddit API error: ${result.status} ${result.message}` };
+          return {
+            success: false,
+            content: `Reddit API error: ${result.status} ${result.message}`,
+          };
         }
 
         const posts = result.data.data.children.map((c) => c.data);
@@ -195,7 +200,9 @@ export function createRedditSearchTool(config: RedditConfig): Tool {
         }
 
         const formatted = posts.map((p, i) => formatPost(p, i)).join('\n\n');
-        const content = wrapExternalContent(`Reddit search results for "${query}":\n\n${formatted}`);
+        const content = wrapExternalContent(
+          `Reddit search results for "${query}":\n\n${formatted}`
+        );
 
         cache.set(cacheKey, content);
         logger.debug({ query, resultCount: posts.length }, 'reddit_search completed');
@@ -239,7 +246,9 @@ export function createRedditHotTool(config: RedditConfig): Tool {
     },
 
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
-      const subreddit = String(args.subreddit ?? '').replace(/^r\//, '').trim();
+      const subreddit = String(args.subreddit ?? '')
+        .replace(/^r\//, '')
+        .trim();
       if (!subreddit) {
         return { success: false, content: 'Missing required parameter: subreddit' };
       }
@@ -264,16 +273,22 @@ export function createRedditHotTool(config: RedditConfig): Tool {
 
         logger.info({ subreddit, limit, time }, 'Executing reddit_hot');
 
-        const result = await apiRequest<{ data: { children: Array<{ data: RedditPost }> } }>(url.toString(), {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'User-Agent': config.userAgent,
-          },
-          timeout: config.timeout,
-        });
+        const result = await apiRequest<{ data: { children: Array<{ data: RedditPost }> } }>(
+          url.toString(),
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'User-Agent': config.userAgent,
+            },
+            timeout: config.timeout,
+          }
+        );
 
         if (!result.ok) {
-          return { success: false, content: `Reddit API error: ${result.status} ${result.message}` };
+          return {
+            success: false,
+            content: `Reddit API error: ${result.status} ${result.message}`,
+          };
         }
 
         const posts = result.data.data.children.map((c) => c.data);
@@ -312,7 +327,8 @@ export function createRedditReadTool(config: RedditConfig): Tool {
           properties: {
             url: {
               type: 'string',
-              description: 'Reddit post URL (e.g. https://reddit.com/r/sub/comments/abc123/title) or just the post ID (e.g. abc123)',
+              description:
+                'Reddit post URL (e.g. https://reddit.com/r/sub/comments/abc123/title) or just the post ID (e.g. abc123)',
             },
           },
           required: ['url'],
@@ -348,19 +364,21 @@ export function createRedditReadTool(config: RedditConfig): Tool {
 
         logger.info({ postId }, 'Executing reddit_read');
 
-        const result = await apiRequest<Array<{ data: { children: Array<{ data: RedditPost | RedditComment; kind: string }> } }>>(
-          url,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'User-Agent': config.userAgent,
-            },
-            timeout: config.timeout,
+        const result = await apiRequest<
+          Array<{ data: { children: Array<{ data: RedditPost | RedditComment; kind: string }> } }>
+        >(url, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'User-Agent': config.userAgent,
           },
-        );
+          timeout: config.timeout,
+        });
 
         if (!result.ok) {
-          return { success: false, content: `Reddit API error: ${result.status} ${result.message}` };
+          return {
+            success: false,
+            content: `Reddit API error: ${result.status} ${result.message}`,
+          };
         }
 
         const data = result.data;

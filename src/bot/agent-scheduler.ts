@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BotConfig } from '../config';
 import type { Logger } from '../logger';
-import type { BotContext } from './types';
 import type { AgentLoopResult, BotScheduleInfo } from './agent-loop';
 import { parseDurationMs } from './agent-loop';
-import { computeCyclesUntilStrategist } from './agent-strategist';
 import type { RecentAction } from './agent-loop-utils';
+import { computeCyclesUntilStrategist } from './agent-strategist';
+import type { BotContext } from './types';
 
 export interface BotSchedule {
   nextRunAt: number;
@@ -50,8 +50,12 @@ export class AgentScheduler {
 
   constructor(
     private ctx: BotContext,
-    private runOneBotFn: (botId: string, botConfig: BotConfig, opts?: { suppressSideEffects?: boolean }) => Promise<AgentLoopResult>,
-    private dataDir?: string,
+    private runOneBotFn: (
+      botId: string,
+      botConfig: BotConfig,
+      opts?: { suppressSideEffects?: boolean }
+    ) => Promise<AgentLoopResult>,
+    private dataDir?: string
   ) {
     if (dataDir) this.loadFromDisk();
   }
@@ -104,6 +108,14 @@ export class AgentScheduler {
     } catch (err) {
       this.ctx.logger.warn({ err }, 'AgentScheduler: failed to flush to disk');
     }
+  }
+
+  /** Remove schedule state for a specific bot. Returns true if an entry existed. */
+  clearForBot(botId: string): boolean {
+    const existed = this.botSchedules.has(botId);
+    this.botSchedules.delete(botId);
+    if (existed) this.schedulePersist();
+    return existed;
   }
 
   // --- Getters for AgentLoop to use ---
@@ -160,7 +172,10 @@ export class AgentScheduler {
     this.enabled = false;
     for (const c of this.sleepControllers) c.abort();
     // Flush synchronously before clearing maps
-    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
     this.flushDirty = true;
     this.flushToDisk();
     this.pendingWakeRequests.clear();
@@ -215,7 +230,10 @@ export class AgentScheduler {
       if (this.drainingResolve) {
         return new Promise<void>((resolve) => {
           const prev = this.drainingResolve;
-          this.drainingResolve = () => { prev?.(); resolve(); };
+          this.drainingResolve = () => {
+            prev?.();
+            resolve();
+          };
         });
       }
       return;
@@ -291,10 +309,14 @@ export class AgentScheduler {
 
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => resolve(), ms);
-      signal.addEventListener('abort', () => {
-        clearTimeout(timer);
-        resolve();
-      }, { once: true });
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true }
+      );
     }).finally(() => {
       this.sleepControllers.delete(controller);
     });
@@ -428,10 +450,17 @@ export class AgentScheduler {
     for (const [botId, sched] of this.botSchedules) {
       const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
       const mode = this.getBotMode(botId);
+      let backend: 'ollama' | 'claude-cli' | null = null;
+      try {
+        backend = this.ctx.getLLMClient(botId).backend;
+      } catch {
+        /* bot may not have client yet */
+      }
       schedules.push({
         botId,
         botName: botConfig?.name ?? botId,
         mode,
+        backend,
         nextRunAt: mode === 'continuous' ? null : sched.nextRunAt,
         lastRunAt: sched.lastRunAt,
         nextCheckIn: sched.nextCheckIn,
@@ -439,7 +468,9 @@ export class AgentScheduler {
         lastStrategistAt: sched.lastStrategistAt,
         lastFocus: sched.lastFocus,
         strategistCyclesUntilNext: computeCyclesUntilStrategist(
-          botConfig, this.ctx.config.agentLoop.strategist, sched,
+          botConfig,
+          this.ctx.config.agentLoop.strategist,
+          sched
         ),
         continuousCycleCount: sched.continuousCycleCount,
         isIdle: sched.consecutiveIdleCycles > 0,

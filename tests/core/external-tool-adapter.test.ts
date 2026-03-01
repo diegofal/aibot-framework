@@ -1,6 +1,6 @@
-import { describe, test, expect } from 'bun:test';
-import { adaptExternalTool } from '../../src/core/external-tool-adapter';
+import { describe, expect, test } from 'bun:test';
 import type { ExternalToolDef } from '../../src/core/external-skill-loader';
+import { adaptExternalTool } from '../../src/core/external-tool-adapter';
 
 const mockLogger = {
   debug: () => {},
@@ -27,13 +27,27 @@ function makeDef(name: string, description = 'test tool'): ExternalToolDef {
 describe('adaptExternalTool', () => {
   test('namespaces tool name as skillId_toolName', () => {
     const handler = async () => 'ok';
-    const tool = adaptExternalTool('github', makeDef('repo_list'), handler, {}, new Map(), mockLogger);
+    const tool = adaptExternalTool(
+      'github',
+      makeDef('repo_list'),
+      handler,
+      {},
+      new Map(),
+      mockLogger
+    );
     expect(tool.definition.function.name).toBe('github_repo_list');
   });
 
   test('prefixes description with skill ID', () => {
     const handler = async () => 'ok';
-    const tool = adaptExternalTool('github', makeDef('repo_list', 'List repos'), handler, {}, new Map(), mockLogger);
+    const tool = adaptExternalTool(
+      'github',
+      makeDef('repo_list', 'List repos'),
+      handler,
+      {},
+      new Map(),
+      mockLogger
+    );
     expect(tool.definition.function.description).toBe('[github] List repos');
   });
 
@@ -80,7 +94,9 @@ describe('adaptExternalTool', () => {
   });
 
   test('catches errors and returns success: false', async () => {
-    const handler = async () => { throw new Error('boom'); };
+    const handler = async () => {
+      throw new Error('boom');
+    };
     const tool = adaptExternalTool('skill', makeDef('test'), handler, {}, new Map(), mockLogger);
     const result = await tool.execute({ input: 'x' }, mockLogger);
     expect(result.success).toBe(false);
@@ -88,7 +104,9 @@ describe('adaptExternalTool', () => {
   });
 
   test('catches non-Error throws', async () => {
-    const handler = async () => { throw 'string error'; };
+    const handler = async () => {
+      throw 'string error';
+    };
     const tool = adaptExternalTool('skill', makeDef('test'), handler, {}, new Map(), mockLogger);
     const result = await tool.execute({ input: 'x' }, mockLogger);
     expect(result.success).toBe(false);
@@ -98,7 +116,7 @@ describe('adaptExternalTool', () => {
   test('state persists across calls', async () => {
     const state = new Map<string, unknown>();
     const handler = async (_args: Record<string, unknown>, ctx: any) => {
-      const count = (ctx.state.get('count') as number ?? 0) + 1;
+      const count = ((ctx.state.get('count') as number) ?? 0) + 1;
       ctx.state.set('count', count);
       return count;
     };
@@ -123,12 +141,19 @@ describe('adaptExternalTool', () => {
       receivedConfig = ctx.config;
       return 'ok';
     };
-    const tool = adaptExternalTool('skill', makeDef('test'), handler, skillConfig, new Map(), mockLogger);
+    const tool = adaptExternalTool(
+      'skill',
+      makeDef('test'),
+      handler,
+      skillConfig,
+      new Map(),
+      mockLogger
+    );
     await tool.execute({ input: 'x' }, mockLogger);
 
     expect(receivedConfig).toBeDefined();
-    expect(receivedConfig!.api_key).toBe('secret-123');
-    expect(receivedConfig!.base_url).toBe('https://api.example.com');
+    expect(receivedConfig?.api_key).toBe('secret-123');
+    expect(receivedConfig?.base_url).toBe('https://api.example.com');
   });
 
   test('logger adapter has correct methods', async () => {
@@ -143,16 +168,31 @@ describe('adaptExternalTool', () => {
 
     // Create a mock logger that records calls
     const trackingLogger = {
-      debug: (msg: any) => { if (typeof msg === 'string') logCalls.push('debug:' + msg); },
-      info: (msg: any) => { if (typeof msg === 'string') logCalls.push('info:' + msg); },
-      warn: (msg: any) => { if (typeof msg === 'string') logCalls.push('warn:' + msg); },
-      error: (msg: any) => { if (typeof msg === 'string') logCalls.push('error:' + msg); },
+      debug: (msg: any) => {
+        if (typeof msg === 'string') logCalls.push(`debug:${msg}`);
+      },
+      info: (msg: any) => {
+        if (typeof msg === 'string') logCalls.push(`info:${msg}`);
+      },
+      warn: (msg: any) => {
+        if (typeof msg === 'string') logCalls.push(`warn:${msg}`);
+      },
+      error: (msg: any) => {
+        if (typeof msg === 'string') logCalls.push(`error:${msg}`);
+      },
       child: () => trackingLogger,
       level: 'debug',
       fatal: () => {},
     } as any;
 
-    const tool = adaptExternalTool('skill', makeDef('test'), handler, {}, new Map(), trackingLogger);
+    const tool = adaptExternalTool(
+      'skill',
+      makeDef('test'),
+      handler,
+      {},
+      new Map(),
+      trackingLogger
+    );
     await tool.execute({ input: 'x' }, mockLogger);
 
     expect(logCalls).toContain('debug:d');
@@ -171,8 +211,8 @@ describe('adaptExternalTool', () => {
     await tool.execute({ input: 'hello', extra: 42 }, mockLogger);
 
     expect(receivedArgs).toBeDefined();
-    expect(receivedArgs!.input).toBe('hello');
-    expect(receivedArgs!.extra).toBe(42);
+    expect(receivedArgs?.input).toBe('hello');
+    expect(receivedArgs?.extra).toBe(42);
   });
 
   test('definition type is function', () => {

@@ -2,7 +2,103 @@
 
 ## Unreleased
 
+### Fixed
+- **Per-bot memory isolation** — Memory was written per-bot (`config/soul/{botId}/`)
+  but searched globally. RAG search, core memory lookup, and memory tools returned
+  results from ALL bots, violating agent separation. Now `core_memory` has a `bot_id`
+  column (`UNIQUE(bot_id, category, key)`), `hybridSearch` filters chunks by path
+  prefix, and all memory tools (`memory_search`, `memory_get`, `recall_memory`,
+  `core_memory_*`) pass `_botId` from `ToolExecutor` injection. Schema migration
+  rebuilds existing `core_memory` tables (defaulting to `'default'`).
+  `clearCoreMemoryForBot()` now uses `WHERE bot_id = ?` instead of deleting all.
+  `SystemPromptBuilder` and `ConversationPipeline` pass `botId` for scoped RAG
+  and core memory rendering.
+- **Bot reset now clears only the target bot's memory from shared DB** — Previously
+  `clearIndex()` and `clearCoreMemory()` wiped ALL bots' data from the shared
+  `data/memory.db`. Now uses `clearIndexForBot(botId)` which filters by path
+  prefix (`botId/`), leaving other bots' indexed data intact. Also cleans
+  orphaned `embedding_cache` entries (previously never cleaned, accumulating
+  indefinitely). New integration tests in `tests/integration/memory-reset.test.ts`.
+
 ### Added
+- **Context compaction** — LLM-based conversation compaction that summarizes older
+  messages when approaching context window limits, preserving key facts and decisions
+  instead of silently dropping history. Configurable via `conversation.compaction` with
+  per-backend context windows (ollama/claude-cli), threshold ratio, and recent message
+  retention. Overflow retry loop automatically triggers emergency compaction on
+  `context_length` errors. Older messages are flushed to Core Memory before compaction.
+  New module `src/bot/context-compaction.ts`, session layer support for
+  `[CONTEXT_SUMMARY]` messages, and `rewriteWithSummary()` persistence.
+- **LLM diagnostics** — per-bot LLM stats tracking via `LlmStatsTracker` in
+  `ActivityStream`. Tracks `totalCalls`, `successCount`, `failCount`,
+  `fallbackCount`, `avgDurationMs`, `lastError`, and per-caller breakdown
+  (conversation/planner/strategist/executor/feedback). New event types
+  `llm:error` and `llm:fallback`. Existing `llm:start`/`llm:end` events now
+  include `backend` and `caller` fields. Agent loop emits LLM events around all
+  4 call sites (planner, strategist, executor, feedback). `BotScheduleInfo` now
+  includes `backend` field. New API endpoints: `GET /api/agent-loop/llm-stats`
+  (all bots) and `GET /api/agent-loop/llm-stats/:botId` (single bot).
+  `LLMClientWithFallback.onFallback` callback fires on primary→fallback
+  transitions, wired to activity stream in `BotManager`.
+- **Comprehensive bot reset** — `BotResetService.reset()` now clears 22 categories
+  of bot-specific data (up from 15). New steps: conversations (`deleteAllForBot`),
+  tool audit logs (entire `data/tool-audit/{botId}/` dir), productions (entire
+  `productions/{botId}/` dir, not just skills), agent scheduler state
+  (`clearForBot`), collaboration tracker records, collaboration sessions, and
+  activity stream events. All new steps are optional — missing deps skip gracefully.
+  Added `clearForBot()` methods to `ToolAuditLog`, `AgentScheduler`,
+  `CollaborationTracker`, `CollaborationSessionManager`, and `ActivityStream`.
+- **Reset unloads production skill tools from runtime** — On bot reset,
+  `ToolRegistry.clearExternalSkillsForBot(botId)` removes all external skill
+  tools belonging to that bot from `ctx.tools[]` and `ctx.toolDefinitions[]`.
+  This reduces the tool count passed to Claude CLI (from ~60-79 down to ~40 core
+  tools), fixing MCP timeout issues caused by uncategorized production skill
+  tools bypassing category filtering.
+- **Reset cleans production skills** — `BotResetService` now deletes the
+  `productions/<botId>/src/skills/` directory on reset and removes stale references
+  from `config.skills.enabled`, `botConfig.skills`, and `config.skills.config`.
+  Production-only skills (not in built-in `src/skills/`) are cleaned; built-in skills
+  are preserved. The config is persisted to disk so the next startup won't try to load
+  missing skills. The `cleared` result now includes a `productionSkills` string array.
+
+### Fixed
+- **Resilient skill loading** — `SkillRegistry.loadSkills()` now logs a warning instead
+  of an error when a skill cannot be found, preventing noisy `ERROR: Failed to load skill`
+  logs for skills that were removed during a bot reset.
+
+### Added
+- **Reset clears dynamic tools and karma** — `BotResetService` now deletes all dynamic tools
+  created by the bot being reset (step 12) and clears karma events (step 13). New
+  `DynamicToolStore.deleteByCreator(botId)` removes tools from disk, and
+  `DynamicToolRegistry.clearForBot(botId)` also unloads them from runtime. Tools created by
+  other bots are unaffected. The `cleared` result now includes `dynamicTools` count and `karma` flag.
+- **Bulk delete conversations** — New "Delete All" button on the conversations index page to wipe
+  all conversations across all bots, and per-bot delete buttons on each row. Backed by new
+  `deleteAllForBot()` / `deleteAll()` service methods and `DELETE /api/conversations[/:botId]`
+  endpoints. Both actions require confirmation before executing.
+- **Claude CLI native tool calling via MCP bridge** — Bots configured with `llmBackend: "claude-cli"`
+  now handle tool execution natively through an MCP (Model Context Protocol) bridge instead of
+  falling back to Ollama. New `claudeGenerateWithTools()` spawns a lightweight MCP tool server
+  (`src/mcp/tool-bridge-server.ts`) that Claude CLI connects to via `--mcp-config`. The bridge
+  translates tool calls back to the main process callback server, preserving bot context, karma,
+  and audit logging. Removed the `LLMClientWithFallback` bypass that routed all tool-based calls
+  to Ollama — Claude CLI now tries tools natively with Ollama as error fallback only.
+- **Claude CLI integration test UI** — Three new endpoints (`GET /claude-cli/status`,
+  `POST /claude-cli/chat`, `POST /claude-cli/chat-with-tools`) and corresponding UI panels
+  on the Integrations page. Test Claude CLI connectivity, simple chat, and full MCP tool bridge
+  end-to-end from the browser.
+
+### Changed
+- **processFeedback() uses getLLMClient()** — Agent loop feedback processing now uses the
+  bot's configured LLM client (with fallback) instead of a bare `ClaudeCliLLMClient`, getting
+  MCP tool support and Ollama fallback for free.
+
+### Removed
+- **TextToolStrategy** — Deleted `src/core/text-tool-strategy.ts`. The XML-based `<tool_call>`
+  protocol was brittle (re-serialized history per round, regex parsing, subprocess-per-round
+  timeouts) and is fully replaced by the MCP bridge approach.
+
+### Added (prior)
 - **Immediate agent loop trigger** — New `requestImmediateRun(botId)` on `AgentScheduler`,
   `AgentLoop`, and `BotManager`. Every user conversation now triggers an immediate agent loop
   cycle so bots act on requests without waiting for the next scheduled cycle. If the bot is

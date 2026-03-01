@@ -64,7 +64,7 @@ export class AskHumanStore {
     callbacks?: {
       onTimeout?: (questionId: string, botId: string, conversationId?: string) => void;
       onDismiss?: (questionId: string, botId: string, conversationId?: string) => void;
-    },
+    }
   ) {
     this.onTimeout = callbacks?.onTimeout;
     this.onDismiss = callbacks?.onDismiss;
@@ -112,7 +112,7 @@ export class AskHumanStore {
     botId: string,
     chatId: number,
     question: string,
-    timeoutMs: number,
+    timeoutMs: number
   ): { id: string; promise: Promise<string> } {
     const id = randomUUID();
 
@@ -143,7 +143,7 @@ export class AskHumanStore {
     if (!this.byChatId.has(chatId)) {
       this.byChatId.set(chatId, new Set());
     }
-    this.byChatId.get(chatId)!.add(id);
+    this.byChatId.get(chatId)?.add(id);
 
     this.logger.debug({ id, botId, chatId }, 'AskHuman: question registered');
 

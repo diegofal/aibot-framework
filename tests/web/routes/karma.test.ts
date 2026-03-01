@@ -1,11 +1,11 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
-import { karmaRoutes } from '../../../src/web/routes/karma';
-import { KarmaService } from '../../../src/karma/service';
 import type { Config } from '../../../src/config';
+import { KarmaService } from '../../../src/karma/service';
 import type { Logger } from '../../../src/logger';
+import { karmaRoutes } from '../../../src/web/routes/karma';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -26,11 +26,14 @@ const mockConfig = {
 
 function makeApp(karmaService: KarmaService) {
   const app = new Hono();
-  app.route('/api/karma', karmaRoutes({
-    karmaService,
-    config: mockConfig,
-    logger: noopLogger,
-  }));
+  app.route(
+    '/api/karma',
+    karmaRoutes({
+      karmaService,
+      config: mockConfig,
+      logger: noopLogger,
+    })
+  );
   return app;
 }
 
@@ -39,12 +42,15 @@ describe('karma routes', () => {
 
   beforeEach(() => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-    service = new KarmaService({
-      enabled: true,
-      baseDir: TEST_DIR,
-      initialScore: 50,
-      decayDays: 30,
-    }, noopLogger);
+    service = new KarmaService(
+      {
+        enabled: true,
+        baseDir: TEST_DIR,
+        initialScore: 50,
+        decayDays: 30,
+      },
+      noopLogger
+    );
   });
 
   afterEach(() => {

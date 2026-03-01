@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, existsSync, readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AgentFeedbackStore } from '../../src/bot/agent-feedback-store';
 import type { Logger } from '../../src/logger';
 
@@ -122,9 +122,9 @@ describe('AgentFeedbackStore', () => {
 
       const updated = store.markApplied('bot1', f1.id, 'Updated soul to be more formal');
       expect(updated).not.toBeNull();
-      expect(updated!.status).toBe('applied');
-      expect(updated!.response).toBe('Updated soul to be more formal');
-      expect(updated!.appliedAt).toBeTruthy();
+      expect(updated?.status).toBe('applied');
+      expect(updated?.response).toBe('Updated soul to be more formal');
+      expect(updated?.appliedAt).toBeTruthy();
     });
 
     test('persists change to JSONL', () => {
@@ -233,8 +233,8 @@ describe('AgentFeedbackStore', () => {
 
       const found = store.getById('bot1', created.id);
       expect(found).not.toBeNull();
-      expect(found!.content).toBe('Find me');
-      expect(found!.id).toBe(created.id);
+      expect(found?.content).toBe('Find me');
+      expect(found?.id).toBe(created.id);
     });
 
     test('returns null for unknown id', () => {
@@ -254,14 +254,14 @@ describe('AgentFeedbackStore', () => {
 
       const msg = store.addThreadMessage('bot1', created.id, 'human', 'Follow-up question');
       expect(msg).not.toBeNull();
-      expect(msg!.role).toBe('human');
-      expect(msg!.content).toBe('Follow-up question');
-      expect(msg!.id).toBeTruthy();
-      expect(msg!.createdAt).toBeTruthy();
+      expect(msg?.role).toBe('human');
+      expect(msg?.content).toBe('Follow-up question');
+      expect(msg?.id).toBeTruthy();
+      expect(msg?.createdAt).toBeTruthy();
 
       const entry = store.getById('bot1', created.id);
-      expect(entry!.thread).toHaveLength(1);
-      expect(entry!.thread![0].content).toBe('Follow-up question');
+      expect(entry?.thread).toHaveLength(1);
+      expect(entry?.thread?.[0].content).toBe('Follow-up question');
     });
 
     test('appends multiple messages to thread', () => {
@@ -273,10 +273,10 @@ describe('AgentFeedbackStore', () => {
       store.addThreadMessage('bot1', created.id, 'human', 'Follow-up');
 
       const entry = store.getById('bot1', created.id);
-      expect(entry!.thread).toHaveLength(3);
-      expect(entry!.thread![0].role).toBe('human');
-      expect(entry!.thread![1].role).toBe('bot');
-      expect(entry!.thread![2].role).toBe('human');
+      expect(entry?.thread).toHaveLength(3);
+      expect(entry?.thread?.[0].role).toBe('human');
+      expect(entry?.thread?.[1].role).toBe('bot');
+      expect(entry?.thread?.[2].role).toBe('human');
     });
 
     test('persists thread to JSONL', () => {
@@ -289,8 +289,8 @@ describe('AgentFeedbackStore', () => {
       store2.loadFromDisk('bot1', tmpDir);
 
       const entry = store2.getById('bot1', created.id);
-      expect(entry!.thread).toHaveLength(1);
-      expect(entry!.thread![0].content).toBe('Persisted msg');
+      expect(entry?.thread).toHaveLength(1);
+      expect(entry?.thread?.[0].content).toBe('Persisted msg');
     });
 
     test('returns null for non-existent entry', () => {

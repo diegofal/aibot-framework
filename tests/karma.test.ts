@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, rmSync, readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { KarmaService } from '../src/karma/service';
 import type { KarmaConfig } from '../src/karma/service';
@@ -257,7 +257,12 @@ describe('KarmaService', () => {
     test('duplicate template events on same file are skipped', () => {
       const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
       const first = svc.addEvent('bot1', -3, 'Empty template detected in "notes.md"', 'production');
-      const second = svc.addEvent('bot1', -3, 'Empty template detected in "notes.md"', 'production');
+      const second = svc.addEvent(
+        'bot1',
+        -3,
+        'Empty template detected in "notes.md"',
+        'production'
+      );
       expect(first).not.toBeNull();
       expect(second).toBeNull();
       expect(svc.getAllEvents('bot1').length).toBe(1);
@@ -310,7 +315,12 @@ describe('KarmaService', () => {
     test('template events on different files are NOT deduped', () => {
       const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
       const first = svc.addEvent('bot1', -3, 'Empty template detected in "notes.md"', 'production');
-      const second = svc.addEvent('bot1', -3, 'Empty template detected in "report.md"', 'production');
+      const second = svc.addEvent(
+        'bot1',
+        -3,
+        'Empty template detected in "report.md"',
+        'production'
+      );
       expect(first).not.toBeNull();
       expect(second).not.toBeNull();
       expect(svc.getAllEvents('bot1').length).toBe(2);
@@ -327,7 +337,10 @@ describe('KarmaService', () => {
 
   describe('extractDedupKey', () => {
     test('extracts file path from production source', () => {
-      const key = KarmaService.extractDedupKey('production', 'Empty template detected in "notes.md"');
+      const key = KarmaService.extractDedupKey(
+        'production',
+        'Empty template detected in "notes.md"'
+      );
       expect(key).toBe('production:notes.md');
     });
 
@@ -337,7 +350,10 @@ describe('KarmaService', () => {
     });
 
     test('uses prefix for agent-loop source', () => {
-      const key = KarmaService.extractDedupKey('agent-loop', 'Repeated action: something long here');
+      const key = KarmaService.extractDedupKey(
+        'agent-loop',
+        'Repeated action: something long here'
+      );
       expect(key).toStartWith('agent-loop:');
     });
 
@@ -347,22 +363,40 @@ describe('KarmaService', () => {
     });
 
     test('normalizes leading ./ in production paths', () => {
-      const key1 = KarmaService.extractDedupKey('production', 'Empty template detected in "./notes.md"');
-      const key2 = KarmaService.extractDedupKey('production', 'Empty template detected in "notes.md"');
+      const key1 = KarmaService.extractDedupKey(
+        'production',
+        'Empty template detected in "./notes.md"'
+      );
+      const key2 = KarmaService.extractDedupKey(
+        'production',
+        'Empty template detected in "notes.md"'
+      );
       expect(key1).toBe(key2);
       expect(key1).toBe('production:notes.md');
     });
 
     test('normalizes ./ prefix in nested paths', () => {
-      const key1 = KarmaService.extractDedupKey('production', 'Empty template detected in "./src/chapter1.md"');
-      const key2 = KarmaService.extractDedupKey('production', 'Empty template detected in "src/chapter1.md"');
+      const key1 = KarmaService.extractDedupKey(
+        'production',
+        'Empty template detected in "./src/chapter1.md"'
+      );
+      const key2 = KarmaService.extractDedupKey(
+        'production',
+        'Empty template detected in "src/chapter1.md"'
+      );
       expect(key1).toBe(key2);
       expect(key1).toBe('production:src/chapter1.md');
     });
 
     test('collapses duplicate slashes in production paths', () => {
-      const key1 = KarmaService.extractDedupKey('production', 'Empty template detected in "src//chapter1.md"');
-      const key2 = KarmaService.extractDedupKey('production', 'Empty template detected in "src/chapter1.md"');
+      const key1 = KarmaService.extractDedupKey(
+        'production',
+        'Empty template detected in "src//chapter1.md"'
+      );
+      const key2 = KarmaService.extractDedupKey(
+        'production',
+        'Empty template detected in "src/chapter1.md"'
+      );
       expect(key1).toBe(key2);
     });
   });
@@ -370,8 +404,18 @@ describe('KarmaService', () => {
   describe('dedup with path normalization', () => {
     test('./file.md and file.md produce same dedup key and are deduped', () => {
       const svc = new KarmaService(makeConfig({ dedupCooldownMinutes: 60 }), noopLogger);
-      const first = svc.addEvent('bot1', -3, 'Empty template detected in "./manuscrito.md"', 'production');
-      const second = svc.addEvent('bot1', -3, 'Empty template detected in "manuscrito.md"', 'production');
+      const first = svc.addEvent(
+        'bot1',
+        -3,
+        'Empty template detected in "./manuscrito.md"',
+        'production'
+      );
+      const second = svc.addEvent(
+        'bot1',
+        -3,
+        'Empty template detected in "manuscrito.md"',
+        'production'
+      );
       expect(first).not.toBeNull();
       expect(second).toBeNull();
       expect(svc.getAllEvents('bot1').length).toBe(1);

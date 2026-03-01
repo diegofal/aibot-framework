@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
-import { ToolExecutor, ToolStartEvent, ToolEndEvent, ToolErrorEvent } from '../../src/bot/tool-executor';
-import { Tool, ToolResult } from '../../src/tools/types';
-import { BotContext } from '../../src/bot/types';
+import { beforeEach, describe, expect, it } from 'bun:test';
+import { EventEmitter } from 'node:events';
 import { z } from 'zod';
-import { EventEmitter } from 'events';
+import {
+  type ToolEndEvent,
+  type ToolErrorEvent,
+  ToolExecutor,
+  type ToolStartEvent,
+} from '../../src/bot/tool-executor';
+import type { BotContext } from '../../src/bot/types';
+import type { Tool, ToolResult } from '../../src/tools/types';
 
 // Helper to create a mock BotContext
 function createMockContext(tools: Tool[] = []): BotContext {
@@ -17,7 +22,14 @@ function createMockContext(tools: Tool[] = []): BotContext {
       error: () => {},
       debug: () => {},
       trace: () => {},
-      child: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, trace: () => {} } as any),
+      child: () =>
+        ({
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+          debug: () => {},
+          trace: () => {},
+        }) as any,
     },
     tools,
     toolDefinitions: tools.map((t) => t.definition),
@@ -65,7 +77,11 @@ function createThrowingTool(name: string, errorMessage: string, maxRetries = 0):
 }
 
 // Helper to create a tool with validation schema
-function createSchemaTool(name: string, outputSchema: z.ZodType<unknown>, executeResult: unknown): Tool {
+function createSchemaTool(
+  name: string,
+  outputSchema: z.ZodType<unknown>,
+  executeResult: unknown
+): Tool {
   return {
     definition: {
       type: 'function',
@@ -190,7 +206,10 @@ describe('ToolExecutor Observability Hooks', () => {
     });
 
     it('should emit tool:end for successful execution with success=true', async () => {
-      const successTool = createTestTool('success_tool', { success: true, content: 'great success' });
+      const successTool = createTestTool('success_tool', {
+        success: true,
+        content: 'great success',
+      });
       const ctx = createMockContext([successTool]);
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
 
@@ -244,11 +263,9 @@ describe('ToolExecutor Observability Hooks', () => {
     });
 
     it('should emit tool:end after exhausting all retries', async () => {
-      const alwaysFailTool = createSchemaTool(
-        'always_fail',
-        z.object({ value: z.number() }),
-        { wrong: 'always' }
-      );
+      const alwaysFailTool = createSchemaTool('always_fail', z.object({ value: z.number() }), {
+        wrong: 'always',
+      });
 
       const ctx = createMockContext([alwaysFailTool]);
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
@@ -333,7 +350,10 @@ describe('ToolExecutor Observability Hooks', () => {
     });
 
     it('should emit tool:error for tool that returns success=false with phase=execution', async () => {
-      const failingTool = createTestTool('fails', { success: false, content: 'Tool failed internally' });
+      const failingTool = createTestTool('fails', {
+        success: false,
+        content: 'Tool failed internally',
+      });
       const ctx = createMockContext([failingTool]);
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
 
@@ -348,7 +368,9 @@ describe('ToolExecutor Observability Hooks', () => {
     });
 
     it('should emit tool:error for validation failures with phase=validation', async () => {
-      const invalidTool = createSchemaTool('invalid', z.object({ count: z.number() }), { count: 'not a number' });
+      const invalidTool = createSchemaTool('invalid', z.object({ count: z.number() }), {
+        count: 'not a number',
+      });
       const ctx = createMockContext([invalidTool]);
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
 
@@ -411,7 +433,7 @@ describe('ToolExecutor Observability Hooks', () => {
       expect(events[0].error).toBe('Attempt 1 failed');
       expect(events[1].error).toBe('Attempt 2 failed');
       expect(events[2].error).toBe('Attempt 3 failed');
-      expect(events.every(e => e.phase === 'execution')).toBe(true);
+      expect(events.every((e) => e.phase === 'execution')).toBe(true);
     });
   });
 
@@ -554,7 +576,9 @@ describe('ToolExecutor Observability Hooks', () => {
     });
 
     it('should emit karma -1 on validation failure (after retries exhausted)', async () => {
-      const invalidTool = createSchemaTool('invalid', z.object({ count: z.number() }), { count: 'not a number' });
+      const invalidTool = createSchemaTool('invalid', z.object({ count: z.number() }), {
+        count: 'not a number',
+      });
       const ctx = createMockContext([invalidTool]);
       const { service, events } = createMockKarmaService();
       const executor = new ToolExecutor(ctx, {

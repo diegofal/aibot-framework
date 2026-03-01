@@ -1,7 +1,7 @@
-import { describe, test, expect, vi } from 'bun:test';
+import { describe, expect, test, vi } from 'bun:test';
 import { GrammyError } from 'grammy';
+import { type SleepFn, TelegramPoller, abortableSleep } from '../../src/bot/telegram-poller';
 import type { Logger } from '../../src/logger';
-import { TelegramPoller, abortableSleep, type SleepFn } from '../../src/bot/telegram-poller';
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -49,7 +49,7 @@ function make409(): GrammyError {
     'Conflict: terminated by other getUpdates request',
     { ok: false, error_code: 409, description: 'Conflict' } as any,
     'getUpdates',
-    {},
+    {}
   );
 }
 
@@ -58,16 +58,21 @@ function make401(): GrammyError {
     'Unauthorized',
     { ok: false, error_code: 401, description: 'Unauthorized' } as any,
     'getUpdates',
-    {},
+    {}
   );
 }
 
 function make429(retryAfter = 1): GrammyError {
   const err = new GrammyError(
     'Too Many Requests',
-    { ok: false, error_code: 429, description: 'Too Many Requests', parameters: { retry_after: retryAfter } } as any,
+    {
+      ok: false,
+      error_code: 429,
+      description: 'Too Many Requests',
+      parameters: { retry_after: retryAfter },
+    } as any,
     'getUpdates',
-    {},
+    {}
   );
   (err as any).parameters = { retry_after: retryAfter };
   return err;
@@ -150,7 +155,10 @@ describe('TelegramPoller', () => {
     await poller.start(bot as any, 'test', ac.signal);
 
     expect(bot.handleUpdate).toHaveBeenCalledTimes(1);
-    expect(bot.handleUpdate).toHaveBeenCalledWith({ update_id: 200, message: { text: 'recovered' } });
+    expect(bot.handleUpdate).toHaveBeenCalledWith({
+      update_id: 200,
+      message: { text: 'recovered' },
+    });
     // First 2 are debug, 3rd is warn
     expect(logger.debug).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledTimes(1);
@@ -164,9 +172,7 @@ describe('TelegramPoller', () => {
     bot.api.getUpdates.mockRejectedValue(make409());
 
     const poller = new TelegramPoller(logger, { sleep: instantSleep });
-    await expect(
-      poller.start(bot as any, 'test', ac.signal)
-    ).rejects.toThrow('Conflict');
+    await expect(poller.start(bot as any, 'test', ac.signal)).rejects.toThrow('Conflict');
 
     // Should have tried 20 times (default MAX_409_CONSECUTIVE) then thrown
     expect(bot.api.getUpdates).toHaveBeenCalledTimes(20);
@@ -226,9 +232,7 @@ describe('TelegramPoller', () => {
     bot.api.getUpdates.mockRejectedValue(make401());
 
     const poller = new TelegramPoller(logger, { sleep: instantSleep });
-    await expect(
-      poller.start(bot as any, 'test', ac.signal)
-    ).rejects.toThrow('Unauthorized');
+    await expect(poller.start(bot as any, 'test', ac.signal)).rejects.toThrow('Unauthorized');
 
     // Only 1 attempt — no retries for 401
     expect(bot.api.getUpdates).toHaveBeenCalledTimes(1);
@@ -240,7 +244,9 @@ describe('TelegramPoller', () => {
     const logger = makeLogger();
     const sleepCalls: number[] = [];
 
-    const trackingSleep: SleepFn = async (ms) => { sleepCalls.push(ms); };
+    const trackingSleep: SleepFn = async (ms) => {
+      sleepCalls.push(ms);
+    };
 
     let callCount = 0;
     bot.api.getUpdates.mockImplementation(async () => {
@@ -263,7 +269,9 @@ describe('TelegramPoller', () => {
     const logger = makeLogger();
     const sleepCalls: number[] = [];
 
-    const trackingSleep: SleepFn = async (ms) => { sleepCalls.push(ms); };
+    const trackingSleep: SleepFn = async (ms) => {
+      sleepCalls.push(ms);
+    };
 
     let callCount = 0;
     bot.api.getUpdates.mockImplementation(async () => {
@@ -307,7 +315,9 @@ describe('TelegramPoller', () => {
     const logger = makeLogger();
     const sleepCalls: number[] = [];
 
-    const trackingSleep: SleepFn = async (ms) => { sleepCalls.push(ms); };
+    const trackingSleep: SleepFn = async (ms) => {
+      sleepCalls.push(ms);
+    };
 
     let callCount = 0;
     bot.api.getUpdates.mockImplementation(async () => {
@@ -322,7 +332,7 @@ describe('TelegramPoller', () => {
     await poller.start(bot as any, 'test', ac.signal);
 
     // Each successful cycle should have a POLL_INTERVAL_MS (500) sleep
-    expect(sleepCalls.filter(ms => ms === POLL_INTERVAL_MS)).toHaveLength(2);
+    expect(sleepCalls.filter((ms) => ms === POLL_INTERVAL_MS)).toHaveLength(2);
   });
 
   test('409 counter resets after successful poll', async () => {
@@ -334,9 +344,9 @@ describe('TelegramPoller', () => {
     let callCount = 0;
     bot.api.getUpdates.mockImplementation(async () => {
       callCount++;
-      if (callCount <= 2) throw make409();          // 2 failures
+      if (callCount <= 2) throw make409(); // 2 failures
       if (callCount === 3) return [{ update_id: 1 }]; // success (reset)
-      if (callCount <= 5) throw make409();           // 2 more failures
+      if (callCount <= 5) throw make409(); // 2 more failures
       if (callCount === 6) return [{ update_id: 2 }]; // success (reset)
       ac.abort();
       return [];

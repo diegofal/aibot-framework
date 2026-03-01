@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import type { Logger } from '../../logger';
 import type { ConversationsService } from '../../conversations/service';
+import type { Logger } from '../../logger';
 
 export function askHumanRoutes(deps: {
   botManager: BotManager;

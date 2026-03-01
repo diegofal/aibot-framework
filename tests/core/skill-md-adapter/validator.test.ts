@@ -2,9 +2,9 @@
  * Tests for SkillValidator
  */
 
-import { describe, it, expect } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
+import type { DeclaredTool, SkillDocument } from '../../../src/core/skill-md-adapter/types';
 import { SkillValidator } from '../../../src/core/skill-md-adapter/validator';
-import type { SkillDocument, DeclaredTool } from '../../../src/core/skill-md-adapter/types';
 
 describe('SkillValidator', () => {
   const validator = new SkillValidator();

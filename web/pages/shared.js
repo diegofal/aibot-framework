@@ -104,7 +104,16 @@ function formatFileSize(bytes) {
  * @param {string} [opts.botId] - Bot ID for file previews
  */
 export function renderThread(container, opts) {
-  const { thread = [], legacyFeedback, legacyResponse, onSend, generating, error, onRetry, botId } = opts;
+  const {
+    thread = [],
+    legacyFeedback,
+    legacyResponse,
+    onSend,
+    generating,
+    error,
+    onRetry,
+    botId,
+  } = opts;
 
   // Build messages list: legacy fields first (if no thread array), then thread
   const messages = [];
@@ -121,12 +130,15 @@ export function renderThread(container, opts) {
   let html = '<div class="transcript thread-messages">';
 
   if (messages.length === 0) {
-    html += '<div class="text-dim text-sm" style="padding:8px 0">No messages yet. Start the discussion below.</div>';
+    html +=
+      '<div class="text-dim text-sm" style="padding:8px 0">No messages yet. Start the discussion below.</div>';
   } else {
     for (const msg of messages) {
       const bubbleClass = msg.role === 'human' ? 'bubble-user' : 'bubble-assistant';
       const roleLabel = msg.role === 'human' ? 'You' : 'Bot';
-      const timeStr = msg.createdAt ? `<span class="text-dim text-sm" style="margin-left:8px">${timeAgo(msg.createdAt)}</span>` : '';
+      const timeStr = msg.createdAt
+        ? `<span class="text-dim text-sm" style="margin-left:8px">${timeAgo(msg.createdAt)}</span>`
+        : '';
       html += `
         <div class="bubble ${bubbleClass}">
           <div class="bubble-role">${roleLabel}${timeStr}</div>
@@ -140,7 +152,8 @@ export function renderThread(container, opts) {
         html += '<div class="message-files-list">';
         for (const file of msg.files) {
           const fileName = file.path.split('/').pop() || file.path;
-          const sizeStr = file.size != null ? ` <span class="text-dim">${formatFileSize(file.size)}</span>` : '';
+          const sizeStr =
+            file.size != null ? ` <span class="text-dim">${formatFileSize(file.size)}</span>` : '';
           html += `<div class="file-chip" data-path="${escapeHtml(file.path)}" data-bot="${escapeHtml(botId)}">&#128196; ${escapeHtml(fileName)}${sizeStr}</div>`;
         }
         html += '</div></div>';

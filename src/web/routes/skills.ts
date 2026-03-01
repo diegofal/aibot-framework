@@ -1,12 +1,12 @@
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { Hono } from 'hono';
-import type { SkillRegistry } from '../../core/skill-registry';
-import type { Config } from '../../config';
 import type { BotManager } from '../../bot';
+import type { Config } from '../../config';
+import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
+import type { SkillRegistry } from '../../core/skill-registry';
 import type { Logger } from '../../logger';
 import { generateSkill } from '../../skill-generator';
-import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
 
 export interface SkillsRouteDeps {
   skillRegistry: SkillRegistry;
@@ -21,7 +21,9 @@ export interface SkillsRouteDeps {
  */
 export function getValidSkillsPaths(config: Config): string[] {
   const paths = [...(config.skillsFolders?.paths ?? [])];
-  const productionEntries = discoverProductionSkillPaths(config.productions?.baseDir ?? './productions');
+  const productionEntries = discoverProductionSkillPaths(
+    config.productions?.baseDir ?? './productions'
+  );
   for (const entry of productionEntries) {
     paths.push(entry.path);
   }
@@ -62,7 +64,7 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
         commands: loaded?.commands ? Object.keys(loaded.commands) : [],
         jobs: loaded?.jobs?.map((j) => ({ id: j.id, schedule: j.schedule })) ?? [],
         hasOnMessage: loaded ? !!loaded.onMessage : false,
-        llmBackend: enabled ? ((cfg.llmBackend as string) || 'ollama') : undefined,
+        llmBackend: enabled ? (cfg.llmBackend as string) || 'ollama' : undefined,
       };
     });
 
@@ -174,7 +176,10 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
     }>();
 
     if (!body.id || !body.targetFolder || !body.skillJson || !body.handlerCode) {
-      return c.json({ error: 'Missing required fields: id, targetFolder, skillJson, handlerCode' }, 400);
+      return c.json(
+        { error: 'Missing required fields: id, targetFolder, skillJson, handlerCode' },
+        400
+      );
     }
 
     if (!isInsideSkillsFolders(body.targetFolder, deps.config)) {
@@ -188,7 +193,11 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
 
     try {
       mkdirSync(skillDir, { recursive: true });
-      writeFileSync(join(skillDir, 'skill.json'), JSON.stringify(body.skillJson, null, 2) + '\n', 'utf-8');
+      writeFileSync(
+        join(skillDir, 'skill.json'),
+        `${JSON.stringify(body.skillJson, null, 2)}\n`,
+        'utf-8'
+      );
       writeFileSync(join(skillDir, 'index.ts'), body.handlerCode, 'utf-8');
       deps.logger.info({ id: body.id, dir: skillDir }, 'External skill created via API');
       return c.json({ ok: true, dir: skillDir });
@@ -219,7 +228,7 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
           timeout: deps.config.improve?.timeout,
           skillsFolderPaths: deps.config.skillsFolders?.paths ?? [],
           logger: deps.logger,
-        },
+        }
       );
       return c.json(result);
     } catch (err) {
@@ -238,7 +247,10 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
     }>();
 
     if (!body.id || !body.targetFolder || !body.skillJson || !body.handlerCode) {
-      return c.json({ error: 'Missing required fields: id, targetFolder, skillJson, handlerCode' }, 400);
+      return c.json(
+        { error: 'Missing required fields: id, targetFolder, skillJson, handlerCode' },
+        400
+      );
     }
 
     if (!isInsideSkillsFolders(body.targetFolder, deps.config)) {
@@ -249,7 +261,11 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
 
     try {
       mkdirSync(skillDir, { recursive: true });
-      writeFileSync(join(skillDir, 'skill.json'), JSON.stringify(body.skillJson, null, 2) + '\n', 'utf-8');
+      writeFileSync(
+        join(skillDir, 'skill.json'),
+        `${JSON.stringify(body.skillJson, null, 2)}\n`,
+        'utf-8'
+      );
       writeFileSync(join(skillDir, 'index.ts'), body.handlerCode, 'utf-8');
       deps.logger.info({ id: body.id, dir: skillDir }, 'Generated skill applied to disk');
       return c.json({ ok: true, dir: skillDir });
@@ -285,7 +301,11 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
 
     try {
       if (body.skillJson) {
-        writeFileSync(join(extSkill.dir, 'skill.json'), JSON.stringify(body.skillJson, null, 2) + '\n', 'utf-8');
+        writeFileSync(
+          join(extSkill.dir, 'skill.json'),
+          `${JSON.stringify(body.skillJson, null, 2)}\n`,
+          'utf-8'
+        );
       }
       if (body.handlerCode) {
         writeFileSync(join(extSkill.dir, 'index.ts'), body.handlerCode, 'utf-8');

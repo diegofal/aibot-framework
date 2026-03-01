@@ -7,7 +7,7 @@ import type { SoulLintIssue } from './soul-lint';
 function buildQualityReviewPrompt(
   soulDir: string,
   soulFiles: Record<string, string | null>,
-  lintIssues: SoulLintIssue[],
+  lintIssues: SoulLintIssue[]
 ): string {
   const parts = [
     'You are a soul quality reviewer for an AI bot personality system.',
@@ -44,14 +44,14 @@ function buildQualityReviewPrompt(
     '6. **Structural issues**: Fix any lint issues listed above.',
     '',
     '## Rules',
-    '1. PRESERVE the core voice and personality — refine, don\'t replace.',
+    "1. PRESERVE the core voice and personality — refine, don't replace.",
     '2. Keep the language consistent (if files are in Spanish, edit in Spanish).',
-    '3. Make targeted, minimal edits. Don\'t rewrite entire files unnecessarily.',
+    "3. Make targeted, minimal edits. Don't rewrite entire files unnecessarily.",
     '4. Back up files before editing is handled automatically — just edit directly.',
     '',
     '## Output',
     'After making all edits, output ONLY a concise summary of what you changed and why (max 10 bullet points).',
-    'If no changes were needed, say "No changes needed."',
+    'If no changes were needed, say "No changes needed."'
   );
 
   return parts.join('\n');
@@ -87,21 +87,20 @@ export async function runQualityReview(opts: {
   const prompt = buildQualityReviewPrompt(soulDir, soulFiles, lintIssues);
 
   const env = { ...process.env };
-  delete env.CLAUDECODE;
+  env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const proc = Bun.spawn(
-    [claudePath, '-p', prompt, '--allowedTools', 'Read,Edit,Write'],
-    {
-      cwd: resolve(soulDir, '..', '..'),
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env,
-    },
-  );
+  const proc = Bun.spawn([claudePath, '-p', prompt, '--allowedTools', 'Read,Edit,Write'], {
+    cwd: resolve(soulDir, '..', '..'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env,
+  });
 
   const timer = setTimeout(() => {
-    try { proc.kill(); } catch {}
+    try {
+      proc.kill();
+    } catch {}
   }, timeout);
 
   try {
@@ -115,7 +114,7 @@ export async function runQualityReview(opts: {
     if (exitCode !== 0) {
       logger.warn(
         { exitCode, stderr: stderr.slice(0, 500) },
-        'Soul quality review: Claude CLI failed',
+        'Soul quality review: Claude CLI failed'
       );
       return `Quality review failed (exit code ${exitCode})`;
     }

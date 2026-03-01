@@ -1,7 +1,11 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { lintSoulDirectory, getUnconsolidatedLogs, runStartupSoulCheck } from '../src/bot/soul-health-check';
+import {
+  getUnconsolidatedLogs,
+  lintSoulDirectory,
+  runStartupSoulCheck,
+} from '../src/bot/soul-health-check';
 import { SoulLoader } from '../src/soul';
 
 const TMP_DIR = join(import.meta.dir, '.tmp-soul-health-check');
@@ -27,7 +31,9 @@ function setupSoulDir(files: Record<string, string> = {}): string {
 
   for (const [name, content] of Object.entries({ ...defaults, ...files })) {
     const filepath = join(soulDir, name);
-    mkdirSync(join(soulDir, name.includes('/') ? name.split('/').slice(0, -1).join('/') : ''), { recursive: true });
+    mkdirSync(join(soulDir, name.includes('/') ? name.split('/').slice(0, -1).join('/') : ''), {
+      recursive: true,
+    });
     writeFileSync(filepath, content, 'utf-8');
   }
 
@@ -39,7 +45,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
+  try {
+    rmSync(TMP_DIR, { recursive: true, force: true });
+  } catch {}
 });
 
 // ---------------------------------------------------------------------------
@@ -58,7 +66,7 @@ describe('lintSoulDirectory', () => {
     mkdirSync(join(soulDir, 'memory'), { recursive: true });
 
     const issues = lintSoulDirectory(soulDir);
-    const errorFiles = issues.filter(i => i.severity === 'error').map(i => i.file);
+    const errorFiles = issues.filter((i) => i.severity === 'error').map((i) => i.file);
     expect(errorFiles).toContain('IDENTITY.md');
     expect(errorFiles).toContain('SOUL.md');
     expect(errorFiles).toContain('MOTIVATIONS.md');
@@ -72,9 +80,9 @@ describe('lintSoulDirectory', () => {
     writeFileSync(join(soulDir, 'MOTIVATIONS.md'), 'motivations', 'utf-8');
 
     const issues = lintSoulDirectory(soulDir);
-    const memoryIssue = issues.find(i => i.file === 'memory/');
+    const memoryIssue = issues.find((i) => i.file === 'memory/');
     expect(memoryIssue).toBeDefined();
-    expect(memoryIssue!.severity).toBe('warning');
+    expect(memoryIssue?.severity).toBe('warning');
   });
 
   test('detects duplicated headers in SOUL.md', () => {
@@ -83,7 +91,7 @@ describe('lintSoulDirectory', () => {
     });
 
     const issues = lintSoulDirectory(soulDir);
-    const soulIssues = issues.filter(i => i.file === 'SOUL.md');
+    const soulIssues = issues.filter((i) => i.file === 'SOUL.md');
     expect(soulIssues.length).toBeGreaterThan(0);
     expect(soulIssues[0].message).toContain('Your Inner Motivations');
   });
@@ -94,18 +102,19 @@ describe('lintSoulDirectory', () => {
     });
 
     const issues = lintSoulDirectory(soulDir);
-    const motivIssues = issues.filter(i => i.file === 'MOTIVATIONS.md');
+    const motivIssues = issues.filter((i) => i.file === 'MOTIVATIONS.md');
     expect(motivIssues.length).toBeGreaterThan(0);
     expect(motivIssues[0].message).toContain('stale placeholder');
   });
 
   test('detects multiple duplicate headers', () => {
     const soulDir = setupSoulDir({
-      'SOUL.md': '## Soul\nContent\n\n## Goals\nGoal content\n\n## Impulsos centrales\nMore content',
+      'SOUL.md':
+        '## Soul\nContent\n\n## Goals\nGoal content\n\n## Impulsos centrales\nMore content',
     });
 
     const issues = lintSoulDirectory(soulDir);
-    const soulIssues = issues.filter(i => i.file === 'SOUL.md');
+    const soulIssues = issues.filter((i) => i.file === 'SOUL.md');
     expect(soulIssues.length).toBe(2); // ## Goals + ## Impulsos centrales
   });
 });
@@ -182,8 +191,8 @@ describe('runStartupSoulCheck cooldown', () => {
 
     // Should have logged "skipping (cooldown)"
     const debugCalls = (mockLogger.debug as any).mock.calls;
-    const skipped = debugCalls.some((call: any[]) =>
-      typeof call[1] === 'string' && call[1].includes('skipping (cooldown)')
+    const skipped = debugCalls.some(
+      (call: any[]) => typeof call[1] === 'string' && call[1].includes('skipping (cooldown)')
     );
     expect(skipped).toBe(true);
   });
@@ -205,8 +214,8 @@ describe('runStartupSoulCheck cooldown', () => {
 
     // Should have logged "starting"
     const infoCalls = (mockLogger.info as any).mock.calls;
-    const started = infoCalls.some((call: any[]) =>
-      typeof call[1] === 'string' && call[1].includes('starting')
+    const started = infoCalls.some(
+      (call: any[]) => typeof call[1] === 'string' && call[1].includes('starting')
     );
     expect(started).toBe(true);
   });
@@ -224,8 +233,8 @@ describe('runStartupSoulCheck cooldown', () => {
     });
 
     const infoCalls = (mockLogger.info as any).mock.calls;
-    const started = infoCalls.some((call: any[]) =>
-      typeof call[1] === 'string' && call[1].includes('starting')
+    const started = infoCalls.some(
+      (call: any[]) => typeof call[1] === 'string' && call[1].includes('starting')
     );
     expect(started).toBe(true);
   });
@@ -240,7 +249,11 @@ describe('SoulLoader.composeSystemPrompt with MEMORY.md', () => {
     const soulDir = setupSoulDir({
       'MEMORY.md': '<!-- last-consolidated: 2026-02-20 -->\n## Facts\n- Important fact',
     });
-    writeFileSync(join(soulDir, 'memory', 'legacy.md'), 'Legacy content that should not appear', 'utf-8');
+    writeFileSync(
+      join(soulDir, 'memory', 'legacy.md'),
+      'Legacy content that should not appear',
+      'utf-8'
+    );
 
     const loader = new SoulLoader({ enabled: true, dir: soulDir } as any, mockLogger);
     const prompt = loader.composeSystemPrompt()!;

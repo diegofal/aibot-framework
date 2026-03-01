@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { createDatetimeTool } from '../../src/tools/datetime';
 
 function createMockLogger() {
@@ -66,7 +66,7 @@ describe('get_datetime tool', () => {
     const result = await tool.execute({}, logger);
     const isoMatch = result.content.match(/ISO 8601: (.+)/);
     expect(isoMatch).toBeTruthy();
-    const parsed = new Date(isoMatch![1]);
+    const parsed = new Date(isoMatch?.[1]);
     expect(parsed.getTime()).not.toBeNaN();
     // Should be within last few seconds
     expect(Date.now() - parsed.getTime()).toBeLessThan(5000);

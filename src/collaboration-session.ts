@@ -16,7 +16,10 @@ export class CollaborationSessionManager {
   private sessions: Map<string, CollaborationSession> = new Map();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private sessionTtlMs: number = 600_000, private dataDir?: string) {
+  constructor(
+    private sessionTtlMs = 600_000,
+    private dataDir?: string
+  ) {
     if (dataDir) this.loadFromDisk();
     this.sweepTimer = setInterval(() => this.sweep(), 60_000);
   }
@@ -84,6 +87,19 @@ export class CollaborationSessionManager {
   end(sessionId: string): void {
     this.sessions.delete(sessionId);
     this.persistToDisk();
+  }
+
+  /** Remove all sessions involving a specific bot. Returns the number of sessions removed. */
+  clearForBot(botId: string): number {
+    let removed = 0;
+    for (const [id, session] of this.sessions) {
+      if (session.sourceBotId === botId || session.targetBotId === botId) {
+        this.sessions.delete(id);
+        removed++;
+      }
+    }
+    if (removed > 0) this.persistToDisk();
+    return removed;
   }
 
   /** Remove sessions that haven't been active within the TTL */

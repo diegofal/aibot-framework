@@ -23,16 +23,22 @@ export type ConversationProcessor = (
   userText: string,
   images?: string[],
   sessionText?: string,
-  isVoice?: boolean,
+  isVoice?: boolean
 ) => Promise<void>;
 
 const SEEN_MESSAGES_CAP = 250;
 
 export class MessageBuffer {
   // Capa 1: inbound debounce buffers
-  private inbound = new Map<string, { entries: BufferEntry[]; timer: ReturnType<typeof setTimeout> }>();
+  private inbound = new Map<
+    string,
+    { entries: BufferEntry[]; timer: ReturnType<typeof setTimeout> }
+  >();
   // Capa 2: followup queues
-  private queues = new Map<string, { entries: BufferEntry[]; timer: ReturnType<typeof setTimeout> | null }>();
+  private queues = new Map<
+    string,
+    { entries: BufferEntry[]; timer: ReturnType<typeof setTimeout> | null }
+  >();
   // Active Ollama tasks per session
   private activeTasks = new Map<string, Promise<void>>();
   // Message dedup
@@ -41,7 +47,7 @@ export class MessageBuffer {
   constructor(
     private bufferConfig: BufferConfig,
     private processor: ConversationProcessor,
-    private logger: Logger,
+    private logger: Logger
   ) {}
 
   /**
@@ -102,7 +108,10 @@ export class MessageBuffer {
       clearTimeout(existing.timer);
       existing.entries.push(entry);
     } else {
-      this.inbound.set(sessionKey, { entries: [entry], timer: null as unknown as ReturnType<typeof setTimeout> });
+      this.inbound.set(sessionKey, {
+        entries: [entry],
+        timer: null as unknown as ReturnType<typeof setTimeout>,
+      });
     }
 
     const buf = this.inbound.get(sessionKey)!;
@@ -136,14 +145,14 @@ export class MessageBuffer {
       const dropped = queue.entries.shift()!;
       this.logger.warn(
         { sessionKey, droppedMessageId: dropped.messageId, queueCap: this.bufferConfig.queueCap },
-        'Queue cap reached, dropping oldest message',
+        'Queue cap reached, dropping oldest message'
       );
     }
 
     queue.entries.push(entry);
     this.logger.debug(
       { sessionKey, queueSize: queue.entries.length, messageId: entry.messageId },
-      'Message enqueued (bot busy)',
+      'Message enqueued (bot busy)'
     );
   }
 
@@ -215,7 +224,7 @@ export class MessageBuffer {
 
     this.logger.info(
       { sessionKey: last.sessionKey, count: entries.length },
-      'Inbound debounce: merging messages',
+      'Inbound debounce: merging messages'
     );
 
     return {
@@ -244,7 +253,7 @@ export class MessageBuffer {
 
     this.logger.info(
       { sessionKey: last.sessionKey, count: entries.length },
-      'Followup queue: merging queued messages',
+      'Followup queue: merging queued messages'
     );
 
     return {

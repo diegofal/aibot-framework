@@ -14,7 +14,13 @@ export interface ClaimBatch {
   claims: Claim[];
 }
 
-export type SessionPhase = 'extracting' | 'reviewing' | 'awaiting_edit' | 'rewriting' | 'confirming' | 'done';
+export type SessionPhase =
+  | 'extracting'
+  | 'reviewing'
+  | 'awaiting_edit'
+  | 'rewriting'
+  | 'confirming'
+  | 'done';
 
 export interface FileRewrite {
   filename: string;

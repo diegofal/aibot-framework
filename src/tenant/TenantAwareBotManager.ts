@@ -1,12 +1,12 @@
 import type { BotManager } from '../bot/bot-manager';
 import type { BotConfig } from '../config';
+import type { Logger } from '../logger';
 import type { TenantManager } from './manager';
 import type { Tenant, UsageEventType } from './types';
-import type { Logger } from '../logger';
 
 /**
  * TenantAwareBotManager wraps BotManager with multi-tenant isolation.
- * 
+ *
  * This is the integration layer between the tenant system and the bot system.
  * It ensures:
  * - API key validation on all operations
@@ -18,7 +18,7 @@ export class TenantAwareBotManager {
   constructor(
     private botManager: BotManager,
     private tenantManager: TenantManager,
-    private logger: Logger,
+    private logger: Logger
   ) {}
 
   // ============================================================================
@@ -56,7 +56,10 @@ export class TenantAwareBotManager {
   /**
    * Update tenant plan or configuration.
    */
-  updateTenant(tenantId: string, updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>): Tenant | undefined {
+  updateTenant(
+    tenantId: string,
+    updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>
+  ): Tenant | undefined {
     return this.tenantManager.updateTenant(tenantId, updates);
   }
 
@@ -71,7 +74,7 @@ export class TenantAwareBotManager {
         await this.botManager.stopBot(bot.id);
       }
     }
-    
+
     return this.tenantManager.deleteTenant(tenantId);
   }
 
@@ -104,9 +107,9 @@ export class TenantAwareBotManager {
     // Check bot count limit for tenant's plan
     if (!this.tenantManager.canCreateBot(botConfig.tenantId, this.botManager)) {
       const planLimits = this.tenantManager.getPlanLimits(tenant.plan);
-      return { 
-        success: false, 
-        error: `Bot limit exceeded. Plan '${tenant.plan}' allows ${planLimits.maxBots} bots.` 
+      return {
+        success: false,
+        error: `Bot limit exceeded. Plan '${tenant.plan}' allows ${planLimits.maxBots} bots.`,
       };
     }
 
@@ -118,7 +121,7 @@ export class TenantAwareBotManager {
 
     try {
       await this.botManager.startBot(botConfig);
-      
+
       // Record bot creation usage
       this.tenantManager.recordUsage({
         tenantId: botConfig.tenantId,
@@ -128,19 +131,25 @@ export class TenantAwareBotManager {
         storageBytesUsed: 0,
       });
 
-      this.logger.info({ 
-        tenantId: botConfig.tenantId, 
-        botId: botConfig.id,
-        plan: tenant.plan 
-      }, 'Tenant bot started successfully');
+      this.logger.info(
+        {
+          tenantId: botConfig.tenantId,
+          botId: botConfig.id,
+          plan: tenant.plan,
+        },
+        'Tenant bot started successfully'
+      );
 
       return { success: true };
     } catch (err) {
-      this.logger.error({ 
-        err, 
-        tenantId: botConfig.tenantId, 
-        botId: botConfig.id 
-      }, 'Failed to start tenant bot');
+      this.logger.error(
+        {
+          err,
+          tenantId: botConfig.tenantId,
+          botId: botConfig.id,
+        },
+        'Failed to start tenant bot'
+      );
       return { success: false, error: String(err) };
     }
   }
@@ -166,7 +175,10 @@ export class TenantAwareBotManager {
   /**
    * Reset a bot with tenant verification.
    */
-  async resetBot(tenantId: string, botId: string): Promise<{ success: boolean; error?: string; result?: unknown }> {
+  async resetBot(
+    tenantId: string,
+    botId: string
+  ): Promise<{ success: boolean; error?: string; result?: unknown }> {
     const bot = this.getTenantBot(tenantId, botId);
     if (!bot) {
       return { success: false, error: 'Bot not found or does not belong to tenant' };
@@ -196,7 +208,7 @@ export class TenantAwareBotManager {
    */
   getTenantBot(tenantId: string, botId: string): BotConfig | undefined {
     const bots = this.getTenantBots(tenantId);
-    return bots.find(b => b.id === botId);
+    return bots.find((b) => b.id === botId);
   }
 
   /**
@@ -222,10 +234,10 @@ export class TenantAwareBotManager {
    * Record usage event for a tenant.
    */
   recordUsage(
-    tenantId: string, 
-    botId: string, 
-    type: UsageEventType, 
-    quantity: number = 1,
+    tenantId: string,
+    botId: string,
+    type: UsageEventType,
+    quantity = 1,
     metadata?: Record<string, unknown>
   ): void {
     // Map UsageEventType to UsageRecord format
@@ -270,18 +282,20 @@ export class TenantAwareBotManager {
   /**
    * Check if tenant has quota for operation.
    */
-  checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount: number = 1): boolean {
+  checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount = 1): boolean {
     return this.tenantManager.checkQuota(tenantId, type, amount);
   }
 
   /**
    * Get quota status with remaining amounts.
    */
-  getQuotaStatus(tenantId: string): { 
-    messages: { used: number; limit: number; remaining: number };
-    apiCalls: { used: number; limit: number; remaining: number };
-    storage: { used: number; limit: number; remaining: number };
-  } | undefined {
+  getQuotaStatus(tenantId: string):
+    | {
+        messages: { used: number; limit: number; remaining: number };
+        apiCalls: { used: number; limit: number; remaining: number };
+        storage: { used: number; limit: number; remaining: number };
+      }
+    | undefined {
     const tenant = this.tenantManager.getTenant(tenantId);
     if (!tenant) return undefined;
 
@@ -313,7 +327,12 @@ export class TenantAwareBotManager {
   /**
    * Send message through a tenant's bot.
    */
-  async sendMessage(tenantId: string, botId: string, chatId: number, text: string): Promise<{ success: boolean; error?: string }> {
+  async sendMessage(
+    tenantId: string,
+    botId: string,
+    chatId: number,
+    text: string
+  ): Promise<{ success: boolean; error?: string }> {
     const bot = this.getTenantBot(tenantId, botId);
     if (!bot) {
       return { success: false, error: 'Bot not found or does not belong to tenant' };
@@ -325,10 +344,10 @@ export class TenantAwareBotManager {
 
     try {
       await this.botManager.sendMessage(chatId, text, botId);
-      
+
       // Record message usage
       this.recordUsage(tenantId, botId, 'message_processed');
-      
+
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -338,7 +357,10 @@ export class TenantAwareBotManager {
   /**
    * Run agent loop for a tenant's bot.
    */
-  async runAgentLoop(tenantId: string, botId: string): Promise<{ success: boolean; error?: string; result?: unknown }> {
+  async runAgentLoop(
+    tenantId: string,
+    botId: string
+  ): Promise<{ success: boolean; error?: string; result?: unknown }> {
     const bot = this.getTenantBot(tenantId, botId);
     if (!bot) {
       return { success: false, error: 'Bot not found or does not belong to tenant' };
@@ -351,10 +373,10 @@ export class TenantAwareBotManager {
 
     try {
       const result = await this.botManager.runAgentLoop(botId);
-      
+
       // Record agent loop usage (higher cost)
       this.recordUsage(tenantId, botId, 'api_call', 3);
-      
+
       return { success: true, result };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -364,13 +386,15 @@ export class TenantAwareBotManager {
   /**
    * Get ask-human pending count for tenant's bots.
    */
-  getAskHumanPending(tenantId: string): Array<{ id: string; botId: string; question: string; timestamp: string }> {
+  getAskHumanPending(
+    tenantId: string
+  ): Array<{ id: string; botId: string; question: string; timestamp: string }> {
     const allPending = this.botManager.getAskHumanPending();
-    const tenantBotIds = new Set(this.getTenantBots(tenantId).map(b => b.id));
-    
+    const tenantBotIds = new Set(this.getTenantBots(tenantId).map((b) => b.id));
+
     return allPending
-      .filter(q => tenantBotIds.has(q.botId))
-      .map(q => ({
+      .filter((q) => tenantBotIds.has(q.botId))
+      .map((q) => ({
         id: q.id,
         botId: q.botId,
         question: q.question,
@@ -381,11 +405,15 @@ export class TenantAwareBotManager {
   /**
    * Answer an ask-human question for a tenant's bot.
    */
-  answerAskHuman(tenantId: string, questionId: string, answer: string): { success: boolean; error?: string } {
+  answerAskHuman(
+    tenantId: string,
+    questionId: string,
+    answer: string
+  ): { success: boolean; error?: string } {
     // Verify question belongs to tenant
     const pending = this.getAskHumanPending(tenantId);
-    const question = pending.find(q => q.id === questionId);
-    
+    const question = pending.find((q) => q.id === questionId);
+
     if (!question) {
       return { success: false, error: 'Question not found or does not belong to tenant' };
     }
@@ -401,7 +429,10 @@ export class TenantAwareBotManager {
   /**
    * Upgrade tenant plan.
    */
-  async upgradePlan(tenantId: string, newPlan: Tenant['plan']): Promise<{ success: boolean; error?: string }> {
+  async upgradePlan(
+    tenantId: string,
+    newPlan: Tenant['plan']
+  ): Promise<{ success: boolean; error?: string }> {
     const tenant = this.tenantManager.getTenant(tenantId);
     if (!tenant) {
       return { success: false, error: 'Tenant not found' };
@@ -411,17 +442,17 @@ export class TenantAwareBotManager {
     if (this.isDowngrade(tenant.plan, newPlan)) {
       const currentBotCount = this.getTenantBots(tenantId).length;
       const newLimits = this.tenantManager.getPlanLimits(newPlan);
-      
+
       if (currentBotCount > newLimits.maxBots) {
-        return { 
-          success: false, 
-          error: `Cannot downgrade: tenant has ${currentBotCount} bots but new plan allows only ${newLimits.maxBots}. Please delete bots first.` 
+        return {
+          success: false,
+          error: `Cannot downgrade: tenant has ${currentBotCount} bots but new plan allows only ${newLimits.maxBots}. Please delete bots first.`,
         };
       }
     }
 
     this.tenantManager.updateTenant(tenantId, { plan: newPlan });
-    
+
     this.logger.info({ tenantId, oldPlan: tenant.plan, newPlan }, 'Tenant plan upgraded');
     return { success: true };
   }

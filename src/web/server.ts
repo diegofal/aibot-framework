@@ -1,29 +1,29 @@
-import { watch, readFileSync, statSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync, watch } from 'node:fs';
+import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
-import type { ServerWebSocket } from 'bun';
 import type { BotManager } from '../bot';
 import type { Config } from '../config';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import type { Logger } from '../logger';
 import type { SessionManager } from '../session';
+import { agentFeedbackRoutes } from './routes/agent-feedback';
+import { agentLoopRoutes } from './routes/agent-loop';
 import { agentsRoutes } from './routes/agents';
+import { askHumanRoutes } from './routes/ask-human';
+import { askPermissionRoutes } from './routes/ask-permission';
+import { conversationsRoutes } from './routes/conversations';
 import { cronRoutes } from './routes/cron';
+import { filesRoutes } from './routes/files';
+import { integrationsRoutes } from './routes/integrations';
+import { karmaRoutes } from './routes/karma';
+import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
 import { settingsRoutes } from './routes/settings';
 import { skillsRoutes } from './routes/skills';
 import { statusRoutes } from './routes/status';
 import { toolsRoutes } from './routes/tools';
-import { agentLoopRoutes } from './routes/agent-loop';
-import { askHumanRoutes } from './routes/ask-human';
-import { askPermissionRoutes } from './routes/ask-permission';
-import { productionsRoutes } from './routes/productions';
-import { agentFeedbackRoutes } from './routes/agent-feedback';
-import { karmaRoutes } from './routes/karma';
-import { conversationsRoutes } from './routes/conversations';
-import { integrationsRoutes } from './routes/integrations';
-import { filesRoutes } from './routes/files';
 
 export type WebServerDeps = {
   config: Config;
@@ -43,34 +43,56 @@ export function startWebServer(deps: WebServerDeps): void {
 
   // API routes
   app.route('/api/status', statusRoutes({ config, botManager: deps.botManager }));
-  app.route('/api/skills', skillsRoutes({
-    skillRegistry: deps.skillRegistry,
-    config,
-    configPath: deps.configPath,
-    botManager: deps.botManager,
-    logger,
-  }));
-  app.route('/api/agents', agentsRoutes({ config, botManager: deps.botManager, configPath: deps.configPath, logger }));
+  app.route(
+    '/api/skills',
+    skillsRoutes({
+      skillRegistry: deps.skillRegistry,
+      config,
+      configPath: deps.configPath,
+      botManager: deps.botManager,
+      logger,
+    })
+  );
+  app.route(
+    '/api/agents',
+    agentsRoutes({ config, botManager: deps.botManager, configPath: deps.configPath, logger })
+  );
   app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager }));
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
   app.route('/api/settings', settingsRoutes({ config, configPath: deps.configPath, logger }));
   app.route('/api/agent-loop', agentLoopRoutes({ config, botManager: deps.botManager, logger }));
-  app.route('/api/ask-human', askHumanRoutes({ botManager: deps.botManager, logger, conversationsService: deps.botManager.getConversationsService() }));
+  app.route(
+    '/api/ask-human',
+    askHumanRoutes({
+      botManager: deps.botManager,
+      logger,
+      conversationsService: deps.botManager.getConversationsService(),
+    })
+  );
   app.route('/api/ask-permission', askPermissionRoutes({ botManager: deps.botManager, logger }));
-  app.route('/api/agent-feedback', agentFeedbackRoutes({
-    config,
-    botManager: deps.botManager,
-    logger,
-    productionsService: deps.botManager.getProductionsService(),
-  }));
+  app.route(
+    '/api/agent-feedback',
+    agentFeedbackRoutes({
+      config,
+      botManager: deps.botManager,
+      logger,
+      productionsService: deps.botManager.getProductionsService(),
+    })
+  );
 
-  app.route('/api/integrations', integrationsRoutes({ config, botManager: deps.botManager, logger }));
+  app.route(
+    '/api/integrations',
+    integrationsRoutes({ config, botManager: deps.botManager, logger })
+  );
   app.route('/api/files', filesRoutes({ config, logger }));
 
   // Productions routes (only if enabled)
   const productionsService = deps.botManager.getProductionsService();
   if (productionsService) {
-    app.route('/api/productions', productionsRoutes({ productionsService, botManager: deps.botManager, logger, config }));
+    app.route(
+      '/api/productions',
+      productionsRoutes({ productionsService, botManager: deps.botManager, logger, config })
+    );
   }
 
   // Karma routes (only if enabled)
@@ -81,24 +103,30 @@ export function startWebServer(deps: WebServerDeps): void {
 
   // Conversations routes (use shared ConversationsService from BotManager)
   const conversationsService = deps.botManager.getConversationsService();
-  app.route('/api/conversations', conversationsRoutes({
-    conversationsService,
-    botManager: deps.botManager,
-    logger,
-    config,
-    productionsService,
-  }));
+  app.route(
+    '/api/conversations',
+    conversationsRoutes({
+      conversationsService,
+      botManager: deps.botManager,
+      logger,
+      config,
+      productionsService,
+    })
+  );
 
   // Dynamic tools routes (only if enabled)
   const dynamicStore = deps.botManager.getDynamicToolStore();
   const dynamicRegistry = deps.botManager.getDynamicToolRegistry();
   if (dynamicStore && dynamicRegistry) {
-    app.route('/api/tools', toolsRoutes({
-      store: dynamicStore,
-      registry: dynamicRegistry,
-      botManager: deps.botManager,
-      logger,
-    }));
+    app.route(
+      '/api/tools',
+      toolsRoutes({
+        store: dynamicStore,
+        registry: dynamicRegistry,
+        botManager: deps.botManager,
+        logger,
+      })
+    );
   }
 
   // Static files from web/ directory
@@ -193,7 +221,9 @@ export function startWebServer(deps: WebServerDeps): void {
             if (!line) continue;
             try {
               parsed.push(JSON.parse(line));
-            } catch { /* skip malformed */ }
+            } catch {
+              /* skip malformed */
+            }
           }
           if (parsed.length > 0) {
             broadcast(JSON.stringify({ type: 'logs', lines: parsed }));
@@ -201,7 +231,9 @@ export function startWebServer(deps: WebServerDeps): void {
         } else {
           closeSync(fd);
         }
-      } catch { /* ignore read errors */ }
+      } catch {
+        /* ignore read errors */
+      }
     });
   } catch {
     logger.warn('Could not watch log file for live streaming');
@@ -240,7 +272,9 @@ export function startWebServer(deps: WebServerDeps): void {
           for (const line of historyLines) {
             try {
               parsed.push(JSON.parse(line));
-            } catch { /* skip */ }
+            } catch {
+              /* skip */
+            }
           }
           ws.send(JSON.stringify({ type: 'history', lines: parsed }));
         }

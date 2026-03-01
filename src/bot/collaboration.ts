@@ -1,13 +1,13 @@
 import type { AgentInfo } from '../agent-registry';
 import type { BotConfig } from '../config';
 import { resolveAgentConfig } from '../config';
+import type { KarmaService } from '../karma/service';
 import type { ChatMessage } from '../ollama';
-import type { BotContext } from './types';
 import type { SystemPromptBuilder } from './system-prompt-builder';
-import type { ToolRegistry } from './tool-registry';
 import { sendLongMessage } from './telegram-utils';
 import { ToolExecutor } from './tool-executor';
-import type { KarmaService } from '../karma/service';
+import type { ToolRegistry } from './tool-registry';
+import type { BotContext } from './types';
 
 export class CollaborationManager {
   private karmaService?: KarmaService;
@@ -16,7 +16,7 @@ export class CollaborationManager {
   constructor(
     private ctx: BotContext,
     private systemPromptBuilder: SystemPromptBuilder,
-    private toolRegistry: ToolRegistry,
+    private toolRegistry: ToolRegistry
   ) {}
 
   setKarmaService(ks: KarmaService): void {
@@ -37,7 +37,12 @@ export class CollaborationManager {
   /**
    * Send a visible collaboration message in a group chat, mentioning the target bot.
    */
-  async sendVisibleMessage(chatId: number, sourceBotId: string, targetBotId: string, message: string): Promise<void> {
+  async sendVisibleMessage(
+    chatId: number,
+    sourceBotId: string,
+    targetBotId: string,
+    message: string
+  ): Promise<void> {
     const bot = this.ctx.bots.get(sourceBotId);
     if (!bot) throw new Error(`Source bot has no Telegram instance (headless?): ${sourceBotId}`);
 
@@ -49,12 +54,22 @@ export class CollaborationManager {
     if (!agent || !resolvedTargetId) throw new Error(`Target agent not found: ${targetBotId}`);
 
     const visibleText = `@${agent.telegramUsername} ${message}`;
-    this.ctx.activityStream?.publish({ type: 'collab:start', botId: sourceBotId, timestamp: Date.now(), data: { targetBotId: resolvedTargetId, mode: 'visible' } });
-    await sendLongMessage(t => bot.api.sendMessage(chatId, t), visibleText);
+    this.ctx.activityStream?.publish({
+      type: 'collab:start',
+      botId: sourceBotId,
+      timestamp: Date.now(),
+      data: { targetBotId: resolvedTargetId, mode: 'visible' },
+    });
+    await sendLongMessage((t) => bot.api.sendMessage(chatId, t), visibleText);
 
     const sourceLogger = this.ctx.getBotLogger(sourceBotId);
     sourceLogger.info(
-      { chatId, sourceBotId, targetBotId: resolvedTargetId, targetUsername: agent.telegramUsername },
+      {
+        chatId,
+        sourceBotId,
+        targetBotId: resolvedTargetId,
+        targetUsername: agent.telegramUsername,
+      },
       'Visible collaboration message sent'
     );
 
@@ -66,9 +81,14 @@ export class CollaborationManager {
     }
     const task = this.processVisibleResponse(chatId, resolvedTargetId, sourceBotId, message)
       .catch((err) => {
-        sourceLogger.error({ err, chatId, targetBotId: resolvedTargetId }, 'Failed to process visible collaboration response');
+        sourceLogger.error(
+          { err, chatId, targetBotId: resolvedTargetId },
+          'Failed to process visible collaboration response'
+        );
       })
-      .finally(() => { botTasks!.delete(task); });
+      .finally(() => {
+        botTasks?.delete(task);
+      });
     botTasks.add(task);
   }
 
@@ -78,7 +98,7 @@ export class CollaborationManager {
   private async runVisibleTurn(
     chatId: number,
     respondingBotId: string,
-    transcript: Array<{ botId: string; text: string }>,
+    transcript: Array<{ botId: string; text: string }>
   ): Promise<string> {
     const respondingConfig = this.ctx.config.bots.find((b) => b.id === respondingBotId);
     if (!respondingConfig) throw new Error(`Bot config not found: ${respondingBotId}`);
@@ -95,7 +115,7 @@ export class CollaborationManager {
         toolsEnabled: this.ctx.config.collaboration.enableTargetTools,
         transcriptEntries: transcript.length,
       },
-      'Visible collaboration turn starting',
+      'Visible collaboration turn starting'
     );
 
     // Build system prompt via unified builder (collaboration mode)
@@ -129,7 +149,8 @@ export class CollaborationManager {
     ];
 
     // Use collaboration-safe tools (filtered per bot)
-    const { tools: collabTools, definitions: collabDefs } = this.toolRegistry.getCollaborationToolsForBot(respondingBotId);
+    const { tools: collabTools, definitions: collabDefs } =
+      this.toolRegistry.getCollaborationToolsForBot(respondingBotId);
     const hasTools = collabDefs.length > 0;
 
     // Create executor with collaboration filter
@@ -159,7 +180,7 @@ export class CollaborationManager {
     chatId: number,
     targetBotId: string,
     sourceBotId: string,
-    message: string,
+    message: string
   ): Promise<void> {
     const visibleMaxTurns = this.ctx.config.collaboration.visibleMaxTurns;
     const botLogger = this.ctx.getBotLogger(targetBotId);
@@ -172,11 +193,15 @@ export class CollaborationManager {
       const respondingBot = this.ctx.bots.get(respondingBotId);
       if (!respondingBot) break;
 
-      try { await respondingBot.api.sendChatAction(chatId, 'typing'); } catch { /* ignore */ }
+      try {
+        await respondingBot.api.sendChatAction(chatId, 'typing');
+      } catch {
+        /* ignore */
+      }
 
       botLogger.info(
         { respondingBotId, turn, transcriptLength: transcript.length },
-        'Visible collaboration: bot receiving turn',
+        'Visible collaboration: bot receiving turn'
       );
 
       const response = await this.runVisibleTurn(chatId, respondingBotId, transcript);
@@ -190,18 +215,28 @@ export class CollaborationManager {
       const respondingConfig = this.ctx.config.bots.find((b) => b.id === respondingBotId)!;
       const resolved = resolveAgentConfig(this.ctx.config, respondingConfig);
       if (this.ctx.config.session.enabled) {
-        this.ctx.sessionManager.appendMessages(serializedKey, [
-          { role: 'user', content: `[${prevName}]: ${prevEntry.text}` },
-          { role: 'assistant', content: response },
-        ], resolved.maxHistory);
+        this.ctx.sessionManager.appendMessages(
+          serializedKey,
+          [
+            { role: 'user', content: `[${prevName}]: ${prevEntry.text}` },
+            { role: 'assistant', content: response },
+          ],
+          resolved.maxHistory
+        );
       }
 
       if (response.trim()) {
-        await sendLongMessage(t => respondingBot.api.sendMessage(chatId, t), response);
+        await sendLongMessage((t) => respondingBot.api.sendMessage(chatId, t), response);
       }
 
       botLogger.info(
-        { chatId, respondingBotId, turn, totalTurns: visibleMaxTurns, responseLength: response.length },
+        {
+          chatId,
+          respondingBotId,
+          turn,
+          totalTurns: visibleMaxTurns,
+          responseLength: response.length,
+        },
         'Visible discussion turn'
       );
     }
@@ -262,9 +297,12 @@ export class CollaborationManager {
     });
 
     if (response.trim() && targetBot) {
-      await sendLongMessage(t => targetBot.api.sendMessage(chatId, t), response);
+      await sendLongMessage((t) => targetBot.api.sendMessage(chatId, t), response);
     } else if (response.trim()) {
-      botLogger.info({ targetBotId, chatId }, 'Delegation response generated but bot is headless, skipping Telegram send');
+      botLogger.info(
+        { targetBotId, chatId },
+        'Delegation response generated but bot is headless, skipping Telegram send'
+      );
     }
 
     botLogger.info(
@@ -294,7 +332,7 @@ export class CollaborationManager {
     sessionId: string | undefined,
     targetBotId: string,
     message: string,
-    sourceBotId: string,
+    sourceBotId: string
   ): Promise<{ sessionId: string; response: string }> {
     const resolvedId = this.ctx.resolveBotId(targetBotId);
     if (!resolvedId) {
@@ -312,17 +350,14 @@ export class CollaborationManager {
       const botLogger = this.ctx.getBotLogger(targetBotId);
       botLogger.warn(
         { sourceBotId, targetBotId, reason: check.reason },
-        'Collaboration rate-limited',
+        'Collaboration rate-limited'
       );
       throw new Error(`Collaboration blocked: ${check.reason}`);
     }
 
     {
       const botLogger = this.ctx.getBotLogger(targetBotId);
-      botLogger.debug(
-        { sourceBotId, targetBotId },
-        'Collaboration rate-limit check passed',
-      );
+      botLogger.debug({ sourceBotId, targetBotId }, 'Collaboration rate-limit check passed');
     }
 
     const collabConfig = this.ctx.config.collaboration;
@@ -330,7 +365,12 @@ export class CollaborationManager {
     const targetSoulLoader = this.ctx.getSoulLoader(targetBotId);
     const botLogger = this.ctx.getBotLogger(targetBotId);
 
-    this.ctx.activityStream?.publish({ type: 'collab:start', botId: sourceBotId, timestamp: Date.now(), data: { targetBotId, mode: 'internal' } });
+    this.ctx.activityStream?.publish({
+      type: 'collab:start',
+      botId: sourceBotId,
+      timestamp: Date.now(),
+      data: { targetBotId, mode: 'internal' },
+    });
 
     let session = sessionId ? this.ctx.collaborationSessions.get(sessionId) : undefined;
     const isResumed = !!session;
@@ -346,7 +386,7 @@ export class CollaborationManager {
         resumed: isResumed,
         ...(isResumed && { messageCount: session.messages.length }),
       },
-      isResumed ? 'Collaboration session resumed' : 'Collaboration session created',
+      isResumed ? 'Collaboration session resumed' : 'Collaboration session created'
     );
 
     let systemPrompt = targetSoulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
@@ -362,7 +402,9 @@ export class CollaborationManager {
     ];
 
     const useTools = collabConfig.enableTargetTools;
-    const collabTools = useTools ? this.toolRegistry.getCollaborationToolsForBot(targetBotId) : { tools: [], definitions: [] };
+    const collabTools = useTools
+      ? this.toolRegistry.getCollaborationToolsForBot(targetBotId)
+      : { tools: [], definitions: [] };
     const hasTools = collabTools.definitions.length > 0;
 
     // Create executor with collaboration filter
@@ -411,8 +453,14 @@ export class CollaborationManager {
     } catch (err) {
       if (err instanceof Error && err.message === 'Collaboration step timeout') {
         botLogger.warn(
-          { sessionId: session.id, targetBotId, model, timeout, historyLength: session.messages.length },
-          'Collaboration step timed out',
+          {
+            sessionId: session.id,
+            targetBotId,
+            model,
+            timeout,
+            historyLength: session.messages.length,
+          },
+          'Collaboration step timed out'
         );
       }
       throw err;
@@ -427,7 +475,12 @@ export class CollaborationManager {
       { sessionId: session.id, targetBotId, responseLength: response.length },
       'Collaboration step completed'
     );
-    this.ctx.activityStream?.publish({ type: 'collab:end', botId: sourceBotId, timestamp: Date.now(), data: { targetBotId, sessionId: session.id, responseLength: response.length } });
+    this.ctx.activityStream?.publish({
+      type: 'collab:end',
+      botId: sourceBotId,
+      timestamp: Date.now(),
+      data: { targetBotId, sessionId: session.id, responseLength: response.length },
+    });
 
     return { sessionId: session.id, response };
   }
@@ -439,7 +492,7 @@ export class CollaborationManager {
     sourceBotId: string,
     targetBotId: string,
     topic: string,
-    maxTurns?: number,
+    maxTurns?: number
   ): Promise<{ sessionId: string; transcript: string; turns: number }> {
     const collabConfig = this.ctx.config.collaboration;
     const turns = maxTurns ?? collabConfig.maxConverseTurns;
@@ -447,7 +500,8 @@ export class CollaborationManager {
 
     const sourceConfig = this.ctx.config.bots.find((b) => b.id === sourceBotId);
     if (!sourceConfig) throw new Error(`Source bot config not found: ${sourceBotId}`);
-    if (!this.ctx.runningBots.has(sourceBotId)) throw new Error(`Source bot not running: ${sourceBotId}`);
+    if (!this.ctx.runningBots.has(sourceBotId))
+      throw new Error(`Source bot not running: ${sourceBotId}`);
 
     const resolved = resolveAgentConfig(this.ctx.config, sourceConfig);
     const sourceSoulLoader = this.ctx.getSoulLoader(sourceBotId);
@@ -455,10 +509,7 @@ export class CollaborationManager {
     let sourceSystemPrompt = sourceSoulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
     const targetConfig = this.ctx.config.bots.find((b) => b.id === targetBotId);
     const targetName = targetConfig?.name ?? targetBotId;
-    sourceSystemPrompt +=
-      `\n\nYou are collaborating with "${targetName}" on a topic. ` +
-      'Evaluate their responses and continue the conversation until you are satisfied. ' +
-      'When you have enough information or the task is complete, include [DONE] in your response.';
+    sourceSystemPrompt += `\n\nYou are collaborating with "${targetName}" on a topic. Evaluate their responses and continue the conversation until you are satisfied. When you have enough information or the task is complete, include [DONE] in your response.`;
 
     let sessionId: string | undefined;
     let currentMessage = topic;
@@ -466,7 +517,12 @@ export class CollaborationManager {
     let turnCount = 0;
 
     for (let i = 0; i < turns; i++) {
-      const step = await this.collaborationStep(sessionId, targetBotId, currentMessage, sourceBotId);
+      const step = await this.collaborationStep(
+        sessionId,
+        targetBotId,
+        currentMessage,
+        sourceBotId
+      );
       sessionId = step.sessionId;
       transcriptLines.push(`[${sourceBotId}]: ${currentMessage}`);
       transcriptLines.push(`[${targetBotId}]: ${step.response}`);
@@ -501,7 +557,7 @@ export class CollaborationManager {
           if (err instanceof Error && err.message === 'Collaboration source timeout') {
             botLogger.warn(
               { sessionId, sourceBotId, targetBotId, model: sourceModel, timeout, turn: i },
-              'Collaboration source-side timed out',
+              'Collaboration source-side timed out'
             );
           }
           throw err;
@@ -525,10 +581,7 @@ export class CollaborationManager {
 
     if (sessionId) {
       this.ctx.collaborationSessions.end(sessionId);
-      botLogger.info(
-        { sessionId, sourceBotId, targetBotId },
-        'Collaboration session ended',
-      );
+      botLogger.info({ sessionId, sourceBotId, targetBotId }, 'Collaboration session ended');
     }
 
     return {

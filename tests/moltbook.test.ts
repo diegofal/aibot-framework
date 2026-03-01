@@ -1,7 +1,7 @@
-import { describe, expect, test, beforeEach, afterEach, mock, spyOn } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createMoltbookRegisterTool } from '../src/tools/moltbook';
 
 function makeLogger() {
@@ -47,10 +47,7 @@ describe('moltbook_register tool', () => {
     }) as any;
 
     try {
-      const result = await tool.execute(
-        { description: 'Test agent' },
-        logger,
-      );
+      const result = await tool.execute({ description: 'Test agent' }, logger);
       // Either already registered (credentials file exists) or network error
       if (result.success) {
         expect(result.content).toContain('Already registered');
@@ -73,10 +70,7 @@ describe('moltbook_register tool', () => {
     })) as any;
 
     try {
-      const result = await tool.execute(
-        { description: 'Test agent' },
-        logger,
-      );
+      const result = await tool.execute({ description: 'Test agent' }, logger);
       // If credentials file exists, will return "already registered"
       // Otherwise will return the HTTP error
       if (!result.success) {
@@ -101,10 +95,7 @@ describe('moltbook_register tool', () => {
     })) as any;
 
     try {
-      const result = await tool.execute(
-        { description: 'An autonomous agent' },
-        logger,
-      );
+      const result = await tool.execute({ description: 'An autonomous agent' }, logger);
       // If credentials file already exists, returns "already registered"
       // Otherwise returns registration success
       if (result.success && result.content.includes('claim_url')) {

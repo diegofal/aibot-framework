@@ -1,17 +1,22 @@
-import { Bot, InputFile, type Context } from 'grammy';
-import { resolveAgentConfig, type BotConfig } from '../config';
+import { type Bot, type Context, InputFile } from 'grammy';
+import { type BotConfig, resolveAgentConfig } from '../config';
+import type { ConversationsService } from '../conversations/service';
 import type { CallbackQueryData, Skill, SkillContext, TelegramClient } from '../core/types';
-import type { BotContext, SeenUser } from './types';
+import type { AskHumanStore } from './ask-human-store';
+import { handleHelp, handleStart, registerBuiltinCommands } from './builtin-commands';
+import { ConversationGate } from './conversation-gate';
 import type { ConversationPipeline } from './conversation-pipeline';
 import type { GroupActivation } from './group-activation';
+import {
+  buildFileUrl,
+  isAuthorized as isAuthorizedMedia,
+  registerMediaHandlers,
+  trackUser,
+} from './media-handlers';
 import type { MemoryFlusher } from './memory-flush';
-import type { ToolRegistry } from './tool-registry';
-import type { AskHumanStore } from './ask-human-store';
-import type { ConversationsService } from '../conversations/service';
 import { sendLongMessage } from './telegram-utils';
-import { registerMediaHandlers, trackUser, isAuthorized as isAuthorizedMedia, buildFileUrl } from './media-handlers';
-import { registerBuiltinCommands, handleStart, handleHelp } from './builtin-commands';
-import { ConversationGate } from './conversation-gate';
+import type { ToolRegistry } from './tool-registry';
+import type { BotContext, SeenUser } from './types';
 
 export class HandlerRegistrar {
   private conversationGate: ConversationGate;
@@ -23,9 +28,14 @@ export class HandlerRegistrar {
     private memoryFlusher: MemoryFlusher,
     private toolRegistry: ToolRegistry,
     private askHumanStore?: AskHumanStore,
-    private conversationsService?: ConversationsService,
+    private conversationsService?: ConversationsService
   ) {
-    this.conversationGate = new ConversationGate(ctx, groupActivation, askHumanStore, conversationsService);
+    this.conversationGate = new ConversationGate(
+      ctx,
+      groupActivation,
+      askHumanStore,
+      conversationsService
+    );
   }
 
   /**
@@ -40,7 +50,10 @@ export class HandlerRegistrar {
 
       const skill = this.ctx.skillRegistry.get(skillId);
       if (!skill) {
-        this.ctx.logger.debug({ skillId, botId: config.id }, 'Skill not found in built-in registry (may be external-only)');
+        this.ctx.logger.debug(
+          { skillId, botId: config.id },
+          'Skill not found in built-in registry (may be external-only)'
+        );
         continue;
       }
       if (skill.commands) {
@@ -142,7 +155,7 @@ export class HandlerRegistrar {
         };
 
         const skillContext = this.createSkillContext(skill.id, ctx, config);
-        const consumed = await skill.onMessage!(message, skillContext);
+        const consumed = await skill.onMessage?.(message, skillContext);
         if (consumed === true) {
           this.ctx.handledMessageIds.add(`${config.id}:${ctx.message.message_id}`);
         }
@@ -156,7 +169,10 @@ export class HandlerRegistrar {
 
   private registerCallbackQueryHandler(bot: Bot, config: BotConfig): void {
     bot.on('callback_query:data', async (ctx) => {
-      this.ctx.logger.info({ data: ctx.callbackQuery.data, userId: ctx.from?.id }, 'Callback query received');
+      this.ctx.logger.info(
+        { data: ctx.callbackQuery.data, userId: ctx.from?.id },
+        'Callback query received'
+      );
 
       if (!this.isAuthorized(ctx.from?.id, config)) {
         await ctx.answerCallbackQuery({ text: '⛔ Unauthorized' });
@@ -209,11 +225,15 @@ export class HandlerRegistrar {
       const chatTitle = 'title' in ctx.chat ? (ctx.chat as { title?: string }).title : undefined;
       botLogger.info(
         {
-          chatId: ctx.chat.id, chatType: ctx.chat.type, chatTitle,
-          userId: ctx.from?.id, username: ctx.from?.username,
-          firstName: ctx.from?.first_name, text: ctx.message.text.substring(0, 120),
+          chatId: ctx.chat.id,
+          chatType: ctx.chat.type,
+          chatTitle,
+          userId: ctx.from?.id,
+          username: ctx.from?.username,
+          firstName: ctx.from?.first_name,
+          text: ctx.message.text.substring(0, 120),
         },
-        '📩 Incoming text message',
+        '📩 Incoming text message'
       );
 
       this.trackUser(ctx);
@@ -224,9 +244,10 @@ export class HandlerRegistrar {
       const userMessage = gate.strippedText ?? ctx.message.text;
       const sessionKey = this.ctx.sessionManager.deriveKey(config.id, ctx);
       const serializedKey = this.ctx.sessionManager.serializeKey(sessionKey);
-      this.ctx.messageBuffer!.enqueue({
+      this.ctx.messageBuffer?.enqueue({
         sessionKey: serializedKey,
-        ctx, config,
+        ctx,
+        config,
         userText: userMessage,
         messageId: ctx.message.message_id,
         isMedia: false,
