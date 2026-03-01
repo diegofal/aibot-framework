@@ -9,6 +9,7 @@ export type CronPayload =
       kind: 'skillJob';
       skillId: string;
       jobId: string;
+      botId?: string;
       llmBackend?: 'ollama' | 'claude-cli';
       claudePath?: string;
       claudeTimeout?: number;
@@ -20,6 +21,7 @@ export type CronPayloadPatch =
       kind: 'skillJob';
       skillId?: string;
       jobId?: string;
+      botId?: string;
       llmBackend?: 'ollama' | 'claude-cli' | null;
       claudePath?: string | null;
       claudeTimeout?: number | null;

@@ -133,7 +133,7 @@ export async function runImprove(opts: {
     env.TERM = 'dumb';
 
     const proc = Bun.spawn([claudePath, ...claudeArgs], {
-      cwd: resolve(soulDir, '..', '..'),
+      cwd: resolve(soulDir), // Soul dir — Claude needs file access but shouldn't see project root
       stdout: 'pipe',
       stderr: 'pipe',
       env,

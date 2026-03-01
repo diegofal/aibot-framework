@@ -55,7 +55,6 @@ export interface BotContext {
   readonly tools: Tool[];
   readonly toolDefinitions: ToolDefinition[];
   readonly soulLoaders: Map<string, SoulLoader>;
-  readonly defaultSoulLoader: SoulLoader;
   readonly botLoggers: Map<string, Logger>;
   readonly seenUsers: Map<number, Map<number, SeenUser>>;
   readonly handledMessageIds: Set<string>;

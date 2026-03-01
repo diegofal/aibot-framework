@@ -48,6 +48,9 @@ export function createMemoryGetTool(memoryManager: MemoryManager): Tool {
 
       try {
         const botId = typeof args._botId === 'string' ? args._botId : undefined;
+        if (!botId) {
+          return { success: false, content: 'Internal error: missing _botId context' };
+        }
         const content = memoryManager.getFileLines(path, from, lines, botId);
 
         if (content === null) {

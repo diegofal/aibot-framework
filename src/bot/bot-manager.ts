@@ -6,12 +6,7 @@ import { CollaborationSessionManager } from '../collaboration-session';
 import { CollaborationTracker } from '../collaboration-tracker';
 import type { BotConfig, Config } from '../config';
 import { resolveAgentConfig } from '../config';
-import {
-  type LLMClient,
-  LLMClientWithFallback,
-  OllamaLLMClient,
-  createLLMClient,
-} from '../core/llm-client';
+import { type LLMClient, LLMClientWithFallback, createLLMClient } from '../core/llm-client';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import type { Logger } from '../logger';
@@ -65,9 +60,7 @@ export class BotManager {
   private botLoggers: Map<string, Logger> = new Map();
   private seenUsers: Map<number, Map<number, SeenUser>> = new Map();
   private handledMessageIds: Set<string> = new Set();
-  private defaultSoulLoader: SoulLoader;
   private llmClients: Map<string, LLMClient> = new Map();
-  private defaultLLMClient: LLMClient;
 
   // Infrastructure
   private messageBuffer: MessageBuffer;
@@ -105,13 +98,10 @@ export class BotManager {
     private ollamaClient: OllamaClient,
     private config: Config,
     private sessionManager: SessionManager,
-    soulLoader: SoulLoader,
     private cronService: CronService,
     private memoryManager?: MemoryManager,
     private configPath = './config/config.json'
   ) {
-    this.defaultSoulLoader = soulLoader;
-    this.defaultLLMClient = new OllamaLLMClient(ollamaClient);
     this.agentRegistry = new AgentRegistry();
 
     const dataDir = config.paths.data;
@@ -224,7 +214,6 @@ export class BotManager {
       tools: this.tools,
       toolDefinitions: this.toolDefinitions,
       soulLoaders: this.soulLoaders,
-      defaultSoulLoader: this.defaultSoulLoader,
       botLoggers: this.botLoggers,
       seenUsers: this.seenUsers,
       handledMessageIds: this.handledMessageIds,
@@ -350,11 +339,19 @@ export class BotManager {
   }
 
   getLLMClient(botId: string): LLMClient {
-    return this.llmClients.get(botId) ?? this.defaultLLMClient;
+    const client = this.llmClients.get(botId);
+    if (!client) {
+      throw new Error(`No LLMClient registered for bot "${botId}". Was startBot() called?`);
+    }
+    return client;
   }
 
   getSoulLoader(botId: string): SoulLoader {
-    return this.soulLoaders.get(botId) ?? this.defaultSoulLoader;
+    const loader = this.soulLoaders.get(botId);
+    if (!loader) {
+      throw new Error(`No SoulLoader registered for bot "${botId}". Was startBot() called?`);
+    }
+    return loader;
   }
 
   private getBotLogger(botId: string): Logger {

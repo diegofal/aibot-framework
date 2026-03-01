@@ -16,7 +16,7 @@ export class MemoryFlusher {
    * Used by both session-expiry flush and proactive flush.
    * @deprecated Use flushWithScoring for importance-weighted memory
    */
-  async flushToDaily(history: ChatMessage[], botId?: string): Promise<void> {
+  async flushToDaily(history: ChatMessage[], botId: string): Promise<void> {
     try {
       const transcript = history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -34,10 +34,11 @@ export class MemoryFlusher {
         { role: 'user', content: transcript },
       ];
 
-      const soulLoader = botId ? this.ctx.getSoulLoader(botId) : this.ctx.defaultSoulLoader;
+      const soulLoader = this.ctx.getSoulLoader(botId);
 
       let summary: string;
       const claudePath = this.ctx.config.improve?.claudePath;
+      const model = this.ctx.getActiveModel(botId);
       if (claudePath) {
         try {
           const fullPrompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
@@ -51,15 +52,9 @@ export class MemoryFlusher {
             { err },
             'Claude CLI failed for memory flush, falling back to Ollama'
           );
-          const model = botId
-            ? this.ctx.getActiveModel(botId)
-            : this.ctx.config.ollama.models.primary;
           summary = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
         }
       } else {
-        const model = botId
-          ? this.ctx.getActiveModel(botId)
-          : this.ctx.config.ollama.models.primary;
         summary = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
       }
 
@@ -77,10 +72,10 @@ export class MemoryFlusher {
    * Each fact gets a score 1-10 (10 = critical, 1 = trivial) and a category.
    * High-importance facts are weighted more heavily in searches.
    */
-  async flushWithScoring(history: ChatMessage[], botId?: string): Promise<ScoredFact[]> {
+  async flushWithScoring(history: ChatMessage[], botId: string): Promise<ScoredFact[]> {
     this.ctx.activityStream?.publish({
       type: 'memory:flush',
-      botId: botId || '',
+      botId,
       timestamp: Date.now(),
       phase: 'start',
       data: { messageCount: history.length },
@@ -107,7 +102,7 @@ export class MemoryFlusher {
 
       let response: string;
       const claudePath = this.ctx.config.improve?.claudePath;
-      const model = botId ? this.ctx.getActiveModel(botId) : this.ctx.config.ollama.models.primary;
+      const model = this.ctx.getActiveModel(botId);
 
       if (claudePath) {
         try {
@@ -150,7 +145,7 @@ export class MemoryFlusher {
         });
       } else if (facts.length > 0) {
         // Fallback to daily log if Core Memory not available
-        const soulLoader = botId ? this.ctx.getSoulLoader(botId) : this.ctx.defaultSoulLoader;
+        const soulLoader = this.ctx.getSoulLoader(botId);
         const summary = facts.map((f) => `[${f.importance}/10] ${f.fact}`).join('\n');
         soulLoader.appendDailyMemory(summary);
         this.ctx.logger.info(
@@ -251,7 +246,7 @@ export class MemoryFlusher {
    * Called before any session clear (expiry or /clear) so key facts survive.
    * Now uses importance scoring by default.
    */
-  async flushSessionToMemory(history: ChatMessage[], botId?: string): Promise<void> {
+  async flushSessionToMemory(history: ChatMessage[], botId: string): Promise<void> {
     await this.flushWithScoring(history, botId);
   }
 }

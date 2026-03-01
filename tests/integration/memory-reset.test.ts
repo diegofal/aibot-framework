@@ -118,6 +118,34 @@ describe('MemoryManager per-bot cleanup', () => {
     expect(hashes).not.toContain('hash_unique_a'); // orphaned, should be cleaned
   });
 
+  it('clearIndexForBot also clears session transcript entries', () => {
+    // Insert soul files for botA
+    const f1 = insertFile('botA/GOALS.md');
+    insertChunk(f1, 'Goal content for botA', 'hash_a_goal');
+
+    // Insert session transcripts for botA
+    const f2 = insertFile('sessions/bot-botA-12345', 'session');
+    insertChunk(f2, 'Session transcript for botA', 'hash_a_session');
+
+    const f3 = insertFile('sessions/bot-botA-67890', 'session');
+    insertChunk(f3, 'Another session for botA', 'hash_a_session2');
+
+    // Insert session transcripts for botB (should survive)
+    const f4 = insertFile('sessions/bot-botB-99999', 'session');
+    insertChunk(f4, 'Session for botB', 'hash_b_session');
+
+    const manager = createManagerWithDb(db);
+    const deleted = manager.clearIndexForBot('botA');
+
+    // Should delete botA soul file + 2 session transcripts = 3
+    expect(deleted).toBe(3);
+
+    // botB session should still exist
+    const remaining = db.prepare<{ path: string }, []>('SELECT path FROM files').all();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].path).toBe('sessions/bot-botB-99999');
+  });
+
   it('returns 0 when no files match the bot prefix', () => {
     const f1 = insertFile('botB/GOALS.md');
     insertChunk(f1, 'Content', 'hash_1');

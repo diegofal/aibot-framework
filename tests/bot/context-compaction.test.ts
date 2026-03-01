@@ -222,7 +222,6 @@ describe('ContextCompactor', () => {
       getActiveModel: () => 'test-model',
       getBotLogger: () => noopLogger,
       getSoulLoader: () => ({ appendDailyMemory: () => {} }) as any,
-      defaultSoulLoader: { appendDailyMemory: () => {} } as any,
       activityStream: { publish: mock(() => {}) },
       memoryManager: undefined,
     } as unknown as BotContext;

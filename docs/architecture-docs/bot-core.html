@@ -483,9 +483,9 @@
         <table class="methods-table">
           <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td>flushToDaily <span class="badge badge-medium">deprecated</span></td><td>history: ChatMessage[], botId?: string</td><td>Legacy: summarizes conversation to bullet points and appends to daily log</td></tr>
-            <tr><td>flushWithScoring</td><td>history: ChatMessage[], botId?: string</td><td>Extracts facts with importance/category, stores in Core Memory or daily log fallback</td></tr>
-            <tr><td>flushSessionToMemory</td><td>history: ChatMessage[], botId?: string</td><td>Entry point: delegates to flushWithScoring. Called on session expiry and /clear.</td></tr>
+            <tr><td>flushToDaily <span class="badge badge-medium">deprecated</span></td><td>history: ChatMessage[], botId: string</td><td>Legacy: summarizes conversation to bullet points and appends to daily log</td></tr>
+            <tr><td>flushWithScoring</td><td>history: ChatMessage[], botId: string</td><td>Extracts facts with importance/category, stores in Core Memory or daily log fallback</td></tr>
+            <tr><td>flushSessionToMemory</td><td>history: ChatMessage[], botId: string</td><td>Entry point: delegates to flushWithScoring. Called on session expiry and /clear.</td></tr>
           </tbody>
         </table>
         <h4>Dependencies</h4>

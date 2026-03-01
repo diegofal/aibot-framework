@@ -67,7 +67,11 @@ const skill: Skill = {
 
   async onLoad(ctx: SkillContext) {
     const config = ctx.config as ReflectionConfig;
-    const soulDir = ctx.soulDir || config.soulDir || './config/soul';
+    const soulDir = ctx.soulDir || config.soulDir;
+    if (!soulDir) {
+      ctx.logger.warn('Reflection onLoad: soulDir not set, skipping initialization');
+      return;
+    }
 
     // Ensure MOTIVATIONS.md exists with initial template
     const motivationsPath = join(soulDir, 'MOTIVATIONS.md');
@@ -125,7 +129,12 @@ const skill: Skill = {
  */
 async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Promise<string> {
   const config = ctx.config as ReflectionConfig;
-  const soulDir = ctx.soulDir || config.soulDir || './config/soul';
+  const soulDir = ctx.soulDir || config.soulDir;
+  if (!soulDir) {
+    const msg = '🪞 Reflection skipped: soulDir not configured (no fallback to shared root).';
+    ctx.logger.error(msg);
+    return msg;
+  }
 
   // Step 1 — Gather context
   ctx.logger.info({ trigger }, 'Reflection: gathering context');

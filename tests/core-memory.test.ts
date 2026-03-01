@@ -41,10 +41,12 @@ describe('CoreMemoryManager', () => {
     db.close();
   });
 
+  const BOT = 'test-bot';
+
   describe('set and get', () => {
     test('creates new entry', async () => {
-      await manager.set('identity', 'name', 'TestBot', 8);
-      const entry = await manager.get('identity', 'name');
+      await manager.set('identity', 'name', 'TestBot', 8, BOT);
+      const entry = await manager.get('identity', 'name', BOT);
 
       expect(entry).not.toBeNull();
       expect(entry?.category).toBe('identity');
@@ -54,40 +56,44 @@ describe('CoreMemoryManager', () => {
     });
 
     test('updates existing entry', async () => {
-      await manager.set('identity', 'name', 'TestBot', 8);
-      await manager.set('identity', 'name', 'UpdatedBot', 9);
-      const entry = await manager.get('identity', 'name');
+      await manager.set('identity', 'name', 'TestBot', 8, BOT);
+      await manager.set('identity', 'name', 'UpdatedBot', 9, BOT);
+      const entry = await manager.get('identity', 'name', BOT);
 
       expect(entry?.value).toBe('UpdatedBot');
       expect(entry?.importance).toBe(9);
     });
 
     test('returns null for non-existent entry', async () => {
-      const entry = await manager.get('identity', 'nonexistent');
+      const entry = await manager.get('identity', 'nonexistent', BOT);
       expect(entry).toBeNull();
     });
 
     test('rejects invalid category', async () => {
-      await expect(manager.set('invalid_category', 'key', 'value')).rejects.toThrow(
+      await expect(manager.set('invalid_category', 'key', 'value', 5, BOT)).rejects.toThrow(
         /Invalid category/
       );
     });
 
     test('rejects key too long', async () => {
       const longKey = 'a'.repeat(101);
-      await expect(manager.set('identity', longKey, 'value')).rejects.toThrow(/Key too long/);
+      await expect(manager.set('identity', longKey, 'value', 5, BOT)).rejects.toThrow(
+        /Key too long/
+      );
     });
 
     test('rejects value too long', async () => {
       const longValue = 'a'.repeat(2001);
-      await expect(manager.set('identity', 'key', longValue)).rejects.toThrow(/Value too long/);
+      await expect(manager.set('identity', 'key', longValue, 5, BOT)).rejects.toThrow(
+        /Value too long/
+      );
     });
 
     test('rejects invalid importance', async () => {
-      await expect(manager.set('identity', 'key', 'value', 0)).rejects.toThrow(
+      await expect(manager.set('identity', 'key', 'value', 0, BOT)).rejects.toThrow(
         /Importance must be between/
       );
-      await expect(manager.set('identity', 'key', 'value', 11)).rejects.toThrow(
+      await expect(manager.set('identity', 'key', 'value', 11, BOT)).rejects.toThrow(
         /Importance must be between/
       );
     });
@@ -95,82 +101,82 @@ describe('CoreMemoryManager', () => {
 
   describe('delete', () => {
     test('deletes existing entry', async () => {
-      await manager.set('identity', 'name', 'TestBot');
-      const deleted = await manager.delete('identity', 'name');
+      await manager.set('identity', 'name', 'TestBot', 5, BOT);
+      const deleted = await manager.delete('identity', 'name', BOT);
       expect(deleted).toBe(true);
 
-      const entry = await manager.get('identity', 'name');
+      const entry = await manager.get('identity', 'name', BOT);
       expect(entry).toBeNull();
     });
 
     test('returns false for non-existent entry', async () => {
-      const deleted = await manager.delete('identity', 'nonexistent');
+      const deleted = await manager.delete('identity', 'nonexistent', BOT);
       expect(deleted).toBe(false);
     });
   });
 
   describe('search', () => {
     beforeEach(async () => {
-      await manager.set('identity', 'name', 'AutoForja', 10);
-      await manager.set('identity', 'style', 'Technical and precise', 7);
-      await manager.set('relationships', 'user_diego', 'Works on AI infrastructure', 8);
-      await manager.set('preferences', 'communication', 'Concise responses', 6);
+      await manager.set('identity', 'name', 'AutoForja', 10, BOT);
+      await manager.set('identity', 'style', 'Technical and precise', 7, BOT);
+      await manager.set('relationships', 'user_diego', 'Works on AI infrastructure', 8, BOT);
+      await manager.set('preferences', 'communication', 'Concise responses', 6, BOT);
     });
 
     test('searches by key', async () => {
-      const results = await manager.search('name');
+      const results = await manager.search('name', undefined, 10, BOT);
       expect(results).toHaveLength(1);
       expect(results[0].key).toBe('name');
     });
 
     test('searches by value', async () => {
-      const results = await manager.search('infrastructure');
+      const results = await manager.search('infrastructure', undefined, 10, BOT);
       expect(results).toHaveLength(1);
       expect(results[0].key).toBe('user_diego');
     });
 
     test('filters by category', async () => {
-      const results = await manager.search('technical', 'identity');
+      const results = await manager.search('technical', 'identity', 10, BOT);
       expect(results).toHaveLength(1);
       expect(results[0].category).toBe('identity');
     });
 
     test('respects limit', async () => {
-      const results = await manager.search('a', undefined, 2);
+      const results = await manager.search('a', undefined, 2, BOT);
       expect(results.length).toBeLessThanOrEqual(2);
     });
 
     test('orders by importance desc', async () => {
-      const results = await manager.search('');
+      const results = await manager.search('', undefined, 10, BOT);
       expect(results[0].importance).toBeGreaterThanOrEqual(results[1]?.importance ?? 0);
     });
   });
 
   describe('list', () => {
     beforeEach(async () => {
-      await manager.set('identity', 'name', 'AutoForja', 10);
-      await manager.set('identity', 'style', 'Technical', 7);
-      await manager.set('relationships', 'user_diego', 'Works on AI', 8);
+      await manager.set('identity', 'name', 'AutoForja', 10, BOT);
+      await manager.set('identity', 'style', 'Technical', 7, BOT);
+      await manager.set('relationships', 'user_diego', 'Works on AI', 8, BOT);
     });
 
     test('lists all entries', async () => {
-      const results = await manager.list();
+      const results = await manager.list(undefined, undefined, BOT);
       expect(results).toHaveLength(3);
     });
 
     test('filters by category', async () => {
-      const results = await manager.list('identity');
+      const results = await manager.list('identity', undefined, BOT);
       expect(results).toHaveLength(2);
       expect(results.every((r) => r.category === 'identity')).toBe(true);
     });
 
     test('filters by minimum importance', async () => {
-      const results = await manager.list(undefined, 8);
+      const results = await manager.list(undefined, 8, BOT);
       expect(results.every((r) => r.importance >= 8)).toBe(true);
     });
 
     test('combines category and importance filters', async () => {
-      const results = await manager.list('identity', 8);
+      const results = await manager.list('identity', 8, BOT);
       expect(results).toHaveLength(1);
       expect(results[0].key).toBe('name');
     });
@@ -178,37 +184,38 @@ describe('CoreMemoryManager', () => {
 
   describe('renderForSystemPrompt', () => {
     test('renders empty string when no entries', () => {
-      const output = manager.renderForSystemPrompt();
+      const output = manager.renderForSystemPrompt(800, BOT);
       expect(output).toBe('');
     });
 
     test('renders entries with importance >= 5', async () => {
-      await manager.set('identity', 'name', 'AutoForja', 10);
-      await manager.set('identity', 'low', 'Should not appear', 4);
+      await manager.set('identity', 'name', 'AutoForja', 10, BOT);
+      await manager.set('identity', 'low', 'Should not appear', 4, BOT);
 
-      const output = manager.renderForSystemPrompt();
+      const output = manager.renderForSystemPrompt(800, BOT);
       expect(output).toContain('AutoForja');
       expect(output).not.toContain('Should not appear');
     });
 
     test('respects maxChars limit', async () => {
-      await manager.set('identity', 'name', 'AutoForja', 10);
+      await manager.set('identity', 'name', 'AutoForja', 10, BOT);
       await manager.set(
         'relationships',
         'user_test',
         'A very long description that takes up space',
-        9
+        9,
+        BOT
       );
 
-      const output = manager.renderForSystemPrompt(100);
+      const output = manager.renderForSystemPrompt(100, BOT);
       expect(output.length).toBeLessThanOrEqual(100 + 50); // some tolerance for formatting
     });
 
     test('groups by category', async () => {
-      await manager.set('identity', 'name', 'AutoForja', 10);
-      await manager.set('relationships', 'user_diego', 'Works on AI', 9);
+      await manager.set('identity', 'name', 'AutoForja', 10, BOT);
+      await manager.set('relationships', 'user_diego', 'Works on AI', 9, BOT);
 
-      const output = manager.renderForSystemPrompt();
+      const output = manager.renderForSystemPrompt(800, BOT);
       expect(output).toContain('## Core Memory');
       expect(output).toContain('**Identity**');
       expect(output).toContain('**Relationships**');
@@ -219,8 +226,8 @@ describe('CoreMemoryManager', () => {
     test('accepts all valid categories', async () => {
       const validCategories = ['identity', 'relationships', 'preferences', 'goals', 'constraints'];
       for (const category of validCategories) {
-        await manager.set(category, 'test', 'value');
-        const entry = await manager.get(category, 'test');
+        await manager.set(category, 'test', 'value', 5, BOT);
+        const entry = await manager.get(category, 'test', BOT);
         expect(entry).not.toBeNull();
       }
     });

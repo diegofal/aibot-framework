@@ -41,7 +41,7 @@ export class ConversationPipeline {
     userText: string,
     isGroup: boolean,
     botLogger: Logger,
-    botId?: string
+    botId: string
   ): Promise<string | null> {
     const ragConfig = this.ctx.config.soul.search?.autoRag;
     if (!ragConfig?.enabled || !this.ctx.searchEnabled || !this.ctx.memoryManager) {

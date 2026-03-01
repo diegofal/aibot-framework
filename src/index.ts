@@ -1,13 +1,14 @@
+import { existsSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { BotManager } from './bot';
-import { loadConfig } from './config';
+import { loadConfig, resolveAgentConfig } from './config';
 import { createLLMClient } from './core/llm-client';
 import { SkillRegistry } from './core/skill-registry';
 import { CronService } from './cron';
 import { createLogger } from './logger';
 import { MemoryManager } from './memory/manager';
 import { SessionManager } from './session';
-import { SoulLoader, migrateSoulRootToPerBot } from './soul';
+import { migrateSoulRootToPerBot } from './soul';
 import { startWebServer } from './web/server';
 
 async function main() {
@@ -61,9 +62,29 @@ async function main() {
     // Migrate flat soul layout to per-bot subdirectories (idempotent)
     migrateSoulRootToPerBot(config.soul.dir, 'default', logger);
 
-    // Initialize soul loader (fallback for bots without per-bot loader)
-    const soulLoader = new SoulLoader(config.soul, logger);
-    await soulLoader.initialize();
+    // Clean up root-level orphan soul files (leftover from pre-isolation layout).
+    // These files are indexed in the DB and can leak into search results for other bots.
+    {
+      const orphanFiles = ['MOTIVATIONS.md', 'IDENTITY.md', 'SOUL.md', 'GOALS.md'];
+      for (const name of orphanFiles) {
+        const orphanPath = join(config.soul.dir, name);
+        if (existsSync(orphanPath)) {
+          unlinkSync(orphanPath);
+          logger.info({ path: orphanPath }, 'Removed orphan root-level soul file');
+        }
+      }
+      // Remove empty root-level memory/ directory
+      const rootMemoryDir = join(config.soul.dir, 'memory');
+      if (existsSync(rootMemoryDir)) {
+        try {
+          const entries = readdirSync(rootMemoryDir);
+          if (entries.length === 0) {
+            rmSync(rootMemoryDir, { recursive: true });
+            logger.info({ path: rootMemoryDir }, 'Removed empty root-level memory directory');
+          }
+        } catch {}
+      }
+    }
 
     // Initialize semantic memory search (if enabled)
     let memoryManager: MemoryManager | undefined;
@@ -113,6 +134,15 @@ async function main() {
         let context = skillRegistry.getContext(payload.skillId);
         if (!context) return undefined;
 
+        // Per-bot soulDir injection
+        if (payload.botId) {
+          const botConfig = config.bots.find((b) => b.id === payload.botId);
+          if (botConfig) {
+            const resolved = resolveAgentConfig(config, botConfig);
+            context = { ...context, soulDir: resolved.soulDir, botId: payload.botId };
+          }
+        }
+
         // Per-job LLM backend override
         if (payload.llmBackend) {
           const llm = createLLMClient(
@@ -136,28 +166,43 @@ async function main() {
       },
     });
 
-    // Register skill jobs in CronService
+    // Clean up legacy skill jobs that have no botId (one-time migration)
+    {
+      const allJobs = await cronService.list({ includeDisabled: true });
+      for (const j of allJobs) {
+        if (j.payload.kind === 'skillJob' && !j.payload.botId) {
+          await cronService.remove(j.id);
+          logger.info(
+            { jobId: j.id, skillId: j.payload.skillId, jobName: j.name },
+            'Removed legacy botId-less skill job'
+          );
+        }
+      }
+    }
+
+    // Register skill jobs PER BOT in CronService
     for (const skill of skillRegistry.getAll()) {
-      if (skill.jobs) {
-        for (const job of skill.jobs) {
-          // Check if skill job already exists in store (will be deduplicated by name)
+      if (!skill.jobs) continue;
+      for (const job of skill.jobs) {
+        for (const botConfig of config.bots) {
           const existingJobs = await cronService.list({ includeDisabled: true });
           const alreadyExists = existingJobs.some(
             (j) =>
               j.payload.kind === 'skillJob' &&
               j.payload.skillId === skill.id &&
-              j.payload.jobId === job.id
+              j.payload.jobId === job.id &&
+              j.payload.botId === botConfig.id
           );
           if (!alreadyExists) {
             await cronService.add({
-              name: `${skill.name}: ${job.id}`,
+              name: `${skill.name}: ${job.id} [${botConfig.id}]`,
               enabled: true,
               schedule: { kind: 'cron', expr: job.schedule },
-              payload: { kind: 'skillJob', skillId: skill.id, jobId: job.id },
+              payload: { kind: 'skillJob', skillId: skill.id, jobId: job.id, botId: botConfig.id },
             });
             logger.info(
-              { skillId: skill.id, jobId: job.id, schedule: job.schedule },
-              'Skill job registered in CronService'
+              { skillId: skill.id, jobId: job.id, botId: botConfig.id, schedule: job.schedule },
+              'Skill job registered in CronService (per-bot)'
             );
           }
         }
@@ -174,7 +219,6 @@ async function main() {
       skillRegistry.getOllamaClient(),
       config,
       sessionManager,
-      soulLoader,
       cronService,
       memoryManager
     );

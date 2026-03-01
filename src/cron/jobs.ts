@@ -183,6 +183,7 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
       kind: 'skillJob',
       skillId: typeof patch.skillId === 'string' ? patch.skillId : existing.skillId,
       jobId: typeof patch.jobId === 'string' ? patch.jobId : existing.jobId,
+      botId: typeof patch.botId === 'string' ? patch.botId : existing.botId,
       llmBackend: 'llmBackend' in patch ? (patch.llmBackend ?? undefined) : existing.llmBackend,
       claudePath: 'claudePath' in patch ? (patch.claudePath ?? undefined) : existing.claudePath,
       claudeTimeout:
@@ -219,6 +220,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       skillId: patch.skillId,
       jobId: patch.jobId,
     };
+    if (patch.botId) result.botId = patch.botId;
     if (patch.llmBackend) result.llmBackend = patch.llmBackend;
     if (patch.claudePath) result.claudePath = patch.claudePath;
     if (patch.claudeTimeout) result.claudeTimeout = patch.claudeTimeout;

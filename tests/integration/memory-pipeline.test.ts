@@ -99,7 +99,6 @@ describe('Core Memory Pipeline Integration', () => {
           appendDailyMemory: () => {},
         }) as unknown as SoulLoader,
       getActiveModel: () => 'test-model',
-      defaultSoulLoader: {} as SoulLoader,
       runningBots: new Set(),
       toolDefinitions: [],
       ollamaClient: {} as OllamaClient,
@@ -139,12 +138,12 @@ describe('Core Memory Pipeline Integration', () => {
       ];
 
       for (const tc of testCases) {
-        await coreMemory.set(tc.category, tc.key, tc.value, tc.importance);
+        await coreMemory.set(tc.category, tc.key, tc.value, tc.importance, 'test-bot');
       }
 
       // Verify all entries stored
       for (const tc of testCases) {
-        const entry = await coreMemory.get(tc.category, tc.key);
+        const entry = await coreMemory.get(tc.category, tc.key, 'test-bot');
         expect(entry).not.toBeNull();
         expect(entry?.value).toBe(tc.value);
         expect(entry?.importance).toBe(tc.importance);
@@ -152,35 +151,35 @@ describe('Core Memory Pipeline Integration', () => {
     });
 
     it('should reject invalid categories', async () => {
-      await expect(coreMemory.set('invalid_category', 'key', 'value', 5)).rejects.toThrow(
-        /Invalid category/
-      );
+      await expect(
+        coreMemory.set('invalid_category', 'key', 'value', 5, 'test-bot')
+      ).rejects.toThrow(/Invalid category/);
     });
 
     it('should reject importance outside 1-10 range', async () => {
-      await expect(coreMemory.set('identity', 'test_key', 'value', 15)).rejects.toThrow(
+      await expect(coreMemory.set('identity', 'test_key', 'value', 15, 'test-bot')).rejects.toThrow(
         /Importance must be between 1 and 10/
       );
     });
 
     it('should list entries filtered by importance', async () => {
-      await coreMemory.set('goals', 'high_priority', 'Critical task', 9);
-      await coreMemory.set('goals', 'medium_priority', 'Normal task', 5);
-      await coreMemory.set('goals', 'low_priority', 'Minor task', 2);
+      await coreMemory.set('goals', 'high_priority', 'Critical task', 9, 'test-bot');
+      await coreMemory.set('goals', 'medium_priority', 'Normal task', 5, 'test-bot');
+      await coreMemory.set('goals', 'low_priority', 'Minor task', 2, 'test-bot');
 
-      const highImportance = await coreMemory.list('goals', 7);
+      const highImportance = await coreMemory.list('goals', 7, 'test-bot');
       expect(highImportance.length).toBe(1);
       expect(highImportance[0].key).toBe('high_priority');
 
-      const all = await coreMemory.list('goals');
+      const all = await coreMemory.list('goals', undefined, 'test-bot');
       expect(all.length).toBe(3);
     });
 
     it('should render formatted output for system prompt', async () => {
-      await coreMemory.set('identity', 'name', 'AutoForja', 10);
-      await coreMemory.set('goals', 'current', 'Write integration tests', 8);
+      await coreMemory.set('identity', 'name', 'AutoForja', 10, 'test-bot');
+      await coreMemory.set('goals', 'current', 'Write integration tests', 8, 'test-bot');
 
-      const rendered = coreMemory.renderForSystemPrompt(800);
+      const rendered = coreMemory.renderForSystemPrompt(800, 'test-bot');
       expect(rendered).toContain('Core Memory');
       expect(rendered).toContain('AutoForja');
       expect(rendered).toContain('Write integration tests');

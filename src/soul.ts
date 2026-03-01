@@ -541,5 +541,21 @@ export function migrateSoulRootToPerBot(
     }
   }
 
+  // Clean up leftover root-level soul files that weren't moved
+  // (e.g., MOTIVATIONS.md recreated after a previous migration)
+  for (const name of toMove) {
+    const src = join(rootDir, name);
+    if (!existsSync(src)) continue;
+    try {
+      const stat = statSync(src);
+      if (stat.isFile() && existsSync(join(targetDir, name))) {
+        unlinkSync(src);
+        logger.info({ file: src }, 'Cleaned up leftover root-level soul file');
+      }
+    } catch {
+      // skip
+    }
+  }
+
   logger.info({ targetDir }, 'Soul root migration complete');
 }

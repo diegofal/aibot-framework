@@ -27,7 +27,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 interface SearchOpts {
   maxResults?: number;
   minScore?: number;
-  botId?: string;
+  botId: string;
 }
 
 interface ChunkRow {
@@ -111,37 +111,30 @@ export async function hybridSearch(
   embeddingService: EmbeddingService,
   config: MemorySearchConfig,
   logger: Logger,
-  opts?: SearchOpts
+  opts: SearchOpts
 ): Promise<MemorySearchResult[]> {
-  const maxResults = opts?.maxResults ?? config.defaultMaxResults;
-  const minScore = opts?.minScore ?? config.defaultMinScore;
+  const maxResults = opts.maxResults ?? config.defaultMaxResults;
+  const minScore = opts.minScore ?? config.defaultMinScore;
 
   // Score maps: chunkId → score
   const vectorScores = new Map<number, number>();
   const keywordScores = new Map<number, number>();
 
   // --- Vector search ---
-  const botId = opts?.botId;
+  const botId = opts.botId;
   try {
     const queryEmbedding = await embeddingService.getEmbedding(
       `query:${query}`, // prefix to distinguish from chunk hashes
       query
     );
 
-    let vectorSql = `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
+    const vectorSql = `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
        FROM chunks c JOIN files f ON c.file_id = f.id
-       WHERE c.embedding IS NOT NULL`;
-    const vectorParams: string[] = [];
-    if (botId) {
-      vectorSql += ` AND (f.path LIKE ? OR f.path LIKE ?)`;
-      vectorParams.push(`${botId}/%`, `sessions/bot-${botId}-%`);
-    }
+       WHERE c.embedding IS NOT NULL AND (f.path LIKE ? OR f.path LIKE ?)`;
 
-    const allChunks = (
-      botId
-        ? db.prepare<ChunkRow, string[]>(vectorSql).all(...vectorParams)
-        : db.prepare<ChunkRow, []>(vectorSql).all()
-    ) as ChunkRow[];
+    const allChunks = db
+      .prepare<ChunkRow, string[]>(vectorSql)
+      .all(`${botId}/%`, `sessions/bot-${botId}-%`) as ChunkRow[];
 
     for (const chunk of allChunks) {
       if (!chunk.embedding) continue;
@@ -168,26 +161,17 @@ export async function hybridSearch(
     const ftsQuery = ftsTokens.map((t) => `${t}*`).join(' OR ');
 
     if (ftsQuery) {
-      let ftsResults: FtsRow[];
-      if (botId) {
-        // Join FTS results with chunks→files to filter by bot path prefix
-        ftsResults = db
-          .prepare<FtsRow, [string, string, string]>(
-            `SELECT fts.rowid, fts.rank FROM chunks_fts fts
-             JOIN chunks c ON c.id = fts.rowid
-             JOIN files f ON f.id = c.file_id
-             WHERE chunks_fts MATCH ?
-               AND (f.path LIKE ? OR f.path LIKE ?)
-             ORDER BY fts.rank LIMIT 50`
-          )
-          .all(ftsQuery, `${botId}/%`, `sessions/bot-${botId}-%`);
-      } else {
-        ftsResults = db
-          .prepare<FtsRow, [string]>(
-            'SELECT rowid, rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT 50'
-          )
-          .all(ftsQuery);
-      }
+      // Join FTS results with chunks→files to filter by bot path prefix
+      const ftsResults = db
+        .prepare<FtsRow, [string, string, string]>(
+          `SELECT fts.rowid, fts.rank FROM chunks_fts fts
+           JOIN chunks c ON c.id = fts.rowid
+           JOIN files f ON f.id = c.file_id
+           WHERE chunks_fts MATCH ?
+             AND (f.path LIKE ? OR f.path LIKE ?)
+           ORDER BY fts.rank LIMIT 50`
+        )
+        .all(ftsQuery, `${botId}/%`, `sessions/bot-${botId}-%`);
 
       for (const row of ftsResults) {
         // BM25 rank is negative (lower = better), convert to 0-1 score
@@ -287,7 +271,7 @@ interface CoreMemoryRow {
  * Search Core Memory with keyword matching and importance weighting.
  * Returns results sorted by relevance * importance.
  */
-function searchCoreMemory(db: Database, query: string, botId?: string): WeightedMemoryResult[] {
+function searchCoreMemory(db: Database, query: string, botId: string): WeightedMemoryResult[] {
   // Check if core_memory table exists
   const tableCheck = db
     .prepare<{ name: string }, []>(
@@ -307,17 +291,13 @@ function searchCoreMemory(db: Database, query: string, botId?: string): Weighted
 
   // Search in both key and value
   const conditions = tokens.map(() => '(LOWER(key) LIKE ? OR LOWER(value) LIKE ?)').join(' OR ');
-  const params: string[] = [];
-  if (botId) params.push(botId);
-  params.push(...tokens.flatMap((t) => [`%${t}%`, `%${t}%`]));
-
-  const botFilter = botId ? 'bot_id = ? AND' : '';
+  const params: string[] = [botId, ...tokens.flatMap((t) => [`%${t}%`, `%${t}%`])];
 
   const rows = db
     .prepare<CoreMemoryRow, string[]>(
       `SELECT id, category, key, value, importance, updated_at
      FROM core_memory
-     WHERE ${botFilter} (${conditions})
+     WHERE bot_id = ? AND (${conditions})
      ORDER BY importance DESC, updated_at DESC
      LIMIT 20`
     )

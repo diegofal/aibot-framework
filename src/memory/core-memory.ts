@@ -13,33 +13,37 @@ export interface CoreMemoryEntry {
 
 export interface CoreMemoryManager {
   /** Get a single entry by category and key */
-  get(category: string, key: string, botId?: string): Promise<CoreMemoryEntry | null>;
+  get(category: string, key: string, botId: string): Promise<CoreMemoryEntry | null>;
 
   /** Set (insert or update) an entry */
   set(
     category: string,
     key: string,
     value: string,
-    importance?: number,
-    botId?: string
+    importance: number,
+    botId: string
   ): Promise<void>;
 
   /** Delete an entry */
-  delete(category: string, key: string, botId?: string): Promise<boolean>;
+  delete(category: string, key: string, botId: string): Promise<boolean>;
 
   /** Search entries by query string (matches key or value) */
   search(
     query: string,
-    category?: string,
-    limit?: number,
-    botId?: string
+    category: string | undefined,
+    limit: number,
+    botId: string
   ): Promise<CoreMemoryEntry[]>;
 
   /** List entries, optionally filtered by category and minimum importance */
-  list(category?: string, minImportance?: number, botId?: string): Promise<CoreMemoryEntry[]>;
+  list(
+    category: string | undefined,
+    minImportance: number | undefined,
+    botId: string
+  ): Promise<CoreMemoryEntry[]>;
 
   /** Render formatted core memory block for system prompt injection */
-  renderForSystemPrompt(maxChars?: number, botId?: string): string;
+  renderForSystemPrompt(maxChars: number, botId: string): string;
 }
 
 type CoreMemoryRow = {
@@ -63,7 +67,6 @@ const VALID_CATEGORIES = new Set([
 ]);
 
 export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemoryManager {
-  const DEFAULT_BOT = 'default';
   const SELECT_COLS = 'id, bot_id, category, key, value, importance, created_at, updated_at';
 
   function rowToEntry(row: CoreMemoryRow): CoreMemoryEntry {
@@ -95,13 +98,12 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
   }
 
   return {
-    async get(category: string, key: string, botId?: string): Promise<CoreMemoryEntry | null> {
-      const bid = botId ?? DEFAULT_BOT;
+    async get(category: string, key: string, botId: string): Promise<CoreMemoryEntry | null> {
       const row = db
         .prepare(
           `SELECT ${SELECT_COLS} FROM core_memory WHERE bot_id = ? AND category = ? AND key = ?`
         )
-        .get(bid, category, key) as CoreMemoryRow | undefined;
+        .get(botId, category, key) as CoreMemoryRow | undefined;
       return row ? rowToEntry(row) : null;
     },
 
@@ -110,7 +112,7 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
       key: string,
       value: string,
       importance = 5,
-      botId?: string
+      botId: string
     ): Promise<void> {
       if (!VALID_CATEGORIES.has(category)) {
         logger.warn({ category, valid: [...VALID_CATEGORIES] }, 'Invalid core memory category');
@@ -128,41 +130,38 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
         throw new Error('Importance must be between 1 and 10');
       }
 
-      const bid = botId ?? DEFAULT_BOT;
-      const existing = await this.get(category, key, bid);
+      const existing = await this.get(category, key, botId);
 
       if (existing) {
         db.prepare(
           'UPDATE core_memory SET value = ?, importance = ?, updated_at = datetime("now") WHERE id = ?'
         ).run(value, importance, existing.id);
-        logger.debug({ category, key, importance, botId: bid }, 'Core memory updated');
+        logger.debug({ category, key, importance, botId }, 'Core memory updated');
       } else {
         db.prepare(
           'INSERT INTO core_memory (bot_id, category, key, value, importance) VALUES (?, ?, ?, ?, ?)'
-        ).run(bid, category, key, value, importance);
-        logger.debug({ category, key, importance, botId: bid }, 'Core memory created');
+        ).run(botId, category, key, value, importance);
+        logger.debug({ category, key, importance, botId }, 'Core memory created');
       }
     },
 
-    async delete(category: string, key: string, botId?: string): Promise<boolean> {
-      const bid = botId ?? DEFAULT_BOT;
+    async delete(category: string, key: string, botId: string): Promise<boolean> {
       const result = db
         .prepare('DELETE FROM core_memory WHERE bot_id = ? AND category = ? AND key = ?')
-        .run(bid, category, key);
+        .run(botId, category, key);
       const deleted = result.changes > 0;
       if (deleted) {
-        logger.debug({ category, key, botId: bid }, 'Core memory deleted');
+        logger.debug({ category, key, botId }, 'Core memory deleted');
       }
       return deleted;
     },
 
     async search(
       query: string,
-      category?: string,
+      category: string | undefined,
       limit = 10,
-      botId?: string
+      botId: string
     ): Promise<CoreMemoryEntry[]> {
-      const bid = botId ?? DEFAULT_BOT;
       const pattern = `%${query.replace(/[%_]/g, '\\$&')}%`;
 
       if (category) {
@@ -172,7 +171,7 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
               'WHERE bot_id = ? AND category = ? AND (key LIKE ? OR value LIKE ?) ' +
               'ORDER BY importance DESC, updated_at DESC LIMIT ?'
           )
-          .all(bid, category, pattern, pattern, limit) as CoreMemoryRow[];
+          .all(botId, category, pattern, pattern, limit) as CoreMemoryRow[];
         return rows.map(rowToEntry);
       }
 
@@ -182,16 +181,15 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
             'WHERE bot_id = ? AND (key LIKE ? OR value LIKE ?) ' +
             'ORDER BY importance DESC, updated_at DESC LIMIT ?'
         )
-        .all(bid, pattern, pattern, limit) as CoreMemoryRow[];
+        .all(botId, pattern, pattern, limit) as CoreMemoryRow[];
       return rows.map(rowToEntry);
     },
 
     async list(
-      category?: string,
-      minImportance?: number,
-      botId?: string
+      category: string | undefined,
+      minImportance: number | undefined,
+      botId: string
     ): Promise<CoreMemoryEntry[]> {
-      const bid = botId ?? DEFAULT_BOT;
       let rows: CoreMemoryRow[];
 
       if (category && minImportance !== undefined) {
@@ -201,42 +199,41 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
               'WHERE bot_id = ? AND category = ? AND importance >= ? ' +
               'ORDER BY importance DESC, updated_at DESC'
           )
-          .all(bid, category, minImportance) as CoreMemoryRow[];
+          .all(botId, category, minImportance) as CoreMemoryRow[];
       } else if (category) {
         rows = db
           .prepare(
             `SELECT ${SELECT_COLS} FROM core_memory ` +
               'WHERE bot_id = ? AND category = ? ORDER BY importance DESC, updated_at DESC'
           )
-          .all(bid, category) as CoreMemoryRow[];
+          .all(botId, category) as CoreMemoryRow[];
       } else if (minImportance !== undefined) {
         rows = db
           .prepare(
             `SELECT ${SELECT_COLS} FROM core_memory ` +
               'WHERE bot_id = ? AND importance >= ? ORDER BY importance DESC, updated_at DESC'
           )
-          .all(bid, minImportance) as CoreMemoryRow[];
+          .all(botId, minImportance) as CoreMemoryRow[];
       } else {
         rows = db
           .prepare(
             `SELECT ${SELECT_COLS} FROM core_memory ` +
               'WHERE bot_id = ? ORDER BY importance DESC, updated_at DESC'
           )
-          .all(bid) as CoreMemoryRow[];
+          .all(botId) as CoreMemoryRow[];
       }
 
       return rows.map(rowToEntry);
     },
 
-    renderForSystemPrompt(maxChars = 800, botId?: string): string {
+    renderForSystemPrompt(maxChars = 800, botId: string): string {
       try {
-        const bid = botId ?? DEFAULT_BOT;
         const rows = db
           .prepare(
             `SELECT ${SELECT_COLS} FROM core_memory ` +
               'WHERE bot_id = ? AND importance >= 5 ORDER BY importance DESC, updated_at DESC LIMIT 20'
           )
-          .all(bid) as CoreMemoryRow[];
+          .all(botId) as CoreMemoryRow[];
         const entries = rows.map(rowToEntry);
 
         if (entries.length === 0) {

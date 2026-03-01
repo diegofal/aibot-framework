@@ -72,6 +72,9 @@ export function createRecallMemoryTool(coreMemory: CoreMemoryManager): Tool {
         // Build search query: combine topic + context if provided
         const searchQuery = context ? `${topic} ${context}` : topic;
         const botId = typeof args._botId === 'string' ? args._botId : undefined;
+        if (!botId) {
+          return { success: false, content: 'Internal error: missing _botId context' };
+        }
 
         // Search core memory
         let results = await coreMemory.search(searchQuery, category, maxResults * 2, botId);

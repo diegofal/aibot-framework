@@ -64,9 +64,9 @@ export class MemoryManager {
 
   async search(
     query: string,
-    maxResults?: number,
-    minScore?: number,
-    botId?: string
+    maxResults: number | undefined,
+    minScore: number | undefined,
+    botId: string
   ): Promise<MemorySearchResult[]> {
     if (!this.db || !this.embeddingService) {
       throw new Error('MemoryManager not initialized');
@@ -80,9 +80,9 @@ export class MemoryManager {
 
   getFileLines(
     relPath: string,
-    fromLine?: number,
-    lineCount?: number,
-    botId?: string
+    fromLine: number | undefined,
+    lineCount: number | undefined,
+    botId: string
   ): string | null {
     // Auto-prefix path with botId if provided and path doesn't already start with it
     let effectivePath = relPath;
@@ -157,11 +157,14 @@ export class MemoryManager {
   clearIndexForBot(botId: string): number {
     if (!this.db) return 0;
     const prefix = `${botId}/`;
+    const sessionPrefix = `sessions/bot-${botId}-`;
 
-    // Get file IDs matching this bot
+    // Get file IDs matching this bot (soul files + session transcripts)
     const files = this.db
-      .prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path LIKE ?')
-      .all(`${prefix}%`);
+      .prepare<{ id: number }, [string, string]>(
+        'SELECT id FROM files WHERE path LIKE ? OR path LIKE ?'
+      )
+      .all(`${prefix}%`, `${sessionPrefix}%`);
 
     if (files.length === 0) return 0;
 
@@ -174,13 +177,13 @@ export class MemoryManager {
       )
       .all(...fileIds);
 
-    // Delete chunks and files for this bot
+    // Delete chunks and files for this bot (soul files + session transcripts)
     this.db.exec(
-      `DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path LIKE '${prefix}%')`
+      `DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path LIKE '${prefix}%' OR path LIKE '${sessionPrefix}%')`
     );
     const deleted = this.db
-      .prepare('DELETE FROM files WHERE path LIKE ?')
-      .run(`${prefix}%`).changes;
+      .prepare('DELETE FROM files WHERE path LIKE ? OR path LIKE ?')
+      .run(`${prefix}%`, `${sessionPrefix}%`).changes;
 
     // Clean orphaned embedding_cache entries (hashes no longer referenced by any chunk)
     for (const { content_hash } of orphanHashes) {

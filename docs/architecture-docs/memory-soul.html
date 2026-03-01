@@ -255,7 +255,7 @@
         <!-- Section 4: RAG Search Flow                                   -->
         <!-- ============================================================ -->
         <h2 id="rag-search">RAG Search Flow</h2>
-        <p>The <code>hybridSearch()</code> function in <code>search.ts</code> combines vector similarity with keyword matching for robust retrieval. Results are merged with Core Memory entries weighted by importance. When a <code>botId</code> is provided, all search paths filter by file path prefix (<code>{botId}/</code> or <code>sessions/bot-{botId}-</code>) and core memory filters by <code>bot_id</code> column, ensuring per-bot isolation.</p>
+        <p>The <code>hybridSearch()</code> function in <code>search.ts</code> combines vector similarity with keyword matching for robust retrieval. Results are merged with Core Memory entries weighted by importance. <code>botId</code> is required on all search paths — vector, keyword, and core memory queries all filter by file path prefix (<code>{botId}/</code> or <code>sessions/bot-{botId}-</code>) and core memory filters by <code>bot_id</code> column, enforcing per-bot isolation with no fallback.</p>
 
         <div class="card-grid cols-2">
           <div class="card">
@@ -329,6 +329,9 @@ score = 1 / (1 + |bm25_rank|)</code></pre>
           <li><strong>Quality Review</strong> &mdash; Spawns Claude CLI with <code>--allowedTools Read,Edit,Write</code> to review soul files for personality drift, vague language, contradictions, and outdated content. Makes targeted, minimal edits preserving voice.</li>
         </ol>
         <p>Consolidation and quality review run concurrently since they operate on different files. A cooldown timestamp (<code>.last-health-check</code>) prevents redundant runs.</p>
+
+        <h3>Per-Bot Isolation in Skill Cron Jobs</h3>
+        <p>Skill cron jobs (reflection, calibrate, improve) are registered <strong>per-bot</strong> in the CronService. Each job's <code>CronPayload</code> carries a <code>botId</code> field. When the cron service fires a skill job, <code>resolveSkillHandler</code> in <code>src/index.ts</code> looks up the bot config, calls <code>resolveAgentConfig()</code> to determine the per-bot <code>soulDir</code>, and injects it into the <code>SkillContext</code>. Skills never fall back to a shared root directory &mdash; if <code>soulDir</code> is not set, they error and skip execution. The improve skill uses a per-bot concurrency lock (<code>Set&lt;string&gt;</code>) instead of a global boolean, allowing concurrent runs for different bots.</p>
 
         <!-- ============================================================ -->
         <!-- Section 6: Core Memory                                       -->

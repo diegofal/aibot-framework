@@ -91,7 +91,7 @@ export async function runQualityReview(opts: {
   env.TERM = 'dumb';
 
   const proc = Bun.spawn([claudePath, '-p', prompt, '--allowedTools', 'Read,Edit,Write'], {
-    cwd: resolve(soulDir, '..', '..'),
+    cwd: resolve(soulDir), // Soul dir — Claude needs file access but shouldn't see project root
     stdout: 'pipe',
     stderr: 'pipe',
     env,

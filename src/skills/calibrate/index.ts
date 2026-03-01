@@ -15,7 +15,6 @@ import type {
 } from './types';
 
 const VALID_SCOPES: CalibrateScope[] = ['all', 'identity', 'soul', 'motivations', 'memory'];
-const DEFAULT_SOUL_DIR = './config/soul';
 const DEFAULT_MAX_BATCHES = 10;
 const DEFAULT_TIMEOUT_MS = 600_000; // 10 minutes
 
@@ -39,7 +38,10 @@ const skill: Skill = {
       description: 'Review and correct soul memory claims interactively',
       async handler(args: string[], ctx: SkillContext) {
         const config = ctx.config as CalibrateConfig;
-        const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
+        const soulDir = ctx.soulDir || config.soulDir;
+        if (!soulDir) {
+          return '❌ Calibration skipped: soulDir not configured.';
+        }
         const maxBatches = config.maxBatches || DEFAULT_MAX_BATCHES;
         const timeoutMs = config.sessionTimeoutMs || DEFAULT_TIMEOUT_MS;
         const chatId = ctx.session?.chatId;
@@ -262,7 +264,12 @@ async function handleCancel(ctx: SkillContext, session: CalibrationSession): Pro
 
 async function handleApply(ctx: SkillContext, session: CalibrationSession): Promise<void> {
   const config = ctx.config as CalibrateConfig;
-  const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
+  const soulDir = ctx.soulDir || config.soulDir;
+  if (!soulDir) {
+    await ctx.telegram.sendMessage(session.chatId, '❌ soulDir not configured — cannot apply.');
+    deleteSession(ctx.data, session.chatId, session.userId);
+    return;
+  }
 
   for (const rewrite of session.rewrites) {
     // Only allow writing to known soul files (safety guard)
@@ -373,7 +380,12 @@ async function finalizeBatches(ctx: SkillContext, session: CalibrationSession): 
 
   try {
     const config = ctx.config as CalibrateConfig;
-    const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
+    const soulDir = ctx.soulDir || config.soulDir;
+    if (!soulDir) {
+      deleteSession(ctx.data, session.chatId, session.userId);
+      await ctx.telegram.sendMessage(session.chatId, '❌ soulDir not configured — cannot rewrite.');
+      return;
+    }
 
     // Read current files that may need rewriting
     const affectedFiles = [...new Set(corrections.map((c) => c.sourceFile))];

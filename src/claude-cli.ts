@@ -38,7 +38,7 @@ export async function claudeGenerate(
   }
 
   const proc = Bun.spawn(args, {
-    cwd: resolve('.'),
+    cwd: tmpdir(), // Isolated dir — no CLAUDE.md, no auto-memory leakage
     stdout: 'pipe',
     stderr: 'pipe',
     env,
@@ -237,7 +237,7 @@ export async function claudeGenerateWithTools(
     );
 
     const proc = Bun.spawn(args, {
-      cwd: resolve('.'),
+      cwd: tmpdir(), // Isolated dir — no CLAUDE.md, no auto-memory leakage
       stdout: 'pipe',
       stderr: 'pipe',
       env,

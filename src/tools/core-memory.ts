@@ -64,6 +64,9 @@ function createCoreMemoryAppendTool(coreMemory: CoreMemoryManager): Tool {
       const value = String(args.value);
       const importance = typeof args.importance === 'number' ? args.importance : 5;
       const botId = typeof args._botId === 'string' ? args._botId : undefined;
+      if (!botId) {
+        return { success: false, content: 'Internal error: missing _botId context' };
+      }
 
       try {
         await coreMemory.set(category, key, value, importance, botId);
@@ -132,6 +135,9 @@ function createCoreMemoryReplaceTool(coreMemory: CoreMemoryManager): Tool {
       const newValue = String(args.new_value);
       const newImportance = typeof args.importance === 'number' ? args.importance : undefined;
       const botId = typeof args._botId === 'string' ? args._botId : undefined;
+      if (!botId) {
+        return { success: false, content: 'Internal error: missing _botId context' };
+      }
 
       try {
         const existing = await coreMemory.get(category, key, botId);
@@ -206,6 +212,9 @@ function createCoreMemorySearchTool(coreMemory: CoreMemoryManager): Tool {
       const category = args.category ? String(args.category) : undefined;
       const limit = typeof args.limit === 'number' ? args.limit : 10;
       const botId = typeof args._botId === 'string' ? args._botId : undefined;
+      if (!botId) {
+        return { success: false, content: 'Internal error: missing _botId context' };
+      }
 
       try {
         const results = await coreMemory.search(query, category, limit, botId);

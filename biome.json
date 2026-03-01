@@ -22,7 +22,8 @@
         "noParameterAssign": "warn",
         "useTemplate": "warn",
         "useConst": "warn",
-        "noUnusedTemplateLiteral": "warn"
+        "noUnusedTemplateLiteral": "warn",
+        "useDefaultParameterLast": "warn"
       }
     }
   },

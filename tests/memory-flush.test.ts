@@ -30,7 +30,6 @@ function createMockContext(db: Database): BotContext {
       getCoreMemory: () => coreMemory,
     } as unknown as MemoryManager,
     getSoulLoader: () => ({ appendDailyMemory: () => {} }) as unknown as SoulLoader,
-    defaultSoulLoader: { appendDailyMemory: () => {} } as unknown as SoulLoader,
     getActiveModel: () => 'test-model',
   } as unknown as BotContext;
 }
@@ -191,12 +190,13 @@ describe('Importance scoring integration', () => {
     const coreMemory = createCoreMemoryManager(db, noopLogger);
 
     // Insert facts with different importance
-    await coreMemory.set('preferences', 'food', 'User likes pizza', 9);
-    await coreMemory.set('preferences', 'color', 'User likes blue', 3);
-    await coreMemory.set('identity', 'work', 'User works in AI', 8);
+    const botId = 'test-bot';
+    await coreMemory.set('preferences', 'food', 'User likes pizza', 9, botId);
+    await coreMemory.set('preferences', 'color', 'User likes blue', 3, botId);
+    await coreMemory.set('identity', 'work', 'User works in AI', 8, botId);
 
     // Search should find the high-importance facts
-    const results = await coreMemory.search('user likes');
+    const results = await coreMemory.search('user likes', undefined, 10, botId);
 
     // Results should be sorted by importance
     expect(results.length).toBeGreaterThan(0);

@@ -9,13 +9,12 @@ interface ImproveConfig {
   telegramChatId?: number;
 }
 
-const DEFAULT_SOUL_DIR = './config/soul';
 const DEFAULT_CLAUDE_PATH = 'claude';
 const DEFAULT_TIMEOUT = 300_000;
 const DEFAULT_MAX_OUTPUT = 15_000;
 
-// Lock to prevent concurrent /improve runs (e.g. both bots in a group)
-let running = false;
+// Per-bot lock to prevent concurrent /improve runs per bot
+const runningBots = new Set<string>();
 
 const skill: Skill = {
   id: 'improve',
@@ -32,16 +31,24 @@ const skill: Skill = {
       description:
         'Run Claude Code to improve soul files. Usage: /improve [focus] [context]. Focus: memory, soul, motivations, identity, all (default)',
       async handler(args: string[], ctx: SkillContext) {
-        // Concurrency guard — only one session at a time across all bots
-        if (running) {
-          ctx.logger.debug('Improve already running, skipping');
+        const lockKey = ctx.botId ?? 'unknown';
+
+        // Concurrency guard — one session per bot
+        if (runningBots.has(lockKey)) {
+          ctx.logger.debug({ botId: lockKey }, 'Improve already running for this bot, skipping');
           return '';
         }
-        running = true;
+        runningBots.add(lockKey);
 
         try {
           const config = ctx.config as ImproveConfig;
-          const soulDir = ctx.soulDir || config.soulDir || DEFAULT_SOUL_DIR;
+          const soulDir = ctx.soulDir || config.soulDir;
+          if (!soulDir) {
+            ctx.logger.error(
+              'Improve skipped: soulDir not configured (no fallback to shared root)'
+            );
+            return '❌ Improve skipped: soulDir not configured.';
+          }
           const claudePath = config.claudePath || DEFAULT_CLAUDE_PATH;
           const timeout = config.timeout || DEFAULT_TIMEOUT;
           const maxOutputLength = config.maxOutputLength || DEFAULT_MAX_OUTPUT;
@@ -83,7 +90,7 @@ const skill: Skill = {
 
           return `❌ ${result.content}`;
         } finally {
-          running = false;
+          runningBots.delete(lockKey);
         }
       },
     },

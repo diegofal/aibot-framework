@@ -2,7 +2,53 @@
 
 ## Unreleased
 
+### Docs
+- **README.md full refresh** — Updated skills count (8→16), tools count (20+→34), added new core systems (context compaction, MCP tool bridge, activity stream, TTS/STT, permissions), updated architecture diagram, project structure, config sections, built-in skills table, web dashboard pages, and tech stack.
+- **CLAUDE.md** — Added rule to keep `README.md` in sync when skills, tools, core systems, dashboard pages, project structure, or tech stack change.
+
+### Changed (Breaking)
+- **botId is now required for all memory operations** — Removed `DEFAULT_BOT` constant
+  and all implicit fallbacks from `CoreMemoryManager`, `MemoryManager.search()`,
+  `MemoryManager.getFileLines()`, and `hybridSearch()`. Missing botId is now a
+  compile-time error, not a silent fallback to another bot's data.
+- **Removed `defaultSoulLoader` and `defaultLLMClient`** — `BotManager` no longer
+  accepts a root-level `SoulLoader` constructor parameter. `getSoulLoader(botId)` and
+  `getLLMClient(botId)` now throw if no loader/client is registered for the given bot
+  (i.e., `startBot()` was not called). The root-level `SoulLoader` in `src/index.ts`
+  has been removed.
+- **Memory tools validate `_botId` context** — `memory_search`, `memory_get`,
+  `recall_memory`, `core_memory_append`, `core_memory_replace`, and
+  `core_memory_search` now return an error if `_botId` is missing from the tool
+  execution context, preventing unscoped queries.
+- **Soul migration cleans leftover root files** — `migrateSoulRootToPerBot()` now
+  deletes root-level soul files (e.g., `config/soul/MOTIVATIONS.md`) when a per-bot
+  copy already exists, preventing stale data from leaking into other bots.
+
 ### Fixed
+- **Claude CLI context leakage between bots** — All Claude CLI spawn sites
+  (`claudeGenerate`, `claudeGenerateWithTools`, `runImprove`, `runQualityReview`)
+  used `cwd: resolve('.')` (project root), causing Claude CLI to inherit
+  project-level CLAUDE.md and auto-memory (~50KB of Finny's data). This leaked
+  one bot's personality, relationships, and cultural intel into other bots'
+  conversations and soul file edits. Fix: `claudeGenerate`/`claudeGenerateWithTools`
+  now use `cwd: tmpdir()` (isolated, no CLAUDE.md); `runImprove`/`runQualityReview`
+  now use `cwd: resolve(soulDir)` (needs file access but avoids project root).
+- **Bot reset did not clear session transcripts from memory index** —
+  `clearIndexForBot()` only matched `${botId}/%` paths but search also queries
+  `sessions/bot-${botId}-%`. Session transcripts survived bot resets and could
+  leak into subsequent search results. Now also clears the session prefix pattern.
+- **Root-level orphan soul files** — Startup cleanup now removes leftover
+  root-level soul files (`MOTIVATIONS.md`, `IDENTITY.md`, `SOUL.md`, `GOALS.md`)
+  and empty `memory/` directory from `config/soul/` root, preventing stale data
+  from leaking into search results.
+- **Per-bot skill cron job isolation** — Cron-triggered skills (reflection, calibrate,
+  improve) were registered once globally and wrote to a shared `./config/soul` root
+  directory, causing cross-bot data leakage. Now each skill cron job is registered
+  per-bot with `botId` in the payload. `resolveSkillHandler` injects the correct
+  per-bot `soulDir` via `resolveAgentConfig`. Legacy botId-less skill jobs are
+  automatically cleaned up on startup. Skills error instead of falling back to the
+  shared root directory. The improve skill's concurrency lock is now per-bot
+  (Set-based) instead of a single global boolean.
 - **Per-bot memory isolation** — Memory was written per-bot (`config/soul/{botId}/`)
   but searched globally. RAG search, core memory lookup, and memory tools returned
   results from ALL bots, violating agent separation. Now `core_memory` has a `bot_id`

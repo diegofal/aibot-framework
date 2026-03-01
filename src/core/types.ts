@@ -75,6 +75,7 @@ export interface SkillContext {
   skillId: string;
   session?: SessionInfo;
   soulDir?: string;
+  botId?: string;
 }
 
 export interface CallbackQueryData {
