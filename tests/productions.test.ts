@@ -916,7 +916,7 @@ describe('ProductionsService', () => {
   describe('getDirectoryTree', () => {
     test('returns empty array for bot with no files', () => {
       const tree = service.getDirectoryTree('bot1');
-      // Only INDEX.md might exist from resolveDir, but it's excluded
+      // resolveDir only creates the directory, no files inside
       expect(tree).toEqual([]);
     });
 
@@ -978,18 +978,49 @@ describe('ProductionsService', () => {
       expect(reportNode?.evaluation?.rating).toBe(4);
     });
 
-    test('excludes INDEX_EXCLUDES files', () => {
+    test('includes empty directories in tree', () => {
+      const dir = service.resolveDir('bot1');
+      mkdirSync(join(dir, 'empty-folder'), { recursive: true });
+      mkdirSync(join(dir, 'parent', 'nested-empty'), { recursive: true });
+
+      const tree = service.getDirectoryTree('bot1');
+      const emptyFolder = tree.find((n) => n.name === 'empty-folder');
+      expect(emptyFolder).toBeTruthy();
+      expect(emptyFolder?.type).toBe('dir');
+      expect(emptyFolder?.children).toEqual([]);
+
+      const parent = tree.find((n) => n.name === 'parent');
+      expect(parent).toBeTruthy();
+      expect(parent?.children?.length).toBe(1);
+      expect(parent?.children?.[0].name).toBe('nested-empty');
+      expect(parent?.children?.[0].children).toEqual([]);
+    });
+
+    test('excludes TREE_EXCLUDES files but shows INDEX.md', () => {
       const dir = service.resolveDir('bot1');
       writeFileSync(join(dir, 'real-file.md'), 'content', 'utf-8');
-      // changelog.jsonl and INDEX.md should be excluded
+      writeFileSync(join(dir, 'INDEX.md'), '# Index', 'utf-8');
+      // changelog.jsonl and summary.json should be excluded
       writeFileSync(join(dir, 'summary.json'), '{}', 'utf-8');
 
       const tree = service.getDirectoryTree('bot1');
       const names = tree.map((n) => n.name);
       expect(names).toContain('real-file.md');
+      expect(names).toContain('INDEX.md');
       expect(names).not.toContain('changelog.jsonl');
       expect(names).not.toContain('summary.json');
-      expect(names).not.toContain('INDEX.md');
+    });
+
+    test('getDirectoryTree includes INDEX.md in tree', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'INDEX.md'), '# Production Index\n**Files:** 3', 'utf-8');
+      writeFileSync(join(dir, 'article.md'), '# Article', 'utf-8');
+
+      const tree = service.getDirectoryTree('bot1');
+      const indexNode = tree.find((n) => n.name === 'INDEX.md');
+      expect(indexNode).toBeTruthy();
+      expect(indexNode?.type).toBe('file');
+      expect(indexNode?.size).toBeGreaterThan(0);
     });
   });
 
@@ -1031,6 +1062,328 @@ describe('ProductionsService', () => {
       mkdirSync(join(dir, 'somedir'), { recursive: true });
 
       expect(service.getFileContentByPath('bot1', 'somedir')).toBeNull();
+    });
+  });
+
+  describe('getAllDirectoryTrees', () => {
+    test('returns bot-level directory nodes for enabled bots', () => {
+      const dir1 = service.resolveDir('bot1');
+      writeFileSync(join(dir1, 'article.md'), '# Article', 'utf-8');
+
+      const dir2 = service.resolveDir('bot2');
+      writeFileSync(join(dir2, 'notes.md'), '# Notes', 'utf-8');
+
+      const trees = service.getAllDirectoryTrees();
+      expect(trees.length).toBeGreaterThanOrEqual(2);
+
+      const bot1Node = trees.find((n) => n.path === 'bot1');
+      expect(bot1Node).toBeTruthy();
+      expect(bot1Node?.type).toBe('dir');
+      expect(bot1Node?.name).toBe('Bot One');
+      expect(bot1Node?.children?.some((c) => c.name === 'article.md')).toBe(true);
+
+      const bot2Node = trees.find((n) => n.path === 'bot2');
+      expect(bot2Node).toBeTruthy();
+      expect(bot2Node?.name).toBe('Bot Two');
+    });
+
+    test('uses bot name from config as node name', () => {
+      service.resolveDir('bot1');
+      const trees = service.getAllDirectoryTrees();
+      const bot1 = trees.find((n) => n.path === 'bot1');
+      expect(bot1?.name).toBe('Bot One');
+    });
+
+    test('includes nested structure within each bot', () => {
+      const dir = service.resolveDir('bot1');
+      mkdirSync(join(dir, 'cultural'), { recursive: true });
+      writeFileSync(join(dir, 'cultural', 'review.md'), 'content', 'utf-8');
+
+      const trees = service.getAllDirectoryTrees();
+      const bot1 = trees.find((n) => n.path === 'bot1');
+      const cultural = bot1?.children?.find((c) => c.name === 'cultural');
+      expect(cultural?.type).toBe('dir');
+      expect(cultural?.children?.[0]?.name).toBe('review.md');
+    });
+  });
+
+  describe('getNextNumber', () => {
+    test('returns 01 for empty directory', () => {
+      expect(service.getNextNumber('bot1', '')).toBe('01');
+    });
+
+    test('returns next number after existing numbered files', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, '01_article.md'), '# Article', 'utf-8');
+      writeFileSync(join(dir, '02_notes.md'), '# Notes', 'utf-8');
+      expect(service.getNextNumber('bot1', '')).toBe('03');
+    });
+
+    test('handles gaps in numbering', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, '01_first.md'), 'content', 'utf-8');
+      writeFileSync(join(dir, '05_fifth.md'), 'content', 'utf-8');
+      expect(service.getNextNumber('bot1', '')).toBe('06');
+    });
+
+    test('works with subdirectories', () => {
+      const dir = service.resolveDir('bot1');
+      mkdirSync(join(dir, 'cultural'), { recursive: true });
+      writeFileSync(join(dir, 'cultural', '01_review.md'), 'content', 'utf-8');
+      writeFileSync(join(dir, 'cultural', '02_analysis.md'), 'content', 'utf-8');
+      expect(service.getNextNumber('bot1', 'cultural')).toBe('03');
+    });
+
+    test('ignores non-numbered files', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'readme.md'), 'content', 'utf-8');
+      writeFileSync(join(dir, '01_article.md'), 'content', 'utf-8');
+      expect(service.getNextNumber('bot1', '')).toBe('02');
+    });
+  });
+
+  describe('renumberFile', () => {
+    test('prepends number to unnumbered file', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'article.md'), '# Article', 'utf-8');
+
+      const newPath = service.renumberFile('bot1', 'article.md');
+      expect(newPath).toBe('01_article.md');
+      expect(existsSync(join(dir, '01_article.md'))).toBe(true);
+      expect(existsSync(join(dir, 'article.md'))).toBe(false);
+    });
+
+    test('skips already numbered files', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, '01_article.md'), 'content', 'utf-8');
+
+      const newPath = service.renumberFile('bot1', '01_article.md');
+      expect(newPath).toBe('01_article.md');
+    });
+
+    test('skips excluded files', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'INDEX.md'), '# Index', 'utf-8');
+
+      const newPath = service.renumberFile('bot1', 'INDEX.md');
+      expect(newPath).toBe('INDEX.md');
+    });
+
+    test('handles subdirectory files', () => {
+      const dir = service.resolveDir('bot1');
+      mkdirSync(join(dir, 'cultural'), { recursive: true });
+      writeFileSync(join(dir, 'cultural', 'review.md'), 'content', 'utf-8');
+
+      const newPath = service.renumberFile('bot1', 'cultural/review.md');
+      expect(newPath).toBe('cultural/01_review.md');
+      expect(existsSync(join(dir, 'cultural', '01_review.md'))).toBe(true);
+    });
+
+    test('increments after existing numbered files', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, '01_first.md'), 'content', 'utf-8');
+      writeFileSync(join(dir, 'second.md'), 'content', 'utf-8');
+
+      const newPath = service.renumberFile('bot1', 'second.md');
+      expect(newPath).toBe('02_second.md');
+    });
+
+    test('returns original path for non-existent file', () => {
+      const newPath = service.renumberFile('bot1', 'nonexistent.md');
+      expect(newPath).toBe('nonexistent.md');
+    });
+  });
+
+  describe('extractDescription', () => {
+    test('extracts title and first sentence', () => {
+      const content = `# My Article
+
+This is a great article about TypeScript. It covers many topics.
+
+## Section 1`;
+      const desc = ProductionsService.extractDescription(content);
+      expect(desc).toBe('My Article -- This is a great article about TypeScript.');
+    });
+
+    test('returns just title when no paragraph follows', () => {
+      const content = `# Title Only
+
+- bullet one
+- bullet two
+## Next Section`;
+      const desc = ProductionsService.extractDescription(content);
+      expect(desc).toBe('Title Only');
+    });
+
+    test('returns empty string for empty content', () => {
+      expect(ProductionsService.extractDescription('')).toBe('');
+      expect(ProductionsService.extractDescription('   \n  ')).toBe('');
+    });
+
+    test('caps at 120 characters', () => {
+      const content = `# A Very Long Title That Goes On And On
+
+This is a very long first sentence that keeps going and going until it reaches well past the one hundred and twenty character limit that we set.`;
+      const desc = ProductionsService.extractDescription(content);
+      expect(desc.length).toBeLessThanOrEqual(120);
+    });
+
+    test('skips metadata lines', () => {
+      const content = `# Report
+
+date: 2026-03-01
+author: Bot
+tags: analysis
+
+The market showed strong signals today.`;
+      const desc = ProductionsService.extractDescription(content);
+      expect(desc).toContain('Report');
+      expect(desc).toContain('The market showed strong signals today.');
+    });
+
+    test('handles content without heading', () => {
+      const content = `Just a plain paragraph of text without any heading.`;
+      const desc = ProductionsService.extractDescription(content);
+      expect(desc).toBe('');
+    });
+  });
+
+  describe('checkCoherence', () => {
+    test('returns coherent for well-structured content', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(
+        join(dir, 'good.md'),
+        `# Good Article
+
+This is a well-written article about an important topic. It has real content and provides value to the reader.
+
+## Analysis
+
+The data shows clear trends in the market. We can see several patterns emerging from the numbers.
+
+## Conclusion
+
+Based on the above, we recommend a conservative approach.`,
+        'utf-8'
+      );
+
+      const result = service.checkCoherence('bot1', 'good.md');
+      expect(result.coherent).toBe(true);
+      expect(result.issues).toHaveLength(0);
+    });
+
+    test('detects too-small content', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'tiny.md'), '# Title\n\nHi', 'utf-8');
+
+      const result = service.checkCoherence('bot1', 'tiny.md');
+      expect(result.coherent).toBe(false);
+      expect(result.issues.some((i) => i.includes('too small'))).toBe(true);
+    });
+
+    test('detects template/placeholder content', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(
+        join(dir, 'template.md'),
+        `# Section
+## Title
+## Overview
+## Summary
+- TBD
+- TBD
+- [ ]
+- [ ]
+TODO: fill in`,
+        'utf-8'
+      );
+
+      const result = service.checkCoherence('bot1', 'template.md');
+      expect(result.coherent).toBe(false);
+      expect(result.issues.some((i) => i.includes('placeholder'))).toBe(true);
+    });
+
+    test('detects broken structure (many headings, few paragraphs)', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(
+        join(dir, 'headings.md'),
+        `# One
+## Two
+### Three
+#### Four
+##### Five
+Just one line.`,
+        'utf-8'
+      );
+
+      const result = service.checkCoherence('bot1', 'headings.md');
+      expect(result.coherent).toBe(false);
+      expect(result.issues.some((i) => i.includes('Broken structure'))).toBe(true);
+    });
+
+    test('returns not found for missing file', () => {
+      const result = service.checkCoherence('bot1', 'missing.md');
+      expect(result.coherent).toBe(false);
+      expect(result.issues).toContain('File not found');
+    });
+  });
+
+  describe('rebuildIndex with plan section', () => {
+    test('includes plan section when summary.json has plan', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'article.md'), '# Test Article\n\nSome content here.', 'utf-8');
+      service.writeSummary('bot1', {
+        summary: 'Bot is writing articles.',
+        plan: 'Focus on cultural content and parenting guides.',
+        generatedAt: new Date().toISOString(),
+      });
+
+      service.rebuildIndex('bot1');
+      const index = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+      expect(index).toContain('## Strategy & Plan');
+      expect(index).toContain('Focus on cultural content and parenting guides.');
+    });
+
+    test('omits plan section when no plan exists', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'article.md'), '# Test Article\n\nContent.', 'utf-8');
+      service.writeSummary('bot1', {
+        summary: 'Bot is writing.',
+        generatedAt: new Date().toISOString(),
+      });
+
+      service.rebuildIndex('bot1');
+      const index = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+      expect(index).not.toContain('## Strategy & Plan');
+    });
+  });
+
+  describe('getFileDescription improvements', () => {
+    test('uses extractDescription for richer descriptions', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(
+        join(dir, 'analysis.md'),
+        `# Market Analysis Q1 2026
+
+The market showed unprecedented growth in the first quarter.
+
+## Key Findings`,
+        'utf-8'
+      );
+
+      service.rebuildIndex('bot1');
+      const index = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+      expect(index).toContain('Market Analysis Q1 2026');
+      expect(index).toContain('unprecedented growth');
+    });
+
+    test('strips number prefix from humanized filenames', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, '03_my-report.json'), '{"data": true}', 'utf-8');
+
+      service.rebuildIndex('bot1');
+      const index = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+      // Should show humanized "My Report" not "03 My Report"
+      expect(index).toContain('My Report');
     });
   });
 

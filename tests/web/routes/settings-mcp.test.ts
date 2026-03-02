@@ -54,6 +54,7 @@ function createBaseConfig() {
 }
 
 function createMockBotManager(overrides?: Record<string, unknown>) {
+  const registerMcpToolsCalls: unknown[] = [];
   const pool = {
     addServer: () => ({
       connect: async () => {},
@@ -64,9 +65,17 @@ function createMockBotManager(overrides?: Record<string, unknown>) {
     size: 0,
     ...overrides,
   };
-  return {
+  const toolRegistry = {
+    registerMcpTools: () => {
+      registerMcpToolsCalls.push(true);
+    },
+  };
+  const bm = {
     getMcpClientPool: () => pool,
-  } as unknown as BotManager;
+    getToolRegistry: () => toolRegistry,
+    _registerMcpToolsCalls: registerMcpToolsCalls,
+  } as unknown as BotManager & { _registerMcpToolsCalls: unknown[] };
+  return bm;
 }
 
 function setupApp(config: ReturnType<typeof createBaseConfig>, botManager?: BotManager) {
@@ -251,6 +260,25 @@ describe('POST /api/settings/mcp/servers', () => {
     const data = await res.json();
     expect(data.error).toContain('url is required');
   });
+
+  test('calls registerMcpTools after successful connect', async () => {
+    const config = createBaseConfig();
+    const mockBm = createMockBotManager();
+    const app = setupApp(config, mockBm);
+
+    const res = await app.request('/api/settings/mcp/servers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'sync-test',
+        transport: 'stdio',
+        command: 'echo',
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockBm._registerMcpToolsCalls).toHaveLength(1);
+  });
 });
 
 describe('DELETE /api/settings/mcp/servers/:name', () => {
@@ -298,5 +326,26 @@ describe('DELETE /api/settings/mcp/servers/:name', () => {
     });
 
     expect(res.status).toBe(404);
+  });
+
+  test('calls registerMcpTools after removal', async () => {
+    const config = createBaseConfig();
+    config.mcp.servers.push({
+      name: 'sync-remove',
+      transport: 'stdio',
+      command: 'echo',
+      timeout: 30000,
+      autoReconnect: true,
+    } as any);
+
+    const mockBm = createMockBotManager();
+    const app = setupApp(config, mockBm);
+
+    const res = await app.request('/api/settings/mcp/servers/sync-remove', {
+      method: 'DELETE',
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockBm._registerMcpToolsCalls).toHaveLength(1);
   });
 });

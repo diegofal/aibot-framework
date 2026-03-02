@@ -38,6 +38,7 @@ const RESERVED_NAMES = new Set([
   'improve',
   'manage_goals',
   'create_tool',
+  'create_agent',
 ]);
 
 export function createCreateToolTool(store: DynamicToolStore, maxToolsPerBot: number): Tool {

@@ -105,6 +105,15 @@ const DynamicToolsConfigSchema = z
   })
   .default({});
 
+const AgentProposalsConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    storePath: z.string().default('./data/agent-proposals'),
+    maxAgents: z.number().default(20),
+    maxProposalsPerBot: z.number().default(3),
+  })
+  .default({});
+
 const SkillsFoldersConfigSchema = z
   .object({
     paths: z.array(z.string()).default([]),
@@ -307,6 +316,13 @@ const AutoRagConfigSchema = z
   })
   .default({});
 
+export const MMRConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    lambda: z.number().min(0).max(1).default(0.7),
+  })
+  .default({});
+
 const MemorySearchConfigSchema = z.object({
   enabled: z.boolean().default(false),
   embeddingModel: z.string().default(''),
@@ -322,6 +338,7 @@ const MemorySearchConfigSchema = z.object({
   concurrency: z.number().int().positive().default(3),
   watchEnabled: z.boolean().default(true),
   autoRag: AutoRagConfigSchema,
+  mmr: MMRConfigSchema,
 });
 
 const MemoryFlushConfigSchema = z
@@ -608,6 +625,7 @@ const ConfigSchema = z.object({
   agentLoop: GlobalAgentLoopConfigSchema,
   browserTools: BrowserToolsConfigSchema.default({}),
   dynamicTools: DynamicToolsConfigSchema,
+  agentProposals: AgentProposalsConfigSchema,
   skillsFolders: SkillsFoldersConfigSchema,
   productions: ProductionsConfigSchema,
   conversations: ConversationsFeatureConfigSchema,
@@ -649,6 +667,7 @@ export type AgentLoopConfig = z.infer<typeof GlobalAgentLoopConfigSchema>;
 export type AgentLoopRetryConfig = z.infer<typeof AgentLoopRetryConfigSchema>;
 export type BotAgentLoopOverride = z.infer<typeof BotAgentLoopOverrideSchema>;
 export type DynamicToolsConfig = z.infer<typeof DynamicToolsConfigSchema>;
+export type AgentProposalsConfig = z.infer<typeof AgentProposalsConfigSchema>;
 export type MemoryFlushConfig = z.infer<typeof MemoryFlushConfigSchema>;
 export type SessionMemoryConfig = z.infer<typeof SessionMemoryConfigSchema>;
 export type LlmRelevanceCheckConfig = z.infer<typeof LlmRelevanceCheckSchema>;
@@ -668,6 +687,7 @@ export type SkillsFoldersConfig = z.infer<typeof SkillsFoldersConfigSchema>;
 export type McpConfig = z.infer<typeof McpConfigSchema>;
 export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
 export type McpExposedServerConfig = z.infer<typeof McpExposedServerSchema>;
+export type MMRConfig = z.infer<typeof MMRConfigSchema>;
 
 /**
  * Substitute environment variables in strings

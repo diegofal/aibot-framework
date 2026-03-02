@@ -5,6 +5,7 @@ import {
   CalendarConfigSchema,
   CompactionConfigSchema,
   GlobalAgentLoopConfigSchema,
+  MMRConfigSchema,
   RedditConfigSchema,
   TwitterConfigSchema,
 } from '../src/config';
@@ -194,6 +195,34 @@ describe('CalendarConfigSchema', () => {
       calendarId: 'my-cal@group.calendar.google.com',
     });
     expect(result.calendarId).toBe('my-cal@group.calendar.google.com');
+  });
+});
+
+describe('MMRConfigSchema', () => {
+  test('provides defaults from empty object', () => {
+    const result = MMRConfigSchema.parse({});
+    expect(result.enabled).toBe(false);
+    expect(result.lambda).toBe(0.7);
+  });
+
+  test('accepts enabled: true', () => {
+    const result = MMRConfigSchema.parse({ enabled: true });
+    expect(result.enabled).toBe(true);
+  });
+
+  test('accepts custom lambda', () => {
+    const result = MMRConfigSchema.parse({ lambda: 0.5 });
+    expect(result.lambda).toBe(0.5);
+  });
+
+  test('accepts lambda boundaries', () => {
+    expect(MMRConfigSchema.parse({ lambda: 0 }).lambda).toBe(0);
+    expect(MMRConfigSchema.parse({ lambda: 1 }).lambda).toBe(1);
+  });
+
+  test('rejects lambda out of range', () => {
+    expect(() => MMRConfigSchema.parse({ lambda: -0.1 })).toThrow();
+    expect(() => MMRConfigSchema.parse({ lambda: 1.1 })).toThrow();
   });
 });
 

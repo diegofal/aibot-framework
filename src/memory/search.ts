@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import type { MemorySearchConfig } from '../config';
 import type { Logger } from '../logger';
 import type { EmbeddingService } from './embeddings';
+import { applyMMRToMemoryResults } from './mmr';
 import { deserializeEmbedding } from './schema';
 import type { MemorySearchResult } from './types';
 
@@ -240,8 +241,11 @@ export async function hybridSearch(
     });
   }
 
+  // Apply MMR diversity re-ranking (opt-in, disabled by default)
+  const mmrResults = applyMMRToMemoryResults(results, config.mmr);
+
   // Merge Core Memory results (they get priority boost based on importance)
-  const mergedResults = mergeWithCoreMemory(results, coreMemoryResults, maxResults);
+  const mergedResults = mergeWithCoreMemory(mmrResults, coreMemoryResults, maxResults);
 
   logger.debug(
     {

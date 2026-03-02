@@ -91,6 +91,7 @@
         <li><code>/api/productions</code> &mdash; only if <code>ProductionsService</code> is available.</li>
         <li><code>/api/karma</code> &mdash; only if <code>KarmaService</code> is available.</li>
         <li><code>/api/tools</code> &mdash; only if <code>DynamicToolStore</code> and <code>DynamicToolRegistry</code> are available.</li>
+        <li><code>/api/agent-proposals</code> &mdash; only if <code>AgentProposalStore</code> is available (<code>agentProposals.enabled: true</code>).</li>
       </ul>
 
       <div class="diagram-container">
@@ -700,6 +701,18 @@
               <td><code>productions.ts</code></td>
             </tr>
             <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/productions/:botId/:id/archive</code></td>
+              <td>Archive a production file to <code>archived/</code>. Body: <code>{ reason?: string }</code></td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/productions/:botId/:id/coherence</code></td>
+              <td>Check coherence of a production file (heuristic: template ratio, content size, structure balance)</td>
+              <td><code>productions.ts</code></td>
+            </tr>
+            <tr>
               <td><span class="badge badge-high">DELETE</span></td>
               <td><code>/api/productions/:botId/:id</code></td>
               <td>Delete a production entry</td>
@@ -708,6 +721,15 @@
           </tbody>
         </table>
       </div>
+
+      <h4>Productions Service Features</h4>
+      <ul>
+        <li><strong>Auto-numbered filenames</strong> &mdash; New files get <code>01_</code>, <code>02_</code>, etc. prefixes per directory for chronological ordering.</li>
+        <li><strong>Rich INDEX.md descriptions</strong> &mdash; Extracts "Title -- First sentence" from file content (120 char cap).</li>
+        <li><strong>Strategy &amp; Plan section</strong> &mdash; AI-generated plan cached in <code>summary.json</code>, rendered in INDEX.md when summary is generated.</li>
+        <li><strong>Coherence checking</strong> &mdash; Heuristic checks (template ratio, min content size, heading/paragraph balance) without LLM.</li>
+        <li><strong>Archive from dashboard</strong> &mdash; File viewer has Archive button with reason modal, moves files to <code>archived/</code>.</li>
+      </ul>
 
       <!-- --- Conversations --- -->
       <h3>Conversations</h3>
@@ -1202,11 +1224,26 @@ compaction                            // Context compaction
         </div>
 
         <div class="card">
-          <h3>Logs</h3>
-          <p>Real-time log viewer powered by the <code>/ws/logs</code> WebSocket.
-             Displays structured JSON log entries with level, timestamp, module,
-             and message. Shows a 100-line history backlog on connect, then
-             streams new entries live.</p>
+          <h3>Agent Proposals</h3>
+          <p>Review agent creation proposals submitted by bots via <code>create_agent</code>.
+             Pending proposals show as cards with full details (name, role, personality,
+             skills, justification). Approve to trigger agent creation pipeline (config entry +
+             soul directory + AI soul generation), or reject with optional note.
+             History section shows resolved proposals. Badge in sidebar shows pending count.</p>
+        </div>
+
+        <div class="card">
+          <h3>Activity (unified)</h3>
+          <p>Unified real-time monitoring page with two tabs:</p>
+          <ul>
+            <li><strong>Events</strong> — Structured bot events (tool calls, LLM, agent phases,
+                memory, collaboration) via <code>/ws/activity</code>. Filter by agent and event type.</li>
+            <li><strong>System Logs</strong> — Pino log output (debug/info/warn/error) via
+                <code>/ws/logs</code>. Filter by level, agent, and free-text search.</li>
+          </ul>
+          <p>Both WebSockets run in parallel so neither tab loses events while viewing the other.
+             Pause/Resume and Clear act on the active tab. The old <code>#/logs</code> route
+             redirects to <code>#/activity?tab=logs</code>.</p>
         </div>
 
         <div class="card">

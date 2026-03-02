@@ -15,7 +15,8 @@ export type ActivityEventType =
   | 'memory:rag'
   | 'collab:start'
   | 'collab:end'
-  | 'compaction';
+  | 'compaction'
+  | 'karma:change';
 
 export type LlmCaller = 'conversation' | 'planner' | 'strategist' | 'executor' | 'feedback';
 

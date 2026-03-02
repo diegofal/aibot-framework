@@ -24,6 +24,21 @@ Rules:
 const THREAD_SYSTEM_PROMPT = `You are an AI bot in a conversation thread discussing your work or behavior with a human reviewer.
 Rules: Be concise (2-4 sentences), no markdown headers, match the bot's language, respond to the latest message in context of the full thread, be specific.`;
 
+const COHERENCE_SYSTEM_PROMPT = `You are a content quality analyst. Your job is to evaluate whether a piece of AI-generated content is coherent and well-formed.
+
+Check for:
+- Logical flow and structure
+- Completeness (no unfinished sections, missing content, or placeholder text)
+- Language quality (grammar, clarity, readability)
+- Internal consistency (no contradictions, no abrupt topic shifts)
+- Broken formatting (heading-only outlines with no real content, excessive boilerplate)
+
+Respond ONLY with valid JSON (no markdown, no code fences):
+{"coherent": true/false, "issues": ["short issue description", ...], "explanation": "2-3 sentence human-readable explanation of the main problems found, or why the content is good"}
+
+If the content is coherent, return {"coherent": true, "issues": [], "explanation": "...brief positive note..."}.
+If incoherent, be specific about what's wrong.`;
+
 const SUMMARY_SYSTEM_PROMPT = `You are a concise work analyst reviewing an AI bot's recent productions. Your job is to summarize what the bot is currently working on.
 
 Rules:
@@ -191,10 +206,125 @@ export function productionsRoutes(deps: {
     })();
   }
 
+  const coherenceResults = new Map<
+    string,
+    { coherent: boolean; issues: string[]; explanation?: string }
+  >();
+
+  /** Extracted coherence check generation — LLM-based evaluation. */
+  function generateCoherenceCheck(
+    botId: string,
+    id: string,
+    entry: { path: string; action: string; description: string }
+  ) {
+    const key = `${botId}:${id}:coherence`;
+    generationState.set(key, { status: 'generating' });
+
+    (async () => {
+      try {
+        const content = productionsService.getFileContent(botId, id);
+        if (!content || content.trim().length === 0) {
+          const result = { coherent: false, issues: ['File is empty or not found'] };
+          coherenceResults.set(`${botId}:${id}`, result);
+          generationState.delete(key);
+          return;
+        }
+
+        const soulLoader = botManager.getSoulLoader(botId);
+        const identity = soulLoader.readIdentity();
+        const goals = soulLoader.readGoals();
+
+        const sections: string[] = [];
+        sections.push('# Content Coherence Check');
+        sections.push(
+          `## File Metadata\n- Path: ${entry.path}\n- Action: ${entry.action}\n- Description: ${entry.description}`
+        );
+        sections.push(`## Content\n${truncate(content, 5000)}`);
+        if (identity)
+          sections.push(`## Bot Identity (for language matching)\n${truncate(identity, 300)}`);
+        if (goals) sections.push(`## Bot Goals (context)\n${truncate(goals, 500)}`);
+        sections.push(
+          '## Task\n\nEvaluate whether this content is coherent and well-formed. Respond with JSON only.'
+        );
+
+        const prompt = sections.join('\n\n');
+        const claudePath = config.improve?.claudePath ?? 'claude';
+        const timeout = config.improve?.timeout ?? 300_000;
+
+        const raw = await claudeGenerate(prompt, {
+          systemPrompt: COHERENCE_SYSTEM_PROMPT,
+          claudePath,
+          timeout,
+          maxLength: 2000,
+          logger,
+        });
+
+        // Parse JSON response from LLM
+        let parsed: { coherent: boolean; issues: string[]; explanation?: string };
+        try {
+          // Strip markdown code fences if present
+          const cleaned = raw
+            .replace(/^```(?:json)?\s*\n?/i, '')
+            .replace(/\n?```\s*$/i, '')
+            .trim();
+          parsed = JSON.parse(cleaned);
+        } catch {
+          // Fallback: treat unparseable response as coherent (don't block on LLM format issues)
+          logger.warn(
+            { botId, id, raw: raw.slice(0, 200) },
+            'Could not parse coherence LLM response as JSON'
+          );
+          parsed = { coherent: true, issues: [], explanation: 'Could not parse LLM response' };
+        }
+
+        const result = {
+          coherent: !!parsed.coherent,
+          issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+          explanation: typeof parsed.explanation === 'string' ? parsed.explanation : undefined,
+        };
+        coherenceResults.set(`${botId}:${id}`, result);
+
+        // Auto-post explanation to discussion thread if incoherent
+        if (!result.coherent && result.explanation) {
+          const current = productionsService.getEntry(botId, id);
+          const thread = current?.evaluation?.thread ?? [];
+          const alreadyPosted = thread.some(
+            (m) => m.role === 'bot' && m.content.startsWith('Coherence Check:')
+          );
+          if (!alreadyPosted) {
+            productionsService.addThreadMessage(
+              botId,
+              id,
+              'bot',
+              `Coherence Check: ${result.explanation}`
+            );
+          }
+        }
+
+        logger.info({ botId, id, coherent: result.coherent }, 'LLM coherence check completed');
+        generationState.delete(key);
+      } catch (err) {
+        logger.error({ err, botId, id }, 'Failed to generate LLM coherence check');
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        generationState.set(key, {
+          status: 'error',
+          error: `Failed to check coherence: ${message}`,
+        });
+      }
+    })();
+  }
+
   // List all bots with production stats
   app.get('/', (c) => {
     const stats = productionsService.getAllBotStats();
     return c.json(stats);
+  });
+
+  // Directory trees for all bots (file explorer at productions level)
+  // NOTE: must be registered before GET /:botId to avoid Hono trie router conflicts
+  app.get('/all-trees', (c) => {
+    const tree = productionsService.getAllDirectoryTrees();
+    return c.json({ tree });
   });
 
   // Unified entries across all bots
@@ -326,10 +456,28 @@ export function productionsRoutes(deps: {
           logger,
         });
 
+        // Generate strategic plan section
+        let plan: string | undefined;
+        try {
+          const planPrompt = `${sections.slice(0, -1).join('\n\n')}\n\n## Task\n\nAnalyze the strategy and plan behind this bot's productions. What themes connect the files? What is the bot building toward? What gaps exist? What should it focus on next? Be specific — cite file names and content when relevant.`;
+          const planSystemPrompt = `You are a strategic analyst reviewing an AI bot's body of work. Identify the overarching strategy, recurring themes, gaps in coverage, and recommend next priorities. Write in the bot's language. Keep output under 500 words. No markdown headers, no preamble, no sign-off.`;
+          plan = await claudeGenerate(planPrompt, {
+            systemPrompt: planSystemPrompt,
+            claudePath,
+            timeout,
+            maxLength: 3000,
+            logger,
+          });
+        } catch (planErr) {
+          logger.warn({ err: planErr, botId }, 'Failed to generate plan section (non-fatal)');
+        }
+
         productionsService.writeSummary(botId, {
           summary,
+          plan,
           generatedAt: new Date().toISOString(),
         });
+        productionsService.rebuildIndex(botId);
         logger.info({ botId }, 'Generated productions summary via Claude CLI');
       } catch (err) {
         logger.error({ err, botId }, 'Failed to generate productions summary');
@@ -426,6 +574,61 @@ export function productionsRoutes(deps: {
     return c.json({ entries, stats });
   });
 
+  // Archive a production file
+  // NOTE: must be registered before GET /:botId/:id to avoid Hono trie router conflicts
+  app.post('/:botId/:id/archive', async (c) => {
+    const botId = c.req.param('botId');
+    const id = c.req.param('id');
+    const body = await c.req.json<{ reason?: string }>();
+
+    const entry = productionsService.getEntry(botId, id);
+    if (!entry) {
+      return c.json({ error: 'Production not found' }, 404);
+    }
+
+    const reason = body.reason?.trim() || 'Archived from dashboard';
+    const ok = productionsService.archiveFile(botId, entry.path, reason);
+    if (!ok) {
+      return c.json({ error: 'Failed to archive file' }, 500);
+    }
+
+    logger.info({ botId, id, path: entry.path, reason }, 'Production archived via web');
+    return c.json({ ok: true });
+  });
+
+  // Check coherence of a production file (LLM-based, async)
+  // NOTE: must be registered before GET /:botId/:id to avoid Hono trie router conflicts
+  app.get('/:botId/:id/coherence', (c) => {
+    const botId = c.req.param('botId');
+    const id = c.req.param('id');
+
+    const entry = productionsService.getEntry(botId, id);
+    if (!entry) {
+      return c.json({ error: 'Production not found' }, 404);
+    }
+
+    // Check cached result
+    const cacheKey = `${botId}:${id}`;
+    const cached = coherenceResults.get(cacheKey);
+    if (cached) {
+      return c.json(cached);
+    }
+
+    // Check generation state
+    const genKey = `${botId}:${id}:coherence`;
+    const state = generationState.get(genKey);
+    if (state?.status === 'generating') {
+      return c.json({ status: 'checking' });
+    }
+    if (state?.status === 'error') {
+      return c.json({ status: 'error', error: state.error });
+    }
+
+    // Fire-and-forget LLM coherence check
+    generateCoherenceCheck(botId, id, entry);
+    return c.json({ status: 'checking' });
+  });
+
   // Get single production with file content
   app.get('/:botId/:id', (c) => {
     const botId = c.req.param('botId');
@@ -464,7 +667,16 @@ export function productionsRoutes(deps: {
       | undefined;
     const soulLoader = soulLoaders?.get(botId);
 
-    const updated = productionsService.evaluate(botId, id, body, soulLoader);
+    const karmaService = botManager.getKarmaService();
+    const activityStream = botManager.getActivityStream();
+    const updated = productionsService.evaluate(
+      botId,
+      id,
+      body,
+      soulLoader,
+      karmaService,
+      activityStream
+    );
     if (!updated) {
       return c.json({ error: 'Production not found' }, 404);
     }

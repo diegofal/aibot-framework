@@ -62,6 +62,10 @@ function makeMockDeps(overrides?: Record<string, unknown>) {
     deleteProduction: () => false,
     readSummary: () => null,
     writeSummary: mock(() => {}),
+    rebuildIndex: mock(() => {}),
+    addThreadMessage: () => null,
+    archiveFile: () => true,
+    checkCoherence: () => ({ coherent: true, issues: [] }),
   };
 
   const mockBotManager = {
@@ -70,6 +74,8 @@ function makeMockDeps(overrides?: Record<string, unknown>) {
       readGoals: () => '- Goal 1\n- Goal 2',
       readDailyLogsSince: () => 'Day 1 log\nDay 2 log',
     }),
+    getKarmaService: () => undefined,
+    getActivityStream: () => undefined,
   };
 
   return {
@@ -203,7 +209,10 @@ describe('productions routes', () => {
       expect(data.status).toBe('generating');
 
       // Resolve the pending generation so it doesn't leak
+      // (route now calls claudeGenerate twice: summary + plan)
       resolveGenerate?.('done');
+      await tick();
+      resolveGenerate?.('plan done');
       await tick();
 
       // Restore
@@ -232,7 +241,8 @@ describe('productions routes', () => {
         method: 'POST',
       });
 
-      // Wait for background async to complete
+      // Wait for background async to complete (summary + plan generation = 2 claudeGenerate calls)
+      await tick();
       await tick();
 
       expect(deps.productionsService.writeSummary).toHaveBeenCalledTimes(1);
@@ -241,10 +251,13 @@ describe('productions routes', () => {
       expect(callArgs[1].summary).toBe(
         'The bot is focused on writing articles about technology trends.'
       );
+      expect(callArgs[1].plan).toBe(
+        'The bot is focused on writing articles about technology trends.'
+      );
       expect(callArgs[1].generatedAt).toBeTruthy();
 
-      // Verify prompt contains key context
-      expect(mockClaudeGenerate).toHaveBeenCalledTimes(1);
+      // Verify prompts: 1st = summary, 2nd = plan
+      expect(mockClaudeGenerate).toHaveBeenCalledTimes(2);
       const prompt = mockClaudeGenerate.mock.calls[0][0] as string;
       expect(prompt).toContain('TestBot');
       expect(prompt).toContain('Productions Stats');
@@ -612,7 +625,11 @@ describe('productions routes', () => {
         readGoals: () => '- Goal 1',
         appendDailyMemory: mock(() => {}),
       };
-      deps.botManager = { getSoulLoader: () => mockSoulLoader } as any;
+      deps.botManager = {
+        getSoulLoader: () => mockSoulLoader,
+        getKarmaService: () => undefined,
+        getActivityStream: () => undefined,
+      } as any;
 
       const app = new Hono();
       app.route('/api/productions', freshModule.productionsRoutes(deps));
@@ -760,7 +777,11 @@ describe('productions routes', () => {
         readGoals: () => '- Goal 1',
         appendDailyMemory: mock(() => {}),
       };
-      deps.botManager = { getSoulLoader: () => mockSoulLoader } as any;
+      deps.botManager = {
+        getSoulLoader: () => mockSoulLoader,
+        getKarmaService: () => undefined,
+        getActivityStream: () => undefined,
+      } as any;
 
       const app = new Hono();
       app.route('/api/productions', freshModule.productionsRoutes(deps));
@@ -848,6 +869,8 @@ describe('productions routes', () => {
       };
       deps.botManager = {
         getSoulLoader: () => mockSoulLoader,
+        getKarmaService: () => undefined,
+        getActivityStream: () => undefined,
       } as any;
 
       const app = new Hono();

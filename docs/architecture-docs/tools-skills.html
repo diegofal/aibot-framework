@@ -824,6 +824,28 @@
             </div>
           </div>
 
+          <!-- create_agent -->
+          <div class="tool-card">
+            <h4 class="tool-name">create_agent</h4>
+            <div class="tool-desc">Propose the creation of a new agent in the ecosystem. The proposal is stored and must be approved by a human in the web dashboard before the agent is created. Agents are created disabled with no token &mdash; human starts them when ready.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>agent_id</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Unique ID (3-40 chars, lowercase, starts with letter)</span></li>
+                <li><code>name</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Display name</span></li>
+                <li><code>role</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; What this agent does</span></li>
+                <li><code>personality_description</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Detailed personality (min 50 chars) for soul generation</span></li>
+                <li><code>skills</code> <span class="param-type">array</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Skill IDs to assign</span></li>
+                <li><code>justification</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Why this agent is needed (min 20 chars)</span></li>
+                <li><code>emoji</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Optional emoji</span></li>
+                <li><code>language</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Soul generation language (default: Spanish)</span></li>
+                <li><code>model</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Optional LLM model override</span></li>
+                <li><code>llm_backend</code> <span class="param-type">string</span> <span class="param-desc">&mdash; "ollama" or "claude-cli"</span></li>
+                <li><code>agent_loop</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Optional { mode, every }</span></li>
+              </ul>
+            </div>
+          </div>
+
           <!-- improve -->
           <div class="tool-card">
             <h4 class="tool-name">improve</h4>
@@ -912,6 +934,20 @@
 
         <p>Dynamic tools support per-bot scoping &mdash; a tool can be available to all bots or restricted to the bot that created it.</p>
 
+        <h3 id="agent-proposals">Agent Self-Creation Proposals</h3>
+
+        <p>Similarly, agents can propose the creation of entirely new agents using the <code>create_agent</code> tool. The workflow mirrors dynamic tools:</p>
+
+        <ol style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px;">
+          <li>An agent identifies a gap in the ecosystem and calls <code>create_agent</code> with the new agent's ID, name, role, personality, skills, and justification</li>
+          <li>Validation checks: ID format, reserved names, duplicates, per-bot limits, total agent cap</li>
+          <li>The proposal is stored in <code>AgentProposalStore</code> with status <span class="badge badge-medium">PENDING</span></li>
+          <li>A human reviews the proposal in the <strong>Agent Proposals</strong> dashboard page</li>
+          <li>On approval: a <code>BotConfig</code> entry is created (disabled, no token), soul directory is initialized, and AI soul generation is attempted via Claude CLI</li>
+          <li>The human starts the new agent from the Agents page when ready</li>
+        </ol>
+
+        <p>Safety limits: max 20 total agents (configurable), max 3 pending proposals per bot, strict ID validation, reserved name protection.</p>
 
         <!-- ============================================================ -->
         <!--  MCP SECTION                                                   -->
@@ -1246,7 +1282,7 @@ Agent Edit UI → Per-bot skill enable/disable (BotConfig.disabledSkills[])</cod
             </tr>
             <tr>
               <td><code>src/core/external-tool-adapter.ts</code></td>
-              <td>Adapts TSC ToolHandler signature to framework Tool interface with namespaced names</td>
+              <td>Adapts TSC ToolHandler signature to framework Tool interface with namespaced names. Optional <code>cronDeps</code> parameter wires <code>ctx.cron.add/remove</code> to real <code>CronService</code> (enables reminders skill scheduling).</td>
             </tr>
             <tr>
               <td><code>src/bot/tool-registry.ts</code></td>

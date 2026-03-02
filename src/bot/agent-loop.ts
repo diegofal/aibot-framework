@@ -393,19 +393,23 @@ export class AgentLoop {
         const planSummary = detail.plan.join('; ').slice(0, 200);
         const isRepetitive = isRepetitiveAction(schedule.recentActions, planSummary);
         if (isRepetitive) {
-          this.karmaService.addEvent(
+          const reason = `Repeated action: ${planSummary.slice(0, 80)}`;
+          this.karmaService.addEvent(botId, -2, reason, 'agent-loop');
+          this.ctx.activityStream?.publish({
+            type: 'karma:change',
             botId,
-            -2,
-            `Repeated action: ${planSummary.slice(0, 80)}`,
-            'agent-loop'
-          );
+            timestamp: Date.now(),
+            data: { delta: -2, reason, source: 'agent-loop' },
+          });
         } else {
-          this.karmaService.addEvent(
+          const reason = `Novel action: ${planSummary.slice(0, 80)}`;
+          this.karmaService.addEvent(botId, 1, reason, 'agent-loop');
+          this.ctx.activityStream?.publish({
+            type: 'karma:change',
             botId,
-            1,
-            `Novel action: ${planSummary.slice(0, 80)}`,
-            'agent-loop'
-          );
+            timestamp: Date.now(),
+            data: { delta: 1, reason, source: 'agent-loop' },
+          });
         }
       }
 
@@ -993,39 +997,7 @@ export class AgentLoop {
       });
     }
 
-    // Bridge tool events to activity stream
-    if (this.ctx.activityStream) {
-      const stream = this.ctx.activityStream;
-      executor.on('tool:start', (e) =>
-        stream.publish({
-          type: 'tool:start',
-          botId,
-          timestamp: e.timestamp,
-          data: { toolName: e.toolName, args: e.args },
-        })
-      );
-      executor.on('tool:end', (e) =>
-        stream.publish({
-          type: 'tool:end',
-          botId,
-          timestamp: e.timestamp,
-          data: {
-            toolName: e.toolName,
-            success: e.success,
-            durationMs: e.durationMs,
-            result: e.result.slice(0, 300),
-          },
-        })
-      );
-      executor.on('tool:error', (e) =>
-        stream.publish({
-          type: 'tool:error',
-          botId,
-          timestamp: e.timestamp,
-          data: { toolName: e.toolName, error: e.error.slice(0, 300), phase: e.phase },
-        })
-      );
-    }
+    // Tool events are auto-bridged to activity stream inside ToolExecutor constructor
 
     // Tool pre-selection: narrow executor tools based on planner's category picks
     let executorDefs = defs;

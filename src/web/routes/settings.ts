@@ -204,6 +204,7 @@ export function settingsRoutes(deps: {
       try {
         const client = pool.addServer(serverConfig);
         await client.connect();
+        deps.botManager?.getToolRegistry().registerMcpTools();
         deps.logger.info({ name: entry.name }, 'MCP server added and connected via Settings UI');
       } catch (err) {
         deps.logger.warn({ name: entry.name, err }, 'MCP server added but connect failed');
@@ -228,6 +229,7 @@ export function settingsRoutes(deps: {
     const pool = deps.botManager?.getMcpClientPool();
     if (pool) {
       await pool.removeServer(name);
+      deps.botManager?.getToolRegistry().registerMcpTools();
       deps.logger.info({ name }, 'MCP server removed via Settings UI');
     }
 

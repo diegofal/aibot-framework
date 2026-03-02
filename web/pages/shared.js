@@ -44,6 +44,13 @@ export function escapeHtml(str) {
   return _div.innerHTML;
 }
 
+export function renderContent(content, filename) {
+  if (filename?.endsWith('.md') && window.marked) {
+    return `<div class="md-preview">${marked.parse(content)}</div>`;
+  }
+  return `<pre>${escapeHtml(content)}</pre>`;
+}
+
 export function timeAgo(isoOrDate, future = false) {
   const d = new Date(isoOrDate);
   const diff = future ? d - Date.now() : Date.now() - d;
@@ -78,7 +85,7 @@ export async function previewFile(botId, path) {
   modal.style.maxWidth = '700px';
   showModal(`
     <div class="modal-title">${escapeHtml(data.path)}${sizeStr}</div>
-    <div class="file-preview-content"><pre>${escapeHtml(data.content)}</pre></div>
+    <div class="file-preview-content">${renderContent(data.content, data.path || path)}</div>
     <div class="modal-actions"><button class="btn" id="file-preview-close">Close</button></div>
   `);
   document.getElementById('file-preview-close')?.addEventListener('click', closeModal);

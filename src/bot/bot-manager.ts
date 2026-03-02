@@ -309,6 +309,8 @@ export class BotManager {
     this.toolRegistry.initializeAll(
       () => this.collaborationManager,
       () => ({
+        isTargetAvailable: (targetBotId: string) =>
+          this.collaborationManager.isTargetAvailable(targetBotId),
         discoverAgents: (excludeBotId: string) =>
           this.collaborationManager.discoverAgents(excludeBotId),
         collaborationStep: (
@@ -906,6 +908,11 @@ export class BotManager {
 
   getDynamicToolRegistry() {
     return this.toolRegistry.getDynamicToolRegistry();
+  }
+
+  // Agent proposals (for web API)
+  getAgentProposalStore() {
+    return this.toolRegistry.getAgentProposalStore();
   }
 
   async initializeExternalSkills(): Promise<void> {

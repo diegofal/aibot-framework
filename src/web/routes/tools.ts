@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import type { DynamicToolRegistry } from '../../bot/dynamic-tool-registry';
+import { TOOL_TO_CATEGORY } from '../../bot/tool-registry';
 import type { Logger } from '../../logger';
+import { parseMcpToolName } from '../../mcp/tool-adapter';
 import type { DynamicToolStore } from '../../tools/dynamic-tool-store';
 
 export function toolsRoutes(deps: {
@@ -18,31 +20,45 @@ export function toolsRoutes(deps: {
       name: string;
       description: string;
       parameters: Record<string, unknown>;
-      source: 'built-in' | 'dynamic';
+      source: 'built-in' | 'dynamic' | 'mcp';
       status?: string;
+      category?: string;
     }> = [];
 
-    // Built-in tools from ToolRegistry
+    // Registry tools (built-in + MCP) from ToolRegistry
     if (deps.botManager) {
       const toolRegistry = deps.botManager.getToolRegistry();
       const definitions = toolRegistry.getDefinitions();
       for (const def of definitions) {
-        result.push({
-          name: def.function.name,
-          description: def.function.description,
-          parameters: def.function.parameters,
-          source: 'built-in',
-        });
+        const name = def.function.name;
+        const cat = TOOL_TO_CATEGORY.get(name);
+        if (cat === 'mcp') {
+          const parsed = parseMcpToolName(name);
+          result.push({
+            name,
+            description: def.function.description,
+            parameters: def.function.parameters,
+            source: 'mcp',
+            category: parsed?.prefix,
+          });
+        } else {
+          result.push({
+            name,
+            description: def.function.description,
+            parameters: def.function.parameters,
+            source: 'built-in',
+          });
+        }
       }
     }
 
     // Dynamic tools from DynamicToolStore
     const dynamicTools = deps.store.list();
-    // Track built-in names to avoid duplicates (approved dynamic tools are also in ToolRegistry)
-    const builtInNames = new Set(result.map((t) => t.name));
+    // Track registry names to avoid duplicates (approved dynamic tools are also in ToolRegistry)
+    const registryNames = new Set(result.map((t) => t.name));
 
     for (const dt of dynamicTools) {
-      if (builtInNames.has(dt.name)) {
+      if (registryNames.has(dt.name)) {
         // Already listed as built-in (approved dynamic tool) — update source to dynamic
         const existing = result.find((t) => t.name === dt.name);
         if (existing) {

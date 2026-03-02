@@ -15,6 +15,7 @@ export async function renderToolRunner(el) {
   }
 
   const builtIn = tools.filter((t) => t.source === 'built-in');
+  const mcp = tools.filter((t) => t.source === 'mcp');
   const dynamic = tools.filter((t) => t.source === 'dynamic');
 
   el.innerHTML = `
@@ -51,6 +52,9 @@ export async function renderToolRunner(el) {
     const filteredBuiltIn = builtIn.filter(
       (t) => t.name.toLowerCase().includes(lower) || t.description.toLowerCase().includes(lower)
     );
+    const filteredMcp = mcp.filter(
+      (t) => t.name.toLowerCase().includes(lower) || t.description.toLowerCase().includes(lower)
+    );
     const filteredDynamic = dynamic.filter(
       (t) => t.name.toLowerCase().includes(lower) || t.description.toLowerCase().includes(lower)
     );
@@ -69,6 +73,37 @@ export async function renderToolRunner(el) {
           <div style="font-weight:500;font-size:13px">${escapeHtml(t.name)}</div>
           <div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.description.slice(0, 80))}</div>
         </div>`;
+      }
+    }
+
+    if (filteredMcp.length > 0) {
+      html +=
+        '<div style="padding:6px 10px;font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">MCP Servers</div>';
+      // Group by category (server prefix)
+      const byServer = {};
+      for (const t of filteredMcp) {
+        const key = t.category || 'unknown';
+        if (!byServer[key]) byServer[key] = [];
+        byServer[key].push(t);
+      }
+      const sortedServers = Object.keys(byServer).sort();
+      for (const server of sortedServers) {
+        const serverTools = byServer[server];
+        html += `<div style="padding:4px 10px;font-size:11px;display:flex;align-items:center;gap:6px">
+          <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>
+          <span style="color:var(--text);font-weight:500">${escapeHtml(server)}</span>
+          <span style="color:var(--text-dim)">${serverTools.length}</span>
+        </div>`;
+        for (const t of serverTools) {
+          const active =
+            selectedTool && selectedTool.name === t.name
+              ? ' style="background:var(--bg-hover);border-left:3px solid var(--accent);padding-left:22px"'
+              : ' style="padding-left:22px"';
+          html += `<div class="tool-list-item" data-name="${escapeHtml(t.name)}"${active}>
+            <div style="font-weight:500;font-size:13px">${escapeHtml(t.name)}</div>
+            <div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.description.slice(0, 80))}</div>
+          </div>`;
+        }
       }
     }
 
@@ -93,7 +128,7 @@ export async function renderToolRunner(el) {
       }
     }
 
-    if (filteredBuiltIn.length === 0 && filteredDynamic.length === 0) {
+    if (filteredBuiltIn.length === 0 && filteredMcp.length === 0 && filteredDynamic.length === 0) {
       html =
         '<div style="padding:16px;color:var(--text-dim);text-align:center">No tools match your search.</div>';
     }
@@ -147,7 +182,7 @@ export async function renderToolRunner(el) {
     toolDetail.innerHTML = `
       <div class="detail-card">
         <div class="form-section-title">${escapeHtml(tool.name)}
-          <span class="badge ${tool.source === 'built-in' ? 'badge-running' : 'badge-pending'}" style="font-size:10px">${escapeHtml(tool.source)}</span>
+          <span class="badge ${tool.source === 'mcp' ? 'badge-mcp' : tool.source === 'built-in' ? 'badge-running' : 'badge-pending'}" style="font-size:10px">${tool.source === 'mcp' ? 'mcp: ' + escapeHtml(tool.category || 'unknown') : escapeHtml(tool.source)}</span>
           ${tool.status ? `<span class="badge badge-${tool.status === 'approved' ? 'running' : tool.status === 'pending' ? 'pending' : 'stopped'}" style="font-size:10px">${escapeHtml(tool.status)}</span>` : ''}
         </div>
         <p style="margin-bottom:16px;color:var(--text-dim)">${escapeHtml(tool.description)}</p>

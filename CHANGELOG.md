@@ -3,6 +3,51 @@
 ## Unreleased
 
 ### Added
+- **MMR diversity re-ranking for memory search** — Opt-in Maximal Marginal Relevance (MMR) post-processing step in `hybridSearch()`. When enabled (`soul.search.mmr.enabled: true`), re-ranks results to balance relevance with diversity, reducing near-duplicate chunks that waste context slots. Configurable lambda parameter (0 = max diversity, 1 = max relevance, default 0.7). Algorithm transplanted from OpenClaw.
+- **`create_agent` tool — Agent self-creation proposals** — Agents can now propose new agents for the ecosystem via the `create_agent` tool. Proposals include agent ID, name, role, personality description, skills, and justification. All proposals require human approval in the web dashboard before creation.
+- **Agent Proposals dashboard page** — New `#/agent-proposals` page with pending proposal cards (approve/reject), resolved history table, and badge polling for pending count in the sidebar.
+- **Agent Proposals web API** — `GET /api/agent-proposals` (list), `GET /api/agent-proposals/count` (badge), `POST /:id/approve` (create agent + generate soul), `POST /:id/reject`, `DELETE /:id`.
+- **Approval pipeline** — Approving a proposal creates a `BotConfig` entry (disabled, no token), soul directory with `IDENTITY.md`, attempts AI soul generation via Claude CLI (with graceful fallback), and saves baseline backups.
+- **`AgentProposalStore`** — Disk-based persistent store for proposals at `data/agent-proposals/{uuid}/meta.json`, following the `DynamicToolStore` pattern.
+- **Config: `agentProposals`** — New config section: `enabled`, `storePath`, `maxAgents` (default 20), `maxProposalsPerBot` (default 3).
+
+### Fixed
+- **Karma/Activity consistency** — Tool errors now appear in both Karma and Activity event log. Previously, only ToolExecutor instances created by the agent-loop bridged events to the activity stream; conversation pipeline and collaboration executors were invisible. Auto-bridging is now built into the ToolExecutor constructor, so all instances publish `tool:start`, `tool:end`, and `tool:error` to the activity stream automatically.
+- **Broken skills (`daily-priorities`, `reminders`, `task-tracker`)** — These skills existed in `./src/skills` with valid `skill.json` manifests but were never discovered because `skillsFolders.paths` only pointed to `./productions/tsc/src/skills`. Added `./src/skills` to the configured paths. The `reminders` skill's `ctx.cron.add/remove` calls are now wired to the real `CronService` instead of a no-op, enabling actual job scheduling.
+
+### Added
+- **`karma:change` activity event type** — Non-tool karma changes (production evaluations, agent-loop novel/repetitive action tracking) are now published to the activity stream as `karma:change` events. The Activity UI renders them with a yellow badge.
+- **Production evaluation → Activity stream** — Approving/rejecting a production now publishes a `karma:change` event to the activity stream with delta, reason, and file path.
+
+### Changed
+- **External tool adapter: real cron support** — `adaptExternalTool()` accepts optional `cronDeps` with a `CronService` reference. When provided, `ctx.cron.add()` creates actual scheduled jobs (with proper `chatId`/`botId` from ToolExecutor context injection) and `ctx.cron.remove()` looks up jobs by name or ID before removing.
+
+### Added
+- **Productions: per-directory auto-numbered filenames** — New files created by bots via `file_write` are automatically renamed with a `01_`, `02_`, etc. prefix for chronological ordering within each directory. Already-numbered and excluded files (INDEX.md, changelog.jsonl, etc.) are skipped. New methods: `getNextNumber()`, `renumberFile()`.
+- **Productions: richer INDEX.md descriptions** — INDEX.md now shows "Title -- First sentence" descriptions (up to 120 chars) extracted from file content instead of just the first heading. Humanized filename fallback strips number prefixes.
+- **Productions: AI-generated strategy/plan section in INDEX.md** — The "Generate Summary" button now also generates a strategic plan section analyzing themes, gaps, and next priorities. The plan is cached in `summary.json` and rendered as "Strategy & Plan" in INDEX.md.
+- **Productions: coherence checking** — New `checkCoherence()` method performs heuristic checks (template ratio, content size, heading/paragraph balance) without LLM. New `GET /:botId/:id/coherence` API route. Dashboard shows an "Incoherent" badge on files that fail checks.
+- **Productions: archive from dashboard** — New `POST /:botId/:id/archive` API route exposes the existing `archiveFile()` method to the web. Dashboard file viewer now has an "Archive" button that shows a modal for entering an archive reason, then moves the file to `archived/`.
+- **Tool Runner: MCP tools separated by server** — MCP tools now appear in their own "MCP Servers" section in the Tool Runner sidebar, sub-grouped by server prefix (e.g., `github`, `everything`). The `/api/tools/all` endpoint returns `source: 'mcp'` and `category` (server prefix) for MCP tools. Detail view shows a distinct `mcp: <server>` badge.
+- **Productions explorer: Expand all / Collapse all buttons** — Both the all-trees and bot-level explorer views now have Expand all / Collapse all buttons. Expand state is persisted to `localStorage` per view (all-trees and per-bot) so it survives page navigations and refreshes.
+
+### Fixed
+- **Collaboration tools crash in autonomous mode** — `collaborate send` crashed with `handler.isTargetAvailable is not a function` because the handler object wired in `bot-manager.ts` was missing `isTargetAvailable`. Added the missing property to the collaborate handler. This restores all bot-to-bot communication in autonomous mode (`collaborate send`, `delegate_to_bot` fallback).
+- **`signal_completion` tool never registered** — `signal_completion` was listed in `TOOL_CATEGORIES.production` but never imported or instantiated in `tool-registry.ts`. Now registered alongside other production tools when `productionsService` is available.
+- **Productions explorer: auto-expand all directories** — In all-trees view (`#/productions`), bot folders AND all subdirectories are now auto-expanded so files are visible immediately. In bot-level view, auto-expand threshold raised from 5 to 20 dirs to cover bots with many subdirectories.
+- **Productions explorer: INDEX.md now visible in tree** — `INDEX.md` was incorrectly excluded from the file tree display. Added a separate `TREE_EXCLUDES` set (without `INDEX.md`) for tree rendering while keeping `INDEX_EXCLUDES` (with `INDEX.md`) for `rebuildIndex()`.
+- **MCP tools not visible after dynamic add/remove via Settings UI** — `registerMcpTools()` is now idempotent: it removes existing MCP tool entries before re-registering, so calling it after add/remove doesn't duplicate tools. The Settings route now calls `registerMcpTools()` after POST (add server) and DELETE (remove server), so MCP tools appear/disappear in the Tool Runner immediately without requiring a restart.
+- **Graceful handling of collaborate tool when target bot is offline** — When a bot tries to collaborate with an offline target, the tool now returns a clean `{ success: false }` with an actionable message ("not currently running, use discover") instead of throwing an error that gets caught and logged as ERROR. Added `isTargetAvailable()` method to `CollaborationManager` and a pre-check in the collaborate tool's send action.
+- **Productions explorer: directories now visible and clickable** — `matchesFilters()` no longer hides directories when no search/status filters are active, fixing two bugs: root-level folders not appearing and folder clicks not expanding/collapsing.
+- **Productions explorer: cross-bot expand key collision** — In all-bots view, expanding `cultural/` in bot A no longer affects `cultural/` in bot B. Expand keys now use `botId/path` composite keys for non-top-level directories.
+
+### Added
+- **Markdown preview in Productions** — Files with `.md` extension are now rendered as formatted HTML (headings, lists, code blocks, tables, blockquotes) instead of raw text. Applies to file viewer in both explorer views, detail modal, and shared file preview modal. Uses `marked` library via CDN. Non-markdown files continue to render as `<pre>` blocks.
+
+### Changed
+- **Unified Activity & Logs into a single dashboard page** — The separate Logs page has been merged into the Activity page as a "System Logs" tab alongside the existing "Events" tab. Both WebSocket streams run in parallel so neither loses data while viewing the other tab. Pause/Resume and Clear act on the active tab. The sidebar nav no longer shows a separate "Logs" link, and `#/logs` redirects to `#/activity?tab=logs`.
+
+### Added
 - **MCP Agent Collaboration** — External MCP agents can now participate in the collaboration system:
   - `CollaborationManager.collaborationStep()` detects external MCP agents (registered via `McpAgentBridge` with `mcp-external` skill) and routes messages through `McpAgentBridge.callTool()` instead of the internal LLM path.
   - Supports `collaborate`, `chat`, `message`, or `ask` tool names on the external agent, with descriptive fallback when no suitable tool is available.
@@ -16,15 +61,12 @@
   - Config persistence: changes are written to `config.json` for persistence across restarts.
   - Settings UI card shows server list with name, transport type, and status badge (connected/disconnected/error), plus add/remove controls.
   - 10 new tests covering CRUD operations, validation, persistence, and error cases.
-- **Productions File Explorer UI** — Replaced flat table view with an interactive file explorer for bot productions:
-  - Tree sidebar with expand/collapse directories, status dots (approved/rejected/unreviewed), text and status filters
-  - Content panel with file preview, inline evaluation (approve/reject/rate), and discussion thread
-  - Bot selector dropdown to switch between bots without navigating back
-  - New backend endpoints: `GET /:botId/tree` (directory tree), `GET /:botId/file-content` (read by path with traversal protection)
-  - `getDirectoryTree()` and `getFileContentByPath()` methods on `ProductionsService`
-  - `TreeNode` interface in productions types
+- **Productions File Explorer UI** — Replaced flat table views with interactive file explorers:
+  - **Bot-level explorer**: tree sidebar with expand/collapse directories, status dots (approved/rejected/unreviewed), text and status filters. Content panel with file preview, inline evaluation (approve/reject/rate), and discussion thread. Bot selector dropdown to switch bots.
+  - **All-bots explorer**: main productions page shows a unified tree rooted at bot folders, with the same file viewer, evaluation, and thread capabilities. Replaces the flat "All Entries" table.
+  - New backend: `GET /:botId/tree`, `GET /:botId/file-content`, `GET /all-trees` endpoints. `getDirectoryTree()`, `getFileContentByPath()`, and `getAllDirectoryTrees()` on `ProductionsService`. `TreeNode` interface.
   - `destroyProductions()` cleanup for polling intervals on navigation
-  - Auto-expands directories when tree has 5 or fewer folders
+  - Auto-expands bot folders (all-bots view) and directories when tree has 5 or fewer folders (bot view)
   - Summary and Productions Chat sections preserved below the explorer
 - **MCP Bidirectional Interoperability** — Full Model Context Protocol support:
   - **MCP Client** (`src/mcp/client.ts`, `client-pool.ts`) — Connect to external MCP servers (GitHub, Linear, Notion, etc.) via stdio or SSE transport. Auto-reconnect, tool filtering (allow/deny lists), per-server namespacing.

@@ -11,6 +11,7 @@ import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
 import { agentLoopRoutes } from './routes/agent-loop';
+import { agentProposalRoutes } from './routes/agent-proposals';
 import { agentsRoutes } from './routes/agents';
 import { askHumanRoutes } from './routes/ask-human';
 import { askPermissionRoutes } from './routes/ask-permission';
@@ -129,6 +130,20 @@ export function startWebServer(deps: WebServerDeps): void {
         store: dynamicStore,
         registry: dynamicRegistry,
         botManager: deps.botManager,
+        logger,
+      })
+    );
+  }
+
+  // Agent proposal routes (only if enabled)
+  const agentProposalStore = deps.botManager.getAgentProposalStore();
+  if (agentProposalStore) {
+    app.route(
+      '/api/agent-proposals',
+      agentProposalRoutes({
+        store: agentProposalStore,
+        config,
+        configPath: deps.configPath,
         logger,
       })
     );

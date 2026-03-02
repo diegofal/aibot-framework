@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import type { ActivityStream } from '../bot/activity-stream';
 import type { Config } from '../config';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
@@ -131,7 +132,8 @@ export class ProductionsService {
     id: string,
     evaluation: { status: 'approved' | 'rejected'; rating?: number; feedback?: string },
     soulLoader?: SoulLoader,
-    karmaService?: KarmaService
+    karmaService?: KarmaService,
+    activityStream?: ActivityStream
   ): ProductionEntry | null {
     const dir = this.resolveDir(botId);
     const changelogPath = join(dir, 'changelog.jsonl');
@@ -162,32 +164,28 @@ export class ProductionsService {
 
     // Karma: adjust based on evaluation
     if (karmaService) {
+      let delta: number;
+      let reason: string;
       if (evaluation.status === 'rejected') {
-        karmaService.addEvent(
-          botId,
-          -10,
-          `Production rejected: "${entries[idx].path}"`,
-          'production',
-          { rating: evaluation.rating }
-        );
+        delta = -10;
+        reason = `Production rejected: "${entries[idx].path}"`;
+        karmaService.addEvent(botId, delta, reason, 'production', { rating: evaluation.rating });
       } else if (evaluation.rating != null) {
-        const delta =
-          evaluation.rating >= 4 ? (evaluation.rating === 5 ? 10 : 5) : evaluation.rating;
-        karmaService.addEvent(
-          botId,
-          delta,
-          `Production approved: "${entries[idx].path}" (rating: ${evaluation.rating}/5)`,
-          'production',
-          { rating: evaluation.rating }
-        );
+        delta = evaluation.rating >= 4 ? (evaluation.rating === 5 ? 10 : 5) : evaluation.rating;
+        reason = `Production approved: "${entries[idx].path}" (rating: ${evaluation.rating}/5)`;
+        karmaService.addEvent(botId, delta, reason, 'production', { rating: evaluation.rating });
       } else {
-        karmaService.addEvent(
-          botId,
-          3,
-          `Production approved: "${entries[idx].path}"`,
-          'production'
-        );
+        delta = 3;
+        reason = `Production approved: "${entries[idx].path}"`;
+        karmaService.addEvent(botId, delta, reason, 'production');
       }
+
+      activityStream?.publish({
+        type: 'karma:change',
+        botId,
+        timestamp: Date.now(),
+        data: { delta, reason, source: 'production', path: entries[idx].path },
+      });
     }
 
     // Write feedback to bot memory
@@ -484,11 +482,195 @@ export class ProductionsService {
     return { entries, total };
   }
 
+  /**
+   * Get the next auto-number for files in a given directory.
+   * Scans existing files for `^\d{2}_` pattern and returns next number as zero-padded string.
+   */
+  getNextNumber(botId: string, relativeDir: string): string {
+    const dir = this.resolveDir(botId);
+    const targetDir = relativeDir ? join(dir, relativeDir) : dir;
+
+    if (!existsSync(targetDir)) {
+      return '01';
+    }
+
+    let maxNum = 0;
+    try {
+      const entries = readdirSync(targetDir);
+      for (const entry of entries) {
+        const match = entry.match(/^(\d{2})_/);
+        if (match) {
+          const num = Number.parseInt(match[1], 10);
+          if (num > maxNum) maxNum = num;
+        }
+      }
+    } catch {
+      return '01';
+    }
+
+    return String(maxNum + 1).padStart(2, '0');
+  }
+
+  /**
+   * Rename a file on disk to prepend the next auto-number.
+   * Returns the new relative path. Skips if already numbered or if file is in INDEX_EXCLUDES.
+   */
+  renumberFile(botId: string, relativePath: string): string {
+    const fileName = basename(relativePath);
+
+    // Skip excluded files
+    if (ProductionsService.INDEX_EXCLUDES.has(fileName)) return relativePath;
+
+    // Skip if already numbered
+    if (/^\d{2}_/.test(fileName)) return relativePath;
+
+    const relDir = dirname(relativePath) === '.' ? '' : dirname(relativePath);
+    const nextNum = this.getNextNumber(botId, relDir);
+    const numberedName = `${nextNum}_${fileName}`;
+    const newRelPath = relDir ? `${relDir}/${numberedName}` : numberedName;
+
+    const dir = this.resolveDir(botId);
+    const srcPath = join(dir, relativePath);
+    const destPath = join(dir, newRelPath);
+
+    if (!existsSync(srcPath)) return relativePath;
+
+    try {
+      renameSync(srcPath, destPath);
+      this.logger.debug({ botId, from: relativePath, to: newRelPath }, 'Auto-numbered file');
+      return newRelPath;
+    } catch (err) {
+      this.logger.warn({ err, botId, path: relativePath }, 'Failed to auto-number file');
+      return relativePath;
+    }
+  }
+
+  /**
+   * Extract a richer description from file content.
+   * Returns "Title -- First sentence" capped at 120 chars.
+   */
+  static extractDescription(content: string): string {
+    if (!content || content.trim().length === 0) return '';
+
+    const lines = content.split('\n');
+    let title = '';
+    let firstSentence = '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      // Find first heading
+      if (!title) {
+        const headingMatch = trimmed.match(/^#{1,6}\s+(.+)$/);
+        if (headingMatch) {
+          title = headingMatch[1].trim();
+          continue;
+        }
+      }
+
+      // Skip metadata lines, bullets, sub-headings, tables, separators
+      if (title && !firstSentence) {
+        if (/^#{1,6}\s/.test(trimmed)) break; // hit another heading, stop
+        if (/^[-*+]\s/.test(trimmed)) continue; // bullet
+        if (/^\|/.test(trimmed)) continue; // table
+        if (/^[-=_*]{3,}$/.test(trimmed)) continue; // separator
+        if (/^>\s/.test(trimmed)) continue; // blockquote
+        if (/^```/.test(trimmed)) break; // code block, stop
+        if (/^(date|author|tags|category|status):/i.test(trimmed)) continue; // metadata
+
+        // Found a paragraph line — extract first sentence
+        const sentenceMatch = trimmed.match(/^(.+?[.!?])\s/);
+        firstSentence = sentenceMatch ? sentenceMatch[1] : trimmed;
+        break;
+      }
+    }
+
+    if (!title && !firstSentence) return '';
+    if (!firstSentence) return title.slice(0, 120);
+    if (!title) return firstSentence.slice(0, 120);
+
+    const combined = `${title} -- ${firstSentence}`;
+    return combined.length > 120 ? `${combined.slice(0, 117)}...` : combined;
+  }
+
+  /**
+   * Check coherence of a production file (heuristic, no LLM).
+   * Returns whether the content is coherent and a list of issues found.
+   */
+  checkCoherence(botId: string, relativePath: string): { coherent: boolean; issues: string[] } {
+    const dir = this.resolveDir(botId);
+    const fullPath = join(dir, relativePath);
+
+    if (!existsSync(fullPath)) {
+      return { coherent: false, issues: ['File not found'] };
+    }
+
+    let content: string;
+    try {
+      content = readFileSync(fullPath, 'utf-8');
+    } catch {
+      return { coherent: false, issues: ['Could not read file'] };
+    }
+
+    const issues: string[] = [];
+
+    // Check 1: Too small (< 100 chars of real content)
+    const stripped = content.replace(/\s+/g, '');
+    if (stripped.length < 100) {
+      issues.push('Content too small (less than 100 characters of real content)');
+    }
+
+    // Check 2: Template/placeholder ratio
+    const quality = ProductionsService.assessContentQuality(content);
+    if (quality.isTemplate) {
+      issues.push(
+        `High placeholder ratio (${Math.round((1 - quality.ratio) * 100)}% placeholder content)`
+      );
+    }
+
+    // Check 3: Broken structure — many headings, few paragraphs
+    const lines = content.split('\n');
+    let headingCount = 0;
+    let paragraphCount = 0;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (/^#{1,6}\s/.test(trimmed)) {
+        headingCount++;
+      } else if (
+        trimmed.length > 20 &&
+        !/^[-*+|>]/.test(trimmed) &&
+        !/^[-=_*]{3,}$/.test(trimmed)
+      ) {
+        paragraphCount++;
+      }
+    }
+    if (headingCount >= 4 && paragraphCount < headingCount) {
+      issues.push(
+        `Broken structure: ${headingCount} headings but only ${paragraphCount} content paragraphs`
+      );
+    }
+
+    return { coherent: issues.length === 0, issues };
+  }
+
   /** Files/dirs excluded from INDEX.md generation */
   private static readonly INDEX_EXCLUDES = new Set([
     'changelog.jsonl',
     'summary.json',
     'INDEX.md',
+    '.gitignore',
+    'node_modules',
+    'venv',
+    '.vercel',
+    '.git',
+  ]);
+
+  /** Files/dirs excluded from tree display (INDEX.md is shown in tree but excluded from index generation) */
+  private static readonly TREE_EXCLUDES = new Set([
+    'changelog.jsonl',
+    'summary.json',
     '.gitignore',
     'node_modules',
     'venv',
@@ -593,6 +775,12 @@ export class ProductionsService {
       '',
     ];
 
+    // Insert cached plan section from summary.json
+    const summaryData = this.readSummary(botId);
+    if (summaryData?.plan) {
+      lines.push('## Strategy & Plan', '', summaryData.plan, '');
+    }
+
     for (const key of sortedKeys) {
       const group = groups.get(key)!;
       group.sort((a, b) => a.name.localeCompare(b.name));
@@ -676,7 +864,7 @@ export class ProductionsService {
     return true;
   }
 
-  /** Get description for a file: changelog > first heading > humanized name */
+  /** Get description for a file: changelog > rich extract > humanized name */
   private getFileDescription(
     relPath: string,
     descMap: Map<string, string>,
@@ -689,22 +877,24 @@ export class ProductionsService {
       !changelogDesc.startsWith('file_write:') &&
       !changelogDesc.startsWith('file_edit:')
     ) {
-      return changelogDesc;
+      return changelogDesc.slice(0, 120);
     }
 
-    // Try first heading from markdown file
+    // Try rich description from markdown/txt file content
     try {
       if (existsSync(absPath) && (absPath.endsWith('.md') || absPath.endsWith('.txt'))) {
         const content = readFileSync(absPath, 'utf-8');
-        const heading = content.match(/^#+ (.+)$/m)?.[1];
-        if (heading) return heading.slice(0, 80);
+        const desc = ProductionsService.extractDescription(content);
+        if (desc) return desc;
       }
     } catch {
       /* skip */
     }
 
-    // Humanize filename
-    return basename(relPath, '.md')
+    // Humanize filename (strip number prefix)
+    const name = basename(relPath, '.md');
+    return name
+      .replace(/^\d{2}_/, '')
       .replace(/[-_]/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase())
       .slice(0, 60);
@@ -777,7 +967,7 @@ export class ProductionsService {
       const nodes: TreeNode[] = [];
 
       for (const name of dirEntries.sort()) {
-        if (ProductionsService.INDEX_EXCLUDES.has(name)) continue;
+        if (ProductionsService.TREE_EXCLUDES.has(name)) continue;
         const fullPath = join(current, name);
         let stat;
         try {
@@ -853,6 +1043,28 @@ export class ProductionsService {
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
     return this.parseJsonlLines(lines);
+  }
+
+  /**
+   * Get directory trees for all enabled bots, wrapped as top-level bot directories.
+   * Returns TreeNode[] where each root node is a bot folder containing its productions tree.
+   */
+  getAllDirectoryTrees(): TreeNode[] {
+    const nodes: TreeNode[] = [];
+    for (const bot of this.config.bots) {
+      if (!this.isEnabled(bot.id)) continue;
+      const children = this.getDirectoryTree(bot.id);
+      // Only include bots that have files (or at least a dir)
+      const dir = this.resolveDir(bot.id);
+      if (!existsSync(dir)) continue;
+      nodes.push({
+        name: bot.name || bot.id,
+        path: bot.id,
+        type: 'dir',
+        children,
+      });
+    }
+    return nodes;
   }
 
   getAllBotStats(): Array<

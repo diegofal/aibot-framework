@@ -19,6 +19,7 @@ const logger = createMockLogger();
 
 function createMockHandler(overrides: Partial<CollaborateHandler> = {}): CollaborateHandler {
   return {
+    isTargetAvailable: overrides.isTargetAvailable ?? (() => true),
     discoverAgents: overrides.discoverAgents ?? (() => []),
     collaborationStep:
       overrides.collaborationStep ?? (async () => ({ sessionId: 'sess-1', response: 'ok' })),
@@ -226,6 +227,47 @@ describe('collaborate tool', () => {
     const result = await tool.execute({ action: 'invalid', _botId: 'bot-1' }, logger);
     expect(result.success).toBe(false);
     expect(result.content).toContain('Unknown action');
+  });
+
+  test('returns helpful error when target bot is not running', async () => {
+    const handler = createMockHandler({ isTargetAvailable: () => false });
+    const tool = createCollaborateTool(() => handler);
+
+    const result = await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'offline-bot',
+        message: 'hello',
+        _botId: 'bot-1',
+      },
+      logger
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('offline-bot');
+    expect(result.content).toContain('not currently running');
+    expect(result.content).toContain('discover');
+  });
+
+  test('does not call collaborationStep when target is offline', async () => {
+    const stepFn = mock(async () => ({ sessionId: 'sess-1', response: 'should not reach' }));
+    const handler = createMockHandler({
+      isTargetAvailable: () => false,
+      collaborationStep: stepFn,
+    });
+    const tool = createCollaborateTool(() => handler);
+
+    await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'offline-bot',
+        message: 'hello',
+        _botId: 'bot-1',
+      },
+      logger
+    );
+
+    expect(stepFn).not.toHaveBeenCalled();
   });
 
   test('multi-turn with sessionId', async () => {

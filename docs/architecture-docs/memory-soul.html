@@ -160,6 +160,11 @@
               <td><code>initializeMemoryDb()</code>, <code>serializeEmbedding()</code>, <code>deserializeEmbedding()</code></td>
             </tr>
             <tr>
+              <td><code>mmr.ts</code></td>
+              <td>Maximal Marginal Relevance (MMR) re-ranking. Balances relevance with diversity using Jaccard text similarity. Opt-in post-processing step in the search pipeline (<code>soul.search.mmr.enabled</code>).</td>
+              <td><code>mmrRerank()</code>, <code>applyMMRToMemoryResults()</code>, <code>tokenize()</code>, <code>jaccardSimilarity()</code></td>
+            </tr>
+            <tr>
               <td><code>search.ts</code></td>
               <td>Hybrid search combining vector similarity (cosine) and keyword matching (FTS5/BM25). Bilingual stop-word filtering (Spanish + English). Core Memory results boosted by importance weighting.</td>
               <td><code>hybridSearch()</code></td>
@@ -278,7 +283,14 @@ score = 1 / (1 + |bm25_rank|)</code></pre>
         <p>The final score is a weighted combination of both search paths, controlled by <code>config.vectorWeight</code> and <code>config.keywordWeight</code>:</p>
         <pre><code>finalScore = vectorWeight * vectorScore + keywordWeight * keywordScore</code></pre>
 
-        <p>Results are filtered by <code>minScore</code>, sorted descending, and limited to <code>maxResults</code>. Core Memory entries with <code>importance >= 7</code> are prioritized above regular results. Lower-importance core entries fill remaining slots.</p>
+        <p>Results are filtered by <code>minScore</code>, sorted descending, and limited to <code>maxResults</code>.</p>
+
+        <h3>MMR Diversity Re-ranking (Opt-in)</h3>
+        <p>After score-based ranking and before Core Memory merge, an optional <strong>Maximal Marginal Relevance (MMR)</strong> step can re-rank results to reduce near-duplicate chunks. Enabled via <code>soul.search.mmr.enabled: true</code> in config.</p>
+        <p>MMR iteratively selects items that maximize: <code>&lambda; &times; relevance &minus; (1&minus;&lambda;) &times; max_similarity_to_selected</code>. Text similarity is computed using Jaccard distance on tokenized content. The <code>lambda</code> parameter (default 0.7) controls the balance: higher values favor relevance, lower values favor diversity.</p>
+        <pre><code>Pipeline: vector + keyword &rarr; score merge &rarr; build results &rarr; <strong>MMR</strong> &rarr; core memory merge &rarr; return</code></pre>
+
+        <p>Core Memory entries with <code>importance >= 7</code> are prioritized above regular results. Lower-importance core entries fill remaining slots.</p>
 
         <h3>Stop Words</h3>
         <p>Bilingual filtering removes common words in both Spanish and English before FTS5 queries. Only tokens with 3+ characters pass through.</p>

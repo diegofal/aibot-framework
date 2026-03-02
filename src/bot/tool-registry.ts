@@ -5,7 +5,7 @@ import {
   discoverSkillDirs,
   loadExternalSkill,
 } from '../core/external-skill-loader';
-import { adaptExternalTool } from '../core/external-tool-adapter';
+import { type ExternalToolCronDeps, adaptExternalTool } from '../core/external-tool-adapter';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { adaptAllMcpTools } from '../mcp/tool-adapter';
@@ -13,6 +13,7 @@ import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import { ToolExecutor } from './tool-executor';
 import type { BotContext } from './types';
 
+import { AgentProposalStore } from '../tools/agent-proposal-store';
 import { createArchiveFileTool } from '../tools/archive-file';
 import { type AskHumanDeps, createAskHumanTool } from '../tools/ask-human';
 import { type AskPermissionDeps, createAskPermissionTool } from '../tools/ask-permission';
@@ -24,6 +25,7 @@ import {
 } from '../tools/calendar';
 import { createCollaborateTool } from '../tools/collaborate';
 import { createCoreMemoryTools } from '../tools/core-memory';
+import { createCreateAgentTool } from '../tools/create-agent';
 import { createCreateToolTool } from '../tools/create-tool';
 import { createCronTool } from '../tools/cron';
 import { createDatetimeTool } from '../tools/datetime';
@@ -41,6 +43,7 @@ import { createProcessTool } from '../tools/process';
 import { createProductionLogTool } from '../tools/production-log';
 import { createRecallMemoryTool } from '../tools/recall-memory';
 import { createRedditHotTool, createRedditReadTool, createRedditSearchTool } from '../tools/reddit';
+import { createSignalCompletionTool } from '../tools/signal-completion';
 import {
   createSaveMemoryTool,
   createUpdateIdentityTool,
@@ -103,6 +106,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'delegate_to_bot',
     'collaborate',
     'moltbook_register',
+    'create_agent',
   ],
   browser: ['browser'],
   production: ['read_production_log', 'archive_file', 'create_tool', 'signal_completion'],
@@ -126,6 +130,7 @@ export const TOOL_TO_CATEGORY: Map<string, ToolCategory> = (() => {
 export class ToolRegistry {
   private dynamicToolRegistry: DynamicToolRegistry | null = null;
   private dynamicToolStore: DynamicToolStore | null = null;
+  private agentProposalStore: AgentProposalStore | null = null;
   /** Loaded external skills metadata (for per-bot filtering + web API) */
   private externalSkills: LoadedExternalSkill[] = [];
   /** Maps namespaced tool name → originating skill ID */
@@ -379,7 +384,10 @@ export class ToolRegistry {
     if (this.ctx.productionsService) {
       tools.push(createProductionLogTool(this.ctx.productionsService));
       tools.push(createArchiveFileTool(this.ctx.productionsService));
-      logger.info('Production tools initialized (read_production_log, archive_file)');
+      tools.push(createSignalCompletionTool());
+      logger.info(
+        'Production tools initialized (read_production_log, archive_file, signal_completion)'
+      );
     }
 
     // Moltbook registration tool
@@ -395,6 +403,21 @@ export class ToolRegistry {
       logger.info('create_tool registered');
       // Load approved dynamic tools (adds to ctx.tools[] via dynamicToolRegistry)
       this.dynamicToolRegistry.initialize();
+    }
+
+    // Agent proposals (create_agent tool)
+    const apConfig = config.agentProposals;
+    if (apConfig?.enabled) {
+      this.agentProposalStore = new AgentProposalStore(apConfig.storePath);
+      tools.push(
+        createCreateAgentTool(
+          this.agentProposalStore,
+          config.bots,
+          apConfig.maxAgents,
+          apConfig.maxProposalsPerBot
+        )
+      );
+      logger.info('create_agent registered');
     }
 
     // Populate definitions
@@ -416,10 +439,33 @@ export class ToolRegistry {
   registerMcpTools(): void {
     const { logger } = this.ctx;
     const pool = this.ctx.mcpClientPool;
-    if (!pool || pool.connectedCount === 0) return;
+
+    // Remove existing MCP tools first (idempotent re-registration)
+    const oldMcpNames = TOOL_CATEGORIES.mcp;
+    if (oldMcpNames.length > 0) {
+      const oldSet = new Set(oldMcpNames);
+      this.ctx.tools = this.ctx.tools.filter((t) => !oldSet.has(t.definition.function.name));
+      for (const name of oldMcpNames) {
+        TOOL_TO_CATEGORY.delete(name);
+      }
+      TOOL_CATEGORIES.mcp = [];
+    }
+
+    if (!pool || pool.connectedCount === 0) {
+      // Re-sync definitions (MCP tools were removed)
+      this.ctx.toolDefinitions.length = 0;
+      this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
+      logger.info('MCP tools cleared (no connected servers)');
+      return;
+    }
 
     const mcpTools = adaptAllMcpTools(pool, logger);
-    if (mcpTools.length === 0) return;
+    if (mcpTools.length === 0) {
+      this.ctx.toolDefinitions.length = 0;
+      this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
+      logger.info('MCP tools cleared (no tools from connected servers)');
+      return;
+    }
 
     // Track MCP tool names in the category for pre-selection
     const mcpToolNames: string[] = [];
@@ -533,6 +579,11 @@ export class ToolRegistry {
           Object.assign(skillConfig, frameworkConfig);
         }
 
+        // Build cron deps if CronService is available (enables reminders skill, etc.)
+        const cronDeps: ExternalToolCronDeps | undefined = this.ctx.cronService
+          ? { cronService: this.ctx.cronService }
+          : undefined;
+
         let toolCount = 0;
         for (const toolDef of manifest.tools) {
           const handler = handlers[toolDef.name];
@@ -544,7 +595,8 @@ export class ToolRegistry {
             handler,
             skillConfig,
             skillState,
-            logger
+            logger,
+            cronDeps
           );
 
           this.ctx.tools.push(tool);
@@ -712,6 +764,13 @@ export class ToolRegistry {
    */
   getDynamicToolRegistry(): DynamicToolRegistry | null {
     return this.dynamicToolRegistry;
+  }
+
+  /**
+   * Get the agent proposal store (for web API).
+   */
+  getAgentProposalStore(): AgentProposalStore | null {
+    return this.agentProposalStore;
   }
 
   /**

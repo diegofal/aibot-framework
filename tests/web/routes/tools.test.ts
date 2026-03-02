@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotManager } from '../../../src/bot';
 import type { DynamicToolRegistry } from '../../../src/bot/dynamic-tool-registry';
+import { TOOL_CATEGORIES, TOOL_TO_CATEGORY } from '../../../src/bot/tool-registry';
 import type { Logger } from '../../../src/logger';
 import { DynamicToolStore } from '../../../src/tools/dynamic-tool-store';
 import type { Tool, ToolDefinition } from '../../../src/tools/types';
@@ -64,8 +65,46 @@ const mockFailTool: Tool = {
   },
 };
 
+const mockMcpEverythingTool: Tool = {
+  definition: {
+    type: 'function',
+    function: {
+      name: 'mcp_everything_echo',
+      description: '[MCP:everything] Echoes input',
+      parameters: {
+        type: 'object',
+        properties: { input: { type: 'string', description: 'Input text' } },
+        required: ['input'],
+      },
+    },
+  },
+  execute: async (args) => ({ success: true, content: `echo: ${args.input}` }),
+};
+
+const mockMcpGithubTool: Tool = {
+  definition: {
+    type: 'function',
+    function: {
+      name: 'mcp_github_create_issue',
+      description: '[MCP:github] Create a GitHub issue',
+      parameters: {
+        type: 'object',
+        properties: { title: { type: 'string', description: 'Issue title' } },
+        required: ['title'],
+      },
+    },
+  },
+  execute: async (args) => ({ success: true, content: `created: ${args.title}` }),
+};
+
 function createMockToolRegistry() {
-  const tools = [mockDatetimeTool, mockEchoTool, mockFailTool];
+  const tools = [
+    mockDatetimeTool,
+    mockEchoTool,
+    mockFailTool,
+    mockMcpEverythingTool,
+    mockMcpGithubTool,
+  ];
   const definitions = tools.map((t) => t.definition);
   return {
     getTools: () => tools,
@@ -129,10 +168,22 @@ describe('tools routes — /all and /execute', () => {
   beforeEach(() => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
+    // Register MCP tool names in the category map so the route can classify them
+    TOOL_TO_CATEGORY.set('mcp_everything_echo', 'mcp');
+    TOOL_TO_CATEGORY.set('mcp_github_create_issue', 'mcp');
+    if (!TOOL_CATEGORIES.mcp.includes('mcp_everything_echo')) {
+      TOOL_CATEGORIES.mcp.push('mcp_everything_echo', 'mcp_github_create_issue');
+    }
   });
 
   afterEach(() => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    // Cleanup MCP entries
+    TOOL_TO_CATEGORY.delete('mcp_everything_echo');
+    TOOL_TO_CATEGORY.delete('mcp_github_create_issue');
+    TOOL_CATEGORIES.mcp = TOOL_CATEGORIES.mcp.filter(
+      (n) => n !== 'mcp_everything_echo' && n !== 'mcp_github_create_issue'
+    );
   });
 
   describe('GET /api/tools/all', () => {
@@ -143,15 +194,33 @@ describe('tools routes — /all and /execute', () => {
 
       const data = await res.json();
       expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBe(3); // datetime, echo, fail
+      expect(data.length).toBe(5); // datetime, echo, fail + 2 MCP
 
-      const names = data.map((t: any) => t.name);
-      expect(names).toContain('get_datetime');
-      expect(names).toContain('echo_test');
-      expect(names).toContain('fail_tool');
+      const builtInTools = data.filter((t: any) => t.source === 'built-in');
+      expect(builtInTools.length).toBe(3);
+      const builtInNames = builtInTools.map((t: any) => t.name);
+      expect(builtInNames).toContain('get_datetime');
+      expect(builtInNames).toContain('echo_test');
+      expect(builtInNames).toContain('fail_tool');
+    });
 
-      // All should be built-in
-      expect(data.every((t: any) => t.source === 'built-in')).toBe(true);
+    test('MCP tools get source mcp with category', async () => {
+      const { app } = makeApp();
+      const res = await app.request('http://localhost/api/tools/all');
+      const data = await res.json();
+
+      const mcpTools = data.filter((t: any) => t.source === 'mcp');
+      expect(mcpTools.length).toBe(2);
+
+      const everythingTool = mcpTools.find((t: any) => t.name === 'mcp_everything_echo');
+      expect(everythingTool).toBeTruthy();
+      expect(everythingTool.source).toBe('mcp');
+      expect(everythingTool.category).toBe('everything');
+
+      const githubTool = mcpTools.find((t: any) => t.name === 'mcp_github_create_issue');
+      expect(githubTool).toBeTruthy();
+      expect(githubTool.source).toBe('mcp');
+      expect(githubTool.category).toBe('github');
     });
 
     test('includes dynamic tools', async () => {

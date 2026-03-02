@@ -2,6 +2,7 @@ import type { AgentInfo } from '../agent-registry';
 import type { Tool, ToolResult } from './types';
 
 export interface CollaborateHandler {
+  isTargetAvailable(targetBotId: string): boolean;
   discoverAgents(excludeBotId: string): Array<AgentInfo & { model?: string }>;
   collaborationStep(
     sessionId: string | undefined,
@@ -135,6 +136,14 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
               return { success: false, content: `Visible collaboration failed: ${String(err)}` };
             }
           }
+        }
+
+        if (!handler.isTargetAvailable(targetBotId)) {
+          logger.info({ targetBotId, sourceBotId }, 'collaborate: target bot is not running');
+          return {
+            success: false,
+            content: `Bot "${targetBotId}" is not currently running. Use action "discover" to see which bots are available right now.`,
+          };
         }
 
         try {

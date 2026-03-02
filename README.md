@@ -11,7 +11,7 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
 - **Soul & memory system** — Layered personality files (IDENTITY, SOUL, MOTIVATIONS, GOALS) + semantic search (RAG) over daily memory logs
 - **Bot-to-bot collaboration** — Visible, internal, and delegation modes with multi-turn session support
 - **Web dashboard** — Real-time monitoring, agent CRUD, session viewer, cron manager, productions review, karma scores
-- **Skills & tools** — 16 bundled skills, 34 LLM-callable tools, dynamic tool creation at runtime
+- **Skills & tools** — 16 bundled skills, 35 LLM-callable tools, dynamic tool & agent creation at runtime
 - **Context compaction** — LLM-based conversation summarization to stay within token limits
 - **MCP tool bridge** — Claude CLI can call framework tools natively via Model Context Protocol
 - **Activity stream** — Real-time event feed with WebSocket streaming
@@ -94,6 +94,7 @@ src/
 │   ├── memory-search.ts    #   Semantic memory search (RAG)
 │   ├── ask-permission.ts   #   Request human approval
 │   ├── production-log.ts   #   Log productions for review
+│   ├── create-agent.ts     #   Propose new agents (human-approved)
 │   ├── reddit.ts           #   Reddit API integration
 │   ├── twitter.ts          #   Twitter/X API integration
 │   ├── calendar.ts         #   Google Calendar integration
@@ -243,7 +244,7 @@ Cron          — Job management, force-run, run logs
 Tools         — Dynamic tool approval/rejection queue
 Tool Runner   — Execute tools manually with parameter forms
 Skills        — Built-in + external skills browser with SKILL.md viewer
-Activity      — Real-time event feed with WebSocket streaming
+Activity      — Real-time event feed (Events + System Logs tabs)
 Permissions   — Human-in-the-loop approval queue (approve/deny)
 Inbox         — Pending ask_human requests from agents
 Productions   — Bot output review, ratings, threaded feedback

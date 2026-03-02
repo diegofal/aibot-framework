@@ -1,4 +1,12 @@
-import { api, closeModal, escapeHtml, renderThread, showModal, timeAgo } from './shared.js';
+import {
+  api,
+  closeModal,
+  escapeHtml,
+  renderContent,
+  renderThread,
+  showModal,
+  timeAgo,
+} from './shared.js';
 
 function statusBadge(entry) {
   if (!entry.evaluation?.status)
@@ -18,9 +26,13 @@ function starsHtml(rating, interactive = false) {
 }
 
 export async function renderProductions(el) {
+  destroyProductions();
   el.innerHTML = '<div class="page-title">Productions</div><p class="text-dim">Loading...</p>';
 
-  const stats = await api('/api/productions');
+  const [stats, treeData] = await Promise.all([
+    api('/api/productions'),
+    api('/api/productions/all-trees'),
+  ]);
 
   if (stats.error) {
     el.innerHTML = `
@@ -31,154 +43,529 @@ export async function renderProductions(el) {
   }
 
   const total = stats.reduce((s, b) => s + b.total, 0);
+  const tree = treeData.tree || [];
 
-  // Build botNameMap for unified list
+  // Build botId→name map from stats and a botId set from tree top-level nodes
   const botNameMap = {};
+  const botIdFromName = {};
   for (const bot of stats) {
     botNameMap[bot.botId] = bot.name;
   }
+  for (const node of tree) {
+    // Top-level nodes: name is bot name, path is botId
+    botIdFromName[node.name] = node.path;
+  }
+
+  // Explorer state — restore from localStorage if available
+  const STORAGE_KEY = 'prod-expanded-all';
+  const expandedDirs = new Set();
+  let selectedFile = null;
+  let searchFilter = '';
+  let statusFilter = '';
+
+  function saveExpandState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...expandedDirs]));
+    } catch {}
+  }
+
+  function collectAllDirKeys(nodes, botId) {
+    const keys = [];
+    for (const node of nodes || []) {
+      if (node.type === 'dir') {
+        const isTopLevel = tree.includes(node);
+        const key = isTopLevel ? node.path : botId + '/' + node.path;
+        keys.push(key);
+        keys.push(...collectAllDirKeys(node.children, isTopLevel ? node.path : botId));
+      }
+    }
+    return keys;
+  }
 
   el.innerHTML = `
-    <div class="flex-between mb-16">
-      <div class="page-title">Productions <span class="count">${total}</span></div>
-    </div>
-    ${
-      stats.length === 0
-        ? '<p class="text-dim">No productions yet. Bots will log file operations here when they create or edit files.</p>'
-        : `<table>
-          <thead><tr><th>Bot</th><th>Total</th><th>Approved</th><th>Rejected</th><th>Unreviewed</th><th>Avg Rating</th></tr></thead>
-          <tbody id="prod-tbody"></tbody>
-        </table>`
-    }
-    <div id="unified-entries-section"></div>
-  `;
-
-  if (stats.length === 0) return;
-
-  const tbody = document.getElementById('prod-tbody');
-  for (const bot of stats) {
-    const tr = document.createElement('tr');
-    tr.style.cursor = 'pointer';
-    tr.innerHTML = `
-      <td><a href="#/productions/${encodeURIComponent(bot.botId)}">${escapeHtml(bot.name)}</a></td>
-      <td>${bot.total}</td>
-      <td class="text-dim">${bot.approved}</td>
-      <td class="text-dim">${bot.rejected}</td>
-      <td>${bot.unreviewed > 0 ? `<span style="color:var(--orange)">${bot.unreviewed}</span>` : '0'}</td>
-      <td>${bot.avgRating != null ? `${starsHtml(Math.round(bot.avgRating))} <span class="text-dim">${bot.avgRating}</span>` : '<span class="text-dim">-</span>'}</td>
-    `;
-    tr.addEventListener('click', (e) => {
-      if (e.target.tagName === 'A') return;
-      location.hash = `#/productions/${encodeURIComponent(bot.botId)}`;
-    });
-    tbody.appendChild(tr);
-  }
-
-  // Unified entries list
-  const section = document.getElementById('unified-entries-section');
-  if (!section || total === 0) return;
-
-  let filterBot = '';
-  let filterStatus = '';
-  let currentOffset = 0;
-  const PAGE_SIZE = 100;
-  let loadedEntries = [];
-  let loadedTotal = 0;
-
-  async function loadUnifiedEntries(append) {
-    const params = new URLSearchParams();
-    params.set('limit', String(PAGE_SIZE));
-    params.set('offset', String(append ? currentOffset : 0));
-    if (filterBot) params.set('botId', filterBot);
-    if (filterStatus) params.set('status', filterStatus);
-
-    const data = await api(`/api/productions/all-entries?${params}`);
-    if (data.error) return;
-
-    if (append) {
-      loadedEntries = loadedEntries.concat(data.entries);
-    } else {
-      loadedEntries = data.entries;
-      currentOffset = 0;
-    }
-    loadedTotal = data.total;
-    currentOffset = loadedEntries.length;
-
-    renderUnifiedEntries();
-  }
-
-  function renderUnifiedEntries() {
-    section.innerHTML = `
-      <div class="form-separator"></div>
-      <div class="flex-between mb-16">
-        <div class="page-title" style="font-size:1.1rem">All Entries</div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <select id="unified-bot-filter" class="log-agent-filter">
-            <option value="">All Bots</option>
-            ${stats.map((b) => `<option value="${escapeHtml(b.botId)}"${filterBot === b.botId ? ' selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
-          </select>
-          <select id="unified-status-filter" class="log-agent-filter">
-            <option value=""${filterStatus === '' ? ' selected' : ''}>All</option>
-            <option value="approved"${filterStatus === 'approved' ? ' selected' : ''}>Approved</option>
-            <option value="rejected"${filterStatus === 'rejected' ? ' selected' : ''}>Rejected</option>
-            <option value="unreviewed"${filterStatus === 'unreviewed' ? ' selected' : ''}>Unreviewed</option>
-          </select>
+    <div class="productions-explorer">
+      <div class="prod-topbar">
+        <div style="display:flex;gap:12px;align-items:center">
+          <div class="page-title" style="margin-bottom:0">Productions <span class="count">${total}</span></div>
+        </div>
+        <div class="prod-topbar-stats">
+          ${stats.map((b) => `<div class="stat-item"><a href="#/productions/${encodeURIComponent(b.botId)}">${escapeHtml(b.name)}</a> <span class="text-dim">${b.total}</span></div>`).join('')}
         </div>
       </div>
 
-      ${
-        loadedEntries.length === 0
-          ? '<p class="text-dim">No entries match the filter.</p>'
-          : `<table>
-            <thead><tr><th>Time</th><th>Bot</th><th>Path</th><th>Tool</th><th>Action</th><th>Status</th><th>Rating</th></tr></thead>
-            <tbody id="unified-entries-tbody"></tbody>
-          </table>`
-      }
+      <div class="prod-explorer-body">
+        <div class="prod-tree-panel">
+          <input type="text" class="prod-tree-search" id="prod-tree-search" placeholder="Filter files...">
+          <select id="prod-status-filter" class="log-agent-filter" style="width:100%;margin-bottom:8px">
+            <option value="">All Status</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="unreviewed">Unreviewed</option>
+          </select>
+          <div class="prod-tree-toolbar">
+            <button class="btn btn-sm" id="prod-expand-all">Expand all</button>
+            <button class="btn btn-sm" id="prod-collapse-all">Collapse all</button>
+          </div>
+          <div id="prod-tree-container"></div>
+        </div>
+        <div class="prod-content-panel" id="prod-content-panel">
+          <div class="prod-empty-state">Select a file to view its content</div>
+        </div>
+      </div>
+    </div>
+  `;
 
-      ${
-        loadedTotal > loadedEntries.length
-          ? `<div style="text-align:center;margin-top:12px"><button class="btn btn-sm" id="unified-load-more">Load More (${loadedEntries.length}/${loadedTotal})</button></div>`
-          : ''
-      }
+  if (stats.length === 0) {
+    el.innerHTML = `
+      <div class="page-title">Productions</div>
+      <p class="text-dim">No productions yet. Bots will log file operations here when they create or edit files.</p>
     `;
+    return;
+  }
 
-    // Bind filter events
-    document.getElementById('unified-bot-filter')?.addEventListener('change', (e) => {
-      filterBot = e.target.value;
-      loadUnifiedEntries(false);
-    });
-    document.getElementById('unified-status-filter')?.addEventListener('change', (e) => {
-      filterStatus = e.target.value;
-      loadUnifiedEntries(false);
-    });
-    document.getElementById('unified-load-more')?.addEventListener('click', () => {
-      loadUnifiedEntries(true);
-    });
+  // --- Tree rendering (same pattern as bot-level explorer) ---
+  function matchesFilters(node) {
+    if (node.type === 'dir') {
+      if (!searchFilter && !statusFilter) return true;
+      return node.children?.some(matchesFilters) ?? false;
+    }
+    if (
+      searchFilter &&
+      !node.name.toLowerCase().includes(searchFilter.toLowerCase()) &&
+      !node.path.toLowerCase().includes(searchFilter.toLowerCase())
+    ) {
+      return false;
+    }
+    if (statusFilter) {
+      const evalStatus = node.evaluation?.status;
+      if (statusFilter === 'unreviewed' && evalStatus) return false;
+      if (statusFilter === 'approved' && evalStatus !== 'approved') return false;
+      if (statusFilter === 'rejected' && evalStatus !== 'rejected') return false;
+    }
+    return true;
+  }
 
-    // Populate rows
-    const utbody = document.getElementById('unified-entries-tbody');
-    if (!utbody) return;
-
-    for (const entry of loadedEntries) {
-      const tr = document.createElement('tr');
-      tr.style.cursor = 'pointer';
-      tr.innerHTML = `
-        <td class="text-dim">${timeAgo(entry.timestamp)}</td>
-        <td>${escapeHtml(botNameMap[entry.botId] || entry.botId)}</td>
-        <td>${escapeHtml(entry.path)}</td>
-        <td class="text-dim">${escapeHtml(entry.tool)}</td>
-        <td class="text-dim">${escapeHtml(entry.action)}${entry.trackOnly ? ' <span class="badge badge-disabled">track</span>' : ''}</td>
-        <td>${statusBadge(entry)}</td>
-        <td>${entry.evaluation?.rating ? starsHtml(entry.evaluation.rating) : '<span class="text-dim">-</span>'}</td>
-      `;
-      tr.addEventListener('click', () =>
-        showDetailModal(entry.botId, entry.id, () => loadUnifiedEntries(false))
-      );
-      utbody.appendChild(tr);
+  function renderTree(container, nodes) {
+    container.innerHTML = '';
+    for (const node of nodes) {
+      if (!matchesFilters(node)) continue;
+      renderTreeNode(container, node, null);
+    }
+    if (container.childElementCount === 0) {
+      container.innerHTML =
+        '<p class="text-dim" style="padding:8px;font-size:12px">No files match filters</p>';
     }
   }
 
-  await loadUnifiedEntries(false);
+  function renderTreeNode(parent, node, botId) {
+    if (node.type === 'dir') {
+      // Top-level dirs are bot folders (path = botId)
+      const isTopLevel = tree.includes(node);
+      const resolvedBotId = isTopLevel ? node.path : botId;
+      const expandKey = isTopLevel ? node.path : resolvedBotId + '/' + node.path;
+      const isExpanded = expandedDirs.has(expandKey);
+      const item = document.createElement('div');
+      item.className = 'tree-item';
+      item.innerHTML = `<span class="tree-chevron${isExpanded ? ' expanded' : ''}">&#9654;</span> ${escapeHtml(node.name)}/`;
+      if (isTopLevel) {
+        item.style.fontWeight = '600';
+      }
+      item.addEventListener('click', () => {
+        if (expandedDirs.has(expandKey)) {
+          expandedDirs.delete(expandKey);
+        } else {
+          expandedDirs.add(expandKey);
+        }
+        saveExpandState();
+        renderTree(document.getElementById('prod-tree-container'), tree);
+      });
+      parent.appendChild(item);
+
+      if (isExpanded && node.children) {
+        const childContainer = document.createElement('div');
+        childContainer.className = 'tree-children';
+        for (const child of node.children) {
+          if (!matchesFilters(child)) continue;
+          renderTreeNode(childContainer, child, resolvedBotId);
+        }
+        parent.appendChild(childContainer);
+      }
+    } else {
+      if (!matchesFilters(node)) return;
+      const item = document.createElement('div');
+      const isSelected = selectedFile?.path === node.path && selectedFile?._botId === botId;
+      item.className = `tree-item${isSelected ? ' selected' : ''}`;
+
+      let dotHtml = '';
+      if (node.evaluation?.status === 'approved')
+        dotHtml = '<span class="tree-dot tree-dot-approved"></span>';
+      else if (node.evaluation?.status === 'rejected')
+        dotHtml = '<span class="tree-dot tree-dot-rejected"></span>';
+      else if (node.entryId) dotHtml = '<span class="tree-dot tree-dot-unreviewed"></span>';
+
+      item.innerHTML = `<span style="width:14px;flex-shrink:0"></span>${dotHtml} ${escapeHtml(node.name)}`;
+      item.title = node.description || node.path;
+      item.addEventListener('click', () => {
+        selectedFile = { ...node, _botId: botId };
+        renderTree(document.getElementById('prod-tree-container'), tree);
+        renderFileViewer(botId, node);
+      });
+      parent.appendChild(item);
+    }
+  }
+
+  // --- File viewer (same as bot-level but resolves botId from tree context) ---
+  async function renderFileViewer(botId, node) {
+    const panel = document.getElementById('prod-content-panel');
+    if (!panel) return;
+    panel.innerHTML = '<p class="text-dim">Loading...</p>';
+
+    let content = null;
+    let entry = null;
+    if (node.entryId) {
+      const data = await api(`/api/productions/${encodeURIComponent(botId)}/${node.entryId}`);
+      if (!data.error) {
+        content = data.content;
+        entry = data.entry;
+      }
+    }
+    if (content == null) {
+      const data = await api(
+        `/api/productions/${encodeURIComponent(botId)}/file-content?path=${encodeURIComponent(node.path)}`
+      );
+      if (!data.error) content = data.content;
+    }
+
+    let currentRating = entry?.evaluation?.rating || 0;
+    let currentStatus = entry?.evaluation?.status || '';
+    let threadGenerating = false;
+    let threadErrorMsg = null;
+    let coherenceResult = null;
+    let coherencePolling = false;
+    const VIEWER_MAX_POLLS = 90;
+
+    // Fetch coherence check in background (LLM-based, may need polling)
+    function fetchCoherence() {
+      if (!entry) return;
+      const badge = document.getElementById('viewer-coherence-badge');
+      api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/coherence`).then((res) => {
+        if (res.error) return;
+        if (res.status === 'checking') {
+          if (badge) badge.innerHTML = '<span class="badge badge-disabled">Checking\u2026</span>';
+          if (!coherencePolling) {
+            coherencePolling = true;
+            const pollId = setInterval(() => {
+              api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/coherence`).then(
+                (r) => {
+                  if (r.status === 'checking') return;
+                  clearInterval(pollId);
+                  coherencePolling = false;
+                  if (r.status === 'error') {
+                    const b = document.getElementById('viewer-coherence-badge');
+                    if (b)
+                      b.innerHTML =
+                        '<span class="badge badge-disabled" title="Coherence check failed">Error</span>';
+                    return;
+                  }
+                  coherenceResult = r;
+                  const b = document.getElementById('viewer-coherence-badge');
+                  if (b && !r.coherent) {
+                    b.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(r.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
+                  } else if (b) {
+                    b.innerHTML = '';
+                  }
+                }
+              );
+            }, 3000);
+          }
+        } else {
+          coherenceResult = res;
+          if (badge && !res.coherent) {
+            badge.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(res.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
+          }
+        }
+      });
+    }
+    fetchCoherence();
+
+    function renderViewer() {
+      const botLabel = botNameMap[botId] || botId;
+      panel.innerHTML = `
+        <div class="prod-file-viewer-title">
+          <a href="#/productions/${encodeURIComponent(botId)}" style="font-size:13px;font-weight:400">${escapeHtml(botLabel)}</a> / ${escapeHtml(node.path)}
+        </div>
+        ${
+          entry
+            ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:12px;align-items:center">
+          <span class="text-dim">${new Date(entry.timestamp).toLocaleString()}</span>
+          <span class="text-dim">${escapeHtml(entry.tool)} / ${escapeHtml(entry.action)}</span>
+          ${entry.trackOnly ? '<span class="badge badge-disabled">track-only</span>' : ''}
+          ${statusBadge(entry)}
+          <span id="viewer-coherence-badge">${coherencePolling ? '<span class="badge badge-disabled">Checking\u2026</span>' : coherenceResult && !coherenceResult.coherent ? `<span class="badge eval-badge-rejected" title="${escapeHtml(coherenceResult.issues.join('; '))}">${escapeHtml('Incoherent')}</span>` : ''}</span>
+        </div>`
+            : ''
+        }
+
+        <div class="production-content" style="max-height:400px">${content != null ? renderContent(content, node.name) : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
+
+        ${
+          entry
+            ? `
+          <div class="eval-controls" style="margin-top:16px">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+              <button class="btn btn-sm${currentStatus === 'approved' ? ' btn-primary' : ''}" id="viewer-approve">Approve</button>
+              <button class="btn btn-sm${currentStatus === 'rejected' ? ' btn-danger' : ''}" id="viewer-reject">Reject</button>
+              <span style="margin-left:12px">${starsHtml(currentRating, true)}</span>
+              <button class="btn btn-primary btn-sm" id="viewer-save" style="margin-left:auto">Save</button>
+              <button class="btn btn-sm" id="viewer-archive" title="Move to archived/">Archive</button>
+              <button class="btn btn-danger btn-sm" id="viewer-delete">Delete</button>
+            </div>
+          </div>
+
+          <div class="form-separator"></div>
+          <div class="form-section-title">Discussion</div>
+          <div id="viewer-thread-container"></div>
+        `
+            : `<div style="margin-top:12px"><span class="text-dim text-sm">This file is not tracked in the changelog.</span></div>`
+        }
+      `;
+
+      if (!entry) return;
+
+      // Star rating
+      panel.querySelectorAll('.star-interactive .star').forEach((star) => {
+        star.style.cursor = 'pointer';
+        star.addEventListener('click', () => {
+          currentRating = Number.parseInt(star.dataset.star);
+          renderViewer();
+        });
+      });
+
+      document.getElementById('viewer-approve')?.addEventListener('click', () => {
+        currentStatus = 'approved';
+        renderViewer();
+      });
+      document.getElementById('viewer-reject')?.addEventListener('click', () => {
+        currentStatus = 'rejected';
+        renderViewer();
+      });
+
+      // Save
+      document.getElementById('viewer-save')?.addEventListener('click', async () => {
+        if (!currentStatus && !currentRating) return;
+        const btn = document.getElementById('viewer-save');
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+
+        await api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/evaluate`, {
+          method: 'POST',
+          body: { status: currentStatus || undefined, rating: currentRating || undefined },
+        });
+
+        if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
+        if (currentStatus) entry.evaluation.status = currentStatus;
+        if (currentRating) entry.evaluation.rating = currentRating;
+
+        // Update tree dot
+        if (node.entryId) {
+          node.evaluation = { status: currentStatus, rating: currentRating };
+          renderTree(document.getElementById('prod-tree-container'), tree);
+        }
+
+        btn.textContent = 'Saved';
+        setTimeout(() => {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Save';
+          }
+        }, 1500);
+      });
+
+      // Archive
+      document.getElementById('viewer-archive')?.addEventListener('click', () => {
+        showModal(
+          'Archive Production',
+          `
+          <p style="margin-bottom:12px">Move <strong>${escapeHtml(entry.path)}</strong> to <code>archived/</code>.</p>
+          <label class="form-label">Reason</label>
+          <input type="text" id="archive-reason" class="form-input" placeholder="Why are you archiving this file?" style="width:100%;margin-bottom:12px">
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-sm" id="archive-cancel">Cancel</button>
+            <button class="btn btn-primary btn-sm" id="archive-confirm">Archive</button>
+          </div>
+        `
+        );
+        document.getElementById('archive-cancel')?.addEventListener('click', closeModal);
+        document.getElementById('archive-confirm')?.addEventListener('click', async () => {
+          const reason =
+            document.getElementById('archive-reason')?.value?.trim() || 'Archived from dashboard';
+          const confirmBtn = document.getElementById('archive-confirm');
+          if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Archiving...';
+          }
+          await api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/archive`, {
+            method: 'POST',
+            body: { reason },
+          });
+          closeModal();
+          selectedFile = null;
+          const freshTree = await api('/api/productions/all-trees');
+          tree.length = 0;
+          tree.push(...(freshTree.tree || []));
+          renderTree(document.getElementById('prod-tree-container'), tree);
+          panel.innerHTML =
+            '<div class="prod-empty-state">File archived. Select another file.</div>';
+        });
+      });
+
+      // Delete
+      document.getElementById('viewer-delete')?.addEventListener('click', async () => {
+        if (!confirm('Delete this production and its file? This cannot be undone.')) return;
+        await api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}`, {
+          method: 'DELETE',
+        });
+        selectedFile = null;
+        // Reload tree
+        const freshTree = await api('/api/productions/all-trees');
+        tree.length = 0;
+        tree.push(...(freshTree.tree || []));
+        renderTree(document.getElementById('prod-tree-container'), tree);
+        panel.innerHTML = '<div class="prod-empty-state">File deleted. Select another file.</div>';
+      });
+
+      // Thread
+      const threadContainer = document.getElementById('viewer-thread-container');
+
+      function startViewerThreadPolling() {
+        let pollCount = 0;
+        const interval = setInterval(async () => {
+          if (!document.getElementById('viewer-thread-container')) {
+            clearInterval(interval);
+            return;
+          }
+          pollCount++;
+          if (pollCount >= VIEWER_MAX_POLLS) {
+            clearInterval(interval);
+            threadGenerating = false;
+            threadErrorMsg = 'Response timed out (3 minutes).';
+            renderViewerThread();
+            return;
+          }
+          const statusRes = await api(
+            `/api/productions/${encodeURIComponent(botId)}/${entry.id}/thread-status`
+          );
+          if (statusRes.status === 'error') {
+            clearInterval(interval);
+            threadGenerating = false;
+            threadErrorMsg = statusRes.error || 'Generation failed';
+            renderViewerThread();
+            return;
+          }
+          if (statusRes.status === 'idle') {
+            clearInterval(interval);
+            if (statusRes.lastBotMessage) {
+              if (!entry.evaluation?.thread?.find((m) => m.id === statusRes.lastBotMessage.id)) {
+                if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
+                if (!entry.evaluation.thread) entry.evaluation.thread = [];
+                entry.evaluation.thread.push(statusRes.lastBotMessage);
+              }
+            }
+            threadGenerating = false;
+            threadErrorMsg = null;
+            renderViewerThread();
+          }
+        }, 2000);
+        _prodIntervals.push(interval);
+      }
+
+      function renderViewerThread() {
+        if (!threadContainer) return;
+        renderThread(threadContainer, {
+          thread: entry.evaluation?.thread ?? [],
+          legacyFeedback: entry.evaluation?.feedback || null,
+          legacyResponse: entry.evaluation?.aiResponse || null,
+          generating: threadGenerating,
+          error: threadErrorMsg,
+          botId,
+          onRetry: async () => {
+            threadErrorMsg = null;
+            threadGenerating = true;
+            renderViewerThread();
+            await api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/retry-thread`, {
+              method: 'POST',
+            });
+            startViewerThreadPolling();
+          },
+          onSend: async (text) => {
+            if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
+            if (!entry.evaluation.thread) entry.evaluation.thread = [];
+            entry.evaluation.thread.push({
+              id: 'temp',
+              role: 'human',
+              content: text,
+              createdAt: new Date().toISOString(),
+            });
+            threadGenerating = true;
+            threadErrorMsg = null;
+            renderViewerThread();
+
+            const res = await api(
+              `/api/productions/${encodeURIComponent(botId)}/${entry.id}/thread`,
+              { method: 'POST', body: { message: text } }
+            );
+            if (res.error) {
+              threadGenerating = false;
+              renderViewerThread();
+              return;
+            }
+            if (res.entry?.evaluation) entry.evaluation = res.entry.evaluation;
+            startViewerThreadPolling();
+          },
+        });
+      }
+
+      renderViewerThread();
+    }
+
+    renderViewer();
+  }
+
+  // --- Filters ---
+  document.getElementById('prod-tree-search')?.addEventListener('input', (e) => {
+    searchFilter = e.target.value;
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  });
+  document.getElementById('prod-status-filter')?.addEventListener('change', (e) => {
+    statusFilter = e.target.value;
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  });
+
+  // --- Expand / Collapse buttons ---
+  document.getElementById('prod-expand-all')?.addEventListener('click', () => {
+    for (const key of collectAllDirKeys(tree, null)) expandedDirs.add(key);
+    saveExpandState();
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  });
+  document.getElementById('prod-collapse-all')?.addEventListener('click', () => {
+    expandedDirs.clear();
+    saveExpandState();
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  });
+
+  // Restore expand state from localStorage, or auto-expand everything as default
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (Array.isArray(saved)) {
+      for (const key of saved) expandedDirs.add(key);
+    }
+  } catch {}
+  if (expandedDirs.size === 0) {
+    // Default: auto-expand all
+    for (const key of collectAllDirKeys(tree, null)) expandedDirs.add(key);
+    saveExpandState();
+  }
+  renderTree(document.getElementById('prod-tree-container'), tree);
 }
 
 // --- Polling intervals to clean up on navigation ---
@@ -213,11 +600,29 @@ export async function renderBotProductions(el, botId) {
   const tree = treeData.tree || [];
   const botList = Array.isArray(allBots) ? allBots : [];
 
-  // Explorer state
+  // Explorer state — restore from localStorage if available
+  const BOT_STORAGE_KEY = 'prod-expanded-' + botId;
   const expandedDirs = new Set();
   let selectedFile = null;
   let searchFilter = '';
   let statusFilter = '';
+
+  function saveExpandState() {
+    try {
+      localStorage.setItem(BOT_STORAGE_KEY, JSON.stringify([...expandedDirs]));
+    } catch {}
+  }
+
+  function collectAllDirKeys(nodes) {
+    const keys = [];
+    for (const node of nodes || []) {
+      if (node.type === 'dir') {
+        keys.push(node.path);
+        keys.push(...collectAllDirKeys(node.children));
+      }
+    }
+    return keys;
+  }
 
   // Build the explorer layout
   el.innerHTML = `
@@ -248,6 +653,10 @@ export async function renderBotProductions(el, botId) {
             <option value="rejected">Rejected</option>
             <option value="unreviewed">Unreviewed</option>
           </select>
+          <div class="prod-tree-toolbar">
+            <button class="btn btn-sm" id="prod-expand-all">Expand all</button>
+            <button class="btn btn-sm" id="prod-collapse-all">Collapse all</button>
+          </div>
           <div id="prod-tree-container"></div>
         </div>
         <div class="prod-content-panel" id="prod-content-panel">
@@ -267,6 +676,7 @@ export async function renderBotProductions(el, botId) {
   // --- Tree rendering ---
   function matchesFilters(node) {
     if (node.type === 'dir') {
+      if (!searchFilter && !statusFilter) return true;
       return node.children?.some(matchesFilters) ?? false;
     }
     if (
@@ -309,6 +719,7 @@ export async function renderBotProductions(el, botId) {
         } else {
           expandedDirs.add(node.path);
         }
+        saveExpandState();
         renderTree(document.getElementById('prod-tree-container'), tree);
       });
       parent.appendChild(item);
@@ -373,23 +784,70 @@ export async function renderBotProductions(el, botId) {
     let currentStatus = entry?.evaluation?.status || '';
     let threadGenerating = false;
     let threadErrorMsg = null;
+    let coherenceResult = null;
+    let coherencePolling = false;
     const VIEWER_MAX_POLLS = 90;
+
+    // Fetch coherence check in background (LLM-based, may need polling)
+    function fetchCoherence() {
+      if (!entry) return;
+      const badge = document.getElementById('viewer-coherence-badge');
+      api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/coherence`).then((res) => {
+        if (res.error) return;
+        if (res.status === 'checking') {
+          if (badge) badge.innerHTML = '<span class="badge badge-disabled">Checking\u2026</span>';
+          if (!coherencePolling) {
+            coherencePolling = true;
+            const pollId = setInterval(() => {
+              api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/coherence`).then(
+                (r) => {
+                  if (r.status === 'checking') return;
+                  clearInterval(pollId);
+                  coherencePolling = false;
+                  if (r.status === 'error') {
+                    const b = document.getElementById('viewer-coherence-badge');
+                    if (b)
+                      b.innerHTML =
+                        '<span class="badge badge-disabled" title="Coherence check failed">Error</span>';
+                    return;
+                  }
+                  coherenceResult = r;
+                  const b = document.getElementById('viewer-coherence-badge');
+                  if (b && !r.coherent) {
+                    b.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(r.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
+                  } else if (b) {
+                    b.innerHTML = '';
+                  }
+                }
+              );
+            }, 3000);
+          }
+        } else {
+          coherenceResult = res;
+          if (badge && !res.coherent) {
+            badge.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(res.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
+          }
+        }
+      });
+    }
+    fetchCoherence();
 
     function renderViewer() {
       panel.innerHTML = `
         <div class="prod-file-viewer-title">${escapeHtml(node.path)}</div>
         ${
           entry
-            ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">
+            ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:12px;align-items:center">
           <span class="text-dim">${new Date(entry.timestamp).toLocaleString()}</span>
           <span class="text-dim">${escapeHtml(entry.tool)} / ${escapeHtml(entry.action)}</span>
           ${entry.trackOnly ? '<span class="badge badge-disabled">track-only</span>' : ''}
           ${statusBadge(entry)}
+          <span id="viewer-coherence-badge">${coherencePolling ? '<span class="badge badge-disabled">Checking\u2026</span>' : coherenceResult && !coherenceResult.coherent ? `<span class="badge eval-badge-rejected" title="${escapeHtml(coherenceResult.issues.join('; '))}">${escapeHtml('Incoherent')}</span>` : ''}</span>
         </div>`
             : ''
         }
 
-        <div class="production-content" style="max-height:400px">${content != null ? `<pre>${escapeHtml(content)}</pre>` : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
+        <div class="production-content" style="max-height:400px">${content != null ? renderContent(content, node.name) : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
 
         ${
           entry
@@ -400,6 +858,7 @@ export async function renderBotProductions(el, botId) {
               <button class="btn btn-sm${currentStatus === 'rejected' ? ' btn-danger' : ''}" id="viewer-reject">Reject</button>
               <span style="margin-left:12px">${starsHtml(currentRating, true)}</span>
               <button class="btn btn-primary btn-sm" id="viewer-save" style="margin-left:auto">Save</button>
+              <button class="btn btn-sm" id="viewer-archive" title="Move to archived/">Archive</button>
               <button class="btn btn-danger btn-sm" id="viewer-delete">Delete</button>
             </div>
           </div>
@@ -462,6 +921,44 @@ export async function renderBotProductions(el, botId) {
             btn.textContent = 'Save';
           }
         }, 1500);
+      });
+
+      // Archive
+      document.getElementById('viewer-archive')?.addEventListener('click', () => {
+        showModal(
+          'Archive Production',
+          `
+          <p style="margin-bottom:12px">Move <strong>${escapeHtml(entry.path)}</strong> to <code>archived/</code>.</p>
+          <label class="form-label">Reason</label>
+          <input type="text" id="archive-reason" class="form-input" placeholder="Why are you archiving this file?" style="width:100%;margin-bottom:12px">
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-sm" id="archive-cancel">Cancel</button>
+            <button class="btn btn-primary btn-sm" id="archive-confirm">Archive</button>
+          </div>
+        `
+        );
+        document.getElementById('archive-cancel')?.addEventListener('click', closeModal);
+        document.getElementById('archive-confirm')?.addEventListener('click', async () => {
+          const reason =
+            document.getElementById('archive-reason')?.value?.trim() || 'Archived from dashboard';
+          const confirmBtn = document.getElementById('archive-confirm');
+          if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Archiving...';
+          }
+          await api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/archive`, {
+            method: 'POST',
+            body: { reason },
+          });
+          closeModal();
+          selectedFile = null;
+          const freshTree = await api(`/api/productions/${encodeURIComponent(botId)}/tree`);
+          tree.length = 0;
+          tree.push(...(freshTree.tree || []));
+          renderTree(document.getElementById('prod-tree-container'), tree);
+          panel.innerHTML =
+            '<div class="prod-empty-state">File archived. Select another file.</div>';
+        });
       });
 
       // Delete
@@ -586,28 +1083,40 @@ export async function renderBotProductions(el, botId) {
     renderTree(document.getElementById('prod-tree-container'), tree);
   });
 
-  // Initial tree render — auto-expand if few dirs
-  function countDirs(nodes) {
-    let n = 0;
-    for (const node of nodes) {
-      if (node.type === 'dir') {
-        n++;
-        n += countDirs(node.children || []);
-      }
+  // --- Expand / Collapse buttons ---
+  document.getElementById('prod-expand-all')?.addEventListener('click', () => {
+    for (const key of collectAllDirKeys(tree)) expandedDirs.add(key);
+    saveExpandState();
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  });
+  document.getElementById('prod-collapse-all')?.addEventListener('click', () => {
+    expandedDirs.clear();
+    saveExpandState();
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  });
+
+  // Restore expand state from localStorage, or auto-expand if few dirs
+  try {
+    const saved = JSON.parse(localStorage.getItem(BOT_STORAGE_KEY));
+    if (Array.isArray(saved)) {
+      for (const key of saved) expandedDirs.add(key);
     }
-    return n;
-  }
-  if (countDirs(tree) <= 5) {
-    // Auto-expand all dirs
-    function expandAll(nodes) {
+  } catch {}
+  if (expandedDirs.size === 0) {
+    function countDirs(nodes) {
+      let n = 0;
       for (const node of nodes) {
         if (node.type === 'dir') {
-          expandedDirs.add(node.path);
-          expandAll(node.children || []);
+          n++;
+          n += countDirs(node.children || []);
         }
       }
+      return n;
     }
-    expandAll(tree);
+    if (countDirs(tree) <= 20) {
+      for (const key of collectAllDirKeys(tree)) expandedDirs.add(key);
+    }
+    saveExpandState();
   }
   renderTree(document.getElementById('prod-tree-container'), tree);
 
@@ -893,7 +1402,7 @@ async function showDetailModal(botId, entryId, onDelete) {
         ${statusBadge(entry)}
       </div>
 
-      <div class="production-content">${content != null ? `<pre>${escapeHtml(content)}</pre>` : '<p class="text-dim">File not found or empty</p>'}</div>
+      <div class="production-content">${content != null ? renderContent(content, entry.path) : '<p class="text-dim">File not found or empty</p>'}</div>
 
       <div class="form-separator"></div>
       <div class="form-section-title">Discussion</div>

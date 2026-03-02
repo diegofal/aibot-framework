@@ -144,6 +144,49 @@ export class ToolExecutor extends EventEmitter {
       const botConfig = ctx.config.bots.find((b) => b.id === options.botId);
       this.disabledTools = new Set(botConfig?.disabledTools ?? []);
     }
+
+    // Auto-bridge tool events to activity stream (if available)
+    this.bridgeToActivityStream();
+  }
+
+  /**
+   * Subscribe to own tool lifecycle events and publish to ctx.activityStream.
+   * This ensures ALL ToolExecutor instances (agent-loop, conversation pipeline,
+   * collaboration) automatically surface events in the activity stream.
+   */
+  private bridgeToActivityStream(): void {
+    const stream = this.ctx.activityStream;
+    if (!stream) return;
+
+    this.on('tool:start', (e) =>
+      stream.publish({
+        type: 'tool:start',
+        botId: e.botId,
+        timestamp: e.timestamp,
+        data: { toolName: e.toolName, args: e.args },
+      })
+    );
+    this.on('tool:end', (e) =>
+      stream.publish({
+        type: 'tool:end',
+        botId: e.botId,
+        timestamp: e.timestamp,
+        data: {
+          toolName: e.toolName,
+          success: e.success,
+          durationMs: e.durationMs,
+          result: e.result.slice(0, 300),
+        },
+      })
+    );
+    this.on('tool:error', (e) =>
+      stream.publish({
+        type: 'tool:error',
+        botId: e.botId,
+        timestamp: e.timestamp,
+        data: { toolName: e.toolName, error: e.error.slice(0, 300), phase: e.phase },
+      })
+    );
   }
 
   /**
@@ -352,11 +395,17 @@ export class ToolExecutor extends EventEmitter {
                       );
                     }
                   } else {
+                    // Auto-number new files (non-append file_write only)
+                    const finalPath =
+                      name === 'file_write' && !args.append
+                        ? ps.renumberFile(botId, logPath)
+                        : logPath;
+
                     ps.logProduction({
                       timestamp: new Date().toISOString(),
                       botId,
                       tool: name,
-                      path: logPath,
+                      path: finalPath,
                       action: name === 'file_write' ? (args.append ? 'edit' : 'create') : 'edit',
                       description,
                       size: content.length,

@@ -384,6 +384,9 @@
           with quality gate, and observable lifecycle events (tool:start, tool:end, tool:error).
           Extends EventEmitter. Error paths are consolidated via <code>buildFailResult()</code>
           helper that unifies 6 different error response construction sites.
+          Auto-bridges tool lifecycle events to <code>ctx.activityStream</code> in the constructor
+          (when available), ensuring all ToolExecutor instances &mdash; agent-loop, conversation
+          pipeline, collaboration &mdash; surface events in the Activity stream without manual wiring.
         </p>
         <h4>Exported Classes / Functions</h4>
         <ul class="inline-list">

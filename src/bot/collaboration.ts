@@ -315,6 +315,16 @@ export class CollaborationManager {
   }
 
   /**
+   * Check if a target bot is reachable for collaboration (running locally or available via MCP).
+   */
+  isTargetAvailable(targetBotId: string): boolean {
+    const resolvedId = this.ctx.resolveBotId(targetBotId);
+    if (resolvedId) return true;
+    const agent = this.ctx.agentRegistry.getByBotId(targetBotId);
+    return !!(agent?.skills.includes('mcp-external') && this.ctx.mcpAgentBridge);
+  }
+
+  /**
    * Discover agents with their full capabilities (tools, model, skills).
    */
   discoverAgents(excludeBotId: string): Array<AgentInfo & { model?: string }> {

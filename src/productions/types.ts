@@ -12,6 +12,7 @@ export interface ProductionEvaluation {
 
 export interface SummaryData {
   summary?: string;
+  plan?: string;
   error?: string;
   generatedAt: string;
 }

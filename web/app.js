@@ -1,4 +1,5 @@
 import { destroyActivity, renderActivity } from './pages/activity.js';
+import { renderAgentProposals } from './pages/agent-proposals.js';
 import { renderAgentDetail, renderAgentEdit, renderAgents } from './pages/agents.js';
 import {
   renderBotConversations,
@@ -11,7 +12,6 @@ import { renderBotFeedback, renderFeedback } from './pages/feedback.js';
 import { destroyInbox, renderInbox, renderInboxChat } from './pages/inbox.js';
 import { renderIntegrations } from './pages/integrations.js';
 import { renderBotKarma, renderKarma } from './pages/karma.js';
-import { destroyLogs, renderLogs } from './pages/logs.js';
 import { destroyPermissions, renderPermissions } from './pages/permissions.js';
 import {
   destroyProductions,
@@ -72,14 +72,13 @@ const routes = [
   { pattern: /^#\/tool-runner$/, handler: () => renderToolRunner(content) },
   { pattern: /^#\/tools\/([^/]+)$/, handler: (m) => renderToolDetail(content, m[1]) },
   { pattern: /^#\/tools$/, handler: () => renderTools(content) },
-  { pattern: /^#\/activity$/, handler: () => renderActivity(content) },
-  { pattern: /^#\/logs$/, handler: () => renderLogs(content) },
+  { pattern: /^#\/agent-proposals$/, handler: () => renderAgentProposals(content) },
+  { pattern: /^#\/activity/, handler: () => renderActivity(content) },
   { pattern: /^#\/integrations$/, handler: () => renderIntegrations(content) },
   { pattern: /^#\/settings$/, handler: () => renderSettings(content) },
 ];
 
 function navigate() {
-  destroyLogs();
   destroyInbox();
   destroyPermissions();
   destroyActivity();
@@ -87,6 +86,12 @@ function navigate() {
   const hash = location.hash || '#/';
   if (hash === '#') {
     location.hash = '#/';
+    return;
+  }
+
+  // Redirect legacy #/logs to unified activity page
+  if (hash === '#/logs') {
+    location.hash = '#/activity?tab=logs';
     return;
   }
 
@@ -191,6 +196,29 @@ async function loadPermissionsBadge() {
 
 loadPermissionsBadge();
 setInterval(loadPermissionsBadge, 10000);
+
+// Agent proposals badge polling
+async function loadAgentProposalsBadge() {
+  try {
+    const res = await fetch('/api/agent-proposals/count');
+    if (!res.ok) return; // feature not enabled
+    const data = await res.json();
+    const badge = document.getElementById('agent-proposals-badge');
+    if (badge) {
+      if (data.count > 0) {
+        badge.textContent = data.count;
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+loadAgentProposalsBadge();
+setInterval(loadAgentProposalsBadge, 10000);
 
 // Initial route
 navigate();
