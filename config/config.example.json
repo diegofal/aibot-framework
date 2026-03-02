@@ -1,63 +1,124 @@
 {
-  "bots": [
-    {
-      "id": "default",
-      "name": "AIBot",
-      "token": "${TELEGRAM_BOT_TOKEN}",
-      "enabled": true,
-      "allowedUsers": [],
-      "skills": ["example", "intel-gatherer"],
-      "mentionPatterns": ["finny", "bot"]
-    },
-    {
-      "id": "intel-bot",
-      "name": "Intel Bot",
-      "token": "${TELEGRAM_BOT_TOKEN_INTEL}",
-      "enabled": false,
-      "allowedUsers": [796164002],
-      "skills": ["intel-gatherer"]
-    }
-  ],
-
   "ollama": {
     "baseUrl": "http://127.0.0.1:11434",
+    "timeout": 300000,
     "models": {
       "primary": "llama3.3",
-      "fallbacks": ["mistral", "qwen2.5-coder:32b"]
+      "fallbacks": ["mistral"]
     }
   },
 
-  "skills": {
-    "enabled": ["example", "intel-gatherer"],
-    "config": {
-      "intel-gatherer": {
-        "telegramChatId": 796164002,
-        "sourcesFile": "./src/skills/intel-gatherer/sources.yml",
-        "dataDir": "./data/intel"
-      }
-    }
+  "conversation": {
+    "enabled": true,
+    "systemPrompt": "You are a helpful assistant. Be concise and informative.",
+    "temperature": 0.7,
+    "maxHistory": 20
   },
 
   "exec": {
     "enabled": false,
     "timeout": 30000,
-    "maxOutputLength": 10000,
-    "deniedPatterns": [],
-    "allowedPatterns": []
+    "maxOutputLength": 10000
   },
 
   "fileTools": {
     "enabled": false,
     "basePath": "./",
-    "maxFileSizeBytes": 1048576,
-    "deniedPatterns": []
+    "allowedPaths": []
   },
 
   "processTools": {
     "enabled": false,
-    "maxSessions": 10,
-    "finishedTtlMs": 600000,
-    "maxOutputChars": 200000
+    "maxSessions": 10
+  },
+
+  "webTools": {
+    "enabled": false,
+    "search": {
+      "apiKey": "${BRAVE_SEARCH_API_KEY}",
+      "maxResults": 5
+    },
+    "fetch": {
+      "maxContentLength": 50000
+    },
+    "maxToolRounds": 5
+  },
+
+  "media": {
+    "enabled": false,
+    "maxFileSizeMb": 10,
+    "whisper": {
+      "endpoint": "https://api.openai.com/v1/audio/transcriptions",
+      "model": "whisper-1",
+      "language": "es",
+      "apiKey": "${OPENAI_API_KEY}"
+    },
+    "tts": {
+      "provider": "elevenlabs",
+      "apiKey": "${ELEVENLABS_API_KEY}",
+      "voiceId": "pMsXgVXv3BLzUgSXRplE",
+      "modelId": "eleven_multilingual_v2",
+      "languageCode": "es",
+      "maxTextLength": 1500
+    }
+  },
+
+  "datetime": {
+    "enabled": true,
+    "timezone": "America/Argentina/Buenos_Aires",
+    "locale": "es-AR"
+  },
+
+  "soul": {
+    "search": {
+      "enabled": false,
+      "embeddingModel": "nomic-embed-text:latest"
+    },
+    "memoryFlush": {
+      "enabled": true,
+      "messageThreshold": 30
+    },
+    "sessionMemory": {
+      "enabled": false,
+      "indexOnStartup": false
+    }
+  },
+
+  "phoneCall": {
+    "enabled": false,
+    "accountSid": "${TWILIO_ACCOUNT_SID}",
+    "authToken": "${TWILIO_AUTH_TOKEN}",
+    "fromNumber": "${TWILIO_FROM_NUMBER}",
+    "defaultNumber": "${TWILIO_TO_NUMBER}",
+    "language": "es-MX",
+    "voice": "Polly.Mia",
+    "contactsFile": "./data/contacts.json"
+  },
+
+  "skills": {
+    "enabled": ["example"],
+    "config": {}
+  },
+
+  "session": {
+    "llmRelevanceCheck": {
+      "enabled": true,
+      "temperature": 0.1,
+      "timeout": 5000,
+      "contextMessages": 4,
+      "broadcastCheck": false,
+      "multiBotAware": false
+    }
+  },
+
+  "humanizer": {
+    "enabled": false
+  },
+
+  "improve": {
+    "enabled": false,
+    "timeout": 300000,
+    "soulDir": "./config/soul"
   },
 
   "buffer": {
@@ -65,6 +126,92 @@
     "queueDebounceMs": 1000,
     "queueCap": 10
   },
+
+  "productions": {
+    "enabled": true,
+    "baseDir": "./productions"
+  },
+
+  "collaboration": {
+    "enabled": false
+  },
+
+  "dynamicTools": {
+    "enabled": false,
+    "storePath": "./data/tools",
+    "maxToolsPerBot": 20
+  },
+
+  "agentProposals": {
+    "enabled": false,
+    "storePath": "./data/agent-proposals",
+    "maxAgents": 20,
+    "maxProposalsPerBot": 3
+  },
+
+  "agentLoop": {
+    "enabled": false,
+    "every": "6h",
+    "maxDurationMs": 300000
+  },
+
+  "web": {
+    "enabled": false,
+    "port": 3000,
+    "host": "127.0.0.1"
+  },
+
+  "browserTools": {
+    "enabled": false,
+    "headless": true,
+    "screenshotDir": "./data/screenshots"
+  },
+
+  "karma": {
+    "enabled": true,
+    "baseDir": "./data/karma"
+  },
+
+  "mcp": {
+    "servers": [],
+    "expose": {
+      "enabled": false,
+      "transport": "http",
+      "port": 3001,
+      "host": "127.0.0.1",
+      "hiddenTools": ["exec", "file_write", "file_edit", "process", "create_tool"],
+      "maxCallsPerMinute": 60
+    }
+  },
+
+  "reddit": {
+    "enabled": false,
+    "clientId": "${REDDIT_CLIENT_ID}",
+    "clientSecret": "${REDDIT_CLIENT_SECRET}",
+    "username": "${REDDIT_USERNAME}",
+    "password": "${REDDIT_PASSWORD}"
+  },
+
+  "twitter": {
+    "enabled": false,
+    "apiKey": "${TWITTER_API_KEY}",
+    "apiSecret": "${TWITTER_API_SECRET}",
+    "bearerToken": "${TWITTER_BEARER_TOKEN}",
+    "accessToken": "${TWITTER_ACCESS_TOKEN}",
+    "accessSecret": "${TWITTER_ACCESS_SECRET}"
+  },
+
+  "calendar": {
+    "enabled": false,
+    "provider": "google",
+    "apiKey": "${CALENDAR_API_KEY}",
+    "calendarId": "${CALENDAR_ID}"
+  },
+
+  "skillsFolders": {
+    "paths": ["./src/skills"]
+  },
+
   "logging": {
     "level": "info",
     "file": "./data/logs/aibot.log"

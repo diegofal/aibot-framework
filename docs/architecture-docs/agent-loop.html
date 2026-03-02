@@ -490,7 +490,8 @@
               <tr><td>workDir resolution</td><td>Resolves relative file paths to bot-specific working directories</td></tr>
               <tr><td>Retry &amp; backoff</td><td>Configurable <code>maxRetries</code> per tool with exponential backoff (1s, 2s, 4s, max 10s)</td></tr>
               <tr><td>Output validation</td><td>Validates tool output against optional Zod <code>outputSchema</code></td></tr>
-              <tr><td>Event hooks</td><td>Emits <code>tool:start</code>, <code>tool:end</code>, <code>tool:error</code> events</td></tr>
+              <tr><td>Event hooks</td><td>Emits <code>tool:start</code>, <code>tool:end</code>, <code>tool:error</code>, <code>tool:loop-warning</code>, <code>tool:loop-blocked</code> events</td></tr>
+              <tr><td>Loop detection</td><td>Optional <code>ToolLoopDetector</code> injection — pre-checks before execution, records calls/outcomes, blocks on critical or injects warning into result</td></tr>
               <tr><td>Execution log</td><td>Records each call as <code>ToolExecutionRecord</code> when <code>enableLogging: true</code></td></tr>
               <tr><td>Productions tracking</td><td>Logs file writes to ProductionsService with quality gate (template detection)</td></tr>
             </tbody>
@@ -512,6 +513,79 @@
             The LLM makes tool calls, which the callback dispatches through the executor. After the LLM conversation
             finishes, <code>executor.getExecutionLog()</code> retrieves all recorded tool calls for the cycle result.
           </p>
+        </div>
+
+        <div class="module-section">
+          <h3>ToolLoopDetector</h3>
+          <div class="file-path">src/bot/tool-loop-detector.ts</div>
+          <div class="responsibility">
+            Detects when an LLM is stuck in repetitive tool call patterns and provides
+            warning/blocking signals to break the loop. Adapted from OpenClaw's
+            <code>tool-loop-detection.ts</code> with architectural changes to fit the
+            ToolExecutor class pattern.
+          </div>
+
+          <h4>4 Detection Strategies</h4>
+          <table>
+            <thead>
+              <tr><th>Detector</th><th>Pattern</th><th>Levels</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>global_circuit_breaker</code></td>
+                <td>Same tool+args+result repeated past absolute ceiling</td>
+                <td>Critical only (default: 25)</td>
+              </tr>
+              <tr>
+                <td><code>known_poll_no_progress</code></td>
+                <td>Configurable "poll" tools returning identical results</td>
+                <td>Warning (8) / Critical (16)</td>
+              </tr>
+              <tr>
+                <td><code>ping_pong</code></td>
+                <td>A&harr;B alternating call patterns with no progress</td>
+                <td>Warning (8) / Critical (16, requires no-progress evidence)</td>
+              </tr>
+              <tr>
+                <td><code>generic_repeat</code></td>
+                <td>Same tool+args repeated (result-aware: skips if results differ)</td>
+                <td>Warning only (8)</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h4>Integration Flow</h4>
+          <p>
+            The <code>AgentLoop</code> creates a <code>ToolLoopDetector</code> from the
+            <code>agentLoop.loopDetection</code> config (merged global + per-bot overrides)
+            and passes it to <code>ToolExecutor</code> via options. Inside <code>execute()</code>:
+          </p>
+          <ol>
+            <li><strong>Pre-check</strong>: <code>detector.check(name, args)</code> before execution.
+              Critical &rarr; block and return error. Warning &rarr; capture message.</li>
+            <li><strong>Record</strong>: <code>detector.recordCall(name, args)</code> after tool runs.</li>
+            <li><strong>Outcome</strong>: <code>detector.recordOutcome(name, args, result)</code> with content hash.</li>
+            <li><strong>Inject</strong>: If warning was captured, append <code>[LOOP WARNING: ...]</code> to result
+              so the LLM sees it in context.</li>
+          </ol>
+
+          <h4>Configuration</h4>
+<pre><code>// config.json → agentLoop.loopDetection
+{
+  "enabled": true,            // default: true
+  "historySize": 30,          // sliding window
+  "warningThreshold": 8,
+  "criticalThreshold": 16,
+  "globalCircuitBreakerThreshold": 25,
+  "detectors": {
+    "genericRepeat": true,
+    "knownPollNoProgress": true,
+    "pingPong": true
+  },
+  "knownPollTools": [
+    { "toolName": "process", "actions": ["poll", "log", "list"] }
+  ]
+}</code></pre>
         </div>
 
         <!-- ============================================================ -->
@@ -648,30 +722,41 @@ interface PendingQuestionInfo {
         <div class="module-section">
           <h3>AskPermissionStore</h3>
           <div class="file-path">src/bot/ask-permission-store.ts</div>
-          <div class="responsibility">Manages pending ask_permission requests with promise-based resolution, timeout handling, and web dashboard integration.</div>
+          <div class="responsibility">Manages pending ask_permission requests with promise-based resolution, disk persistence, and web dashboard integration. Permissions never expire — they persist until the human decides.</div>
 
           <h4>Key Interfaces</h4>
-<pre><code>interface PendingPermission {
+<pre><code>interface PermissionRequest {
   id: string;          // UUID
   botId: string;
-  chatId: number;
   action: string;
   resource: string;
   description: string;
   urgency: 'low' | 'normal' | 'high';
+  status: 'pending' | 'approved' | 'denied';
   createdAt: number;
-  timeoutMs: number;
-  // + resolve/reject callbacks, timer
+  // + resolve/reject callbacks (in-memory only)
 }
 
-interface PermissionDecision {
+interface ResolvedPermission {
   id: string;
   botId: string;
   action: string;
   resource: string;
-  decision: 'approved' | 'denied';
-  decidedAt: number;
+  description: string;
+  status: 'approved' | 'denied';
+  resolvedAt: number;
+  note?: string;
 }</code></pre>
+
+          <h4>Persistence</h4>
+          <p>Pending, resolved, and history entries are all persisted to <code>data/ask-permission/history.json</code>.
+             On restart, pending requests are restored with fresh deferred promises. This means permission
+             requests survive <code>dispose()</code> and process restarts.</p>
+
+          <h4>Allowed Write Paths</h4>
+          <p>Each bot can configure <code>allowedWritePaths</code> (default: <code>["productions/"]</code>).
+             Writes to these paths do not require <code>ask_permission</code>. The planner prompt explicitly lists
+             which paths are allowed and which require permission.</p>
 
           <h4>Flow</h4>
           <table>
@@ -679,11 +764,10 @@ interface PermissionDecision {
               <tr><th>Step</th><th>Description</th></tr>
             </thead>
             <tbody>
-              <tr><td>1. Request</td><td>Agent calls <code>ask_permission</code> tool. <code>AskPermissionStore.request()</code> registers the request and returns a promise.</td></tr>
+              <tr><td>1. Request</td><td>Agent calls <code>ask_permission</code> tool. <code>AskPermissionStore.request()</code> registers the request, persists to disk, and returns a promise.</td></tr>
               <tr><td>2. Display</td><td>Permission request appears in the web dashboard permissions page with action, resource, description, and urgency.</td></tr>
               <tr><td>3. Decide</td><td>Human approves (<code>approveById()</code>) or denies (<code>denyById()</code>). Promise resolves with the decision.</td></tr>
               <tr><td>4. Consume</td><td>Next agent loop cycle calls <code>consumeDecisionsForBot()</code>. Permission decisions are injected into the planner context.</td></tr>
-              <tr><td>5. Timeout</td><td>Undecided requests auto-reject after <code>timeoutMs</code>. Timer cleared on decision.</td></tr>
             </tbody>
           </table>
         </div>

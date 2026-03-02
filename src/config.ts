@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 
 // Zod schemas for type-safe configuration
@@ -38,6 +39,31 @@ export const PhaseTimeoutsSchema = z
   })
   .default({});
 
+const KnownPollToolSchema = z.object({
+  toolName: z.string(),
+  actions: z.array(z.string()).optional(),
+});
+
+export const LoopDetectionConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    historySize: z.number().int().min(5).max(200).default(30),
+    warningThreshold: z.number().int().min(2).max(100).default(8),
+    criticalThreshold: z.number().int().min(3).max(200).default(16),
+    globalCircuitBreakerThreshold: z.number().int().min(5).max(500).default(25),
+    detectors: z
+      .object({
+        genericRepeat: z.boolean().default(true),
+        knownPollNoProgress: z.boolean().default(true),
+        pingPong: z.boolean().default(true),
+      })
+      .default({}),
+    knownPollTools: z
+      .array(KnownPollToolSchema)
+      .default([{ toolName: 'process', actions: ['poll', 'log', 'list'] }]),
+  })
+  .default({});
+
 export const GlobalAgentLoopConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -58,6 +84,8 @@ export const GlobalAgentLoopConfigSchema = z
     phaseTimeouts: PhaseTimeoutsSchema,
     strategist: StrategistConfigSchema,
     retry: AgentLoopRetryConfigSchema,
+    /** Tool loop detection for agent-loop executor phase */
+    loopDetection: LoopDetectionConfigSchema,
   })
   .default({});
 
@@ -92,6 +120,23 @@ export const BotAgentLoopOverrideSchema = z
         strategistMs: z.number().int().positive().optional(),
         plannerMs: z.number().int().positive().optional(),
         executorMs: z.number().int().positive().optional(),
+      })
+      .optional(),
+    loopDetection: z
+      .object({
+        enabled: z.boolean().optional(),
+        historySize: z.number().int().min(5).max(200).optional(),
+        warningThreshold: z.number().int().min(2).max(100).optional(),
+        criticalThreshold: z.number().int().min(3).max(200).optional(),
+        globalCircuitBreakerThreshold: z.number().int().min(5).max(500).optional(),
+        detectors: z
+          .object({
+            genericRepeat: z.boolean().optional(),
+            knownPollNoProgress: z.boolean().optional(),
+            pingPong: z.boolean().optional(),
+          })
+          .optional(),
+        knownPollTools: z.array(KnownPollToolSchema).optional(),
       })
       .optional(),
   })
@@ -166,6 +211,7 @@ const BotConfigSchema = z.object({
   agentLoop: BotAgentLoopOverrideSchema,
   tts: BotTtsOverrideSchema,
   productions: BotProductionsConfigSchema,
+  allowedWritePaths: z.array(z.string()).optional(),
   // Multi-tenant hosting fields
   tenantId: z.string().optional(),
   apiKey: z.string().optional(),
@@ -603,7 +649,7 @@ export const McpConfigSchema = z
   .default({});
 
 const ConfigSchema = z.object({
-  bots: z.array(BotConfigSchema),
+  bots: z.array(BotConfigSchema).default([]),
   ollama: OllamaConfigSchema,
   skills: SkillsConfigSchema,
   conversation: ConversationConfigSchema.default({}),
@@ -665,6 +711,7 @@ export type BufferConfig = z.infer<typeof BufferConfigSchema>;
 export type WebConfig = z.infer<typeof WebConfigSchema>;
 export type AgentLoopConfig = z.infer<typeof GlobalAgentLoopConfigSchema>;
 export type AgentLoopRetryConfig = z.infer<typeof AgentLoopRetryConfigSchema>;
+export type LoopDetectionConfig = z.infer<typeof LoopDetectionConfigSchema>;
 export type BotAgentLoopOverride = z.infer<typeof BotAgentLoopOverrideSchema>;
 export type DynamicToolsConfig = z.infer<typeof DynamicToolsConfigSchema>;
 export type AgentProposalsConfig = z.infer<typeof AgentProposalsConfigSchema>;
@@ -721,12 +768,43 @@ function substituteEnvVars(obj: unknown): unknown {
 }
 
 /**
- * Load and validate configuration from file
+ * Derive the path to bots.json from the main config file path.
+ */
+export function botsPathFromConfigPath(configPath: string): string {
+  return join(dirname(configPath), 'bots.json');
+}
+
+/**
+ * Persist bots array to bots.json (sibling of configPath).
+ */
+export function persistBots(configPath: string, bots: BotConfig[]): void {
+  const botsPath = botsPathFromConfigPath(configPath);
+  writeFileSync(botsPath, `${JSON.stringify(bots, null, 2)}\n`, 'utf-8');
+}
+
+/**
+ * Load and validate configuration from file.
+ * Bots are loaded from a separate bots.json (sibling of configPath).
+ * If bots.json doesn't exist but config.json contains a bots array,
+ * they are auto-migrated to bots.json on first run.
  */
 export async function loadConfig(configPath: string): Promise<Config> {
   try {
     const content = readFileSync(configPath, 'utf-8');
     const rawConfig = JSON.parse(content);
+
+    // Load bots from separate file, fall back to inline
+    const botsPath = botsPathFromConfigPath(configPath);
+    if (existsSync(botsPath)) {
+      rawConfig.bots = JSON.parse(readFileSync(botsPath, 'utf-8'));
+    } else if (Array.isArray(rawConfig.bots) && rawConfig.bots.length > 0) {
+      // Auto-migrate: write bots.json, strip from config.json
+      writeFileSync(botsPath, `${JSON.stringify(rawConfig.bots, null, 2)}\n`, 'utf-8');
+      const rawClean = JSON.parse(content);
+      delete rawClean.bots;
+      writeFileSync(configPath, `${JSON.stringify(rawClean, null, 2)}\n`, 'utf-8');
+      console.info(`[config] Migrated ${rawConfig.bots.length} bots → ${botsPath}`);
+    }
 
     // Substitute environment variables
     const configWithEnv = substituteEnvVars(rawConfig);

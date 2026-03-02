@@ -1,0 +1,110 @@
+import type { BotManager } from '../../bot';
+import { claudeGenerate } from '../../claude-cli';
+import type { Config } from '../../config';
+import type { Logger } from '../../logger';
+
+/**
+ * Tools that should never be available in dashboard interactions.
+ * These are agent-loop / collaboration / telephony tools that make no sense
+ * when a human is directly chatting with a bot via the web UI.
+ */
+export const DASHBOARD_EXCLUDED_TOOLS = new Set([
+  'delegate_to_bot',
+  'collaborate',
+  'ask_human',
+  'ask_permission',
+  'signal_completion',
+  'phone_call',
+  'create_agent',
+]);
+
+const TOOL_AWARENESS_SUFFIX = `\n\nYou have access to tools (web search, file operations, memory, etc.). Use them when needed to provide accurate, up-to-date information.`;
+
+export interface WebGenerateOptions {
+  prompt: string;
+  systemPrompt: string;
+  botId: string;
+  botManager: BotManager;
+  config: Config;
+  logger: Logger;
+  maxLength?: number;
+  enableTools?: boolean;
+}
+
+/**
+ * Shared helper for web dashboard LLM interactions.
+ *
+ * When `enableTools` is true (default), uses the bot's LLMClient with
+ * tool definitions and executor — same path as ConversationPipeline / AgentLoop.
+ *
+ * When `enableTools` is false, falls back to plain `claudeGenerate()` (text-only,
+ * no MCP overhead).
+ */
+export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
+  const { prompt, systemPrompt, botId, botManager, config, logger, maxLength } = opts;
+  const enableTools = opts.enableTools !== false;
+
+  if (!enableTools) {
+    const claudePath = config.improve?.claudePath ?? 'claude';
+    const timeout = config.improve?.timeout ?? 300_000;
+    return claudeGenerate(prompt, {
+      systemPrompt,
+      claudePath,
+      timeout,
+      maxLength,
+      logger,
+    });
+  }
+
+  // Tool-enabled path: use LLMClient abstraction
+  let llmClient: ReturnType<BotManager['getLLMClient']>;
+  try {
+    llmClient = botManager.getLLMClient(botId);
+  } catch {
+    // Bot not started or no LLMClient registered — fallback to text-only
+    logger.warn({ botId }, 'No LLMClient for bot, falling back to text-only webGenerate');
+    const claudePath = config.improve?.claudePath ?? 'claude';
+    const timeout = config.improve?.timeout ?? 300_000;
+    return claudeGenerate(prompt, {
+      systemPrompt,
+      claudePath,
+      timeout,
+      maxLength,
+      logger,
+    });
+  }
+
+  const toolRegistry = botManager.getToolRegistry();
+  const allDefs = toolRegistry.getDefinitionsForBot(botId);
+  const filteredDefs = allDefs.filter((d) => !DASHBOARD_EXCLUDED_TOOLS.has(d.function.name));
+
+  if (filteredDefs.length === 0) {
+    // No tools available after filtering — use text-only path
+    logger.debug({ botId }, 'No tools available after dashboard filter, using text-only');
+    const claudePath = config.improve?.claudePath ?? 'claude';
+    const timeout = config.improve?.timeout ?? 300_000;
+    return claudeGenerate(prompt, {
+      systemPrompt,
+      claudePath,
+      timeout,
+      maxLength,
+      logger,
+    });
+  }
+
+  const toolExecutor = toolRegistry.createExecutor(0, botId);
+  const enrichedSystemPrompt = systemPrompt + TOOL_AWARENESS_SUFFIX;
+  const model = botManager.getActiveModel(botId);
+
+  return llmClient.chat(
+    [
+      { role: 'system', content: enrichedSystemPrompt },
+      { role: 'user', content: prompt },
+    ],
+    {
+      model,
+      tools: filteredDefs,
+      toolExecutor,
+    }
+  );
+}

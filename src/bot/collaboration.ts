@@ -544,11 +544,17 @@ export class CollaborationManager {
 
     // Try known tool names for chat-like interaction
     const agentTools = agent.tools ?? [];
+    const attemptedTools = ['collaborate', 'chat', 'message', 'ask'];
     const chatToolName =
       agentTools.find((t) => t === 'collaborate') ??
       agentTools.find((t) => t === 'chat') ??
       agentTools.find((t) => t === 'message') ??
       agentTools.find((t) => t === 'ask');
+
+    botLogger.debug(
+      { targetBotId, attemptedTools, foundTool: chatToolName ?? null },
+      'MCP collaboration tool discovery'
+    );
 
     let result: McpToolCallResult;
     if (chatToolName) {
@@ -563,6 +569,10 @@ export class CollaborationManager {
         sourceBotId
       );
     } else {
+      botLogger.warn(
+        { targetBotId, availableTools: agentTools },
+        'No suitable MCP tool found for collaboration'
+      );
       // No suitable tool found — return a descriptive error
       const response = `External agent "${agent.name}" (${targetBotId}) is registered but does not expose a collaborate, chat, message, or ask tool. Available tools: ${agentTools.join(', ') || 'none'}`;
       this.ctx.collaborationSessions.appendMessages(session.id, [
@@ -573,6 +583,12 @@ export class CollaborationManager {
     }
 
     // Extract text response from MCP result
+    const contentLength =
+      result.content?.reduce((sum, c) => sum + ('text' in c ? c.text.length : 0), 0) ?? 0;
+    botLogger.debug(
+      { targetBotId, isError: result.isError, contentLength },
+      'MCP collaboration response extracted'
+    );
     const response = result.isError
       ? `MCP error: ${result.content.map((c) => ('text' in c ? c.text : '')).join(' ')}`
       : result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
@@ -686,7 +702,7 @@ export class CollaborationManager {
     }
 
     botLogger.info(
-      { sessionId, sourceBotId, targetBotId, turns: turnCount },
+      { sessionId, sourceBotId, targetBotId, actualTurns: turnCount, maxTurns: turns },
       'Collaboration completed'
     );
 

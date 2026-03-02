@@ -28,6 +28,7 @@ import { AgentScheduler } from './agent-scheduler';
 import { type StrategistResult, runStrategist, shouldRunStrategist } from './agent-strategist';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
+import { ToolLoopDetector } from './tool-loop-detector';
 import { TOOL_CATEGORY_NAMES, type ToolCategory, type ToolRegistry } from './tool-registry';
 import type { BotContext } from './types';
 
@@ -62,6 +63,16 @@ export interface AgentLoopResult {
   selectedToolCategories?: string[];
   /** Number of tool definitions sent to executor after pre-selection */
   executorToolCount?: number;
+  /** Loop detection summary — present only if warnings or blocks occurred */
+  loopDetection?: {
+    warnings: number;
+    blocks: number;
+    stats?: {
+      totalCalls: number;
+      uniquePatterns: number;
+      mostFrequent: { toolName: string; count: number } | null;
+    };
+  };
 }
 
 interface ExecuteLoopDetail {
@@ -730,6 +741,9 @@ export class AgentLoop {
         ? this.karmaService.renderForPrompt(botId)
         : undefined;
 
+    // Resolve allowed write paths for this bot (default: productions/)
+    const allowedWritePaths = botConfig.allowedWritePaths ?? ['productions/'];
+
     // Build autonomous cycles note if bot hasn't used ask_human recently
     const askHumanCheckInThreshold = globalConfig.askHumanCheckInCycles ?? 5;
     const cyclesSinceAskHuman = schedule?.cyclesSinceAskHuman ?? 0;
@@ -770,6 +784,7 @@ export class AgentLoop {
         karmaBlock,
         autonomousCyclesNote,
         toolCategoryList,
+        allowedWritePaths,
       });
 
       const plannerStartMs = Date.now();
@@ -845,6 +860,7 @@ export class AgentLoop {
         karmaBlock,
         autonomousCyclesNote,
         toolCategoryList,
+        allowedWritePaths,
       });
 
       const plannerStartMs = Date.now();
@@ -971,12 +987,24 @@ export class AgentLoop {
     ];
 
     const toolCallLog: ToolExecutionRecord[] = [];
+    const loopDetector = this.createLoopDetector(globalConfig, botOverride);
     const executor = new ToolExecutor(this.ctx, {
       botId,
       chatId: botOverride?.reportChatId ?? 0,
       disabledTools: allDisabled,
       enableLogging: true,
       karmaService: this.karmaService ?? undefined,
+      loopDetector,
+    });
+
+    // Track loop detection events during cycle
+    let loopWarnings = 0;
+    let loopBlocks = 0;
+    executor.on('tool:loop-warning', () => {
+      loopWarnings++;
+    });
+    executor.on('tool:loop-blocked', () => {
+      loopBlocks++;
     });
 
     // Subscribe to tool:end for audit log persistence
@@ -1105,6 +1133,14 @@ export class AgentLoop {
       throw err;
     }
 
+    const loopDetectionStats = loopDetector?.getStats();
+    if (loopWarnings > 0 || loopBlocks > 0) {
+      botLogger.warn(
+        { botId, loopWarnings, loopBlocks, loopStats: loopDetectionStats },
+        'Agent loop: loop detection triggered during executor phase'
+      );
+    }
+
     this.ctx.activityStream?.publish({
       type: 'agent:result',
       botId,
@@ -1113,6 +1149,9 @@ export class AgentLoop {
         toolCallCount: toolCallLog.length,
         priority,
         summary: (response || '').slice(0, 200),
+        ...(loopWarnings > 0 || loopBlocks > 0
+          ? { loopDetection: { warnings: loopWarnings, blocks: loopBlocks } }
+          : {}),
       },
     });
 
@@ -1127,6 +1166,10 @@ export class AgentLoop {
       focus,
       selectedToolCategories,
       executorToolCount: executorDefs.length,
+      loopDetection:
+        loopWarnings > 0 || loopBlocks > 0
+          ? { warnings: loopWarnings, blocks: loopBlocks, stats: loopDetectionStats }
+          : undefined,
     };
   }
 
@@ -1176,6 +1219,52 @@ export class AgentLoop {
         'Agent loop: auto-attached files to ask_human inbox message'
       );
     }
+  }
+
+  /**
+   * Create a ToolLoopDetector from merged global + per-bot config.
+   * Optional overrides allow callers (e.g. feedback phase) to cap thresholds.
+   */
+  private createLoopDetector(
+    globalConfig: import('../config').AgentLoopConfig,
+    botOverride?: import('../config').BotAgentLoopOverride,
+    caps?: {
+      warningThreshold?: number;
+      criticalThreshold?: number;
+      globalCircuitBreakerThreshold?: number;
+    }
+  ): ToolLoopDetector | undefined {
+    const gc = globalConfig.loopDetection;
+    const bo = botOverride?.loopDetection;
+    const enabled = bo?.enabled ?? gc.enabled;
+    if (!enabled) return undefined;
+
+    const warn = caps?.warningThreshold
+      ? Math.min(bo?.warningThreshold ?? gc.warningThreshold, caps.warningThreshold)
+      : (bo?.warningThreshold ?? gc.warningThreshold);
+    const crit = caps?.criticalThreshold
+      ? Math.min(bo?.criticalThreshold ?? gc.criticalThreshold, caps.criticalThreshold)
+      : (bo?.criticalThreshold ?? gc.criticalThreshold);
+    const breaker = caps?.globalCircuitBreakerThreshold
+      ? Math.min(
+          bo?.globalCircuitBreakerThreshold ?? gc.globalCircuitBreakerThreshold,
+          caps.globalCircuitBreakerThreshold
+        )
+      : (bo?.globalCircuitBreakerThreshold ?? gc.globalCircuitBreakerThreshold);
+
+    return new ToolLoopDetector({
+      enabled: true,
+      historySize: bo?.historySize ?? gc.historySize,
+      warningThreshold: warn,
+      criticalThreshold: crit,
+      globalCircuitBreakerThreshold: breaker,
+      detectors: {
+        genericRepeat: bo?.detectors?.genericRepeat ?? gc.detectors.genericRepeat,
+        knownPollNoProgress: bo?.detectors?.knownPollNoProgress ?? gc.detectors.knownPollNoProgress,
+        pingPong: bo?.detectors?.pingPong ?? gc.detectors.pingPong,
+      },
+      knownPollTools: bo?.knownPollTools ?? gc.knownPollTools,
+    });
   }
 
   private async processFeedback(
@@ -1233,11 +1322,17 @@ export class AgentLoop {
           { role: 'user', content: userPrompt },
         ];
 
+        const feedbackLoopDetector = this.createLoopDetector(globalConfig, botOverride, {
+          warningThreshold: 4,
+          criticalThreshold: 6,
+          globalCircuitBreakerThreshold: 8,
+        });
         const executor = new ToolExecutor(this.ctx, {
           botId,
           chatId: botOverride?.reportChatId ?? 0,
           disabledTools: allDisabled,
           enableLogging: true,
+          loopDetector: feedbackLoopDetector,
         });
 
         if (this.ctx.toolAuditLog) {

@@ -11,7 +11,7 @@ import {
 import { join } from 'node:path';
 import type { CollaborationSessionManager } from '../collaboration-session';
 import type { CollaborationTracker } from '../collaboration-tracker';
-import type { Config } from '../config';
+import { type Config, persistBots } from '../config';
 import type { ConversationsService } from '../conversations/service';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
@@ -316,7 +316,7 @@ export class BotResetService {
         delete config.skills.config[id];
       }
 
-      // Persist config to disk (read raw → mutate → write back)
+      // Persist skills to config.json (read raw → mutate → write back)
       try {
         const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
         if (raw.skills?.enabled) {
@@ -327,18 +327,20 @@ export class BotResetService {
             delete raw.skills.config[id];
           }
         }
-        if (raw.bots) {
-          const rawBot = raw.bots.find((b: { id: string }) => b.id === botId);
-          if (rawBot?.skills) {
-            rawBot.skills = rawBot.skills.filter((id: string) => !removeSet.has(id));
-          }
-        }
+        delete raw.bots; // bots live in bots.json now
         writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
       } catch (err) {
         logger.warn(
           { err, configPath },
           'Failed to persist config after production skills cleanup'
         );
+      }
+
+      // Persist bots to bots.json (in-memory bots already mutated above)
+      try {
+        persistBots(configPath, config.bots);
+      } catch (err) {
+        logger.warn({ err, configPath }, 'Failed to persist bots after production skills cleanup');
       }
 
       logger.info({ botId, productionOnlySkills }, 'Cleaned production-only skills from config');

@@ -43,10 +43,10 @@ function createTestConfig(): Config {
 
 function createTestConfigPath(): string {
   const configPath = join(TEST_DIR, 'config.json');
-  const config = {
-    bots: [{ id: 'bot-1', name: 'Bot One', skills: [], token: '', enabled: true }],
-  };
-  writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  const botsPath = join(TEST_DIR, 'bots.json');
+  const bots = [{ id: 'bot-1', name: 'Bot One', skills: [], token: '', enabled: true }];
+  writeFileSync(configPath, JSON.stringify({}, null, 2), 'utf-8');
+  writeFileSync(botsPath, JSON.stringify(bots, null, 2), 'utf-8');
   return configPath;
 }
 

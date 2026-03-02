@@ -1,8 +1,8 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import { type BotConfig, type Config, resolveAgentConfig } from '../../config';
+import { type BotConfig, type Config, persistBots, resolveAgentConfig } from '../../config';
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
 import { generateSoul } from '../../soul-generator';
@@ -359,14 +359,4 @@ function maskToken(token: string): string {
   if (!token || token.startsWith('${')) return token;
   if (token.length <= 8) return '****';
   return `${token.slice(0, 4)}****${token.slice(-4)}`;
-}
-
-/**
- * Persist only the bots array to config.json, preserving env var references
- * in the rest of the file.
- */
-function persistBots(configPath: string, bots: BotConfig[]): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  raw.bots = bots;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }

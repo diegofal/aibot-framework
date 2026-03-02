@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotConfig, Config } from '../../config';
-import { resolveAgentConfig } from '../../config';
+import { persistBots, resolveAgentConfig } from '../../config';
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
 import { generateSoul } from '../../soul-generator';
@@ -185,13 +185,4 @@ export function agentProposalRoutes(deps: {
   });
 
   return app;
-}
-
-/**
- * Persist only the bots array to config.json, preserving env var references.
- */
-function persistBots(configPath: string, bots: BotConfig[]): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  raw.bots = bots;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }

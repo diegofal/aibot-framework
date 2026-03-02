@@ -49,16 +49,27 @@
       <!-- ============================================================
            Section 1: Config File
            ============================================================ -->
-      <h2>Config File</h2>
+      <h2>Config Files</h2>
 
       <p>
-        The entire framework is configured through a single JSON file located at
-        <code>config/config.json</code>. It is loaded at startup by the
+        The framework uses a <strong>two-file layout</strong> for configuration:
+      </p>
+
+      <ul style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px; line-height: 1.8;">
+        <li><code>config/config.json</code> &mdash; Global settings (ollama, skills, tools, logging, etc.). <strong>Token-free</strong>, safe to commit.</li>
+        <li><code>config/bots.json</code> &mdash; Bot definitions array (id, token, skills, overrides). Contains Telegram tokens, <strong>gitignored</strong>.</li>
+      </ul>
+
+      <p>
+        Both files are loaded at startup by the
         <code>loadConfig()</code> function in <code>src/config.ts</code>, which:
       </p>
 
       <ul style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px; line-height: 1.8;">
-        <li>Reads the JSON file from disk using <code>readFileSync</code></li>
+        <li>Reads <code>config.json</code> from disk</li>
+        <li>Loads bots from <code>bots.json</code> (sibling file derived via <code>botsPathFromConfigPath()</code>)</li>
+        <li>Falls back to inline <code>bots</code> key in <code>config.json</code> if <code>bots.json</code> doesn't exist (backward compat)</li>
+        <li><strong>Auto-migrates</strong>: if bots are found inline, writes them to <code>bots.json</code> and strips the key from <code>config.json</code></li>
         <li>Substitutes environment variables using <code>${VAR_NAME}</code> syntax</li>
         <li>Validates the entire structure against a root <code>ConfigSchema</code> (Zod)</li>
         <li>Returns a fully typed <code>Config</code> object with all defaults applied</li>
@@ -70,10 +81,17 @@
         ensures no bot starts with a malformed config.
       </p>
 
+      <p>
+        Bot persistence (create, update, delete via dashboard) uses the shared
+        <code>persistBots(configPath, bots)</code> export, which writes directly to
+        <code>bots.json</code>.
+      </p>
+
       <pre><code>// Loading config at startup
 import { loadConfig } from './config';
 
-const config = await loadConfig('./config/config.json');</code></pre>
+const config = await loadConfig('./config/config.json');
+// config.bots loaded from config/bots.json</code></pre>
 
       <!-- ============================================================
            Section 2: Top-Level Structure
@@ -99,8 +117,8 @@ const config = await loadConfig('./config/config.json');</code></pre>
             <tr>
               <td><code>bots</code></td>
               <td><code>BotConfigSchema[]</code></td>
-              <td>Yes</td>
-              <td>Array of bot definitions (id, token, skills, overrides)</td>
+              <td>No (default&nbsp;<code>[]</code>)</td>
+              <td>Array of bot definitions — loaded from <code>bots.json</code>, not from this file</td>
             </tr>
             <tr>
               <td><code>ollama</code></td>
@@ -1029,6 +1047,67 @@ const config = await loadConfig('./config/config.json');</code></pre>
               <td>object</td>
               <td>(defaults)</td>
               <td>Per-phase timeout limits: <code>feedbackMs</code> (30s), <code>strategistMs</code> (60s), <code>plannerMs</code> (60s), <code>executorMs</code> (90s). Per-bot overridable via <code>botConfig.agentLoop.phaseTimeouts</code>.</td>
+            </tr>
+            <tr>
+              <td><code>loopDetection</code></td>
+              <td>object</td>
+              <td>(defaults)</td>
+              <td>Nested <code>LoopDetectionConfigSchema</code>. Tool loop detection for agent-loop executor phase.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- LoopDetectionConfigSchema -->
+      <div class="card">
+        <h3><code>LoopDetectionConfigSchema</code></h3>
+        <p>Tool loop detection configuration. Detects when the LLM is stuck in repetitive tool call patterns.</p>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Default</th><th>Validation</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>enabled</code></td>
+              <td>boolean</td>
+              <td><code>true</code></td>
+              <td>&mdash;</td>
+            </tr>
+            <tr>
+              <td><code>historySize</code></td>
+              <td>number</td>
+              <td><code>30</code></td>
+              <td>5&ndash;200 (integer). Sliding window size for call history.</td>
+            </tr>
+            <tr>
+              <td><code>warningThreshold</code></td>
+              <td>number</td>
+              <td><code>8</code></td>
+              <td>2&ndash;100 (integer). Calls before a warning is emitted.</td>
+            </tr>
+            <tr>
+              <td><code>criticalThreshold</code></td>
+              <td>number</td>
+              <td><code>16</code></td>
+              <td>3&ndash;200 (integer). Calls before execution is blocked. Must be &gt; warningThreshold.</td>
+            </tr>
+            <tr>
+              <td><code>globalCircuitBreakerThreshold</code></td>
+              <td>number</td>
+              <td><code>25</code></td>
+              <td>5&ndash;500 (integer). Absolute no-progress ceiling. Must be &gt; criticalThreshold.</td>
+            </tr>
+            <tr>
+              <td><code>detectors</code></td>
+              <td>object</td>
+              <td>(all true)</td>
+              <td><code>genericRepeat</code>, <code>knownPollNoProgress</code>, <code>pingPong</code> &mdash; toggle individual detectors.</td>
+            </tr>
+            <tr>
+              <td><code>knownPollTools</code></td>
+              <td>array</td>
+              <td><code>[{toolName: "process", actions: ["poll","log","list"]}]</code></td>
+              <td>Tools treated as polling tools for the <code>knownPollNoProgress</code> detector.</td>
             </tr>
           </tbody>
         </table>
@@ -1980,6 +2059,12 @@ const config = await loadConfig('./config/config.json');</code></pre>
               <td>object</td>
               <td>&mdash; (optional)</td>
               <td>Nested <code>BotProductionsConfigSchema</code></td>
+            </tr>
+            <tr>
+              <td><code>allowedWritePaths</code></td>
+              <td>string[]</td>
+              <td>&mdash; (optional)</td>
+              <td>Paths where the bot can write without <code>ask_permission</code>. Default at runtime: <code>["productions/"]</code></td>
             </tr>
           </tbody>
         </table>

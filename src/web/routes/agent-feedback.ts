@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import { claudeGenerate } from '../../claude-cli';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
+import { webGenerate } from './web-tool-helpers';
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
@@ -208,15 +208,14 @@ export function agentFeedbackRoutes(deps: {
         botName: botConfig.name ?? botId,
       });
 
-      const claudePath = deps.config.improve?.claudePath ?? 'claude';
-      const timeout = deps.config.improve?.timeout ?? 300_000;
-
-      const feedback = await claudeGenerate(prompt, {
+      const feedback = await webGenerate({
+        prompt,
         systemPrompt: GENERATE_SYSTEM_PROMPT,
-        claudePath,
-        timeout,
-        maxLength: 8000,
+        botId,
+        botManager: deps.botManager,
+        config: deps.config,
         logger: deps.logger,
+        maxLength: 8000,
       });
 
       deps.logger.info({ botId }, 'Generated feedback via Claude CLI');
@@ -301,15 +300,15 @@ export function agentFeedbackRoutes(deps: {
         );
 
         const prompt = sections.join('\n\n');
-        const claudePath = deps.config.improve?.claudePath ?? 'claude';
-        const timeout = deps.config.improve?.timeout ?? 300_000;
 
-        const response = await claudeGenerate(prompt, {
+        const response = await webGenerate({
+          prompt,
           systemPrompt: THREAD_SYSTEM_PROMPT,
-          claudePath,
-          timeout,
-          maxLength: 2000,
+          botId,
+          botManager: deps.botManager,
+          config: deps.config,
           logger: deps.logger,
+          maxLength: 2000,
         });
 
         deps.botManager.addAgentFeedbackThreadMessage(botId, id, 'bot', response);

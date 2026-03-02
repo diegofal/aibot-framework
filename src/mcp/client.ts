@@ -93,6 +93,12 @@ export class McpClient {
 
       await this.transport.start();
 
+      const handshakeStart = Date.now();
+      this.logger.debug(
+        { server: this.serverConfig.name, timeout: this.serverConfig.timeout },
+        'MCP handshake starting'
+      );
+
       // MCP handshake: initialize
       const initReq = createJsonRpcRequest('initialize', {
         protocolVersion: MCP_PROTOCOL_VERSION,
@@ -124,6 +130,7 @@ export class McpClient {
           server: this.serverConfig.name,
           serverInfo: this._serverInfo,
           toolCount: this._tools.length,
+          handshakeMs: Date.now() - handshakeStart,
         },
         'MCP client connected'
       );
@@ -161,6 +168,9 @@ export class McpClient {
     const allTools = (listResp.result as { tools: McpToolDef[] }).tools ?? [];
 
     // Apply allow/deny filters
+    const hasFilters = !!(
+      this.serverConfig.allowedTools?.length || this.serverConfig.deniedTools?.length
+    );
     this._tools = allTools.filter((t) => {
       if (this.serverConfig.allowedTools?.length) {
         return this.serverConfig.allowedTools.includes(t.name);
@@ -171,6 +181,16 @@ export class McpClient {
       return true;
     });
 
+    this.logger.info(
+      {
+        server: this.serverConfig.name,
+        rawCount: allTools.length,
+        filteredCount: this._tools.length,
+        filtersApplied: hasFilters,
+      },
+      'MCP tools refreshed'
+    );
+
     return this._tools;
   }
 
@@ -180,6 +200,12 @@ export class McpClient {
       throw new Error(`MCP server ${this.serverConfig.name} not connected`);
     }
 
+    const startMs = Date.now();
+    this.logger.debug(
+      { server: this.serverConfig.name, toolName, argsKeys: Object.keys(args) },
+      'MCP tool call starting'
+    );
+
     const callReq = createJsonRpcRequest('tools/call', {
       name: toolName,
       arguments: args,
@@ -188,15 +214,34 @@ export class McpClient {
     this.transport.send(callReq);
 
     const callResp = await waitForResponse(this.transport, callReq.id, this.serverConfig.timeout);
+    const durationMs = Date.now() - startMs;
 
     if (callResp.error) {
+      this.logger.error(
+        { server: this.serverConfig.name, toolName, durationMs, error: callResp.error.message },
+        'MCP tool call failed'
+      );
       return {
         content: [{ type: 'text', text: `MCP error: ${callResp.error.message}` }],
         isError: true,
       };
     }
 
-    return callResp.result as McpToolCallResult;
+    const result = callResp.result as McpToolCallResult;
+    const contentLength =
+      result.content?.reduce((sum, c) => sum + ('text' in c ? c.text.length : 0), 0) ?? 0;
+    this.logger.debug(
+      {
+        server: this.serverConfig.name,
+        toolName,
+        durationMs,
+        isError: result.isError,
+        contentLength,
+      },
+      'MCP tool call completed'
+    );
+
+    return result;
   }
 
   /** Disconnect from the server */

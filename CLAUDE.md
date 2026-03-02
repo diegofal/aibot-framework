@@ -43,7 +43,8 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `bot-manager.ts` | Facade slim: constructor, `startBot`, `stopBot`, `sendMessage`, API pública |
 | `tenant-facade.ts` | Tenant/billing/metering — delegado desde BotManager |
 | `tool-registry.ts` | Inicialización de tools, categorías (`TOOL_CATEGORIES`), pre-selección por categoría, filtro collaboration-safe |
-| `tool-executor.ts` | Ejecución de tools con lifecycle events y retry |
+| `tool-executor.ts` | Ejecución de tools con lifecycle events, retry y loop detection |
+| `tool-loop-detector.ts` | 4-strategy tool loop detection: circuit breaker, poll no-progress, ping-pong, generic repeat |
 | `system-prompt-builder.ts` | Composición unificada de system prompts (modo `conversation` y `collaboration`) |
 | `memory-flush.ts` | Flush de sesión a daily memory log |
 | `group-activation.ts` | Checks de relevancia en grupos: deference, LLM relevance, broadcast |
@@ -55,6 +56,7 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `handler-registrar.ts` | Registro de handlers grammy: skills, commands, media, built-ins |
 | `telegram-poller.ts` | Custom polling loop: getUpdates + 409/429 backoff + abort |
 | `bot-reset.ts` | Reset de soul files, memoria, sessions, stores |
+| `bot-export-service.ts` | Export/import de bots como .tar.gz (soul, config, core_memory, productions, etc.) |
 | `agent-loop.ts` | Orquestador del agent loop: ejecuta bots periódica/continuamente |
 | `agent-scheduler.ts` | Scheduling, concurrency, sleep, bot loops |
 | `agent-retry-engine.ts` | Retry con backoff exponencial, clasificación de errores |
@@ -102,6 +104,7 @@ BotManager (facade)
   ├── CollaborationManager    (usa SystemPromptBuilder, ToolRegistry)
   ├── TelegramPoller          (polling loop, inyectado en startTelegramBot)
   ├── BotResetService         (reset soul/memory/sessions/stores)
+  ├── BotExportService        (export/import bots as .tar.gz archives)
   ├── HandlerRegistrar        (usa ConversationPipeline, GroupActivation, ConversationGate)
   │   └── ConversationGate    (auth, grupo, bot-to-bot gates)
   └── AgentLoop               (orquestador)

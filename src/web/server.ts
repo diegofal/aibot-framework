@@ -9,6 +9,7 @@ import type { CronService } from '../cron';
 import type { Logger } from '../logger';
 import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
+import { agentExportRoutes } from './routes/agent-export';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
 import { agentLoopRoutes } from './routes/agent-loop';
 import { agentProposalRoutes } from './routes/agent-proposals';
@@ -59,6 +60,16 @@ export function startWebServer(deps: WebServerDeps): void {
   app.route(
     '/api/agents',
     agentsRoutes({ config, botManager: deps.botManager, configPath: deps.configPath, logger })
+  );
+  app.route(
+    '/api/agents',
+    agentExportRoutes({
+      config,
+      configPath: deps.configPath,
+      botManager: deps.botManager,
+      logger,
+      memoryManager: deps.botManager.getMemoryManager(),
+    })
   );
   app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager }));
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
@@ -189,18 +200,45 @@ export function startWebServer(deps: WebServerDeps): void {
     })
   );
 
+  // --- Activity stream REST endpoint ---
+  const activityStream = deps.botManager.getActivityStream();
+  app.get('/api/activity', (c) => {
+    const limit = Math.min(Math.max(1, Number(c.req.query('limit') || '50')), 500);
+    const offset = Math.max(0, Number(c.req.query('offset') || '0'));
+    return c.json(activityStream.getSlice(limit, offset));
+  });
+
+  // --- System logs REST endpoint (paginated) ---
+  app.get('/api/logs', (c) => {
+    const limit = Math.min(Math.max(1, Number(c.req.query('limit') || '100')), 1000);
+    const offset = Math.max(0, Number(c.req.query('offset') || '0'));
+    try {
+      const text = readFileSync(logFile, 'utf-8') as string;
+      const allLines = text.trimEnd().split('\n').filter(Boolean);
+      const total = allLines.length;
+      const end = total - offset;
+      const start = Math.max(0, end - limit);
+      if (end <= 0) return c.json({ lines: [], total });
+      const slice = allLines.slice(start, end);
+      const parsed: unknown[] = [];
+      for (const line of slice) {
+        try {
+          parsed.push(JSON.parse(line));
+        } catch {
+          /* skip malformed */
+        }
+      }
+      return c.json({ lines: parsed, total });
+    } catch {
+      return c.json({ lines: [], total: 0 });
+    }
+  });
+
   // Static files from web/ directory
   app.use('/*', serveStatic({ root: './web' }));
 
   // Fallback: serve index.html for SPA routing
   app.get('*', serveStatic({ root: './web', path: '/index.html' }));
-
-  // --- Activity stream REST endpoint ---
-  const activityStream = deps.botManager.getActivityStream();
-  app.get('/api/activity', (c) => {
-    const count = Number(c.req.query('count') || '50');
-    return c.json(activityStream.getRecent(count));
-  });
 
   // --- WebSocket log streaming ---
   const logFile = config.logging?.file || './data/logs/aibot.log';
@@ -231,7 +269,8 @@ export function startWebServer(deps: WebServerDeps): void {
     for (const ws of wsClients) {
       try {
         ws.send(data);
-      } catch {
+      } catch (err) {
+        logger.debug({ err }, 'WebSocket log broadcast send failed, removing client');
         wsClients.delete(ws);
       }
     }
@@ -241,7 +280,8 @@ export function startWebServer(deps: WebServerDeps): void {
     for (const ws of activityClients) {
       try {
         ws.send(data);
-      } catch {
+      } catch (err) {
+        logger.debug({ err }, 'WebSocket activity broadcast send failed, removing client');
         activityClients.delete(ws);
       }
     }
@@ -321,11 +361,16 @@ export function startWebServer(deps: WebServerDeps): void {
       open(ws) {
         if (ws.data?.type === 'activity') {
           activityClients.add(ws);
+          logger.debug(
+            { clientCount: activityClients.size },
+            'WebSocket activity client connected'
+          );
           // Send recent activity events as history
           const recent = activityStream.getRecent(50);
           ws.send(JSON.stringify({ type: 'history', events: recent }));
         } else {
           wsClients.add(ws);
+          logger.debug({ clientCount: wsClients.size }, 'WebSocket logs client connected');
           // Send last 100 lines as history
           const historyLines = readLastLines(logFile, 100);
           const parsed: unknown[] = [];
@@ -345,8 +390,13 @@ export function startWebServer(deps: WebServerDeps): void {
       close(ws) {
         if (ws.data?.type === 'activity') {
           activityClients.delete(ws);
+          logger.debug(
+            { clientCount: activityClients.size },
+            'WebSocket activity client disconnected'
+          );
         } else {
           wsClients.delete(ws);
+          logger.debug({ clientCount: wsClients.size }, 'WebSocket logs client disconnected');
         }
       },
     },

@@ -117,7 +117,10 @@ export async function renderAgents(el) {
   el.innerHTML = `
     <div class="flex-between mb-16">
       <div class="page-title">Agents <span class="count">${agents.length}</span></div>
-      <button class="btn btn-primary" id="btn-new-agent">+ New Agent</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn" id="btn-import-agent">Import Agent</button>
+        <button class="btn btn-primary" id="btn-new-agent">+ New Agent</button>
+      </div>
     </div>
     <table>
       <thead><tr><th>Name</th><th>ID</th><th>Status</th><th>Karma</th><th>Skills</th><th>Actions</th></tr></thead>
@@ -157,6 +160,7 @@ export async function renderAgents(el) {
         }
         <button class="btn btn-sm" data-action="edit" data-id="${agent.id}">Edit</button>
         <button class="btn btn-sm" data-action="clone" data-id="${agent.id}">Clone</button>
+        <button class="btn btn-sm" data-action="export" data-id="${agent.id}">Export</button>
         ${!agent.running ? `<button class="btn btn-sm btn-danger" data-action="reset" data-id="${agent.id}">Reset</button>` : ''}
         <button class="btn btn-sm btn-danger" data-action="delete" data-id="${agent.id}">Delete</button>
       </td>
@@ -225,6 +229,8 @@ export async function renderAgents(el) {
         if (res.error) alert(`Reset failed: ${res.error}`);
         renderAgents(el);
       }
+    } else if (action === 'export') {
+      showExportModal(id);
     } else if (action === 'delete') {
       if (confirm(`Delete agent "${id}"? This cannot be undone.`)) {
         await api(`/api/agents/${id}`, { method: 'DELETE' });
@@ -235,6 +241,10 @@ export async function renderAgents(el) {
 
   document.getElementById('btn-new-agent').addEventListener('click', () => {
     showNewAgentModal(skills, el);
+  });
+
+  document.getElementById('btn-import-agent').addEventListener('click', () => {
+    showImportModal(el);
   });
 }
 
@@ -1108,6 +1118,121 @@ function showNewAgentModal(skills, el) {
       alert(`Failed: ${err.message || err}`);
       btn.disabled = false;
       btn.textContent = 'Create & Generate Soul';
+    }
+  });
+}
+
+function showExportModal(botId) {
+  showModal(`
+    <div class="modal-title">Export Agent: ${escapeHtml(botId)}</div>
+    <p class="text-dim mb-16">Select what to include in the export archive (.tar.gz). Soul files are always included.</p>
+    <div class="form-group">
+      <label><input type="checkbox" id="export-productions"> Include productions</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="export-conversations"> Include conversations</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="export-karma"> Include karma</label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="export-cancel">Cancel</button>
+      <button class="btn btn-primary" id="export-confirm">Download Export</button>
+    </div>
+  `);
+
+  document.getElementById('export-cancel').addEventListener('click', closeModal);
+  document.getElementById('export-confirm').addEventListener('click', () => {
+    const productions = document.getElementById('export-productions').checked;
+    const conversations = document.getElementById('export-conversations').checked;
+    const karma = document.getElementById('export-karma').checked;
+
+    const params = new URLSearchParams();
+    if (productions) params.set('productions', 'true');
+    if (conversations) params.set('conversations', 'true');
+    if (karma) params.set('karma', 'true');
+
+    const url = `/api/agents/${encodeURIComponent(botId)}/export?${params}`;
+    window.location.href = url;
+    closeModal();
+  });
+}
+
+function showImportModal(el) {
+  showModal(`
+    <div class="modal-title">Import Agent</div>
+    <p class="text-dim mb-16">Upload a .tar.gz export archive to import an agent.</p>
+    <div class="form-group">
+      <label>Archive file</label>
+      <input type="file" id="import-file" accept=".tar.gz,.gz">
+    </div>
+    <div class="form-group">
+      <label>New Bot ID (optional, overrides the ID in the archive)</label>
+      <input type="text" id="import-bot-id" placeholder="Leave empty to use original ID">
+    </div>
+    <div class="form-group">
+      <label>New Bot Name (optional)</label>
+      <input type="text" id="import-bot-name" placeholder="Leave empty to use original name">
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="import-overwrite"> Overwrite if agent already exists</label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="import-cancel">Cancel</button>
+      <button class="btn btn-primary" id="import-confirm">Import</button>
+    </div>
+  `);
+
+  document.getElementById('import-cancel').addEventListener('click', closeModal);
+  document.getElementById('import-confirm').addEventListener('click', async () => {
+    const fileInput = document.getElementById('import-file');
+    const file = fileInput.files?.[0];
+    if (!file) {
+      alert('Please select a file');
+      return;
+    }
+
+    const btn = document.getElementById('import-confirm');
+    btn.disabled = true;
+    btn.textContent = 'Importing...';
+
+    try {
+      const newBotId = document.getElementById('import-bot-id').value.trim();
+      const newBotName = document.getElementById('import-bot-name').value.trim();
+      const overwrite = document.getElementById('import-overwrite').checked;
+
+      const params = new URLSearchParams();
+      if (newBotId) params.set('newBotId', newBotId);
+      if (newBotName) params.set('newBotName', newBotName);
+      if (overwrite) params.set('overwrite', 'true');
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch(`/api/agents/import?${params}`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        alert(`Import failed: ${result.error}`);
+        btn.disabled = false;
+        btn.textContent = 'Import';
+        return;
+      }
+
+      let msg = `Agent "${result.botName}" (${result.botId}) imported successfully.`;
+      if (result.warnings?.length) {
+        msg += `\n\nWarnings:\n- ${result.warnings.join('\n- ')}`;
+      }
+      alert(msg);
+      closeModal();
+      renderAgents(el);
+    } catch (err) {
+      alert(`Import failed: ${err.message || err}`);
+      btn.disabled = false;
+      btn.textContent = 'Import';
     }
   });
 }

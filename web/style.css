@@ -1255,6 +1255,13 @@ textarea {
   font-size: 12px;
   padding: 4px 0;
 }
+.scroll-loading-indicator {
+  text-align: center;
+  padding: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  opacity: 0.7;
+}
 .activity-event {
   padding: 4px 12px;
   border-bottom: 1px solid var(--border);

@@ -99,6 +99,63 @@ describe('ActivityStream', () => {
     expect(l2).toHaveBeenCalledTimes(1);
   });
 
+  test('getSlice() returns events from end with offset', () => {
+    for (let i = 0; i < 20; i++) {
+      stream.publish({
+        type: 'agent:phase',
+        botId: 'bot1',
+        timestamp: i,
+        data: { index: i },
+      });
+    }
+
+    // Most recent 5 (offset 0)
+    const page0 = stream.getSlice(5, 0);
+    expect(page0.total).toBe(20);
+    expect(page0.events).toHaveLength(5);
+    expect(page0.events[0].data?.index).toBe(15);
+    expect(page0.events[4].data?.index).toBe(19);
+
+    // Next 5 (offset 5)
+    const page1 = stream.getSlice(5, 5);
+    expect(page1.total).toBe(20);
+    expect(page1.events).toHaveLength(5);
+    expect(page1.events[0].data?.index).toBe(10);
+    expect(page1.events[4].data?.index).toBe(14);
+
+    // Last page (offset 18 → only 2 events left)
+    const pageLast = stream.getSlice(5, 18);
+    expect(pageLast.events).toHaveLength(2);
+    expect(pageLast.events[0].data?.index).toBe(0);
+    expect(pageLast.events[1].data?.index).toBe(1);
+  });
+
+  test('getSlice() returns empty when offset exceeds buffer', () => {
+    for (let i = 0; i < 5; i++) {
+      stream.publish({ type: 'agent:idle', botId: 'bot1', timestamp: i });
+    }
+    const result = stream.getSlice(10, 100);
+    expect(result.events).toEqual([]);
+    expect(result.total).toBe(5);
+  });
+
+  test('getSlice() default params return last 50', () => {
+    for (let i = 0; i < 100; i++) {
+      stream.publish({ type: 'agent:phase', botId: 'bot1', timestamp: i });
+    }
+    const result = stream.getSlice();
+    expect(result.events).toHaveLength(50);
+    expect(result.total).toBe(100);
+    expect(result.events[0].timestamp).toBe(50);
+    expect(result.events[49].timestamp).toBe(99);
+  });
+
+  test('getSlice() on empty buffer', () => {
+    const result = stream.getSlice(10, 0);
+    expect(result.events).toEqual([]);
+    expect(result.total).toBe(0);
+  });
+
   test('events preserve all fields', () => {
     const event: ActivityEvent = {
       type: 'memory:flush',

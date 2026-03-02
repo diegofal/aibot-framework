@@ -6,6 +6,7 @@ import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { ProductionsService } from '../productions/service';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
+import type { LoopDetectionResult, ToolLoopDetector } from './tool-loop-detector';
 import type { BotContext } from './types';
 
 /**
@@ -63,12 +64,29 @@ export interface ToolErrorEvent {
 }
 
 /**
+ * Event payload for loop detection events (warning or blocked).
+ */
+export interface ToolLoopEvent {
+  toolName: string;
+  args: Record<string, unknown>;
+  detector: string;
+  level: 'warning' | 'critical';
+  count: number;
+  message: string;
+  botId: string;
+  chatId: number;
+  timestamp: number;
+}
+
+/**
  * Observable events emitted by ToolExecutor.
  */
 export interface ToolExecutorEvents {
   'tool:start': ToolStartEvent;
   'tool:end': ToolEndEvent;
   'tool:error': ToolErrorEvent;
+  'tool:loop-warning': ToolLoopEvent;
+  'tool:loop-blocked': ToolLoopEvent;
 }
 
 /**
@@ -91,6 +109,8 @@ export interface ToolExecutorOptions {
   tools?: Tool[];
   /** Optional karma service for quality gate penalties */
   karmaService?: KarmaService;
+  /** Optional loop detector for agent-loop repetition protection */
+  loopDetector?: ToolLoopDetector;
 }
 
 /**
@@ -128,6 +148,7 @@ export class ToolExecutor extends EventEmitter {
   private tools: Tool[];
   private logger: Logger;
   private executionLog: ToolExecutionRecord[] = [];
+  private loopDetector: ToolLoopDetector | undefined;
 
   constructor(
     private ctx: BotContext,
@@ -136,6 +157,7 @@ export class ToolExecutor extends EventEmitter {
     super();
     this.logger = options.logger ?? ctx.logger;
     this.tools = options.tools ?? ctx.tools;
+    this.loopDetector = options.loopDetector;
 
     // Build disabled set: config + explicit override
     if (options.disabledTools) {
@@ -185,6 +207,30 @@ export class ToolExecutor extends EventEmitter {
         botId: e.botId,
         timestamp: e.timestamp,
         data: { toolName: e.toolName, error: e.error.slice(0, 300), phase: e.phase },
+      })
+    );
+    this.on('tool:loop-warning', (e) =>
+      stream.publish({
+        type: 'tool:error',
+        botId: e.botId,
+        timestamp: e.timestamp,
+        data: {
+          toolName: e.toolName,
+          error: `[loop-${e.level}] ${e.message}`.slice(0, 300),
+          phase: 'loop-detection',
+        },
+      })
+    );
+    this.on('tool:loop-blocked', (e) =>
+      stream.publish({
+        type: 'tool:error',
+        botId: e.botId,
+        timestamp: e.timestamp,
+        data: {
+          toolName: e.toolName,
+          error: `[loop-blocked] ${e.message}`.slice(0, 300),
+          phase: 'loop-detection',
+        },
       })
     );
   }
@@ -264,6 +310,48 @@ export class ToolExecutor extends EventEmitter {
       chatId,
       timestamp: startMs,
     });
+
+    // Loop detection pre-check (before any execution)
+    let loopWarningMessage: string | undefined;
+    if (this.loopDetector) {
+      const loopCheck = this.loopDetector.check(name, args);
+      if (loopCheck.stuck) {
+        const loopEvent: ToolLoopEvent = {
+          toolName: name,
+          args,
+          detector: loopCheck.detector,
+          level: loopCheck.level,
+          count: loopCheck.count,
+          message: loopCheck.message,
+          botId,
+          chatId,
+          timestamp: Date.now(),
+        };
+
+        if (loopCheck.level === 'critical') {
+          this.emit('tool:loop-blocked', loopEvent);
+          this.logger.error(
+            { tool: name, botId, detector: loopCheck.detector, count: loopCheck.count },
+            `Loop detector blocked tool: ${loopCheck.message}`
+          );
+          return this.buildFailResult(
+            name,
+            args,
+            startMs,
+            `BLOCKED by loop detection (${loopCheck.detector}): ${loopCheck.message}`,
+            'execution'
+          );
+        }
+
+        // Warning level: emit event but continue execution
+        this.emit('tool:loop-warning', loopEvent);
+        this.logger.warn(
+          { tool: name, botId, detector: loopCheck.detector, count: loopCheck.count },
+          `Loop detector warning: ${loopCheck.message}`
+        );
+        loopWarningMessage = loopCheck.message;
+      }
+    }
 
     // Check if tool is disabled
     if (this.disabledTools.has(name)) {
@@ -417,21 +505,33 @@ export class ToolExecutor extends EventEmitter {
             }
           }
 
+          // Record in loop detector
+          if (this.loopDetector) {
+            this.loopDetector.recordCall(name, args);
+            this.loopDetector.recordOutcome(name, args, validatedResult.content);
+          }
+
+          // Inject loop warning into result content so LLM sees it
+          const finalContent = loopWarningMessage
+            ? `${validatedResult.content}\n\n[LOOP WARNING: ${loopWarningMessage}]`
+            : validatedResult.content;
+
           // Success! Return result with retry count
           const durationMs = Date.now() - startMs;
           const result: ToolExecutionResult = {
             ...validatedResult,
+            content: finalContent,
             toolName: name,
             args,
             durationMs,
             retryAttempts: attempt,
           };
-          this.logExecution(name, args, true, validatedResult.content, durationMs);
+          this.logExecution(name, args, true, finalContent, durationMs);
           this.emit('tool:end', {
             toolName: name,
             args,
             success: true,
-            result: validatedResult.content,
+            result: finalContent,
             durationMs,
             retryAttempts: attempt,
             botId,
@@ -443,6 +543,11 @@ export class ToolExecutor extends EventEmitter {
 
         // Tool error (not validation) — pass through without retry
         if (!toolResult.success) {
+          // Record errors in loop detector too
+          if (this.loopDetector) {
+            this.loopDetector.recordCall(name, args);
+            this.loopDetector.recordOutcome(name, args, validatedResult.content);
+          }
           return this.buildFailResult(
             name,
             args,
@@ -485,6 +590,12 @@ export class ToolExecutor extends EventEmitter {
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         this.logger.error({ tool: name, botId, attempt, error: err }, 'Tool execution error');
+
+        // Record thrown errors in loop detector
+        if (this.loopDetector) {
+          this.loopDetector.recordCall(name, args);
+          this.loopDetector.recordOutcome(name, args, `error:${lastError}`);
+        }
 
         // Retries left — emit error and continue
         if (attempt < maxRetries) {

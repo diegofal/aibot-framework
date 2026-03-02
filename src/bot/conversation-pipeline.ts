@@ -252,6 +252,16 @@ export class ConversationPipeline {
         config.id,
         compactionConfig
       );
+      if (compResult.compacted) {
+        botLogger.info(
+          {
+            botId: config.id,
+            messagesBefore: truncated.length,
+            messagesAfter: compResult.messages.length,
+          },
+          'Context compaction applied'
+        );
+      }
       let currentMessages = compResult.messages;
 
       // Typing indicator
@@ -332,6 +342,7 @@ export class ConversationPipeline {
           overflowRetries++;
           botLogger.warn({ attempt: overflowRetries }, 'Context overflow, emergency compaction');
 
+          const emergencyBefore = currentMessages.length;
           const emergency = await this.contextCompactor.maybeCompact(
             currentMessages,
             serializedKey,
@@ -339,6 +350,14 @@ export class ConversationPipeline {
             { ...compactionConfig, thresholdRatio: 0.1, keepRecentMessages: 2 }
           );
           currentMessages = emergency.messages;
+          botLogger.info(
+            {
+              botId: config.id,
+              messagesBefore: emergencyBefore,
+              messagesAfter: currentMessages.length,
+            },
+            'Emergency overflow compaction applied'
+          );
 
           llmResult = await executeWithResilience(
             () =>
@@ -433,6 +452,7 @@ export class ConversationPipeline {
             ],
             resolved.maxHistory
           );
+          botLogger.debug({ botId: config.id, messagesAppended: 2 }, 'Session messages persisted');
         }
 
         if (response.trim()) {

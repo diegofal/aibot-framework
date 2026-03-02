@@ -76,6 +76,13 @@ function makeMockDeps(overrides?: Record<string, unknown>) {
     }),
     getKarmaService: () => undefined,
     getActivityStream: () => undefined,
+    getLLMClient: () => {
+      throw new Error('No LLMClient in test');
+    },
+    getToolRegistry: () => ({
+      getDefinitionsForBot: () => [],
+      createExecutor: () => async () => ({ success: true, content: 'ok' }),
+    }),
   };
 
   return {
@@ -629,6 +636,13 @@ describe('productions routes', () => {
         getSoulLoader: () => mockSoulLoader,
         getKarmaService: () => undefined,
         getActivityStream: () => undefined,
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
+        }),
       } as any;
 
       const app = new Hono();
@@ -781,6 +795,13 @@ describe('productions routes', () => {
         getSoulLoader: () => mockSoulLoader,
         getKarmaService: () => undefined,
         getActivityStream: () => undefined,
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
+        }),
       } as any;
 
       const app = new Hono();
@@ -871,6 +892,13 @@ describe('productions routes', () => {
         getSoulLoader: () => mockSoulLoader,
         getKarmaService: () => undefined,
         getActivityStream: () => undefined,
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
+        }),
       } as any;
 
       const app = new Hono();
@@ -946,6 +974,311 @@ describe('productions routes', () => {
       mock.module('../../../src/claude-cli', () => ({
         claudeGenerate: orig,
       }));
+    });
+  });
+
+  describe('GET /:botId/:id/coherence (LLM-based)', () => {
+    test('returns 404 for non-existent entry', async () => {
+      const deps = makeMockDeps();
+      const app = new Hono();
+      app.route('/api/productions', productionsRoutes(deps));
+
+      const res = await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      expect(res.status).toBe(404);
+    });
+
+    test('returns { status: "checking" } on first call and starts LLM generation', async () => {
+      let resolveGenerate: (v: string) => void;
+      const mockClaudeGenerate = mock(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveGenerate = resolve;
+          })
+      );
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/productions');
+      const deps = makeMockDeps();
+      const mockEntry = {
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/article.md',
+        action: 'create',
+        description: 'Wrote article',
+        size: 500,
+        trackOnly: false,
+        timestamp: '2026-02-20T10:00:00Z',
+      };
+      deps.productionsService.getEntry = () => mockEntry;
+
+      const app = new Hono();
+      app.route('/api/productions', freshModule.productionsRoutes(deps));
+
+      const res = await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.status).toBe('checking');
+
+      // Resolve so it doesn't leak
+      resolveGenerate!('{"coherent": true, "issues": [], "explanation": "Good content"}');
+      await tick();
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+
+    test('returns cached coherent result after LLM completes', async () => {
+      const mockClaudeGenerate = mock(() =>
+        Promise.resolve(
+          '{"coherent": true, "issues": [], "explanation": "Well-structured content"}'
+        )
+      );
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/productions');
+      const deps = makeMockDeps();
+      const mockEntry = {
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/article.md',
+        action: 'create',
+        description: 'Wrote article',
+        size: 500,
+        trackOnly: false,
+        timestamp: '2026-02-20T10:00:00Z',
+      };
+      deps.productionsService.getEntry = () => mockEntry;
+
+      const app = new Hono();
+      app.route('/api/productions', freshModule.productionsRoutes(deps));
+
+      // First call triggers generation
+      const res1 = await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      expect((await res1.json()).status).toBe('checking');
+
+      await tick();
+
+      // Second call returns cached result
+      const res2 = await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      const data = await res2.json();
+      expect(data.coherent).toBe(true);
+      expect(data.issues).toEqual([]);
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+
+    test('returns incoherent result and auto-posts to thread', async () => {
+      const mockClaudeGenerate = mock(() =>
+        Promise.resolve(
+          '{"coherent": false, "issues": ["Missing content", "Placeholder text"], "explanation": "The file contains mostly placeholder text with no real substance."}'
+        )
+      );
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/productions');
+      const deps = makeMockDeps();
+      const mockEntry = {
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/article.md',
+        action: 'create',
+        description: 'Wrote article',
+        size: 500,
+        trackOnly: false,
+        timestamp: '2026-02-20T10:00:00Z',
+      };
+      deps.productionsService.getEntry = () => mockEntry;
+      deps.productionsService.addThreadMessage = mock(
+        (_b: string, _i: string, role: string, content: string) => ({
+          message: { id: 'msg1', role, content, createdAt: new Date().toISOString() },
+          entry: mockEntry,
+        })
+      );
+
+      const app = new Hono();
+      app.route('/api/productions', freshModule.productionsRoutes(deps));
+
+      // First call triggers generation
+      await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      await tick();
+
+      // Second call returns result
+      const res = await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      const data = await res.json();
+      expect(data.coherent).toBe(false);
+      expect(data.issues).toEqual(['Missing content', 'Placeholder text']);
+
+      // Verify auto thread message was posted
+      expect(deps.productionsService.addThreadMessage).toHaveBeenCalledTimes(1);
+      const callArgs = (deps.productionsService.addThreadMessage as any).mock.calls[0];
+      expect(callArgs[0]).toBe('bot1');
+      expect(callArgs[1]).toBe('p1');
+      expect(callArgs[2]).toBe('bot');
+      expect(callArgs[3]).toStartWith('Coherence Check:');
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+
+    test('does not duplicate thread message if already posted', async () => {
+      const mockClaudeGenerate = mock(() =>
+        Promise.resolve('{"coherent": false, "issues": ["Bad"], "explanation": "Needs work."}')
+      );
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/productions');
+      const deps = makeMockDeps();
+      const mockEntry = {
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/article.md',
+        action: 'create',
+        description: 'Wrote article',
+        size: 500,
+        trackOnly: false,
+        timestamp: '2026-02-20T10:00:00Z',
+        evaluation: {
+          evaluatedAt: '2026-02-20T10:00:00Z',
+          thread: [
+            {
+              id: 'existing',
+              role: 'bot',
+              content: 'Coherence Check: This was already flagged.',
+              createdAt: '2026-02-20T10:00:00Z',
+            },
+          ],
+        },
+      };
+      deps.productionsService.getEntry = () => mockEntry as any;
+      deps.productionsService.addThreadMessage = mock(() => null);
+
+      const app = new Hono();
+      app.route('/api/productions', freshModule.productionsRoutes(deps));
+
+      await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      await tick();
+
+      // Should NOT have posted another thread message
+      expect(deps.productionsService.addThreadMessage).not.toHaveBeenCalled();
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+
+    test('returns error status when LLM fails', async () => {
+      const mockClaudeGenerate = mock(() => Promise.reject(new Error('LLM timeout')));
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/productions');
+      const deps = makeMockDeps();
+      const mockEntry = {
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/article.md',
+        action: 'create',
+        description: 'Wrote article',
+        size: 500,
+        trackOnly: false,
+        timestamp: '2026-02-20T10:00:00Z',
+      };
+      deps.productionsService.getEntry = () => mockEntry;
+
+      const app = new Hono();
+      app.route('/api/productions', freshModule.productionsRoutes(deps));
+
+      // First call triggers generation
+      await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      await tick();
+
+      // Second call returns error
+      const res = await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      const data = await res.json();
+      expect(data.status).toBe('error');
+      expect(data.error).toContain('LLM timeout');
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+
+    test('handles empty file content gracefully', async () => {
+      const mockClaudeGenerate = mock(() => Promise.resolve('should not be called'));
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/productions');
+      const deps = makeMockDeps();
+      const mockEntry = {
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/empty.md',
+        action: 'create',
+        description: 'Empty file',
+        size: 0,
+        trackOnly: false,
+        timestamp: '2026-02-20T10:00:00Z',
+      };
+      deps.productionsService.getEntry = () => mockEntry;
+      deps.productionsService.getFileContent = () => '';
+
+      const app = new Hono();
+      app.route('/api/productions', freshModule.productionsRoutes(deps));
+
+      await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      await tick();
+
+      const res = await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      const data = await res.json();
+      expect(data.coherent).toBe(false);
+      expect(data.issues).toContain('File is empty or not found');
+
+      // LLM should NOT have been called for empty content
+      expect(mockClaudeGenerate).not.toHaveBeenCalled();
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
+    });
+
+    test('handles LLM response with markdown code fences', async () => {
+      const mockClaudeGenerate = mock(() =>
+        Promise.resolve(
+          '```json\n{"coherent": true, "issues": [], "explanation": "Content looks good"}\n```'
+        )
+      );
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
+
+      const freshModule = await import('../../../src/web/routes/productions');
+      const deps = makeMockDeps();
+      const mockEntry = {
+        id: 'p1',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/output/article.md',
+        action: 'create',
+        description: 'Wrote article',
+        size: 500,
+        trackOnly: false,
+        timestamp: '2026-02-20T10:00:00Z',
+      };
+      deps.productionsService.getEntry = () => mockEntry;
+
+      const app = new Hono();
+      app.route('/api/productions', freshModule.productionsRoutes(deps));
+
+      await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      await tick();
+
+      const res = await app.request('http://localhost/api/productions/bot1/p1/coherence');
+      const data = await res.json();
+      expect(data.coherent).toBe(true);
+
+      const { claudeGenerate: orig } = await import('../../../src/claude-cli');
+      mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
     });
   });
 });

@@ -129,6 +129,38 @@ export function settingsRoutes(deps: {
     });
   });
 
+  // Get memory search settings (includes MMR)
+  app.get('/memory-search', (c) => {
+    return c.json(deps.config.soul.search);
+  });
+
+  // Update memory search settings
+  app.patch('/memory-search', async (c) => {
+    const body = await c.req.json();
+    const search = deps.config.soul.search;
+
+    // MMR sub-config
+    if (body.mmr) {
+      if (body.mmr.enabled !== undefined) search.mmr.enabled = body.mmr.enabled;
+      if (body.mmr.lambda !== undefined) search.mmr.lambda = body.mmr.lambda;
+    }
+
+    // AutoRag sub-config
+    if (body.autoRag) {
+      if (body.autoRag.enabled !== undefined) search.autoRag.enabled = body.autoRag.enabled;
+      if (body.autoRag.maxResults !== undefined)
+        search.autoRag.maxResults = body.autoRag.maxResults;
+      if (body.autoRag.minScore !== undefined) search.autoRag.minScore = body.autoRag.minScore;
+      if (body.autoRag.maxContentChars !== undefined)
+        search.autoRag.maxContentChars = body.autoRag.maxContentChars;
+    }
+
+    persistMemorySearch(deps.configPath, search);
+    deps.logger.info('Memory search settings updated via API');
+
+    return c.json(search);
+  });
+
   // --- MCP Server Management ---
 
   // GET /mcp — return MCP config + live status
@@ -260,5 +292,12 @@ function persistCollaboration(configPath: string, collaboration: Config['collabo
 function persistSkillsFolders(configPath: string, skillsFolders: Config['skillsFolders']): void {
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   raw.skillsFolders = skillsFolders;
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+}
+
+function persistMemorySearch(configPath: string, search: Config['soul']['search']): void {
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+  if (!raw.soul) raw.soul = {};
+  raw.soul.search = search;
   writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }

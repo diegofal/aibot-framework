@@ -139,7 +139,10 @@ export class OllamaClient {
    */
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<string> {
     const model = options.model || this.config.models.primary;
-    const hasTools = options.tools && options.tools.length > 0 && options.toolExecutor;
+    // Ensure the resolved model propagates to strategies so they never fall back to a hardcoded default
+    const resolvedOptions = { ...options, model };
+    const hasTools =
+      resolvedOptions.tools && resolvedOptions.tools.length > 0 && resolvedOptions.toolExecutor;
     const startMs = Date.now();
 
     try {
@@ -150,7 +153,7 @@ export class OllamaClient {
 
       // If tools are provided, delegate to the generic tool loop
       if (hasTools) {
-        const maxRounds = options.maxToolRounds ?? 5;
+        const maxRounds = resolvedOptions.maxToolRounds ?? 5;
         const strategy = new NativeToolStrategy(
           this,
           this.config.baseUrl,
@@ -162,12 +165,12 @@ export class OllamaClient {
           messages,
           {
             maxRounds,
-            tools: options.tools!,
-            toolExecutor: options.toolExecutor!,
+            tools: resolvedOptions.tools!,
+            toolExecutor: resolvedOptions.toolExecutor!,
             logger: this.logger,
             loopDetector: createLoopDetector(maxRounds),
           },
-          options
+          resolvedOptions
         );
       }
 
@@ -178,7 +181,7 @@ export class OllamaClient {
         this.logger,
         this.config.timeout
       );
-      const result = await strategy.chat(messages, options);
+      const result = await strategy.chat(messages, resolvedOptions);
       this.logger.debug(
         { model, response: (result.content || '').slice(0, 100), elapsedMs: Date.now() - startMs },
         'Chat response'

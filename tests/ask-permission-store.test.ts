@@ -50,16 +50,14 @@ describe('AskPermissionStore', () => {
     expect(r.status).toBe('pending');
     expect(typeof r.id).toBe('string');
     expect(typeof r.createdAt).toBe('number');
-    expect(r.remainingMs).toBeGreaterThan(0);
     store.dispose();
   });
 
-  test('request() with custom urgency and timeout', () => {
-    const { promise } = store.request('bot1', 'exec', 'npm test', 'Run tests', 'high', 30 * 60_000);
+  test('request() with custom urgency', () => {
+    const { promise } = store.request('bot1', 'exec', 'npm test', 'Run tests', 'high');
     promise.catch(() => {});
     const all = store.getAll();
     expect(all[0].urgency).toBe('high');
-    expect(all[0].timeoutMs).toBe(30 * 60_000);
     store.dispose();
   });
 
@@ -174,13 +172,14 @@ describe('AskPermissionStore', () => {
     store.dispose();
   });
 
-  test('timeout auto-expires request', async () => {
-    const { promise } = store.request('bot1', 'file_write', '/x', 'test', 'normal', 50);
+  test('permissions never expire (no timeout)', async () => {
+    const { promise } = store.request('bot1', 'file_write', '/x', 'test');
     promise.catch(() => {}); // prevent unhandled rejection
 
+    // Wait well past any old timeout — request should still be pending
     await new Promise((r) => setTimeout(r, 100));
-    expect(store.getPendingCount()).toBe(0);
-    await expect(promise).rejects.toThrow('timed out');
+    expect(store.getPendingCount()).toBe(1);
+    store.dispose();
   });
 
   test('dispose() clears all and rejects promises', async () => {
@@ -316,7 +315,7 @@ describe('AskPermissionStore history', () => {
     expect(store.getHistory()).toEqual([]);
   });
 
-  test('dispose clears history', async () => {
+  test('dispose clears in-memory history', async () => {
     const { id, promise } = store.request('bot1', 'file_write', '/a', 'desc');
     store.approveById(id);
     await promise;
@@ -642,14 +641,78 @@ describe('AskPermissionStore persistence', () => {
     expect(decisions[0].id).toBe(id);
   });
 
-  test('clearForBot removes persisted entries', async () => {
+  test('pending permissions survive store recreation', () => {
     const store1 = new AskPermissionStore(makeLogger(), tmpDir);
-    const { id, promise } = store1.request('bot1', 'file_write', '/a', 'desc');
-    store1.approveById(id);
-    await promise;
-    store1.clearForBot('bot1');
+    const { id, promise: p1 } = store1.request('bot1', 'file_write', '/a', 'desc');
+    const { id: id2, promise: p2 } = store1.request('bot1', 'exec', 'npm test', 'run tests');
+    p1.catch(() => {});
+    p2.catch(() => {});
+
+    expect(store1.getPendingCount()).toBe(2);
+
+    // Dispose persists pending to disk, then clears in-memory
+    store1.dispose();
+
+    // Recreate store from disk — pending should be restored
+    const store2 = new AskPermissionStore(makeLogger(), tmpDir);
+    expect(store2.getPendingCount()).toBe(2);
+
+    const all = store2.getAll();
+    const ids = all.map((r) => r.id);
+    expect(ids).toContain(id);
+    expect(ids).toContain(id2);
+
+    // Approve a restored pending — should work normally
+    const ok = store2.approveById(id);
+    expect(ok).toBe(true);
+    expect(store2.getPendingCount()).toBe(1);
+
+    const decisions = store2.consumeDecisionsForBot('bot1');
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].status).toBe('approved');
+
+    store2.dispose();
+  });
+
+  test('pending permissions deduplicate after restore', () => {
+    const store1 = new AskPermissionStore(makeLogger(), tmpDir);
+    const { promise: p1 } = store1.request('bot1', 'file_write', '/a', 'desc');
+    p1.catch(() => {});
+    store1.dispose();
 
     const store2 = new AskPermissionStore(makeLogger(), tmpDir);
+    // Same (botId, action, resource) should be detected as duplicate
+    expect(store2.hasPendingDuplicate('bot1', 'file_write', '/a')).toBe(true);
+    store2.dispose();
+  });
+
+  test('clearForBot removes history but preserves pending', async () => {
+    const store1 = new AskPermissionStore(makeLogger(), tmpDir);
+
+    // Create a resolved entry (goes to history)
+    const { id: resolvedId, promise } = store1.request('bot1', 'file_write', '/a', 'desc');
+    store1.approveById(resolvedId);
+    await promise;
+
+    // Create a pending entry
+    const { promise: pendingPromise } = store1.request('bot1', 'exec', 'npm test', 'run tests');
+    pendingPromise.catch(() => {});
+
+    expect(store1.getHistory()).toHaveLength(1);
+    expect(store1.getPendingCount()).toBe(1);
+
+    store1.clearForBot('bot1');
+
+    // History should be cleared
+    expect(store1.getHistory()).toHaveLength(0);
+    // Pending should be preserved
+    expect(store1.getPendingCount()).toBe(1);
+
+    // Verify persistence
+    store1.dispose();
+    const store2 = new AskPermissionStore(makeLogger(), tmpDir);
     expect(store2.getHistory()).toHaveLength(0);
+    expect(store2.getPendingCount()).toBe(1);
+    store2.dispose();
   });
 });

@@ -579,7 +579,12 @@ describe('BotResetService production skills cleanup', () => {
 
   function writeConfig(config: Record<string, unknown>): void {
     mkdirSync(join(tmpDir), { recursive: true });
-    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+    // Write bots to separate bots.json (matching the split config layout)
+    const { bots, ...rest } = config;
+    writeFileSync(configPath, JSON.stringify(rest, null, 2), 'utf-8');
+    if (bots) {
+      writeFileSync(join(tmpDir, 'bots.json'), JSON.stringify(bots, null, 2), 'utf-8');
+    }
   }
 
   function createResetServiceWithConfig(
@@ -687,8 +692,8 @@ describe('BotResetService production skills cleanup', () => {
     });
     const result = await service.reset('test-bot', soulDir);
 
-    const persisted = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(persisted.bots[0].skills).toEqual(['reminders']);
+    const persistedBots = JSON.parse(readFileSync(join(tmpDir, 'bots.json'), 'utf-8'));
+    expect(persistedBots[0].skills).toEqual(['reminders']);
     expect(result.cleared.productionSkills).toEqual(['bookmarks']);
   });
 

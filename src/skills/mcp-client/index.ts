@@ -87,3 +87,11 @@ export async function call_mcp_tool(
 
   return output;
 }
+
+/**
+ * Handlers map expected by the external skill loader.
+ */
+export const handlers = {
+  list_mcp_servers,
+  call_mcp_tool,
+};

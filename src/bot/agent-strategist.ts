@@ -127,6 +127,11 @@ export async function runStrategistWithRetry(
         { attempt, raw: raw.slice(0, 200) },
         'Agent loop: strategist failed to parse, retrying with temperature 0'
       );
+    } else {
+      logger.warn(
+        { rawResponse: raw.slice(0, 300) },
+        'Agent loop: strategist parse failed on final attempt'
+      );
     }
   }
 
@@ -201,7 +206,15 @@ export function applyGoalOperations(
   logger: Logger,
   soulLoader: ReturnType<BotContext['getSoulLoader']>
 ): void {
+  logger.info(
+    { botId, operationCount: operations.length, types: operations.map((o) => o.action) },
+    'Applying goal operations'
+  );
+
   const content = soulLoader.readGoals?.() ?? null;
+  if (!content) {
+    logger.debug({ botId }, 'No goals file found, starting fresh');
+  }
   const { active, completed } = parseGoals(content);
 
   for (const op of operations) {
@@ -261,4 +274,5 @@ export function applyGoalOperations(
   }
 
   soulLoader.writeGoals(serializeGoals(active, completed));
+  logger.debug({ botId, goalCount: active.length + completed.length }, 'Goals written back');
 }

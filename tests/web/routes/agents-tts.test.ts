@@ -16,6 +16,7 @@ const noopLogger: Logger = {
 
 const TEST_DIR = join(process.cwd(), '.test-agents-tts-routes');
 const CONFIG_PATH = join(TEST_DIR, 'config.json');
+const BOTS_PATH = join(TEST_DIR, 'bots.json');
 
 function makeBots(): BotConfig[] {
   return [
@@ -90,7 +91,8 @@ describe('agents routes - TTS', () => {
 
   function setupConfig(bots: BotConfig[], mediaTts?: any) {
     const config = makeConfig(bots, mediaTts);
-    writeFileSync(CONFIG_PATH, JSON.stringify({ bots: config.bots }, null, 2));
+    writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2));
+    writeFileSync(BOTS_PATH, JSON.stringify(config.bots, null, 2));
     return { config, app: makeApp(config, CONFIG_PATH) };
   }
 
@@ -198,8 +200,8 @@ describe('agents routes - TTS', () => {
         body: JSON.stringify({ tts: { voiceId: 'persisted-voice' } }),
       });
 
-      const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
-      expect(raw.bots[0].tts).toEqual({ voiceId: 'persisted-voice' });
+      const raw = JSON.parse(readFileSync(BOTS_PATH, 'utf-8'));
+      expect(raw[0].tts).toEqual({ voiceId: 'persisted-voice' });
     });
   });
 });

@@ -55,6 +55,8 @@ export async function runPlannerWithRetry(
 ): Promise<PlannerResult> {
   const temperatures = [0.3, 0];
 
+  logger.debug({ model, temperature: temperatures[0], maxRetries }, 'Agent loop: planner starting');
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const raw = await llmClient.generate(plannerInput.prompt, {
       system: plannerInput.system,
@@ -77,6 +79,11 @@ export async function runPlannerWithRetry(
       );
     }
   }
+
+  logger.warn(
+    { attemptsTotal: maxRetries + 1, finalTemperature: temperatures[maxRetries] ?? 0 },
+    'Agent loop: planner fallback to empty plan after all retries exhausted'
+  );
 
   return {
     reasoning: 'Failed to parse planner output after retries',

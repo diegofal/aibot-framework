@@ -47,7 +47,7 @@ export interface ActivityEvent {
   data?: Record<string, unknown>;
 }
 
-const DEFAULT_BUFFER_SIZE = 200;
+const DEFAULT_BUFFER_SIZE = 2000;
 
 export class LlmStatsTracker {
   private stats = new Map<string, LlmBotStats>();
@@ -161,6 +161,15 @@ export class ActivityStream extends EventEmitter {
 
   getRecent(count = 50): ActivityEvent[] {
     return this.buffer.slice(-count);
+  }
+
+  /** Return a page of events from the end of the buffer (offset 0 = most recent). */
+  getSlice(limit = 50, offset = 0): { events: ActivityEvent[]; total: number } {
+    const total = this.buffer.length;
+    const end = total - offset;
+    const start = Math.max(0, end - limit);
+    if (end <= 0) return { events: [], total };
+    return { events: this.buffer.slice(start, end), total };
   }
 
   clear(): void {

@@ -9,7 +9,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 // Minimal bot config shape — just what we need from config.json
 export interface BotConfigEntry {
@@ -53,18 +53,8 @@ export interface AgentDataLoader {
   getAgent(agentId: string): AgentCard | undefined;
 }
 
-/**
- * Load bots array from config.json
- */
-export function loadBotsFromConfig(configPath: string): BotConfigEntry[] {
-  const content = readFileSync(configPath, 'utf-8');
-  const raw = JSON.parse(content);
-
-  if (!raw.bots || !Array.isArray(raw.bots)) {
-    throw new Error(`Invalid config: expected "bots" array in ${configPath}`);
-  }
-
-  return raw.bots.map((b: Record<string, unknown>) => ({
+function mapBotEntry(b: Record<string, unknown>): BotConfigEntry {
+  return {
     id: b.id as string,
     name: b.name as string,
     enabled: b.enabled !== false,
@@ -75,7 +65,26 @@ export function loadBotsFromConfig(configPath: string): BotConfigEntry[] {
     soulDir: b.soulDir as string | undefined,
     disabledTools: b.disabledTools as string[] | undefined,
     agentLoop: b.agentLoop as BotConfigEntry['agentLoop'],
-  }));
+  };
+}
+
+/**
+ * Load bots array from bots.json (or fall back to inline bots in config.json).
+ */
+export function loadBotsFromConfig(configPath: string): BotConfigEntry[] {
+  // Try bots.json first
+  const botsPath = join(dirname(configPath), 'bots.json');
+  if (existsSync(botsPath)) {
+    const bots = JSON.parse(readFileSync(botsPath, 'utf-8'));
+    if (Array.isArray(bots)) return bots.map(mapBotEntry);
+  }
+
+  // Fallback: inline bots in config.json
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+  if (!raw.bots || !Array.isArray(raw.bots)) {
+    throw new Error(`No bots found in ${botsPath} or ${configPath}`);
+  }
+  return raw.bots.map(mapBotEntry);
 }
 
 /**

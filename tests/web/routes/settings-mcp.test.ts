@@ -47,6 +47,17 @@ function createBaseConfig() {
       sessionTtlMs: 300000,
       visibleMaxTurns: 3,
     },
+    soul: {
+      search: {
+        enabled: false,
+        vectorWeight: 0.7,
+        keywordWeight: 0.3,
+        defaultMaxResults: 5,
+        defaultMinScore: 0.1,
+        autoRag: { enabled: true, maxResults: 3, minScore: 0.25, maxContentChars: 2000 },
+        mmr: { enabled: false, lambda: 0.7 },
+      },
+    },
     skillsFolders: { paths: [] },
     productions: { baseDir: './productions' },
     paths: { skills: './src/skills' },
@@ -347,5 +358,97 @@ describe('DELETE /api/settings/mcp/servers/:name', () => {
 
     expect(res.status).toBe(200);
     expect(mockBm._registerMcpToolsCalls).toHaveLength(1);
+  });
+});
+
+describe('GET /api/settings/memory-search', () => {
+  test('returns memory search config including mmr', async () => {
+    const config = createBaseConfig();
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/memory-search');
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.mmr).toEqual({ enabled: false, lambda: 0.7 });
+    expect(data.autoRag).toBeDefined();
+    expect(data.autoRag.enabled).toBe(true);
+  });
+});
+
+describe('PATCH /api/settings/memory-search', () => {
+  test('updates MMR config and persists', async () => {
+    const config = createBaseConfig();
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/memory-search', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mmr: { enabled: true, lambda: 0.5 },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.mmr.enabled).toBe(true);
+    expect(data.mmr.lambda).toBe(0.5);
+
+    // Verify persistence
+    const persisted = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+    expect(persisted.soul.search.mmr.enabled).toBe(true);
+    expect(persisted.soul.search.mmr.lambda).toBe(0.5);
+  });
+
+  test('updates autoRag config and persists', async () => {
+    const config = createBaseConfig();
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/memory-search', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        autoRag: { enabled: false, maxResults: 5 },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.autoRag.enabled).toBe(false);
+    expect(data.autoRag.maxResults).toBe(5);
+  });
+
+  test('partial MMR update preserves other fields', async () => {
+    const config = createBaseConfig();
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/memory-search', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mmr: { enabled: true },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.mmr.enabled).toBe(true);
+    expect(data.mmr.lambda).toBe(0.7); // preserved default
+  });
+
+  test('empty body is a no-op', async () => {
+    const config = createBaseConfig();
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/memory-search', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.mmr.enabled).toBe(false);
+    expect(data.mmr.lambda).toBe(0.7);
   });
 });

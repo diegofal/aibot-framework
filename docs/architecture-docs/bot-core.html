@@ -998,7 +998,8 @@
         <p class="responsibility">
           Manages pending "ask_permission" requests. When an agent needs human approval before
           performing a sensitive action, it registers a permission request with action, resource,
-          description, and urgency. The store supports web dashboard approval/denial and timeout.
+          description, and urgency. Permissions never expire — they persist until the human decides.
+          Pending requests are persisted to disk and survive restarts.
           Decisions (approved/denied) are held for consumption by the next agent loop cycle.
         </p>
         <h4>Exported Types / Classes</h4>
@@ -1012,14 +1013,14 @@
         <table class="methods-table">
           <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td>request</td><td>botId, chatId, action, resource, description, urgency, timeoutMs</td><td>Registers a permission request with timeout. Returns { id, promise } where promise resolves with the decision.</td></tr>
+            <tr><td>request</td><td>botId, action, resource, description, urgency</td><td>Registers a permission request (no timeout — persists until decided). Returns { id, promise } where promise resolves with the decision.</td></tr>
             <tr><td>approveById</td><td>id: string</td><td>Approves a pending permission request from the web dashboard</td></tr>
             <tr><td>denyById</td><td>id: string</td><td>Denies a pending permission request from the web dashboard</td></tr>
             <tr><td>consumeDecisionsForBot</td><td>botId: string</td><td>Returns and deletes all decided permissions for a bot (consumed by agent loop)</td></tr>
-            <tr><td>getPendingForBot</td><td>botId: string</td><td>Returns pending permission requests for a bot with remaining time</td></tr>
-            <tr><td>getAll</td><td>(none)</td><td>Returns all pending permission requests with remaining time info</td></tr>
+            <tr><td>getPendingForBot</td><td>botId: string</td><td>Returns pending permission requests for a bot</td></tr>
+            <tr><td>getAll</td><td>(none)</td><td>Returns all pending permission requests</td></tr>
             <tr><td>getPendingCount</td><td>(none)</td><td>Returns total number of pending permission requests</td></tr>
-            <tr><td>dispose</td><td>(none)</td><td>Clears all timers and rejects all pending promises</td></tr>
+            <tr><td>dispose</td><td>(none)</td><td>Persists state to disk, then clears memory and rejects pending promises</td></tr>
           </tbody>
         </table>
         <h4>Dependencies</h4>
@@ -1136,7 +1137,7 @@
         <table class="methods-table">
           <thead><tr><th>Store</th><th>Path</th><th>Format</th></tr></thead>
           <tbody>
-            <tr><td>AskPermissionStore</td><td><code>data/ask-permission/history.json</code></td><td>JSON: { history, resolved }</td></tr>
+            <tr><td>AskPermissionStore</td><td><code>data/ask-permission/history.json</code></td><td>JSON: { pending, history, resolved }</td></tr>
             <tr><td>AskHumanStore</td><td><code>data/ask-human/answered.json</code></td><td>JSON: { answered }</td></tr>
             <tr><td>AgentScheduler</td><td><code>data/agent-scheduler/schedules.json</code></td><td>JSON: { botId: schedule } (debounced 10s)</td></tr>
             <tr><td>CollaborationTracker</td><td><code>data/collaboration/tracker.json</code></td><td>JSON: { records }</td></tr>
@@ -1171,7 +1172,7 @@
 
         <h4>Data NOT Persisted</h4>
         <ul>
-          <li><code>pending</code> maps in AskPermissionStore/AskHumanStore (contain Promises)</li>
+          <li><code>pending</code> map in AskHumanStore (contains Promises; AskPermissionStore pending IS persisted)</li>
           <li><code>handledMessageIds</code> Set (Telegram manages offsets)</li>
           <li><code>seenUsers</code> Map (cache, reconstructed naturally)</li>
           <li><code>generatingReplies</code> Set in conversation routes (transient)</li>

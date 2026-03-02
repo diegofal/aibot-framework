@@ -2,8 +2,8 @@
 node_modules/
 bun.lockb
 
-# Configuration
-config/config.json
+# Configuration (bots.json contains Telegram tokens — never commit)
+config/bots.json
 .env
 
 # Data and logs

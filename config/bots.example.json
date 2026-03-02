@@ -1,0 +1,32 @@
+[
+  {
+    "id": "default",
+    "name": "AIBot",
+    "token": "${TELEGRAM_BOT_TOKEN}",
+    "enabled": true,
+    "allowedUsers": [],
+    "skills": ["example", "humanizer", "reflection", "calibrate", "improve"],
+    "mentionPatterns": ["bot"],
+    "disabledTools": [],
+    "disabledSkills": [],
+    "plan": "free"
+  },
+  {
+    "id": "agent-bot",
+    "name": "Agent Bot",
+    "token": "${TELEGRAM_BOT_TOKEN_AGENT}",
+    "enabled": false,
+    "skills": ["humanizer", "reflection", "calibrate", "improve"],
+    "mentionPatterns": [],
+    "llmBackend": "claude-cli",
+    "disabledTools": [],
+    "disabledSkills": [],
+    "agentLoop": {
+      "every": "6h",
+      "mode": "periodic",
+      "continuousPauseMs": 5000,
+      "continuousMemoryEvery": 5
+    },
+    "plan": "free"
+  }
+]

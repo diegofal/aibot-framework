@@ -33,8 +33,8 @@ async function main() {
   log('');
 
   // Check if config already exists
-  if (existsSync('./config/config.json')) {
-    log('⚠️  config.json already exists!', YELLOW);
+  if (existsSync('./config/config.json') || existsSync('./config/bots.json')) {
+    log('⚠️  config.json / bots.json already exist!', YELLOW);
     const overwrite = await prompt('Overwrite? (yes/no):');
     if (overwrite.toLowerCase() !== 'yes') {
       log('Setup cancelled.', RED);
@@ -44,21 +44,20 @@ async function main() {
 
   log('This wizard will help you configure your AIBot Framework.\n', GREEN);
 
-  // Load example config
+  // Load example config + bots
   const exampleConfig = JSON.parse(readFileSync('./config/config.example.json', 'utf-8'));
+  const exampleBots = JSON.parse(readFileSync('./config/bots.example.json', 'utf-8'));
 
   // Telegram Bot Token
   log('═══ Telegram Configuration ═══', BOLD);
   const botToken = await prompt('Enter your Telegram bot token:');
   if (botToken) {
-    exampleConfig.bots[0].token = botToken;
+    exampleBots[0].token = botToken;
   }
 
   const allowedUsers = await prompt('Allowed user IDs (comma-separated, or leave empty for all):');
   if (allowedUsers) {
-    exampleConfig.bots[0].allowedUsers = allowedUsers
-      .split(',')
-      .map((id) => Number.parseInt(id.trim()));
+    exampleBots[0].allowedUsers = allowedUsers.split(',').map((id) => Number.parseInt(id.trim()));
   }
 
   // Ollama Configuration
@@ -97,7 +96,7 @@ async function main() {
   if (enableIntel.toLowerCase() === 'yes') enabledSkills.push('intel-gatherer');
 
   exampleConfig.skills.enabled = enabledSkills;
-  exampleConfig.bots[0].skills = enabledSkills;
+  exampleBots[0].skills = enabledSkills;
 
   // Intel-gatherer specific config
   if (enableIntel.toLowerCase() === 'yes') {
@@ -136,8 +135,10 @@ async function main() {
 
   // Save configuration
   log('\n💾 Saving configuration...', BLUE);
-  writeFileSync('./config/config.json', JSON.stringify(exampleConfig, null, 2));
+  writeFileSync('./config/config.json', `${JSON.stringify(exampleConfig, null, 2)}\n`);
   log('  Saved: ./config/config.json', GREEN);
+  writeFileSync('./config/bots.json', `${JSON.stringify(exampleBots, null, 2)}\n`);
+  log('  Saved: ./config/bots.json', GREEN);
 
   // Create .env file
   log('\n📝 Creating .env file...', BLUE);

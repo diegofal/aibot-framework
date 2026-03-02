@@ -290,6 +290,18 @@
               <td>Write generated soul files (IDENTITY.md, SOUL.md, MOTIVATIONS.md) to disk with backups</td>
               <td><code>agents.ts</code></td>
             </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id/export</code></td>
+              <td>Download agent as .tar.gz archive (soul, config, core_memory; optional: productions, conversations, karma via query params)</td>
+              <td><code>agent-export.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/import</code></td>
+              <td>Upload .tar.gz to import an agent (multipart/form-data). Supports <code>newBotId</code>, <code>newBotName</code>, <code>overwrite</code> query params.</td>
+              <td><code>agent-export.ts</code></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1025,6 +1037,18 @@
               <td>Update collaboration settings (persisted to config.json)</td>
               <td><code>settings.ts</code></td>
             </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/settings/memory-search</code></td>
+              <td>Get memory search settings (MMR, autoRag, weights, etc.)</td>
+              <td><code>settings.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PATCH</span></td>
+              <td><code>/api/settings/memory-search</code></td>
+              <td>Update memory search settings (MMR enabled/lambda, autoRag params)</td>
+              <td><code>settings.ts</code></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1086,8 +1110,11 @@
         (<code>src/bot/activity-stream.ts</code>). On connect, the last 50 events are sent as
         <code>{ type: "history", events: [...] }</code>. New events are broadcast as
         <code>{ type: "activity", event: {...} }</code>. The <code>ActivityStream</code> is an
-        <code>EventEmitter</code> with a circular buffer (default 200 events) that receives
+        <code>EventEmitter</code> with a circular buffer (default 2000 events) that receives
         events from agent-loop, conversation-pipeline, memory-flush, and collaboration modules.
+        The <code>getSlice(limit, offset)</code> method supports paginated access for infinite scroll.
+        REST endpoints: <code>GET /api/activity?limit=&amp;offset=</code> (events) and
+        <code>GET /api/logs?limit=&amp;offset=</code> (system logs) return <code>{ events/lines, total }</code>.
       </p>
 
       <pre><code>// Activity event types
@@ -1135,8 +1162,10 @@ compaction                            // Context compaction
              Shows everything the bot does as it does it: tool calls (start/end/error),
              LLM requests, agent loop phases (strategist/planner/executor), memory operations
              (flush, RAG), and collaboration sessions. Color-coded event type badges,
-             filter by bot or event type, expandable event details. 500-event DOM limit
-             with auto-scroll and pause/resume. REST fallback via <code>GET /api/activity</code>.</p>
+             filter by bot or event type, expandable event details. 2000-event DOM limit
+             with auto-scroll, pause/resume, and infinite scroll (scroll up to load older entries
+             via <code>GET /api/activity</code>). System Logs tab also supports scroll-up pagination
+             via <code>GET /api/logs</code> (5000-line DOM limit).</p>
         </div>
 
         <div class="card">
@@ -1256,9 +1285,9 @@ compaction                            // Context compaction
 
         <div class="card">
           <h3>Settings</h3>
-          <p>Configuration editor for session and collaboration settings. Edits are
+          <p>Configuration editor for session, collaboration, and memory search settings. Edits are
              persisted directly to <code>config.json</code>. Covers session reset
-             policies, group activation, LLM relevance checks, and collaboration
+             policies, group activation, LLM relevance checks, memory search (MMR diversity re-ranking, Auto-RAG), and collaboration
              parameters (max rounds, cooldown, timeouts).</p>
         </div>
 

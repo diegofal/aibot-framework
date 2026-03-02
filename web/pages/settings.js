@@ -3,11 +3,12 @@ import { api } from './shared.js';
 export async function renderSettings(el) {
   el.innerHTML = '<div class="page-title">Settings</div><p class="text-dim">Loading...</p>';
 
-  const [session, collab, skillsFolders, mcpData] = await Promise.all([
+  const [session, collab, skillsFolders, mcpData, memSearch] = await Promise.all([
     api('/api/settings/session'),
     api('/api/settings/collaboration'),
     api('/api/settings/skills-folders'),
     api('/api/settings/mcp'),
+    api('/api/settings/memory-search'),
   ]);
   if (session.error || collab.error) {
     el.innerHTML = '<div class="page-title">Settings</div><p>Failed to load settings.</p>';
@@ -232,6 +233,52 @@ export async function renderSettings(el) {
             <label>Visible Max Turns</label>
             <input type="number" name="collabVisibleMaxTurns" min="1" max="10" step="1" value="${collab.visibleMaxTurns}">
             <p class="text-dim text-sm mt-8">Max turns for visible back-and-forth discussions in group chat.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="detail-card">
+        <div class="form-section-title">Memory Search</div>
+
+        <div class="form-group">
+          <label>MMR Diversity Re-ranking</label>
+          <label class="toggle">
+            <input type="checkbox" name="mmrEnabled" ${memSearch.mmr?.enabled ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="text-dim text-sm mt-8">Re-rank search results to reduce near-duplicate memory chunks. Balances relevance with diversity.</p>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Lambda (0 = max diversity, 1 = max relevance)</label>
+            <input type="number" name="mmrLambda" min="0" max="1" step="0.05" value="${memSearch.mmr?.lambda ?? 0.7}">
+          </div>
+        </div>
+
+        <div class="form-separator"></div>
+
+        <div class="form-group">
+          <label>Auto-RAG</label>
+          <label class="toggle">
+            <input type="checkbox" name="autoRagEnabled" ${memSearch.autoRag?.enabled ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="text-dim text-sm mt-8">Automatically search memory before each LLM call and inject relevant context.</p>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Max Results</label>
+            <input type="number" name="autoRagMaxResults" min="1" max="20" step="1" value="${memSearch.autoRag?.maxResults ?? 3}">
+          </div>
+          <div class="form-group">
+            <label>Min Score (0-1)</label>
+            <input type="number" name="autoRagMinScore" min="0" max="1" step="0.05" value="${memSearch.autoRag?.minScore ?? 0.25}">
+          </div>
+          <div class="form-group">
+            <label>Max Content Chars</label>
+            <input type="number" name="autoRagMaxContentChars" min="100" step="100" value="${memSearch.autoRag?.maxContentChars ?? 2000}">
           </div>
         </div>
       </div>
@@ -491,15 +538,29 @@ export async function renderSettings(el) {
       visibleMaxTurns: Number.parseInt(form.collabVisibleMaxTurns.value, 10),
     };
 
-    const [result, collabResult] = await Promise.all([
+    const memSearchPatch = {
+      mmr: {
+        enabled: form.mmrEnabled.checked,
+        lambda: Number.parseFloat(form.mmrLambda.value),
+      },
+      autoRag: {
+        enabled: form.autoRagEnabled.checked,
+        maxResults: Number.parseInt(form.autoRagMaxResults.value, 10),
+        minScore: Number.parseFloat(form.autoRagMinScore.value),
+        maxContentChars: Number.parseInt(form.autoRagMaxContentChars.value, 10),
+      },
+    };
+
+    const [result, collabResult, memSearchResult] = await Promise.all([
       api('/api/settings/session', { method: 'PATCH', body: sessionPatch }),
       api('/api/settings/collaboration', { method: 'PATCH', body: collabPatch }),
+      api('/api/settings/memory-search', { method: 'PATCH', body: memSearchPatch }),
     ]);
 
     btn.disabled = false;
     btn.textContent = 'Save';
 
-    if (result.error || collabResult.error) {
+    if (result.error || collabResult.error || memSearchResult.error) {
       status.textContent = 'Failed to save';
       status.style.color = 'var(--red)';
     } else {

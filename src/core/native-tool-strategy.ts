@@ -18,7 +18,8 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     messages: ChatMessage[],
     opts: ChatOptions
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
-    const model = opts.model || 'llama3';
+    const model = opts.model;
+    if (!model) throw new Error('NativeToolStrategy: model is required but was not provided');
     const startMs = Date.now();
 
     const body: Record<string, unknown> = {

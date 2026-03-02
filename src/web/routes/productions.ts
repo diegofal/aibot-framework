@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import { claudeGenerate } from '../../claude-cli';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
+import { webGenerate } from './web-tool-helpers';
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
@@ -101,15 +101,15 @@ export function productionsRoutes(deps: {
         );
 
         const prompt = sections.join('\n\n');
-        const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 300_000;
 
-        const response = await claudeGenerate(prompt, {
+        const response = await webGenerate({
+          prompt,
           systemPrompt: RESPONSE_SYSTEM_PROMPT,
-          claudePath,
-          timeout,
-          maxLength: 2000,
+          botId,
+          botManager,
+          config,
           logger,
+          maxLength: 2000,
         });
 
         productionsService.setAiResponse(botId, id, response);
@@ -173,15 +173,15 @@ export function productionsRoutes(deps: {
         );
 
         const prompt = sections.join('\n\n');
-        const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 300_000;
 
-        const response = await claudeGenerate(prompt, {
+        const response = await webGenerate({
+          prompt,
           systemPrompt: THREAD_SYSTEM_PROMPT,
-          claudePath,
-          timeout,
-          maxLength: 2000,
+          botId,
+          botManager,
+          config,
           logger,
+          maxLength: 2000,
         });
 
         productionsService.addThreadMessage(botId, id, 'bot', response);
@@ -248,15 +248,16 @@ export function productionsRoutes(deps: {
         );
 
         const prompt = sections.join('\n\n');
-        const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 300_000;
 
-        const raw = await claudeGenerate(prompt, {
+        const raw = await webGenerate({
+          prompt,
           systemPrompt: COHERENCE_SYSTEM_PROMPT,
-          claudePath,
-          timeout,
-          maxLength: 2000,
+          botId,
+          botManager,
+          config,
           logger,
+          maxLength: 2000,
+          enableTools: false,
         });
 
         // Parse JSON response from LLM
@@ -445,15 +446,15 @@ export function productionsRoutes(deps: {
 
         const prompt = sections.join('\n\n');
 
-        const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 300_000;
-
-        const summary = await claudeGenerate(prompt, {
+        const summary = await webGenerate({
+          prompt,
           systemPrompt: SUMMARY_SYSTEM_PROMPT,
-          claudePath,
-          timeout,
-          maxLength: 6000,
+          botId,
+          botManager,
+          config,
           logger,
+          maxLength: 6000,
+          enableTools: false,
         });
 
         // Generate strategic plan section
@@ -461,12 +462,15 @@ export function productionsRoutes(deps: {
         try {
           const planPrompt = `${sections.slice(0, -1).join('\n\n')}\n\n## Task\n\nAnalyze the strategy and plan behind this bot's productions. What themes connect the files? What is the bot building toward? What gaps exist? What should it focus on next? Be specific — cite file names and content when relevant.`;
           const planSystemPrompt = `You are a strategic analyst reviewing an AI bot's body of work. Identify the overarching strategy, recurring themes, gaps in coverage, and recommend next priorities. Write in the bot's language. Keep output under 500 words. No markdown headers, no preamble, no sign-off.`;
-          plan = await claudeGenerate(planPrompt, {
+          plan = await webGenerate({
+            prompt: planPrompt,
             systemPrompt: planSystemPrompt,
-            claudePath,
-            timeout,
-            maxLength: 3000,
+            botId,
+            botManager,
+            config,
             logger,
+            maxLength: 3000,
+            enableTools: false,
           });
         } catch (planErr) {
           logger.warn({ err: planErr, botId }, 'Failed to generate plan section (non-fatal)');

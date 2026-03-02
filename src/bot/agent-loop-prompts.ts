@@ -31,6 +31,8 @@ export interface PlannerPromptInput {
   autonomousCyclesNote?: string;
   /** Tool category names for pre-selection — when set, planner should include toolCategories in response */
   toolCategoryList?: string[];
+  /** Paths where the bot can write without asking permission (default: ['productions/']) */
+  allowedWritePaths?: string[];
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -61,6 +63,8 @@ export interface ContinuousPlannerPromptInput {
   autonomousCyclesNote?: string;
   /** Tool category names for pre-selection — when set, planner should include toolCategories in response */
   toolCategoryList?: string[];
+  /** Paths where the bot can write without asking permission (default: ['productions/']) */
+  allowedWritePaths?: string[];
 }
 
 export interface PlannerResult {
@@ -136,6 +140,25 @@ function buildHumanQuestionsSection(
     section += '\nDo NOT ask the same question again. Work on other tasks while waiting.\n';
   }
   return section;
+}
+
+function buildPermissionProtocol(allowedWritePaths?: string[]): string {
+  const paths =
+    allowedWritePaths && allowedWritePaths.length > 0 ? allowedWritePaths : ['productions/'];
+  return `PERMISSION PROTOCOL:
+You MUST use ask_permission BEFORE performing any of these actions:
+- file_write or file_edit to paths OUTSIDE your allowed write paths
+- exec (any command execution)
+- api_call or accessing external services not through provided tools
+- Modifying framework source code (src/)
+
+Your allowed write paths (NO permission needed): ${paths.join(', ')}
+Writes to any other path REQUIRE ask_permission first.
+
+- Permission requests are non-blocking — continue with other work while waiting
+- Permissions never expire — the human will review them eventually
+- If denied, respect the decision — do NOT retry the same request
+- If the Permission Decisions section shows APPROVED, proceed immediately`;
 }
 
 function buildPermissionDecisionsSection(
@@ -252,12 +275,7 @@ If you're about to make a significant decision, change direction, or have been w
 - If the deliverable needs human input, include an ask_human step AND continue with whatever you can do independently
 - When unsure between two approaches, ask the human instead of guessing
 
-PERMISSION PROTOCOL:
-When you need to perform a sensitive action (write files to protected paths, run commands, access external services, modify protected resources), use ask_permission BEFORE performing it.
-- Do NOT proceed with a sensitive action without permission
-- If denied, respect the decision — do NOT retry the same request
-- Permission requests are non-blocking — continue with other work while waiting
-- If the Permission Decisions section shows APPROVED, proceed with the action immediately
+${buildPermissionProtocol(input.allowedWritePaths)}
 
 ANTI-PATTERNS (banned):
 - Reviewing goals just to review them (only update if status actually changed)
@@ -395,12 +413,7 @@ If you're about to make a significant decision, change direction, or have been w
 - If the deliverable needs human input, include an ask_human step AND continue with whatever you can do independently
 - When unsure between two approaches, ask the human instead of guessing
 
-PERMISSION PROTOCOL:
-When you need to perform a sensitive action (write files to protected paths, run commands, access external services, modify protected resources), use ask_permission BEFORE performing it.
-- Do NOT proceed with a sensitive action without permission
-- If denied, respect the decision — do NOT retry the same request
-- Permission requests are non-blocking — continue with other work while waiting
-- If the Permission Decisions section shows APPROVED, proceed with the action immediately
+${buildPermissionProtocol(input.allowedWritePaths)}
 
 ANTI-PATTERNS (banned):
 - Reviewing goals just to review them (only update if status actually changed)

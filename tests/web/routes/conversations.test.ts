@@ -39,6 +39,13 @@ function makeDeps(overrides?: Record<string, unknown>) {
       readGoals: () => '- Goal 1',
       appendDailyMemory: mock(() => {}),
     }),
+    getLLMClient: () => {
+      throw new Error('No LLMClient in test');
+    },
+    getToolRegistry: () => ({
+      getDefinitionsForBot: () => [],
+      createExecutor: () => async () => ({ success: true, content: 'ok' }),
+    }),
   };
 
   const mockProductionsService = {

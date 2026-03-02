@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Logger } from '../logger';
 
 export type PermissionUrgency = 'low' | 'normal' | 'high';
-export type PermissionStatus = 'pending' | 'approved' | 'denied' | 'expired';
+export type PermissionStatus = 'pending' | 'approved' | 'denied';
 export type ExecutionStatus = 'decided' | 'consumed' | 'executed' | 'failed';
 
 export interface PermissionRequest {
@@ -16,7 +16,6 @@ export interface PermissionRequest {
   urgency: PermissionUrgency;
   status: PermissionStatus;
   createdAt: number;
-  timeoutMs: number;
   resolvedAt?: number;
   note?: string;
 }
@@ -30,8 +29,6 @@ export interface PermissionRequestInfo {
   urgency: PermissionUrgency;
   status: 'pending';
   createdAt: number;
-  timeoutMs: number;
-  remainingMs: number;
 }
 
 export interface ResolvedPermission {
@@ -57,7 +54,6 @@ interface PendingEntry {
   request: PermissionRequest;
   resolve: (decision: 'approved' | 'denied') => void;
   reject: (reason: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -81,7 +77,7 @@ export class AskPermissionStore {
     if (dataDir) this.loadFromDisk();
   }
 
-  /** Load resolved history from disk on startup. Pending entries are NOT persisted. */
+  /** Load pending, resolved, and history from disk on startup. */
   loadFromDisk(): void {
     if (!this.dataDir) return;
     const filePath = join(this.dataDir, 'history.json');
@@ -90,6 +86,15 @@ export class AskPermissionStore {
     try {
       const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
       const now = Date.now();
+
+      // Restore pending entries (recreate deferred promises)
+      if (Array.isArray(raw.pending)) {
+        for (const req of raw.pending) {
+          const { promise, resolve, reject } = this.createDeferredPromise<'approved' | 'denied'>();
+          promise.catch(() => {}); // prevent unhandled rejection for restored entries
+          this.pending.set(req.id, { request: req, resolve, reject });
+        }
+      }
 
       // Restore history (prune TTL 24h)
       if (Array.isArray(raw.history)) {
@@ -108,7 +113,11 @@ export class AskPermissionStore {
       }
 
       this.logger.debug(
-        { historyCount: this.history.size, resolvedCount: this.resolved.size },
+        {
+          pendingCount: this.pending.size,
+          historyCount: this.history.size,
+          resolvedCount: this.resolved.size,
+        },
         'AskPermission: loaded from disk'
       );
     } catch (err) {
@@ -116,12 +125,13 @@ export class AskPermissionStore {
     }
   }
 
-  /** Persist history and resolved maps to disk. */
+  /** Persist pending, history, and resolved maps to disk. */
   private persistToDisk(): void {
     if (!this.dataDir) return;
     try {
       mkdirSync(this.dataDir, { recursive: true });
       const data = {
+        pending: Array.from(this.pending.values()).map((e) => e.request),
         history: Array.from(this.history.values()),
         resolved: Array.from(this.resolved.values()),
       };
@@ -140,8 +150,7 @@ export class AskPermissionStore {
     action: string,
     resource: string,
     description: string,
-    urgency: PermissionUrgency = 'normal',
-    timeoutMs: number = 60 * 60_000
+    urgency: PermissionUrgency = 'normal'
   ): { id: string; promise: Promise<'approved' | 'denied'> } {
     // Dedup check
     const existing = this.findPendingDuplicate(botId, action, resource);
@@ -172,15 +181,6 @@ export class AskPermissionStore {
 
     const { promise, resolve, reject } = this.createDeferredPromise<'approved' | 'denied'>();
 
-    const timer = setTimeout(() => {
-      const entry = this.pending.get(id);
-      if (entry) {
-        entry.request.status = 'expired';
-        this.cleanup(id);
-        reject(new Error('Permission request timed out'));
-      }
-    }, timeoutMs);
-
     const request: PermissionRequest = {
       id,
       botId,
@@ -190,10 +190,10 @@ export class AskPermissionStore {
       urgency,
       status: 'pending',
       createdAt: Date.now(),
-      timeoutMs,
     };
 
-    this.pending.set(id, { request, resolve, reject, timer });
+    this.pending.set(id, { request, resolve, reject });
+    this.persistToDisk();
 
     this.logger.debug({ id, botId, action, resource }, 'AskPermission: request registered');
 
@@ -291,12 +291,9 @@ export class AskPermissionStore {
    * Get pending (unresolved) requests for a specific bot.
    */
   getPendingForBot(botId: string): PermissionRequestInfo[] {
-    const now = Date.now();
     const results: PermissionRequestInfo[] = [];
     for (const entry of this.pending.values()) {
       if (entry.request.botId !== botId) continue;
-      const elapsed = now - entry.request.createdAt;
-      const remainingMs = Math.max(0, entry.request.timeoutMs - elapsed);
       results.push({
         id: entry.request.id,
         botId: entry.request.botId,
@@ -306,8 +303,6 @@ export class AskPermissionStore {
         urgency: entry.request.urgency,
         status: 'pending',
         createdAt: entry.request.createdAt,
-        timeoutMs: entry.request.timeoutMs,
-        remainingMs,
       });
     }
     return results;
@@ -317,11 +312,8 @@ export class AskPermissionStore {
    * Get all pending requests (for dashboard).
    */
   getAll(): PermissionRequestInfo[] {
-    const now = Date.now();
     const results: PermissionRequestInfo[] = [];
     for (const entry of this.pending.values()) {
-      const elapsed = now - entry.request.createdAt;
-      const remainingMs = Math.max(0, entry.request.timeoutMs - elapsed);
       results.push({
         id: entry.request.id,
         botId: entry.request.botId,
@@ -331,8 +323,6 @@ export class AskPermissionStore {
         urgency: entry.request.urgency,
         status: 'pending',
         createdAt: entry.request.createdAt,
-        timeoutMs: entry.request.timeoutMs,
-        remainingMs,
       });
     }
     return results;
@@ -472,10 +462,8 @@ export class AskPermissionStore {
   }
 
   private cleanup(id: string): void {
-    const entry = this.pending.get(id);
-    if (!entry) return;
-    clearTimeout(entry.timer);
     this.pending.delete(id);
+    this.persistToDisk();
   }
 
   private createDeferredPromise<T>(): {
@@ -492,16 +480,9 @@ export class AskPermissionStore {
     return { promise, resolve, reject };
   }
 
-  /** Clear all pending, resolved, and history entries for a specific bot. */
+  /** Clear resolved and history entries for a specific bot. Pending requests are preserved — they still need human review. */
   clearForBot(botId: string): void {
-    // Reject + remove pending requests for this bot
-    for (const [id, entry] of this.pending) {
-      if (entry.request.botId === botId) {
-        clearTimeout(entry.timer);
-        entry.reject(new Error('AskPermissionStore cleared for bot reset'));
-        this.pending.delete(id);
-      }
-    }
+    // Pending requests are NOT cleared — the human hasn't reviewed them yet.
     // Clear resolved entries for this bot
     for (const [id, entry] of this.resolved) {
       if (entry.botId === botId) this.resolved.delete(id);
@@ -510,7 +491,10 @@ export class AskPermissionStore {
     for (const [id, entry] of this.history) {
       if (entry.botId === botId) this.history.delete(id);
     }
-    this.logger.info({ botId }, 'AskPermission: cleared all entries for bot');
+    this.logger.info(
+      { botId, pendingPreserved: this.getPendingForBot(botId).length },
+      'AskPermission: cleared resolved/history for bot (pending preserved)'
+    );
     this.persistToDisk();
   }
 
@@ -518,8 +502,8 @@ export class AskPermissionStore {
    * Dispose all pending requests and clean up timers.
    */
   dispose(): void {
+    this.persistToDisk();
     for (const entry of this.pending.values()) {
-      clearTimeout(entry.timer);
       entry.reject(new Error('AskPermissionStore disposed'));
     }
     this.pending.clear();

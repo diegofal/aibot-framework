@@ -191,6 +191,27 @@ export async function consolidateMemory(opts: {
       return { merged: 0, archived: 0 };
     }
 
+    // Validate output before overwriting — protect against LLM returning a
+    // diff/summary instead of the full consolidated MEMORY.md
+    if (!output.includes('<!-- last-consolidated:')) {
+      logger.warn(
+        { outputLen: output.length },
+        'Memory consolidation: output missing <!-- last-consolidated: --> header, rejecting'
+      );
+      return { merged: 0, archived: 0 };
+    }
+
+    if (existingMemory) {
+      const ratio = output.length / existingMemory.length;
+      if (ratio < 0.5) {
+        logger.warn(
+          { outputLen: output.length, existingLen: existingMemory.length, ratio: ratio.toFixed(2) },
+          'Memory consolidation: output is <50% of existing MEMORY.md size, rejecting to prevent data loss'
+        );
+        return { merged: 0, archived: 0 };
+      }
+    }
+
     // Backup existing MEMORY.md before overwriting
     if (existsSync(memoryMdPath)) {
       backupSoulFile(memoryMdPath, logger);

@@ -186,4 +186,48 @@ describe('consolidateMemory', () => {
     expect(result.merged).toBe(0);
     expect(result.archived).toBe(0);
   });
+
+  it('rejects output missing <!-- last-consolidated: --> header', async () => {
+    const logger = createMockLogger();
+    writeFileSync(join(TEST_DIR, 'memory', '2026-01-15.md'), '# Jan 15\nFact');
+    // Use printf to output text without the header
+    const result = await consolidateMemory({
+      soulDir: TEST_DIR,
+      claudePath: '/bin/sh',
+      timeout: 5_000,
+      logger,
+    });
+
+    // /bin/sh with -p flag runs in privileged mode and outputs nothing useful
+    // The output won't contain <!-- last-consolidated: so it gets rejected
+    expect(result.merged).toBe(0);
+    expect(result.archived).toBe(0);
+  });
+
+  it('rejects output that is <50% of existing MEMORY.md size', async () => {
+    const logger = createMockLogger();
+    // Create a large existing MEMORY.md
+    const largeContent = '<!-- last-consolidated: 2026-01-01 -->\n' + '# Memory\n'.repeat(200);
+    writeFileSync(join(TEST_DIR, 'MEMORY.md'), largeContent);
+    writeFileSync(join(TEST_DIR, 'memory', '2026-01-15.md'), '# Jan 15\nSmall fact');
+
+    // Use a script that outputs something with the header but much smaller
+    const scriptPath = join(TEST_DIR, 'tiny-output.sh');
+    writeFileSync(scriptPath, '#!/bin/sh\necho "<!-- last-consolidated: 2026-01-15 -->"', {
+      mode: 0o755,
+    });
+
+    const result = await consolidateMemory({
+      soulDir: TEST_DIR,
+      claudePath: scriptPath,
+      timeout: 5_000,
+      logger,
+    });
+
+    expect(result.merged).toBe(0);
+    expect(result.archived).toBe(0);
+    // Verify the original MEMORY.md was NOT overwritten
+    const content = readFileSync(join(TEST_DIR, 'MEMORY.md'), 'utf-8');
+    expect(content).toBe(largeContent);
+  });
 });

@@ -62,6 +62,13 @@ describe('agent-feedback routes', () => {
         readDailyLogsSince: () => 'Day 1 log\nDay 2 log',
       }),
       getProductionsService: () => undefined,
+      getLLMClient: () => {
+        throw new Error('No LLMClient in test');
+      },
+      getToolRegistry: () => ({
+        getDefinitionsForBot: () => [],
+        createExecutor: () => async () => ({ success: true, content: 'ok' }),
+      }),
     };
 
     app = new Hono();
@@ -259,6 +266,13 @@ describe('agent-feedback routes', () => {
           readDailyLogsSince: () => '',
           appendDailyMemory: mock(() => {}),
         }),
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
+        }),
       };
 
       const testApp = new Hono();
@@ -363,6 +377,13 @@ describe('agent-feedback routes', () => {
           readDailyLogsSince: () => '',
           appendDailyMemory: mock(() => {}),
         }),
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
+        }),
       };
 
       const testApp = new Hono();
@@ -432,6 +453,13 @@ describe('agent-feedback routes', () => {
           readGoals: () => null,
           readDailyLogsSince: () => '',
           appendDailyMemory: mock(() => {}),
+        }),
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
         }),
       };
 
@@ -533,6 +561,13 @@ describe('agent-feedback routes', () => {
           readDailyLogsSince: () => 'Day 1 log\nDay 2 log',
         }),
         getProductionsService: () => undefined,
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
+        }),
       };
 
       const testApp = new Hono();
@@ -583,6 +618,13 @@ describe('agent-feedback routes', () => {
           readDailyLogsSince: () => '',
         }),
         getProductionsService: () => undefined,
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
+        }),
       };
 
       const testApp = new Hono();
@@ -657,6 +699,13 @@ describe('agent-feedback routes', () => {
           readDailyLogsSince: () => '',
         }),
         getProductionsService: () => mockProductionsService,
+        getLLMClient: () => {
+          throw new Error('No LLMClient in test');
+        },
+        getToolRegistry: () => ({
+          getDefinitionsForBot: () => [],
+          createExecutor: () => async () => ({ success: true, content: 'ok' }),
+        }),
       };
 
       const testApp = new Hono();

@@ -2,8 +2,11 @@ import { escapeHtml } from './shared.js';
 
 /* ── Constants ─────────────────────────────────────────────── */
 
-const MAX_DOM_EVENTS = 500;
-const MAX_DOM_LINES = 2000;
+const MAX_DOM_EVENTS = 2000;
+const MAX_DOM_LINES = 5000;
+
+const EV_PAGE_SIZE = 50;
+const LOG_PAGE_SIZE = 100;
 
 const TYPE_COLORS = {
   'tool:start': '#6c8cff',
@@ -42,6 +45,11 @@ let evContainer = null;
 let evActiveBot = '';
 let evActiveType = '';
 
+// Events pagination
+let evOffset = 0;
+let evLoading = false;
+let evHasMore = true;
+
 // Logs tab state
 let logWs = null;
 let logPaused = false;
@@ -51,6 +59,11 @@ let logContainer = null;
 let logActiveLevels = new Set(['debug', 'info', 'warn', 'error', 'fatal', 'trace']);
 let logSearchTerm = '';
 let logActiveAgent = '';
+
+// Logs pagination
+let logOffset = 0;
+let logLoading = false;
+let logHasMore = true;
 
 // Shared
 let countBadge = null;
@@ -67,6 +80,14 @@ function updateCount() {
   if (!countBadge) return;
   const c = activeTab === 'events' ? evContainer : logContainer;
   countBadge.textContent = c ? c.children.length : 0;
+}
+
+/** Create a small loading indicator element */
+function createLoadingIndicator() {
+  const div = document.createElement('div');
+  div.className = 'scroll-loading-indicator';
+  div.textContent = 'Loading older entries...';
+  return div;
 }
 
 /* ── Events tab ────────────────────────────────────────────── */
@@ -133,9 +154,50 @@ function evAppendEvents(events) {
   }
 }
 
+/** Prepend older events at the top, preserving scroll position */
+function evPrependEvents(events) {
+  if (!evContainer) return;
+  const oldScrollHeight = evContainer.scrollHeight;
+  const frag = document.createDocumentFragment();
+  for (const event of events) {
+    frag.appendChild(createEventEl(event));
+  }
+  evContainer.insertBefore(frag, evContainer.firstChild);
+  // Restore scroll position so the view doesn't jump
+  evContainer.scrollTop = evContainer.scrollHeight - oldScrollHeight;
+  // Apply current filters to prepended elements
+  evRefilterAll();
+  if (activeTab === 'events') updateCount();
+}
+
+/** Fetch older events from REST API */
+async function evLoadOlder() {
+  if (evLoading || !evHasMore || !evContainer) return;
+  evLoading = true;
+  const indicator = createLoadingIndicator();
+  evContainer.insertBefore(indicator, evContainer.firstChild);
+  try {
+    const res = await fetch(`/api/activity?limit=${EV_PAGE_SIZE}&offset=${evOffset}`);
+    const data = await res.json();
+    indicator.remove();
+    const events = data.events || [];
+    if (events.length > 0) {
+      evPrependEvents(events);
+      evOffset += events.length;
+    }
+    if (events.length < EV_PAGE_SIZE || evOffset >= (data.total || 0)) {
+      evHasMore = false;
+    }
+  } catch {
+    indicator.remove();
+  }
+  evLoading = false;
+}
+
 function evRefilterAll() {
   if (!evContainer) return;
   for (const child of evContainer.children) {
+    if (child.classList.contains('scroll-loading-indicator')) continue;
     let visible = true;
     if (evActiveBot) {
       visible = (child.dataset.botid || '') === evActiveBot;
@@ -156,7 +218,10 @@ function evConnectWS() {
     try {
       const data = JSON.parse(e.data);
       if (data.type === 'history') {
-        evAppendEvents(data.events || []);
+        const events = data.events || [];
+        evAppendEvents(events);
+        // Set initial offset based on what WS sent us
+        evOffset = events.length;
       } else if (data.type === 'activity') {
         const events = [data.event];
         if (evPaused) {
@@ -238,9 +303,48 @@ function logAppendLines(entries) {
   }
 }
 
+/** Prepend older log lines at the top, preserving scroll position */
+function logPrependLines(entries) {
+  if (!logContainer) return;
+  const oldScrollHeight = logContainer.scrollHeight;
+  const frag = document.createDocumentFragment();
+  for (const entry of entries) {
+    frag.appendChild(createLineEl(entry));
+  }
+  logContainer.insertBefore(frag, logContainer.firstChild);
+  logContainer.scrollTop = logContainer.scrollHeight - oldScrollHeight;
+  logRefilterAll();
+  if (activeTab === 'logs') updateCount();
+}
+
+/** Fetch older log lines from REST API */
+async function logLoadOlder() {
+  if (logLoading || !logHasMore || !logContainer) return;
+  logLoading = true;
+  const indicator = createLoadingIndicator();
+  logContainer.insertBefore(indicator, logContainer.firstChild);
+  try {
+    const res = await fetch(`/api/logs?limit=${LOG_PAGE_SIZE}&offset=${logOffset}`);
+    const data = await res.json();
+    indicator.remove();
+    const lines = data.lines || [];
+    if (lines.length > 0) {
+      logPrependLines(lines);
+      logOffset += lines.length;
+    }
+    if (lines.length < LOG_PAGE_SIZE || logOffset >= (data.total || 0)) {
+      logHasMore = false;
+    }
+  } catch {
+    indicator.remove();
+  }
+  logLoading = false;
+}
+
 function logRefilterAll() {
   if (!logContainer) return;
   for (const child of logContainer.children) {
+    if (child.classList.contains('scroll-loading-indicator')) continue;
     const classes = child.className;
     const lvlMatch = classes.match(/log-level-(\w+)/);
     const lvl = lvlMatch ? lvlMatch[1] : 'info';
@@ -266,7 +370,10 @@ function logConnectWS() {
     try {
       const data = JSON.parse(e.data);
       const lines = data.lines || [];
-      if (logPaused) {
+      if (data.type === 'history') {
+        logAppendLines(lines);
+        logOffset = lines.length;
+      } else if (logPaused) {
         logPauseBuffer.push(...lines);
       } else {
         logAppendLines(lines);
@@ -321,6 +428,9 @@ export async function renderActivity(el) {
   evAutoScroll = true;
   evActiveBot = '';
   evActiveType = '';
+  evOffset = 0;
+  evLoading = false;
+  evHasMore = true;
 
   logPaused = false;
   logPauseBuffer = [];
@@ -328,6 +438,9 @@ export async function renderActivity(el) {
   logActiveLevels = new Set(['debug', 'info', 'warn', 'error', 'fatal', 'trace']);
   logSearchTerm = '';
   logActiveAgent = '';
+  logOffset = 0;
+  logLoading = false;
+  logHasMore = true;
 
   // Determine initial tab from URL
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
@@ -438,8 +551,12 @@ export async function renderActivity(el) {
   document.getElementById('activity-clear').addEventListener('click', () => {
     if (activeTab === 'events') {
       evContainer.innerHTML = '';
+      evOffset = 0;
+      evHasMore = true;
     } else {
       logContainer.innerHTML = '';
+      logOffset = 0;
+      logHasMore = true;
     }
     updateCount();
   });
@@ -475,17 +592,25 @@ export async function renderActivity(el) {
     logRefilterAll();
   });
 
-  // ── Auto-scroll for both containers ──
+  // ── Auto-scroll + scroll-up-to-load-more for both containers ──
   evContainer.addEventListener('scroll', () => {
     const atBottom =
       evContainer.scrollHeight - evContainer.scrollTop - evContainer.clientHeight < 40;
     evAutoScroll = atBottom;
+    // Scroll-up detection: load older events
+    if (evContainer.scrollTop < 80 && !evLoading && evHasMore) {
+      evLoadOlder();
+    }
   });
 
   logContainer.addEventListener('scroll', () => {
     const atBottom =
       logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 40;
     logAutoScroll = atBottom;
+    // Scroll-up detection: load older logs
+    if (logContainer.scrollTop < 80 && !logLoading && logHasMore) {
+      logLoadOlder();
+    }
   });
 
   // ── Connect both WebSockets (so neither loses events while on the other tab) ──

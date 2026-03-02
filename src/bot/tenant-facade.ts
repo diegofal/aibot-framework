@@ -45,7 +45,11 @@ export class TenantFacade {
       this.deps.logger.warn('Tenant manager not initialized');
       return undefined;
     }
-    return this.tenantManager.createTenant(name, email, plan);
+    const tenant = this.tenantManager.createTenant(name, email, plan);
+    if (tenant) {
+      this.deps.logger.info({ tenantId: tenant.id, email }, 'Tenant created');
+    }
+    return tenant;
   }
 
   getTenant(tenantId: string): Tenant | undefined {
@@ -53,7 +57,11 @@ export class TenantFacade {
   }
 
   getTenantByApiKey(apiKey: string): Tenant | undefined {
-    return this.tenantManager?.getTenantByApiKey(apiKey);
+    const tenant = this.tenantManager?.getTenantByApiKey(apiKey);
+    if (!tenant && this.tenantManager) {
+      this.deps.logger.warn('API key lookup failed — key not found');
+    }
+    return tenant;
   }
 
   listTenants(): Tenant[] {
@@ -64,7 +72,11 @@ export class TenantFacade {
     tenantId: string,
     updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>
   ): Tenant | undefined {
-    return this.tenantManager?.updateTenant(tenantId, updates);
+    const tenant = this.tenantManager?.updateTenant(tenantId, updates);
+    if (tenant) {
+      this.deps.logger.info({ tenantId }, 'Tenant updated');
+    }
+    return tenant;
   }
 
   async deleteTenant(tenantId: string): Promise<boolean> {
@@ -78,11 +90,20 @@ export class TenantFacade {
       }
     }
 
-    return this.tenantManager.deleteTenant(tenantId);
+    const botsStopped = tenantBots.filter((b) => this.deps.runningBots.has(b.id)).length;
+    const deleted = this.tenantManager.deleteTenant(tenantId);
+    if (deleted) {
+      this.deps.logger.info({ tenantId, botsStopped }, 'Tenant deleted');
+    }
+    return deleted;
   }
 
   regenerateTenantApiKey(tenantId: string): string | undefined {
-    return this.tenantManager?.regenerateApiKey(tenantId);
+    const newKey = this.tenantManager?.regenerateApiKey(tenantId);
+    if (newKey) {
+      this.deps.logger.warn({ tenantId }, 'Tenant API key regenerated');
+    }
+    return newKey;
   }
 
   // --- Usage Metering ---
@@ -96,6 +117,7 @@ export class TenantFacade {
   ): void {
     if (!this.tenantManager) return;
 
+    this.deps.logger.debug({ tenantId, botId, type, quantity }, 'Recording usage');
     this.tenantManager.recordUsage({
       tenantId,
       botId,
@@ -112,7 +134,11 @@ export class TenantFacade {
   }
 
   checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount = 1): boolean {
-    return this.tenantManager?.checkQuota(tenantId, type, amount) ?? true;
+    const allowed = this.tenantManager?.checkQuota(tenantId, type, amount) ?? true;
+    if (!allowed) {
+      this.deps.logger.warn({ tenantId, type, amount }, 'Quota exceeded');
+    }
+    return allowed;
   }
 
   // --- Bot Lifecycle with Tenant Awareness ---
@@ -136,6 +162,10 @@ export class TenantFacade {
 
     try {
       await this.deps.startBot(botConfig);
+      this.deps.logger.info(
+        { tenantId: botConfig.tenantId, botId: botConfig.id },
+        'Bot started with tenant'
+      );
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -166,6 +196,7 @@ export class TenantFacade {
 
     try {
       const customerId = await this.billingProvider.createCustomer(tenant);
+      this.deps.logger.info({ tenantId, customerId }, 'Billing customer created');
       this.tenantManager.updateTenant(tenantId, {
         billing: {
           ...tenant.billing,

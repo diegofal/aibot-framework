@@ -1,0 +1,468 @@
+{
+  "ollama": {
+    "baseUrl": "http://127.0.0.1:11434",
+    "timeout": 300000,
+    "models": {
+      "primary": "kimi-k2.5:cloud",
+      "fallbacks": []
+    }
+  },
+  "conversation": {
+    "enabled": true,
+    "systemPrompt": "You are a helpful assistant. Be concise and informative.",
+    "temperature": 0.7,
+    "maxHistory": 20
+  },
+  "exec": {
+    "enabled": true,
+    "timeout": 30000,
+    "maxOutputLength": 10000
+  },
+  "fileTools": {
+    "enabled": true,
+    "basePath": "/home/diego/projects/aibot-framework",
+    "allowedPaths": [
+      "/home/diego/openclaw"
+    ]
+  },
+  "processTools": {
+    "enabled": true,
+    "maxSessions": 10
+  },
+  "webTools": {
+    "enabled": true,
+    "search": {
+      "apiKey": "${BRAVE_SEARCH_API_KEY}",
+      "maxResults": 5
+    },
+    "fetch": {
+      "maxContentLength": 50000
+    },
+    "maxToolRounds": 5
+  },
+  "media": {
+    "enabled": true,
+    "maxFileSizeMb": 10,
+    "whisper": {
+      "endpoint": "https://api.openai.com/v1/audio/transcriptions",
+      "model": "whisper-1",
+      "language": "es",
+      "apiKey": "${OPENAI_API_KEY}"
+    },
+    "tts": {
+      "provider": "elevenlabs",
+      "apiKey": "${ELEVENLABS_API_KEY}",
+      "voiceId": "pMsXgVXv3BLzUgSXRplE",
+      "modelId": "eleven_multilingual_v2",
+      "languageCode": "es",
+      "maxTextLength": 1500
+    },
+    "supportedDocTypes": [
+      "application/pdf",
+      "text/plain",
+      "text/markdown",
+      "text/csv",
+      "application/json",
+      "text/html"
+    ]
+  },
+  "datetime": {
+    "enabled": true,
+    "timezone": "America/Argentina/Buenos_Aires",
+    "locale": "es-AR"
+  },
+  "soul": {
+    "search": {
+      "enabled": true,
+      "embeddingModel": "nomic-embed-text:latest"
+    },
+    "memoryFlush": {
+      "enabled": true,
+      "messageThreshold": 5
+    },
+    "sessionMemory": {
+      "enabled": true,
+      "indexOnStartup": true
+    }
+  },
+  "phoneCall": {
+    "enabled": true,
+    "accountSid": "${TWILIO_ACCOUNT_SID}",
+    "authToken": "${TWILIO_AUTH_TOKEN}",
+    "fromNumber": "${TWILIO_FROM_NUMBER}",
+    "defaultNumber": "${TWILIO_TO_NUMBER}",
+    "language": "es-MX",
+    "voice": "Polly.Mia",
+    "contactsFile": "./data/contacts.json"
+  },
+  "skills": {
+    "enabled": [
+      "example",
+      "intel-gatherer",
+      "phone-call",
+      "humanizer",
+      "reflection",
+      "calibrate",
+      "improve",
+      "quick-notes",
+      "task-tracker",
+      "daily-priorities",
+      "reminders"
+    ],
+    "config": {
+      "intel-gatherer": {
+        "llmBackend": "claude-cli",
+        "claudePath": "claude",
+        "claudeTimeout": 90000,
+        "telegramChatId": 8440919102,
+        "sourcesFile": "./src/skills/intel-gatherer/sources.yml",
+        "dataDir": "./data/intel"
+      },
+      "phone-call": {
+        "accountSid": "${TWILIO_ACCOUNT_SID}",
+        "authToken": "${TWILIO_AUTH_TOKEN}",
+        "fromNumber": "${TWILIO_FROM_NUMBER}",
+        "toNumber": "${TWILIO_TO_NUMBER}",
+        "maydayMessage": "Atención! Esta es una llamada de emergencia desde el bot. Por favor responda urgente.",
+        "language": "es-MX",
+        "voice": "Polly.Mia"
+      },
+      "reflection": {
+        "llmBackend": "claude-cli",
+        "claudePath": "claude",
+        "claudeTimeout": 90000,
+        "soulDir": "./config/soul",
+        "telegramChatId": 8440919102,
+        "notifyOnReflection": true,
+        "cronSchedule": "30 3 * * *",
+        "webSearch": {
+          "enabled": true,
+          "apiKey": "${BRAVE_SEARCH_API_KEY}",
+          "maxResults": 3,
+          "maxToolRounds": 4,
+          "maxDiscoveryChars": 2000
+        }
+      },
+      "calibrate": {
+        "soulDir": "./config/soul",
+        "maxBatches": 10,
+        "sessionTimeoutMs": 600000
+      },
+      "improve": {
+        "soulDir": "./config/soul",
+        "timeout": 300000,
+        "maxOutputLength": 15000
+      }
+    }
+  },
+  "session": {
+    "llmRelevanceCheck": {
+      "enabled": true,
+      "temperature": 0.1,
+      "timeout": 5000,
+      "contextMessages": 4,
+      "broadcastCheck": true,
+      "multiBotAware": true
+    }
+  },
+  "humanizer": {
+    "enabled": true
+  },
+  "improve": {
+    "enabled": true,
+    "timeout": 300000,
+    "soulDir": "./config/soul"
+  },
+  "buffer": {
+    "inboundDebounceMs": 1500,
+    "queueDebounceMs": 1000,
+    "queueCap": 10
+  },
+  "productions": {
+    "enabled": true,
+    "baseDir": "./productions"
+  },
+  "collaboration": {
+    "enabled": true
+  },
+  "dynamicTools": {
+    "enabled": true,
+    "storePath": "./data/tools",
+    "maxToolsPerBot": 20
+  },
+  "agentProposals": {
+    "enabled": true
+  },
+  "agentLoop": {
+    "enabled": true,
+    "every": "6h",
+    "maxDurationMs": 600000
+  },
+  "web": {
+    "enabled": true,
+    "port": 3000,
+    "host": "127.0.0.1"
+  },
+  "reddit": {
+    "enabled": false,
+    "clientId": "${REDDIT_CLIENT_ID}",
+    "clientSecret": "${REDDIT_CLIENT_SECRET}",
+    "username": "${REDDIT_USERNAME}",
+    "password": "${REDDIT_PASSWORD}"
+  },
+  "twitter": {
+    "enabled": false,
+    "apiKey": "${TWITTER_API_KEY}",
+    "apiSecret": "${TWITTER_API_SECRET}",
+    "bearerToken": "${TWITTER_BEARER_TOKEN}",
+    "accessToken": "${TWITTER_ACCESS_TOKEN}",
+    "accessSecret": "${TWITTER_ACCESS_SECRET}"
+  },
+  "calendar": {
+    "enabled": false,
+    "provider": "google",
+    "apiKey": "${CALENDAR_API_KEY}",
+    "calendarId": "${CALENDAR_ID}"
+  },
+  "logging": {
+    "level": "info",
+    "file": "./data/logs/aibot.log"
+  },
+  "paths": {
+    "data": "./data",
+    "logs": "./data/logs",
+    "skills": "./src/skills"
+  },
+  "skillsFolders": {
+    "paths": [
+      "./src/skills",
+      "./productions/tsc/src/skills"
+    ]
+  },
+  "mcp": {
+    "servers": [
+      {
+        "name": "Everything",
+        "transport": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-everything"
+        ],
+        "timeout": 30000,
+        "autoReconnect": true
+      }
+    ],
+    "expose": {
+      "enabled": false,
+      "transport": "http",
+      "port": 3001,
+      "host": "127.0.0.1",
+      "hiddenTools": [
+        "exec",
+        "file_write",
+        "file_edit",
+        "process",
+        "create_tool"
+      ],
+      "maxCallsPerMinute": 60
+    }
+  },
+  "bots": [
+    {
+      "id": "default",
+      "name": "AIBot",
+      "token": "8440919102:AAF-l6DIR-SZAvE1sroyvAlNRSRXDJ0g76M",
+      "enabled": true,
+      "allowedUsers": [],
+      "skills": [
+        "example",
+        "intel-gatherer",
+        "phone-call",
+        "humanizer",
+        "reflection",
+        "calibrate",
+        "improve",
+        "playwright"
+      ],
+      "mentionPatterns": [
+        "finny"
+      ],
+      "disabledTools": [],
+      "disabledSkills": [],
+      "tts": {
+        "voiceId": "FGY2WhTYpPnrIDTdsKH5"
+      },
+      "plan": "free"
+    },
+    {
+      "id": "cryptik",
+      "name": "cryptik",
+      "token": "8331640005:AAHb8ldn2YFdsk0sVp7V9FK33FpvGUPNhWY",
+      "enabled": false,
+      "skills": [
+        "humanizer",
+        "reflection",
+        "calibrate",
+        "improve"
+      ],
+      "mentionPatterns": [],
+      "llmBackend": "claude-cli",
+      "disabledTools": [],
+      "disabledSkills": [],
+      "agentLoop": {
+        "every": "3h",
+        "mode": "periodic",
+        "continuousPauseMs": 5000,
+        "continuousMemoryEvery": 5
+      },
+      "plan": "free"
+    },
+    {
+      "id": "job-seeker",
+      "name": "job-seeker",
+      "token": "8297319556:AAFikgigrzlt_8DVCPA11wRL13q9gl_-pJ8",
+      "enabled": true,
+      "skills": [
+        "humanizer",
+        "reflection",
+        "calibrate",
+        "improve"
+      ],
+      "mentionPatterns": [],
+      "llmBackend": "claude-cli",
+      "disabledTools": [],
+      "disabledSkills": [],
+      "agentLoop": {
+        "every": "3h",
+        "mode": "periodic",
+        "continuousPauseMs": 5000,
+        "continuousMemoryEvery": 5
+      },
+      "plan": "free"
+    },
+    {
+      "id": "myfirstmillion",
+      "name": "My First Million",
+      "token": "empty",
+      "enabled": true,
+      "skills": [
+        "humanizer",
+        "reflection",
+        "calibrate",
+        "improve"
+      ],
+      "mentionPatterns": [],
+      "llmBackend": "claude-cli",
+      "disabledTools": [],
+      "disabledSkills": [],
+      "agentLoop": {
+        "every": "3h",
+        "mode": "periodic",
+        "continuousPauseMs": 5000,
+        "continuousMemoryEvery": 5
+      },
+      "plan": "free"
+    },
+    {
+      "id": "openclone",
+      "name": "openclone",
+      "token": "dasoifhafoih",
+      "enabled": true,
+      "skills": [],
+      "mentionPatterns": [],
+      "llmBackend": "claude-cli",
+      "disabledTools": [],
+      "disabledSkills": [],
+      "agentLoop": {
+        "every": "6h",
+        "mode": "periodic",
+        "continuousPauseMs": 5000,
+        "continuousMemoryEvery": 5
+      },
+      "plan": "free"
+    },
+    {
+      "id": "moltbook",
+      "name": "moltbook",
+      "token": "moltbook",
+      "enabled": true,
+      "skills": [],
+      "mentionPatterns": [],
+      "llmBackend": "claude-cli",
+      "disabledTools": [],
+      "disabledSkills": [],
+      "agentLoop": {
+        "every": "3h",
+        "mode": "periodic",
+        "continuousPauseMs": 5000,
+        "continuousMemoryEvery": 5
+      },
+      "plan": "free"
+    },
+    {
+      "id": "monetize",
+      "name": "monetize",
+      "token": "monetize",
+      "enabled": false,
+      "skills": [],
+      "mentionPatterns": [],
+      "llmBackend": "claude-cli",
+      "disabledTools": [],
+      "disabledSkills": [],
+      "agentLoop": {
+        "every": "30m",
+        "mode": "periodic",
+        "continuousPauseMs": 5000,
+        "continuousMemoryEvery": 5
+      },
+      "plan": "free"
+    },
+    {
+      "id": "milei-rocca",
+      "name": "milei-rocca",
+      "token": "milei-rocca",
+      "enabled": true,
+      "skills": [
+        "humanizer",
+        "reflection",
+        "task-tracker",
+        "calibrate",
+        "daily-priorities",
+        "calendar",
+        "mcp-client",
+        "reddit",
+        "improve",
+        "twitter",
+        "daily-briefing",
+        "task-tracker",
+        "daily-priorities",
+        "calendar",
+        "reddit",
+        "reminders"
+      ],
+      "mentionPatterns": [],
+      "llmBackend": "claude-cli",
+      "disabledTools": [],
+      "disabledSkills": [],
+      "plan": "free"
+    },
+    {
+      "id": "selfimprove",
+      "name": "self-improve",
+      "token": "selfimprove",
+      "enabled": true,
+      "skills": [
+        "humanizer",
+        "reflection",
+        "improve"
+      ],
+      "mentionPatterns": [],
+      "disabledTools": [],
+      "disabledSkills": [],
+      "agentLoop": {
+        "every": "2h"
+      }
+    }
+  ]
+}

@@ -950,6 +950,10 @@ export class BotManager {
     return this.activityStream.llmStats.getAllStats();
   }
 
+  getMemoryManager(): MemoryManager | undefined {
+    return this.memoryManager;
+  }
+
   getOllamaClient(): OllamaClient {
     return this.ollamaClient;
   }

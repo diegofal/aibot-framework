@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import { claudeGenerate } from '../../claude-cli';
 import type { Config } from '../../config';
 import type { ConversationsService } from '../../conversations/service';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
+import { webGenerate } from './web-tool-helpers';
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
@@ -103,8 +103,6 @@ export function conversationsRoutes(deps: {
         sections.push('## Task\n\nRespond to the latest message. Be authentic and reflective.');
 
         const prompt = sections.join('\n\n');
-        const claudePath = config.improve?.claudePath ?? 'claude';
-        const timeout = config.improve?.timeout ?? 300_000;
         const systemPrompt =
           conversation.type === 'productions'
             ? PRODUCTIONS_CHAT_SYSTEM_PROMPT
@@ -112,12 +110,14 @@ export function conversationsRoutes(deps: {
               ? INBOX_CHAT_SYSTEM_PROMPT
               : CONVERSATION_SYSTEM_PROMPT;
 
-        const response = await claudeGenerate(prompt, {
+        const response = await webGenerate({
+          prompt,
           systemPrompt,
-          claudePath,
-          timeout,
-          maxLength: 3000,
+          botId,
+          botManager,
+          config,
           logger,
+          maxLength: 3000,
         });
 
         conversationsService.addMessage(botId, id, 'bot', response);

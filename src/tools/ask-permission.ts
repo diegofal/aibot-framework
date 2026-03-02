@@ -3,9 +3,6 @@ import type { AskPermissionStore } from '../bot/ask-permission-store';
 import type { Logger } from '../logger';
 import type { Tool, ToolResult } from './types';
 
-const MAX_TIMEOUT_MINUTES = 480;
-const DEFAULT_TIMEOUT_MINUTES = 60;
-
 export interface AskPermissionDeps {
   store: AskPermissionStore;
   getBotInstance: (botId: string) => Bot | undefined;
@@ -24,8 +21,8 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
       function: {
         name: 'ask_permission',
         description:
-          'Request permission to perform a sensitive action (file writes, command execution, external API calls, etc.). ' +
-          'The request is queued in the permissions dashboard (non-blocking). ' +
+          'Request permission to perform a sensitive action (file writes outside allowed paths, command execution, external API calls, etc.). ' +
+          'The request is queued in the permissions dashboard (non-blocking). Permissions never expire — the human will review them eventually. ' +
           'Use BEFORE performing any sensitive action. ' +
           'The decision (approved/denied) will be delivered to you in your next cycle. Continue working on other tasks in the meantime.',
         parameters: {
@@ -49,10 +46,6 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
               type: 'string',
               enum: ['low', 'normal', 'high'],
               description: 'How urgent the request is (default: "normal").',
-            },
-            timeout_minutes: {
-              type: 'number',
-              description: `Minutes to wait for a decision (default: ${DEFAULT_TIMEOUT_MINUTES}, max: ${MAX_TIMEOUT_MINUTES}).`,
             },
           },
           required: ['action', 'resource', 'description'],
@@ -92,21 +85,8 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
         ? (args.urgency as 'low' | 'normal' | 'high')
         : 'normal';
 
-      const timeoutMinutes = Math.min(
-        Math.max(1, Number(args.timeout_minutes) || DEFAULT_TIMEOUT_MINUTES),
-        MAX_TIMEOUT_MINUTES
-      );
-      const timeoutMs = timeoutMinutes * 60_000;
-
-      // Register in store
-      const { id, promise } = deps.store.request(
-        botId,
-        action,
-        resource,
-        description,
-        urgency,
-        timeoutMs
-      );
+      // Register in store (no timeout — permissions never expire)
+      const { id, promise } = deps.store.request(botId, action, resource, description, urgency);
       promise.catch((err) => {
         logger.info(
           { requestId: id, botId, reason: err.message },
@@ -133,7 +113,7 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
       }
 
       logger.info(
-        { requestId: id, botId, action, resource, urgency, timeoutMinutes },
+        { requestId: id, botId, action, resource, urgency },
         'ask_permission: request queued to dashboard (non-blocking)'
       );
 
