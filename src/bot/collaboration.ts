@@ -2,6 +2,7 @@ import type { AgentInfo } from '../agent-registry';
 import type { BotConfig } from '../config';
 import { resolveAgentConfig } from '../config';
 import type { KarmaService } from '../karma/service';
+import type { McpToolCallResult } from '../mcp/types';
 import type { ChatMessage } from '../ollama';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { sendLongMessage } from './telegram-utils';
@@ -336,6 +337,11 @@ export class CollaborationManager {
   ): Promise<{ sessionId: string; response: string }> {
     const resolvedId = this.ctx.resolveBotId(targetBotId);
     if (!resolvedId) {
+      // Check if this is an external MCP agent
+      const agent = this.ctx.agentRegistry.getByBotId(targetBotId);
+      if (agent?.skills.includes('mcp-external') && this.ctx.mcpAgentBridge) {
+        return this.mcpCollaborationStep(sessionId, targetBotId, message, sourceBotId, agent);
+      }
       throw new Error(`Target bot not running: ${targetBotId}`);
     }
     targetBotId = resolvedId;
@@ -474,6 +480,101 @@ export class CollaborationManager {
     botLogger.info(
       { sessionId: session.id, targetBotId, responseLength: response.length },
       'Collaboration step completed'
+    );
+    this.ctx.activityStream?.publish({
+      type: 'collab:end',
+      botId: sourceBotId,
+      timestamp: Date.now(),
+      data: { targetBotId, sessionId: session.id, responseLength: response.length },
+    });
+
+    return { sessionId: session.id, response };
+  }
+
+  /**
+   * Route a collaboration step through MCP for external agents.
+   */
+  private async mcpCollaborationStep(
+    sessionId: string | undefined,
+    targetBotId: string,
+    message: string,
+    sourceBotId: string,
+    agent: AgentInfo
+  ): Promise<{ sessionId: string; response: string }> {
+    const bridge = this.ctx.mcpAgentBridge!;
+    const botLogger = this.ctx.getBotLogger(sourceBotId);
+
+    // Rate limiting
+    const check = this.ctx.collaborationTracker.checkAndRecord(sourceBotId, targetBotId, 0);
+    if (!check.allowed) {
+      botLogger.warn(
+        { sourceBotId, targetBotId, reason: check.reason },
+        'MCP collaboration rate-limited'
+      );
+      throw new Error(`Collaboration blocked: ${check.reason}`);
+    }
+
+    this.ctx.activityStream?.publish({
+      type: 'collab:start',
+      botId: sourceBotId,
+      timestamp: Date.now(),
+      data: { targetBotId, mode: 'mcp' },
+    });
+
+    // Create or resume collaboration session
+    let session = sessionId ? this.ctx.collaborationSessions.get(sessionId) : undefined;
+    if (!session) {
+      session = this.ctx.collaborationSessions.create(sourceBotId, targetBotId);
+    }
+
+    botLogger.info(
+      { sessionId: session.id, sourceBotId, targetBotId, mode: 'mcp' },
+      'MCP collaboration step'
+    );
+
+    // Try known tool names for chat-like interaction
+    const agentTools = agent.tools ?? [];
+    const chatToolName =
+      agentTools.find((t) => t === 'collaborate') ??
+      agentTools.find((t) => t === 'chat') ??
+      agentTools.find((t) => t === 'message') ??
+      agentTools.find((t) => t === 'ask');
+
+    let result: McpToolCallResult;
+    if (chatToolName) {
+      result = await bridge.callTool(
+        targetBotId,
+        chatToolName,
+        {
+          message,
+          sourceBotId,
+          sessionId: session.id,
+        },
+        sourceBotId
+      );
+    } else {
+      // No suitable tool found — return a descriptive error
+      const response = `External agent "${agent.name}" (${targetBotId}) is registered but does not expose a collaborate, chat, message, or ask tool. Available tools: ${agentTools.join(', ') || 'none'}`;
+      this.ctx.collaborationSessions.appendMessages(session.id, [
+        { role: 'user', content: message },
+        { role: 'assistant', content: response },
+      ]);
+      return { sessionId: session.id, response };
+    }
+
+    // Extract text response from MCP result
+    const response = result.isError
+      ? `MCP error: ${result.content.map((c) => ('text' in c ? c.text : '')).join(' ')}`
+      : result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
+
+    this.ctx.collaborationSessions.appendMessages(session.id, [
+      { role: 'user', content: message },
+      { role: 'assistant', content: response },
+    ]);
+
+    botLogger.info(
+      { sessionId: session.id, targetBotId, responseLength: response.length },
+      'MCP collaboration step completed'
     );
     this.ctx.activityStream?.publish({
       type: 'collab:end',

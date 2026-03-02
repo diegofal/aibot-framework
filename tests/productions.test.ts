@@ -913,6 +913,127 @@ describe('ProductionsService', () => {
     });
   });
 
+  describe('getDirectoryTree', () => {
+    test('returns empty array for bot with no files', () => {
+      const tree = service.getDirectoryTree('bot1');
+      // Only INDEX.md might exist from resolveDir, but it's excluded
+      expect(tree).toEqual([]);
+    });
+
+    test('returns file nodes for flat directory', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'article.md'), '# Article', 'utf-8');
+      writeFileSync(join(dir, 'notes.txt'), 'Some notes', 'utf-8');
+
+      const tree = service.getDirectoryTree('bot1');
+      expect(tree.length).toBe(2);
+      expect(tree[0].name).toBe('article.md');
+      expect(tree[0].type).toBe('file');
+      expect(tree[0].path).toBe('article.md');
+      expect(tree[0].size).toBeGreaterThan(0);
+      expect(tree[1].name).toBe('notes.txt');
+    });
+
+    test('returns nested directory structure', () => {
+      const dir = service.resolveDir('bot1');
+      mkdirSync(join(dir, 'cultural'), { recursive: true });
+      mkdirSync(join(dir, 'parenting'), { recursive: true });
+      writeFileSync(join(dir, 'cultural', 'review.md'), '# Review', 'utf-8');
+      writeFileSync(join(dir, 'parenting', 'guide.md'), '# Guide', 'utf-8');
+      writeFileSync(join(dir, 'readme.md'), '# Root file', 'utf-8');
+
+      const tree = service.getDirectoryTree('bot1');
+      const cultural = tree.find((n) => n.name === 'cultural');
+      expect(cultural).toBeTruthy();
+      expect(cultural?.type).toBe('dir');
+      expect(cultural?.children?.length).toBe(1);
+      expect(cultural?.children?.[0].name).toBe('review.md');
+
+      const rootFile = tree.find((n) => n.name === 'readme.md');
+      expect(rootFile).toBeTruthy();
+      expect(rootFile?.type).toBe('file');
+    });
+
+    test('enriches nodes with changelog metadata', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'report.md'), '# Report', 'utf-8');
+
+      const entry = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'report.md',
+        action: 'create',
+        description: 'Monthly report',
+        size: 10,
+        trackOnly: false,
+      });
+      service.evaluate('bot1', entry.id, { status: 'approved', rating: 4 });
+
+      const tree = service.getDirectoryTree('bot1');
+      const reportNode = tree.find((n) => n.name === 'report.md');
+      expect(reportNode?.entryId).toBe(entry.id);
+      expect(reportNode?.description).toBe('Monthly report');
+      expect(reportNode?.evaluation?.status).toBe('approved');
+      expect(reportNode?.evaluation?.rating).toBe(4);
+    });
+
+    test('excludes INDEX_EXCLUDES files', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'real-file.md'), 'content', 'utf-8');
+      // changelog.jsonl and INDEX.md should be excluded
+      writeFileSync(join(dir, 'summary.json'), '{}', 'utf-8');
+
+      const tree = service.getDirectoryTree('bot1');
+      const names = tree.map((n) => n.name);
+      expect(names).toContain('real-file.md');
+      expect(names).not.toContain('changelog.jsonl');
+      expect(names).not.toContain('summary.json');
+      expect(names).not.toContain('INDEX.md');
+    });
+  });
+
+  describe('getFileContentByPath', () => {
+    test('reads file content by relative path', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'test.md'), 'Hello world', 'utf-8');
+
+      const result = service.getFileContentByPath('bot1', 'test.md');
+      expect(result).not.toBeNull();
+      expect(result?.content).toBe('Hello world');
+      expect(result?.size).toBe(11);
+    });
+
+    test('reads file in subdirectory', () => {
+      const dir = service.resolveDir('bot1');
+      mkdirSync(join(dir, 'sub'), { recursive: true });
+      writeFileSync(join(dir, 'sub', 'nested.txt'), 'Nested content', 'utf-8');
+
+      const result = service.getFileContentByPath('bot1', 'sub/nested.txt');
+      expect(result).not.toBeNull();
+      expect(result?.content).toBe('Nested content');
+    });
+
+    test('returns null for non-existent file', () => {
+      expect(service.getFileContentByPath('bot1', 'nonexistent.md')).toBeNull();
+    });
+
+    test('blocks path traversal with ..', () => {
+      expect(service.getFileContentByPath('bot1', '../../../etc/passwd')).toBeNull();
+    });
+
+    test('blocks absolute paths', () => {
+      expect(service.getFileContentByPath('bot1', '/etc/passwd')).toBeNull();
+    });
+
+    test('returns null for directories', () => {
+      const dir = service.resolveDir('bot1');
+      mkdirSync(join(dir, 'somedir'), { recursive: true });
+
+      expect(service.getFileContentByPath('bot1', 'somedir')).toBeNull();
+    });
+  });
+
   describe('assessContentQuality', () => {
     test('detects empty content as template', () => {
       const result = ProductionsService.assessContentQuality('');

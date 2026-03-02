@@ -828,6 +828,134 @@ textarea {
   margin-top: 12px;
 }
 
+/* Productions Explorer */
+.productions-explorer {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 48px);
+}
+.prod-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.prod-topbar-stats {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  font-size: 13px;
+}
+.prod-topbar-stats .stat-item {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.prod-explorer-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  margin-top: 12px;
+}
+.prod-tree-panel {
+  width: 280px;
+  min-width: 220px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding-right: 8px;
+  flex-shrink: 0;
+}
+.prod-content-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding-left: 16px;
+  min-width: 0;
+}
+.prod-tree-search {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  margin-bottom: 8px;
+}
+.prod-tree-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-size: 13px;
+  user-select: none;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-item:hover {
+  background: var(--bg-hover);
+}
+.tree-item.selected {
+  background: var(--bg-hover);
+  border-left-color: var(--accent);
+}
+.tree-chevron {
+  display: inline-block;
+  width: 14px;
+  font-size: 10px;
+  color: var(--text-dim);
+  transition: transform .15s;
+  flex-shrink: 0;
+  text-align: center;
+}
+.tree-chevron.expanded {
+  transform: rotate(90deg);
+}
+.tree-children {
+  padding-left: 14px;
+}
+.tree-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tree-dot-approved {
+  background: var(--green);
+}
+.tree-dot-rejected {
+  background: var(--red);
+}
+.tree-dot-unreviewed {
+  background: var(--orange);
+}
+.prod-file-viewer-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  word-break: break-all;
+}
+.prod-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
 /* Thread */
 .thread-messages {
   max-height: 300px;

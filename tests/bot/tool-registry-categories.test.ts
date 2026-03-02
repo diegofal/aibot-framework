@@ -50,8 +50,8 @@ function createMockContext(
 // ─── Category Constants ───
 
 describe('Tool category constants', () => {
-  test('TOOL_CATEGORY_NAMES has 10 categories', () => {
-    expect(TOOL_CATEGORY_NAMES).toHaveLength(10);
+  test('TOOL_CATEGORY_NAMES has 11 categories', () => {
+    expect(TOOL_CATEGORY_NAMES).toHaveLength(11);
   });
 
   test('no tool appears in multiple categories', () => {
@@ -86,7 +86,10 @@ describe('Tool category constants', () => {
   test('each category in TOOL_CATEGORY_NAMES exists in TOOL_CATEGORIES', () => {
     for (const name of TOOL_CATEGORY_NAMES) {
       expect(TOOL_CATEGORIES[name]).toBeDefined();
-      expect(TOOL_CATEGORIES[name].length).toBeGreaterThan(0);
+      // 'mcp' category starts empty (dynamically populated at runtime)
+      if (name !== 'mcp') {
+        expect(TOOL_CATEGORIES[name].length).toBeGreaterThan(0);
+      }
     }
   });
 });

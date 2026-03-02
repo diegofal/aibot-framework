@@ -377,6 +377,41 @@ export function productionsRoutes(deps: {
     return c.json({ status: 'idle' });
   });
 
+  // Directory tree for file explorer UI
+  // NOTE: must be registered before GET /:botId/:id to avoid Hono trie router conflicts
+  app.get('/:botId/tree', (c) => {
+    const botId = c.req.param('botId');
+    const botConfig = config.bots.find((b) => b.id === botId);
+    if (!botConfig) {
+      return c.json({ error: 'Bot not found' }, 404);
+    }
+
+    const tree = productionsService.getDirectoryTree(botId);
+    return c.json({ tree });
+  });
+
+  // Read file content by relative path
+  // NOTE: must be registered before GET /:botId/:id to avoid Hono trie router conflicts
+  app.get('/:botId/file-content', (c) => {
+    const botId = c.req.param('botId');
+    const path = c.req.query('path');
+    if (!path) {
+      return c.json({ error: 'Missing "path" query parameter' }, 400);
+    }
+
+    const botConfig = config.bots.find((b) => b.id === botId);
+    if (!botConfig) {
+      return c.json({ error: 'Bot not found' }, 404);
+    }
+
+    const result = productionsService.getFileContentByPath(botId, path);
+    if (!result) {
+      return c.json({ error: 'File not found or access denied' }, 404);
+    }
+
+    return c.json(result);
+  });
+
   // List productions for a bot (paginated)
   app.get('/:botId', (c) => {
     const botId = c.req.param('botId');

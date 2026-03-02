@@ -7,6 +7,7 @@ import type { Config } from '../config';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import type { Logger } from '../logger';
+import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
 import { agentLoopRoutes } from './routes/agent-loop';
@@ -18,6 +19,7 @@ import { cronRoutes } from './routes/cron';
 import { filesRoutes } from './routes/files';
 import { integrationsRoutes } from './routes/integrations';
 import { karmaRoutes } from './routes/karma';
+import { mcpRoutes } from './routes/mcp';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
 import { settingsRoutes } from './routes/settings';
@@ -59,7 +61,10 @@ export function startWebServer(deps: WebServerDeps): void {
   );
   app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager }));
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
-  app.route('/api/settings', settingsRoutes({ config, configPath: deps.configPath, logger }));
+  app.route(
+    '/api/settings',
+    settingsRoutes({ config, configPath: deps.configPath, logger, botManager: deps.botManager })
+  );
   app.route('/api/agent-loop', agentLoopRoutes({ config, botManager: deps.botManager, logger }));
   app.route(
     '/api/ask-human',
@@ -128,6 +133,46 @@ export function startWebServer(deps: WebServerDeps): void {
       })
     );
   }
+
+  // MCP routes (exposed server + client status)
+  let mcpServer: McpServer | null = null;
+  const mcpExposeConfig = config.mcp?.expose;
+  if (mcpExposeConfig?.enabled) {
+    const toolRegistry = deps.botManager.getToolRegistry();
+    mcpServer = new McpServer({
+      config: {
+        enabled: mcpExposeConfig.enabled,
+        port: mcpExposeConfig.port,
+        host: mcpExposeConfig.host,
+        exposedTools: mcpExposeConfig.exposedTools,
+        hiddenTools: mcpExposeConfig.hiddenTools,
+        authToken: mcpExposeConfig.authToken,
+        maxCallsPerMinute: mcpExposeConfig.maxCallsPerMinute,
+      },
+      getTools: () => toolRegistry.getTools(),
+      getDefinitions: () => toolRegistry.getDefinitions(),
+      executeTool: async (name, args) => {
+        const tool = toolRegistry.getTools().find((t) => t.definition.function.name === name);
+        if (!tool) return { success: false, content: `Tool not found: ${name}` };
+        return tool.execute(args, logger);
+      },
+      logger,
+    });
+
+    // Auto-start the exposed server
+    mcpServer.start().catch((err) => {
+      logger.warn({ err }, 'Failed to auto-start MCP exposed server');
+    });
+  }
+
+  app.route(
+    '/api/mcp',
+    mcpRoutes({
+      botManager: deps.botManager,
+      logger,
+      getMcpServer: () => mcpServer,
+    })
+  );
 
   // Static files from web/ directory
   app.use('/*', serveStatic({ root: './web' }));

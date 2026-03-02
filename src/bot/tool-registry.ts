@@ -8,6 +8,7 @@ import {
 import { adaptExternalTool } from '../core/external-tool-adapter';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
+import { adaptAllMcpTools } from '../mcp/tool-adapter';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import { ToolExecutor } from './tool-executor';
 import type { BotContext } from './types';
@@ -67,6 +68,7 @@ export const TOOL_CATEGORY_NAMES = [
   'communication',
   'browser',
   'production',
+  'mcp',
 ] as const;
 
 export type ToolCategory = (typeof TOOL_CATEGORY_NAMES)[number];
@@ -104,6 +106,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   ],
   browser: ['browser'],
   production: ['read_production_log', 'archive_file', 'create_tool', 'signal_completion'],
+  mcp: [], // Dynamically populated by registerMcpTools()
 };
 
 /** Tools always sent to the executor regardless of category selection */
@@ -404,6 +407,38 @@ export class ToolRegistry {
         'Tools initialized'
       );
     }
+  }
+
+  /**
+   * Register MCP tools from connected MCP servers.
+   * Called after McpClientPool.connectAll() completes.
+   */
+  registerMcpTools(): void {
+    const { logger } = this.ctx;
+    const pool = this.ctx.mcpClientPool;
+    if (!pool || pool.connectedCount === 0) return;
+
+    const mcpTools = adaptAllMcpTools(pool, logger);
+    if (mcpTools.length === 0) return;
+
+    // Track MCP tool names in the category for pre-selection
+    const mcpToolNames: string[] = [];
+
+    for (const tool of mcpTools) {
+      this.ctx.tools.push(tool);
+      const name = tool.definition.function.name;
+      mcpToolNames.push(name);
+      TOOL_TO_CATEGORY.set(name, 'mcp');
+    }
+
+    // Update the mcp category list
+    TOOL_CATEGORIES.mcp = mcpToolNames;
+
+    // Re-sync definitions
+    this.ctx.toolDefinitions.length = 0;
+    this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
+
+    logger.info({ mcpToolCount: mcpTools.length, tools: mcpToolNames }, 'MCP tools registered');
   }
 
   /**

@@ -81,7 +81,8 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
 
         const list = agents
           .map((a) => {
-            const parts = [`- **${a.botId}** (${a.name}, @${a.telegramUsername})`];
+            const identity = a.telegramUsername ? `${a.name}, @${a.telegramUsername}` : a.name;
+            const parts = [`- **${a.botId}** (${identity})`];
             if (a.description) parts.push(`  Description: ${a.description}`);
             if (a.skills.length > 0) parts.push(`  Skills: ${a.skills.join(', ')}`);
             if (a.tools && a.tools.length > 0) parts.push(`  Tools: ${a.tools.join(', ')}`);

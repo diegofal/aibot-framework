@@ -8,6 +8,8 @@ import type { LLMClient } from '../core/llm-client';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import type { Logger } from '../logger';
+import type { McpAgentBridge } from '../mcp/agent-bridge';
+import type { McpClientPool } from '../mcp/client-pool';
 import type { MediaHandler } from '../media';
 import type { MemoryManager } from '../memory/manager';
 import type { MessageBuffer } from '../message-buffer';
@@ -66,6 +68,8 @@ export interface BotContext {
   readonly productionsService?: ProductionsService;
   readonly conversationsService?: ConversationsService;
   readonly activityStream?: ActivityStream;
+  readonly mcpClientPool?: McpClientPool;
+  readonly mcpAgentBridge?: McpAgentBridge;
 
   // Helper methods
   getActiveModel(botId: string): string;

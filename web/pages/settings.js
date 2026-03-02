@@ -3,10 +3,11 @@ import { api } from './shared.js';
 export async function renderSettings(el) {
   el.innerHTML = '<div class="page-title">Settings</div><p class="text-dim">Loading...</p>';
 
-  const [session, collab, skillsFolders] = await Promise.all([
+  const [session, collab, skillsFolders, mcpData] = await Promise.all([
     api('/api/settings/session'),
     api('/api/settings/collaboration'),
     api('/api/settings/skills-folders'),
+    api('/api/settings/mcp'),
   ]);
   if (session.error || collab.error) {
     el.innerHTML = '<div class="page-title">Settings</div><p>Failed to load settings.</p>';
@@ -15,6 +16,8 @@ export async function renderSettings(el) {
 
   const sfPaths = skillsFolders.paths || [];
   const sfDefault = skillsFolders.defaultPath || '';
+  const mcpServers = mcpData.servers || [];
+  const mcpStatus = mcpData.status || [];
 
   el.innerHTML = `
     <div class="page-title">Settings</div>
@@ -33,6 +36,44 @@ export async function renderSettings(el) {
       <div class="actions" style="margin-top:12px">
         <button type="button" class="btn btn-primary btn-sm" id="sf-save-btn">Save Folders</button>
         <span class="text-dim text-sm" id="sf-save-status"></span>
+      </div>
+    </div>
+
+    <div class="detail-card" id="mcp-servers-card">
+      <div class="form-section-title">MCP Servers</div>
+      <p class="text-dim text-sm mb-16">External MCP server connections. Bots can use tools from these servers.</p>
+      <div id="mcp-list"></div>
+      <div class="form-separator" style="margin:12px 0"></div>
+      <div class="form-row" style="align-items:flex-end;gap:8px">
+        <div class="form-group" style="flex:1;margin-bottom:0">
+          <label>Name</label>
+          <input type="text" id="mcp-new-name" placeholder="my-server">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label>Transport</label>
+          <select id="mcp-new-transport">
+            <option value="stdio">stdio</option>
+            <option value="sse">sse</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row" style="align-items:flex-end;gap:8px;margin-top:8px">
+        <div class="form-group" style="flex:1;margin-bottom:0" id="mcp-cmd-group">
+          <label>Command</label>
+          <input type="text" id="mcp-new-command" placeholder="npx -y @modelcontextprotocol/server-github">
+        </div>
+        <div class="form-group" style="flex:1;margin-bottom:0;display:none" id="mcp-url-group">
+          <label>URL</label>
+          <input type="text" id="mcp-new-url" placeholder="http://localhost:3001/sse">
+        </div>
+        <div class="form-group" style="width:100px;margin-bottom:0">
+          <label>Timeout</label>
+          <input type="number" id="mcp-new-timeout" min="1000" step="1000" value="30000">
+        </div>
+        <button type="button" class="btn btn-sm btn-primary" id="mcp-add-btn" style="margin-bottom:0">Add Server</button>
+      </div>
+      <div style="margin-top:8px">
+        <span class="text-dim text-sm" id="mcp-status"></span>
       </div>
     </div>
 
@@ -275,6 +316,135 @@ export async function renderSettings(el) {
       setTimeout(() => {
         status.textContent = '';
       }, 4000);
+    }
+  });
+
+  // --- MCP Servers UI logic ---
+  function getServerStatus(name) {
+    const entry = mcpStatus.find((s) => s.name === name);
+    return entry?.status ?? 'unknown';
+  }
+
+  function statusBadge(status) {
+    const colors = {
+      connected: 'var(--green)',
+      disconnected: 'var(--yellow)',
+      error: 'var(--red)',
+    };
+    const color = colors[status] || 'var(--text-dim)';
+    return `<span class="badge" style="background:${color};color:#000;font-size:11px">${status}</span>`;
+  }
+
+  function renderMcpList() {
+    const listEl = document.getElementById('mcp-list');
+    if (mcpServers.length === 0) {
+      listEl.innerHTML = '<p class="text-dim text-sm">No MCP servers configured.</p>';
+      return;
+    }
+    listEl.innerHTML = mcpServers
+      .map(
+        (s, i) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <code style="flex:1">${s.name}</code>
+        <span class="text-dim text-sm">${s.transport}</span>
+        ${statusBadge(getServerStatus(s.name))}
+        <button type="button" class="btn btn-sm btn-danger mcp-remove-btn" data-name="${s.name}">Remove</button>
+      </div>
+    `
+      )
+      .join('');
+
+    listEl.querySelectorAll('.mcp-remove-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.name;
+        btn.disabled = true;
+        btn.textContent = '...';
+        const res = await api(`/api/settings/mcp/servers/${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+        });
+        if (!res.error) {
+          const idx = mcpServers.findIndex((s) => s.name === name);
+          if (idx !== -1) mcpServers.splice(idx, 1);
+          renderMcpList();
+          showMcpStatus('Removed', 'var(--green)');
+        } else {
+          btn.disabled = false;
+          btn.textContent = 'Remove';
+          showMcpStatus('Failed to remove', 'var(--red)');
+        }
+      });
+    });
+  }
+
+  function showMcpStatus(text, color) {
+    const el = document.getElementById('mcp-status');
+    el.textContent = text;
+    el.style.color = color;
+    setTimeout(() => {
+      el.textContent = '';
+    }, 4000);
+  }
+
+  renderMcpList();
+
+  // Toggle command/url fields based on transport
+  document.getElementById('mcp-new-transport').addEventListener('change', (e) => {
+    const isStdio = e.target.value === 'stdio';
+    document.getElementById('mcp-cmd-group').style.display = isStdio ? '' : 'none';
+    document.getElementById('mcp-url-group').style.display = isStdio ? 'none' : '';
+  });
+
+  document.getElementById('mcp-add-btn').addEventListener('click', async () => {
+    const name = document.getElementById('mcp-new-name').value.trim();
+    const transport = document.getElementById('mcp-new-transport').value;
+    const command = document.getElementById('mcp-new-command').value.trim();
+    const url = document.getElementById('mcp-new-url').value.trim();
+    const timeout = Number.parseInt(document.getElementById('mcp-new-timeout').value, 10) || 30000;
+
+    if (!name) {
+      showMcpStatus('Name is required', 'var(--red)');
+      return;
+    }
+
+    const body = { name, transport, timeout };
+    if (transport === 'stdio') {
+      if (!command) {
+        showMcpStatus('Command is required for stdio', 'var(--red)');
+        return;
+      }
+      // Split command into command + args
+      const parts = command.split(/\s+/);
+      body.command = parts[0];
+      if (parts.length > 1) body.args = parts.slice(1);
+    } else {
+      if (!url) {
+        showMcpStatus('URL is required for SSE', 'var(--red)');
+        return;
+      }
+      body.url = url;
+    }
+
+    const btn = document.getElementById('mcp-add-btn');
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+
+    const res = await api('/api/settings/mcp/servers', { method: 'POST', body });
+    btn.disabled = false;
+    btn.textContent = 'Add Server';
+
+    if (res.error) {
+      showMcpStatus(res.error, 'var(--red)');
+    } else {
+      mcpServers.push(res.server);
+      document.getElementById('mcp-new-name').value = '';
+      document.getElementById('mcp-new-command').value = '';
+      document.getElementById('mcp-new-url').value = '';
+      // Refresh status
+      const freshData = await api('/api/settings/mcp');
+      mcpStatus.length = 0;
+      mcpStatus.push(...(freshData.status || []));
+      renderMcpList();
+      showMcpStatus('Server added', 'var(--green)');
     }
   });
 

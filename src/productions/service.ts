@@ -16,7 +16,7 @@ import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { SoulLoader } from '../soul';
 import type { ThreadMessage } from '../types/thread';
-import type { ProductionEntry, ProductionEvaluation, SummaryData } from './types';
+import type { ProductionEntry, ProductionEvaluation, SummaryData, TreeNode } from './types';
 
 export class ProductionsService {
   private baseDir: string;
@@ -734,6 +734,116 @@ export class ProductionsService {
       }
     }
     return null;
+  }
+
+  /**
+   * Build a directory tree for a bot's productions folder.
+   * Enriches file nodes with changelog metadata (entryId, evaluation, description).
+   */
+  getDirectoryTree(botId: string): TreeNode[] {
+    const dir = this.resolveDir(botId);
+    if (!existsSync(dir)) return [];
+
+    // Build a lookup from relative path → newest changelog entry
+    const entryMap = new Map<string, ProductionEntry>();
+    const changelogPath = join(dir, 'changelog.jsonl');
+    if (existsSync(changelogPath)) {
+      const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const entry: ProductionEntry = JSON.parse(line);
+          // Normalize: if path is absolute within the dir, make it relative
+          let relPath = entry.path;
+          if (relPath.startsWith('/')) {
+            const rel = relative(dir, relPath);
+            if (!rel.startsWith('..')) relPath = rel;
+          }
+          // Keep newest entry per path (later lines = newer)
+          entryMap.set(relPath, entry);
+        } catch {
+          /* skip malformed lines */
+        }
+      }
+    }
+
+    const walk = (current: string, relPrefix: string): TreeNode[] => {
+      let dirEntries: string[];
+      try {
+        dirEntries = readdirSync(current);
+      } catch {
+        return [];
+      }
+
+      const nodes: TreeNode[] = [];
+
+      for (const name of dirEntries.sort()) {
+        if (ProductionsService.INDEX_EXCLUDES.has(name)) continue;
+        const fullPath = join(current, name);
+        let stat;
+        try {
+          stat = statSync(fullPath);
+        } catch {
+          continue;
+        }
+
+        const relPath = relPrefix ? `${relPrefix}/${name}` : name;
+
+        if (stat.isDirectory()) {
+          const children = walk(fullPath, relPath);
+          nodes.push({ name, path: relPath, type: 'dir', children });
+        } else {
+          const node: TreeNode = { name, path: relPath, type: 'file', size: stat.size };
+          const entry = entryMap.get(relPath);
+          if (entry) {
+            node.entryId = entry.id;
+            node.description = entry.description;
+            if (entry.evaluation) {
+              node.evaluation = {
+                status: entry.evaluation.status,
+                rating: entry.evaluation.rating,
+              };
+            }
+          }
+          nodes.push(node);
+        }
+      }
+
+      return nodes;
+    };
+
+    return walk(dir, '');
+  }
+
+  /**
+   * Read a file by relative path within a bot's productions directory.
+   * Validates against path traversal.
+   */
+  getFileContentByPath(
+    botId: string,
+    relativePath: string
+  ): { content: string; size: number } | null {
+    // Path traversal protection
+    if (relativePath.includes('..') || relativePath.startsWith('/')) {
+      return null;
+    }
+
+    const dir = this.resolveDir(botId);
+    const fullPath = resolve(join(dir, relativePath));
+
+    // Ensure resolved path is still within the bot dir
+    if (!fullPath.startsWith(dir)) {
+      return null;
+    }
+
+    try {
+      if (!existsSync(fullPath)) return null;
+      const stat = statSync(fullPath);
+      if (!stat.isFile()) return null;
+      const content = readFileSync(fullPath, 'utf-8');
+      return { content, size: stat.size };
+    } catch {
+      return null;
+    }
   }
 
   private loadRawChangelog(botId: string): ProductionEntry[] {

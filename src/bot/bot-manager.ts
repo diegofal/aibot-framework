@@ -10,6 +10,9 @@ import { type LLMClient, LLMClientWithFallback, createLLMClient } from '../core/
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import type { Logger } from '../logger';
+import { McpAgentBridge } from '../mcp/agent-bridge';
+import type { McpServerConfig } from '../mcp/client';
+import { McpClientPool } from '../mcp/client-pool';
 import { MediaHandler } from '../media';
 import type { MemoryManager } from '../memory/manager';
 import { MessageBuffer } from '../message-buffer';
@@ -88,6 +91,9 @@ export class BotManager {
   private tenantFacade: TenantFacade;
   private activityStream: ActivityStream;
   private botResetService: BotResetService;
+  private mcpClientPool: McpClientPool;
+  private mcpAgentBridge: McpAgentBridge;
+  private mcpConnected = false;
   private restartAttempts = new Map<string, number[]>();
   private restartTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pollAbortControllers = new Map<string, AbortController>();
@@ -172,6 +178,33 @@ export class BotManager {
     // Initialize activity stream for real-time visibility
     this.activityStream = new ActivityStream();
 
+    // Initialize MCP client pool
+    this.mcpClientPool = new McpClientPool(logger);
+    const mcpServers = config.mcp?.servers ?? [];
+    for (const serverEntry of mcpServers) {
+      const serverConfig: McpServerConfig = {
+        name: serverEntry.name,
+        transport: serverEntry.transport,
+        command: serverEntry.command,
+        args: serverEntry.args,
+        env: serverEntry.env,
+        url: serverEntry.url,
+        headers: serverEntry.headers,
+        timeout: serverEntry.timeout,
+        autoReconnect: serverEntry.autoReconnect,
+        toolPrefix: serverEntry.toolPrefix,
+        allowedTools: serverEntry.allowedTools,
+        deniedTools: serverEntry.deniedTools,
+      };
+      this.mcpClientPool.addServer(serverConfig);
+    }
+    if (mcpServers.length > 0) {
+      logger.info({ count: mcpServers.length }, 'MCP server configs registered');
+    }
+
+    // Initialize MCP agent bridge for external agent collaboration
+    this.mcpAgentBridge = new McpAgentBridge(this.agentRegistry, this.collaborationTracker, logger);
+
     // Initialize bot reset service
     this.botResetService = new BotResetService({
       sessionManager,
@@ -225,6 +258,8 @@ export class BotManager {
       productionsService: this.productionsService,
       conversationsService: this.conversationsService,
       activityStream: this.activityStream,
+      mcpClientPool: this.mcpClientPool,
+      mcpAgentBridge: this.mcpAgentBridge,
 
       getActiveModel: (botId: string) => this.getActiveModel(botId),
       getLLMClient: (botId: string) => this.getLLMClient(botId),
@@ -463,6 +498,23 @@ export class BotManager {
       } else {
         this.registerHeadless(config, botLogger);
       }
+      // Connect MCP servers (once, on first bot start) and register their tools
+      if (!this.mcpConnected && this.mcpClientPool.size > 0) {
+        this.mcpConnected = true;
+        this.mcpClientPool
+          .connectAll()
+          .then(() => {
+            this.toolRegistry.registerMcpTools();
+            this.logger.info(
+              { connected: this.mcpClientPool.connectedCount },
+              'MCP servers connected and tools registered'
+            );
+          })
+          .catch((err) => {
+            this.logger.warn({ err }, 'MCP connect failed (non-fatal)');
+          });
+      }
+
       // Wake the agent loop so it picks up the new bot immediately
       if (this.config.agentLoop.enabled) this.agentLoop.wakeUp();
       this.logger.info({ botId: config.id, name: config.name, mode }, 'Bot started successfully');
@@ -644,6 +696,10 @@ export class BotManager {
     this.collaborationSessions.dispose();
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
+    // Disconnect MCP agent bridge and servers
+    await this.mcpAgentBridge.disconnectAll().catch(() => {});
+    await this.mcpClientPool.disconnectAll().catch(() => {});
+    this.mcpConnected = false;
     // Cancel all pending restart timers
     for (const [, timer] of this.restartTimers) {
       clearTimeout(timer);
@@ -672,6 +728,10 @@ export class BotManager {
     this.collaborationSessions.dispose();
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
+    // Disconnect MCP agent bridge and servers
+    await this.mcpAgentBridge.disconnectAll().catch(() => {});
+    await this.mcpClientPool.disconnectAll().catch(() => {});
+    this.mcpConnected = false;
     // Cancel all pending restart timers
     for (const [, timer] of this.restartTimers) {
       clearTimeout(timer);
@@ -889,6 +949,10 @@ export class BotManager {
 
   getToolRegistry(): ToolRegistry {
     return this.toolRegistry;
+  }
+
+  getMcpClientPool(): McpClientPool {
+    return this.mcpClientPool;
   }
 
   // Collaboration delegates

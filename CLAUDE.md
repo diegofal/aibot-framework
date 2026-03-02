@@ -69,6 +69,19 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `soul-quality-reviewer.ts` | Quality review de soul files (Claude CLI) |
 | `index.ts` | Barrel re-export de `BotManager` |
 
+### Módulos MCP (`src/mcp/`)
+
+| Archivo | Responsabilidad |
+|---|---|
+| `types.ts` | Tipos compartidos: `JsonRpcMessage`, `McpToolDef`, `McpToolCallResult`, `MCP_PROTOCOL_VERSION` |
+| `protocol.ts` | Transports: `McpStdioTransport` (spawn + NDJSON stdin/stdout), `McpSseTransport` (HTTP SSE) |
+| `client.ts` | `McpClient` — conecta a un MCP server, handshake, `callTool()`, reconnect |
+| `client-pool.ts` | `McpClientPool` — lifecycle de múltiples clients |
+| `tool-adapter.ts` | Conversión MCP tools ↔ framework `Tool` objects. Prefijo: `mcp_<server>_<tool>` |
+| `server.ts` | `McpServer` — HTTP/SSE server que expone tools a clientes externos (Claude Desktop, Cursor, etc.) |
+| `agent-bridge.ts` | `McpAgentBridge` — agent-to-agent via MCP, integra con `AgentRegistry` y `CollaborationTracker` |
+| `tool-bridge-server.ts` | Standalone stdio server para Claude CLI (usa tipos compartidos de `types.ts`) |
+
 ### Patrón de composición
 
 Todos los módulos reciben un `BotContext` compartido (estado mutable por referencia).
@@ -79,7 +92,8 @@ Las dependencias circulares (delegation/collaborate tools → CollaborationManag
 ```
 BotManager (facade)
   ├── TenantFacade            (tenant/billing/metering)
-  ├── ToolRegistry            (sin deps de módulo)
+  ├── McpClientPool           (MCP server connections, shared pool)
+  ├── ToolRegistry            (sin deps de módulo, registra MCP tools)
   ├── SystemPromptBuilder     (lee ToolRegistry.getDefinitions())
   ├── MemoryFlusher           (sin deps de módulo)
   ├── GroupActivation         (sin deps de módulo)

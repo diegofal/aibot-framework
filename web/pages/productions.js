@@ -181,157 +181,507 @@ export async function renderProductions(el) {
   await loadUnifiedEntries(false);
 }
 
+// --- Polling intervals to clean up on navigation ---
+let _prodIntervals = [];
+
+export function destroyProductions() {
+  for (const id of _prodIntervals) clearInterval(id);
+  _prodIntervals = [];
+}
+
 export async function renderBotProductions(el, botId) {
+  destroyProductions();
   el.innerHTML = '<div class="page-title">Productions</div><p class="text-dim">Loading...</p>';
 
-  let currentStatus = 'all';
+  // Load tree + stats + bot list in parallel
+  const [treeData, statsData, allBots] = await Promise.all([
+    api(`/api/productions/${encodeURIComponent(botId)}/tree`),
+    api(`/api/productions/${encodeURIComponent(botId)}`),
+    api('/api/productions'),
+  ]);
 
-  async function load() {
-    const statusParam = currentStatus !== 'all' ? `&status=${currentStatus}` : '';
-    const data = await api(`/api/productions/${encodeURIComponent(botId)}?limit=100${statusParam}`);
-
-    if (data.error) {
-      el.innerHTML = `
-        <div class="page-title">Productions</div>
-        <p class="text-dim">${escapeHtml(data.error)}</p>
-        <a href="#/productions" class="btn btn-sm">&larr; Back</a>
-      `;
-      return;
-    }
-
-    const { entries, stats } = data;
-
+  if (statsData.error) {
     el.innerHTML = `
-      <div class="flex-between mb-16">
-        <div class="page-title">${escapeHtml(botId)} Productions <span class="count">${stats.total}</span></div>
-        <a href="#/productions" class="btn btn-sm">&larr; Back</a>
-      </div>
-
-      <div class="detail-card mb-16" style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">
-        <div><strong>${stats.total}</strong> <span class="text-dim">Total</span></div>
-        <div><span style="color:var(--green)">${stats.approved}</span> <span class="text-dim">Approved</span></div>
-        <div><span style="color:var(--red)">${stats.rejected}</span> <span class="text-dim">Rejected</span></div>
-        <div><span style="color:var(--orange)">${stats.unreviewed}</span> <span class="text-dim">Unreviewed</span></div>
-        <div>${stats.avgRating != null ? `${starsHtml(Math.round(stats.avgRating))} <span class="text-dim">${stats.avgRating}</span>` : '<span class="text-dim">No ratings</span>'}</div>
-        <div style="margin-left:auto"><button class="btn btn-sm" id="generate-summary-btn">Generate Summary</button></div>
-      </div>
-
-      <div id="summary-container" class="mb-16"></div>
-
-      <div class="mb-16">
-        <select id="status-filter" class="log-agent-filter">
-          <option value="all"${currentStatus === 'all' ? ' selected' : ''}>All</option>
-          <option value="approved"${currentStatus === 'approved' ? ' selected' : ''}>Approved</option>
-          <option value="rejected"${currentStatus === 'rejected' ? ' selected' : ''}>Rejected</option>
-          <option value="unreviewed"${currentStatus === 'unreviewed' ? ' selected' : ''}>Unreviewed</option>
-        </select>
-      </div>
-
-      ${
-        entries.length === 0
-          ? '<p class="text-dim">No entries match the filter.</p>'
-          : `<table>
-            <thead><tr><th>Time</th><th>Path</th><th>Tool</th><th>Action</th><th>Status</th><th>Rating</th></tr></thead>
-            <tbody id="entries-tbody"></tbody>
-          </table>`
-      }
+      <div class="page-title">Productions</div>
+      <p class="text-dim">${escapeHtml(statsData.error)}</p>
+      <a href="#/productions" class="btn btn-sm">&larr; Back</a>
     `;
+    return;
+  }
 
-    document.getElementById('status-filter')?.addEventListener('change', (e) => {
-      currentStatus = e.target.value;
-      load();
-    });
+  const { stats } = statsData;
+  const tree = treeData.tree || [];
+  const botList = Array.isArray(allBots) ? allBots : [];
 
-    function checkSummaryStatus(id) {
-      const btn = document.getElementById('generate-summary-btn');
-      const container = document.getElementById('summary-container');
-      if (!btn || !container) return Promise.resolve('gone');
+  // Explorer state
+  const expandedDirs = new Set();
+  let selectedFile = null;
+  let searchFilter = '';
+  let statusFilter = '';
 
-      return api(`/api/productions/${encodeURIComponent(id)}/summary-status`).then((res) => {
-        // Guard: DOM may be gone if user navigated away
-        if (!document.getElementById('generate-summary-btn')) return 'gone';
+  // Build the explorer layout
+  el.innerHTML = `
+    <div class="productions-explorer">
+      <div class="prod-topbar">
+        <div style="display:flex;gap:12px;align-items:center">
+          <a href="#/productions" class="btn btn-sm">&larr; Back</a>
+          <select id="prod-bot-selector" class="log-agent-filter">
+            ${botList.map((b) => `<option value="${escapeHtml(b.botId)}"${b.botId === botId ? ' selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="prod-topbar-stats">
+          <div class="stat-item"><strong>${stats.total}</strong> <span class="text-dim">Total</span></div>
+          <div class="stat-item"><span style="color:var(--green)">${stats.approved}</span> <span class="text-dim">Approved</span></div>
+          <div class="stat-item"><span style="color:var(--red)">${stats.rejected}</span> <span class="text-dim">Rejected</span></div>
+          <div class="stat-item"><span style="color:var(--orange)">${stats.unreviewed}</span> <span class="text-dim">Unreviewed</span></div>
+          ${stats.avgRating != null ? `<div class="stat-item">${starsHtml(Math.round(stats.avgRating))} <span class="text-dim">${stats.avgRating}</span></div>` : ''}
+          <button class="btn btn-sm" id="generate-summary-btn">Summary</button>
+        </div>
+      </div>
 
-        if (res.status === 'generating') {
-          btn.disabled = true;
-          btn.textContent = 'Generating...';
-          container.innerHTML = '<p class="text-dim">Analyzing productions...</p>';
-        } else if (res.status === 'done') {
-          btn.disabled = false;
-          btn.textContent = 'Regenerate Summary';
-          container.innerHTML = `<div class="detail-card" style="white-space:pre-wrap">${escapeHtml(res.summary)}</div>`;
-        } else if (res.status === 'error') {
-          btn.disabled = false;
-          btn.textContent = 'Retry Summary';
-          container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">${escapeHtml(res.error)}</p></div>`;
-        } else {
-          // idle
-          btn.disabled = false;
-          btn.textContent = 'Generate Summary';
-        }
-        return res.status;
-      });
+      <div class="prod-explorer-body">
+        <div class="prod-tree-panel">
+          <input type="text" class="prod-tree-search" id="prod-tree-search" placeholder="Filter files...">
+          <select id="prod-status-filter" class="log-agent-filter" style="width:100%;margin-bottom:8px">
+            <option value="">All Status</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="unreviewed">Unreviewed</option>
+          </select>
+          <div id="prod-tree-container"></div>
+        </div>
+        <div class="prod-content-panel" id="prod-content-panel">
+          <div class="prod-empty-state">Select a file to view its content</div>
+        </div>
+      </div>
+
+      <div id="prod-bottom-section"></div>
+    </div>
+  `;
+
+  // --- Bot selector ---
+  document.getElementById('prod-bot-selector')?.addEventListener('change', (e) => {
+    location.hash = '#/productions/' + encodeURIComponent(e.target.value);
+  });
+
+  // --- Tree rendering ---
+  function matchesFilters(node) {
+    if (node.type === 'dir') {
+      return node.children?.some(matchesFilters) ?? false;
     }
-
-    function startPolling(id) {
-      const interval = setInterval(async () => {
-        const status = await checkSummaryStatus(id);
-        if (status !== 'generating') clearInterval(interval);
-      }, 3000);
+    if (
+      searchFilter &&
+      !node.name.toLowerCase().includes(searchFilter.toLowerCase()) &&
+      !node.path.toLowerCase().includes(searchFilter.toLowerCase())
+    ) {
+      return false;
     }
-
-    const summaryBtn = document.getElementById('generate-summary-btn');
-    if (summaryBtn) {
-      // Check status on load
-      checkSummaryStatus(botId).then((status) => {
-        if (status === 'generating') startPolling(botId);
-      });
-
-      summaryBtn.addEventListener('click', async () => {
-        summaryBtn.disabled = true;
-        summaryBtn.textContent = 'Generating...';
-        const container = document.getElementById('summary-container');
-        container.innerHTML = '<p class="text-dim">Analyzing productions...</p>';
-
-        try {
-          await api(`/api/productions/${encodeURIComponent(botId)}/generate-summary`, {
-            method: 'POST',
-          });
-          startPolling(botId);
-        } catch (err) {
-          container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">Request failed: ${escapeHtml(String(err))}</p></div>`;
-          summaryBtn.disabled = false;
-          summaryBtn.textContent = 'Retry Summary';
-        }
-      });
+    if (statusFilter) {
+      const evalStatus = node.evaluation?.status;
+      if (statusFilter === 'unreviewed' && evalStatus) return false;
+      if (statusFilter === 'approved' && evalStatus !== 'approved') return false;
+      if (statusFilter === 'rejected' && evalStatus !== 'rejected') return false;
     }
+    return true;
+  }
 
-    if (entries.length === 0) return;
-
-    const tbody = document.getElementById('entries-tbody');
-    for (const entry of entries) {
-      const tr = document.createElement('tr');
-      tr.style.cursor = 'pointer';
-      tr.innerHTML = `
-        <td class="text-dim">${timeAgo(entry.timestamp)}</td>
-        <td>${escapeHtml(entry.path)}</td>
-        <td class="text-dim">${escapeHtml(entry.tool)}</td>
-        <td class="text-dim">${escapeHtml(entry.action)}${entry.trackOnly ? ' <span class="badge badge-disabled">track</span>' : ''}</td>
-        <td>${statusBadge(entry)}</td>
-        <td>${entry.evaluation?.rating ? starsHtml(entry.evaluation.rating) : '<span class="text-dim">-</span>'}</td>
-      `;
-      tr.addEventListener('click', () => showDetailModal(botId, entry.id, () => load()));
-      tbody.appendChild(tr);
+  function renderTree(container, nodes) {
+    container.innerHTML = '';
+    for (const node of nodes) {
+      if (!matchesFilters(node)) continue;
+      renderTreeNode(container, node);
+    }
+    if (container.childElementCount === 0) {
+      container.innerHTML =
+        '<p class="text-dim" style="padding:8px;font-size:12px">No files match filters</p>';
     }
   }
 
-  await load();
+  function renderTreeNode(parent, node) {
+    if (node.type === 'dir') {
+      const isExpanded = expandedDirs.has(node.path);
+      const item = document.createElement('div');
+      item.className = 'tree-item';
+      item.innerHTML = `<span class="tree-chevron${isExpanded ? ' expanded' : ''}">&#9654;</span> ${escapeHtml(node.name)}/`;
+      item.addEventListener('click', () => {
+        if (expandedDirs.has(node.path)) {
+          expandedDirs.delete(node.path);
+        } else {
+          expandedDirs.add(node.path);
+        }
+        renderTree(document.getElementById('prod-tree-container'), tree);
+      });
+      parent.appendChild(item);
+
+      if (isExpanded && node.children) {
+        const childContainer = document.createElement('div');
+        childContainer.className = 'tree-children';
+        for (const child of node.children) {
+          if (!matchesFilters(child)) continue;
+          renderTreeNode(childContainer, child);
+        }
+        parent.appendChild(childContainer);
+      }
+    } else {
+      if (!matchesFilters(node)) return;
+      const item = document.createElement('div');
+      const isSelected = selectedFile?.path === node.path;
+      item.className = `tree-item${isSelected ? ' selected' : ''}`;
+
+      let dotHtml = '';
+      if (node.evaluation?.status === 'approved')
+        dotHtml = '<span class="tree-dot tree-dot-approved"></span>';
+      else if (node.evaluation?.status === 'rejected')
+        dotHtml = '<span class="tree-dot tree-dot-rejected"></span>';
+      else if (node.entryId) dotHtml = '<span class="tree-dot tree-dot-unreviewed"></span>';
+
+      item.innerHTML = `<span style="width:14px;flex-shrink:0"></span>${dotHtml} ${escapeHtml(node.name)}`;
+      item.title = node.description || node.path;
+      item.addEventListener('click', () => {
+        selectedFile = node;
+        renderTree(document.getElementById('prod-tree-container'), tree);
+        renderFileViewer(botId, node);
+      });
+      parent.appendChild(item);
+    }
+  }
+
+  // --- File viewer ---
+  async function renderFileViewer(botId, node) {
+    const panel = document.getElementById('prod-content-panel');
+    if (!panel) return;
+    panel.innerHTML = '<p class="text-dim">Loading...</p>';
+
+    // Load content either via entryId or by path
+    let content = null;
+    let entry = null;
+    if (node.entryId) {
+      const data = await api(`/api/productions/${encodeURIComponent(botId)}/${node.entryId}`);
+      if (!data.error) {
+        content = data.content;
+        entry = data.entry;
+      }
+    }
+    if (content == null) {
+      const data = await api(
+        `/api/productions/${encodeURIComponent(botId)}/file-content?path=${encodeURIComponent(node.path)}`
+      );
+      if (!data.error) content = data.content;
+    }
+
+    let currentRating = entry?.evaluation?.rating || 0;
+    let currentStatus = entry?.evaluation?.status || '';
+    let threadGenerating = false;
+    let threadErrorMsg = null;
+    const VIEWER_MAX_POLLS = 90;
+
+    function renderViewer() {
+      panel.innerHTML = `
+        <div class="prod-file-viewer-title">${escapeHtml(node.path)}</div>
+        ${
+          entry
+            ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">
+          <span class="text-dim">${new Date(entry.timestamp).toLocaleString()}</span>
+          <span class="text-dim">${escapeHtml(entry.tool)} / ${escapeHtml(entry.action)}</span>
+          ${entry.trackOnly ? '<span class="badge badge-disabled">track-only</span>' : ''}
+          ${statusBadge(entry)}
+        </div>`
+            : ''
+        }
+
+        <div class="production-content" style="max-height:400px">${content != null ? `<pre>${escapeHtml(content)}</pre>` : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
+
+        ${
+          entry
+            ? `
+          <div class="eval-controls" style="margin-top:16px">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+              <button class="btn btn-sm${currentStatus === 'approved' ? ' btn-primary' : ''}" id="viewer-approve">Approve</button>
+              <button class="btn btn-sm${currentStatus === 'rejected' ? ' btn-danger' : ''}" id="viewer-reject">Reject</button>
+              <span style="margin-left:12px">${starsHtml(currentRating, true)}</span>
+              <button class="btn btn-primary btn-sm" id="viewer-save" style="margin-left:auto">Save</button>
+              <button class="btn btn-danger btn-sm" id="viewer-delete">Delete</button>
+            </div>
+          </div>
+
+          <div class="form-separator"></div>
+          <div class="form-section-title">Discussion</div>
+          <div id="viewer-thread-container"></div>
+        `
+            : `<div style="margin-top:12px"><span class="text-dim text-sm">This file is not tracked in the changelog.</span></div>`
+        }
+      `;
+
+      if (!entry) return;
+
+      // Star rating
+      panel.querySelectorAll('.star-interactive .star').forEach((star) => {
+        star.style.cursor = 'pointer';
+        star.addEventListener('click', () => {
+          currentRating = Number.parseInt(star.dataset.star);
+          renderViewer();
+        });
+      });
+
+      // Approve/Reject
+      document.getElementById('viewer-approve')?.addEventListener('click', () => {
+        currentStatus = 'approved';
+        renderViewer();
+      });
+      document.getElementById('viewer-reject')?.addEventListener('click', () => {
+        currentStatus = 'rejected';
+        renderViewer();
+      });
+
+      // Save
+      document.getElementById('viewer-save')?.addEventListener('click', async () => {
+        if (!currentStatus && !currentRating) return;
+        const btn = document.getElementById('viewer-save');
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+
+        await api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/evaluate`, {
+          method: 'POST',
+          body: { status: currentStatus || undefined, rating: currentRating || undefined },
+        });
+
+        if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
+        if (currentStatus) entry.evaluation.status = currentStatus;
+        if (currentRating) entry.evaluation.rating = currentRating;
+
+        // Update tree dot
+        if (node.entryId) {
+          node.evaluation = { status: currentStatus, rating: currentRating };
+          renderTree(document.getElementById('prod-tree-container'), tree);
+        }
+
+        btn.textContent = 'Saved';
+        setTimeout(() => {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Save';
+          }
+        }, 1500);
+      });
+
+      // Delete
+      document.getElementById('viewer-delete')?.addEventListener('click', async () => {
+        if (!confirm('Delete this production and its file? This cannot be undone.')) return;
+        await api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}`, {
+          method: 'DELETE',
+        });
+        selectedFile = null;
+        // Reload tree
+        const freshTree = await api(`/api/productions/${encodeURIComponent(botId)}/tree`);
+        tree.length = 0;
+        tree.push(...(freshTree.tree || []));
+        renderTree(document.getElementById('prod-tree-container'), tree);
+        panel.innerHTML = '<div class="prod-empty-state">File deleted. Select another file.</div>';
+      });
+
+      // Thread
+      const threadContainer = document.getElementById('viewer-thread-container');
+
+      function startViewerThreadPolling() {
+        let pollCount = 0;
+        const interval = setInterval(async () => {
+          if (!document.getElementById('viewer-thread-container')) {
+            clearInterval(interval);
+            return;
+          }
+          pollCount++;
+          if (pollCount >= VIEWER_MAX_POLLS) {
+            clearInterval(interval);
+            threadGenerating = false;
+            threadErrorMsg = 'Response timed out (3 minutes).';
+            renderViewerThread();
+            return;
+          }
+          const statusRes = await api(
+            `/api/productions/${encodeURIComponent(botId)}/${entry.id}/thread-status`
+          );
+          if (statusRes.status === 'error') {
+            clearInterval(interval);
+            threadGenerating = false;
+            threadErrorMsg = statusRes.error || 'Generation failed';
+            renderViewerThread();
+            return;
+          }
+          if (statusRes.status === 'idle') {
+            clearInterval(interval);
+            if (statusRes.lastBotMessage) {
+              if (!entry.evaluation?.thread?.find((m) => m.id === statusRes.lastBotMessage.id)) {
+                if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
+                if (!entry.evaluation.thread) entry.evaluation.thread = [];
+                entry.evaluation.thread.push(statusRes.lastBotMessage);
+              }
+            }
+            threadGenerating = false;
+            threadErrorMsg = null;
+            renderViewerThread();
+          }
+        }, 2000);
+        _prodIntervals.push(interval);
+      }
+
+      function renderViewerThread() {
+        if (!threadContainer) return;
+        renderThread(threadContainer, {
+          thread: entry.evaluation?.thread ?? [],
+          legacyFeedback: entry.evaluation?.feedback || null,
+          legacyResponse: entry.evaluation?.aiResponse || null,
+          generating: threadGenerating,
+          error: threadErrorMsg,
+          botId,
+          onRetry: async () => {
+            threadErrorMsg = null;
+            threadGenerating = true;
+            renderViewerThread();
+            await api(`/api/productions/${encodeURIComponent(botId)}/${entry.id}/retry-thread`, {
+              method: 'POST',
+            });
+            startViewerThreadPolling();
+          },
+          onSend: async (text) => {
+            if (!entry.evaluation) entry.evaluation = { evaluatedAt: new Date().toISOString() };
+            if (!entry.evaluation.thread) entry.evaluation.thread = [];
+            entry.evaluation.thread.push({
+              id: 'temp',
+              role: 'human',
+              content: text,
+              createdAt: new Date().toISOString(),
+            });
+            threadGenerating = true;
+            threadErrorMsg = null;
+            renderViewerThread();
+
+            const res = await api(
+              `/api/productions/${encodeURIComponent(botId)}/${entry.id}/thread`,
+              { method: 'POST', body: { message: text } }
+            );
+            if (res.error) {
+              threadGenerating = false;
+              renderViewerThread();
+              return;
+            }
+            if (res.entry?.evaluation) entry.evaluation = res.entry.evaluation;
+            startViewerThreadPolling();
+          },
+        });
+      }
+
+      renderViewerThread();
+    }
+
+    renderViewer();
+  }
+
+  // --- Filters ---
+  document.getElementById('prod-tree-search')?.addEventListener('input', (e) => {
+    searchFilter = e.target.value;
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  });
+  document.getElementById('prod-status-filter')?.addEventListener('change', (e) => {
+    statusFilter = e.target.value;
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  });
+
+  // Initial tree render — auto-expand if few dirs
+  function countDirs(nodes) {
+    let n = 0;
+    for (const node of nodes) {
+      if (node.type === 'dir') {
+        n++;
+        n += countDirs(node.children || []);
+      }
+    }
+    return n;
+  }
+  if (countDirs(tree) <= 5) {
+    // Auto-expand all dirs
+    function expandAll(nodes) {
+      for (const node of nodes) {
+        if (node.type === 'dir') {
+          expandedDirs.add(node.path);
+          expandAll(node.children || []);
+        }
+      }
+    }
+    expandAll(tree);
+  }
+  renderTree(document.getElementById('prod-tree-container'), tree);
+
+  // --- Summary (collapsible at bottom) ---
+  const bottomSection = document.getElementById('prod-bottom-section');
+  if (bottomSection) {
+    bottomSection.innerHTML = `
+      <div class="form-separator"></div>
+      <div id="summary-container" class="mb-16"></div>
+      <div id="productions-chat-section" class="mb-16"></div>
+    `;
+  }
+
+  // Summary polling
+  function checkSummaryStatus(id) {
+    const btn = document.getElementById('generate-summary-btn');
+    const container = document.getElementById('summary-container');
+    if (!btn || !container) return Promise.resolve('gone');
+
+    return api(`/api/productions/${encodeURIComponent(id)}/summary-status`).then((res) => {
+      if (!document.getElementById('generate-summary-btn')) return 'gone';
+      if (res.status === 'generating') {
+        btn.disabled = true;
+        btn.textContent = 'Generating...';
+        container.innerHTML = '<p class="text-dim">Analyzing productions...</p>';
+      } else if (res.status === 'done') {
+        btn.disabled = false;
+        btn.textContent = 'Summary';
+        container.innerHTML = `<div class="detail-card" style="white-space:pre-wrap">${escapeHtml(res.summary)}</div>`;
+      } else if (res.status === 'error') {
+        btn.disabled = false;
+        btn.textContent = 'Summary';
+        container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">${escapeHtml(res.error)}</p></div>`;
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Summary';
+      }
+      return res.status;
+    });
+  }
+
+  function startSummaryPolling(id) {
+    const interval = setInterval(async () => {
+      const status = await checkSummaryStatus(id);
+      if (status !== 'generating') clearInterval(interval);
+    }, 3000);
+    _prodIntervals.push(interval);
+  }
+
+  const summaryBtn = document.getElementById('generate-summary-btn');
+  if (summaryBtn) {
+    checkSummaryStatus(botId).then((status) => {
+      if (status === 'generating') startSummaryPolling(botId);
+    });
+    summaryBtn.addEventListener('click', async () => {
+      summaryBtn.disabled = true;
+      summaryBtn.textContent = 'Generating...';
+      const container = document.getElementById('summary-container');
+      if (container) container.innerHTML = '<p class="text-dim">Analyzing productions...</p>';
+      try {
+        await api(`/api/productions/${encodeURIComponent(botId)}/generate-summary`, {
+          method: 'POST',
+        });
+        startSummaryPolling(botId);
+      } catch (err) {
+        if (container)
+          container.innerHTML = `<div class="detail-card" style="border-color:var(--red)"><p class="text-dim">Request failed: ${escapeHtml(String(err))}</p></div>`;
+        summaryBtn.disabled = false;
+        summaryBtn.textContent = 'Summary';
+      }
+    });
+  }
 
   // --- Productions Chat section ---
-  const chatSection = document.createElement('div');
-  chatSection.className = 'mb-16';
-  chatSection.id = 'productions-chat-section';
-  el.appendChild(chatSection);
-
   let chatConvos = [];
   let activeChat = null;
   let chatMessages = [];
@@ -350,51 +700,42 @@ export async function renderBotProductions(el, botId) {
     if (!section) return;
 
     section.innerHTML = `
-      <div class="form-separator"></div>
       <div class="flex-between mb-16">
-        <div class="page-title" style="font-size:1.1rem">Productions Chat</div>
+        <div class="form-section-title">Productions Chat</div>
         <button class="btn btn-primary btn-sm" id="new-prod-chat-btn">New Chat</button>
       </div>
       ${
         chatConvos.length > 0 && !activeChat
           ? `<div id="prod-chat-list" class="mb-16">
-            ${chatConvos
-              .map(
-                (c) => `
-              <div class="detail-card mb-8 prod-chat-item" data-id="${c.id}" style="cursor:pointer;padding:10px 14px;display:flex;justify-content:space-between;align-items:center">
-                <div>
-                  <strong>${escapeHtml(c.title)}</strong>
-                  <span class="text-dim text-sm" style="margin-left:8px">${c.messageCount} messages</span>
-                </div>
-                <span class="text-dim text-sm">${timeAgo(c.updatedAt)}</span>
-              </div>
-            `
-              )
-              .join('')}
-          </div>`
+        ${chatConvos
+          .map(
+            (c) => `
+          <div class="detail-card mb-8 prod-chat-item" data-id="${c.id}" style="cursor:pointer;padding:10px 14px;display:flex;justify-content:space-between;align-items:center">
+            <div><strong>${escapeHtml(c.title)}</strong> <span class="text-dim text-sm" style="margin-left:8px">${c.messageCount} messages</span></div>
+            <span class="text-dim text-sm">${timeAgo(c.updatedAt)}</span>
+          </div>
+        `
+          )
+          .join('')}
+      </div>`
           : ''
       }
       ${
         activeChat
           ? `<div class="detail-card mb-16">
-            <div class="flex-between mb-8">
-              <strong>${escapeHtml(activeChat.title)}</strong>
-              <div style="display:flex;gap:8px;align-items:center">
-                <a href="#/conversations/${encodeURIComponent(botId)}/${activeChat.id}" class="text-dim text-sm">Open in Conversations &rarr;</a>
-                <button class="btn btn-sm" id="prod-chat-back-btn">Back to list</button>
-              </div>
-            </div>
-            <div id="prod-chat-thread"></div>
-          </div>`
+        <div class="flex-between mb-8">
+          <strong>${escapeHtml(activeChat.title)}</strong>
+          <div style="display:flex;gap:8px;align-items:center">
+            <a href="#/conversations/${encodeURIComponent(botId)}/${activeChat.id}" class="text-dim text-sm">Open in Conversations &rarr;</a>
+            <button class="btn btn-sm" id="prod-chat-back-btn">Back to list</button>
+          </div>
+        </div>
+        <div id="prod-chat-thread"></div>
+      </div>`
           : ''
       }
-      ${
-        !activeChat && chatConvos.length === 0
-          ? '<p class="text-dim">No productions chats yet. Start a conversation about this bot\'s work.</p>'
-          : ''
-      }`;
+      ${!activeChat && chatConvos.length === 0 ? '<p class="text-dim">No productions chats yet. Start a conversation about this bot\'s work.</p>' : ''}`;
 
-    // Wire new chat button
     document.getElementById('new-prod-chat-btn')?.addEventListener('click', async () => {
       const res = await api(`/api/conversations/${encodeURIComponent(botId)}`, {
         method: 'POST',
@@ -407,18 +748,15 @@ export async function renderBotProductions(el, botId) {
         renderProductionsChat();
       }
     });
-
-    // Wire back button
     document.getElementById('prod-chat-back-btn')?.addEventListener('click', () => {
       activeChat = null;
       loadProductionsChats();
     });
-
-    // Wire chat item clicks
     document.querySelectorAll('.prod-chat-item').forEach((item) => {
       item.addEventListener('click', async () => {
-        const convId = item.dataset.id;
-        const data = await api(`/api/conversations/${encodeURIComponent(botId)}/${convId}`);
+        const data = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${item.dataset.id}`
+        );
         if (data.conversation) {
           activeChat = data.conversation;
           chatMessages = data.messages || [];
@@ -427,11 +765,7 @@ export async function renderBotProductions(el, botId) {
         }
       });
     });
-
-    // Render thread if active chat
-    if (activeChat) {
-      renderProdChatThread();
-    }
+    if (activeChat) renderProdChatThread();
   }
 
   function startProdChatPolling() {
@@ -445,7 +779,7 @@ export async function renderBotProductions(el, botId) {
       if (pollCount >= MAX_POLLS) {
         clearInterval(pollInterval);
         chatGenerating = false;
-        chatErrorMsg = 'Response timed out (3 minutes). The bot may still be processing.';
+        chatErrorMsg = 'Response timed out (3 minutes).';
         renderProdChatThread();
         return;
       }
@@ -461,32 +795,29 @@ export async function renderBotProductions(el, botId) {
       }
       if (statusRes.status === 'idle') {
         clearInterval(pollInterval);
-        if (statusRes.lastBotMessage) {
-          if (!chatMessages.find((m) => m.id === statusRes.lastBotMessage.id)) {
-            chatMessages.push(statusRes.lastBotMessage);
-          }
-        }
+        if (
+          statusRes.lastBotMessage &&
+          !chatMessages.find((m) => m.id === statusRes.lastBotMessage.id)
+        )
+          chatMessages.push(statusRes.lastBotMessage);
         chatGenerating = false;
         chatErrorMsg = null;
         renderProdChatThread();
-
-        // Refresh title
         const convData = await api(
           `/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}`
         );
         if (convData.conversation) {
           activeChat.title = convData.conversation.title;
-          loadProductionsChats().then(() => {});
-          renderProductionsChat();
+          loadProductionsChats();
         }
       }
     }, 2000);
+    _prodIntervals.push(pollInterval);
   }
 
   function renderProdChatThread() {
     const container = document.getElementById('prod-chat-thread');
     if (!container || !activeChat) return;
-
     renderThread(container, {
       thread: chatMessages,
       generating: chatGenerating,
@@ -511,26 +842,19 @@ export async function renderBotProductions(el, botId) {
         chatGenerating = true;
         chatErrorMsg = null;
         renderProdChatThread();
-
         const res = await api(
           `/api/conversations/${encodeURIComponent(botId)}/${activeChat.id}/messages`,
-          {
-            method: 'POST',
-            body: { message: text },
-          }
+          { method: 'POST', body: { message: text } }
         );
-
         if (res.error) {
           chatGenerating = false;
           renderProdChatThread();
           return;
         }
-
         if (res.message) {
           const tempIdx = chatMessages.findIndex((m) => m.id.startsWith('temp-'));
           if (tempIdx !== -1) chatMessages[tempIdx] = res.message;
         }
-
         startProdChatPolling();
       },
     });

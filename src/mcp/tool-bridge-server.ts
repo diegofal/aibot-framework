@@ -11,22 +11,19 @@
  *   CALLBACK_PORT   — port of the HTTP callback server in the main process
  */
 
+import {
+  MCP_PROTOCOL_VERSION,
+  type McpToolDef,
+  createJsonRpcErrorResponse,
+  createJsonRpcResponse,
+} from './types';
+
 const TOOL_DEFS_FILE = process.env.TOOL_DEFS_FILE;
 const CALLBACK_PORT = process.env.CALLBACK_PORT;
 
 if (!TOOL_DEFS_FILE || !CALLBACK_PORT) {
   process.stderr.write('Missing TOOL_DEFS_FILE or CALLBACK_PORT env vars\n');
   process.exit(1);
-}
-
-interface McpToolDef {
-  name: string;
-  description: string;
-  inputSchema: {
-    type: 'object';
-    properties: Record<string, unknown>;
-    required?: string[];
-  };
 }
 
 // Load tool definitions
@@ -39,15 +36,7 @@ try {
   process.exit(1);
 }
 
-// JSON-RPC response helpers
-function jsonrpcResponse(id: string | number | null, result: unknown) {
-  return JSON.stringify({ jsonrpc: '2.0', id, result });
-}
-
-function jsonrpcError(id: string | number | null, code: number, message: string) {
-  return JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } });
-}
-
+// JSON-RPC helpers (use shared types)
 async function handleRequest(msg: {
   jsonrpc: string;
   id?: string | number | null;
@@ -58,25 +47,27 @@ async function handleRequest(msg: {
 
   switch (msg.method) {
     case 'initialize':
-      return jsonrpcResponse(id, {
-        protocolVersion: '2024-11-05',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'aibot-tool-bridge', version: '1.0.0' },
-      });
+      return JSON.stringify(
+        createJsonRpcResponse(id, {
+          protocolVersion: MCP_PROTOCOL_VERSION,
+          capabilities: { tools: {} },
+          serverInfo: { name: 'aibot-tool-bridge', version: '1.0.0' },
+        })
+      );
 
     case 'notifications/initialized':
       // No response for notifications
       return null;
 
     case 'tools/list':
-      return jsonrpcResponse(id, { tools: toolDefs });
+      return JSON.stringify(createJsonRpcResponse(id, { tools: toolDefs }));
 
     case 'tools/call': {
       const params = msg.params as
         | { name: string; arguments?: Record<string, unknown> }
         | undefined;
       if (!params?.name) {
-        return jsonrpcError(id, -32602, 'Missing tool name');
+        return JSON.stringify(createJsonRpcErrorResponse(id, -32602, 'Missing tool name'));
       }
 
       try {
@@ -89,21 +80,27 @@ async function handleRequest(msg: {
 
         const result = (await resp.json()) as { success: boolean; content: string };
 
-        return jsonrpcResponse(id, {
-          content: [{ type: 'text', text: result.content }],
-          isError: !result.success,
-        });
+        return JSON.stringify(
+          createJsonRpcResponse(id, {
+            content: [{ type: 'text', text: result.content }],
+            isError: !result.success,
+          })
+        );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        return jsonrpcResponse(id, {
-          content: [{ type: 'text', text: `Tool bridge error: ${errMsg}` }],
-          isError: true,
-        });
+        return JSON.stringify(
+          createJsonRpcResponse(id, {
+            content: [{ type: 'text', text: `Tool bridge error: ${errMsg}` }],
+            isError: true,
+          })
+        );
       }
     }
 
     default:
-      return jsonrpcError(id, -32601, `Unknown method: ${msg.method}`);
+      return JSON.stringify(
+        createJsonRpcErrorResponse(id, -32601, `Unknown method: ${msg.method}`)
+      );
   }
 }
 

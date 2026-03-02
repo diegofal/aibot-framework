@@ -219,7 +219,7 @@
             <div class="label">Skills</div>
           </div>
           <div class="tools-stat">
-            <div class="number">8</div>
+            <div class="number">11</div>
             <div class="label">Categories</div>
           </div>
           <div class="tools-stat">
@@ -911,6 +911,75 @@
         </ol>
 
         <p>Dynamic tools support per-bot scoping &mdash; a tool can be available to all bots or restricted to the bot that created it.</p>
+
+
+        <!-- ============================================================ -->
+        <!--  MCP SECTION                                                   -->
+        <!-- ============================================================ -->
+
+        <h2 id="mcp">MCP Bidirectional Interoperability</h2>
+
+        <p>The <a href="https://spec.modelcontextprotocol.io/specification/">Model Context Protocol (MCP)</a> v2024-11-05 enables bots to both <strong>consume</strong> external tools and <strong>expose</strong> their own tools to external clients.</p>
+
+        <h3>MCP Client &mdash; Connect to External Servers</h3>
+
+        <p>Configure external MCP servers in <code>config.mcp.servers[]</code>. Each server connects via <strong>stdio</strong> (spawn process) or <strong>SSE</strong> (HTTP) transport. Tools are auto-discovered and registered as framework <code>Tool</code> objects with <code>mcp_&lt;prefix&gt;_&lt;toolName&gt;</code> naming.</p>
+
+        <table>
+          <tr><th>Module</th><th>Responsibility</th></tr>
+          <tr><td><code>src/mcp/types.ts</code></td><td>Shared protocol types: <code>JsonRpcMessage</code>, <code>McpToolDef</code>, <code>McpToolCallResult</code></td></tr>
+          <tr><td><code>src/mcp/protocol.ts</code></td><td>Transport implementations: <code>McpStdioTransport</code>, <code>McpSseTransport</code></td></tr>
+          <tr><td><code>src/mcp/client.ts</code></td><td><code>McpClient</code> &mdash; connects to one MCP server, handshake, <code>callTool()</code>, auto-reconnect</td></tr>
+          <tr><td><code>src/mcp/client-pool.ts</code></td><td><code>McpClientPool</code> &mdash; manages multiple clients, shared by all bots</td></tr>
+          <tr><td><code>src/mcp/tool-adapter.ts</code></td><td>Converts MCP tools &harr; framework <code>Tool</code> objects. Namespaced as <code>mcp_&lt;prefix&gt;_&lt;tool&gt;</code></td></tr>
+        </table>
+
+        <pre><code>// config/config.json
+{
+  "mcp": {
+    "servers": [
+      {
+        "name": "github",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" },
+        "allowedTools": ["create_issue", "search_repositories"]
+      }
+    ]
+  }
+}</code></pre>
+
+        <h3>MCP Server &mdash; Expose Tools to External Clients</h3>
+
+        <p>Enable <code>config.mcp.expose</code> to start an HTTP/SSE MCP server. External clients (Claude Desktop, Cursor, other agents) can connect and use bot tools.</p>
+
+        <table>
+          <tr><th>Module</th><th>Responsibility</th></tr>
+          <tr><td><code>src/mcp/server.ts</code></td><td><code>McpServer</code> &mdash; HTTP/SSE server with auth, rate limiting, tool allow/deny</td></tr>
+          <tr><td><code>src/web/routes/mcp.ts</code></td><td>Web API: <code>GET /api/mcp/servers</code>, <code>GET /api/mcp/expose/status</code>, <code>POST /api/mcp/expose/start|stop</code></td></tr>
+        </table>
+
+        <p>Security: <code>authToken</code> for authentication, <code>hiddenTools</code> denylist (exec, file_write, etc. excluded by default), <code>maxCallsPerMinute</code> rate limiting.</p>
+
+        <h3>Agent Bridge &amp; Collaboration Routing</h3>
+
+        <p><code>McpAgentBridge</code> (<code>src/mcp/agent-bridge.ts</code>) enables agent-to-agent communication via MCP. External agents register in <code>AgentRegistry</code> with the <code>mcp-external</code> skill and become discoverable by internal bots. Uses <code>CollaborationTracker</code> for rate limiting.</p>
+
+        <p><strong>Collaboration routing:</strong> When a bot uses <code>collaborate &rarr; send</code> targeting an external MCP agent, <code>CollaborationManager.collaborationStep()</code> detects that the target is not a running internal bot and checks <code>AgentRegistry</code> for an agent with the <code>mcp-external</code> skill. If found, the message is routed through <code>McpAgentBridge.callTool()</code> instead of the internal LLM path. The bridge tries tool names in order: <code>collaborate</code>, <code>chat</code>, <code>message</code>, <code>ask</code>. Rate limiting, session management, and activity events apply equally to MCP and internal collaborations.</p>
+
+        <h3>MCP Server Management via Settings UI</h3>
+
+        <p>MCP server connections can be managed from the web dashboard Settings page. Routes in <code>src/web/routes/settings.ts</code>:</p>
+        <table>
+          <tr><td><code>GET /api/settings/mcp</code></td><td>Returns configured servers and live connection status from <code>McpClientPool</code></td></tr>
+          <tr><td><code>POST /api/settings/mcp/servers</code></td><td>Add a new MCP server: validates, persists to config, and connects live</td></tr>
+          <tr><td><code>DELETE /api/settings/mcp/servers/:name</code></td><td>Remove a server: disconnects and removes from config</td></tr>
+        </table>
+
+        <h3>MCP Client Skill</h3>
+
+        <p>The <code>mcp-client</code> skill (<code>src/skills/mcp-client/</code>) provides <code>list_mcp_servers</code> and <code>call_mcp_tool</code> for bot-level MCP interaction.</p>
 
 
         <!-- ============================================================ -->

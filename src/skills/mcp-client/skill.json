@@ -1,0 +1,39 @@
+{
+  "id": "mcp-client",
+  "name": "MCP Client",
+  "description": "Discover and interact with external tools via MCP (Model Context Protocol)",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "name": "list_mcp_servers",
+      "description": "List all configured MCP server connections and their status",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "call_mcp_tool",
+      "description": "Call a tool on a connected MCP server. Use list_mcp_servers first to see available servers and tools.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "server": {
+            "type": "string",
+            "description": "Name of the MCP server"
+          },
+          "tool": {
+            "type": "string",
+            "description": "Name of the tool to call (original name, not namespaced)"
+          },
+          "arguments": {
+            "type": "object",
+            "description": "Arguments to pass to the tool"
+          }
+        },
+        "required": ["server", "tool"]
+      }
+    }
+  ]
+}

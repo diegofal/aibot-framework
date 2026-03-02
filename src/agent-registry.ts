@@ -6,6 +6,10 @@ export interface AgentInfo {
   skills: string[];
   description?: string;
   tools?: string[];
+  /** MCP endpoint URL for external agents reachable via MCP */
+  mcpEndpoint?: string;
+  /** MCP server name for routing through McpClientPool */
+  mcpServerName?: string;
 }
 
 /**

@@ -1,13 +1,16 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Hono } from 'hono';
-import type { Config } from '../../config';
+import type { BotManager } from '../../bot';
+import type { Config, McpServerEntry } from '../../config';
 import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
 import type { Logger } from '../../logger';
+import type { McpServerConfig } from '../../mcp/client';
 
 export function settingsRoutes(deps: {
   config: Config;
   configPath: string;
   logger: Logger;
+  botManager?: BotManager;
 }) {
   const app = new Hono();
 
@@ -126,7 +129,118 @@ export function settingsRoutes(deps: {
     });
   });
 
+  // --- MCP Server Management ---
+
+  // GET /mcp — return MCP config + live status
+  app.get('/mcp', (c) => {
+    const mcpConfig = deps.config.mcp;
+    const pool = deps.botManager?.getMcpClientPool();
+    return c.json({
+      servers: mcpConfig.servers,
+      status: pool?.getStatus() ?? [],
+      connectedCount: pool?.connectedCount ?? 0,
+      totalCount: pool?.size ?? 0,
+    });
+  });
+
+  // POST /mcp/servers — add a new MCP server
+  app.post('/mcp/servers', async (c) => {
+    const body = await c.req.json<Partial<McpServerEntry>>();
+
+    if (!body.name || typeof body.name !== 'string') {
+      return c.json({ error: 'name is required' }, 400);
+    }
+    if (!body.transport || !['stdio', 'sse'].includes(body.transport)) {
+      return c.json({ error: 'transport must be "stdio" or "sse"' }, 400);
+    }
+    if (body.transport === 'stdio' && !body.command) {
+      return c.json({ error: 'command is required for stdio transport' }, 400);
+    }
+    if (body.transport === 'sse' && !body.url) {
+      return c.json({ error: 'url is required for sse transport' }, 400);
+    }
+
+    // Check for duplicate name
+    const existing = deps.config.mcp.servers.find((s) => s.name === body.name);
+    if (existing) {
+      return c.json({ error: `MCP server "${body.name}" already exists` }, 409);
+    }
+
+    const entry: McpServerEntry = {
+      name: body.name,
+      transport: body.transport,
+      command: body.command,
+      args: body.args,
+      env: body.env,
+      url: body.url,
+      headers: body.headers,
+      timeout: body.timeout ?? 30_000,
+      autoReconnect: body.autoReconnect ?? true,
+      toolPrefix: body.toolPrefix,
+      allowedTools: body.allowedTools,
+      deniedTools: body.deniedTools,
+    };
+
+    deps.config.mcp.servers.push(entry);
+    persistMcp(deps.configPath, deps.config.mcp);
+
+    // Live connect if botManager available
+    const pool = deps.botManager?.getMcpClientPool();
+    if (pool) {
+      const serverConfig: McpServerConfig = {
+        name: entry.name,
+        transport: entry.transport,
+        command: entry.command,
+        args: entry.args,
+        env: entry.env,
+        url: entry.url,
+        headers: entry.headers,
+        timeout: entry.timeout,
+        autoReconnect: entry.autoReconnect,
+        toolPrefix: entry.toolPrefix,
+        allowedTools: entry.allowedTools,
+        deniedTools: entry.deniedTools,
+      };
+      try {
+        const client = pool.addServer(serverConfig);
+        await client.connect();
+        deps.logger.info({ name: entry.name }, 'MCP server added and connected via Settings UI');
+      } catch (err) {
+        deps.logger.warn({ name: entry.name, err }, 'MCP server added but connect failed');
+      }
+    }
+
+    return c.json({ ok: true, server: entry }, 201);
+  });
+
+  // DELETE /mcp/servers/:name — remove an MCP server
+  app.delete('/mcp/servers/:name', async (c) => {
+    const name = c.req.param('name');
+    const idx = deps.config.mcp.servers.findIndex((s) => s.name === name);
+    if (idx === -1) {
+      return c.json({ error: `MCP server "${name}" not found` }, 404);
+    }
+
+    deps.config.mcp.servers.splice(idx, 1);
+    persistMcp(deps.configPath, deps.config.mcp);
+
+    // Live disconnect
+    const pool = deps.botManager?.getMcpClientPool();
+    if (pool) {
+      await pool.removeServer(name);
+      deps.logger.info({ name }, 'MCP server removed via Settings UI');
+    }
+
+    return c.json({ ok: true });
+  });
+
   return app;
+}
+
+function persistMcp(configPath: string, mcp: Config['mcp']): void {
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+  raw.mcp = mcp;
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }
 
 function persistSession(configPath: string, session: Config['session']): void {

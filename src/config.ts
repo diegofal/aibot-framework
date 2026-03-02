@@ -546,6 +546,45 @@ export const CalendarConfigSchema = z.object({
   timeout: z.number().int().positive().default(30_000),
 });
 
+// ─── MCP Configuration ───
+
+const McpServerEntrySchema = z.object({
+  name: z.string(),
+  transport: z.enum(['stdio', 'sse']),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string()).optional(),
+  url: z.string().url().optional(),
+  headers: z.record(z.string()).optional(),
+  timeout: z.number().int().positive().default(30_000),
+  autoReconnect: z.boolean().default(true),
+  toolPrefix: z.string().optional(),
+  allowedTools: z.array(z.string()).optional(),
+  deniedTools: z.array(z.string()).optional(),
+});
+
+const McpExposedServerSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    transport: z.enum(['stdio', 'http']).default('http'),
+    port: z.number().int().positive().default(3001),
+    host: z.string().default('127.0.0.1'),
+    exposedTools: z.array(z.string()).optional(),
+    hiddenTools: z
+      .array(z.string())
+      .default(['exec', 'file_write', 'file_edit', 'process', 'create_tool']),
+    authToken: z.string().optional(),
+    maxCallsPerMinute: z.number().int().positive().default(60),
+  })
+  .default({});
+
+export const McpConfigSchema = z
+  .object({
+    servers: z.array(McpServerEntrySchema).default([]),
+    expose: McpExposedServerSchema,
+  })
+  .default({});
+
 const ConfigSchema = z.object({
   bots: z.array(BotConfigSchema),
   ollama: OllamaConfigSchema,
@@ -573,6 +612,7 @@ const ConfigSchema = z.object({
   productions: ProductionsConfigSchema,
   conversations: ConversationsFeatureConfigSchema,
   karma: KarmaConfigSchema,
+  mcp: McpConfigSchema,
   reddit: RedditConfigSchema.optional(),
   twitter: TwitterConfigSchema.optional(),
   calendar: CalendarConfigSchema.optional(),
@@ -625,6 +665,9 @@ export type TwitterConfig = z.infer<typeof TwitterConfigSchema>;
 export type CalendarConfig = z.infer<typeof CalendarConfigSchema>;
 export type CompactionConfig = z.infer<typeof CompactionConfigSchema>;
 export type SkillsFoldersConfig = z.infer<typeof SkillsFoldersConfigSchema>;
+export type McpConfig = z.infer<typeof McpConfigSchema>;
+export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
+export type McpExposedServerConfig = z.infer<typeof McpExposedServerSchema>;
 
 /**
  * Substitute environment variables in strings

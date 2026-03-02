@@ -2,9 +2,48 @@
 
 ## Unreleased
 
+### Added
+- **MCP Agent Collaboration** — External MCP agents can now participate in the collaboration system:
+  - `CollaborationManager.collaborationStep()` detects external MCP agents (registered via `McpAgentBridge` with `mcp-external` skill) and routes messages through `McpAgentBridge.callTool()` instead of the internal LLM path.
+  - Supports `collaborate`, `chat`, `message`, or `ask` tool names on the external agent, with descriptive fallback when no suitable tool is available.
+  - Rate limiting, session management, and activity events apply equally to MCP and internal collaborations.
+  - `McpAgentBridge` is now part of `BotContext` and initialized/cleaned up by `BotManager`.
+  - Discover action no longer shows `@undefined` for MCP agents without a Telegram username.
+  - 7 new tests covering MCP routing, rate limiting, error handling, and discover display.
+- **MCP Server Settings UI** — Add/remove/view MCP server connections from the web dashboard Settings page:
+  - New routes: `GET /api/settings/mcp`, `POST /api/settings/mcp/servers`, `DELETE /api/settings/mcp/servers/:name`.
+  - Live connect/disconnect: adding a server immediately connects it; removing disconnects it.
+  - Config persistence: changes are written to `config.json` for persistence across restarts.
+  - Settings UI card shows server list with name, transport type, and status badge (connected/disconnected/error), plus add/remove controls.
+  - 10 new tests covering CRUD operations, validation, persistence, and error cases.
+- **Productions File Explorer UI** — Replaced flat table view with an interactive file explorer for bot productions:
+  - Tree sidebar with expand/collapse directories, status dots (approved/rejected/unreviewed), text and status filters
+  - Content panel with file preview, inline evaluation (approve/reject/rate), and discussion thread
+  - Bot selector dropdown to switch between bots without navigating back
+  - New backend endpoints: `GET /:botId/tree` (directory tree), `GET /:botId/file-content` (read by path with traversal protection)
+  - `getDirectoryTree()` and `getFileContentByPath()` methods on `ProductionsService`
+  - `TreeNode` interface in productions types
+  - `destroyProductions()` cleanup for polling intervals on navigation
+  - Auto-expands directories when tree has 5 or fewer folders
+  - Summary and Productions Chat sections preserved below the explorer
+- **MCP Bidirectional Interoperability** — Full Model Context Protocol support:
+  - **MCP Client** (`src/mcp/client.ts`, `client-pool.ts`) — Connect to external MCP servers (GitHub, Linear, Notion, etc.) via stdio or SSE transport. Auto-reconnect, tool filtering (allow/deny lists), per-server namespacing.
+  - **MCP Server** (`src/mcp/server.ts`) — Expose bot tools to external clients (Claude Desktop, Cursor, other frameworks). Auth token, rate limiting, tool hide/expose lists.
+  - **MCP Agent Bridge** (`src/mcp/agent-bridge.ts`) — Agent-to-agent communication via MCP. External agents register with `AgentRegistry` and become discoverable by internal bots.
+  - **MCP Client Skill** (`src/skills/mcp-client/`) — `list_mcp_servers` and `call_mcp_tool` handlers for bot-level MCP interaction.
+  - **Shared MCP types** (`src/mcp/types.ts`) — `JsonRpcMessage`, `McpToolDef`, `McpToolCallResult`, protocol helpers. Existing `tool-bridge-server.ts` refactored to import shared types.
+  - **MCP Tool Adapter** (`src/mcp/tool-adapter.ts`) — Converts MCP tools to framework `Tool` objects with `mcp_<prefix>_<tool>` naming convention.
+  - **Config** — New `mcp.servers[]` and `mcp.expose` config sections with Zod validation.
+  - **Web routes** — `GET /api/mcp/servers`, `GET /api/mcp/expose/status`, `POST /api/mcp/expose/start|stop`.
+  - **Tool category** — New `mcp` tool category in `TOOL_CATEGORIES` for agent loop pre-selection.
+  - **67 new tests** across 7 test files covering types, client, pool, adapter, server, and agent bridge.
+
 ### Docs
 - **README.md full refresh** — Updated skills count (8→16), tools count (20+→34), added new core systems (context compaction, MCP tool bridge, activity stream, TTS/STT, permissions), updated architecture diagram, project structure, config sections, built-in skills table, web dashboard pages, and tech stack.
 - **CLAUDE.md** — Added rule to keep `README.md` in sync when skills, tools, core systems, dashboard pages, project structure, or tech stack change.
+
+### Changed
+- Moved `mcp-servers/aibot-discovery/` to `packages/mcp-discovery/` for cleaner project structure.
 
 ### Changed (Breaking)
 - **botId is now required for all memory operations** — Removed `DEFAULT_BOT` constant

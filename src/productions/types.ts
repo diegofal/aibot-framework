@@ -16,6 +16,17 @@ export interface SummaryData {
   generatedAt: string;
 }
 
+export interface TreeNode {
+  name: string;
+  path: string; // relative to productions/{botId}/
+  type: 'dir' | 'file';
+  children?: TreeNode[];
+  size?: number;
+  entryId?: string;
+  evaluation?: { status?: string; rating?: number };
+  description?: string;
+}
+
 export interface ProductionEntry {
   id: string;
   timestamp: string; // ISO

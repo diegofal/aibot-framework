@@ -13,7 +13,11 @@ import { renderIntegrations } from './pages/integrations.js';
 import { renderBotKarma, renderKarma } from './pages/karma.js';
 import { destroyLogs, renderLogs } from './pages/logs.js';
 import { destroyPermissions, renderPermissions } from './pages/permissions.js';
-import { renderBotProductions, renderProductions } from './pages/productions.js';
+import {
+  destroyProductions,
+  renderBotProductions,
+  renderProductions,
+} from './pages/productions.js';
 import { renderSessionTranscript, renderSessions } from './pages/sessions.js';
 import { renderSettings } from './pages/settings.js';
 import {
@@ -79,6 +83,7 @@ function navigate() {
   destroyInbox();
   destroyPermissions();
   destroyActivity();
+  destroyProductions();
   const hash = location.hash || '#/';
   if (hash === '#') {
     location.hash = '#/';
