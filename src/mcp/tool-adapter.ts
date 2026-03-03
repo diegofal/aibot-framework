@@ -38,7 +38,13 @@ export function adaptMcpTool(
     },
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
       try {
-        const result = await pool.callTool(serverName, mcpTool.name, args);
+        // Strip internal context fields injected by ToolExecutor —
+        // external MCP servers (e.g. FastMCP/Pydantic) reject unknown keys.
+        const cleanArgs: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(args)) {
+          if (!k.startsWith('_')) cleanArgs[k] = v;
+        }
+        const result = await pool.callTool(serverName, mcpTool.name, cleanArgs);
 
         // Extract text content from MCP result
         const textParts = result.content

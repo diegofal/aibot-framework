@@ -25,6 +25,31 @@ function starsHtml(rating, interactive = false) {
   return `<span class="star-rating${interactive ? ' star-interactive' : ''}">${html}</span>`;
 }
 
+function getHashParams() {
+  const idx = location.hash.indexOf('?');
+  if (idx === -1) return {};
+  return Object.fromEntries(new URLSearchParams(location.hash.slice(idx + 1)));
+}
+
+function findNodeInTree(nodes, targetPath, botId, parentKeys, getExpandKey) {
+  for (const node of nodes || []) {
+    if (node.type === 'dir') {
+      const key = getExpandKey(node, botId);
+      const found = findNodeInTree(
+        node.children,
+        targetPath,
+        botId,
+        [...parentKeys, key],
+        getExpandKey
+      );
+      if (found) return found;
+    } else if (node.path === targetPath) {
+      return { node, botId, parentKeys };
+    }
+  }
+  return null;
+}
+
 export async function renderProductions(el) {
   destroyProductions();
   el.innerHTML = '<div class="page-title">Productions</div><p class="text-dim">Loading...</p>';
@@ -101,6 +126,7 @@ export async function renderProductions(el) {
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
             <option value="unreviewed">Unreviewed</option>
+            <option value="checked">Checked</option>
           </select>
           <div class="prod-tree-toolbar">
             <button class="btn btn-sm" id="prod-expand-all">Expand all</button>
@@ -137,6 +163,7 @@ export async function renderProductions(el) {
       return false;
     }
     if (statusFilter) {
+      if (statusFilter === 'checked' && !node.coherenceCheck) return false;
       const evalStatus = node.evaluation?.status;
       if (statusFilter === 'unreviewed' && evalStatus) return false;
       if (statusFilter === 'approved' && evalStatus !== 'approved') return false;
@@ -196,17 +223,30 @@ export async function renderProductions(el) {
       const isSelected = selectedFile?.path === node.path && selectedFile?._botId === botId;
       item.className = `tree-item${isSelected ? ' selected' : ''}`;
 
-      let dotHtml = '';
+      let statusDotHtml = '';
       if (node.evaluation?.status === 'approved')
-        dotHtml = '<span class="tree-dot tree-dot-approved"></span>';
+        statusDotHtml = '<span class="tree-dot tree-dot-approved"></span>';
       else if (node.evaluation?.status === 'rejected')
-        dotHtml = '<span class="tree-dot tree-dot-rejected"></span>';
-      else if (node.entryId) dotHtml = '<span class="tree-dot tree-dot-unreviewed"></span>';
+        statusDotHtml = '<span class="tree-dot tree-dot-rejected"></span>';
+      else if (node.entryId) statusDotHtml = '<span class="tree-dot tree-dot-unreviewed"></span>';
 
+      let coherenceDotHtml = '';
+      if (node.coherenceCheck) {
+        coherenceDotHtml = node.coherenceCheck.coherent
+          ? '<span class="tree-dot tree-dot-coherent" title="Coherent"></span>'
+          : '<span class="tree-dot tree-dot-incoherent" title="Incoherent"></span>';
+      }
+
+      const dotHtml = statusDotHtml + coherenceDotHtml;
       item.innerHTML = `<span style="width:14px;flex-shrink:0"></span>${dotHtml} ${escapeHtml(node.name)}`;
       item.title = node.description || node.path;
       item.addEventListener('click', () => {
         selectedFile = { ...node, _botId: botId };
+        history.replaceState(
+          null,
+          '',
+          `#/productions?bot=${encodeURIComponent(botId)}&file=${encodeURIComponent(node.path)}`
+        );
         renderTree(document.getElementById('prod-tree-container'), tree);
         renderFileViewer(botId, node);
       });
@@ -244,6 +284,22 @@ export async function renderProductions(el) {
     let coherencePolling = false;
     const VIEWER_MAX_POLLS = 90;
 
+    function updateCoherenceBadge(r) {
+      const b = document.getElementById('viewer-coherence-badge');
+      if (!b) return;
+      if (r.coherent) {
+        const tip = r.explanation ? ` title="${escapeHtml(r.explanation)}"` : '';
+        b.innerHTML = `<span class="badge eval-badge-checked"${tip}>Checked</span>`;
+      } else {
+        b.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(r.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
+      }
+    }
+
+    function updateTreeCoherence(r) {
+      node.coherenceCheck = { coherent: r.coherent };
+      renderTree(document.getElementById('prod-tree-container'), tree);
+    }
+
     // Fetch coherence check in background (LLM-based, may need polling)
     function fetchCoherence() {
       if (!entry) return;
@@ -268,21 +324,16 @@ export async function renderProductions(el) {
                     return;
                   }
                   coherenceResult = r;
-                  const b = document.getElementById('viewer-coherence-badge');
-                  if (b && !r.coherent) {
-                    b.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(r.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
-                  } else if (b) {
-                    b.innerHTML = '';
-                  }
+                  updateCoherenceBadge(r);
+                  updateTreeCoherence(r);
                 }
               );
             }, 3000);
           }
         } else {
           coherenceResult = res;
-          if (badge && !res.coherent) {
-            badge.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(res.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
-          }
+          updateCoherenceBadge(res);
+          if (!node.coherenceCheck) updateTreeCoherence(res);
         }
       });
     }
@@ -301,7 +352,8 @@ export async function renderProductions(el) {
           <span class="text-dim">${escapeHtml(entry.tool)} / ${escapeHtml(entry.action)}</span>
           ${entry.trackOnly ? '<span class="badge badge-disabled">track-only</span>' : ''}
           ${statusBadge(entry)}
-          <span id="viewer-coherence-badge">${coherencePolling ? '<span class="badge badge-disabled">Checking\u2026</span>' : coherenceResult && !coherenceResult.coherent ? `<span class="badge eval-badge-rejected" title="${escapeHtml(coherenceResult.issues.join('; '))}">${escapeHtml('Incoherent')}</span>` : ''}</span>
+          ${entry.coherenceCheck ? `<span class="badge eval-badge-checked"${entry.coherenceCheck.explanation ? ` title="${escapeHtml(entry.coherenceCheck.explanation)}"` : ''}>Checked</span>` : ''}
+          <span id="viewer-coherence-badge">${coherencePolling ? '<span class="badge badge-disabled">Checking\u2026</span>' : coherenceResult ? (coherenceResult.coherent ? `<span class="badge eval-badge-checked"${coherenceResult.explanation ? ` title="${escapeHtml(coherenceResult.explanation)}"` : ''}>Checked</span>` : `<span class="badge eval-badge-rejected" title="${escapeHtml(coherenceResult.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`) : ''}</span>
         </div>`
             : ''
         }
@@ -410,6 +462,7 @@ export async function renderProductions(el) {
           });
           closeModal();
           selectedFile = null;
+          history.replaceState(null, '', '#/productions');
           const freshTree = await api('/api/productions/all-trees');
           tree.length = 0;
           tree.push(...(freshTree.tree || []));
@@ -426,6 +479,7 @@ export async function renderProductions(el) {
           method: 'DELETE',
         });
         selectedFile = null;
+        history.replaceState(null, '', '#/productions');
         // Reload tree
         const freshTree = await api('/api/productions/all-trees');
         tree.length = 0;
@@ -566,6 +620,34 @@ export async function renderProductions(el) {
     saveExpandState();
   }
   renderTree(document.getElementById('prod-tree-container'), tree);
+
+  // Restore selected file from URL hash params
+  const hashParams = getHashParams();
+  if (hashParams.bot && hashParams.file) {
+    const targetBotId = hashParams.bot;
+    // Find the bot's top-level node in the tree
+    const botNode = tree.find((n) => n.path === targetBotId);
+    if (botNode) {
+      const expandKeyFn = (dirNode, bId) => {
+        const isTopLevel = tree.includes(dirNode);
+        return isTopLevel ? dirNode.path : bId + '/' + dirNode.path;
+      };
+      const result = findNodeInTree(
+        botNode.children,
+        hashParams.file,
+        targetBotId,
+        [botNode.path],
+        expandKeyFn
+      );
+      if (result) {
+        for (const key of result.parentKeys) expandedDirs.add(key);
+        saveExpandState();
+        selectedFile = { ...result.node, _botId: targetBotId };
+        renderTree(document.getElementById('prod-tree-container'), tree);
+        renderFileViewer(targetBotId, result.node);
+      }
+    }
+  }
 }
 
 // --- Polling intervals to clean up on navigation ---
@@ -652,6 +734,7 @@ export async function renderBotProductions(el, botId) {
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
             <option value="unreviewed">Unreviewed</option>
+            <option value="checked">Checked</option>
           </select>
           <div class="prod-tree-toolbar">
             <button class="btn btn-sm" id="prod-expand-all">Expand all</button>
@@ -687,6 +770,7 @@ export async function renderBotProductions(el, botId) {
       return false;
     }
     if (statusFilter) {
+      if (statusFilter === 'checked' && !node.coherenceCheck) return false;
       const evalStatus = node.evaluation?.status;
       if (statusFilter === 'unreviewed' && evalStatus) return false;
       if (statusFilter === 'approved' && evalStatus !== 'approved') return false;
@@ -739,17 +823,30 @@ export async function renderBotProductions(el, botId) {
       const isSelected = selectedFile?.path === node.path;
       item.className = `tree-item${isSelected ? ' selected' : ''}`;
 
-      let dotHtml = '';
+      let statusDotHtml = '';
       if (node.evaluation?.status === 'approved')
-        dotHtml = '<span class="tree-dot tree-dot-approved"></span>';
+        statusDotHtml = '<span class="tree-dot tree-dot-approved"></span>';
       else if (node.evaluation?.status === 'rejected')
-        dotHtml = '<span class="tree-dot tree-dot-rejected"></span>';
-      else if (node.entryId) dotHtml = '<span class="tree-dot tree-dot-unreviewed"></span>';
+        statusDotHtml = '<span class="tree-dot tree-dot-rejected"></span>';
+      else if (node.entryId) statusDotHtml = '<span class="tree-dot tree-dot-unreviewed"></span>';
 
+      let coherenceDotHtml = '';
+      if (node.coherenceCheck) {
+        coherenceDotHtml = node.coherenceCheck.coherent
+          ? '<span class="tree-dot tree-dot-coherent" title="Coherent"></span>'
+          : '<span class="tree-dot tree-dot-incoherent" title="Incoherent"></span>';
+      }
+
+      const dotHtml = statusDotHtml + coherenceDotHtml;
       item.innerHTML = `<span style="width:14px;flex-shrink:0"></span>${dotHtml} ${escapeHtml(node.name)}`;
       item.title = node.description || node.path;
       item.addEventListener('click', () => {
         selectedFile = node;
+        history.replaceState(
+          null,
+          '',
+          `#/productions/${encodeURIComponent(botId)}?file=${encodeURIComponent(node.path)}`
+        );
         renderTree(document.getElementById('prod-tree-container'), tree);
         renderFileViewer(botId, node);
       });
@@ -788,6 +885,22 @@ export async function renderBotProductions(el, botId) {
     let coherencePolling = false;
     const VIEWER_MAX_POLLS = 90;
 
+    function updateCoherenceBadge(r) {
+      const b = document.getElementById('viewer-coherence-badge');
+      if (!b) return;
+      if (r.coherent) {
+        const tip = r.explanation ? ` title="${escapeHtml(r.explanation)}"` : '';
+        b.innerHTML = `<span class="badge eval-badge-checked"${tip}>Checked</span>`;
+      } else {
+        b.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(r.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
+      }
+    }
+
+    function updateTreeCoherence(r) {
+      node.coherenceCheck = { coherent: r.coherent };
+      renderTree(document.getElementById('prod-tree-container'), tree);
+    }
+
     // Fetch coherence check in background (LLM-based, may need polling)
     function fetchCoherence() {
       if (!entry) return;
@@ -812,21 +925,16 @@ export async function renderBotProductions(el, botId) {
                     return;
                   }
                   coherenceResult = r;
-                  const b = document.getElementById('viewer-coherence-badge');
-                  if (b && !r.coherent) {
-                    b.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(r.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
-                  } else if (b) {
-                    b.innerHTML = '';
-                  }
+                  updateCoherenceBadge(r);
+                  updateTreeCoherence(r);
                 }
               );
             }, 3000);
           }
         } else {
           coherenceResult = res;
-          if (badge && !res.coherent) {
-            badge.innerHTML = `<span class="badge eval-badge-rejected" title="${escapeHtml(res.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`;
-          }
+          updateCoherenceBadge(res);
+          if (!node.coherenceCheck) updateTreeCoherence(res);
         }
       });
     }
@@ -842,7 +950,8 @@ export async function renderBotProductions(el, botId) {
           <span class="text-dim">${escapeHtml(entry.tool)} / ${escapeHtml(entry.action)}</span>
           ${entry.trackOnly ? '<span class="badge badge-disabled">track-only</span>' : ''}
           ${statusBadge(entry)}
-          <span id="viewer-coherence-badge">${coherencePolling ? '<span class="badge badge-disabled">Checking\u2026</span>' : coherenceResult && !coherenceResult.coherent ? `<span class="badge eval-badge-rejected" title="${escapeHtml(coherenceResult.issues.join('; '))}">${escapeHtml('Incoherent')}</span>` : ''}</span>
+          ${entry.coherenceCheck ? `<span class="badge eval-badge-checked"${entry.coherenceCheck.explanation ? ` title="${escapeHtml(entry.coherenceCheck.explanation)}"` : ''}>Checked</span>` : ''}
+          <span id="viewer-coherence-badge">${coherencePolling ? '<span class="badge badge-disabled">Checking\u2026</span>' : coherenceResult ? (coherenceResult.coherent ? `<span class="badge eval-badge-checked"${coherenceResult.explanation ? ` title="${escapeHtml(coherenceResult.explanation)}"` : ''}>Checked</span>` : `<span class="badge eval-badge-rejected" title="${escapeHtml(coherenceResult.issues.join('; '))}">${escapeHtml('Incoherent')}</span>`) : ''}</span>
         </div>`
             : ''
         }
@@ -952,6 +1061,7 @@ export async function renderBotProductions(el, botId) {
           });
           closeModal();
           selectedFile = null;
+          history.replaceState(null, '', `#/productions/${encodeURIComponent(botId)}`);
           const freshTree = await api(`/api/productions/${encodeURIComponent(botId)}/tree`);
           tree.length = 0;
           tree.push(...(freshTree.tree || []));
@@ -968,6 +1078,7 @@ export async function renderBotProductions(el, botId) {
           method: 'DELETE',
         });
         selectedFile = null;
+        history.replaceState(null, '', `#/productions/${encodeURIComponent(botId)}`);
         // Reload tree
         const freshTree = await api(`/api/productions/${encodeURIComponent(botId)}/tree`);
         tree.length = 0;
@@ -1119,6 +1230,20 @@ export async function renderBotProductions(el, botId) {
     saveExpandState();
   }
   renderTree(document.getElementById('prod-tree-container'), tree);
+
+  // Restore selected file from URL hash params
+  const botHashParams = getHashParams();
+  if (botHashParams.file) {
+    const expandKeyFn = (dirNode) => dirNode.path;
+    const result = findNodeInTree(tree, botHashParams.file, botId, [], expandKeyFn);
+    if (result) {
+      for (const key of result.parentKeys) expandedDirs.add(key);
+      saveExpandState();
+      selectedFile = result.node;
+      renderTree(document.getElementById('prod-tree-container'), tree);
+      renderFileViewer(botId, result.node);
+    }
+  }
 
   // --- Summary (collapsible at bottom) ---
   const bottomSection = document.getElementById('prod-bottom-section');

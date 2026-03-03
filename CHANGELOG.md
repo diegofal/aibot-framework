@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Fixed
+- **Coherence check always shows explanation** — Coherence check explanation is now always visible: thread auto-posts "Coherence Check (OK): ..." for coherent results (previously only incoherent results posted), and the "Checked" badge now shows the explanation as a tooltip on hover.
+
+### Added
+- **Coherence check persistence + visual indicators** — Coherence check results now persist in the JSONL changelog (survive server restarts). New `setCoherenceCheck()` method in `ProductionsService`. Tree view shows a second dot per file: celeste for coherent, red for incoherent. File viewer shows "Checked" badge alongside "Unreviewed"/"Approved"/"Rejected". New "Checked" filter option in the status dropdown. `getStats()` now includes a `checked` counter. `CoherenceCheck` interface added to `types.ts`.
+
+### Added
+- **Productions YAML frontmatter** — New `.md` production files now get `created_at` YAML frontmatter injected automatically after file creation. `ProductionsService.injectFrontmatter()` and `parseFrontmatter()` static methods handle injection/extraction. Existing files without frontmatter fall back to changelog timestamp or stat.birthtime (no retroactive migration).
+- **Productions chronological index** — `INDEX.md` now includes a `## All Files (chronological)` section at the end showing all non-archived files sorted by creation date with sequential numbering. Date format upgraded from `YYYY-MM-DD` to `YYYY-MM-DD HH:mm` across all index sections. `resolveCreatedAt` resolves dates with priority: YAML frontmatter > changelog timestamp > stat.birthtime.
+- **Productions auto-cleanup** — `rebuildIndex` now runs a throttled cleanup (1 hour cooldown) that auto-archives: (1) tiny files <50 bytes, (2) incoherent `.md` files (via `checkCoherence`), (3) duplicate files (SHA-256 hash). Approved files are never auto-archived. `archiveFile` accepts optional `skipRebuild` parameter to batch multiple archives efficiently.
+
+### Fixed
+- **Agent loop cadence enforcement** — Fixed 3 bugs causing bots to run outside their configured schedules:
+  1. **Global `wakeUp()` no longer triggers out-of-schedule runs** — `runBotLoop()` now re-checks `nextRunAt` after waking from sleep. If the bot was woken early by a global `wakeUp()` (triggered by dashboard interactions like ask_human replies, permission approvals, or agent feedback), it goes back to sleep for the remaining time instead of immediately re-executing. Only bots targeted by `requestImmediateRun()` bypass the guard.
+  2. **Stale `nextCheckIn` reconciled on startup** — `loadFromDisk()` now compares each bot's persisted `nextCheckIn` against the current config and corrects mismatches (e.g., selfimprove had `nextCheckIn: "6h"` on disk while config said `every: "2h"`). Also recalculates `nextRunAt` based on the corrected interval.
+  3. **Concurrency starvation mitigated** — The cadence guard (fix 1) reduces unnecessary wakeups that flood the concurrency queue, giving high-frequency bots (e.g., monetize at 30m) fairer access to execution slots.
+
+### Added
+- **Productions URL state persistence** — Selected production file is now encoded in the URL hash as query parameters (`?bot=...&file=...` for all-bots view, `?file=...` for single-bot view). Refreshing the page restores the selected file, expanding parent directories as needed. Archive/delete operations clear the URL params. Uses `history.replaceState` to avoid polluting browser history.
+
 ### Added
 - **Bot Export/Import system** — New `BotExportService` (`src/bot/bot-export-service.ts`) enables full bot backup and restoration as portable `.tar.gz` archives. Exports include: manifest, sanitized config (no tokens), soul directory (excludes `.versions/`), core memory (JSONL), and optionally productions, conversations, and karma. Import supports ID/name overrides, conflict detection (409), and overwrite mode. API routes: `GET /api/agents/:id/export` (download), `POST /api/agents/import` (multipart upload). Dashboard UI: Export button per agent (with modal for optional inclusions), Import Agent button in header (with file upload and ID override fields).
 - **Memory consolidation safety guard** — `soul-memory-consolidator.ts` now validates LLM output before overwriting `MEMORY.md`: rejects output missing the `<!-- last-consolidated: -->` header, and rejects output that is less than 50% of the existing file size. Prevents accidental data loss from LLM returning summaries instead of full consolidated documents.

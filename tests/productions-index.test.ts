@@ -335,3 +335,150 @@ describe('ProductionsService — archiveFile', () => {
     expect(archiveEntry?.archiveReason).toBe('Test archive');
   });
 });
+
+describe('ProductionsService — frontmatter', () => {
+  test('injectFrontmatter adds frontmatter to .md file', () => {
+    const result = ProductionsService.injectFrontmatter(
+      '# My Title\nContent here',
+      'report.md',
+      '2026-03-03T14:23:00.000Z'
+    );
+    expect(result).toContain('---\ncreated_at: "2026-03-03T14:23:00.000Z"\n---');
+    expect(result).toContain('# My Title');
+  });
+
+  test('injectFrontmatter skips non-.md files', () => {
+    const original = '{"key": "value"}';
+    const result = ProductionsService.injectFrontmatter(original, 'data.json');
+    expect(result).toBe(original);
+  });
+
+  test('injectFrontmatter skips if already has frontmatter', () => {
+    const original = '---\ncreated_at: "2026-01-01T00:00:00Z"\n---\n\n# Title';
+    const result = ProductionsService.injectFrontmatter(original, 'doc.md', '2026-03-03T00:00:00Z');
+    expect(result).toBe(original);
+  });
+
+  test('parseFrontmatter extracts created_at', () => {
+    const content = '---\ncreated_at: "2026-03-03T14:23:00.000Z"\n---\n\n# Title';
+    const ts = ProductionsService.parseFrontmatter(content);
+    expect(ts).toBe('2026-03-03T14:23:00.000Z');
+  });
+
+  test('parseFrontmatter returns null when no frontmatter', () => {
+    const content = '# Title\nNo frontmatter here';
+    expect(ProductionsService.parseFrontmatter(content)).toBeNull();
+  });
+
+  test('parseFrontmatter returns null when no created_at field', () => {
+    const content = '---\nauthor: "bot"\n---\n\n# Title';
+    expect(ProductionsService.parseFrontmatter(content)).toBeNull();
+  });
+});
+
+describe('ProductionsService — rebuildIndex datetime & chronological', () => {
+  let service: ProductionsService;
+
+  beforeEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    service = new ProductionsService(makeConfig(), noopLogger);
+  });
+
+  afterEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test('rebuildIndex shows datetime not just date', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(
+      join(dir, 'report.md'),
+      '---\ncreated_at: "2026-03-03T14:23:00.000Z"\n---\n\n# Report\nContent here.',
+      'utf-8'
+    );
+
+    service.rebuildIndex('testbot');
+
+    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    expect(content).toContain('2026-03-03 14:23');
+  });
+
+  test('rebuildIndex uses frontmatter date over birthtime', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(
+      join(dir, 'article.md'),
+      '---\ncreated_at: "2025-01-15T09:30:00.000Z"\n---\n\n# Old Article\nWritten in 2025.',
+      'utf-8'
+    );
+
+    service.rebuildIndex('testbot');
+
+    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    expect(content).toContain('2025-01-15 09:30');
+  });
+
+  test('rebuildIndex includes chronological section', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(
+      join(dir, 'first.md'),
+      '---\ncreated_at: "2026-01-01T10:00:00.000Z"\n---\n\n# First\nContent.',
+      'utf-8'
+    );
+    writeFileSync(
+      join(dir, 'second.md'),
+      '---\ncreated_at: "2026-02-01T12:00:00.000Z"\n---\n\n# Second\nContent.',
+      'utf-8'
+    );
+
+    service.rebuildIndex('testbot');
+
+    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    expect(content).toContain('## All Files (chronological)');
+    expect(content).toContain('| # | File | Directory | Description | Created | Size |');
+
+    // Verify order: first.md should come before second.md in the chronological table
+    const chronoSection = content.slice(content.indexOf('## All Files (chronological)'));
+    const firstIdx = chronoSection.indexOf('first.md');
+    const secondIdx = chronoSection.indexOf('second.md');
+    expect(firstIdx).toBeLessThan(secondIdx);
+  });
+
+  test('chronological section excludes archived files', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(join(dir, 'keep.md'), '# Keep\nGood content here for the reader.', 'utf-8');
+    mkdirSync(join(dir, 'archived'), { recursive: true });
+    writeFileSync(join(dir, 'archived', 'old.md'), '# Old\nArchived content.', 'utf-8');
+
+    service.rebuildIndex('testbot');
+
+    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    const chronoSection = content.slice(content.indexOf('## All Files (chronological)'));
+    expect(chronoSection).toContain('keep.md');
+    expect(chronoSection).not.toContain('old.md');
+  });
+
+  test('rebuildIndex uses changelog timestamp when no frontmatter', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(
+      join(dir, 'tracked.md'),
+      '# Tracked\nThis file has no frontmatter but has a changelog entry.',
+      'utf-8'
+    );
+
+    // Log a production entry with a specific timestamp
+    service.logProduction({
+      timestamp: '2026-02-20T08:15:00.000Z',
+      botId: 'testbot',
+      tool: 'file_write',
+      path: 'tracked.md',
+      action: 'create',
+      description: 'Tracked file',
+      size: 50,
+      trackOnly: false,
+    });
+
+    service.rebuildIndex('testbot');
+
+    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    expect(content).toContain('2026-02-20 08:15');
+  });
+});

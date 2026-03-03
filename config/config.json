@@ -251,6 +251,16 @@
         ],
         "timeout": 30000,
         "autoReconnect": true
+      },
+      {
+        "name": "linkedin-scraper",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": [
+          "linkedin-scraper-mcp"
+        ],
+        "timeout": 30000,
+        "autoReconnect": true
       }
     ],
     "expose": {

@@ -53,8 +53,11 @@ const routes = [
   },
   { pattern: /^#\/conversations\/([^/]+)$/, handler: (m) => renderBotConversations(content, m[1]) },
   { pattern: /^#\/conversations$/, handler: () => renderConversations(content) },
-  { pattern: /^#\/productions\/([^/]+)$/, handler: (m) => renderBotProductions(content, m[1]) },
-  { pattern: /^#\/productions$/, handler: () => renderProductions(content) },
+  {
+    pattern: /^#\/productions\/([^/?]+)(?:\?|$)/,
+    handler: (m) => renderBotProductions(content, m[1]),
+  },
+  { pattern: /^#\/productions(?:\?|$)/, handler: () => renderProductions(content) },
   { pattern: /^#\/feedback\/([^/]+)$/, handler: (m) => renderBotFeedback(content, m[1]) },
   { pattern: /^#\/feedback$/, handler: () => renderFeedback(content) },
   { pattern: /^#\/karma\/([^/]+)$/, handler: (m) => renderBotKarma(content, m[1]) },

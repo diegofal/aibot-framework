@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
@@ -17,10 +17,11 @@ import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { SoulLoader } from '../soul';
 import type { ThreadMessage } from '../types/thread';
-import type { ProductionEntry, ProductionEvaluation, SummaryData, TreeNode } from './types';
+import type { CoherenceCheck, ProductionEntry, ProductionEvaluation, SummaryData, TreeNode } from './types';
 
 export class ProductionsService {
   private baseDir: string;
+  private lastCleanupAt = new Map<string, number>();
 
   constructor(
     private config: Config,
@@ -224,6 +225,35 @@ export class ProductionsService {
     return entries[idx];
   }
 
+  setCoherenceCheck(
+    botId: string,
+    id: string,
+    result: { coherent: boolean; issues: string[]; explanation?: string }
+  ): ProductionEntry | null {
+    const dir = this.resolveDir(botId);
+    const changelogPath = join(dir, 'changelog.jsonl');
+    if (!existsSync(changelogPath)) return null;
+
+    const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
+    const entries: ProductionEntry[] = this.parseJsonlLines(lines);
+
+    const idx = entries.findIndex((e) => e.id === id);
+    if (idx === -1) return null;
+
+    entries[idx].coherenceCheck = {
+      coherent: result.coherent,
+      issues: result.issues,
+      explanation: result.explanation,
+      checkedAt: new Date().toISOString(),
+    };
+
+    const updated = `${entries.map((e) => JSON.stringify(e)).join('\n')}\n`;
+    writeFileSync(changelogPath, updated, 'utf-8');
+
+    this.logger.info({ botId, id, coherent: result.coherent }, 'Coherence check saved to production');
+    return entries[idx];
+  }
+
   addThreadMessage(
     botId: string,
     id: string,
@@ -338,12 +368,13 @@ export class ProductionsService {
     approved: number;
     rejected: number;
     unreviewed: number;
+    checked: number;
     avgRating: number | null;
   } {
     const dir = this.resolveDir(botId);
     const changelogPath = join(dir, 'changelog.jsonl');
     if (!existsSync(changelogPath)) {
-      return { total: 0, approved: 0, rejected: 0, unreviewed: 0, avgRating: null };
+      return { total: 0, approved: 0, rejected: 0, unreviewed: 0, checked: 0, avgRating: null };
     }
 
     const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
@@ -352,6 +383,7 @@ export class ProductionsService {
     let approved = 0;
     let rejected = 0;
     let unreviewed = 0;
+    let checked = 0;
     const ratings: number[] = [];
 
     for (const entry of entries) {
@@ -364,6 +396,7 @@ export class ProductionsService {
         rejected++;
         if (entry.evaluation.rating != null) ratings.push(entry.evaluation.rating);
       }
+      if (entry.coherenceCheck) checked++;
     }
 
     return {
@@ -371,6 +404,7 @@ export class ProductionsService {
       approved,
       rejected,
       unreviewed,
+      checked,
       avgRating:
         ratings.length > 0
           ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
@@ -426,6 +460,63 @@ export class ProductionsService {
 
     const ratio = (totalLines - emptyOrPlaceholderLines) / totalLines;
     return { ratio: Math.round(ratio * 100) / 100, isTemplate: ratio < 0.3 };
+  }
+
+  /**
+   * Inject YAML frontmatter with `created_at` into markdown content.
+   * Only for `.md` files; skips if content already starts with `---`.
+   */
+  static injectFrontmatter(content: string, filePath: string, timestamp?: string): string {
+    if (!filePath.endsWith('.md')) return content;
+    if (content.trimStart().startsWith('---')) return content;
+    const ts = timestamp ?? new Date().toISOString();
+    return `---\ncreated_at: "${ts}"\n---\n\n${content}`;
+  }
+
+  /**
+   * Parse `created_at` from YAML frontmatter. Simple regex-based parser.
+   * Returns ISO string or null if not found.
+   */
+  static parseFrontmatter(content: string): string | null {
+    if (!content.trimStart().startsWith('---')) return null;
+    const endIdx = content.indexOf('---', content.indexOf('---') + 3);
+    if (endIdx === -1) return null;
+    const frontmatter = content.slice(content.indexOf('---') + 3, endIdx);
+    const match = frontmatter.match(/created_at:\s*"?([^"\n]+)"?/);
+    return match ? match[1].trim() : null;
+  }
+
+  /**
+   * Resolve the best created_at timestamp for a file.
+   * Priority: (1) YAML frontmatter, (2) changelog timestamp, (3) stat.birthtime
+   */
+  static resolveCreatedAt(
+    absPath: string,
+    relPath: string,
+    birthtime: Date,
+    changelogTimestampMap: Map<string, string>
+  ): Date {
+    // 1) Try YAML frontmatter
+    try {
+      if (existsSync(absPath) && absPath.endsWith('.md')) {
+        const content = readFileSync(absPath, 'utf-8');
+        const ts = ProductionsService.parseFrontmatter(content);
+        if (ts) {
+          const d = new Date(ts);
+          if (!Number.isNaN(d.getTime())) return d;
+        }
+      }
+    } catch { /* skip */ }
+
+    // 2) Try changelog timestamp
+    const changelogTs = changelogTimestampMap.get(relPath);
+    if (changelogTs) {
+      const d = new Date(changelogTs);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+
+    // 3) Fallback to stat.birthtime
+    return birthtime;
   }
 
   readSummary(botId: string): SummaryData | null {
@@ -678,23 +769,38 @@ export class ProductionsService {
     '.git',
   ]);
 
+  /** Format a Date as `YYYY-MM-DD HH:mm` */
+  private static formatDatetime(d: Date): string {
+    const iso = d.toISOString();
+    return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
+  }
+
   /**
    * Rebuild the auto-generated INDEX.md for a production directory.
    * Scans all files, groups by subdirectory, and uses changelog descriptions.
+   * Runs auto-cleanup (throttled) before rebuilding.
    */
   rebuildIndex(botId: string): void {
+    // Auto-cleanup before rebuilding (throttled to 1h)
+    this.runCleanup(botId);
+
     const dir = this.resolveDir(botId);
 
-    // Load changelog for description lookup (newest first per path)
+    // Load changelog for description lookup AND timestamp map (first create entry per path)
     const descMap = new Map<string, string>();
+    const changelogTimestampMap = new Map<string, string>();
     const changelogPath = join(dir, 'changelog.jsonl');
     if (existsSync(changelogPath)) {
-      const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
-      for (const line of lines) {
+      const rawLines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
+      for (const line of rawLines) {
         try {
           const entry: ProductionEntry = JSON.parse(line);
           // Keep newest description per path (later lines = newer)
           descMap.set(entry.path, entry.description);
+          // Keep first (oldest) timestamp per path for creation date
+          if (entry.action === 'create' && !changelogTimestampMap.has(entry.path)) {
+            changelogTimestampMap.set(entry.path, entry.timestamp);
+          }
         } catch {
           /* skip malformed lines */
         }
@@ -736,12 +842,19 @@ export class ProductionsService {
           dirCount++;
           walk(fullPath, relPrefix ? `${relPrefix}/${entry}` : entry);
         } else {
+          const relPath = relPrefix ? `${relPrefix}/${entry}` : entry;
+          const created = ProductionsService.resolveCreatedAt(
+            fullPath,
+            relPath,
+            stat.birthtime,
+            changelogTimestampMap
+          );
           files.push({
-            relativePath: relPrefix ? `${relPrefix}/${entry}` : entry,
+            relativePath: relPath,
             name: entry,
             dir: relPrefix,
             size: stat.size,
-            created: stat.birthtime,
+            created,
             isArchived: relPrefix === 'archived' || relPrefix.startsWith('archived/'),
           });
         }
@@ -768,7 +881,7 @@ export class ProductionsService {
     });
 
     // Build INDEX.md
-    const lines: string[] = [
+    const indexLines: string[] = [
       `# Production Index — ${botId}`,
       `**Last updated:** ${new Date().toISOString()}`,
       `**Files:** ${files.length} | **Directories:** ${dirCount}`,
@@ -778,7 +891,7 @@ export class ProductionsService {
     // Insert cached plan section from summary.json
     const summaryData = this.readSummary(botId);
     if (summaryData?.plan) {
-      lines.push('## Strategy & Plan', '', summaryData.plan, '');
+      indexLines.push('## Strategy & Plan', '', summaryData.plan, '');
     }
 
     for (const key of sortedKeys) {
@@ -786,42 +899,61 @@ export class ProductionsService {
       group.sort((a, b) => a.name.localeCompare(b.name));
 
       const heading = key === 'root' ? '## Root' : `## ${key}/`;
-      lines.push(heading, '');
+      indexLines.push(heading, '');
 
       if (key === 'archived' || key.startsWith('archived/')) {
         // Archived files get a different table format
-        lines.push('| File | Archived From | Reason | Original Date |');
-        lines.push('|------|---------------|--------|---------------|');
+        indexLines.push('| File | Archived From | Reason | Original Date |');
+        indexLines.push('|------|---------------|--------|---------------|');
         for (const f of group) {
           // Look up archive entry in changelog
           const desc = descMap.get(f.relativePath) ?? '';
           const archiveEntry = this.findArchiveEntry(botId, f.relativePath);
           const from = archiveEntry?.archivedFrom ?? '—';
           const reason = archiveEntry?.archiveReason ?? (desc || '—');
-          const date = f.created.toISOString().slice(0, 10);
-          lines.push(`| ${f.name} | ${from} | ${reason} | ${date} |`);
+          const date = ProductionsService.formatDatetime(f.created);
+          indexLines.push(`| ${f.name} | ${from} | ${reason} | ${date} |`);
         }
       } else {
-        lines.push('| File | Description | Created | Size |');
-        lines.push('|------|-------------|---------|------|');
+        indexLines.push('| File | Description | Created | Size |');
+        indexLines.push('|------|-------------|---------|------|');
         for (const f of group) {
           const desc = this.getFileDescription(f.relativePath, descMap, join(dir, f.relativePath));
-          const date = f.created.toISOString().slice(0, 10);
+          const date = ProductionsService.formatDatetime(f.created);
           const size = this.formatSize(f.size);
-          lines.push(`| ${f.name} | ${desc} | ${date} | ${size} |`);
+          indexLines.push(`| ${f.name} | ${desc} | ${date} | ${size} |`);
         }
       }
-      lines.push('');
+      indexLines.push('');
+    }
+
+    // Chronological global section (all non-archived files sorted by created asc)
+    const nonArchived = files.filter((f) => !f.isArchived);
+    if (nonArchived.length > 0) {
+      nonArchived.sort((a, b) => a.created.getTime() - b.created.getTime());
+      indexLines.push('## All Files (chronological)', '');
+      indexLines.push('| # | File | Directory | Description | Created | Size |');
+      indexLines.push('|---|------|-----------|-------------|---------|------|');
+      let seq = 1;
+      for (const f of nonArchived) {
+        const desc = this.getFileDescription(f.relativePath, descMap, join(dir, f.relativePath));
+        const date = ProductionsService.formatDatetime(f.created);
+        const size = this.formatSize(f.size);
+        const dirLabel = f.dir || '(root)';
+        indexLines.push(`| ${seq} | ${f.name} | ${dirLabel} | ${desc} | ${date} | ${size} |`);
+        seq++;
+      }
+      indexLines.push('');
     }
 
     const indexPath = join(dir, 'INDEX.md');
-    writeFileSync(indexPath, lines.join('\n'), 'utf-8');
+    writeFileSync(indexPath, indexLines.join('\n'), 'utf-8');
   }
 
   /**
    * Archive a production file by moving it to archived/ with a reason.
    */
-  archiveFile(botId: string, relativePath: string, reason: string): boolean {
+  archiveFile(botId: string, relativePath: string, reason: string, skipRebuild?: boolean): boolean {
     const dir = this.resolveDir(botId);
     const srcPath = join(dir, relativePath);
 
@@ -846,22 +978,156 @@ export class ProductionsService {
       return false;
     }
 
-    // Log the archive action
-    this.logProduction({
-      timestamp: new Date().toISOString(),
-      botId,
-      tool: 'archive',
-      path: `archived/${fileName}`,
-      action: 'archive',
-      description: reason,
-      size: 0,
-      trackOnly: false,
-      archivedFrom: relativePath,
-      archiveReason: reason,
-    });
+    if (skipRebuild) {
+      // Log directly to changelog without triggering rebuildIndex
+      const dir2 = this.resolveDir(botId);
+      const changelogPath = join(dir2, 'changelog.jsonl');
+      const entry: ProductionEntry = {
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+        botId,
+        tool: 'archive',
+        path: `archived/${fileName}`,
+        action: 'archive',
+        description: reason,
+        size: 0,
+        trackOnly: false,
+        archivedFrom: relativePath,
+        archiveReason: reason,
+      };
+      appendFileSync(changelogPath, `${JSON.stringify(entry)}\n`, 'utf-8');
+    } else {
+      // Log the archive action (triggers rebuildIndex)
+      this.logProduction({
+        timestamp: new Date().toISOString(),
+        botId,
+        tool: 'archive',
+        path: `archived/${fileName}`,
+        action: 'archive',
+        description: reason,
+        size: 0,
+        trackOnly: false,
+        archivedFrom: relativePath,
+        archiveReason: reason,
+      });
+    }
 
     this.logger.info({ botId, from: relativePath, reason }, 'File archived');
     return true;
+  }
+
+  /**
+   * Auto-cleanup: archive tiny, incoherent, and duplicate production files.
+   * Throttled to run at most once per hour per bot.
+   * Only processes files tracked in the changelog (actual productions).
+   * Skips files modified less than 60 seconds ago (grace period for just-created files).
+   */
+  private runCleanup(botId: string): void {
+    const now = Date.now();
+    const last = this.lastCleanupAt.get(botId) ?? 0;
+    if (now - last < 3600_000) return; // 1 hour throttle
+    this.lastCleanupAt.set(botId, now);
+
+    const dir = this.resolveDir(botId);
+    const changelogPath = join(dir, 'changelog.jsonl');
+    if (!existsSync(changelogPath)) return;
+
+    // Build sets from changelog: tracked paths, approved paths
+    const trackedPaths = new Set<string>();
+    const approvedPaths = new Set<string>();
+    const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        const entry: ProductionEntry = JSON.parse(line);
+        if (entry.action !== 'archive') {
+          trackedPaths.add(entry.path);
+        }
+        if (entry.evaluation?.status === 'approved') {
+          approvedPaths.add(entry.path);
+        }
+      } catch { /* skip */ }
+    }
+
+    // Collect tracked, non-archived, non-excluded files
+    interface CleanupFile {
+      relativePath: string;
+      absPath: string;
+      size: number;
+    }
+
+    const files: CleanupFile[] = [];
+    const walkCleanup = (current: string, relPrefix: string): void => {
+      let entries: string[];
+      try { entries = readdirSync(current); } catch { return; }
+      for (const entry of entries) {
+        if (ProductionsService.INDEX_EXCLUDES.has(entry)) continue;
+        const fullPath = join(current, entry);
+        let stat;
+        try { stat = statSync(fullPath); } catch { continue; }
+        const relPath = relPrefix ? `${relPrefix}/${entry}` : entry;
+        if (stat.isDirectory()) {
+          if (entry === 'archived') continue; // skip archived/
+          walkCleanup(fullPath, relPath);
+        } else {
+          // Only process files tracked in changelog
+          if (!trackedPaths.has(relPath)) continue;
+          // Grace period: skip files modified less than 60s ago
+          if (now - stat.mtimeMs < 60_000) continue;
+          files.push({ relativePath: relPath, absPath: fullPath, size: stat.size });
+        }
+      }
+    };
+    walkCleanup(dir, '');
+
+    let archived = 0;
+    const hashMap = new Map<string, string>(); // hash → first relativePath
+
+    for (const f of files) {
+      // Skip approved files
+      if (approvedPaths.has(f.relativePath)) continue;
+
+      // 1) Tiny files (< 50 bytes)
+      if (f.size < 50) {
+        this.archiveFile(botId, f.relativePath, 'auto-cleanup: file too small (<50 bytes)', true);
+        archived++;
+        continue;
+      }
+
+      // 2) Duplicate detection (SHA-256)
+      try {
+        const content = readFileSync(f.absPath);
+        const hash = createHash('sha256').update(content).digest('hex');
+        if (hashMap.has(hash)) {
+          this.archiveFile(
+            botId,
+            f.relativePath,
+            `auto-cleanup: duplicate of ${hashMap.get(hash)}`,
+            true
+          );
+          archived++;
+          continue;
+        }
+        hashMap.set(hash, f.relativePath);
+      } catch { /* skip */ }
+
+      // 3) Incoherent .md files
+      if (f.absPath.endsWith('.md')) {
+        const result = this.checkCoherence(botId, f.relativePath);
+        if (!result.coherent) {
+          this.archiveFile(
+            botId,
+            f.relativePath,
+            `auto-cleanup: ${result.issues.join('; ')}`,
+            true
+          );
+          archived++;
+        }
+      }
+    }
+
+    if (archived > 0) {
+      this.logger.info({ botId, archived }, 'Auto-cleanup completed');
+    }
   }
 
   /** Get description for a file: changelog > rich extract > humanized name */
@@ -992,6 +1258,9 @@ export class ProductionsService {
                 status: entry.evaluation.status,
                 rating: entry.evaluation.rating,
               };
+            }
+            if (entry.coherenceCheck) {
+              node.coherenceCheck = { coherent: entry.coherenceCheck.coherent };
             }
           }
           nodes.push(node);

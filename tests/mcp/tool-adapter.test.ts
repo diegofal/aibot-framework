@@ -91,6 +91,27 @@ describe('MCP Tool Adapter', () => {
       expect(result.content).toContain('Connection refused');
     });
 
+    it('should strip _-prefixed internal fields before calling MCP server', async () => {
+      const pool = new McpClientPool(mockLogger);
+      let receivedArgs: Record<string, unknown> | undefined;
+      pool.callTool = async (
+        _serverName: string,
+        _toolName: string,
+        args: Record<string, unknown>
+      ): Promise<McpToolCallResult> => {
+        receivedArgs = args;
+        return { content: [{ type: 'text', text: 'ok' }], isError: false };
+      };
+
+      const tool = adaptMcpTool('linkedin', 'linkedin', sampleTool, pool, mockLogger);
+      await tool.execute(
+        { title: 'Test', _chatId: 12345, _botId: 'bot-1', _workDir: '/tmp/bot-1' },
+        mockLogger
+      );
+
+      expect(receivedArgs).toEqual({ title: 'Test' });
+    });
+
     it('should handle empty response', async () => {
       const pool = new McpClientPool(mockLogger);
       pool.callTool = async (): Promise<McpToolCallResult> => ({

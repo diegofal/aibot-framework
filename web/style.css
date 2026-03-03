@@ -17,6 +17,7 @@
   --green: #34d399;
   --red: #f87171;
   --orange: #fbbf24;
+  --celeste: #67e8f9;
   --radius: 6px;
 }
 html,
@@ -811,6 +812,10 @@ textarea {
   background: rgba(251, 191, 36, 0.15);
   color: var(--orange);
 }
+.eval-badge-checked {
+  background: rgba(103, 232, 249, 0.15);
+  color: var(--celeste);
+}
 .production-content {
   max-height: 300px;
   overflow-y: auto;
@@ -1029,6 +1034,12 @@ textarea {
 }
 .tree-dot-unreviewed {
   background: var(--orange);
+}
+.tree-dot-coherent {
+  background: var(--celeste);
+}
+.tree-dot-incoherent {
+  background: var(--red);
 }
 .prod-file-viewer-title {
   font-size: 15px;

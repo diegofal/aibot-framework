@@ -284,20 +284,22 @@ export function productionsRoutes(deps: {
           explanation: typeof parsed.explanation === 'string' ? parsed.explanation : undefined,
         };
         coherenceResults.set(`${botId}:${id}`, result);
+        productionsService.setCoherenceCheck(botId, id, result);
 
-        // Auto-post explanation to discussion thread if incoherent
-        if (!result.coherent && result.explanation) {
+        // Auto-post explanation to discussion thread
+        if (result.explanation) {
+          const prefix = result.coherent ? 'Coherence Check (OK)' : 'Coherence Check';
           const current = productionsService.getEntry(botId, id);
           const thread = current?.evaluation?.thread ?? [];
           const alreadyPosted = thread.some(
-            (m) => m.role === 'bot' && m.content.startsWith('Coherence Check:')
+            (m) => m.role === 'bot' && m.content.startsWith('Coherence Check')
           );
           if (!alreadyPosted) {
             productionsService.addThreadMessage(
               botId,
               id,
               'bot',
-              `Coherence Check: ${result.explanation}`
+              `${prefix}: ${result.explanation}`
             );
           }
         }
@@ -611,11 +613,22 @@ export function productionsRoutes(deps: {
       return c.json({ error: 'Production not found' }, 404);
     }
 
-    // Check cached result
+    // Check cached result (in-memory)
     const cacheKey = `${botId}:${id}`;
     const cached = coherenceResults.get(cacheKey);
     if (cached) {
       return c.json(cached);
+    }
+
+    // Check persisted result (survives restarts)
+    if (entry.coherenceCheck) {
+      const persisted = {
+        coherent: entry.coherenceCheck.coherent,
+        issues: entry.coherenceCheck.issues,
+        explanation: entry.coherenceCheck.explanation,
+      };
+      coherenceResults.set(cacheKey, persisted); // warm the cache
+      return c.json(persisted);
     }
 
     // Check generation state

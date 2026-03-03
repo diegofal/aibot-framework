@@ -75,6 +75,22 @@ export class AgentScheduler {
           ...s,
           lastResult: null,
         });
+
+        // Reconcile nextCheckIn with current config — the persisted schedule
+        // may have a stale interval from a previous config version.
+        const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+        const configEvery = botConfig?.agentLoop?.every ?? this.ctx.config.agentLoop.every;
+        if (s.nextCheckIn && s.nextCheckIn !== configEvery) {
+          const restored = this.botSchedules.get(botId)!;
+          this.ctx.logger.info(
+            { botId, stale: s.nextCheckIn, current: configEvery },
+            'AgentScheduler: reconciling stale nextCheckIn from disk'
+          );
+          restored.nextCheckIn = configEvery;
+          if (restored.lastRunAt) {
+            restored.nextRunAt = restored.lastRunAt + parseDurationMs(configEvery);
+          }
+        }
       }
       this.ctx.logger.debug({ count: this.botSchedules.size }, 'AgentScheduler: loaded from disk');
     } catch (err) {
@@ -551,6 +567,19 @@ export class AgentScheduler {
         ? (botConfig.agentLoop?.continuousPauseMs ?? 5_000)
         : this.computeBotSleepMs(botId, result);
       await this.interruptibleSleep(sleepMs);
+
+      // Re-check schedule after waking — if woken early by global wakeUp(),
+      // go back to sleep for the remaining time instead of running out of schedule.
+      if (!isContinuous) {
+        const sched = this.botSchedules.get(botId);
+        if (sched) {
+          const remaining = sched.nextRunAt - Date.now();
+          if (remaining > 5_000) {
+            botLogger.debug({ botId, remainingMs: remaining }, 'Woken early — resuming sleep');
+            await this.interruptibleSleep(remaining);
+          }
+        }
+      }
     }
 
     this.botLoops.delete(botId);

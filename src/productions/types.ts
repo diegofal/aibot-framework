@@ -10,6 +10,13 @@ export interface ProductionEvaluation {
   thread?: ThreadMessage[];
 }
 
+export interface CoherenceCheck {
+  coherent: boolean;
+  issues: string[];
+  explanation?: string;
+  checkedAt: string; // ISO
+}
+
 export interface SummaryData {
   summary?: string;
   plan?: string;
@@ -25,6 +32,7 @@ export interface TreeNode {
   size?: number;
   entryId?: string;
   evaluation?: { status?: string; rating?: number };
+  coherenceCheck?: { coherent?: boolean };
   description?: string;
 }
 
@@ -41,4 +49,5 @@ export interface ProductionEntry {
   archivedFrom?: string; // Original path before archiving
   archiveReason?: string; // Why it was archived
   evaluation?: ProductionEvaluation;
+  coherenceCheck?: CoherenceCheck;
 }

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
@@ -488,6 +488,26 @@ export class ToolExecutor extends EventEmitter {
                       name === 'file_write' && !args.append
                         ? ps.renumberFile(botId, logPath)
                         : logPath;
+
+                    // Inject frontmatter for new .md files (non-append file_write)
+                    if (name === 'file_write' && !args.append && finalPath.endsWith('.md')) {
+                      try {
+                        const absFilePath = join(ps.resolveDir(botId), finalPath);
+                        if (existsSync(absFilePath)) {
+                          const fileContent = readFileSync(absFilePath, 'utf-8');
+                          const withFrontmatter = ProductionsService.injectFrontmatter(
+                            fileContent,
+                            absFilePath,
+                            new Date().toISOString()
+                          );
+                          if (withFrontmatter !== fileContent) {
+                            writeFileSync(absFilePath, withFrontmatter, 'utf-8');
+                          }
+                        }
+                      } catch {
+                        /* skip frontmatter injection errors */
+                      }
+                    }
 
                     ps.logProduction({
                       timestamp: new Date().toISOString(),

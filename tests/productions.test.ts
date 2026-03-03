@@ -1453,4 +1453,282 @@ The analysis shows significant opportunity.`;
       expect(result.isTemplate).toBe(false);
     });
   });
+
+  describe('runCleanup (via rebuildIndex)', () => {
+    const { utimesSync } = require('node:fs');
+
+    /** Helper: create file, log it as production, backdate mtime so grace period doesn't skip it */
+    function createTrackedFile(
+      svc: ProductionsService,
+      botId: string,
+      relPath: string,
+      content: string
+    ) {
+      const dir = svc.resolveDir(botId);
+      const fullPath = join(dir, relPath);
+      const dirPath = join(fullPath, '..');
+      if (!existsSync(dirPath)) mkdirSync(dirPath, { recursive: true });
+      writeFileSync(fullPath, content, 'utf-8');
+      svc.logProduction({
+        timestamp: new Date().toISOString(),
+        botId,
+        tool: 'file_write',
+        path: relPath,
+        action: 'create',
+        description: `test: ${relPath}`,
+        size: content.length,
+        trackOnly: false,
+      });
+      // Backdate mtime by 2 minutes so grace period (60s) doesn't skip it
+      const past = new Date(Date.now() - 120_000);
+      utimesSync(fullPath, past, past);
+    }
+
+    test('archives tiny files (<50 bytes)', () => {
+      const dir = service.resolveDir('bot1');
+      createTrackedFile(service, 'bot1', 'tiny.md', 'hi');
+
+      // Create a new service to reset throttle (logProduction already triggered one cleanup)
+      const svc2 = new ProductionsService(makeConfig(), noopLogger);
+      svc2.rebuildIndex('bot1');
+
+      expect(existsSync(join(dir, 'tiny.md'))).toBe(false);
+      expect(existsSync(join(dir, 'archived', 'tiny.md'))).toBe(true);
+    });
+
+    test('archives incoherent .md files', () => {
+      const dir = service.resolveDir('bot1');
+      createTrackedFile(
+        service,
+        'bot1',
+        'incoherent.md',
+        '# One\n## Two\n### Three\n#### Four\n##### Five\nShort.'
+      );
+
+      const svc2 = new ProductionsService(makeConfig(), noopLogger);
+      svc2.rebuildIndex('bot1');
+
+      expect(existsSync(join(dir, 'incoherent.md'))).toBe(false);
+      expect(existsSync(join(dir, 'archived', 'incoherent.md'))).toBe(true);
+    });
+
+    test('archives duplicate files (keeps first)', () => {
+      const dir = service.resolveDir('bot1');
+      const content =
+        '# Duplicate Content\n\nThis is a substantial piece of content that is duplicated across two files and should be long enough to avoid the tiny check and coherence checks.';
+      createTrackedFile(service, 'bot1', 'original.md', content);
+      createTrackedFile(service, 'bot1', 'copy.md', content);
+
+      const svc2 = new ProductionsService(makeConfig(), noopLogger);
+      svc2.rebuildIndex('bot1');
+
+      // First file should survive, second should be archived
+      const originalExists = existsSync(join(dir, 'original.md'));
+      const copyExists = existsSync(join(dir, 'copy.md'));
+      expect(originalExists || copyExists).toBe(true);
+      expect(
+        existsSync(join(dir, 'archived', 'original.md')) ||
+          existsSync(join(dir, 'archived', 'copy.md'))
+      ).toBe(true);
+    });
+
+    test('skips approved files during cleanup', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'approved_tiny.md'), 'ok', 'utf-8');
+
+      // Log and approve this production
+      const entry = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'approved_tiny.md',
+        action: 'create',
+        description: 'Approved tiny file',
+        size: 2,
+        trackOnly: false,
+      });
+      service.evaluate('bot1', entry.id, { status: 'approved' });
+
+      // Backdate mtime so grace period doesn't skip it
+      const past = new Date(Date.now() - 120_000);
+      utimesSync(join(dir, 'approved_tiny.md'), past, past);
+
+      // Force a fresh cleanup by creating a new service (resets throttle)
+      const service2 = new ProductionsService(makeConfig(), noopLogger);
+      service2.rebuildIndex('bot1');
+
+      // File should NOT be archived because it's approved
+      expect(existsSync(join(dir, 'approved_tiny.md'))).toBe(true);
+    });
+
+    test('throttle prevents cleanup from running twice in 1 hour', () => {
+      const dir = service.resolveDir('bot1');
+      createTrackedFile(service, 'bot1', 'small.md', 'x');
+
+      // First rebuild on a fresh service — cleanup runs
+      const svc2 = new ProductionsService(makeConfig(), noopLogger);
+      svc2.rebuildIndex('bot1');
+      expect(existsSync(join(dir, 'archived', 'small.md'))).toBe(true);
+
+      // Create another tiny tracked file
+      writeFileSync(join(dir, 'small2.md'), 'y', 'utf-8');
+      svc2.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'small2.md',
+        action: 'create',
+        description: 'test',
+        size: 1,
+        trackOnly: false,
+      });
+      const past = new Date(Date.now() - 120_000);
+      utimesSync(join(dir, 'small2.md'), past, past);
+
+      // Second rebuild on SAME service — cleanup should be throttled
+      svc2.rebuildIndex('bot1');
+      // small2.md should still exist (cleanup didn't run again)
+      expect(existsSync(join(dir, 'small2.md'))).toBe(true);
+    });
+  });
+
+  describe('setCoherenceCheck', () => {
+    test('saves coherent result to entry', () => {
+      const entry = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'coherent.md',
+        action: 'create',
+        description: 'Coherent file',
+        size: 100,
+        trackOnly: false,
+      });
+
+      const result = service.setCoherenceCheck('bot1', entry.id, {
+        coherent: true,
+        issues: [],
+        explanation: 'Content is well-formed',
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.coherenceCheck).toBeDefined();
+      expect(result!.coherenceCheck!.coherent).toBe(true);
+      expect(result!.coherenceCheck!.issues).toEqual([]);
+      expect(result!.coherenceCheck!.explanation).toBe('Content is well-formed');
+      expect(result!.coherenceCheck!.checkedAt).toBeTruthy();
+    });
+
+    test('saves incoherent result with issues', () => {
+      const entry = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'incoherent.md',
+        action: 'create',
+        description: 'Incoherent file',
+        size: 50,
+        trackOnly: false,
+      });
+
+      const result = service.setCoherenceCheck('bot1', entry.id, {
+        coherent: false,
+        issues: ['Missing conclusion', 'Abrupt topic shift'],
+        explanation: 'Content has structural problems',
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.coherenceCheck!.coherent).toBe(false);
+      expect(result!.coherenceCheck!.issues).toEqual(['Missing conclusion', 'Abrupt topic shift']);
+    });
+
+    test('returns null for non-existent entry', () => {
+      const result = service.setCoherenceCheck('bot1', 'non-existent-id', {
+        coherent: true,
+        issues: [],
+      });
+      expect(result).toBeNull();
+    });
+
+    test('persists in JSONL (survives re-read)', () => {
+      const entry = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'persist-check.md',
+        action: 'create',
+        description: 'Persistence test',
+        size: 80,
+        trackOnly: false,
+      });
+
+      service.setCoherenceCheck('bot1', entry.id, {
+        coherent: true,
+        issues: [],
+        explanation: 'Good',
+      });
+
+      // Re-read from disk
+      const reloaded = service.getEntry('bot1', entry.id);
+      expect(reloaded).not.toBeNull();
+      expect(reloaded!.coherenceCheck).toBeDefined();
+      expect(reloaded!.coherenceCheck!.coherent).toBe(true);
+    });
+
+    test('getStats counts checked entries', () => {
+      const e1 = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'file1.md',
+        action: 'create',
+        description: 'File 1',
+        size: 100,
+        trackOnly: false,
+      });
+      service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'file2.md',
+        action: 'create',
+        description: 'File 2',
+        size: 100,
+        trackOnly: false,
+      });
+
+      // Only check first entry
+      service.setCoherenceCheck('bot1', e1.id, { coherent: true, issues: [] });
+
+      const stats = service.getStats('bot1');
+      expect(stats.checked).toBe(1);
+      expect(stats.total).toBe(2);
+    });
+
+    test('getDirectoryTree includes coherenceCheck in nodes', () => {
+      const dir = service.resolveDir('bot1');
+      writeFileSync(join(dir, 'checked-file.md'), '# Checked', 'utf-8');
+
+      const entry = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: 'checked-file.md',
+        action: 'create',
+        description: 'Checked file',
+        size: 10,
+        trackOnly: false,
+      });
+
+      service.setCoherenceCheck('bot1', entry.id, {
+        coherent: false,
+        issues: ['Bad structure'],
+      });
+
+      const tree = service.getDirectoryTree('bot1');
+      const node = tree.find((n) => n.name === 'checked-file.md');
+      expect(node).toBeTruthy();
+      expect(node!.coherenceCheck).toEqual({ coherent: false });
+    });
+  });
 });

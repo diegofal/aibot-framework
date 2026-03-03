@@ -66,6 +66,7 @@ function makeMockDeps(overrides?: Record<string, unknown>) {
     addThreadMessage: () => null,
     archiveFile: () => true,
     checkCoherence: () => ({ coherent: true, issues: [] }),
+    setCoherenceCheck: () => {},
   };
 
   const mockBotManager = {
