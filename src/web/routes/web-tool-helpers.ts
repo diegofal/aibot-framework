@@ -45,6 +45,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
   const enableTools = opts.enableTools !== false;
 
   if (!enableTools) {
+    logger.info({ botId, path: 'claude-cli-text-only' }, 'webGenerate: tools disabled, using Claude CLI');
     const claudePath = config.improve?.claudePath ?? 'claude';
     const timeout = config.improve?.timeout ?? 300_000;
     return claudeGenerate(prompt, {
@@ -62,7 +63,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     llmClient = botManager.getLLMClient(botId);
   } catch {
     // Bot not started or no LLMClient registered — fallback to text-only
-    logger.warn({ botId }, 'No LLMClient for bot, falling back to text-only webGenerate');
+    logger.warn({ botId }, 'webGenerate: no LLMClient for bot, falling back to Claude CLI');
     const claudePath = config.improve?.claudePath ?? 'claude';
     const timeout = config.improve?.timeout ?? 300_000;
     return claudeGenerate(prompt, {
@@ -80,7 +81,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
 
   if (filteredDefs.length === 0) {
     // No tools available after filtering — use text-only path
-    logger.debug({ botId }, 'No tools available after dashboard filter, using text-only');
+    logger.info({ botId }, 'webGenerate: no tools after dashboard filter, using Claude CLI');
     const claudePath = config.improve?.claudePath ?? 'claude';
     const timeout = config.improve?.timeout ?? 300_000;
     return claudeGenerate(prompt, {
@@ -95,6 +96,11 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
   const toolExecutor = toolRegistry.createExecutor(0, botId);
   const enrichedSystemPrompt = systemPrompt + TOOL_AWARENESS_SUFFIX;
   const model = botManager.getActiveModel(botId);
+
+  logger.info(
+    { botId, backend: llmClient.backend, model, toolCount: filteredDefs.length },
+    'webGenerate: calling LLM with tools'
+  );
 
   return llmClient.chat(
     [

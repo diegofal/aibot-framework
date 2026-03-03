@@ -58,6 +58,13 @@ export function conversationsRoutes(deps: {
   ) {
     const key = `${botId}:${id}`;
     generationState.set(key, { status: 'generating' });
+    const startMs = Date.now();
+    const botName = config.bots.find((b) => b.id === botId)?.name ?? botId;
+
+    logger.info(
+      { botId, botName, conversationId: id, type: conversation.type },
+      'Web conversation: generating reply…'
+    );
 
     (async () => {
       try {
@@ -110,6 +117,11 @@ export function conversationsRoutes(deps: {
               ? INBOX_CHAT_SYSTEM_PROMPT
               : CONVERSATION_SYSTEM_PROMPT;
 
+        logger.info(
+          { botId, botName, conversationId: id, promptLen: prompt.length, messageCount: recentMessages.length },
+          'Web conversation: calling LLM…'
+        );
+
         const response = await webGenerate({
           prompt,
           systemPrompt,
@@ -127,10 +139,15 @@ export function conversationsRoutes(deps: {
           `## Web Conversation\n- Type: ${conversation.type}\n- Topic: "${conversation.title}"\n- My response: "${truncate(response, 200)}"`
         );
 
-        logger.info({ botId, conversationId: id }, 'Conversation bot reply generated');
+        const durationMs = Date.now() - startMs;
+        logger.info(
+          { botId, botName, conversationId: id, durationMs, responseLen: response.length },
+          'Web conversation: reply generated'
+        );
         generationState.delete(key);
       } catch (err) {
-        logger.error({ err, botId, conversationId: id }, 'Failed to generate conversation reply');
+        const durationMs = Date.now() - startMs;
+        logger.error({ err, botId, botName, conversationId: id, durationMs }, 'Web conversation: failed to generate reply');
         const message = err instanceof Error ? err.message : 'Unknown error';
         generationState.set(key, {
           status: 'error',

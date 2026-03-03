@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- **Web conversation logging** — `generateBotReply()` and `webGenerate()` now log detailed info to the console: generation start (botId, botName, type), LLM call (promptLen, messageCount, backend, model, toolCount), and completion (durationMs, responseLen). Previously only 1-2 lines were logged, making web conversations invisible in `bun run start` output.
+
 ### Fixed
 - **Coherence check always shows explanation** — Coherence check explanation is now always visible: thread auto-posts "Coherence Check (OK): ..." for coherent results (previously only incoherent results posted), and the "Checked" badge now shows the explanation as a tooltip on hover.
 
