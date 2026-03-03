@@ -6,6 +6,7 @@ import { type BotConfig, type Config, persistBots, resolveAgentConfig } from '..
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
 import { generateSoul } from '../../soul-generator';
+import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 
 export function agentsRoutes(deps: {
   config: Config;
@@ -15,9 +16,18 @@ export function agentsRoutes(deps: {
 }) {
   const app = new Hono();
 
+  /** Find a bot by id, respecting tenant scope. Returns null if not found or not accessible. */
+  function findBotScoped(c: import('hono').Context, id: string): BotConfig | null {
+    const bot = deps.config.bots.find((b) => b.id === id);
+    if (!bot) return null;
+    if (!isBotAccessible(bot, getTenantId(c))) return null;
+    return bot;
+  }
+
   // List all agents
   app.get('/', (c) => {
-    const agents = deps.config.bots.map((bot) => ({
+    const tenantId = getTenantId(c);
+    const agents = scopeBots(deps.config.bots, tenantId).map((bot) => ({
       ...bot,
       token: maskToken(bot.token),
       running: deps.botManager.isRunning(bot.id),
@@ -49,7 +59,7 @@ export function agentsRoutes(deps: {
 
   // Get single agent
   app.get('/:id', (c) => {
-    const bot = deps.config.bots.find((b) => b.id === c.req.param('id'));
+    const bot = findBotScoped(c, c.req.param('id'));
     if (!bot) return c.json({ error: 'Agent not found' }, 404);
     return c.json({
       ...bot,
@@ -68,6 +78,8 @@ export function agentsRoutes(deps: {
       return c.json({ error: 'Agent with this id already exists' }, 409);
     }
 
+    const tenantId = getTenantId(c);
+
     const newBot: BotConfig = {
       id: body.id,
       name: body.name,
@@ -81,6 +93,7 @@ export function agentsRoutes(deps: {
       soulDir: body.soulDir,
       disabledTools: body.disabledTools,
       conversation: body.conversation,
+      ...(tenantId ? { tenantId } : {}),
     };
 
     deps.config.bots.push(newBot);
@@ -92,7 +105,7 @@ export function agentsRoutes(deps: {
   // Update agent
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
-    const bot = deps.config.bots.find((b) => b.id === id);
+    const bot = findBotScoped(c, id);
     if (!bot) return c.json({ error: 'Agent not found' }, 404);
 
     const body = await c.req.json<Partial<BotConfig>>();
@@ -148,6 +161,7 @@ export function agentsRoutes(deps: {
   // Delete agent
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
+    if (!findBotScoped(c, id)) return c.json({ error: 'Agent not found' }, 404);
     if (deps.botManager.isRunning(id)) {
       return c.json({ error: 'Stop the agent before deleting' }, 400);
     }
@@ -163,7 +177,7 @@ export function agentsRoutes(deps: {
   // Start agent
   app.post('/:id/start', async (c) => {
     const id = c.req.param('id');
-    const bot = deps.config.bots.find((b) => b.id === id);
+    const bot = findBotScoped(c, id);
     if (!bot) {
       deps.logger.warn({ botId: id }, 'Start failed: agent not found');
       return c.json({ error: 'Agent not found' }, 404);
@@ -199,7 +213,7 @@ export function agentsRoutes(deps: {
   // Reset agent (full reset to baseline)
   app.post('/:id/reset', async (c) => {
     const id = c.req.param('id');
-    const bot = deps.config.bots.find((b) => b.id === id);
+    const bot = findBotScoped(c, id);
     if (!bot) return c.json({ error: 'Agent not found' }, 404);
     if (deps.botManager.isRunning(id)) {
       return c.json({ error: 'Stop the agent before resetting' }, 400);
@@ -218,7 +232,7 @@ export function agentsRoutes(deps: {
   // Clone agent
   app.post('/:id/clone', async (c) => {
     const id = c.req.param('id');
-    const source = deps.config.bots.find((b) => b.id === id);
+    const source = findBotScoped(c, id);
     if (!source) return c.json({ error: 'Agent not found' }, 404);
 
     const body = await c.req.json<{ id: string; name: string }>();
@@ -229,12 +243,14 @@ export function agentsRoutes(deps: {
       return c.json({ error: 'Agent with this id already exists' }, 409);
     }
 
+    const tenantId = getTenantId(c);
     const clone: BotConfig = {
       ...structuredClone(source),
       id: body.id,
       name: body.name,
       token: '',
       enabled: false,
+      ...(tenantId ? { tenantId } : {}),
     };
 
     // Copy soul files from source bot's resolved soulDir
@@ -254,7 +270,7 @@ export function agentsRoutes(deps: {
   // Initialize per-agent soul directory
   app.post('/:id/init-soul', async (c) => {
     const id = c.req.param('id');
-    const bot = deps.config.bots.find((b) => b.id === id);
+    const bot = findBotScoped(c, id);
     if (!bot) return c.json({ error: 'Agent not found' }, 404);
 
     const agentSoulDir = `./config/soul/${id}`;
@@ -273,7 +289,7 @@ export function agentsRoutes(deps: {
   // Generate soul files with AI (preview only — doesn't write)
   app.post('/:id/generate-soul', async (c) => {
     const id = c.req.param('id');
-    const bot = deps.config.bots.find((b) => b.id === id);
+    const bot = findBotScoped(c, id);
     if (!bot) return c.json({ error: 'Agent not found' }, 404);
 
     const body = await c.req.json<{
@@ -312,7 +328,7 @@ export function agentsRoutes(deps: {
   // Apply generated soul files to disk
   app.post('/:id/apply-soul', async (c) => {
     const id = c.req.param('id');
-    const bot = deps.config.bots.find((b) => b.id === id);
+    const bot = findBotScoped(c, id);
     if (!bot) return c.json({ error: 'Agent not found' }, 404);
 
     const body = await c.req.json<{

@@ -66,7 +66,8 @@ export class MemoryManager {
     query: string,
     maxResults: number | undefined,
     minScore: number | undefined,
-    botId: string
+    botId: string,
+    userId?: string
   ): Promise<MemorySearchResult[]> {
     if (!this.db || !this.embeddingService) {
       throw new Error('MemoryManager not initialized');
@@ -75,6 +76,7 @@ export class MemoryManager {
       maxResults,
       minScore,
       botId,
+      userId,
     });
   }
 

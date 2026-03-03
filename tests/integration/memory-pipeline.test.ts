@@ -38,13 +38,14 @@ describe('Core Memory Pipeline Integration', () => {
       CREATE TABLE IF NOT EXISTS core_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         bot_id TEXT NOT NULL DEFAULT 'default',
+        user_id TEXT,
         category TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         importance INTEGER DEFAULT 5,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(bot_id, category, key)
+        UNIQUE(bot_id, user_id, category, key)
       )
     `);
 

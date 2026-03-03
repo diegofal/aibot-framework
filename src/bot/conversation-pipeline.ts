@@ -215,6 +215,17 @@ export class ConversationPipeline {
       // Await RAG pre-fetch
       const ragContext = await ragPromise;
 
+      // Resolve userId for per-user isolation
+      const userIsolation = config.userIsolation;
+      const rawUserId = ctx.from?.id;
+      const userId = userIsolation?.enabled && rawUserId ? String(rawUserId) : undefined;
+
+      // Resolve tenant root for path sandboxing
+      const tenantRoot =
+        config.tenantId && this.ctx.config.multiTenant?.enabled
+          ? `${this.ctx.config.multiTenant.dataDir ?? './data/tenants'}/${config.tenantId}`
+          : undefined;
+
       // Build system prompt via unified builder
       const systemPrompt = this.systemPromptBuilder.build({
         mode: 'conversation',
@@ -222,6 +233,7 @@ export class ConversationPipeline {
         botConfig: config,
         isGroup,
         ragContext,
+        userId,
       });
 
       // In groups, prefix messages with sender name
@@ -275,6 +287,25 @@ export class ConversationPipeline {
       }, 4000);
 
       try {
+        // Quota check: block if tenant exceeded message quota
+        if (config.tenantId && this.ctx.tenantFacade?.isMultiTenant()) {
+          const allowed = this.ctx.tenantFacade.checkQuota(config.tenantId, 'messages');
+          if (!allowed) {
+            botLogger.warn(
+              { tenantId: config.tenantId, botId: config.id },
+              'Message quota exceeded'
+            );
+            clearInterval(typingInterval);
+            await sendLongMessage(
+              ctx,
+              'Sorry, the message quota for this service has been exceeded. Please try again later or contact support.',
+              undefined,
+              botLogger
+            );
+            return;
+          }
+        }
+
         const activeModel = this.ctx.getActiveModel(config.id);
         botLogger.info(
           {
@@ -309,7 +340,7 @@ export class ConversationPipeline {
               temperature: resolved.temperature,
               tools: hasTools ? botToolDefs : undefined,
               toolExecutor: hasTools
-                ? this.toolRegistry.createExecutor(chatId, config.id)
+                ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
                 : undefined,
               maxToolRounds: webToolsConfig?.maxToolRounds,
             }),
@@ -366,7 +397,7 @@ export class ConversationPipeline {
                 temperature: resolved.temperature,
                 tools: hasTools ? botToolDefs : undefined,
                 toolExecutor: hasTools
-                  ? this.toolRegistry.createExecutor(chatId, config.id)
+                  ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
                   : undefined,
                 maxToolRounds: webToolsConfig?.maxToolRounds,
               }),
@@ -486,6 +517,12 @@ export class ConversationPipeline {
           },
           '✅ Reply sent to Telegram'
         );
+
+        // Record usage for tenant metering
+        if (config.tenantId && this.ctx.tenantFacade?.isMultiTenant()) {
+          this.ctx.tenantFacade.recordUsage(config.tenantId, config.id, 'message_processed');
+          this.ctx.tenantFacade.recordUsage(config.tenantId, config.id, 'llm_request');
+        }
 
         // Keep the reply window open for this user in groups
         if (isGroup && ctx.from?.id) {

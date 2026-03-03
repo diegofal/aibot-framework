@@ -741,11 +741,15 @@ export class ToolRegistry {
    */
   createExecutor(
     chatId: number,
-    botId: string
+    botId: string,
+    userId?: string,
+    tenantRoot?: string
   ): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
     const executor = new ToolExecutor(this.ctx, {
       botId,
       chatId,
+      userId,
+      tenantRoot,
       tools: this.getToolsForBot(botId),
       karmaService: this.karmaService,
     });

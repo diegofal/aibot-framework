@@ -13,6 +13,8 @@ export interface SystemPromptOptions {
   isGroup: boolean;
   /** RAG pre-fetched context (conversation mode only) */
   ragContext?: string | null;
+  /** User ID for per-user core memory isolation */
+  userId?: string;
 }
 
 export class SystemPromptBuilder {
@@ -69,9 +71,10 @@ export class SystemPromptBuilder {
     }
 
     // Core Memory injection (structured identity - near end for recency bias)
-    if (this.ctx.memoryManager?.getCoreMemory()) {
-      const coreMemory = this.ctx.memoryManager.getCoreMemory()!;
-      const coreMemoryBlock = coreMemory.renderForSystemPrompt(800, botId);
+    // When userId is provided, includes both user-specific and shared entries
+    const coreMemory = this.ctx.memoryManager?.getCoreMemory();
+    if (coreMemory) {
+      const coreMemoryBlock = coreMemory.renderForSystemPrompt(800, botId, options.userId);
       if (coreMemoryBlock) {
         prompt += coreMemoryBlock;
       }
@@ -110,90 +113,92 @@ export class SystemPromptBuilder {
     ragContext?: string | null
   ): string {
     if (defs.length === 0) return prompt;
+    let builtPrompt = prompt;
 
     // Web tools
     const webToolNames = defs
       .filter((d) => d.function.name.startsWith('web_'))
       .map((d) => d.function.name);
     if (webToolNames.length > 0) {
-      prompt += this.webToolsInstructions(webToolNames);
+      builtPrompt += this.webToolsInstructions(webToolNames);
     }
 
     // Soul tools
     if (defs.some((d) => d.function.name === 'save_memory')) {
-      prompt += this.soulToolsInstructions();
+      builtPrompt += this.soulToolsInstructions();
     }
 
     // Exec tool
     if (defs.some((d) => d.function.name === 'exec')) {
-      prompt += this.execToolInstructions();
+      builtPrompt += this.execToolInstructions();
     }
 
     // File tools
     if (defs.some((d) => d.function.name === 'file_read')) {
-      prompt += this.fileToolsInstructions();
+      builtPrompt += this.fileToolsInstructions();
     }
 
     // Process tool
     if (defs.some((d) => d.function.name === 'process')) {
-      prompt += this.processToolInstructions();
+      builtPrompt += this.processToolInstructions();
     }
 
     // Memory search
     if (defs.some((d) => d.function.name === 'memory_search')) {
-      prompt += this.memorySearchInstructions(!!ragContext);
+      builtPrompt += this.memorySearchInstructions(!!ragContext);
     }
 
     // Datetime tool
     if (defs.some((d) => d.function.name === 'get_datetime')) {
-      prompt += this.datetimeToolInstructions();
+      builtPrompt += this.datetimeToolInstructions();
     }
 
     // Phone call tool
     if (defs.some((d) => d.function.name === 'phone_call')) {
-      prompt += this.phoneCallInstructions();
+      builtPrompt += this.phoneCallInstructions();
     }
 
     // Cron tool
     if (defs.some((d) => d.function.name === 'cron')) {
-      prompt += this.cronToolInstructions();
+      builtPrompt += this.cronToolInstructions();
     }
 
     // Delegation tool
     if (defs.some((d) => d.function.name === 'delegate_to_bot')) {
-      prompt += this.delegationInstructions(botConfig);
+      builtPrompt += this.delegationInstructions(botConfig);
     }
 
     // Collaboration tool
     if (defs.some((d) => d.function.name === 'collaborate')) {
-      prompt += this.collaborationInstructions(botConfig);
+      builtPrompt += this.collaborationInstructions(botConfig);
     }
 
     // Goals tool
     if (defs.some((d) => d.function.name === 'manage_goals')) {
-      prompt += this.goalsToolInstructions();
+      builtPrompt += this.goalsToolInstructions();
     }
 
     // Core memory tools
     if (defs.some((d) => d.function.name === 'core_memory_append')) {
-      prompt += this.coreMemoryToolInstructions();
+      builtPrompt += this.coreMemoryToolInstructions();
     }
 
     // Create tool (dynamic tools)
     if (defs.some((d) => d.function.name === 'create_tool')) {
-      prompt += this.createToolInstructions();
+      builtPrompt += this.createToolInstructions();
     }
 
-    return prompt;
+    return builtPrompt;
   }
 
   private appendCollaborationToolBlocks(
     prompt: string,
     defs: import('../tools/types').ToolDefinition[]
   ): string {
+    let builtPrompt = prompt;
     // Memory search
     if (defs.some((d) => d.function.name === 'memory_search')) {
-      prompt +=
+      builtPrompt +=
         '\n\n## Memory Search\n\n' +
         'You have a searchable long-term memory (daily logs, legacy notes, session history).\n' +
         'Before answering ANYTHING about prior conversations, people, preferences, facts you were told, ' +
@@ -203,13 +208,13 @@ export class SystemPromptBuilder {
 
     // Soul tools
     if (defs.some((d) => d.function.name === 'save_memory')) {
-      prompt +=
+      builtPrompt +=
         '\n\nYou have persistent files that define who you are. ' +
         'They ARE your memory — update them to persist across conversations.\n' +
         "- save_memory: When you learn a preference, fact, or context worth remembering, save it. Don't ask — just do it.";
     }
 
-    return prompt;
+    return builtPrompt;
   }
 
   private appendAutonomousToolBlocks(
@@ -218,8 +223,9 @@ export class SystemPromptBuilder {
     botConfig: BotConfig
   ): string {
     if (defs.length === 0) return prompt;
+    let builtPrompt = prompt;
 
-    prompt +=
+    builtPrompt +=
       '\n\n## Autonomous Mode\n\n' +
       'You are running autonomously without a human in the loop. ' +
       'Execute your plan efficiently using available tools. ' +
@@ -232,18 +238,18 @@ export class SystemPromptBuilder {
         ? `${this.ctx.config.productions.baseDir}/${botConfig.id}`
         : undefined);
     if (workDir) {
-      prompt += `\n\n## File Sandbox\n\nYour file operations are sandboxed to your working directory: \`${workDir}\`.\nAll file paths (file_read, file_write, file_edit) are resolved relative to this directory.\nYou CANNOT read files outside your workspace — only files you created or that were placed in your directory.\nDo NOT attempt to read framework source code, system configs, or other bots\' files — those paths will resolve inside your sandbox and fail.`;
+      builtPrompt += `\n\n## File Sandbox\n\nYour file operations are sandboxed to your working directory: \`${workDir}\`.\nAll file paths (file_read, file_write, file_edit) are resolved relative to this directory.\nYou CANNOT read files outside your workspace — only files you created or that were placed in your directory.\nDo NOT attempt to read framework source code, system configs, or other bots\' files — those paths will resolve inside your sandbox and fail.`;
     }
 
     // Include all relevant tool instruction blocks (same as conversation minus group-specific ones)
-    prompt = this.appendConversationToolBlocks(prompt, defs, botConfig);
+    builtPrompt = this.appendConversationToolBlocks(builtPrompt, defs, botConfig);
 
     // Goals tool instructions
     if (defs.some((d) => d.function.name === 'manage_goals')) {
-      prompt += this.goalsToolInstructions();
+      builtPrompt += this.goalsToolInstructions();
     }
 
-    return prompt;
+    return builtPrompt;
   }
 
   // --- Private instruction block methods ---

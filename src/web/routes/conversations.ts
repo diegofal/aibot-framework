@@ -4,6 +4,7 @@ import type { Config } from '../../config';
 import type { ConversationsService } from '../../conversations/service';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
+import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 import { webGenerate } from './web-tool-helpers';
 
 function truncate(text: string, maxLen: number): string {
@@ -140,12 +141,22 @@ export function conversationsRoutes(deps: {
     })();
   }
 
+  /** Check if botId is accessible to the requesting tenant */
+  function checkBotAccess(c: import('hono').Context, botId: string): boolean {
+    const bot = config.bots.find((b) => b.id === botId);
+    return !bot || isBotAccessible(bot, getTenantId(c));
+  }
+
   // List bots with conversation counts
   app.get('/', (c) => {
-    const botIds = conversationsService.getBotIds();
+    const tenantId = getTenantId(c);
+    const allowedBots = scopeBots(config.bots, tenantId);
+    const allowedIds = new Set(allowedBots.map((b) => b.id));
+
+    const botIds = conversationsService.getBotIds().filter((id) => allowedIds.has(id));
     const result = botIds.map((botId) => {
       const convos = conversationsService.listConversations(botId);
-      const botConfig = config.bots.find((b) => b.id === botId);
+      const botConfig = allowedBots.find((b) => b.id === botId);
       return {
         botId,
         name: botConfig?.name ?? botId,
@@ -154,7 +165,7 @@ export function conversationsRoutes(deps: {
     });
 
     // Also include bots with no conversations yet
-    for (const bot of config.bots) {
+    for (const bot of allowedBots) {
       if (!result.find((r) => r.botId === bot.id)) {
         result.push({ botId: bot.id, name: bot.name, conversationCount: 0 });
       }
@@ -166,6 +177,7 @@ export function conversationsRoutes(deps: {
   // List conversations for a bot
   app.get('/:botId', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const type = c.req.query('type') || undefined;
     const limit = Number(c.req.query('limit')) || 50;
     const offset = Number(c.req.query('offset')) || 0;
@@ -177,6 +189,7 @@ export function conversationsRoutes(deps: {
   // Create conversation
   app.post('/:botId', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const body = await c.req
       .json<{ type?: 'general' | 'productions' | 'inbox'; title?: string }>()
       .catch(() => ({}) as { type?: string; title?: string });
@@ -194,6 +207,7 @@ export function conversationsRoutes(deps: {
   // NOTE: must be registered after fixed-segment routes to avoid collision
   app.get('/:botId/:id', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const conversation = conversationsService.getConversation(botId, id);
@@ -207,6 +221,16 @@ export function conversationsRoutes(deps: {
 
   // Delete all conversations across all bots
   app.delete('/', (c) => {
+    const tenantId = getTenantId(c);
+    if (tenantId) {
+      // In multi-tenant mode, only delete conversations for tenant's bots
+      const allowedBots = scopeBots(config.bots, tenantId);
+      let deleted = 0;
+      for (const bot of allowedBots) {
+        deleted += conversationsService.deleteAllForBot(bot.id);
+      }
+      return c.json({ ok: true, deleted });
+    }
     const deleted = conversationsService.deleteAll();
     return c.json({ ok: true, deleted });
   });
@@ -214,6 +238,7 @@ export function conversationsRoutes(deps: {
   // Delete all conversations for a specific bot
   app.delete('/:botId', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const deleted = conversationsService.deleteAllForBot(botId);
     return c.json({ ok: true, deleted });
   });
@@ -221,6 +246,7 @@ export function conversationsRoutes(deps: {
   // Delete conversation
   app.delete('/:botId/:id', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const ok = conversationsService.deleteConversation(botId, id);
@@ -234,6 +260,7 @@ export function conversationsRoutes(deps: {
   // Send human message + fire-and-forget bot reply
   app.post('/:botId/:id/messages', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
     const body = await c.req.json<{ message?: string }>();
 
@@ -294,6 +321,7 @@ export function conversationsRoutes(deps: {
   // Poll for bot reply status
   app.get('/:botId/:id/status', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const conversation = conversationsService.getConversation(botId, id);
@@ -318,6 +346,7 @@ export function conversationsRoutes(deps: {
   // Retry failed bot reply generation
   app.post('/:botId/:id/retry', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const conversation = conversationsService.getConversation(botId, id);

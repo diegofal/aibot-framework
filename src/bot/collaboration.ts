@@ -327,8 +327,8 @@ export class CollaborationManager {
   /**
    * Discover agents with their full capabilities (tools, model, skills).
    */
-  discoverAgents(excludeBotId: string): Array<AgentInfo & { model?: string }> {
-    const agents = this.ctx.agentRegistry.listOtherAgents(excludeBotId);
+  discoverAgents(excludeBotId: string, tenantId?: string): Array<AgentInfo & { model?: string }> {
+    const agents = this.ctx.agentRegistry.listOtherAgents(excludeBotId, tenantId);
     return agents.map((a) => ({
       ...a,
       model: this.ctx.activeModels.get(a.botId),

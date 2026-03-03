@@ -21,6 +21,26 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeModal();
 });
 
+export function getAuthToken() {
+  return sessionStorage.getItem('auth_token');
+}
+
+export function getAuthContext() {
+  return {
+    token: sessionStorage.getItem('auth_token'),
+    role: sessionStorage.getItem('auth_role'),
+    name: sessionStorage.getItem('auth_name'),
+    tenantId: sessionStorage.getItem('auth_tenant_id'),
+  };
+}
+
+export function clearAuth() {
+  sessionStorage.removeItem('auth_token');
+  sessionStorage.removeItem('auth_role');
+  sessionStorage.removeItem('auth_name');
+  sessionStorage.removeItem('auth_tenant_id');
+}
+
 export async function api(url, opts = {}) {
   const fetchOpts = { headers: {} };
   if (opts.method) fetchOpts.method = opts.method;
@@ -28,8 +48,17 @@ export async function api(url, opts = {}) {
     fetchOpts.headers['Content-Type'] = 'application/json';
     fetchOpts.body = JSON.stringify(opts.body);
   }
+  const token = getAuthToken();
+  if (token) {
+    fetchOpts.headers.Authorization = `Bearer ${token}`;
+  }
   try {
     const res = await fetch(url, fetchOpts);
+    if (res.status === 401 && token) {
+      clearAuth();
+      window.dispatchEvent(new CustomEvent('auth:required'));
+      return { error: 'Authentication required' };
+    }
     return await res.json();
   } catch (err) {
     console.error('API error:', err);

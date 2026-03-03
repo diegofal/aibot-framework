@@ -226,6 +226,14 @@ async function main() {
     // Load external skills from configured folders
     await botManager.initializeExternalSkills();
 
+    // Initialize multi-tenant manager if enabled
+    if (config.multiTenant?.enabled) {
+      botManager.initializeTenantManager({
+        dataDir: config.multiTenant.dataDir ?? './data/tenants',
+      });
+      logger.info('Multi-tenant manager initialized');
+    }
+
     // Start global agent loop timer (runs only for started bots)
     botManager.startAgentLoop();
 

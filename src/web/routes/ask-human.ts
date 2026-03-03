@@ -2,17 +2,30 @@ import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import type { ConversationsService } from '../../conversations/service';
 import type { Logger } from '../../logger';
+import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
 
 export function askHumanRoutes(deps: {
   botManager: BotManager;
   logger: Logger;
   conversationsService?: ConversationsService;
+  config?: import('../../config').Config;
 }) {
   const app = new Hono();
 
+  /** Get allowed bot IDs for the requesting tenant (undefined = all allowed) */
+  function getAllowedBotIds(c: import('hono').Context): Set<string> | undefined {
+    const tenantId = getTenantId(c);
+    if (!tenantId || !deps.config) return undefined;
+    return new Set(scopeBots(deps.config.bots, tenantId).map((b) => b.id));
+  }
+
   // List all pending questions
   app.get('/', (c) => {
-    const questions = deps.botManager.getAskHumanPending();
+    let questions = deps.botManager.getAskHumanPending();
+    const allowedIds = getAllowedBotIds(c);
+    if (allowedIds) {
+      questions = questions.filter((q: any) => allowedIds.has(q.botId));
+    }
 
     return c.json({
       questions,
@@ -24,11 +37,18 @@ export function askHumanRoutes(deps: {
   // Counts pending inbox conversations across all bots (if conversationsService available),
   // falls back to in-memory pending count.
   app.get('/count', (c) => {
+    const allowedIds = getAllowedBotIds(c);
     if (deps.conversationsService) {
       let count = 0;
       for (const botId of deps.conversationsService.getBotIds()) {
+        if (allowedIds && !allowedIds.has(botId)) continue;
         count += deps.conversationsService.countByInboxStatus(botId, 'pending');
       }
+      return c.json({ count });
+    }
+    if (allowedIds) {
+      const questions = deps.botManager.getAskHumanPending();
+      const count = questions.filter((q: any) => allowedIds.has(q.botId)).length;
       return c.json({ count });
     }
     const questionCount = deps.botManager.getAskHumanCount();

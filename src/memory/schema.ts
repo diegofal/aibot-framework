@@ -54,13 +54,14 @@ END;
 CREATE TABLE IF NOT EXISTS core_memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   bot_id TEXT NOT NULL DEFAULT 'default',
+  user_id TEXT,
   category TEXT NOT NULL,
   key TEXT NOT NULL,
   value TEXT NOT NULL,
   importance INTEGER NOT NULL DEFAULT 5,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(bot_id, category, key)
+  UNIQUE(bot_id, user_id, category, key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_core_memory_category ON core_memory(category);
@@ -113,6 +114,42 @@ function migrateSchema(db: Database, logger: Logger): void {
   // Ensure bot_id index exists (runs after migration for existing DBs, and for new DBs
   // where SCHEMA_SQL created the table with bot_id but the index isn't in SCHEMA_SQL)
   db.exec('CREATE INDEX IF NOT EXISTS idx_core_memory_bot_id ON core_memory(bot_id)');
+
+  // Add user_id column to core_memory table if missing (per-user isolation)
+  const coreColumnsForUserId = db.prepare('PRAGMA table_info(core_memory)').all() as {
+    name: string;
+  }[];
+  const hasUserId = coreColumnsForUserId.some((c) => c.name === 'user_id');
+  if (!hasUserId && coreColumnsForUserId.length > 0) {
+    // Rebuild table to add user_id and change UNIQUE constraint
+    db.exec(`
+      CREATE TABLE core_memory_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id TEXT NOT NULL DEFAULT 'default',
+        user_id TEXT,
+        category TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        importance INTEGER NOT NULL DEFAULT 5,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(bot_id, user_id, category, key)
+      );
+      INSERT INTO core_memory_new (id, bot_id, user_id, category, key, value, importance, created_at, updated_at)
+        SELECT id, bot_id, NULL, category, key, value, importance, created_at, updated_at FROM core_memory;
+      DROP TABLE core_memory;
+      ALTER TABLE core_memory_new RENAME TO core_memory;
+      CREATE INDEX idx_core_memory_bot_id ON core_memory(bot_id);
+      CREATE INDEX idx_core_memory_user_id ON core_memory(user_id);
+      CREATE INDEX idx_core_memory_category ON core_memory(category);
+      CREATE INDEX idx_core_memory_importance ON core_memory(importance DESC);
+      CREATE INDEX idx_core_memory_updated ON core_memory(updated_at DESC);
+    `);
+    logger.info('Migration: added user_id column to core_memory table');
+  }
+
+  // Ensure user_id index exists
+  db.exec('CREATE INDEX IF NOT EXISTS idx_core_memory_user_id ON core_memory(user_id)');
 }
 
 export function initializeMemoryDb(dbPath: string, logger: Logger): Database {

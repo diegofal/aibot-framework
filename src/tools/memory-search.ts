@@ -43,10 +43,11 @@ export function createMemorySearchTool(memoryManager: MemoryManager): Tool {
 
       try {
         const botId = typeof args._botId === 'string' ? args._botId : undefined;
+        const userId = typeof args._userId === 'string' ? args._userId : undefined;
         if (!botId) {
           return { success: false, content: 'Internal error: missing _botId context' };
         }
-        const results = await memoryManager.search(query, maxResults, minScore, botId);
+        const results = await memoryManager.search(query, maxResults, minScore, botId, userId);
 
         if (results.length === 0) {
           return { success: true, content: 'No relevant memories found.' };

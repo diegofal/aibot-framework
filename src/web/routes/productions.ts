@@ -4,6 +4,7 @@ import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
+import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 import { webGenerate } from './web-tool-helpers';
 
 function truncate(text: string, maxLen: number): string {
@@ -317,28 +318,57 @@ export function productionsRoutes(deps: {
     })();
   }
 
+  /** Check if botId is accessible to the requesting tenant */
+  function checkBotAccess(c: import('hono').Context, botId: string): boolean {
+    const bot = config.bots.find((b) => b.id === botId);
+    return !bot || isBotAccessible(bot, getTenantId(c));
+  }
+
   // List all bots with production stats
   app.get('/', (c) => {
+    const tenantId = getTenantId(c);
+    const allowedIds = new Set(scopeBots(config.bots, tenantId).map((b) => b.id));
     const stats = productionsService.getAllBotStats();
-    return c.json(stats);
+    return c.json(tenantId ? stats.filter((s: any) => allowedIds.has(s.botId)) : stats);
   });
 
   // Directory trees for all bots (file explorer at productions level)
   // NOTE: must be registered before GET /:botId to avoid Hono trie router conflicts
   app.get('/all-trees', (c) => {
+    const tenantId = getTenantId(c);
     const tree = productionsService.getAllDirectoryTrees();
+    if (tenantId) {
+      const allowedIds = new Set(scopeBots(config.bots, tenantId).map((b) => b.id));
+      const filtered: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(tree)) {
+        if (allowedIds.has(key)) filtered[key] = value;
+      }
+      return c.json({ tree: filtered });
+    }
     return c.json({ tree });
   });
 
   // Unified entries across all bots
   // NOTE: must be registered before GET /:botId to avoid Hono trie router conflicts
   app.get('/all-entries', (c) => {
+    const tenantId = getTenantId(c);
     const limit = Number(c.req.query('limit')) || 100;
     const offset = Number(c.req.query('offset')) || 0;
     const status = c.req.query('status') || undefined;
-    const botId = c.req.query('botId') || undefined;
+    let botId = c.req.query('botId') || undefined;
+
+    // If tenant requests a specific botId, validate access
+    if (botId && tenantId && !checkBotAccess(c, botId)) {
+      return c.json({ entries: [], total: 0 });
+    }
 
     const result = productionsService.getAllEntries({ limit, offset, status, botId });
+    if (tenantId && !botId) {
+      // Filter entries to tenant's bots
+      const allowedIds = new Set(scopeBots(config.bots, tenantId).map((b) => b.id));
+      result.entries = result.entries.filter((e: any) => allowedIds.has(e.botId));
+      result.total = result.entries.length;
+    }
     return c.json(result);
   });
 
@@ -346,6 +376,7 @@ export function productionsRoutes(deps: {
   // NOTE: must be registered before GET /:botId to avoid Hono trie router conflicts
   app.get('/:botId/summary-status', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const botConfig = config.bots.find((b) => b.id === botId);
     if (!botConfig) {
       return c.json({ error: 'Bot not found' }, 404);
@@ -369,6 +400,7 @@ export function productionsRoutes(deps: {
   // Fire-and-forget summary generation
   app.post('/:botId/generate-summary', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const botConfig = config.bots.find((b) => b.id === botId);
     if (!botConfig) {
       return c.json({ error: 'Bot not found' }, 404);
@@ -504,6 +536,7 @@ export function productionsRoutes(deps: {
   // NOTE: must be registered before GET /:botId/:id to avoid Hono trie conflicts
   app.get('/:botId/:id/response-status', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const entry = productionsService.getEntry(botId, id);
@@ -535,6 +568,7 @@ export function productionsRoutes(deps: {
   // NOTE: must be registered before GET /:botId/:id to avoid Hono trie router conflicts
   app.get('/:botId/tree', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const botConfig = config.bots.find((b) => b.id === botId);
     if (!botConfig) {
       return c.json({ error: 'Bot not found' }, 404);
@@ -548,6 +582,7 @@ export function productionsRoutes(deps: {
   // NOTE: must be registered before GET /:botId/:id to avoid Hono trie router conflicts
   app.get('/:botId/file-content', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const path = c.req.query('path');
     if (!path) {
       return c.json({ error: 'Missing "path" query parameter' }, 400);
@@ -569,6 +604,7 @@ export function productionsRoutes(deps: {
   // List productions for a bot (paginated)
   app.get('/:botId', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const limit = Number(c.req.query('limit')) || 50;
     const offset = Number(c.req.query('offset')) || 0;
     const status = c.req.query('status') || undefined;
@@ -584,6 +620,7 @@ export function productionsRoutes(deps: {
   // NOTE: must be registered before GET /:botId/:id to avoid Hono trie router conflicts
   app.post('/:botId/:id/archive', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
     const body = await c.req.json<{ reason?: string }>();
 
@@ -606,6 +643,7 @@ export function productionsRoutes(deps: {
   // NOTE: must be registered before GET /:botId/:id to avoid Hono trie router conflicts
   app.get('/:botId/:id/coherence', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const entry = productionsService.getEntry(botId, id);
@@ -649,6 +687,7 @@ export function productionsRoutes(deps: {
   // Get single production with file content
   app.get('/:botId/:id', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const entry = productionsService.getEntry(botId, id);
@@ -663,6 +702,7 @@ export function productionsRoutes(deps: {
   // Evaluate a production
   app.post('/:botId/:id/evaluate', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
     const body = await c.req.json<{
       status: 'approved' | 'rejected';
@@ -719,6 +759,7 @@ export function productionsRoutes(deps: {
   // Thread: add human message + trigger AI reply
   app.post('/:botId/:id/thread', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
     const body = await c.req.json<{ message?: string }>();
 
@@ -752,6 +793,7 @@ export function productionsRoutes(deps: {
   // Thread: poll for bot reply generation status
   app.get('/:botId/:id/thread-status', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const entry = productionsService.getEntry(botId, id);
@@ -776,6 +818,7 @@ export function productionsRoutes(deps: {
   // Retry failed response generation (evaluation feedback response)
   app.post('/:botId/:id/retry-response', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const entry = productionsService.getEntry(botId, id);
@@ -804,6 +847,7 @@ export function productionsRoutes(deps: {
   // Retry failed thread reply generation
   app.post('/:botId/:id/retry-thread', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const entry = productionsService.getEntry(botId, id);
@@ -824,6 +868,7 @@ export function productionsRoutes(deps: {
   // Update file content
   app.put('/:botId/:id/content', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
     const body = await c.req.json<{ content: string }>();
 
@@ -843,6 +888,7 @@ export function productionsRoutes(deps: {
   // Delete production
   app.delete('/:botId/:id', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const ok = productionsService.deleteProduction(botId, id);
