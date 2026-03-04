@@ -12,6 +12,7 @@ import { renderBotFeedback, renderFeedback } from './pages/feedback.js';
 import { destroyInbox, renderInbox, renderInboxChat } from './pages/inbox.js';
 import { renderIntegrations } from './pages/integrations.js';
 import { renderBotKarma, renderKarma } from './pages/karma.js';
+import { renderAdminSetup, renderLogin } from './pages/login.js';
 import { destroyPermissions, renderPermissions } from './pages/permissions.js';
 import {
   destroyProductions,
@@ -20,6 +21,7 @@ import {
 } from './pages/productions.js';
 import { renderSessionTranscript, renderSessions } from './pages/sessions.js';
 import { renderSettings } from './pages/settings.js';
+import { clearAuth, getAuthContext, getAuthToken } from './pages/shared.js';
 import {
   renderSkillCreate,
   renderSkillDetail,
@@ -30,6 +32,48 @@ import { renderToolRunner } from './pages/tool-runner.js';
 import { renderToolDetail, renderTools } from './pages/tools.js';
 
 const content = document.getElementById('content');
+const sidebar = document.getElementById('sidebar');
+let multiTenantEnabled = false;
+let adminSetupRequired = false;
+
+function authedFetch(url) {
+  const token = getAuthToken();
+  const opts = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
+  return fetch(url, opts);
+}
+
+function updateAuthUI() {
+  // Remove existing auth info
+  const existing = document.getElementById('nav-auth-info');
+  if (existing) existing.remove();
+
+  if (!multiTenantEnabled || !getAuthToken()) return;
+
+  const ctx = getAuthContext();
+  const div = document.createElement('div');
+  div.id = 'nav-auth-info';
+  div.className = 'nav-auth-info';
+  div.innerHTML = `<span class="auth-name">${ctx.name || ctx.role || 'User'}</span><button class="btn btn-sm" id="auth-logout-btn">Logout</button>`;
+
+  const navStatus = document.getElementById('nav-status');
+  navStatus.parentNode.insertBefore(div, navStatus);
+
+  document.getElementById('auth-logout-btn').addEventListener('click', async () => {
+    const token = getAuthToken();
+    if (token?.startsWith('sess_')) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    clearAuth();
+    navigate();
+  });
+}
 
 const routes = [
   { pattern: /^#\/$/, handler: () => renderDashboard(content) },
@@ -86,6 +130,29 @@ function navigate() {
   destroyPermissions();
   destroyActivity();
   destroyProductions();
+
+  // Auth gate: require login in multi-tenant mode
+  if (multiTenantEnabled && !getAuthToken()) {
+    sidebar.style.display = 'none';
+    const existing = document.getElementById('nav-auth-info');
+    if (existing) existing.remove();
+    if (adminSetupRequired) {
+      renderAdminSetup(content, () => {
+        adminSetupRequired = false;
+        navigate();
+      });
+      return;
+    }
+    renderLogin(content, () => {
+      sidebar.style.display = '';
+      updateAuthUI();
+      navigate();
+    });
+    return;
+  }
+  sidebar.style.display = '';
+  updateAuthUI();
+
   const hash = location.hash || '#/';
   if (hash === '#') {
     location.hash = '#/';
@@ -119,7 +186,19 @@ function navigate() {
 
 window.addEventListener('hashchange', navigate);
 
-// Load status
+// Load auth status (public endpoint)
+async function loadAuthStatus() {
+  try {
+    const res = await fetch('/api/auth/status');
+    const data = await res.json();
+    multiTenantEnabled = data.multiTenantEnabled ?? false;
+    adminSetupRequired = data.adminSetupRequired ?? false;
+  } catch {
+    /* ignore */
+  }
+}
+
+// Load status (public endpoint, no auth needed)
 async function loadStatus() {
   try {
     const res = await fetch('/api/status');
@@ -131,13 +210,11 @@ async function loadStatus() {
   }
 }
 
-loadStatus();
-setInterval(loadStatus, 10000);
-
 // Inbox badge polling
 async function loadInboxBadge() {
   try {
-    const res = await fetch('/api/ask-human/count');
+    const res = await authedFetch('/api/ask-human/count');
+    if (!res.ok) return;
     const data = await res.json();
     const badge = document.getElementById('inbox-badge');
     if (badge) {
@@ -153,13 +230,11 @@ async function loadInboxBadge() {
   }
 }
 
-loadInboxBadge();
-setInterval(loadInboxBadge, 10000);
-
 // Feedback badge polling
 async function loadFeedbackBadge() {
   try {
-    const res = await fetch('/api/agent-feedback/count');
+    const res = await authedFetch('/api/agent-feedback/count');
+    if (!res.ok) return;
     const data = await res.json();
     const badge = document.getElementById('feedback-badge');
     if (badge) {
@@ -175,13 +250,11 @@ async function loadFeedbackBadge() {
   }
 }
 
-loadFeedbackBadge();
-setInterval(loadFeedbackBadge, 10000);
-
 // Permissions badge polling
 async function loadPermissionsBadge() {
   try {
-    const res = await fetch('/api/ask-permission/count');
+    const res = await authedFetch('/api/ask-permission/count');
+    if (!res.ok) return;
     const data = await res.json();
     const badge = document.getElementById('permissions-badge');
     if (badge) {
@@ -197,14 +270,11 @@ async function loadPermissionsBadge() {
   }
 }
 
-loadPermissionsBadge();
-setInterval(loadPermissionsBadge, 10000);
-
 // Agent proposals badge polling
 async function loadAgentProposalsBadge() {
   try {
-    const res = await fetch('/api/agent-proposals/count');
-    if (!res.ok) return; // feature not enabled
+    const res = await authedFetch('/api/agent-proposals/count');
+    if (!res.ok) return;
     const data = await res.json();
     const badge = document.getElementById('agent-proposals-badge');
     if (badge) {
@@ -220,6 +290,20 @@ async function loadAgentProposalsBadge() {
   }
 }
 
+// Listen for auth:required events (401 from api())
+window.addEventListener('auth:required', () => navigate());
+
+// Boot: load auth status first (multi-tenant + admin setup), then bot status, then navigate
+await loadAuthStatus();
+loadStatus();
+setInterval(loadStatus, 10000);
+
+loadInboxBadge();
+setInterval(loadInboxBadge, 10000);
+loadFeedbackBadge();
+setInterval(loadFeedbackBadge, 10000);
+loadPermissionsBadge();
+setInterval(loadPermissionsBadge, 10000);
 loadAgentProposalsBadge();
 setInterval(loadAgentProposalsBadge, 10000);
 

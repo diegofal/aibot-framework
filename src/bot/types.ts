@@ -22,6 +22,7 @@ import type { ActivityStream } from './activity-stream';
 import type { AgentFeedbackStore } from './agent-feedback-store';
 import type { AskHumanStore } from './ask-human-store';
 import type { AskPermissionStore } from './ask-permission-store';
+import type { TenantFacade } from './tenant-facade';
 import type { ToolAuditLog } from './tool-audit-log';
 
 export interface SeenUser {
@@ -70,6 +71,7 @@ export interface BotContext {
   readonly activityStream?: ActivityStream;
   readonly mcpClientPool?: McpClientPool;
   readonly mcpAgentBridge?: McpAgentBridge;
+  readonly tenantFacade?: TenantFacade;
 
   // Helper methods
   getActiveModel(botId: string): string;

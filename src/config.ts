@@ -192,6 +192,13 @@ const BotProductionsConfigSchema = z
   })
   .optional();
 
+const UserIsolationConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    sharedCategories: z.array(z.string()).default(['identity', 'goals', 'constraints']),
+  })
+  .optional();
+
 const BotConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -211,6 +218,7 @@ const BotConfigSchema = z.object({
   agentLoop: BotAgentLoopOverrideSchema,
   tts: BotTtsOverrideSchema,
   productions: BotProductionsConfigSchema,
+  userIsolation: UserIsolationConfigSchema,
   allowedWritePaths: z.array(z.string()).optional(),
   // Multi-tenant hosting fields
   tenantId: z.string().optional(),
@@ -648,6 +656,26 @@ export const McpConfigSchema = z
   })
   .default({});
 
+const MultiTenantConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    dataDir: z.string().default('./data/tenants'),
+    stripe: z
+      .object({
+        secretKey: z.string(),
+        webhookSecret: z.string(),
+        priceIds: z
+          .object({
+            starter: z.string(),
+            pro: z.string(),
+            enterprise: z.string(),
+          })
+          .optional(),
+      })
+      .optional(),
+  })
+  .default({});
+
 const ConfigSchema = z.object({
   bots: z.array(BotConfigSchema).default([]),
   ollama: OllamaConfigSchema,
@@ -680,6 +708,7 @@ const ConfigSchema = z.object({
   reddit: RedditConfigSchema.optional(),
   twitter: TwitterConfigSchema.optional(),
   calendar: CalendarConfigSchema.optional(),
+  multiTenant: MultiTenantConfigSchema,
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
 });
@@ -735,6 +764,8 @@ export type McpConfig = z.infer<typeof McpConfigSchema>;
 export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
 export type McpExposedServerConfig = z.infer<typeof McpExposedServerSchema>;
 export type MMRConfig = z.infer<typeof MMRConfigSchema>;
+export type UserIsolationConfig = z.infer<typeof UserIsolationConfigSchema>;
+export type MultiTenantConfig = z.infer<typeof MultiTenantConfigSchema>;
 
 /**
  * Substitute environment variables in strings
@@ -864,6 +895,58 @@ export function resolveAgentConfig(
     systemPrompt: botConfig.conversation?.systemPrompt ?? globalConfig.conversation.systemPrompt,
     temperature: botConfig.conversation?.temperature ?? globalConfig.conversation.temperature,
     maxHistory: botConfig.conversation?.maxHistory ?? globalConfig.conversation.maxHistory,
+  };
+}
+
+/**
+ * Merge global → tenant → bot config.
+ * Bot-level overrides win, then tenant-level, then global defaults.
+ * Used when multi-tenant is enabled and a TenantConfig is available.
+ *
+ * When tenantId is provided, soulDir and workDir resolve to tenant-scoped paths
+ * under the multiTenant.dataDir directory.
+ */
+export function resolveAgentConfigWithTenant(
+  globalConfig: Config,
+  tenantConfig:
+    | {
+        llmBackend?: string;
+        model?: string;
+        conversation?: { systemPrompt?: string; temperature?: number; maxHistory?: number };
+      }
+    | undefined,
+  botConfig: BotConfig,
+  tenantId?: string
+): ResolvedAgentConfig {
+  if (!tenantConfig && !tenantId) return resolveAgentConfig(globalConfig, botConfig);
+
+  // Tenant-scoped paths when tenantId is provided
+  const dataDir = globalConfig.multiTenant?.dataDir ?? './data/tenants';
+  const defaultSoulDir = tenantId
+    ? `${dataDir}/${tenantId}/bots/${botConfig.id}/soul`
+    : `${globalConfig.soul.dir}/${botConfig.id}`;
+  const defaultWorkDir = tenantId
+    ? `${dataDir}/${tenantId}/bots/${botConfig.id}/productions`
+    : `${globalConfig.productions?.baseDir ?? './productions'}/${botConfig.id}`;
+
+  return {
+    model: botConfig.model ?? tenantConfig?.model ?? globalConfig.ollama.models.primary,
+    llmBackend:
+      botConfig.llmBackend ?? (tenantConfig?.llmBackend as 'ollama' | 'claude-cli' | undefined),
+    soulDir: botConfig.soulDir ?? defaultSoulDir,
+    workDir: botConfig.workDir ?? defaultWorkDir,
+    systemPrompt:
+      botConfig.conversation?.systemPrompt ??
+      tenantConfig?.conversation?.systemPrompt ??
+      globalConfig.conversation.systemPrompt,
+    temperature:
+      botConfig.conversation?.temperature ??
+      tenantConfig?.conversation?.temperature ??
+      globalConfig.conversation.temperature,
+    maxHistory:
+      botConfig.conversation?.maxHistory ??
+      tenantConfig?.conversation?.maxHistory ??
+      globalConfig.conversation.maxHistory,
   };
 }
 

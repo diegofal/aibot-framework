@@ -21,15 +21,17 @@ describe('CoreMemoryManager', () => {
       CREATE TABLE core_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         bot_id TEXT NOT NULL DEFAULT 'default',
+        user_id TEXT,
         category TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         importance INTEGER NOT NULL DEFAULT 5,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(bot_id, category, key)
+        UNIQUE(bot_id, user_id, category, key)
       );
       CREATE INDEX idx_core_memory_bot_id ON core_memory(bot_id);
+      CREATE INDEX idx_core_memory_user_id ON core_memory(user_id);
       CREATE INDEX idx_core_memory_category ON core_memory(category);
       CREATE INDEX idx_core_memory_importance ON core_memory(importance DESC);
       CREATE INDEX idx_core_memory_updated ON core_memory(updated_at DESC);

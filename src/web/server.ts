@@ -9,6 +9,14 @@ import type { CronService } from '../cron';
 import type { Logger } from '../logger';
 import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
+import { AdminCredentialStore } from '../tenant/admin-credentials';
+import { createAdminAuthMiddleware } from '../tenant/admin-middleware';
+import { TenantManager } from '../tenant/manager';
+import { createTenantAuthMiddleware } from '../tenant/middleware';
+import { createRateLimitMiddleware } from '../tenant/rate-limit-middleware';
+import { RateLimiter } from '../tenant/rate-limiter';
+import { SessionStore } from '../tenant/session-store';
+import { TenantConfigStore } from '../tenant/tenant-config-store';
 import { agentExportRoutes } from './routes/agent-export';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
 import { agentLoopRoutes } from './routes/agent-loop';
@@ -16,18 +24,24 @@ import { agentProposalRoutes } from './routes/agent-proposals';
 import { agentsRoutes } from './routes/agents';
 import { askHumanRoutes } from './routes/ask-human';
 import { askPermissionRoutes } from './routes/ask-permission';
+import { authRoutes } from './routes/auth';
+import { billingRoutes } from './routes/billing';
 import { conversationsRoutes } from './routes/conversations';
 import { cronRoutes } from './routes/cron';
 import { filesRoutes } from './routes/files';
 import { integrationsRoutes } from './routes/integrations';
 import { karmaRoutes } from './routes/karma';
 import { mcpRoutes } from './routes/mcp';
+import { onboardingRoutes } from './routes/onboarding';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
 import { settingsRoutes } from './routes/settings';
 import { skillsRoutes } from './routes/skills';
 import { statusRoutes } from './routes/status';
+import { tenantConfigRoutes } from './routes/tenant-config';
+import { tenantRoutes } from './routes/tenants';
 import { toolsRoutes } from './routes/tools';
+import { webhookRoutes } from './routes/webhooks';
 
 export type WebServerDeps = {
   config: Config;
@@ -45,8 +59,52 @@ export function startWebServer(deps: WebServerDeps): void {
 
   const app = new Hono();
 
+  // --- Session & credential stores ---
+  const dataDir = config.multiTenant?.dataDir ?? './data/tenants';
+  const sessionStore = new SessionStore();
+  const adminCredentialStore = new AdminCredentialStore(dataDir);
+
+  // --- Multi-tenant API auth middleware (must be registered BEFORE routes) ---
+  let tenantManager: TenantManager | null = null;
+  if (config.multiTenant?.enabled) {
+    tenantManager = new TenantManager({ dataDir }, logger);
+    const tenantAuth = createTenantAuthMiddleware(tenantManager, logger, sessionStore);
+
+    // Apply tenant auth to regular API routes (skip public, admin, auth, and tenant-specific endpoints)
+    app.use('/api/*', async (c, next) => {
+      const path = c.req.path;
+      if (
+        path === '/api/status' ||
+        path.startsWith('/api/auth/') ||
+        path.startsWith('/api/admin/') ||
+        path === '/api/tenants' ||
+        path.startsWith('/api/tenant/')
+      ) {
+        return next();
+      }
+      return tenantAuth(c, next);
+    });
+
+    // Rate limiting for tenant API requests
+    const rateLimiter = new RateLimiter();
+    const rateLimitMw = createRateLimitMiddleware(rateLimiter, tenantManager, logger);
+    app.use('/api/*', rateLimitMw);
+
+    // Periodic cleanup of expired rate limit entries + sessions (every 5 minutes)
+    setInterval(() => {
+      rateLimiter.cleanup();
+      sessionStore.cleanup();
+    }, 5 * 60_000);
+
+    logger.info('Multi-tenant API authentication and rate limiting enabled');
+  }
+
   // API routes
   app.route('/api/status', statusRoutes({ config, botManager: deps.botManager }));
+  app.route(
+    '/api/auth',
+    authRoutes({ config, tenantManager, sessionStore, adminCredentialStore, logger })
+  );
   app.route(
     '/api/skills',
     skillsRoutes({
@@ -84,9 +142,13 @@ export function startWebServer(deps: WebServerDeps): void {
       botManager: deps.botManager,
       logger,
       conversationsService: deps.botManager.getConversationsService(),
+      config,
     })
   );
-  app.route('/api/ask-permission', askPermissionRoutes({ botManager: deps.botManager, logger }));
+  app.route(
+    '/api/ask-permission',
+    askPermissionRoutes({ botManager: deps.botManager, logger, config })
+  );
   app.route(
     '/api/agent-feedback',
     agentFeedbackRoutes({
@@ -199,6 +261,64 @@ export function startWebServer(deps: WebServerDeps): void {
       getMcpServer: () => mcpServer,
     })
   );
+
+  // --- Multi-tenant routes (only when enabled) ---
+  if (tenantManager && config.multiTenant?.enabled) {
+    const adminAuth = createAdminAuthMiddleware(logger, sessionStore);
+    const tenantAuthForSelfService = createTenantAuthMiddleware(
+      tenantManager,
+      logger,
+      sessionStore
+    );
+    const tenantConfigStore = new TenantConfigStore(config.multiTenant.dataDir ?? './data/tenants');
+
+    // Tenant config routes (protected by global tenant auth middleware)
+    app.route('/api/tenant-config', tenantConfigRoutes({ configStore: tenantConfigStore, logger }));
+
+    const routeDeps = {
+      tenantManager: tenantManager!,
+      botManager: deps.botManager,
+      config,
+      logger,
+      sessionStore,
+    };
+
+    // Public: tenant signup + onboarding signup
+    app.post('/api/tenants', async (c) => {
+      const routes = tenantRoutes(routeDeps);
+      return routes.fetch(
+        new Request(c.req.url, {
+          method: 'POST',
+          body: await c.req.text(),
+          headers: c.req.raw.headers,
+        })
+      );
+    });
+    app.route('/api/onboarding', onboardingRoutes(routeDeps));
+
+    // Public: Stripe webhook (no auth needed, verified by signature)
+    app.route('/api/webhooks', webhookRoutes({ botManager: deps.botManager, logger }));
+
+    // Tenant-auth protected: tenant self-service
+    const tenantSelfService = new Hono();
+    tenantSelfService.use('*', tenantAuthForSelfService);
+    tenantSelfService.route('/', tenantRoutes(routeDeps));
+    app.route('/api/tenant', tenantSelfService);
+
+    // Tenant-auth protected: billing
+    const billingApp = new Hono();
+    billingApp.use('*', tenantAuthForSelfService);
+    billingApp.route('/', billingRoutes(routeDeps));
+    app.route('/api/billing', billingApp);
+
+    // Admin-auth protected: tenant management
+    const adminTenantRoutes = new Hono();
+    adminTenantRoutes.use('*', adminAuth);
+    adminTenantRoutes.route('/tenants', tenantRoutes(routeDeps));
+    app.route('/api/admin', adminTenantRoutes);
+
+    logger.info('Multi-tenant routes mounted (with billing, onboarding, webhooks)');
+  }
 
   // --- Activity stream REST endpoint ---
   const activityStream = deps.botManager.getActivityStream();
@@ -342,13 +462,24 @@ export function startWebServer(deps: WebServerDeps): void {
   Bun.serve<WsData>({
     fetch(req, server) {
       const url = new URL(req.url);
-      if (url.pathname === '/ws/logs') {
-        const ok = server.upgrade(req, { data: { type: 'logs' } });
-        if (ok) return undefined;
-        return new Response('WebSocket upgrade failed', { status: 400 });
-      }
-      if (url.pathname === '/ws/activity') {
-        const ok = server.upgrade(req, { data: { type: 'activity' } });
+      if (url.pathname === '/ws/logs' || url.pathname === '/ws/activity') {
+        // Authenticate WebSocket connections in multi-tenant mode
+        if (config.multiTenant?.enabled) {
+          const token = url.searchParams.get('token');
+          if (!token) return new Response('Unauthorized', { status: 401 });
+          // Accept session tokens
+          if (token.startsWith('sess_')) {
+            const session = sessionStore.getSession(token);
+            if (!session) return new Response('Unauthorized', { status: 401 });
+          } else {
+            const adminKey = process.env.ADMIN_API_KEY;
+            const isAdmin = adminKey && token === adminKey;
+            const isTenant = tenantManager?.getTenantByApiKey(token);
+            if (!isAdmin && !isTenant) return new Response('Unauthorized', { status: 401 });
+          }
+        }
+        const wsType = url.pathname === '/ws/activity' ? 'activity' : 'logs';
+        const ok = server.upgrade(req, { data: { type: wsType } });
         if (ok) return undefined;
         return new Response('WebSocket upgrade failed', { status: 400 });
       }

@@ -260,6 +260,7 @@ export class BotManager {
       activityStream: this.activityStream,
       mcpClientPool: this.mcpClientPool,
       mcpAgentBridge: this.mcpAgentBridge,
+      tenantFacade: this.tenantFacade,
 
       getActiveModel: (botId: string) => this.getActiveModel(botId),
       getLLMClient: (botId: string) => this.getLLMClient(botId),
@@ -607,6 +608,7 @@ export class BotManager {
       skills: config.skills,
       description: config.description,
       tools: this.toolRegistry.getDefinitionsForBot(config.id).map((d) => d.function.name),
+      tenantId: config.tenantId,
     });
     botLogger.info(
       { telegramUserId: me.id, username: me.username },
@@ -621,6 +623,7 @@ export class BotManager {
       skills: config.skills,
       description: config.description,
       tools: this.toolRegistry.getDefinitionsForBot(config.id).map((d) => d.function.name),
+      tenantId: config.tenantId,
     });
     botLogger.info('Registered headless bot in agent registry');
   }
@@ -1088,5 +1091,8 @@ export class BotManager {
   }
   createBillingCustomer(tenantId: string) {
     return this.tenantFacade.createBillingCustomer(tenantId);
+  }
+  handleWebhook(payload: unknown, signature: string) {
+    return this.tenantFacade.handleWebhook(payload, signature);
   }
 }

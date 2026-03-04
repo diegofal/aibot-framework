@@ -9,6 +9,7 @@ export interface Tenant {
   email: string;
   plan: 'free' | 'starter' | 'pro' | 'enterprise';
   apiKey: string;
+  passwordHash?: string;
   createdAt: string;
   updatedAt: string;
   usageQuota: {
@@ -70,6 +71,7 @@ export class TenantManager {
   private usagePath: string;
   private tenants: Map<string, Tenant> = new Map();
   private apiKeyIndex: Map<string, string> = new Map(); // apiKey -> tenantId
+  private emailIndex: Map<string, string> = new Map(); // email (lowercase) -> tenantId
 
   constructor(
     private config: TenantManagerConfig,
@@ -87,6 +89,7 @@ export class TenantManager {
         for (const tenant of data.tenants || []) {
           this.tenants.set(tenant.id, tenant);
           this.apiKeyIndex.set(tenant.apiKey, tenant.id);
+          this.emailIndex.set(tenant.email.toLowerCase(), tenant.id);
         }
         this.logger.info({ count: this.tenants.size }, 'Loaded tenants');
       } catch (err) {
@@ -109,7 +112,12 @@ export class TenantManager {
     return `${prefix}${randomUUID().replace(/-/g, '')}`;
   }
 
-  createTenant(name: string, email: string, plan: Tenant['plan'] = 'free'): Tenant {
+  createTenant(
+    name: string,
+    email: string,
+    plan: Tenant['plan'] = 'free',
+    passwordHash?: string
+  ): Tenant {
     const id = randomUUID();
     const limits = PLAN_LIMITS[plan];
 
@@ -128,9 +136,11 @@ export class TenantManager {
         maxBots: limits.maxBots,
       },
     };
+    if (passwordHash) tenant.passwordHash = passwordHash;
 
     this.tenants.set(id, tenant);
     this.apiKeyIndex.set(tenant.apiKey, id);
+    this.emailIndex.set(email.toLowerCase(), id);
     this.saveTenants();
 
     this.logger.info({ tenantId: id, plan }, 'Created tenant');
@@ -144,6 +154,20 @@ export class TenantManager {
   getTenantByApiKey(apiKey: string): Tenant | undefined {
     const tenantId = this.apiKeyIndex.get(apiKey);
     return tenantId ? this.tenants.get(tenantId) : undefined;
+  }
+
+  getTenantByEmail(email: string): Tenant | undefined {
+    const tenantId = this.emailIndex.get(email.toLowerCase());
+    return tenantId ? this.tenants.get(tenantId) : undefined;
+  }
+
+  setPasswordHash(tenantId: string, hash: string): boolean {
+    const tenant = this.tenants.get(tenantId);
+    if (!tenant) return false;
+    tenant.passwordHash = hash;
+    tenant.updatedAt = new Date().toISOString();
+    this.saveTenants();
+    return true;
   }
 
   updateTenant(id: string, updates: Partial<Omit<Tenant, 'id' | 'createdAt'>>): Tenant | undefined {
@@ -166,6 +190,10 @@ export class TenantManager {
       this.apiKeyIndex.delete(tenant.apiKey);
       this.apiKeyIndex.set(updates.apiKey, id);
     }
+    if (updates.email) {
+      this.emailIndex.delete(tenant.email.toLowerCase());
+      this.emailIndex.set(updates.email.toLowerCase(), id);
+    }
 
     Object.assign(tenant, updates, { updatedAt: new Date().toISOString() });
 
@@ -179,6 +207,7 @@ export class TenantManager {
     if (!tenant) return false;
 
     this.apiKeyIndex.delete(tenant.apiKey);
+    this.emailIndex.delete(tenant.email.toLowerCase());
     this.tenants.delete(id);
     this.saveTenants();
 

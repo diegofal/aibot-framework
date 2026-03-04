@@ -97,6 +97,8 @@ export interface ToolExecutorOptions {
   botId: string;
   /** Chat ID for _chatId injection */
   chatId: number;
+  /** User ID for _userId injection (per-user isolation) */
+  userId?: string;
   /** Optional override of disabled tools (defaults to config lookup) */
   disabledTools?: Set<string>;
   /** Enable execution logging (for AgentLoop toolCallLog) */
@@ -111,6 +113,8 @@ export interface ToolExecutorOptions {
   karmaService?: KarmaService;
   /** Optional loop detector for agent-loop repetition protection */
   loopDetector?: ToolLoopDetector;
+  /** Tenant root directory for path sandboxing (multi-tenant mode) */
+  tenantRoot?: string;
 }
 
 /**
@@ -389,6 +393,8 @@ export class ToolExecutor extends EventEmitter {
         ...args,
         _chatId: chatId,
         _botId: botId,
+        ...(this.options.userId ? { _userId: this.options.userId } : {}),
+        ...(this.options.tenantRoot ? { _tenantRoot: this.options.tenantRoot } : {}),
       };
 
       // Per-bot workDir: resolve file paths and exec cwd

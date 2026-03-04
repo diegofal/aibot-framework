@@ -10,6 +10,8 @@ export interface AgentInfo {
   mcpEndpoint?: string;
   /** MCP server name for routing through McpClientPool */
   mcpServerName?: string;
+  /** Tenant ID for multi-tenant isolation (bots can only collaborate within same tenant) */
+  tenantId?: string;
 }
 
 /**
@@ -60,7 +62,12 @@ export class AgentRegistry {
     return this.telegramIdMap.has(telegramUserId);
   }
 
-  listOtherAgents(excludeBotId: string): AgentInfo[] {
-    return Array.from(this.agents.values()).filter((a) => a.botId !== excludeBotId);
+  listOtherAgents(excludeBotId: string, tenantId?: string): AgentInfo[] {
+    return Array.from(this.agents.values()).filter((a) => {
+      if (a.botId === excludeBotId) return false;
+      // In multi-tenant mode, only discover agents from the same tenant
+      if (tenantId && a.tenantId !== tenantId) return false;
+      return true;
+    });
   }
 }

@@ -212,7 +212,9 @@ function evRefilterAll() {
 
 function evConnectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  evWs = new WebSocket(`${proto}//${location.host}/ws/activity`);
+  const token = sessionStorage.getItem('auth_token');
+  const authParam = token ? `?token=${encodeURIComponent(token)}` : '';
+  evWs = new WebSocket(`${proto}//${location.host}/ws/activity${authParam}`);
 
   evWs.onmessage = (e) => {
     try {
@@ -364,7 +366,9 @@ function logRefilterAll() {
 
 function logConnectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  logWs = new WebSocket(`${proto}//${location.host}/ws/logs`);
+  const token = sessionStorage.getItem('auth_token');
+  const authParam = token ? `?token=${encodeURIComponent(token)}` : '';
+  logWs = new WebSocket(`${proto}//${location.host}/ws/logs${authParam}`);
 
   logWs.onmessage = (e) => {
     try {

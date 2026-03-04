@@ -1,6 +1,7 @@
 import type { Context, Next } from 'hono';
 import type { Logger } from '../logger';
 import type { TenantManager } from '../tenant/manager';
+import type { SessionStore } from '../tenant/session-store';
 
 export interface TenantContext {
   tenantId: string;
@@ -8,7 +9,11 @@ export interface TenantContext {
   plan: string;
 }
 
-export function createTenantAuthMiddleware(tenantManager: TenantManager, logger: Logger) {
+export function createTenantAuthMiddleware(
+  tenantManager: TenantManager,
+  logger: Logger,
+  sessionStore?: SessionStore
+) {
   return async (c: Context, next: Next) => {
     const authHeader = c.req.header('Authorization');
 
@@ -16,23 +21,49 @@ export function createTenantAuthMiddleware(tenantManager: TenantManager, logger:
       return c.json({ error: 'Missing Authorization header' }, 401);
     }
 
-    const [scheme, apiKey] = authHeader.split(' ');
+    const [scheme, token] = authHeader.split(' ');
 
-    if (scheme !== 'Bearer' || !apiKey) {
-      return c.json({ error: 'Invalid Authorization format. Expected: Bearer <api_key>' }, 401);
+    if (scheme !== 'Bearer' || !token) {
+      return c.json({ error: 'Invalid Authorization format. Expected: Bearer <token>' }, 401);
     }
 
-    const tenant = tenantManager.getTenantByApiKey(apiKey);
+    // Session token auth (dashboard login)
+    if (token.startsWith('sess_') && sessionStore) {
+      const session = sessionStore.getSession(token);
+      if (session) {
+        if (session.role === 'admin') {
+          c.set('tenant', { tenantId: '__admin__', apiKey: token, plan: 'enterprise' });
+          return next();
+        }
+        if (session.tenantId) {
+          const tenant = tenantManager.getTenant(session.tenantId);
+          if (tenant) {
+            c.set('tenant', { tenantId: tenant.id, apiKey: token, plan: tenant.plan });
+            return next();
+          }
+        }
+      }
+      return c.json({ error: 'Invalid or expired session' }, 401);
+    }
+
+    // API key auth (programmatic access)
+    const tenant = tenantManager.getTenantByApiKey(token);
 
     if (!tenant) {
-      logger.warn({ apiKey: `${apiKey.slice(0, 8)}...` }, 'Invalid API key');
+      // Allow admin key to pass through as a super-tenant
+      const adminKey = process.env.ADMIN_API_KEY;
+      if (adminKey && token === adminKey) {
+        c.set('tenant', { tenantId: '__admin__', apiKey: token, plan: 'enterprise' });
+        return next();
+      }
+      logger.warn({ apiKey: `${token.slice(0, 8)}...` }, 'Invalid API key');
       return c.json({ error: 'Invalid API key' }, 401);
     }
 
     // Attach tenant context to request
     c.set('tenant', {
       tenantId: tenant.id,
-      apiKey: apiKey,
+      apiKey: token,
       plan: tenant.plan,
     });
 
@@ -107,6 +138,23 @@ export function createQuotaCheckMiddleware(tenantManager: TenantManager, logger:
     // Check if request would exceed quota
     const currentUsage = tenantManager.getCurrentMonthUsage(tenant.tenantId);
     const path = c.req.path;
+
+    // Graceful degradation: compute usage percentages
+    const msgPct =
+      tenantData.usageQuota.messagesPerMonth > 0
+        ? currentUsage.messages / tenantData.usageQuota.messagesPerMonth
+        : 0;
+    const apiPct =
+      tenantData.usageQuota.apiCallsPerMonth > 0
+        ? currentUsage.apiCalls / tenantData.usageQuota.apiCallsPerMonth
+        : 0;
+    const maxPct = Math.max(msgPct, apiPct);
+
+    // 80% warning: add headers so clients can show upgrade CTA
+    if (maxPct >= 0.8) {
+      c.header('X-Quota-Warning', maxPct >= 0.9 ? 'critical' : 'approaching');
+      c.header('X-Quota-Usage-Pct', String(Math.round(maxPct * 100)));
+    }
 
     // Check message quota for message endpoints
     if (path.includes('/messages')) {

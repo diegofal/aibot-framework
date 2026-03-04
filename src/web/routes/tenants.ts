@@ -37,6 +37,14 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
         return c.json({ error: `Invalid plan. Must be one of: ${validPlans.join(', ')}` }, 400);
       }
 
+      // Email dedup
+      const existing = tenantManager
+        .listTenants()
+        .find((t) => t.email.toLowerCase() === email.toLowerCase());
+      if (existing) {
+        return c.json({ error: 'An account with this email already exists' }, 409);
+      }
+
       const tenant = tenantManager.createTenant(name, email, plan as Tenant['plan']);
 
       logger.info({ tenantId: tenant.id, email }, 'Tenant created via API');

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Tenancy - AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+  <div class="layout">
+
+    <!-- Hamburger (mobile) -->
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+    <!-- Backdrop (mobile) -->
+    <div class="sidebar-backdrop" id="backdrop"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        AIBot Framework
+        <small>Architecture Docs</small>
+      </div>
+      <nav>
+        <div class="nav-group">Pages</div>
+        <a href="index.html">Overview</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="bot-core.html">Bot Core Modules</a>
+        <a href="data-flows.html">Data Flows</a>
+        <a href="tools-skills.html">Tools &amp; Skills</a>
+        <a href="memory-soul.html">Memory &amp; Soul</a>
+        <a href="agent-loop.html">Agent Loop</a>
+        <a href="web-dashboard.html">Web Dashboard</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="simplifications.html">Simplifications</a>
+        <a href="multi-tenancy.html" class="active">Multi-Tenancy</a>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="content">
+
+        <h1>Multi-Tenancy &amp; BaaS</h1>
+        <p>The framework supports a full shared-infrastructure multi-tenant mode for running Bots-as-a-Service (BaaS). Gated by <code>config.multiTenant.enabled</code>.</p>
+
+        <!-- Overview -->
+        <div class="card">
+          <h2>Two Levels of Isolation</h2>
+          <table>
+            <thead>
+              <tr><th>Level</th><th>What</th><th>How</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><strong>Platform (tenant)</strong></td><td>Different companies/clients</td><td><code>tenantId</code> on BotConfig, auth middleware, tenant-scoped paths, agent registry filtering</td></tr>
+              <tr><td><strong>User (within bot)</strong></td><td>End-users of a single bot</td><td><code>userIsolation.enabled</code> flag, <code>user_id</code> column in core_memory, per-user daily logs, per-user memory search</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Auth -->
+        <div class="card">
+          <h2>Authentication &amp; Authorization</h2>
+
+          <h3>Dual Auth Model</h3>
+          <p>The system supports two token types for different use cases:</p>
+          <table>
+            <thead>
+              <tr><th>Token Type</th><th>Prefix</th><th>Use Case</th><th>Lifetime</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Session token</td><td><code>sess_</code></td><td>Dashboard login (email + password)</td><td>24 hours (in-memory, auto-expiry)</td></tr>
+              <tr><td>API key</td><td><code>aibot_</code></td><td>Programmatic / external integrations</td><td>Persistent (stored on tenant record)</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Session &amp; Credential Stores</h3>
+          <ul>
+            <li><strong><code>SessionStore</code></strong> (<code>src/tenant/session-store.ts</code>) &mdash; In-memory map of active sessions with 24h TTL and periodic cleanup. Creates <code>sess_</code>-prefixed tokens via <code>crypto.randomBytes</code>.</li>
+            <li><strong><code>AdminCredentialStore</code></strong> (<code>src/tenant/admin-credentials.ts</code>) &mdash; File-based admin credentials (<code>data/admin-credentials.json</code>). Passwords hashed with <strong>argon2id</strong> via <code>Bun.password.hash</code>. Supports first-run setup (create-once) and verification.</li>
+            <li><strong><code>passwordHash</code> field on Tenant</strong> &mdash; Tenants have an optional <code>passwordHash</code> field for email+password login. Also hashed with argon2id.</li>
+          </ul>
+
+          <h3>Three Auth Tiers</h3>
+          <table>
+            <thead>
+              <tr><th>Tier</th><th>Middleware</th><th>Routes</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Public</td><td>None</td><td><code>POST /api/tenants</code>, <code>GET /api/status</code>, <code>GET /api/auth/status</code>, <code>POST /api/auth/login</code>, <code>POST /api/auth/admin-setup</code>, <code>POST /api/webhooks/stripe</code>, <code>POST /api/onboarding/signup</code></td></tr>
+              <tr><td>Tenant</td><td><code>createTenantAuthMiddleware</code> (Bearer token &mdash; <code>sess_</code> or <code>aibot_</code>)</td><td><code>/api/agents/*</code>, <code>/api/conversations/*</code>, <code>/api/billing/*</code>, etc.</td></tr>
+              <tr><td>Admin</td><td><code>createAdminAuthMiddleware</code> (session token with admin role, or <code>ADMIN_API_KEY</code> env)</td><td><code>/api/admin/*</code></td></tr>
+            </tbody>
+          </table>
+          <p>The tenant auth middleware resolves the Bearer token in two ways: if the token starts with <code>sess_</code>, it looks up the <code>SessionStore</code>; otherwise it matches against tenant API keys (<code>aibot_</code> prefix) or the <code>ADMIN_API_KEY</code> env var. Admin sessions (role <code>admin</code>) get the virtual <code>__admin__</code> tenantId with <code>enterprise</code> plan.</p>
+
+          <h3>Route Scoping</h3>
+          <p>All route handlers use <code>getTenantId(c)</code>, <code>scopeBots()</code>, and <code>isBotAccessible()</code> from <code>src/tenant/tenant-scoping.ts</code> to filter data per-tenant. When <code>tenantId</code> is <code>__admin__</code>, both helpers treat it as a super-tenant: <code>scopeBots</code> returns all bots (including legacy bots without <code>tenantId</code>), and <code>isBotAccessible</code> returns true for any bot.</p>
+        </div>
+
+        <!-- Data Isolation -->
+        <div class="card">
+          <h2>Data Isolation</h2>
+          <h3>Directory Structure</h3>
+          <pre><code>data/tenants/{tenantId}/
+  config.json            # Tenant-level config overrides
+  bots/{botId}/
+    soul/                # Soul files (identity, personality, etc.)
+    productions/         # Production files
+    sessions/            # Session transcripts
+    feedback/            # Agent feedback</code></pre>
+          <p>Resolved by <code>resolveTenantPaths()</code> in <code>src/tenant/tenant-paths.ts</code>.</p>
+
+          <h3>Path Sandboxing</h3>
+          <p><code>isPathWithinTenant(path, tenantRoot)</code> validates that file operations stay within the tenant&rsquo;s root. <code>_tenantRoot</code> is injected into tool args by <code>ToolExecutor</code>.</p>
+
+          <h3>Collaboration Boundaries</h3>
+          <p><code>AgentRegistry.listOtherAgents(excludeBotId, tenantId)</code> only returns agents from the same tenant, preventing cross-tenant bot-to-bot communication.</p>
+        </div>
+
+        <!-- Config -->
+        <div class="card">
+          <h2>Tenant Configuration</h2>
+          <h3>Config Merge Order</h3>
+          <p><code>global &rarr; tenant &rarr; bot</code> (bot wins). Implemented in <code>resolveAgentConfigWithTenant()</code>.</p>
+          <h3>BYOK (Bring Your Own Key)</h3>
+          <p>Tenants can provide their own API keys for Claude, ElevenLabs, Brave Search via <code>TenantConfigStore</code>.</p>
+          <h3>Schema</h3>
+          <p><code>TenantConfigSchema</code> (Zod) in <code>src/tenant/tenant-config.ts</code> covers: LLM backend, model, API keys, conversation defaults, feature toggles, branding.</p>
+        </div>
+
+        <!-- Quota & Rate Limiting -->
+        <div class="card">
+          <h2>Quota &amp; Rate Limiting</h2>
+          <h3>Plan Limits</h3>
+          <table>
+            <thead>
+              <tr><th>Plan</th><th>Msgs/mo</th><th>API calls/mo</th><th>Storage</th><th>Bots</th><th>Rate (req/min)</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Free</td><td>500</td><td>1,000</td><td>100 MB</td><td>1</td><td>20</td></tr>
+              <tr><td>Starter</td><td>5,000</td><td>10,000</td><td>1 GB</td><td>3</td><td>60</td></tr>
+              <tr><td>Pro</td><td>25,000</td><td>50,000</td><td>5 GB</td><td>10</td><td>200</td></tr>
+              <tr><td>Enterprise</td><td>100,000</td><td>200,000</td><td>20 GB</td><td>50</td><td>500</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Enforcement Points</h3>
+          <ul>
+            <li><strong>ConversationPipeline</strong>: Pre-LLM check blocks messages if quota exceeded; post-reply records usage.</li>
+            <li><strong>AgentLoop</strong>: Pre-cycle check skips execution if API call quota exceeded; post-cycle records LLM + tool usage.</li>
+            <li><strong>REST API</strong>: <code>createQuotaCheckMiddleware</code> returns 429; <code>createRateLimitMiddleware</code> enforces per-minute sliding window.</li>
+          </ul>
+
+          <h3>Graceful Degradation</h3>
+          <p>At 80% usage: <code>X-Quota-Warning: approaching</code>. At 90%: <code>X-Quota-Warning: critical</code>. At 100%: requests blocked with upgrade URL.</p>
+        </div>
+
+        <!-- Billing -->
+        <div class="card">
+          <h2>Billing Integration</h2>
+          <p>Two billing providers:</p>
+          <ul>
+            <li><code>NoOpBillingProvider</code> &mdash; for self-hosted / open source (default)</li>
+            <li><code>StripeBillingProvider</code> &mdash; for managed hosting (requires <code>stripe</code> npm package)</li>
+          </ul>
+          <h3>API Routes</h3>
+          <table>
+            <thead><tr><th>Route</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /api/billing/status</code></td><td>Tenant</td><td>Current plan, usage, billing info</td></tr>
+              <tr><td><code>POST /api/billing/upgrade</code></td><td>Tenant</td><td>Upgrade plan (Stripe or direct)</td></tr>
+              <tr><td><code>POST /api/billing/downgrade</code></td><td>Tenant</td><td>Downgrade to free plan</td></tr>
+              <tr><td><code>POST /api/webhooks/stripe</code></td><td>Public (signature verified)</td><td>Handle Stripe webhook events</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Onboarding -->
+        <div class="card">
+          <h2>Onboarding</h2>
+          <table>
+            <thead><tr><th>Route</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>POST /api/onboarding/signup</code></td><td>Public</td><td>Create tenant with email dedup, auto-create dirs</td></tr>
+              <tr><td><code>POST /api/onboarding/first-bot</code></td><td>Tenant</td><td>Create first bot with plan limit check</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Files -->
+        <!-- Dashboard Auth -->
+        <div class="card">
+          <h2>Dashboard Authentication</h2>
+          <p>When <code>multiTenant.enabled = true</code>, the web dashboard requires authentication via email + password. In single-tenant mode, no auth is required &mdash; fully backward compatible.</p>
+
+          <h3>Flow</h3>
+          <ol>
+            <li><code>app.js</code> fetches <code>/api/auth/status</code> (public) to check <code>multiTenantEnabled</code> and <code>adminSetupRequired</code></li>
+            <li>If <code>adminSetupRequired = true</code> (first run, no admin account yet) &rarr; admin setup form shown</li>
+            <li>Admin setup POSTs to <code>/api/auth/admin-setup</code> with <code>{ email, password }</code> (min 8 chars). Only works once.</li>
+            <li>If multi-tenant enabled and no session token in sessionStorage &rarr; sidebar hidden, login page rendered</li>
+            <li>Login form POSTs to <code>/api/auth/login</code> with <code>{ email, password }</code></li>
+            <li>Server checks admin credentials (argon2id) first, then tenant by email. Returns <code>{ sessionToken, role, name }</code></li>
+            <li>On success: session token (<code>sess_</code> prefix), role, name stored in sessionStorage. All <code>api()</code> calls add <code>Authorization: Bearer &lt;token&gt;</code></li>
+            <li>On 401: token cleared, <code>auth:required</code> event fires &rarr; redirect to login</li>
+            <li>Logout POSTs to <code>/api/auth/logout</code>, which invalidates the session server-side</li>
+          </ol>
+
+          <h3>Auth Endpoints</h3>
+          <table>
+            <thead><tr><th>Route</th><th>Auth</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /api/auth/status</code></td><td>Public</td><td>Returns <code>{ multiTenantEnabled, adminSetupRequired }</code> for dashboard boot</td></tr>
+              <tr><td><code>POST /api/auth/admin-setup</code></td><td>Public</td><td>First-run admin account creation (create-once, argon2id)</td></tr>
+              <tr><td><code>POST /api/auth/login</code></td><td>Public</td><td>Email + password login &rarr; session token</td></tr>
+              <tr><td><code>POST /api/auth/logout</code></td><td>Bearer</td><td>Invalidate session server-side</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Session Token in Middlewares</h3>
+          <p>Both tenant and admin auth middlewares accept <code>sess_</code>-prefixed session tokens. The token is resolved via <code>SessionStore</code>: admin-role sessions get <code>__admin__</code> tenantId with <code>enterprise</code> plan; tenant-role sessions resolve to the tenant record. API keys (<code>aibot_</code> prefix) and the <code>ADMIN_API_KEY</code> env var remain supported for programmatic access.</p>
+
+          <h3>WebSocket Auth</h3>
+          <p>Activity and log WebSocket connections pass the token as <code>?token=...</code> query parameter. The server validates the token (session or API key) before upgrade in multi-tenant mode.</p>
+
+          <h3>Key Files</h3>
+          <table>
+            <thead><tr><th>File</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>src/tenant/session-store.ts</code></td><td>SessionStore — in-memory session map, 24h TTL, <code>sess_</code> tokens</td></tr>
+              <tr><td><code>src/tenant/admin-credentials.ts</code></td><td>AdminCredentialStore — file-based admin creds, argon2id hashing</td></tr>
+              <tr><td><code>src/web/routes/auth.ts</code></td><td>Auth API routes: status, admin-setup, login, logout</td></tr>
+              <tr><td><code>web/pages/login.js</code></td><td>Login form UI (email + password)</td></tr>
+              <tr><td><code>web/pages/shared.js</code></td><td>Auth helpers: getAuthToken, getAuthContext, clearAuth</td></tr>
+              <tr><td><code>web/app.js</code></td><td>Auth gate, authedFetch, auth UI, auth:required listener</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>Key Files</h2>
+          <table>
+            <thead><tr><th>File</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>src/tenant/manager.ts</code></td><td>Tenant CRUD, usage tracking, quota checks</td></tr>
+              <tr><td><code>src/tenant/types.ts</code></td><td>Tenant, TenantQuota, UsageEvent, BillingProvider interfaces</td></tr>
+              <tr><td><code>src/tenant/middleware.ts</code></td><td>Auth, usage metering, quota check middlewares</td></tr>
+              <tr><td><code>src/tenant/rate-limiter.ts</code></td><td>In-memory sliding window rate limiter</td></tr>
+              <tr><td><code>src/tenant/rate-limit-middleware.ts</code></td><td>Hono rate limit middleware (429 + Retry-After)</td></tr>
+              <tr><td><code>src/tenant/tenant-paths.ts</code></td><td>Path resolver + sandbox validation</td></tr>
+              <tr><td><code>src/tenant/tenant-config.ts</code></td><td>Zod schema for per-tenant config</td></tr>
+              <tr><td><code>src/tenant/tenant-config-store.ts</code></td><td>File-based tenant config storage</td></tr>
+              <tr><td><code>src/tenant/tenant-scoping.ts</code></td><td>Route scoping helpers</td></tr>
+              <tr><td><code>src/tenant/session-store.ts</code></td><td>In-memory session store (24h TTL, <code>sess_</code> tokens)</td></tr>
+              <tr><td><code>src/tenant/admin-credentials.ts</code></td><td>Admin credential store (argon2id password hashing)</td></tr>
+              <tr><td><code>src/tenant/admin-middleware.ts</code></td><td>Admin auth (session token with admin role, or ADMIN_API_KEY env)</td></tr>
+              <tr><td><code>src/tenant/billing.ts</code></td><td>NoOp + Stripe billing providers</td></tr>
+              <tr><td><code>src/bot/tenant-facade.ts</code></td><td>Tenant operations facade for BotManager</td></tr>
+              <tr><td><code>src/web/routes/billing.ts</code></td><td>Billing API routes</td></tr>
+              <tr><td><code>src/web/routes/webhooks.ts</code></td><td>Stripe webhook endpoint</td></tr>
+              <tr><td><code>src/web/routes/onboarding.ts</code></td><td>Signup + first-bot wizard</td></tr>
+              <tr><td><code>src/web/routes/tenant-config.ts</code></td><td>Tenant config API routes</td></tr>
+              <tr><td><code>src/web/routes/tenants.ts</code></td><td>Tenant CRUD + usage API routes</td></tr>
+              <tr><td><code>src/web/routes/auth.ts</code></td><td>Auth routes: status, admin-setup, login, logout</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const hamburger = document.getElementById('hamburger');
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('backdrop');
+    hamburger?.addEventListener('click', () => sidebar?.classList.toggle('open'));
+    backdrop?.addEventListener('click', () => sidebar?.classList.remove('open'));
+  </script>
+</body>
+</html>

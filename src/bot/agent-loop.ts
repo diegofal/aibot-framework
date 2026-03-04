@@ -327,6 +327,28 @@ export class AgentLoop {
       return true;
     };
 
+    // Quota check: skip agent loop cycle if tenant exceeded API call quota
+    if (botConfig.tenantId && this.ctx.tenantFacade?.isMultiTenant()) {
+      const allowed = this.ctx.tenantFacade.checkQuota(botConfig.tenantId, 'apiCalls', 3);
+      if (!allowed) {
+        botLogger.warn(
+          { tenantId: botConfig.tenantId, botId },
+          'Agent loop quota exceeded, skipping cycle'
+        );
+        return {
+          botId,
+          botName: botConfig.name,
+          status: 'skipped',
+          summary: 'API call quota exceeded for tenant',
+          durationMs: 0,
+          plannerReasoning: '',
+          plan: [],
+          toolCalls: [],
+          strategistRan: false,
+        };
+      }
+    }
+
     botLogger.info({ botId }, 'Agent loop starting for bot');
     this.ctx.activityStream?.publish({
       type: 'agent:phase',
@@ -450,6 +472,22 @@ export class AgentLoop {
       // Send report if configured
       if (botOverride?.reportChatId) {
         await sendReport(this.ctx, botId, botOverride.reportChatId, detail.summary);
+      }
+
+      // Record agent loop usage for tenant metering
+      if (botConfig.tenantId && this.ctx.tenantFacade?.isMultiTenant() && !isIdle) {
+        // Count LLM calls: planner + executor + optional strategist
+        const llmCalls = detail.strategistRan ? 3 : 2;
+        this.ctx.tenantFacade.recordUsage(botConfig.tenantId, botId, 'api_call', llmCalls);
+        // Count tool executions
+        if (detail.toolCalls.length > 0) {
+          this.ctx.tenantFacade.recordUsage(
+            botConfig.tenantId,
+            botId,
+            'tool_execution',
+            detail.toolCalls.length
+          );
+        }
       }
 
       botLogger.info(

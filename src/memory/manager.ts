@@ -62,11 +62,21 @@ export class MemoryManager {
     return this.coreMemoryManager;
   }
 
+  /**
+   * Re-run full reindex of all soul files.
+   * Useful after importing a bot whose soul files were copied post-startup.
+   */
+  async reindex(): Promise<void> {
+    if (!this.db || !this.embeddingService) return;
+    await fullReindex(this.db, this.soulDir, this.embeddingService, this.config, this.logger);
+  }
+
   async search(
     query: string,
     maxResults: number | undefined,
     minScore: number | undefined,
-    botId: string
+    botId: string,
+    userId?: string
   ): Promise<MemorySearchResult[]> {
     if (!this.db || !this.embeddingService) {
       throw new Error('MemoryManager not initialized');
@@ -75,6 +85,7 @@ export class MemoryManager {
       maxResults,
       minScore,
       botId,
+      userId,
     });
   }
 

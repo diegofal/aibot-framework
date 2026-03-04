@@ -287,8 +287,9 @@ export class SoulLoader {
 
   /**
    * Append a fact to the daily memory log (config/soul/memory/YYYY-MM-DD.md)
+   * When userId is provided, writes to config/soul/memory/users/{userId}/YYYY-MM-DD.md
    */
-  appendDailyMemory(fact: string): void {
+  appendDailyMemory(fact: string, userId?: string): void {
     const sanitized = sanitizeFact(fact);
     if (!sanitized) {
       this.logger.warn(
@@ -301,9 +302,14 @@ export class SoulLoader {
     const now = new Date();
     const dateStr = localDateStr(now);
     const timeStr = localTimeStr(now);
-    const logPath = join(this.dir, 'memory', `${dateStr}.md`);
+    const memoryDir = userId ? join(this.dir, 'memory', 'users', userId) : join(this.dir, 'memory');
+    mkdirSync(memoryDir, { recursive: true });
+    const logPath = join(memoryDir, `${dateStr}.md`);
     appendFileSync(logPath, `- [${timeStr}] ${sanitized}\n`, 'utf-8');
-    this.logger.info({ date: dateStr, fact: sanitized.slice(0, 80) }, 'Daily memory appended');
+    this.logger.info(
+      { date: dateStr, userId, fact: sanitized.slice(0, 80) },
+      'Daily memory appended'
+    );
   }
 
   /**

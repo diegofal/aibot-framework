@@ -45,13 +45,14 @@ describe('MemoryFlusher', () => {
       CREATE TABLE core_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         bot_id TEXT NOT NULL DEFAULT 'default',
+        user_id TEXT,
         category TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         importance INTEGER NOT NULL DEFAULT 5,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(bot_id, category, key)
+        UNIQUE(bot_id, user_id, category, key)
       );
     `);
     const ctx = createMockContext(db);
@@ -177,13 +178,14 @@ describe('Importance scoring integration', () => {
       CREATE TABLE core_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         bot_id TEXT NOT NULL DEFAULT 'default',
+        user_id TEXT,
         category TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         importance INTEGER NOT NULL DEFAULT 5,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(bot_id, category, key)
+        UNIQUE(bot_id, user_id, category, key)
       );
     `);
 

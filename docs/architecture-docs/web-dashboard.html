@@ -33,6 +33,7 @@
       <a href="web-dashboard.html" class="active">Web Dashboard</a>
       <a href="configuration.html">Configuration</a>
       <a href="simplifications.html">Simplifications</a>
+        <a href="multi-tenancy.html">Multi-Tenancy</a>
     </nav>
   </aside>
 
@@ -1306,30 +1307,74 @@ compaction                            // Context compaction
       <h2>Authentication</h2>
 
       <p>
-        The web dashboard currently operates <strong>without authentication</strong>.
-        There is no auth middleware, API key validation, or session-based login in the
-        server code. All API endpoints and the WebSocket are openly accessible to any
-        client that can reach the configured host and port.
+        In <strong>single-tenant mode</strong> (default), the dashboard operates without authentication.
+        All API endpoints and WebSocket connections are openly accessible. This assumes a trusted
+        local network or an external reverse proxy handling auth.
       </p>
 
       <p>
-        This design assumes the dashboard is run on a <strong>trusted local network</strong>
-        or behind a reverse proxy that handles authentication externally (e.g., a VPN,
-        Tailscale, or nginx with basic auth). The server binds to the host and port
-        specified in <code>config.web</code>:
+        In <strong>multi-tenant mode</strong> (<code>multiTenant.enabled = true</code>), the dashboard
+        enforces username/password authentication with session tokens:
       </p>
 
-      <pre><code>Bun.serve({
-  port,            // from config.web.port
-  hostname: host,  // from config.web.host
-  idleTimeout: 255,
-  // ...
-});</code></pre>
+      <ul>
+        <li><code>app.js</code> fetches <code>GET /api/auth/status</code> at boot to check <code>multiTenantEnabled</code> and <code>adminSetupRequired</code> flags</li>
+        <li>On first run (<code>adminSetupRequired = true</code>), a setup form is shown. The admin submits email + password (min 8 chars) via <code>POST /api/auth/admin-setup</code>. Credentials are stored with <strong>argon2id</strong> hashing. This endpoint only works once.</li>
+        <li>If multi-tenant is enabled and no session token exists in <code>sessionStorage</code>, the sidebar is hidden and the login page is shown</li>
+        <li>Users authenticate via <code>POST /api/auth/login</code> with <code>{ email, password }</code>. The server checks admin credentials first, then tenant credentials by email.</li>
+        <li>On success, a session token (<code>sess_</code> prefix, 24h TTL) is returned and stored in <code>sessionStorage</code>. All <code>api()</code> calls send it as <code>Authorization: Bearer &lt;token&gt;</code></li>
+        <li>On 401, the token is cleared and the user is redirected back to login</li>
+        <li>Logout calls <code>POST /api/auth/logout</code> which invalidates the session server-side via <code>SessionStore</code></li>
+        <li>WebSocket connections pass the token as a <code>?token=</code> query parameter</li>
+      </ul>
+
+      <h3>Auth Endpoints</h3>
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/auth/status</code></td>
+              <td>Returns <code>{ multiTenantEnabled, adminSetupRequired }</code> for dashboard boot</td>
+              <td><code>auth.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/auth/admin-setup</code></td>
+              <td>First-run admin account creation. Body: <code>{ email, password }</code>. Returns 409 if already exists.</td>
+              <td><code>auth.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/auth/login</code></td>
+              <td>Email + password login. Returns <code>{ sessionToken, role, name, tenantId? }</code></td>
+              <td><code>auth.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/auth/logout</code></td>
+              <td>Invalidate session server-side. Requires Bearer token.</td>
+              <td><code>auth.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <p>
-        If network-level protection is not available, it is strongly recommended to
-        place the dashboard behind an authenticating reverse proxy before exposing it
-        to the public internet.
+        Key files: <code>src/tenant/session-store.ts</code> (SessionStore),
+        <code>src/tenant/admin-credentials.ts</code> (AdminCredentialStore),
+        <code>src/web/routes/auth.ts</code> (auth routes),
+        <code>web/pages/login.js</code> (login form UI),
+        <code>web/pages/shared.js</code> (auth helpers),
+        <code>web/app.js</code> (auth gate).
       </p>
 
     </div>

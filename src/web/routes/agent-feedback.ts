@@ -4,6 +4,7 @@ import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
+import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 import { webGenerate } from './web-tool-helpers';
 
 function truncate(text: string, maxLen: number): string {
@@ -100,9 +101,17 @@ export function agentFeedbackRoutes(deps: {
 }) {
   const app = new Hono();
 
+  /** Check if botId is accessible to the requesting tenant */
+  function checkBotAccess(c: import('hono').Context, botId: string): boolean {
+    const bot = deps.config.bots.find((b) => b.id === botId);
+    return !bot || isBotAccessible(bot, getTenantId(c));
+  }
+
   // List bots with pending feedback counts
   app.get('/', (c) => {
-    const botIds = deps.botManager.getAgentFeedbackBotIds();
+    const tenantId = getTenantId(c);
+    const allowedIds = new Set(scopeBots(deps.config.bots, tenantId).map((b) => b.id));
+    const botIds = deps.botManager.getAgentFeedbackBotIds().filter((id) => allowedIds.has(id));
     const bots = botIds.map((botId) => {
       const botConfig = deps.config.bots.find((b) => b.id === botId);
       const all = deps.botManager.getAgentFeedback(botId);
@@ -129,6 +138,7 @@ export function agentFeedbackRoutes(deps: {
   // Generate feedback via Claude CLI analysis
   app.post('/:botId/generate', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const botConfig = deps.config.bots.find((b) => b.id === botId);
     if (!botConfig) {
       return c.json({ error: 'Bot not found' }, 404);
@@ -230,6 +240,7 @@ export function agentFeedbackRoutes(deps: {
   // List feedback history for a bot
   app.get('/:botId', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const status = c.req.query('status');
     const limit = Number.parseInt(c.req.query('limit') ?? '100', 10);
     const offset = Number.parseInt(c.req.query('offset') ?? '0', 10);
@@ -246,6 +257,7 @@ export function agentFeedbackRoutes(deps: {
   // Submit new feedback
   app.post('/:botId', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const body = await c.req.json<{ content?: string }>();
 
     if (!body.content || typeof body.content !== 'string' || !body.content.trim()) {
@@ -336,6 +348,7 @@ export function agentFeedbackRoutes(deps: {
   // Thread reply: add human message + trigger AI response
   app.post('/:botId/:id/reply', async (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
     const body = await c.req.json<{ message?: string }>();
 
@@ -377,6 +390,7 @@ export function agentFeedbackRoutes(deps: {
   // Thread reply: poll for bot reply generation status
   app.get('/:botId/:id/reply-status', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const entry = deps.botManager.getAgentFeedbackById(botId, id);
@@ -401,6 +415,7 @@ export function agentFeedbackRoutes(deps: {
   // Retry failed reply generation
   app.post('/:botId/:id/retry-reply', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const entry = deps.botManager.getAgentFeedbackById(botId, id);
@@ -421,6 +436,7 @@ export function agentFeedbackRoutes(deps: {
   // Dismiss feedback
   app.delete('/:botId/:id', (c) => {
     const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
 
     const ok = deps.botManager.dismissAgentFeedback(botId, id);

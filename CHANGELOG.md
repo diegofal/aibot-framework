@@ -4,8 +4,34 @@
 
 ### Added
 - **Web conversation logging** — `generateBotReply()` and `webGenerate()` now log detailed info to the console: generation start (botId, botName, type), LLM call (promptLen, messageCount, backend, model, toolCount), and completion (durationMs, responseLen). Previously only 1-2 lines were logged, making web conversations invisible in `bun run start` output.
+- **Username/password auth for web dashboard** — Replaces API-key login with email + password for human users:
+  - **Session store** (`src/tenant/session-store.ts`): In-memory sessions with `sess_` prefix, 24h TTL, periodic cleanup
+  - **Admin credential store** (`src/tenant/admin-credentials.ts`): First-run admin setup, argon2id password hashing via `Bun.password`
+  - **Dual auth**: Session tokens (`sess_`) for dashboard, API keys (`aibot_`) for programmatic access. Middleware accepts both
+  - **New auth endpoints**: `POST /api/auth/login` (email+password → session), `POST /api/auth/logout`, `POST /api/auth/admin-setup` (first-run), `GET /api/auth/status` (multiTenant + adminSetupRequired flags)
+  - **Tenant password support**: `passwordHash` field on Tenant, `getTenantByEmail()`, `emailIndex` for fast lookup
+  - **Onboarding signup** now requires password (min 8 chars), returns `sessionToken` for auto-login alongside `apiKey`
+  - **Admin middleware** accepts session tokens with admin role (not just `ADMIN_API_KEY`)
+  - **WebSocket auth** accepts session tokens in `?token=` param
+  - **Login form** rewritten: email + password fields, admin setup form for first run
+  - **`/api/status`** no longer exposes `multiTenant` (moved to `/api/auth/status`)
+  - Removed `/api/auth/validate` endpoint (replaced by `/api/auth/login`)
+  - 33 new tests across 4 test files. API keys still work for programmatic access. Single-tenant mode fully backward compatible
+- **Multi-Tenant BaaS infrastructure** — Complete shared-infrastructure multi-tenancy system across 6 phases:
+  - **Phase 6 — Per-user isolation within bots**: Core memory now supports `user_id` column for per-user data isolation. `userIsolation.enabled` config flag gates the feature. Memory tools, search, daily logs, system prompts, and indexer all support per-user scoping. Shared categories (null userId) visible to all users.
+  - **Phase 1 — Security foundation**: Admin auth middleware (`ADMIN_API_KEY`), tenant auth middleware (Bearer token), tenant scoping helpers (`scopeBots`, `isBotAccessible`, `getTenantId`). All 7 route handlers scoped per-tenant. Server.ts restructured with 3 auth tiers (public, tenant-auth, admin-auth).
+  - **Phase 2 — Tenant config layer**: Zod-validated `TenantConfigSchema` for per-tenant LLM/BYOK/features/branding overrides. File-based `TenantConfigStore`. Config merge: global → tenant → bot. API routes for GET/PUT config and masked API key management.
+  - **Phase 3 — Data isolation**: `resolveTenantPaths()` resolves `data/tenants/{tenantId}/bots/{botId}/`. Path sandbox validation via `isPathWithinTenant()`. `_tenantRoot` injected into tool args. Agent registry filters collaboration by `tenantId`. Headless bots registered with tenant.
+  - **Phase 4 — Quota enforcement & rate limiting**: In-memory sliding window `RateLimiter` with per-plan limits (free: 20/min → enterprise: 500/min). Rate limit Hono middleware with 429 + Retry-After. Quota checks in `ConversationPipeline` (pre-LLM) and `AgentLoop` (pre-cycle). Usage recording for messages, LLM requests, API calls, tool executions. Graceful degradation: X-Quota-Warning headers at 80%/90%.
+  - **Phase 5 — Onboarding & billing**: Enhanced signup with email dedup and auto-directory creation. First-bot onboarding wizard. Billing routes (status, upgrade, downgrade). Stripe webhook endpoint. `handleWebhook` delegate on BotManager.
+- **New files**: `src/tenant/rate-limiter.ts`, `src/tenant/rate-limit-middleware.ts`, `src/tenant/tenant-paths.ts`, `src/tenant/tenant-config.ts`, `src/tenant/tenant-config-store.ts`, `src/tenant/admin-middleware.ts`, `src/tenant/tenant-scoping.ts`, `src/web/routes/tenant-config.ts`, `src/web/routes/billing.ts`, `src/web/routes/webhooks.ts`, `src/web/routes/onboarding.ts`
+- **93 new tests** across 11 test files covering all multi-tenant features
 
 ### Fixed
+- **Bot import: soul files now re-indexed for RAG search** — After importing a bot, soul files (IDENTITY.md, MEMORY.md, legacy.md, etc.) were not re-indexed in the search database, making them invisible to RAG queries ("te acordás de X?"). Import now triggers a full reindex via a new `MemoryManager.reindex()` method.
+- **Bot import: core_memory fallback without Ollama** — When `MemoryManager` is not available (e.g. `soul.search.enabled: false` or Ollama down), the import now creates a standalone `CoreMemoryManager` via direct SQLite access instead of silently skipping `core_memory.jsonl`.
+- **Export manifest accuracy** — `manifest.includes.coreMemory` now reflects whether entries were actually exported, not just whether the callback function was injected.
+- **Admin sees all bots** — In multi-tenant mode, admin (tenantId `__admin__`) now sees and can access all bots, including legacy bots without `tenantId`. `scopeBots` and `isBotAccessible` in `src/tenant/tenant-scoping.ts` treat `__admin__` as a super-tenant.
 - **Coherence check always shows explanation** — Coherence check explanation is now always visible: thread auto-posts "Coherence Check (OK): ..." for coherent results (previously only incoherent results posted), and the "Checked" badge now shows the explanation as a tooltip on hover.
 
 ### Added
