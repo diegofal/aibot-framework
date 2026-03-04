@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
-import type { Config } from '../../config';
+import type { BotConfig, Config } from '../../config';
 import type { ConversationsService } from '../../conversations/service';
 import type { Logger } from '../../logger';
+import type { ChatMessage } from '../../ollama';
 import type { ProductionsService } from '../../productions/service';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 import { webGenerate } from './web-tool-helpers';
@@ -12,32 +13,15 @@ function truncate(text: string, maxLen: number): string {
   return `${text.slice(0, maxLen)}\n... [truncated]`;
 }
 
-const CONVERSATION_SYSTEM_PROMPT = `You are an AI bot having a direct conversation with your human operator through the web dashboard. This is a meta-conversation about yourself — your goals, motivations, work, and behavior.
-
-Rules:
-- Be authentic and reflective about your goals and work.
+const WEB_DASHBOARD_OVERLAY = `\n\nYou are chatting with your human operator through the web dashboard. This is a direct conversation about yourself — your goals, motivations, work, and behavior.
+- Be authentic and reflective.
 - Be concise (2-4 sentences per reply unless more detail is requested).
-- No markdown headers, no preamble, no sign-off.
-- Write in the same language as your identity/soul files.
-- Be specific about your current work, goals, and motivations when asked.`;
+- No markdown headers, no preamble, no sign-off.`;
 
-const PRODUCTIONS_CHAT_SYSTEM_PROMPT = `You are an AI bot discussing your production work (files you created or edited) with your human operator through the web dashboard.
+const PRODUCTIONS_OVERLAY =
+  '\n\nThis conversation is about your production work (files you created or edited). Reference specific productions when relevant. Be reflective about the quality and purpose of your work.';
 
-Rules:
-- Reference specific productions (file names, content) when relevant.
-- Be concise (2-4 sentences per reply unless more detail is requested).
-- No markdown headers, no preamble, no sign-off.
-- Write in the same language as your identity/soul files.
-- Be reflective about the quality and purpose of your work.`;
-
-const INBOX_CHAT_SYSTEM_PROMPT = `You are an AI bot having a follow-up discussion with your human operator about a question you asked through your inbox.
-
-Rules:
-- Be concise (2-4 sentences per reply unless more detail is requested).
-- No markdown headers, no preamble, no sign-off.
-- Write in the same language as your identity/soul files.
-- Reference the original question and the operator's answer when relevant.
-- Be appreciative that the human took the time to respond.`;
+const INBOX_OVERLAY = `\n\nThis is a follow-up discussion about a question you asked through your inbox. Reference the original question and the operator's answer when relevant. Be appreciative that the human took the time to respond.`;
 
 export function conversationsRoutes(deps: {
   conversationsService: ConversationsService;
@@ -51,6 +35,32 @@ export function conversationsRoutes(deps: {
 
   const generationState = new Map<string, { status: 'generating' | 'error'; error?: string }>();
 
+  /** Build the type-specific overlay appended to the unified system prompt. */
+  function getConversationOverlay(conversationType: string, botId: string): string {
+    let overlay =
+      conversationType === 'productions'
+        ? PRODUCTIONS_OVERLAY
+        : conversationType === 'inbox'
+          ? INBOX_OVERLAY
+          : WEB_DASHBOARD_OVERLAY;
+
+    if (conversationType === 'productions' && productionsService) {
+      const stats = productionsService.getStats(botId);
+      const recent = productionsService.getChangelog(botId, { limit: 10 });
+      overlay += `\n\n## Productions Stats\nTotal: ${stats.total} | Approved: ${stats.approved} | Rejected: ${stats.rejected} | Unreviewed: ${stats.unreviewed} | Avg Rating: ${stats.avgRating ?? 'N/A'}`;
+      if (recent.length > 0) {
+        const lines = recent.map((e) => {
+          let line = `- [${e.timestamp}] ${e.action} ${e.path}`;
+          if (e.description) line += ` — ${e.description}`;
+          return line;
+        });
+        overlay += `\n\n## Recent Productions\n${lines.join('\n')}`;
+      }
+    }
+
+    return overlay;
+  }
+
   /** Extracted bot reply generation logic — shared by message send and retry. */
   function generateBotReply(
     botId: string,
@@ -60,7 +70,8 @@ export function conversationsRoutes(deps: {
     const key = `${botId}:${id}`;
     generationState.set(key, { status: 'generating' });
     const startMs = Date.now();
-    const botName = config.bots.find((b) => b.id === botId)?.name ?? botId;
+    const botConfig = config.bots.find((b) => b.id === botId);
+    const botName = botConfig?.name ?? botId;
 
     logger.info(
       { botId, botName, conversationId: id, type: conversation.type },
@@ -70,67 +81,58 @@ export function conversationsRoutes(deps: {
     (async () => {
       try {
         const soulLoader = botManager.getSoulLoader(botId);
-        const identity = soulLoader.readIdentity();
-        const soul = soulLoader.readSoul();
-        const motivations = soulLoader.readMotivations();
-        const goals = soulLoader.readGoals();
-
         const recentMessages = conversationsService.getMessages(botId, id, { limit: 20 });
 
-        const sections: string[] = [];
-        const botConfig = config.bots.find((b) => b.id === botId);
-        sections.push(`# Conversation with operator — Bot: ${botConfig?.name ?? botId}`);
+        // Extract latest user message for RAG query
+        const latestHuman = [...recentMessages].reverse().find((m) => m.role === 'human');
+        const ragQuery = latestHuman?.content ?? '';
 
-        if (identity) sections.push(`## Identity\n${truncate(identity, 500)}`);
-        if (soul) sections.push(`## Soul\n${truncate(soul, 1000)}`);
-        if (motivations) sections.push(`## Motivations\n${truncate(motivations, 1000)}`);
-        if (goals) sections.push(`## Goals\n${truncate(goals, 1000)}`);
+        // Pre-fetch RAG context (same as Telegram ConversationPipeline)
+        const ragContext =
+          ragQuery.length >= 8 ? await botManager.prefetchMemoryContext(ragQuery, botId) : null;
 
-        // For productions type, include production context
-        if (conversation.type === 'productions' && productionsService) {
-          const stats = productionsService.getStats(botId);
-          const recent = productionsService.getChangelog(botId, { limit: 10 });
-          sections.push(
-            `## Productions Stats\nTotal: ${stats.total} | Approved: ${stats.approved} | Rejected: ${stats.rejected} | Unreviewed: ${stats.unreviewed} | Avg Rating: ${stats.avgRating ?? 'N/A'}`
-          );
-          if (recent.length > 0) {
-            const lines = recent.map((e) => {
-              let line = `- [${e.timestamp}] ${e.action} ${e.path}`;
-              if (e.description) line += ` — ${e.description}`;
-              return line;
-            });
-            sections.push(`## Recent Productions\n${lines.join('\n')}`);
-          }
-        }
+        // Build unified system prompt (soul, memory, core mem, tools, karma, humanizer, RAG)
+        let systemPrompt = botManager.buildSystemPrompt({
+          mode: 'conversation',
+          botId,
+          botConfig: botConfig as BotConfig,
+          isGroup: false,
+          ragContext,
+        });
 
-        // Format conversation thread
-        const threadText = recentMessages
-          .map((m) => `${m.role === 'human' ? 'Human' : 'Bot'}: ${m.content}`)
-          .join('\n\n');
-        sections.push(`## Conversation\n${threadText}`);
-        sections.push('## Task\n\nRespond to the latest message. Be authentic and reflective.');
+        // Append conversation-type overlay
+        systemPrompt += getConversationOverlay(conversation.type, botId);
 
-        const prompt = sections.join('\n\n');
-        const systemPrompt =
-          conversation.type === 'productions'
-            ? PRODUCTIONS_CHAT_SYSTEM_PROMPT
-            : conversation.type === 'inbox'
-              ? INBOX_CHAT_SYSTEM_PROMPT
-              : CONVERSATION_SYSTEM_PROMPT;
+        // Build multi-turn message array (same format as Telegram pipeline)
+        const messages: ChatMessage[] = [
+          { role: 'system', content: systemPrompt },
+          ...recentMessages.map((m) => ({
+            role: (m.role === 'human' ? 'user' : 'assistant') as ChatMessage['role'],
+            content: m.content,
+          })),
+        ];
 
         logger.info(
-          { botId, botName, conversationId: id, promptLen: prompt.length, messageCount: recentMessages.length },
+          {
+            botId,
+            botName,
+            conversationId: id,
+            systemPromptLen: systemPrompt.length,
+            messageCount: recentMessages.length,
+            hasRag: !!ragContext,
+          },
           'Web conversation: calling LLM…'
         );
 
         const response = await webGenerate({
-          prompt,
-          systemPrompt,
+          prompt: '',
+          systemPrompt: '',
           botId,
           botManager,
           config,
           logger,
           maxLength: 3000,
+          messages,
         });
 
         conversationsService.addMessage(botId, id, 'bot', response);
@@ -148,7 +150,10 @@ export function conversationsRoutes(deps: {
         generationState.delete(key);
       } catch (err) {
         const durationMs = Date.now() - startMs;
-        logger.error({ err, botId, botName, conversationId: id, durationMs }, 'Web conversation: failed to generate reply');
+        logger.error(
+          { err, botId, botName, conversationId: id, durationMs },
+          'Web conversation: failed to generate reply'
+        );
         const message = err instanceof Error ? err.message : 'Unknown error';
         generationState.set(key, {
           status: 'error',

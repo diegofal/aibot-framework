@@ -795,7 +795,7 @@
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/conversations/:botId/:id/messages</code></td>
-              <td>Send human message; triggers bot reply via Claude CLI (fire-and-forget). Body: <code>{ message: string }</code></td>
+              <td>Send human message; triggers bot reply via unified conversation pipeline (fire-and-forget). Uses same SystemPromptBuilder + RAG pre-fetch as Telegram. Body: <code>{ message: string }</code></td>
               <td><code>conversations.ts</code></td>
             </tr>
             <tr>
@@ -1231,11 +1231,14 @@ compaction                            // Context compaction
 
         <div class="card">
           <h3>Conversations</h3>
-          <p>Direct web-based chat with bots. Two types: <em>general</em> (discuss goals,
-             motivations, behavior) and <em>productions</em> (discuss recent work).
-             Three views: bots list, bot conversations, and full-page chat using
-             <code>renderThread()</code>. Bot replies via Claude CLI with soul context.
-             Also integrated inline in the Productions page.</p>
+          <p>Direct web-based chat with bots. Three types: <em>general</em> (discuss goals,
+             motivations, behavior), <em>productions</em> (discuss recent work), and
+             <em>inbox</em> (follow-up on bot questions).
+             Uses the same unified conversation pipeline as Telegram:
+             <code>SystemPromptBuilder.build()</code> for full system prompts (soul, memory,
+             core memory, RAG, humanizer, karma, tool blocks) and
+             <code>prefetchMemoryContext()</code> for automatic RAG context injection.
+             Multi-turn message history sent as proper <code>ChatMessage[]</code> array.</p>
         </div>
 
         <div class="card">

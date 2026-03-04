@@ -969,6 +969,19 @@ export class BotManager {
     return this.mcpClientPool;
   }
 
+  buildSystemPrompt(options: import('./system-prompt-builder').SystemPromptOptions): string {
+    return this.systemPromptBuilder.build(options);
+  }
+
+  async prefetchMemoryContext(query: string, botId: string): Promise<string | null> {
+    return this.conversationPipeline.prefetchMemoryContext(
+      query,
+      false,
+      this.getBotLogger(botId),
+      botId
+    );
+  }
+
   // Collaboration delegates
   async sendVisibleMessage(
     chatId: number,

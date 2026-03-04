@@ -28,6 +28,7 @@
 - **93 new tests** across 11 test files covering all multi-tenant features
 
 ### Fixed
+- **Unified web/Telegram conversation pipeline** — Web dashboard conversations now use the same `SystemPromptBuilder.build()` and `prefetchMemoryContext()` path as Telegram. Previously the web route built a stripped-down prompt manually (truncated soul files, no MEMORY.md, no core memory, no RAG, no humanizer, no karma, no tool instruction blocks). Now both channels produce identical system prompts with full memory access. New `buildSystemPrompt()` and `prefetchMemoryContext()` facade methods on `BotManager`. `webGenerate()` supports multi-turn `messages[]` arrays.
 - **Bot import: soul files now re-indexed for RAG search** — After importing a bot, soul files (IDENTITY.md, MEMORY.md, legacy.md, etc.) were not re-indexed in the search database, making them invisible to RAG queries ("te acordás de X?"). Import now triggers a full reindex via a new `MemoryManager.reindex()` method.
 - **Bot import: core_memory fallback without Ollama** — When `MemoryManager` is not available (e.g. `soul.search.enabled: false` or Ollama down), the import now creates a standalone `CoreMemoryManager` via direct SQLite access instead of silently skipping `core_memory.jsonl`.
 - **Export manifest accuracy** — `manifest.includes.coreMemory` now reflects whether entries were actually exported, not just whether the callback function was injected.

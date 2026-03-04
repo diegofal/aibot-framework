@@ -33,10 +33,6 @@ function makeDeps(overrides?: Record<string, unknown>) {
 
   const mockBotManager = {
     getSoulLoader: () => ({
-      readIdentity: () => 'I am TestBot',
-      readSoul: () => 'Kind soul',
-      readMotivations: () => 'Help humans',
-      readGoals: () => '- Goal 1',
       appendDailyMemory: mock(() => {}),
     }),
     getLLMClient: () => {
@@ -46,6 +42,8 @@ function makeDeps(overrides?: Record<string, unknown>) {
       getDefinitionsForBot: () => [],
       createExecutor: () => async () => ({ success: true, content: 'ok' }),
     }),
+    buildSystemPrompt: mock(() => 'Unified system prompt for testing'),
+    prefetchMemoryContext: mock(() => Promise.resolve(null)),
   };
 
   const mockProductionsService = {
@@ -337,6 +335,73 @@ describe('conversations routes', () => {
       const data = await res.json();
       expect(data.message.role).toBe('human');
       expect(data.message.content).toBe('Hello bot');
+    });
+
+    test('calls buildSystemPrompt and prefetchMemoryContext for unified pipeline', async () => {
+      const deps = makeDeps();
+
+      mock.module('../../../src/claude-cli', () => ({
+        claudeGenerate: mock(() => Promise.resolve('Unified reply')),
+      }));
+
+      const convo = deps.conversationsService.createConversation('bot1');
+      const app = makeApp(deps);
+
+      await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Tell me about Pri' }),
+      });
+
+      await tick(500);
+
+      // Verify unified pipeline methods were called
+      const bm = deps.botManager as any;
+      expect(bm.buildSystemPrompt).toHaveBeenCalled();
+      expect(bm.prefetchMemoryContext).toHaveBeenCalled();
+
+      // Verify buildSystemPrompt was called with mode: 'conversation'
+      const buildCall = bm.buildSystemPrompt.mock.calls[0];
+      expect(buildCall[0].mode).toBe('conversation');
+      expect(buildCall[0].botId).toBe('bot1');
+      expect(buildCall[0].isGroup).toBe(false);
+
+      // Verify prefetchMemoryContext was called with the user's message
+      const ragCall = bm.prefetchMemoryContext.mock.calls[0];
+      expect(ragCall[0]).toBe('Tell me about Pri');
+      expect(ragCall[1]).toBe('bot1');
+
+      // Verify bot reply was stored
+      const msgs = deps.conversationsService.getMessages('bot1', convo.id);
+      const botMsgs = msgs.filter((m) => m.role === 'bot');
+      expect(botMsgs.length).toBe(1);
+    });
+
+    test('skips RAG prefetch for short messages', async () => {
+      const deps = makeDeps();
+
+      mock.module('../../../src/claude-cli', () => ({
+        claudeGenerate: mock(() => Promise.resolve('Hi!')),
+      }));
+
+      const convo = deps.conversationsService.createConversation('bot1');
+      const app = makeApp(deps);
+
+      await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'hola' }),
+      });
+
+      await tick(500);
+
+      // prefetchMemoryContext should NOT be called for short messages (<8 chars)
+      const bm = deps.botManager as any;
+      expect(bm.prefetchMemoryContext).not.toHaveBeenCalled();
+      // buildSystemPrompt should still be called with ragContext: null
+      expect(bm.buildSystemPrompt).toHaveBeenCalled();
+      const buildCall = bm.buildSystemPrompt.mock.calls[0];
+      expect(buildCall[0].ragContext).toBeNull();
     });
 
     test('returns 400 for missing message', async () => {
