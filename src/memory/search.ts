@@ -124,14 +124,12 @@ export async function hybridSearch(
 
   // --- Vector search ---
   const botId = opts.botId;
+  const userPathPattern = opts.userId ? `${botId}/memory/users/${opts.userId}/%` : null;
   try {
     const queryEmbedding = await embeddingService.getEmbedding(
       `query:${query}`, // prefix to distinguish from chunk hashes
       query
     );
-
-    // When userId is provided, also include per-user memory paths
-    const userPathPattern = opts.userId ? `${botId}/memory/users/${opts.userId}/%` : null;
     const vectorSql = userPathPattern
       ? `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
          FROM chunks c JOIN files f ON c.file_id = f.id
