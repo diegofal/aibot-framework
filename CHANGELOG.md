@@ -27,6 +27,9 @@
 - **93 new tests** across 11 test files covering all multi-tenant features
 
 ### Fixed
+- **Bot import: soul files now re-indexed for RAG search** — After importing a bot, soul files (IDENTITY.md, MEMORY.md, legacy.md, etc.) were not re-indexed in the search database, making them invisible to RAG queries ("te acordás de X?"). Import now triggers a full reindex via a new `MemoryManager.reindex()` method.
+- **Bot import: core_memory fallback without Ollama** — When `MemoryManager` is not available (e.g. `soul.search.enabled: false` or Ollama down), the import now creates a standalone `CoreMemoryManager` via direct SQLite access instead of silently skipping `core_memory.jsonl`.
+- **Export manifest accuracy** — `manifest.includes.coreMemory` now reflects whether entries were actually exported, not just whether the callback function was injected.
 - **Admin sees all bots** — In multi-tenant mode, admin (tenantId `__admin__`) now sees and can access all bots, including legacy bots without `tenantId`. `scopeBots` and `isBotAccessible` in `src/tenant/tenant-scoping.ts` treat `__admin__` as a super-tenant.
 - **Coherence check always shows explanation** — Coherence check explanation is now always visible: thread auto-posts "Coherence Check (OK): ..." for coherent results (previously only incoherent results posted), and the "Checked" badge now shows the explanation as a tooltip on hover.
 

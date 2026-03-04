@@ -19,7 +19,8 @@ export function agentExportRoutes(deps: {
     deps.config,
     deps.configPath,
     deps.logger,
-    deps.memoryManager ? () => deps.memoryManager!.getCoreMemory() : undefined
+    deps.memoryManager ? () => deps.memoryManager?.getCoreMemory() ?? null : undefined,
+    deps.memoryManager ? () => deps.memoryManager?.reindex() ?? Promise.resolve() : undefined
   );
 
   // GET /:id/export — Download .tar.gz

@@ -1,3 +1,4 @@
+import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -437,6 +438,154 @@ describe('BotExportService', () => {
       const prodDir = join(PROD_DIR, 'imported-prod');
       expect(existsSync(join(prodDir, 'article.md'))).toBe(true);
       expect(readFileSync(join(prodDir, 'article.md'), 'utf-8')).toBe('# Article');
+    });
+
+    it('calls onSoulFilesImported callback after copying soul files', async () => {
+      const exportBuffer = await createExportBuffer(
+        { id: 'reindex-bot' },
+        { 'IDENTITY.md': 'name: Reindex Bot\n', 'SOUL.md': '# Soul\nTest' }
+      );
+
+      rmSync(TEST_DIR, { recursive: true, force: true });
+      mkdirSync(TEST_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
+      writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
+
+      const importConfig = makeConfig([]);
+      const logger = createMockLogger();
+      const onSoulFilesImported = mock(async () => {});
+      const service = new BotExportService(
+        importConfig,
+        CONFIG_PATH,
+        logger,
+        undefined,
+        onSoulFilesImported
+      );
+
+      await service.importBot(exportBuffer, { newBotId: 'imported-reindex' });
+
+      expect(onSoulFilesImported).toHaveBeenCalledTimes(1);
+    });
+
+    it('imports core memory via SQLite fallback when no MemoryManager available', async () => {
+      const coreEntries = [
+        {
+          category: 'relationships',
+          key: 'pri',
+          value: 'Priscila, pareja de Diego',
+          importance: 9,
+        },
+        { category: 'identity', key: 'name', value: 'Test Bot', importance: 8 },
+      ];
+      const exportBuffer = await createExportBuffer(
+        { id: 'fallback-bot' },
+        { 'IDENTITY.md': 'name: Fallback Bot\n' },
+        { coreMemory: coreEntries }
+      );
+
+      rmSync(TEST_DIR, { recursive: true, force: true });
+      mkdirSync(TEST_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
+      writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
+
+      const dbPath = join(TEST_DIR, 'data', 'memory.db');
+      const importConfig = makeConfig([]);
+      (importConfig.soul as any).search = { dbPath };
+      const logger = createMockLogger();
+      // No getCoreMemory callback — forces SQLite fallback
+      const service = new BotExportService(importConfig, CONFIG_PATH, logger);
+
+      await service.importBot(exportBuffer, { newBotId: 'imported-fallback' });
+
+      // Verify entries landed in SQLite
+      const db = new Database(dbPath, { readonly: true });
+      const rows = db
+        .prepare('SELECT category, key, value, importance FROM core_memory WHERE bot_id = ?')
+        .all('imported-fallback') as any[];
+      db.close();
+
+      expect(rows).toHaveLength(2);
+      const pri = rows.find((r: any) => r.key === 'pri');
+      expect(pri).toBeDefined();
+      expect(pri.value).toBe('Priscila, pareja de Diego');
+      expect(pri.importance).toBe(9);
+    });
+  });
+
+  describe('export manifest accuracy', () => {
+    it('sets coreMemory: true when entries are exported', async () => {
+      const bot = makeBot();
+      const config = makeConfig([bot]);
+      const soulDir = join(SOUL_DIR, 'test-bot');
+      mkdirSync(join(soulDir, 'memory'), { recursive: true });
+      writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Test Bot\n');
+
+      const entries = [{ category: 'identity', key: 'name', value: 'Bot', importance: 8 }];
+      const coreMemory = createMockCoreMemory(entries);
+      const logger = createMockLogger();
+      const service = new BotExportService(config, CONFIG_PATH, logger, () => coreMemory);
+
+      const buffer = await service.exportBot('test-bot');
+      const verifyDir = join(TEST_DIR, 'verify');
+      mkdirSync(verifyDir, { recursive: true });
+      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
+      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      await proc.exited;
+
+      const manifest = JSON.parse(readFileSync(join(verifyDir, 'manifest.json'), 'utf-8'));
+      expect(manifest.includes.coreMemory).toBe(true);
+    });
+
+    it('sets coreMemory: false when no entries exist', async () => {
+      const bot = makeBot();
+      const config = makeConfig([bot]);
+      const soulDir = join(SOUL_DIR, 'test-bot');
+      mkdirSync(join(soulDir, 'memory'), { recursive: true });
+      writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Test Bot\n');
+
+      const coreMemory = createMockCoreMemory([]);
+      const logger = createMockLogger();
+      const service = new BotExportService(config, CONFIG_PATH, logger, () => coreMemory);
+
+      const buffer = await service.exportBot('test-bot');
+      const verifyDir = join(TEST_DIR, 'verify');
+      mkdirSync(verifyDir, { recursive: true });
+      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
+      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      await proc.exited;
+
+      const manifest = JSON.parse(readFileSync(join(verifyDir, 'manifest.json'), 'utf-8'));
+      expect(manifest.includes.coreMemory).toBe(false);
+    });
+
+    it('sets coreMemory: false when no CoreMemoryManager provided', async () => {
+      const bot = makeBot();
+      const config = makeConfig([bot]);
+      const soulDir = join(SOUL_DIR, 'test-bot');
+      mkdirSync(join(soulDir, 'memory'), { recursive: true });
+      writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Test Bot\n');
+
+      const logger = createMockLogger();
+      const service = new BotExportService(config, CONFIG_PATH, logger);
+
+      const buffer = await service.exportBot('test-bot');
+      const verifyDir = join(TEST_DIR, 'verify');
+      mkdirSync(verifyDir, { recursive: true });
+      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
+      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      await proc.exited;
+
+      const manifest = JSON.parse(readFileSync(join(verifyDir, 'manifest.json'), 'utf-8'));
+      expect(manifest.includes.coreMemory).toBe(false);
     });
   });
 });

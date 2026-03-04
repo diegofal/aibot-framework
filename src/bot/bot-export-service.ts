@@ -11,7 +11,8 @@ import { join, resolve } from 'node:path';
 import type { BotConfig, Config } from '../config';
 import { persistBots, resolveAgentConfig } from '../config';
 import type { Logger } from '../logger';
-import type { CoreMemoryManager } from '../memory/core-memory';
+import { type CoreMemoryManager, createCoreMemoryManager } from '../memory/core-memory';
+import { initializeMemoryDb } from '../memory/schema';
 
 const EXPORT_VERSION = 1;
 
@@ -53,7 +54,8 @@ export class BotExportService {
     private config: Config,
     private configPath: string,
     private logger: Logger,
-    private getCoreMemory?: () => CoreMemoryManager | null
+    private getCoreMemory?: () => CoreMemoryManager | null,
+    private onSoulFilesImported?: () => Promise<void>
   ) {}
 
   async exportBot(botId: string, opts: ExportOptions = {}): Promise<Buffer> {
@@ -67,23 +69,9 @@ export class BotExportService {
     try {
       mkdirSync(stagingDir, { recursive: true });
 
-      // 1. Write manifest
-      const manifest: ExportManifest = {
-        version: EXPORT_VERSION,
-        botId,
-        botName: botConfig.name,
-        exportDate: new Date().toISOString(),
-        includes: {
-          soul: true,
-          coreMemory: !!this.getCoreMemory,
-          productions: !!opts.productions,
-          conversations: !!opts.conversations,
-          karma: !!opts.karma,
-        },
-      };
-      writeFileSync(join(stagingDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');
+      let coreMemoryExported = false;
 
-      // 2. Write sanitized config (no token, no apiKey)
+      // 1. Write sanitized config (no token, no apiKey)
       const sanitizedConfig: BotConfig = {
         ...structuredClone(botConfig),
         token: '',
@@ -114,7 +102,8 @@ export class BotExportService {
           const entries = await coreMemory.list(undefined, undefined, botId);
           if (entries.length > 0) {
             const lines = entries.map((e) => JSON.stringify(e));
-            writeFileSync(join(stagingDir, 'core_memory.jsonl'), lines.join('\n') + '\n', 'utf-8');
+            writeFileSync(join(stagingDir, 'core_memory.jsonl'), `${lines.join('\n')}\n`, 'utf-8');
+            coreMemoryExported = true;
           }
         } catch (err) {
           this.logger.warn({ err, botId }, 'Export: failed to dump core memory');
@@ -145,7 +134,23 @@ export class BotExportService {
         }
       }
 
-      // 8. Create tar.gz via Bun.spawn
+      // 8. Write manifest (after all data collection so flags are accurate)
+      const manifest: ExportManifest = {
+        version: EXPORT_VERSION,
+        botId,
+        botName: botConfig.name,
+        exportDate: new Date().toISOString(),
+        includes: {
+          soul: true,
+          coreMemory: coreMemoryExported,
+          productions: !!opts.productions,
+          conversations: !!opts.conversations,
+          karma: !!opts.karma,
+        },
+      };
+      writeFileSync(join(stagingDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');
+
+      // 9. Create tar.gz via Bun.spawn
       const archiveName = `${botId}-export-${ts}.tar.gz`;
       const archivePath = join('/tmp', archiveName);
 
@@ -241,34 +246,69 @@ export class BotExportService {
         }
         mkdirSync(targetSoulDir, { recursive: true });
         cpSync(sourceSoul, targetSoulDir, { recursive: true });
+
+        // Re-index soul files so RAG search can find them immediately
+        if (this.onSoulFilesImported) {
+          try {
+            await this.onSoulFilesImported();
+            this.logger.info({ botId }, 'Import: soul files re-indexed');
+          } catch (err) {
+            this.logger.warn({ err, botId }, 'Import: failed to re-index soul files');
+            warnings.push('Soul files copied but search index was not updated — restart to fix');
+          }
+        }
       } else {
         warnings.push('Archive has no soul directory');
       }
 
       // 6. Re-insert core_memory
       const coreMemoryPath = join(stagingDir, 'core_memory.jsonl');
-      const coreMemory = this.getCoreMemory?.();
-      if (existsSync(coreMemoryPath) && coreMemory) {
-        const lines = readFileSync(coreMemoryPath, 'utf-8').trim().split('\n');
-        let imported = 0;
-        for (const line of lines) {
-          if (!line) continue;
+      if (existsSync(coreMemoryPath)) {
+        let coreMemory = this.getCoreMemory?.();
+        let fallbackDb: ReturnType<typeof initializeMemoryDb> | null = null;
+
+        if (!coreMemory) {
+          const dbPath = this.config.soul?.search?.dbPath ?? './data/memory.db';
           try {
-            const entry = JSON.parse(line);
-            await coreMemory.set(entry.category, entry.key, entry.value, entry.importance, botId);
-            imported++;
+            fallbackDb = initializeMemoryDb(dbPath, this.logger);
+            coreMemory = createCoreMemoryManager(fallbackDb, this.logger);
+            this.logger.info(
+              { dbPath },
+              'Import: using standalone CoreMemoryManager (no Ollama required)'
+            );
           } catch (err) {
             this.logger.warn(
-              { err, line: line.slice(0, 100) },
-              'Import: failed to import core memory entry'
+              { err, dbPath },
+              'Import: failed to open memory database for fallback'
             );
+            warnings.push(`Core memory data found but could not open database: ${err}`);
           }
         }
-        if (imported > 0) {
-          this.logger.info({ botId, imported }, 'Import: core memory entries restored');
+
+        if (coreMemory) {
+          const lines = readFileSync(coreMemoryPath, 'utf-8').trim().split('\n');
+          let imported = 0;
+          for (const line of lines) {
+            if (!line) continue;
+            try {
+              const entry = JSON.parse(line);
+              await coreMemory.set(entry.category, entry.key, entry.value, entry.importance, botId);
+              imported++;
+            } catch (err) {
+              this.logger.warn(
+                { err, line: line.slice(0, 100) },
+                'Import: failed to import core memory entry'
+              );
+            }
+          }
+          if (imported > 0) {
+            this.logger.info({ botId, imported }, 'Import: core memory entries restored');
+          }
         }
-      } else if (existsSync(coreMemoryPath) && !coreMemory) {
-        warnings.push('Core memory data found but MemoryManager is not available, skipped');
+
+        if (fallbackDb) {
+          fallbackDb.close();
+        }
       }
 
       // 7. Optional: restore productions
