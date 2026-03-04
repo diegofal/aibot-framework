@@ -1,4 +1,4 @@
-import { api, closeModal, escapeHtml, showModal, timeAgo } from './shared.js';
+import { api, closeModal, escapeHtml, getAuthToken, showModal, timeAgo } from './shared.js';
 
 function formatDuration(ms) {
   if (ms < 1000) return `${ms}ms`;
@@ -1142,7 +1142,7 @@ function showExportModal(botId) {
   `);
 
   document.getElementById('export-cancel').addEventListener('click', closeModal);
-  document.getElementById('export-confirm').addEventListener('click', () => {
+  document.getElementById('export-confirm').addEventListener('click', async () => {
     const productions = document.getElementById('export-productions').checked;
     const conversations = document.getElementById('export-conversations').checked;
     const karma = document.getElementById('export-karma').checked;
@@ -1153,7 +1153,41 @@ function showExportModal(botId) {
     if (karma) params.set('karma', 'true');
 
     const url = `/api/agents/${encodeURIComponent(botId)}/export?${params}`;
-    window.location.href = url;
+    const btn = document.getElementById('export-confirm');
+    btn.disabled = true;
+    btn.textContent = 'Downloading...';
+
+    try {
+      const headers = {};
+      const token = getAuthToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Export failed' }));
+        alert(err.error || 'Export failed');
+        btn.disabled = false;
+        btn.textContent = 'Download Export';
+        return;
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] || `${botId}-export.tar.gz`;
+
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      alert(`Export failed: ${err.message || err}`);
+      btn.disabled = false;
+      btn.textContent = 'Download Export';
+      return;
+    }
+
     closeModal();
   });
 }
@@ -1209,8 +1243,13 @@ function showImportModal(el) {
       const formData = new FormData();
       formData.append('file', file);
 
+      const headers = {};
+      const token = getAuthToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch(`/api/agents/import?${params}`, {
         method: 'POST',
+        headers,
         body: formData,
       });
 
