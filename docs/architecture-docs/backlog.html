@@ -6,90 +6,176 @@
   <title>Backlog - AIBot Framework Architecture</title>
   <link rel="stylesheet" href="shared.css">
   <style>
-    .backlog-card {
-      background: var(--bg-card);
+    /* ---- Epic ---- */
+    .epic {
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 16px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      background: var(--bg-card);
       transition: border-color .15s;
     }
-    .backlog-card:hover { border-color: var(--accent); }
+    .epic:hover { border-color: var(--accent); }
 
-    .backlog-card .card-header {
+    .epic > summary {
       display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 8px;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 20px;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
     }
+    .epic > summary::-webkit-details-marker { display: none; }
+    .epic > summary::marker { display: none; content: ""; }
 
-    .backlog-card .card-header h3 {
-      margin: 0;
-      font-size: 16px;
+    .epic > summary .chevron {
+      font-size: 12px;
+      color: var(--text-dim);
+      transition: transform .15s;
+      flex-shrink: 0;
+      width: 16px;
+      text-align: center;
+    }
+    .epic[open] > summary .chevron { transform: rotate(90deg); }
+
+    .epic > summary .epic-title {
+      flex: 1;
+      font-size: 15px;
+      font-weight: 600;
       color: var(--text);
     }
+    .epic > summary .epic-count {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-right: 6px;
+    }
+    .epic > summary .badge { flex-shrink: 0; }
 
-    .backlog-card .card-desc {
+    .epic-body { padding: 0 20px 16px 20px; }
+
+    .epic-desc {
       color: var(--text-dim);
       font-size: 13px;
       line-height: 1.6;
-      margin-bottom: 12px;
+      margin: 0 0 14px 28px;
     }
 
-    .backlog-card ul {
-      margin: 8px 0 8px 20px;
-      color: var(--text-dim);
-      font-size: 13px;
-      line-height: 1.7;
-    }
-
-    .backlog-card ul li code {
-      font-size: 12px;
-    }
-
-    .status-done { color: var(--green); font-weight: 600; }
-    .status-partial { color: var(--orange); font-weight: 600; }
-    .status-pending { color: var(--text-dim); font-weight: 600; }
-    .status-deferred { color: var(--text-dim); font-style: italic; }
-
-    .section-label {
+    /* ---- Phase label inside epic ---- */
+    .phase-label {
       font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 1px;
+      letter-spacing: .8px;
       color: var(--text-dim);
-      margin-top: 8px;
+      font-weight: 600;
+      margin: 16px 0 6px 28px;
+    }
+    .phase-label:first-child { margin-top: 0; }
+
+    /* ---- Story (nested inside epic) ---- */
+    .story-list {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 0 28px;
     }
 
-    .remaining-list {
-      margin: 4px 0 0 20px;
+    .story {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      background: var(--bg);
+      transition: border-color .15s;
+    }
+    .story:hover { border-color: #3a3d48; }
+
+    .story > summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text);
+      list-style: none;
+      user-select: none;
+    }
+    .story > summary::-webkit-details-marker { display: none; }
+    .story > summary::marker { display: none; content: ""; }
+
+    .story > summary .chevron {
+      font-size: 10px;
+      color: var(--text-dim);
+      transition: transform .15s;
+      flex-shrink: 0;
+      width: 14px;
+      text-align: center;
+    }
+    .story[open] > summary .chevron { transform: rotate(90deg); }
+    .story > summary .story-title { flex: 1; font-weight: 400; }
+    .story > summary .badge { flex-shrink: 0; font-size: 10px; padding: 1px 8px; }
+
+    .story-body {
+      padding: 0 14px 12px 36px;
       color: var(--text-dim);
       font-size: 13px;
       line-height: 1.7;
     }
+    .story-body p { margin: 0 0 8px; }
+    .story-body ul { margin: 4px 0 10px 16px; }
+    .story-body ul li { margin-bottom: 2px; }
+    .story-body .sub-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--text-dim);
+      font-weight: 600;
+      margin: 10px 0 3px;
+    }
+    .story-body table { margin: 6px 0 10px; font-size: 12px; }
 
+    /* ---- Standalone story (no epic parent) ---- */
+    .standalone-story {
+      margin-bottom: 6px;
+    }
+    .standalone-story > summary {
+      padding: 12px 16px;
+      font-size: 14px;
+    }
+    .standalone-story > summary .chevron { font-size: 11px; width: 16px; }
+    .standalone-story .story-body { padding-left: 40px; }
+
+    /* ---- Done epic ---- */
+    .done-epic > summary .epic-title { color: var(--text-dim); }
+    .done-story > summary .story-title {
+      text-decoration: line-through;
+      text-decoration-color: var(--border);
+      color: var(--text-dim);
+    }
+
+    /* ---- Ideas grid ---- */
     .ideas-grid {
       display: grid;
-      gap: 12px;
+      gap: 10px;
       grid-template-columns: repeat(2, 1fr);
-      margin: 16px 0 32px;
+      margin: 12px 0 32px;
     }
     @media (max-width: 750px) {
       .ideas-grid { grid-template-columns: 1fr; }
     }
-
     .idea-card {
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 16px;
+      padding: 14px 16px;
     }
     .idea-card h4 {
-      font-size: 14px;
+      font-size: 13px;
       color: var(--text);
-      margin: 0 0 6px;
+      margin: 0 0 4px;
+      text-transform: none;
+      letter-spacing: 0;
     }
     .idea-card p {
-      font-size: 13px;
+      font-size: 12px;
       color: var(--text-dim);
       margin: 0;
       line-height: 1.5;
@@ -99,13 +185,9 @@
 <body>
   <div class="layout">
 
-    <!-- Hamburger (mobile) -->
     <button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
-
-    <!-- Backdrop (mobile) -->
     <div class="sidebar-backdrop" id="backdrop"></div>
 
-    <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-logo">
         AIBot Framework
@@ -128,241 +210,524 @@
       </nav>
     </aside>
 
-    <!-- Main content -->
     <main class="main">
       <div class="content">
 
-        <!-- Page header -->
         <div class="page-header">
           <h1>Backlog</h1>
-          <p>Feature backlog, integration roadmap, and planned improvements</p>
+          <p>Feature backlog organized by epic. Click to expand. Last updated: <strong>2026-03-06</strong>.</p>
         </div>
 
-        <p>Living document tracking features, integrations, and improvements &mdash; organized by status. Last updated: <strong>2026-03-05</strong>.</p>
-
         <!-- ============================================================ -->
-        <!--  IMPLEMENTED — PENDING TESTING                                -->
+        <!--  BACKLOG                                                      -->
         <!-- ============================================================ -->
         <div class="category-header">
-          <h2 id="pending-testing">Implemented &mdash; Pending Manual Testing</h2>
-          <span class="count">4 items</span>
+          <h2 id="backlog">Backlog</h2>
+          <span class="count">planned work, pending implementation</span>
         </div>
 
-        <!-- Audio Input -->
-        <div class="backlog-card">
-          <div class="card-header">
-            <h3>Audio Input (Voice-to-Text)</h3>
-            <span class="badge badge-green">Code Complete</span>
-          </div>
-          <div class="card-desc">
-            <code>processVoice()</code> in <code>src/media.ts</code> sends OGG to Whisper endpoint.
-            Handler <code>message:voice</code> in <code>src/bot/media-handlers.ts</code> injects transcription into conversation.
-            <code>WhisperConfigSchema</code> supports OpenAI and local whisper.cpp endpoints.
-            Authorization header sent conditionally when <code>apiKey</code> is present.
-            13 unit tests in <code>tests/media.test.ts</code>.
-          </div>
-          <div class="section-label">Remaining</div>
-          <ul class="remaining-list">
-            <li>Manual testing with real Telegram voice notes (requires <code>OPENAI_API_KEY</code>)</li>
-            <li>"Transcribing..." feedback message while processing</li>
-            <li>Support for <code>message:audio</code> (regular audio files, not just voice notes)</li>
-          </ul>
-        </div>
+        <!-- ======================== EPIC: A2A ======================== -->
+        <details class="epic">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title">A2A Protocol (Agent-to-Agent)</span>
+            <span class="epic-count">16 stories &middot; 2 phases</span>
+            <span class="badge badge-purple">Designed</span>
+          </summary>
+          <div class="epic-body">
+            <p class="epic-desc">
+              Native TypeScript implementation of A2A v0.3.0 in the existing web server.
+              Makes every bot a standards-compliant A2A agent. Enables discovery, consumption, and collaboration with external A2A agents.
+              Builds on existing MCP infrastructure patterns in <code>src/mcp/</code>.
+            </p>
 
-        <!-- Audio Output -->
-        <div class="backlog-card">
-          <div class="card-header">
-            <h3>Audio Output (TTS)</h3>
-            <span class="badge badge-green">Code Complete</span>
-          </div>
-          <div class="card-desc">
-            <code>generateSpeech()</code> in <code>src/tts.ts</code> calls ElevenLabs API, returns OGG/Opus.
-            Inbound mode: TTS activates when user sends voice. Integrated in <code>conversation-pipeline.ts</code>.
-            Markdown stripping, text truncation, typing indicator (<code>record_voice</code>).
-            22 unit tests + 4 integration tests.
-          </div>
-          <div class="section-label">Remaining</div>
-          <ul class="remaining-list">
-            <li>Manual testing with real voice notes (requires <code>ELEVENLABS_API_KEY</code>)</li>
-            <li>Multi-provider support (OpenAI TTS as cheaper alternative)</li>
-            <li>Response caching for frequent answers</li>
-            <li>Outbound mode: <code>send_voice_message</code> tool where LLM decides when to speak</li>
-            <li><code>message:audio</code> support (regular audio files don&rsquo;t trigger TTS)</li>
-          </ul>
-        </div>
+            <div class="phase-label">Phase 1 &mdash; A2A Server + Client (11 stories)</div>
+            <ul class="story-list">
 
-        <!-- Twitter -->
-        <div class="backlog-card">
-          <div class="card-header">
-            <h3>Twitter/X Integration</h3>
-            <span class="badge badge-yellow">Partially Complete</span>
-          </div>
-          <div class="card-desc">
-            3 framework tools in <code>src/tools/twitter.ts</code>: <code>twitter_search</code> (Bearer Token),
-            <code>twitter_read</code> (Bearer Token), <code>twitter_post</code> (OAuth 1.0a with built-in HMAC-SHA1).
-            <code>twitter_post</code> requires <code>ask_permission</code>. Rate limiting, TTL cache, 19 unit tests.
-          </div>
-          <div class="section-label">Remaining</div>
-          <ul class="remaining-list">
-            <li><strong>Telegram skill</strong> &mdash; <code>src/skills/twitter/</code> does not exist. Need skill with <code>/twitter search</code>, <code>/twitter trending</code>, <code>/twitter post</code> commands.</li>
-            <li>Configure app at developer.twitter.com and obtain API keys</li>
-            <li>Manual testing with real API keys</li>
-          </ul>
-        </div>
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Types &mdash; A2A v0.3.0 protocol type definitions</span>
+                </summary>
+                <div class="story-body">
+                  <p>Create <code>src/a2a/types.ts</code>.</p>
+                  <ul>
+                    <li><code>A2aAgentCard</code>, <code>A2aSkill</code>, <code>A2aCapabilities</code></li>
+                    <li><code>A2aMessage</code>, <code>A2aPart</code> (TextPart, DataPart, FilePart)</li>
+                    <li><code>A2aTask</code>, <code>TaskState</code>, <code>TaskStatus</code></li>
+                    <li><code>MessageSendParams</code>, <code>MessageSendResult</code></li>
+                  </ul>
+                  <div class="sub-label">References</div>
+                  <p>Reuse JSON-RPC base from <code>src/mcp/types.ts</code>. See <a href="https://google.github.io/A2A/">A2A spec</a>.</p>
+                </div>
+              </details>
 
-        <!-- Reddit -->
-        <div class="backlog-card">
-          <div class="card-header">
-            <h3>Reddit Integration</h3>
-            <span class="badge badge-green">Code Complete</span>
-          </div>
-          <div class="card-desc">
-            3 framework tools in <code>src/tools/reddit.ts</code> + Telegram skill in <code>src/skills/reddit/</code>.
-            OAuth2 script-app auth with promise-based mutex. Rate limiting 100 req/min. TTL cache (300s). 16 unit tests.
-          </div>
-          <div class="section-label">Remaining</div>
-          <ul class="remaining-list">
-            <li>Register app at reddit.com/prefs/apps (type "script")</li>
-            <li>Manual testing with real API keys</li>
-          </ul>
-        </div>
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Config &mdash; schema and defaults</span>
+                </summary>
+                <div class="story-body">
+                  <p>Add <code>a2a</code> block to <code>src/config.ts</code> (Zod schema) and <code>config/config.json</code>.</p>
+                  <ul>
+                    <li><code>server.enabled</code>, <code>server.basePath</code> (default <code>/a2a</code>), <code>server.authToken</code></li>
+                    <li><code>clients[]</code> &mdash; <code>{ name, url, autoConnect, authToken? }</code></li>
+                    <li><code>directory.enabled</code>, <code>directory.remoteUrl</code>, <code>directory.heartbeatIntervalMs</code>, <code>directory.staleTtlMs</code></li>
+                  </ul>
+                </div>
+              </details>
 
-        <!-- Calendar -->
-        <div class="backlog-card" style="margin-bottom:0">
-          <div class="card-header">
-            <h3>Calendly / Google Calendar Integration</h3>
-            <span class="badge badge-green">Code Complete</span>
-          </div>
-          <div class="card-desc">
-            3 framework tools in <code>src/tools/calendar.ts</code> + Telegram skill in <code>src/skills/calendar/</code>.
-            Provider abstraction (<code>CalendarProvider</code>) with Calendly and Google Calendar implementations.
-            <code>calendar_schedule</code> requires <code>ask_permission</code>. TTL cache (60s). 20 unit tests.
-          </div>
-          <div class="section-label">Remaining</div>
-          <ul class="remaining-list">
-            <li>Obtain Calendly or Google Calendar API key</li>
-            <li>Manual testing with real API keys</li>
-          </ul>
-        </div>
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Agent Card Builder &mdash; auto-generate from bot config</span>
+                </summary>
+                <div class="story-body">
+                  <p>Create <code>src/a2a/agent-card-builder.ts</code>.</p>
+                  <ul>
+                    <li><code>buildAgentCard(botConfig, toolDefs, baseUrl)</code> &rarr; <code>A2aAgentCard</code></li>
+                    <li>Group tools by <code>TOOL_CATEGORIES</code> into A2A skills</li>
+                    <li>Extract description from soul system prompt</li>
+                  </ul>
+                </div>
+              </details>
 
-        <!-- ============================================================ -->
-        <!--  RESEARCH / PLANNING                                          -->
-        <!-- ============================================================ -->
-        <div class="category-header">
-          <h2 id="research">Research &amp; Planning</h2>
-          <span class="count">2 items</span>
-        </div>
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Task Store &mdash; in-memory task lifecycle</span>
+                </summary>
+                <div class="story-body">
+                  <p>Create <code>src/a2a/task-store.ts</code>.</p>
+                  <ul>
+                    <li><code>create()</code>, <code>get()</code>, <code>update()</code>, <code>cancel()</code></li>
+                    <li>States: submitted &rarr; working &rarr; completed / failed / canceled</li>
+                    <li>TTL-based cleanup</li>
+                  </ul>
+                </div>
+              </details>
 
-        <!-- WhatsApp -->
-        <div class="backlog-card">
-          <div class="card-header">
-            <h3>WhatsApp Integration</h3>
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Executor &mdash; headless LLM + tools message processor</span>
+                </summary>
+                <div class="story-body">
+                  <p>Create <code>src/a2a/executor.ts</code>. Processes A2A messages without Telegram or sessions.</p>
+                  <ul>
+                    <li>Extract text from A2A Message parts</li>
+                    <li>Build system prompt via <code>SystemPromptBuilder</code></li>
+                    <li>Get tools via <code>ToolRegistry.getDefinitionsForBot(botId)</code></li>
+                    <li>Call LLM, return A2A Message + Task status</li>
+                  </ul>
+                  <div class="sub-label">Reference</div>
+                  <p><code>src/bot/conversation-pipeline.ts</code> &mdash; adapt without Telegram deps.</p>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Server &mdash; JSON-RPC HTTP handler</span>
+                </summary>
+                <div class="story-body">
+                  <p>Create <code>src/a2a/server.ts</code>.</p>
+                  <ul>
+                    <li>Per-bot routes: <code>GET /a2a/:botId/.well-known/agent-card.json</code>, <code>POST /a2a/:botId/</code></li>
+                    <li>JSON-RPC: <code>message/send</code>, <code>tasks/get</code>, <code>tasks/cancel</code></li>
+                    <li>Bearer token auth, rate limiting</li>
+                  </ul>
+                  <div class="sub-label">Reference</div>
+                  <p><code>src/mcp/server.ts</code> &mdash; same HTTP pattern.</p>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Web integration &mdash; mount routes, wire lifecycle</span>
+                </summary>
+                <div class="story-body">
+                  <ul>
+                    <li>Mount in <code>src/web/server.ts</code> under <code>config.a2a.server.basePath</code></li>
+                    <li><code>startA2a()</code> / <code>stopA2a()</code> in <code>BotManager</code></li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Client + Pool &mdash; consume external A2A agents</span>
+                </summary>
+                <div class="story-body">
+                  <p>Create <code>src/a2a/client.ts</code> and <code>src/a2a/client-pool.ts</code>.</p>
+                  <ul>
+                    <li><code>A2aClient</code>: <code>fetchAgentCard()</code>, <code>sendMessage()</code>, <code>getTask()</code></li>
+                    <li><code>A2aClientPool</code>: manages connections, <code>connectAll()</code>, <code>getAllAgents()</code></li>
+                  </ul>
+                  <div class="sub-label">Reference</div>
+                  <p><code>src/mcp/client.ts</code> + <code>client-pool.ts</code></p>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Tool Adapter &mdash; external agents as framework tools</span>
+                </summary>
+                <div class="story-body">
+                  <p>Create <code>src/a2a/tool-adapter.ts</code>.</p>
+                  <ul>
+                    <li><code>adaptA2aAgent(agentCard, client)</code> &rarr; <code>Tool[]</code></li>
+                    <li>Naming: <code>a2a_&lt;agentName&gt;_&lt;skillId&gt;</code></li>
+                    <li><code>ToolRegistry.registerA2aTools()</code></li>
+                  </ul>
+                  <div class="sub-label">Reference</div>
+                  <p><code>src/mcp/tool-adapter.ts</code></p>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Collaboration &mdash; A2A as transport in CollaborationManager</span>
+                </summary>
+                <div class="story-body">
+                  <ul>
+                    <li>Route to <code>A2aClientPool</code> when target is <code>a2a-external</code></li>
+                    <li>Register A2A agents in <code>AgentRegistry</code></li>
+                    <li><code>isTargetAvailable()</code> checks MCP + A2A</li>
+                  </ul>
+                  <div class="sub-label">Reference</div>
+                  <p><code>src/bot/collaboration.ts</code> &mdash; <code>mcpCollaborationStep()</code></p>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Tests &mdash; unit tests for all Phase 1 modules</span>
+                </summary>
+                <div class="story-body">
+                  <ul>
+                    <li>Types: serialization / deserialization</li>
+                    <li>Agent Card Builder: valid cards from real config</li>
+                    <li>Task Store: lifecycle, TTL, concurrency</li>
+                    <li>Executor: message processing, tool calls, errors</li>
+                    <li>Server: JSON-RPC dispatch, auth, rate limiting</li>
+                    <li>Client: fetch, send, timeout, errors</li>
+                    <li>Tool Adapter: naming, execution, result mapping</li>
+                  </ul>
+                </div>
+              </details>
+
+            </ul>
+
+            <div class="phase-label">Phase 2 &mdash; Agent Directory (5 stories)</div>
+            <ul class="story-list">
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Directory service &mdash; registry with health tracking</span>
+                </summary>
+                <div class="story-body">
+                  <p>Create <code>src/a2a/directory.ts</code>.</p>
+                  <ul>
+                    <li><code>register()</code>, <code>unregister()</code>, <code>heartbeat()</code>, <code>list()</code>, <code>search()</code>, <code>prune()</code></li>
+                    <li>Health: online / stale / offline via heartbeat TTL</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Directory REST API &mdash; HTTP endpoints</span>
+                </summary>
+                <div class="story-body">
+                  <ul>
+                    <li><code>POST /api/directory/register</code></li>
+                    <li><code>DELETE /api/directory/:name</code></li>
+                    <li><code>POST /api/directory/:name/heartbeat</code></li>
+                    <li><code>GET /api/directory</code> (filters: <code>?skill=</code>, <code>?tag=</code>, <code>?q=</code>)</li>
+                    <li><code>GET /api/directory/:name</code></li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Auto-registration &mdash; local + remote directory</span>
+                </summary>
+                <div class="story-body">
+                  <ul>
+                    <li>Auto-register on bot start when A2A enabled</li>
+                    <li>Register with remote directory if <code>config.a2a.directory.remoteUrl</code> set</li>
+                    <li>Periodic heartbeat, unregister on stop</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Dashboard page &mdash; agent discovery UI</span>
+                </summary>
+                <div class="story-body">
+                  <ul>
+                    <li>Page at <code>/directory</code> listing registered agents</li>
+                    <li>Name, description, skills, status indicator</li>
+                    <li>Search/filter, Agent Card link, connectivity test</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Phase 2 tests + docs</span>
+                </summary>
+                <div class="story-body">
+                  <ul>
+                    <li>Unit tests: register, heartbeat, prune, search</li>
+                    <li>Integration tests: REST API</li>
+                    <li>Update architecture docs, README, CHANGELOG</li>
+                  </ul>
+                </div>
+              </details>
+
+            </ul>
+          </div>
+        </details>
+
+        <!-- ======================== EPIC: Multi-Channel ======================== -->
+        <details class="epic">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title">Multi-Channel Messaging</span>
+            <span class="epic-count">2 stories</span>
             <span class="badge badge-dim">Research</span>
-          </div>
-          <div class="card-desc">
-            The bot is currently Telegram-only via grammy. Minimal platform abstraction exists
-            (<code>TelegramClient</code> interface in <code>src/core/types.ts</code>).
-          </div>
+          </summary>
+          <div class="epic-body">
+            <p class="epic-desc">
+              Abstract the Telegram-specific transport layer into a <code>MessagingPlatform</code> interface
+              to support WhatsApp, Discord, and future channels without duplicating core logic.
+            </p>
 
-          <div class="section-label">Integration Options</div>
-          <table style="margin: 8px 0">
-            <thead><tr><th>Option</th><th>Approach</th><th>Trade-offs</th></tr></thead>
-            <tbody>
-              <tr>
-                <td><strong>A</strong></td>
-                <td>WhatsApp Business Cloud API (Meta)</td>
-                <td>Free for user-initiated messages (24h window). Requires Facebook Business account. Template approval for outbound.</td>
-              </tr>
-              <tr>
-                <td><strong>B</strong></td>
-                <td>Via provider (Twilio, MessageBird)</td>
-                <td>Friendlier API. Twilio already partially integrated (phone calls). Additional cost per message.</td>
-              </tr>
-              <tr>
-                <td><strong>C</strong></td>
-                <td>Open-source (whatsapp-web.js, Baileys)</td>
-                <td>Free but high risk of ban. Unstable reverse-engineered protocol. Not recommended for production.</td>
-              </tr>
-            </tbody>
-          </table>
+            <ul class="story-list">
 
-          <div class="section-label">Required Refactoring</div>
-          <ul class="remaining-list">
-            <li>Abstract <code>TelegramClient</code> to <code>MessagingPlatform</code> interface</li>
-            <li>Handler adapter layer (grammy handlers &rarr; platform-agnostic)</li>
-            <li>Media handling (WhatsApp has its own media ID / download system)</li>
-            <li>Session key adaptation for WhatsApp chat IDs</li>
-            <li>Skills using Telegram-specific features (inline keyboards, callbacks)</li>
-          </ul>
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">WhatsApp Integration</span>
+                  <span class="badge badge-dim">Research</span>
+                </summary>
+                <div class="story-body">
+                  <p>Bot is Telegram-only via grammy. Minimal abstraction (<code>TelegramClient</code> interface).</p>
+                  <div class="sub-label">Options</div>
+                  <table>
+                    <thead><tr><th>Option</th><th>Approach</th><th>Trade-offs</th></tr></thead>
+                    <tbody>
+                      <tr><td><strong>A</strong></td><td>WhatsApp Business Cloud API (Meta)</td><td>Free user-initiated (24h). Requires FB Business account.</td></tr>
+                      <tr><td><strong>B</strong></td><td>Via Twilio / MessageBird</td><td>Friendlier API. Twilio partially integrated. Extra cost.</td></tr>
+                      <tr><td><strong>C</strong></td><td>whatsapp-web.js / Baileys</td><td>Free but ban risk. Not for production.</td></tr>
+                    </tbody>
+                  </table>
+                  <div class="sub-label">Required refactoring</div>
+                  <ul>
+                    <li><code>TelegramClient</code> &rarr; <code>MessagingPlatform</code> interface</li>
+                    <li>Handler adapter layer (grammy &rarr; platform-agnostic)</li>
+                    <li>Media handling, session keys, Telegram-specific features</li>
+                  </ul>
+                </div>
+              </details>
 
-          <div class="section-label">Next Steps</div>
-          <ul class="remaining-list">
-            <li>Decide: refactor for multi-channel vs. separate WhatsApp bot sharing core</li>
-            <li>Design <code>MessagingPlatform</code> interface and adapter pattern</li>
-            <li>Choose WhatsApp API provider</li>
-            <li>POC with echo bot</li>
-          </ul>
-        </div>
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Discord Integration</span>
+                  <span class="badge badge-dim">Deferred</span>
+                </summary>
+                <div class="story-body">
+                  <p>Blocked by WhatsApp / <code>MessagingPlatform</code> abstraction. Library: <code>discord.js</code>.</p>
+                </div>
+              </details>
 
-        <!-- Discord -->
-        <div class="backlog-card">
-          <div class="card-header">
-            <h3>Discord Integration</h3>
-            <span class="badge badge-dim">Deferred</span>
+            </ul>
           </div>
-          <div class="card-desc">
-            Requires the multi-channel abstraction from WhatsApp (above). A unified <code>Channel</code>
-            interface that supports Telegram, WhatsApp, and Discord under an adapter pattern.
-            Library: <code>discord.js</code>. OpenClaw uses <code>ChannelPlugin</code> with
-            <code>api.registerChannel()</code> as reference.
+        </details>
+
+        <!-- ======================== EPIC: Social ======================== -->
+        <details class="epic">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title">Social Media Integrations</span>
+            <span class="epic-count">2 stories</span>
+            <span class="badge badge-yellow">Partially Complete</span>
+          </summary>
+          <div class="epic-body">
+            <p class="epic-desc">
+              Twitter and Reddit tools and Telegram skills. Twitter tools exist but lack a Telegram skill.
+              Reddit is code complete, pending manual testing with API keys.
+            </p>
+
+            <ul class="story-list">
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Twitter/X &mdash; Telegram skill + API keys</span>
+                  <span class="badge badge-yellow">Partial</span>
+                </summary>
+                <div class="story-body">
+                  <p>3 framework tools exist (<code>src/tools/twitter.ts</code>) but no skill (<code>src/skills/twitter/</code>).</p>
+                  <ul>
+                    <li>Create skill: <code>/twitter search</code>, <code>/twitter trending</code>, <code>/twitter post</code></li>
+                    <li>Configure app at developer.twitter.com</li>
+                    <li>Manual testing with real API keys</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story done-story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Reddit &mdash; manual testing with API keys</span>
+                  <span class="badge badge-green">Code Complete</span>
+                </summary>
+                <div class="story-body">
+                  <p>3 tools + skill. OAuth2, rate limiting, cache. 16 tests.</p>
+                  <ul>
+                    <li>Register app at reddit.com/prefs/apps</li>
+                    <li>Manual testing with real API keys</li>
+                  </ul>
+                </div>
+              </details>
+
+            </ul>
           </div>
-          <div class="section-label">Blocked By</div>
-          <ul class="remaining-list">
-            <li>WhatsApp multi-channel abstraction (prerequisite)</li>
-          </ul>
-        </div>
+        </details>
+
+        <!-- ======================== Standalone: Calendar ======================== -->
+        <details class="epic standalone-story done-story">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title" style="color: var(--text-dim); text-decoration: line-through; text-decoration-color: var(--border)">Calendar Integration &mdash; manual testing with API keys</span>
+            <span class="badge badge-green">Code Complete</span>
+          </summary>
+          <div class="epic-body">
+            <div class="story-body" style="margin-left: 28px">
+              <p>3 tools + skill. <code>CalendarProvider</code> abstraction (Calendly, Google). 20 tests.</p>
+              <ul>
+                <li>Obtain Calendly or Google Calendar API key</li>
+                <li>Manual testing</li>
+              </ul>
+            </div>
+          </div>
+        </details>
 
         <!-- ============================================================ -->
         <!--  IDEAS / FUTURE                                               -->
         <!-- ============================================================ -->
         <div class="category-header">
-          <h2 id="ideas">Ideas &amp; Future Work</h2>
+          <h2 id="ideas">Ideas &amp; Future</h2>
           <span class="count">open-ended</span>
         </div>
 
         <div class="ideas-grid">
           <div class="idea-card">
-            <h4>Multi-Channel Unification</h4>
-            <p>Abstract <code>Channel</code> interface for Telegram, WhatsApp, Discord, and future platforms without duplicating logic. Prerequisite for WhatsApp and Discord projects.</p>
+            <h4>A2A Discovery Gateway (Phase 3)</h4>
+            <p>Directory becomes routing gateway. Find agent by capability, proxy request, load balance.</p>
           </div>
           <div class="idea-card">
-            <h4>Additional Calendar Providers</h4>
-            <p>Outlook Calendar, Cal.com integration beyond Calendly and Google Calendar.</p>
+            <h4>A2A Streaming</h4>
+            <p><code>message/stream</code> SSE for long-running agent tasks. Depends on A2A Phase 1.</p>
           </div>
           <div class="idea-card">
             <h4>Social Media Pipeline</h4>
-            <p>Coordinated content creation &rarr; human review &rarr; multi-platform publishing (Twitter + Reddit) with scheduling.</p>
+            <p>Content creation &rarr; human review &rarr; multi-platform publishing.</p>
+          </div>
+          <div class="idea-card">
+            <h4>Additional Calendar Providers</h4>
+            <p>Outlook Calendar, Cal.com integration.</p>
           </div>
           <div class="idea-card">
             <h4>OpenAI TTS Provider</h4>
-            <p>Add OpenAI TTS as cheaper alternative to ElevenLabs for voice output. Multi-provider TTS with fallback.</p>
+            <p>Cheaper voice output alternative. Multi-provider with fallback.</p>
           </div>
           <div class="idea-card">
-            <h4>Twitter Telegram Skill</h4>
-            <p>Create <code>src/skills/twitter/</code> with <code>/twitter search</code>, <code>/twitter trending</code>, <code>/twitter post</code> commands to match the existing Reddit and Calendar skill patterns.</p>
-          </div>
-          <div class="idea-card">
-            <h4>Voice Message Outbound Mode</h4>
-            <p><code>send_voice_message</code> tool letting the LLM decide when to respond with voice instead of text.</p>
+            <h4>Voice Outbound Mode</h4>
+            <p><code>send_voice_message</code> tool &mdash; LLM decides when to respond with voice.</p>
           </div>
         </div>
 
-      </div><!-- /content -->
+        <!-- ============================================================ -->
+        <!--  DONE                                                         -->
+        <!-- ============================================================ -->
+        <div class="category-header">
+          <h2 id="done">Done &mdash; Pending Manual Testing</h2>
+          <span class="count">2 items</span>
+        </div>
+
+        <!-- ======================== EPIC: Audio ======================== -->
+        <details class="epic done-epic">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title">Audio (Voice Input + Output)</span>
+            <span class="epic-count">2 stories</span>
+            <span class="badge badge-green">Code Complete</span>
+          </summary>
+          <div class="epic-body">
+
+            <ul class="story-list">
+
+              <details class="story done-story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Voice-to-Text (Input)</span>
+                  <span class="badge badge-green">Done</span>
+                </summary>
+                <div class="story-body">
+                  <p><code>processVoice()</code> in <code>src/media.ts</code>. Handler <code>message:voice</code>. 13 tests.</p>
+                  <div class="sub-label">Remaining</div>
+                  <ul>
+                    <li>Manual testing (requires <code>OPENAI_API_KEY</code>)</li>
+                    <li>&ldquo;Transcribing&hellip;&rdquo; feedback</li>
+                    <li><code>message:audio</code> support</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story done-story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Text-to-Speech (Output)</span>
+                  <span class="badge badge-green">Done</span>
+                </summary>
+                <div class="story-body">
+                  <p><code>generateSpeech()</code> in <code>src/tts.ts</code>. ElevenLabs. 22 + 4 tests.</p>
+                  <div class="sub-label">Remaining</div>
+                  <ul>
+                    <li>Manual testing (requires <code>ELEVENLABS_API_KEY</code>)</li>
+                    <li>Multi-provider (OpenAI TTS)</li>
+                    <li>Response caching</li>
+                    <li>Outbound mode</li>
+                  </ul>
+                </div>
+              </details>
+
+            </ul>
+          </div>
+        </details>
+
+      </div>
     </main>
 
-  </div><!-- /layout -->
+  </div>
 
-  <!-- Hamburger mobile JS -->
   <script>
     (function () {
       var hamburger = document.getElementById('hamburger');
@@ -373,7 +738,6 @@
         sidebar.classList.toggle('open');
         backdrop.classList.toggle('show');
       }
-
       function close() {
         sidebar.classList.remove('open');
         backdrop.classList.remove('show');

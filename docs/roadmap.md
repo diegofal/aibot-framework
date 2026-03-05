@@ -1,7 +1,7 @@
 # Roadmap
 
 Documento vivo para trackear features futuras, ideas y estado de proyectos en progreso.
-Última actualización: 2026-03-05.
+Última actualización: 2026-03-06.
 
 ---
 
@@ -197,8 +197,131 @@ Requiere refactor multi-canal: una interface `Channel` abstracta que soporte Tel
 
 ---
 
+## Proyecto 8 — A2A Protocol (Agent-to-Agent)
+
+**Estado: Diseño completado — pendiente implementación**
+
+### Contexto
+
+El framework ya soporta comunicación entre agentes via `CollaborationManager` (interno) y `McpAgentBridge` (externo via MCP). Sin embargo, estos mecanismos son propietarios del framework. El protocolo A2A (Agent-to-Agent) de Google es el estándar emergente de la industria para interoperabilidad entre agentes AI.
+
+A2A permite que cualquier agente compatible descubra, consuma y colabore con nuestros bots sin necesidad de conocer la implementación interna. Conceptualmente es como lo que MCP hace para tools, pero a nivel agente (conversaciones con contexto, multi-turn, task lifecycle).
+
+### Infraestructura existente relevante
+
+- `src/mcp/server.ts` — Expone tools via HTTP/SSE a clientes MCP. Patrón de referencia para el A2A server.
+- `src/mcp/client.ts` + `client-pool.ts` — Pool de conexiones a servers MCP externos. Patrón de referencia para el A2A client.
+- `src/mcp/tool-adapter.ts` — Convierte tools MCP externos a tools del framework. Patrón de referencia para el A2A tool adapter.
+- `src/mcp/agent-bridge.ts` — Agent-to-agent via MCP. Se puede complementar con A2A como transport alternativo.
+- `src/bot/tool-registry.ts` — Registro central de tools/capabilities. Los Agent Cards se generan desde acá.
+- `src/bot/collaboration.ts` — Bot-to-bot actual. A2A se integra como un transport más.
+- `src/web/server.ts` — Web server donde se montan las rutas A2A.
+- `src/mcp/types.ts` — JSON-RPC types reutilizables.
+
+### Diseño: 3 fases
+
+#### Phase 1: A2A Protocol (server + client nativos en TypeScript)
+
+Hace que cada bot del framework sea un agente A2A estándar, discoverable y consumible por cualquier agente externo compatible. También permite que nuestros bots consuman agentes A2A externos.
+
+**Server (inbound):**
+- Cada bot expone su propio endpoint: `GET /a2a/:botId/.well-known/agent-card.json` y `POST /a2a/:botId/`
+- Agent Card auto-generado desde `BotConfig` + `ToolRegistry` (skills reales, no hardcoded)
+- JSON-RPC dispatcher: `message/send`, `tasks/get`, `tasks/cancel`
+- Executor headless: LLM + tools sin dependencia de Telegram (adaptar `ConversationPipeline`)
+- Task store in-memory con lifecycle (submitted → working → completed/failed/canceled)
+- Auth opcional (Bearer token) y rate limiting
+
+**Client (outbound):**
+- `A2aClient`: fetch agent cards, send messages, get tasks
+- `A2aClientPool`: gestión de múltiples conexiones a agentes externos
+- `A2aToolAdapter`: cada skill de un agente externo se convierte en un tool del framework (`a2a_<agent>_<skill>`)
+- Integración con `CollaborationManager` como transport alternativo a MCP bridge
+
+**Módulos nuevos (`src/a2a/`):**
+
+| Módulo | Responsabilidad |
+|---|---|
+| `types.ts` | Tipos A2A v0.3.0 (AgentCard, Message, Task, Part, etc.) |
+| `agent-card-builder.ts` | Genera AgentCard desde BotConfig + ToolRegistry |
+| `task-store.ts` | In-memory task store con lifecycle y TTL |
+| `executor.ts` | Procesador headless de mensajes (LLM + tools) |
+| `server.ts` | HTTP handler JSON-RPC, montado en web server |
+| `client.ts` | Cliente HTTP A2A para agentes externos |
+| `client-pool.ts` | Pool de A2aClient connections |
+| `tool-adapter.ts` | Convierte agentes A2A externos a tools del framework |
+
+**Cambios a módulos existentes:**
+- `src/web/server.ts` — Montar rutas A2A bajo `config.a2a.server.basePath`
+- `src/bot/bot-manager.ts` — Crear/exponer `A2aClientPool`, lifecycle `startA2a()`/`stopA2a()`
+- `src/bot/tool-registry.ts` — Agregar `registerA2aTools()` similar a `registerMcpTools()`
+- `src/bot/collaboration.ts` — A2A como transport option junto a MCP bridge
+- `src/config.ts` — Nuevo bloque `a2a` en config schema
+- `config/config.json` — Defaults para `a2a`
+
+**Config schema:**
+```json
+{
+  "a2a": {
+    "server": {
+      "enabled": false,
+      "basePath": "/a2a",
+      "authToken": ""
+    },
+    "clients": [],
+    "directory": {
+      "enabled": false,
+      "remoteUrl": "",
+      "heartbeatIntervalMs": 60000,
+      "staleTtlMs": 180000
+    }
+  }
+}
+```
+
+#### Phase 2: Agent Directory (registro centralizado)
+
+Un servicio de directorio donde los bots publican sus Agent Cards para ser descubiertos por cualquier client.
+
+**Módulo nuevo: `src/a2a/directory.ts`**
+- `AgentDirectory` class: register, unregister, heartbeat, list, search, prune
+- REST API: `POST /api/directory/register`, `GET /api/directory`, `GET /api/directory?skill=X`, `DELETE /api/directory/:name`
+- Auto-registration de bots locales al arrancar con A2A habilitado
+- Config para registrarse en un directory remoto (otra instancia del framework)
+- Heartbeat con TTL configurable: agentes que no envían heartbeat pasan a `stale` y luego a `offline`
+- Dashboard page `/directory` mostrando agentes registrados, skills, status, health
+
+#### Phase 3: Discovery Gateway (futuro)
+
+El directory evoluciona para rutear requests:
+- Un client pide "necesito un agente que sepa X" → el directory busca el mejor match
+- Proxy/routing transparente al agente seleccionado
+- Load balancing si hay múltiples agentes con la misma skill
+- Auth/rate-limiting centralizado
+
+Phase 3 es roadmap a futuro. El diseño de Phase 1 y 2 lo habilita sin breaking changes.
+
+### Prototipo existente
+
+Existe un prototipo A2A standalone en Python (`productions/moltbook/a2a-servers/`) con dos servers (job-seeker y myfirstmillion) usando el A2A Python SDK. Este prototipo sirvió para validar el protocolo pero tiene lógica hardcodeada y no está conectado al framework. La implementación nativa en TypeScript lo reemplaza.
+
+### Próximos pasos
+
+1. Implementar Phase 1 tipos y config schema
+2. Implementar A2A server (agent-card-builder, task-store, executor, HTTP handler)
+3. Montar rutas en web server e integrar con BotManager lifecycle
+4. Implementar A2A client (client, pool, tool-adapter)
+5. Integrar con CollaborationManager
+6. Tests unitarios para todos los módulos nuevos
+7. Phase 2: Agent Directory + dashboard page
+8. Actualizar docs de arquitectura
+
+---
+
 ## Ideas futuras
 
+- **A2A Discovery Gateway** — Evolución del Agent Directory (Proyecto 8 Phase 3): el directorio rutea requests al mejor agente por capability match, con load balancing y auth centralizado
+- **A2A Streaming** — Soporte `message/stream` SSE para tareas largas (scraping, razonamiento multi-step). Depende de Phase 1 del Proyecto 8
 - **Multi-canal unificado** — Interface `Channel` abstracta que permita conectar Telegram, WhatsApp, Discord y futuros canales sin duplicar lógica (prerequisito para Proyectos 3 y 7)
 - **Integración con APIs de calendario de terceros** — Más allá de Calendly/Google: Outlook Calendar, Cal.com
 - **Social media posting pipeline** — Composición de contenido → revisión humana → publicación coordinada en Twitter + Reddit
