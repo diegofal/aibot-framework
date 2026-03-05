@@ -196,6 +196,7 @@
         <a href="configuration.html">Configuration</a>
         <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
+        <a href="backlog.html">Backlog</a>
       </nav>
     </aside>
 
@@ -206,17 +207,17 @@
         <!-- Page header -->
         <div class="page-header">
           <h1>Tools &amp; Skills</h1>
-          <p>27 LLM tools and 8 skills powering the agents</p>
+          <p>41 LLM tools and 15 skills powering the agents</p>
         </div>
 
         <!-- Stats overview -->
         <div class="tools-stat-row">
           <div class="tools-stat">
-            <div class="number">27</div>
+            <div class="number">41</div>
             <div class="label">LLM Tools</div>
           </div>
           <div class="tools-stat">
-            <div class="number">8</div>
+            <div class="number">15</div>
             <div class="label">Skills</div>
           </div>
           <div class="tools-stat">
@@ -803,27 +804,10 @@
         <!-- ---- Meta ---- -->
         <div class="category-header">
           <h2 id="cat-meta">Meta</h2>
-          <span class="count">3 tools</span>
+          <span class="count">4 tools</span>
         </div>
 
         <div class="tool-grid cols-2">
-
-          <!-- create_tool -->
-          <div class="tool-card">
-            <h4 class="tool-name">create_tool</h4>
-            <div class="tool-desc">Create a new custom tool that will be available after human approval. Supports TypeScript (Bun script) and command (shell with {{param}} placeholders) types. Includes static analysis to reject dangerous code patterns. Tools start in "pending" status.</div>
-            <div class="tool-params">
-              <strong>Parameters</strong>
-              <ul>
-                <li><code>name</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Tool name in snake_case (must be unique)</span></li>
-                <li><code>description</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; What the tool does (shown to the LLM)</span></li>
-                <li><code>type</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; "typescript" or "command"</span></li>
-                <li><code>source</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The source code for the tool</span></li>
-                <li><code>parameters</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Parameter definitions { paramName: { type, description, required } }</span></li>
-                <li><code>scope</code> <span class="param-type">string</span> <span class="param-desc">&mdash; "all" (default) or a specific bot ID</span></li>
-              </ul>
-            </div>
-          </div>
 
           <!-- create_agent -->
           <div class="tool-card">
@@ -883,7 +867,7 @@
         <!-- ---- Production ---- -->
         <div class="category-header">
           <h2 id="cat-production">Production</h2>
-          <span class="count">1 tool</span>
+          <span class="count">4 tools</span>
         </div>
 
         <div class="tool-grid cols-2">
@@ -914,6 +898,35 @@
             </div>
           </div>
 
+          <!-- create_tool -->
+          <div class="tool-card">
+            <h4 class="tool-name">create_tool</h4>
+            <div class="tool-desc">Create a new custom tool that will be available after human approval. Supports TypeScript (Bun script) and command (shell with {{param}} placeholders) types. Includes static analysis to reject dangerous code patterns. Tools start in "pending" status.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>name</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Tool name in snake_case (must be unique)</span></li>
+                <li><code>description</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; What the tool does (shown to the LLM)</span></li>
+                <li><code>type</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; "typescript" or "command"</span></li>
+                <li><code>source</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The source code for the tool</span></li>
+                <li><code>parameters</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Parameter definitions { paramName: { type, description, required } }</span></li>
+                <li><code>scope</code> <span class="param-type">string</span> <span class="param-desc">&mdash; "all" (default) or a specific bot ID</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- signal_completion -->
+          <div class="tool-card">
+            <h4 class="tool-name">signal_completion</h4>
+            <div class="tool-desc">Signal that the current task or production is complete. Used by bots in agent-loop mode to indicate they have finished their planned work for the current cycle, allowing the executor to end gracefully without filling remaining tool rounds.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>summary</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Brief summary of what was accomplished</span></li>
+              </ul>
+            </div>
+          </div>
+
         </div><!-- /tool-grid Production -->
 
 
@@ -923,7 +936,7 @@
 
         <h2 id="dynamic-tools">Dynamic Tools</h2>
 
-        <p>Beyond the 27 built-in tools, agents can create custom tools at runtime using the <code>create_tool</code> tool. Dynamic tools go through a human approval workflow:</p>
+        <p>Beyond the 41 built-in tools, agents can create custom tools at runtime using the <code>create_tool</code> tool. Dynamic tools go through a human approval workflow:</p>
 
         <ol style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px;">
           <li>The agent creates a tool via <code>create_tool</code> (TypeScript or shell command)</li>
@@ -1135,20 +1148,6 @@
             </div>
           </div>
 
-          <!-- twitter -->
-          <div class="skill-card">
-            <div class="skill-header">
-              <h3>Twitter/X</h3>
-              <span class="skill-id">twitter</span>
-            </div>
-            <div class="skill-desc">Search tweets, read timelines, post on Twitter/X. Read uses Bearer Token, write uses OAuth 1.0a (built-in HMAC-SHA1 signer). Post requires ask_permission approval.</div>
-            <div class="skill-meta">
-              <span class="badge badge-purple">v1.0.0</span>
-              <span class="tag">commands: /twitter search, /twitter trending, /twitter post</span>
-              <span class="tag">config: apiKey, apiSecret, bearerToken, accessToken, accessSecret</span>
-            </div>
-          </div>
-
           <!-- calendar -->
           <div class="skill-card">
             <div class="skill-header">
@@ -1160,6 +1159,84 @@
               <span class="badge badge-purple">v1.0.0</span>
               <span class="tag">commands: /cal today, /cal availability, /cal schedule</span>
               <span class="tag">config: provider (calendly|google), apiKey, calendarId</span>
+            </div>
+          </div>
+
+          <!-- daily-briefing -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Daily Briefing</h3>
+              <span class="skill-id">daily-briefing</span>
+            </div>
+            <div class="skill-desc">Generate and deliver daily briefings summarizing relevant information from multiple sources. Supports scheduled delivery and on-demand generation.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">tools: generate_brief, schedule_brief</span>
+            </div>
+          </div>
+
+          <!-- daily-priorities -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Daily Priorities</h3>
+              <span class="skill-id">daily-priorities</span>
+            </div>
+            <div class="skill-desc">Set, track, and review daily priorities. Supports setting priorities, checking progress, daily reviews with stats, and historical lookback.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">tools: daily_set_priorities, daily_get_priorities, daily_check_progress, daily_review, daily_get_history, daily_get_stats</span>
+            </div>
+          </div>
+
+          <!-- quick-notes -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Quick Notes</h3>
+              <span class="skill-id">quick-notes</span>
+            </div>
+            <div class="skill-desc">Fast note-taking system with save, list, search, and delete operations. Notes are tagged and searchable.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">tools: quick_notes_save, quick_notes_list, quick_notes_search, quick_notes_delete</span>
+            </div>
+          </div>
+
+          <!-- task-tracker -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Task Tracker</h3>
+              <span class="skill-id">task-tracker</span>
+            </div>
+            <div class="skill-desc">Manage tasks with add, list, complete, delete, and prioritize operations. Persistent task storage with priority levels.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">tools: task_add, task_list, task_complete, task_delete, task_prioritize</span>
+            </div>
+          </div>
+
+          <!-- reminders -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>Reminders</h3>
+              <span class="skill-id">reminders</span>
+            </div>
+            <div class="skill-desc">Schedule and manage reminders with set, list, delete, snooze, and complete operations. Wired to the real CronService for actual job scheduling.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">tools: reminders_set, reminders_list, reminders_delete, reminders_snooze, reminders_complete</span>
+            </div>
+          </div>
+
+          <!-- mcp-client -->
+          <div class="skill-card">
+            <div class="skill-header">
+              <h3>MCP Client</h3>
+              <span class="skill-id">mcp-client</span>
+            </div>
+            <div class="skill-desc">Interact with connected MCP servers: list available servers and their tools, or call any MCP tool by name. Enables bot-level access to the MCP ecosystem.</div>
+            <div class="skill-meta">
+              <span class="badge badge-purple">v1.0.0</span>
+              <span class="tag">tools: list_mcp_servers, call_mcp_tool</span>
             </div>
           </div>
 
@@ -1200,7 +1277,7 @@ interface ToolDefinition {
         <p><code>ToolRegistry.initializeAll()</code> checks each tool's config flag and creates instances. The registry provides filtered views per bot (<code>getDefinitionsForBot()</code>, <code>getToolsForBot()</code>) that respect per-bot <code>disabledTools</code> and dynamic tool scope exclusions.</p>
 
         <h3>Tool Categories &amp; Pre-Selection</h3>
-        <p>Tools are organized into 10 categories (<code>TOOL_CATEGORIES</code> in <code>tool-registry.ts</code>): <code>web</code>, <code>memory</code>, <code>soul</code>, <code>files</code>, <code>system</code>, <code>social</code>, <code>calendar</code>, <code>communication</code>, <code>browser</code>, <code>production</code>.</p>
+        <p>Tools are organized into 11 categories (<code>TOOL_CATEGORIES</code> in <code>tool-registry.ts</code>): <code>web</code>, <code>memory</code>, <code>soul</code>, <code>files</code>, <code>system</code>, <code>social</code>, <code>calendar</code>, <code>communication</code>, <code>browser</code>, <code>production</code>, <code>mcp</code> (dynamically populated).</p>
         <p>During agent loop execution, the planner selects which categories the executor needs (via <code>toolCategories</code> in its JSON response). The agent loop then calls <code>getDefinitionsByCategories()</code> to send only the matching tools, reducing token usage by ~2,500&ndash;3,500 tokens per call. Three tools (<code>get_datetime</code>, <code>ask_human</code>, <code>ask_permission</code>) are always included. External/dynamic tools (not in any category) also pass through unconditionally.</p>
         <p>Config: <code>agentLoop.toolPreSelection</code> (default: <code>true</code>). Set to <code>false</code> to disable and always send all tools.</p>
 
@@ -1462,12 +1539,12 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
         <!-- ────────────────────────────────────────── -->
         <!-- Planned Integrations                       -->
         <!-- ────────────────────────────────────────── -->
-        <h2 id="planned-integrations">Planned Integrations</h2>
+        <h2 id="external-integrations">External Service Integrations</h2>
         <p>
-          The following external service integrations are planned. Each will be implemented
-          as a <strong>native tool</strong> + <strong>built-in skill</strong> + <strong>external skill</strong>,
-          covering all three integration patterns in the framework.
-          See <a href="../roadmap.md"><code>docs/roadmap.md</code></a> for detailed status and next steps.
+          The following external service integrations have been implemented. Each follows
+          the <strong>native tool</strong> pattern in <code>src/tools/</code>, with optional
+          <strong>built-in skill</strong> wrappers for Telegram commands.
+          See <a href="backlog.html">Backlog</a> for pending testing and future plans.
         </p>
 
         <table>
@@ -1483,22 +1560,20 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
           <tbody>
             <tr>
               <td><strong>Twitter/X</strong></td>
-              <td><span class="badge badge-yellow">Planning</span></td>
+              <td><span class="badge badge-green">Implemented</span></td>
               <td>
                 <code>twitter_search</code>,
                 <code>twitter_post</code>,
                 <code>twitter_read</code>
               </td>
               <td>
-                <code>/twitter trending</code>,
-                <code>/twitter post</code>,
-                <code>/twitter search</code>
+                Tools only (no skill)
               </td>
-              <td>Twitter API v2 (OAuth 2.0 / 1.0a)</td>
+              <td>Twitter API v2 (Bearer Token + OAuth 1.0a)</td>
             </tr>
             <tr>
               <td><strong>Reddit</strong></td>
-              <td><span class="badge badge-yellow">Planning</span></td>
+              <td><span class="badge badge-green">Implemented</span></td>
               <td>
                 <code>reddit_search</code>,
                 <code>reddit_hot</code>,
@@ -1512,16 +1587,16 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
             </tr>
             <tr>
               <td><strong>Calendly / Calendars</strong></td>
-              <td><span class="badge badge-yellow">Planning</span></td>
+              <td><span class="badge badge-green">Implemented</span></td>
               <td>
+                <code>calendar_list</code>,
                 <code>calendar_availability</code>,
-                <code>calendar_schedule</code>,
-                <code>calendar_list</code>
+                <code>calendar_schedule</code>
               </td>
               <td>
+                <code>/cal today</code>,
                 <code>/cal availability</code>,
-                <code>/cal schedule</code>,
-                <code>/cal today</code>
+                <code>/cal schedule</code>
               </td>
               <td>Calendly API v2 / Google Calendar API</td>
             </tr>

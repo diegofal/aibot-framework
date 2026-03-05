@@ -343,6 +343,53 @@ export class AskPermissionStore {
   }
 
   /**
+   * Check resolved queue and recent history for an existing approval,
+   * using normalized resource paths to handle LLM rephrasing.
+   */
+  hasRecentApproval(
+    botId: string,
+    action: string,
+    resource: string,
+    windowMs = 24 * 3_600_000
+  ): boolean {
+    const norm = AskPermissionStore.normalizeResource(resource);
+
+    for (const entry of this.resolved.values()) {
+      if (
+        entry.botId === botId &&
+        entry.action === action &&
+        entry.status === 'approved' &&
+        AskPermissionStore.normalizeResource(entry.resource) === norm
+      ) {
+        return true;
+      }
+    }
+
+    const cutoff = Date.now() - windowMs;
+    for (const entry of this.history.values()) {
+      if (
+        entry.botId === botId &&
+        entry.action === action &&
+        entry.status === 'approved' &&
+        (entry.resolvedAt ?? 0) > cutoff &&
+        AskPermissionStore.normalizeResource(entry.resource) === norm
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static normalizeResource(resource: string): string {
+    return resource
+      .replace(/\/home\/[^/]+\/projects\/aibot-framework\//g, '')
+      .replace(/\/home\/[^/]+\//g, '~/')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  /**
    * Report execution outcome for consumed permission IDs.
    * Called by agent loop after executor completes.
    */
@@ -449,11 +496,12 @@ export class AskPermissionStore {
     action: string,
     resource: string
   ): PendingEntry | undefined {
+    const norm = AskPermissionStore.normalizeResource(resource);
     for (const entry of this.pending.values()) {
       if (
         entry.request.botId === botId &&
         entry.request.action === action &&
-        entry.request.resource === resource
+        AskPermissionStore.normalizeResource(entry.request.resource) === norm
       ) {
         return entry;
       }

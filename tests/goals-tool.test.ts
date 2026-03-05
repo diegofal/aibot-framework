@@ -52,6 +52,20 @@ describe('resolveGoalParam', () => {
     expect(resolveGoalParam({ goal: 'primary', goalId: '1', name: 'alias' })).toBe('primary');
   });
 
+  test('returns jobId as fallback', () => {
+    expect(resolveGoalParam({ jobId: 'Generate weekly briefing' })).toBe(
+      'Generate weekly briefing'
+    );
+  });
+
+  test('returns job as fallback', () => {
+    expect(resolveGoalParam({ job: 'Deploy app' })).toBe('Deploy app');
+  });
+
+  test('returns id as fallback', () => {
+    expect(resolveGoalParam({ id: 'Execute cold outreach' })).toBe('Execute cold outreach');
+  });
+
   test('returns empty for no matching key', () => {
     expect(resolveGoalParam({ action: 'update', notes: 'some note' })).toBe('');
   });
@@ -114,6 +128,47 @@ describe('findGoalIndex', () => {
 
   test('returns -1 for unrelated search', () => {
     expect(findGoalIndex(goals, 'deploy kubernetes cluster')).toBe(-1);
+  });
+
+  test('strips filler words from slug (goal-, task-)', () => {
+    const g: GoalEntry[] = [
+      { text: 'Auditar presencia digital completa', status: 'pending', priority: 'high' },
+    ];
+    expect(findGoalIndex(g, 'goal-auditar-presencia-digital')).toBe(0);
+    expect(findGoalIndex(g, 'task_auditar_presencia_digital')).toBe(0);
+  });
+
+  test('Jaccard similarity matches paraphrased text', () => {
+    const g: GoalEntry[] = [
+      {
+        text: 'Create launch-ready assets for MVP Phase 1: email template, landing page copy',
+        status: 'in_progress',
+        priority: 'high',
+      },
+    ];
+    expect(
+      findGoalIndex(g, 'Create launch ready assets MVP Phase email template landing page')
+    ).toBe(0);
+  });
+
+  test('Jaccard similarity does NOT match completely unrelated text', () => {
+    const g: GoalEntry[] = [
+      { text: 'Track monthly revenue and expenses', status: 'pending', priority: 'high' },
+    ];
+    expect(findGoalIndex(g, 'deploy kubernetes cluster production')).toBe(-1);
+  });
+
+  test('Jaccard picks best match among multiple goals', () => {
+    const g: GoalEntry[] = [
+      {
+        text: 'Implement circuit breaker pattern for tool failures',
+        status: 'pending',
+        priority: 'high',
+      },
+      { text: 'Deploy landing page for product launch', status: 'pending', priority: 'medium' },
+    ];
+    expect(findGoalIndex(g, 'circuit breaker tool failure implementation')).toBe(0);
+    expect(findGoalIndex(g, 'landing page product launch deploy')).toBe(1);
   });
 
   test('case insensitive', () => {
@@ -255,7 +310,7 @@ describe('manage_goals tool with aliases', () => {
 
     expect(result.success).toBe(true);
     expect(result.content).toContain('Goal completed (via update)');
-    const stored = loader.readGoals()!;
+    const stored = loader.readGoals() ?? '';
     expect(stored).toContain('## Completed');
     expect(stored).toContain('[x] Resolve filesystem bug');
     const activeSection = stored.split('## Completed')[0];

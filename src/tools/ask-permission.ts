@@ -73,11 +73,19 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
         };
       }
 
-      // Dedup check
+      // Dedup: check pending requests
       if (deps.store.hasPendingDuplicate(botId, action, resource)) {
         return {
           success: true,
           content: `You already have a pending permission request for "${action}" on "${resource}". Wait for the human to decide before requesting again.`,
+        };
+      }
+
+      // Dedup: check recently approved (resolved queue + history within 24h)
+      if (deps.store.hasRecentApproval(botId, action, resource)) {
+        return {
+          success: true,
+          content: `Permission for "${action}" on "${resource}" was already approved recently. You may proceed without requesting again.`,
         };
       }
 

@@ -9,7 +9,16 @@ type SoulLoaderResolver = (botId: string) => SoulLoader;
  * LLMs frequently call manage_goals with "goalId" (numeric ID) instead of
  * "goal" (substring text).  Normalise common aliases observed in production.
  */
-const GOAL_ALIASES = ['goalId', 'name', 'title', 'text', 'description'] as const;
+const GOAL_ALIASES = [
+  'goalId',
+  'name',
+  'title',
+  'text',
+  'description',
+  'jobId',
+  'job',
+  'id',
+] as const;
 
 export function resolveGoalParam(args: Record<string, unknown>): string {
   const direct = String(args.goal ?? '').trim();
@@ -22,12 +31,15 @@ export function resolveGoalParam(args: Record<string, unknown>): string {
   return '';
 }
 
+const FILLER_WORDS = new Set(['goal', 'task', 'objective', 'item', 'todo']);
+
 /**
  * Smart goal matching that handles common LLM patterns:
  * 1. Numeric IDs → 1-based index into the array
  * 2. Direct substring match (original behaviour)
- * 3. Slug-normalised match (dashes/underscores → spaces)
+ * 3. Slug-normalised match (dashes/underscores → spaces, filler words stripped)
  * 4. Word-based fallback (all words ≥3 chars in search appear in goal)
+ * 5. Jaccard word similarity (best match above threshold)
  */
 export function findGoalIndex(goals: GoalEntry[], search: string): number {
   if (!search || goals.length === 0) return -1;
@@ -44,21 +56,53 @@ export function findGoalIndex(goals: GoalEntry[], search: string): number {
   const directIdx = goals.findIndex((g) => g.text.toLowerCase().includes(lower));
   if (directIdx !== -1) return directIdx;
 
-  // 3. Slug-normalised (dashes/underscores → spaces)
+  // 3. Slug-normalised (dashes/underscores → spaces, filler words stripped)
   const normalised = lower.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (normalised !== lower) {
-    const slugIdx = goals.findIndex((g) => g.text.toLowerCase().includes(normalised));
+  const stripped = normalised
+    .split(/\s+/)
+    .filter((w) => !FILLER_WORDS.has(w))
+    .join(' ')
+    .trim();
+  const slugCandidate = stripped || normalised;
+  if (slugCandidate !== lower) {
+    const slugIdx = goals.findIndex((g) => g.text.toLowerCase().includes(slugCandidate));
     if (slugIdx !== -1) return slugIdx;
   }
 
   // 4. Word-based: all significant words in search must appear in goal text
-  const words = normalised.split(/\s+/).filter((w) => w.length >= 3);
+  const words = slugCandidate.split(/\s+/).filter((w) => w.length >= 3);
   if (words.length >= 2) {
     const wordIdx = goals.findIndex((g) => {
       const goalLower = g.text.toLowerCase();
       return words.every((w) => goalLower.includes(w));
     });
     if (wordIdx !== -1) return wordIdx;
+  }
+
+  // 5. Jaccard word similarity: best match above threshold
+  const searchWords = new Set(slugCandidate.split(/\s+/).filter((w) => w.length >= 3));
+  if (searchWords.size >= 2) {
+    let bestIdx = -1;
+    let bestScore = 0;
+    for (let i = 0; i < goals.length; i++) {
+      const goalWords = new Set(
+        goals[i].text
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((w) => w.length >= 3)
+      );
+      let intersection = 0;
+      for (const w of searchWords) {
+        if (goalWords.has(w)) intersection++;
+      }
+      const union = new Set([...searchWords, ...goalWords]).size;
+      const score = union > 0 ? intersection / union : 0;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx !== -1 && bestScore >= 0.3) return bestIdx;
   }
 
   return -1;

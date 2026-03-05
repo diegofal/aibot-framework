@@ -166,6 +166,18 @@ async function executeJobCore(
     }
   }
 
+  if (job.payload.kind === 'memory_note') {
+    try {
+      state.deps.appendMemory?.(
+        job.payload.botId,
+        `[cron reminder: ${job.name}] ${job.payload.text}`
+      );
+      return { status: 'ok', output: 'Memory note appended' };
+    } catch (err) {
+      return { status: 'error', error: String(err) };
+    }
+  }
+
   if (job.payload.kind === 'skillJob') {
     const handler = state.deps.resolveSkillHandler(job.payload);
     if (!handler) {

@@ -94,16 +94,18 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
               payload:
                 j.payload.kind === 'message'
                   ? { kind: 'message', text: j.payload.text }
-                  : { kind: 'skillJob', skillId: j.payload.skillId, jobId: j.payload.jobId },
+                  : j.payload.kind === 'memory_note'
+                    ? { kind: 'memory_note', text: j.payload.text }
+                    : { kind: 'skillJob', skillId: j.payload.skillId, jobId: j.payload.jobId },
             }));
             return { success: true, content: JSON.stringify(summary) };
           }
 
           case 'add': {
-            if (!_chatId || !_botId) {
+            if (!_botId) {
               return {
                 success: false,
-                content: 'Internal error: missing chat context for cron add',
+                content: 'Internal error: missing bot context for cron add',
               };
             }
 
@@ -220,17 +222,16 @@ async function doAdd(
 
   const deleteAfterRun = typeof args.deleteAfterRun === 'boolean' ? args.deleteAfterRun : undefined;
 
+  const payload = chatId
+    ? { kind: 'message' as const, text, chatId, botId }
+    : { kind: 'memory_note' as const, text, botId };
+
   const job = await cronService.add({
     name,
     enabled: true,
     deleteAfterRun,
     schedule: cronSchedule,
-    payload: {
-      kind: 'message',
-      text,
-      chatId,
-      botId,
-    },
+    payload,
   });
 
   logger.info(

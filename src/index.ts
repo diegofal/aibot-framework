@@ -126,6 +126,14 @@ async function main() {
       sendMessage: async (chatId: number, text: string, botId: string) => {
         await botManager.sendMessage(chatId, text, botId);
       },
+      appendMemory: (botId: string, text: string) => {
+        try {
+          const soulLoader = botManager.getSoulLoader(botId);
+          soulLoader.appendDailyMemory(text);
+        } catch {
+          /* bot not registered yet */
+        }
+      },
       resolveSkillHandler: (payload) => {
         const skill = skillRegistry.get(payload.skillId);
         if (!skill?.jobs) return undefined;
@@ -269,7 +277,7 @@ async function main() {
 
     // Keep process alive
     await new Promise(() => {});
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Fatal error:', error);
     process.exit(1);
   }

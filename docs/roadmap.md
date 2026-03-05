@@ -1,7 +1,7 @@
 # Roadmap
 
 Documento vivo para trackear features futuras, ideas y estado de proyectos en progreso.
-Última actualización: 2026-02-24.
+Última actualización: 2026-03-05.
 
 ---
 
@@ -115,12 +115,11 @@ El bot está actualmente acoplado a grammy/Telegram. La abstracción existente e
 
 ## Proyecto 4 — Twitter/X Integration
 
-**Estado: Implementado — pendiente testing manual con API keys reales**
+**Estado: Tools implementados — pendiente skill Telegram y testing manual**
 
 ### Lo que ya existe
 
 - `src/tools/twitter.ts` — 3 tools: `twitter_search` (Bearer Token), `twitter_read` (Bearer Token), `twitter_post` (OAuth 1.0a con firma HMAC-SHA1 built-in, sin deps externas)
-- `src/skills/twitter/` — Telegram skill con comandos `/twitter search`, `/twitter trending`, `/twitter post`
 - `TwitterConfigSchema` en `src/config.ts` — apiKey, apiSecret, bearerToken, accessToken (optional), accessSecret (optional)
 - `twitter_post` requiere `ask_permission` antes de publicar; solo se registra cuando hay credenciales de escritura
 - Rate limiting: 300/15min (search), 200/15min (tweets)
@@ -129,6 +128,7 @@ El bot está actualmente acoplado a grammy/Telegram. La abstracción existente e
 
 ### Lo que falta
 
+- **`src/skills/twitter/` skill** — No existe. Los tools están disponibles vía LLM pero no hay Telegram skill con comandos `/twitter search`, `/twitter trending`, `/twitter post`.
 - Configurar app en developer.twitter.com y obtener API keys
 - Testing manual con API keys reales
 

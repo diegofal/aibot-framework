@@ -31,6 +31,7 @@ export type CronServiceDeps = {
   storePath: string;
   cronEnabled: boolean;
   sendMessage: (chatId: number, text: string, botId: string) => Promise<void>;
+  appendMemory?: (botId: string, text: string) => void;
   resolveSkillHandler: (
     payload: Extract<CronPayload, { kind: 'skillJob' }>
   ) => (() => Promise<string | undefined>) | undefined;

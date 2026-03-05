@@ -26,6 +26,7 @@
       <a href="configuration.html">Configuration</a>
       <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
+        <a href="backlog.html">Backlog</a>
     </nav>
   </aside>
 
@@ -35,25 +36,25 @@
 
       <div class="page-header">
         <h1>Bot Core Modules</h1>
-        <p>Deep dive into all 30 modules in <code>src/bot/</code></p>
+        <p>Deep dive into all 40 modules in <code>src/bot/</code></p>
       </div>
 
       <!-- Stats -->
       <div class="stat-row">
         <div class="stat">
-          <div class="number">30</div>
+          <div class="number">40</div>
           <div class="label">Modules</div>
         </div>
         <div class="stat">
-          <div class="number">~7,200</div>
+          <div class="number">~14,500</div>
           <div class="label">Lines of Code</div>
         </div>
         <div class="stat">
-          <div class="number">7</div>
+          <div class="number">8</div>
           <div class="label">Groups</div>
         </div>
         <div class="stat">
-          <div class="number">16</div>
+          <div class="number">20</div>
           <div class="label">Classes</div>
         </div>
       </div>
@@ -333,7 +334,7 @@
       <!-- ================================================================ -->
       <div class="category-header">
         <h2>Tool System</h2>
-        <span class="count">3 modules</span>
+        <span class="count">5 modules</span>
       </div>
 
       <!-- tool-registry.ts -->
@@ -638,6 +639,48 @@
         </table>
         <h4>Dependencies</h4>
         <p><code>./types</code>, <code>./tool-registry</code>, <code>../config</code> (resolveAgentConfig), <code>../humanizer-prompt</code>, <code>../karma/service</code></p>
+      </div>
+
+      <!-- tool-loop-detector.ts -->
+      <div class="module-section" id="tool-loop-detector">
+        <h3>tool-loop-detector.ts</h3>
+        <div class="file-path">src/bot/tool-loop-detector.ts &middot; 551 lines</div>
+        <p class="responsibility">
+          Detects when an LLM is stuck in repetitive tool call patterns and provides
+          warning/blocking signals to break the loop. 4 detection strategies: global circuit breaker,
+          known poll no-progress, ping-pong alternation, and generic repeat. Adapted from OpenClaw's
+          <code>tool-loop-detection.ts</code>. Injected into <code>ToolExecutor</code> via options.
+          Critical detections block tool execution; warnings append a notice to tool results.
+          Configurable via <code>agentLoop.loopDetection</code> with per-bot overrides.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>ToolLoopDetector</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>check</td><td>name: string, args: Record</td><td>Pre-check before execution. Returns critical (block) or warning signal.</td></tr>
+            <tr><td>recordCall</td><td>name: string, args: Record</td><td>Records a tool call after execution for pattern tracking.</td></tr>
+            <tr><td>recordOutcome</td><td>name: string, args: Record, result: string</td><td>Records outcome with content hash for result-aware detection.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>../logger</code></p>
+      </div>
+
+      <!-- llm-resilience.ts -->
+      <div class="module-section" id="llm-resilience">
+        <h3>llm-resilience.ts</h3>
+        <div class="file-path">src/bot/llm-resilience.ts &middot; 460 lines</div>
+        <p class="responsibility">
+          LLM resilience layer providing fallback strategies, health monitoring, and automatic
+          recovery for LLM backend failures. Manages primary/fallback backend switching,
+          circuit breaker patterns, and graceful degradation when LLM services are unavailable.
+        </p>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>../core/llm-client</code>, <code>../logger</code></p>
       </div>
 
       <!-- ================================================================ -->
@@ -1033,7 +1076,7 @@
       <!-- ================================================================ -->
       <div class="category-header">
         <h2>Facade</h2>
-        <span class="count">2 modules</span>
+        <span class="count">4 modules</span>
       </div>
 
       <!-- bot-manager.ts -->
@@ -1115,6 +1158,61 @@
         </ul>
         <h4>Dependencies</h4>
         <p><code>./types</code>, <code>../tenant/manager</code>, <code>../config</code></p>
+      </div>
+
+      <!-- bot-export-service.ts -->
+      <div class="module-section" id="bot-export-service">
+        <h3>bot-export-service.ts</h3>
+        <div class="file-path">src/bot/bot-export-service.ts &middot; 391 lines</div>
+        <p class="responsibility">
+          Full bot backup and restoration as portable <code>.tar.gz</code> archives. Exports include:
+          manifest, sanitized config (no tokens), soul directory (excludes <code>.versions/</code>),
+          core memory (JSONL), and optionally productions, conversations, and karma. Import supports
+          ID/name overrides, conflict detection (409), and overwrite mode. Also re-indexes soul files
+          for RAG search and handles core memory import with Ollama fallback.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>BotExportService</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>exportBot</td><td>botId: string, options</td><td>Creates a .tar.gz archive containing bot config, soul files, core memory, and optional extras.</td></tr>
+            <tr><td>importBot</td><td>archivePath: string, options</td><td>Imports a bot from archive with conflict detection, ID/name overrides, and post-import reindexing.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>../config</code>, <code>../memory/manager</code>, <code>../memory/core-memory</code>, <code>../logger</code>, <code>node:fs</code>, <code>node:path</code></p>
+      </div>
+
+      <!-- bot-reset.ts -->
+      <div class="module-section" id="bot-reset">
+        <h3>bot-reset.ts</h3>
+        <div class="file-path">src/bot/bot-reset.ts &middot; 355 lines</div>
+        <p class="responsibility">
+          Comprehensive bot reset across 22 categories of bot-specific data. Clears sessions,
+          soul files (with baseline restore), goals, memory, versions, feedback, core memory,
+          search index, ask-human/ask-permission stores, dynamic tools, karma, production skill
+          tools (runtime + disk + config refs), conversations, tool audit logs, entire productions
+          directory, agent scheduler state, collaboration tracker records, collaboration sessions,
+          and activity stream events. All steps are optional &mdash; missing deps skip gracefully.
+          Also unloads production skill tools from runtime.
+        </p>
+        <h4>Exported Classes</h4>
+        <ul class="inline-list">
+          <li><code>BotResetService</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>reset</td><td>botId: string</td><td>Full 22-step reset. Returns a summary of what was cleared.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>./types</code>, <code>../config</code>, <code>../soul</code>, <code>../memory/manager</code>, <code>../logger</code></p>
       </div>
 
       <!-- ================================================================ -->

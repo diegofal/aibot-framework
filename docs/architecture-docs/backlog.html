@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backlog - AIBot Framework Architecture</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    .backlog-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+      transition: border-color .15s;
+    }
+    .backlog-card:hover { border-color: var(--accent); }
+
+    .backlog-card .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+
+    .backlog-card .card-header h3 {
+      margin: 0;
+      font-size: 16px;
+      color: var(--text);
+    }
+
+    .backlog-card .card-desc {
+      color: var(--text-dim);
+      font-size: 13px;
+      line-height: 1.6;
+      margin-bottom: 12px;
+    }
+
+    .backlog-card ul {
+      margin: 8px 0 8px 20px;
+      color: var(--text-dim);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .backlog-card ul li code {
+      font-size: 12px;
+    }
+
+    .status-done { color: var(--green); font-weight: 600; }
+    .status-partial { color: var(--orange); font-weight: 600; }
+    .status-pending { color: var(--text-dim); font-weight: 600; }
+    .status-deferred { color: var(--text-dim); font-style: italic; }
+
+    .section-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-dim);
+      margin-top: 8px;
+    }
+
+    .remaining-list {
+      margin: 4px 0 0 20px;
+      color: var(--text-dim);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .ideas-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, 1fr);
+      margin: 16px 0 32px;
+    }
+    @media (max-width: 750px) {
+      .ideas-grid { grid-template-columns: 1fr; }
+    }
+
+    .idea-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .idea-card h4 {
+      font-size: 14px;
+      color: var(--text);
+      margin: 0 0 6px;
+    }
+    .idea-card p {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin: 0;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+
+    <!-- Hamburger (mobile) -->
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+    <!-- Backdrop (mobile) -->
+    <div class="sidebar-backdrop" id="backdrop"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        AIBot Framework
+        <small>Architecture Docs</small>
+      </div>
+      <nav>
+        <div class="nav-group">Pages</div>
+        <a href="index.html">Overview</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="bot-core.html">Bot Core Modules</a>
+        <a href="data-flows.html">Data Flows</a>
+        <a href="tools-skills.html">Tools &amp; Skills</a>
+        <a href="memory-soul.html">Memory &amp; Soul</a>
+        <a href="agent-loop.html">Agent Loop</a>
+        <a href="web-dashboard.html">Web Dashboard</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="simplifications.html">Simplifications</a>
+        <a href="multi-tenancy.html">Multi-Tenancy</a>
+        <a href="backlog.html" class="active">Backlog</a>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="content">
+
+        <!-- Page header -->
+        <div class="page-header">
+          <h1>Backlog</h1>
+          <p>Feature backlog, integration roadmap, and planned improvements</p>
+        </div>
+
+        <p>Living document tracking features, integrations, and improvements &mdash; organized by status. Last updated: <strong>2026-03-05</strong>.</p>
+
+        <!-- ============================================================ -->
+        <!--  IMPLEMENTED — PENDING TESTING                                -->
+        <!-- ============================================================ -->
+        <div class="category-header">
+          <h2 id="pending-testing">Implemented &mdash; Pending Manual Testing</h2>
+          <span class="count">4 items</span>
+        </div>
+
+        <!-- Audio Input -->
+        <div class="backlog-card">
+          <div class="card-header">
+            <h3>Audio Input (Voice-to-Text)</h3>
+            <span class="badge badge-green">Code Complete</span>
+          </div>
+          <div class="card-desc">
+            <code>processVoice()</code> in <code>src/media.ts</code> sends OGG to Whisper endpoint.
+            Handler <code>message:voice</code> in <code>src/bot/media-handlers.ts</code> injects transcription into conversation.
+            <code>WhisperConfigSchema</code> supports OpenAI and local whisper.cpp endpoints.
+            Authorization header sent conditionally when <code>apiKey</code> is present.
+            13 unit tests in <code>tests/media.test.ts</code>.
+          </div>
+          <div class="section-label">Remaining</div>
+          <ul class="remaining-list">
+            <li>Manual testing with real Telegram voice notes (requires <code>OPENAI_API_KEY</code>)</li>
+            <li>"Transcribing..." feedback message while processing</li>
+            <li>Support for <code>message:audio</code> (regular audio files, not just voice notes)</li>
+          </ul>
+        </div>
+
+        <!-- Audio Output -->
+        <div class="backlog-card">
+          <div class="card-header">
+            <h3>Audio Output (TTS)</h3>
+            <span class="badge badge-green">Code Complete</span>
+          </div>
+          <div class="card-desc">
+            <code>generateSpeech()</code> in <code>src/tts.ts</code> calls ElevenLabs API, returns OGG/Opus.
+            Inbound mode: TTS activates when user sends voice. Integrated in <code>conversation-pipeline.ts</code>.
+            Markdown stripping, text truncation, typing indicator (<code>record_voice</code>).
+            22 unit tests + 4 integration tests.
+          </div>
+          <div class="section-label">Remaining</div>
+          <ul class="remaining-list">
+            <li>Manual testing with real voice notes (requires <code>ELEVENLABS_API_KEY</code>)</li>
+            <li>Multi-provider support (OpenAI TTS as cheaper alternative)</li>
+            <li>Response caching for frequent answers</li>
+            <li>Outbound mode: <code>send_voice_message</code> tool where LLM decides when to speak</li>
+            <li><code>message:audio</code> support (regular audio files don&rsquo;t trigger TTS)</li>
+          </ul>
+        </div>
+
+        <!-- Twitter -->
+        <div class="backlog-card">
+          <div class="card-header">
+            <h3>Twitter/X Integration</h3>
+            <span class="badge badge-yellow">Partially Complete</span>
+          </div>
+          <div class="card-desc">
+            3 framework tools in <code>src/tools/twitter.ts</code>: <code>twitter_search</code> (Bearer Token),
+            <code>twitter_read</code> (Bearer Token), <code>twitter_post</code> (OAuth 1.0a with built-in HMAC-SHA1).
+            <code>twitter_post</code> requires <code>ask_permission</code>. Rate limiting, TTL cache, 19 unit tests.
+          </div>
+          <div class="section-label">Remaining</div>
+          <ul class="remaining-list">
+            <li><strong>Telegram skill</strong> &mdash; <code>src/skills/twitter/</code> does not exist. Need skill with <code>/twitter search</code>, <code>/twitter trending</code>, <code>/twitter post</code> commands.</li>
+            <li>Configure app at developer.twitter.com and obtain API keys</li>
+            <li>Manual testing with real API keys</li>
+          </ul>
+        </div>
+
+        <!-- Reddit -->
+        <div class="backlog-card">
+          <div class="card-header">
+            <h3>Reddit Integration</h3>
+            <span class="badge badge-green">Code Complete</span>
+          </div>
+          <div class="card-desc">
+            3 framework tools in <code>src/tools/reddit.ts</code> + Telegram skill in <code>src/skills/reddit/</code>.
+            OAuth2 script-app auth with promise-based mutex. Rate limiting 100 req/min. TTL cache (300s). 16 unit tests.
+          </div>
+          <div class="section-label">Remaining</div>
+          <ul class="remaining-list">
+            <li>Register app at reddit.com/prefs/apps (type "script")</li>
+            <li>Manual testing with real API keys</li>
+          </ul>
+        </div>
+
+        <!-- Calendar -->
+        <div class="backlog-card" style="margin-bottom:0">
+          <div class="card-header">
+            <h3>Calendly / Google Calendar Integration</h3>
+            <span class="badge badge-green">Code Complete</span>
+          </div>
+          <div class="card-desc">
+            3 framework tools in <code>src/tools/calendar.ts</code> + Telegram skill in <code>src/skills/calendar/</code>.
+            Provider abstraction (<code>CalendarProvider</code>) with Calendly and Google Calendar implementations.
+            <code>calendar_schedule</code> requires <code>ask_permission</code>. TTL cache (60s). 20 unit tests.
+          </div>
+          <div class="section-label">Remaining</div>
+          <ul class="remaining-list">
+            <li>Obtain Calendly or Google Calendar API key</li>
+            <li>Manual testing with real API keys</li>
+          </ul>
+        </div>
+
+        <!-- ============================================================ -->
+        <!--  RESEARCH / PLANNING                                          -->
+        <!-- ============================================================ -->
+        <div class="category-header">
+          <h2 id="research">Research &amp; Planning</h2>
+          <span class="count">2 items</span>
+        </div>
+
+        <!-- WhatsApp -->
+        <div class="backlog-card">
+          <div class="card-header">
+            <h3>WhatsApp Integration</h3>
+            <span class="badge badge-dim">Research</span>
+          </div>
+          <div class="card-desc">
+            The bot is currently Telegram-only via grammy. Minimal platform abstraction exists
+            (<code>TelegramClient</code> interface in <code>src/core/types.ts</code>).
+          </div>
+
+          <div class="section-label">Integration Options</div>
+          <table style="margin: 8px 0">
+            <thead><tr><th>Option</th><th>Approach</th><th>Trade-offs</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>A</strong></td>
+                <td>WhatsApp Business Cloud API (Meta)</td>
+                <td>Free for user-initiated messages (24h window). Requires Facebook Business account. Template approval for outbound.</td>
+              </tr>
+              <tr>
+                <td><strong>B</strong></td>
+                <td>Via provider (Twilio, MessageBird)</td>
+                <td>Friendlier API. Twilio already partially integrated (phone calls). Additional cost per message.</td>
+              </tr>
+              <tr>
+                <td><strong>C</strong></td>
+                <td>Open-source (whatsapp-web.js, Baileys)</td>
+                <td>Free but high risk of ban. Unstable reverse-engineered protocol. Not recommended for production.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="section-label">Required Refactoring</div>
+          <ul class="remaining-list">
+            <li>Abstract <code>TelegramClient</code> to <code>MessagingPlatform</code> interface</li>
+            <li>Handler adapter layer (grammy handlers &rarr; platform-agnostic)</li>
+            <li>Media handling (WhatsApp has its own media ID / download system)</li>
+            <li>Session key adaptation for WhatsApp chat IDs</li>
+            <li>Skills using Telegram-specific features (inline keyboards, callbacks)</li>
+          </ul>
+
+          <div class="section-label">Next Steps</div>
+          <ul class="remaining-list">
+            <li>Decide: refactor for multi-channel vs. separate WhatsApp bot sharing core</li>
+            <li>Design <code>MessagingPlatform</code> interface and adapter pattern</li>
+            <li>Choose WhatsApp API provider</li>
+            <li>POC with echo bot</li>
+          </ul>
+        </div>
+
+        <!-- Discord -->
+        <div class="backlog-card">
+          <div class="card-header">
+            <h3>Discord Integration</h3>
+            <span class="badge badge-dim">Deferred</span>
+          </div>
+          <div class="card-desc">
+            Requires the multi-channel abstraction from WhatsApp (above). A unified <code>Channel</code>
+            interface that supports Telegram, WhatsApp, and Discord under an adapter pattern.
+            Library: <code>discord.js</code>. OpenClaw uses <code>ChannelPlugin</code> with
+            <code>api.registerChannel()</code> as reference.
+          </div>
+          <div class="section-label">Blocked By</div>
+          <ul class="remaining-list">
+            <li>WhatsApp multi-channel abstraction (prerequisite)</li>
+          </ul>
+        </div>
+
+        <!-- ============================================================ -->
+        <!--  IDEAS / FUTURE                                               -->
+        <!-- ============================================================ -->
+        <div class="category-header">
+          <h2 id="ideas">Ideas &amp; Future Work</h2>
+          <span class="count">open-ended</span>
+        </div>
+
+        <div class="ideas-grid">
+          <div class="idea-card">
+            <h4>Multi-Channel Unification</h4>
+            <p>Abstract <code>Channel</code> interface for Telegram, WhatsApp, Discord, and future platforms without duplicating logic. Prerequisite for WhatsApp and Discord projects.</p>
+          </div>
+          <div class="idea-card">
+            <h4>Additional Calendar Providers</h4>
+            <p>Outlook Calendar, Cal.com integration beyond Calendly and Google Calendar.</p>
+          </div>
+          <div class="idea-card">
+            <h4>Social Media Pipeline</h4>
+            <p>Coordinated content creation &rarr; human review &rarr; multi-platform publishing (Twitter + Reddit) with scheduling.</p>
+          </div>
+          <div class="idea-card">
+            <h4>OpenAI TTS Provider</h4>
+            <p>Add OpenAI TTS as cheaper alternative to ElevenLabs for voice output. Multi-provider TTS with fallback.</p>
+          </div>
+          <div class="idea-card">
+            <h4>Twitter Telegram Skill</h4>
+            <p>Create <code>src/skills/twitter/</code> with <code>/twitter search</code>, <code>/twitter trending</code>, <code>/twitter post</code> commands to match the existing Reddit and Calendar skill patterns.</p>
+          </div>
+          <div class="idea-card">
+            <h4>Voice Message Outbound Mode</h4>
+            <p><code>send_voice_message</code> tool letting the LLM decide when to respond with voice instead of text.</p>
+          </div>
+        </div>
+
+      </div><!-- /content -->
+    </main>
+
+  </div><!-- /layout -->
+
+  <!-- Hamburger mobile JS -->
+  <script>
+    (function () {
+      var hamburger = document.getElementById('hamburger');
+      var sidebar   = document.getElementById('sidebar');
+      var backdrop  = document.getElementById('backdrop');
+
+      function toggle() {
+        sidebar.classList.toggle('open');
+        backdrop.classList.toggle('show');
+      }
+
+      function close() {
+        sidebar.classList.remove('open');
+        backdrop.classList.remove('show');
+      }
+
+      hamburger.addEventListener('click', toggle);
+      backdrop.addEventListener('click', close);
+
+      var links = sidebar.querySelectorAll('nav a');
+      for (var i = 0; i < links.length; i++) {
+        links[i].addEventListener('click', close);
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,5 +1,6 @@
+import { readdirSync } from 'node:fs';
 import { lstat, mkdir } from 'node:fs/promises';
-import { relative, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import type { Logger } from '../logger';
 import type { Tool, ToolResult } from './types';
 
@@ -232,7 +233,32 @@ export function createFileReadTool(config: FileToolsConfig): Tool {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (msg.includes('No such file') || msg.includes('ENOENT')) {
-          return { success: false, content: `File not found: ${rawPath}` };
+          let hint = '';
+          try {
+            const parentDir = dirname(validated);
+            const entries = readdirSync(parentDir);
+            if (entries.length > 0) {
+              const listed = entries.slice(0, 20).join(', ');
+              const suffix = entries.length > 20 ? ` ... (${entries.length} total)` : '';
+              hint = `\n\nFiles in ${dirname(rawPath)}/: ${listed}${suffix}`;
+            }
+          } catch {
+            /* parent doesn't exist either */
+          }
+          return { success: false, content: `File not found: ${rawPath}${hint}` };
+        }
+        if (msg.includes('Is a directory') || msg.includes('EISDIR')) {
+          try {
+            const entries = readdirSync(validated);
+            const listed = entries.slice(0, 30).join('\n  ');
+            const suffix = entries.length > 30 ? `\n  ... (${entries.length} total)` : '';
+            return {
+              success: false,
+              content: `"${rawPath}" is a directory. Contents:\n  ${listed}${suffix}`,
+            };
+          } catch {
+            /* fallthrough */
+          }
         }
         logger.error({ error: msg, path: rawPath }, 'file_read: failed');
         return { success: false, content: `Failed to read file: ${msg}` };

@@ -2,11 +2,22 @@
 
 ## Unreleased
 
+### Docs
+- **Architecture docs refresh** — Updated `tools-skills.html` (27→41 tools, 8→15 skills, added 6 missing skills, moved Planned Integrations to Implemented, added `signal_completion` tool), `index.html` (20→40 modules, 27→41 tools, 8→15 skills), `bot-core.html` (30→40 modules, ~7.2K→~14.5K lines, added `BotExportService`, `BotResetService`, `ToolLoopDetector`, `LlmResilience` module docs). Added Backlog link to all 12 sidebar navs.
+- **New Backlog page** (`docs/architecture-docs/backlog.html`) — Feature backlog imported from `docs/roadmap.md` with status tracking: Audio I/O, Twitter, Reddit, Calendar (pending testing), WhatsApp and Discord (research/deferred), plus Ideas section.
+- **README.md updated** — Added multi-tenant BaaS (6-phase), authentication (dual auth), bot export/import sections. Updated tool count (35→41), skill count (16→15), module count (38→40). Expanded MCP and tenant project structure. Added missing dashboard pages (Agent Proposals, Feedback). Added new config sections (mcp, agentProposals, collaboration). Removed non-existent twitter skill.
+- **roadmap.md** — Fixed Project 4 (Twitter) status: skill directory `src/skills/twitter/` does not exist (was incorrectly listed as implemented). Updated date to 2026-03-05.
+
 ### Added
 - **Per-bot `maxToolRounds` for conversations** — Each bot can now override the global `webTools.maxToolRounds` limit via `maxToolRounds` in its bot config. This controls how many tool call rounds the LLM can execute during a conversation or collaboration turn. Also raised the global ceiling from 10 to 50.
+- **Chatless cron scheduling (`memory_note` payload)** — Bots in agent-loop mode (no Telegram chat) can now schedule cron reminders. Previously, `cron add` rejected with "missing chat context" because all jobs required a `chatId` for Telegram message delivery. New `kind: 'memory_note'` payload writes the reminder text to the bot's daily memory log when it fires, so the bot picks it up on its next agent loop iteration.
 
 ### Fixed
 - **`__admin__` tenant blocked by quota checks** — Bots with `tenantId: "__admin__"` were permanently blocked from running agent loops and conversations because `__admin__` is a synthetic super-tenant (not a real tenant in TenantManager), causing `checkQuota` to always return `false`. Fixed by exempting `__admin__` from quota checks, usage recording, and bot-limit validation in `TenantFacade`, consistent with how it's already exempted from tenant scoping.
+- **`manage_goals` alias expansion** — Added `jobId`, `job`, and `id` to goal parameter aliases. LLMs used these names for `complete` and `update` actions, causing "Missing required parameter: goal" errors.
+- **`manage_goals` fuzzy matching (Jaccard similarity)** — Added 5th matching strategy using Jaccard word similarity scoring (threshold ≥0.3) as fallback when substring, slug, and word-based strategies all fail. Also strips filler words (`goal`, `task`, `objective`, `item`, `todo`) from slug-normalized searches so inputs like `"goal-audit-presencia-digital"` match `"Auditar presencia digital"`.
+- **`file_read` directory listing on errors** — When a file is not found, the error now includes a listing of files in the parent directory (up to 20 entries) so the LLM can self-correct. When reading a directory, returns its contents instead of a generic "Directories cannot be read" error.
+- **`ask_permission` duplicate request spam** — Bots re-requested the same permission 5-6 times per run because dedup only checked the `pending` queue. Once a permission was approved and consumed, the guard dropped and the bot asked again. Extended dedup to check `resolved` queue + `history` (24h window). Also added resource path normalization so `/home/diego/projects/aibot-framework/src/bot/tool-executor.ts` and `src/bot/tool-executor.ts` are recognized as the same resource.
 - **Duplicate skills in agent edit UI** — `GET /api/skills` concatenated built-in and external skill lists without deduplication, causing skills present in both registries to appear twice in the edit form. Added dedup by skill ID (builtin preferred over external, plus external-to-external dedup). Also added `[...new Set()]` dedup on PATCH/POST agent save to prevent duplicate IDs from being persisted.
 
 ### Changed
