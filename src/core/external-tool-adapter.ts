@@ -2,6 +2,7 @@ import type { CronService } from '../cron';
 import type { Logger } from '../logger';
 import type { Tool, ToolResult } from '../tools/types';
 import type { ExternalToolDef } from './external-skill-loader';
+import type { ToolExecuteFn } from './types';
 
 /**
  * TSC Logger interface (single-arg string methods).
@@ -31,6 +32,9 @@ interface TscSkillContext {
   cron: {
     add(opts: Record<string, unknown>): Promise<void>;
     remove(opts: Record<string, unknown>): Promise<void>;
+  };
+  tools: {
+    execute: ToolExecuteFn;
   };
 }
 
@@ -178,7 +182,8 @@ export function adaptExternalTool(
   skillConfig: Record<string, unknown>,
   state: Map<string, unknown>,
   logger: Logger,
-  cronDeps?: ExternalToolCronDeps
+  cronDeps?: ExternalToolCronDeps,
+  toolExecuteFn?: ToolExecuteFn
 ): Tool {
   const namespacedName = `${skillId}_${toolDef.name}`;
   const tscLogger = wrapLogger(logger, skillId);
@@ -202,6 +207,10 @@ export function adaptExternalTool(
     },
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
       currentArgs = args;
+      const noopExecute: ToolExecuteFn = async () => undefined;
+
+      const toolsBridge = Object.freeze({ execute: toolExecuteFn ?? noopExecute });
+
       const context: TscSkillContext = {
         state,
         config: skillConfig,
@@ -215,6 +224,7 @@ export function adaptExternalTool(
           has: (key: string) => state.has(key),
         },
         cron: cronAdapter,
+        tools: toolsBridge,
       };
 
       try {

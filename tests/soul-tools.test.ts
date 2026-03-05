@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { createSaveMemoryTool } from '../src/tools/soul';
+import { createSaveMemoryTool, resolveFactParam } from '../src/tools/soul';
 
 const mockLogger = {
   info: mock(() => {}),
@@ -64,5 +64,115 @@ describe('save_memory tool', () => {
     const tool = createSaveMemoryTool(() => ({ appendDailyMemory: () => {} }) as any);
     const result = await tool.execute({ fact: '', _botId: 'test' }, mockLogger);
     expect(result.success).toBe(false);
+  });
+
+  test('accepts "content" as alias for "fact" (common LLM mistake)', async () => {
+    let savedFact = '';
+    const mockSoulLoader = {
+      appendDailyMemory: (f: string) => {
+        savedFact = f;
+      },
+    };
+    const tool = createSaveMemoryTool(() => mockSoulLoader as any);
+
+    const result = await tool.execute(
+      { content: 'Curiosity scan 2026-03-04', source: 'web_search', _botId: 'test' },
+      mockLogger
+    );
+
+    expect(result.success).toBe(true);
+    expect(savedFact).toBe('Curiosity scan 2026-03-04');
+  });
+
+  test('accepts "value" as alias for "fact"', async () => {
+    let savedFact = '';
+    const mockSoulLoader = {
+      appendDailyMemory: (f: string) => {
+        savedFact = f;
+      },
+    };
+    const tool = createSaveMemoryTool(() => mockSoulLoader as any);
+
+    const result = await tool.execute(
+      { category: 'pricing', key: 'deploy-script', value: 'Created deploy script', _botId: 'test' },
+      mockLogger
+    );
+
+    expect(result.success).toBe(true);
+    expect(savedFact).toBe('Created deploy script');
+  });
+
+  test('accepts "text" as alias for "fact"', async () => {
+    let savedFact = '';
+    const mockSoulLoader = {
+      appendDailyMemory: (f: string) => {
+        savedFact = f;
+      },
+    };
+    const tool = createSaveMemoryTool(() => mockSoulLoader as any);
+
+    const result = await tool.execute({ text: 'Some important note', _botId: 'test' }, mockLogger);
+
+    expect(result.success).toBe(true);
+    expect(savedFact).toBe('Some important note');
+  });
+
+  test('"fact" takes priority over aliases', async () => {
+    let savedFact = '';
+    const mockSoulLoader = {
+      appendDailyMemory: (f: string) => {
+        savedFact = f;
+      },
+    };
+    const tool = createSaveMemoryTool(() => mockSoulLoader as any);
+
+    const result = await tool.execute(
+      { fact: 'correct value', content: 'should be ignored', _botId: 'test' },
+      mockLogger
+    );
+
+    expect(result.success).toBe(true);
+    expect(savedFact).toBe('correct value');
+  });
+
+  test('rejects when no alias has a value either', async () => {
+    const tool = createSaveMemoryTool(() => ({ appendDailyMemory: () => {} }) as any);
+    const result = await tool.execute({ source: 'web_search', _botId: 'test' }, mockLogger);
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('resolveFactParam', () => {
+  test('returns fact when present', () => {
+    expect(resolveFactParam({ fact: 'hello' })).toBe('hello');
+  });
+
+  test('returns content as fallback', () => {
+    expect(resolveFactParam({ content: 'hello' })).toBe('hello');
+  });
+
+  test('returns text as fallback', () => {
+    expect(resolveFactParam({ text: 'hello' })).toBe('hello');
+  });
+
+  test('returns value as fallback', () => {
+    expect(resolveFactParam({ value: 'hello' })).toBe('hello');
+  });
+
+  test('returns empty for no matching key', () => {
+    expect(resolveFactParam({ source: 'web' })).toBe('');
+  });
+
+  test('fact takes priority over aliases', () => {
+    expect(resolveFactParam({ fact: 'primary', content: 'alias' })).toBe('primary');
+  });
+
+  test('trims whitespace', () => {
+    expect(resolveFactParam({ fact: '  hello  ' })).toBe('hello');
+    expect(resolveFactParam({ content: '  world  ' })).toBe('world');
+  });
+
+  test('skips empty string aliases', () => {
+    expect(resolveFactParam({ content: '', text: '', value: 'found' })).toBe('found');
   });
 });

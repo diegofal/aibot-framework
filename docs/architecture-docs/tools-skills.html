@@ -944,7 +944,7 @@
           <li>Validation checks: ID format, reserved names, duplicates, per-bot limits, total agent cap</li>
           <li>The proposal is stored in <code>AgentProposalStore</code> with status <span class="badge badge-medium">PENDING</span></li>
           <li>A human reviews the proposal in the <strong>Agent Proposals</strong> dashboard page</li>
-          <li>On approval: a <code>BotConfig</code> entry is created (disabled, no token), soul directory is initialized, and AI soul generation is attempted via Claude CLI</li>
+          <li>On approval: a <code>BotConfig</code> entry is created (disabled, no token), soul directory is initialized, and AI soul generation is attempted (Claude CLI by default, configurable via <code>llmBackend</code>/<code>model</code> parameters)</li>
           <li>The human starts the new agent from the Agents page when ready</li>
         </ol>
 

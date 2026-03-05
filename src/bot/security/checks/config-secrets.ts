@@ -100,7 +100,8 @@ function scanConfigObject(
           severity: 'warn',
           title: `Possible hardcoded secret in config: ${fullKey}`,
           detail: `${configFilePath} key "${fullKey}" has a value that resembles a credential (starts with "${value.slice(0, 6)}...").`,
-          remediation: `If this is a secret, move it to an env var. If not, this is a false positive.`,
+          remediation:
+            'If this is a secret, move it to an env var. If not, this is a false positive.',
         });
       }
     } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {

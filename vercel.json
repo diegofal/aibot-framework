@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "name": "aibot-framework-landing",
+  "builds": [
+    {
+      "src": "productions/monetize/assets/*.html",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/",
+      "dest": "/productions/monetize/assets/02_carrd-landing-template.html"
+    }
+  ]
+}

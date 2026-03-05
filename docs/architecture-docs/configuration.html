@@ -961,6 +961,18 @@ const config = await loadConfig('./config/config.json');
               <td><code>true</code></td>
               <td>&mdash;</td>
             </tr>
+            <tr>
+              <td><code>llmBackend</code></td>
+              <td>string</td>
+              <td><code>"claude-cli"</code></td>
+              <td><code>"ollama"</code> | <code>"claude-cli"</code></td>
+            </tr>
+            <tr>
+              <td><code>model</code></td>
+              <td>string</td>
+              <td>(optional)</td>
+              <td>Model name for Ollama; uses primary model if empty</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1411,7 +1423,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>maxToolRounds</code></td>
               <td>number</td>
               <td><code>5</code></td>
-              <td>min: 1, max: 10 (integer)</td>
+              <td>min: 1, max: 50 (integer). Per-bot <code>maxToolRounds</code> in <code>BotConfigSchema</code> takes priority.</td>
             </tr>
           </tbody>
         </table>
@@ -2042,6 +2054,12 @@ const config = await loadConfig('./config/config.json');
               <td>string[]</td>
               <td><code>[]</code></td>
               <td>External skill IDs to disable for this bot (disables all tools from those skills)</td>
+            </tr>
+            <tr>
+              <td><code>maxToolRounds</code></td>
+              <td>number</td>
+              <td>&mdash; (optional)</td>
+              <td>Per-bot max tool call rounds for conversations (1&ndash;50). Overrides global <code>webTools.maxToolRounds</code>.</td>
             </tr>
             <tr>
               <td><code>conversation</code></td>

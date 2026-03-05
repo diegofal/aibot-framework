@@ -1,4 +1,4 @@
-import { escapeHtml } from './shared.js';
+import { api, escapeHtml } from './shared.js';
 
 /* ── Constants ─────────────────────────────────────────────── */
 
@@ -177,8 +177,7 @@ async function evLoadOlder() {
   const indicator = createLoadingIndicator();
   evContainer.insertBefore(indicator, evContainer.firstChild);
   try {
-    const res = await fetch(`/api/activity?limit=${EV_PAGE_SIZE}&offset=${evOffset}`);
-    const data = await res.json();
+    const data = await api(`/api/activity?limit=${EV_PAGE_SIZE}&offset=${evOffset}`);
     indicator.remove();
     const events = data.events || [];
     if (events.length > 0) {
@@ -326,8 +325,7 @@ async function logLoadOlder() {
   const indicator = createLoadingIndicator();
   logContainer.insertBefore(indicator, logContainer.firstChild);
   try {
-    const res = await fetch(`/api/logs?limit=${LOG_PAGE_SIZE}&offset=${logOffset}`);
-    const data = await res.json();
+    const data = await api(`/api/logs?limit=${LOG_PAGE_SIZE}&offset=${logOffset}`);
     indicator.remove();
     const lines = data.lines || [];
     if (lines.length > 0) {
@@ -453,8 +451,8 @@ export async function renderActivity(el) {
   // Fetch agents for filter dropdowns
   let agents = [];
   try {
-    const res = await fetch('/api/agents');
-    agents = await res.json();
+    const data = await api('/api/agents');
+    if (Array.isArray(data)) agents = data;
   } catch {
     /* ignore */
   }

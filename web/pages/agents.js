@@ -95,11 +95,12 @@ function renderAgentLoopResult(r) {
 export async function renderAgents(el) {
   el.innerHTML = '<div class="page-title">Agents</div><p class="text-dim">Loading...</p>';
 
-  const [agents, skills, karmaScores, loopState] = await Promise.all([
+  const [agents, skills, karmaScores, loopState, defaults] = await Promise.all([
     api('/api/agents'),
     api('/api/skills'),
     api('/api/karma'),
     api('/api/agent-loop'),
+    api('/api/agents/defaults'),
   ]);
 
   // Build karma lookup by botId (graceful if karma is disabled)
@@ -118,12 +119,13 @@ export async function renderAgents(el) {
     <div class="flex-between mb-16">
       <div class="page-title">Agents <span class="count">${agents.length}</span></div>
       <div style="display:flex;gap:8px">
+        <button class="btn" id="btn-start-all">Start All</button>
         <button class="btn" id="btn-import-agent">Import Agent</button>
         <button class="btn btn-primary" id="btn-new-agent">+ New Agent</button>
       </div>
     </div>
     <table>
-      <thead><tr><th>Name</th><th>ID</th><th>Status</th><th>Karma</th><th>Skills</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Status</th><th>Karma</th><th>Skills</th><th>Actions</th></tr></thead>
       <tbody id="agents-tbody"></tbody>
     </table>
   `;
@@ -141,9 +143,20 @@ export async function renderAgents(el) {
 
     const tr = document.createElement('tr');
     const karma = karmaMap[agent.id];
+    const effectiveModel = agent.llmBackend === 'claude-cli' ? 'claude-cli' : agent.model || '';
+    const modelOptions = (defaults.availableModels || [])
+      .map(
+        (m) =>
+          `<option value="${escapeHtml(m)}"${m === effectiveModel ? ' selected' : ''}>${escapeHtml(m)}</option>`
+      )
+      .join('');
     tr.innerHTML = `
       <td><a href="#/agents/${agent.id}">${escapeHtml(agent.name)}</a></td>
       <td class="text-dim">${escapeHtml(agent.id)}</td>
+      <td><select class="inline-model-select" data-agent-id="${agent.id}" style="font-size:12px;padding:2px 4px;max-width:170px">
+        <option value=""${!effectiveModel ? ' selected' : ''}>Global (${escapeHtml(defaults.model)})</option>
+        ${modelOptions}
+      </select></td>
       <td>${statusBadge}</td>
       <td><a href="#/karma/${encodeURIComponent(agent.id)}" style="text-decoration:none">${karmaCompact(karma?.current, karma?.trend)}</a></td>
       <td class="text-dim">${agent.skills.length}</td>
@@ -237,6 +250,52 @@ export async function renderAgents(el) {
         renderAgents(el);
       }
     }
+  });
+
+  // Inline model change
+  tbody.addEventListener('change', async (e) => {
+    const select = e.target.closest('.inline-model-select');
+    if (!select) return;
+    const agentId = select.dataset.agentId;
+    const selectedModel = select.value.trim();
+
+    const patch = {};
+    if (selectedModel === 'claude-cli') {
+      patch.model = null;
+      patch.llmBackend = 'claude-cli';
+    } else {
+      patch.model = selectedModel || null;
+      patch.llmBackend = null;
+    }
+
+    select.disabled = true;
+    const res = await api(`/api/agents/${agentId}`, { method: 'PATCH', body: patch });
+    select.disabled = false;
+    if (res.error) {
+      alert(`Failed to update model: ${res.error}`);
+      renderAgents(el);
+    }
+  });
+
+  document.getElementById('btn-start-all').addEventListener('click', async () => {
+    const stoppedAgents = agents.filter((a) => a.enabled && !a.running);
+    if (stoppedAgents.length === 0) {
+      alert('All enabled agents are already running.');
+      return;
+    }
+
+    const btn = document.getElementById('btn-start-all');
+    btn.disabled = true;
+    btn.textContent = `Starting ${stoppedAgents.length}...`;
+
+    const errors = [];
+    for (const agent of stoppedAgents) {
+      const res = await api(`/api/agents/${agent.id}/start`, { method: 'POST' });
+      if (res.error) errors.push(`${agent.name}: ${res.error}`);
+    }
+
+    if (errors.length) alert(`Some agents failed to start:\n${errors.join('\n')}`);
+    renderAgents(el);
   });
 
   document.getElementById('btn-new-agent').addEventListener('click', () => {
@@ -458,11 +517,54 @@ export async function renderAgentDetail(el, id) {
   }
 }
 
+function buildSoulStatusBanner(soulStatus) {
+  if (!soulStatus || soulStatus.error) {
+    return `<div class="soul-banner soul-banner-error">
+      <span class="soul-banner-icon">&#9888;</span>
+      <div class="soul-banner-text">
+        <strong>Soul status unknown</strong>
+        <span class="text-dim text-sm">Could not check soul files.</span>
+      </div>
+      <button class="btn btn-sm btn-primary" id="btn-soul-retry">Generate Soul</button>
+    </div>`;
+  }
+
+  if (soulStatus.complete) return '';
+
+  const missing = [];
+  if (!soulStatus.files.identity.exists || soulStatus.files.identity.length === 0)
+    missing.push('IDENTITY.md');
+  if (!soulStatus.files.soul.exists || soulStatus.files.soul.length === 0) missing.push('SOUL.md');
+  if (!soulStatus.files.motivations.exists || soulStatus.files.motivations.length === 0)
+    missing.push('MOTIVATIONS.md');
+
+  if (!soulStatus.hasSoulDir) {
+    return `<div class="soul-banner soul-banner-error">
+      <span class="soul-banner-icon">&#9888;</span>
+      <div class="soul-banner-text">
+        <strong>No soul directory</strong>
+        <span class="text-dim text-sm">Soul files have not been created yet. Generate a soul to give this agent a personality.</span>
+      </div>
+      <button class="btn btn-sm btn-primary" id="btn-soul-retry">Generate Soul</button>
+    </div>`;
+  }
+
+  return `<div class="soul-banner soul-banner-warn">
+    <span class="soul-banner-icon">&#9888;</span>
+    <div class="soul-banner-text">
+      <strong>Incomplete soul files</strong>
+      <span class="text-dim text-sm">Missing: ${missing.join(', ')}. Generate or regenerate soul to fix this.</span>
+    </div>
+    <button class="btn btn-sm btn-primary" id="btn-soul-retry">Generate Soul</button>
+  </div>`;
+}
+
 export async function renderAgentEdit(el, id) {
-  const [agent, skills, defaults] = await Promise.all([
+  const [agent, skills, defaults, soulStatus] = await Promise.all([
     api(`/api/agents/${id}`),
     api('/api/skills'),
     api('/api/agents/defaults'),
+    api(`/api/agents/${id}/soul-status`),
   ]);
 
   if (agent.error) {
@@ -470,11 +572,14 @@ export async function renderAgentEdit(el, id) {
     return;
   }
 
+  const soulBanner = buildSoulStatusBanner(soulStatus);
+
   el.innerHTML = `
     <div class="detail-header">
       <a href="#/agents/${id}" class="back">&larr;</a>
       <div class="page-title">Edit ${escapeHtml(agent.name)}</div>
     </div>
+    ${soulBanner}
     <form id="edit-form" class="detail-card">
       <div class="form-group">
         <label>Name</label>
@@ -493,6 +598,10 @@ export async function renderAgentEdit(el, id) {
       </div>
       <div class="form-group">
         <label>Skills</label>
+        <div style="margin-bottom:6px">
+          <a href="#" id="skills-select-all" class="text-sm" style="margin-right:12px">Select all</a>
+          <a href="#" id="skills-unselect-all" class="text-sm">Unselect all</a>
+        </div>
         <div class="checkbox-group" id="skills-group">
           ${skills
             .map(
@@ -662,6 +771,22 @@ export async function renderAgentEdit(el, id) {
     });
   });
 
+  // Skills select all / unselect all
+  function setAllSkillCheckboxes(checked) {
+    el.querySelectorAll('#skills-group input[type="checkbox"]').forEach((inp) => {
+      inp.checked = checked;
+      inp.parentElement.classList.toggle('checked', checked);
+    });
+  }
+  document.getElementById('skills-select-all')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAllSkillCheckboxes(true);
+  });
+  document.getElementById('skills-unselect-all')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAllSkillCheckboxes(false);
+  });
+
   // Init custom soul button
   document.getElementById('btn-init-soul').addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -678,10 +803,18 @@ export async function renderAgentEdit(el, id) {
     }, 2000);
   });
 
-  // Generate soul button
+  // Generate soul button (bottom of form)
   document.getElementById('btn-generate-soul').addEventListener('click', () => {
     showGenerateSoulModal(id, agent.name, () => renderAgentEdit(el, id));
   });
+
+  // Soul status banner retry button
+  const soulRetryBtn = document.getElementById('btn-soul-retry');
+  if (soulRetryBtn) {
+    soulRetryBtn.addEventListener('click', () => {
+      showGenerateSoulModal(id, agent.name, () => renderAgentEdit(el, id));
+    });
+  }
 
   // Load ElevenLabs voices button
   const loadVoicesBtn = document.getElementById('btn-load-voices');
@@ -737,17 +870,17 @@ export async function renderAgentEdit(el, id) {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    // Per-agent overrides (empty string = clear override)
+    // Per-agent overrides (use null to clear — undefined is stripped by JSON.stringify)
     const selectedModel = form.model.value.trim();
     if (selectedModel === 'claude-cli') {
-      patch.model = undefined;
+      patch.model = null;
       patch.llmBackend = 'claude-cli';
     } else {
-      patch.model = selectedModel || undefined;
-      patch.llmBackend = undefined;
+      patch.model = selectedModel || null;
+      patch.llmBackend = null;
     }
-    patch.soulDir = form.soulDir.value.trim() || undefined;
-    patch.workDir = form.workDir.value.trim() || undefined;
+    patch.soulDir = form.soulDir.value.trim() || null;
+    patch.workDir = form.workDir.value.trim() || null;
 
     // Build conversation overrides
     const systemPrompt = form.systemPrompt.value.trim() || undefined;
@@ -844,7 +977,10 @@ function showCloneModal(sourceId, el, onDone) {
   });
 }
 
-function showGenerateSoulModal(agentId, agentName, onComplete) {
+async function showGenerateSoulModal(agentId, agentName, onComplete) {
+  const defaults = await api('/api/agents/defaults');
+  const models = defaults.availableModels || ['claude-cli'];
+
   showModal(`
     <div class="modal-title">Generate Soul with AI</div>
     <div class="form-group">
@@ -868,6 +1004,12 @@ function showGenerateSoulModal(agentId, agentName, onComplete) {
         <input type="text" id="gen-emoji" placeholder="AI picks if empty" maxlength="4" style="width:80px">
       </div>
     </div>
+    <div class="form-group">
+      <label>Generation Model</label>
+      <select id="gen-model">
+        ${models.map((m) => `<option value="${escapeHtml(m)}"${m === 'claude-cli' ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('')}
+      </select>
+    </div>
     <div class="modal-actions">
       <button class="btn" id="gen-cancel">Cancel</button>
       <button class="btn btn-primary" id="gen-submit">Generate</button>
@@ -880,11 +1022,15 @@ function showGenerateSoulModal(agentId, agentName, onComplete) {
     const personalityDescription = document.getElementById('gen-personality').value.trim();
     const language = document.getElementById('gen-language').value;
     const emoji = document.getElementById('gen-emoji').value.trim();
+    const selectedModel = document.getElementById('gen-model').value;
 
     if (!role || !personalityDescription) {
       alert('Role and personality description are required.');
       return;
     }
+
+    const llmBackend = selectedModel === 'claude-cli' ? 'claude-cli' : 'ollama';
+    const model = selectedModel === 'claude-cli' ? undefined : selectedModel;
 
     const btn = document.getElementById('gen-submit');
     btn.disabled = true;
@@ -899,6 +1045,8 @@ function showGenerateSoulModal(agentId, agentName, onComplete) {
           personalityDescription,
           language,
           emoji: emoji || undefined,
+          llmBackend,
+          model,
         },
       });
 
@@ -913,7 +1061,7 @@ function showGenerateSoulModal(agentId, agentName, onComplete) {
         agentId,
         agentName,
         result,
-        { role, personalityDescription, language, emoji },
+        { role, personalityDescription, language, emoji, llmBackend, model },
         { onComplete }
       );
     } catch (err) {
@@ -971,6 +1119,8 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
           personalityDescription: inputData.personalityDescription,
           language: inputData.language,
           emoji: inputData.emoji || undefined,
+          llmBackend: inputData.llmBackend,
+          model: inputData.model,
         },
       });
 
@@ -1019,7 +1169,10 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
   });
 }
 
-function showNewAgentModal(skills, el) {
+async function showNewAgentModal(skills, el) {
+  const defaults = await api('/api/agents/defaults');
+  const models = defaults.availableModels || ['claude-cli'];
+
   showModal(`
     <div class="modal-title">New Agent</div>
     <div class="form-group">
@@ -1057,6 +1210,12 @@ function showNewAgentModal(skills, el) {
         <input type="text" id="new-emoji" placeholder="AI picks if empty" maxlength="4" style="width:80px">
       </div>
     </div>
+    <div class="form-group">
+      <label>Generation Model</label>
+      <select id="new-gen-model">
+        ${models.map((m) => `<option value="${escapeHtml(m)}"${m === 'claude-cli' ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('')}
+      </select>
+    </div>
     <div class="modal-actions">
       <button class="btn" id="new-cancel">Cancel</button>
       <button class="btn btn-primary" id="new-confirm">Create & Generate Soul</button>
@@ -1072,11 +1231,15 @@ function showNewAgentModal(skills, el) {
     const personalityDescription = document.getElementById('new-personality').value.trim();
     const language = document.getElementById('new-language').value;
     const emoji = document.getElementById('new-emoji').value.trim();
+    const selectedModel = document.getElementById('new-gen-model').value;
 
     if (!id || !name || !token || !role || !personalityDescription) {
       alert('ID, Name, Token, Role, and Personality Description are required.');
       return;
     }
+
+    const llmBackend = selectedModel === 'claude-cli' ? 'claude-cli' : 'ollama';
+    const model = selectedModel === 'claude-cli' ? undefined : selectedModel;
 
     const btn = document.getElementById('new-confirm');
     btn.disabled = true;
@@ -1098,7 +1261,15 @@ function showNewAgentModal(skills, el) {
 
       const soulResult = await api(`/api/agents/${id}/generate-soul`, {
         method: 'POST',
-        body: { name, role, personalityDescription, language, emoji: emoji || undefined },
+        body: {
+          name,
+          role,
+          personalityDescription,
+          language,
+          emoji: emoji || undefined,
+          llmBackend,
+          model,
+        },
       });
 
       if (soulResult.error) {
@@ -1108,7 +1279,7 @@ function showNewAgentModal(skills, el) {
         return;
       }
 
-      const inputData = { role, personalityDescription, language, emoji };
+      const inputData = { role, personalityDescription, language, emoji, llmBackend, model };
       showSoulPreviewModal(id, name, soulResult, inputData, {
         onComplete: () => {
           location.hash = `#/agents/${id}/edit`;

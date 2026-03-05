@@ -6,6 +6,7 @@ import {
   loadExternalSkill,
 } from '../core/external-skill-loader';
 import { type ExternalToolCronDeps, adaptExternalTool } from '../core/external-tool-adapter';
+import type { ToolExecuteFn } from '../core/types';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { adaptAllMcpTools } from '../mcp/tool-adapter';
@@ -584,6 +585,13 @@ export class ToolRegistry {
           ? { cronService: this.ctx.cronService }
           : undefined;
 
+        // Lazy tool executor: looks up tools at call time so it sees all registered tools
+        const toolExecuteFn: ToolExecuteFn = async (name, args) => {
+          const target = this.ctx.tools.find((t) => t.definition.function.name === name);
+          if (!target) return undefined;
+          return target.execute(args, logger);
+        };
+
         let toolCount = 0;
         for (const toolDef of manifest.tools) {
           const handler = handlers[toolDef.name];
@@ -596,7 +604,8 @@ export class ToolRegistry {
             skillConfig,
             skillState,
             logger,
-            cronDeps
+            cronDeps,
+            toolExecuteFn
           );
 
           this.ctx.tools.push(tool);

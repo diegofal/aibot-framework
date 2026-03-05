@@ -104,7 +104,7 @@ function buildToolCategorySection(toolCategoryList?: string[]): string {
     social: 'reddit_*, twitter_* — social media tools',
     calendar: 'calendar_* — scheduling and availability',
     communication:
-      'ask_human, ask_permission, phone_call, delegate_to_bot, collaborate — human and bot interaction',
+      'ask_human, ask_permission, phone_call, delegate_to_bot, collaborate, create_agent — human/bot interaction and agent proposals',
     browser: 'browser — web browsing with headless browser',
     production: 'read_production_log, archive_file, create_tool — production management',
   };

@@ -312,6 +312,12 @@ describe('TenantFacade', () => {
         storageBytesUsed: 0,
       });
     });
+
+    test('__admin__ usage is not recorded', () => {
+      facade.recordUsage('__admin__', 'bot1', 'api_call', 5);
+      facade.recordUsage('__admin__', 'bot1', 'message_processed', 3);
+      expect(mgr.recordUsage).not.toHaveBeenCalled();
+    });
   });
 
   // ----------------------------------------------------------------
@@ -358,6 +364,16 @@ describe('TenantFacade', () => {
 
       facade.checkQuota('t1', 'apiCalls');
       expect(mgr.checkQuota).toHaveBeenCalledWith('t1', 'apiCalls', 1);
+    });
+
+    test('__admin__ always passes quota without calling TenantManager', () => {
+      facade.initializeTenantManager({ dataDir: '/tmp/test' });
+      const mgr = facade.getTenantManager()! as any;
+
+      expect(facade.checkQuota('__admin__', 'messages', 999)).toBe(true);
+      expect(facade.checkQuota('__admin__', 'apiCalls', 999)).toBe(true);
+      expect(facade.checkQuota('__admin__', 'storage', 999)).toBe(true);
+      expect(mgr.checkQuota).not.toHaveBeenCalled();
     });
   });
 
@@ -430,6 +446,19 @@ describe('TenantFacade', () => {
       // Since tenantManager is undefined, it skips and calls startBot directly.
       expect(result).toEqual({ success: true });
       expect(deps.startBot).toHaveBeenCalledWith(botConfig);
+    });
+
+    test('__admin__ bypasses tenant lookup and bot limit check', async () => {
+      facade.initializeTenantManager({ dataDir: '/tmp/test' });
+      const mgr = facade.getTenantManager()! as any;
+
+      const botConfig = { id: 'bot1', tenantId: '__admin__' } as any;
+      const result = await facade.startBotWithTenant(botConfig);
+
+      expect(result).toEqual({ success: true });
+      expect(deps.startBot).toHaveBeenCalledWith(botConfig);
+      expect(mgr.getTenant).not.toHaveBeenCalled();
+      expect(mgr.canCreateBot).not.toHaveBeenCalled();
     });
   });
 

@@ -274,6 +274,12 @@
               <td><code>agents.ts</code></td>
             </tr>
             <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id/soul-status</code></td>
+              <td>Check soul file status: returns whether soul directory exists and which files (IDENTITY.md, SOUL.md, MOTIVATIONS.md) are present and non-empty</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/agents/:id/init-soul</code></td>
               <td>Initialize a per-agent soul directory with default IDENTITY.md</td>
@@ -282,7 +288,7 @@
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/agents/:id/generate-soul</code></td>
-              <td>Generate soul files via AI (preview only, does not write to disk)</td>
+              <td>Generate soul files via AI (preview only, does not write to disk). Accepts optional <code>llmBackend</code> (<code>ollama</code> | <code>claude-cli</code>) and <code>model</code> to select the generation model</td>
               <td><code>agents.ts</code></td>
             </tr>
             <tr>

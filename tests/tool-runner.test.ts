@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   type ToolCallingStrategy,
   type ToolRunnerOptions,
+  detectPhantomMemorySave,
   runToolLoop,
 } from '../src/core/tool-runner';
 import type { ChatMessage, ChatOptions } from '../src/ollama';
@@ -139,5 +140,96 @@ describe('runToolLoop', () => {
     const result = await runToolLoop(strategy, [{ role: 'user', content: 'work' }], opts, {});
     // Falls through the loop → returns the exhaustion fallback
     expect(result).toBe('I was unable to complete the request within the allowed number of steps.');
+  });
+
+  test('logs warning when LLM claims memory save without calling memory tool', async () => {
+    const warnings: { msg: string; data: any }[] = [];
+    const warnLogger = {
+      ...noopLogger,
+      warn: (data: any, msg: string) => warnings.push({ msg, data }),
+    };
+
+    const strategy: ToolCallingStrategy = {
+      async chat(_messages, _opts) {
+        return { content: 'Guardado en memoria estructurada.' };
+      },
+    };
+
+    const opts: ToolRunnerOptions = {
+      maxRounds: 5,
+      tools: [dummyTool],
+      toolExecutor: async () => ({ success: true, content: 'ok' }),
+      logger: warnLogger as any,
+    };
+
+    const result = await runToolLoop(strategy, [{ role: 'user', content: 'save this' }], opts, {});
+    expect(result).toBe('Guardado en memoria estructurada.');
+    expect(warnings.some((w) => w.msg.includes('Phantom memory save'))).toBe(true);
+  });
+
+  test('does not log phantom warning when memory tool was actually called', async () => {
+    const warnings: { msg: string; data: any }[] = [];
+    const warnLogger = {
+      ...noopLogger,
+      warn: (data: any, msg: string) => warnings.push({ msg, data }),
+    };
+
+    let callCount = 0;
+    const strategy: ToolCallingStrategy = {
+      async chat(_messages, _opts) {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            content: '',
+            toolCalls: [{ function: { name: 'save_memory', arguments: { fact: 'test' } } }],
+          };
+        }
+        return { content: 'Guardado en memoria.' };
+      },
+    };
+
+    const opts: ToolRunnerOptions = {
+      maxRounds: 5,
+      tools: [dummyTool],
+      toolExecutor: async () => ({ success: true, content: 'ok' }),
+      logger: warnLogger as any,
+    };
+
+    await runToolLoop(strategy, [{ role: 'user', content: 'save this' }], opts, {});
+    expect(warnings.some((w) => w.msg.includes('Phantom memory save'))).toBe(false);
+  });
+});
+
+describe('detectPhantomMemorySave', () => {
+  test('detects Spanish phantom save patterns', () => {
+    expect(detectPhantomMemorySave('Guardado en memoria.', new Set())).toBe(true);
+    expect(detectPhantomMemorySave('Lo guardo en memoria estructurada.', new Set())).toBe(true);
+    expect(detectPhantomMemorySave('Guardé en core memory.', new Set())).toBe(true);
+    expect(detectPhantomMemorySave('Anotado en memoria.', new Set())).toBe(true);
+  });
+
+  test('detects English phantom save patterns', () => {
+    expect(detectPhantomMemorySave('Saved to memory.', new Set())).toBe(true);
+    expect(detectPhantomMemorySave('Stored in core memory.', new Set())).toBe(true);
+  });
+
+  test('returns false when memory tool was called', () => {
+    expect(detectPhantomMemorySave('Guardado en memoria.', new Set(['save_memory']))).toBe(false);
+    expect(detectPhantomMemorySave('Stored in core memory.', new Set(['core_memory_append']))).toBe(
+      false
+    );
+    expect(detectPhantomMemorySave('Guardado en memoria.', new Set(['core_memory_replace']))).toBe(
+      false
+    );
+  });
+
+  test('returns false for unrelated responses', () => {
+    expect(detectPhantomMemorySave('Hello, how are you?', new Set())).toBe(false);
+    expect(detectPhantomMemorySave('Guardado el archivo.', new Set())).toBe(false);
+    expect(detectPhantomMemorySave('Memory is important.', new Set())).toBe(false);
+  });
+
+  test('returns false when non-memory tools were called but text is clean', () => {
+    expect(detectPhantomMemorySave('Done.', new Set(['file_write']))).toBe(false);
   });
 });

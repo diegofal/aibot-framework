@@ -220,4 +220,45 @@ describe('adaptExternalTool', () => {
     const tool = adaptExternalTool('skill', makeDef('test'), handler, {}, new Map(), mockLogger);
     expect(tool.definition.type).toBe('function');
   });
+
+  test('provides tools.execute as noop when no toolExecuteFn given', async () => {
+    let capturedCtx: any;
+    const handler = async (_args: Record<string, unknown>, ctx: any) => {
+      capturedCtx = ctx;
+      const result = await ctx.tools.execute('some_tool', { x: 1 });
+      return result ?? 'no tool found';
+    };
+    const tool = adaptExternalTool('skill', makeDef('test'), handler, {}, new Map(), mockLogger);
+    const result = await tool.execute({ input: 'x' }, mockLogger);
+    expect(result.success).toBe(true);
+    expect(result.content).toBe('no tool found');
+    expect(capturedCtx.tools).toBeDefined();
+    expect(typeof capturedCtx.tools.execute).toBe('function');
+  });
+
+  test('provides tools.execute that delegates to toolExecuteFn', async () => {
+    const toolExecuteFn = async (name: string, args: Record<string, unknown>) => {
+      if (name === 'other_tool') {
+        return { success: true, content: `called ${name} with ${JSON.stringify(args)}` };
+      }
+      return undefined;
+    };
+    const handler = async (_args: Record<string, unknown>, ctx: any) => {
+      const result = await ctx.tools.execute('other_tool', { key: 'val' });
+      return result?.content ?? 'not found';
+    };
+    const tool = adaptExternalTool(
+      'skill',
+      makeDef('test'),
+      handler,
+      {},
+      new Map(),
+      mockLogger,
+      undefined,
+      toolExecuteFn
+    );
+    const result = await tool.execute({ input: 'x' }, mockLogger);
+    expect(result.success).toBe(true);
+    expect(result.content).toBe('called other_tool with {"key":"val"}');
+  });
 });

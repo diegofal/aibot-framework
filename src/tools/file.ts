@@ -10,6 +10,45 @@ export interface FileToolsConfig {
   allowedPaths?: string[];
 }
 
+/**
+ * LLMs sometimes use alternate parameter names.  These helpers normalise
+ * the most common aliases observed in production logs.
+ */
+const PATH_ALIASES = ['file_path', 'filepath', 'file'] as const;
+
+export function resolvePathParam(args: Record<string, unknown>): string {
+  const direct = String(args.path ?? '').trim();
+  if (direct) return direct;
+  for (const alias of PATH_ALIASES) {
+    const val = String(args[alias] ?? '').trim();
+    if (val) return val;
+  }
+  return '';
+}
+
+const OLD_TEXT_ALIASES = ['old_string', 'oldText', 'search'] as const;
+const NEW_TEXT_ALIASES = ['new_string', 'newText', 'replace'] as const;
+
+export function resolveOldTextParam(args: Record<string, unknown>): string {
+  const direct = String(args.old_text ?? '');
+  if (direct) return direct;
+  for (const alias of OLD_TEXT_ALIASES) {
+    const val = String(args[alias] ?? '');
+    if (val) return val;
+  }
+  return '';
+}
+
+export function resolveNewTextParam(args: Record<string, unknown>): string {
+  const direct = String(args.new_text ?? '');
+  if (direct) return direct;
+  for (const alias of NEW_TEXT_ALIASES) {
+    const val = String(args[alias] ?? '');
+    if (val) return val;
+  }
+  return '';
+}
+
 /** Default patterns for sensitive files */
 const BUILTIN_DENIED = [
   /\.env($|\.)/,
@@ -153,7 +192,7 @@ export function createFileReadTool(config: FileToolsConfig): Tool {
     },
 
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
-      const rawPath = String(args.path ?? '').trim();
+      const rawPath = resolvePathParam(args);
       if (!rawPath) {
         return { success: false, content: 'Missing required parameter: path' };
       }
@@ -240,7 +279,7 @@ export function createFileWriteTool(config: FileToolsConfig): Tool {
     },
 
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
-      const rawPath = String(args.path ?? '').trim();
+      const rawPath = resolvePathParam(args);
       const content = String(args.content ?? '');
       const append = Boolean(args.append);
 
@@ -338,9 +377,9 @@ export function createFileEditTool(config: FileToolsConfig): Tool {
     },
 
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
-      const rawPath = String(args.path ?? '').trim();
-      const oldText = String(args.old_text ?? '');
-      const newText = String(args.new_text ?? '');
+      const rawPath = resolvePathParam(args);
+      const oldText = resolveOldTextParam(args);
+      const newText = resolveNewTextParam(args);
       const replaceAll = Boolean(args.replace_all);
 
       if (!rawPath) {
@@ -362,10 +401,10 @@ export function createFileEditTool(config: FileToolsConfig): Tool {
 
         // Count occurrences
         let count = 0;
-        let idx = 0;
-        while ((idx = content.indexOf(oldText, idx)) !== -1) {
+        let idx = content.indexOf(oldText, 0);
+        while (idx !== -1) {
           count++;
-          idx += oldText.length;
+          idx = content.indexOf(oldText, idx + oldText.length);
         }
 
         if (count === 0) {

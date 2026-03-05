@@ -23,7 +23,7 @@ describe('Admin Auth Middleware', () => {
   });
 
   afterEach(() => {
-    delete process.env.ADMIN_API_KEY;
+    process.env.ADMIN_API_KEY = undefined;
   });
 
   test('rejects request without Authorization header', async () => {
@@ -59,7 +59,7 @@ describe('Admin Auth Middleware', () => {
   });
 
   test('allows request when ADMIN_API_KEY is not set', async () => {
-    delete process.env.ADMIN_API_KEY;
+    process.env.ADMIN_API_KEY = undefined;
     // Need to recreate the middleware to pick up the unset env var
     const openApp = new Hono();
     openApp.use('*', createAdminAuthMiddleware(noopLogger));

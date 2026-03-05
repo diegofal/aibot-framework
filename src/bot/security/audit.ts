@@ -149,7 +149,7 @@ export function formatReportMarkdown(report: AuditReport): string {
   const { critical, warn, info } = report.summary;
   const total = critical + warn + info;
 
-  lines.push(`## Security Audit Report`);
+  lines.push('## Security Audit Report');
   lines.push(
     `*${new Date(report.timestamp).toISOString()}* | \`${report.meta.botDir}\` | ${report.meta.durationMs}ms`
   );

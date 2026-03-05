@@ -68,19 +68,29 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
       };
     });
 
-    const external = deps.botManager.getExternalSkills().map((s) => ({
-      id: s.manifest.id,
-      name: s.manifest.name,
-      type: 'external' as const,
-      version: s.manifest.version,
-      description: s.manifest.description,
-      author: undefined as string | undefined,
-      toolCount: s.manifest.tools.length,
-      warnings: s.warnings,
-      dir: s.dir,
-      requires: s.manifest.requires,
-      botName: s.botName,
-    }));
+    const builtInIds = new Set(builtIn.map((s) => s.id));
+    const seenExternalIds = new Set<string>();
+    const external = deps.botManager
+      .getExternalSkills()
+      .filter((s) => {
+        if (builtInIds.has(s.manifest.id)) return false;
+        if (seenExternalIds.has(s.manifest.id)) return false;
+        seenExternalIds.add(s.manifest.id);
+        return true;
+      })
+      .map((s) => ({
+        id: s.manifest.id,
+        name: s.manifest.name,
+        type: 'external' as const,
+        version: s.manifest.version,
+        description: s.manifest.description,
+        author: undefined as string | undefined,
+        toolCount: s.manifest.tools.length,
+        warnings: s.warnings,
+        dir: s.dir,
+        requires: s.manifest.requires,
+        botName: s.botName,
+      }));
 
     return c.json([...builtIn, ...external]);
   });

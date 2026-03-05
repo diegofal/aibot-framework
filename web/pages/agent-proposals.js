@@ -58,7 +58,7 @@ export async function renderAgentProposals(el) {
       card.innerHTML = `
         <div class="flex-between mb-8">
           <div>
-            <strong>${p.emoji ? escapeHtml(p.emoji) + ' ' : ''}${escapeHtml(p.agentName)}</strong>
+            <strong>${p.emoji ? `${escapeHtml(p.emoji)} ` : ''}${escapeHtml(p.agentName)}</strong>
             <span class="text-dim ml-8">${escapeHtml(p.agentId)}</span>
           </div>
           ${STATUS_BADGES.pending}
@@ -130,7 +130,7 @@ export async function renderAgentProposals(el) {
     for (const p of resolved) {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${p.emoji ? escapeHtml(p.emoji) + ' ' : ''}${escapeHtml(p.agentName)} <span class="text-dim">(${escapeHtml(p.agentId)})</span></td>
+        <td>${p.emoji ? `${escapeHtml(p.emoji)} ` : ''}${escapeHtml(p.agentName)} <span class="text-dim">(${escapeHtml(p.agentId)})</span></td>
         <td class="text-dim">${escapeHtml(p.role)}</td>
         <td>${STATUS_BADGES[p.status] || p.status}</td>
         <td class="text-dim">${escapeHtml(p.proposedBy)}</td>

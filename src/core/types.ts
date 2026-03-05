@@ -65,6 +65,11 @@ export interface SessionInfo {
   threadId?: number;
 }
 
+export type ToolExecuteFn = (
+  name: string,
+  args: Record<string, unknown>
+) => Promise<{ success: boolean; content: string } | undefined>;
+
 export interface SkillContext {
   config: unknown; // Skill-specific configuration
   logger: Logger;
@@ -76,6 +81,8 @@ export interface SkillContext {
   session?: SessionInfo;
   soulDir?: string;
   botId?: string;
+  /** Execute another registered tool by name. Absent if not wired at init time. */
+  tools?: { execute: ToolExecuteFn };
 }
 
 export interface CallbackQueryData {

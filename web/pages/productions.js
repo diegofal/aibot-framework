@@ -68,7 +68,7 @@ export async function renderProductions(el) {
   }
 
   const total = stats.reduce((s, b) => s + b.total, 0);
-  const tree = treeData.tree || [];
+  const tree = Array.isArray(treeData.tree) ? treeData.tree : [];
 
   // Build botId→name map from stats and a botId set from tree top-level nodes
   const botNameMap = {};
@@ -99,7 +99,7 @@ export async function renderProductions(el) {
     for (const node of nodes || []) {
       if (node.type === 'dir') {
         const isTopLevel = tree.includes(node);
-        const key = isTopLevel ? node.path : botId + '/' + node.path;
+        const key = isTopLevel ? node.path : `${botId}/${node.path}`;
         keys.push(key);
         keys.push(...collectAllDirKeys(node.children, isTopLevel ? node.path : botId));
       }
@@ -189,7 +189,7 @@ export async function renderProductions(el) {
       // Top-level dirs are bot folders (path = botId)
       const isTopLevel = tree.includes(node);
       const resolvedBotId = isTopLevel ? node.path : botId;
-      const expandKey = isTopLevel ? node.path : resolvedBotId + '/' + node.path;
+      const expandKey = isTopLevel ? node.path : `${resolvedBotId}/${node.path}`;
       const isExpanded = expandedDirs.has(expandKey);
       const item = document.createElement('div');
       item.className = 'tree-item';
@@ -630,7 +630,7 @@ export async function renderProductions(el) {
     if (botNode) {
       const expandKeyFn = (dirNode, bId) => {
         const isTopLevel = tree.includes(dirNode);
-        return isTopLevel ? dirNode.path : bId + '/' + dirNode.path;
+        return isTopLevel ? dirNode.path : `${bId}/${dirNode.path}`;
       };
       const result = findNodeInTree(
         botNode.children,
@@ -679,11 +679,11 @@ export async function renderBotProductions(el, botId) {
   }
 
   const { stats } = statsData;
-  const tree = treeData.tree || [];
+  const tree = Array.isArray(treeData.tree) ? treeData.tree : [];
   const botList = Array.isArray(allBots) ? allBots : [];
 
   // Explorer state — restore from localStorage if available
-  const BOT_STORAGE_KEY = 'prod-expanded-' + botId;
+  const BOT_STORAGE_KEY = `prod-expanded-${botId}`;
   const expandedDirs = new Set();
   let selectedFile = null;
   let searchFilter = '';
@@ -753,7 +753,7 @@ export async function renderBotProductions(el, botId) {
 
   // --- Bot selector ---
   document.getElementById('prod-bot-selector')?.addEventListener('change', (e) => {
-    location.hash = '#/productions/' + encodeURIComponent(e.target.value);
+    location.hash = `#/productions/${encodeURIComponent(e.target.value)}`;
   });
 
   // --- Tree rendering ---

@@ -199,7 +199,7 @@ const UserIsolationConfigSchema = z
   })
   .optional();
 
-const BotConfigSchema = z.object({
+export const BotConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
   token: z.string().optional().default(''),
@@ -214,6 +214,8 @@ const BotConfigSchema = z.object({
   description: z.string().optional(),
   disabledTools: z.array(z.string()).optional(),
   disabledSkills: z.array(z.string()).default([]),
+  /** Per-bot max tool call rounds for conversation pipeline (overrides global webTools.maxToolRounds) */
+  maxToolRounds: z.number().int().min(1).max(50).optional(),
   conversation: BotConversationOverrideSchema,
   agentLoop: BotAgentLoopOverrideSchema,
   tts: BotTtsOverrideSchema,
@@ -354,11 +356,11 @@ const DatetimeToolConfigSchema = z.object({
   locale: z.string().default('es-AR'),
 });
 
-const WebToolsConfigSchema = z.object({
+export const WebToolsConfigSchema = z.object({
   enabled: z.boolean().default(false),
   search: WebToolsSearchConfigSchema.optional(),
   fetch: WebToolsFetchConfigSchema.optional(),
-  maxToolRounds: z.number().int().min(1).max(10).default(5),
+  maxToolRounds: z.number().int().min(1).max(50).default(5),
 });
 
 const AutoRagConfigSchema = z
@@ -414,6 +416,8 @@ const HealthCheckConfigSchema = z
     enabled: z.boolean().default(true),
     cooldownMs: z.number().int().positive().default(86_400_000), // 24h
     consolidateMemory: z.boolean().default(true),
+    llmBackend: z.enum(['ollama', 'claude-cli']).default('claude-cli'),
+    model: z.string().optional(),
   })
   .default({});
 
@@ -832,7 +836,7 @@ export async function loadConfig(configPath: string): Promise<Config> {
       // Auto-migrate: write bots.json, strip from config.json
       writeFileSync(botsPath, `${JSON.stringify(rawConfig.bots, null, 2)}\n`, 'utf-8');
       const rawClean = JSON.parse(content);
-      delete rawClean.bots;
+      rawClean.bots = undefined;
       writeFileSync(configPath, `${JSON.stringify(rawClean, null, 2)}\n`, 'utf-8');
       console.info(`[config] Migrated ${rawConfig.bots.length} bots → ${botsPath}`);
     }

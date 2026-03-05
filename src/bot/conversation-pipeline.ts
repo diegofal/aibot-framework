@@ -149,6 +149,7 @@ export class ConversationPipeline {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
     const webToolsConfig = this.ctx.config.webTools;
+    const maxToolRounds = config.maxToolRounds ?? webToolsConfig?.maxToolRounds;
     const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id);
     const hasTools = botToolDefs.length > 0;
     const chatId = ctx.chat?.id;
@@ -342,7 +343,7 @@ export class ConversationPipeline {
               toolExecutor: hasTools
                 ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
                 : undefined,
-              maxToolRounds: webToolsConfig?.maxToolRounds,
+              maxToolRounds,
             }),
           'conversation-pipeline.chat',
           {
@@ -399,7 +400,7 @@ export class ConversationPipeline {
                 toolExecutor: hasTools
                   ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
                   : undefined,
-                maxToolRounds: webToolsConfig?.maxToolRounds,
+                maxToolRounds,
               }),
             'conversation-pipeline.chat',
             {

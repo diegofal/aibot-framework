@@ -44,7 +44,7 @@ describe('Tenant Auth Middleware - Admin key passthrough', () => {
   });
 
   afterEach(() => {
-    delete process.env.ADMIN_API_KEY;
+    process.env.ADMIN_API_KEY = undefined;
   });
 
   test('admin key passes through with __admin__ tenantId', async () => {

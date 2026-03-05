@@ -93,7 +93,7 @@ export class AllCandidatesExhaustedError extends Error {
   constructor(attempts: FallbackAttempt[]) {
     const summary = attempts
       .map(
-        (a) => `${a.backend}${a.model ? '/' + a.model : ''}: ${a.reason ?? 'unknown'} (${a.error})`
+        (a) => `${a.backend}${a.model ? `/${a.model}` : ''}: ${a.reason ?? 'unknown'} (${a.error})`
       )
       .join('; ');
     super(`All model candidates exhausted: ${summary}`);

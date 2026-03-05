@@ -1242,7 +1242,7 @@ The market showed strong signals today.`;
     });
 
     test('handles content without heading', () => {
-      const content = `Just a plain paragraph of text without any heading.`;
+      const content = 'Just a plain paragraph of text without any heading.';
       const desc = ProductionsService.extractDescription(content);
       expect(desc).toBe('');
     });
@@ -1612,11 +1612,11 @@ The analysis shows significant opportunity.`;
       });
 
       expect(result).not.toBeNull();
-      expect(result!.coherenceCheck).toBeDefined();
-      expect(result!.coherenceCheck!.coherent).toBe(true);
-      expect(result!.coherenceCheck!.issues).toEqual([]);
-      expect(result!.coherenceCheck!.explanation).toBe('Content is well-formed');
-      expect(result!.coherenceCheck!.checkedAt).toBeTruthy();
+      expect(result?.coherenceCheck).toBeDefined();
+      expect(result?.coherenceCheck?.coherent).toBe(true);
+      expect(result?.coherenceCheck?.issues).toEqual([]);
+      expect(result?.coherenceCheck?.explanation).toBe('Content is well-formed');
+      expect(result?.coherenceCheck?.checkedAt).toBeTruthy();
     });
 
     test('saves incoherent result with issues', () => {
@@ -1638,8 +1638,8 @@ The analysis shows significant opportunity.`;
       });
 
       expect(result).not.toBeNull();
-      expect(result!.coherenceCheck!.coherent).toBe(false);
-      expect(result!.coherenceCheck!.issues).toEqual(['Missing conclusion', 'Abrupt topic shift']);
+      expect(result?.coherenceCheck?.coherent).toBe(false);
+      expect(result?.coherenceCheck?.issues).toEqual(['Missing conclusion', 'Abrupt topic shift']);
     });
 
     test('returns null for non-existent entry', () => {
@@ -1671,8 +1671,8 @@ The analysis shows significant opportunity.`;
       // Re-read from disk
       const reloaded = service.getEntry('bot1', entry.id);
       expect(reloaded).not.toBeNull();
-      expect(reloaded!.coherenceCheck).toBeDefined();
-      expect(reloaded!.coherenceCheck!.coherent).toBe(true);
+      expect(reloaded?.coherenceCheck).toBeDefined();
+      expect(reloaded?.coherenceCheck?.coherent).toBe(true);
     });
 
     test('getStats counts checked entries', () => {
@@ -1728,7 +1728,7 @@ The analysis shows significant opportunity.`;
       const tree = service.getDirectoryTree('bot1');
       const node = tree.find((n) => n.name === 'checked-file.md');
       expect(node).toBeTruthy();
-      expect(node!.coherenceCheck).toEqual({ coherent: false });
+      expect(node?.coherenceCheck).toEqual({ coherent: false });
     });
   });
 });

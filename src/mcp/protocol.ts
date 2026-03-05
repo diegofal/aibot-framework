@@ -63,12 +63,12 @@ export class McpStdioTransport extends EventEmitter implements McpTransport {
     this.proc = proc;
     this._connected = true;
 
-    proc.stdout!.on('data', (chunk: Buffer) => {
+    proc.stdout?.on('data', (chunk: Buffer) => {
       this.buffer += chunk.toString('utf-8');
       this.processBuffer();
     });
 
-    proc.stderr!.on('data', (chunk: Buffer) => {
+    proc.stderr?.on('data', (chunk: Buffer) => {
       // Log stderr but don't treat as fatal
       const text = chunk.toString('utf-8').trim();
       if (text) {
@@ -107,7 +107,7 @@ export class McpStdioTransport extends EventEmitter implements McpTransport {
           resolve();
         }, 3000);
 
-        this.proc!.on('close', () => {
+        this.proc?.on('close', () => {
           clearTimeout(timeout);
           resolve();
         });

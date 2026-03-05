@@ -3,6 +3,41 @@
 ## Unreleased
 
 ### Added
+- **Per-bot `maxToolRounds` for conversations** — Each bot can now override the global `webTools.maxToolRounds` limit via `maxToolRounds` in its bot config. This controls how many tool call rounds the LLM can execute during a conversation or collaboration turn. Also raised the global ceiling from 10 to 50.
+
+### Fixed
+- **`__admin__` tenant blocked by quota checks** — Bots with `tenantId: "__admin__"` were permanently blocked from running agent loops and conversations because `__admin__` is a synthetic super-tenant (not a real tenant in TenantManager), causing `checkQuota` to always return `false`. Fixed by exempting `__admin__` from quota checks, usage recording, and bot-limit validation in `TenantFacade`, consistent with how it's already exempted from tenant scoping.
+- **Duplicate skills in agent edit UI** — `GET /api/skills` concatenated built-in and external skill lists without deduplication, causing skills present in both registries to appear twice in the edit form. Added dedup by skill ID (builtin preferred over external, plus external-to-external dedup). Also added `[...new Set()]` dedup on PATCH/POST agent save to prevent duplicate IDs from being persisted.
+
+### Changed
+- **New bots default to all skills** — `POST /api/agents` now defaults the `skills` array to all available skills (built-in + external, deduplicated) when `skills` is not provided in the request body.
+
+### Added
+- **Soul status banner on agent edit screen** — The edit agent form now checks soul file status on load via `GET /api/agents/:id/soul-status`. If soul files are missing or incomplete (e.g. generation failed during bot creation), a prominent warning banner is shown with a "Generate Soul" button for easy retry.
+- **Select all / unselect all for skills** — Agent edit form now has "Select all" and "Unselect all" links above the skills checkbox group.
+
+### Fixed
+- **`manage_goals` — "No active goal matching" false negatives** — LLMs frequently call `manage_goals` with numeric IDs (`"4"`), slug-style keys (`"establish-autonomy-loop-for-idle-periods"`), or verbose text that doesn't exactly substring-match the stored goal. Added `findGoalIndex()` with 4-tier matching: (1) numeric 1-based index, (2) direct substring, (3) slug-normalised (dashes/underscores → spaces), (4) word-based fallback. Error messages now include the active goal list so the LLM can self-correct. Also: `updateGoal` with `status: completed` now auto-moves the goal to the Completed section instead of leaving it stranded under Active Goals.
+- **External skill tool crash (`ctx.tools.execute` undefined)** — Reddit, calendar, and daily-briefing skills had `handlers` that tried to delegate to other tools via `ctx.tools.execute`, but neither `SkillContext` nor `TscSkillContext` provided a `tools` property. This caused `reddit_hot`, `reddit_search`, `calendar_list`, etc. to throw `"undefined is not an object (evaluating 'ctx.tools.execute')"` when called through the external tool adapter. Root causes and fixes:
+  - **Reddit/calendar**: Removed broken delegator `handlers` and `tools[]` from `skill.json` — these created duplicate wrapper tools (`reddit_reddit_hot`, etc.) that shadowed the real tools in `src/tools/`. Command handlers now use `ctx.tools?.execute?.()` safely.
+  - **Daily-briefing**: Fixed unsafe property chain (`ctx.tools.execute` → `ctx.tools?.execute?.()`).
+  - **`TscSkillContext`**: Added `tools.execute` capability to the external-tool-adapter context, wired via a lazy tool executor that resolves tools at call time.
+  - **`SkillContext`**: Added optional `tools` property; `SkillRegistry.setToolExecutor()` patches all existing contexts after tools are initialized.
+- **Tool parameter alias normalization** — LLMs (qwen3.5, qwen3-coder) frequently call tools with wrong parameter names, wasting an entire LLM round-trip on self-correction (5-20s each). Added alias resolution across the most-affected tools:
+  - `save_memory`: accepts `content`, `value`, `text`, `memory`, `note`, `message` as aliases for `fact` (7 errors)
+  - `manage_goals`: accepts `goalId`, `name`, `title`, `text`, `description` as aliases for `goal` (17 errors — most common tool error)
+  - `file_read`/`file_write`: accepts `file_path`, `filepath`, `file` as aliases for `path`
+  - `file_edit`: accepts `old_string`/`oldText`/`search` for `old_text`; `new_string`/`newText`/`replace` for `new_text`
+  - Canonical parameter names always take priority over aliases.
+- **read_production_log crash on malformed JSONL entries** — `e.timestamp.slice()` threw when JSONL entries had missing `timestamp`, `action`, or `path` fields. Added null-coalescing guards.
+- **manage_goals SoulLoader race condition** — `getSoulLoader(botId)` was called outside the try/catch block, causing an unhandled throw when tools executed for bots not yet started (e.g. during collaboration). Moved into try/catch so the error returns `{success: false}` gracefully.
+- **External skill adapter tools context hardening** — Froze the `tools` bridge object passed to external skill handlers via `Object.freeze()` to prevent accidental nullification of `ctx.tools.execute`.
+- **Phantom memory saves** — LLM sometimes responded with "guardado en memoria" or "saved" without actually calling `save_memory` or `core_memory_append`, leading to silently lost data. Two-pronged fix: (1) system prompt now explicitly forbids claiming a save without a tool call, (2) `runToolLoop` detects phantom save patterns in the response and logs a warning when no memory tool was called.
+
+### Added
+- **Configurable LLM backend for soul health check / quality review** — Quality review and memory consolidation now support both Claude CLI and Ollama backends. New `soul.healthCheck.llmBackend` and `soul.healthCheck.model` config fields let you choose which model runs the review. Configurable via the Settings page in the web dashboard ("Soul Health Check / Quality Review" card). When Claude CLI is out of quota, switch to Ollama to keep quality reviews running. Also improved failure logging: Claude CLI errors now include stdout in the log (previously only stderr was captured, which was empty for quota errors).
+- **`create_agent` system prompt instructions** — The `create_agent` tool was registered but never surfaced in the system prompt, so no bot knew it existed. Added `createAgentInstructions()` to `SystemPromptBuilder` (injected when the tool is present) listing the current ecosystem agents and guidelines for when to propose a new one. Also added `create_agent` to the `communication` category description in agent-loop planner prompts.
+- **Soul generation model selector** — Users can now choose which LLM to use for soul generation (Claude CLI or any available Ollama model) in both the "New Agent" and "Generate Soul" modals. The selection persists through regeneration. Previously, soul generation was hardcoded to Claude CLI with no fallback.
 - **Web conversation logging** — `generateBotReply()` and `webGenerate()` now log detailed info to the console: generation start (botId, botName, type), LLM call (promptLen, messageCount, backend, model, toolCount), and completion (durationMs, responseLen). Previously only 1-2 lines were logged, making web conversations invisible in `bun run start` output.
 - **Username/password auth for web dashboard** — Replaces API-key login with email + password for human users:
   - **Session store** (`src/tenant/session-store.ts`): In-memory sessions with `sess_` prefix, 24h TTL, periodic cleanup

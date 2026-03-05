@@ -139,23 +139,39 @@ function buildPrompt(input: SoulGenerationInput, soulDir: string): string {
   return parts.join('\n');
 }
 
+export interface SoulGenerationOptions {
+  soulDir: string;
+  logger: Logger;
+  /** Custom generate function — when provided, bypasses Claude CLI entirely. */
+  generate?: (prompt: string) => Promise<string>;
+  claudePath?: string;
+  timeout?: number;
+}
+
 /**
- * Generate soul files for a new bot using Claude CLI.
+ * Generate soul files for a new bot.
+ * Uses the provided `generate` function if given, otherwise falls back to Claude CLI.
  */
 export async function generateSoul(
   input: SoulGenerationInput,
-  opts: { claudePath?: string; timeout?: number; soulDir: string; logger: Logger }
+  opts: SoulGenerationOptions
 ): Promise<GeneratedSoul> {
   const prompt = buildPrompt(input, opts.soulDir);
 
-  opts.logger.info({ name: input.name, role: input.role }, 'soul-generator: calling Claude CLI');
+  const generateFn =
+    opts.generate ??
+    ((p: string) =>
+      claudeGenerate(p, {
+        claudePath: opts.claudePath,
+        timeout: opts.timeout ?? 300_000,
+        maxLength: 30_000,
+        logger: opts.logger,
+      }));
 
-  const raw = await claudeGenerate(prompt, {
-    claudePath: opts.claudePath,
-    timeout: opts.timeout ?? 300_000,
-    maxLength: 30_000,
-    logger: opts.logger,
-  });
+  const backend = opts.generate ? 'custom' : 'claude-cli';
+  opts.logger.info({ name: input.name, role: input.role, backend }, 'soul-generator: generating');
+
+  const raw = await generateFn(prompt);
 
   // Strip markdown fences if present
   let cleaned = raw.trim();

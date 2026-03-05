@@ -548,7 +548,18 @@ export class AgentLoop {
   ): Promise<ExecuteLoopDetail> {
     const globalConfig = this.ctx.config.agentLoop;
     const botOverride = botConfig.agentLoop;
-    const soulLoader = this.ctx.getSoulLoader(botId);
+
+    const soulLoader = this.ctx.soulLoaders.get(botId);
+    if (!soulLoader) {
+      return {
+        summary: 'Bot stopped before execution started',
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        strategistRan: false,
+      };
+    }
+
     const llmClient = this.ctx.getLLMClient(botId);
     const model = this.ctx.getActiveModel(botId);
 

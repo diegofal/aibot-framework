@@ -137,10 +137,13 @@ export function scanFileTree(dirPath: string): string | null {
 
 /**
  * Log a summary to the bot's daily memory file.
+ * Tolerates bot-stopped-mid-execution: if the soulLoader was removed
+ * by a concurrent stopBot(), we skip silently instead of warning.
  */
 export function logToMemory(ctx: BotContext, botId: string, summary: string): void {
   try {
-    const soulLoader = ctx.getSoulLoader(botId);
+    const soulLoader = ctx.soulLoaders.get(botId);
+    if (!soulLoader) return;
     const truncated = summary.length > 500 ? `${summary.slice(0, 500)}...` : summary;
     soulLoader.appendDailyMemory(`[agent-loop] ${truncated}`);
   } catch (err) {

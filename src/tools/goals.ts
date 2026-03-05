@@ -5,6 +5,65 @@ import type { Tool, ToolResult } from './types';
 
 type SoulLoaderResolver = (botId: string) => SoulLoader;
 
+/**
+ * LLMs frequently call manage_goals with "goalId" (numeric ID) instead of
+ * "goal" (substring text).  Normalise common aliases observed in production.
+ */
+const GOAL_ALIASES = ['goalId', 'name', 'title', 'text', 'description'] as const;
+
+export function resolveGoalParam(args: Record<string, unknown>): string {
+  const direct = String(args.goal ?? '').trim();
+  if (direct) return direct;
+
+  for (const alias of GOAL_ALIASES) {
+    const val = String(args[alias] ?? '').trim();
+    if (val) return val;
+  }
+  return '';
+}
+
+/**
+ * Smart goal matching that handles common LLM patterns:
+ * 1. Numeric IDs → 1-based index into the array
+ * 2. Direct substring match (original behaviour)
+ * 3. Slug-normalised match (dashes/underscores → spaces)
+ * 4. Word-based fallback (all words ≥3 chars in search appear in goal)
+ */
+export function findGoalIndex(goals: GoalEntry[], search: string): number {
+  if (!search || goals.length === 0) return -1;
+
+  // 1. Numeric ID → 1-based index
+  if (/^\d+$/.test(search)) {
+    const idx = Number.parseInt(search, 10) - 1;
+    return idx >= 0 && idx < goals.length ? idx : -1;
+  }
+
+  const lower = search.toLowerCase();
+
+  // 2. Direct substring
+  const directIdx = goals.findIndex((g) => g.text.toLowerCase().includes(lower));
+  if (directIdx !== -1) return directIdx;
+
+  // 3. Slug-normalised (dashes/underscores → spaces)
+  const normalised = lower.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (normalised !== lower) {
+    const slugIdx = goals.findIndex((g) => g.text.toLowerCase().includes(normalised));
+    if (slugIdx !== -1) return slugIdx;
+  }
+
+  // 4. Word-based: all significant words in search must appear in goal text
+  const words = normalised.split(/\s+/).filter((w) => w.length >= 3);
+  if (words.length >= 2) {
+    const wordIdx = goals.findIndex((g) => {
+      const goalLower = g.text.toLowerCase();
+      return words.every((w) => goalLower.includes(w));
+    });
+    if (wordIdx !== -1) return wordIdx;
+  }
+
+  return -1;
+}
+
 export interface GoalEntry {
   text: string;
   status: string;
@@ -31,19 +90,30 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
           properties: {
             action: {
               type: 'string',
-              description: 'Action to perform: list, add, update, complete',
+              enum: ['list', 'add', 'update', 'complete'],
+              description:
+                'Action to perform. ' +
+                '"list" — no extra params needed. ' +
+                '"add" — requires goal (text), optional priority, notes. ' +
+                '"update" — requires goal (substring match), optional status, priority, notes. ' +
+                '"complete" — requires goal (substring match), optional outcome.',
             },
             goal: {
               type: 'string',
-              description: 'Goal text (for add) or goal identifier substring (for update/complete)',
+              description:
+                'REQUIRED for add/update/complete. ' +
+                'For "add": the full goal text. ' +
+                'For "update"/"complete": a substring that uniquely identifies an existing goal.',
             },
             status: {
               type: 'string',
-              description: 'New status (for update): pending, in_progress, blocked',
+              enum: ['pending', 'in_progress', 'blocked'],
+              description: 'New status (for update action only)',
             },
             priority: {
               type: 'string',
-              description: 'Priority level (for add/update): high, medium, low',
+              enum: ['high', 'medium', 'low'],
+              description: 'Priority level (for add/update)',
             },
             notes: {
               type: 'string',
@@ -51,7 +121,7 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
             },
             outcome: {
               type: 'string',
-              description: 'Outcome summary (for complete)',
+              description: 'Outcome summary (for complete action)',
             },
           },
           required: ['action'],
@@ -62,15 +132,16 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const action = String(args.action ?? '').trim();
       const botId = String(args._botId ?? '');
-      const soulLoader = getSoulLoader(botId);
 
       try {
+        const soulLoader = getSoulLoader(botId);
+
         switch (action) {
           case 'list':
             return listGoals(soulLoader);
 
           case 'add': {
-            const goal = String(args.goal ?? '').trim();
+            const goal = resolveGoalParam(args);
             if (!goal) return { success: false, content: 'Missing required parameter: goal' };
             const priority = String(args.priority ?? 'medium').trim();
             const notes = args.notes ? String(args.notes).trim() : undefined;
@@ -78,7 +149,7 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
           }
 
           case 'update': {
-            const goal = String(args.goal ?? '').trim();
+            const goal = resolveGoalParam(args);
             if (!goal) return { success: false, content: 'Missing required parameter: goal' };
             const status = args.status ? String(args.status).trim() : undefined;
             const notes = args.notes ? String(args.notes).trim() : undefined;
@@ -87,7 +158,7 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
           }
 
           case 'complete': {
-            const goal = String(args.goal ?? '').trim();
+            const goal = resolveGoalParam(args);
             if (!goal) return { success: false, content: 'Missing required parameter: goal' };
             const outcome = args.outcome ? String(args.outcome).trim() : undefined;
             return completeGoal(soulLoader, goal, outcome);
@@ -242,6 +313,12 @@ function addGoal(
   return { success: true, content: `Goal added: ${goal} (priority: ${priority})` };
 }
 
+function goalListHint(active: GoalEntry[]): string {
+  if (active.length === 0) return ' No active goals exist.';
+  const list = active.map((g, i) => `  ${i + 1}. ${g.text.slice(0, 80)}`).join('\n');
+  return `\nActive goals:\n${list}`;
+}
+
 function updateGoal(
   soulLoader: SoulLoader,
   goalSubstring: string,
@@ -250,10 +327,25 @@ function updateGoal(
   const content = soulLoader.readGoals();
   const { active, completed } = parseGoals(content);
 
-  const lower = goalSubstring.toLowerCase();
-  const found = active.find((g) => g.text.toLowerCase().includes(lower));
-  if (!found) {
-    return { success: false, content: `No active goal matching "${goalSubstring}"` };
+  const idx = findGoalIndex(active, goalSubstring);
+  if (idx === -1) {
+    return {
+      success: false,
+      content: `No active goal matching "${goalSubstring}".${goalListHint(active)}`,
+    };
+  }
+
+  const found = active[idx];
+
+  // If LLM sets status to "completed" via update, redirect to complete logic
+  if (updates.status === 'completed' || updates.status === 'done') {
+    const [goal] = active.splice(idx, 1);
+    goal.status = 'completed';
+    goal.completed = localDateStr();
+    if (updates.notes) goal.outcome = updates.notes;
+    completed.push(goal);
+    soulLoader.writeGoals(serializeGoals(active, completed));
+    return { success: true, content: `Goal completed (via update): ${goal.text}` };
   }
 
   if (updates.status) found.status = updates.status;
@@ -268,10 +360,12 @@ function completeGoal(soulLoader: SoulLoader, goalSubstring: string, outcome?: s
   const content = soulLoader.readGoals();
   const { active, completed } = parseGoals(content);
 
-  const lower = goalSubstring.toLowerCase();
-  const idx = active.findIndex((g) => g.text.toLowerCase().includes(lower));
+  const idx = findGoalIndex(active, goalSubstring);
   if (idx === -1) {
-    return { success: false, content: `No active goal matching "${goalSubstring}"` };
+    return {
+      success: false,
+      content: `No active goal matching "${goalSubstring}".${goalListHint(active)}`,
+    };
   }
 
   const [goal] = active.splice(idx, 1);

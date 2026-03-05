@@ -3,13 +3,21 @@ import type { Logger } from '../logger';
 import { OllamaClient } from '../ollama';
 import { createLLMClient } from './llm-client';
 import { SkillLoader } from './skill-loader';
-import type { DataStore, Skill, SkillContext, SkillManifest, TelegramClient } from './types';
+import type {
+  DataStore,
+  Skill,
+  SkillContext,
+  SkillManifest,
+  TelegramClient,
+  ToolExecuteFn,
+} from './types';
 
 export class SkillRegistry {
   private skills: Map<string, Skill> = new Map();
   private contexts: Map<string, SkillContext> = new Map();
   private loader: SkillLoader;
   private ollamaClient: OllamaClient;
+  private toolExecuteFn: ToolExecuteFn | undefined;
 
   constructor(
     private config: Config,
@@ -17,6 +25,18 @@ export class SkillRegistry {
   ) {
     this.loader = new SkillLoader(config.paths.skills, logger);
     this.ollamaClient = new OllamaClient(config.ollama, logger);
+  }
+
+  /**
+   * Inject a tool executor so skill command handlers can call other tools.
+   * Called after ToolRegistry.initializeTools() populates the tool list.
+   */
+  setToolExecutor(fn: ToolExecuteFn): void {
+    this.toolExecuteFn = fn;
+    // Patch existing contexts so already-loaded skills get the capability
+    for (const ctx of this.contexts.values()) {
+      ctx.tools = { execute: fn };
+    }
   }
 
   /**
@@ -156,7 +176,7 @@ export class SkillRegistry {
       skillLogger
     );
 
-    return {
+    const ctx: SkillContext = {
       skillId,
       config: skillConfig,
       logger: skillLogger,
@@ -165,6 +185,10 @@ export class SkillRegistry {
       telegram: telegramClient || this.createDummyTelegramClient(),
       data: dataStore,
     };
+    if (this.toolExecuteFn) {
+      ctx.tools = { execute: this.toolExecuteFn };
+    }
+    return ctx;
   }
 
   /**

@@ -116,6 +116,7 @@ export class TenantFacade {
     metadata?: Record<string, unknown>
   ): void {
     if (!this.tenantManager) return;
+    if (tenantId === '__admin__') return;
 
     this.deps.logger.debug({ tenantId, botId, type, quantity }, 'Recording usage');
     this.tenantManager.recordUsage({
@@ -134,6 +135,7 @@ export class TenantFacade {
   }
 
   checkQuota(tenantId: string, type: 'messages' | 'apiCalls' | 'storage', amount = 1): boolean {
+    if (tenantId === '__admin__') return true;
     const allowed = this.tenantManager?.checkQuota(tenantId, type, amount) ?? true;
     if (!allowed) {
       this.deps.logger.warn({ tenantId, type, amount }, 'Quota exceeded');
@@ -144,7 +146,7 @@ export class TenantFacade {
   // --- Bot Lifecycle with Tenant Awareness ---
 
   async startBotWithTenant(botConfig: BotConfig): Promise<{ success: boolean; error?: string }> {
-    if (botConfig.tenantId && this.tenantManager) {
+    if (botConfig.tenantId && botConfig.tenantId !== '__admin__' && this.tenantManager) {
       const tenant = this.tenantManager.getTenant(botConfig.tenantId);
       if (!tenant) {
         return { success: false, error: 'Tenant not found' };
@@ -152,9 +154,9 @@ export class TenantFacade {
 
       if (
         !this.tenantManager.canCreateBot(botConfig.tenantId, {
+          getBotIds: () => [...this.deps.runningBots],
           config: this.deps.config,
-          runningBots: this.deps.runningBots,
-        } as any)
+        })
       ) {
         return { success: false, error: 'Bot limit exceeded for tenant plan' };
       }

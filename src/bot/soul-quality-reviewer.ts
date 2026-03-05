@@ -1,8 +1,33 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Logger } from '../logger';
+import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
 import type { SoulLintIssue } from './soul-lint';
+
+const SOUL_FILES = ['IDENTITY.md', 'SOUL.md', 'MOTIVATIONS.md', 'GOALS.md'] as const;
+
+function readSoulFiles(soulDir: string): Record<string, string | null> {
+  const result: Record<string, string | null> = {};
+  for (const name of SOUL_FILES) {
+    const filepath = join(soulDir, name);
+    try {
+      result[name] = readFileSync(filepath, 'utf-8').trim() || null;
+    } catch {
+      result[name] = null;
+    }
+  }
+  return result;
+}
+
+function backupExistingFiles(soulDir: string, logger: Logger): void {
+  for (const name of SOUL_FILES) {
+    const filepath = join(soulDir, name);
+    if (existsSync(filepath)) {
+      backupSoulFile(filepath, logger);
+    }
+  }
+}
 
 function buildQualityReviewPrompt(
   soulDir: string,
@@ -48,50 +73,110 @@ function buildQualityReviewPrompt(
     '2. Keep the language consistent (if files are in Spanish, edit in Spanish).',
     "3. Make targeted, minimal edits. Don't rewrite entire files unnecessarily.",
     '4. Back up files before editing is handled automatically — just edit directly.',
-    '',
-    '## Output',
-    'After making all edits, output ONLY a concise summary of what you changed and why (max 10 bullet points).',
-    'If no changes were needed, say "No changes needed."'
+    ''
   );
 
   return parts.join('\n');
 }
 
-export async function runQualityReview(opts: {
+function buildClaudeCliPrompt(
+  soulDir: string,
+  soulFiles: Record<string, string | null>,
+  lintIssues: SoulLintIssue[]
+): string {
+  const base = buildQualityReviewPrompt(soulDir, soulFiles, lintIssues);
+  return (
+    base +
+    [
+      '## Output',
+      'After making all edits, output ONLY a concise summary of what you changed and why (max 10 bullet points).',
+      'If no changes were needed, say "No changes needed."',
+    ].join('\n')
+  );
+}
+
+function buildOllamaPrompt(
+  soulDir: string,
+  soulFiles: Record<string, string | null>,
+  lintIssues: SoulLintIssue[]
+): string {
+  const base = buildQualityReviewPrompt(soulDir, soulFiles, lintIssues);
+  return (
+    base +
+    [
+      '## Output Format',
+      'For each file that needs changes, output it in this EXACT format:',
+      '',
+      '--- FILE: FILENAME.md ---',
+      '(full corrected content of the file)',
+      '--- END FILE ---',
+      '',
+      'After all file corrections, output a summary:',
+      '',
+      '--- SUMMARY ---',
+      '- Change 1',
+      '- Change 2',
+      '--- END SUMMARY ---',
+      '',
+      'If no changes are needed, output only:',
+      '',
+      '--- SUMMARY ---',
+      'No changes needed.',
+      '--- END SUMMARY ---',
+    ].join('\n')
+  );
+}
+
+interface ParsedReviewOutput {
+  files: Record<string, string>;
+  summary: string;
+}
+
+function parseOllamaOutput(output: string): ParsedReviewOutput {
+  const files: Record<string, string> = {};
+  const fileRegex = /--- FILE:\s*(\S+)\s*---\n([\s\S]*?)\n--- END FILE ---/g;
+  let match: RegExpExecArray | null = fileRegex.exec(output);
+  while (match !== null) {
+    files[match[1]] = match[2].trim();
+    match = fileRegex.exec(output);
+  }
+
+  let summary = 'No output from quality review';
+  const summaryMatch = output.match(/--- SUMMARY ---\n([\s\S]*?)\n--- END SUMMARY ---/);
+  if (summaryMatch) {
+    summary = summaryMatch[1].trim();
+  }
+
+  return { files, summary };
+}
+
+export interface QualityReviewOptions {
   soulDir: string;
-  claudePath: string;
-  timeout: number;
   lintIssues: SoulLintIssue[];
   logger: Logger;
-}): Promise<string> {
-  const { soulDir, claudePath, timeout, lintIssues, logger } = opts;
+  llmBackend?: 'ollama' | 'claude-cli';
+  // Claude CLI specific
+  claudePath?: string;
+  timeout?: number;
+  // Ollama specific
+  ollamaClient?: OllamaClient;
+  model?: string;
+}
 
-  const fileNames = ['IDENTITY.md', 'SOUL.md', 'MOTIVATIONS.md', 'GOALS.md'];
-  const soulFiles: Record<string, string | null> = {};
-  for (const name of fileNames) {
-    const filepath = join(soulDir, name);
-    try {
-      soulFiles[name] = readFileSync(filepath, 'utf-8').trim() || null;
-    } catch {
-      soulFiles[name] = null;
-    }
-  }
+async function runClaudeCliReview(opts: QualityReviewOptions): Promise<string> {
+  const { soulDir, lintIssues, logger, claudePath = 'claude', timeout = 300_000 } = opts;
 
-  for (const name of fileNames) {
-    const filepath = join(soulDir, name);
-    if (existsSync(filepath)) {
-      backupSoulFile(filepath, logger);
-    }
-  }
+  const soulFiles = readSoulFiles(soulDir);
+  backupExistingFiles(soulDir, logger);
 
-  const prompt = buildQualityReviewPrompt(soulDir, soulFiles, lintIssues);
+  const prompt = buildClaudeCliPrompt(soulDir, soulFiles, lintIssues);
 
   const env = { ...process.env };
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
   const proc = Bun.spawn([claudePath, '-p', prompt, '--allowedTools', 'Read,Edit,Write'], {
-    cwd: resolve(soulDir), // Soul dir — Claude needs file access but shouldn't see project root
+    cwd: resolve(soulDir),
     stdout: 'pipe',
     stderr: 'pipe',
     env,
@@ -113,10 +198,10 @@ export async function runQualityReview(opts: {
 
     if (exitCode !== 0) {
       logger.warn(
-        { exitCode, stderr: stderr.slice(0, 500) },
+        { exitCode, stderr: stderr.slice(0, 500), stdout: stdout.slice(0, 500) },
         'Soul quality review: Claude CLI failed'
       );
-      return `Quality review failed (exit code ${exitCode})`;
+      return `Quality review failed (exit code ${exitCode}): ${stdout.slice(0, 200) || stderr.slice(0, 200)}`;
     }
 
     const output = stdout.trim() || 'No output from quality review';
@@ -128,4 +213,51 @@ export async function runQualityReview(opts: {
     logger.warn({ err: message }, 'Soul quality review: error');
     return `Quality review error: ${message}`;
   }
+}
+
+async function runOllamaReview(opts: QualityReviewOptions): Promise<string> {
+  const { soulDir, lintIssues, logger, ollamaClient, model } = opts;
+
+  if (!ollamaClient) {
+    return 'Quality review skipped: ollama client not available';
+  }
+
+  const soulFiles = readSoulFiles(soulDir);
+  backupExistingFiles(soulDir, logger);
+
+  const prompt = buildOllamaPrompt(soulDir, soulFiles, lintIssues);
+
+  try {
+    const output = await ollamaClient.generate(prompt, { model });
+
+    const { files, summary } = parseOllamaOutput(output);
+
+    let filesWritten = 0;
+    for (const [name, content] of Object.entries(files)) {
+      if (!SOUL_FILES.includes(name as (typeof SOUL_FILES)[number])) continue;
+      if (!content) continue;
+
+      const filepath = join(soulDir, name);
+      const existing = soulFiles[name];
+      if (existing && content === existing) continue;
+
+      writeFileSync(filepath, content, 'utf-8');
+      filesWritten++;
+    }
+
+    logger.info({ outputLen: output.length, filesWritten }, 'Soul quality review: complete');
+    return summary;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: message }, 'Soul quality review: error');
+    return `Quality review error: ${message}`;
+  }
+}
+
+export async function runQualityReview(opts: QualityReviewOptions): Promise<string> {
+  const backend = opts.llmBackend ?? 'claude-cli';
+  if (backend === 'ollama') {
+    return runOllamaReview(opts);
+  }
+  return runClaudeCliReview(opts);
 }

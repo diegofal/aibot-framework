@@ -3,17 +3,26 @@ import { api } from './shared.js';
 export async function renderSettings(el) {
   el.innerHTML = '<div class="page-title">Settings</div><p class="text-dim">Loading...</p>';
 
-  const [session, collab, skillsFolders, mcpData, memSearch] = await Promise.all([
-    api('/api/settings/session'),
-    api('/api/settings/collaboration'),
-    api('/api/settings/skills-folders'),
-    api('/api/settings/mcp'),
-    api('/api/settings/memory-search'),
-  ]);
+  const [session, collab, skillsFolders, mcpData, memSearch, healthCheck, agentDefaults] =
+    await Promise.all([
+      api('/api/settings/session'),
+      api('/api/settings/collaboration'),
+      api('/api/settings/skills-folders'),
+      api('/api/settings/mcp'),
+      api('/api/settings/memory-search'),
+      api('/api/settings/health-check'),
+      api('/api/agents/defaults'),
+    ]);
   if (session.error || collab.error) {
     el.innerHTML = '<div class="page-title">Settings</div><p>Failed to load settings.</p>';
     return;
   }
+
+  const availableModels = agentDefaults.availableModels || ['claude-cli'];
+  const hcEffectiveModel =
+    healthCheck.llmBackend === 'claude-cli'
+      ? 'claude-cli'
+      : healthCheck.model || agentDefaults.model || '';
 
   const sfPaths = skillsFolders.paths || [];
   const sfDefault = skillsFolders.defaultPath || '';
@@ -75,6 +84,45 @@ export async function renderSettings(el) {
       </div>
       <div style="margin-top:8px">
         <span class="text-dim text-sm" id="mcp-status"></span>
+      </div>
+    </div>
+
+    <div class="detail-card" id="health-check-card">
+      <div class="form-section-title">Soul Health Check / Quality Review</div>
+      <p class="text-dim text-sm mb-16">Configure the LLM backend used for soul quality review and memory consolidation on startup.</p>
+
+      <div class="form-group">
+        <label>Enabled</label>
+        <label class="toggle">
+          <input type="checkbox" id="hc-enabled" ${healthCheck.enabled ? 'checked' : ''}>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label>Model</label>
+        <select id="hc-model">
+          ${availableModels.map((m) => `<option value="${m}"${m === hcEffectiveModel ? ' selected' : ''}>${m}${m === agentDefaults.model ? ' (primary)' : ''}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Cooldown (hours)</label>
+          <input type="number" id="hc-cooldown" min="1" step="1" value="${Math.round((healthCheck.cooldownMs || 86400000) / 3600000)}">
+        </div>
+        <div class="form-group">
+          <label>Memory Consolidation</label>
+          <label class="toggle">
+            <input type="checkbox" id="hc-consolidate" ${healthCheck.consolidateMemory ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="actions" style="margin-top:12px">
+        <button type="button" class="btn btn-primary btn-sm" id="hc-save-btn">Save</button>
+        <span class="text-dim text-sm" id="hc-save-status"></span>
       </div>
     </div>
 
@@ -319,13 +367,12 @@ export async function renderSettings(el) {
       listEl.innerHTML = items.join('');
     }
 
-    // Wire remove buttons
-    listEl.querySelectorAll('.sf-remove-btn').forEach((btn) => {
+    for (const btn of listEl.querySelectorAll('.sf-remove-btn')) {
       btn.addEventListener('click', () => {
         currentSfPaths.splice(Number.parseInt(btn.dataset.idx, 10), 1);
         renderSfList();
       });
-    });
+    }
   }
 
   renderSfList();
@@ -401,7 +448,7 @@ export async function renderSettings(el) {
       )
       .join('');
 
-    listEl.querySelectorAll('.mcp-remove-btn').forEach((btn) => {
+    for (const btn of listEl.querySelectorAll('.mcp-remove-btn')) {
       btn.addEventListener('click', async () => {
         const name = btn.dataset.name;
         btn.disabled = true;
@@ -420,7 +467,7 @@ export async function renderSettings(el) {
           showMcpStatus('Failed to remove', 'var(--red)');
         }
       });
-    });
+    }
   }
 
   function showMcpStatus(text, color) {
@@ -492,6 +539,40 @@ export async function renderSettings(el) {
       mcpStatus.push(...(freshData.status || []));
       renderMcpList();
       showMcpStatus('Server added', 'var(--green)');
+    }
+  });
+
+  // --- Health Check save ---
+  document.getElementById('hc-save-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('hc-save-btn');
+    const status = document.getElementById('hc-save-status');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    const selectedModel = document.getElementById('hc-model').value;
+    const isClaudeCli = selectedModel === 'claude-cli';
+    const patch = {
+      enabled: document.getElementById('hc-enabled').checked,
+      llmBackend: isClaudeCli ? 'claude-cli' : 'ollama',
+      model: isClaudeCli ? '' : selectedModel,
+      cooldownMs: Number.parseInt(document.getElementById('hc-cooldown').value, 10) * 3600000,
+      consolidateMemory: document.getElementById('hc-consolidate').checked,
+    };
+
+    const res = await api('/api/settings/health-check', { method: 'PATCH', body: patch });
+
+    btn.disabled = false;
+    btn.textContent = 'Save';
+
+    if (res.error) {
+      status.textContent = 'Failed to save';
+      status.style.color = 'var(--red)';
+    } else {
+      status.textContent = 'Saved (applies on next bot start)';
+      status.style.color = 'var(--green)';
+      setTimeout(() => {
+        status.textContent = '';
+      }, 4000);
     }
   });
 

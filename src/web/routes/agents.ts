@@ -1,8 +1,9 @@
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import { type BotConfig, type Config, persistBots, resolveAgentConfig } from '../../config';
+import type { SkillRegistry } from '../../core/skill-registry';
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
 import { generateSoul } from '../../soul-generator';
@@ -11,6 +12,7 @@ import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-sco
 export function agentsRoutes(deps: {
   config: Config;
   botManager: BotManager;
+  skillRegistry: SkillRegistry;
   configPath: string;
   logger: Logger;
 }) {
@@ -80,16 +82,25 @@ export function agentsRoutes(deps: {
 
     const tenantId = getTenantId(c);
 
+    let skills: string[];
+    if (body.skills !== undefined) {
+      skills = [...new Set(body.skills)];
+    } else {
+      const builtIn = (await deps.skillRegistry.listAvailable()).map((s) => s.id);
+      const external = deps.botManager.getExternalSkillNames();
+      skills = [...new Set([...builtIn, ...external])];
+    }
+
     const newBot: BotConfig = {
       id: body.id,
       name: body.name,
       token: body.token ?? '',
       enabled: body.enabled ?? false,
-      skills: body.skills ?? [],
+      skills,
       allowedUsers: body.allowedUsers,
       mentionPatterns: body.mentionPatterns,
       model: body.model,
-      llmBackend: (body as any).llmBackend,
+      llmBackend: body.llmBackend,
       soulDir: body.soulDir,
       disabledTools: body.disabledTools,
       conversation: body.conversation,
@@ -113,18 +124,17 @@ export function agentsRoutes(deps: {
     if (body.name !== undefined) bot.name = body.name;
     if (body.token !== undefined) bot.token = body.token;
     if (body.enabled !== undefined) bot.enabled = body.enabled;
-    if (body.skills !== undefined) bot.skills = body.skills;
+    if (body.skills !== undefined) bot.skills = [...new Set(body.skills)];
     if (body.allowedUsers !== undefined) bot.allowedUsers = body.allowedUsers;
     if (body.mentionPatterns !== undefined) bot.mentionPatterns = body.mentionPatterns;
     if (body.disabledTools !== undefined) bot.disabledTools = body.disabledTools;
-    if ((body as any).disabledSkills !== undefined)
-      bot.disabledSkills = (body as any).disabledSkills;
+    if (body.disabledSkills !== undefined) bot.disabledSkills = body.disabledSkills;
 
     // Per-agent override fields (undefined = clear override, use global default)
     if ('model' in body) bot.model = body.model || undefined;
-    if ('llmBackend' in body) bot.llmBackend = (body as any).llmBackend || undefined;
+    if ('llmBackend' in body) bot.llmBackend = body.llmBackend || undefined;
     if ('soulDir' in body) bot.soulDir = body.soulDir || undefined;
-    if ('workDir' in body) bot.workDir = (body as any).workDir || undefined;
+    if ('workDir' in body) bot.workDir = body.workDir || undefined;
     if ('conversation' in body) {
       if (body.conversation && Object.values(body.conversation).some((v) => v !== undefined)) {
         bot.conversation = body.conversation;
@@ -133,7 +143,7 @@ export function agentsRoutes(deps: {
       }
     }
     if ('agentLoop' in body) {
-      const al = (body as any).agentLoop;
+      const al = body.agentLoop;
       if (al && Object.values(al).some((v: unknown) => v !== undefined)) {
         bot.agentLoop = { ...bot.agentLoop, ...al };
       } else {
@@ -141,7 +151,7 @@ export function agentsRoutes(deps: {
       }
     }
     if ('tts' in body) {
-      const tts = (body as any).tts;
+      const tts = body.tts;
       if (tts && Object.values(tts).some((v: unknown) => v !== undefined)) {
         bot.tts = tts;
       } else {
@@ -191,9 +201,10 @@ export function agentsRoutes(deps: {
       await deps.botManager.startBot(bot);
       deps.logger.info({ botId: id }, 'Agent started via API');
       return c.json({ ok: true, running: true });
-    } catch (err: any) {
-      deps.logger.error({ botId: id, error: err.message }, 'Start failed');
-      return c.json({ error: err.message ?? 'Failed to start agent' }, 500);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to start agent';
+      deps.logger.error({ botId: id, error: message }, 'Start failed');
+      return c.json({ error: message }, 500);
     }
   });
 
@@ -223,9 +234,10 @@ export function agentsRoutes(deps: {
       const result = await deps.botManager.resetBot(id);
       deps.logger.info({ botId: id, cleared: result.cleared }, 'Agent reset via API');
       return c.json(result);
-    } catch (err: any) {
-      deps.logger.error({ botId: id, error: err.message }, 'Reset failed');
-      return c.json({ error: err.message ?? 'Reset failed' }, 500);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Reset failed';
+      deps.logger.error({ botId: id, error: message }, 'Reset failed');
+      return c.json({ error: message }, 500);
     }
   });
 
@@ -267,6 +279,46 @@ export function agentsRoutes(deps: {
     return c.json({ ...clone, token: '', running: false }, 201);
   });
 
+  // Check soul file status for an agent
+  app.get('/:id/soul-status', (c) => {
+    const id = c.req.param('id');
+    const bot = findBotScoped(c, id);
+    if (!bot) return c.json({ error: 'Agent not found' }, 404);
+
+    const soulDir = resolveAgentConfig(deps.config, bot).soulDir;
+    const hasSoulDir = existsSync(soulDir);
+
+    const fileStatus = (filename: string) => {
+      const filepath = join(soulDir, filename);
+      if (!existsSync(filepath)) return { exists: false, length: 0 };
+      try {
+        const stat = statSync(filepath);
+        return { exists: true, length: stat.size };
+      } catch {
+        return { exists: false, length: 0 };
+      }
+    };
+
+    const identity = fileStatus('IDENTITY.md');
+    const soul = fileStatus('SOUL.md');
+    const motivations = fileStatus('MOTIVATIONS.md');
+    const complete =
+      hasSoulDir &&
+      identity.exists &&
+      soul.exists &&
+      motivations.exists &&
+      identity.length > 0 &&
+      soul.length > 0 &&
+      motivations.length > 0;
+
+    return c.json({
+      soulDir,
+      hasSoulDir,
+      files: { identity, soul, motivations },
+      complete,
+    });
+  });
+
   // Initialize per-agent soul directory
   app.post('/:id/init-soul', async (c) => {
     const id = c.req.param('id');
@@ -298,10 +350,19 @@ export function agentsRoutes(deps: {
       personalityDescription: string;
       language?: string;
       emoji?: string;
+      llmBackend?: 'ollama' | 'claude-cli';
+      model?: string;
     }>();
 
     if (!body.role || !body.personalityDescription) {
       return c.json({ error: 'role and personalityDescription are required' }, 400);
+    }
+
+    let generate: ((prompt: string) => Promise<string>) | undefined;
+    if (body.llmBackend === 'ollama') {
+      const ollamaClient = deps.botManager.getOllamaClient();
+      const model = body.model || deps.config.ollama.models.primary;
+      generate = (prompt) => ollamaClient.generate(prompt, { model });
     }
 
     try {
@@ -316,12 +377,14 @@ export function agentsRoutes(deps: {
         {
           soulDir: deps.config.soul.dir,
           logger: deps.logger,
+          generate,
         }
       );
       return c.json(result);
-    } catch (err: any) {
-      deps.logger.error({ botId: id, error: err.message }, 'Soul generation failed');
-      return c.json({ error: err.message ?? 'Soul generation failed' }, 500);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Soul generation failed';
+      deps.logger.error({ botId: id, error: message }, 'Soul generation failed');
+      return c.json({ error: message }, 500);
     }
   });
 

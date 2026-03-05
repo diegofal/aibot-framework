@@ -92,7 +92,8 @@ export async function checkModelHygiene(opts: {
         severity: 'warn',
         title: `Small model used as primary: ${value}`,
         detail: `Config key "${key}" uses "${value}" which is a small model (<300B parameters). Small models have weaker security judgment — they may follow malicious instructions more easily.`,
-        remediation: `Consider using a larger model (claude-sonnet-4-20250514, gpt-4o) for the primary agent. Reserve small models for low-stakes auxiliary tasks.`,
+        remediation:
+          'Consider using a larger model (claude-sonnet-4-20250514, gpt-4o) for the primary agent. Reserve small models for low-stakes auxiliary tasks.',
       });
     }
   }

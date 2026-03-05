@@ -129,7 +129,7 @@ describe('logToMemory', () => {
   it('truncates summaries over 500 chars', () => {
     const appendDailyMemory = vi.fn();
     const mockCtx = {
-      getSoulLoader: () => ({ appendDailyMemory }),
+      soulLoaders: new Map([['bot1', { appendDailyMemory }]]),
       logger: { warn: vi.fn() },
     } as any;
 
@@ -140,15 +140,31 @@ describe('logToMemory', () => {
     expect(logged).toContain('...');
   });
 
-  it('handles errors gracefully', () => {
+  it('skips silently when soulLoader is missing (bot stopped mid-execution)', () => {
     const mockCtx = {
-      getSoulLoader: () => {
-        throw new Error('no loader');
-      },
+      soulLoaders: new Map(),
       logger: { warn: vi.fn() },
     } as any;
 
-    // Should not throw
+    logToMemory(mockCtx, 'bot1', 'test');
+    expect(mockCtx.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('handles appendDailyMemory errors gracefully', () => {
+    const mockCtx = {
+      soulLoaders: new Map([
+        [
+          'bot1',
+          {
+            appendDailyMemory: () => {
+              throw new Error('disk full');
+            },
+          },
+        ],
+      ]),
+      logger: { warn: vi.fn() },
+    } as any;
+
     logToMemory(mockCtx, 'bot1', 'test');
     expect(mockCtx.logger.warn).toHaveBeenCalled();
   });

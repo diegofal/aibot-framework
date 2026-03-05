@@ -4,7 +4,10 @@
     "timeout": 300000,
     "models": {
       "primary": "kimi-k2.5:cloud",
-      "fallbacks": []
+      "fallbacks": [
+        "qwen3.5:397b-cloud",
+        "qwen3-coder-next:cloud"
+      ]
     }
   },
   "conversation": {
@@ -83,6 +86,13 @@
     "sessionMemory": {
       "enabled": true,
       "indexOnStartup": true
+    },
+    "healthCheck": {
+      "enabled": true,
+      "cooldownMs": 86400000,
+      "consolidateMemory": true,
+      "llmBackend": "ollama",
+      "model": "qwen3.5:397b-cloud"
     }
   },
   "phoneCall": {
@@ -225,7 +235,7 @@
     "calendarId": "${CALENDAR_ID}"
   },
   "logging": {
-    "level": "info",
+    "level": "debug",
     "file": "./data/logs/aibot.log"
   },
   "paths": {

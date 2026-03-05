@@ -25,7 +25,7 @@ type PermissionInfo = {
 };
 
 function formatOctal(mode: number): string {
-  return '0o' + (mode & 0o777).toString(8);
+  return `0o${(mode & 0o777).toString(8)}`;
 }
 
 async function inspectPermissions(path: string): Promise<PermissionInfo> {

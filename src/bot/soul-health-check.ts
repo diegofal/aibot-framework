@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger';
+import type { OllamaClient } from '../ollama';
 import { lintSoulDirectory } from './soul-lint';
 import { consolidateMemory } from './soul-memory-consolidator';
 import { runQualityReview } from './soul-quality-reviewer';
@@ -17,6 +18,9 @@ export interface StartupSoulCheckOptions {
   timeout: number;
   logger: Logger;
   consolidateMemory?: boolean;
+  llmBackend?: 'ollama' | 'claude-cli';
+  model?: string;
+  ollamaClient?: OllamaClient;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +56,7 @@ function isCooldownActive(soulDir: string, cooldownMs: number): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Run startup soul health check: lint + Claude CLI quality review + memory consolidation.
+ * Run startup soul health check: lint + LLM quality review + memory consolidation.
  * Designed to run as a non-blocking background task.
  */
 export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promise<void> {
@@ -64,6 +68,9 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
     timeout,
     logger,
     consolidateMemory: shouldConsolidate = true,
+    llmBackend = 'claude-cli',
+    model,
+    ollamaClient,
   } = opts;
 
   if (isCooldownActive(soulDir, cooldownMs)) {
@@ -71,7 +78,7 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
     return;
   }
 
-  logger.info({ botId, soulDir }, 'Soul health check: starting');
+  logger.info({ botId, soulDir, llmBackend }, 'Soul health check: starting');
 
   // Step 1: Structural lint (instant, no LLM)
   const issues = lintSoulDirectory(soulDir);
@@ -82,7 +89,7 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
 
   if (shouldConsolidate) {
     tasks.push(
-      consolidateMemory({ soulDir, claudePath, timeout, logger })
+      consolidateMemory({ soulDir, claudePath, timeout, logger, llmBackend, model, ollamaClient })
         .then((result) => {
           logger.info(
             { botId, merged: result.merged, archived: result.archived },
@@ -102,6 +109,9 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
       timeout,
       lintIssues: issues,
       logger,
+      llmBackend,
+      model,
+      ollamaClient,
     })
       .then((reviewResult) => {
         logger.info(

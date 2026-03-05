@@ -117,7 +117,13 @@ export function startWebServer(deps: WebServerDeps): void {
   );
   app.route(
     '/api/agents',
-    agentsRoutes({ config, botManager: deps.botManager, configPath: deps.configPath, logger })
+    agentsRoutes({
+      config,
+      botManager: deps.botManager,
+      skillRegistry: deps.skillRegistry,
+      configPath: deps.configPath,
+      logger,
+    })
   );
   app.route(
     '/api/agents',

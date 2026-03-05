@@ -74,8 +74,8 @@ describe('McpAgentBridge', () => {
     expect(bridge.size).toBe(1);
     const info = registry.getByBotId('ext1');
     expect(info).toBeDefined();
-    expect(info!.name).toBe('Agent ext1');
-    expect(info!.tools).toEqual(['mock_tool']);
+    expect(info?.name).toBe('Agent ext1');
+    expect(info?.tools).toEqual(['mock_tool']);
   });
 
   it('should reject duplicate agent IDs', async () => {

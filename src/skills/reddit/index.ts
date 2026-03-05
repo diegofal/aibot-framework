@@ -1,20 +1,5 @@
 import type { Skill, SkillContext } from '../../core/types';
 
-export const handlers: Record<
-  string,
-  (args: Record<string, unknown>, context: SkillContext) => Promise<unknown>
-> = {
-  async reddit_search(args: Record<string, unknown>, ctx: SkillContext): Promise<unknown> {
-    const result = await ctx.tools.execute?.('reddit_search', args, ctx);
-    return result ?? { success: false, message: 'reddit_search tool not available' };
-  },
-
-  async reddit_hot(args: Record<string, unknown>, ctx: SkillContext): Promise<unknown> {
-    const result = await ctx.tools.execute?.('reddit_hot', args, ctx);
-    return result ?? { success: false, message: 'reddit_hot tool not available' };
-  },
-};
-
 const skill: Skill = {
   id: 'reddit',
   name: 'Reddit',
@@ -36,14 +21,16 @@ const skill: Skill = {
 
         if (subcommand === 'hot') {
           if (!rest) return 'Usage: /reddit hot <subreddit>';
-          const result = await handlers.reddit_hot({ subreddit: rest }, ctx);
-          return (result as { content?: string })?.content || 'No results';
+          const result = await ctx.tools?.execute?.('reddit_hot', { subreddit: rest });
+          if (result?.success) return result.content;
+          return 'Reddit tools not available. Ask me in conversation to browse Reddit.';
         }
 
         if (subcommand === 'search') {
           if (!rest) return 'Usage: /reddit search <query>';
-          const result = await handlers.reddit_search({ query: rest }, ctx);
-          return (result as { content?: string })?.content || 'No results';
+          const result = await ctx.tools?.execute?.('reddit_search', { query: rest });
+          if (result?.success) return result.content;
+          return 'Reddit tools not available. Ask me in conversation to search Reddit.';
         }
 
         return 'Usage: /reddit hot <subreddit> | /reddit search <query>';

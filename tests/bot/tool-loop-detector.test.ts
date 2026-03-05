@@ -735,8 +735,8 @@ describe('ToolLoopDetector', () => {
 
       const stats = d.getStats();
       expect(stats.mostFrequent).not.toBeNull();
-      expect(stats.mostFrequent!.toolName).toBe('frequent');
-      expect(stats.mostFrequent!.count).toBe(5);
+      expect(stats.mostFrequent?.toolName).toBe('frequent');
+      expect(stats.mostFrequent?.count).toBe(5);
     });
 
     it('returns null for mostFrequent when empty', () => {

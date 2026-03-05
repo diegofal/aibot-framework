@@ -2,12 +2,14 @@ import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
 import {
   BotAgentLoopOverrideSchema,
+  BotConfigSchema,
   CalendarConfigSchema,
   CompactionConfigSchema,
   GlobalAgentLoopConfigSchema,
   MMRConfigSchema,
   RedditConfigSchema,
   TwitterConfigSchema,
+  WebToolsConfigSchema,
 } from '../src/config';
 
 describe('GlobalAgentLoopConfigSchema', () => {
@@ -88,6 +90,46 @@ describe('BotAgentLoopOverrideSchema', () => {
   test('rejects invalid maxToolRounds', () => {
     expect(() => BotAgentLoopOverrideSchema.parse({ maxToolRounds: 0 })).toThrow();
     expect(() => BotAgentLoopOverrideSchema.parse({ maxToolRounds: 51 })).toThrow();
+  });
+});
+
+describe('BotConfigSchema maxToolRounds', () => {
+  const minBot = { id: 'test', name: 'Test', skills: [] };
+
+  test('maxToolRounds defaults to undefined (uses global)', () => {
+    const result = BotConfigSchema.parse(minBot);
+    expect(result.maxToolRounds).toBeUndefined();
+  });
+
+  test('accepts per-bot maxToolRounds override', () => {
+    const result = BotConfigSchema.parse({ ...minBot, maxToolRounds: 25 });
+    expect(result.maxToolRounds).toBe(25);
+  });
+
+  test('accepts maxToolRounds up to 50', () => {
+    const result = BotConfigSchema.parse({ ...minBot, maxToolRounds: 50 });
+    expect(result.maxToolRounds).toBe(50);
+  });
+
+  test('rejects maxToolRounds out of range', () => {
+    expect(() => BotConfigSchema.parse({ ...minBot, maxToolRounds: 0 })).toThrow();
+    expect(() => BotConfigSchema.parse({ ...minBot, maxToolRounds: 51 })).toThrow();
+  });
+});
+
+describe('WebToolsConfigSchema maxToolRounds', () => {
+  test('defaults to 5', () => {
+    const result = WebToolsConfigSchema.parse({});
+    expect(result.maxToolRounds).toBe(5);
+  });
+
+  test('accepts up to 50', () => {
+    const result = WebToolsConfigSchema.parse({ maxToolRounds: 50 });
+    expect(result.maxToolRounds).toBe(50);
+  });
+
+  test('rejects above 50', () => {
+    expect(() => WebToolsConfigSchema.parse({ maxToolRounds: 51 })).toThrow();
   });
 });
 

@@ -339,11 +339,7 @@ export function productionsRoutes(deps: {
     const tree = productionsService.getAllDirectoryTrees();
     if (tenantId) {
       const allowedIds = new Set(scopeBots(config.bots, tenantId).map((b) => b.id));
-      const filtered: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(tree)) {
-        if (allowedIds.has(key)) filtered[key] = value;
-      }
-      return c.json({ tree: filtered });
+      return c.json({ tree: tree.filter((node) => allowedIds.has(node.path)) });
     }
     return c.json({ tree });
   });
@@ -355,7 +351,7 @@ export function productionsRoutes(deps: {
     const limit = Number(c.req.query('limit')) || 100;
     const offset = Number(c.req.query('offset')) || 0;
     const status = c.req.query('status') || undefined;
-    let botId = c.req.query('botId') || undefined;
+    const botId = c.req.query('botId') || undefined;
 
     // If tenant requests a specific botId, validate access
     if (botId && tenantId && !checkBotAccess(c, botId)) {

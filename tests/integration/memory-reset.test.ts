@@ -45,7 +45,7 @@ describe('MemoryManager per-bot cleanup', () => {
     const row = db
       .prepare<{ id: number }, [string]>('SELECT id FROM files WHERE path = ?')
       .get(path);
-    return row!.id;
+    return row?.id;
   }
 
   function insertChunk(fileId: number, content: string, contentHash: string): void {
@@ -157,7 +157,7 @@ describe('MemoryManager per-bot cleanup', () => {
 
     // botB data untouched
     const files = db.prepare<{ c: number }, []>('SELECT COUNT(*) as c FROM files').get();
-    expect(files!.c).toBe(1);
+    expect(files?.c).toBe(1);
   });
 
   it('clearCoreMemoryForBot clears only entries for the target bot', () => {
@@ -176,13 +176,13 @@ describe('MemoryManager per-bot cleanup', () => {
 
     expect(cleared).toBe(2);
     const remaining = db.prepare<{ c: number }, []>('SELECT COUNT(*) as c FROM core_memory').get();
-    expect(remaining!.c).toBe(1);
+    expect(remaining?.c).toBe(1);
 
     // botB entry should still exist
     const botBEntry = db
       .prepare<{ key: string }, [string]>('SELECT key FROM core_memory WHERE bot_id = ?')
       .get('botB');
-    expect(botBEntry!.key).toBe('g2');
+    expect(botBEntry?.key).toBe('g2');
   });
 
   it('clearCoreMemoryForBot returns 0 when bot has no entries', () => {
@@ -195,7 +195,7 @@ describe('MemoryManager per-bot cleanup', () => {
 
     expect(cleared).toBe(0);
     const remaining = db.prepare<{ c: number }, []>('SELECT COUNT(*) as c FROM core_memory').get();
-    expect(remaining!.c).toBe(1);
+    expect(remaining?.c).toBe(1);
   });
 
   function createManagerWithDb(database: Database): MemoryManager {

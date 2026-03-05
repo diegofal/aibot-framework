@@ -16,8 +16,8 @@ describe('SessionStore', () => {
     const session = store.createSession({ role: 'tenant', tenantId: 't1', name: 'Test' });
     const retrieved = store.getSession(session.id);
     expect(retrieved).toBeDefined();
-    expect(retrieved!.tenantId).toBe('t1');
-    expect(retrieved!.role).toBe('tenant');
+    expect(retrieved?.tenantId).toBe('t1');
+    expect(retrieved?.role).toBe('tenant');
   });
 
   test('getSession returns undefined for unknown id', () => {

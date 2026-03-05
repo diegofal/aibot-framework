@@ -327,7 +327,7 @@ export class BotResetService {
             delete raw.skills.config[id];
           }
         }
-        delete raw.bots; // bots live in bots.json now
+        raw.bots = undefined; // bots live in bots.json now
         writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
       } catch (err) {
         logger.warn(

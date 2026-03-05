@@ -201,6 +201,78 @@ describe('skills routes', () => {
       const data = await res.json();
       expect(data).toEqual([]);
     });
+
+    test('deduplicates skills that appear as both builtin and external', async () => {
+      const builtInSkills = [
+        { id: 'calendar', name: 'Calendar', version: '1.0.0', description: 'Calendar skill' },
+      ];
+      const externalSkills = [
+        {
+          manifest: {
+            id: 'calendar',
+            name: 'Calendar',
+            version: '1.0.0',
+            description: 'Calendar skill',
+            tools: [{ name: 'calendar_list' }],
+          },
+          dir: '/some/dir',
+          warnings: [],
+        },
+        {
+          manifest: {
+            id: 'unique-ext',
+            name: 'Unique External',
+            version: '1.0.0',
+            description: 'Only external',
+            tools: [{ name: 'ext_tool' }],
+          },
+          dir: '/other/dir',
+          warnings: [],
+        },
+      ];
+
+      const app = makeApp({
+        skillRegistry: makeSkillRegistry(builtInSkills, ['calendar']) as any,
+        botManager: makeBotManager(externalSkills) as any,
+      });
+
+      const res = await app.request('http://localhost/api/skills');
+      const data = await res.json();
+      const calendarEntries = data.filter((s: any) => s.id === 'calendar');
+      expect(calendarEntries.length).toBe(1);
+      expect(calendarEntries[0].type).toBe('builtin');
+
+      const uniqueExt = data.find((s: any) => s.id === 'unique-ext');
+      expect(uniqueExt).toBeDefined();
+      expect(uniqueExt.type).toBe('external');
+
+      expect(data.length).toBe(2);
+    });
+
+    test('deduplicates external skills with same ID from different dirs', async () => {
+      const externalSkills = [
+        {
+          manifest: { id: 'reddit', name: 'Reddit', version: '1.0.0', tools: [{ name: 'r1' }] },
+          dir: '/dir1',
+          warnings: [],
+        },
+        {
+          manifest: { id: 'reddit', name: 'Reddit', version: '1.0.0', tools: [{ name: 'r1' }] },
+          dir: '/dir2',
+          warnings: [],
+          botName: 'bot2',
+        },
+      ];
+
+      const app = makeApp({
+        botManager: makeBotManager(externalSkills) as any,
+      });
+
+      const res = await app.request('http://localhost/api/skills');
+      const data = await res.json();
+      const redditEntries = data.filter((s: any) => s.id === 'reddit');
+      expect(redditEntries.length).toBe(1);
+    });
   });
 
   describe('GET /:id', () => {

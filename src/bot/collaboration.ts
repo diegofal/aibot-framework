@@ -170,7 +170,7 @@ export class CollaborationManager {
       temperature: resolved.temperature,
       tools: hasTools ? collabDefs : undefined,
       toolExecutor: executor,
-      maxToolRounds: this.ctx.config.webTools?.maxToolRounds,
+      maxToolRounds: respondingConfig.maxToolRounds ?? this.ctx.config.webTools?.maxToolRounds,
     });
   }
 
@@ -460,7 +460,7 @@ export class CollaborationManager {
           temperature: resolved.temperature,
           tools: hasTools ? collabTools.definitions : undefined,
           toolExecutor: executor,
-          maxToolRounds: this.ctx.config.webTools?.maxToolRounds,
+          maxToolRounds: targetConfig.maxToolRounds ?? this.ctx.config.webTools?.maxToolRounds,
         }),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Collaboration step timeout')), timeout)

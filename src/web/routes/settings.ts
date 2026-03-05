@@ -129,6 +129,31 @@ export function settingsRoutes(deps: {
     });
   });
 
+  // Get health check (quality review) settings
+  app.get('/health-check', (c) => {
+    return c.json(deps.config.soul.healthCheck);
+  });
+
+  // Update health check (quality review) settings
+  app.patch('/health-check', async (c) => {
+    const body = await c.req.json();
+    const hc = deps.config.soul.healthCheck;
+
+    if (body.enabled !== undefined) hc.enabled = body.enabled;
+    if (body.cooldownMs !== undefined) hc.cooldownMs = body.cooldownMs;
+    if (body.consolidateMemory !== undefined) hc.consolidateMemory = body.consolidateMemory;
+    if (body.llmBackend !== undefined) hc.llmBackend = body.llmBackend;
+    if (body.model !== undefined) hc.model = body.model || undefined;
+
+    persistHealthCheck(deps.configPath, hc);
+    deps.logger.info(
+      { llmBackend: hc.llmBackend, model: hc.model },
+      'Health check settings updated via API'
+    );
+
+    return c.json(hc);
+  });
+
   // Get memory search settings (includes MMR)
   app.get('/memory-search', (c) => {
     return c.json(deps.config.soul.search);
@@ -299,5 +324,12 @@ function persistMemorySearch(configPath: string, search: Config['soul']['search'
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   if (!raw.soul) raw.soul = {};
   raw.soul.search = search;
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+}
+
+function persistHealthCheck(configPath: string, healthCheck: Config['soul']['healthCheck']): void {
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+  if (!raw.soul) raw.soul = {};
+  raw.soul.healthCheck = healthCheck;
   writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }

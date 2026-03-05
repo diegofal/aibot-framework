@@ -343,6 +343,13 @@ export class BotManager {
       }
     );
 
+    // Give skill command handlers the ability to call registered tools
+    this.skillRegistry.setToolExecutor(async (name, args) => {
+      const tool = this.tools.find((t: Tool) => t.definition.function.name === name);
+      if (!tool) return undefined;
+      return tool.execute(args, this.logger);
+    });
+
     // Wire dynamic tool registry, tool registry, and agent loop into reset service (available after initializeAll)
     this.botResetService.setDynamicToolRegistry(this.toolRegistry.getDynamicToolRegistry());
     this.botResetService.setToolRegistry(this.toolRegistry);
@@ -480,6 +487,9 @@ export class BotManager {
           timeout: this.config.improve?.timeout ?? 300_000,
           logger: botLogger,
           consolidateMemory: healthCheckConfig.consolidateMemory,
+          llmBackend: healthCheckConfig.llmBackend,
+          model: healthCheckConfig.model,
+          ollamaClient: healthCheckConfig.llmBackend === 'ollama' ? this.ollamaClient : undefined,
         }).catch((err) => botLogger.warn({ err }, 'Soul health check failed (non-fatal)'));
       }
 

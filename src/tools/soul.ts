@@ -5,6 +5,25 @@ import type { Tool, ToolResult } from './types';
 type SoulLoaderResolver = (botId: string) => SoulLoader;
 
 /**
+ * LLMs (especially qwen3.5/qwen3-coder) frequently call save_memory with
+ * "content", "value", "text" etc. instead of "fact".  Rather than burning an
+ * entire round-trip on a validation error + self-correction, normalise the
+ * most common aliases observed in production logs.
+ */
+const FACT_ALIASES = ['content', 'text', 'value', 'memory', 'note', 'message'] as const;
+
+export function resolveFactParam(args: Record<string, unknown>): string {
+  const direct = String(args.fact ?? '').trim();
+  if (direct) return direct;
+
+  for (const alias of FACT_ALIASES) {
+    const val = String(args[alias] ?? '').trim();
+    if (val) return val;
+  }
+  return '';
+}
+
+/**
  * Tool that lets the LLM persist facts to the daily memory log
  */
 export function createSaveMemoryTool(getSoulLoader: SoulLoaderResolver): Tool {
@@ -32,7 +51,7 @@ export function createSaveMemoryTool(getSoulLoader: SoulLoaderResolver): Tool {
 
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const MAX_MEMORY_LENGTH = 2000;
-      let fact = String(args.fact ?? '').trim();
+      let fact = resolveFactParam(args);
       if (!fact) {
         return { success: false, content: 'Missing required parameter: fact' };
       }

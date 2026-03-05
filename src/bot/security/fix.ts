@@ -88,7 +88,7 @@ async function fixConfigValue(
       } else {
         current[lastKey] = newValue;
       }
-      await writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
     }
 
     return {
@@ -203,8 +203,8 @@ export function formatFixResult(result: FixResult): string {
 
   for (const action of result.actions) {
     if (action.kind === 'chmod') {
-      const oldOctal = '0o' + action.oldMode.toString(8);
-      const newOctal = '0o' + action.newMode.toString(8);
+      const oldOctal = `0o${action.oldMode.toString(8)}`;
+      const newOctal = `0o${action.newMode.toString(8)}`;
       const status = action.ok ? '✅' : '❌';
       lines.push(`${status} chmod ${action.path}: ${oldOctal} → ${newOctal}`);
       if (action.error) lines.push(`   Error: ${action.error}`);

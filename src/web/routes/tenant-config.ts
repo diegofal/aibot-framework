@@ -34,7 +34,7 @@ export function tenantConfigRoutes(deps: {
 
     const body = await c.req.json();
     // Prevent apiKeys from being set via general config update
-    delete body.apiKeys;
+    body.apiKeys = undefined;
 
     try {
       const updated = configStore.update(tenantId, body);

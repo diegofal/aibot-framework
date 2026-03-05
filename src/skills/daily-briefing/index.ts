@@ -27,8 +27,7 @@ export const handlers: Record<
 
     ctx.logger.info({ config }, 'Daily Briefing: generando brief');
 
-    // Obtener goals activos usando manage_goals
-    const goalsResult = await ctx.tools.execute?.('manage_goals', { action: 'list' }, ctx);
+    const goalsResult = await ctx.tools?.execute?.('manage_goals', { action: 'list' });
     const activeGoals: Goal[] = [];
 
     // Parsear goals del resultado
@@ -106,20 +105,16 @@ export const handlers: Record<
 
     try {
       // Usar cron tool para programar
-      const result = await ctx.tools.execute?.(
-        'cron',
-        {
-          action: 'add',
-          name: 'Daily Briefing',
-          schedule: {
-            kind: 'cron',
-            expr: cronExpr,
-            tz: timezone,
-          },
-          text: 'daily-briefing scheduled',
+      const result = await ctx.tools?.execute?.('cron', {
+        action: 'add',
+        name: 'Daily Briefing',
+        schedule: {
+          kind: 'cron',
+          expr: cronExpr,
+          tz: timezone,
         },
-        ctx
-      );
+        text: 'daily-briefing scheduled',
+      });
 
       return {
         success: true,

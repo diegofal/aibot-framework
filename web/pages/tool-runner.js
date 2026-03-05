@@ -182,7 +182,7 @@ export async function renderToolRunner(el) {
     toolDetail.innerHTML = `
       <div class="detail-card">
         <div class="form-section-title">${escapeHtml(tool.name)}
-          <span class="badge ${tool.source === 'mcp' ? 'badge-mcp' : tool.source === 'built-in' ? 'badge-running' : 'badge-pending'}" style="font-size:10px">${tool.source === 'mcp' ? 'mcp: ' + escapeHtml(tool.category || 'unknown') : escapeHtml(tool.source)}</span>
+          <span class="badge ${tool.source === 'mcp' ? 'badge-mcp' : tool.source === 'built-in' ? 'badge-running' : 'badge-pending'}" style="font-size:10px">${tool.source === 'mcp' ? `mcp: ${escapeHtml(tool.category || 'unknown')}` : escapeHtml(tool.source)}</span>
           ${tool.status ? `<span class="badge badge-${tool.status === 'approved' ? 'running' : tool.status === 'pending' ? 'pending' : 'stopped'}" style="font-size:10px">${escapeHtml(tool.status)}</span>` : ''}
         </div>
         <p style="margin-bottom:16px;color:var(--text-dim)">${escapeHtml(tool.description)}</p>

@@ -215,9 +215,9 @@ describe('agent proposal routes', () => {
     // Config should have the new bot
     const newBot = config.bots.find((b: BotConfig) => b.id === 'new-agent');
     expect(newBot).toBeTruthy();
-    expect(newBot!.name).toBe('NewAgent');
-    expect(newBot!.enabled).toBe(false);
-    expect(newBot!.token).toBe('');
+    expect(newBot?.name).toBe('NewAgent');
+    expect(newBot?.enabled).toBe(false);
+    expect(newBot?.token).toBe('');
 
     // Soul dir should exist with at least IDENTITY.md
     const soulDir = data.soulDir;

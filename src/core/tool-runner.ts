@@ -28,6 +28,21 @@ export interface ToolRunnerOptions {
   deliverable?: string;
 }
 
+const MEMORY_TOOL_NAMES = new Set(['save_memory', 'core_memory_append', 'core_memory_replace']);
+
+const PHANTOM_SAVE_PATTERN =
+  /(?:guardado|guard[oé]|saved|stored|lo guardo|lo anoto|anotado)[\s,.].*?(?:memoria|memory|core.memory)/i;
+
+/**
+ * Detect when the LLM claims to have saved to memory in its text response
+ * without actually calling any memory tool — a "phantom save".
+ */
+export function detectPhantomMemorySave(response: string, calledTools: Set<string>): boolean {
+  const usedMemoryTool = [...calledTools].some((t) => MEMORY_TOOL_NAMES.has(t));
+  if (usedMemoryTool) return false;
+  return PHANTOM_SAVE_PATTERN.test(response);
+}
+
 /**
  * Generic agentic tool loop. Calls strategy.chat() in rounds,
  * executing tool calls and feeding results back until the LLM
@@ -40,6 +55,7 @@ export async function runToolLoop(
   chatOptions: ChatOptions
 ): Promise<string> {
   const workingMessages = [...messages];
+  const calledTools = new Set<string>();
 
   for (let round = 0; round <= opts.maxRounds; round++) {
     const isLastRound = round === opts.maxRounds;
@@ -92,6 +108,7 @@ export async function runToolLoop(
       // Execute each tool call
       for (const toolCall of result.toolCalls) {
         const { name, arguments: args } = toolCall.function;
+        calledTools.add(name);
         opts.logger.debug({ tool: name, args }, 'Executing tool call');
 
         const toolResult = await opts.toolExecutor(name, args);
@@ -117,6 +134,12 @@ export async function runToolLoop(
 
     // No tool calls — return text response
     if (result.content) {
+      if (detectPhantomMemorySave(result.content, calledTools)) {
+        opts.logger.warn(
+          { responsePreview: result.content.slice(0, 200) },
+          'Phantom memory save: LLM claimed to save to memory without calling any memory tool'
+        );
+      }
       return result.content;
     }
 

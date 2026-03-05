@@ -4,34 +4,5 @@
   "version": "1.0.0",
   "description": "Browse Reddit: search posts, view hot/top, read threads",
   "author": "AIBot Framework",
-  "main": "index.ts",
-  "tools": [
-    {
-      "name": "reddit_search",
-      "description": "Search Reddit for posts matching a query",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "query": { "type": "string", "description": "Search query" },
-          "subreddit": { "type": "string", "description": "Limit to subreddit" },
-          "sort": { "type": "string", "enum": ["hot", "new", "top", "relevance"] },
-          "limit": { "type": "number", "description": "Results (1-25)" }
-        },
-        "required": ["query"]
-      }
-    },
-    {
-      "name": "reddit_hot",
-      "description": "Get hot posts from a subreddit",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "subreddit": { "type": "string", "description": "Subreddit name" },
-          "limit": { "type": "number" },
-          "time": { "type": "string", "enum": ["hour", "day", "week", "month", "year", "all"] }
-        },
-        "required": ["subreddit"]
-      }
-    }
-  ]
+  "main": "index.ts"
 }

@@ -1022,7 +1022,7 @@ describe('productions routes', () => {
       expect(data.status).toBe('checking');
 
       // Resolve so it doesn't leak
-      resolveGenerate!('{"coherent": true, "issues": [], "explanation": "Good content"}');
+      resolveGenerate?.('{"coherent": true, "issues": [], "explanation": "Good content"}');
       await tick();
 
       const { claudeGenerate: orig } = await import('../../../src/claude-cli');

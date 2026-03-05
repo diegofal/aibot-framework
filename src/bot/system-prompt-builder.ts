@@ -188,6 +188,11 @@ export class SystemPromptBuilder {
       builtPrompt += this.createToolInstructions();
     }
 
+    // Create agent (agent proposals)
+    if (defs.some((d) => d.function.name === 'create_agent')) {
+      builtPrompt += this.createAgentInstructions(botConfig);
+    }
+
     return builtPrompt;
   }
 
@@ -211,7 +216,8 @@ export class SystemPromptBuilder {
       builtPrompt +=
         '\n\nYou have persistent files that define who you are. ' +
         'They ARE your memory — update them to persist across conversations.\n' +
-        "- save_memory: When you learn a preference, fact, or context worth remembering, save it. Don't ask — just do it.";
+        "- save_memory: When you learn a preference, fact, or context worth remembering, save it. Don't ask — just do it.\n" +
+        'Never say "guardado" or "saved" unless you ACTUALLY called save_memory or core_memory_append. A text claim without a tool call means the data is lost.';
     }
 
     return builtPrompt;
@@ -265,7 +271,9 @@ export class SystemPromptBuilder {
       "- save_memory: When you learn a preference, fact, or context worth remembering, save it. Don't ask — just do it.\n" +
       '- update_identity: When the user asks you to change your name, emoji, or vibe.\n' +
       '- update_soul: When the user asks you to change your personality, tone, or behavioral rules. Tell the user when you do this.\n\n' +
-      'Be selective with memory — only save things that matter for future conversations.'
+      'Be selective with memory — only save things that matter for future conversations.\n\n' +
+      'CRITICAL: Never say "guardado", "saved", or "lo guardo en memoria" unless you have ACTUALLY called save_memory or core_memory_append in this turn. ' +
+      'Describing a save in text is NOT the same as executing the tool. To remember something, CALL THE TOOL first, then confirm.'
     );
   }
 
@@ -375,6 +383,14 @@ export class SystemPromptBuilder {
     );
   }
 
+  private createAgentInstructions(botConfig: BotConfig): string {
+    const existingAgents = this.ctx.config.bots
+      .filter((b) => b.enabled !== false)
+      .map((b) => `- ${b.id} (${b.name})`)
+      .join('\n');
+    return `\n\n## Agent Creation\n\nYou can propose the creation of new agents using the \`create_agent\` tool.\nUse this when you identify a gap in the ecosystem — a recurring need that no existing agent covers, or a specialization that would complement the team.\n\nCurrent agents in the ecosystem:\n${existingAgents}\n\n- Provide a clear justification for why the new agent is needed.\n- Describe its personality in detail (tone, style, values, behavioral traits).\n- Choose relevant skills from those available in the ecosystem.\n- Proposals require human approval before the agent is created.\n- Do NOT propose agents that duplicate existing capabilities.`;
+  }
+
   private goalsToolInstructions(): string {
     return (
       '\n\n## Goal Management\n\n' +
@@ -395,7 +411,9 @@ export class SystemPromptBuilder {
       '- `core_memory_replace`: Update an existing fact (must match old_value exactly).\n' +
       '- `core_memory_search`: Search your core memory by query and optional category.\n\n' +
       'Categories: identity, relationships, preferences, goals, constraints, general.\n' +
-      'Use this for structured, high-importance facts. Use `save_memory` for freeform daily notes.'
+      'Use this for structured, high-importance facts. Use `save_memory` for freeform daily notes.\n\n' +
+      'IMPORTANT: Do NOT claim you saved or stored something in memory unless you actually called one of these tools. ' +
+      'Saying "guardado" or "stored" without a tool call means the data is LOST.'
     );
   }
 

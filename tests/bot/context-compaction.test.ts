@@ -301,7 +301,7 @@ describe('ContextCompactor', () => {
     // Mechanical summary should contain "Previous conversation"
     const summaryMsg = result.messages.find((m) => m.content.startsWith(COMPACTION_SUMMARY_PREFIX));
     expect(summaryMsg).toBeDefined();
-    expect(summaryMsg!.content).toContain('Previous conversation');
+    expect(summaryMsg?.content).toContain('Previous conversation');
   });
 
   test('existing summary in history is replaced', async () => {

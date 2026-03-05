@@ -207,7 +207,7 @@ describe('consolidateMemory', () => {
   it('rejects output that is <50% of existing MEMORY.md size', async () => {
     const logger = createMockLogger();
     // Create a large existing MEMORY.md
-    const largeContent = '<!-- last-consolidated: 2026-01-01 -->\n' + '# Memory\n'.repeat(200);
+    const largeContent = `<!-- last-consolidated: 2026-01-01 -->\n${'# Memory\n'.repeat(200)}`;
     writeFileSync(join(TEST_DIR, 'MEMORY.md'), largeContent);
     writeFileSync(join(TEST_DIR, 'memory', '2026-01-15.md'), '# Jan 15\nSmall fact');
 

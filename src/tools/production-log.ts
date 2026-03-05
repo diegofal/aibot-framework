@@ -61,7 +61,7 @@ export function createProductionLogTool(productionsService: ProductionsService):
           const evalStr = e.evaluation?.status
             ? `[${e.evaluation.status.toUpperCase()}${e.evaluation.rating ? ` ${e.evaluation.rating}/5` : ''}]${e.evaluation.feedback ? ` "${e.evaluation.feedback}"` : ''}`
             : '[UNREVIEWED]';
-          return `- ${e.timestamp.slice(0, 16)} | ${e.action} | ${e.path} | ${evalStr}`;
+          return `- ${(e.timestamp ?? '').slice(0, 16)} | ${e.action ?? '?'} | ${e.path ?? '?'} | ${evalStr}`;
         });
 
         return { success: true, content: `${summary}\n${lines.join('\n')}` };
