@@ -59,7 +59,7 @@ describe('Loop detector integration with runToolLoop', () => {
       {}
     );
 
-    expect(result).toContain('Loop stopped');
+    expect(result.text).toContain('Loop stopped');
     expect(chatCallCount).toBeLessThanOrEqual(5);
   });
 
@@ -109,7 +109,7 @@ describe('Loop detector integration with runToolLoop', () => {
       {}
     );
 
-    expect(result).toContain('Loop stopped');
+    expect(result.text).toContain('Loop stopped');
     expect(chatCallCount).toBeLessThanOrEqual(4);
   });
 
@@ -163,8 +163,8 @@ describe('Loop detector integration with runToolLoop', () => {
       {}
     );
 
-    expect(result).toBe('Task completed successfully');
-    expect(result).not.toContain('Loop stopped');
+    expect(result.text).toBe('Task completed successfully');
+    expect(result.text).not.toContain('Loop stopped');
   });
 
   test('global circuit breaker fires at 2x maxRounds', async () => {
@@ -241,8 +241,8 @@ describe('Loop detector integration with runToolLoop', () => {
       {}
     );
 
-    expect(result).toContain('Loop stopped');
-    expect(result).toContain('Exceeded');
+    expect(result.text).toContain('Loop stopped');
+    expect(result.text).toContain('Exceeded');
   });
 
   test('without loopDetector, loop exhausts all rounds', async () => {
@@ -296,7 +296,7 @@ describe('Loop detector integration with runToolLoop', () => {
       { tools: toolDefs }
     );
 
-    expect(result).toBe('Exhaustion summary');
+    expect(result.text).toBe('Exhaustion summary');
     expect(chatCallCount).toBe(4); // 3 tool rounds + 1 final
   });
 });

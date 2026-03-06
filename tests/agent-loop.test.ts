@@ -1547,17 +1547,17 @@ describe('isRetryableError', () => {
     expect(isRetryableError(new Error('Invalid API Key provided'))).toBe(false);
   });
 
-  test('classifies unknown errors as non-retryable', () => {
-    expect(isRetryableError(new Error('Something unexpected happened'))).toBe(false);
-    expect(isRetryableError(new Error('Cannot read property of undefined'))).toBe(false);
-    expect(isRetryableError('random string error')).toBe(false);
+  test('classifies unknown errors as retryable (conservative retry)', () => {
+    expect(isRetryableError(new Error('Something unexpected happened'))).toBe(true);
+    expect(isRetryableError(new Error('Cannot read property of undefined'))).toBe(true);
+    expect(isRetryableError('random string error')).toBe(true);
   });
 
   test('handles non-Error objects', () => {
     expect(isRetryableError('timed out')).toBe(true);
-    expect(isRetryableError(42)).toBe(false);
-    expect(isRetryableError(null)).toBe(false);
-    expect(isRetryableError(undefined)).toBe(false);
+    expect(isRetryableError(42)).toBe(true);
+    expect(isRetryableError(null)).toBe(true);
+    expect(isRetryableError(undefined)).toBe(true);
   });
 
   test('non-retryable patterns take precedence over retryable when both match', () => {

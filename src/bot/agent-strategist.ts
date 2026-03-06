@@ -1,5 +1,5 @@
 import type { BotConfig } from '../config';
-import type { LLMClient } from '../core/llm-client';
+import type { LLMClient, TokenUsage } from '../core/llm-client';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import { parseGoals, serializeGoals } from '../tools/goals';
@@ -98,28 +98,33 @@ export function computeCyclesUntilStrategist(
 /**
  * Run the strategist with retry (temperature 0.4 → 0 on failure).
  */
+export interface StrategistResultWithUsage extends StrategistResult {
+  usage?: TokenUsage;
+}
+
 export async function runStrategistWithRetry(
   llmClient: LLMClient,
   input: { system: string; prompt: string },
   model: string,
   logger: Logger,
   maxRetries = 1
-): Promise<StrategistResult | null> {
+): Promise<StrategistResultWithUsage | null> {
   const temperatures = [0.4, 0];
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const raw = await llmClient.generate(input.prompt, {
+    const llmResult = await llmClient.generate(input.prompt, {
       system: input.system,
       model,
       temperature: temperatures[attempt] ?? 0,
     });
+    const raw = llmResult.text;
 
     const result = parseStrategistResult(raw, logger);
     if (result) {
       if (attempt > 0) {
         logger.info({ attempt }, 'Agent loop: strategist succeeded on retry');
       }
-      return result;
+      return { ...result, usage: llmResult.usage };
     }
 
     if (attempt < maxRetries) {
@@ -154,7 +159,7 @@ export async function runStrategist(
     datetime: string;
     soulLoader: ReturnType<BotContext['getSoulLoader']>;
   }
-): Promise<StrategistResult | null> {
+): Promise<StrategistResultWithUsage | null> {
   const llmClient = ctx.getLLMClient(botId);
   const model = ctx.getActiveModel(botId);
 

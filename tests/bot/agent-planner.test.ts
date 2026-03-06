@@ -148,7 +148,7 @@ describe('runPlannerWithRetry', () => {
       plan: ['do something'],
       priority: 'high',
     });
-    mockClient.generate.mockResolvedValueOnce(validResponse);
+    mockClient.generate.mockResolvedValueOnce({ text: validResponse, usage: undefined });
 
     const result = await runPlannerWithRetry(
       mockClient as any,
@@ -161,6 +161,7 @@ describe('runPlannerWithRetry', () => {
       reasoning: 'First try success',
       plan: ['do something'],
       priority: 'high',
+      usage: undefined,
     });
     expect(mockClient.generate).toHaveBeenCalledTimes(1);
     expect(mockClient.generate).toHaveBeenCalledWith(plannerInput.prompt, {
@@ -178,7 +179,9 @@ describe('runPlannerWithRetry', () => {
       plan: ['retried action'],
       priority: 'medium',
     });
-    mockClient.generate.mockResolvedValueOnce(invalidResponse).mockResolvedValueOnce(validResponse);
+    mockClient.generate
+      .mockResolvedValueOnce({ text: invalidResponse, usage: undefined })
+      .mockResolvedValueOnce({ text: validResponse, usage: undefined });
 
     const result = await runPlannerWithRetry(
       mockClient as any,
@@ -191,6 +194,7 @@ describe('runPlannerWithRetry', () => {
       reasoning: 'Retry success',
       plan: ['retried action'],
       priority: 'medium',
+      usage: undefined,
     });
     expect(mockClient.generate).toHaveBeenCalledTimes(2);
     // First attempt: temperature 0.3
@@ -213,7 +217,9 @@ describe('runPlannerWithRetry', () => {
   });
 
   test('returns fallback idle plan after all retries fail', async () => {
-    mockClient.generate.mockResolvedValueOnce('garbage1').mockResolvedValueOnce('garbage2');
+    mockClient.generate
+      .mockResolvedValueOnce({ text: 'garbage1', usage: undefined })
+      .mockResolvedValueOnce({ text: 'garbage2', usage: undefined });
 
     const result = await runPlannerWithRetry(
       mockClient as any,

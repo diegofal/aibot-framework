@@ -55,7 +55,7 @@ describe('runToolLoop', () => {
 
     const result = await runToolLoop(strategy, [{ role: 'user', content: 'do stuff' }], opts, {});
 
-    expect(result).toBe('Summary of work done.');
+    expect(result.text).toBe('Summary of work done.');
     // The last call's messages should include the summarization system message
     const lastCallMessages = capturedMessages[capturedMessages.length - 1];
     const summarizationMsg = lastCallMessages.find(
@@ -113,7 +113,7 @@ describe('runToolLoop', () => {
     };
 
     const result = await runToolLoop(strategy, [{ role: 'user', content: 'work' }], opts, {});
-    expect(result).toBe('Created 3 files and ran tests successfully.');
+    expect(result.text).toBe('Created 3 files and ran tests successfully.');
   });
 
   test('returns fallback message when LLM returns empty on last round', async () => {
@@ -139,7 +139,9 @@ describe('runToolLoop', () => {
 
     const result = await runToolLoop(strategy, [{ role: 'user', content: 'work' }], opts, {});
     // Falls through the loop → returns the exhaustion fallback
-    expect(result).toBe('I was unable to complete the request within the allowed number of steps.');
+    expect(result.text).toBe(
+      'I was unable to complete the request within the allowed number of steps.'
+    );
   });
 
   test('logs warning when LLM claims memory save without calling memory tool', async () => {
@@ -163,7 +165,7 @@ describe('runToolLoop', () => {
     };
 
     const result = await runToolLoop(strategy, [{ role: 'user', content: 'save this' }], opts, {});
-    expect(result).toBe('Guardado en memoria estructurada.');
+    expect(result.text).toBe('Guardado en memoria estructurada.');
     expect(warnings.some((w) => w.msg.includes('Phantom memory save'))).toBe(true);
   });
 

@@ -165,13 +165,14 @@ export class CollaborationManager {
         }).createCallback()
       : undefined;
 
-    return this.ctx.getLLMClient(respondingBotId).chat(messages, {
+    const result = await this.ctx.getLLMClient(respondingBotId).chat(messages, {
       model,
       temperature: resolved.temperature,
       tools: hasTools ? collabDefs : undefined,
       toolExecutor: executor,
       maxToolRounds: respondingConfig.maxToolRounds ?? this.ctx.config.webTools?.maxToolRounds,
     });
+    return result.text;
   }
 
   /**
@@ -292,10 +293,11 @@ export class CollaborationManager {
       'Handling delegation'
     );
 
-    const response = await this.ctx.getLLMClient(targetBotId).chat(messages, {
+    const llmResult = await this.ctx.getLLMClient(targetBotId).chat(messages, {
       model,
       temperature: resolved.temperature,
     });
+    const response = llmResult.text;
 
     if (response.trim() && targetBot) {
       await sendLongMessage((t) => targetBot.api.sendMessage(chatId, t), response);
@@ -454,7 +456,7 @@ export class CollaborationManager {
 
     let response: string;
     try {
-      response = await Promise.race([
+      const llmResult = await Promise.race([
         this.ctx.getLLMClient(targetBotId).chat(messages, {
           model,
           temperature: resolved.temperature,
@@ -466,6 +468,7 @@ export class CollaborationManager {
           setTimeout(() => reject(new Error('Collaboration step timeout')), timeout)
         ),
       ]);
+      response = llmResult.text;
     } catch (err) {
       if (err instanceof Error && err.message === 'Collaboration step timeout') {
         botLogger.warn(
@@ -671,7 +674,7 @@ export class CollaborationManager {
         const sourceModel = this.ctx.getActiveModel(sourceBotId);
         let sourceResponse: string;
         try {
-          sourceResponse = await Promise.race([
+          const sourceLlmResult = await Promise.race([
             this.ctx.getLLMClient(sourceBotId).chat(evalMessages, {
               model: sourceModel,
               temperature: resolved.temperature,
@@ -680,6 +683,7 @@ export class CollaborationManager {
               setTimeout(() => reject(new Error('Collaboration source timeout')), timeout)
             ),
           ]);
+          sourceResponse = sourceLlmResult.text;
         } catch (err) {
           if (err instanceof Error && err.message === 'Collaboration source timeout') {
             botLogger.warn(

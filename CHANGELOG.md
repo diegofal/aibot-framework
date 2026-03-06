@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- **Per-model token usage tracking** — LLM calls now capture token usage (prompt/completion tokens) from both Ollama and Claude CLI backends. The `LLMClient` interface returns `LLMResponse` (text + optional `TokenUsage`) instead of plain strings. Token data flows through the `ActivityStream` (`llm:end` events), is aggregated per-model in `LlmStatsTracker`, and is included in `AgentLoopResult`. The web UI shows a "Tokens" column in the agents list, a per-model breakdown table in the agent detail LLM Stats card, and token usage sections in agent loop result modals (both agents page and dashboard).
+
 ### Changed
 - **Productions index: INDEX.md → index.html** — `rebuildIndex` now generates a self-contained `index.html` SPA instead of a markdown file. Features: architecture-docs-matching dark theme, sidebar with file navigation, search/filter, inline file viewer (markdown rendered via vendored marked.js, HTML in sandboxed iframe, others as preformatted text), active goals from GOALS.md displayed on the home view, stats dashboard, collapsible archived section.
 - **New static file serving route** — `GET /productions-view/:botId/*` serves production files directly with correct MIME types and path traversal protection. Enables the index.html to load files via relative `fetch()`.

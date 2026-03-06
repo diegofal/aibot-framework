@@ -447,7 +447,9 @@ export class ConversationPipeline {
           throw new Error(`LLM call failed: ${error.message}`);
         }
 
-        const response = llmResult.data ?? '';
+        const llmResponse = llmResult.data;
+        const response = llmResponse?.text ?? '';
+        const tokenUsage = llmResponse?.usage;
 
         botLogger.info(
           {
@@ -469,6 +471,9 @@ export class ConversationPipeline {
             attempts: llmResult.attempts,
             backend: llmBackend,
             caller: 'conversation',
+            model: tokenUsage?.model,
+            tokensIn: tokenUsage?.promptTokens,
+            tokensOut: tokenUsage?.completionTokens,
           },
         });
 

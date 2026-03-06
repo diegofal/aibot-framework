@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import { type BotConfig, resolveAgentConfig } from '../config';
+import type { TokenUsage } from '../core/llm-client';
+import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
@@ -10,7 +12,6 @@ import {
   buildFeedbackProcessorPrompt,
   buildPlannerPrompt,
 } from './agent-loop-prompts';
-import type { PlannerResult } from './agent-loop-prompts';
 import {
   buildRecentActionsDigest,
   isRepetitiveAction,
@@ -19,13 +20,17 @@ import {
   scanFileTree,
   sendReport,
 } from './agent-loop-utils';
-import { runPlannerWithRetry } from './agent-planner';
+import { type PlannerResultWithUsage, runPlannerWithRetry } from './agent-planner';
 import {
   executeSingleBotWithRetry as _executeSingleBotWithRetry,
   resolveRetryConfig,
 } from './agent-retry-engine';
 import { AgentScheduler } from './agent-scheduler';
-import { type StrategistResult, runStrategist, shouldRunStrategist } from './agent-strategist';
+import {
+  type StrategistResultWithUsage,
+  runStrategist,
+  shouldRunStrategist,
+} from './agent-strategist';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
 import { ToolLoopDetector } from './tool-loop-detector';
@@ -73,6 +78,11 @@ export interface AgentLoopResult {
       mostFrequent: { toolName: string; count: number } | null;
     };
   };
+  /** Token usage breakdown by model for this cycle */
+  tokenUsage?: {
+    models: Record<string, { promptTokens: number; completionTokens: number }>;
+    total: number;
+  };
 }
 
 interface ExecuteLoopDetail {
@@ -86,6 +96,27 @@ interface ExecuteLoopDetail {
   focus?: string;
   selectedToolCategories?: string[];
   executorToolCount?: number;
+  tokenUsage?: AgentLoopResult['tokenUsage'];
+}
+
+function buildTokenUsageSummary(
+  ...usages: (TokenUsage | undefined)[]
+): AgentLoopResult['tokenUsage'] | undefined {
+  const models: Record<string, { promptTokens: number; completionTokens: number }> = {};
+  let total = 0;
+  for (const u of usages) {
+    if (!u) continue;
+    const existing = models[u.model];
+    if (existing) {
+      existing.promptTokens += u.promptTokens;
+      existing.completionTokens += u.completionTokens;
+    } else {
+      models[u.model] = { promptTokens: u.promptTokens, completionTokens: u.completionTokens };
+    }
+    total += u.totalTokens;
+  }
+  if (total === 0) return undefined;
+  return { models, total };
 }
 
 export interface BotScheduleInfo {
@@ -511,6 +542,7 @@ export class AgentLoop {
         consecutiveIdleCycles: schedule?.consecutiveIdleCycles ?? 0,
         selectedToolCategories: detail.selectedToolCategories,
         executorToolCount: detail.executorToolCount,
+        tokenUsage: detail.tokenUsage,
       };
     } catch (err) {
       const durationMs = Date.now() - startMs;
@@ -638,6 +670,8 @@ export class AgentLoop {
     let strategistRan = false;
     let strategistReflection: string | undefined;
     let focus: string | undefined;
+    let strategistResult: StrategistResultWithUsage | null = null;
+    let plannerTokenUsage: TokenUsage | undefined;
 
     const schedule = this.scheduler.getSchedule(botId);
     if (shouldRunStrategist(botId, botConfig, globalConfig.strategist, schedule)) {
@@ -654,7 +688,6 @@ export class AgentLoop {
         timestamp: strategistStartMs,
         data: { caller: 'strategist', backend: llmClient.backend },
       });
-      let strategistResult: StrategistResult | null;
       try {
         strategistResult = await withTimeout(
           () =>
@@ -677,6 +710,9 @@ export class AgentLoop {
             caller: 'strategist',
             backend: llmClient.backend,
             durationMs: Date.now() - strategistStartMs,
+            model: strategistResult?.usage?.model,
+            tokensIn: strategistResult?.usage?.promptTokens,
+            tokensOut: strategistResult?.usage?.completionTokens,
           },
         });
       } catch (err) {
@@ -843,7 +879,7 @@ export class AgentLoop {
         timestamp: plannerStartMs,
         data: { caller: 'planner', backend: llmClient.backend, mode: 'continuous' },
       });
-      let continuousResult: PlannerResult;
+      let continuousResult: PlannerResultWithUsage;
       try {
         continuousResult = await withTimeout(
           () => runPlannerWithRetry(llmClient, continuousInput, model, botLogger),
@@ -858,6 +894,9 @@ export class AgentLoop {
             caller: 'planner',
             backend: llmClient.backend,
             durationMs: Date.now() - plannerStartMs,
+            model: continuousResult.usage?.model,
+            tokensIn: continuousResult.usage?.promptTokens,
+            tokensOut: continuousResult.usage?.completionTokens,
           },
         });
       } catch (err) {
@@ -879,6 +918,7 @@ export class AgentLoop {
       plannerReasoning = continuousResult.reasoning;
       priority = continuousResult.priority;
       selectedToolCategories = continuousResult.toolCategories;
+      plannerTokenUsage = continuousResult.usage;
     } else {
       const plannerInput = buildPlannerPrompt({
         identity,
@@ -919,7 +959,7 @@ export class AgentLoop {
         timestamp: plannerStartMs,
         data: { caller: 'planner', backend: llmClient.backend, mode: 'periodic' },
       });
-      let plannerResult: PlannerResult;
+      let plannerResult: PlannerResultWithUsage;
       try {
         plannerResult = await withTimeout(
           () => runPlannerWithRetry(llmClient, plannerInput, model, botLogger),
@@ -934,6 +974,9 @@ export class AgentLoop {
             caller: 'planner',
             backend: llmClient.backend,
             durationMs: Date.now() - plannerStartMs,
+            model: plannerResult.usage?.model,
+            tokensIn: plannerResult.usage?.promptTokens,
+            tokensOut: plannerResult.usage?.completionTokens,
           },
         });
       } catch (err) {
@@ -955,6 +998,7 @@ export class AgentLoop {
       plannerReasoning = plannerResult.reasoning;
       priority = plannerResult.priority;
       selectedToolCategories = plannerResult.toolCategories;
+      plannerTokenUsage = plannerResult.usage;
     }
 
     this.ctx.activityStream?.publish({
@@ -1109,6 +1153,7 @@ export class AgentLoop {
     botLogger.info({ botId, maxToolRounds }, 'Agent loop: starting executor phase');
 
     let response: string;
+    let executorUsage: import('../core/llm-client').TokenUsage | undefined;
     const executorStartMs = Date.now();
     this.ctx.activityStream?.publish({
       type: 'llm:start',
@@ -1117,7 +1162,7 @@ export class AgentLoop {
       data: { caller: 'executor', backend: llmClient.backend, toolCount: executorDefs.length },
     });
     try {
-      response = await withTimeout(
+      const executorResult = await withTimeout(
         () =>
           llmClient.chat(messages, {
             model,
@@ -1129,6 +1174,8 @@ export class AgentLoop {
         'Executor phase',
         executorTimeoutMs
       );
+      response = executorResult.text;
+      executorUsage = executorResult.usage;
       this.ctx.activityStream?.publish({
         type: 'llm:end',
         botId,
@@ -1137,6 +1184,9 @@ export class AgentLoop {
           caller: 'executor',
           backend: llmClient.backend,
           durationMs: Date.now() - executorStartMs,
+          model: executorUsage?.model,
+          tokensIn: executorUsage?.promptTokens,
+          tokensOut: executorUsage?.completionTokens,
         },
       });
 
@@ -1204,6 +1254,12 @@ export class AgentLoop {
       },
     });
 
+    const tokenUsage = buildTokenUsageSummary(
+      strategistResult?.usage,
+      plannerTokenUsage,
+      executorUsage
+    );
+
     return {
       summary: response || '(no response from executor)',
       plannerReasoning,
@@ -1219,6 +1275,7 @@ export class AgentLoop {
         loopWarnings > 0 || loopBlocks > 0
           ? { warnings: loopWarnings, blocks: loopBlocks, stats: loopDetectionStats }
           : undefined,
+      tokenUsage,
     };
   }
 
@@ -1410,12 +1467,13 @@ export class AgentLoop {
         });
         let response: string;
         try {
-          response = await feedbackLLM.chat(messages, {
+          const feedbackResult = await feedbackLLM.chat(messages, {
             temperature: 0.5,
             tools: defs,
             toolExecutor: executor.createCallback(),
             maxToolRounds: 5,
           });
+          response = feedbackResult.text;
           this.ctx.activityStream?.publish({
             type: 'llm:end',
             botId,
@@ -1424,6 +1482,9 @@ export class AgentLoop {
               caller: 'feedback',
               backend: feedbackLLM.backend,
               durationMs: Date.now() - feedbackStartMs,
+              model: feedbackResult.usage?.model,
+              tokensIn: feedbackResult.usage?.promptTokens,
+              tokensOut: feedbackResult.usage?.completionTokens,
             },
           });
         } catch (feedbackErr) {

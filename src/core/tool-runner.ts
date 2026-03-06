@@ -1,6 +1,7 @@
 import type { Logger } from '../logger';
 import type { ChatMessage, ChatOptions } from '../ollama';
 import type { ToolCall, ToolDefinition, ToolExecutor } from '../tools/types';
+import type { LLMResponse, TokenUsage } from './llm-client';
 import type { LoopDetector } from './loop-detector';
 
 /**
@@ -11,7 +12,7 @@ export interface ToolCallingStrategy {
   chat(
     messages: ChatMessage[],
     opts: ChatOptions
-  ): Promise<{ content: string; toolCalls?: ToolCall[] }>;
+  ): Promise<{ content: string; toolCalls?: ToolCall[]; usage?: TokenUsage }>;
 }
 
 export interface ToolRunnerOptions {
@@ -26,6 +27,21 @@ export interface ToolRunnerOptions {
    * summary-like response).
    */
   deliverable?: string;
+}
+
+/** Accumulate token usage across multiple rounds, merging by model. */
+export function mergeTokenUsage(
+  accumulated: TokenUsage | undefined,
+  next: TokenUsage | undefined
+): TokenUsage | undefined {
+  if (!next) return accumulated;
+  if (!accumulated) return { ...next };
+  return {
+    model: next.model,
+    promptTokens: accumulated.promptTokens + next.promptTokens,
+    completionTokens: accumulated.completionTokens + next.completionTokens,
+    totalTokens: accumulated.totalTokens + next.totalTokens,
+  };
 }
 
 const MEMORY_TOOL_NAMES = new Set(['save_memory', 'core_memory_append', 'core_memory_replace']);
@@ -47,15 +63,18 @@ export function detectPhantomMemorySave(response: string, calledTools: Set<strin
  * Generic agentic tool loop. Calls strategy.chat() in rounds,
  * executing tool calls and feeding results back until the LLM
  * produces a text-only response or rounds are exhausted.
+ *
+ * Returns an LLMResponse with accumulated token usage across all rounds.
  */
 export async function runToolLoop(
   strategy: ToolCallingStrategy,
   messages: ChatMessage[],
   opts: ToolRunnerOptions,
   chatOptions: ChatOptions
-): Promise<string> {
+): Promise<LLMResponse> {
   const workingMessages = [...messages];
   const calledTools = new Set<string>();
+  let accumulatedUsage: TokenUsage | undefined;
 
   for (let round = 0; round <= opts.maxRounds; round++) {
     const isLastRound = round === opts.maxRounds;
@@ -79,7 +98,10 @@ export async function runToolLoop(
       if (check.action === 'break') {
         opts.logger.warn({ round, message: check.message }, 'Tool loop detector: breaking');
         const lastContent = workingMessages.filter((m) => m.role === 'assistant').pop()?.content;
-        return `${lastContent || ''}\n\n[Loop stopped: ${check.message}]`;
+        return {
+          text: `${lastContent || ''}\n\n[Loop stopped: ${check.message}]`,
+          usage: accumulatedUsage,
+        };
       }
       if (check.action === 'warn' && check.message) {
         workingMessages.push({
@@ -90,6 +112,7 @@ export async function runToolLoop(
     }
 
     const result = await strategy.chat(workingMessages, roundOpts);
+    accumulatedUsage = mergeTokenUsage(accumulatedUsage, result.usage);
 
     // If there are tool calls and it's not the last round, execute them
     if (!isLastRound && result.toolCalls && result.toolCalls.length > 0) {
@@ -140,7 +163,7 @@ export async function runToolLoop(
           'Phantom memory save: LLM claimed to save to memory without calling any memory tool'
         );
       }
-      return result.content;
+      return { text: result.content, usage: accumulatedUsage };
     }
 
     // Last round with empty content → fall through to exhaustion message
@@ -148,9 +171,12 @@ export async function runToolLoop(
       break;
     }
 
-    return '';
+    return { text: '', usage: accumulatedUsage };
   }
 
   opts.logger.warn({ maxRounds: opts.maxRounds }, 'Tool loop exhausted without text response');
-  return 'I was unable to complete the request within the allowed number of steps.';
+  return {
+    text: 'I was unable to complete the request within the allowed number of steps.',
+    usage: accumulatedUsage,
+  };
 }

@@ -53,7 +53,7 @@ describe('webGenerate', () => {
   });
 
   test('enableTools: true calls llmClient.chat with filtered tools', async () => {
-    const mockChat = mock(() => Promise.resolve('tool-enabled response'));
+    const mockChat = mock(() => Promise.resolve({ text: 'tool-enabled response' }));
 
     const mockToolDefs = [
       {
@@ -167,7 +167,10 @@ describe('webGenerate', () => {
     ];
 
     const mockBotManager = {
-      getLLMClient: () => ({ chat: mock(() => Promise.resolve('')), backend: 'claude-cli' }),
+      getLLMClient: () => ({
+        chat: mock(() => Promise.resolve({ text: '' })),
+        backend: 'claude-cli',
+      }),
       getToolRegistry: () => ({
         getDefinitionsForBot: () => mockToolDefs,
         createExecutor: () => mock(async () => ({ success: true, content: 'ok' })),
@@ -260,7 +263,7 @@ describe('webGenerate', () => {
   });
 
   test('defaults enableTools to true when not specified', async () => {
-    const mockChat = mock(() => Promise.resolve('default tools response'));
+    const mockChat = mock(() => Promise.resolve({ text: 'default tools response' }));
 
     const mockBotManager = {
       getLLMClient: () => ({ chat: mockChat, backend: 'claude-cli' }),

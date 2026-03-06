@@ -1,4 +1,5 @@
 import type { OllamaConfig } from './config';
+import type { LLMResponse, TokenUsage } from './core/llm-client';
 import { createLoopDetector } from './core/loop-detector';
 import { NativeToolStrategy } from './core/native-tool-strategy';
 import { runToolLoop } from './core/tool-runner';
@@ -36,6 +37,8 @@ export interface OllamaResponse {
   model: string;
   response: string;
   done: boolean;
+  prompt_eval_count?: number;
+  eval_count?: number;
 }
 
 interface OllamaChatResponse {
@@ -46,6 +49,20 @@ interface OllamaChatResponse {
     tool_calls?: ToolCall[];
   };
   done: boolean;
+  prompt_eval_count?: number;
+  eval_count?: number;
+}
+
+/** Build a TokenUsage from Ollama's response fields, or undefined if counts are missing. */
+export function ollamaUsage(
+  model: string,
+  promptEvalCount?: number,
+  evalCount?: number
+): TokenUsage | undefined {
+  if (promptEvalCount == null && evalCount == null) return undefined;
+  const promptTokens = promptEvalCount ?? 0;
+  const completionTokens = evalCount ?? 0;
+  return { model, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
 }
 
 export class OllamaClient {
@@ -57,7 +74,7 @@ export class OllamaClient {
   /**
    * Generate text using Ollama
    */
-  async generate(prompt: string, options: GenerateOptions = {}): Promise<string> {
+  async generate(prompt: string, options: GenerateOptions = {}): Promise<LLMResponse> {
     const model = options.model || this.config.models.primary;
     const startMs = Date.now();
 
@@ -93,7 +110,10 @@ export class OllamaClient {
         'Generated response'
       );
 
-      return data.response;
+      return {
+        text: data.response,
+        usage: ollamaUsage(data.model, data.prompt_eval_count, data.eval_count),
+      };
     } catch (error) {
       const elapsedMs = Date.now() - startMs;
 
@@ -137,7 +157,7 @@ export class OllamaClient {
    * Chat with Ollama using message history.
    * Supports an agentic tool-calling loop when tools + toolExecutor are provided.
    */
-  async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<string> {
+  async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<LLMResponse> {
     const model = options.model || this.config.models.primary;
     // Ensure the resolved model propagates to strategies so they never fall back to a hardcoded default
     const resolvedOptions = { ...options, model };
@@ -186,7 +206,7 @@ export class OllamaClient {
         { model, response: (result.content || '').slice(0, 100), elapsedMs: Date.now() - startMs },
         'Chat response'
       );
-      return result.content || '';
+      return { text: result.content || '', usage: result.usage };
     } catch (error) {
       const elapsedMs = Date.now() - startMs;
 

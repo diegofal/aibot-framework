@@ -104,8 +104,8 @@ async function generateConsolidation(
       return { output: null, error: 'ollama client not available' };
     }
     try {
-      const result = await opts.ollamaClient.generate(prompt, { model: opts.model });
-      return { output: result.trim() || null };
+      const llmResult = await opts.ollamaClient.generate(prompt, { model: opts.model });
+      return { output: llmResult.text.trim() || null };
     } catch (err) {
       return { output: null, error: err instanceof Error ? err.message : String(err) };
     }

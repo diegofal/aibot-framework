@@ -42,20 +42,21 @@ export class MemoryFlusher {
       if (claudePath) {
         try {
           const fullPrompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
-          summary = await claudeGenerate(fullPrompt, {
+          const claudeResult = await claudeGenerate(fullPrompt, {
             claudePath,
             timeout: 300_000,
             logger: this.ctx.logger,
           });
+          summary = claudeResult.response;
         } catch (err) {
           this.ctx.logger.warn(
             { err },
             'Claude CLI failed for memory flush, falling back to Ollama'
           );
-          summary = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
+          summary = (await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 })).text;
         }
       } else {
-        summary = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
+        summary = (await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 })).text;
       }
 
       if (summary.trim()) {
@@ -107,20 +108,21 @@ export class MemoryFlusher {
       if (claudePath) {
         try {
           const fullPrompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
-          response = await claudeGenerate(fullPrompt, {
+          const claudeResult = await claudeGenerate(fullPrompt, {
             claudePath,
             timeout: 300_000,
             logger: this.ctx.logger,
           });
+          response = claudeResult.response;
         } catch (err) {
           this.ctx.logger.warn(
             { err },
             'Claude CLI failed for memory scoring, falling back to Ollama'
           );
-          response = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
+          response = (await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 })).text;
         }
       } else {
-        response = await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 });
+        response = (await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 })).text;
       }
 
       const facts = this.parseScoredFacts(response);

@@ -1,5 +1,7 @@
 import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
+import { ollamaUsage } from '../ollama';
 import type { ToolCall } from '../tools/types';
+import type { TokenUsage } from './llm-client';
 import type { ToolCallingStrategy } from './tool-runner';
 
 /**
@@ -17,7 +19,7 @@ export class NativeToolStrategy implements ToolCallingStrategy {
   async chat(
     messages: ChatMessage[],
     opts: ChatOptions
-  ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
+  ): Promise<{ content: string; toolCalls?: ToolCall[]; usage?: TokenUsage }> {
     const model = opts.model;
     if (!model) throw new Error('NativeToolStrategy: model is required but was not provided');
     const startMs = Date.now();
@@ -53,7 +55,10 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     }
 
     const data = (await response.json()) as {
+      model: string;
       message: { content: string; tool_calls?: ToolCall[] };
+      prompt_eval_count?: number;
+      eval_count?: number;
     };
 
     this.logger.debug(
@@ -64,6 +69,7 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     return {
       content: data.message.content || '',
       toolCalls: data.message.tool_calls,
+      usage: ollamaUsage(data.model, data.prompt_eval_count, data.eval_count),
     };
   }
 }

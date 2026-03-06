@@ -26,6 +26,14 @@ export interface LlmCallerStats {
   errors: number;
 }
 
+export interface ModelTokenStats {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  calls: number;
+}
+
 export interface LlmBotStats {
   botId: string;
   totalCalls: number;
@@ -37,6 +45,9 @@ export interface LlmBotStats {
   lastCallAt: number | null;
   lastError: string | null;
   callerBreakdown: Record<string, LlmCallerStats>;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  modelBreakdown: Record<string, ModelTokenStats>;
 }
 
 export interface ActivityEvent {
@@ -74,6 +85,9 @@ export class LlmStatsTracker {
         lastCallAt: null,
         lastError: null,
         callerBreakdown: {},
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        modelBreakdown: {},
       };
       this.stats.set(botId, s);
     }
@@ -101,6 +115,8 @@ export class LlmStatsTracker {
     const cs = this.ensureCaller(s, caller);
     cs.calls++;
     cs.totalDurationMs += durationMs;
+
+    this.accumulateTokens(s, event);
   }
 
   private onError(event: ActivityEvent): void {
@@ -120,6 +136,31 @@ export class LlmStatsTracker {
     cs.calls++;
     cs.totalDurationMs += durationMs;
     cs.errors++;
+
+    this.accumulateTokens(s, event);
+  }
+
+  private accumulateTokens(s: LlmBotStats, event: ActivityEvent): void {
+    const modelName = event.data?.model as string | undefined;
+    const tokensIn = event.data?.tokensIn as number | undefined;
+    const tokensOut = event.data?.tokensOut as number | undefined;
+    if (!modelName || (tokensIn == null && tokensOut == null)) return;
+
+    const promptTokens = tokensIn ?? 0;
+    const completionTokens = tokensOut ?? 0;
+
+    s.totalPromptTokens += promptTokens;
+    s.totalCompletionTokens += completionTokens;
+
+    let ms = s.modelBreakdown[modelName];
+    if (!ms) {
+      ms = { model: modelName, promptTokens: 0, completionTokens: 0, totalTokens: 0, calls: 0 };
+      s.modelBreakdown[modelName] = ms;
+    }
+    ms.promptTokens += promptTokens;
+    ms.completionTokens += completionTokens;
+    ms.totalTokens += promptTokens + completionTokens;
+    ms.calls++;
   }
 
   private onFallback(event: ActivityEvent): void {

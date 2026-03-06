@@ -168,7 +168,7 @@ export async function generateSkill(
 
   opts.logger.info({ id: input.id, name: input.name }, 'skill-generator: calling Claude CLI');
 
-  const raw = await claudeGenerate(prompt, {
+  const claudeResult = await claudeGenerate(prompt, {
     claudePath: opts.claudePath,
     timeout: opts.timeout ?? 300_000,
     maxLength: 50_000,
@@ -176,7 +176,7 @@ export async function generateSkill(
   });
 
   // Strip markdown fences if present
-  let cleaned = raw.trim();
+  let cleaned = claudeResult.response.trim();
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
   }

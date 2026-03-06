@@ -123,9 +123,10 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     'webGenerate: calling LLM with tools'
   );
 
-  return llmClient.chat(chatMessages, {
+  const result = await llmClient.chat(chatMessages, {
     model,
     tools: filteredDefs,
     toolExecutor,
   });
+  return result.text;
 }

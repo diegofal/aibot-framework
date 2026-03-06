@@ -228,9 +228,9 @@ async function runOllamaReview(opts: QualityReviewOptions): Promise<string> {
   const prompt = buildOllamaPrompt(soulDir, soulFiles, lintIssues);
 
   try {
-    const output = await ollamaClient.generate(prompt, { model });
+    const llmResult = await ollamaClient.generate(prompt, { model });
 
-    const { files, summary } = parseOllamaOutput(output);
+    const { files, summary } = parseOllamaOutput(llmResult.text);
 
     let filesWritten = 0;
     for (const [name, content] of Object.entries(files)) {

@@ -48,12 +48,12 @@ const skill: Skill = {
         ctx.logger.info({ question }, 'AI question received');
 
         try {
-          const response = await ctx.ollama.generate(question, {
+          const result = await ctx.ollama.generate(question, {
             system: 'You are a helpful assistant. Be concise and friendly.',
             temperature: 0.7,
           });
 
-          return `🤖 ${response}`;
+          return `🤖 ${result.text}`;
         } catch (error) {
           ctx.logger.error({ error }, 'AI generation failed');
           return '❌ Sorry, I encountered an error. Please try again later.';

@@ -68,12 +68,12 @@ export function integrationsRoutes(deps: {
     const start = Date.now();
 
     try {
-      const response = await ollamaClient.chat([{ role: 'user', content: body.message }], {
+      const result = await ollamaClient.chat([{ role: 'user', content: body.message }], {
         model,
       });
 
       return c.json({
-        response,
+        response: result.text,
         durationMs: Date.now() - start,
         model,
       });
@@ -158,14 +158,14 @@ export function integrationsRoutes(deps: {
     const start = Date.now();
 
     try {
-      const response = await ollamaClient.chat([{ role: 'user', content: body.message }], {
+      const result = await ollamaClient.chat([{ role: 'user', content: body.message }], {
         model,
         tools: selectedDefs,
         toolExecutor: executor,
       });
 
       return c.json({
-        response,
+        response: result.text,
         durationMs: Date.now() - start,
         model,
         toolCalls,
@@ -243,14 +243,14 @@ export function integrationsRoutes(deps: {
     const start = Date.now();
 
     try {
-      const response = await claudeGenerate(body.message, {
+      const result = await claudeGenerate(body.message, {
         claudePath,
         timeout: 300_000,
         logger: deps.logger,
       });
 
       return c.json({
-        response,
+        response: result.response,
         durationMs: Date.now() - start,
       });
     } catch (err) {

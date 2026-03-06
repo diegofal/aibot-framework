@@ -6,6 +6,13 @@ function formatDuration(ms) {
   return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
 }
 
+function formatTokenCount(n) {
+  if (n == null || n === 0) return '--';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
 function statusBadge(status) {
   const cls =
     status === 'completed' ? 'badge-ok' : status === 'error' ? 'badge-error' : 'badge-disabled';
@@ -73,6 +80,22 @@ function renderDetailRow(r, colspan) {
     sections.push(`<div class="result-section">
       <div class="result-section-title">Tool Calls (${r.toolCalls.length})</div>
       ${renderToolCallsTable(r.toolCalls)}
+    </div>`);
+  }
+
+  if (r.tokenUsage && r.tokenUsage.total > 0) {
+    const modelRows = Object.entries(r.tokenUsage.models)
+      .map(
+        ([model, u]) =>
+          `<tr><td style="font-family:monospace;font-size:12px">${escapeHtml(model)}</td><td style="text-align:right">${formatTokenCount(u.promptTokens)}</td><td style="text-align:right">${formatTokenCount(u.completionTokens)}</td><td style="text-align:right;font-weight:600">${formatTokenCount(u.promptTokens + u.completionTokens)}</td></tr>`
+      )
+      .join('');
+    sections.push(`<div class="result-section">
+      <div class="result-section-title">Token Usage (${formatTokenCount(r.tokenUsage.total)} total)</div>
+      <table style="width:100%;font-size:13px">
+        <thead><tr><th style="text-align:left">Model</th><th style="text-align:right">In</th><th style="text-align:right">Out</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${modelRows}</tbody>
+      </table>
     </div>`);
   }
 
