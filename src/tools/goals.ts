@@ -11,6 +11,7 @@ type SoulLoaderResolver = (botId: string) => SoulLoader;
  */
 const GOAL_ALIASES = [
   'goalId',
+  'goal_id',
   'name',
   'title',
   'text',
@@ -18,6 +19,7 @@ const GOAL_ALIASES = [
   'jobId',
   'job',
   'id',
+  'key',
 ] as const;
 
 export function resolveGoalParam(args: Record<string, unknown>): string {
@@ -195,9 +197,18 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
           case 'update': {
             const goal = resolveGoalParam(args);
             if (!goal) return { success: false, content: 'Missing required parameter: goal' };
-            const status = args.status ? String(args.status).trim() : undefined;
-            const notes = args.notes ? String(args.notes).trim() : undefined;
-            const priority = args.priority ? String(args.priority).trim() : undefined;
+            const status =
+              (args.status ?? args.new_status)
+                ? String(args.status ?? args.new_status).trim()
+                : undefined;
+            const notes =
+              (args.notes ?? args.new_notes)
+                ? String(args.notes ?? args.new_notes).trim()
+                : undefined;
+            const priority =
+              (args.priority ?? args.new_priority)
+                ? String(args.priority ?? args.new_priority).trim()
+                : undefined;
             return updateGoal(soulLoader, goal, { status, notes, priority });
           }
 

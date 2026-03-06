@@ -16,6 +16,7 @@ import type { Config } from '../config';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { SoulLoader } from '../soul';
+import { parseGoals } from '../tools/goals';
 import type { ThreadMessage } from '../types/thread';
 import type { CoherenceCheck, ProductionEntry, ProductionEvaluation, SummaryData, TreeNode } from './types';
 
@@ -746,11 +747,12 @@ export class ProductionsService {
     return { coherent: issues.length === 0, issues };
   }
 
-  /** Files/dirs excluded from INDEX.md generation */
+  /** Files/dirs excluded from index.html generation */
   private static readonly INDEX_EXCLUDES = new Set([
     'changelog.jsonl',
     'summary.json',
     'INDEX.md',
+    'index.html',
     '.gitignore',
     'node_modules',
     'venv',
@@ -758,7 +760,7 @@ export class ProductionsService {
     '.git',
   ]);
 
-  /** Files/dirs excluded from tree display (INDEX.md is shown in tree but excluded from index generation) */
+  /** Files/dirs excluded from tree display */
   private static readonly TREE_EXCLUDES = new Set([
     'changelog.jsonl',
     'summary.json',
@@ -776,17 +778,80 @@ export class ProductionsService {
   }
 
   /**
-   * Rebuild the auto-generated INDEX.md for a production directory.
-   * Scans all files, groups by subdirectory, and uses changelog descriptions.
+   * Read and parse active goals from the bot's GOALS.md soul file.
+   * Returns structured goal data for embedding in the production index.
+   */
+  readActiveGoals(botId: string): Array<{ text: string; status: string; priority: string; notes?: string }> {
+    const soulDir = resolve('config/soul', botId);
+    const goalsPath = join(soulDir, 'GOALS.md');
+    try {
+      if (!existsSync(goalsPath)) return [];
+      const content = readFileSync(goalsPath, 'utf-8');
+      const { active } = parseGoals(content);
+      if (active.length > 0) {
+        return active.map((g) => ({
+          text: g.text,
+          status: g.status,
+          priority: g.priority,
+          notes: g.notes,
+        }));
+      }
+
+      // Fallback: parse first ## section as bullet list (handles non-standard formats
+      // like "## Metas a Corto Plazo" with "- **bold**: description" items)
+      return ProductionsService.parseFirstSectionAsBullets(content);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Fallback parser for GOALS.md files that don't follow the standard
+   * `## Active Goals` + `- [ ] text` format. Extracts items from the
+   * first `##` section, handling bold-prefixed bullets.
+   */
+  private static parseFirstSectionAsBullets(
+    content: string,
+  ): Array<{ text: string; status: string; priority: string }> {
+    const lines = content.split('\n');
+    let inFirstSection = false;
+    const goals: Array<{ text: string; status: string; priority: string }> = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('## ')) {
+        if (inFirstSection) break;
+        inFirstSection = true;
+        continue;
+      }
+      if (!inFirstSection) continue;
+
+      // Match "- **bold text**: rest" or "- **bold text**" or plain "- text"
+      const boldMatch = trimmed.match(/^- \*\*(.+?)\*\*(?::\s*(.+))?$/);
+      if (boldMatch) {
+        const desc = boldMatch[2] ? `${boldMatch[1]}: ${boldMatch[2]}` : boldMatch[1];
+        goals.push({ text: desc, status: 'pending', priority: 'medium' });
+        continue;
+      }
+      const plainMatch = trimmed.match(/^- (.+)$/);
+      if (plainMatch && !plainMatch[1].startsWith('[')) {
+        goals.push({ text: plainMatch[1], status: 'pending', priority: 'medium' });
+      }
+    }
+    return goals;
+  }
+
+  /**
+   * Rebuild the auto-generated index.html for a production directory.
+   * Generates a self-contained SPA with sidebar navigation, active goals,
+   * and inline file viewer matching the architecture-docs design system.
    * Runs auto-cleanup (throttled) before rebuilding.
    */
   rebuildIndex(botId: string): void {
-    // Auto-cleanup before rebuilding (throttled to 1h)
     this.runCleanup(botId);
 
     const dir = this.resolveDir(botId);
 
-    // Load changelog for description lookup AND timestamp map (first create entry per path)
     const descMap = new Map<string, string>();
     const changelogTimestampMap = new Map<string, string>();
     const changelogPath = join(dir, 'changelog.jsonl');
@@ -795,26 +860,22 @@ export class ProductionsService {
       for (const line of rawLines) {
         try {
           const entry: ProductionEntry = JSON.parse(line);
-          // Keep newest description per path (later lines = newer)
           descMap.set(entry.path, entry.description);
-          // Keep first (oldest) timestamp per path for creation date
           if (entry.action === 'create' && !changelogTimestampMap.has(entry.path)) {
             changelogTimestampMap.set(entry.path, entry.timestamp);
           }
-        } catch {
-          /* skip malformed lines */
-        }
+        } catch { /* skip */ }
       }
     }
 
-    // Scan directory recursively
     interface FileInfo {
       relativePath: string;
       name: string;
-      dir: string; // relative dir ('' for root)
+      dir: string;
       size: number;
       created: Date;
       isArchived: boolean;
+      description: string;
     }
 
     const files: FileInfo[] = [];
@@ -822,21 +883,13 @@ export class ProductionsService {
 
     const walk = (current: string, relPrefix: string): void => {
       let entries: string[];
-      try {
-        entries = readdirSync(current);
-      } catch {
-        return;
-      }
+      try { entries = readdirSync(current); } catch { return; }
 
       for (const entry of entries) {
         if (ProductionsService.INDEX_EXCLUDES.has(entry)) continue;
         const fullPath = join(current, entry);
         let stat;
-        try {
-          stat = statSync(fullPath);
-        } catch {
-          continue;
-        }
+        try { stat = statSync(fullPath); } catch { continue; }
 
         if (stat.isDirectory()) {
           dirCount++;
@@ -844,10 +897,7 @@ export class ProductionsService {
         } else {
           const relPath = relPrefix ? `${relPrefix}/${entry}` : entry;
           const created = ProductionsService.resolveCreatedAt(
-            fullPath,
-            relPath,
-            stat.birthtime,
-            changelogTimestampMap
+            fullPath, relPath, stat.birthtime, changelogTimestampMap
           );
           files.push({
             relativePath: relPath,
@@ -856,98 +906,186 @@ export class ProductionsService {
             size: stat.size,
             created,
             isArchived: relPrefix === 'archived' || relPrefix.startsWith('archived/'),
+            description: this.getFileDescription(relPath, descMap, fullPath),
           });
         }
       }
     };
-
     walk(dir, '');
 
-    // Group files by directory
-    const groups = new Map<string, FileInfo[]>();
-    for (const f of files) {
-      const key = f.dir || 'root';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)?.push(f);
-    }
+    const goals = this.readActiveGoals(botId);
+    const totalSize = files.reduce((s, f) => s + f.size, 0);
+    const html = this.generateIndexHtml(botId, files, goals, dirCount, totalSize);
 
-    // Sort groups: root first, then archived last, rest alphabetical
-    const sortedKeys = [...groups.keys()].sort((a, b) => {
-      if (a === 'root') return -1;
-      if (b === 'root') return 1;
-      if (a === 'archived' || a.startsWith('archived/')) return 1;
-      if (b === 'archived' || b.startsWith('archived/')) return -1;
+    writeFileSync(join(dir, 'index.html'), html, 'utf-8');
+  }
+
+  /** Load the vendored marked.min.js for inline embedding. Cached after first read. */
+  private static _markedJs: string | null = null;
+  private static loadMarkedJs(): string {
+    if (ProductionsService._markedJs) return ProductionsService._markedJs;
+    try {
+      const markedPath = join(dirname(new URL(import.meta.url).pathname), 'marked.min.js');
+      ProductionsService._markedJs = readFileSync(markedPath, 'utf-8');
+    } catch {
+      ProductionsService._markedJs = '/* marked.min.js not found */';
+    }
+    return ProductionsService._markedJs;
+  }
+
+  private static escHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  private static fileIcon(name: string): string {
+    if (name.endsWith('.md')) return '\u{1F4DD}';
+    if (name.endsWith('.html')) return '\u{1F310}';
+    if (name.endsWith('.json')) return '\u{1F4CB}';
+    if (name.endsWith('.csv') || name.endsWith('.tsv')) return '\u{1F4CA}';
+    if (name.endsWith('.py') || name.endsWith('.ts') || name.endsWith('.js')) return '\u{1F4BB}';
+    return '\u{1F4C4}';
+  }
+
+  /**
+   * Generate a self-contained index.html SPA for a bot's production directory.
+   */
+  private generateIndexHtml(
+    botId: string,
+    files: Array<{
+      relativePath: string; name: string; dir: string;
+      size: number; created: Date; isArchived: boolean; description: string;
+    }>,
+    goals: Array<{ text: string; status: string; priority: string; notes?: string }>,
+    dirCount: number,
+    totalSize: number
+  ): string {
+    const esc = ProductionsService.escHtml;
+    const fmtDate = ProductionsService.formatDatetime;
+    const fmtSize = this.formatSize.bind(this);
+    const icon = ProductionsService.fileIcon;
+
+    const nonArchived = files.filter((f) => !f.isArchived);
+    const archived = files.filter((f) => f.isArchived);
+
+    const groups = new Map<string, typeof files>();
+    for (const f of nonArchived) {
+      const key = f.dir || '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(f);
+    }
+    const sortedGroupKeys = [...groups.keys()].sort((a, b) => {
+      if (a === '') return -1;
+      if (b === '') return 1;
       return a.localeCompare(b);
     });
 
-    // Build INDEX.md
-    const indexLines: string[] = [
-      `# Production Index — ${botId}`,
-      `**Last updated:** ${new Date().toISOString()}`,
-      `**Files:** ${files.length} | **Directories:** ${dirCount}`,
-      '',
-    ];
-
-    // Insert cached plan section from summary.json
-    const summaryData = this.readSummary(botId);
-    if (summaryData?.plan) {
-      indexLines.push('## Strategy & Plan', '', summaryData.plan, '');
-    }
-
-    for (const key of sortedKeys) {
-      const group = groups.get(key)!;
-      group.sort((a, b) => a.name.localeCompare(b.name));
-
-      const heading = key === 'root' ? '## Root' : `## ${key}/`;
-      indexLines.push(heading, '');
-
-      if (key === 'archived' || key.startsWith('archived/')) {
-        // Archived files get a different table format
-        indexLines.push('| File | Archived From | Reason | Original Date |');
-        indexLines.push('|------|---------------|--------|---------------|');
-        for (const f of group) {
-          // Look up archive entry in changelog
-          const desc = descMap.get(f.relativePath) ?? '';
-          const archiveEntry = this.findArchiveEntry(botId, f.relativePath);
-          const from = archiveEntry?.archivedFrom ?? '—';
-          const reason = archiveEntry?.archiveReason ?? (desc || '—');
-          const date = ProductionsService.formatDatetime(f.created);
-          indexLines.push(`| ${f.name} | ${from} | ${reason} | ${date} |`);
-        }
-      } else {
-        indexLines.push('| File | Description | Created | Size |');
-        indexLines.push('|------|-------------|---------|------|');
-        for (const f of group) {
-          const desc = this.getFileDescription(f.relativePath, descMap, join(dir, f.relativePath));
-          const date = ProductionsService.formatDatetime(f.created);
-          const size = this.formatSize(f.size);
-          indexLines.push(`| ${f.name} | ${desc} | ${date} | ${size} |`);
-        }
+    // Build goals HTML
+    let goalsHtml = '';
+    if (goals.length > 0) {
+      goalsHtml = '<h2>Active Goals</h2>\n<div class="goals-list">\n';
+      for (const g of goals) {
+        const badgeClass = g.status === 'in_progress' ? 'badge-green'
+          : g.status === 'blocked' ? 'badge-high'
+          : g.status === 'ready_for_human_review' || g.status === 'ready_for_activation' ? 'badge-yellow'
+          : 'badge-dim';
+        const prioClass = g.priority === 'high' ? 'badge-high'
+          : g.priority === 'low' ? 'badge-low' : 'badge-medium';
+        goalsHtml += `<div class="goal-card">
+  <div class="goal-text">${esc(g.text)}</div>
+  <div class="goal-meta"><span class="badge ${badgeClass}">${esc(g.status)}</span> <span class="badge ${prioClass}">${esc(g.priority)}</span></div>
+  ${g.notes ? `<div class="goal-notes">${esc(g.notes)}</div>` : ''}
+</div>\n`;
       }
-      indexLines.push('');
+      goalsHtml += '</div>\n';
+    } else {
+      goalsHtml = '<h2>Active Goals</h2>\n<p class="text-dim">No active goals.</p>\n';
     }
 
-    // Chronological global section (all non-archived files sorted by created asc)
-    const nonArchived = files.filter((f) => !f.isArchived);
-    if (nonArchived.length > 0) {
-      nonArchived.sort((a, b) => a.created.getTime() - b.created.getTime());
-      indexLines.push('## All Files (chronological)', '');
-      indexLines.push('| # | File | Directory | Description | Created | Size |');
-      indexLines.push('|---|------|-----------|-------------|---------|------|');
-      let seq = 1;
-      for (const f of nonArchived) {
-        const desc = this.getFileDescription(f.relativePath, descMap, join(dir, f.relativePath));
-        const date = ProductionsService.formatDatetime(f.created);
-        const size = this.formatSize(f.size);
-        const dirLabel = f.dir || '(root)';
-        indexLines.push(`| ${seq} | ${f.name} | ${dirLabel} | ${desc} | ${date} | ${size} |`);
-        seq++;
+    // Build file table HTML (or empty state)
+    let tableHtml = '';
+    if (nonArchived.length === 0) {
+      tableHtml = `<div style="text-align:center;padding:60px 20px">
+  <div style="font-size:48px;margin-bottom:16px">\u{1F4C2}</div>
+  <h2 style="border:none;margin:0 0 12px;font-size:20px">No productions yet</h2>
+  <p class="text-dim" style="max-width:400px;margin:0 auto">This bot hasn't created any production files yet. Once it starts working on its goals, files will appear here.</p>
+</div>\n`;
+    } else {
+      tableHtml = '<h2>Files</h2>\n';
+      tableHtml += '<table><thead><tr><th>File</th><th>Description</th><th>Created</th><th>Size</th></tr></thead><tbody>\n';
+      const chronoFiles = [...nonArchived].sort((a, b) => b.created.getTime() - a.created.getTime());
+      for (const f of chronoFiles) {
+        tableHtml += `<tr>
+  <td><a href="/#/productions?bot=${esc(botId)}&amp;file=${esc(f.relativePath)}" class="file-link-inline">${icon(f.name)} ${esc(f.name)}</a></td>
+  <td class="text-dim">${esc(f.description)}</td>
+  <td class="text-dim">${fmtDate(f.created)}</td>
+  <td class="text-dim">${fmtSize(f.size)}</td>
+</tr>\n`;
       }
-      indexLines.push('');
+      tableHtml += '</tbody></table>\n';
     }
 
-    const indexPath = join(dir, 'INDEX.md');
-    writeFileSync(indexPath, indexLines.join('\n'), 'utf-8');
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Productions — ${esc(botId)}</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f1117;--bg-card:#181a20;--bg-hover:#1e2028;--border:#2a2d36;--text:#e0e0e6;--text-dim:#8b8d97;--accent:#6c8cff;--accent-hover:#8da8ff;--green:#34d399;--red:#f87171;--orange:#fbbf24;--purple:#a78bfa;--cyan:#22d3ee;--radius:6px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;--mono:"SF Mono",SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace}
+html{scroll-behavior:smooth}
+body{font-family:var(--font);font-size:15px;line-height:1.65;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+a:hover{color:var(--accent-hover);text-decoration:underline}
+.content{max-width:960px;margin:0 auto;padding:40px 40px 80px}
+.page-header{margin-bottom:36px;padding-bottom:20px;border-bottom:1px solid var(--border)}
+.page-header h1{font-size:28px;font-weight:700;margin-bottom:6px}
+.page-header p{color:var(--text-dim);font-size:15px}
+h2{font-size:22px;font-weight:600;margin:40px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.stat-row{display:flex;gap:16px;margin:24px 0;flex-wrap:wrap}
+.stat{flex:1;min-width:100px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center}
+.stat .number{font-size:28px;font-weight:700;color:var(--accent)}
+.stat .label{font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin-top:4px}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+thead th{text-align:left;padding:10px 12px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);border-bottom:2px solid var(--border)}
+tbody td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr:hover{background:var(--bg-hover)}
+.text-dim{color:var(--text-dim)}
+.badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.3px}
+.badge-high{background:rgba(248,113,113,.15);color:var(--red)}
+.badge-medium{background:rgba(251,191,36,.15);color:var(--orange)}
+.badge-low{background:rgba(108,140,255,.15);color:var(--accent)}
+.badge-green{background:rgba(52,211,153,.15);color:var(--green)}
+.badge-yellow{background:rgba(251,191,36,.15);color:var(--orange)}
+.badge-dim{background:rgba(148,163,184,.12);color:var(--text-dim)}
+.goal-card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px}
+.goal-text{font-size:14px;margin-bottom:8px}
+.goal-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.goal-notes{font-size:12px;color:var(--text-dim);line-height:1.5;margin-top:6px}
+@media(max-width:600px){
+  .content{padding:40px 16px 60px}
+  .stat-row{flex-direction:column}
+  table{font-size:13px}
+  thead th,tbody td{padding:8px}
+}
+</style>
+</head>
+<body>
+<div class="content">
+  <div class="page-header">
+    <h1>Productions &mdash; ${esc(botId)}</h1>
+    <p>Last updated: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC</p>
+  </div>
+  <div class="stat-row">
+    <div class="stat"><div class="number">${nonArchived.length}</div><div class="label">Files</div></div>
+    <div class="stat"><div class="number">${fmtSize(totalSize)}</div><div class="label">Total Size</div></div>
+    ${archived.length > 0 ? `<div class="stat"><div class="number">${archived.length}</div><div class="label">Archived</div></div>` : ''}
+  </div>
+  ${goalsHtml}
+  ${tableHtml}
+</div>
+</body>
+</html>`;
   }
 
   /**

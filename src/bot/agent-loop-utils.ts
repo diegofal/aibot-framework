@@ -101,10 +101,10 @@ export function scanFileTree(dirPath: string): string | null {
     } catch {
       return [];
     }
-    // Sort with INDEX.md first for priority visibility when truncated
+    // Sort with index.html first for priority visibility when truncated
     entries.sort((a, b) => {
-      if (a === 'INDEX.md') return -1;
-      if (b === 'INDEX.md') return 1;
+      if (a === 'index.html' || a === 'INDEX.md') return -1;
+      if (b === 'index.html' || b === 'INDEX.md') return 1;
       return a.localeCompare(b);
     });
     const lines: string[] = [];

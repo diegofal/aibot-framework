@@ -77,6 +77,10 @@ export function renderContent(content, filename) {
   if (filename?.endsWith('.md') && window.marked) {
     return `<div class="md-preview">${marked.parse(content)}</div>`;
   }
+  if (filename?.endsWith('.html') || filename?.endsWith('.htm')) {
+    const escaped = escapeHtml(content).replace(/"/g, '&quot;');
+    return `<iframe sandbox="allow-same-origin allow-scripts" srcdoc="${escaped}" style="width:100%;height:calc(100vh - 120px);min-height:400px;border:1px solid var(--border);border-radius:6px;background:var(--bg, #0f1117)"></iframe>`;
+  }
   return `<pre>${escapeHtml(content)}</pre>`;
 }
 

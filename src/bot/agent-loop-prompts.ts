@@ -284,8 +284,8 @@ ANTI-PATTERNS (banned):
 - Creating templates or checklists without real data to fill them
 - Writing about what you plan to do instead of doing it
 - Adding extra tasks beyond the assigned deliverable
-- Creating a new file when a similar one already exists (check INDEX.md first)
-- Dumping files at root level instead of using subdirectories
+- Creating a new file when a similar one already exists (check index.html first)
+- Creating subdirectories — place ALL files at root level
 
 Assign a priority to your plan:
 - "high": deliverable is urgent or blocking other work
@@ -422,8 +422,8 @@ ANTI-PATTERNS (banned):
 - Creating templates or checklists without real data to fill them
 - Writing about what you plan to do instead of doing it
 - Adding extra tasks beyond the assigned deliverable
-- Creating a new file when a similar one already exists (check INDEX.md first)
-- Dumping files at root level instead of using subdirectories
+- Creating a new file when a similar one already exists (check index.html first)
+- Creating subdirectories — place ALL files at root level
 
 Assign a priority to your plan:
 - "high": deliverable is urgent or blocking other work
@@ -526,12 +526,12 @@ ${
 
 ## Production Directory Rules
 
-Your working directory has an auto-generated INDEX.md — do NOT edit it manually.
+Your working directory has an auto-generated index.html — do NOT edit it manually.
 
 DIRECTORY STRUCTURE (mandatory):
-- Use subdirectories by topic/category. NEVER dump files at root level.
+- Place ALL files at root level. Do NOT create subdirectories.
 - Name files descriptively: \`liftai_application_package.md\` not \`package1.md\`
-- When creating a new file, place it in the appropriate subdirectory. Create the subdirectory if needed.
+- The archived/ directory is the only valid subdirectory (managed by archive_file tool).
 
 ARCHIVAL PROTOCOL:
 - When you create a new version of a file, archive the old one first using \`archive_file\`.
@@ -539,7 +539,7 @@ ARCHIVAL PROTOCOL:
 - NEVER delete production files — always archive with a reason.
 
 ANTI-DUPLICATION:
-- Before creating a new file, check if a similar file exists (use file_read on INDEX.md).
+- Before creating a new file, check if a similar file exists (use file_read on index.html to see the file listing).
 - If it exists, UPDATE the existing file instead of creating a new one.
 - If the existing file is outdated, archive it first, then create the replacement.`;
 }

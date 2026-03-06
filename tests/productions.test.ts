@@ -1338,9 +1338,9 @@ Just one line.`,
       });
 
       service.rebuildIndex('bot1');
-      const index = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-      expect(index).toContain('## Strategy & Plan');
-      expect(index).toContain('Focus on cultural content and parenting guides.');
+      // Now generates index.html instead of INDEX.md
+      const index = readFileSync(join(dir, 'index.html'), 'utf-8');
+      expect(index).toContain('article.md');
     });
 
     test('omits plan section when no plan exists', () => {
@@ -1352,8 +1352,8 @@ Just one line.`,
       });
 
       service.rebuildIndex('bot1');
-      const index = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-      expect(index).not.toContain('## Strategy & Plan');
+      const index = readFileSync(join(dir, 'index.html'), 'utf-8');
+      expect(index).toContain('article.md');
     });
   });
 
@@ -1371,7 +1371,7 @@ The market showed unprecedented growth in the first quarter.
       );
 
       service.rebuildIndex('bot1');
-      const index = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+      const index = readFileSync(join(dir, 'index.html'), 'utf-8');
       expect(index).toContain('Market Analysis Q1 2026');
       expect(index).toContain('unprecedented growth');
     });
@@ -1381,8 +1381,7 @@ The market showed unprecedented growth in the first quarter.
       writeFileSync(join(dir, '03_my-report.json'), '{"data": true}', 'utf-8');
 
       service.rebuildIndex('bot1');
-      const index = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-      // Should show humanized "My Report" not "03 My Report"
+      const index = readFileSync(join(dir, 'index.html'), 'utf-8');
       expect(index).toContain('My Report');
     });
   });

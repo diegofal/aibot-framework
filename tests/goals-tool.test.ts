@@ -343,4 +343,47 @@ describe('manage_goals tool with aliases', () => {
     expect(result.success).toBe(false);
     expect(result.content).toContain('No SoulLoader registered');
   });
+
+  test('add accepts goal_id alias', async () => {
+    const loader = mockSoulLoader(null);
+    const tool = createGoalsTool(() => loader as any);
+    const result = await tool.execute(
+      { action: 'add', goal_id: 'Setup CI pipeline', priority: 'high', _botId: 'test' },
+      mockLogger
+    );
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('Setup CI pipeline');
+  });
+
+  test('add accepts key alias', async () => {
+    const loader = mockSoulLoader(null);
+    const tool = createGoalsTool(() => loader as any);
+    const result = await tool.execute(
+      { action: 'add', key: 'political_risk_pricing', _botId: 'test' },
+      mockLogger
+    );
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('political_risk_pricing');
+  });
+
+  test('update accepts new_status and new_notes aliases', async () => {
+    const loader = mockSoulLoader(
+      '## Active Goals\n- [ ] Deploy v2\n  - status: pending\n  - priority: high\n'
+    );
+    const tool = createGoalsTool(() => loader as any);
+    const result = await tool.execute(
+      {
+        action: 'update',
+        goal: 'Deploy v2',
+        new_status: 'blocked',
+        new_notes: 'Waiting on infra',
+        _botId: 'test',
+      },
+      mockLogger
+    );
+    expect(result.success).toBe(true);
+    const stored = loader.readGoals() ?? '';
+    expect(stored).toContain('status: blocked');
+    expect(stored).toContain('notes: Waiting on infra');
+  });
 });

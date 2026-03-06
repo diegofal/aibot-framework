@@ -114,7 +114,7 @@ export async function renderProductions(el) {
           <div class="page-title" style="margin-bottom:0">Productions <span class="count">${total}</span></div>
         </div>
         <div class="prod-topbar-stats">
-          ${stats.map((b) => `<div class="stat-item"><a href="#/productions/${encodeURIComponent(b.botId)}">${escapeHtml(b.name)}</a> <span class="text-dim">${b.total}</span></div>`).join('')}
+          ${stats.map((b) => `<div class="stat-item"><a href="#/productions/${encodeURIComponent(b.botId)}">${escapeHtml(b.name)}</a> <span class="text-dim">${b.total}</span> <a href="/productions-view/${encodeURIComponent(b.botId)}/" target="_blank" class="btn btn-sm" style="font-size:10px;padding:2px 6px;margin-left:4px" title="Open production index page">Index</a></div>`).join('')}
         </div>
       </div>
 
@@ -358,7 +358,7 @@ export async function renderProductions(el) {
             : ''
         }
 
-        <div class="production-content" style="max-height:400px">${content != null ? renderContent(content, node.name) : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
+        <div class="production-content">${content != null ? renderContent(content, node.name) : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
 
         ${
           entry
@@ -722,6 +722,7 @@ export async function renderBotProductions(el, botId) {
           <div class="stat-item"><span style="color:var(--red)">${stats.rejected}</span> <span class="text-dim">Rejected</span></div>
           <div class="stat-item"><span style="color:var(--orange)">${stats.unreviewed}</span> <span class="text-dim">Unreviewed</span></div>
           ${stats.avgRating != null ? `<div class="stat-item">${starsHtml(Math.round(stats.avgRating))} <span class="text-dim">${stats.avgRating}</span></div>` : ''}
+          <a href="/productions-view/${encodeURIComponent(botId)}/" target="_blank" class="btn btn-sm" title="Open production index page">Index</a>
           <button class="btn btn-sm" id="generate-summary-btn">Summary</button>
         </div>
       </div>
@@ -956,7 +957,7 @@ export async function renderBotProductions(el, botId) {
             : ''
         }
 
-        <div class="production-content" style="max-height:400px">${content != null ? renderContent(content, node.name) : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
+        <div class="production-content">${content != null ? renderContent(content, node.name) : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
 
         ${
           entry

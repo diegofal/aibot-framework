@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
@@ -405,6 +405,22 @@ export class ToolExecutor extends EventEmitter {
           ? `${this.ctx.config.productions.baseDir}/${botId}`
           : undefined);
       let originalPathForProductions: string | undefined;
+
+      // Normalise path aliases (file_path, filepath, file → path) before workdir
+      // resolution so the workdir prefix and productions logging both work
+      // regardless of which alias the LLM used.
+      if (
+        ['file_read', 'file_write', 'file_edit'].includes(name) &&
+        typeof effectiveArgs.path !== 'string'
+      ) {
+        for (const alias of ['file_path', 'filepath', 'file'] as const) {
+          if (typeof effectiveArgs[alias] === 'string') {
+            effectiveArgs.path = effectiveArgs[alias];
+            break;
+          }
+        }
+      }
+
       if (workDir) {
         mkdirSync(workDir, { recursive: true });
         effectiveArgs._workDir = workDir;
@@ -414,7 +430,30 @@ export class ToolExecutor extends EventEmitter {
           typeof effectiveArgs.path === 'string'
         ) {
           originalPathForProductions = effectiveArgs.path as string;
-          effectiveArgs.path = resolve(workDir, effectiveArgs.path as string);
+
+          // Strip redundant workDir prefix the LLM may include
+          let filePath = effectiveArgs.path as string;
+          const normWork = workDir.replace(/^\.\//, '');
+          const normFile = filePath.replace(/^\.\//, '');
+          if (normWork && normFile.startsWith(`${normWork}/`)) {
+            filePath = normFile.slice(normWork.length + 1);
+          }
+          effectiveArgs.path = resolve(workDir, filePath);
+
+          // Safety net: prevent file_write from creating subdirs (except archived/)
+          if (name === 'file_write') {
+            const resolved = effectiveArgs.path as string;
+            const absWork = resolve(workDir);
+            const rel = relative(absWork, resolved);
+            if (rel.includes('/') && !rel.startsWith('archived/') && !rel.startsWith('..')) {
+              const flat = join(absWork, basename(resolved));
+              this.logger.warn(
+                { tool: name, botId, original: resolved, flattened: flat },
+                'Flattened nested path to root of workDir'
+              );
+              effectiveArgs.path = flat;
+            }
+          }
         }
         if (name === 'exec' && !effectiveArgs.workdir) {
           effectiveArgs.workdir = workDir;
@@ -442,10 +481,16 @@ export class ToolExecutor extends EventEmitter {
           if (this.ctx.productionsService && ['file_write', 'file_edit'].includes(name)) {
             const ps = this.ctx.productionsService;
             if (ps.isEnabled(botId)) {
-              const logPath = originalPathForProductions ?? (args.path as string);
+              const logPath =
+                originalPathForProductions ?? (effectiveArgs.path as string | undefined);
 
-              // Skip INDEX.md to avoid circular logging
-              if (!logPath.endsWith('/INDEX.md') && logPath !== 'INDEX.md') {
+              if (
+                logPath &&
+                !logPath.endsWith('/INDEX.md') &&
+                logPath !== 'INDEX.md' &&
+                !logPath.endsWith('/index.html') &&
+                logPath !== 'index.html'
+              ) {
                 // file_write uses `content`, file_edit uses `new_text`
                 const content =
                   name === 'file_edit'
@@ -646,7 +691,7 @@ export class ToolExecutor extends EventEmitter {
           `Tool execution failed after ${attempt + 1} attempt(s): ${lastError}`,
           'execution',
           attempt,
-          lastError!
+          lastError as Error
         );
       }
     }

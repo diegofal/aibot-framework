@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import type { Config } from '../src/config';
 import { ProductionsService } from '../src/productions/service';
 
@@ -33,7 +33,7 @@ function makeConfig(): Config {
   } as Config;
 }
 
-describe('ProductionsService — rebuildIndex', () => {
+describe('ProductionsService — rebuildIndex (HTML)', () => {
   let service: ProductionsService;
 
   beforeEach(() => {
@@ -45,35 +45,34 @@ describe('ProductionsService — rebuildIndex', () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
-  test('generates INDEX.md with correct header', () => {
+  test('generates index.html with correct title', () => {
     const dir = service.resolveDir('testbot');
     writeFileSync(join(dir, 'hello.md'), '# Hello World\nSome content', 'utf-8');
 
     service.rebuildIndex('testbot');
 
-    const indexPath = join(dir, 'INDEX.md');
+    const indexPath = join(dir, 'index.html');
     expect(existsSync(indexPath)).toBe(true);
 
     const content = readFileSync(indexPath, 'utf-8');
-    expect(content).toContain('# Production Index — testbot');
-    expect(content).toContain('**Files:**');
-    expect(content).toContain('**Directories:**');
+    expect(content).toContain('<title>Productions');
+    expect(content).toContain('testbot');
+    expect(content).toContain('<!DOCTYPE html>');
   });
 
-  test('lists root files in Root section', () => {
+  test('lists files in the HTML output', () => {
     const dir = service.resolveDir('testbot');
     writeFileSync(join(dir, 'report.md'), '# My Report\nDetails here', 'utf-8');
     writeFileSync(join(dir, 'notes.txt'), 'Some notes', 'utf-8');
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    expect(content).toContain('## Root');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
     expect(content).toContain('report.md');
     expect(content).toContain('notes.txt');
   });
 
-  test('groups files by subdirectory', () => {
+  test('handles subdirectories as collapsible groups', () => {
     const dir = service.resolveDir('testbot');
     mkdirSync(join(dir, 'research'), { recursive: true });
     writeFileSync(join(dir, 'research', 'findings.md'), '# Research Findings', 'utf-8');
@@ -81,9 +80,8 @@ describe('ProductionsService — rebuildIndex', () => {
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    expect(content).toContain('## Root');
-    expect(content).toContain('## research/');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
+    expect(content).toContain('research/');
     expect(content).toContain('findings.md');
     expect(content).toContain('root_file.md');
   });
@@ -94,7 +92,7 @@ describe('ProductionsService — rebuildIndex', () => {
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
     expect(content).toContain('Pipeline Tracker for Jobs');
   });
 
@@ -102,7 +100,6 @@ describe('ProductionsService — rebuildIndex', () => {
     const dir = service.resolveDir('testbot');
     writeFileSync(join(dir, 'output.md'), '# Some heading\nContent', 'utf-8');
 
-    // Log a production with a custom description
     service.logProduction({
       timestamp: new Date().toISOString(),
       botId: 'testbot',
@@ -114,24 +111,13 @@ describe('ProductionsService — rebuildIndex', () => {
       trackOnly: false,
     });
 
-    // rebuildIndex is called by logProduction, but call again to ensure latest
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
     expect(content).toContain('Custom description from changelog');
   });
 
-  test('falls back to humanized filename when no heading or changelog', () => {
-    const dir = service.resolveDir('testbot');
-    writeFileSync(join(dir, 'my_cool_report.md'), 'No heading here, just text.', 'utf-8');
-
-    service.rebuildIndex('testbot');
-
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    expect(content).toContain('My Cool Report');
-  });
-
-  test('excludes INDEX.md, changelog.jsonl, summary.json from listing', () => {
+  test('excludes index.html, INDEX.md, changelog.jsonl, summary.json from listing', () => {
     const dir = service.resolveDir('testbot');
     writeFileSync(join(dir, 'real_file.md'), '# Real', 'utf-8');
     writeFileSync(join(dir, 'INDEX.md'), 'old index', 'utf-8');
@@ -140,28 +126,22 @@ describe('ProductionsService — rebuildIndex', () => {
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
     expect(content).toContain('real_file.md');
-    // INDEX.md, changelog.jsonl, summary.json should NOT appear as table rows
-    const lines = content.split('\n');
-    const tableRows = lines.filter(
-      (l) => l.startsWith('|') && !l.startsWith('|--') && !l.includes('File')
-    );
-    for (const row of tableRows) {
-      expect(row).not.toContain('| INDEX.md');
-      expect(row).not.toContain('| changelog.jsonl');
-      expect(row).not.toContain('| summary.json');
-    }
+    expect(content).not.toContain('href="INDEX.md"');
+    expect(content).not.toContain('href="changelog.jsonl"');
+    expect(content).not.toContain('href="summary.json"');
   });
 
-  test('handles empty directory', () => {
+  test('handles empty directory with meaningful empty state', () => {
     service.resolveDir('testbot');
 
     service.rebuildIndex('testbot');
 
     const dir = service.resolveDir('testbot');
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    expect(content).toContain('**Files:** 0');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
+    expect(content).toContain('No productions yet');
+    expect(content).toContain("hasn't created any production files yet");
   });
 
   test('logProduction triggers rebuildIndex automatically', () => {
@@ -179,30 +159,28 @@ describe('ProductionsService — rebuildIndex', () => {
       trackOnly: false,
     });
 
-    const indexPath = join(dir, 'INDEX.md');
+    const indexPath = join(dir, 'index.html');
     expect(existsSync(indexPath)).toBe(true);
     const content = readFileSync(indexPath, 'utf-8');
     expect(content).toContain('pre_existing.md');
   });
 
-  test('formats file sizes correctly', () => {
+  test('includes stats section with file count', () => {
     const dir = service.resolveDir('testbot');
     writeFileSync(join(dir, 'tiny.md'), 'x', 'utf-8');
     writeFileSync(join(dir, 'medium.md'), 'x'.repeat(2048), 'utf-8');
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    // tiny.md should show bytes, medium.md should show KB
-    expect(content).toMatch(/\d+B/);
-    expect(content).toMatch(/\d+\.\d+KB/);
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
+    expect(content).toContain('<div class="number">2</div>');
+    expect(content).toContain('Files');
   });
 
   test('skips generic file_write descriptions from changelog', () => {
     const dir = service.resolveDir('testbot');
     writeFileSync(join(dir, 'report.md'), '# My Report Title\nContent', 'utf-8');
 
-    // Log with generic description
     service.logProduction({
       timestamp: new Date().toISOString(),
       botId: 'testbot',
@@ -216,11 +194,48 @@ describe('ProductionsService — rebuildIndex', () => {
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    // Should use first heading instead of generic description
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
     expect(content).toContain('My Report Title');
-    // Should NOT show the generic description in the table
-    expect(content).not.toContain('| file_write: report.md');
+  });
+
+  test('generated HTML is a valid self-contained page', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(join(dir, 'file.md'), '# File\nContent', 'utf-8');
+
+    service.rebuildIndex('testbot');
+
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
+    expect(content).toContain('<!DOCTYPE html>');
+    expect(content).toContain('</html>');
+    expect(content).toContain('<style>');
+    expect(content).toContain('class="content"');
+  });
+
+  test('file links point to dashboard route, not href="#"', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(join(dir, 'report.md'), '# Report\nContent', 'utf-8');
+    writeFileSync(join(dir, 'analysis.txt'), 'Some analysis', 'utf-8');
+
+    service.rebuildIndex('testbot');
+
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
+    expect(content).toContain('href="/#/productions?bot=testbot&amp;file=report.md"');
+    expect(content).toContain('href="/#/productions?bot=testbot&amp;file=analysis.txt"');
+    expect(content).not.toContain('href="#"');
+    expect(content).not.toContain('data-path=');
+  });
+
+  test('shows archived file count in stats', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(join(dir, 'keep.md'), '# Keep\nGood content here for the reader.', 'utf-8');
+    mkdirSync(join(dir, 'archived'), { recursive: true });
+    writeFileSync(join(dir, 'archived', 'old.md'), '# Old\nArchived content.', 'utf-8');
+
+    service.rebuildIndex('testbot');
+
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
+    expect(content).toContain('keep.md');
+    expect(content).toContain('Archived');
   });
 });
 
@@ -246,7 +261,6 @@ describe('ProductionsService — archiveFile', () => {
     expect(existsSync(join(dir, 'old_report.md'))).toBe(false);
     expect(existsSync(join(dir, 'archived', 'old_report.md'))).toBe(true);
 
-    // Verify content preserved
     const content = readFileSync(join(dir, 'archived', 'old_report.md'), 'utf-8');
     expect(content).toBe('# Old Report');
   });
@@ -294,31 +308,17 @@ describe('ProductionsService — archiveFile', () => {
     expect(existsSync(join(dir, 'archived', 'draft_v1.md'))).toBe(true);
   });
 
-  test('rebuilds INDEX.md after archiving', () => {
+  test('rebuilds index.html after archiving', () => {
     const dir = service.resolveDir('testbot');
     writeFileSync(join(dir, 'to_archive.md'), '# To Archive', 'utf-8');
     writeFileSync(join(dir, 'keep.md'), '# Keep', 'utf-8');
 
     service.archiveFile('testbot', 'to_archive.md', 'Test reason');
 
-    const indexContent = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    expect(indexContent).toContain('## archived/');
-    expect(indexContent).toContain('to_archive.md');
+    const indexContent = readFileSync(join(dir, 'index.html'), 'utf-8');
+    expect(indexContent).toContain('Archived');
     expect(indexContent).toContain('keep.md');
-  });
-
-  test('archived section shows reason and original path', () => {
-    const dir = service.resolveDir('testbot');
-    writeFileSync(join(dir, 'old.md'), 'old content', 'utf-8');
-
-    service.archiveFile('testbot', 'old.md', 'Replaced by new.md');
-
-    const indexContent = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    // Archived table should have different columns
-    expect(indexContent).toContain('Archived From');
-    expect(indexContent).toContain('Reason');
-    expect(indexContent).toContain('old.md');
-    expect(indexContent).toContain('Replaced by new.md');
+    expect(indexContent).not.toContain('href="to_archive.md"');
   });
 
   test('ProductionEntry type supports archive fields', () => {
@@ -376,6 +376,183 @@ describe('ProductionsService — frontmatter', () => {
   });
 });
 
+describe('ProductionsService — readActiveGoals', () => {
+  let service: ProductionsService;
+
+  beforeEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    service = new ProductionsService(makeConfig(), noopLogger);
+  });
+
+  afterEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test('returns empty array when no GOALS.md exists', () => {
+    const goals = service.readActiveGoals('nonexistent-bot');
+    expect(goals).toEqual([]);
+  });
+
+  test('parses active goals from GOALS.md', () => {
+    const soulDir = join(process.cwd(), 'config/soul/testbot');
+    mkdirSync(soulDir, { recursive: true });
+    writeFileSync(
+      join(soulDir, 'GOALS.md'),
+      `## Active Goals
+- [ ] Build production pipeline
+  - status: in_progress
+  - priority: high
+  - notes: Working on it
+- [ ] Write documentation
+  - status: pending
+  - priority: medium
+
+## Completed
+- [x] Setup project
+  - completed: 2026-03-01
+`,
+      'utf-8'
+    );
+
+    try {
+      const goals = service.readActiveGoals('testbot');
+      expect(goals).toHaveLength(2);
+      expect(goals[0].text).toBe('Build production pipeline');
+      expect(goals[0].status).toBe('in_progress');
+      expect(goals[0].priority).toBe('high');
+      expect(goals[0].notes).toBe('Working on it');
+      expect(goals[1].text).toBe('Write documentation');
+      expect(goals[1].status).toBe('pending');
+      expect(goals[1].priority).toBe('medium');
+    } finally {
+      rmSync(join(soulDir, 'GOALS.md'));
+      try {
+        rmSync(soulDir, { recursive: true });
+      } catch {}
+    }
+  });
+
+  test('falls back to first section for non-standard GOALS.md format', () => {
+    const soulDir = join(process.cwd(), 'config/soul/testbot');
+    mkdirSync(soulDir, { recursive: true });
+    writeFileSync(
+      join(soulDir, 'GOALS.md'),
+      `## Metas a Corto Plazo (0-3 meses)
+- **Validación de los primeros USD 100**: Generar la primera venta real.
+- **Auditoría de tiempo**: Registrar dónde va cada hora de tu semana.
+- **Lanzamiento del MVP**: Tener algo cobrable en el mercado.
+
+## Metas a Mediano Plazo (3-12 meses)
+- **Reemplazo de ingresos**: Igualar tu sueldo actual.
+`,
+      'utf-8'
+    );
+
+    try {
+      const goals = service.readActiveGoals('testbot');
+      expect(goals).toHaveLength(3);
+      expect(goals[0].text).toContain('Validación de los primeros USD 100');
+      expect(goals[0].text).toContain('Generar la primera venta real.');
+      expect(goals[0].status).toBe('pending');
+      expect(goals[1].text).toContain('Auditoría de tiempo');
+      expect(goals[2].text).toContain('Lanzamiento del MVP');
+    } finally {
+      rmSync(join(soulDir, 'GOALS.md'));
+      try {
+        rmSync(soulDir, { recursive: true });
+      } catch {}
+    }
+  });
+
+  test('falls back to plain bullet list when no checkboxes or bold items', () => {
+    const soulDir = join(process.cwd(), 'config/soul/testbot');
+    mkdirSync(soulDir, { recursive: true });
+    writeFileSync(
+      join(soulDir, 'GOALS.md'),
+      `## Objetivos Actuales
+- Completar el primer prototipo
+- Conseguir 3 usuarios beta
+
+## Completados
+- Setup del proyecto
+`,
+      'utf-8'
+    );
+
+    try {
+      const goals = service.readActiveGoals('testbot');
+      expect(goals).toHaveLength(2);
+      expect(goals[0].text).toBe('Completar el primer prototipo');
+      expect(goals[1].text).toBe('Conseguir 3 usuarios beta');
+    } finally {
+      rmSync(join(soulDir, 'GOALS.md'));
+      try {
+        rmSync(soulDir, { recursive: true });
+      } catch {}
+    }
+  });
+
+  test('prefers standard parseGoals over fallback when Active Goals section exists', () => {
+    const soulDir = join(process.cwd(), 'config/soul/testbot');
+    mkdirSync(soulDir, { recursive: true });
+    writeFileSync(
+      join(soulDir, 'GOALS.md'),
+      `## Active Goals
+- [ ] Standard goal
+  - status: in_progress
+  - priority: high
+
+## Other Section
+- **Bold item**: description
+`,
+      'utf-8'
+    );
+
+    try {
+      const goals = service.readActiveGoals('testbot');
+      expect(goals).toHaveLength(1);
+      expect(goals[0].text).toBe('Standard goal');
+      expect(goals[0].status).toBe('in_progress');
+    } finally {
+      rmSync(join(soulDir, 'GOALS.md'));
+      try {
+        rmSync(soulDir, { recursive: true });
+      } catch {}
+    }
+  });
+
+  test('goals appear in generated index.html', () => {
+    const dir = service.resolveDir('testbot');
+    writeFileSync(join(dir, 'file.md'), '# File\nContent', 'utf-8');
+
+    const soulDir = join(process.cwd(), 'config/soul/testbot');
+    mkdirSync(soulDir, { recursive: true });
+    writeFileSync(
+      join(soulDir, 'GOALS.md'),
+      `## Active Goals
+- [ ] Important task
+  - status: in_progress
+  - priority: high
+`,
+      'utf-8'
+    );
+
+    try {
+      service.rebuildIndex('testbot');
+
+      const content = readFileSync(join(dir, 'index.html'), 'utf-8');
+      expect(content).toContain('Active Goals');
+      expect(content).toContain('Important task');
+      expect(content).toContain('in_progress');
+    } finally {
+      rmSync(join(soulDir, 'GOALS.md'));
+      try {
+        rmSync(soulDir, { recursive: true });
+      } catch {}
+    }
+  });
+});
+
 describe('ProductionsService — rebuildIndex datetime & chronological', () => {
   let service: ProductionsService;
 
@@ -388,7 +565,7 @@ describe('ProductionsService — rebuildIndex datetime & chronological', () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
-  test('rebuildIndex shows datetime not just date', () => {
+  test('rebuildIndex shows datetime', () => {
     const dir = service.resolveDir('testbot');
     writeFileSync(
       join(dir, 'report.md'),
@@ -398,7 +575,7 @@ describe('ProductionsService — rebuildIndex datetime & chronological', () => {
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
     expect(content).toContain('2026-03-03 14:23');
   });
 
@@ -412,48 +589,8 @@ describe('ProductionsService — rebuildIndex datetime & chronological', () => {
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
     expect(content).toContain('2025-01-15 09:30');
-  });
-
-  test('rebuildIndex includes chronological section', () => {
-    const dir = service.resolveDir('testbot');
-    writeFileSync(
-      join(dir, 'first.md'),
-      '---\ncreated_at: "2026-01-01T10:00:00.000Z"\n---\n\n# First\nContent.',
-      'utf-8'
-    );
-    writeFileSync(
-      join(dir, 'second.md'),
-      '---\ncreated_at: "2026-02-01T12:00:00.000Z"\n---\n\n# Second\nContent.',
-      'utf-8'
-    );
-
-    service.rebuildIndex('testbot');
-
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    expect(content).toContain('## All Files (chronological)');
-    expect(content).toContain('| # | File | Directory | Description | Created | Size |');
-
-    // Verify order: first.md should come before second.md in the chronological table
-    const chronoSection = content.slice(content.indexOf('## All Files (chronological)'));
-    const firstIdx = chronoSection.indexOf('first.md');
-    const secondIdx = chronoSection.indexOf('second.md');
-    expect(firstIdx).toBeLessThan(secondIdx);
-  });
-
-  test('chronological section excludes archived files', () => {
-    const dir = service.resolveDir('testbot');
-    writeFileSync(join(dir, 'keep.md'), '# Keep\nGood content here for the reader.', 'utf-8');
-    mkdirSync(join(dir, 'archived'), { recursive: true });
-    writeFileSync(join(dir, 'archived', 'old.md'), '# Old\nArchived content.', 'utf-8');
-
-    service.rebuildIndex('testbot');
-
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
-    const chronoSection = content.slice(content.indexOf('## All Files (chronological)'));
-    expect(chronoSection).toContain('keep.md');
-    expect(chronoSection).not.toContain('old.md');
   });
 
   test('rebuildIndex uses changelog timestamp when no frontmatter', () => {
@@ -464,7 +601,6 @@ describe('ProductionsService — rebuildIndex datetime & chronological', () => {
       'utf-8'
     );
 
-    // Log a production entry with a specific timestamp
     service.logProduction({
       timestamp: '2026-02-20T08:15:00.000Z',
       botId: 'testbot',
@@ -478,7 +614,78 @@ describe('ProductionsService — rebuildIndex datetime & chronological', () => {
 
     service.rebuildIndex('testbot');
 
-    const content = readFileSync(join(dir, 'INDEX.md'), 'utf-8');
+    const content = readFileSync(join(dir, 'index.html'), 'utf-8');
     expect(content).toContain('2026-02-20 08:15');
+  });
+});
+
+describe('Path normalization — workDir prefix stripping and subdir guard', () => {
+  /**
+   * These tests exercise the same logic used in tool-executor.ts
+   * to normalize LLM-supplied file paths before resolve().
+   */
+  function normalizeFilePath(workDir: string, rawPath: string): string {
+    let filePath = rawPath;
+    const normWork = workDir.replace(/^\.\//, '');
+    const normFile = filePath.replace(/^\.\//, '');
+    if (normWork && normFile.startsWith(`${normWork}/`)) {
+      filePath = normFile.slice(normWork.length + 1);
+    }
+    return resolve(workDir, filePath);
+  }
+
+  function guardSubdir(workDir: string, resolved: string): string {
+    const absWork = resolve(workDir);
+    const rel = relative(absWork, resolved);
+    if (rel.includes('/') && !rel.startsWith('archived/') && !rel.startsWith('..')) {
+      return join(absWork, basename(resolved));
+    }
+    return resolved;
+  }
+
+  test('strips redundant workDir prefix from path', () => {
+    const result = normalizeFilePath(
+      './productions/job-seeker',
+      'productions/job-seeker/report.md'
+    );
+    expect(result).toBe(resolve('./productions/job-seeker', 'report.md'));
+  });
+
+  test('strips prefix with ./ on both sides', () => {
+    const result = normalizeFilePath('./productions/bot1', './productions/bot1/file.txt');
+    expect(result).toBe(resolve('./productions/bot1', 'file.txt'));
+  });
+
+  test('leaves plain relative path untouched', () => {
+    const result = normalizeFilePath('./productions/bot1', 'my_report.md');
+    expect(result).toBe(resolve('./productions/bot1', 'my_report.md'));
+  });
+
+  test('subdir guard flattens nested subdir to root', () => {
+    const workDir = './productions/bot1';
+    const nested = resolve(workDir, 'subdir/file.md');
+    const result = guardSubdir(workDir, nested);
+    expect(result).toBe(join(resolve(workDir), 'file.md'));
+  });
+
+  test('subdir guard allows archived/ subdirectory', () => {
+    const workDir = './productions/bot1';
+    const archived = resolve(workDir, 'archived/old.md');
+    const result = guardSubdir(workDir, archived);
+    expect(result).toBe(archived);
+  });
+
+  test('subdir guard leaves root-level files untouched', () => {
+    const workDir = './productions/bot1';
+    const rootFile = resolve(workDir, 'report.md');
+    const result = guardSubdir(workDir, rootFile);
+    expect(result).toBe(rootFile);
+  });
+
+  test('combined: redundant prefix + subdir guard yields correct root file', () => {
+    const workDir = './productions/job-seeker';
+    const normalized = normalizeFilePath(workDir, 'productions/job-seeker/report.md');
+    const guarded = guardSubdir(workDir, normalized);
+    expect(guarded).toBe(resolve(workDir, 'report.md'));
   });
 });

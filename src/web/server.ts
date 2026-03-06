@@ -1,4 +1,14 @@
-import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync, watch } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+  watch,
+} from 'node:fs';
+import { join as joinPath, resolve as resolvePath } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
@@ -178,6 +188,58 @@ export function startWebServer(deps: WebServerDeps): void {
       '/api/productions',
       productionsRoutes({ productionsService, botManager: deps.botManager, logger, config })
     );
+
+    // Static file serving for production index.html and its file links
+    app.get('/productions-view/:botId/*', (c) => {
+      const botId = c.req.param('botId');
+      const filePath = c.req.param('*') || 'index.html';
+
+      if (filePath.includes('..') || filePath.startsWith('/')) {
+        return c.text('Forbidden', 403);
+      }
+
+      const dir = productionsService.resolveDir(botId);
+      const fullPath = resolvePath(joinPath(dir, filePath));
+
+      if (!fullPath.startsWith(dir)) {
+        return c.text('Forbidden', 403);
+      }
+
+      if (!existsSync(fullPath)) {
+        return c.text('Not Found', 404);
+      }
+      try {
+        const stat = statSync(fullPath);
+        if (!stat.isFile()) return c.text('Not Found', 404);
+      } catch {
+        return c.text('Not Found', 404);
+      }
+
+      const MIME_TYPES: Record<string, string> = {
+        html: 'text/html; charset=utf-8',
+        htm: 'text/html; charset=utf-8',
+        css: 'text/css; charset=utf-8',
+        js: 'text/javascript; charset=utf-8',
+        json: 'application/json; charset=utf-8',
+        md: 'text/markdown; charset=utf-8',
+        txt: 'text/plain; charset=utf-8',
+        csv: 'text/csv; charset=utf-8',
+        xml: 'application/xml; charset=utf-8',
+        svg: 'image/svg+xml',
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        gif: 'image/gif',
+        pdf: 'application/pdf',
+      };
+      const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+
+      const content = readFileSync(fullPath);
+      return new Response(content, {
+        headers: { 'Content-Type': contentType },
+      });
+    });
   }
 
   // Karma routes (only if enabled)
@@ -282,7 +344,7 @@ export function startWebServer(deps: WebServerDeps): void {
     app.route('/api/tenant-config', tenantConfigRoutes({ configStore: tenantConfigStore, logger }));
 
     const routeDeps = {
-      tenantManager: tenantManager!,
+      tenantManager: tenantManager,
       botManager: deps.botManager,
       config,
       logger,

@@ -745,8 +745,9 @@
       <h4>Productions Service Features</h4>
       <ul>
         <li><strong>Auto-numbered filenames</strong> &mdash; New files get <code>01_</code>, <code>02_</code>, etc. prefixes per directory for chronological ordering.</li>
-        <li><strong>Rich INDEX.md descriptions</strong> &mdash; Extracts "Title -- First sentence" from file content (120 char cap).</li>
-        <li><strong>Strategy &amp; Plan section</strong> &mdash; AI-generated plan cached in <code>summary.json</code>, rendered in INDEX.md when summary is generated.</li>
+        <li><strong>Self-contained index.html SPA</strong> &mdash; Auto-generated HTML page with sidebar navigation, file viewer (markdown rendered via marked.js, HTML in sandboxed iframe), active goals from GOALS.md, and stats. Matches architecture-docs dark theme.</li>
+        <li><strong>Static file serving</strong> &mdash; <code>GET /productions-view/:botId/*</code> serves production files with correct MIME types, enabling the index.html SPA to fetch files via relative URLs.</li>
+        <li><strong>Rich file descriptions</strong> &mdash; Extracts "Title -- First sentence" from file content (120 char cap).</li>
         <li><strong>Coherence checking</strong> &mdash; Heuristic checks (template ratio, min content size, heading/paragraph balance) without LLM.</li>
         <li><strong>Archive from dashboard</strong> &mdash; File viewer has Archive button with reason modal, moves files to <code>archived/</code>.</li>
       </ul>

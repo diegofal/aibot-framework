@@ -864,6 +864,10 @@ textarea {
   border-radius: var(--radius);
   margin-bottom: 12px;
 }
+.production-content:has(iframe) {
+  max-height: none;
+  overflow: visible;
+}
 .production-content pre {
   padding: 12px;
   margin: 0;

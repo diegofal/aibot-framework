@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+- **Productions index: INDEX.md → index.html** — `rebuildIndex` now generates a self-contained `index.html` SPA instead of a markdown file. Features: architecture-docs-matching dark theme, sidebar with file navigation, search/filter, inline file viewer (markdown rendered via vendored marked.js, HTML in sandboxed iframe, others as preformatted text), active goals from GOALS.md displayed on the home view, stats dashboard, collapsible archived section.
+- **New static file serving route** — `GET /productions-view/:botId/*` serves production files directly with correct MIME types and path traversal protection. Enables the index.html to load files via relative `fetch()`.
+- **Dashboard: "Index" button** — Both the global productions view and per-bot view now have an "Index" button that opens the production index page in a new tab.
+- **Agent prompts: flat directory structure** — Bot prompts now mandate placing all production files at root level instead of creating subdirectories. The `archived/` directory (managed by `archive_file` tool) is the only valid subdirectory.
+- **Goals parser fallback for non-standard formats** — `readActiveGoals()` now falls back to parsing the first `##` section as a bullet list when `## Active Goals` is not found. Handles bold-prefixed bullets (`- **bold**: description`) and plain bullets used by non-English GOALS.md files.
+- **Productions empty state** — Generated `index.html` now shows a meaningful "No productions yet" message when no non-archived files exist, instead of an empty table.
+
 ### Docs
 - **Architecture docs refresh** — Updated `tools-skills.html` (27→41 tools, 8→15 skills, added 6 missing skills, moved Planned Integrations to Implemented, added `signal_completion` tool), `index.html` (20→40 modules, 27→41 tools, 8→15 skills), `bot-core.html` (30→40 modules, ~7.2K→~14.5K lines, added `BotExportService`, `BotResetService`, `ToolLoopDetector`, `LlmResilience` module docs). Added Backlog link to all 12 sidebar navs.
 - **New Backlog page** (`docs/architecture-docs/backlog.html`) — Feature backlog imported from `docs/roadmap.md` with status tracking: Audio I/O, Twitter, Reddit, Calendar (pending testing), WhatsApp and Discord (research/deferred), plus Ideas section.
@@ -13,6 +21,8 @@
 - **Chatless cron scheduling (`memory_note` payload)** — Bots in agent-loop mode (no Telegram chat) can now schedule cron reminders. Previously, `cron add` rejected with "missing chat context" because all jobs required a `chatId` for Telegram message delivery. New `kind: 'memory_note'` payload writes the reminder text to the bot's daily memory log when it fires, so the bot picks it up on its next agent loop iteration.
 
 ### Fixed
+- **Productions: nested folder creation** — LLMs redundantly including the workDir prefix in file paths (e.g. `productions/bot/file.md` instead of `file.md`) caused `resolve()` to double the path, creating `productions/bot/productions/bot/file.md`. Added prefix stripping in `tool-executor.ts` before `resolve()`. Also added a subdirectory guard that flattens any nested path (except `archived/`) to root level.
+- **Productions: dead `href="#"` links in index.html** — Generated `index.html` file table links pointed to `#` with unused `data-path` attributes (leftover from removed SPA). Links now point to the dashboard route (`/#/productions?bot={id}&file={path}`) and `data-path` attributes are removed.
 - **`__admin__` tenant blocked by quota checks** — Bots with `tenantId: "__admin__"` were permanently blocked from running agent loops and conversations because `__admin__` is a synthetic super-tenant (not a real tenant in TenantManager), causing `checkQuota` to always return `false`. Fixed by exempting `__admin__` from quota checks, usage recording, and bot-limit validation in `TenantFacade`, consistent with how it's already exempted from tenant scoping.
 - **`manage_goals` alias expansion** — Added `jobId`, `job`, and `id` to goal parameter aliases. LLMs used these names for `complete` and `update` actions, causing "Missing required parameter: goal" errors.
 - **`manage_goals` fuzzy matching (Jaccard similarity)** — Added 5th matching strategy using Jaccard word similarity scoring (threshold ≥0.3) as fallback when substring, slug, and word-based strategies all fail. Also strips filler words (`goal`, `task`, `objective`, `item`, `todo`) from slug-normalized searches so inputs like `"goal-audit-presencia-digital"` match `"Auditar presencia digital"`.
