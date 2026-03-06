@@ -1,4 +1,13 @@
 import { EventEmitter } from 'node:events';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
 
 export type ActivityEventType =
   | 'tool:start'
@@ -60,10 +69,19 @@ export interface ActivityEvent {
 
 const DEFAULT_BUFFER_SIZE = 2000;
 
+const FLUSH_DEBOUNCE_MS = 5_000;
+
 export class LlmStatsTracker {
   private stats = new Map<string, LlmBotStats>();
+  private dataDir: string | null = null;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private dirty = false;
 
-  constructor(stream: ActivityStream) {
+  constructor(stream: ActivityStream, dataDir?: string) {
+    if (dataDir) {
+      this.dataDir = dataDir;
+      this.loadFromDisk();
+    }
     stream.on('activity', (event: ActivityEvent) => {
       if (event.type === 'llm:end') this.onEnd(event);
       else if (event.type === 'llm:error') this.onError(event);
@@ -117,6 +135,7 @@ export class LlmStatsTracker {
     cs.totalDurationMs += durationMs;
 
     this.accumulateTokens(s, event);
+    this.scheduleDiskFlush();
   }
 
   private onError(event: ActivityEvent): void {
@@ -138,6 +157,7 @@ export class LlmStatsTracker {
     cs.errors++;
 
     this.accumulateTokens(s, event);
+    this.scheduleDiskFlush();
   }
 
   private accumulateTokens(s: LlmBotStats, event: ActivityEvent): void {
@@ -166,6 +186,7 @@ export class LlmStatsTracker {
   private onFallback(event: ActivityEvent): void {
     const s = this.ensure(event.botId);
     s.fallbackCount++;
+    this.scheduleDiskFlush();
   }
 
   getStats(botId: string): LlmBotStats | undefined {
@@ -178,6 +199,59 @@ export class LlmStatsTracker {
 
   clearForBot(botId: string): void {
     this.stats.delete(botId);
+    if (this.dataDir) {
+      const filePath = join(this.dataDir, `${botId}.json`);
+      try {
+        if (existsSync(filePath)) unlinkSync(filePath);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+    this.scheduleDiskFlush();
+  }
+
+  /** Force an immediate write of all stats to disk. */
+  flushToDisk(): void {
+    if (!this.dataDir) return;
+    try {
+      mkdirSync(this.dataDir, { recursive: true });
+      for (const [botId, s] of this.stats) {
+        writeFileSync(join(this.dataDir, `${botId}.json`), JSON.stringify(s, null, 2), 'utf-8');
+      }
+      this.dirty = false;
+    } catch {
+      // best-effort persistence
+    }
+  }
+
+  private loadFromDisk(): void {
+    if (!this.dataDir || !existsSync(this.dataDir)) return;
+    try {
+      const files = readdirSync(this.dataDir).filter((f) => f.endsWith('.json'));
+      for (const file of files) {
+        try {
+          const raw = readFileSync(join(this.dataDir as string, file), 'utf-8');
+          const data = JSON.parse(raw) as LlmBotStats;
+          if (data.botId) {
+            this.stats.set(data.botId, data);
+          }
+        } catch {
+          // skip malformed files
+        }
+      }
+    } catch {
+      // directory not readable — start fresh
+    }
+  }
+
+  private scheduleDiskFlush(): void {
+    this.dirty = true;
+    if (!this.dataDir) return;
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      if (this.dirty) this.flushToDisk();
+    }, FLUSH_DEBOUNCE_MS);
   }
 }
 
@@ -186,10 +260,10 @@ export class ActivityStream extends EventEmitter {
   private maxSize: number;
   readonly llmStats: LlmStatsTracker;
 
-  constructor(maxSize: number = DEFAULT_BUFFER_SIZE) {
+  constructor(maxSize: number = DEFAULT_BUFFER_SIZE, llmStatsDir?: string) {
     super();
     this.maxSize = maxSize;
-    this.llmStats = new LlmStatsTracker(this);
+    this.llmStats = new LlmStatsTracker(this, llmStatsDir);
   }
 
   publish(event: ActivityEvent): void {

@@ -175,8 +175,8 @@ export class BotManager {
       startBot: (botConfig: BotConfig) => this.startBot(botConfig),
     });
 
-    // Initialize activity stream for real-time visibility
-    this.activityStream = new ActivityStream();
+    // Initialize activity stream for real-time visibility (with persistent LLM stats)
+    this.activityStream = new ActivityStream(undefined, join(dataDir, 'llm-stats'));
 
     // Initialize MCP client pool
     this.mcpClientPool = new McpClientPool(logger);
@@ -713,6 +713,7 @@ export class BotManager {
     this.collaborationSessions.dispose();
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
+    this.activityStream.llmStats.flushToDisk();
     // Disconnect MCP agent bridge and servers
     await this.mcpAgentBridge.disconnectAll().catch(() => {});
     await this.mcpClientPool.disconnectAll().catch(() => {});
@@ -745,6 +746,7 @@ export class BotManager {
     this.collaborationSessions.dispose();
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
+    this.activityStream.llmStats.flushToDisk();
     // Disconnect MCP agent bridge and servers
     await this.mcpAgentBridge.disconnectAll().catch(() => {});
     await this.mcpClientPool.disconnectAll().catch(() => {});
