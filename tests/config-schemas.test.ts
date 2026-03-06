@@ -4,6 +4,7 @@ import {
   BotAgentLoopOverrideSchema,
   BotConfigSchema,
   CalendarConfigSchema,
+  ClaudeCliConfigSchema,
   CompactionConfigSchema,
   GlobalAgentLoopConfigSchema,
   MMRConfigSchema,
@@ -313,5 +314,22 @@ describe('CompactionConfigSchema', () => {
 
   test('rejects non-positive maxMessageChars', () => {
     expect(() => CompactionConfigSchema.parse({ maxMessageChars: 0 })).toThrow();
+  });
+});
+
+describe('ClaudeCliConfigSchema', () => {
+  test('defaults to empty object with no model', () => {
+    const result = ClaudeCliConfigSchema.parse({});
+    expect(result.model).toBeUndefined();
+  });
+
+  test('accepts a model string', () => {
+    const result = ClaudeCliConfigSchema.parse({ model: 'sonnet' });
+    expect(result.model).toBe('sonnet');
+  });
+
+  test('accepts undefined model', () => {
+    const result = ClaudeCliConfigSchema.parse({ model: undefined });
+    expect(result.model).toBeUndefined();
   });
 });

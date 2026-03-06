@@ -4,6 +4,7 @@
 
 ### Added
 - **Per-model token usage tracking** — LLM calls now capture token usage (prompt/completion tokens) from both Ollama and Claude CLI backends. The `LLMClient` interface returns `LLMResponse` (text + optional `TokenUsage`) instead of plain strings. Token data flows through the `ActivityStream` (`llm:end` events), is aggregated per-model in `LlmStatsTracker`, and is included in `AgentLoopResult`. The web UI shows a "Tokens" column in the agents list, a per-model breakdown table in the agent detail LLM Stats card, and token usage sections in agent loop result modals (both agents page and dashboard).
+- **Claude CLI configurable model** — New `claudeCli.model` config option sets the `--model` flag for all Claude CLI invocations (soul generation, quality review, memory consolidation, improve tool, skill generation, dashboard chat, memory flush). Exposed in the Settings dashboard as a "Claude CLI" card with a text input. Accepts model aliases (e.g. `sonnet`, `opus`) or full model names. When empty, falls back to Claude CLI's own default.
 
 ### Changed
 - **Productions index: INDEX.md → index.html** — `rebuildIndex` now generates a self-contained `index.html` SPA instead of a markdown file. Features: architecture-docs-matching dark theme, sidebar with file navigation, search/filter, inline file viewer (markdown rendered via vendored marked.js, HTML in sandboxed iframe, others as preformatted text), active goals from GOALS.md displayed on the home view, stats dashboard, collapsible archived section.

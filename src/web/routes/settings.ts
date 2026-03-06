@@ -293,6 +293,26 @@ export function settingsRoutes(deps: {
     return c.json({ ok: true });
   });
 
+  // --- Claude CLI Settings ---
+
+  app.get('/claude-cli', (c) => {
+    return c.json(deps.config.claudeCli);
+  });
+
+  app.patch('/claude-cli', async (c) => {
+    const body = await c.req.json();
+    const cli = deps.config.claudeCli;
+
+    if (body.model !== undefined) {
+      cli.model = body.model || undefined;
+    }
+
+    persistClaudeCli(deps.configPath, cli);
+    deps.logger.info({ model: cli.model }, 'Claude CLI settings updated via API');
+
+    return c.json(cli);
+  });
+
   return app;
 }
 
@@ -331,5 +351,11 @@ function persistHealthCheck(configPath: string, healthCheck: Config['soul']['hea
   const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
   if (!raw.soul) raw.soul = {};
   raw.soul.healthCheck = healthCheck;
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+}
+
+function persistClaudeCli(configPath: string, claudeCli: Config['claudeCli']): void {
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+  raw.claudeCli = claudeCli;
   writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }

@@ -159,6 +159,7 @@ export async function generateSkill(
   input: SkillGenerationInput,
   opts: {
     claudePath?: string;
+    claudeModel?: string;
     timeout?: number;
     skillsFolderPaths: string[];
     logger: Logger;
@@ -170,6 +171,7 @@ export async function generateSkill(
 
   const claudeResult = await claudeGenerate(prompt, {
     claudePath: opts.claudePath,
+    model: opts.claudeModel,
     timeout: opts.timeout ?? 300_000,
     maxLength: 50_000,
     logger: opts.logger,

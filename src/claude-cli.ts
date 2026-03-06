@@ -17,6 +17,7 @@ function parseClaudeUsage(parsed: Record<string, unknown>): TokenUsage | undefin
 
 export interface ClaudeGenerateOptions {
   claudePath?: string;
+  model?: string;
   timeout?: number;
   maxLength?: number;
   systemPrompt?: string;
@@ -45,6 +46,9 @@ export async function claudeGenerate(
   env.TERM = 'dumb';
 
   const args = [claudePath, '-p', prompt, '--output-format', 'json'];
+  if (opts.model) {
+    args.push('--model', opts.model);
+  }
   if (opts.systemPrompt) {
     args.push('--system-prompt', opts.systemPrompt);
   }
@@ -254,6 +258,9 @@ export async function claudeGenerateWithTools(
       '--allowedTools',
       allowedTools.join(','),
     ];
+    if (opts.model) {
+      args.push('--model', opts.model);
+    }
     if (opts.systemPrompt) {
       args.push('--system-prompt', opts.systemPrompt);
     }

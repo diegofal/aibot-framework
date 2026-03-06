@@ -235,6 +235,7 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
         { id: body.id, name: body.name, description: body.description, purpose: body.purpose },
         {
           claudePath: deps.config.improve?.claudePath,
+          claudeModel: deps.config.claudeCli?.model,
           timeout: deps.config.improve?.timeout,
           skillsFolderPaths: deps.config.skillsFolders?.paths ?? [],
           logger: deps.logger,

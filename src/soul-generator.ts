@@ -145,6 +145,7 @@ export interface SoulGenerationOptions {
   /** Custom generate function — when provided, bypasses Claude CLI entirely. */
   generate?: (prompt: string) => Promise<string>;
   claudePath?: string;
+  claudeModel?: string;
   timeout?: number;
 }
 
@@ -163,6 +164,7 @@ export async function generateSoul(
     ((p: string) =>
       claudeGenerate(p, {
         claudePath: opts.claudePath,
+        model: opts.claudeModel,
         timeout: opts.timeout ?? 300_000,
         maxLength: 30_000,
         logger: opts.logger,

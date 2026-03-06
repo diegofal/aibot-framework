@@ -56,12 +56,14 @@ export class ClaudeCliLLMClient implements LLMClient {
   constructor(
     private claudePath: string,
     private timeout: number,
-    private logger: Logger
+    private logger: Logger,
+    private model?: string
   ) {}
 
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
     const result = await claudeGenerate(prompt, {
       claudePath: this.claudePath,
+      model: this.model,
       timeout: this.timeout,
       logger: this.logger,
       systemPrompt: opts?.system,
@@ -90,6 +92,7 @@ export class ClaudeCliLLMClient implements LLMClient {
 
       const result = await claudeGenerateWithTools(parts.join('\n\n'), {
         claudePath: this.claudePath,
+        model: this.model,
         timeout: this.timeout,
         logger: this.logger,
         systemPrompt: system,
@@ -177,6 +180,7 @@ export class LLMClientWithFallback implements LLMClient {
 export interface CreateLLMClientOptions {
   llmBackend?: 'ollama' | 'claude-cli';
   claudePath?: string;
+  claudeModel?: string;
   claudeTimeout?: number;
 }
 
@@ -196,7 +200,8 @@ export function createLLMClient(
     const claudeLLM = new ClaudeCliLLMClient(
       opts.claudePath || 'claude',
       opts.claudeTimeout ?? 300_000,
-      logger
+      logger,
+      opts.claudeModel
     );
     return new LLMClientWithFallback(claudeLLM, ollamaLLM, logger);
   }

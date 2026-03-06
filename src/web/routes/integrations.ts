@@ -245,6 +245,7 @@ export function integrationsRoutes(deps: {
     try {
       const result = await claudeGenerate(body.message, {
         claudePath,
+        model: deps.config.claudeCli?.model,
         timeout: 300_000,
         logger: deps.logger,
       });
@@ -315,6 +316,7 @@ export function integrationsRoutes(deps: {
     try {
       const result = await claudeGenerateWithTools(body.message, {
         claudePath,
+        model: deps.config.claudeCli?.model,
         timeout: 300_000,
         logger: deps.logger,
         tools: selectedDefs,

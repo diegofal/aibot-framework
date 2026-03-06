@@ -157,6 +157,7 @@ export interface QualityReviewOptions {
   llmBackend?: 'ollama' | 'claude-cli';
   // Claude CLI specific
   claudePath?: string;
+  claudeModel?: string;
   timeout?: number;
   // Ollama specific
   ollamaClient?: OllamaClient;
@@ -164,7 +165,14 @@ export interface QualityReviewOptions {
 }
 
 async function runClaudeCliReview(opts: QualityReviewOptions): Promise<string> {
-  const { soulDir, lintIssues, logger, claudePath = 'claude', timeout = 300_000 } = opts;
+  const {
+    soulDir,
+    lintIssues,
+    logger,
+    claudePath = 'claude',
+    claudeModel,
+    timeout = 300_000,
+  } = opts;
 
   const soulFiles = readSoulFiles(soulDir);
   backupExistingFiles(soulDir, logger);
@@ -175,7 +183,12 @@ async function runClaudeCliReview(opts: QualityReviewOptions): Promise<string> {
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const proc = Bun.spawn([claudePath, '-p', prompt, '--allowedTools', 'Read,Edit,Write'], {
+  const claudeArgs = [claudePath, '-p', prompt, '--allowedTools', 'Read,Edit,Write'];
+  if (claudeModel) {
+    claudeArgs.push('--model', claudeModel);
+  }
+
+  const proc = Bun.spawn(claudeArgs, {
     cwd: resolve(soulDir),
     stdout: 'pipe',
     stderr: 'pipe',

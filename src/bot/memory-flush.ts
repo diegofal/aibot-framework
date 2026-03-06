@@ -44,6 +44,7 @@ export class MemoryFlusher {
           const fullPrompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
           const claudeResult = await claudeGenerate(fullPrompt, {
             claudePath,
+            model: this.ctx.config.claudeCli?.model,
             timeout: 300_000,
             logger: this.ctx.logger,
           });
@@ -110,6 +111,7 @@ export class MemoryFlusher {
           const fullPrompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
           const claudeResult = await claudeGenerate(fullPrompt, {
             claudePath,
+            model: this.ctx.config.claudeCli?.model,
             timeout: 300_000,
             logger: this.ctx.logger,
           });

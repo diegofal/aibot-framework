@@ -498,6 +498,12 @@ const HumanizerConfigSchema = z.object({
   enabled: z.boolean().default(false),
 });
 
+export const ClaudeCliConfigSchema = z
+  .object({
+    model: z.string().optional(),
+  })
+  .default({});
+
 const ImproveToolConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -696,6 +702,7 @@ const ConfigSchema = z.object({
   cron: CronConfigSchema.default({}),
   phoneCall: PhoneCallConfigSchema.optional(),
   humanizer: HumanizerConfigSchema.default({}),
+  claudeCli: ClaudeCliConfigSchema,
   improve: ImproveToolConfigSchema,
   collaboration: CollaborationConfigSchema,
   buffer: BufferConfigSchema,
@@ -738,6 +745,7 @@ export type DatetimeToolConfig = z.infer<typeof DatetimeToolConfigSchema>;
 export type CronConfig = z.infer<typeof CronConfigSchema>;
 export type PhoneCallConfig = z.infer<typeof PhoneCallConfigSchema>;
 export type HumanizerConfig = z.infer<typeof HumanizerConfigSchema>;
+export type ClaudeCliConfig = z.infer<typeof ClaudeCliConfigSchema>;
 export type ImproveToolConfig = z.infer<typeof ImproveToolConfigSchema>;
 export type CollaborationConfig = z.infer<typeof CollaborationConfigSchema>;
 export type BufferConfig = z.infer<typeof BufferConfigSchema>;

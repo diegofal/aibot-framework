@@ -358,13 +358,16 @@ export class ToolRegistry {
     // Improve tool
     if (config.improve.enabled) {
       tools.push(
-        createImproveTool({
-          claudePath: config.improve.claudePath,
-          timeout: config.improve.timeout,
-          maxOutputLength: config.improve.maxOutputLength,
-          soulDir: config.improve.soulDir,
-          allowedFocus: config.improve.allowedFocus,
-        })
+        createImproveTool(
+          {
+            claudePath: config.improve.claudePath,
+            timeout: config.improve.timeout,
+            maxOutputLength: config.improve.maxOutputLength,
+            soulDir: config.improve.soulDir,
+            allowedFocus: config.improve.allowedFocus,
+          },
+          config.claudeCli?.model
+        )
       );
       logger.info('Improve tool initialized');
     }

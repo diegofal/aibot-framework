@@ -3,16 +3,25 @@ import { api } from './shared.js';
 export async function renderSettings(el) {
   el.innerHTML = '<div class="page-title">Settings</div><p class="text-dim">Loading...</p>';
 
-  const [session, collab, skillsFolders, mcpData, memSearch, healthCheck, agentDefaults] =
-    await Promise.all([
-      api('/api/settings/session'),
-      api('/api/settings/collaboration'),
-      api('/api/settings/skills-folders'),
-      api('/api/settings/mcp'),
-      api('/api/settings/memory-search'),
-      api('/api/settings/health-check'),
-      api('/api/agents/defaults'),
-    ]);
+  const [
+    session,
+    collab,
+    skillsFolders,
+    mcpData,
+    memSearch,
+    healthCheck,
+    agentDefaults,
+    claudeCli,
+  ] = await Promise.all([
+    api('/api/settings/session'),
+    api('/api/settings/collaboration'),
+    api('/api/settings/skills-folders'),
+    api('/api/settings/mcp'),
+    api('/api/settings/memory-search'),
+    api('/api/settings/health-check'),
+    api('/api/agents/defaults'),
+    api('/api/settings/claude-cli'),
+  ]);
   if (session.error || collab.error) {
     el.innerHTML = '<div class="page-title">Settings</div><p>Failed to load settings.</p>';
     return;
@@ -84,6 +93,21 @@ export async function renderSettings(el) {
       </div>
       <div style="margin-top:8px">
         <span class="text-dim text-sm" id="mcp-status"></span>
+      </div>
+    </div>
+
+    <div class="detail-card" id="claude-cli-card">
+      <div class="form-section-title">Claude CLI</div>
+      <p class="text-dim text-sm mb-16">Configure the model used for all Claude CLI invocations (soul generation, quality review, memory consolidation, improve tool, etc.). Leave empty to use Claude CLI's default model.</p>
+
+      <div class="form-group">
+        <label>Model</label>
+        <input type="text" id="ccli-model" placeholder="e.g. sonnet, opus, claude-sonnet-4-20250514" value="${claudeCli.model || ''}">
+      </div>
+
+      <div class="actions" style="margin-top:12px">
+        <button type="button" class="btn btn-primary btn-sm" id="ccli-save-btn">Save</button>
+        <span class="text-dim text-sm" id="ccli-save-status"></span>
       </div>
     </div>
 
@@ -539,6 +563,34 @@ export async function renderSettings(el) {
       mcpStatus.push(...(freshData.status || []));
       renderMcpList();
       showMcpStatus('Server added', 'var(--green)');
+    }
+  });
+
+  // --- Claude CLI save ---
+  document.getElementById('ccli-save-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('ccli-save-btn');
+    const status = document.getElementById('ccli-save-status');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    const patch = {
+      model: document.getElementById('ccli-model').value.trim(),
+    };
+
+    const res = await api('/api/settings/claude-cli', { method: 'PATCH', body: patch });
+
+    btn.disabled = false;
+    btn.textContent = 'Save';
+
+    if (res.error) {
+      status.textContent = 'Failed to save';
+      status.style.color = 'var(--red)';
+    } else {
+      status.textContent = 'Saved';
+      status.style.color = 'var(--green)';
+      setTimeout(() => {
+        status.textContent = '';
+      }, 4000);
     }
   });
 
