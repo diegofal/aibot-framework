@@ -201,8 +201,8 @@ describe('ContextCompactor', () => {
   beforeEach(() => {
     mockLLMClient = {
       backend: 'ollama' as const,
-      generate: mock(() => Promise.resolve('')),
-      chat: mock(() => Promise.resolve('Summary of the conversation with key facts.')),
+      generate: mock(() => Promise.resolve({ text: '' })),
+      chat: mock(() => Promise.resolve({ text: 'Summary of the conversation with key facts.' })),
     };
 
     mockSessionManager = {

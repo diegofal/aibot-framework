@@ -96,6 +96,7 @@ export function agentProposalRoutes(deps: {
         },
         {
           soulDir: deps.config.soul.dir,
+          claudeModel: deps.config.claudeCli?.model,
           logger: deps.logger,
         }
       );

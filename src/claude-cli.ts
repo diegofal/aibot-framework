@@ -1,11 +1,23 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { TokenUsage } from './core/llm-client';
 import type { Logger } from './logger';
 import type { ToolDefinition, ToolExecutor } from './tools/types';
 
+/** Extract TokenUsage from Claude CLI JSON output's usage field. */
+function parseClaudeUsage(parsed: Record<string, unknown>): TokenUsage | undefined {
+  const usage = parsed.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+  if (!usage || (usage.input_tokens == null && usage.output_tokens == null)) return undefined;
+  const promptTokens = usage.input_tokens ?? 0;
+  const completionTokens = usage.output_tokens ?? 0;
+  const model = (typeof parsed.model === 'string' ? parsed.model : null) ?? 'claude';
+  return { model, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
+}
+
 export interface ClaudeGenerateOptions {
   claudePath?: string;
+  model?: string;
   timeout?: number;
   maxLength?: number;
   systemPrompt?: string;
@@ -16,13 +28,14 @@ const DEFAULT_TIMEOUT = 300_000;
 const DEFAULT_MAX_LENGTH = 50_000;
 
 /**
- * Spawn Claude CLI in prompt mode and return the text output.
+ * Spawn Claude CLI in prompt mode and return the text output + usage.
+ * Uses --output-format json to capture token usage metadata.
  * Throws on timeout, non-zero exit, or empty output so callers can fall back.
  */
 export async function claudeGenerate(
   prompt: string,
   opts: ClaudeGenerateOptions & { logger: Logger }
-): Promise<string> {
+): Promise<{ response: string; usage?: TokenUsage }> {
   const claudePath = opts.claudePath || DEFAULT_CLAUDE_PATH;
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
   const maxLength = opts.maxLength ?? DEFAULT_MAX_LENGTH;
@@ -32,7 +45,10 @@ export async function claudeGenerate(
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const args = [claudePath, '-p', prompt, '--output-format', 'text'];
+  const args = [claudePath, '-p', prompt, '--output-format', 'json'];
+  if (opts.model) {
+    args.push('--model', opts.model);
+  }
   if (opts.systemPrompt) {
     args.push('--system-prompt', opts.systemPrompt);
   }
@@ -81,7 +97,22 @@ export async function claudeGenerate(
       throw new Error(`Claude CLI exited with code ${exitCode}: ${detail}`);
     }
 
-    let output = stdout.trim();
+    let output: string;
+    let usage: TokenUsage | undefined;
+    const raw = stdout.trim();
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'string') {
+        output = parsed;
+      } else {
+        output = parsed.result ?? parsed.content ?? parsed.text ?? raw;
+        usage = parseClaudeUsage(parsed);
+      }
+    } catch {
+      output = raw;
+    }
+
     if (!output) {
       throw new Error('Claude CLI produced no output');
     }
@@ -95,7 +126,7 @@ export async function claudeGenerate(
       'Claude CLI completed'
     );
 
-    return output;
+    return { response: output, usage };
   } catch (err) {
     clearTimeout(timer);
     throw err;
@@ -145,7 +176,7 @@ function toMcpToolDefs(tools: ToolDefinition[]): Array<{
 export async function claudeGenerateWithTools(
   prompt: string,
   opts: ClaudeGenerateWithToolsOptions & { logger: Logger }
-): Promise<{ response: string; toolCalls: ClaudeToolCallRecord[] }> {
+): Promise<{ response: string; toolCalls: ClaudeToolCallRecord[]; usage?: TokenUsage }> {
   const claudePath = opts.claudePath || DEFAULT_CLAUDE_PATH;
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
   const maxLength = opts.maxLength ?? DEFAULT_MAX_LENGTH;
@@ -227,6 +258,9 @@ export async function claudeGenerateWithTools(
       '--allowedTools',
       allowedTools.join(','),
     ];
+    if (opts.model) {
+      args.push('--model', opts.model);
+    }
     if (opts.systemPrompt) {
       args.push('--system-prompt', opts.systemPrompt);
     }
@@ -280,13 +314,15 @@ export async function claudeGenerateWithTools(
 
     // Parse JSON output — Claude CLI --output-format json wraps result
     let response: string;
+    let usage: TokenUsage | undefined;
     try {
       const parsed = JSON.parse(stdout.trim());
-      // Claude CLI JSON output: { result: "...", ... } or just the text
-      response =
-        typeof parsed === 'string'
-          ? parsed
-          : (parsed.result ?? parsed.content ?? parsed.text ?? stdout.trim());
+      if (typeof parsed === 'string') {
+        response = parsed;
+      } else {
+        response = parsed.result ?? parsed.content ?? parsed.text ?? stdout.trim();
+        usage = parseClaudeUsage(parsed);
+      }
     } catch {
       // Fallback: treat as plain text if JSON parsing fails
       response = stdout.trim();
@@ -309,7 +345,7 @@ export async function claudeGenerateWithTools(
       'Claude CLI (MCP tools) completed'
     );
 
-    return { response, toolCalls };
+    return { response, toolCalls, usage };
   } finally {
     callbackServer.stop(true);
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});

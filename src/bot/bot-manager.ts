@@ -442,6 +442,7 @@ export class BotManager {
       const llmClient = createLLMClient(
         {
           llmBackend: resolved.llmBackend,
+          claudeModel: this.config.claudeCli?.model,
           claudeTimeout: config.agentLoop?.claudeTimeout ?? this.config.agentLoop.claudeTimeout,
         },
         this.ollamaClient,
@@ -484,6 +485,7 @@ export class BotManager {
           soulDir: resolved.soulDir,
           cooldownMs: healthCheckConfig.cooldownMs,
           claudePath: this.config.improve?.claudePath ?? 'claude',
+          claudeModel: this.config.claudeCli?.model,
           timeout: this.config.improve?.timeout ?? 300_000,
           logger: botLogger,
           consolidateMemory: healthCheckConfig.consolidateMemory,

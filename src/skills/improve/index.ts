@@ -76,6 +76,7 @@ const skill: Skill = {
 
           const result = await runImprove({
             claudePath,
+            claudeModel: ctx.claudeCliModel,
             timeout,
             maxOutputLength,
             soulDir,

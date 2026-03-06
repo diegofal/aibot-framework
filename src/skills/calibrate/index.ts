@@ -90,8 +90,8 @@ const skill: Skill = {
             maxBatches,
           });
 
-          const raw = await ctx.ollama.generate(prompt, { system, temperature: 0.3 });
-          const result = await parseJsonResponse<ExtractionResult>(ctx, raw);
+          const llmResult = await ctx.ollama.generate(prompt, { system, temperature: 0.3 });
+          const result = await parseJsonResponse<ExtractionResult>(ctx, llmResult.text);
 
           if (!result || !result.batches || result.batches.length === 0) {
             return '❌ Could not extract claims from soul files. Try again.';
@@ -392,8 +392,8 @@ async function finalizeBatches(ctx: SkillContext, session: CalibrationSession): 
     const files = readSoulFiles(soulDir, affectedFiles);
 
     const { system, prompt } = buildRewritePrompt({ files, corrections });
-    const raw = await ctx.ollama.generate(prompt, { system, temperature: 0.3 });
-    const result = await parseJsonResponse<RewriteResult>(ctx, raw);
+    const llmResult = await ctx.ollama.generate(prompt, { system, temperature: 0.3 });
+    const result = await parseJsonResponse<RewriteResult>(ctx, llmResult.text);
 
     if (!result || !result.files || result.files.length === 0) {
       deleteSession(ctx.data, session.chatId, session.userId);
@@ -504,9 +504,9 @@ async function parseJsonResponse<T>(ctx: SkillContext, raw: string): Promise<T |
 
   try {
     const fixPrompt = buildJsonFixPrompt(cleaned);
-    const fixed = await ctx.ollama.generate(fixPrompt, { temperature: 0.1 });
+    const fixResult = await ctx.ollama.generate(fixPrompt, { temperature: 0.1 });
 
-    let fixedCleaned = fixed.trim();
+    let fixedCleaned = fixResult.text.trim();
     if (fixedCleaned.startsWith('```')) {
       fixedCleaned = fixedCleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
     }

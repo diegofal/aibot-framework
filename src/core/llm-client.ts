@@ -2,6 +2,18 @@ import { claudeGenerate, claudeGenerateWithTools } from '../claude-cli';
 import type { Logger } from '../logger';
 import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
 
+export interface TokenUsage {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface LLMResponse {
+  text: string;
+  usage?: TokenUsage;
+}
+
 export interface LLMGenerateOptions {
   model?: string;
   system?: string;
@@ -13,8 +25,8 @@ export interface LLMChatOptions extends ChatOptions {}
 
 export interface LLMClient {
   readonly backend: 'ollama' | 'claude-cli';
-  generate(prompt: string, opts?: LLMGenerateOptions): Promise<string>;
-  chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<string>;
+  generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse>;
+  chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<LLMResponse>;
 }
 
 /**
@@ -25,11 +37,11 @@ export class OllamaLLMClient implements LLMClient {
 
   constructor(private ollama: OllamaClient) {}
 
-  generate(prompt: string, opts?: LLMGenerateOptions): Promise<string> {
+  generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
     return this.ollama.generate(prompt, opts);
   }
 
-  chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<string> {
+  chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<LLMResponse> {
     return this.ollama.chat(messages, opts);
   }
 }
@@ -44,19 +56,22 @@ export class ClaudeCliLLMClient implements LLMClient {
   constructor(
     private claudePath: string,
     private timeout: number,
-    private logger: Logger
+    private logger: Logger,
+    private model?: string
   ) {}
 
-  async generate(prompt: string, opts?: LLMGenerateOptions): Promise<string> {
-    return claudeGenerate(prompt, {
+  async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
+    const result = await claudeGenerate(prompt, {
       claudePath: this.claudePath,
+      model: this.model,
       timeout: this.timeout,
       logger: this.logger,
       systemPrompt: opts?.system,
     });
+    return { text: result.response, usage: result.usage };
   }
 
-  async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<string> {
+  async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<LLMResponse> {
     const hasTools = opts?.tools && opts.tools.length > 0 && opts.toolExecutor;
 
     if (hasTools) {
@@ -77,6 +92,7 @@ export class ClaudeCliLLMClient implements LLMClient {
 
       const result = await claudeGenerateWithTools(parts.join('\n\n'), {
         claudePath: this.claudePath,
+        model: this.model,
         timeout: this.timeout,
         logger: this.logger,
         systemPrompt: system,
@@ -84,7 +100,7 @@ export class ClaudeCliLLMClient implements LLMClient {
         toolExecutor: opts.toolExecutor ?? (async () => ''),
       });
 
-      return result.response;
+      return { text: result.response, usage: result.usage };
     }
 
     // Simple path: no tools, single generate call
@@ -127,7 +143,7 @@ export class LLMClientWithFallback implements LLMClient {
     this.backend = primary.backend;
   }
 
-  async generate(prompt: string, opts?: LLMGenerateOptions): Promise<string> {
+  async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
     try {
       return await this.primary.generate(prompt, opts);
     } catch (err) {
@@ -142,7 +158,7 @@ export class LLMClientWithFallback implements LLMClient {
     }
   }
 
-  async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<string> {
+  async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<LLMResponse> {
     try {
       return await this.primary.chat(messages, opts);
     } catch (err) {
@@ -164,6 +180,7 @@ export class LLMClientWithFallback implements LLMClient {
 export interface CreateLLMClientOptions {
   llmBackend?: 'ollama' | 'claude-cli';
   claudePath?: string;
+  claudeModel?: string;
   claudeTimeout?: number;
 }
 
@@ -183,7 +200,8 @@ export function createLLMClient(
     const claudeLLM = new ClaudeCliLLMClient(
       opts.claudePath || 'claude',
       opts.claudeTimeout ?? 300_000,
-      logger
+      logger,
+      opts.claudeModel
     );
     return new LLMClientWithFallback(claudeLLM, ollamaLLM, logger);
   }

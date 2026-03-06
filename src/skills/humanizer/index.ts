@@ -61,11 +61,11 @@ If the text is already natural and human-sounding, return it with minimal change
 Keep the same language as the input (if Spanish, respond in Spanish; if English, respond in English).`;
 
 async function humanize(text: string, ctx: SkillContext): Promise<string> {
-  const response = await ctx.ollama.generate(text, {
+  const result = await ctx.ollama.generate(text, {
     system: SYSTEM_PROMPT,
     temperature: 0.8,
   });
-  return response;
+  return result.text;
 }
 
 const skill: Skill = {

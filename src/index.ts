@@ -157,6 +157,7 @@ async function main() {
             {
               llmBackend: payload.llmBackend,
               claudePath: payload.claudePath,
+              claudeModel: config.claudeCli?.model,
               claudeTimeout: payload.claudeTimeout,
             },
             skillRegistry.getOllamaClient(),

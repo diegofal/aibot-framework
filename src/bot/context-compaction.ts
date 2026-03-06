@@ -211,7 +211,8 @@ export class ContextCompactor {
 
     const llmClient = this.ctx.getLLMClient(botId);
     const model = this.ctx.getActiveModel(botId);
-    return llmClient.chat(summaryMessages, { model, temperature: 0.3 });
+    const result = await llmClient.chat(summaryMessages, { model, temperature: 0.3 });
+    return result.text;
   }
 
   /** Fallback: build a mechanical summary from first lines of each message */

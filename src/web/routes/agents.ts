@@ -362,7 +362,7 @@ export function agentsRoutes(deps: {
     if (body.llmBackend === 'ollama') {
       const ollamaClient = deps.botManager.getOllamaClient();
       const model = body.model || deps.config.ollama.models.primary;
-      generate = (prompt) => ollamaClient.generate(prompt, { model });
+      generate = async (prompt) => (await ollamaClient.generate(prompt, { model })).text;
     }
 
     try {
@@ -376,6 +376,7 @@ export function agentsRoutes(deps: {
         },
         {
           soulDir: deps.config.soul.dir,
+          claudeModel: deps.config.claudeCli?.model,
           logger: deps.logger,
           generate,
         }

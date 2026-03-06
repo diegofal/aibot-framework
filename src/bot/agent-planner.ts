@@ -1,8 +1,12 @@
-import type { LLMClient } from '../core/llm-client';
+import type { LLMClient, TokenUsage } from '../core/llm-client';
 import type { Logger } from '../logger';
 import type { ContinuousPlannerResult, PlannerResult } from './agent-loop-prompts';
 import { parseLLMJson } from './llm-json-parser';
 import { TOOL_CATEGORY_NAMES } from './tool-registry';
+
+export interface PlannerResultWithUsage extends PlannerResult {
+  usage?: TokenUsage;
+}
 
 /**
  * Parse a planner result (works for both periodic and continuous modes).
@@ -52,24 +56,25 @@ export async function runPlannerWithRetry(
   model: string,
   logger: Logger,
   maxRetries = 1
-): Promise<PlannerResult> {
+): Promise<PlannerResultWithUsage> {
   const temperatures = [0.3, 0];
 
   logger.debug({ model, temperature: temperatures[0], maxRetries }, 'Agent loop: planner starting');
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const raw = await llmClient.generate(plannerInput.prompt, {
+    const llmResult = await llmClient.generate(plannerInput.prompt, {
       system: plannerInput.system,
       model,
       temperature: temperatures[attempt] ?? 0,
     });
+    const raw = llmResult.text;
 
     const result = parsePlannerResult(raw, logger);
     if (result) {
       if (attempt > 0) {
         logger.info({ attempt }, 'Agent loop: planner succeeded on retry');
       }
-      return result;
+      return { ...result, usage: llmResult.usage };
     }
 
     if (attempt < maxRetries) {

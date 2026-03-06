@@ -78,17 +78,17 @@ export class GroupActivation {
         .filter(Boolean)
         .join('\n');
 
-      const result = await Promise.race([
+      const llmResult = await Promise.race([
         this.ctx.getLLMClient(botId ?? '').generate(prompt, {
           model: botId ? this.ctx.getActiveModel(botId) : this.ctx.config.ollama.models.primary,
           temperature: rlc.temperature,
         }),
-        new Promise<string>((_, reject) =>
+        new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('LLM relevance check timeout')), rlc.timeout)
         ),
       ]);
 
-      const answer = result.trim().toLowerCase();
+      const answer = llmResult.text.trim().toLowerCase();
       const isRelevant = answer.startsWith('yes');
 
       this.ctx.logger.info(
@@ -138,17 +138,17 @@ export class GroupActivation {
         .filter(Boolean)
         .join('\n');
 
-      const result = await Promise.race([
+      const llmResult = await Promise.race([
         this.ctx.getLLMClient(botId).generate(prompt, {
           model: this.ctx.getActiveModel(botId),
           temperature: rlc.temperature,
         }),
-        new Promise<string>((_, reject) =>
+        new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Broadcast relevance check timeout')), rlc.timeout)
         ),
       ]);
 
-      const answer = result.trim().toLowerCase();
+      const answer = llmResult.text.trim().toLowerCase();
       const isRelevant = answer.startsWith('yes');
 
       this.ctx.logger.info(

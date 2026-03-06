@@ -89,6 +89,7 @@ export interface ConsolidateMemoryOptions {
   logger: Logger;
   llmBackend?: 'ollama' | 'claude-cli';
   claudePath?: string;
+  claudeModel?: string;
   timeout?: number;
   ollamaClient?: OllamaClient;
   model?: string;
@@ -104,8 +105,8 @@ async function generateConsolidation(
       return { output: null, error: 'ollama client not available' };
     }
     try {
-      const result = await opts.ollamaClient.generate(prompt, { model: opts.model });
-      return { output: result.trim() || null };
+      const llmResult = await opts.ollamaClient.generate(prompt, { model: opts.model });
+      return { output: llmResult.text.trim() || null };
     } catch (err) {
       return { output: null, error: err instanceof Error ? err.message : String(err) };
     }
@@ -119,7 +120,12 @@ async function generateConsolidation(
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const proc = Bun.spawn([claudePath, '-p', prompt, '--output-format', 'text'], {
+  const claudeArgs = [claudePath, '-p', prompt, '--output-format', 'text'];
+  if (opts.claudeModel) {
+    claudeArgs.push('--model', opts.claudeModel);
+  }
+
+  const proc = Bun.spawn(claudeArgs, {
     cwd: resolve('.'),
     stdout: 'pipe',
     stderr: 'pipe',

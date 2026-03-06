@@ -61,6 +61,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     return claudeGenerate(prompt, {
       systemPrompt,
       claudePath,
+      model: config.claudeCli?.model,
       timeout,
       maxLength,
       logger,
@@ -79,6 +80,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     return claudeGenerate(prompt, {
       systemPrompt,
       claudePath,
+      model: config.claudeCli?.model,
       timeout,
       maxLength,
       logger,
@@ -97,6 +99,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     return claudeGenerate(prompt, {
       systemPrompt,
       claudePath,
+      model: config.claudeCli?.model,
       timeout,
       maxLength,
       logger,
@@ -123,9 +126,10 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     'webGenerate: calling LLM with tools'
   );
 
-  return llmClient.chat(chatMessages, {
+  const result = await llmClient.chat(chatMessages, {
     model,
     tools: filteredDefs,
     toolExecutor,
   });
+  return result.text;
 }

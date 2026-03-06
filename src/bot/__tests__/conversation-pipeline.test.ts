@@ -73,7 +73,7 @@ describe('ConversationPipeline', () => {
 
     mockLLMClient = {
       backend: 'ollama' as const,
-      chat: jest.fn().mockResolvedValue('Mocked LLM response'),
+      chat: jest.fn().mockResolvedValue({ text: 'Mocked LLM response' }),
       stream: jest.fn(),
     } as unknown as LLMClient;
 
@@ -210,7 +210,7 @@ describe('ConversationPipeline', () => {
     });
 
     it('should handle empty LLM response with checkmark', async () => {
-      (mockLLMClient.chat as jest.Mock).mockResolvedValue('   ');
+      (mockLLMClient.chat as jest.Mock).mockResolvedValue({ text: '   ' });
 
       const ctx = createMockContext();
       const config = createMockBotConfig();
@@ -536,7 +536,7 @@ describe('ConversationPipeline', () => {
         if (callCount < 3) {
           return Promise.reject(new Error('timeout'));
         }
-        return Promise.resolve('Success after retries');
+        return Promise.resolve({ text: 'Success after retries' });
       });
 
       const ctx = createMockContext();

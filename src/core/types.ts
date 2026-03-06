@@ -81,6 +81,7 @@ export interface SkillContext {
   session?: SessionInfo;
   soulDir?: string;
   botId?: string;
+  claudeCliModel?: string;
   /** Execute another registered tool by name. Absent if not wired at init time. */
   tools?: { execute: ToolExecuteFn };
 }

@@ -15,6 +15,7 @@ export interface StartupSoulCheckOptions {
   soulDir: string;
   cooldownMs: number;
   claudePath: string;
+  claudeModel?: string;
   timeout: number;
   logger: Logger;
   consolidateMemory?: boolean;
@@ -65,6 +66,7 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
     soulDir,
     cooldownMs,
     claudePath,
+    claudeModel,
     timeout,
     logger,
     consolidateMemory: shouldConsolidate = true,
@@ -89,7 +91,16 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
 
   if (shouldConsolidate) {
     tasks.push(
-      consolidateMemory({ soulDir, claudePath, timeout, logger, llmBackend, model, ollamaClient })
+      consolidateMemory({
+        soulDir,
+        claudePath,
+        claudeModel,
+        timeout,
+        logger,
+        llmBackend,
+        model,
+        ollamaClient,
+      })
         .then((result) => {
           logger.info(
             { botId, merged: result.merged, archived: result.archived },
@@ -106,6 +117,7 @@ export async function runStartupSoulCheck(opts: StartupSoulCheckOptions): Promis
     runQualityReview({
       soulDir,
       claudePath,
+      claudeModel,
       timeout,
       lintIssues: issues,
       logger,

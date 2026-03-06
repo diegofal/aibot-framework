@@ -12,6 +12,29 @@ function statusBadge(status) {
   return `<span class="badge ${cls}">${status}</span>`;
 }
 
+function formatTokenCount(n) {
+  if (n == null || n === 0) return '--';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function tokenBreakdownCompact(stats) {
+  if (!stats || !stats.modelBreakdown) return '<span class="text-dim">--</span>';
+  const total = (stats.totalPromptTokens || 0) + (stats.totalCompletionTokens || 0);
+  if (total === 0) return '<span class="text-dim">--</span>';
+
+  const models = Object.keys(stats.modelBreakdown);
+  const totalStr = formatTokenCount(total);
+  if (models.length <= 1) {
+    return `<span title="${models[0] || 'unknown'}: ${total} tokens">${totalStr}</span>`;
+  }
+  const detail = models
+    .map((m) => `${m}: ${formatTokenCount(stats.modelBreakdown[m].totalTokens)}`)
+    .join(', ');
+  return `<span title="${detail}">${totalStr} <span class="text-dim">(${models.length} models)</span></span>`;
+}
+
 function karmaScoreColor(score) {
   if (score >= 70) return 'var(--green)';
   if (score >= 40) return 'var(--orange)';
@@ -84,6 +107,22 @@ function renderAgentLoopResult(r) {
     </div>`);
   }
 
+  if (r.tokenUsage && r.tokenUsage.total > 0) {
+    const modelRows = Object.entries(r.tokenUsage.models)
+      .map(
+        ([model, u]) =>
+          `<tr><td style="font-family:monospace;font-size:12px">${escapeHtml(model)}</td><td style="text-align:right">${formatTokenCount(u.promptTokens)}</td><td style="text-align:right">${formatTokenCount(u.completionTokens)}</td><td style="text-align:right;font-weight:600">${formatTokenCount(u.promptTokens + u.completionTokens)}</td></tr>`
+      )
+      .join('');
+    sections.push(`<div class="result-section">
+      <div class="result-section-title">Token Usage (${formatTokenCount(r.tokenUsage.total)} total)</div>
+      <table style="width:100%;font-size:13px">
+        <thead><tr><th style="text-align:left">Model</th><th style="text-align:right">In</th><th style="text-align:right">Out</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${modelRows}</tbody>
+      </table>
+    </div>`);
+  }
+
   sections.push(`<div class="result-section">
     <div class="result-section-title">Summary</div>
     <pre>${escapeHtml(r.summary || '')}</pre>
@@ -95,18 +134,25 @@ function renderAgentLoopResult(r) {
 export async function renderAgents(el) {
   el.innerHTML = '<div class="page-title">Agents</div><p class="text-dim">Loading...</p>';
 
-  const [agents, skills, karmaScores, loopState, defaults] = await Promise.all([
+  const [agents, skills, karmaScores, loopState, defaults, llmStatsRes] = await Promise.all([
     api('/api/agents'),
     api('/api/skills'),
     api('/api/karma'),
     api('/api/agent-loop'),
     api('/api/agents/defaults'),
+    api('/api/agent-loop/llm-stats'),
   ]);
 
   // Build karma lookup by botId (graceful if karma is disabled)
   const karmaMap = {};
   if (Array.isArray(karmaScores)) {
     for (const k of karmaScores) karmaMap[k.botId] = k;
+  }
+
+  // Build LLM stats lookup by botId
+  const llmStatsMap = {};
+  if (Array.isArray(llmStatsRes?.stats)) {
+    for (const s of llmStatsRes.stats) llmStatsMap[s.botId] = s;
   }
 
   // Build executing lookup from loop state
@@ -125,7 +171,7 @@ export async function renderAgents(el) {
       </div>
     </div>
     <table>
-      <thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Status</th><th>Karma</th><th>Skills</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Status</th><th>Karma</th><th>LLM Calls</th><th>Tokens</th><th>Fallbacks</th><th>Skills</th><th>Actions</th></tr></thead>
       <tbody id="agents-tbody"></tbody>
     </table>
   `;
@@ -143,6 +189,7 @@ export async function renderAgents(el) {
 
     const tr = document.createElement('tr');
     const karma = karmaMap[agent.id];
+    const llmStats = llmStatsMap[agent.id];
     const effectiveModel = agent.llmBackend === 'claude-cli' ? 'claude-cli' : agent.model || '';
     const modelOptions = (defaults.availableModels || [])
       .map(
@@ -150,6 +197,14 @@ export async function renderAgents(el) {
           `<option value="${escapeHtml(m)}"${m === effectiveModel ? ' selected' : ''}>${escapeHtml(m)}</option>`
       )
       .join('');
+
+    const callsDisplay = llmStats
+      ? `<span style="color:var(--green)">${llmStats.successCount}</span><span class="text-dim"> / ${llmStats.totalCalls}</span>`
+      : '<span class="text-dim">--</span>';
+    const fallbackDisplay = llmStats?.fallbackCount
+      ? `<span style="color:var(--orange);font-weight:600">${llmStats.fallbackCount}</span>`
+      : '<span class="text-dim">0</span>';
+
     tr.innerHTML = `
       <td><a href="#/agents/${agent.id}">${escapeHtml(agent.name)}</a></td>
       <td class="text-dim">${escapeHtml(agent.id)}</td>
@@ -159,6 +214,9 @@ export async function renderAgents(el) {
       </select></td>
       <td>${statusBadge}</td>
       <td><a href="#/karma/${encodeURIComponent(agent.id)}" style="text-decoration:none">${karmaCompact(karma?.current, karma?.trend)}</a></td>
+      <td>${callsDisplay}</td>
+      <td>${tokenBreakdownCompact(llmStats)}</td>
+      <td>${fallbackDisplay}</td>
       <td class="text-dim">${agent.skills.length}</td>
       <td class="actions">
         ${
@@ -308,13 +366,16 @@ export async function renderAgents(el) {
 }
 
 export async function renderAgentDetail(el, id) {
-  const [agent, skills, defaults, karmaData, loopState] = await Promise.all([
+  const [agent, skills, defaults, karmaData, loopState, llmStatsRes] = await Promise.all([
     api(`/api/agents/${id}`),
     api('/api/skills'),
     api('/api/agents/defaults'),
     api(`/api/karma/${encodeURIComponent(id)}`),
     api('/api/agent-loop'),
+    api(`/api/agent-loop/llm-stats/${encodeURIComponent(id)}`),
   ]);
+
+  const llmStats = llmStatsRes?.stats;
 
   // Find this bot's schedule info
   const botSchedule = loopState.botSchedules?.find((s) => s.botId === id);
@@ -437,6 +498,8 @@ export async function renderAgentDetail(el, id) {
         : ''
     }
 
+    ${llmStats ? buildLlmStatsCard(llmStats) : ''}
+
     <div class="actions">
       ${
         agent.running
@@ -515,6 +578,115 @@ export async function renderAgentDetail(el, id) {
       runLoopBtn.textContent = 'Run Agent Loop';
     });
   }
+}
+
+function buildLlmStatsCard(stats) {
+  const successRate =
+    stats.totalCalls > 0 ? ((stats.successCount / stats.totalCalls) * 100).toFixed(1) : '0.0';
+  const rateColor =
+    Number(successRate) >= 95
+      ? 'var(--green)'
+      : Number(successRate) >= 80
+        ? 'var(--orange)'
+        : 'var(--red)';
+  const lastCallDisplay = stats.lastCallAt ? timeAgo(stats.lastCallAt) : 'Never';
+
+  const callerRows = Object.entries(stats.callerBreakdown || {})
+    .sort(([, a], [, b]) => b.calls - a.calls)
+    .map(([caller, cs]) => {
+      const avgMs = cs.calls > 0 ? Math.round(cs.totalDurationMs / cs.calls) : 0;
+      return `<tr>
+        <td style="font-family:monospace;font-size:12px">${escapeHtml(caller)}</td>
+        <td>${cs.calls}</td>
+        <td>${cs.errors > 0 ? `<span style="color:var(--red)">${cs.errors}</span>` : '0'}</td>
+        <td class="text-dim">${formatDuration(avgMs)}</td>
+      </tr>`;
+    })
+    .join('');
+
+  return `
+    <div class="detail-card" style="margin-top:16px">
+      <div style="font-weight:600;margin-bottom:12px">LLM Stats</div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:16px">
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:700">${stats.totalCalls}</div>
+          <div class="text-dim text-sm">Total Calls</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:700;color:var(--green)">${stats.successCount}</div>
+          <div class="text-dim text-sm">Successes</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:700;color:${stats.failCount > 0 ? 'var(--red)' : 'inherit'}">${stats.failCount}</div>
+          <div class="text-dim text-sm">Failures</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:700;color:${stats.fallbackCount > 0 ? 'var(--orange)' : 'inherit'}">${stats.fallbackCount}</div>
+          <div class="text-dim text-sm">Fallbacks</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:700;color:${rateColor}">${successRate}%</div>
+          <div class="text-dim text-sm">Success Rate</div>
+        </div>
+      </div>
+      <table style="font-size:13px;margin-bottom:8px">
+        <tr>
+          <td class="text-dim" style="width:120px">Avg Duration</td>
+          <td>${formatDuration(stats.avgDurationMs)}</td>
+        </tr>
+        <tr>
+          <td class="text-dim">Last Call</td>
+          <td>${lastCallDisplay}</td>
+        </tr>
+        ${
+          stats.lastError
+            ? `<tr>
+          <td class="text-dim">Last Error</td>
+          <td><details><summary style="cursor:pointer;color:var(--red);font-size:12px">Show error</summary><pre style="white-space:pre-wrap;font-size:11px;margin-top:4px;max-height:100px;overflow-y:auto">${escapeHtml(stats.lastError)}</pre></details></td>
+        </tr>`
+            : ''
+        }
+      </table>
+      ${
+        callerRows
+          ? `
+        <div class="text-dim text-sm" style="margin-bottom:4px;margin-top:12px">Breakdown by caller</div>
+        <table style="font-size:13px">
+          <thead><tr><th style="text-align:left">Caller</th><th>Calls</th><th>Errors</th><th>Avg Duration</th></tr></thead>
+          <tbody>${callerRows}</tbody>
+        </table>
+      `
+          : ''
+      }
+      ${buildModelTokenBreakdown(stats)}
+    </div>`;
+}
+
+function buildModelTokenBreakdown(stats) {
+  const mb = stats.modelBreakdown;
+  if (!mb || Object.keys(mb).length === 0) return '';
+  const totalTokens = (stats.totalPromptTokens || 0) + (stats.totalCompletionTokens || 0);
+  if (totalTokens === 0) return '';
+
+  const rows = Object.values(mb)
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .map(
+      (m) => `<tr>
+        <td style="font-family:monospace;font-size:12px">${escapeHtml(m.model)}</td>
+        <td style="text-align:right">${formatTokenCount(m.promptTokens)}</td>
+        <td style="text-align:right">${formatTokenCount(m.completionTokens)}</td>
+        <td style="text-align:right;font-weight:600">${formatTokenCount(m.totalTokens)}</td>
+        <td style="text-align:right" class="text-dim">${m.calls}</td>
+      </tr>`
+    )
+    .join('');
+
+  return `
+    <div class="text-dim text-sm" style="margin-bottom:4px;margin-top:12px">Token usage by model (${formatTokenCount(totalTokens)} total)</div>
+    <table style="font-size:13px">
+      <thead><tr><th style="text-align:left">Model</th><th style="text-align:right">In</th><th style="text-align:right">Out</th><th style="text-align:right">Total</th><th style="text-align:right">Calls</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 function buildSoulStatusBanner(soulStatus) {

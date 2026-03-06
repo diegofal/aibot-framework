@@ -88,6 +88,7 @@ function buildClaudePrompt(absDir: string, focus: FocusArea, context?: string): 
  */
 export async function runImprove(opts: {
   claudePath: string;
+  claudeModel?: string;
   timeout: number;
   maxOutputLength: number;
   soulDir: string;
@@ -96,7 +97,17 @@ export async function runImprove(opts: {
   botId?: string;
   logger: Logger;
 }): Promise<ToolResult> {
-  const { claudePath, timeout, maxOutputLength, soulDir, focus, context, botId, logger } = opts;
+  const {
+    claudePath,
+    claudeModel,
+    timeout,
+    maxOutputLength,
+    soulDir,
+    focus,
+    context,
+    botId,
+    logger,
+  } = opts;
 
   // Resolve bot-specific soul dir if botId is provided
   let targetDir = resolve(soulDir);
@@ -126,6 +137,9 @@ export async function runImprove(opts: {
 
   try {
     const claudeArgs = ['-p', prompt, '--allowedTools', 'Read,Edit,Write,Glob,Grep'];
+    if (claudeModel) {
+      claudeArgs.push('--model', claudeModel);
+    }
 
     // Clear CLAUDECODE env to avoid nested session detection
     const env = { ...process.env };
@@ -190,7 +204,7 @@ export async function runImprove(opts: {
   }
 }
 
-export function createImproveTool(config: ImproveToolConfig): Tool {
+export function createImproveTool(config: ImproveToolConfig, claudeModel?: string): Tool {
   return {
     definition: {
       type: 'function',
@@ -236,6 +250,7 @@ export function createImproveTool(config: ImproveToolConfig): Tool {
 
       return runImprove({
         claudePath: config.claudePath,
+        claudeModel,
         timeout: config.timeout,
         maxOutputLength: config.maxOutputLength,
         soulDir: config.soulDir,

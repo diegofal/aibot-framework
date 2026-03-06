@@ -170,6 +170,7 @@ export class SkillRegistry {
       {
         llmBackend: cfg.llmBackend as 'ollama' | 'claude-cli' | undefined,
         claudePath: cfg.claudePath as string | undefined,
+        claudeModel: this.config.claudeCli?.model,
         claudeTimeout: cfg.claudeTimeout as number | undefined,
       },
       this.ollamaClient,
@@ -184,6 +185,7 @@ export class SkillRegistry {
       llm,
       telegram: telegramClient || this.createDummyTelegramClient(),
       data: dataStore,
+      claudeCliModel: this.config.claudeCli?.model,
     };
     if (this.toolExecuteFn) {
       ctx.tools = { execute: this.toolExecuteFn };

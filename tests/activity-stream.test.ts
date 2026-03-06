@@ -362,4 +362,144 @@ describe('LlmStatsTracker', () => {
     expect(s2.successCount).toBe(0);
     expect(s2.failCount).toBe(1);
   });
+
+  test('tracks token usage from llm:end events', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 300, caller: 'planner', model: 'llama3', tokensIn: 100, tokensOut: 50 },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalPromptTokens).toBe(100);
+    expect(stats.totalCompletionTokens).toBe(50);
+    expect(stats.modelBreakdown).toEqual({
+      llama3: {
+        model: 'llama3',
+        promptTokens: 100,
+        completionTokens: 50,
+        totalTokens: 150,
+        calls: 1,
+      },
+    });
+  });
+
+  test('accumulates tokens across multiple calls', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 200, caller: 'planner', model: 'llama3', tokensIn: 100, tokensOut: 50 },
+    });
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 2000,
+      data: { durationMs: 400, caller: 'executor', model: 'llama3', tokensIn: 200, tokensOut: 80 },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalPromptTokens).toBe(300);
+    expect(stats.totalCompletionTokens).toBe(130);
+    expect(stats.modelBreakdown.llama3.calls).toBe(2);
+    expect(stats.modelBreakdown.llama3.totalTokens).toBe(430);
+  });
+
+  test('tracks per-model breakdown with multiple models', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 200, caller: 'planner', model: 'llama3', tokensIn: 100, tokensOut: 50 },
+    });
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 2000,
+      data: { durationMs: 500, caller: 'executor', model: 'claude', tokensIn: 500, tokensOut: 200 },
+    });
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 3000,
+      data: {
+        durationMs: 300,
+        caller: 'strategist',
+        model: 'llama3',
+        tokensIn: 150,
+        tokensOut: 60,
+      },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalPromptTokens).toBe(750);
+    expect(stats.totalCompletionTokens).toBe(310);
+
+    expect(Object.keys(stats.modelBreakdown)).toHaveLength(2);
+
+    expect(stats.modelBreakdown.llama3).toEqual({
+      model: 'llama3',
+      promptTokens: 250,
+      completionTokens: 110,
+      totalTokens: 360,
+      calls: 2,
+    });
+    expect(stats.modelBreakdown.claude).toEqual({
+      model: 'claude',
+      promptTokens: 500,
+      completionTokens: 200,
+      totalTokens: 700,
+      calls: 1,
+    });
+  });
+
+  test('ignores token data when model is missing', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 200, caller: 'planner', tokensIn: 100, tokensOut: 50 },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalPromptTokens).toBe(0);
+    expect(stats.totalCompletionTokens).toBe(0);
+    expect(Object.keys(stats.modelBreakdown)).toHaveLength(0);
+  });
+
+  test('tracks tokens from llm:error events too', () => {
+    stream.publish({
+      type: 'llm:error',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: {
+        durationMs: 100,
+        caller: 'executor',
+        error: 'timeout',
+        model: 'llama3',
+        tokensIn: 80,
+        tokensOut: 10,
+      },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalPromptTokens).toBe(80);
+    expect(stats.totalCompletionTokens).toBe(10);
+    expect(stats.modelBreakdown.llama3.calls).toBe(1);
+  });
+
+  test('initializes token fields to zero for new bots', () => {
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 100, caller: 'planner' },
+    });
+
+    const stats = stream.llmStats.getStats('bot1')!;
+    expect(stats.totalPromptTokens).toBe(0);
+    expect(stats.totalCompletionTokens).toBe(0);
+    expect(stats.modelBreakdown).toEqual({});
+  });
 });

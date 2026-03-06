@@ -159,6 +159,7 @@ export async function generateSkill(
   input: SkillGenerationInput,
   opts: {
     claudePath?: string;
+    claudeModel?: string;
     timeout?: number;
     skillsFolderPaths: string[];
     logger: Logger;
@@ -168,15 +169,16 @@ export async function generateSkill(
 
   opts.logger.info({ id: input.id, name: input.name }, 'skill-generator: calling Claude CLI');
 
-  const raw = await claudeGenerate(prompt, {
+  const claudeResult = await claudeGenerate(prompt, {
     claudePath: opts.claudePath,
+    model: opts.claudeModel,
     timeout: opts.timeout ?? 300_000,
     maxLength: 50_000,
     logger: opts.logger,
   });
 
   // Strip markdown fences if present
-  let cleaned = raw.trim();
+  let cleaned = claudeResult.response.trim();
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
   }

@@ -60,6 +60,7 @@ function createBaseConfig() {
     },
     skillsFolders: { paths: [] },
     productions: { baseDir: './productions' },
+    claudeCli: {},
     paths: { skills: './src/skills' },
   };
 }
@@ -450,5 +451,85 @@ describe('PATCH /api/settings/memory-search', () => {
     const data = await res.json();
     expect(data.mmr.enabled).toBe(false);
     expect(data.mmr.lambda).toBe(0.7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claude CLI Settings
+// ---------------------------------------------------------------------------
+
+describe('GET /api/settings/claude-cli', () => {
+  test('returns current config', async () => {
+    const config = createBaseConfig();
+    config.claudeCli = { model: 'sonnet' };
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/claude-cli');
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.model).toBe('sonnet');
+  });
+
+  test('returns empty object when no model configured', async () => {
+    const config = createBaseConfig();
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/claude-cli');
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.model).toBeUndefined();
+  });
+});
+
+describe('PATCH /api/settings/claude-cli', () => {
+  test('sets the model', async () => {
+    const config = createBaseConfig();
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/claude-cli', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514' }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.model).toBe('claude-sonnet-4-20250514');
+
+    // Verify persisted to disk
+    const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+    expect(raw.claudeCli.model).toBe('claude-sonnet-4-20250514');
+  });
+
+  test('clears model when empty string is sent', async () => {
+    const config = createBaseConfig();
+    config.claudeCli = { model: 'sonnet' };
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/claude-cli', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: '' }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.model).toBeUndefined();
+  });
+
+  test('empty body is a no-op', async () => {
+    const config = createBaseConfig();
+    config.claudeCli = { model: 'opus' };
+    const app = setupApp(config);
+
+    const res = await app.request('/api/settings/claude-cli', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.model).toBe('opus');
   });
 });

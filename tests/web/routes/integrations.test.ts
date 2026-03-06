@@ -51,9 +51,9 @@ const mockBotManager = {
       // If tools are provided, simulate tool execution via executor then return
       if (opts?.tools && opts?.toolExecutor) {
         await opts.toolExecutor('get_datetime', {});
-        return 'The time is 2026-02-24T12:00:00Z';
+        return { text: 'The time is 2026-02-24T12:00:00Z' };
       }
-      return 'test response';
+      return { text: 'test response' };
     },
   }),
   getToolRegistry: () => mockToolRegistry,
@@ -130,7 +130,7 @@ describe('integrations routes - POST /ollama/chat-with-tools', () => {
       getOllamaClient: () => ({
         chat: async (_msgs: any, opts: any) => {
           capturedTools = opts.tools;
-          return 'ok';
+          return { text: 'ok' };
         },
       }),
     } as any;
@@ -151,7 +151,7 @@ describe('integrations routes - POST /ollama/chat-with-tools', () => {
       getOllamaClient: () => ({
         chat: async (_msgs: any, opts: any) => {
           capturedTools = opts.tools;
-          return 'ok';
+          return { text: 'ok' };
         },
       }),
     } as any;
@@ -191,7 +191,7 @@ describe('integrations routes - POST /ollama/chat-with-tools', () => {
       getOllamaClient: () => ({
         chat: async (_msgs: any, opts: any) => {
           capturedModel = opts.model;
-          return 'ok';
+          return { text: 'ok' };
         },
       }),
     } as any;
@@ -234,7 +234,7 @@ describe('integrations routes - POST /ollama/chat-with-tools', () => {
         chat: async (_msgs: any, opts: any) => {
           // The LLM tries to call a tool that doesn't exist in our map
           const result = await opts.toolExecutor('nonexistent', { a: 1 });
-          return `got: ${result.content}`;
+          return { text: `got: ${result.content}` };
         },
       }),
     } as any;
