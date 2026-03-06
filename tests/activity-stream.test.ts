@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { type ActivityEvent, ActivityStream, type LlmBotStats } from '../src/bot/activity-stream';
 
 describe('ActivityStream', () => {
@@ -501,5 +504,149 @@ describe('LlmStatsTracker', () => {
     expect(stats.totalPromptTokens).toBe(0);
     expect(stats.totalCompletionTokens).toBe(0);
     expect(stats.modelBreakdown).toEqual({});
+  });
+});
+
+describe('LlmStatsTracker persistence', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `llm-stats-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('flushToDisk writes per-bot JSON files', () => {
+    const stream = new ActivityStream(undefined, tmpDir);
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 200, caller: 'planner', model: 'llama3', tokensIn: 100, tokensOut: 50 },
+    });
+
+    stream.llmStats.flushToDisk();
+
+    const filePath = join(tmpDir, 'bot1.json');
+    expect(existsSync(filePath)).toBe(true);
+    const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+    expect(data.botId).toBe('bot1');
+    expect(data.totalPromptTokens).toBe(100);
+    expect(data.totalCompletionTokens).toBe(50);
+    expect(data.modelBreakdown.llama3.calls).toBe(1);
+  });
+
+  test('loads persisted stats on construction', () => {
+    const stats: LlmBotStats = {
+      botId: 'bot1',
+      totalCalls: 5,
+      successCount: 4,
+      failCount: 1,
+      fallbackCount: 0,
+      totalDurationMs: 2000,
+      avgDurationMs: 400,
+      lastCallAt: 9999,
+      lastError: null,
+      callerBreakdown: {},
+      totalPromptTokens: 500,
+      totalCompletionTokens: 200,
+      modelBreakdown: {
+        llama3: {
+          model: 'llama3',
+          promptTokens: 500,
+          completionTokens: 200,
+          totalTokens: 700,
+          calls: 5,
+        },
+      },
+    };
+    writeFileSync(join(tmpDir, 'bot1.json'), JSON.stringify(stats), 'utf-8');
+
+    const stream = new ActivityStream(undefined, tmpDir);
+    const loaded = stream.llmStats.getStats('bot1')!;
+    expect(loaded.totalCalls).toBe(5);
+    expect(loaded.totalPromptTokens).toBe(500);
+    expect(loaded.modelBreakdown.llama3.calls).toBe(5);
+  });
+
+  test('new events accumulate on top of loaded stats', () => {
+    const stats: LlmBotStats = {
+      botId: 'bot1',
+      totalCalls: 2,
+      successCount: 2,
+      failCount: 0,
+      fallbackCount: 0,
+      totalDurationMs: 1000,
+      avgDurationMs: 500,
+      lastCallAt: 5000,
+      lastError: null,
+      callerBreakdown: {},
+      totalPromptTokens: 300,
+      totalCompletionTokens: 100,
+      modelBreakdown: {
+        llama3: {
+          model: 'llama3',
+          promptTokens: 300,
+          completionTokens: 100,
+          totalTokens: 400,
+          calls: 2,
+        },
+      },
+    };
+    writeFileSync(join(tmpDir, 'bot1.json'), JSON.stringify(stats), 'utf-8');
+
+    const stream = new ActivityStream(undefined, tmpDir);
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 6000,
+      data: { durationMs: 400, caller: 'executor', model: 'llama3', tokensIn: 150, tokensOut: 60 },
+    });
+
+    const updated = stream.llmStats.getStats('bot1')!;
+    expect(updated.totalCalls).toBe(3);
+    expect(updated.totalPromptTokens).toBe(450);
+    expect(updated.totalCompletionTokens).toBe(160);
+    expect(updated.modelBreakdown.llama3.calls).toBe(3);
+  });
+
+  test('clearForBot removes the persisted file', () => {
+    const stream = new ActivityStream(undefined, tmpDir);
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 100, caller: 'planner', model: 'llama3', tokensIn: 50, tokensOut: 20 },
+    });
+    stream.llmStats.flushToDisk();
+
+    expect(existsSync(join(tmpDir, 'bot1.json'))).toBe(true);
+
+    stream.clearForBot('bot1');
+    expect(existsSync(join(tmpDir, 'bot1.json'))).toBe(false);
+    expect(stream.llmStats.getStats('bot1')).toBeUndefined();
+  });
+
+  test('handles missing dataDir gracefully (no persistence)', () => {
+    const stream = new ActivityStream();
+    stream.publish({
+      type: 'llm:end',
+      botId: 'bot1',
+      timestamp: 1000,
+      data: { durationMs: 100, caller: 'planner', model: 'llama3', tokensIn: 50, tokensOut: 20 },
+    });
+    stream.llmStats.flushToDisk();
+    expect(stream.llmStats.getStats('bot1')!.totalPromptTokens).toBe(50);
+  });
+
+  test('skips malformed JSON files during load', () => {
+    writeFileSync(join(tmpDir, 'bad.json'), 'not valid json', 'utf-8');
+    writeFileSync(join(tmpDir, 'nobotid.json'), JSON.stringify({ totalCalls: 1 }), 'utf-8');
+
+    const stream = new ActivityStream(undefined, tmpDir);
+    expect(stream.llmStats.getAllStats()).toHaveLength(0);
   });
 });
