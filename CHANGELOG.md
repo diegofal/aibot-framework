@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Per-bot productions toggle in agent loop prompts**: When `productions.enabled === false` for a bot, the executor prompt skips "Working Directory Contents" and "Production Directory Rules" sections, and removes file-centric tool usage instructions. Also skips `scanFileTree()` FS walk for disabled bots. Dashboard exposes inline On/Off toggles for both Agent Loop and Productions on the agents list, plus a select in the bot edit form. The config field `productions.enabled` already existed — this wires it into the prompt layer.
 - **Per-bot agent loop enable/disable**: New `agentLoop.enabled` field (boolean, optional) per bot config. When `false`, the scheduler skips creating loops and schedules for that bot. When `undefined`, inherits the global setting. Exposed in schedule infos and dashboard UI as a tri-state select (Inherit global / On / Off).
 - **Standing directives**: New `agentLoop.directives` (array of strings, max 10×500 chars) and `agentLoop.presetDirectives` (array of preset IDs) per bot config. Directives are ongoing behavioral instructions injected into strategist, planner, and executor prompts via a new "Operator Directives" section. Custom directives and preset expansions are combined by `resolveDirectives()`.
 - **Conversation review preset directive**: Built-in `conversation-review` preset that instructs the agent to periodically review session logs for quality improvements. Available via `presetDirectives: ['conversation-review']`.

@@ -96,6 +96,8 @@ export interface ExecutorPromptInput {
   fileTree?: string | null;
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** Whether productions are enabled for this bot (controls working directory and production rules sections) */
+  productionsEnabled?: boolean;
 }
 
 function buildToolCategorySection(toolCategoryList?: string[]): string {
@@ -535,7 +537,9 @@ After completing the plan (or as much as you can), provide a brief summary of wh
 
 If you make progress on a goal, use the manage_goals tool to update its status.
 If you learn something worth remembering, use the save_memory tool.
-
+${
+  input.productionsEnabled !== false
+    ? `
 ## Working Directory Contents
 
 Your working directory is \`${input.workDir}\`.
@@ -544,16 +548,24 @@ ${
     ? `\n\`\`\`\n${input.fileTree}\n\`\`\`\n\nUse RELATIVE paths when referencing these files.`
     : '\nThe directory is currently **EMPTY**. Use file_write to create new files. Do NOT attempt file_read or file_edit on non-existent files — there is nothing to read or edit yet.'
 }
-
+`
+    : ''
+}
 ## Tool Usage Rules
-
+${
+  input.productionsEnabled !== false
+    ? `
 - Use RELATIVE paths within your working directory.
 - Use file_read to read files — do NOT use exec with cat/head/tail.
-- Use file_read/file_write/file_edit for file operations — reserve exec ONLY for running commands (tests, git, build tools).
+- Use file_read/file_write/file_edit for file operations — reserve exec ONLY for running commands (tests, git, build tools).`
+    : ''
+}
 - You have a LIMITED number of tool rounds. Focus on DOING things (writing, editing, saving), not just reading.
-- Produce concrete output: save findings to memory, update goals, write/edit files. Reading without action is wasted effort.
+- Produce concrete output: save findings to memory, update goals${input.productionsEnabled !== false ? ', write/edit files' : ''}. Reading without action is wasted effort.
 - When using web_search/web_fetch to find opportunities, jobs, or resources: ALWAYS include the direct URL in your findings. A finding without a URL is not actionable. Save URLs in memory using markdown format: [Description](URL).${input.hasCreateTool ? '\n- If the plan includes creating a new tool, use `create_tool` with a clear name, description, and working source code.' : ''}
-
+${
+  input.productionsEnabled !== false
+    ? `
 ## Production Directory Rules
 
 Your working directory has an auto-generated index.html — do NOT edit it manually.
@@ -571,7 +583,9 @@ ARCHIVAL PROTOCOL:
 ANTI-DUPLICATION:
 - Before creating a new file, check if a similar file exists (use file_read on index.html to see the file listing).
 - If it exists, UPDATE the existing file instead of creating a new one.
-- If the existing file is outdated, archive it first, then create the replacement.`;
+- If the existing file is outdated, archive it first, then create the replacement.`
+    : ''
+}`;
 }
 
 export interface FeedbackProcessorPromptInput {

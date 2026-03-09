@@ -1071,7 +1071,8 @@ export class AgentLoop {
     });
 
     const agentConfig = resolveAgentConfig(this.ctx.config, botConfig);
-    const fileTree = scanFileTree(agentConfig.workDir);
+    const productionsEnabled = botConfig.productions?.enabled !== false;
+    const fileTree = productionsEnabled ? scanFileTree(agentConfig.workDir) : null;
     const executorUserPrompt = buildExecutorPrompt({
       plan,
       identity,
@@ -1083,6 +1084,7 @@ export class AgentLoop {
       workDir: agentConfig.workDir,
       fileTree,
       directives: directives.length > 0 ? directives : undefined,
+      productionsEnabled,
     });
 
     const messages: ChatMessage[] = [

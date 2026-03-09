@@ -184,3 +184,58 @@ describe('directives in prompt builders', () => {
     expect(result.system).toContain('Prioritize user engagement');
   });
 });
+
+describe('buildExecutorPrompt productionsEnabled', () => {
+  const baseExecutorInput = {
+    plan: ['Step 1', 'Step 2'],
+    identity: 'TestBot',
+    soul: 'A bot',
+    motivations: 'Be helpful',
+    goals: '## Goals\n- Goal 1',
+    datetime: '2026-03-08T12:00:00Z',
+    hasCreateTool: false,
+    workDir: '/tmp/test',
+    fileTree: 'file1.md\nfile2.md',
+  };
+
+  test('includes production sections by default', () => {
+    const result = buildExecutorPrompt(baseExecutorInput);
+    expect(result).toContain('## Working Directory Contents');
+    expect(result).toContain('## Production Directory Rules');
+    expect(result).toContain('ARCHIVAL PROTOCOL');
+    expect(result).toContain('file_read/file_write/file_edit');
+  });
+
+  test('includes production sections when productionsEnabled is true', () => {
+    const result = buildExecutorPrompt({ ...baseExecutorInput, productionsEnabled: true });
+    expect(result).toContain('## Working Directory Contents');
+    expect(result).toContain('## Production Directory Rules');
+    expect(result).toContain('ARCHIVAL PROTOCOL');
+  });
+
+  test('skips production sections when productionsEnabled is false', () => {
+    const result = buildExecutorPrompt({ ...baseExecutorInput, productionsEnabled: false });
+    expect(result).not.toContain('## Working Directory Contents');
+    expect(result).not.toContain('## Production Directory Rules');
+    expect(result).not.toContain('ARCHIVAL PROTOCOL');
+    expect(result).not.toContain('ANTI-DUPLICATION');
+    expect(result).not.toContain('file_read/file_write/file_edit');
+    expect(result).not.toContain('Use RELATIVE paths');
+  });
+
+  test('skips Working Directory when productionsEnabled is false', () => {
+    const result = buildExecutorPrompt({ ...baseExecutorInput, productionsEnabled: false });
+    expect(result).not.toContain('/tmp/test');
+    expect(result).not.toContain('file1.md');
+  });
+
+  test('still includes memory/goals instructions when productions disabled', () => {
+    const result = buildExecutorPrompt({ ...baseExecutorInput, productionsEnabled: false });
+    expect(result).toContain('save findings to memory, update goals');
+    expect(result).toContain('manage_goals');
+    expect(result).toContain('save_memory');
+    expect(result).toContain('## Tool Usage Rules');
+    // Should NOT include "write/edit files" in the output line
+    expect(result).not.toContain('save findings to memory, update goals, write/edit files');
+  });
+});

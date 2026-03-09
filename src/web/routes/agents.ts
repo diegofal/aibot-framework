@@ -152,6 +152,14 @@ export function agentsRoutes(deps: {
         bot.agentLoop = undefined;
       }
     }
+    if ('productions' in body) {
+      const prod = body.productions;
+      if (prod && Object.values(prod).some((v: unknown) => v !== undefined)) {
+        bot.productions = { ...bot.productions, ...prod };
+      } else {
+        bot.productions = undefined;
+      }
+    }
     if ('tts' in body) {
       const tts = body.tts;
       if (tts && Object.values(tts).some((v: unknown) => v !== undefined)) {

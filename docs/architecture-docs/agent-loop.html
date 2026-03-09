@@ -462,6 +462,13 @@
             tells the LLM that the directory is empty and to use <code>file_write</code> only &mdash; preventing
             blind <code>file_read</code>/<code>file_edit</code> attempts on non-existent files.
           </p>
+          <p>
+            When <code>productions.enabled === false</code> for a bot, the file tree scan is skipped entirely
+            and the executor prompt omits the "Working Directory Contents", "Production Directory Rules",
+            and file-centric tool usage instructions. This saves context tokens and prevents the LLM from
+            being pushed toward file production for bots that should focus on conversations, research, or
+            goal management. The <code>productionsEnabled</code> flag is passed via <code>ExecutorPromptInput</code>.
+          </p>
         </div>
 
         <div class="module-section">
@@ -890,6 +897,32 @@ interface ResolvedPermission {
             A "Stop All Safe" button appears when the loop is enabled/draining. An "Activity" column in
             the bot schedules table shows "Executing" (with pulsing dot) or "Idle" per bot. A "Draining..."
             badge appears next to the Running badge during drain. Auto-refresh polls every 5s while active.
+          </p>
+        </div>
+
+        <h3>Standing Directives</h3>
+        <div class="module-section">
+          <p>
+            Operators can assign <strong>standing directives</strong> to individual bots &mdash; ongoing behavioral
+            instructions that are injected into strategist, planner, and executor prompts via a dedicated
+            <em>"Operator Directives"</em> section. Unlike goals (which the agent manages), directives are
+            operator-controlled and persistent.
+          </p>
+          <p>
+            Config fields (<code>BotAgentLoopOverrideSchema</code>):
+          </p>
+          <ul>
+            <li><code>directives: string[]</code> &mdash; custom free-text directives (max 10, 500 chars each)</li>
+            <li><code>presetDirectives: string[]</code> &mdash; IDs of built-in directive bundles (e.g. <code>"conversation-review"</code>)</li>
+          </ul>
+          <p>
+            <code>resolveDirectives(botConfig)</code> in <code>agent-scheduler.ts</code> merges custom directives
+            with expanded preset definitions from <code>PRESET_DIRECTIVE_DEFINITIONS</code> in <code>agent-loop-prompts.ts</code>.
+            The result is passed to all prompt builders and rendered by <code>buildDirectivesSection()</code>.
+          </p>
+          <p>
+            API: <code>GET /api/agents/:id/directives</code> returns <code>directives</code>, <code>presetDirectives</code>,
+            <code>resolvedDirectives</code> (expanded), and <code>availablePresets</code>.
           </p>
         </div>
 

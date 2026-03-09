@@ -171,7 +171,7 @@ export async function renderAgents(el) {
       </div>
     </div>
     <table>
-      <thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Status</th><th>Karma</th><th>LLM Calls</th><th>Tokens</th><th>Fallbacks</th><th>Skills</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Status</th><th>Agent Loop</th><th>Productions</th><th>Karma</th><th>LLM Calls</th><th>Tokens</th><th>Fallbacks</th><th>Skills</th><th>Actions</th></tr></thead>
       <tbody id="agents-tbody"></tbody>
     </table>
   `;
@@ -213,6 +213,8 @@ export async function renderAgents(el) {
         ${modelOptions}
       </select></td>
       <td>${statusBadge}</td>
+      <td><button class="btn btn-sm${agent.agentLoop?.enabled === false ? ' btn-danger' : ''}" data-action="toggle-loop" data-id="${agent.id}" title="${agent.agentLoop?.enabled == null ? 'Inherit global' : agent.agentLoop.enabled ? 'On' : 'Off'}">${agent.agentLoop?.enabled === false ? 'Off' : agent.agentLoop?.enabled === true ? 'On' : '<span class="text-dim">Auto</span>'}</button></td>
+      <td><button class="btn btn-sm${agent.productions?.enabled === false ? ' btn-danger' : ''}" data-action="toggle-productions" data-id="${agent.id}">${agent.productions?.enabled === false ? 'Off' : 'On'}</button></td>
       <td><a href="#/karma/${encodeURIComponent(agent.id)}" style="text-decoration:none">${karmaCompact(karma?.current, karma?.trend)}</a></td>
       <td>${callsDisplay}</td>
       <td>${tokenBreakdownCompact(llmStats)}</td>
@@ -302,6 +304,48 @@ export async function renderAgents(el) {
       }
     } else if (action === 'export') {
       showExportModal(id);
+    } else if (action === 'toggle-loop') {
+      const agent = agents.find((a) => a.id === id);
+      // Cycle: Auto → On → Off → Auto
+      const current = agent?.agentLoop?.enabled;
+      const next = current == null ? true : current === true ? false : undefined;
+      const patch = { agentLoop: { ...agent?.agentLoop, enabled: next } };
+      if (next === undefined) patch.agentLoop.enabled = undefined;
+      btn.disabled = true;
+      const res = await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
+      btn.disabled = false;
+      if (res.error) {
+        alert(`Failed to update: ${res.error}`);
+        return;
+      }
+      // Update in-place
+      if (agent) {
+        if (!agent.agentLoop) agent.agentLoop = {};
+        agent.agentLoop.enabled = next;
+      }
+      btn.className = `btn btn-sm${next === false ? ' btn-danger' : ''}`;
+      btn.title = next == null ? 'Inherit global' : next ? 'On' : 'Off';
+      btn.innerHTML =
+        next === false ? 'Off' : next === true ? 'On' : '<span class="text-dim">Auto</span>';
+    } else if (action === 'toggle-productions') {
+      const agent = agents.find((a) => a.id === id);
+      const current = agent?.productions?.enabled !== false;
+      const next = !current;
+      const patch = { productions: { ...agent?.productions, enabled: next } };
+      btn.disabled = true;
+      const res = await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
+      btn.disabled = false;
+      if (res.error) {
+        alert(`Failed to update: ${res.error}`);
+        return;
+      }
+      // Update in-place
+      if (agent) {
+        if (!agent.productions) agent.productions = {};
+        agent.productions.enabled = next;
+      }
+      btn.className = `btn btn-sm${!next ? ' btn-danger' : ''}`;
+      btn.textContent = next ? 'On' : 'Off';
     } else if (action === 'delete') {
       if (confirm(`Delete agent "${id}"? This cannot be undone.`)) {
         await api(`/api/agents/${id}`, { method: 'DELETE' });
@@ -436,6 +480,7 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim">Model</td><td>${modelDisplay}</td></tr>
         <tr><td class="text-dim">Soul Dir</td><td>${soulDirDisplay}</td></tr>
         <tr><td class="text-dim">Work Dir</td><td>${workDirDisplay}</td></tr>
+        <tr><td class="text-dim">Productions</td><td>${agent.productions?.enabled === false ? '<span class="badge badge-disabled">Disabled</span>' : '<span class="badge badge-ok">Enabled</span>'}</td></tr>
         <tr><td class="text-dim">System Prompt</td><td>${systemPromptDisplay}</td></tr>
         <tr><td class="text-dim">Temperature</td><td>${tempDisplay}</td></tr>
         <tr><td class="text-dim">Max History</td><td>${maxHistDisplay}</td></tr>
@@ -840,6 +885,14 @@ export async function renderAgentEdit(el, id) {
         <input type="text" name="workDir" value="${escapeHtml(agent.workDir || '')}" placeholder="${escapeHtml(`${defaults.productionsBaseDir || './productions'}/${agent.id}`)}">
         <span class="text-dim text-sm">File tools and exec operate within this directory. Default: productions/&lt;botId&gt;</span>
       </div>
+      <div class="form-group">
+        <label>Productions</label>
+        <select name="productionsEnabled">
+          <option value="true" ${agent.productions?.enabled !== false ? 'selected' : ''}>Enabled (default)</option>
+          <option value="false" ${agent.productions?.enabled === false ? 'selected' : ''}>Disabled</option>
+        </select>
+        <span class="text-dim text-sm">When disabled, the agent loop won't instruct the bot to produce files or scan the working directory</span>
+      </div>
 
       <div class="form-separator"></div>
       <div class="form-section-title">Agent Loop <span class="text-dim text-sm">(empty = use global default)</span></div>
@@ -1079,6 +1132,10 @@ export async function renderAgentEdit(el, id) {
     }
     patch.soulDir = form.soulDir.value.trim() || null;
     patch.workDir = form.workDir.value.trim() || null;
+
+    // Productions toggle
+    const productionsEnabledVal = form.productionsEnabled.value;
+    patch.productions = { ...agent.productions, enabled: productionsEnabledVal !== 'false' };
 
     // Build conversation overrides
     const systemPrompt = form.systemPrompt.value.trim() || undefined;
