@@ -26,6 +26,7 @@
       <a href="configuration.html">Configuration</a>
       <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
+        <a href="use-cases.html">Use Cases</a>
         <a href="backlog.html">Backlog</a>
     </nav>
   </aside>
@@ -177,7 +178,7 @@
           </tbody>
         </table>
         <h4>Dependencies</h4>
-        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./context-compaction</code> (ContextCompactor), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./telegram-utils</code> (sendLongMessage), <code>../channel/types</code> (Channel, InboundMessage)</p>
+        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./context-compaction</code> (ContextCompactor), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./topic-guard</code> (TopicGuard), <code>./telegram-utils</code> (sendLongMessage), <code>../channel/types</code> (Channel, InboundMessage)</p>
       </div>
 
       <!-- handler-registrar.ts -->
@@ -263,6 +264,36 @@
         </table>
         <h4>Dependencies</h4>
         <p><code>./types</code> (BotContext). Uses <code>ctx.agentRegistry</code>, <code>ctx.sessionManager</code>, <code>ctx.getLLMClient()</code>.</p>
+      </div>
+
+      <!-- topic-guard.ts -->
+      <div class="module-section" id="topic-guard">
+        <h3>topic-guard.ts</h3>
+        <div class="file-path">src/bot/topic-guard.ts &middot; ~140 lines</div>
+        <p class="responsibility">
+          Topic guardrail pre-filter. Uses a cheap LLM call to classify whether a message is on-topic
+          before running the full conversation pipeline, saving tenant tokens on off-topic messages.
+          Configurable per-bot via <code>topicGuard</code> in BotConfig. Follows the same fail-open
+          pattern as <code>GroupActivation.checkLlmRelevance()</code>. Runs after conversation gate
+          and RAG pre-fetch but before the main LLM call.
+        </p>
+        <h4>Exported Classes &amp; Interfaces</h4>
+        <ul class="inline-list">
+          <li><code>TopicGuard</code></li>
+          <li><code>TopicGuardConfig</code></li>
+          <li><code>TopicGuardResult</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>check</td><td>message: string, botId: string, config: TopicGuardConfig, logger: Logger</td><td>Classifies message as on-topic or off-topic. Skips very short messages (&lt;5 chars). 5s timeout. Returns <code>{ allowed, reason? }</code>. Fail-open by default.</td></tr>
+          </tbody>
+        </table>
+        <h4>Config Fields</h4>
+        <p><code>enabled</code>, <code>model</code> (defaults to claude-haiku), <code>botPurpose</code>, <code>allowedTopics</code>, <code>blockedTopics</code>, <code>strictness</code> (loose/moderate/strict), <code>failOpen</code>, <code>customRejectMessage</code>.</p>
+        <h4>Dependencies</h4>
+        <p><code>./types</code> (BotContext). Uses <code>ctx.getLLMClient()</code>.</p>
       </div>
 
       <!-- media-handlers.ts -->

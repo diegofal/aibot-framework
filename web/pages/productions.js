@@ -8,6 +8,76 @@ import {
   timeAgo,
 } from './shared.js';
 
+// --- Shared context menu for tree items ---
+let _activeContextMenu = null;
+
+function dismissContextMenu() {
+  if (_activeContextMenu) {
+    _activeContextMenu.remove();
+    _activeContextMenu = null;
+  }
+}
+
+function _onDocClickDismiss() {
+  dismissContextMenu();
+}
+function _onDocKeyDismiss(e) {
+  if (e.key === 'Escape') dismissContextMenu();
+}
+
+document.addEventListener('click', _onDocClickDismiss);
+document.addEventListener('keydown', _onDocKeyDismiss);
+
+/**
+ * Show a context menu for a tree node.
+ * @param {MouseEvent} e
+ * @param {{ botId: string, path: string, type: string, isTopLevel?: boolean, onDeleted: () => void }} opts
+ */
+function showTreeContextMenu(e, opts) {
+  e.preventDefault();
+  e.stopPropagation();
+  dismissContextMenu();
+
+  // Don't show menu for top-level bot folders (virtual nodes)
+  if (opts.isTopLevel) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'tree-context-menu';
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+
+  const deleteItem = document.createElement('div');
+  deleteItem.className = 'tree-context-menu-item danger';
+  deleteItem.textContent = 'Delete';
+  deleteItem.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    dismissContextMenu();
+    const label =
+      opts.type === 'dir' ? `folder "${opts.path}" and all its contents` : `file "${opts.path}"`;
+    if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
+    const res = await api(`/api/productions/${encodeURIComponent(opts.botId)}/by-path`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: opts.path }),
+    });
+    if (res.ok) {
+      opts.onDeleted();
+    } else {
+      alert(res.error || 'Delete failed');
+    }
+  });
+
+  menu.appendChild(deleteItem);
+  document.body.appendChild(menu);
+  _activeContextMenu = menu;
+
+  // Clamp menu position if it overflows viewport
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = `${window.innerWidth - rect.width - 4}px`;
+  if (rect.bottom > window.innerHeight)
+    menu.style.top = `${window.innerHeight - rect.height - 4}px`;
+}
+
 function statusBadge(entry) {
   if (!entry.evaluation?.status)
     return '<span class="badge eval-badge-unreviewed">Unreviewed</span>';
@@ -68,7 +138,16 @@ export async function renderProductions(el) {
   }
 
   const total = stats.reduce((s, b) => s + b.total, 0);
-  const tree = Array.isArray(treeData.tree) ? treeData.tree : [];
+  let tree = Array.isArray(treeData.tree) ? treeData.tree : [];
+
+  async function reloadTree() {
+    const fresh = await api('/api/productions/all-trees');
+    tree = Array.isArray(fresh.tree) ? fresh.tree : [];
+    selectedFile = null;
+    renderTree(document.getElementById('prod-tree-container'), tree);
+    const panel = document.getElementById('prod-content-panel');
+    if (panel) panel.innerHTML = '<p class="text-dim">Select a file from the tree</p>';
+  }
 
   // Build botId→name map from stats and a botId set from tree top-level nodes
   const botNameMap = {};
@@ -206,6 +285,15 @@ export async function renderProductions(el) {
         saveExpandState();
         renderTree(document.getElementById('prod-tree-container'), tree);
       });
+      item.addEventListener('contextmenu', (e) => {
+        showTreeContextMenu(e, {
+          botId: resolvedBotId,
+          path: node.path,
+          type: 'dir',
+          isTopLevel,
+          onDeleted: () => reloadTree(),
+        });
+      });
       parent.appendChild(item);
 
       if (isExpanded && node.children) {
@@ -249,6 +337,14 @@ export async function renderProductions(el) {
         );
         renderTree(document.getElementById('prod-tree-container'), tree);
         renderFileViewer(botId, node);
+      });
+      item.addEventListener('contextmenu', (e) => {
+        showTreeContextMenu(e, {
+          botId,
+          path: node.path,
+          type: 'file',
+          onDeleted: () => reloadTree(),
+        });
       });
       parent.appendChild(item);
     }
@@ -679,8 +775,17 @@ export async function renderBotProductions(el, botId) {
   }
 
   const { stats } = statsData;
-  const tree = Array.isArray(treeData.tree) ? treeData.tree : [];
+  let tree = Array.isArray(treeData.tree) ? treeData.tree : [];
   const botList = Array.isArray(allBots) ? allBots : [];
+
+  async function reloadTree() {
+    const fresh = await api(`/api/productions/${encodeURIComponent(botId)}/tree`);
+    tree = Array.isArray(fresh.tree) ? fresh.tree : [];
+    selectedFile = null;
+    renderTree(document.getElementById('prod-tree-container'), tree);
+    const panel = document.getElementById('prod-content-panel');
+    if (panel) panel.innerHTML = '<p class="text-dim">Select a file from the tree</p>';
+  }
 
   // Explorer state — restore from localStorage if available
   const BOT_STORAGE_KEY = `prod-expanded-${botId}`;
@@ -807,6 +912,14 @@ export async function renderBotProductions(el, botId) {
         saveExpandState();
         renderTree(document.getElementById('prod-tree-container'), tree);
       });
+      item.addEventListener('contextmenu', (e) => {
+        showTreeContextMenu(e, {
+          botId,
+          path: node.path,
+          type: 'dir',
+          onDeleted: () => reloadTree(),
+        });
+      });
       parent.appendChild(item);
 
       if (isExpanded && node.children) {
@@ -850,6 +963,14 @@ export async function renderBotProductions(el, botId) {
         );
         renderTree(document.getElementById('prod-tree-container'), tree);
         renderFileViewer(botId, node);
+      });
+      item.addEventListener('contextmenu', (e) => {
+        showTreeContextMenu(e, {
+          botId,
+          path: node.path,
+          type: 'file',
+          onDeleted: () => reloadTree(),
+        });
       });
       parent.appendChild(item);
     }

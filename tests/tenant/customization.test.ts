@@ -90,6 +90,80 @@ describe('CustomizationService', () => {
     expect(overlay).toContain('- Be polite');
   });
 
+  // --- getTopicGuardOverlay tests ---
+
+  test('getTopicGuardOverlay returns undefined when no customization and no bot config', () => {
+    expect(service.getTopicGuardOverlay('nonexistent')).toBeUndefined();
+  });
+
+  test('getTopicGuardOverlay returns bot config when no tenant overlay', () => {
+    const botConfig = {
+      enabled: true,
+      botPurpose: 'Sales coaching',
+      allowedTopics: ['sales'],
+      strictness: 'moderate' as const,
+    };
+    const result = service.getTopicGuardOverlay('no-overlay-bot', botConfig);
+    expect(result).toEqual(botConfig);
+  });
+
+  test('getTopicGuardOverlay returns tenant overlay when no bot config', () => {
+    service.set({
+      tenantId: 't',
+      botId: 'b',
+      topicGuard: {
+        enabled: true,
+        botPurpose: 'Tenant purpose',
+        allowedTopics: ['support'],
+      },
+    });
+    const result = service.getTopicGuardOverlay('b');
+    expect(result?.enabled).toBe(true);
+    expect(result?.botPurpose).toBe('Tenant purpose');
+    expect(result?.failOpen).toBe(true); // default when no bot config
+  });
+
+  test('getTopicGuardOverlay merges tenant overlay with bot config', () => {
+    service.set({
+      tenantId: 't',
+      botId: 'b',
+      topicGuard: {
+        strictness: 'strict',
+        allowedTopics: ['billing'],
+        blockedTopics: ['politics'],
+        customRejectMessage: 'Tenant reject',
+      },
+    });
+    const botConfig = {
+      enabled: true,
+      botPurpose: 'Support bot',
+      allowedTopics: ['support', 'account'],
+      strictness: 'moderate' as const,
+      failOpen: true,
+    };
+    const result = service.getTopicGuardOverlay('b', botConfig);
+    expect(result?.enabled).toBe(true); // from bot
+    expect(result?.botPurpose).toBe('Support bot'); // from bot (tenant didn't set)
+    expect(result?.strictness).toBe('strict'); // tenant wins
+    expect(result?.customRejectMessage).toBe('Tenant reject'); // tenant wins
+    // Arrays are unioned
+    expect(result?.allowedTopics).toContain('support');
+    expect(result?.allowedTopics).toContain('account');
+    expect(result?.allowedTopics).toContain('billing');
+    expect(result?.blockedTopics).toContain('politics');
+    expect(result?.failOpen).toBe(true); // from bot
+  });
+
+  test('getTopicGuardOverlay tenant can override enabled to false', () => {
+    service.set({
+      tenantId: 't',
+      botId: 'b',
+      topicGuard: { enabled: false },
+    });
+    const result = service.getTopicGuardOverlay('b', { enabled: true, botPurpose: 'test' });
+    expect(result?.enabled).toBe(false);
+  });
+
   test('persistence across reloads', () => {
     service.set({ tenantId: 't', botId: 'b', displayName: 'Persistent' });
 

@@ -883,6 +883,29 @@ export function productionsRoutes(deps: {
     return c.json({ ok: true });
   });
 
+  // Delete file or folder by relative path (used by tree context menu)
+  app.delete('/:botId/by-path', async (c) => {
+    const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
+    const botConfig = config.bots.find((b) => b.id === botId);
+    if (!botConfig) {
+      return c.json({ error: 'Bot not found' }, 404);
+    }
+
+    const body = await c.req.json<{ path: string }>();
+    if (!body.path || typeof body.path !== 'string') {
+      return c.json({ error: 'Missing "path" string in body' }, 400);
+    }
+
+    const result = productionsService.deleteByPath(botId, body.path);
+    if (!result) {
+      return c.json({ error: 'File not found or access denied' }, 404);
+    }
+
+    logger.info({ botId, path: body.path, ...result }, 'Production deleted by path via web');
+    return c.json({ ok: true, ...result });
+  });
+
   // Delete production
   app.delete('/:botId/:id', (c) => {
     const botId = c.req.param('botId');

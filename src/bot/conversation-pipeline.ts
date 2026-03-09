@@ -18,10 +18,12 @@ import type { MemoryFlusher } from './memory-flush';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { sendLongMessage } from './telegram-utils';
 import type { ToolRegistry } from './tool-registry';
+import { TopicGuard, type TopicGuardConfig } from './topic-guard';
 import type { BotContext } from './types';
 
 export class ConversationPipeline {
   private circuitBreaker: CircuitBreaker;
+  private topicGuard: TopicGuard;
 
   constructor(
     private ctx: BotContext,
@@ -32,6 +34,7 @@ export class ConversationPipeline {
   ) {
     // Initialize circuit breaker for LLM calls (uses shared defaults from llm-resilience)
     this.circuitBreaker = new CircuitBreaker(DEFAULT_CIRCUIT_CONFIG, ctx.logger);
+    this.topicGuard = new TopicGuard(ctx);
   }
 
   /**
@@ -225,6 +228,48 @@ export class ConversationPipeline {
 
       // Await RAG pre-fetch
       const ragContext = await ragPromise;
+
+      // Topic guard pre-filter (merge tenant overlay if present)
+      const rawTopicGuard = config.topicGuard as TopicGuardConfig | undefined;
+      const topicGuardConfig =
+        (this.ctx.customizationService
+          ? (this.ctx.customizationService.getTopicGuardOverlay(config.id, rawTopicGuard) as
+              | TopicGuardConfig
+              | undefined)
+          : rawTopicGuard) ?? rawTopicGuard;
+      if (topicGuardConfig?.enabled) {
+        const guardResult = await this.topicGuard.check(
+          userText,
+          config.id,
+          topicGuardConfig,
+          botLogger
+        );
+        if (!guardResult.allowed) {
+          botLogger.info(
+            { botId: config.id, chatId, reason: guardResult.reason },
+            'Topic guard blocked message'
+          );
+          const rejectMessage =
+            topicGuardConfig.customRejectMessage ||
+            "I'm not able to help with that topic. Could you ask me something related to my area of expertise?";
+          await sendLongMessage((t: string) => ctx.reply(t), rejectMessage);
+
+          // Record analytics
+          if (config.tenantId) {
+            this.ctx.analyticsService?.record({
+              type: 'topic_guard.blocked' as any,
+              tenantId: config.tenantId,
+              botId: config.id,
+              chatId: String(chatId ?? ''),
+              userId: ctx.from?.id ? String(ctx.from.id) : undefined,
+              channelKind: 'telegram',
+              data: { reason: guardResult.reason },
+            });
+          }
+
+          return;
+        }
+      }
 
       // Resolve tenant root for path sandboxing
       const tenantRoot =
@@ -746,6 +791,48 @@ export class ConversationPipeline {
 
       // Await RAG
       const ragContext = await ragPromise;
+
+      // Topic guard pre-filter (merge tenant overlay if present)
+      const rawChannelTopicGuard = config.topicGuard as TopicGuardConfig | undefined;
+      const topicGuardConfig =
+        (this.ctx.customizationService
+          ? (this.ctx.customizationService.getTopicGuardOverlay(config.id, rawChannelTopicGuard) as
+              | TopicGuardConfig
+              | undefined)
+          : rawChannelTopicGuard) ?? rawChannelTopicGuard;
+      if (topicGuardConfig?.enabled) {
+        const guardResult = await this.topicGuard.check(
+          msg.text,
+          config.id,
+          topicGuardConfig,
+          botLogger
+        );
+        if (!guardResult.allowed) {
+          botLogger.info(
+            { botId: config.id, reason: guardResult.reason, channelKind: msg.channelKind },
+            'Topic guard blocked message'
+          );
+          const rejectMessage =
+            topicGuardConfig.customRejectMessage ||
+            "I'm not able to help with that topic. Could you ask me something related to my area of expertise?";
+          await channel.sendText(rejectMessage);
+
+          // Record analytics
+          if (config.tenantId) {
+            this.ctx.analyticsService?.record({
+              type: 'topic_guard.blocked' as any,
+              tenantId: config.tenantId,
+              botId: config.id,
+              chatId: msg.chatId,
+              userId: msg.sender.id,
+              channelKind: msg.channelKind,
+              data: { reason: guardResult.reason },
+            });
+          }
+
+          return rejectMessage;
+        }
+      }
 
       // Tenant root
       const tenantRoot =

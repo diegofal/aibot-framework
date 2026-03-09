@@ -621,6 +621,28 @@ textarea {
 .form-row .form-group {
   flex: 1;
 }
+.form-details {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0;
+  margin-bottom: 12px;
+}
+.form-details[open] {
+  padding: 0 16px 12px;
+}
+.form-details-summary {
+  cursor: pointer;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  user-select: none;
+}
+.form-details[open] .form-details-summary {
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
 .input-with-btn {
   display: flex;
   gap: 8px;
@@ -1047,6 +1069,27 @@ textarea {
 .tree-item.selected {
   background: var(--bg-hover);
   border-left-color: var(--accent);
+}
+.tree-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 140px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.tree-context-menu-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.tree-context-menu-item:hover {
+  background: var(--bg-hover);
+}
+.tree-context-menu-item.danger {
+  color: var(--danger-color, #e74c3c);
 }
 .tree-chevron {
   display: inline-block;

@@ -25,6 +25,15 @@ export interface TenantCustomization {
   brandColor?: string;
   /** Custom avatar URL */
   avatarUrl?: string;
+  /** Topic guard override — tenant can restrict topics (merged with bot config) */
+  topicGuard?: {
+    enabled?: boolean;
+    botPurpose?: string;
+    allowedTopics?: string[];
+    blockedTopics?: string[];
+    strictness?: 'loose' | 'moderate' | 'strict';
+    customRejectMessage?: string;
+  };
   updatedAt: string;
 }
 
@@ -122,5 +131,60 @@ export class CustomizationService {
     }
 
     return parts.length > 0 ? parts.join('\n\n') : undefined;
+  }
+
+  /**
+   * Get merged topic guard config: bot config + tenant overlay.
+   * Tenant overlay fields win when present (except arrays which are merged).
+   */
+  getTopicGuardOverlay(
+    botId: string,
+    botTopicGuard?: {
+      enabled?: boolean;
+      botPurpose?: string;
+      allowedTopics?: string[];
+      blockedTopics?: string[];
+      strictness?: 'loose' | 'moderate' | 'strict';
+      customRejectMessage?: string;
+      failOpen?: boolean;
+    }
+  ):
+    | {
+        enabled?: boolean;
+        botPurpose?: string;
+        allowedTopics?: string[];
+        blockedTopics?: string[];
+        strictness?: 'loose' | 'moderate' | 'strict';
+        customRejectMessage?: string;
+        failOpen?: boolean;
+      }
+    | undefined {
+    const c = this.customizations.get(botId);
+    if (!c?.topicGuard && !botTopicGuard) return undefined;
+    if (!c?.topicGuard) return botTopicGuard;
+    if (!botTopicGuard) return { ...c.topicGuard, failOpen: true };
+
+    const merged = { ...botTopicGuard };
+
+    // Tenant overlay fields win when present
+    if (c.topicGuard.enabled !== undefined) merged.enabled = c.topicGuard.enabled;
+    if (c.topicGuard.botPurpose) merged.botPurpose = c.topicGuard.botPurpose;
+    if (c.topicGuard.strictness) merged.strictness = c.topicGuard.strictness;
+    if (c.topicGuard.customRejectMessage)
+      merged.customRejectMessage = c.topicGuard.customRejectMessage;
+
+    // Arrays are merged (union)
+    if (c.topicGuard.allowedTopics?.length) {
+      const base = new Set(merged.allowedTopics ?? []);
+      for (const t of c.topicGuard.allowedTopics) base.add(t);
+      merged.allowedTopics = [...base];
+    }
+    if (c.topicGuard.blockedTopics?.length) {
+      const base = new Set(merged.blockedTopics ?? []);
+      for (const t of c.topicGuard.blockedTopics) base.add(t);
+      merged.blockedTopics = [...base];
+    }
+
+    return merged;
   }
 }

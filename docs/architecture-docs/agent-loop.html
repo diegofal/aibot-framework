@@ -34,6 +34,7 @@
         <a href="configuration.html">Configuration</a>
         <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
+        <a href="use-cases.html">Use Cases</a>
         <a href="backlog.html">Backlog</a>
       </nav>
     </aside>
@@ -135,6 +136,11 @@
               <td><code>llm-json-parser.ts</code></td>
               <td>60</td>
               <td>Generic <code>parseLLMJson&lt;T&gt;</code> function: strips markdown fences, attempts JSON.parse, validates shape. Used by both planner and strategist parsers.</td>
+            </tr>
+            <tr>
+              <td><code>agent-loop-user-context.ts</code></td>
+              <td>~95</td>
+              <td><code>buildActiveUsersSummary()</code>: scans session metadata for recently active users, returns compact markdown table for planner injection. Configurable via <code>agentLoop.userAwareness</code> (enabled, activeWindowHours, maxUsers).</td>
             </tr>
           </tbody>
         </table>
@@ -601,6 +607,40 @@
         <!-- ============================================================ -->
         <!-- 7. Feedback System -->
         <!-- ============================================================ -->
+        <h2 id="user-awareness">User Awareness</h2>
+        <p>
+          The agent loop can be configured to scan session metadata and inject a summary of
+          recently active users into the planner prompt. This enables coach bots and other
+          proactive agents to see who is active and send messages to them.
+        </p>
+        <div class="module-section">
+          <h3>Configuration</h3>
+          <div class="file-path">config.json → agentLoop.userAwareness</div>
+<pre><code>{
+  "enabled": false,            // default: false
+  "activeWindowHours": 24,     // look back window (1-168)
+  "maxUsers": 5                // max users in summary (1-20)
+}</code></pre>
+          <p>Per-bot overrides via <code>bots[].agentLoop.userAwareness</code> (same fields, all optional).</p>
+
+          <h3>How It Works</h3>
+          <ol>
+            <li><code>buildActiveUsersSummary()</code> scans <code>SessionManager.listSessions()</code> for keys matching <code>bot:{botId}:private:*</code>.</li>
+            <li>Filters by <code>lastActivityAt</code> within the configured time window.</li>
+            <li>Sorts by most recent, takes top N users.</li>
+            <li>Returns a markdown table injected into the planner system prompt.</li>
+          </ol>
+
+          <h3>Proactive Messaging Tool</h3>
+          <div class="file-path">src/tools/send-proactive-message.ts</div>
+          <p>
+            The <code>send_proactive_message</code> tool (category: <code>communication</code>) allows the agent loop
+            to send messages to users. For numeric chat IDs, it sends via Telegram <code>bot.api.sendMessage()</code>.
+            For non-numeric IDs (widget users), it appends to the session transcript, visible on reconnect via the history endpoint.
+          </p>
+        </div>
+
+        <!-- ============================================================ -->
         <h2 id="feedback-system">Feedback System</h2>
         <p>
           The <code>AgentFeedbackStore</code> allows humans to submit feedback to bots via the web dashboard.
@@ -897,6 +937,15 @@ interface ResolvedPermission {
             A "Stop All Safe" button appears when the loop is enabled/draining. An "Activity" column in
             the bot schedules table shows "Executing" (with pulsing dot) or "Idle" per bot. A "Draining..."
             badge appears next to the Running badge during drain. Auto-refresh polls every 5s while active.
+          </p>
+          <p>
+            The bot edit form exposes <strong>all per-bot agent loop override fields</strong> from
+            <code>BotAgentLoopOverrideSchema</code>: mode, maxToolRounds, reportChatId, continuous mode
+            settings, strategist, phase timeouts, retry, and loop detection &mdash; organized in collapsible
+            <code>&lt;details&gt;</code> sub-groups. The agent detail view shows key operational fields
+            (mode, max tool rounds, strategist on/off, loop detection on/off). The
+            <code>GET /api/agents/defaults</code> endpoint returns the full global <code>agentLoop</code>
+            config so the UI can display inherited values as placeholders.
           </p>
         </div>
 

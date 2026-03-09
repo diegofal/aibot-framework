@@ -142,6 +142,30 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
     }
   });
 
+  // Regenerate identity secret
+  app.post('/me/identity-secret/regenerate', async (c) => {
+    const tenant = c.get('tenant') as { tenantId: string } | undefined;
+
+    if (!tenant) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const newSecret = tenantManager.regenerateIdentitySecret(tenant.tenantId);
+
+    if (!newSecret) {
+      return c.json({ error: 'Tenant not found' }, 404);
+    }
+
+    logger.info({ tenantId: tenant.tenantId }, 'Identity secret regenerated');
+
+    return c.json({
+      success: true,
+      identitySecret: newSecret,
+      message:
+        'Your old identity secret is now invalid. Update your backend HMAC signing immediately — existing widget sessions with old hashes will fail verification.',
+    });
+  });
+
   // Regenerate API key
   app.post('/me/api-key/regenerate', async (c) => {
     const tenant = c.get('tenant') as { tenantId: string } | undefined;

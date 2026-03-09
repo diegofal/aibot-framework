@@ -23,6 +23,7 @@ import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
 import { AdminCredentialStore } from '../tenant/admin-credentials';
 import { createAdminAuthMiddleware } from '../tenant/admin-middleware';
+import { verifyUserIdentity } from '../tenant/identity-verification';
 import { TenantManager } from '../tenant/manager';
 import { createTenantAuthMiddleware } from '../tenant/middleware';
 import { createRateLimitMiddleware } from '../tenant/rate-limit-middleware';
@@ -41,6 +42,8 @@ import { askPermissionRoutes } from './routes/ask-permission';
 import { authRoutes } from './routes/auth';
 import { baasRoutes } from './routes/baas';
 import { billingRoutes } from './routes/billing';
+import { chatRoutes } from './routes/chat';
+import { chatHistoryRoutes } from './routes/chat-history';
 import { conversationsRoutes } from './routes/conversations';
 import { cronRoutes } from './routes/cron';
 import { dashboardRoutes } from './routes/dashboard';
@@ -118,6 +121,14 @@ export function startWebServer(deps: WebServerDeps): void {
   }
 
   // API routes
+  app.route(
+    '/api/v1/chat',
+    chatRoutes({ config, botManager: deps.botManager, logger, tenantManager })
+  );
+  app.route(
+    '/api/v1/chat',
+    chatHistoryRoutes({ config, sessionManager: deps.sessionManager, logger })
+  );
   app.route('/api/status', statusRoutes({ config, botManager: deps.botManager }));
   app.route(
     '/api/auth',
@@ -623,6 +634,32 @@ export function startWebServer(deps: WebServerDeps): void {
           // Verify bot belongs to this tenant
           if (bot.tenantId && bot.tenantId !== tenant.id) {
             return new Response('Bot not found', { status: 404 });
+          }
+
+          // Identity verification for widget/REST
+          const identityConfig = bot.userIdentityVerification;
+          const identityRequired =
+            identityConfig?.required ||
+            (config.multiTenant?.enabled && identityConfig?.enabled !== false);
+
+          if (identityRequired || identityConfig?.enabled) {
+            const userHash = url.searchParams.get('userHash');
+            const senderIdParam = url.searchParams.get('senderId');
+
+            if (tenant?.identitySecret && senderIdParam) {
+              if (!userHash) {
+                if (identityConfig?.required) {
+                  return new Response('Missing userHash for identity verification', {
+                    status: 403,
+                  });
+                }
+                // Not required: allow as anonymous (no per-user isolation)
+              } else {
+                if (!verifyUserIdentity(tenant.identitySecret, senderIdParam, userHash)) {
+                  return new Response('Invalid user identity', { status: 403 });
+                }
+              }
+            }
           }
         }
 

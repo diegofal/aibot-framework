@@ -171,7 +171,7 @@ export async function renderAgents(el) {
       </div>
     </div>
     <table>
-      <thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Status</th><th>Agent Loop</th><th>Productions</th><th>Karma</th><th>LLM Calls</th><th>Tokens</th><th>Fallbacks</th><th>Skills</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>ID</th><th>Enabled</th><th>Model</th><th>Status</th><th>Agent Loop</th><th>Productions</th><th>Karma</th><th>LLM Calls</th><th>Tokens</th><th>Fallbacks</th><th>Skills</th><th>Actions</th></tr></thead>
       <tbody id="agents-tbody"></tbody>
     </table>
   `;
@@ -208,6 +208,7 @@ export async function renderAgents(el) {
     tr.innerHTML = `
       <td><a href="#/agents/${agent.id}">${escapeHtml(agent.name)}</a></td>
       <td class="text-dim">${escapeHtml(agent.id)}</td>
+      <td><label class="toggle"><input type="checkbox" data-action="toggle-enabled" data-id="${agent.id}" ${agent.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label></td>
       <td><select class="inline-model-select" data-agent-id="${agent.id}" style="font-size:12px;padding:2px 4px;max-width:170px">
         <option value=""${!effectiveModel ? ' selected' : ''}>Global (${escapeHtml(defaults.model)})</option>
         ${modelOptions}
@@ -354,8 +355,25 @@ export async function renderAgents(el) {
     }
   });
 
-  // Inline model change
+  // Toggle enabled switch
   tbody.addEventListener('change', async (e) => {
+    const toggle = e.target.closest('[data-action="toggle-enabled"]');
+    if (toggle) {
+      const id = toggle.dataset.id;
+      const enabled = toggle.checked;
+      toggle.disabled = true;
+      const res = await api(`/api/agents/${id}`, { method: 'PATCH', body: { enabled } });
+      toggle.disabled = false;
+      if (res.error) {
+        alert(`Failed to update: ${res.error}`);
+        toggle.checked = !enabled;
+      } else {
+        const agent = agents.find((a) => a.id === id);
+        if (agent) agent.enabled = enabled;
+      }
+      return;
+    }
+
     const select = e.target.closest('.inline-model-select');
     if (!select) return;
     const agentId = select.dataset.agentId;
@@ -452,6 +470,27 @@ export async function renderAgentDetail(el, id) {
     ? escapeHtml(agentLoopEvery)
     : `<span class="text-dim">${escapeHtml(defaults.agentLoopInterval || '6h')} (global)</span>`;
 
+  const alMode = agent.agentLoop?.mode || 'periodic';
+  const alMaxToolRounds = agent.agentLoop?.maxToolRounds;
+  const maxToolRoundsDisplay =
+    alMaxToolRounds != null
+      ? alMaxToolRounds
+      : `<span class="text-dim">${defaults.agentLoop?.maxToolRounds ?? 30} (global)</span>`;
+  const alStrategistEnabled = agent.agentLoop?.strategist?.enabled;
+  const strategistDisplay =
+    alStrategistEnabled === true
+      ? 'On'
+      : alStrategistEnabled === false
+        ? 'Off'
+        : `<span class="text-dim">${defaults.agentLoop?.strategist?.enabled !== false ? 'On' : 'Off'} (global)</span>`;
+  const alLoopDetection = agent.agentLoop?.loopDetection?.enabled;
+  const loopDetectionDisplay =
+    alLoopDetection === true
+      ? 'On'
+      : alLoopDetection === false
+        ? 'Off'
+        : `<span class="text-dim">${defaults.agentLoop?.loopDetection?.enabled !== false ? 'On' : 'Off'} (global)</span>`;
+
   const systemPromptDisplay = agent.conversation?.systemPrompt
     ? escapeHtml(agent.conversation.systemPrompt).substring(0, 120) +
       (agent.conversation.systemPrompt.length > 120 ? '...' : '')
@@ -488,6 +527,10 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim">Allowed Users</td><td>${agent.allowedUsers?.length ? agent.allowedUsers.join(', ') : '<span class="text-dim">All</span>'}</td></tr>
         <tr><td class="text-dim">Mention Patterns</td><td>${agent.mentionPatterns?.length ? agent.mentionPatterns.join(', ') : '<span class="text-dim">None</span>'}</td></tr>
         <tr><td class="text-dim">Loop Interval</td><td>${loopIntervalDisplay}</td></tr>
+        <tr><td class="text-dim">Mode</td><td>${alMode === 'continuous' ? '<span class="badge badge-running">Continuous</span>' : 'Periodic'}</td></tr>
+        <tr><td class="text-dim">Max Tool Rounds</td><td>${maxToolRoundsDisplay}</td></tr>
+        <tr><td class="text-dim">Strategist</td><td>${strategistDisplay}</td></tr>
+        <tr><td class="text-dim">Loop Detection</td><td>${loopDetectionDisplay}</td></tr>
         ${
           agent.running
             ? `<tr><td class="text-dim">Loop Status</td><td>${
@@ -914,6 +957,139 @@ export async function renderAgentEdit(el, id) {
       </div>
 
       <div class="form-group">
+        <label>Mode</label>
+        <select name="agentLoopMode">
+          <option value="periodic" ${(agent.agentLoop?.mode || 'periodic') === 'periodic' ? 'selected' : ''}>Periodic</option>
+          <option value="continuous" ${agent.agentLoop?.mode === 'continuous' ? 'selected' : ''}>Continuous</option>
+        </select>
+        <span class="text-dim text-sm">Periodic = runs at interval, Continuous = runs non-stop with pauses</span>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Max Tool Rounds</label>
+          <input type="number" name="agentLoopMaxToolRounds" min="1" max="50" value="${agent.agentLoop?.maxToolRounds ?? ''}" placeholder="${defaults.agentLoop?.maxToolRounds ?? 30}">
+        </div>
+        <div class="form-group">
+          <label>Report Chat ID</label>
+          <input type="number" name="agentLoopReportChatId" value="${agent.agentLoop?.reportChatId ?? ''}" placeholder="Telegram chat ID">
+        </div>
+      </div>
+
+      <div id="continuous-fields" style="display:${agent.agentLoop?.mode === 'continuous' ? 'block' : 'none'}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Continuous Pause (ms)</label>
+            <input type="number" name="agentLoopContinuousPauseMs" min="0" value="${agent.agentLoop?.continuousPauseMs ?? ''}" placeholder="5000">
+          </div>
+          <div class="form-group">
+            <label>Memory Flush Every N Cycles</label>
+            <input type="number" name="agentLoopContinuousMemoryEvery" min="1" value="${agent.agentLoop?.continuousMemoryEvery ?? ''}" placeholder="5">
+          </div>
+        </div>
+      </div>
+
+      <details class="form-details">
+        <summary class="form-details-summary">Strategist</summary>
+        <div class="form-group">
+          <label>Strategist Enabled</label>
+          <select name="agentLoopStrategistEnabled">
+            <option value="" ${agent.agentLoop?.strategist?.enabled == null ? 'selected' : ''}>Inherit global</option>
+            <option value="true" ${agent.agentLoop?.strategist?.enabled === true ? 'selected' : ''}>On</option>
+            <option value="false" ${agent.agentLoop?.strategist?.enabled === false ? 'selected' : ''}>Off</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Every N Cycles</label>
+            <input type="number" name="agentLoopStrategistEveryCycles" min="1" value="${agent.agentLoop?.strategist?.everyCycles ?? ''}" placeholder="${defaults.agentLoop?.strategist?.everyCycles ?? 4}">
+          </div>
+          <div class="form-group">
+            <label>Min Interval</label>
+            <input type="text" name="agentLoopStrategistMinInterval" value="${escapeHtml(agent.agentLoop?.strategist?.minInterval || '')}" placeholder="${escapeHtml(defaults.agentLoop?.strategist?.minInterval || '4h')}">
+          </div>
+        </div>
+      </details>
+
+      <details class="form-details">
+        <summary class="form-details-summary">Timeouts</summary>
+        <div class="form-group">
+          <label>Claude Timeout (ms)</label>
+          <input type="number" name="agentLoopClaudeTimeout" min="1" value="${agent.agentLoop?.claudeTimeout ?? ''}" placeholder="${defaults.agentLoop?.claudeTimeout ?? 300000}">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Feedback (ms)</label>
+            <input type="number" name="agentLoopPhaseTimeoutFeedback" min="1" value="${agent.agentLoop?.phaseTimeouts?.feedbackMs ?? ''}" placeholder="${defaults.agentLoop?.phaseTimeouts?.feedbackMs ?? 30000}">
+          </div>
+          <div class="form-group">
+            <label>Strategist (ms)</label>
+            <input type="number" name="agentLoopPhaseTimeoutStrategist" min="1" value="${agent.agentLoop?.phaseTimeouts?.strategistMs ?? ''}" placeholder="${defaults.agentLoop?.phaseTimeouts?.strategistMs ?? 60000}">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Planner (ms)</label>
+            <input type="number" name="agentLoopPhaseTimeoutPlanner" min="1" value="${agent.agentLoop?.phaseTimeouts?.plannerMs ?? ''}" placeholder="${defaults.agentLoop?.phaseTimeouts?.plannerMs ?? 60000}">
+          </div>
+          <div class="form-group">
+            <label>Executor (ms)</label>
+            <input type="number" name="agentLoopPhaseTimeoutExecutor" min="1" value="${agent.agentLoop?.phaseTimeouts?.executorMs ?? ''}" placeholder="${defaults.agentLoop?.phaseTimeouts?.executorMs ?? 90000}">
+          </div>
+        </div>
+      </details>
+
+      <details class="form-details">
+        <summary class="form-details-summary">Retry</summary>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Max Retries</label>
+            <input type="number" name="agentLoopRetryMaxRetries" min="0" max="10" value="${agent.agentLoop?.retry?.maxRetries ?? ''}" placeholder="${defaults.agentLoop?.retry?.maxRetries ?? 2}">
+          </div>
+          <div class="form-group">
+            <label>Backoff Multiplier</label>
+            <input type="number" name="agentLoopRetryBackoffMultiplier" min="1" max="10" step="0.5" value="${agent.agentLoop?.retry?.backoffMultiplier ?? ''}" placeholder="${defaults.agentLoop?.retry?.backoffMultiplier ?? 2}">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Initial Delay (ms)</label>
+            <input type="number" name="agentLoopRetryInitialDelay" min="1000" max="300000" value="${agent.agentLoop?.retry?.initialDelayMs ?? ''}" placeholder="${defaults.agentLoop?.retry?.initialDelayMs ?? 10000}">
+          </div>
+          <div class="form-group">
+            <label>Max Delay (ms)</label>
+            <input type="number" name="agentLoopRetryMaxDelay" min="1000" max="600000" value="${agent.agentLoop?.retry?.maxDelayMs ?? ''}" placeholder="${defaults.agentLoop?.retry?.maxDelayMs ?? 60000}">
+          </div>
+        </div>
+      </details>
+
+      <details class="form-details">
+        <summary class="form-details-summary">Loop Detection</summary>
+        <div class="form-group">
+          <label>Loop Detection Enabled</label>
+          <select name="agentLoopLoopDetectionEnabled">
+            <option value="" ${agent.agentLoop?.loopDetection?.enabled == null ? 'selected' : ''}>Inherit global</option>
+            <option value="true" ${agent.agentLoop?.loopDetection?.enabled === true ? 'selected' : ''}>On</option>
+            <option value="false" ${agent.agentLoop?.loopDetection?.enabled === false ? 'selected' : ''}>Off</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Warning Threshold</label>
+            <input type="number" name="agentLoopLoopDetectionWarning" min="2" max="100" value="${agent.agentLoop?.loopDetection?.warningThreshold ?? ''}" placeholder="${defaults.agentLoop?.loopDetection?.warningThreshold ?? 8}">
+          </div>
+          <div class="form-group">
+            <label>Critical Threshold</label>
+            <input type="number" name="agentLoopLoopDetectionCritical" min="3" max="200" value="${agent.agentLoop?.loopDetection?.criticalThreshold ?? ''}" placeholder="${defaults.agentLoop?.loopDetection?.criticalThreshold ?? 16}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Circuit Breaker Threshold</label>
+          <input type="number" name="agentLoopLoopDetectionCircuitBreaker" min="5" max="500" value="${agent.agentLoop?.loopDetection?.globalCircuitBreakerThreshold ?? ''}" placeholder="${defaults.agentLoop?.loopDetection?.globalCircuitBreakerThreshold ?? 25}">
+        </div>
+      </details>
+
+      <div class="form-group">
         <label>Standing Directives</label>
         <textarea name="agentLoopDirectives" rows="3" placeholder="One directive per line — ongoing behavioral instructions for the agent loop">${escapeHtml((agent.agentLoop?.directives || []).join('\n'))}</textarea>
         <span class="text-dim text-sm">Ongoing instructions injected into strategist/planner/executor prompts (max 10, 500 chars each)</span>
@@ -1054,6 +1230,15 @@ export async function renderAgentEdit(el, id) {
     }, 2000);
   });
 
+  // Toggle continuous fields visibility based on mode
+  const modeSelect = document.querySelector('select[name="agentLoopMode"]');
+  if (modeSelect) {
+    modeSelect.addEventListener('change', () => {
+      const fields = document.getElementById('continuous-fields');
+      if (fields) fields.style.display = modeSelect.value === 'continuous' ? 'block' : 'none';
+    });
+  }
+
   // Generate soul button (bottom of form)
   document.getElementById('btn-generate-soul').addEventListener('click', () => {
     showGenerateSoulModal(id, agent.name, () => renderAgentEdit(el, id));
@@ -1186,33 +1371,98 @@ export async function renderAgentEdit(el, id) {
       : [];
     const presetDirectives = Array.from(presetCheckboxes).map((cb) => cb.value);
 
+    // Helper: parse number input, return undefined if empty
+    const numOrUndef = (name) => {
+      const v = form[name]?.value;
+      return v !== '' && v != null ? Number(v) : undefined;
+    };
+    // Helper: parse select with inherit option
+    const boolOrUndef = (name) => {
+      const v = form[name]?.value;
+      return v === 'true' ? true : v === 'false' ? false : undefined;
+    };
+
     const agentLoopPatch = { ...agent.agentLoop };
-    let agentLoopChanged = false;
 
-    if (agentLoopEvery !== undefined) {
-      agentLoopPatch.every = agentLoopEvery;
-      agentLoopChanged = true;
-    } else if (agent.agentLoop?.every) {
-      agentLoopPatch.every = undefined;
-      agentLoopChanged = true;
+    // Core fields
+    agentLoopPatch.enabled = agentLoopEnabled;
+    agentLoopPatch.every = agentLoopEvery;
+    agentLoopPatch.mode = form.agentLoopMode.value === 'continuous' ? 'continuous' : undefined;
+    agentLoopPatch.maxToolRounds = numOrUndef('agentLoopMaxToolRounds');
+    agentLoopPatch.reportChatId = numOrUndef('agentLoopReportChatId');
+    agentLoopPatch.claudeTimeout = numOrUndef('agentLoopClaudeTimeout');
+
+    // Continuous mode fields
+    agentLoopPatch.continuousPauseMs = numOrUndef('agentLoopContinuousPauseMs');
+    agentLoopPatch.continuousMemoryEvery = numOrUndef('agentLoopContinuousMemoryEvery');
+
+    // Directives
+    agentLoopPatch.directives = agentLoopDirectives;
+    agentLoopPatch.presetDirectives = presetDirectives.length > 0 ? presetDirectives : undefined;
+
+    // Strategist sub-object
+    const stratEnabled = boolOrUndef('agentLoopStrategistEnabled');
+    const stratEveryCycles = numOrUndef('agentLoopStrategistEveryCycles');
+    const stratMinInterval = form.agentLoopStrategistMinInterval?.value.trim() || undefined;
+    if (stratEnabled != null || stratEveryCycles != null || stratMinInterval != null) {
+      agentLoopPatch.strategist = {
+        enabled: stratEnabled,
+        everyCycles: stratEveryCycles,
+        minInterval: stratMinInterval,
+      };
+    } else {
+      agentLoopPatch.strategist = undefined;
     }
 
-    if (agentLoopEnabled !== agent.agentLoop?.enabled) {
-      agentLoopPatch.enabled = agentLoopEnabled;
-      agentLoopChanged = true;
-    }
-    if (JSON.stringify(agentLoopDirectives) !== JSON.stringify(agent.agentLoop?.directives)) {
-      agentLoopPatch.directives = agentLoopDirectives;
-      agentLoopChanged = true;
-    }
-    if (
-      JSON.stringify(presetDirectives) !== JSON.stringify(agent.agentLoop?.presetDirectives || [])
-    ) {
-      agentLoopPatch.presetDirectives = presetDirectives.length > 0 ? presetDirectives : undefined;
-      agentLoopChanged = true;
+    // Phase timeouts sub-object
+    const ptFeedback = numOrUndef('agentLoopPhaseTimeoutFeedback');
+    const ptStrategist = numOrUndef('agentLoopPhaseTimeoutStrategist');
+    const ptPlanner = numOrUndef('agentLoopPhaseTimeoutPlanner');
+    const ptExecutor = numOrUndef('agentLoopPhaseTimeoutExecutor');
+    if (ptFeedback != null || ptStrategist != null || ptPlanner != null || ptExecutor != null) {
+      agentLoopPatch.phaseTimeouts = {
+        feedbackMs: ptFeedback,
+        strategistMs: ptStrategist,
+        plannerMs: ptPlanner,
+        executorMs: ptExecutor,
+      };
+    } else {
+      agentLoopPatch.phaseTimeouts = undefined;
     }
 
-    if (agentLoopChanged) {
+    // Retry sub-object
+    const retryMax = numOrUndef('agentLoopRetryMaxRetries');
+    const retryInitial = numOrUndef('agentLoopRetryInitialDelay');
+    const retryMaxDelay = numOrUndef('agentLoopRetryMaxDelay');
+    const retryBackoff = numOrUndef('agentLoopRetryBackoffMultiplier');
+    if (retryMax != null || retryInitial != null || retryMaxDelay != null || retryBackoff != null) {
+      agentLoopPatch.retry = {
+        maxRetries: retryMax,
+        initialDelayMs: retryInitial,
+        maxDelayMs: retryMaxDelay,
+        backoffMultiplier: retryBackoff,
+      };
+    } else {
+      agentLoopPatch.retry = undefined;
+    }
+
+    // Loop detection sub-object
+    const ldEnabled = boolOrUndef('agentLoopLoopDetectionEnabled');
+    const ldWarning = numOrUndef('agentLoopLoopDetectionWarning');
+    const ldCritical = numOrUndef('agentLoopLoopDetectionCritical');
+    const ldCircuitBreaker = numOrUndef('agentLoopLoopDetectionCircuitBreaker');
+    if (ldEnabled != null || ldWarning != null || ldCritical != null || ldCircuitBreaker != null) {
+      agentLoopPatch.loopDetection = {
+        enabled: ldEnabled,
+        warningThreshold: ldWarning,
+        criticalThreshold: ldCritical,
+        globalCircuitBreakerThreshold: ldCircuitBreaker,
+      };
+    } else {
+      agentLoopPatch.loopDetection = undefined;
+    }
+
+    {
       const hasValues = Object.values(agentLoopPatch).some((v) => v !== undefined);
       patch.agentLoop = hasValues ? agentLoopPatch : undefined;
     }

@@ -636,6 +636,9 @@ export class AgentLoop {
     const recentMemory = soulLoader.readRecentDailyLogs();
     const datetime = new Date().toISOString();
 
+    // Resolve standing directives (custom + presets) for this bot — must be before strategist
+    const directives = resolveDirectives(botConfig);
+
     // Phase -1: Process pending human feedback
     if (checkTimeout && !checkTimeout('before_feedback')) {
       return {
@@ -834,6 +837,18 @@ export class AgentLoop {
     // Resolve allowed write paths for this bot (default: productions/)
     const allowedWritePaths = botConfig.allowedWritePaths ?? ['productions/'];
 
+    // Build active users summary for agent loop user awareness
+    const uaCfg = botOverride?.userAwareness ?? globalConfig.userAwareness;
+    let activeUsersSummary: string | null = null;
+    if (uaCfg?.enabled) {
+      const { buildActiveUsersSummary } = await import('./agent-loop-user-context');
+      activeUsersSummary = buildActiveUsersSummary(this.ctx.sessionManager, botId, {
+        enabled: true,
+        activeWindowHours: uaCfg.activeWindowHours ?? 24,
+        maxUsers: uaCfg.maxUsers ?? 5,
+      });
+    }
+
     // Build autonomous cycles note if bot hasn't used ask_human recently
     const askHumanCheckInThreshold = globalConfig.askHumanCheckInCycles ?? 5;
     const cyclesSinceAskHuman = schedule?.cyclesSinceAskHuman ?? 0;
@@ -841,9 +856,6 @@ export class AgentLoop {
       cyclesSinceAskHuman >= askHumanCheckInThreshold
         ? `## Autonomous Run Notice\n\nYou have been running autonomously for ${cyclesSinceAskHuman} cycles without checking in with your human operator. Consider using ask_human to check in — ask for feedback on recent work, confirm priorities, or request direction.`
         : undefined;
-
-    // Resolve standing directives (custom + presets) for this bot
-    const directives = resolveDirectives(botConfig);
 
     if (isContinuous) {
       const lastCycleSummary = schedule?.lastResult?.summary;
@@ -879,6 +891,7 @@ export class AgentLoop {
         toolCategoryList,
         allowedWritePaths,
         directives: directives.length > 0 ? directives : undefined,
+        activeUsersSummary: activeUsersSummary || undefined,
       });
 
       const plannerStartMs = Date.now();
@@ -960,6 +973,7 @@ export class AgentLoop {
         toolCategoryList,
         allowedWritePaths,
         directives: directives.length > 0 ? directives : undefined,
+        activeUsersSummary: activeUsersSummary || undefined,
       });
 
       const plannerStartMs = Date.now();

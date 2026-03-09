@@ -31,6 +31,7 @@
     position: scriptTag?.getAttribute('data-position') || 'right',
     senderId: scriptTag?.getAttribute('data-sender-id') || '',
     senderName: scriptTag?.getAttribute('data-sender-name') || '',
+    userHash: scriptTag?.getAttribute('data-user-hash') || '',
   };
 
   let config = {};
@@ -165,10 +166,24 @@
       return;
     }
 
-    chatId = config.chatId || `widget-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    // Persist chatId/senderId in localStorage for session continuity
+    const storageKey = `aibot_widget_${config.botId}`;
+    let stored = {};
+    try {
+      stored = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    } catch {}
+
+    chatId =
+      config.chatId ||
+      stored.chatId ||
+      `widget-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     if (!config.senderId) {
-      config.senderId = `widget-user-${Math.random().toString(36).slice(2, 8)}`;
+      config.senderId = stored.senderId || `widget-user-${Math.random().toString(36).slice(2, 8)}`;
     }
+
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ chatId, senderId: config.senderId }));
+    } catch {}
 
     // Inject styles
     const style = document.createElement('style');
@@ -249,12 +264,17 @@
     let params = `botId=${encodeURIComponent(config.botId)}&chatId=${encodeURIComponent(chatId)}&senderId=${encodeURIComponent(config.senderId)}`;
     if (config.senderName) params += `&senderName=${encodeURIComponent(config.senderName)}`;
     if (config.token) params += `&token=${encodeURIComponent(config.token)}`;
+    if (config.userHash) params += `&userHash=${encodeURIComponent(config.userHash)}`;
 
     ws = new WebSocket(`${serverUrl}/ws/chat?${params}`);
 
     ws.onopen = () => {
       setStatus('Connected');
       container._sendBtn.disabled = false;
+      // Fetch history on first connect (not on every reconnect)
+      if (!container._historyLoaded) {
+        fetchHistory();
+      }
     };
 
     ws.onmessage = (evt) => {
@@ -293,6 +313,28 @@
     ws.onerror = () => {
       setStatus('Connection error');
     };
+  }
+
+  function fetchHistory() {
+    const proto = config.server.replace(/^ws/, 'http');
+    let url = `${proto}/api/v1/chat/${encodeURIComponent(config.botId)}/history?chatId=${encodeURIComponent(chatId)}&senderId=${encodeURIComponent(config.senderId)}&limit=50`;
+    if (config.token) url += `&token=${encodeURIComponent(config.token)}`;
+
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.messages && data.messages.length > 0) {
+          // Clear any existing messages and render history
+          container._messages.innerHTML = '';
+          for (const msg of data.messages) {
+            addMessage(msg.role === 'bot' ? 'bot' : 'user', msg.content);
+          }
+          container._historyLoaded = true;
+        }
+      })
+      .catch(() => {
+        /* ignore history fetch errors */
+      });
   }
 
   function sendMessage() {

@@ -44,6 +44,7 @@ import { createProcessTool } from '../tools/process';
 import { createProductionLogTool } from '../tools/production-log';
 import { createRecallMemoryTool } from '../tools/recall-memory';
 import { createRedditHotTool, createRedditReadTool, createRedditSearchTool } from '../tools/reddit';
+import { createSendProactiveMessageTool } from '../tools/send-proactive-message';
 import { createSignalCompletionTool } from '../tools/signal-completion';
 import {
   createSaveMemoryTool,
@@ -108,6 +109,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'collaborate',
     'moltbook_register',
     'create_agent',
+    'send_proactive_message',
   ],
   browser: ['browser'],
   production: ['read_production_log', 'archive_file', 'create_tool', 'signal_completion'],
@@ -383,6 +385,35 @@ export class ToolRegistry {
       tools.push(createAskPermissionTool(askPermissionDeps));
       logger.info('ask_permission tool initialized');
     }
+
+    // Proactive messaging tool (for agent loop user awareness)
+    tools.push(
+      createSendProactiveMessageTool({
+        sendTelegramMessage: async (chatId: number, text: string) => {
+          // Find a running bot instance to send through
+          const bot = this.ctx.bots?.values().next().value;
+          if (bot) {
+            await bot.api.sendMessage(chatId, text);
+          } else {
+            throw new Error('No active bot instance available to send Telegram message');
+          }
+        },
+        appendToSession: (botId: string, userId: string, text: string) => {
+          const sessionKey = this.ctx.sessionManager.serializeKey({
+            botId,
+            chatType: 'private',
+            chatId: 0,
+            userId: Number(userId) || undefined,
+          });
+          this.ctx.sessionManager.appendMessages(
+            sessionKey,
+            [{ role: 'assistant', content: text }],
+            100
+          );
+        },
+      })
+    );
+    logger.info('send_proactive_message tool initialized');
 
     // Productions tools
     if (this.ctx.productionsService) {

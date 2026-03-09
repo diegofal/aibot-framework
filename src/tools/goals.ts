@@ -130,7 +130,8 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
         name: 'manage_goals',
         description:
           'Manage your structured goals. Use this to track tasks, projects, and objectives. ' +
-          'Goals persist in your soul directory and are visible during reflection and agent loop.',
+          'Goals persist in your soul directory and are visible during reflection and agent loop. ' +
+          'When talking to a user, goals default to per-user scope. Use scope: "shared" for bot-level goals.',
         parameters: {
           type: 'object',
           properties: {
@@ -169,6 +170,12 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
               type: 'string',
               description: 'Outcome summary (for complete action)',
             },
+            scope: {
+              type: 'string',
+              enum: ['user', 'shared'],
+              description:
+                'Goal scope: "user" for per-user goals (default when in user context), "shared" for bot-level goals',
+            },
           },
           required: ['action'],
         },
@@ -178,19 +185,28 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const action = String(args.action ?? '').trim();
       const botId = String(args._botId ?? '');
+      const userId = args._userId ? String(args._userId) : undefined;
+      const scope = args.scope ? String(args.scope) : undefined;
 
       try {
         const soulLoader = getSoulLoader(botId);
 
         switch (action) {
-          case 'list':
+          case 'list': {
+            if (userId) {
+              return listGoalsWithUserScope(soulLoader, userId, scope);
+            }
             return listGoals(soulLoader);
+          }
 
           case 'add': {
             const goal = resolveGoalParam(args);
             if (!goal) return { success: false, content: 'Missing required parameter: goal' };
             const priority = String(args.priority ?? 'medium').trim();
             const notes = args.notes ? String(args.notes).trim() : undefined;
+            if (userId && scope !== 'shared') {
+              return addUserGoal(soulLoader, userId, goal, priority, notes);
+            }
             return addGoal(soulLoader, goal, priority, notes);
           }
 
@@ -209,6 +225,9 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
               (args.priority ?? args.new_priority)
                 ? String(args.priority ?? args.new_priority).trim()
                 : undefined;
+            if (userId && scope !== 'shared') {
+              return updateUserGoal(soulLoader, userId, goal, { status, notes, priority });
+            }
             return updateGoal(soulLoader, goal, { status, notes, priority });
           }
 
@@ -216,6 +235,9 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
             const goal = resolveGoalParam(args);
             if (!goal) return { success: false, content: 'Missing required parameter: goal' };
             const outcome = args.outcome ? String(args.outcome).trim() : undefined;
+            if (userId && scope !== 'shared') {
+              return completeUserGoal(soulLoader, userId, goal, outcome);
+            }
             return completeGoal(soulLoader, goal, outcome);
           }
 
@@ -431,4 +453,109 @@ function completeGoal(soulLoader: SoulLoader, goalSubstring: string, outcome?: s
 
   soulLoader.writeGoals(serializeGoals(active, completed));
   return { success: true, content: `Goal completed: ${goal.text}` };
+}
+
+// --- Per-user goal helpers ---
+
+function listGoalsWithUserScope(
+  soulLoader: SoulLoader,
+  userId: string,
+  scope?: string
+): ToolResult {
+  const parts: string[] = [];
+
+  if (scope !== 'user') {
+    const sharedContent = soulLoader.readGoals();
+    if (sharedContent) {
+      parts.push(`# Shared Goals (all users)\n${sharedContent}`);
+    }
+  }
+
+  if (scope !== 'shared') {
+    const userContent = soulLoader.readUserGoals(userId);
+    if (userContent) {
+      parts.push(`# Your Personal Goals\n${userContent}`);
+    } else if (scope === 'user') {
+      parts.push('No personal goals yet. Use action "add" to create one.');
+    }
+  }
+
+  if (parts.length === 0) {
+    return {
+      success: true,
+      content: 'No goals found. Use action "add" to create your first goal.',
+    };
+  }
+
+  return { success: true, content: parts.join('\n\n---\n\n') };
+}
+
+function addUserGoal(
+  soulLoader: SoulLoader,
+  userId: string,
+  goal: string,
+  priority: string,
+  notes?: string
+): ToolResult {
+  const content = soulLoader.readUserGoals(userId);
+  const { active, completed } = parseGoals(content);
+  active.push({ text: goal, status: 'pending', priority, notes });
+  soulLoader.writeUserGoals(userId, serializeGoals(active, completed));
+  return { success: true, content: `Personal goal added: ${goal} (priority: ${priority})` };
+}
+
+function updateUserGoal(
+  soulLoader: SoulLoader,
+  userId: string,
+  goalSubstring: string,
+  updates: { status?: string; notes?: string; priority?: string }
+): ToolResult {
+  const content = soulLoader.readUserGoals(userId);
+  const { active, completed } = parseGoals(content);
+  const idx = findGoalIndex(active, goalSubstring);
+  if (idx === -1) {
+    return {
+      success: false,
+      content: `No personal goal matching "${goalSubstring}".${goalListHint(active)}`,
+    };
+  }
+  const found = active[idx];
+  if (updates.status === 'completed' || updates.status === 'done') {
+    const [goal] = active.splice(idx, 1);
+    goal.status = 'completed';
+    goal.completed = localDateStr();
+    if (updates.notes) goal.outcome = updates.notes;
+    completed.push(goal);
+    soulLoader.writeUserGoals(userId, serializeGoals(active, completed));
+    return { success: true, content: `Personal goal completed: ${goal.text}` };
+  }
+  if (updates.status) found.status = updates.status;
+  if (updates.notes) found.notes = updates.notes;
+  if (updates.priority) found.priority = updates.priority;
+  soulLoader.writeUserGoals(userId, serializeGoals(active, completed));
+  return { success: true, content: `Personal goal updated: ${found.text}` };
+}
+
+function completeUserGoal(
+  soulLoader: SoulLoader,
+  userId: string,
+  goalSubstring: string,
+  outcome?: string
+): ToolResult {
+  const content = soulLoader.readUserGoals(userId);
+  const { active, completed } = parseGoals(content);
+  const idx = findGoalIndex(active, goalSubstring);
+  if (idx === -1) {
+    return {
+      success: false,
+      content: `No personal goal matching "${goalSubstring}".${goalListHint(active)}`,
+    };
+  }
+  const [goal] = active.splice(idx, 1);
+  goal.status = 'completed';
+  goal.completed = localDateStr();
+  if (outcome) goal.outcome = outcome;
+  completed.push(goal);
+  soulLoader.writeUserGoals(userId, serializeGoals(active, completed));
+  return { success: true, content: `Personal goal completed: ${goal.text}` };
 }

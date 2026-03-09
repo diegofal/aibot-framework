@@ -15,6 +15,7 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
 - **Multi-tenant BaaS** — Shared-infrastructure multi-tenancy with tenant isolation, quota enforcement, rate limiting, and per-tenant config overrides
 - **Username/password auth** — Session-based dashboard login with admin setup, dual auth (session tokens for UI, API keys for programmatic access)
 - **Bot export/import** — Portable `.tar.gz` archives for full bot backup and restoration (soul, config, memory, productions)
+- **AI Coach/Student platform** — Per-user goals, topic guard, proactive messaging, identity verification, REST Chat API, and agent loop user awareness for building coaching/tutoring bots
 - **Context compaction** — LLM-based conversation summarization to stay within token limits
 - **MCP tool bridge** — Claude CLI can call framework tools natively via Model Context Protocol
 - **Activity stream** — Real-time event feed with WebSocket streaming
@@ -208,6 +209,18 @@ Complete shared-infrastructure multi-tenancy across 6 phases:
 - **Quota & rate limiting** — Sliding-window rate limiter (20–500 req/min by plan), per-tenant quotas with 80%/90% warning headers
 - **Onboarding & billing** — Email signup with dedup, first-bot wizard, Stripe webhook integration
 - **Per-user isolation** — `user_id` column on core memory for per-user data scoping within shared bots
+
+### AI Coach/Student Features
+
+Purpose-built infrastructure for coaching, tutoring, and mentoring bots:
+
+- **Per-user goals** — `manage_goals` tool with `scope:"user"` stores goals per end-user in `memory/users/{userId}/GOALS.md`. System prompt injection ensures goal awareness.
+- **Topic guard** — LLM-based pre-filter blocks off-topic messages before the full pipeline. Configurable `botPurpose`, `allowedTopics`, `blockedTopics`, `strictness` (loose/moderate/strict), and `failOpen`. Tenant customization overlay merges topic guard settings.
+- **Identity verification** — HMAC-SHA256 `userHash` prevents senderId spoofing in Widget and REST API. Tenants auto-receive `identitySecret`; WebSocket verifies on connect.
+- **REST Chat API** — `POST /api/v1/chat/:botId` for sync HTTP integration with mobile apps and backend services. Supports multi-tenant auth + identity verification.
+- **Proactive messaging** — `send_proactive_message` tool sends follow-ups via Telegram or widget sessions from the agent loop.
+- **Agent loop user awareness** — `agentLoop.userAwareness` injects active users summary into planner prompts for personalized outreach decisions.
+- **Chat history persistence** — Widget persists `chatId`/`senderId` in localStorage; `GET /api/v1/chat/:botId/history` loads previous messages on reconnect.
 
 ### Authentication
 

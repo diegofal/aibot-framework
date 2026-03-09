@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger';
+import { generateIdentitySecret } from './identity-verification';
 
 export interface Tenant {
   id: string;
@@ -18,6 +19,7 @@ export interface Tenant {
     storageBytes: number;
   };
   rateLimitOverride?: number; // custom max requests/min, overrides plan default
+  identitySecret?: string; // HMAC secret for end-user identity verification (widget/REST)
   billing?: {
     stripeCustomerId?: string;
     stripeSubscriptionId?: string;
@@ -138,6 +140,7 @@ export class TenantManager {
       },
     };
     if (passwordHash) tenant.passwordHash = passwordHash;
+    tenant.identitySecret = generateIdentitySecret();
 
     this.tenants.set(id, tenant);
     this.apiKeyIndex.set(tenant.apiKey, id);
@@ -232,6 +235,16 @@ export class TenantManager {
 
     this.logger.info({ tenantId: id }, 'Regenerated API key');
     return tenant.apiKey;
+  }
+
+  regenerateIdentitySecret(id: string): string | undefined {
+    const tenant = this.tenants.get(id);
+    if (!tenant) return undefined;
+    tenant.identitySecret = generateIdentitySecret();
+    tenant.updatedAt = new Date().toISOString();
+    this.saveTenants();
+    this.logger.info({ tenantId: id }, 'Regenerated identity secret');
+    return tenant.identitySecret;
   }
 
   getPlanLimits(plan: Tenant['plan']) {

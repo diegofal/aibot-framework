@@ -64,6 +64,8 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `agent-strategist.ts` | Strategist: reflexión, operaciones de goals, cadencia |
 | `agent-loop-utils.ts` | Funciones puras: digest, dedup, file scan, memory log |
 | `agent-loop-prompts.ts` | Prompt builders para planner, strategist, executor, feedback |
+| `agent-loop-user-context.ts` | Active users summary for planner injection (coach/student awareness) |
+| `topic-guard.ts` | LLM-based topic pre-filter: blocks off-topic messages before full pipeline |
 | `llm-json-parser.ts` | Parser genérico de JSON desde output LLM |
 | `soul-health-check.ts` | Orquestador: lint + consolidación + quality review |
 | `soul-lint.ts` | Lint estructural de soul directory (sin LLM) |

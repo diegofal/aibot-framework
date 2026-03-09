@@ -35,6 +35,8 @@ export interface PlannerPromptInput {
   allowedWritePaths?: string[];
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** Summary of recently active users for proactive engagement */
+  activeUsersSummary?: string;
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -69,6 +71,8 @@ export interface ContinuousPlannerPromptInput {
   allowedWritePaths?: string[];
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** Summary of recently active users for proactive engagement */
+  activeUsersSummary?: string;
 }
 
 export interface PlannerResult {
@@ -112,7 +116,7 @@ function buildToolCategorySection(toolCategoryList?: string[]): string {
     social: 'reddit_*, twitter_* — social media tools',
     calendar: 'calendar_* — scheduling and availability',
     communication:
-      'ask_human, ask_permission, phone_call, delegate_to_bot, collaborate, create_agent — human/bot interaction and agent proposals',
+      'ask_human, ask_permission, phone_call, delegate_to_bot, collaborate, create_agent, send_proactive_message — human/bot interaction, proactive messaging, and agent proposals',
     browser: 'browser — web browsing with headless browser',
     production: 'read_production_log, archive_file, create_tool — production management',
   };
@@ -270,7 +274,7 @@ ${input.focus}
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
 `
       : ''
-}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
+}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -398,7 +402,7 @@ ${input.focus}
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
 `
       : ''
-}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}
+}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}

@@ -34,6 +34,7 @@
       <a href="configuration.html">Configuration</a>
       <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
+        <a href="use-cases.html">Use Cases</a>
         <a href="backlog.html">Backlog</a>
     </nav>
   </aside>
@@ -1080,6 +1081,12 @@
               <td><code>/api/v1/chat/:botId</code></td>
               <td>Send a message and receive a synchronous bot response. Body: <code>{ message, chatId?, senderId?, senderName?, images? }</code>. Returns <code>{ reply, botId, chatId, durationMs }</code>.</td>
               <td><code>chat-api.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/v1/chat/:botId/history</code></td>
+              <td>Fetch previous chat messages for session continuity. Query: <code>chatId</code> or <code>senderId</code> (at least one required), <code>limit</code> (1-200, default 50). Filters system messages and context summaries. Returns <code>{ messages: [{ role, content }], chatId, botId, count }</code>.</td>
+              <td><code>chat-history.ts</code></td>
             </tr>
           </tbody>
         </table>

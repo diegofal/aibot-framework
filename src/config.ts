@@ -86,6 +86,14 @@ export const GlobalAgentLoopConfigSchema = z
     retry: AgentLoopRetryConfigSchema,
     /** Tool loop detection for agent-loop executor phase */
     loopDetection: LoopDetectionConfigSchema,
+    /** User awareness: scan sessions to show active users in planner prompt */
+    userAwareness: z
+      .object({
+        enabled: z.boolean().default(false),
+        activeWindowHours: z.number().min(1).max(168).default(24),
+        maxUsers: z.number().int().min(1).max(20).default(5),
+      })
+      .default({}),
   })
   .default({});
 
@@ -148,6 +156,13 @@ export const BotAgentLoopOverrideSchema = z
         knownPollTools: z.array(KnownPollToolSchema).optional(),
       })
       .optional(),
+    userAwareness: z
+      .object({
+        enabled: z.boolean().optional(),
+        activeWindowHours: z.number().min(1).max(168).optional(),
+        maxUsers: z.number().int().min(1).max(20).optional(),
+      })
+      .optional(),
   })
   .optional();
 
@@ -208,6 +223,26 @@ const UserIsolationConfigSchema = z
   })
   .optional();
 
+const UserIdentityVerificationConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    required: z.boolean().default(false),
+  })
+  .optional();
+
+const TopicGuardConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    model: z.string().optional(),
+    botPurpose: z.string(),
+    allowedTopics: z.array(z.string()).optional(),
+    blockedTopics: z.array(z.string()).optional(),
+    strictness: z.enum(['loose', 'moderate', 'strict']).default('moderate'),
+    failOpen: z.boolean().default(true),
+    customRejectMessage: z.string().optional(),
+  })
+  .optional();
+
 export const BotConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -230,6 +265,8 @@ export const BotConfigSchema = z.object({
   tts: BotTtsOverrideSchema,
   productions: BotProductionsConfigSchema,
   userIsolation: UserIsolationConfigSchema,
+  userIdentityVerification: UserIdentityVerificationConfigSchema,
+  topicGuard: TopicGuardConfigSchema,
   allowedWritePaths: z.array(z.string()).optional(),
   // Multi-tenant hosting fields
   tenantId: z.string().optional(),
@@ -786,6 +823,8 @@ export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
 export type McpExposedServerConfig = z.infer<typeof McpExposedServerSchema>;
 export type MMRConfig = z.infer<typeof MMRConfigSchema>;
 export type UserIsolationConfig = z.infer<typeof UserIsolationConfigSchema>;
+export type UserIdentityVerificationConfig = z.infer<typeof UserIdentityVerificationConfigSchema>;
+export type TopicGuardConfig = z.infer<typeof TopicGuardConfigSchema>;
 export type MultiTenantConfig = z.infer<typeof MultiTenantConfigSchema>;
 
 /**

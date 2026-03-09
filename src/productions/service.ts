@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -342,6 +343,72 @@ export class ProductionsService {
 
     this.logger.info({ botId, id }, 'Production deleted');
     return true;
+  }
+
+  /**
+   * Delete a file or folder by relative path within the bot's productions dir.
+   * Also removes any changelog entries referencing that path.
+   */
+  deleteByPath(botId: string, relativePath: string): { deletedFiles: number; deletedEntries: number } | null {
+    // Path traversal protection
+    if (relativePath.includes('..') || relativePath.startsWith('/')) {
+      this.logger.warn({ botId, path: relativePath }, 'deleteByPath blocked: path traversal');
+      return null;
+    }
+
+    const dir = this.resolveDir(botId);
+    const fullPath = resolve(join(dir, relativePath));
+
+    // Ensure resolved path is within bot dir
+    if (!fullPath.startsWith(dir + '/') && fullPath !== dir) {
+      this.logger.warn({ botId, path: relativePath }, 'deleteByPath blocked: resolved outside bot dir');
+      return null;
+    }
+
+    if (!existsSync(fullPath)) {
+      return null;
+    }
+
+    const stat = statSync(fullPath);
+    let deletedFiles = 0;
+
+    if (stat.isDirectory()) {
+      // Count files before removing
+      const countFiles = (p: string): number => {
+        let count = 0;
+        for (const entry of readdirSync(p, { withFileTypes: true })) {
+          if (entry.isDirectory()) count += countFiles(join(p, entry.name));
+          else count++;
+        }
+        return count;
+      };
+      deletedFiles = countFiles(fullPath);
+      rmSync(fullPath, { recursive: true });
+    } else {
+      unlinkSync(fullPath);
+      deletedFiles = 1;
+    }
+
+    // Clean changelog entries matching this path
+    const changelogPath = join(dir, 'changelog.jsonl');
+    let deletedEntries = 0;
+    if (existsSync(changelogPath)) {
+      const lines = readFileSync(changelogPath, 'utf-8').trim().split('\n').filter(Boolean);
+      const entries: ProductionEntry[] = this.parseJsonlLines(lines);
+      const prefix = stat.isDirectory() ? `${relativePath}/` : null;
+      const remaining = entries.filter((e) => {
+        const match = e.path === relativePath || (prefix && e.path.startsWith(prefix));
+        if (match) deletedEntries++;
+        return !match;
+      });
+      const updated = remaining.length > 0
+        ? `${remaining.map((e) => JSON.stringify(e)).join('\n')}\n`
+        : '';
+      writeFileSync(changelogPath, updated, 'utf-8');
+    }
+
+    this.logger.info({ botId, path: relativePath, deletedFiles, deletedEntries }, 'Production deleted by path');
+    return { deletedFiles, deletedEntries };
   }
 
   updateContent(botId: string, id: string, content: string): boolean {

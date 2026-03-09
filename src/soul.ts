@@ -216,6 +216,14 @@ export class SoulLoader {
       sections.push(`## Goals\n\n${goals}`);
     }
 
+    // 4b. Per-user goals (in addition to shared goals)
+    if (userId) {
+      const userGoals = this.readUserGoals(userId);
+      if (userGoals) {
+        sections.push(`## Your Goals (for this user)\n\n${userGoals}`);
+      }
+    }
+
     // 6. Consolidated memory (MEMORY.md) or fall back to legacy.md
     const memoryMdPath = join(this.dir, 'MEMORY.md');
     const legacyPath = join(this.dir, 'memory', 'legacy.md');
@@ -440,6 +448,33 @@ export class SoulLoader {
     }
     writeFileSync(goalsPath, content, 'utf-8');
     this.logger.info('Goals updated');
+  }
+
+  /**
+   * Read per-user goals from memory/users/{userId}/GOALS.md
+   */
+  readUserGoals(userId: string): string | null {
+    const userGoalsPath = join(this.dir, 'memory', 'users', userId, 'GOALS.md');
+    try {
+      const content = readFileSync(userGoalsPath, 'utf-8').trim();
+      return content || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Write per-user goals to memory/users/{userId}/GOALS.md with versioning
+   */
+  writeUserGoals(userId: string, content: string): void {
+    const userDir = join(this.dir, 'memory', 'users', userId);
+    mkdirSync(userDir, { recursive: true });
+    const goalsPath = join(userDir, 'GOALS.md');
+    if (this.versioningEnabled) {
+      backupSoulFile(goalsPath, this.logger, this.maxVersions);
+    }
+    writeFileSync(goalsPath, content, 'utf-8');
+    this.logger.info({ userId }, 'Per-user goals updated');
   }
 
   /**

@@ -74,6 +74,7 @@ export interface BotContext {
   readonly tenantFacade?: TenantFacade;
   readonly webhookService?: import('../tenant/webhook-service').WebhookService;
   readonly analyticsService?: import('../tenant/analytics-service').AnalyticsService;
+  readonly customizationService?: import('../tenant/customization').CustomizationService;
 
   // Helper methods
   getActiveModel(botId: string): string;

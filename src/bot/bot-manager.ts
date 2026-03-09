@@ -1136,11 +1136,13 @@ export class BotManager {
     // Wire customization into system prompt builder
     this.systemPromptBuilder.setCustomizationService(this.customizationService);
 
-    // Expose webhook/analytics services to pipeline via shared BotContext
+    // Expose BaaS services to pipeline via shared BotContext
     // biome-ignore lint/suspicious/noExplicitAny: BotContext has readonly fields; runtime injection required for BaaS services
     (this.botContext as any).webhookService = this.webhookService;
     // biome-ignore lint/suspicious/noExplicitAny: BotContext has readonly fields; runtime injection required for BaaS services
     (this.botContext as any).analyticsService = this.analyticsService;
+    // biome-ignore lint/suspicious/noExplicitAny: BotContext has readonly fields; runtime injection required for BaaS services
+    (this.botContext as any).customizationService = this.customizationService;
 
     this.logger.info('BaaS services initialized (templates, customization, webhooks, analytics)');
   }
