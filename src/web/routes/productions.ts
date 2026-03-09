@@ -884,7 +884,8 @@ export function productionsRoutes(deps: {
   });
 
   // Delete file or folder by relative path (used by tree context menu)
-  app.delete('/:botId/by-path', async (c) => {
+  // NOTE: uses POST to avoid /:botId/:id param collision with DELETE /:botId/:id
+  app.post('/:botId/delete-by-path', async (c) => {
     const botId = c.req.param('botId');
     if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const botConfig = config.bots.find((b) => b.id === botId);

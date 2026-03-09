@@ -8,7 +8,7 @@ import {
   timeAgo,
 } from './shared.js';
 
-// --- Shared context menu for tree items ---
+// --- Shared context menu & multi-select helpers ---
 let _activeContextMenu = null;
 
 function dismissContextMenu() {
@@ -18,60 +18,161 @@ function dismissContextMenu() {
   }
 }
 
-function _onDocClickDismiss() {
-  dismissContextMenu();
-}
-function _onDocKeyDismiss(e) {
+document.addEventListener('click', () => dismissContextMenu());
+document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') dismissContextMenu();
-}
+});
 
-document.addEventListener('click', _onDocClickDismiss);
-document.addEventListener('keydown', _onDocKeyDismiss);
+/** Unique key for a selectable tree item */
+function selKey(botId, path) {
+  return `${botId}\0${path}`;
+}
 
 /**
- * Show a context menu for a tree node.
+ * Collect the flat ordered list of visible (non-top-level) selectable items in the tree.
+ * Each entry: { botId, path, type }
+ */
+function collectVisibleItems(nodes, botId, expandedDirs, tree, matchesFilters) {
+  const items = [];
+  for (const node of nodes || []) {
+    if (!matchesFilters(node)) continue;
+    if (node.type === 'dir') {
+      const isTopLevel = tree.includes(node);
+      const resolvedBotId = isTopLevel ? node.path : botId;
+      const expandKey = isTopLevel ? node.path : `${resolvedBotId}/${node.path}`;
+      // Dirs themselves are selectable (unless top-level bot folders)
+      if (!isTopLevel) {
+        items.push({ botId: resolvedBotId, path: node.path, type: 'dir' });
+      }
+      if (expandedDirs.has(expandKey) && node.children) {
+        items.push(
+          ...collectVisibleItems(node.children, resolvedBotId, expandedDirs, tree, matchesFilters)
+        );
+      }
+    } else {
+      items.push({ botId: botId, path: node.path, type: 'file' });
+    }
+  }
+  return items;
+}
+
+/** Single-bot variant (no top-level bot folders) */
+function collectVisibleItemsSingleBot(nodes, botId, expandedDirs, matchesFilters) {
+  const items = [];
+  for (const node of nodes || []) {
+    if (!matchesFilters(node)) continue;
+    if (node.type === 'dir') {
+      items.push({ botId, path: node.path, type: 'dir' });
+      if (expandedDirs.has(node.path) && node.children) {
+        items.push(
+          ...collectVisibleItemsSingleBot(node.children, botId, expandedDirs, matchesFilters)
+        );
+      }
+    } else {
+      items.push({ botId, path: node.path, type: 'file' });
+    }
+  }
+  return items;
+}
+
+/**
+ * Handle click for multi-select. Returns true if the click was consumed (shift/ctrl).
  * @param {MouseEvent} e
- * @param {{ botId: string, path: string, type: string, isTopLevel?: boolean, onDeleted: () => void }} opts
+ * @param {{ botId: string, path: string, type: string }} item
+ * @param {Set} selection - Set of selKey strings
+ * @param {{ value: {botId,path,type}|null }} lastClicked - mutable ref
+ * @param {() => Array} getVisibleItems - lazy getter for ordered visible items
+ * @param {() => void} rerender - re-render tree to update visual state
+ */
+function handleMultiSelectClick(e, item, selection, lastClicked, getVisibleItems, rerender) {
+  const key = selKey(item.botId, item.path);
+
+  if (e.shiftKey && lastClicked.value) {
+    // Range select
+    const visible = getVisibleItems();
+    const fromIdx = visible.findIndex(
+      (v) => selKey(v.botId, v.path) === selKey(lastClicked.value.botId, lastClicked.value.path)
+    );
+    const toIdx = visible.findIndex((v) => selKey(v.botId, v.path) === key);
+    if (fromIdx !== -1 && toIdx !== -1) {
+      const lo = Math.min(fromIdx, toIdx);
+      const hi = Math.max(fromIdx, toIdx);
+      if (!e.ctrlKey && !e.metaKey) selection.clear();
+      for (let i = lo; i <= hi; i++) {
+        const v = visible[i];
+        selection.add(selKey(v.botId, v.path));
+      }
+    }
+    rerender();
+    return true;
+  }
+
+  if (e.ctrlKey || e.metaKey) {
+    // Toggle
+    if (selection.has(key)) selection.delete(key);
+    else selection.add(key);
+    lastClicked.value = item;
+    rerender();
+    return true;
+  }
+
+  // Plain click — clear multi-selection, let normal handler proceed
+  selection.clear();
+  lastClicked.value = item;
+  return false;
+}
+
+/**
+ * Show context menu for one or more selected items.
+ * @param {MouseEvent} e
+ * @param {{ items: Array<{botId,path,type}>, isTopLevel?: boolean, onDeleted: () => void }} opts
  */
 function showTreeContextMenu(e, opts) {
   e.preventDefault();
   e.stopPropagation();
   dismissContextMenu();
 
-  // Don't show menu for top-level bot folders (virtual nodes)
   if (opts.isTopLevel) return;
+  const items = opts.items.filter((i) => !i.isTopLevel);
+  if (items.length === 0) return;
 
   const menu = document.createElement('div');
   menu.className = 'tree-context-menu';
   menu.style.left = `${e.clientX}px`;
   menu.style.top = `${e.clientY}px`;
 
+  const count = items.length;
   const deleteItem = document.createElement('div');
   deleteItem.className = 'tree-context-menu-item danger';
-  deleteItem.textContent = 'Delete';
+  deleteItem.textContent = count > 1 ? `Delete ${count} items` : 'Delete';
   deleteItem.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     dismissContextMenu();
+
     const label =
-      opts.type === 'dir' ? `folder "${opts.path}" and all its contents` : `file "${opts.path}"`;
+      count > 1
+        ? `${count} items`
+        : items[0].type === 'dir'
+          ? `folder "${items[0].path}" and all its contents`
+          : `file "${items[0].path}"`;
     if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
-    const res = await api(`/api/productions/${encodeURIComponent(opts.botId)}/by-path`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: opts.path }),
-    });
-    if (res.ok) {
-      opts.onDeleted();
-    } else {
-      alert(res.error || 'Delete failed');
+
+    let failed = 0;
+    for (const item of items) {
+      const res = await api(`/api/productions/${encodeURIComponent(item.botId)}/delete-by-path`, {
+        method: 'POST',
+        body: { path: item.path },
+      });
+      if (!res.ok) failed++;
     }
+    if (failed > 0) alert(`${failed} of ${count} deletions failed`);
+    opts.onDeleted();
   });
 
   menu.appendChild(deleteItem);
   document.body.appendChild(menu);
   _activeContextMenu = menu;
 
-  // Clamp menu position if it overflows viewport
   const rect = menu.getBoundingClientRect();
   if (rect.right > window.innerWidth) menu.style.left = `${window.innerWidth - rect.width - 4}px`;
   if (rect.bottom > window.innerHeight)
@@ -144,6 +245,8 @@ export async function renderProductions(el) {
     const fresh = await api('/api/productions/all-trees');
     tree = Array.isArray(fresh.tree) ? fresh.tree : [];
     selectedFile = null;
+    multiSelection.clear();
+    lastClicked.value = null;
     renderTree(document.getElementById('prod-tree-container'), tree);
     const panel = document.getElementById('prod-content-panel');
     if (panel) panel.innerHTML = '<p class="text-dim">Select a file from the tree</p>';
@@ -164,6 +267,8 @@ export async function renderProductions(el) {
   const STORAGE_KEY = 'prod-expanded-all';
   const expandedDirs = new Set();
   let selectedFile = null;
+  const multiSelection = new Set(); // Set of selKey strings
+  const lastClicked = { value: null }; // { botId, path, type }
   let searchFilter = '';
   let statusFilter = '';
 
@@ -263,6 +368,18 @@ export async function renderProductions(el) {
     }
   }
 
+  function getVisibleItems() {
+    return collectVisibleItems(tree, null, expandedDirs, tree, matchesFilters);
+  }
+  function rerenderTree() {
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  }
+  function getSelectedItems() {
+    // Resolve selKey set → item objects from visible list
+    const visible = getVisibleItems();
+    return visible.filter((v) => multiSelection.has(selKey(v.botId, v.path)));
+  }
+
   function renderTreeNode(parent, node, botId) {
     if (node.type === 'dir') {
       // Top-level dirs are bot folders (path = botId)
@@ -270,29 +387,45 @@ export async function renderProductions(el) {
       const resolvedBotId = isTopLevel ? node.path : botId;
       const expandKey = isTopLevel ? node.path : `${resolvedBotId}/${node.path}`;
       const isExpanded = expandedDirs.has(expandKey);
+      const isMultiSel = !isTopLevel && multiSelection.has(selKey(resolvedBotId, node.path));
       const item = document.createElement('div');
-      item.className = 'tree-item';
+      item.className = `tree-item${isMultiSel ? ' multi-selected' : ''}`;
       item.innerHTML = `<span class="tree-chevron${isExpanded ? ' expanded' : ''}">&#9654;</span> ${escapeHtml(node.name)}/`;
       if (isTopLevel) {
         item.style.fontWeight = '600';
       }
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        if (!isTopLevel) {
+          const consumed = handleMultiSelectClick(
+            e,
+            { botId: resolvedBotId, path: node.path, type: 'dir' },
+            multiSelection,
+            lastClicked,
+            getVisibleItems,
+            rerenderTree
+          );
+          if (consumed) return;
+        }
         if (expandedDirs.has(expandKey)) {
           expandedDirs.delete(expandKey);
         } else {
           expandedDirs.add(expandKey);
         }
         saveExpandState();
-        renderTree(document.getElementById('prod-tree-container'), tree);
+        rerenderTree();
       });
       item.addEventListener('contextmenu', (e) => {
-        showTreeContextMenu(e, {
-          botId: resolvedBotId,
-          path: node.path,
-          type: 'dir',
-          isTopLevel,
-          onDeleted: () => reloadTree(),
-        });
+        const thisItem = { botId: resolvedBotId, path: node.path, type: 'dir', isTopLevel };
+        const key = selKey(resolvedBotId, node.path);
+        // If right-clicking an item not in selection, select only it
+        if (!multiSelection.has(key) && !isTopLevel) {
+          multiSelection.clear();
+          multiSelection.add(key);
+          lastClicked.value = thisItem;
+          rerenderTree();
+        }
+        const items = multiSelection.size > 0 ? getSelectedItems() : [thisItem];
+        showTreeContextMenu(e, { items, isTopLevel, onDeleted: () => reloadTree() });
       });
       parent.appendChild(item);
 
@@ -308,8 +441,10 @@ export async function renderProductions(el) {
     } else {
       if (!matchesFilters(node)) return;
       const item = document.createElement('div');
-      const isSelected = selectedFile?.path === node.path && selectedFile?._botId === botId;
-      item.className = `tree-item${isSelected ? ' selected' : ''}`;
+      const key = selKey(botId, node.path);
+      const isFileSelected = selectedFile?.path === node.path && selectedFile?._botId === botId;
+      const isMultiSel = multiSelection.has(key);
+      item.className = `tree-item${isFileSelected ? ' selected' : ''}${isMultiSel ? ' multi-selected' : ''}`;
 
       let statusDotHtml = '';
       if (node.evaluation?.status === 'approved')
@@ -328,23 +463,35 @@ export async function renderProductions(el) {
       const dotHtml = statusDotHtml + coherenceDotHtml;
       item.innerHTML = `<span style="width:14px;flex-shrink:0"></span>${dotHtml} ${escapeHtml(node.name)}`;
       item.title = node.description || node.path;
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        const consumed = handleMultiSelectClick(
+          e,
+          { botId, path: node.path, type: 'file' },
+          multiSelection,
+          lastClicked,
+          getVisibleItems,
+          rerenderTree
+        );
+        if (consumed) return;
         selectedFile = { ...node, _botId: botId };
         history.replaceState(
           null,
           '',
           `#/productions?bot=${encodeURIComponent(botId)}&file=${encodeURIComponent(node.path)}`
         );
-        renderTree(document.getElementById('prod-tree-container'), tree);
+        rerenderTree();
         renderFileViewer(botId, node);
       });
       item.addEventListener('contextmenu', (e) => {
-        showTreeContextMenu(e, {
-          botId,
-          path: node.path,
-          type: 'file',
-          onDeleted: () => reloadTree(),
-        });
+        const thisItem = { botId, path: node.path, type: 'file' };
+        if (!multiSelection.has(key)) {
+          multiSelection.clear();
+          multiSelection.add(key);
+          lastClicked.value = thisItem;
+          rerenderTree();
+        }
+        const items = multiSelection.size > 0 ? getSelectedItems() : [thisItem];
+        showTreeContextMenu(e, { items, onDeleted: () => reloadTree() });
       });
       parent.appendChild(item);
     }
@@ -782,6 +929,8 @@ export async function renderBotProductions(el, botId) {
     const fresh = await api(`/api/productions/${encodeURIComponent(botId)}/tree`);
     tree = Array.isArray(fresh.tree) ? fresh.tree : [];
     selectedFile = null;
+    multiSelection.clear();
+    lastClicked.value = null;
     renderTree(document.getElementById('prod-tree-container'), tree);
     const panel = document.getElementById('prod-content-panel');
     if (panel) panel.innerHTML = '<p class="text-dim">Select a file from the tree</p>';
@@ -791,6 +940,8 @@ export async function renderBotProductions(el, botId) {
   const BOT_STORAGE_KEY = `prod-expanded-${botId}`;
   const expandedDirs = new Set();
   let selectedFile = null;
+  const multiSelection = new Set();
+  const lastClicked = { value: null };
   let searchFilter = '';
   let statusFilter = '';
 
@@ -897,28 +1048,53 @@ export async function renderBotProductions(el, botId) {
     }
   }
 
+  function getVisibleItems() {
+    return collectVisibleItemsSingleBot(tree, botId, expandedDirs, matchesFilters);
+  }
+  function rerenderTree() {
+    renderTree(document.getElementById('prod-tree-container'), tree);
+  }
+  function getSelectedItems() {
+    const visible = getVisibleItems();
+    return visible.filter((v) => multiSelection.has(selKey(v.botId, v.path)));
+  }
+
   function renderTreeNode(parent, node) {
     if (node.type === 'dir') {
       const isExpanded = expandedDirs.has(node.path);
+      const isMultiSel = multiSelection.has(selKey(botId, node.path));
       const item = document.createElement('div');
-      item.className = 'tree-item';
+      item.className = `tree-item${isMultiSel ? ' multi-selected' : ''}`;
       item.innerHTML = `<span class="tree-chevron${isExpanded ? ' expanded' : ''}">&#9654;</span> ${escapeHtml(node.name)}/`;
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        const consumed = handleMultiSelectClick(
+          e,
+          { botId, path: node.path, type: 'dir' },
+          multiSelection,
+          lastClicked,
+          getVisibleItems,
+          rerenderTree
+        );
+        if (consumed) return;
         if (expandedDirs.has(node.path)) {
           expandedDirs.delete(node.path);
         } else {
           expandedDirs.add(node.path);
         }
         saveExpandState();
-        renderTree(document.getElementById('prod-tree-container'), tree);
+        rerenderTree();
       });
       item.addEventListener('contextmenu', (e) => {
-        showTreeContextMenu(e, {
-          botId,
-          path: node.path,
-          type: 'dir',
-          onDeleted: () => reloadTree(),
-        });
+        const thisItem = { botId, path: node.path, type: 'dir' };
+        const key = selKey(botId, node.path);
+        if (!multiSelection.has(key)) {
+          multiSelection.clear();
+          multiSelection.add(key);
+          lastClicked.value = thisItem;
+          rerenderTree();
+        }
+        const items = multiSelection.size > 0 ? getSelectedItems() : [thisItem];
+        showTreeContextMenu(e, { items, onDeleted: () => reloadTree() });
       });
       parent.appendChild(item);
 
@@ -934,8 +1110,10 @@ export async function renderBotProductions(el, botId) {
     } else {
       if (!matchesFilters(node)) return;
       const item = document.createElement('div');
-      const isSelected = selectedFile?.path === node.path;
-      item.className = `tree-item${isSelected ? ' selected' : ''}`;
+      const key = selKey(botId, node.path);
+      const isFileSelected = selectedFile?.path === node.path;
+      const isMultiSel = multiSelection.has(key);
+      item.className = `tree-item${isFileSelected ? ' selected' : ''}${isMultiSel ? ' multi-selected' : ''}`;
 
       let statusDotHtml = '';
       if (node.evaluation?.status === 'approved')
@@ -954,23 +1132,35 @@ export async function renderBotProductions(el, botId) {
       const dotHtml = statusDotHtml + coherenceDotHtml;
       item.innerHTML = `<span style="width:14px;flex-shrink:0"></span>${dotHtml} ${escapeHtml(node.name)}`;
       item.title = node.description || node.path;
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        const consumed = handleMultiSelectClick(
+          e,
+          { botId, path: node.path, type: 'file' },
+          multiSelection,
+          lastClicked,
+          getVisibleItems,
+          rerenderTree
+        );
+        if (consumed) return;
         selectedFile = node;
         history.replaceState(
           null,
           '',
           `#/productions/${encodeURIComponent(botId)}?file=${encodeURIComponent(node.path)}`
         );
-        renderTree(document.getElementById('prod-tree-container'), tree);
+        rerenderTree();
         renderFileViewer(botId, node);
       });
       item.addEventListener('contextmenu', (e) => {
-        showTreeContextMenu(e, {
-          botId,
-          path: node.path,
-          type: 'file',
-          onDeleted: () => reloadTree(),
-        });
+        const thisItem = { botId, path: node.path, type: 'file' };
+        if (!multiSelection.has(key)) {
+          multiSelection.clear();
+          multiSelection.add(key);
+          lastClicked.value = thisItem;
+          rerenderTree();
+        }
+        const items = multiSelection.size > 0 ? getSelectedItems() : [thisItem];
+        showTreeContextMenu(e, { items, onDeleted: () => reloadTree() });
       });
       parent.appendChild(item);
     }

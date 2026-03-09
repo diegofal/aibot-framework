@@ -25,7 +25,7 @@ function makeConfig(baseDir: string): Config {
   } as unknown as Config;
 }
 
-describe('DELETE /api/productions/:botId/by-path', () => {
+describe('POST /api/productions/:botId/delete-by-path', () => {
   let app: Hono;
   let botDir: string;
   let service: ProductionsService;
@@ -95,8 +95,8 @@ describe('DELETE /api/productions/:botId/by-path', () => {
   });
 
   test('delete file by path removes file and changelog entry', async () => {
-    const res = await app.request('/api/productions/bot1/by-path', {
-      method: 'DELETE',
+    const res = await app.request('/api/productions/bot1/delete-by-path', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: 'file1.md' }),
     });
@@ -111,8 +111,8 @@ describe('DELETE /api/productions/:botId/by-path', () => {
 
   test('delete file without changelog entry still removes file', async () => {
     writeFileSync(join(botDir, 'untracked.md'), '# Untracked');
-    const res = await app.request('/api/productions/bot1/by-path', {
-      method: 'DELETE',
+    const res = await app.request('/api/productions/bot1/delete-by-path', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: 'untracked.md' }),
     });
@@ -126,8 +126,8 @@ describe('DELETE /api/productions/:botId/by-path', () => {
   });
 
   test('delete folder recursively removes files and changelog entries', async () => {
-    const res = await app.request('/api/productions/bot1/by-path', {
-      method: 'DELETE',
+    const res = await app.request('/api/productions/bot1/delete-by-path', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: 'subdir' }),
     });
@@ -141,8 +141,8 @@ describe('DELETE /api/productions/:botId/by-path', () => {
   });
 
   test('path traversal is blocked', async () => {
-    const res = await app.request('/api/productions/bot1/by-path', {
-      method: 'DELETE',
+    const res = await app.request('/api/productions/bot1/delete-by-path', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: '../../../etc/passwd' }),
     });
@@ -151,8 +151,8 @@ describe('DELETE /api/productions/:botId/by-path', () => {
   });
 
   test('absolute path is blocked', async () => {
-    const res = await app.request('/api/productions/bot1/by-path', {
-      method: 'DELETE',
+    const res = await app.request('/api/productions/bot1/delete-by-path', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: '/etc/passwd' }),
     });
@@ -161,8 +161,8 @@ describe('DELETE /api/productions/:botId/by-path', () => {
   });
 
   test('non-existent bot returns 404', async () => {
-    const res = await app.request('/api/productions/nonexistent/by-path', {
-      method: 'DELETE',
+    const res = await app.request('/api/productions/nonexistent/delete-by-path', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: 'file1.md' }),
     });
@@ -171,8 +171,8 @@ describe('DELETE /api/productions/:botId/by-path', () => {
   });
 
   test('non-existent file returns 404', async () => {
-    const res = await app.request('/api/productions/bot1/by-path', {
-      method: 'DELETE',
+    const res = await app.request('/api/productions/bot1/delete-by-path', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: 'nope.md' }),
     });
@@ -181,8 +181,8 @@ describe('DELETE /api/productions/:botId/by-path', () => {
   });
 
   test('missing path in body returns 400', async () => {
-    const res = await app.request('/api/productions/bot1/by-path', {
-      method: 'DELETE',
+    const res = await app.request('/api/productions/bot1/delete-by-path', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
