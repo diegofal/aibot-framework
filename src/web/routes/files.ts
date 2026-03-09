@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import type { Config } from '../../config';
 import { resolveAgentConfig } from '../../config';
 import type { Logger } from '../../logger';
+import { getTenantId, isBotAccessible } from '../../tenant/tenant-scoping';
 
 /** Sensitive file patterns — ported from src/tools/file.ts BUILTIN_DENIED */
 const DENIED_PATTERNS = [
@@ -31,7 +32,7 @@ export function filesRoutes(deps: { config: Config; logger: Logger }) {
   app.get('/:botId/*', async (c) => {
     const botId = c.req.param('botId');
     const botConfig = config.bots.find((b) => b.id === botId);
-    if (!botConfig) {
+    if (!botConfig || !isBotAccessible(botConfig, getTenantId(c))) {
       return c.json({ error: 'Bot not found' }, 404);
     }
 

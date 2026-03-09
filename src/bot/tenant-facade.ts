@@ -27,6 +27,13 @@ export class TenantFacade {
   initializeTenantManager(config: TenantManagerConfig, billing?: BillingProvider): void {
     this.tenantManager = new TenantManager(config, this.deps.logger);
     this.billingProvider = billing ?? new NoOpBillingProvider();
+
+    // Rotate old usage records on startup (keeps current month only in main file)
+    const rotation = this.tenantManager.rotateUsage();
+    if (rotation.archived > 0) {
+      this.deps.logger.info(rotation, 'Usage records rotated on startup');
+    }
+
     this.deps.logger.info({ dataDir: config.dataDir }, 'Tenant manager initialized');
   }
 

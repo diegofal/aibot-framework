@@ -42,32 +42,31 @@ export function registerBuiltinCommands(
 
     const noFlush = (telegramCtx.match || '').toString().trim().includes('--no-flush');
 
-    const clearedBots: string[] = [];
-    for (const botId of ctx.runningBots) {
-      const sessionKey = ctx.sessionManager.deriveKey(botId, telegramCtx);
-      const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
+    const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
+    const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
 
-      if (!noFlush && ctx.config.soul.enabled) {
-        const history = ctx.sessionManager.getFullHistory(serializedKey);
-        if (history.length > 0) {
-          await memoryFlusher.flushSessionToMemory(history, botId);
-        }
+    if (!noFlush && ctx.config.soul.enabled) {
+      const history = ctx.sessionManager.getFullHistory(serializedKey);
+      if (history.length > 0) {
+        const isolationActive = config.userIsolation?.enabled || !!config.tenantId;
+        const userId =
+          isolationActive && telegramCtx.from?.id ? String(telegramCtx.from.id) : undefined;
+        await memoryFlusher.flushSessionToMemory(history, config.id, userId);
       }
-
-      ctx.sessionManager.clearSession(serializedKey);
-      clearedBots.push(botId);
     }
 
+    ctx.sessionManager.clearSession(serializedKey);
+
     ctx.logger.info(
-      { chatId: telegramCtx.chat.id, clearedBots, noFlush },
-      'Sessions cleared for all bots'
+      { chatId: telegramCtx.chat.id, botId: config.id, noFlush },
+      'Session cleared for bot'
     );
     await telegramCtx.reply(
       noFlush
-        ? '🗑️ Conversation history cleared for all bots. Memory flush skipped.'
+        ? '🗑️ Conversation history cleared. Memory flush skipped.'
         : ctx.config.soul.enabled
-          ? '🗑️ Conversation history cleared for all bots. Key facts saved to memory.'
-          : '🗑️ Conversation history cleared for all bots.'
+          ? '🗑️ Conversation history cleared. Key facts saved to memory.'
+          : '🗑️ Conversation history cleared.'
     );
   });
 
@@ -97,7 +96,7 @@ export function registerBuiltinCommands(
     }
 
     const chatId = telegramCtx.chat.id;
-    const users = ctx.seenUsers.get(chatId);
+    const users = ctx.seenUsers.get(config.id)?.get(chatId);
 
     if (!users || users.size === 0) {
       await telegramCtx.reply(

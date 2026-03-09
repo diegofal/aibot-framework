@@ -96,7 +96,8 @@
           <p>The tenant auth middleware resolves the Bearer token in two ways: if the token starts with <code>sess_</code>, it looks up the <code>SessionStore</code>; otherwise it matches against tenant API keys (<code>aibot_</code> prefix) or the <code>ADMIN_API_KEY</code> env var. Admin sessions (role <code>admin</code>) get the virtual <code>__admin__</code> tenantId with <code>enterprise</code> plan.</p>
 
           <h3>Route Scoping</h3>
-          <p>All route handlers use <code>getTenantId(c)</code>, <code>scopeBots()</code>, and <code>isBotAccessible()</code> from <code>src/tenant/tenant-scoping.ts</code> to filter data per-tenant. When <code>tenantId</code> is <code>__admin__</code>, both helpers treat it as a super-tenant: <code>scopeBots</code> returns all bots (including legacy bots without <code>tenantId</code>), and <code>isBotAccessible</code> returns true for any bot.</p>
+          <p>All route handlers use <code>getTenantId(c)</code>, <code>scopeBots()</code>, <code>isBotAccessible()</code>, and <code>isAdminOrSingleTenant()</code> from <code>src/tenant/tenant-scoping.ts</code> to filter data per-tenant. When <code>tenantId</code> is <code>__admin__</code>, both helpers treat it as a super-tenant: <code>scopeBots</code> returns all bots (including legacy bots without <code>tenantId</code>), and <code>isBotAccessible</code> returns true for any bot.</p>
+          <p>Data-bearing endpoints (agent-loop status, status, activity, proposals, dashboard badges) filter results by the tenant's allowed bot IDs. Global admin endpoints (settings, tools, MCP, integrations, system logs) use <code>isAdminOrSingleTenant()</code> middleware to return 403 for non-admin tenants.</p>
         </div>
 
         <!-- Data Isolation -->

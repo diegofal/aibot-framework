@@ -91,7 +91,8 @@ export class ContextCompactor {
     messages: ChatMessage[],
     serializedKey: string,
     botId: string,
-    config: CompactionConfig
+    config: CompactionConfig,
+    userId?: string
   ): Promise<CompactionResult> {
     if (!config.enabled) {
       return { messages, compacted: false };
@@ -137,7 +138,7 @@ export class ContextCompactor {
     }
 
     // Fire-and-forget memory flush of older messages
-    this.memoryFlusher.flushWithScoring(olderMessages, botId).catch((err) => {
+    this.memoryFlusher.flushWithScoring(olderMessages, botId, userId).catch((err) => {
       botLogger.warn({ err }, 'Memory flush during compaction failed (non-fatal)');
     });
 

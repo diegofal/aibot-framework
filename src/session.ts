@@ -181,6 +181,16 @@ export class SessionManager {
   private transcriptPath(serializedKey: string): string {
     // Replace colons with dashes for filesystem safety
     const filename = `${serializedKey.replace(/:/g, '-')}.jsonl`;
+    // Organize transcripts in per-bot subdirectories for isolation
+    const botMatch = serializedKey.match(/^bot:([^:]+):/);
+    if (botMatch) {
+      const newPath = join(this.transcriptsDir, botMatch[1], filename);
+      // Backward compat: if old flat path exists but new path doesn't, use old path
+      if (!existsSync(newPath) && existsSync(join(this.transcriptsDir, filename))) {
+        return join(this.transcriptsDir, filename);
+      }
+      return newPath;
+    }
     return join(this.transcriptsDir, filename);
   }
 

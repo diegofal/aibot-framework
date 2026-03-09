@@ -1,6 +1,11 @@
 import { destroyActivity, renderActivity } from './pages/activity.js';
 import { renderAgentProposals } from './pages/agent-proposals.js';
 import { renderAgentDetail, renderAgentEdit, renderAgents } from './pages/agents.js';
+import { renderBaasAnalytics } from './pages/baas-analytics.js';
+import { renderBaasCustomizations } from './pages/baas-customizations.js';
+import { renderBaasTemplateDetail, renderBaasTemplates } from './pages/baas-templates.js';
+import { renderBaasTenants } from './pages/baas-tenants.js';
+import { renderBaasWebhooks } from './pages/baas-webhooks.js';
 import {
   renderBotConversations,
   renderConversationChat,
@@ -123,6 +128,15 @@ const routes = [
   { pattern: /^#\/activity/, handler: () => renderActivity(content) },
   { pattern: /^#\/integrations$/, handler: () => renderIntegrations(content) },
   { pattern: /^#\/settings$/, handler: () => renderSettings(content) },
+  {
+    pattern: /^#\/baas\/templates\/([^/]+)$/,
+    handler: (m) => renderBaasTemplateDetail(content, decodeURIComponent(m[1])),
+  },
+  { pattern: /^#\/baas\/templates$/, handler: () => renderBaasTemplates(content) },
+  { pattern: /^#\/baas\/webhooks$/, handler: () => renderBaasWebhooks(content) },
+  { pattern: /^#\/baas\/customizations$/, handler: () => renderBaasCustomizations(content) },
+  { pattern: /^#\/baas\/analytics$/, handler: () => renderBaasAnalytics(content) },
+  { pattern: /^#\/baas\/tenants$/, handler: () => renderBaasTenants(content) },
 ];
 
 function navigate() {
@@ -152,6 +166,24 @@ function navigate() {
   }
   sidebar.style.display = '';
   updateAuthUI();
+
+  // Toggle BaaS sidebar links based on multi-tenant mode
+  const baasDisplay = multiTenantEnabled ? '' : 'none';
+  document.querySelectorAll('.nav-link-baas').forEach((el) => {
+    el.style.display = baasDisplay;
+  });
+
+  // Hide admin-only BaaS pages from tenant users
+  const auth = getAuthContext();
+  if (auth.role === 'tenant') {
+    document.querySelectorAll('.nav-link-baas-admin').forEach((el) => {
+      el.style.display = 'none';
+    });
+    // Hide admin-only nav links (Settings, Integrations, Tools, Tool Runner)
+    document.querySelectorAll('.nav-link-admin').forEach((el) => {
+      el.style.display = 'none';
+    });
+  }
 
   const hash = location.hash || '#/';
   if (hash === '#') {
@@ -210,79 +242,27 @@ async function loadStatus() {
   }
 }
 
-// Inbox badge polling
-async function loadInboxBadge() {
+// Batched badge polling — single request for all badge counts
+async function loadBadges() {
   try {
-    const res = await authedFetch('/api/ask-human/count');
+    const res = await authedFetch('/api/dashboard/badges');
     if (!res.ok) return;
     const data = await res.json();
-    const badge = document.getElementById('inbox-badge');
-    if (badge) {
-      if (data.count > 0) {
-        badge.textContent = data.count;
-        badge.style.display = '';
-      } else {
-        badge.style.display = 'none';
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
-// Feedback badge polling
-async function loadFeedbackBadge() {
-  try {
-    const res = await authedFetch('/api/agent-feedback/count');
-    if (!res.ok) return;
-    const data = await res.json();
-    const badge = document.getElementById('feedback-badge');
-    if (badge) {
-      if (data.count > 0) {
-        badge.textContent = data.count;
-        badge.style.display = '';
-      } else {
-        badge.style.display = 'none';
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
-// Permissions badge polling
-async function loadPermissionsBadge() {
-  try {
-    const res = await authedFetch('/api/ask-permission/count');
-    if (!res.ok) return;
-    const data = await res.json();
-    const badge = document.getElementById('permissions-badge');
-    if (badge) {
-      if (data.count > 0) {
-        badge.textContent = data.count;
-        badge.style.display = '';
-      } else {
-        badge.style.display = 'none';
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
-// Agent proposals badge polling
-async function loadAgentProposalsBadge() {
-  try {
-    const res = await authedFetch('/api/agent-proposals/count');
-    if (!res.ok) return;
-    const data = await res.json();
-    const badge = document.getElementById('agent-proposals-badge');
-    if (badge) {
-      if (data.count > 0) {
-        badge.textContent = data.count;
-        badge.style.display = '';
-      } else {
-        badge.style.display = 'none';
+    const badges = [
+      ['inbox-badge', data.askHuman],
+      ['feedback-badge', data.agentFeedback],
+      ['permissions-badge', data.askPermission],
+      ['agent-proposals-badge', data.agentProposals],
+    ];
+    for (const [id, count] of badges) {
+      const badge = document.getElementById(id);
+      if (badge) {
+        if (count > 0) {
+          badge.textContent = count;
+          badge.style.display = '';
+        } else {
+          badge.style.display = 'none';
+        }
       }
     }
   } catch {
@@ -298,14 +278,8 @@ await loadAuthStatus();
 loadStatus();
 setInterval(loadStatus, 10000);
 
-loadInboxBadge();
-setInterval(loadInboxBadge, 10000);
-loadFeedbackBadge();
-setInterval(loadFeedbackBadge, 10000);
-loadPermissionsBadge();
-setInterval(loadPermissionsBadge, 10000);
-loadAgentProposalsBadge();
-setInterval(loadAgentProposalsBadge, 10000);
+loadBadges();
+setInterval(loadBadges, 10000);
 
 // Initial route
 navigate();

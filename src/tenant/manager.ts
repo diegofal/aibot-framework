@@ -17,6 +17,7 @@ export interface Tenant {
     apiCallsPerMonth: number;
     storageBytes: number;
   };
+  rateLimitOverride?: number; // custom max requests/min, overrides plan default
   billing?: {
     stripeCustomerId?: string;
     stripeSubscriptionId?: string;
@@ -306,6 +307,51 @@ export class TenantManager {
       default:
         return false;
     }
+  }
+
+  /**
+   * Rotate usage: archive records older than current month to a separate file.
+   * Keeps the main usage.jsonl lean for fast getCurrentMonthUsage() queries.
+   * Should be called monthly (e.g., via cron or at startup).
+   */
+  rotateUsage(): { archived: number; kept: number } {
+    if (!existsSync(this.usagePath)) return { archived: 0, kept: 0 };
+
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const content = readFileSync(this.usagePath, 'utf-8');
+    const lines = content.split('\n').filter((l) => l.trim());
+
+    const current: string[] = [];
+    const old: string[] = [];
+
+    for (const line of lines) {
+      try {
+        const record: UsageRecord = JSON.parse(line);
+        if (record.timestamp >= startOfMonth) {
+          current.push(line);
+        } else {
+          old.push(line);
+        }
+      } catch {
+        // Drop corrupt lines during rotation
+      }
+    }
+
+    if (old.length === 0) return { archived: 0, kept: current.length };
+
+    // Append old records to archive file
+    const archivePath = join(
+      this.config.dataDir,
+      `usage-archive-${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}.jsonl`
+    );
+    writeFileSync(archivePath, `${old.join('\n')}\n`, { flag: 'a' });
+
+    // Rewrite main file with only current month
+    writeFileSync(this.usagePath, current.length > 0 ? `${current.join('\n')}\n` : '');
+
+    this.logger.info({ archived: old.length, kept: current.length }, 'Usage rotated');
+    return { archived: old.length, kept: current.length };
   }
 
   // Bot counting for plan limits

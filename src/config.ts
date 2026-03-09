@@ -122,6 +122,15 @@ export const BotAgentLoopOverrideSchema = z
         executorMs: z.number().int().positive().optional(),
       })
       .optional(),
+    /** Per-bot agent loop enable/disable — undefined = inherit global setting */
+    enabled: z.boolean().optional(),
+    /** Standing directives: ongoing behavioral instructions injected into strategist/planner/executor prompts */
+    directives: z.array(z.string().max(500)).max(10).optional(),
+    /** Preset directive bundles — predefined behavioral instruction sets */
+    presetDirectives: z
+      .array(z.enum(['conversation-review']))
+      .max(5)
+      .optional(),
     loopDetection: z
       .object({
         enabled: z.boolean().optional(),
@@ -897,8 +906,13 @@ export function resolveAgentConfig(
   globalConfig: Config,
   botConfig: BotConfig
 ): ResolvedAgentConfig {
+  // When backend is claude-cli, default to claudeCli.model (not ollama's primary)
+  const defaultModel =
+    botConfig.llmBackend === 'claude-cli'
+      ? (globalConfig.claudeCli?.model ?? 'claude')
+      : globalConfig.ollama.models.primary;
   return {
-    model: botConfig.model ?? globalConfig.ollama.models.primary,
+    model: botConfig.model ?? defaultModel,
     llmBackend: botConfig.llmBackend,
     soulDir: botConfig.soulDir ?? `${globalConfig.soul.dir}/${botConfig.id}`,
     workDir:
@@ -941,10 +955,17 @@ export function resolveAgentConfigWithTenant(
     ? `${dataDir}/${tenantId}/bots/${botConfig.id}/productions`
     : `${globalConfig.productions?.baseDir ?? './productions'}/${botConfig.id}`;
 
+  // Resolve llmBackend first so we can pick the right model default
+  const resolvedBackend =
+    botConfig.llmBackend ?? (tenantConfig?.llmBackend as 'ollama' | 'claude-cli' | undefined);
+  const defaultModel =
+    resolvedBackend === 'claude-cli'
+      ? (globalConfig.claudeCli?.model ?? 'claude')
+      : globalConfig.ollama.models.primary;
+
   return {
-    model: botConfig.model ?? tenantConfig?.model ?? globalConfig.ollama.models.primary,
-    llmBackend:
-      botConfig.llmBackend ?? (tenantConfig?.llmBackend as 'ollama' | 'claude-cli' | undefined),
+    model: botConfig.model ?? tenantConfig?.model ?? defaultModel,
+    llmBackend: resolvedBackend,
     soulDir: botConfig.soulDir ?? defaultSoulDir,
     workDir: botConfig.workDir ?? defaultWorkDir,
     systemPrompt:

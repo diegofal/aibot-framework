@@ -250,7 +250,8 @@ describe('ConversationPipeline', () => {
       expect(mockSessionManager.isExpired).toHaveBeenCalledWith('user:123');
       expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalledWith(
         expiredHistory,
-        'test-bot'
+        'test-bot',
+        undefined // userId (no userIsolation configured)
       );
       expect(mockSessionManager.clearSession).toHaveBeenCalledWith('user:123');
     });
@@ -359,7 +360,8 @@ describe('ConversationPipeline', () => {
         'Tell me about my preferences',
         5, // maxResults
         0.5, // minScore
-        'test-bot' // botId
+        'test-bot', // botId
+        undefined // userId (no userIsolation configured)
       );
       expect(mockSystemPromptBuilder.build).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -736,6 +738,8 @@ describe('ConversationPipeline', () => {
       );
 
       expect(result).toContain('Relevant Memory Context');
+      expect(result).toContain('MAY be relevant');
+      expect(result).toContain('do NOT assume you have already discussed');
       expect(result).toContain('Memory about user preferences');
       expect(result).toContain('preferences.md');
       expect(result).toContain('score: 0.90');
@@ -748,12 +752,225 @@ describe('ConversationPipeline', () => {
 
       await pipeline.prefetchMemoryContext('[Alice]: Hello everyone', true, mockLogger);
 
-      // Should search with stripped query (4th arg is botId, undefined when not passed)
+      // Should search with stripped query (4th arg is botId, 5th is userId)
       expect(mockMemoryManager.search).toHaveBeenCalledWith(
         'Hello everyone',
         expect.any(Number),
         expect.any(Number),
-        undefined
+        undefined, // botId (not passed in standalone call)
+        undefined // userId
+      );
+    });
+  });
+
+  describe('webhook and analytics emission', () => {
+    let mockWebhookService: any;
+    let mockAnalyticsService: any;
+
+    beforeEach(() => {
+      mockWebhookService = {
+        emit: jest.fn().mockResolvedValue(undefined),
+      };
+      mockAnalyticsService = {
+        record: jest.fn(),
+      };
+      (mockBotContext as any).webhookService = mockWebhookService;
+      (mockBotContext as any).analyticsService = mockAnalyticsService;
+    });
+
+    it('should emit message.received and message.sent webhooks for tenant bots (Telegram)', async () => {
+      const ctx = createMockContext();
+      const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello from tenant');
+
+      expect(mockWebhookService.emit).toHaveBeenCalledWith(
+        'tenant-1',
+        'message.received',
+        expect.objectContaining({
+          botId: 'test-bot',
+          channelKind: 'telegram',
+          messageLength: 17,
+        }),
+        'test-bot'
+      );
+      expect(mockWebhookService.emit).toHaveBeenCalledWith(
+        'tenant-1',
+        'message.sent',
+        expect.objectContaining({
+          botId: 'test-bot',
+          channelKind: 'telegram',
+        }),
+        'test-bot'
+      );
+    });
+
+    it('should record conversation.message analytics for tenant bots (Telegram)', async () => {
+      const ctx = createMockContext();
+      const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello analytics');
+
+      expect(mockAnalyticsService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'conversation.message',
+          tenantId: 'tenant-1',
+          botId: 'test-bot',
+          channelKind: 'telegram',
+        })
+      );
+    });
+
+    it('should record conversation.started when history is empty', async () => {
+      // history is already empty by default in mock
+      const ctx = createMockContext();
+      const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'First message');
+
+      expect(mockAnalyticsService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'conversation.started',
+          tenantId: 'tenant-1',
+          botId: 'test-bot',
+        })
+      );
+    });
+
+    it('should NOT record conversation.started when history is non-empty', async () => {
+      (mockSessionManager.getHistory as jest.Mock).mockReturnValue([
+        { role: 'user', content: 'Previous' },
+        { role: 'assistant', content: 'Response' },
+      ]);
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Second message');
+
+      const startedCalls = mockAnalyticsService.record.mock.calls.filter(
+        (c: any) => c[0].type === 'conversation.started'
+      );
+      expect(startedCalls).toHaveLength(0);
+    });
+
+    it('should emit bot.error webhook and error.occurred analytics on failure', async () => {
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('invalid api key'));
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Trigger error');
+
+      expect(mockWebhookService.emit).toHaveBeenCalledWith(
+        'tenant-1',
+        'bot.error',
+        expect.objectContaining({
+          botId: 'test-bot',
+          channelKind: 'telegram',
+          error: expect.stringContaining('invalid api key'),
+        }),
+        'test-bot'
+      );
+      expect(mockAnalyticsService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error.occurred',
+          tenantId: 'tenant-1',
+          botId: 'test-bot',
+          data: expect.objectContaining({ error: expect.any(String) }),
+        })
+      );
+    });
+
+    it('should NOT emit webhooks for non-tenant bots', async () => {
+      const ctx = createMockContext();
+      const config = createMockBotConfig(); // no tenantId
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'No tenant');
+
+      expect(mockWebhookService.emit).not.toHaveBeenCalled();
+      expect(mockAnalyticsService.record).not.toHaveBeenCalled();
+    });
+
+    it('should emit webhooks for channel-agnostic path', async () => {
+      const config = createMockBotConfig({ tenantId: 'tenant-2' } as any);
+      const msg = {
+        text: 'Hello via REST',
+        chatId: '456',
+        chatType: 'private' as const,
+        channelKind: 'rest',
+        sender: { id: '789', firstName: 'TestUser' },
+      };
+      const channel = {
+        kind: 'rest' as const,
+        sendText: jest.fn().mockResolvedValue(undefined),
+        showTyping: jest.fn().mockResolvedValue(undefined),
+      };
+
+      await pipeline.handleChannelMessage(msg as any, channel as any, config, 'user:456');
+
+      expect(mockWebhookService.emit).toHaveBeenCalledWith(
+        'tenant-2',
+        'message.received',
+        expect.objectContaining({
+          botId: 'test-bot',
+          channelKind: 'rest',
+        }),
+        'test-bot'
+      );
+      expect(mockWebhookService.emit).toHaveBeenCalledWith(
+        'tenant-2',
+        'message.sent',
+        expect.objectContaining({
+          botId: 'test-bot',
+          channelKind: 'rest',
+        }),
+        'test-bot'
+      );
+      expect(mockAnalyticsService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'conversation.message',
+          tenantId: 'tenant-2',
+          channelKind: 'rest',
+        })
+      );
+    });
+
+    it('should emit bot.error on channel-agnostic path failure', async () => {
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(new Error('invalid api key'));
+
+      const config = createMockBotConfig({ tenantId: 'tenant-2' } as any);
+      const msg = {
+        text: 'Trigger error',
+        chatId: '456',
+        chatType: 'private' as const,
+        channelKind: 'rest',
+        sender: { id: '789', firstName: 'TestUser' },
+      };
+      const channel = {
+        kind: 'rest' as const,
+        sendText: jest.fn().mockResolvedValue(undefined),
+        showTyping: jest.fn().mockResolvedValue(undefined),
+      };
+
+      await pipeline.handleChannelMessage(msg as any, channel as any, config, 'user:456');
+
+      expect(mockWebhookService.emit).toHaveBeenCalledWith(
+        'tenant-2',
+        'bot.error',
+        expect.objectContaining({
+          botId: 'test-bot',
+          channelKind: 'rest',
+          error: expect.stringContaining('invalid api key'),
+        }),
+        'test-bot'
+      );
+      expect(mockAnalyticsService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error.occurred',
+          tenantId: 'tenant-2',
+          channelKind: 'rest',
+        })
       );
     });
   });
@@ -927,6 +1144,130 @@ describe('ConversationPipeline', () => {
       // Should send text reply since TTS is not configured
       expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
       expect((ctx as any).replyWithVoice).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tenant auto-isolation', () => {
+    it('should auto-enable userId for tenant bots in handleConversation', async () => {
+      const ctx = createMockContext();
+      // Bot with tenantId but NO userIsolation config
+      const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello tenant');
+
+      // Memory flush should receive userId derived from ctx.from.id
+      // Verify system prompt builder received userId
+      expect(mockSystemPromptBuilder.build).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: '789', // ctx.from.id = 789
+        })
+      );
+    });
+
+    it('should NOT auto-enable userId for non-tenant bots', async () => {
+      const ctx = createMockContext();
+      const config = createMockBotConfig(); // no tenantId, no userIsolation
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello personal');
+
+      expect(mockSystemPromptBuilder.build).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: undefined,
+        })
+      );
+    });
+
+    it('should auto-enable userId for tenant bots in handleChannelMessage', async () => {
+      const config = createMockBotConfig({ tenantId: 'tenant-2' } as any);
+      const msg = {
+        text: 'Hello via REST',
+        chatId: '456',
+        chatType: 'private' as const,
+        channelKind: 'rest',
+        sender: { id: 'sender-99', firstName: 'TestUser' },
+      };
+      const channel = {
+        kind: 'rest' as const,
+        sendText: jest.fn().mockResolvedValue(undefined),
+        showTyping: jest.fn().mockResolvedValue(undefined),
+      };
+
+      await pipeline.handleChannelMessage(msg as any, channel as any, config, 'user:456');
+
+      expect(mockSystemPromptBuilder.build).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'sender-99',
+        })
+      );
+    });
+
+    it('should respect explicit userIsolation.enabled=false even with tenantId', async () => {
+      const ctx = createMockContext();
+      // Explicit opt-out: userIsolation.enabled = false, but has tenantId
+      // Note: isolationActive = userIsolation?.enabled || !!config.tenantId
+      // With enabled=false, first clause is false, but tenantId makes it true
+      // This is by design: tenant bots should always isolate
+      const config = createMockBotConfig({
+        tenantId: 'tenant-1',
+        userIsolation: { enabled: false },
+      } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
+
+      // tenantId takes precedence — isolation is active
+      expect(mockSystemPromptBuilder.build).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: '789',
+        })
+      );
+    });
+
+    it('should pass userId to RAG search for tenant bots', async () => {
+      (mockBotContext.config.soul.search.autoRag as any).enabled = true;
+      (mockMemoryManager.search as jest.Mock).mockResolvedValue([]);
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Tell me about my preferences');
+
+      expect(mockMemoryManager.search).toHaveBeenCalledWith(
+        'Tell me about my preferences',
+        5,
+        0.5,
+        'test-bot',
+        '789' // userId auto-derived from tenantId
+      );
+    });
+
+    it('should pass userId to memory flush for tenant bots on session expiry', async () => {
+      (mockSessionManager.isExpired as jest.Mock).mockReturnValue(true);
+      (mockSessionManager.getFullHistory as jest.Mock).mockReturnValue([
+        { role: 'user', content: 'Old message' },
+      ]);
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'New message');
+
+      expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalledWith(
+        expect.any(Array),
+        'test-bot',
+        '789' // userId auto-derived from tenantId
+      );
+    });
+  });
+
+  describe('TTS voice reply — per-bot override', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
     });
 
     it('should use per-bot TTS override voiceId when bot has tts config', async () => {

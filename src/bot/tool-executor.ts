@@ -192,7 +192,7 @@ export class ToolExecutor extends EventEmitter {
         data: { toolName: e.toolName, args: e.args },
       })
     );
-    this.on('tool:end', (e) =>
+    this.on('tool:end', (e) => {
       stream.publish({
         type: 'tool:end',
         botId: e.botId,
@@ -203,8 +203,28 @@ export class ToolExecutor extends EventEmitter {
           durationMs: e.durationMs,
           result: e.result.slice(0, 300),
         },
-      })
-    );
+      });
+
+      // Record tool.called analytics for tenant bots
+      const analyticsService = this.ctx.analyticsService;
+      if (analyticsService) {
+        const botConfig = this.ctx.config.bots.find((b) => b.id === e.botId);
+        if (botConfig?.tenantId) {
+          analyticsService.record({
+            type: 'tool.called',
+            tenantId: botConfig.tenantId,
+            botId: e.botId,
+            chatId: String(e.chatId),
+            channelKind: 'unknown',
+            data: {
+              toolName: e.toolName,
+              durationMs: e.durationMs,
+              success: e.success,
+            },
+          });
+        }
+      }
+    });
     this.on('tool:error', (e) =>
       stream.publish({
         type: 'tool:error',

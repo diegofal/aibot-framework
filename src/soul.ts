@@ -182,7 +182,7 @@ export class SoulLoader {
    * Older daily logs and legacy.md are surfaced via memory_search.
    * Returns null if no soul files were loaded (caller should fall back).
    */
-  composeSystemPrompt(): string | null {
+  composeSystemPrompt(userId?: string): string | null {
     if (!this.config.enabled) {
       return null;
     }
@@ -243,7 +243,7 @@ export class SoulLoader {
     }
 
     // 7. Daily memory log (today only — older logs are consolidated into MEMORY.md)
-    const dailyLogs = this.readRecentDailyLogs();
+    const dailyLogs = this.readRecentDailyLogs(userId);
     if (dailyLogs) {
       sections.push(dailyLogs);
     }
@@ -316,21 +316,38 @@ export class SoulLoader {
    * Read today's daily log file for inclusion in the system prompt.
    * Older logs are consolidated into MEMORY.md on startup.
    */
-  readRecentDailyLogs(): string {
+  readRecentDailyLogs(userId?: string): string {
     const memoryDir = join(this.dir, 'memory');
     const today = localDateStr();
+    const sections: string[] = [];
 
-    const logPath = join(memoryDir, `${today}.md`);
-    try {
-      const content = readFileSync(logPath, 'utf-8').trim();
-      if (content) {
-        return `## Recent Memory\n\n### ${today}\n${content}`;
+    if (userId) {
+      // User-isolated mode: only include per-user daily log.
+      // The shared bot-level log contains agent loop activity (not user conversations)
+      // and must NOT leak into isolated user sessions.
+      const userPath = join(memoryDir, 'users', userId, `${today}.md`);
+      try {
+        const content = readFileSync(userPath, 'utf-8').trim();
+        if (content) {
+          sections.push(`### ${today}\n${content}`);
+        }
+      } catch {
+        // File doesn't exist — skip
       }
-    } catch {
-      // File doesn't exist — skip
+    } else {
+      // No user isolation: include the shared bot-level daily log
+      const sharedPath = join(memoryDir, `${today}.md`);
+      try {
+        const content = readFileSync(sharedPath, 'utf-8').trim();
+        if (content) {
+          sections.push(`### ${today}\n${content}`);
+        }
+      } catch {
+        // File doesn't exist — skip
+      }
     }
 
-    return '';
+    return sections.length > 0 ? `## Recent Memory\n\n${sections.join('\n\n')}` : '';
   }
 
   /**

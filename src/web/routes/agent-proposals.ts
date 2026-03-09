@@ -6,7 +6,8 @@ import { persistBots, resolveAgentConfig } from '../../config';
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
 import { generateSoul } from '../../soul-generator';
-import type { AgentProposalStore } from '../../tools/agent-proposal-store';
+import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
+import type { AgentProposal, AgentProposalStore } from '../../tools/agent-proposal-store';
 
 export function agentProposalRoutes(deps: {
   store: AgentProposalStore;
@@ -16,15 +17,31 @@ export function agentProposalRoutes(deps: {
 }) {
   const app = new Hono();
 
+  /** Filter proposals to only those from bots belonging to the requesting tenant */
+  function filterByTenant(proposals: AgentProposal[], c: import('hono').Context): AgentProposal[] {
+    const tenantId = getTenantId(c);
+    if (!tenantId || tenantId === '__admin__') return proposals;
+    const allowedIds = new Set(scopeBots(deps.config.bots, tenantId).map((b) => b.id));
+    return proposals.filter((p) => allowedIds.has(p.proposedBy));
+  }
+
+  /** Check if a specific proposal is accessible to the requesting tenant */
+  function isProposalAccessible(proposal: AgentProposal, c: import('hono').Context): boolean {
+    const tenantId = getTenantId(c);
+    if (!tenantId || tenantId === '__admin__') return true;
+    const allowedIds = new Set(scopeBots(deps.config.bots, tenantId).map((b) => b.id));
+    return allowedIds.has(proposal.proposedBy);
+  }
+
   // List all proposals
   app.get('/', (c) => {
-    const proposals = deps.store.list();
+    const proposals = filterByTenant(deps.store.list(), c);
     return c.json(proposals);
   });
 
   // Pending count (for badge polling)
   app.get('/count', (c) => {
-    const proposals = deps.store.list();
+    const proposals = filterByTenant(deps.store.list(), c);
     const count = proposals.filter((p) => p.status === 'pending').length;
     return c.json({ count });
   });
@@ -34,7 +51,7 @@ export function agentProposalRoutes(deps: {
     const id = c.req.param('id');
     const proposal = deps.store.get(id);
 
-    if (!proposal) {
+    if (!proposal || !isProposalAccessible(proposal, c)) {
       return c.json({ error: 'Proposal not found' }, 404);
     }
 
@@ -158,7 +175,7 @@ export function agentProposalRoutes(deps: {
     const id = c.req.param('id');
     const proposal = deps.store.get(id);
 
-    if (!proposal) {
+    if (!proposal || !isProposalAccessible(proposal, c)) {
       return c.json({ error: 'Proposal not found' }, 404);
     }
 
@@ -180,6 +197,10 @@ export function agentProposalRoutes(deps: {
   // Delete a proposal
   app.delete('/:id', (c) => {
     const id = c.req.param('id');
+    const proposal = deps.store.get(id);
+    if (!proposal || !isProposalAccessible(proposal, c)) {
+      return c.json({ error: 'Proposal not found' }, 404);
+    }
     const deleted = deps.store.delete(id);
     if (!deleted) return c.json({ error: 'Proposal not found' }, 404);
     return c.json({ ok: true });

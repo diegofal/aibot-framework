@@ -12,7 +12,7 @@ export interface RateLimitConfig {
 
 /** Per-plan rate limits (requests per minute) */
 export const PLAN_RATE_LIMITS: Record<string, number> = {
-  free: 20,
+  free: 30,
   starter: 60,
   pro: 200,
   enterprise: 500,

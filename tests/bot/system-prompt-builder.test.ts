@@ -12,7 +12,8 @@ function makeDef(name: string): ToolDefinition {
 }
 
 function createMockCtx(
-  bots: Array<{ id: string; name: string; enabled?: boolean }> = []
+  bots: Array<{ id: string; name: string; enabled?: boolean; tenantId?: string }> = [],
+  agentRegistryOverride?: { listOtherAgents: (...args: any[]) => any[] }
 ): BotContext {
   return {
     config: {
@@ -35,7 +36,7 @@ function createMockCtx(
       composeSystemPrompt: () => 'You are TestBot.',
     }),
     runningBots: new Set(bots.map((b) => b.id)),
-    agentRegistry: {
+    agentRegistry: agentRegistryOverride ?? {
       listOtherAgents: () => [],
     },
   } as unknown as BotContext;
@@ -151,6 +152,113 @@ describe('SystemPromptBuilder', () => {
 
       expect(prompt).toContain('## Agent Creation');
       expect(prompt).toContain('- alpha (Alpha)');
+    });
+  });
+
+  describe('cross-tenant bot visibility isolation', () => {
+    const tenantABot = { id: 'bot-a', name: 'BotA', tenantId: 'tenant-a' } as any;
+    const tenantBBot = { id: 'bot-b', name: 'BotB', tenantId: 'tenant-b' } as any;
+
+    test('delegationInstructions filters bots by tenantId', () => {
+      const bots = [
+        { id: 'bot-a', name: 'BotA', tenantId: 'tenant-a' },
+        { id: 'bot-a2', name: 'BotA2', tenantId: 'tenant-a' },
+        { id: 'bot-b', name: 'BotB', tenantId: 'tenant-b' },
+      ];
+      const ctx = createMockCtx(bots);
+      const defs = [makeDef('delegate_to_bot')];
+      const registry = createMockToolRegistry(defs);
+      const builder = new SystemPromptBuilder(ctx, registry);
+
+      const prompt = builder.build({
+        mode: 'conversation',
+        botId: 'bot-a',
+        botConfig: tenantABot,
+        isGroup: false,
+      });
+
+      expect(prompt).toContain('bot-a2 (BotA2)');
+      expect(prompt).not.toContain('bot-b');
+      expect(prompt).not.toContain('BotB');
+    });
+
+    test('createAgentInstructions filters bots by tenantId', () => {
+      const bots = [
+        { id: 'bot-a', name: 'BotA', tenantId: 'tenant-a' },
+        { id: 'bot-b', name: 'BotB', tenantId: 'tenant-b' },
+        { id: 'bot-b2', name: 'BotB2', tenantId: 'tenant-b' },
+      ];
+      const ctx = createMockCtx(bots);
+      const defs = [makeDef('create_agent')];
+      const registry = createMockToolRegistry(defs);
+      const builder = new SystemPromptBuilder(ctx, registry);
+
+      const prompt = builder.build({
+        mode: 'conversation',
+        botId: 'bot-b',
+        botConfig: tenantBBot,
+        isGroup: false,
+      });
+
+      expect(prompt).toContain('bot-b (BotB)');
+      expect(prompt).toContain('bot-b2 (BotB2)');
+      expect(prompt).not.toContain('bot-a');
+      expect(prompt).not.toContain('BotA');
+    });
+
+    test('collaborationInstructions passes tenantId to listOtherAgents', () => {
+      let capturedTenantId: string | undefined;
+      const bots = [
+        { id: 'bot-a', name: 'BotA', tenantId: 'tenant-a' },
+        { id: 'bot-b', name: 'BotB', tenantId: 'tenant-b' },
+      ];
+      const ctx = createMockCtx(bots, {
+        listOtherAgents: (_botId: string, tenantId?: string) => {
+          capturedTenantId = tenantId;
+          return [];
+        },
+      });
+      const defs = [makeDef('collaborate')];
+      const registry = createMockToolRegistry(defs);
+      const builder = new SystemPromptBuilder(ctx, registry);
+
+      builder.build({
+        mode: 'conversation',
+        botId: 'bot-a',
+        botConfig: tenantABot,
+        isGroup: false,
+      });
+
+      expect(capturedTenantId).toBe('tenant-a');
+    });
+
+    test('bots without tenantId see all bots (single-tenant mode)', () => {
+      const bots = [
+        { id: 'bot-x', name: 'BotX' },
+        { id: 'bot-y', name: 'BotY' },
+        { id: 'bot-z', name: 'BotZ' },
+      ];
+      const noTenantConfig = {
+        id: 'bot-x',
+        name: 'BotX',
+        token: 'x',
+        enabled: true,
+        skills: [],
+      } as any;
+      const ctx = createMockCtx(bots);
+      const defs = [makeDef('delegate_to_bot'), makeDef('create_agent')];
+      const registry = createMockToolRegistry(defs);
+      const builder = new SystemPromptBuilder(ctx, registry);
+
+      const prompt = builder.build({
+        mode: 'conversation',
+        botId: 'bot-x',
+        botConfig: noTenantConfig,
+        isGroup: false,
+      });
+
+      expect(prompt).toContain('bot-y (BotY)');
+      expect(prompt).toContain('bot-z (BotZ)');
     });
   });
 });

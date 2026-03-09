@@ -13,6 +13,8 @@ import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
 import type { BotManager } from '../bot';
+import { wsChannel, wsToInbound } from '../channel/websocket';
+import type { WsChatData } from '../channel/websocket';
 import type { Config } from '../config';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
@@ -27,17 +29,21 @@ import { createRateLimitMiddleware } from '../tenant/rate-limit-middleware';
 import { RateLimiter } from '../tenant/rate-limiter';
 import { SessionStore } from '../tenant/session-store';
 import { TenantConfigStore } from '../tenant/tenant-config-store';
+import { getTenantId, scopeBots } from '../tenant/tenant-scoping';
 import { agentExportRoutes } from './routes/agent-export';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
 import { agentLoopRoutes } from './routes/agent-loop';
 import { agentProposalRoutes } from './routes/agent-proposals';
 import { agentsRoutes } from './routes/agents';
+import { analyticsRoutes } from './routes/analytics';
 import { askHumanRoutes } from './routes/ask-human';
 import { askPermissionRoutes } from './routes/ask-permission';
 import { authRoutes } from './routes/auth';
+import { baasRoutes } from './routes/baas';
 import { billingRoutes } from './routes/billing';
 import { conversationsRoutes } from './routes/conversations';
 import { cronRoutes } from './routes/cron';
+import { dashboardRoutes } from './routes/dashboard';
 import { filesRoutes } from './routes/files';
 import { integrationsRoutes } from './routes/integrations';
 import { karmaRoutes } from './routes/karma';
@@ -52,6 +58,7 @@ import { tenantConfigRoutes } from './routes/tenant-config';
 import { tenantRoutes } from './routes/tenants';
 import { toolsRoutes } from './routes/tools';
 import { webhookRoutes } from './routes/webhooks';
+import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
 
 export type WebServerDeps = {
   config: Config;
@@ -88,7 +95,8 @@ export function startWebServer(deps: WebServerDeps): void {
         path.startsWith('/api/auth/') ||
         path.startsWith('/api/admin/') ||
         path === '/api/tenants' ||
-        path.startsWith('/api/tenant/')
+        path.startsWith('/api/tenant/') ||
+        path.startsWith('/api/onboarding/')
       ) {
         return next();
       }
@@ -145,8 +153,8 @@ export function startWebServer(deps: WebServerDeps): void {
       memoryManager: deps.botManager.getMemoryManager(),
     })
   );
-  app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager }));
-  app.route('/api/cron', cronRoutes({ cronService: deps.cronService }));
+  app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager, config }));
+  app.route('/api/cron', cronRoutes({ cronService: deps.cronService, config }));
   app.route(
     '/api/settings',
     settingsRoutes({ config, configPath: deps.configPath, logger, botManager: deps.botManager })
@@ -175,6 +183,7 @@ export function startWebServer(deps: WebServerDeps): void {
     })
   );
 
+  app.route('/api/dashboard', dashboardRoutes({ config, botManager: deps.botManager, logger }));
   app.route(
     '/api/integrations',
     integrationsRoutes({ config, botManager: deps.botManager, logger })
@@ -385,19 +394,57 @@ export function startWebServer(deps: WebServerDeps): void {
     adminTenantRoutes.route('/tenants', tenantRoutes(routeDeps));
     app.route('/api/admin', adminTenantRoutes);
 
-    logger.info('Multi-tenant routes mounted (with billing, onboarding, webhooks)');
+    // BaaS routes: templates, customizations, webhooks management
+    app.route('/api/baas', baasRoutes(deps.botManager));
+
+    // Analytics routes (tenant-scoped)
+    const analyticsService = deps.botManager.getAnalyticsService();
+    if (analyticsService) {
+      app.route('/api/baas/analytics', analyticsRoutes(analyticsService));
+    }
+
+    logger.info(
+      'Multi-tenant routes mounted (with billing, onboarding, webhooks, BaaS, analytics)'
+    );
   }
+
+  // --- WhatsApp Business API webhook (public — Meta sends webhooks here) ---
+  app.route(
+    '/api/whatsapp',
+    whatsappWebhookRoutes({ config, botManager: deps.botManager, logger })
+  );
+
+  // --- OpenAPI spec ---
+  app.get('/api/v1/openapi.json', (c) => {
+    try {
+      const spec = readFileSync('./web/openapi.json', 'utf-8');
+      return c.json(JSON.parse(spec));
+    } catch {
+      return c.json({ error: 'OpenAPI spec not found' }, 404);
+    }
+  });
 
   // --- Activity stream REST endpoint ---
   const activityStream = deps.botManager.getActivityStream();
   app.get('/api/activity', (c) => {
     const limit = Math.min(Math.max(1, Number(c.req.query('limit') || '50')), 500);
     const offset = Math.max(0, Number(c.req.query('offset') || '0'));
-    return c.json(activityStream.getSlice(limit, offset));
+    const tenantId = getTenantId(c);
+    const slice = activityStream.getSlice(limit, offset);
+    let events = slice.events;
+    if (tenantId && tenantId !== '__admin__') {
+      const allowedIds = new Set(scopeBots(config.bots, tenantId).map((b) => b.id));
+      events = events.filter((e) => allowedIds.has(e.botId));
+    }
+    return c.json({ events, total: slice.total });
   });
 
-  // --- System logs REST endpoint (paginated) ---
+  // --- System logs REST endpoint (paginated, admin-only in multi-tenant) ---
   app.get('/api/logs', (c) => {
+    const tenantId = getTenantId(c);
+    if (tenantId && tenantId !== '__admin__') {
+      return c.json({ error: 'Admin access required' }, 403);
+    }
     const limit = Math.min(Math.max(1, Number(c.req.query('limit') || '100')), 1000);
     const offset = Math.max(0, Number(c.req.query('offset') || '0'));
     try {
@@ -428,11 +475,18 @@ export function startWebServer(deps: WebServerDeps): void {
   // Fallback: serve index.html for SPA routing
   app.get('*', serveStatic({ root: './web', path: '/index.html' }));
 
-  // --- WebSocket log streaming ---
+  // --- WebSocket log streaming + chat ---
   const logFile = config.logging?.file || './data/logs/aibot.log';
-  type WsData = { type: string };
+  type WsData = {
+    type: string;
+    botId?: string;
+    chatId?: string;
+    senderId?: string;
+    senderName?: string;
+  };
   const wsClients = new Set<ServerWebSocket<WsData>>();
   const activityClients = new Set<ServerWebSocket<WsData>>();
+  const chatClients = new Set<ServerWebSocket<WsData>>();
   let fileOffset = 0;
 
   function readLastLines(path: string, maxLines: number): string[] {
@@ -551,6 +605,38 @@ export function startWebServer(deps: WebServerDeps): void {
         if (ok) return undefined;
         return new Response('WebSocket upgrade failed', { status: 400 });
       }
+
+      // WebSocket chat for embeddable widget: /ws/chat?botId=X&chatId=Y&senderId=Z
+      if (url.pathname === '/ws/chat') {
+        const botId = url.searchParams.get('botId');
+        if (!botId) return new Response('Missing botId parameter', { status: 400 });
+
+        const bot = config.bots.find((b) => b.id === botId);
+        if (!bot) return new Response('Bot not found', { status: 404 });
+
+        // In multi-tenant mode, authenticate via token param
+        if (config.multiTenant?.enabled) {
+          const token = url.searchParams.get('token');
+          if (!token) return new Response('Unauthorized', { status: 401 });
+          const tenant = tenantManager?.getTenantByApiKey(token);
+          if (!tenant) return new Response('Unauthorized', { status: 401 });
+          // Verify bot belongs to this tenant
+          if (bot.tenantId && bot.tenantId !== tenant.id) {
+            return new Response('Bot not found', { status: 404 });
+          }
+        }
+
+        const chatId = url.searchParams.get('chatId') || `widget-${Date.now()}`;
+        const senderId = url.searchParams.get('senderId') || `anon-${Date.now()}`;
+        const senderName = url.searchParams.get('senderName') || undefined;
+
+        const ok = server.upgrade(req, {
+          data: { type: 'chat', botId, chatId, senderId, senderName },
+        });
+        if (ok) return undefined;
+        return new Response('WebSocket upgrade failed', { status: 400 });
+      }
+
       return app.fetch(req, server);
     },
     port,
@@ -558,7 +644,14 @@ export function startWebServer(deps: WebServerDeps): void {
     idleTimeout: 255,
     websocket: {
       open(ws) {
-        if (ws.data?.type === 'activity') {
+        if (ws.data?.type === 'chat') {
+          chatClients.add(ws);
+          logger.debug(
+            { clientCount: chatClients.size, botId: ws.data.botId, chatId: ws.data.chatId },
+            'WebSocket chat client connected'
+          );
+          ws.send(JSON.stringify({ type: 'connected', botId: ws.data.botId }));
+        } else if (ws.data?.type === 'activity') {
           activityClients.add(ws);
           logger.debug(
             { clientCount: activityClients.size },
@@ -583,11 +676,58 @@ export function startWebServer(deps: WebServerDeps): void {
           ws.send(JSON.stringify({ type: 'history', lines: parsed }));
         }
       },
-      message() {
-        // No client->server messages needed
+      message(ws, raw) {
+        // Chat WebSocket messages
+        if (ws.data?.type === 'chat') {
+          // biome-ignore lint/style/noNonNullAssertion: botId is guaranteed set during ws upgrade
+          const botId = ws.data.botId!;
+          let parsed: { type?: string; message?: string };
+          try {
+            parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+          } catch {
+            ws.send(JSON.stringify({ type: 'error', error: 'Invalid JSON' }));
+            return;
+          }
+
+          if (parsed.type !== 'message' || !parsed.message?.trim()) {
+            ws.send(
+              JSON.stringify({ type: 'error', error: 'Send { type: "message", message: "..." }' })
+            );
+            return;
+          }
+
+          const chatData: WsChatData = {
+            type: 'chat',
+            botId,
+            // biome-ignore lint/style/noNonNullAssertion: chatId is guaranteed set during ws upgrade
+            chatId: ws.data.chatId!,
+            // biome-ignore lint/style/noNonNullAssertion: senderId is guaranteed set during ws upgrade
+            senderId: ws.data.senderId!,
+            senderName: ws.data.senderName,
+          };
+
+          const msg = wsToInbound(chatData, parsed.message.trim());
+          const channel = wsChannel(ws as unknown as import('bun').ServerWebSocket<WsChatData>);
+
+          deps.botManager.handleChannelMessage(msg, channel, botId).catch((err) => {
+            logger.error({ err, botId, chatId: ws.data.chatId }, 'WebSocket chat handler failed');
+            try {
+              ws.send(JSON.stringify({ type: 'error', error: 'Failed to generate response' }));
+            } catch {
+              /* connection closed */
+            }
+          });
+        }
+        // No client->server messages needed for logs/activity
       },
       close(ws) {
-        if (ws.data?.type === 'activity') {
+        if (ws.data?.type === 'chat') {
+          chatClients.delete(ws);
+          logger.debug(
+            { clientCount: chatClients.size, botId: ws.data.botId },
+            'WebSocket chat client disconnected'
+          );
+        } else if (ws.data?.type === 'activity') {
           activityClients.delete(ws);
           logger.debug(
             { clientCount: activityClients.size },

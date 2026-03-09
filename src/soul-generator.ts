@@ -161,14 +161,16 @@ export async function generateSoul(
 
   const generateFn =
     opts.generate ??
-    ((p: string) =>
-      claudeGenerate(p, {
+    (async (p: string) => {
+      const result = await claudeGenerate(p, {
         claudePath: opts.claudePath,
         model: opts.claudeModel,
         timeout: opts.timeout ?? 300_000,
         maxLength: 30_000,
         logger: opts.logger,
-      }));
+      });
+      return result.response;
+    });
 
   const backend = opts.generate ? 'custom' : 'claude-cli';
   opts.logger.info({ name: input.name, role: input.role, backend }, 'soul-generator: generating');

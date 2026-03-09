@@ -11,6 +11,7 @@ import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import type { Logger } from '../../logger';
 import type { McpServer } from '../../mcp/server';
+import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
 
 interface McpRoutesDeps {
   botManager: BotManager;
@@ -21,6 +22,15 @@ interface McpRoutesDeps {
 export function mcpRoutes(deps: McpRoutesDeps) {
   const app = new Hono();
   const { botManager, logger, getMcpServer } = deps;
+
+  // Admin-only gate: MCP server management is global, not per-tenant
+  app.use('*', async (c, next) => {
+    const tenantId = getTenantId(c);
+    if (!isAdminOrSingleTenant(tenantId)) {
+      return c.json({ error: 'Admin access required' }, 403);
+    }
+    return next();
+  });
 
   // GET /servers — list MCP client connections
   app.get('/servers', (c) => {

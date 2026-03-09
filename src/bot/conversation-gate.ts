@@ -55,9 +55,9 @@ export class ConversationGate {
     const sessionConfig = this.ctx.config.session;
 
     // 1. ask_human reply intercept
-    if (this.askHumanStore?.hasPending(chatId)) {
+    if (this.askHumanStore?.hasPending(config.id, chatId)) {
       const replyToId = grammyCtx.message.reply_to_message?.message_id;
-      const replyResult = this.askHumanStore.handleReply(chatId, text, replyToId);
+      const replyResult = this.askHumanStore.handleReply(config.id, chatId, text, replyToId);
       if (replyResult.matched) {
         botLogger.info(
           { chatId, questionId: replyResult.questionId },

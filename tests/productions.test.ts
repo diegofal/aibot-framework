@@ -1730,4 +1730,61 @@ The analysis shows significant opportunity.`;
       expect(node?.coherenceCheck).toEqual({ coherent: false });
     });
   });
+
+  describe('path traversal protection', () => {
+    test('updateContent blocks path traversal via ../', () => {
+      const entry = service.logProduction({
+        botId: 'bot1',
+        path: '../../../etc/shadow',
+        title: 'Traversal attempt',
+        status: 'unreviewed',
+        createdAt: new Date().toISOString(),
+      });
+
+      const result = service.updateContent('bot1', entry.id, 'malicious content');
+      expect(result).toBe(false);
+    });
+
+    test('updateContent blocks absolute path outside production dir', () => {
+      const entry = service.logProduction({
+        botId: 'bot1',
+        path: '/tmp/evil-file.txt',
+        title: 'Absolute traversal',
+        status: 'unreviewed',
+        createdAt: new Date().toISOString(),
+      });
+
+      const result = service.updateContent('bot1', entry.id, 'malicious content');
+      expect(result).toBe(false);
+    });
+
+    test('getFileContent returns null for path traversal', () => {
+      const entry = service.logProduction({
+        botId: 'bot1',
+        path: '../../../etc/passwd',
+        title: 'Read traversal',
+        status: 'unreviewed',
+        createdAt: new Date().toISOString(),
+      });
+
+      const content = service.getFileContent('bot1', entry.id);
+      expect(content).toBeNull();
+    });
+
+    test('updateContent allows paths within production dir', () => {
+      const entry = service.logProduction({
+        botId: 'bot1',
+        path: 'safe/nested/file.md',
+        title: 'Safe path',
+        status: 'unreviewed',
+        createdAt: new Date().toISOString(),
+      });
+
+      const result = service.updateContent('bot1', entry.id, 'safe content');
+      expect(result).toBe(true);
+
+      const content = service.getFileContent('bot1', entry.id);
+      expect(content).toBe('safe content');
+    });
+  });
 });

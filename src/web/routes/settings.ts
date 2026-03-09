@@ -5,6 +5,7 @@ import type { Config, McpServerEntry } from '../../config';
 import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
 import type { Logger } from '../../logger';
 import type { McpServerConfig } from '../../mcp/client';
+import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
 
 export function settingsRoutes(deps: {
   config: Config;
@@ -13,6 +14,15 @@ export function settingsRoutes(deps: {
   botManager?: BotManager;
 }) {
   const app = new Hono();
+
+  // Admin-only gate: settings are global config, not per-tenant
+  app.use('*', async (c, next) => {
+    const tenantId = getTenantId(c);
+    if (!isAdminOrSingleTenant(tenantId)) {
+      return c.json({ error: 'Admin access required' }, 403);
+    }
+    return next();
+  });
 
   // Get session settings
   app.get('/session', (c) => {

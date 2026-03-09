@@ -93,7 +93,7 @@ describe('RateLimiter', () => {
 
 describe('PLAN_RATE_LIMITS', () => {
   it('defines limits for all plans', () => {
-    expect(PLAN_RATE_LIMITS.free).toBe(20);
+    expect(PLAN_RATE_LIMITS.free).toBe(30);
     expect(PLAN_RATE_LIMITS.starter).toBe(60);
     expect(PLAN_RATE_LIMITS.pro).toBe(200);
     expect(PLAN_RATE_LIMITS.enterprise).toBe(500);

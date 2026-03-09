@@ -33,6 +33,8 @@ export interface PlannerPromptInput {
   toolCategoryList?: string[];
   /** Paths where the bot can write without asking permission (default: ['productions/']) */
   allowedWritePaths?: string[];
+  /** Operator-assigned standing directives — ongoing behavioral instructions */
+  directives?: string[];
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -65,6 +67,8 @@ export interface ContinuousPlannerPromptInput {
   toolCategoryList?: string[];
   /** Paths where the bot can write without asking permission (default: ['productions/']) */
   allowedWritePaths?: string[];
+  /** Operator-assigned standing directives — ongoing behavioral instructions */
+  directives?: string[];
 }
 
 export interface PlannerResult {
@@ -90,6 +94,8 @@ export interface ExecutorPromptInput {
   singleDeliverable?: string;
   /** Pre-scanned file tree of workDir, or null if empty/missing */
   fileTree?: string | null;
+  /** Operator-assigned standing directives — ongoing behavioral instructions */
+  directives?: string[];
 }
 
 function buildToolCategorySection(toolCategoryList?: string[]): string {
@@ -192,6 +198,30 @@ function buildPermissionDecisionsSection(
   return section;
 }
 
+/** Predefined directive bundles that operators can enable by name */
+export const PRESET_DIRECTIVE_DEFINITIONS: Record<string, string[]> = {
+  'conversation-review': [
+    'Periodically review recent conversation session logs to evaluate your own conversation quality. ' +
+      'Read session files from data/sessions/ for your bot. Look for: (1) responses that were too verbose or too terse, ' +
+      '(2) missed context from previous messages, (3) tonal inconsistencies with your identity, ' +
+      '(4) opportunities where you could have been more helpful. ' +
+      'When you find actionable improvements, update your SOUL.md or MOTIVATIONS.md accordingly and log the insight to memory.',
+  ],
+};
+
+/** Available preset directive metadata for API/UI consumption */
+export const AVAILABLE_PRESETS = Object.entries(PRESET_DIRECTIVE_DEFINITIONS).map(
+  ([id, lines]) => ({
+    id,
+    description: lines[0].slice(0, 120) + (lines[0].length > 120 ? '...' : ''),
+  })
+);
+
+export function buildDirectivesSection(directives?: string[]): string {
+  if (!directives?.length) return '';
+  return `\n## Operator Directives\n\nYour operator has assigned these standing directives. These are ongoing behavioral instructions (not one-time goals). Factor them into your planning when relevant:\n\n${directives.map((d) => `- ${d}`).join('\n')}\n`;
+}
+
 export function buildPlannerPrompt(input: PlannerPromptInput): { system: string; prompt: string } {
   const system = `You are an autonomous agent operating in SINGLE-FOCUS MODE. Your value comes from completing ONE concrete deliverable per session.
 
@@ -215,7 +245,7 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}
+}${buildDirectivesSection(input.directives)}
 ${
   input.singleDeliverable
     ? `
@@ -343,7 +373,7 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}
+}${buildDirectivesSection(input.directives)}
 ${
   input.singleDeliverable
     ? `
@@ -493,7 +523,7 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}
+}${buildDirectivesSection(input.directives)}
 
 Current date/time: ${input.datetime}
 
@@ -601,6 +631,8 @@ export interface StrategistPromptInput {
   goals: string;
   recentMemory: string;
   datetime: string;
+  /** Operator-assigned standing directives — ongoing behavioral instructions */
+  directives?: string[];
 }
 
 export interface StrategistResult {
@@ -643,7 +675,7 @@ ${input.motivations}
 
 ## Current Goals
 
-${input.goals || '(no goals set)'}
+${input.goals || '(no goals set)'}${buildDirectivesSection(input.directives)}
 
 ## Recent Activity (last 7 days)
 

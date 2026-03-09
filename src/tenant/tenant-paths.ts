@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 /**
  * Resolve data paths for a tenant.
@@ -18,6 +18,10 @@ export interface TenantPaths {
   soulDir: string;
   /** Productions/work directory for a specific bot */
   workDir: string;
+  /** Sessions directory for a specific bot */
+  sessionsDir: string;
+  /** Memory database path for this tenant */
+  memoryDbPath: string;
 }
 
 /**
@@ -30,6 +34,8 @@ export function resolveTenantPaths(opts: {
   dataDir: string; // base data dir, e.g. './data/tenants'
   defaultSoulDir: string; // e.g. './config/soul'
   defaultProductionsDir: string; // e.g. './productions'
+  defaultSessionsDir?: string; // e.g. './data/sessions'
+  defaultMemoryDbPath?: string; // e.g. './data/memory.db'
 }): TenantPaths {
   const { tenantId, botId, dataDir, defaultSoulDir, defaultProductionsDir } = opts;
 
@@ -38,6 +44,8 @@ export function resolveTenantPaths(opts: {
       tenantRoot: '',
       soulDir: join(defaultSoulDir, botId),
       workDir: join(defaultProductionsDir, botId),
+      sessionsDir: opts.defaultSessionsDir ?? './data/sessions',
+      memoryDbPath: opts.defaultMemoryDbPath ?? './data/memory.db',
     };
   }
 
@@ -46,6 +54,8 @@ export function resolveTenantPaths(opts: {
     tenantRoot,
     soulDir: join(tenantRoot, 'bots', botId, 'soul'),
     workDir: join(tenantRoot, 'bots', botId, 'productions'),
+    sessionsDir: join(tenantRoot, 'bots', botId, 'sessions'),
+    memoryDbPath: join(tenantRoot, 'memory.db'),
   };
 }
 
@@ -56,7 +66,6 @@ export function resolveTenantPaths(opts: {
  */
 export function isPathWithinTenant(path: string, tenantRoot: string): boolean {
   if (!tenantRoot) return true; // single-tenant mode
-  const { resolve } = require('node:path');
   const resolvedPath = resolve(path);
   const resolvedRoot = resolve(tenantRoot);
   return resolvedPath.startsWith(`${resolvedRoot}/`) || resolvedPath === resolvedRoot;

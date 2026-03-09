@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { KarmaService } from '../../karma/service';
 import type { Logger } from '../../logger';
+import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 
 export function karmaRoutes(deps: {
   karmaService: KarmaService;
@@ -11,9 +12,9 @@ export function karmaRoutes(deps: {
   const app = new Hono();
   const { karmaService, config, logger } = deps;
 
-  // Get karma for all bots
+  // Get karma for all bots (tenant-scoped)
   app.get('/', (c) => {
-    const botIds = config.bots.map((b) => b.id);
+    const botIds = scopeBots(config.bots, getTenantId(c)).map((b) => b.id);
     const scores = karmaService.getAllScores(botIds);
     return c.json(scores);
   });
@@ -22,7 +23,7 @@ export function karmaRoutes(deps: {
   app.get('/:botId', (c) => {
     const botId = c.req.param('botId');
     const botConfig = config.bots.find((b) => b.id === botId);
-    if (!botConfig) {
+    if (!botConfig || !isBotAccessible(botConfig, getTenantId(c))) {
       return c.json({ error: 'Bot not found' }, 404);
     }
 
@@ -34,7 +35,7 @@ export function karmaRoutes(deps: {
   app.get('/:botId/history', (c) => {
     const botId = c.req.param('botId');
     const botConfig = config.bots.find((b) => b.id === botId);
-    if (!botConfig) {
+    if (!botConfig || !isBotAccessible(botConfig, getTenantId(c))) {
       return c.json({ error: 'Bot not found' }, 404);
     }
 
@@ -48,7 +49,7 @@ export function karmaRoutes(deps: {
   app.delete('/:botId/events', (c) => {
     const botId = c.req.param('botId');
     const botConfig = config.bots.find((b) => b.id === botId);
-    if (!botConfig) {
+    if (!botConfig || !isBotAccessible(botConfig, getTenantId(c))) {
       return c.json({ error: 'Bot not found' }, 404);
     }
 
@@ -61,7 +62,7 @@ export function karmaRoutes(deps: {
   app.post('/:botId/adjust', async (c) => {
     const botId = c.req.param('botId');
     const botConfig = config.bots.find((b) => b.id === botId);
-    if (!botConfig) {
+    if (!botConfig || !isBotAccessible(botConfig, getTenantId(c))) {
       return c.json({ error: 'Bot not found' }, 404);
     }
 

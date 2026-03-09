@@ -32,3 +32,11 @@ export function isBotAccessible(bot: BotConfig, tenantId: string | undefined): b
   if (tenantId === '__admin__') return true;
   return bot.tenantId === tenantId;
 }
+
+/**
+ * Check if the requesting context is admin or single-tenant (no multi-tenant active).
+ * Use this to gate admin-only endpoints.
+ */
+export function isAdminOrSingleTenant(tenantId: string | undefined): boolean {
+  return !tenantId || tenantId === '__admin__';
+}

@@ -75,9 +75,9 @@ export function productionsRoutes(deps: {
 
     (async () => {
       try {
-        const soulLoaderForResponse = botManager.getSoulLoader(botId);
-        const identity = soulLoaderForResponse.readIdentity();
-        const goals = soulLoaderForResponse.readGoals();
+        const soulLoaderForResponse = botManager.findSoulLoader(botId);
+        const identity = soulLoaderForResponse?.readIdentity();
+        const goals = soulLoaderForResponse?.readGoals();
 
         const sections: string[] = [];
         sections.push('# Production Feedback Response');
@@ -146,9 +146,9 @@ export function productionsRoutes(deps: {
 
     (async () => {
       try {
-        const soulLoader = botManager.getSoulLoader(botId);
-        const identity = soulLoader.readIdentity();
-        const goals = soulLoader.readGoals();
+        const soulLoader = botManager.findSoulLoader(botId);
+        const identity = soulLoader?.readIdentity();
+        const goals = soulLoader?.readGoals();
 
         // Reload entry to get full thread
         const current = productionsService.getEntry(botId, id);
@@ -231,9 +231,9 @@ export function productionsRoutes(deps: {
           return;
         }
 
-        const soulLoader = botManager.getSoulLoader(botId);
-        const identity = soulLoader.readIdentity();
-        const goals = soulLoader.readGoals();
+        const soulLoader = botManager.findSoulLoader(botId);
+        const identity = soulLoader?.readIdentity();
+        const goals = soulLoader?.readGoals();
 
         const sections: string[] = [];
         sections.push('# Content Coherence Check');
@@ -329,6 +329,7 @@ export function productionsRoutes(deps: {
     const tenantId = getTenantId(c);
     const allowedIds = new Set(scopeBots(config.bots, tenantId).map((b) => b.id));
     const stats = productionsService.getAllBotStats();
+    // biome-ignore lint/suspicious/noExplicitAny: stats entries have dynamic shape from service
     return c.json(tenantId ? stats.filter((s: any) => allowedIds.has(s.botId)) : stats);
   });
 
@@ -362,6 +363,7 @@ export function productionsRoutes(deps: {
     if (tenantId && !botId) {
       // Filter entries to tenant's bots
       const allowedIds = new Set(scopeBots(config.bots, tenantId).map((b) => b.id));
+      // biome-ignore lint/suspicious/noExplicitAny: entries have dynamic shape from service
       result.entries = result.entries.filter((e: any) => allowedIds.has(e.botId));
       result.total = result.entries.length;
     }
@@ -410,7 +412,7 @@ export function productionsRoutes(deps: {
 
     (async () => {
       try {
-        const soulLoader = botManager.getSoulLoader(botId);
+        const soulLoader = botManager.findSoulLoader(botId);
         const stats = productionsService.getStats(botId);
         const changelog = productionsService.getChangelog(botId, { limit: 20 });
 
@@ -440,11 +442,11 @@ export function productionsRoutes(deps: {
         }
 
         // Soul context
-        const identity = soulLoader.readIdentity();
-        const goals = soulLoader.readGoals();
+        const identity = soulLoader?.readIdentity();
+        const goals = soulLoader?.readGoals();
         const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
         const sinceDate = localDateStr(sevenDaysAgo);
-        const recentMemory = soulLoader.readDailyLogsSince(sinceDate);
+        const recentMemory = soulLoader?.readDailyLogsSince(sinceDate);
 
         // Build prompt
         const sections: string[] = [];

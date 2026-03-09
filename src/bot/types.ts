@@ -59,7 +59,7 @@ export interface BotContext {
   readonly toolDefinitions: ToolDefinition[];
   readonly soulLoaders: Map<string, SoulLoader>;
   readonly botLoggers: Map<string, Logger>;
-  readonly seenUsers: Map<number, Map<number, SeenUser>>;
+  readonly seenUsers: Map<string, Map<number, Map<number, SeenUser>>>;
   readonly handledMessageIds: Set<string>;
   readonly llmClients: Map<string, LLMClient>;
   readonly askHumanStore: AskHumanStore;
@@ -72,6 +72,8 @@ export interface BotContext {
   readonly mcpClientPool?: McpClientPool;
   readonly mcpAgentBridge?: McpAgentBridge;
   readonly tenantFacade?: TenantFacade;
+  readonly webhookService?: import('../tenant/webhook-service').WebhookService;
+  readonly analyticsService?: import('../tenant/analytics-service').AnalyticsService;
 
   // Helper methods
   getActiveModel(botId: string): string;

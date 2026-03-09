@@ -313,6 +313,7 @@
       "tts": {
         "voiceId": "FGY2WhTYpPnrIDTdsKH5"
       },
+      "userIsolation": { "enabled": false },
       "plan": "free"
     },
     {
@@ -330,6 +331,7 @@
       "llmBackend": "claude-cli",
       "disabledTools": [],
       "disabledSkills": [],
+      "userIsolation": { "enabled": false },
       "agentLoop": {
         "every": "3h",
         "mode": "periodic",

@@ -16,7 +16,7 @@ export class MemoryFlusher {
    * Used by both session-expiry flush and proactive flush.
    * @deprecated Use flushWithScoring for importance-weighted memory
    */
-  async flushToDaily(history: ChatMessage[], botId: string): Promise<void> {
+  async flushToDaily(history: ChatMessage[], botId: string, userId?: string): Promise<void> {
     try {
       const transcript = history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -61,8 +61,8 @@ export class MemoryFlusher {
       }
 
       if (summary.trim()) {
-        soulLoader.appendDailyMemory(summary.trim());
-        this.ctx.logger.info('Conversation flushed to daily memory log');
+        soulLoader.appendDailyMemory(summary.trim(), userId);
+        this.ctx.logger.info({ userId }, 'Conversation flushed to daily memory log');
       }
     } catch (err) {
       this.ctx.logger.warn({ err }, 'Failed to flush to daily memory log');
@@ -74,7 +74,11 @@ export class MemoryFlusher {
    * Each fact gets a score 1-10 (10 = critical, 1 = trivial) and a category.
    * High-importance facts are weighted more heavily in searches.
    */
-  async flushWithScoring(history: ChatMessage[], botId: string): Promise<ScoredFact[]> {
+  async flushWithScoring(
+    history: ChatMessage[],
+    botId: string,
+    userId?: string
+  ): Promise<ScoredFact[]> {
     this.ctx.activityStream?.publish({
       type: 'memory:flush',
       botId,
@@ -134,7 +138,7 @@ export class MemoryFlusher {
       if (coreMemory && facts.length > 0) {
         for (const fact of facts) {
           const key = this.generateFactKey(fact);
-          await coreMemory.set(fact.category, key, fact.fact, fact.importance, botId);
+          await coreMemory.set(fact.category, key, fact.fact, fact.importance, botId, userId);
         }
         this.ctx.logger.info(
           { count: facts.length },
@@ -151,7 +155,7 @@ export class MemoryFlusher {
         // Fallback to daily log if Core Memory not available
         const soulLoader = this.ctx.getSoulLoader(botId);
         const summary = facts.map((f) => `[${f.importance}/10] ${f.fact}`).join('\n');
-        soulLoader.appendDailyMemory(summary);
+        soulLoader.appendDailyMemory(summary, userId);
         this.ctx.logger.info(
           { count: facts.length },
           'Conversation flushed to daily log (Core Memory unavailable)'
@@ -162,7 +166,7 @@ export class MemoryFlusher {
     } catch (err) {
       this.ctx.logger.warn({ err }, 'Failed to flush with scoring, falling back to simple flush');
       // Fallback to legacy behavior
-      await this.flushToDaily(history, botId);
+      await this.flushToDaily(history, botId, userId);
       return [];
     }
   }
@@ -250,7 +254,11 @@ export class MemoryFlusher {
    * Called before any session clear (expiry or /clear) so key facts survive.
    * Now uses importance scoring by default.
    */
-  async flushSessionToMemory(history: ChatMessage[], botId: string): Promise<void> {
-    await this.flushWithScoring(history, botId);
+  async flushSessionToMemory(
+    history: ChatMessage[],
+    botId: string,
+    userId?: string
+  ): Promise<void> {
+    await this.flushWithScoring(history, botId, userId);
   }
 }

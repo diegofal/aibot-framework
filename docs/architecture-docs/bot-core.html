@@ -173,10 +173,11 @@
           <tbody>
             <tr><td>prefetchMemoryContext</td><td>userText: string, isGroup: boolean, botLogger: Logger</td><td>Runs RAG search in parallel and returns formatted memory context or null. Filters out today/yesterday daily logs and short queries.</td></tr>
             <tr><td>handleConversation</td><td>ctx: Context, config: BotConfig, serializedKey: string, userText: string, images?: string[], sessionText?: string</td><td>Full pipeline: session expiry check, proactive memory flush, RAG await, system prompt build, LLM call with tools, session persist, reply with typing indicator.</td></tr>
+            <tr><td>handleChannelMessage</td><td>msg: InboundMessage, channel: Channel, config: BotConfig, sessionKey: string</td><td>Channel-agnostic pipeline entry point. Same LLM/session/RAG/tools/compaction pipeline as handleConversation but decoupled from grammy Context. Used by REST API, web widget, and MCP channels. Returns the response text.</td></tr>
           </tbody>
         </table>
         <h4>Dependencies</h4>
-        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./context-compaction</code> (ContextCompactor), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./telegram-utils</code> (sendLongMessage)</p>
+        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./context-compaction</code> (ContextCompactor), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./telegram-utils</code> (sendLongMessage), <code>../channel/types</code> (Channel, InboundMessage)</p>
       </div>
 
       <!-- handler-registrar.ts -->

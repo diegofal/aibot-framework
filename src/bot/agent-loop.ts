@@ -25,7 +25,7 @@ import {
   executeSingleBotWithRetry as _executeSingleBotWithRetry,
   resolveRetryConfig,
 } from './agent-retry-engine';
-import { AgentScheduler } from './agent-scheduler';
+import { AgentScheduler, resolveDirectives } from './agent-scheduler';
 import {
   type StrategistResultWithUsage,
   runStrategist,
@@ -138,6 +138,10 @@ export interface BotScheduleInfo {
   retryCount: number;
   lastErrorMessage: string | null;
   isExecutingLoop: boolean;
+  /** Whether agent loop is enabled for this bot (per-bot override → global) */
+  agentLoopEnabled: boolean;
+  /** Resolved standing directives (custom + preset) for this bot */
+  directives: string[];
 }
 
 export interface AgentLoopState {
@@ -698,6 +702,7 @@ export class AgentLoop {
               goals,
               datetime,
               soulLoader,
+              directives: directives.length > 0 ? directives : undefined,
             }),
           'Strategist',
           strategistTimeoutMs
@@ -837,6 +842,9 @@ export class AgentLoop {
         ? `## Autonomous Run Notice\n\nYou have been running autonomously for ${cyclesSinceAskHuman} cycles without checking in with your human operator. Consider using ask_human to check in — ask for feedback on recent work, confirm priorities, or request direction.`
         : undefined;
 
+    // Resolve standing directives (custom + presets) for this bot
+    const directives = resolveDirectives(botConfig);
+
     if (isContinuous) {
       const lastCycleSummary = schedule?.lastResult?.summary;
       const continuousInput = buildContinuousPlannerPrompt({
@@ -870,6 +878,7 @@ export class AgentLoop {
         autonomousCyclesNote,
         toolCategoryList,
         allowedWritePaths,
+        directives: directives.length > 0 ? directives : undefined,
       });
 
       const plannerStartMs = Date.now();
@@ -950,6 +959,7 @@ export class AgentLoop {
         autonomousCyclesNote,
         toolCategoryList,
         allowedWritePaths,
+        directives: directives.length > 0 ? directives : undefined,
       });
 
       const plannerStartMs = Date.now();
@@ -1072,6 +1082,7 @@ export class AgentLoop {
       hasCreateTool,
       workDir: agentConfig.workDir,
       fileTree,
+      directives: directives.length > 0 ? directives : undefined,
     });
 
     const messages: ChatMessage[] = [
@@ -1081,6 +1092,12 @@ export class AgentLoop {
 
     const toolCallLog: ToolExecutionRecord[] = [];
     const loopDetector = this.createLoopDetector(globalConfig, botOverride);
+    // Resolve tenantRoot for multi-tenant path sandboxing
+    const tenantRoot =
+      botConfig.tenantId && this.ctx.config.multiTenant?.enabled
+        ? `${this.ctx.config.multiTenant.dataDir ?? './data/tenants'}/${botConfig.tenantId}`
+        : undefined;
+
     const executor = new ToolExecutor(this.ctx, {
       botId,
       chatId: botOverride?.reportChatId ?? 0,
@@ -1088,6 +1105,7 @@ export class AgentLoop {
       enableLogging: true,
       karmaService: this.karmaService ?? undefined,
       loopDetector,
+      tenantRoot,
     });
 
     // Track loop detection events during cycle

@@ -50,8 +50,8 @@ export interface HandleReplyResult {
  */
 export class AskHumanStore {
   private pending = new Map<string, PendingQuestion>();
-  // chatId → question id (for quick lookup when a reply comes in)
-  private byChatId = new Map<number, Set<string>>();
+  // botId:chatId → question id (for quick lookup when a reply comes in)
+  private byChatId = new Map<string, Set<string>>();
   // Answered questions waiting to be consumed by the next agent loop cycle
   private answered = new Map<string, AnsweredQuestion>();
 
@@ -140,10 +140,11 @@ export class AskHumanStore {
     };
 
     this.pending.set(id, entry);
-    if (!this.byChatId.has(chatId)) {
-      this.byChatId.set(chatId, new Set());
+    const compositeKey = `${botId}:${chatId}`;
+    if (!this.byChatId.has(compositeKey)) {
+      this.byChatId.set(compositeKey, new Set());
     }
-    this.byChatId.get(chatId)?.add(id);
+    this.byChatId.get(compositeKey)?.add(id);
 
     this.logger.debug({ id, botId, chatId }, 'AskHuman: question registered');
 
@@ -177,8 +178,13 @@ export class AskHumanStore {
    * If no replyToMessageId but there's exactly one pending question in the chat, resolve that.
    * Returns true if a question was matched and resolved.
    */
-  handleReply(chatId: number, text: string, replyToMessageId?: number): HandleReplyResult {
-    const questionIds = this.byChatId.get(chatId);
+  handleReply(
+    botId: string,
+    chatId: number,
+    text: string,
+    replyToMessageId?: number
+  ): HandleReplyResult {
+    const questionIds = this.byChatId.get(`${botId}:${chatId}`);
     if (!questionIds || questionIds.size === 0) return { matched: false };
 
     // Try to match by reply-to
@@ -207,7 +213,7 @@ export class AskHumanStore {
 
     // Fallback: if exactly one pending question in this chat, match it
     if (questionIds.size === 1) {
-      const qId = questionIds.values().next().value!;
+      const qId = questionIds.values().next().value as string;
       const entry = this.pending.get(qId);
       if (entry) {
         this.logger.info({ questionId: qId, chatId }, 'AskHuman: reply matched (single pending)');
@@ -234,8 +240,8 @@ export class AskHumanStore {
   /**
    * Check if there are any pending questions for a chat.
    */
-  hasPending(chatId: number): boolean {
-    const ids = this.byChatId.get(chatId);
+  hasPending(botId: string, chatId: number): boolean {
+    const ids = this.byChatId.get(`${botId}:${chatId}`);
     return !!ids && ids.size > 0;
   }
 
@@ -246,11 +252,12 @@ export class AskHumanStore {
     clearTimeout(entry.timer);
     this.pending.delete(questionId);
 
-    const chatIds = this.byChatId.get(entry.chatId);
+    const compositeKey = `${entry.botId}:${entry.chatId}`;
+    const chatIds = this.byChatId.get(compositeKey);
     if (chatIds) {
       chatIds.delete(questionId);
       if (chatIds.size === 0) {
-        this.byChatId.delete(entry.chatId);
+        this.byChatId.delete(compositeKey);
       }
     }
   }
@@ -375,10 +382,11 @@ export class AskHumanStore {
         clearTimeout(entry.timer);
         entry.reject(new Error('AskHumanStore cleared for bot reset'));
         this.pending.delete(id);
-        const chatIds = this.byChatId.get(entry.chatId);
+        const compositeKey = `${entry.botId}:${entry.chatId}`;
+        const chatIds = this.byChatId.get(compositeKey);
         if (chatIds) {
           chatIds.delete(id);
-          if (chatIds.size === 0) this.byChatId.delete(entry.chatId);
+          if (chatIds.size === 0) this.byChatId.delete(compositeKey);
         }
       }
     }

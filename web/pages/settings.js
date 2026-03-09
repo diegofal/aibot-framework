@@ -1,6 +1,12 @@
-import { api } from './shared.js';
+import { api, getAuthContext } from './shared.js';
 
 export async function renderSettings(el) {
+  const { role } = getAuthContext();
+  if (role === 'tenant') {
+    el.innerHTML = '<p class="text-dim">Access denied.</p>';
+    return;
+  }
+
   el.innerHTML = '<div class="page-title">Settings</div><p class="text-dim">Loading...</p>';
 
   const [

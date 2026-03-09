@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs';
 import { lstat, mkdir } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 import type { Logger } from '../logger';
+import { isPathWithinTenant } from '../tenant/tenant-paths';
 import type { Tool, ToolResult } from './types';
 
 export interface FileToolsConfig {
@@ -204,6 +205,13 @@ export function createFileReadTool(config: FileToolsConfig): Tool {
         return { success: false, content: validated.error };
       }
 
+      // Tenant boundary enforcement (multi-tenant mode)
+      const tenantRoot = typeof args._tenantRoot === 'string' ? args._tenantRoot : undefined;
+      if (tenantRoot && !isPathWithinTenant(validated, tenantRoot)) {
+        logger.warn({ path: rawPath, tenantRoot }, 'file_read: tenant boundary violation');
+        return { success: false, content: 'Access denied: path outside tenant boundary' };
+      }
+
       try {
         const file = Bun.file(validated);
 
@@ -326,6 +334,13 @@ export function createFileWriteTool(config: FileToolsConfig): Tool {
         return { success: false, content: validated.error };
       }
 
+      // Tenant boundary enforcement (multi-tenant mode)
+      const tenantRoot = typeof args._tenantRoot === 'string' ? args._tenantRoot : undefined;
+      if (tenantRoot && !isPathWithinTenant(validated, tenantRoot)) {
+        logger.warn({ path: rawPath, tenantRoot }, 'file_write: tenant boundary violation');
+        return { success: false, content: 'Access denied: path outside tenant boundary' };
+      }
+
       try {
         // Ensure parent directory exists
         const dir = validated.substring(0, validated.lastIndexOf('/'));
@@ -419,6 +434,13 @@ export function createFileEditTool(config: FileToolsConfig): Tool {
       if (typeof validated === 'object') {
         logger.warn({ path: rawPath, reason: validated.error }, 'file_edit: blocked');
         return { success: false, content: validated.error };
+      }
+
+      // Tenant boundary enforcement (multi-tenant mode)
+      const tenantRoot = typeof args._tenantRoot === 'string' ? args._tenantRoot : undefined;
+      if (tenantRoot && !isPathWithinTenant(validated, tenantRoot)) {
+        logger.warn({ path: rawPath, tenantRoot }, 'file_edit: tenant boundary violation');
+        return { success: false, content: 'Access denied: path outside tenant boundary' };
       }
 
       try {

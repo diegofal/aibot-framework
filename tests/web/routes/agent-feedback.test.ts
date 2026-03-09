@@ -237,7 +237,7 @@ describe('agent-feedback routes', () => {
     });
 
     test('adds human message and returns updated entry', async () => {
-      const mockClaudeGenerate = mock(() => Promise.resolve('Bot reply'));
+      const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'Bot reply' }));
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
       const freshModule = await import('../../../src/web/routes/agent-feedback');
@@ -425,7 +425,7 @@ describe('agent-feedback routes', () => {
       const mockClaudeGenerate = mock(() => {
         callCount++;
         if (callCount === 1) return Promise.reject(new Error('First fail'));
-        return Promise.resolve('Retry worked!');
+        return Promise.resolve({ response: 'Retry worked!' });
       });
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
@@ -530,7 +530,7 @@ describe('agent-feedback routes', () => {
     test('returns generated feedback on success', async () => {
       // Build a separate app with claudeGenerate mocked via deps
       const mockClaudeGenerate = mock(() =>
-        Promise.resolve('Stop writing templated garbage. Focus on original content.')
+        Promise.resolve({ response: 'Stop writing templated garbage. Focus on original content.' })
       );
 
       // We need to create a route instance where claudeGenerate is mockable.
@@ -653,7 +653,9 @@ describe('agent-feedback routes', () => {
     });
 
     test('includes productions context when service is available', async () => {
-      const mockClaudeGenerate = mock(() => Promise.resolve('Feedback with productions context'));
+      const mockClaudeGenerate = mock(() =>
+        Promise.resolve({ response: 'Feedback with productions context' })
+      );
 
       mock.module('../../../src/claude-cli', () => ({
         claudeGenerate: mockClaudeGenerate,

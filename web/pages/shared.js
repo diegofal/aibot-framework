@@ -229,13 +229,13 @@ export function renderThread(container, opts) {
   }
 
   // Wire file chip click handlers
-  container.querySelectorAll('.file-chip').forEach((chip) => {
+  for (const chip of container.querySelectorAll('.file-chip')) {
     chip.addEventListener('click', () => {
       const filePath = chip.dataset.path;
       const fileBotId = chip.dataset.bot;
       if (filePath && fileBotId) previewFile(fileBotId, filePath);
     });
-  });
+  }
 
   // Wire send button + Enter key
   const textarea = container.querySelector('.thread-input');
@@ -261,4 +261,66 @@ export function renderThread(container, opts) {
   if (retryBtn && onRetry) {
     retryBtn.addEventListener('click', onRetry);
   }
+}
+
+/**
+ * Resolve tenantId for BaaS pages.
+ * - Tenant users: returns their tenantId directly.
+ * - Admin users: renders a tenant selector dropdown and calls onChange(tenantId).
+ *   Returns null initially; the page should re-render when onChange fires.
+ *
+ * @param {HTMLElement} container - Where to render the selector (admin only)
+ * @param {function} onChange - Called with selected tenantId
+ * @returns {Promise<string|null>} tenantId or null if admin needs to pick
+ */
+export async function resolveTenantId(container, onChange) {
+  const ctx = getAuthContext();
+
+  // Tenant user — already has tenantId
+  if (ctx.tenantId) {
+    container.innerHTML = '';
+    return ctx.tenantId;
+  }
+
+  // Admin — fetch tenant list and show selector
+  if (ctx.role === 'admin') {
+    const data = await api('/api/admin/tenants');
+    const tenants = Array.isArray(data?.tenants) ? data.tenants : Array.isArray(data) ? data : [];
+
+    if (tenants.length === 0) {
+      container.innerHTML = '<p class="text-dim">No tenants registered yet.</p>';
+      return null;
+    }
+
+    // Check if there's a previously selected tenant in sessionStorage
+    const saved = sessionStorage.getItem('admin_selected_tenant');
+    const savedValid = saved && tenants.some((t) => t.id === saved);
+
+    container.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)">
+        <span class="text-dim text-sm" style="white-space:nowrap">Viewing as tenant:</span>
+        <select id="admin-tenant-select" style="padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;flex:1">
+          <option value="">Select a tenant...</option>
+          ${tenants.map((t) => `<option value="${escapeHtml(t.id)}"${t.id === saved ? ' selected' : ''}>${escapeHtml(t.name)} (${escapeHtml(t.id)})</option>`).join('')}
+        </select>
+      </div>`;
+
+    const select = container.querySelector('#admin-tenant-select');
+    select.addEventListener('change', () => {
+      const val = select.value;
+      if (val) sessionStorage.setItem('admin_selected_tenant', val);
+      onChange(val);
+    });
+
+    // If we have a saved valid selection, fire immediately
+    if (savedValid) {
+      return saved;
+    }
+
+    return null;
+  }
+
+  // No tenantId and not admin
+  container.innerHTML = '<p class="text-dim">No tenant context available. Please log in.</p>';
+  return null;
 }

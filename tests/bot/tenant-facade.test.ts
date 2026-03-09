@@ -14,6 +14,7 @@ vi.mock('../../src/tenant/manager', () => ({
     getCurrentMonthUsage: vi.fn(),
     checkQuota: vi.fn(),
     canCreateBot: vi.fn(),
+    rotateUsage: vi.fn().mockReturnValue({ archived: 0, kept: 0 }),
   })),
 }));
 
@@ -91,7 +92,7 @@ describe('TenantFacade', () => {
 
     beforeEach(() => {
       facade.initializeTenantManager({ dataDir: '/tmp/test' });
-      mgr = facade.getTenantManager()!;
+      mgr = facade.getTenantManager();
     });
 
     test('createTenant delegates to TenantManager', () => {
@@ -176,7 +177,7 @@ describe('TenantFacade', () => {
 
     test('stops running bots that belong to tenant before deleting', async () => {
       facade.initializeTenantManager({ dataDir: '/tmp/test' });
-      const mgr = facade.getTenantManager()! as any;
+      const mgr = facade.getTenantManager() as any;
       mgr.deleteTenant.mockReturnValue(true);
 
       // Set up config with bots belonging to this tenant
@@ -199,7 +200,7 @@ describe('TenantFacade', () => {
 
     test('delegates to TenantManager.deleteTenant', async () => {
       facade.initializeTenantManager({ dataDir: '/tmp/test' });
-      const mgr = facade.getTenantManager()! as any;
+      const mgr = facade.getTenantManager() as any;
       mgr.deleteTenant.mockReturnValue(false);
 
       const result = await facade.deleteTenant('nonexistent');

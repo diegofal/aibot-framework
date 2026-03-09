@@ -236,8 +236,9 @@ export class HandlerRegistrar {
         '📩 Incoming text message'
       );
 
-      this.trackUser(ctx);
+      this.trackUser(ctx, config.id);
 
+      // biome-ignore lint/suspicious/noExplicitAny: grammy Context subtypes are not fully compatible with gate signature
       const gate = await this.conversationGate.evaluate(ctx as any, config, botLogger);
       if (!gate.allowed) return;
 
@@ -278,8 +279,8 @@ export class HandlerRegistrar {
 
   // --- Utility methods ---
 
-  private trackUser(ctx: Context): void {
-    trackUser(this.ctx, ctx);
+  private trackUser(ctx: Context, botId: string): void {
+    trackUser(this.ctx, ctx, botId);
   }
 
   private isAuthorized(userId: number | undefined, config: BotConfig): boolean {
@@ -335,7 +336,7 @@ export class HandlerRegistrar {
       throw new Error(`Skill context not found: ${skillId}`);
     }
 
-    let session;
+    let session: ReturnType<typeof this.ctx.sessionManager.buildSessionInfo> | undefined;
     if (this.ctx.config.session.enabled && ctx.chat) {
       const sessionKey = this.ctx.sessionManager.deriveKey(config.id, ctx);
       session = this.ctx.sessionManager.buildSessionInfo(sessionKey);

@@ -193,7 +193,7 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 500, caller: 'planner' },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalCalls).toBe(1);
     expect(stats.successCount).toBe(1);
     expect(stats.failCount).toBe(0);
@@ -217,7 +217,7 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 400, caller: 'executor' },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalCalls).toBe(2);
     expect(stats.successCount).toBe(2);
     expect(stats.totalDurationMs).toBe(600);
@@ -233,7 +233,7 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 100, caller: 'executor', error: 'timeout' },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalCalls).toBe(1);
     expect(stats.successCount).toBe(0);
     expect(stats.failCount).toBe(1);
@@ -255,7 +255,7 @@ describe('LlmStatsTracker', () => {
       data: { primaryBackend: 'claude-cli', fallbackBackend: 'ollama' },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.fallbackCount).toBe(2);
     // Fallbacks don't count as calls (they just tag that a fallback happened)
     expect(stats.totalCalls).toBe(0);
@@ -287,7 +287,7 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 1000, caller: 'executor' },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.callerBreakdown.planner).toEqual({
       calls: 2,
       totalDurationMs: 500,
@@ -357,8 +357,8 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 50, caller: 'executor', error: 'err' },
     });
 
-    const s1 = stream.llmStats.getStats('bot1')!;
-    const s2 = stream.llmStats.getStats('bot2')!;
+    const s1 = stream.llmStats.getStats('bot1');
+    const s2 = stream.llmStats.getStats('bot2');
 
     expect(s1.successCount).toBe(1);
     expect(s1.failCount).toBe(0);
@@ -374,7 +374,7 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 300, caller: 'planner', model: 'llama3', tokensIn: 100, tokensOut: 50 },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalPromptTokens).toBe(100);
     expect(stats.totalCompletionTokens).toBe(50);
     expect(stats.modelBreakdown).toEqual({
@@ -402,7 +402,7 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 400, caller: 'executor', model: 'llama3', tokensIn: 200, tokensOut: 80 },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalPromptTokens).toBe(300);
     expect(stats.totalCompletionTokens).toBe(130);
     expect(stats.modelBreakdown.llama3.calls).toBe(2);
@@ -435,7 +435,7 @@ describe('LlmStatsTracker', () => {
       },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalPromptTokens).toBe(750);
     expect(stats.totalCompletionTokens).toBe(310);
 
@@ -465,7 +465,7 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 200, caller: 'planner', tokensIn: 100, tokensOut: 50 },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalPromptTokens).toBe(0);
     expect(stats.totalCompletionTokens).toBe(0);
     expect(Object.keys(stats.modelBreakdown)).toHaveLength(0);
@@ -486,7 +486,7 @@ describe('LlmStatsTracker', () => {
       },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalPromptTokens).toBe(80);
     expect(stats.totalCompletionTokens).toBe(10);
     expect(stats.modelBreakdown.llama3.calls).toBe(1);
@@ -500,7 +500,7 @@ describe('LlmStatsTracker', () => {
       data: { durationMs: 100, caller: 'planner' },
     });
 
-    const stats = stream.llmStats.getStats('bot1')!;
+    const stats = stream.llmStats.getStats('bot1');
     expect(stats.totalPromptTokens).toBe(0);
     expect(stats.totalCompletionTokens).toBe(0);
     expect(stats.modelBreakdown).toEqual({});
@@ -566,7 +566,7 @@ describe('LlmStatsTracker persistence', () => {
     writeFileSync(join(tmpDir, 'bot1.json'), JSON.stringify(stats), 'utf-8');
 
     const stream = new ActivityStream(undefined, tmpDir);
-    const loaded = stream.llmStats.getStats('bot1')!;
+    const loaded = stream.llmStats.getStats('bot1');
     expect(loaded.totalCalls).toBe(5);
     expect(loaded.totalPromptTokens).toBe(500);
     expect(loaded.modelBreakdown.llama3.calls).toBe(5);
@@ -606,7 +606,7 @@ describe('LlmStatsTracker persistence', () => {
       data: { durationMs: 400, caller: 'executor', model: 'llama3', tokensIn: 150, tokensOut: 60 },
     });
 
-    const updated = stream.llmStats.getStats('bot1')!;
+    const updated = stream.llmStats.getStats('bot1');
     expect(updated.totalCalls).toBe(3);
     expect(updated.totalPromptTokens).toBe(450);
     expect(updated.totalCompletionTokens).toBe(160);
@@ -639,7 +639,7 @@ describe('LlmStatsTracker persistence', () => {
       data: { durationMs: 100, caller: 'planner', model: 'llama3', tokensIn: 50, tokensOut: 20 },
     });
     stream.llmStats.flushToDisk();
-    expect(stream.llmStats.getStats('bot1')!.totalPromptTokens).toBe(50);
+    expect(stream.llmStats.getStats('bot1')?.totalPromptTokens).toBe(50);
   });
 
   test('skips malformed JSON files during load', () => {

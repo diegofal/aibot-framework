@@ -2,7 +2,7 @@
 
 > **Created**: 2026-03-05
 > **Branch**: `feat/baas-multi-tenant`
-> **Status**: Phase 1 — Fix Foundation
+> **Status**: Phase 3.9 complete — BaaS Dashboard Pages + Chat UI. Phase 4 next.
 
 This document is the **living tracker** for the BaaS multi-tenant feature. All work happens on the `feat/baas-multi-tenant` branch. Items are marked as completed when the corresponding code lands.
 
@@ -334,40 +334,51 @@ User B: talks to the bot
 
 **Goal**: Proper tenant and user isolation. No data leaks.
 
-- [ ] 1.1 — Fix end-user isolation leak: memory flush (`memory-flush.ts` — pass userId)
-- [ ] 1.2 — Fix end-user isolation leak: `readRecentDailyLogs` (`soul.ts` — accept userId, read per-user dir)
-- [ ] 1.3 — Fix end-user isolation leak: RAG pre-fetch (`conversation-pipeline.ts` — pass userId to search)
-- [ ] 1.4 — Fix end-user isolation leak: `save_memory` tool (`tools/soul.ts` — pass `_userId`)
-- [ ] 1.5 — Wire `resolveAgentConfigWithTenant` in `bot-manager.ts startBot()`
-- [ ] 1.6 — Fix rate limiter bug (`c.get('tenantId')` → `c.get('tenant')?.tenantId`)
-- [ ] 1.7 — Add tenant check to export route
-- [ ] 1.8 — Enforce `isPathWithinTenant()` in file tools
-- [ ] 1.9 — Pass `tenantRoot` and `userId` to agent loop executor
-- [ ] 1.10 — Per-tenant data directories (sessions, memory, productions)
-- [ ] 1.11 — Tests for all isolation boundaries
+- [x] 1.1 — Fix end-user isolation leak: memory flush (`memory-flush.ts` — pass userId)
+- [x] 1.2 — Fix end-user isolation leak: `readRecentDailyLogs` (`soul.ts` — accept userId, read per-user dir)
+- [x] 1.3 — Fix end-user isolation leak: RAG pre-fetch (`conversation-pipeline.ts` — pass userId to search)
+- [x] 1.4 — Fix end-user isolation leak: `save_memory` tool (`tools/soul.ts` — pass `_userId`)
+- [x] 1.5 — Wire `resolveAgentConfigWithTenant` in `bot-manager.ts startBot()`
+- [x] 1.6 — Fix rate limiter bug (`c.get('tenantId')` → `c.get('tenant')?.tenantId`)
+- [x] 1.7 — Add tenant check to export route
+- [x] 1.8 — Enforce `isPathWithinTenant()` in file tools
+- [x] 1.9 — Pass `tenantRoot` and `userId` to agent loop executor
+- [x] 1.10 — Per-tenant data directories: soul/work dirs tenant-scoped via `resolveTenantPaths()`. Session transcripts organized in per-bot subdirectories (`transcripts/{botId}/`) with backward-compat fallback. Productions use `botConfig.workDir` (tenant-resolved). Memory DB uses query-level isolation (`bot_id`+`user_id` columns, all queries filtered).
+- [x] 1.11 — Tests for all isolation boundaries
 
 ### Phase 2 — Channel Abstraction (enables non-Telegram use cases)
 
 **Goal**: Channel-agnostic message pipeline. At least one non-Telegram channel.
 
-- [ ] 2.1 — Define `Channel` interface (sendMessage, receiveMessage, formatMessage)
-- [ ] 2.2 — Refactor conversation pipeline to accept channel-agnostic messages
-- [ ] 2.3 — Build embeddable web widget (WebSocket-based)
-- [ ] 2.4 — Public REST Chat API (`/api/v1/chat`) with sync response or SSE streaming
-- [ ] 2.5 — API versioning (`/api/v1/` prefix)
-- [ ] 2.6 — OpenAPI/Swagger documentation
+- [x] 2.1 — Define `Channel` interface (`src/channel/types.ts`: `InboundMessage`, `Channel`, `ChannelKind`)
+- [x] 2.2 — Refactor conversation pipeline to accept channel-agnostic messages (`handleChannelMessage()` + Telegram/REST adapters)
+- [x] 2.3 — Embeddable web widget (`/ws/chat` WebSocket + `web/widget.js` self-contained embed)
+- [x] 2.4 — Public REST Chat API (`POST /api/v1/chat/:botId`) with sync response
+- [x] 2.5 — API versioning (`/api/v1/` prefix established)
+- [x] 2.6 — OpenAPI spec (`GET /api/v1/openapi.json`)
 
 ### Phase 3 — BaaS Platform (enables self-service)
 
 **Goal**: Customers can sign up, create bots from templates, customize, and serve their end users.
 
-- [ ] 3.1 — Bot template system (create template → spawn instances)
-- [ ] 3.2 — Template versioning and update propagation
-- [ ] 3.3 — Tenant customization layer (identity override, knowledge injection, custom goals/rules)
-- [ ] 3.4 — Outbound webhooks for external integrations
-- [ ] 3.5 — WhatsApp Business API adapter
-- [ ] 3.6 — Monthly usage reset cron
-- [ ] 3.7 — Analytics/reporting (conversation metrics, resolution rates)
+- [x] 3.1 — Bot template system (`src/tenant/template-service.ts`: CRUD + instantiation + version tracking)
+- [x] 3.2 — Template versioning and update propagation (version bump on config change, `hasUpdate()` per instance)
+- [x] 3.3 — Tenant customization layer (`src/tenant/customization.ts`: identity override, knowledge, goals, rules → system prompt overlay via `SystemPromptBuilder`)
+- [x] 3.4 — Outbound webhooks (`src/tenant/webhook-service.ts`: register/emit, HMAC signatures, retry with backoff, auto-disable on failures)
+- [x] 3.5 — WhatsApp Business API adapter (`src/channel/whatsapp.ts`: inbound message conversion, outbound via Cloud API, webhook signature verification; `src/web/routes/whatsapp-webhook.ts`: GET verification + POST inbound; per-bot `whatsapp` config with phoneNumberId/accessToken/verifyToken/appSecret)
+- [x] 3.6 — Monthly usage rotation (`TenantManager.rotateUsage()`, auto-runs on startup via `TenantFacade`)
+- [x] 3.7 — Analytics/reporting (`src/tenant/analytics-service.ts`: event recording, tenant-scoped JSONL storage, aggregation engine. Metrics: conversations, messages, unique users, resolution rate, tool usage, errors, per-day breakdowns, per-bot drill-down. API: `GET /api/baas/analytics/:tenantId`, `GET /api/baas/analytics/:tenantId/:botId`, `GET /api/baas/analytics/:tenantId/current-month`. Events emitted from `BotManager.handleChannelMessage()`)
+- [x] 3.8 — Cross-bot isolation: `seenUsers` scoped by botId, `AskHumanStore` scoped by `botId:chatId`, `ProductionsService` path traversal protection
+
+### Phase 3.9 — BaaS Dashboard Pages + Chat UI
+
+**Goal**: Dashboard UI for all BaaS services + direct bot chat from the dashboard.
+
+- [x] 3.9.1 — Chat page (`web/pages/chat.js`: bot selector, `renderThread()` integration, `POST /api/v1/chat/:botId`)
+- [x] 3.9.2 — BaaS Templates page (`web/pages/baas-templates.js`: list, detail, CRUD modals, instantiate)
+- [x] 3.9.3 — BaaS Webhooks page (`web/pages/baas-webhooks.js`: CRUD, health badges, toggle enabled)
+- [x] 3.9.4 — BaaS Customizations page (`web/pages/baas-customizations.js`: card layout, inline editor with list editors for knowledge/goals/rules)
+- [x] 3.9.5 — BaaS Analytics page (`web/pages/baas-analytics.js`: metrics cards, pure CSS bar charts, breakdown tables, date range + bot filter)
 
 ### Phase 4 — Scale & Optimize (Model C transition)
 
@@ -396,4 +407,8 @@ User B: talks to the bot
 
 | Date | Item | Commit | Notes |
 |------|------|--------|-------|
+| 2026-03-08 | Phase 3.9 complete (3.9.1–3.9.5) | — | Dashboard: Chat page, Templates CRUD, Webhooks CRUD, Customizations editor, Analytics dashboard with bar charts |
+| 2026-03-08 | Phase 3 complete (3.1–3.8) | — | Bot templates, customization layer, outbound webhooks, WhatsApp adapter, usage rotation, analytics/reporting, cross-bot isolation fixes |
+| 2026-03-07 | Phase 2 complete (2.1–2.6) | — | Channel abstraction layer, REST Chat API, WebSocket widget, OpenAPI spec, API versioning |
+| 2026-03-06 | Phase 1 complete (1.1–1.11) | — | All 4 end-user data leaks fixed, 6 tenant infra gaps closed |
 | 2026-03-05 | Document created | — | Initial architecture analysis and roadmap |

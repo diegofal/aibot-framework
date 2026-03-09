@@ -1,4 +1,5 @@
 import { type Context, InputFile } from 'grammy';
+import type { Channel, InboundMessage } from '../channel/types';
 import type { BotConfig } from '../config';
 import { resolveAgentConfig, resolveTtsConfig } from '../config';
 import { localDateStr } from '../date-utils';
@@ -41,7 +42,8 @@ export class ConversationPipeline {
     userText: string,
     isGroup: boolean,
     botLogger: Logger,
-    botId: string
+    botId: string,
+    userId?: string
   ): Promise<string | null> {
     const ragConfig = this.ctx.config.soul.search?.autoRag;
     if (!ragConfig?.enabled || !this.ctx.searchEnabled || !this.ctx.memoryManager) {
@@ -62,7 +64,8 @@ export class ConversationPipeline {
         query,
         ragConfig.maxResults,
         ragConfig.minScore,
-        botId
+        botId,
+        userId
       );
 
       if (results.length === 0) {
@@ -126,7 +129,7 @@ export class ConversationPipeline {
         },
       });
 
-      return `## Relevant Memory Context\n\nThe following was retrieved from your long-term memory for this conversation.\nUSE this information to answer — it takes precedence over daily log entries.\n\n${snippets.join('\n\n')}`;
+      return `## Relevant Memory Context\n\nThe following was retrieved from your long-term memory and MAY be relevant.\nUse it as background reference — but do NOT assume you have already discussed\nthese topics with the user unless the current conversation history confirms it.\n\n${snippets.join('\n\n')}`;
     } catch (err) {
       botLogger.warn({ err }, 'RAG pre-fetch failed (non-fatal)');
       return null;
@@ -170,8 +173,15 @@ export class ConversationPipeline {
       '🔄 handleConversation start'
     );
 
+    // Resolve userId early (synchronous) so it's available for RAG pre-fetch
+    // Auto-enable user isolation for tenant bots (BaaS multi-tenant)
+    const userIsolation = config.userIsolation;
+    const rawUserId = ctx.from?.id;
+    const isolationActive = userIsolation?.enabled || !!config.tenantId;
+    const userId = isolationActive && rawUserId ? String(rawUserId) : undefined;
+
     // Start RAG pre-fetch early for parallelism
-    const ragPromise = this.prefetchMemoryContext(userText, isGroup, botLogger, config.id);
+    const ragPromise = this.prefetchMemoryContext(userText, isGroup, botLogger, config.id, userId);
 
     try {
       // Memory flush on session expiry
@@ -180,7 +190,7 @@ export class ConversationPipeline {
         if (this.ctx.config.soul.enabled) {
           const expiredHistory = this.ctx.sessionManager.getFullHistory(serializedKey);
           if (expiredHistory.length > 0) {
-            await this.memoryFlusher.flushSessionToMemory(expiredHistory, config.id);
+            await this.memoryFlusher.flushSessionToMemory(expiredHistory, config.id, userId);
           }
         }
         this.ctx.sessionManager.clearSession(serializedKey);
@@ -202,7 +212,7 @@ export class ConversationPipeline {
           const recentHistory = this.ctx.sessionManager.getFullHistory(serializedKey);
           this.ctx.sessionManager.markMemoryFlushed(serializedKey);
           // Use flushWithScoring for importance-weighted Core Memory storage
-          this.memoryFlusher.flushWithScoring(recentHistory, config.id).catch((err) => {
+          this.memoryFlusher.flushWithScoring(recentHistory, config.id, userId).catch((err) => {
             botLogger.warn({ err }, 'Proactive memory flush failed');
           });
         }
@@ -215,11 +225,6 @@ export class ConversationPipeline {
 
       // Await RAG pre-fetch
       const ragContext = await ragPromise;
-
-      // Resolve userId for per-user isolation
-      const userIsolation = config.userIsolation;
-      const rawUserId = ctx.from?.id;
-      const userId = userIsolation?.enabled && rawUserId ? String(rawUserId) : undefined;
 
       // Resolve tenant root for path sandboxing
       const tenantRoot =
@@ -263,7 +268,8 @@ export class ConversationPipeline {
         truncated,
         serializedKey,
         config.id,
-        compactionConfig
+        compactionConfig,
+        userId
       );
       if (compResult.compacted) {
         botLogger.info(
@@ -379,7 +385,8 @@ export class ConversationPipeline {
             currentMessages,
             serializedKey,
             config.id,
-            { ...compactionConfig, thresholdRatio: 0.1, keepRecentMessages: 2 }
+            { ...compactionConfig, thresholdRatio: 0.1, keepRecentMessages: 2 },
+            userId
           );
           currentMessages = emergency.messages;
           botLogger.info(
@@ -530,6 +537,61 @@ export class ConversationPipeline {
           this.ctx.tenantFacade.recordUsage(config.tenantId, config.id, 'llm_request');
         }
 
+        // Webhook & analytics (fire-and-forget) — Telegram path
+        if (config.tenantId) {
+          const chatIdStr = String(chatId ?? '');
+          const senderId = ctx.from?.id ? String(ctx.from.id) : undefined;
+
+          // conversation.started — first message in session
+          if (history.length === 0 && this.ctx.analyticsService) {
+            this.ctx.analyticsService.record({
+              type: 'conversation.started',
+              tenantId: config.tenantId,
+              botId: config.id,
+              chatId: chatIdStr,
+              userId: senderId,
+              channelKind: 'telegram',
+            });
+          }
+
+          this.ctx.webhookService
+            ?.emit(
+              config.tenantId,
+              'message.received',
+              {
+                botId: config.id,
+                senderId,
+                channelKind: 'telegram',
+                messageLength: userText.length,
+              },
+              config.id
+            )
+            .catch(() => {});
+
+          this.ctx.webhookService
+            ?.emit(
+              config.tenantId,
+              'message.sent',
+              {
+                botId: config.id,
+                senderId,
+                channelKind: 'telegram',
+                replyLength: response.length,
+              },
+              config.id
+            )
+            .catch(() => {});
+
+          this.ctx.analyticsService?.record({
+            type: 'conversation.message',
+            tenantId: config.tenantId,
+            botId: config.id,
+            chatId: chatIdStr,
+            userId: senderId,
+            channelKind: 'telegram',
+          });
+        }
+
         // Keep the reply window open for this user in groups
         if (isGroup && ctx.from?.id) {
           this.ctx.sessionManager.markActive(config.id, chatId, ctx.from.id);
@@ -544,6 +606,30 @@ export class ConversationPipeline {
         { error, chatId, circuitState: this.circuitBreaker.getState() },
         'Conversation handler failed'
       );
+
+      // Emit bot.error webhook + error.occurred analytics (fire-and-forget)
+      if (config.tenantId) {
+        this.ctx.webhookService
+          ?.emit(
+            config.tenantId,
+            'bot.error',
+            {
+              botId: config.id,
+              channelKind: 'telegram',
+              error: errorInfo,
+            },
+            config.id
+          )
+          .catch(() => {});
+        this.ctx.analyticsService?.record({
+          type: 'error.occurred',
+          tenantId: config.tenantId,
+          botId: config.id,
+          chatId: String(chatId ?? ''),
+          channelKind: 'telegram',
+          data: { error: errorInfo },
+        });
+      }
 
       // Determine user-facing message based on error context
       let userMessage = '❌ Failed to generate response. Please try again later.';
@@ -572,6 +658,452 @@ export class ConversationPipeline {
       } catch (replyError) {
         botLogger.error({ replyError }, 'Failed to send error message to user');
       }
+    }
+  }
+
+  /**
+   * Channel-agnostic conversation pipeline entry point.
+   *
+   * Accepts an InboundMessage + Channel instead of a grammy Context,
+   * allowing non-Telegram channels (REST API, web widget, MCP) to share
+   * the same LLM call, session management, RAG, memory flush, and tool
+   * execution pipeline.
+   */
+  async handleChannelMessage(
+    msg: InboundMessage,
+    channel: Channel,
+    config: BotConfig,
+    sessionKey: string
+  ): Promise<string> {
+    const resolved = resolveAgentConfig(this.ctx.config, config);
+    const sessionConfig = this.ctx.config.session;
+    const webToolsConfig = this.ctx.config.webTools;
+    const maxToolRounds = config.maxToolRounds ?? webToolsConfig?.maxToolRounds;
+    const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id);
+    const hasTools = botToolDefs.length > 0;
+    const isGroup = msg.chatType === 'group' || msg.chatType === 'supergroup';
+    const botLogger = this.ctx.getBotLogger(config.id);
+
+    const senderName = isGroup ? (msg.sender.firstName ?? 'Unknown') : undefined;
+    botLogger.info(
+      {
+        chatId: msg.chatId,
+        sessionKey,
+        isGroup,
+        sender: msg.sender.firstName,
+        userId: msg.sender.id,
+        channelKind: msg.channelKind,
+        textPreview: msg.text.substring(0, 120),
+        hasImages: !!(msg.images && msg.images.length > 0),
+      },
+      'handleChannelMessage start'
+    );
+
+    // Resolve userId for user isolation
+    // Auto-enable user isolation for tenant bots (BaaS multi-tenant)
+    const userIsolation = config.userIsolation;
+    const isolationActive = userIsolation?.enabled || !!config.tenantId;
+    const userId = isolationActive && msg.sender.id ? msg.sender.id : undefined;
+
+    // Start RAG pre-fetch early
+    const ragPromise = this.prefetchMemoryContext(msg.text, isGroup, botLogger, config.id, userId);
+
+    try {
+      // Memory flush on session expiry
+      if (sessionConfig.enabled && this.ctx.sessionManager.isExpired(sessionKey)) {
+        botLogger.info({ key: sessionKey }, 'Session expired, flushing to memory');
+        if (this.ctx.config.soul.enabled) {
+          const expiredHistory = this.ctx.sessionManager.getFullHistory(sessionKey);
+          if (expiredHistory.length > 0) {
+            await this.memoryFlusher.flushSessionToMemory(expiredHistory, config.id, userId);
+          }
+        }
+        this.ctx.sessionManager.clearSession(sessionKey);
+      }
+
+      // Proactive memory flush
+      const flushConfig = this.ctx.config.soul.memoryFlush;
+      if (sessionConfig.enabled && flushConfig?.enabled) {
+        const meta = this.ctx.sessionManager.getSessionMeta(sessionKey);
+        if (
+          meta &&
+          meta.messageCount >= flushConfig.messageThreshold &&
+          meta.lastFlushCompactionIndex !== (meta.compactionCount ?? 0)
+        ) {
+          botLogger.info({ key: sessionKey, msgs: meta.messageCount }, 'Proactive memory flush');
+          const recentHistory = this.ctx.sessionManager.getFullHistory(sessionKey);
+          this.ctx.sessionManager.markMemoryFlushed(sessionKey);
+          this.memoryFlusher.flushWithScoring(recentHistory, config.id, userId).catch((err) => {
+            botLogger.warn({ err }, 'Proactive memory flush failed');
+          });
+        }
+      }
+
+      // Get history
+      const history = sessionConfig.enabled
+        ? this.ctx.sessionManager.getHistory(sessionKey, resolved.maxHistory)
+        : [];
+
+      // Await RAG
+      const ragContext = await ragPromise;
+
+      // Tenant root
+      const tenantRoot =
+        config.tenantId && this.ctx.config.multiTenant?.enabled
+          ? `${this.ctx.config.multiTenant.dataDir ?? './data/tenants'}/${config.tenantId}`
+          : undefined;
+
+      // Build system prompt
+      const systemPrompt = this.systemPromptBuilder.build({
+        mode: 'conversation',
+        botId: config.id,
+        botConfig: config,
+        isGroup,
+        ragContext,
+        userId,
+      });
+
+      // In groups, prefix messages with sender name
+      const prefixedText = senderName ? `[${senderName}]: ${msg.text}` : msg.text;
+
+      // Build messages
+      const userMessage: ChatMessage = { role: 'user', content: prefixedText };
+      if (msg.images && msg.images.length > 0) {
+        userMessage.images = msg.images;
+      }
+
+      const rawMessages: ChatMessage[] = [
+        { role: 'system', content: systemPrompt },
+        ...history,
+        userMessage,
+      ];
+
+      // Truncate + compact
+      const compactionConfig = this.ctx.config.conversation.compaction;
+      const { messages: truncated } = truncateOversizedMessages(
+        rawMessages,
+        compactionConfig.maxMessageChars
+      );
+      const compResult = await this.contextCompactor.maybeCompact(
+        truncated,
+        sessionKey,
+        config.id,
+        compactionConfig,
+        userId
+      );
+      let currentMessages = compResult.messages;
+
+      // Typing indicator
+      await channel.showTyping();
+      const typingInterval = setInterval(async () => {
+        try {
+          await channel.showTyping();
+        } catch {
+          // Ignore
+        }
+      }, 4000);
+
+      try {
+        // Tenant quota check
+        if (config.tenantId && this.ctx.tenantFacade?.isMultiTenant()) {
+          const allowed = this.ctx.tenantFacade.checkQuota(config.tenantId, 'messages');
+          if (!allowed) {
+            botLogger.warn(
+              { tenantId: config.tenantId, botId: config.id },
+              'Message quota exceeded'
+            );
+            clearInterval(typingInterval);
+            const quotaMsg =
+              'Sorry, the message quota for this service has been exceeded. Please try again later.';
+            await channel.sendText(quotaMsg);
+            return quotaMsg;
+          }
+        }
+
+        const activeModel = this.ctx.getActiveModel(config.id);
+        const llmBackend = this.ctx.getLLMClient(config.id).backend;
+        botLogger.info(
+          {
+            chatId: msg.chatId,
+            model: activeModel,
+            historyLength: history.length,
+            toolCount: hasTools ? botToolDefs.length : 0,
+            channelKind: msg.channelKind,
+          },
+          'Sending to LLM'
+        );
+        this.ctx.activityStream?.publish({
+          type: 'llm:start',
+          botId: config.id,
+          timestamp: Date.now(),
+          data: {
+            model: activeModel,
+            historyLength: history.length,
+            toolCount: hasTools ? botToolDefs.length : 0,
+            backend: llmBackend,
+            caller: `channel:${msg.channelKind}`,
+          },
+        });
+
+        const chatId = Number(msg.chatId) || 0;
+
+        // LLM call with resilience
+        let llmResult = await executeWithResilience(
+          () =>
+            this.ctx.getLLMClient(config.id).chat(currentMessages, {
+              model: activeModel,
+              temperature: resolved.temperature,
+              tools: hasTools ? botToolDefs : undefined,
+              toolExecutor: hasTools
+                ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
+                : undefined,
+              maxToolRounds,
+            }),
+          `channel-pipeline.chat:${msg.channelKind}`,
+          {
+            retryConfig: {
+              maxRetries: 3,
+              baseDelayMs: 1000,
+              maxDelayMs: 15000,
+              backoffMultiplier: 2,
+            },
+            circuitBreaker: this.circuitBreaker,
+            logger: botLogger,
+          }
+        );
+
+        // Overflow retry
+        let overflowRetries = 0;
+        while (
+          !llmResult.success &&
+          llmResult.error?.category === 'context_length' &&
+          overflowRetries < compactionConfig.maxOverflowRetries
+        ) {
+          overflowRetries++;
+          botLogger.warn({ attempt: overflowRetries }, 'Context overflow, emergency compaction');
+          const emergency = await this.contextCompactor.maybeCompact(
+            currentMessages,
+            sessionKey,
+            config.id,
+            { ...compactionConfig, thresholdRatio: 0.1, keepRecentMessages: 2 },
+            userId
+          );
+          currentMessages = emergency.messages;
+
+          llmResult = await executeWithResilience(
+            () =>
+              this.ctx.getLLMClient(config.id).chat(currentMessages, {
+                model: activeModel,
+                temperature: resolved.temperature,
+                tools: hasTools ? botToolDefs : undefined,
+                toolExecutor: hasTools
+                  ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
+                  : undefined,
+                maxToolRounds,
+              }),
+            `channel-pipeline.chat:${msg.channelKind}`,
+            {
+              retryConfig: {
+                maxRetries: 1,
+                baseDelayMs: 1000,
+                maxDelayMs: 5000,
+                backoffMultiplier: 2,
+              },
+              circuitBreaker: this.circuitBreaker,
+              logger: botLogger,
+            }
+          );
+        }
+
+        if (!llmResult.success) {
+          const error = llmResult.error ?? {
+            message: 'unknown error',
+            category: 'unknown' as const,
+          };
+          this.ctx.activityStream?.publish({
+            type: 'llm:error',
+            botId: config.id,
+            timestamp: Date.now(),
+            data: {
+              error: error.message,
+              category: error.category,
+              durationMs: llmResult.totalDurationMs,
+              attempts: llmResult.attempts,
+              backend: llmBackend,
+              caller: `channel:${msg.channelKind}`,
+            },
+          });
+          throw new Error(`LLM call failed: ${error.message}`);
+        }
+
+        const response = llmResult.data?.text ?? '';
+        const tokenUsage = llmResult.data?.usage;
+
+        botLogger.info(
+          {
+            chatId: msg.chatId,
+            responseLength: response.length,
+            attempts: llmResult.attempts,
+            durationMs: llmResult.totalDurationMs,
+          },
+          'LLM response received'
+        );
+        this.ctx.activityStream?.publish({
+          type: 'llm:end',
+          botId: config.id,
+          timestamp: Date.now(),
+          data: {
+            responseLength: response.length,
+            durationMs: llmResult.totalDurationMs,
+            attempts: llmResult.attempts,
+            backend: llmBackend,
+            caller: `channel:${msg.channelKind}`,
+            model: tokenUsage?.model,
+            tokensIn: tokenUsage?.promptTokens,
+            tokensOut: tokenUsage?.completionTokens,
+          },
+        });
+
+        // Persist to session
+        if (sessionConfig.enabled) {
+          const persistText = msg.sessionText ?? msg.text;
+          const prefixedPersist = senderName ? `[${senderName}]: ${persistText}` : persistText;
+          this.ctx.sessionManager.appendMessages(
+            sessionKey,
+            [
+              { role: 'user', content: prefixedPersist },
+              { role: 'assistant', content: response },
+            ],
+            resolved.maxHistory
+          );
+        }
+
+        // Send reply through channel
+        if (response.trim()) {
+          if (msg.isVoice && this.ctx.config.media.tts && channel.sendVoice) {
+            try {
+              const ttsConfig = resolveTtsConfig(this.ctx.config.media.tts, config);
+              const ttsResult = await generateSpeech(response, ttsConfig, botLogger);
+              await channel.sendVoice(ttsResult.audioBuffer, 'reply.opus');
+            } catch (ttsErr) {
+              botLogger.warn({ err: ttsErr }, 'TTS failed, falling back to text');
+              await sendLongMessage((t) => channel.sendText(t), response);
+            }
+          } else {
+            await sendLongMessage((t) => channel.sendText(t), response);
+          }
+        }
+
+        // Tenant metering
+        if (config.tenantId && this.ctx.tenantFacade?.isMultiTenant()) {
+          this.ctx.tenantFacade.recordUsage(config.tenantId, config.id, 'message_processed');
+          this.ctx.tenantFacade.recordUsage(config.tenantId, config.id, 'llm_request');
+        }
+
+        // Webhook & analytics (fire-and-forget) — channel-agnostic path
+        if (config.tenantId) {
+          // conversation.started — first message in session
+          if (history.length === 0 && this.ctx.analyticsService) {
+            this.ctx.analyticsService.record({
+              type: 'conversation.started',
+              tenantId: config.tenantId,
+              botId: config.id,
+              chatId: msg.chatId,
+              userId: msg.sender.id,
+              channelKind: msg.channelKind,
+            });
+          }
+
+          this.ctx.webhookService
+            ?.emit(
+              config.tenantId,
+              'message.received',
+              {
+                botId: config.id,
+                senderId: msg.sender.id,
+                channelKind: msg.channelKind,
+                messageLength: msg.text.length,
+              },
+              config.id
+            )
+            .catch(() => {});
+
+          this.ctx.webhookService
+            ?.emit(
+              config.tenantId,
+              'message.sent',
+              {
+                botId: config.id,
+                senderId: msg.sender.id,
+                channelKind: msg.channelKind,
+                replyLength: response.length,
+              },
+              config.id
+            )
+            .catch(() => {});
+
+          this.ctx.analyticsService?.record({
+            type: 'conversation.message',
+            tenantId: config.tenantId,
+            botId: config.id,
+            chatId: msg.chatId,
+            userId: msg.sender.id,
+            channelKind: msg.channelKind,
+          });
+        }
+
+        return response;
+      } finally {
+        clearInterval(typingInterval);
+      }
+    } catch (error) {
+      const errorInfo = error instanceof Error ? error.message : String(error);
+      botLogger.error({ error, chatId: msg.chatId }, 'Channel conversation handler failed');
+
+      // Emit bot.error webhook + error.occurred analytics (fire-and-forget)
+      if (config.tenantId) {
+        this.ctx.webhookService
+          ?.emit(
+            config.tenantId,
+            'bot.error',
+            {
+              botId: config.id,
+              channelKind: msg.channelKind,
+              error: errorInfo,
+            },
+            config.id
+          )
+          .catch(() => {});
+        this.ctx.analyticsService?.record({
+          type: 'error.occurred',
+          tenantId: config.tenantId,
+          botId: config.id,
+          chatId: msg.chatId,
+          channelKind: msg.channelKind,
+          data: { error: errorInfo },
+        });
+      }
+
+      let userMessage = 'Failed to generate response. Please try again later.';
+      if (error instanceof Error) {
+        if (error.message.includes('Circuit breaker is open')) {
+          userMessage = 'The AI service is temporarily overloaded. Please wait and try again.';
+        } else if (error.message.includes('timeout') || error.message.includes('timed out')) {
+          userMessage = 'The request took too long. The service might be busy. Please try again.';
+        } else if (
+          error.message.includes('context length') ||
+          error.message.includes('too many tokens')
+        ) {
+          userMessage = 'The conversation is too long. Try starting a new conversation.';
+        }
+      }
+
+      try {
+        await channel.sendText(userMessage);
+      } catch (replyError) {
+        botLogger.error({ replyError }, 'Failed to send error message through channel');
+      }
+      return userMessage;
     }
   }
 }

@@ -39,15 +39,15 @@ describe('AskHumanStore', () => {
     const all = store.getAll();
     expect(all).toHaveLength(2);
 
-    const q1 = all.find((q) => q.botId === 'bot1')!;
+    const q1 = all.find((q) => q.botId === 'bot1');
     expect(q1).toBeDefined();
-    expect(q1.chatId).toBe(123);
-    expect(q1.question).toBe('What should I do?');
-    expect(q1.timeoutMs).toBe(60_000);
-    expect(q1.remainingMs).toBeGreaterThan(0);
-    expect(q1.remainingMs).toBeLessThanOrEqual(60_000);
-    expect(typeof q1.id).toBe('string');
-    expect(typeof q1.createdAt).toBe('number');
+    expect(q1?.chatId).toBe(123);
+    expect(q1?.question).toBe('What should I do?');
+    expect(q1?.timeoutMs).toBe(60_000);
+    expect(q1?.remainingMs).toBeGreaterThan(0);
+    expect(q1?.remainingMs).toBeLessThanOrEqual(60_000);
+    expect(typeof q1?.id).toBe('string');
+    expect(typeof q1?.createdAt).toBe('number');
   });
 
   test('getPendingCount() tracks additions', () => {
@@ -168,7 +168,7 @@ describe('AskHumanStore', () => {
     const { id } = store.ask('bot1', 100, 'What next?', 60_000);
     store.setMessageId(id, 999);
 
-    const result = store.handleReply(100, 'Do X', 999);
+    const result = store.handleReply('bot1', 100, 'Do X', 999);
     expect(result.matched).toBe(true);
     expect(result.questionId).toBe(id);
     expect(result.botId).toBe('bot1');
@@ -228,7 +228,7 @@ describe('AskHumanStore', () => {
     const { id } = store.ask('bot1', 100, 'q1', 60_000);
     store.setConversationId(id, 'conv-abc');
 
-    const result = store.handleReply(100, 'answer');
+    const result = store.handleReply('bot1', 100, 'answer');
     expect(result.matched).toBe(true);
     expect(result.conversationId).toBe('conv-abc');
   });

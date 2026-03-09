@@ -143,7 +143,7 @@ describe('generateSoul', () => {
     // We can't actually call Claude CLI in tests, so we verify the logger call
     // by catching the expected error from the missing CLI
     try {
-      await generateSoul(defaultInput, { soulDir, logger });
+      await generateSoul(defaultInput, { soulDir, logger, timeout: 500 });
     } catch {
       // Expected: Claude CLI not available in test env
     }

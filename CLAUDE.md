@@ -49,7 +49,7 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `memory-flush.ts` | Flush de sesión a daily memory log |
 | `group-activation.ts` | Checks de relevancia en grupos: deference, LLM relevance, broadcast |
 | `context-compaction.ts` | LLM-based context compaction: token estimation, truncation, summarization, overflow retry |
-| `conversation-pipeline.ts` | Pipeline core: session expiry, RAG prefetch, compaction, LLM call, persist, reply |
+| `conversation-pipeline.ts` | Pipeline core: session expiry, RAG prefetch, compaction, LLM call, persist, reply. Channel-agnostic entry: `handleChannelMessage()` |
 | `conversation-gate.ts` | Pre-condiciones de mensajes: auth, grupo, bot-to-bot, ask_human |
 | `ask-permission-store.ts` | Cola de permisos: request → approve/deny → consume en agent loop |
 | `collaboration.ts` | Bot-to-bot: visible, internal, delegation, multi-turn |
@@ -71,6 +71,17 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `soul-quality-reviewer.ts` | Quality review de soul files (Claude CLI) |
 | `index.ts` | Barrel re-export de `BotManager` |
 
+### Módulos Channel (`src/channel/`)
+
+| Archivo | Responsabilidad |
+|---|---|
+| `types.ts` | `InboundMessage`, `Channel`, `ChannelKind` — interfaces canal-agnósticas |
+| `telegram.ts` | Adapter grammy Context → InboundMessage + Channel |
+| `rest.ts` | Adapter REST API request → InboundMessage + Channel (collect-reply pattern) |
+| `websocket.ts` | Adapter WebSocket connection → InboundMessage + Channel (widget chat) |
+| `whatsapp.ts` | Adapter WhatsApp Cloud API → InboundMessage + Channel (webhook signature verification, message extraction) |
+| `index.ts` | Barrel re-export |
+
 ### Módulos MCP (`src/mcp/`)
 
 | Archivo | Responsabilidad |
@@ -83,6 +94,23 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `server.ts` | `McpServer` — HTTP/SSE server que expone tools a clientes externos (Claude Desktop, Cursor, etc.) |
 | `agent-bridge.ts` | `McpAgentBridge` — agent-to-agent via MCP, integra con `AgentRegistry` y `CollaborationTracker` |
 | `tool-bridge-server.ts` | Standalone stdio server para Claude CLI (usa tipos compartidos de `types.ts`) |
+
+### Módulos Tenant (`src/tenant/`)
+
+| Archivo | Responsabilidad |
+|---|---|
+| `types.ts` | `Tenant`, `TenantQuota`, `TenantFeatures`, `UsageEventType`, `PLAN_DEFINITIONS` |
+| `manager.ts` | `TenantManager` — CRUD tenants, usage recording, quota checking, usage rotation |
+| `middleware.ts` | Hono middleware: API key auth, tenant context injection |
+| `rate-limit-middleware.ts` | Per-tenant rate limiting middleware |
+| `billing.ts` | `BillingProvider` interface, `NoOpBillingProvider`, Stripe integration |
+| `tenant-paths.ts` | `resolveTenantPaths()`, `isPathWithinTenant()` — filesystem isolation |
+| `tenant-scoping.ts` | `getTenantId()`, `scopeBots()`, `isBotAccessible()`, `isAdminOrSingleTenant()` — route-level tenant filtering |
+| `usage-tracker.ts` | `UsageTracker` — batched usage metering with periodic flush |
+| `template-service.ts` | `TemplateService` — bot template CRUD, instantiation, version tracking |
+| `customization.ts` | `CustomizationService` — per-tenant bot overlays (identity, knowledge, goals, rules) |
+| `webhook-service.ts` | `WebhookService` — outbound webhook registration, HMAC delivery, retry, auto-disable |
+| `analytics-service.ts` | `AnalyticsService` — conversation metrics, tenant-scoped JSONL event store, aggregation |
 
 ### Patrón de composición
 
@@ -100,7 +128,7 @@ BotManager (facade)
   ├── MemoryFlusher           (sin deps de módulo)
   ├── GroupActivation         (sin deps de módulo)
   ├── ContextCompactor        (usa MemoryFlusher, LLMClient, SessionManager)
-  ├── ConversationPipeline    (usa SystemPromptBuilder, MemoryFlusher, ToolRegistry, ContextCompactor)
+  ├── ConversationPipeline    (usa SystemPromptBuilder, MemoryFlusher, ToolRegistry, ContextCompactor, Channel)
   ├── CollaborationManager    (usa SystemPromptBuilder, ToolRegistry)
   ├── TelegramPoller          (polling loop, inyectado en startTelegramBot)
   ├── BotResetService         (reset soul/memory/sessions/stores)

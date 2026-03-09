@@ -5,6 +5,7 @@ import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import type { CoreMemoryManager } from '../../memory/core-memory';
 import type { MemoryManager } from '../../memory/manager';
+import { getTenantId, isBotAccessible } from '../../tenant/tenant-scoping';
 
 export function agentExportRoutes(deps: {
   config: Config;
@@ -27,7 +28,9 @@ export function agentExportRoutes(deps: {
   app.get('/:id/export', async (c) => {
     const botId = c.req.param('id');
     const bot = deps.config.bots.find((b) => b.id === botId);
-    if (!bot) return c.json({ error: 'Agent not found' }, 404);
+    if (!bot || !isBotAccessible(bot, getTenantId(c))) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
 
     const productions = c.req.query('productions') === 'true';
     const conversations = c.req.query('conversations') === 'true';
@@ -46,9 +49,10 @@ export function agentExportRoutes(deps: {
           'Content-Length': String(buffer.length),
         },
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       deps.logger.error({ err, botId }, 'Export failed');
-      return c.json({ error: err.message ?? 'Export failed' }, 500);
+      const message = err instanceof Error ? err.message : 'Export failed';
+      return c.json({ error: message }, 500);
     }
   });
 
@@ -98,12 +102,13 @@ export function agentExportRoutes(deps: {
       const result = await service.importBot(buffer, { newBotId, newBotName, overwrite });
 
       return c.json(result, result.created ? 201 : 200);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof ConflictError) {
         return c.json({ error: err.message }, 409);
       }
       deps.logger.error({ err }, 'Import failed');
-      return c.json({ error: err.message ?? 'Import failed' }, 500);
+      const message = err instanceof Error ? err.message : 'Import failed';
+      return c.json({ error: message }, 500);
     }
   });
 

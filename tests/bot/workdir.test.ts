@@ -153,7 +153,8 @@ describe('workDir', () => {
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       await executor.execute('file_write', { path: 'output/report.md', content: 'hello' });
 
-      expect(getCapturedArgs().path).toBe(resolve('/tmp/test-workdir', 'output/report.md'));
+      // Nested paths (except archived/) are flattened to root of workDir
+      expect(getCapturedArgs().path).toBe(resolve('/tmp/test-workdir', 'report.md'));
     });
 
     test('resolves file_edit path relative to workDir', async () => {

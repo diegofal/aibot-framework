@@ -61,9 +61,10 @@ export function createSaveMemoryTool(getSoulLoader: SoulLoaderResolver): Tool {
 
       try {
         const botId = String(args._botId ?? '');
+        const userId = typeof args._userId === 'string' ? args._userId : undefined;
         const soulLoader = getSoulLoader(botId);
-        soulLoader.appendDailyMemory(fact);
-        logger.info({ fact }, 'save_memory executed');
+        soulLoader.appendDailyMemory(fact, userId);
+        logger.info({ fact, userId }, 'save_memory executed');
         return { success: true, content: `Saved to memory: ${fact}` };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

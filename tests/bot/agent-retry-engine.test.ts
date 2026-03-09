@@ -128,20 +128,22 @@ describe('isRetryableError', () => {
   });
 
   describe('unknown errors', () => {
-    test('returns false for generic error', () => {
-      expect(isRetryableError(new Error('Something went wrong'))).toBe(false);
+    // classifyError returns UNKNOWN for unrecognized errors, which is retryable
+    // (conservative: retry unknown errors rather than permanently failing)
+    test('returns true for generic error (UNKNOWN is retryable)', () => {
+      expect(isRetryableError(new Error('Something went wrong'))).toBe(true);
     });
 
-    test('returns false for empty error', () => {
-      expect(isRetryableError(new Error(''))).toBe(false);
+    test('returns true for empty error (UNKNOWN is retryable)', () => {
+      expect(isRetryableError(new Error(''))).toBe(true);
     });
 
     test('handles non-Error values', () => {
       expect(isRetryableError('timeout string')).toBe(true);
-      expect(isRetryableError('random string')).toBe(false);
-      expect(isRetryableError(42)).toBe(false);
-      expect(isRetryableError(null)).toBe(false);
-      expect(isRetryableError(undefined)).toBe(false);
+      expect(isRetryableError('random string')).toBe(true); // UNKNOWN → retryable
+      expect(isRetryableError(42)).toBe(true); // UNKNOWN → retryable
+      expect(isRetryableError(null)).toBe(true); // UNKNOWN → retryable
+      expect(isRetryableError(undefined)).toBe(true); // UNKNOWN → retryable
     });
   });
 });

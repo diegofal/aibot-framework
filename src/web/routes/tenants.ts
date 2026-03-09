@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { PLAN_RATE_LIMITS } from '../../tenant/rate-limiter';
 import type { BotManager } from '../bot';
 import type { Config } from '../config';
 import type { Logger } from '../logger';
@@ -94,6 +95,11 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
         createdAt: tenantData.createdAt,
         usageQuota: tenantData.usageQuota,
         currentUsage,
+        rateLimitOverride: tenantData.rateLimitOverride ?? null,
+        effectiveRateLimit:
+          tenantData.rateLimitOverride ??
+          PLAN_RATE_LIMITS[tenantData.plan] ??
+          PLAN_RATE_LIMITS.free,
       },
     });
   });
@@ -220,6 +226,8 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
       email: t.email,
       plan: t.plan,
       createdAt: t.createdAt,
+      rateLimitOverride: t.rateLimitOverride ?? null,
+      effectiveRateLimit: t.rateLimitOverride ?? PLAN_RATE_LIMITS[t.plan] ?? PLAN_RATE_LIMITS.free,
     }));
 
     return c.json({ tenants });
@@ -245,8 +253,71 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
         createdAt: tenant.createdAt,
         usageQuota: tenant.usageQuota,
         currentUsage,
+        rateLimitOverride: tenant.rateLimitOverride ?? null,
+        effectiveRateLimit:
+          tenant.rateLimitOverride ?? PLAN_RATE_LIMITS[tenant.plan] ?? PLAN_RATE_LIMITS.free,
       },
     });
+  });
+
+  // Admin: Update tenant rate limit override
+  app.patch('/:id/rate-limit', async (c) => {
+    const id = c.req.param('id');
+
+    try {
+      const body = await c.req.json();
+      const { maxRequestsPerMinute } = body;
+
+      // null clears the override
+      if (maxRequestsPerMinute !== null) {
+        if (
+          typeof maxRequestsPerMinute !== 'number' ||
+          !Number.isInteger(maxRequestsPerMinute) ||
+          maxRequestsPerMinute <= 0
+        ) {
+          return c.json(
+            { error: 'maxRequestsPerMinute must be a positive integer or null to clear' },
+            400
+          );
+        }
+      }
+
+      const overrideValue = maxRequestsPerMinute === null ? undefined : maxRequestsPerMinute;
+      const updated = tenantManager.updateTenant(id, {
+        rateLimitOverride: overrideValue,
+      } as Partial<Tenant>);
+
+      if (!updated) {
+        return c.json({ error: 'Tenant not found' }, 404);
+      }
+
+      // When clearing, explicitly delete the field so it doesn't persist as undefined in JSON
+      if (maxRequestsPerMinute === null) {
+        (updated as Record<string, unknown>).rateLimitOverride = undefined;
+      }
+
+      const effectiveRateLimit =
+        updated.rateLimitOverride ?? PLAN_RATE_LIMITS[updated.plan] ?? PLAN_RATE_LIMITS.free;
+
+      logger.info(
+        { tenantId: id, rateLimitOverride: maxRequestsPerMinute, effectiveRateLimit },
+        'Tenant rate limit updated'
+      );
+
+      return c.json({
+        success: true,
+        tenant: {
+          id: updated.id,
+          name: updated.name,
+          plan: updated.plan,
+          rateLimitOverride: updated.rateLimitOverride ?? null,
+          effectiveRateLimit,
+        },
+      });
+    } catch (error) {
+      logger.error({ error }, 'Failed to update tenant rate limit');
+      return c.json({ error: 'Failed to update tenant rate limit' }, 500);
+    }
   });
 
   // Admin: Update tenant plan

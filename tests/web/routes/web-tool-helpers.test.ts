@@ -21,7 +21,7 @@ const mockConfig = {
 
 describe('webGenerate', () => {
   test('enableTools: false calls claudeGenerate (text-only)', async () => {
-    const mockClaudeGenerate = mock(() => Promise.resolve('text-only response'));
+    const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'text-only response' }));
     mock.module('../../../src/claude-cli', () => ({
       claudeGenerate: mockClaudeGenerate,
     }));
@@ -137,7 +137,7 @@ describe('webGenerate', () => {
   });
 
   test('falls back to text-only when no tools available after filtering', async () => {
-    const mockClaudeGenerate = mock(() => Promise.resolve('fallback response'));
+    const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'fallback response' }));
     mock.module('../../../src/claude-cli', () => ({
       claudeGenerate: mockClaudeGenerate,
     }));
@@ -195,7 +195,7 @@ describe('webGenerate', () => {
   });
 
   test('falls back to text-only when getLLMClient throws', async () => {
-    const mockClaudeGenerate = mock(() => Promise.resolve('no-client fallback'));
+    const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'no-client fallback' }));
     mock.module('../../../src/claude-cli', () => ({
       claudeGenerate: mockClaudeGenerate,
     }));

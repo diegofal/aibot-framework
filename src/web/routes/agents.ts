@@ -2,6 +2,8 @@ import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
+import { AVAILABLE_PRESETS } from '../../bot/agent-loop-prompts';
+import { resolveDirectives } from '../../bot/agent-scheduler';
 import { type BotConfig, type Config, persistBots, resolveAgentConfig } from '../../config';
 import type { SkillRegistry } from '../../core/skill-registry';
 import type { Logger } from '../../logger';
@@ -211,6 +213,8 @@ export function agentsRoutes(deps: {
   // Stop agent
   app.post('/:id/stop', async (c) => {
     const id = c.req.param('id');
+    const bot = findBotScoped(c, id);
+    if (!bot) return c.json({ error: 'Agent not found' }, 404);
     if (!deps.botManager.isRunning(id)) {
       deps.logger.warn({ botId: id }, 'Stop failed: agent not running');
       return c.json({ error: 'Agent not running' }, 400);
@@ -387,6 +391,19 @@ export function agentsRoutes(deps: {
       deps.logger.error({ botId: id, error: message }, 'Soul generation failed');
       return c.json({ error: message }, 500);
     }
+  });
+
+  // Get directives for an agent
+  app.get('/:id/directives', (c) => {
+    const bot = findBotScoped(c, c.req.param('id'));
+    if (!bot) return c.json({ error: 'Agent not found' }, 404);
+
+    return c.json({
+      directives: bot.agentLoop?.directives ?? [],
+      presetDirectives: bot.agentLoop?.presetDirectives ?? [],
+      resolvedDirectives: resolveDirectives(bot),
+      availablePresets: AVAILABLE_PRESETS,
+    });
   });
 
   // Apply generated soul files to disk

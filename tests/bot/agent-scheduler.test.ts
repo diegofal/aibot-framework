@@ -79,7 +79,7 @@ describe('AgentScheduler', () => {
 
     test('new schedule has sensible defaults', () => {
       scheduler.syncSchedules();
-      const s = scheduler.getSchedule('bot1')!;
+      const s = scheduler.getSchedule('bot1');
       expect(s.lastRunAt).toBeNull();
       expect(s.lastResult).toBeNull();
       expect(s.nextCheckIn).toBeNull();
@@ -97,15 +97,15 @@ describe('AgentScheduler', () => {
 
     test('stagger offsets are applied in order', () => {
       scheduler.syncSchedules();
-      const s1 = scheduler.getSchedule('bot1')!;
-      const s2 = scheduler.getSchedule('bot2')!;
+      const s1 = scheduler.getSchedule('bot1');
+      const s2 = scheduler.getSchedule('bot2');
       // bot1 added first (stagger 0), bot2 added second (stagger 30000)
       expect(s2.nextRunAt - s1.nextRunAt).toBe(30_000);
     });
 
     test('does not overwrite existing schedules on re-sync', () => {
       scheduler.syncSchedules();
-      const before = scheduler.getSchedule('bot1')!;
+      const before = scheduler.getSchedule('bot1');
       before.lastFocus = 'focused';
       scheduler.syncSchedules();
       expect(scheduler.getSchedule('bot1')?.lastFocus).toBe('focused');
@@ -272,7 +272,7 @@ describe('AgentScheduler', () => {
       const result = makeResult({ botId: 'bot1', status: 'completed', strategistRan: false });
       scheduler.updateBotSchedule('bot1', bot1Config, result);
 
-      const s = scheduler.getSchedule('bot1')!;
+      const s = scheduler.getSchedule('bot1');
       expect(s.lastRunAt).toBeGreaterThan(0);
       expect(s.lastResult).toBe(result);
       expect(s.nextCheckIn).toBe('5m');
@@ -283,7 +283,7 @@ describe('AgentScheduler', () => {
       const result = makeResult({ botId: 'bot1', status: 'completed' });
       scheduler.updateBotSchedule('bot1', bot1Config, result);
 
-      const s = scheduler.getSchedule('bot1')!;
+      const s = scheduler.getSchedule('bot1');
       expect(s.lastRunAt).toBeGreaterThan(0);
       expect(s.lastResult).toBe(result);
     });
@@ -301,7 +301,7 @@ describe('AgentScheduler', () => {
         bot1Config,
         makeResult({ strategistRan: true, focus: 'new focus' })
       );
-      const s = scheduler.getSchedule('bot1')!;
+      const s = scheduler.getSchedule('bot1');
       expect(s.strategistCycleCount).toBe(0);
       expect(s.lastStrategistAt).toBeGreaterThan(0);
       expect(s.lastFocus).toBe('new focus');
@@ -312,7 +312,7 @@ describe('AgentScheduler', () => {
       const result = makeResult({ botId: 'bot2', botName: 'Bot 2', status: 'completed' });
       const before = Date.now();
       scheduler.updateBotSchedule('bot2', bot2Config, result);
-      const s = scheduler.getSchedule('bot2')!;
+      const s = scheduler.getSchedule('bot2');
       // nextRunAt should be ~now (sleepMs=0)
       expect(s.nextRunAt).toBeGreaterThanOrEqual(before);
       expect(s.nextRunAt).toBeLessThanOrEqual(before + 100);
@@ -328,7 +328,7 @@ describe('AgentScheduler', () => {
     test('clears retryCount and lastErrorMessage on non-error result', () => {
       scheduler.syncSchedules();
       // Simulate error state
-      const s = scheduler.getSchedule('bot1')!;
+      const s = scheduler.getSchedule('bot1');
       s.retryCount = 3;
       s.lastErrorMessage = 'boom';
 
@@ -339,7 +339,7 @@ describe('AgentScheduler', () => {
 
     test('preserves retryCount on error result', () => {
       scheduler.syncSchedules();
-      const s = scheduler.getSchedule('bot1')!;
+      const s = scheduler.getSchedule('bot1');
       s.retryCount = 2;
       s.lastErrorMessage = 'old error';
 
@@ -420,14 +420,14 @@ describe('AgentScheduler', () => {
       const infos = scheduler.buildScheduleInfos();
       expect(infos).toHaveLength(2);
 
-      const bot1Info = infos.find((i) => i.botId === 'bot1')!;
+      const bot1Info = infos.find((i) => i.botId === 'bot1');
       expect(bot1Info.botName).toBe('Bot 1');
       expect(bot1Info.mode).toBe('periodic');
       expect(bot1Info.nextRunAt).toBeGreaterThan(0);
       expect(bot1Info.lastRunAt).toBeNull();
       expect(bot1Info.lastStatus).toBeNull();
 
-      const bot2Info = infos.find((i) => i.botId === 'bot2')!;
+      const bot2Info = infos.find((i) => i.botId === 'bot2');
       expect(bot2Info.botName).toBe('Bot 2');
       expect(bot2Info.mode).toBe('continuous');
       expect(bot2Info.nextRunAt).toBeNull(); // continuous mode
@@ -439,7 +439,7 @@ describe('AgentScheduler', () => {
       scheduler.updateBotSchedule('bot1', ctx.config.bots[0] as any, result);
 
       const infos = scheduler.buildScheduleInfos();
-      const bot1Info = infos.find((i) => i.botId === 'bot1')!;
+      const bot1Info = infos.find((i) => i.botId === 'bot1');
       expect(bot1Info.lastStatus).toBe('completed');
       expect(bot1Info.lastRunAt).toBeGreaterThan(0);
     });
@@ -453,7 +453,7 @@ describe('AgentScheduler', () => {
 
     test('includes recentActionsSummary (last 5)', () => {
       scheduler.syncSchedules();
-      const s = scheduler.getSchedule('bot1')!;
+      const s = scheduler.getSchedule('bot1');
       for (let i = 0; i < 7; i++) {
         s.recentActions.push({
           cycle: i,
@@ -463,7 +463,7 @@ describe('AgentScheduler', () => {
         });
       }
       const infos = scheduler.buildScheduleInfos();
-      const bot1Info = infos.find((i) => i.botId === 'bot1')!;
+      const bot1Info = infos.find((i) => i.botId === 'bot1');
       expect(bot1Info.recentActionsSummary).toHaveLength(5);
       expect(bot1Info.recentActionsSummary[0]).toBe('action-2');
       expect(bot1Info.recentActionsSummary[4]).toBe('action-6');
@@ -474,19 +474,19 @@ describe('AgentScheduler', () => {
       ctx.runningBots.add('ghost');
       scheduler.syncSchedules();
       const infos = scheduler.buildScheduleInfos();
-      const ghostInfo = infos.find((i) => i.botId === 'ghost')!;
+      const ghostInfo = infos.find((i) => i.botId === 'ghost');
       expect(ghostInfo.botName).toBe('ghost');
     });
 
     test('includes idle and error info', () => {
       scheduler.syncSchedules();
-      const s = scheduler.getSchedule('bot1')!;
+      const s = scheduler.getSchedule('bot1');
       s.consecutiveIdleCycles = 3;
       s.retryCount = 2;
       s.lastErrorMessage = 'timeout';
 
       const infos = scheduler.buildScheduleInfos();
-      const bot1Info = infos.find((i) => i.botId === 'bot1')!;
+      const bot1Info = infos.find((i) => i.botId === 'bot1');
       expect(bot1Info.isIdle).toBe(true);
       expect(bot1Info.consecutiveIdleCycles).toBe(3);
       expect(bot1Info.retryCount).toBe(2);
@@ -514,7 +514,7 @@ describe('AgentScheduler', () => {
 
     test('returns the earliest nextRunAt among periodic bots', () => {
       scheduler.syncSchedules();
-      const s1 = scheduler.getSchedule('bot1')!;
+      const s1 = scheduler.getSchedule('bot1');
       // bot2 is continuous, so only bot1 matters
       const earliest = scheduler.getEarliestRunAt();
       expect(earliest).toBe(s1.nextRunAt);
@@ -530,8 +530,8 @@ describe('AgentScheduler', () => {
       scheduler.syncSchedules();
 
       // bot1 has stagger 0, bot3 has stagger 30_000
-      const s1 = scheduler.getSchedule('bot1')!;
-      const s3 = scheduler.getSchedule('bot3')!;
+      const s1 = scheduler.getSchedule('bot1');
+      const s3 = scheduler.getSchedule('bot3');
       expect(s1.nextRunAt).toBeLessThan(s3.nextRunAt);
       expect(scheduler.getEarliestRunAt()).toBe(s1.nextRunAt);
     });
@@ -648,6 +648,83 @@ describe('AgentScheduler', () => {
       scheduler.syncBotLoops();
       // no crash — noconfig has no entry in config.bots
       scheduler.stop();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Per-bot agent loop enable/disable
+  // -----------------------------------------------------------------------
+
+  describe('isAgentLoopEnabledForBot', () => {
+    test('returns true when no per-bot override (inherits global)', () => {
+      expect(scheduler.isAgentLoopEnabledForBot('bot1')).toBe(true);
+    });
+
+    test('returns false when per-bot enabled is false', () => {
+      ctx.config.bots = [
+        { id: 'bot1', name: 'Bot 1', agentLoop: { enabled: false } },
+        { id: 'bot2', name: 'Bot 2' },
+      ];
+      scheduler = new AgentScheduler(ctx, runOneBotFn);
+      expect(scheduler.isAgentLoopEnabledForBot('bot1')).toBe(false);
+    });
+
+    test('returns true when per-bot enabled is true', () => {
+      ctx.config.bots = [{ id: 'bot1', name: 'Bot 1', agentLoop: { enabled: true } }];
+      scheduler = new AgentScheduler(ctx, runOneBotFn);
+      expect(scheduler.isAgentLoopEnabledForBot('bot1')).toBe(true);
+    });
+
+    test('returns true for unknown bot (no config)', () => {
+      expect(scheduler.isAgentLoopEnabledForBot('unknown')).toBe(true);
+    });
+  });
+
+  describe('syncSchedules with per-bot disable', () => {
+    test('skips disabled bots in syncSchedules', () => {
+      ctx.config.bots = [
+        { id: 'bot1', name: 'Bot 1', agentLoop: { enabled: false } },
+        { id: 'bot2', name: 'Bot 2', agentLoop: { mode: 'continuous' } },
+      ];
+      scheduler = new AgentScheduler(ctx, runOneBotFn);
+      scheduler.syncSchedules();
+      expect(scheduler.getSchedules().has('bot1')).toBe(false);
+      expect(scheduler.getSchedules().has('bot2')).toBe(true);
+    });
+
+    test('removes schedule when bot becomes disabled', () => {
+      scheduler.syncSchedules();
+      expect(scheduler.getSchedules().has('bot1')).toBe(true);
+
+      // Disable bot1
+      ctx.config.bots[0] = { id: 'bot1', name: 'Bot 1', agentLoop: { enabled: false } } as any;
+      scheduler.syncSchedules();
+      expect(scheduler.getSchedules().has('bot1')).toBe(false);
+    });
+  });
+
+  describe('buildScheduleInfos includes agentLoopEnabled and directives', () => {
+    test('includes agentLoopEnabled in schedule info', () => {
+      scheduler.syncSchedules();
+      const infos = scheduler.buildScheduleInfos();
+      const bot1Info = infos.find((i) => i.botId === 'bot1');
+      expect(bot1Info.agentLoopEnabled).toBe(true);
+    });
+
+    test('includes empty directives by default', () => {
+      scheduler.syncSchedules();
+      const infos = scheduler.buildScheduleInfos();
+      const bot1Info = infos.find((i) => i.botId === 'bot1');
+      expect(bot1Info.directives).toEqual([]);
+    });
+
+    test('includes custom directives in schedule info', () => {
+      ctx.config.bots = [{ id: 'bot1', name: 'Bot 1', agentLoop: { directives: ['Check logs'] } }];
+      ctx.runningBots = new Set(['bot1']);
+      scheduler = new AgentScheduler(ctx, runOneBotFn);
+      scheduler.syncSchedules();
+      const infos = scheduler.buildScheduleInfos();
+      expect(infos[0].directives).toEqual(['Check logs']);
     });
   });
 });

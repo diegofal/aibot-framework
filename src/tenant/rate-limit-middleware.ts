@@ -14,7 +14,7 @@ export function createRateLimitMiddleware(
   logger: Logger
 ) {
   return async (c: Context, next: Next) => {
-    const tenantId = c.get('tenantId') as string | undefined;
+    const tenantId = (c.get('tenant') as { tenantId?: string } | undefined)?.tenantId;
     if (!tenantId) {
       // No tenant context — skip rate limiting (single-tenant mode)
       return next();
@@ -26,7 +26,7 @@ export function createRateLimitMiddleware(
     }
 
     const plan = tenant.plan;
-    const maxRequests = PLAN_RATE_LIMITS[plan] ?? PLAN_RATE_LIMITS.free;
+    const maxRequests = tenant.rateLimitOverride ?? PLAN_RATE_LIMITS[plan] ?? PLAN_RATE_LIMITS.free;
     const key = `tenant:${tenantId}`;
 
     const result = rateLimiter.check(key, maxRequests);

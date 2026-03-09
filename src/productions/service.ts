@@ -46,7 +46,8 @@ export class ProductionsService {
 
   resolveDir(botId: string): string {
     const botConfig = this.config.bots.find((b) => b.id === botId);
-    const dir = botConfig?.productions?.dir ?? join(this.baseDir, botId);
+    // Priority: explicit productions.dir > botConfig.workDir (tenant-resolved) > default
+    const dir = botConfig?.productions?.dir ?? botConfig?.workDir ?? join(this.baseDir, botId);
     const resolved = resolve(dir);
     if (!existsSync(resolved)) {
       mkdirSync(resolved, { recursive: true });
@@ -63,6 +64,18 @@ export class ProductionsService {
     if (!this.config.productions.enabled) return false;
     const botConfig = this.config.bots.find((b) => b.id === botId);
     return botConfig?.productions?.enabled !== false;
+  }
+
+  /**
+   * Resolve a production entry's file path and validate it stays within the bot's production dir.
+   * Returns null if the path escapes the boundary (path traversal).
+   * trackOnly entries are allowed to reference paths outside the production dir.
+   */
+  private resolveFilePath(dir: string, entry: { path: string; trackOnly?: boolean }): string | null {
+    if (entry.trackOnly) return resolve(entry.path);
+    const filePath = entry.path.startsWith('/') ? resolve(entry.path) : resolve(join(dir, entry.path));
+    if (!filePath.startsWith(dir + '/') && filePath !== dir) return null;
+    return filePath;
   }
 
   rewritePath(botId: string, originalPath: string): string {
@@ -310,11 +323,15 @@ export class ProductionsService {
 
     // Remove the associated file if not trackOnly
     if (!entry.trackOnly) {
-      const filePath = entry.path.startsWith('/') ? entry.path : join(dir, entry.path);
-      try {
-        if (existsSync(filePath)) unlinkSync(filePath);
-      } catch (err) {
-        this.logger.warn({ err, filePath }, 'Failed to delete production file');
+      const filePath = this.resolveFilePath(dir, entry);
+      if (!filePath) {
+        this.logger.warn({ botId, path: entry.path }, 'Production delete blocked: path traversal');
+      } else {
+        try {
+          if (existsSync(filePath)) unlinkSync(filePath);
+        } catch (err) {
+          this.logger.warn({ err, filePath }, 'Failed to delete production file');
+        }
       }
     }
 
@@ -332,11 +349,11 @@ export class ProductionsService {
     if (!entry) return false;
 
     const dir = this.resolveDir(botId);
-    const filePath = entry.trackOnly
-      ? resolve(entry.path)
-      : entry.path.startsWith('/')
-        ? entry.path
-        : join(dir, entry.path);
+    const filePath = this.resolveFilePath(dir, entry);
+    if (!filePath) {
+      this.logger.warn({ botId, path: entry.path }, 'Production update blocked: path traversal');
+      return false;
+    }
 
     try {
       const fileDir = join(filePath, '..');
@@ -354,7 +371,8 @@ export class ProductionsService {
     if (!entry) return null;
 
     const dir = this.resolveDir(botId);
-    const filePath = entry.path.startsWith('/') ? entry.path : join(dir, entry.path);
+    const filePath = this.resolveFilePath(dir, entry);
+    if (!filePath) return null;
 
     try {
       if (!existsSync(filePath)) return null;

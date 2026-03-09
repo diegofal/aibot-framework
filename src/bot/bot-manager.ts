@@ -5,7 +5,7 @@ import { type AgentInfo, AgentRegistry } from '../agent-registry';
 import { CollaborationSessionManager } from '../collaboration-session';
 import { CollaborationTracker } from '../collaboration-tracker';
 import type { BotConfig, Config } from '../config';
-import { resolveAgentConfig } from '../config';
+import { resolveAgentConfig, resolveAgentConfigWithTenant } from '../config';
 import { type LLMClient, LLMClientWithFallback, createLLMClient } from '../core/llm-client';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
@@ -24,9 +24,13 @@ import type { Tool, ToolDefinition } from '../tools/types';
 import { ConversationsService } from '../conversations/service';
 import { KarmaService } from '../karma/service';
 import { ProductionsService } from '../productions/service';
+import { AnalyticsService } from '../tenant/analytics-service';
 import type { BillingProvider } from '../tenant/billing';
+import { CustomizationService } from '../tenant/customization';
 import type { TenantManagerConfig } from '../tenant/manager';
+import { TemplateService } from '../tenant/template-service';
 import type { Tenant, UsageEventType } from '../tenant/types';
+import { WebhookService } from '../tenant/webhook-service';
 import { ActivityStream } from './activity-stream';
 import { type AgentFeedback, AgentFeedbackStore } from './agent-feedback-store';
 import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
@@ -61,7 +65,7 @@ export class BotManager {
   private toolDefinitions: ToolDefinition[] = [];
   private soulLoaders: Map<string, SoulLoader> = new Map();
   private botLoggers: Map<string, Logger> = new Map();
-  private seenUsers: Map<number, Map<number, SeenUser>> = new Map();
+  private seenUsers: Map<string, Map<number, Map<number, SeenUser>>> = new Map();
   private handledMessageIds: Set<string> = new Set();
   private llmClients: Map<string, LLMClient> = new Map();
 
@@ -93,6 +97,11 @@ export class BotManager {
   private botResetService: BotResetService;
   private mcpClientPool: McpClientPool;
   private mcpAgentBridge: McpAgentBridge;
+  private templateService?: TemplateService;
+  private customizationService?: CustomizationService;
+  private webhookService?: WebhookService;
+  private analyticsService?: AnalyticsService;
+  private botContext!: BotContext;
   private mcpConnected = false;
   private restartAttempts = new Map<string, number[]>();
   private restartTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -268,6 +277,7 @@ export class BotManager {
       getBotLogger: (botId: string) => this.getBotLogger(botId),
       resolveBotId: (targetBotId: string) => this.resolveBotId(targetBotId),
     };
+    this.botContext = ctx;
 
     // Initialize modules in dependency order
     this.toolRegistry = new ToolRegistry(ctx);
@@ -399,6 +409,11 @@ export class BotManager {
     return loader;
   }
 
+  /** Like getSoulLoader but returns undefined if bot is not started. */
+  findSoulLoader(botId: string): SoulLoader | undefined {
+    return this.soulLoaders.get(botId);
+  }
+
   private getBotLogger(botId: string): Logger {
     let botLogger = this.botLoggers.get(botId);
     if (!botLogger) {
@@ -433,11 +448,23 @@ export class BotManager {
       const botLogger = this.getBotLogger(config.id);
 
       // Shared setup: LLM client, soul loader, model
-      const resolved = resolveAgentConfig(this.config, config);
+      // Use tenant-aware config resolution when tenantId is present
+      const resolved =
+        config.tenantId && this.config.multiTenant?.enabled
+          ? resolveAgentConfigWithTenant(this.config, undefined, config, config.tenantId)
+          : resolveAgentConfig(this.config, config);
       this.activeModels.set(config.id, resolved.model);
 
-      // Ensure workDir exists
+      // Ensure workDir and soulDir exist (creates tenant dirs for multi-tenant)
       mkdirSync(resolved.workDir, { recursive: true });
+      mkdirSync(resolved.soulDir, { recursive: true });
+
+      // Persist resolved paths back to botConfig so ProductionsService and other
+      // services can find tenant-scoped directories
+      if (config.tenantId) {
+        config.soulDir = resolved.soulDir;
+        config.workDir = resolved.workDir;
+      }
 
       const llmClient = createLLMClient(
         {
@@ -532,6 +559,22 @@ export class BotManager {
 
       // Wake the agent loop so it picks up the new bot immediately
       if (this.config.agentLoop.enabled) this.agentLoop.wakeUp();
+
+      // Emit webhook for bot start (fire-and-forget)
+      if (config.tenantId && this.webhookService) {
+        this.webhookService
+          .emit(
+            config.tenantId,
+            'bot.started',
+            {
+              botId: config.id,
+              mode,
+            },
+            config.id
+          )
+          .catch(() => {});
+      }
+
       this.logger.info({ botId: config.id, name: config.name, mode }, 'Bot started successfully');
     } catch (error) {
       this.runningBots.delete(config.id);
@@ -673,6 +716,12 @@ export class BotManager {
       clearTimeout(restartTimer);
       this.restartTimers.delete(botId);
     }
+    // Emit webhook for bot stop (fire-and-forget)
+    const botConfig = this.config.bots.find((b) => b.id === botId);
+    if (botConfig?.tenantId && this.webhookService) {
+      this.webhookService.emit(botConfig.tenantId, 'bot.stopped', { botId }, botId).catch(() => {});
+    }
+
     await this.cleanupBot(botId);
     this.restartAttempts.delete(botId);
     this.botLoggers.delete(botId);
@@ -996,6 +1045,32 @@ export class BotManager {
     );
   }
 
+  /**
+   * Channel-agnostic conversation entry point.
+   * Accepts an InboundMessage + Channel instead of grammy Context.
+   */
+  async handleChannelMessage(
+    msg: import('../channel/types').InboundMessage,
+    channel: import('../channel/types').Channel,
+    botId: string
+  ): Promise<string> {
+    const botConfig = this.config.bots.find((b) => b.id === botId);
+    if (!botConfig) throw new Error(`Bot not found: ${botId}`);
+
+    // Derive session key for the channel message
+    const sessionKey = this.sessionManager.serializeKey({
+      botId,
+      chatType: msg.chatType,
+      chatId: Number(msg.chatId) || 0,
+      userId: Number(msg.sender.id) || undefined,
+      threadId: msg.threadId ? Number(msg.threadId) : undefined,
+    });
+
+    // Webhook/analytics emission is handled inside ConversationPipeline
+    // to cover both Telegram and channel-agnostic paths uniformly.
+    return this.conversationPipeline.handleChannelMessage(msg, channel, botConfig, sessionKey);
+  }
+
   // Collaboration delegates
   async sendVisibleMessage(
     chatId: number,
@@ -1051,8 +1126,37 @@ export class BotManager {
 
   initializeTenantManager(config: TenantManagerConfig, billing?: BillingProvider): void {
     this.tenantFacade.initializeTenantManager(config, billing);
+
+    // Initialize BaaS services when multi-tenant is enabled
+    this.templateService = new TemplateService(config.dataDir, this.logger);
+    this.customizationService = new CustomizationService(config.dataDir, this.logger);
+    this.webhookService = new WebhookService(config.dataDir, this.logger);
+    this.analyticsService = new AnalyticsService(config.dataDir);
+
+    // Wire customization into system prompt builder
+    this.systemPromptBuilder.setCustomizationService(this.customizationService);
+
+    // Expose webhook/analytics services to pipeline via shared BotContext
+    // biome-ignore lint/suspicious/noExplicitAny: BotContext has readonly fields; runtime injection required for BaaS services
+    (this.botContext as any).webhookService = this.webhookService;
+    // biome-ignore lint/suspicious/noExplicitAny: BotContext has readonly fields; runtime injection required for BaaS services
+    (this.botContext as any).analyticsService = this.analyticsService;
+
+    this.logger.info('BaaS services initialized (templates, customization, webhooks, analytics)');
   }
 
+  getTemplateService() {
+    return this.templateService;
+  }
+  getCustomizationService() {
+    return this.customizationService;
+  }
+  getWebhookService() {
+    return this.webhookService;
+  }
+  getAnalyticsService() {
+    return this.analyticsService;
+  }
   getTenantManager() {
     return this.tenantFacade.getTenantManager();
   }

@@ -15,15 +15,20 @@ export interface MediaHandlerDeps {
 /**
  * Track user in seen users map
  */
-export function trackUser(ctx: BotContext, telegramCtx: Context): void {
+export function trackUser(ctx: BotContext, telegramCtx: Context, botId: string): void {
   const chatId = telegramCtx.chat?.id;
   const from = telegramCtx.from;
   if (!chatId || !from || from.is_bot) return;
 
-  if (!ctx.seenUsers.has(chatId)) {
-    ctx.seenUsers.set(chatId, new Map());
+  if (!ctx.seenUsers.has(botId)) {
+    ctx.seenUsers.set(botId, new Map());
   }
-  ctx.seenUsers.get(chatId)?.set(from.id, {
+  // biome-ignore lint/style/noNonNullAssertion: guaranteed by set() above
+  const botMap = ctx.seenUsers.get(botId)!;
+  if (!botMap.has(chatId)) {
+    botMap.set(chatId, new Map());
+  }
+  botMap.get(chatId)?.set(from.id, {
     id: from.id,
     firstName: from.first_name,
     username: from.username,
@@ -57,12 +62,13 @@ export function buildFileUrl(config: BotConfig, filePath: string): string {
 export function registerMediaHandlers(bot: Bot, config: BotConfig, deps: MediaHandlerDeps): void {
   const { ctx } = deps;
   const sessionConfig = ctx.config.session;
+  // biome-ignore lint/style/noNonNullAssertion: caller checks ctx.mediaHandler before calling
   const mediaHandler = ctx.mediaHandler!;
   const botLogger = ctx.getBotLogger(config.id);
 
   // Photo handler
   bot.on('message:photo', async (telegramCtx) => {
-    trackUser(ctx, telegramCtx);
+    trackUser(ctx, telegramCtx, config.id);
     if (!isAuthorized(ctx, telegramCtx.from?.id, config)) return;
 
     const isGroup = telegramCtx.chat.type === 'group' || telegramCtx.chat.type === 'supergroup';
@@ -85,7 +91,8 @@ export function registerMediaHandlers(bot: Bot, config: BotConfig, deps: MediaHa
       const photos = telegramCtx.message.photo;
       const photo = photos[photos.length - 1];
       const file = await telegramCtx.api.getFile(photo.file_id);
-      const fileUrl = buildFileUrl(config, file.file_path!);
+      if (!file.file_path) throw new MediaError('Telegram did not return a file path');
+      const fileUrl = buildFileUrl(config, file.file_path);
 
       let caption = telegramCtx.message.caption;
       if (caption && isGroup && botUsername) {
@@ -122,7 +129,7 @@ export function registerMediaHandlers(bot: Bot, config: BotConfig, deps: MediaHa
 
   // Document handler
   bot.on('message:document', async (telegramCtx) => {
-    trackUser(ctx, telegramCtx);
+    trackUser(ctx, telegramCtx, config.id);
     if (!isAuthorized(ctx, telegramCtx.from?.id, config)) return;
 
     const isGroup = telegramCtx.chat.type === 'group' || telegramCtx.chat.type === 'supergroup';
@@ -144,7 +151,8 @@ export function registerMediaHandlers(bot: Bot, config: BotConfig, deps: MediaHa
     try {
       const doc = telegramCtx.message.document;
       const file = await telegramCtx.api.getFile(doc.file_id);
-      const fileUrl = buildFileUrl(config, file.file_path!);
+      if (!file.file_path) throw new MediaError('Telegram did not return a file path');
+      const fileUrl = buildFileUrl(config, file.file_path);
 
       let caption = telegramCtx.message.caption;
       if (caption && isGroup && botUsername) {
@@ -183,7 +191,7 @@ export function registerMediaHandlers(bot: Bot, config: BotConfig, deps: MediaHa
 
   // Voice handler
   bot.on('message:voice', async (telegramCtx) => {
-    trackUser(ctx, telegramCtx);
+    trackUser(ctx, telegramCtx, config.id);
     if (!isAuthorized(ctx, telegramCtx.from?.id, config)) return;
 
     const isGroup = telegramCtx.chat.type === 'group' || telegramCtx.chat.type === 'supergroup';
@@ -205,7 +213,8 @@ export function registerMediaHandlers(bot: Bot, config: BotConfig, deps: MediaHa
     try {
       const voice = telegramCtx.message.voice;
       const file = await telegramCtx.api.getFile(voice.file_id);
-      const fileUrl = buildFileUrl(config, file.file_path!);
+      if (!file.file_path) throw new MediaError('Telegram did not return a file path');
+      const fileUrl = buildFileUrl(config, file.file_path);
 
       const result = await mediaHandler.processVoice(fileUrl, voice.duration, voice.file_size);
       const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);

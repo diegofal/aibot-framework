@@ -69,12 +69,14 @@ function makeMockDeps(overrides?: Record<string, unknown>) {
     setCoherenceCheck: () => {},
   };
 
+  const defaultSoulLoader = {
+    readIdentity: () => 'I am TestBot',
+    readGoals: () => '- Goal 1\n- Goal 2',
+    readDailyLogsSince: () => 'Day 1 log\nDay 2 log',
+  };
   const mockBotManager = {
-    getSoulLoader: () => ({
-      readIdentity: () => 'I am TestBot',
-      readGoals: () => '- Goal 1\n- Goal 2',
-      readDailyLogsSince: () => 'Day 1 log\nDay 2 log',
-    }),
+    getSoulLoader: () => defaultSoulLoader,
+    findSoulLoader: () => defaultSoulLoader,
     getKarmaService: () => undefined,
     getActivityStream: () => undefined,
     getLLMClient: () => {
@@ -193,8 +195,8 @@ describe('productions routes', () => {
       let resolveGenerate: (v: string) => void;
       const mockClaudeGenerate = mock(
         () =>
-          new Promise<string>((resolve) => {
-            resolveGenerate = resolve;
+          new Promise<{ response: string }>((resolve) => {
+            resolveGenerate = (v: string) => resolve({ response: v });
           })
       );
 
@@ -232,7 +234,9 @@ describe('productions routes', () => {
 
     test('writes summary to service on success', async () => {
       const mockClaudeGenerate = mock(() =>
-        Promise.resolve('The bot is focused on writing articles about technology trends.')
+        Promise.resolve({
+          response: 'The bot is focused on writing articles about technology trends.',
+        })
       );
 
       mock.module('../../../src/claude-cli', () => ({
@@ -319,8 +323,8 @@ describe('productions routes', () => {
       let resolveGenerate: (v: string) => void;
       const mockClaudeGenerate = mock(
         () =>
-          new Promise<string>((resolve) => {
-            resolveGenerate = resolve;
+          new Promise<{ response: string }>((resolve) => {
+            resolveGenerate = (v: string) => resolve({ response: v });
           })
       );
 
@@ -361,7 +365,7 @@ describe('productions routes', () => {
     });
 
     test('includes content samples for first entries', async () => {
-      const mockClaudeGenerate = mock(() => Promise.resolve('Summary with content'));
+      const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'Summary with content' }));
 
       mock.module('../../../src/claude-cli', () => ({
         claudeGenerate: mockClaudeGenerate,
@@ -451,8 +455,8 @@ describe('productions routes', () => {
       let resolveGenerate: (v: string) => void;
       const mockClaudeGenerate = mock(
         () =>
-          new Promise<string>((resolve) => {
-            resolveGenerate = resolve;
+          new Promise<{ response: string }>((resolve) => {
+            resolveGenerate = (v: string) => resolve({ response: v });
           })
       );
 
@@ -598,7 +602,7 @@ describe('productions routes', () => {
     });
 
     test('adds human message and returns entry', async () => {
-      const mockClaudeGenerate = mock(() => Promise.resolve('Bot reply'));
+      const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'Bot reply' }));
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
       const freshModule = await import('../../../src/web/routes/productions');
@@ -635,6 +639,7 @@ describe('productions routes', () => {
       };
       deps.botManager = {
         getSoulLoader: () => mockSoulLoader,
+        findSoulLoader: () => mockSoulLoader,
         getKarmaService: () => undefined,
         getActivityStream: () => undefined,
         getLLMClient: () => {
@@ -756,7 +761,7 @@ describe('productions routes', () => {
       const mockClaudeGenerate = mock(() => {
         callCount++;
         if (callCount === 1) return Promise.reject(new Error('First fail'));
-        return Promise.resolve('Retry reply!');
+        return Promise.resolve({ response: 'Retry reply!' });
       });
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
@@ -794,6 +799,7 @@ describe('productions routes', () => {
       };
       deps.botManager = {
         getSoulLoader: () => mockSoulLoader,
+        findSoulLoader: () => mockSoulLoader,
         getKarmaService: () => undefined,
         getActivityStream: () => undefined,
         getLLMClient: () => {
@@ -854,7 +860,9 @@ describe('productions routes', () => {
 
   describe('POST /:botId/:id/evaluate with feedback', () => {
     test('triggers AI response generation when feedback is provided', async () => {
-      const mockClaudeGenerate = mock(() => Promise.resolve('I understand the feedback.'));
+      const mockClaudeGenerate = mock(() =>
+        Promise.resolve({ response: 'I understand the feedback.' })
+      );
 
       mock.module('../../../src/claude-cli', () => ({
         claudeGenerate: mockClaudeGenerate,
@@ -891,6 +899,7 @@ describe('productions routes', () => {
       };
       deps.botManager = {
         getSoulLoader: () => mockSoulLoader,
+        findSoulLoader: () => mockSoulLoader,
         getKarmaService: () => undefined,
         getActivityStream: () => undefined,
         getLLMClient: () => {
@@ -933,7 +942,7 @@ describe('productions routes', () => {
     });
 
     test('does not trigger AI generation when no feedback', async () => {
-      const mockClaudeGenerate = mock(() => Promise.resolve('response'));
+      const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'response' }));
 
       mock.module('../../../src/claude-cli', () => ({
         claudeGenerate: mockClaudeGenerate,
@@ -992,8 +1001,8 @@ describe('productions routes', () => {
       let resolveGenerate: (v: string) => void;
       const mockClaudeGenerate = mock(
         () =>
-          new Promise<string>((resolve) => {
-            resolveGenerate = resolve;
+          new Promise<{ response: string }>((resolve) => {
+            resolveGenerate = (v: string) => resolve({ response: v });
           })
       );
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
@@ -1031,9 +1040,9 @@ describe('productions routes', () => {
 
     test('returns cached coherent result after LLM completes', async () => {
       const mockClaudeGenerate = mock(() =>
-        Promise.resolve(
-          '{"coherent": true, "issues": [], "explanation": "Well-structured content"}'
-        )
+        Promise.resolve({
+          response: '{"coherent": true, "issues": [], "explanation": "Well-structured content"}',
+        })
       );
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
@@ -1073,9 +1082,10 @@ describe('productions routes', () => {
 
     test('returns incoherent result and auto-posts to thread', async () => {
       const mockClaudeGenerate = mock(() =>
-        Promise.resolve(
-          '{"coherent": false, "issues": ["Missing content", "Placeholder text"], "explanation": "The file contains mostly placeholder text with no real substance."}'
-        )
+        Promise.resolve({
+          response:
+            '{"coherent": false, "issues": ["Missing content", "Placeholder text"], "explanation": "The file contains mostly placeholder text with no real substance."}',
+        })
       );
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
@@ -1127,7 +1137,9 @@ describe('productions routes', () => {
 
     test('does not duplicate thread message if already posted', async () => {
       const mockClaudeGenerate = mock(() =>
-        Promise.resolve('{"coherent": false, "issues": ["Bad"], "explanation": "Needs work."}')
+        Promise.resolve({
+          response: '{"coherent": false, "issues": ["Bad"], "explanation": "Needs work."}',
+        })
       );
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
@@ -1208,7 +1220,7 @@ describe('productions routes', () => {
     });
 
     test('handles empty file content gracefully', async () => {
-      const mockClaudeGenerate = mock(() => Promise.resolve('should not be called'));
+      const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'should not be called' }));
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
       const freshModule = await import('../../../src/web/routes/productions');
@@ -1247,9 +1259,10 @@ describe('productions routes', () => {
 
     test('handles LLM response with markdown code fences', async () => {
       const mockClaudeGenerate = mock(() =>
-        Promise.resolve(
-          '```json\n{"coherent": true, "issues": [], "explanation": "Content looks good"}\n```'
-        )
+        Promise.resolve({
+          response:
+            '```json\n{"coherent": true, "issues": [], "explanation": "Content looks good"}\n```',
+        })
       );
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 

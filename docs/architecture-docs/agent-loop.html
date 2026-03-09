@@ -109,7 +109,7 @@
             <tr>
               <td><code>agent-scheduler.ts</code></td>
               <td>353</td>
-              <td><code>AgentScheduler</code> class: per-bot scheduling, concurrency semaphore (maxConcurrent), interruptible sleep, bot loop lifecycle, schedule sync, staggered starts, sleep computation, idle tracking.</td>
+              <td><code>AgentScheduler</code> class: per-bot scheduling, concurrency semaphore (maxConcurrent), interruptible sleep, bot loop lifecycle, schedule sync, staggered starts, sleep computation, idle tracking. Per-bot enable/disable via <code>agentLoop.enabled</code>. <code>resolveDirectives()</code> helper merges custom + preset directives.</td>
             </tr>
             <tr>
               <td><code>agent-strategist.ts</code></td>
@@ -390,6 +390,7 @@
   }&gt;;
   recentActionsDigest?: string;
   karmaBlock?: string;
+  directives?: string[];
 }</code></pre>
           </div>
 
@@ -781,7 +782,9 @@ interface ResolvedPermission {
         <p>
           Scheduling logic lives in <code>agent-scheduler.ts</code> as the <code>AgentScheduler</code> class.
           Each bot maintains its own <code>BotSchedule</code> object that tracks execution state, strategist timing,
-          and recent activity history.
+          and recent activity history. Bots with <code>agentLoop.enabled: false</code> are skipped during
+          <code>syncSchedules()</code> and <code>syncBotLoops()</code> — the per-bot toggle allows
+          disabling the agent loop for specific bots while keeping it globally enabled.
         </p>
 
         <div class="module-section">

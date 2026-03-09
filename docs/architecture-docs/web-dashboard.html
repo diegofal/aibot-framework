@@ -1062,14 +1062,38 @@
         </table>
       </div>
 
+      <!-- Chat API (v1) -->
+      <h3>Chat API (v1)</h3>
+      <p>
+        Channel-agnostic REST endpoint for bot conversations. Uses the unified conversation pipeline
+        with full tool execution, RAG, session management, and tenant isolation.
+        Route file: <code>chat-api.ts</code>.
+      </p>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr><th>Method</th><th>Endpoint</th><th>Description</th><th>Route file</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-yellow">POST</span></td>
+              <td><code>/api/v1/chat/:botId</code></td>
+              <td>Send a message and receive a synchronous bot response. Body: <code>{ message, chatId?, senderId?, senderName?, images? }</code>. Returns <code>{ reply, botId, chatId, durationMs }</code>.</td>
+              <td><code>chat-api.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <!-- ============================================================
            Section 3: WebSocket
            ============================================================ -->
-      <h2>WebSocket &mdash; Log &amp; Activity Streaming</h2>
+      <h2>WebSocket &mdash; Log, Activity &amp; Chat Streaming</h2>
 
       <p>
-        The server provides two WebSocket endpoints: <code>/ws/logs</code> for structured log
-        streaming and <code>/ws/activity</code> for real-time bot activity events. Both use
+        The server provides three WebSocket endpoints: <code>/ws/logs</code> for structured log
+        streaming, <code>/ws/activity</code> for real-time bot activity events, and
+        <code>/ws/chat</code> for the embeddable chat widget. All use
         <code>Bun.serve</code>'s upgrade mechanism with discriminated <code>data.type</code>
         to route connections to separate client sets. The log streaming works as follows:
       </p>
@@ -1308,6 +1332,47 @@ compaction                            // Context compaction
           <p>Read-only inventory of registered skills. Displays skill metadata
              (id, name, version, description), registered commands, scheduled
              jobs, and LLM backend assignment.</p>
+        </div>
+
+        <div class="card">
+          <h3>Chat</h3>
+          <p>Direct bot chat from the dashboard. Bot selector dropdown loads available agents,
+             uses <code>renderThread()</code> from shared.js for the chat UI, sends messages
+             via <code>POST /api/v1/chat/:botId</code>. Conversation state persists in closure
+             with auto-generated <code>chatId</code>. Always visible in sidebar.</p>
+        </div>
+
+        <div class="card">
+          <h3>BaaS: Templates</h3>
+          <p>Bot template management (BaaS-only, requires multi-tenant mode). List view with
+             table, CRUD modals for create/edit, instantiate modal (tenantId, botId, token, overrides).
+             Detail view shows template config, metadata, and version. Routes: <code>#/baas/templates</code>,
+             <code>#/baas/templates/:id</code>.</p>
+        </div>
+
+        <div class="card">
+          <h3>BaaS: Webhooks</h3>
+          <p>Outbound webhook management (BaaS-only). Table with URL, event badges, health status
+             (Healthy/Degraded/Failing based on failCount), inline enabled toggle, last success/failure
+             timestamps. CRUD modals with event checkboxes for 6 event types. Route: <code>#/baas/webhooks</code>.</p>
+        </div>
+
+        <div class="card">
+          <h3>BaaS: Customizations</h3>
+          <p>Per-bot overlay editor (BaaS-only). Card layout shows each bot's customization with
+             displayName, identity preview, count badges for knowledge/goals/rules, and color swatch.
+             Click to edit inline with chip-based list editors for knowledge, goals, and rules.
+             Also edits: displayName, identityOverride, welcomeMessage, brandColor (color picker),
+             avatarUrl. Route: <code>#/baas/customizations</code>.</p>
+        </div>
+
+        <div class="card">
+          <h3>BaaS: Analytics</h3>
+          <p>Conversation analytics dashboard (BaaS-only). Overview cards (conversations, messages,
+             unique users, resolution rate), pure CSS bar charts for messages/conversations per day,
+             breakdown tables for channels, tool usage, and errors. Date range picker with
+             &ldquo;This Month&rdquo; shortcut and per-bot drill-down via dropdown.
+             Route: <code>#/baas/analytics</code>.</p>
         </div>
 
       </div>

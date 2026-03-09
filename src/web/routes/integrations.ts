@@ -3,6 +3,7 @@ import type { BotManager } from '../../bot';
 import { claudeGenerate, claudeGenerateWithTools } from '../../claude-cli';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
+import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
 
 export function integrationsRoutes(deps: {
   config: Config;
@@ -10,6 +11,15 @@ export function integrationsRoutes(deps: {
   logger: Logger;
 }) {
   const app = new Hono();
+
+  // Admin-only gate: integration testing is global, not per-tenant
+  app.use('*', async (c, next) => {
+    const tenantId = getTenantId(c);
+    if (!isAdminOrSingleTenant(tenantId)) {
+      return c.json({ error: 'Admin access required' }, 403);
+    }
+    return next();
+  });
 
   // Ollama health check
   app.get('/ollama/status', async (c) => {

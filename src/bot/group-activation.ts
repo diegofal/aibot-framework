@@ -32,7 +32,8 @@ export class GroupActivation {
    */
   getOtherBotsContext(thisBotId: string): string {
     if (!this.ctx.config.session.llmRelevanceCheck.multiBotAware) return '';
-    const others = this.ctx.agentRegistry.listOtherAgents(thisBotId);
+    const tenantId = this.ctx.config.bots.find((b) => b.id === thisBotId)?.tenantId;
+    const others = this.ctx.agentRegistry.listOtherAgents(thisBotId, tenantId);
     if (others.length === 0) return '';
     const list = others
       .map(

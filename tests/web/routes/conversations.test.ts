@@ -318,7 +318,7 @@ describe('conversations routes', () => {
 
       // Mock claudeGenerate to avoid real CLI call
       mock.module('../../../src/claude-cli', () => ({
-        claudeGenerate: mock(() => Promise.resolve('Bot reply')),
+        claudeGenerate: mock(() => Promise.resolve({ response: 'Bot reply' })),
       }));
 
       const convo = deps.conversationsService.createConversation('bot1');
@@ -341,7 +341,7 @@ describe('conversations routes', () => {
       const deps = makeDeps();
 
       mock.module('../../../src/claude-cli', () => ({
-        claudeGenerate: mock(() => Promise.resolve('Unified reply')),
+        claudeGenerate: mock(() => Promise.resolve({ response: 'Unified reply' })),
       }));
 
       const convo = deps.conversationsService.createConversation('bot1');
@@ -381,7 +381,7 @@ describe('conversations routes', () => {
       const deps = makeDeps();
 
       mock.module('../../../src/claude-cli', () => ({
-        claudeGenerate: mock(() => Promise.resolve('Hi!')),
+        claudeGenerate: mock(() => Promise.resolve({ response: 'Hi!' })),
       }));
 
       const convo = deps.conversationsService.createConversation('bot1');
@@ -459,7 +459,7 @@ describe('conversations routes', () => {
       const deps = makeDeps();
 
       mock.module('../../../src/claude-cli', () => ({
-        claudeGenerate: mock(() => Promise.resolve('Thanks for the direction!')),
+        claudeGenerate: mock(() => Promise.resolve({ response: 'Thanks for the direction!' })),
       }));
 
       // Add answerAskHuman mock to botManager
@@ -524,7 +524,7 @@ describe('conversations routes', () => {
       (deps.botManager as any).answerAskHuman = mock(() => false);
 
       mock.module('../../../src/claude-cli', () => ({
-        claudeGenerate: mock(() => Promise.resolve('Bot reply')),
+        claudeGenerate: mock(() => Promise.resolve({ response: 'Bot reply' })),
       }));
 
       const convo = deps.conversationsService.createConversation('bot1', 'inbox', 'Old question', {
@@ -650,7 +650,7 @@ describe('conversations routes', () => {
       const mockClaudeGenerate = mock(() => {
         callCount++;
         if (callCount === 1) return Promise.reject(new Error('Transient failure'));
-        return Promise.resolve('Retry succeeded!');
+        return Promise.resolve({ response: 'Retry succeeded!' });
       });
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 
@@ -760,7 +760,7 @@ describe('conversations routes', () => {
       const mockClaudeGenerate = mock(() => {
         callCount++;
         if (callCount === 1) return Promise.reject(new Error('First fail'));
-        return Promise.resolve('Second works!');
+        return Promise.resolve({ response: 'Second works!' });
       });
       mock.module('../../../src/claude-cli', () => ({ claudeGenerate: mockClaudeGenerate }));
 

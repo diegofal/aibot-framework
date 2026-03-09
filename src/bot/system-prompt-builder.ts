@@ -2,6 +2,7 @@ import type { BotConfig } from '../config';
 import { resolveAgentConfig } from '../config';
 import { HUMANIZER_PROMPT } from '../humanizer-prompt';
 import type { KarmaService } from '../karma/service';
+import type { CustomizationService } from '../tenant/customization';
 import type { ToolRegistry } from './tool-registry';
 import type { BotContext } from './types';
 
@@ -19,11 +20,16 @@ export interface SystemPromptOptions {
 
 export class SystemPromptBuilder {
   private karmaService: KarmaService | null = null;
+  private customizationService: CustomizationService | null = null;
 
   constructor(
     private ctx: BotContext,
     private toolRegistry: ToolRegistry
   ) {}
+
+  setCustomizationService(service: CustomizationService): void {
+    this.customizationService = service;
+  }
 
   setKarmaService(karmaService: KarmaService): void {
     this.karmaService = karmaService;
@@ -38,7 +44,15 @@ export class SystemPromptBuilder {
     const soulLoader = this.ctx.getSoulLoader(botId);
     const defs = this.toolRegistry.getDefinitionsForBot(botId);
 
-    let prompt = soulLoader.composeSystemPrompt() ?? resolved.systemPrompt;
+    let prompt = soulLoader.composeSystemPrompt(options.userId) ?? resolved.systemPrompt;
+
+    // Tenant customization overlay (identity, knowledge, goals, rules)
+    if (this.customizationService) {
+      const overlay = this.customizationService.composeOverlay(botId);
+      if (overlay) {
+        prompt += `\n\n${overlay}`;
+      }
+    }
 
     // Humanizer
     if (this.ctx.config.humanizer.enabled) {
@@ -309,8 +323,10 @@ export class SystemPromptBuilder {
     if (hasRagContext) {
       return (
         '\n\n## Memory Search\n\n' +
-        'Relevant memory context has been automatically retrieved and included below in "Relevant Memory Context".\n' +
-        'Use `memory_search` to dig deeper if the user asks follow-up questions or if you need more detail.\n' +
+        'Relevant memory context has been automatically retrieved and included below.\n' +
+        'IMPORTANT: This context comes from your long-term memory, NOT from prior exchanges in this conversation.\n' +
+        'Do not claim you have already discussed these topics unless the conversation history above confirms it.\n' +
+        'Use `memory_search` to dig deeper if the user asks follow-up questions.\n' +
         'Use `memory_get` to read more context around a search result if needed.'
       );
     }
@@ -364,7 +380,13 @@ export class SystemPromptBuilder {
 
   private delegationInstructions(botConfig: BotConfig): string {
     const otherBots = this.ctx.config.bots
-      .filter((b) => b.id !== botConfig.id && b.enabled !== false && this.ctx.runningBots.has(b.id))
+      .filter(
+        (b) =>
+          b.id !== botConfig.id &&
+          b.enabled !== false &&
+          this.ctx.runningBots.has(b.id) &&
+          (!botConfig.tenantId || b.tenantId === botConfig.tenantId)
+      )
       .map((b) => `- ${b.id} (${b.name})`)
       .join('\n');
     if (!otherBots) return '';
@@ -385,7 +407,9 @@ export class SystemPromptBuilder {
 
   private createAgentInstructions(botConfig: BotConfig): string {
     const existingAgents = this.ctx.config.bots
-      .filter((b) => b.enabled !== false)
+      .filter(
+        (b) => b.enabled !== false && (!botConfig.tenantId || b.tenantId === botConfig.tenantId)
+      )
       .map((b) => `- ${b.id} (${b.name})`)
       .join('\n');
     return `\n\n## Agent Creation\n\nYou can propose the creation of new agents using the \`create_agent\` tool.\nUse this when you identify a gap in the ecosystem — a recurring need that no existing agent covers, or a specialization that would complement the team.\n\nCurrent agents in the ecosystem:\n${existingAgents}\n\n- Provide a clear justification for why the new agent is needed.\n- Describe its personality in detail (tone, style, values, behavioral traits).\n- Choose relevant skills from those available in the ecosystem.\n- Proposals require human approval before the agent is created.\n- Do NOT propose agents that duplicate existing capabilities.`;
@@ -418,7 +442,7 @@ export class SystemPromptBuilder {
   }
 
   private collaborationInstructions(botConfig: BotConfig): string {
-    const otherAgents = this.ctx.agentRegistry.listOtherAgents(botConfig.id);
+    const otherAgents = this.ctx.agentRegistry.listOtherAgents(botConfig.id, botConfig.tenantId);
     if (otherAgents.length === 0) return '';
     const agentList = otherAgents
       .map((a) => {

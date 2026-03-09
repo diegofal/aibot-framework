@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
-import { getTenantId, isBotAccessible } from '../../tenant/tenant-scoping';
+import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 
 export function agentLoopRoutes(deps: {
   config: Config;
@@ -20,12 +20,16 @@ export function agentLoopRoutes(deps: {
   // Get agent loop status
   app.get('/', (c) => {
     const state = deps.botManager.getAgentLoopState();
+    const tenantId = getTenantId(c);
+    const allowedIds = new Set(scopeBots(deps.config.bots ?? [], tenantId).map((b) => b.id));
     return c.json({
       enabled: deps.config.agentLoop.enabled,
       defaultInterval: deps.config.agentLoop.every,
       minInterval: deps.config.agentLoop.minInterval,
       maxInterval: deps.config.agentLoop.maxInterval,
       ...state,
+      botSchedules: state.botSchedules.filter((s) => allowedIds.has(s.botId)),
+      lastResults: state.lastResults.filter((r) => allowedIds.has(r.botId)),
     });
   });
 
@@ -55,10 +59,24 @@ export function agentLoopRoutes(deps: {
     }
   });
 
-  // LLM diagnostics — per-bot stats
+  // LLM diagnostics — per-bot stats (tenant-scoped)
   app.get('/llm-stats', (c) => {
+    const tenantId = getTenantId(c);
     const stats = deps.botManager.getLlmStats();
-    return c.json({ stats });
+    if (!tenantId || tenantId === '__admin__') {
+      return c.json({ stats });
+    }
+    // Filter stats to only include bots belonging to this tenant
+    const allowedBotIds = new Set(
+      deps.config.bots.filter((b) => b.tenantId === tenantId).map((b) => b.id)
+    );
+    const filtered: Record<string, unknown> = {};
+    if (stats && typeof stats === 'object') {
+      for (const [key, value] of Object.entries(stats as Record<string, unknown>)) {
+        if (allowedBotIds.has(key)) filtered[key] = value;
+      }
+    }
+    return c.json({ stats: filtered });
   });
 
   app.get('/llm-stats/:botId', (c) => {

@@ -4,6 +4,7 @@ import type { DynamicToolRegistry } from '../../bot/dynamic-tool-registry';
 import { TOOL_TO_CATEGORY } from '../../bot/tool-registry';
 import type { Logger } from '../../logger';
 import { parseMcpToolName } from '../../mcp/tool-adapter';
+import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
 import type { DynamicToolStore } from '../../tools/dynamic-tool-store';
 
 export function toolsRoutes(deps: {
@@ -13,6 +14,15 @@ export function toolsRoutes(deps: {
   logger?: Logger;
 }) {
   const app = new Hono();
+
+  // Admin-only gate: tool management is global, not per-tenant
+  app.use('*', async (c, next) => {
+    const tenantId = getTenantId(c);
+    if (!isAdminOrSingleTenant(tenantId)) {
+      return c.json({ error: 'Admin access required' }, 403);
+    }
+    return next();
+  });
 
   // List ALL tools (built-in + dynamic) with full parameter schemas
   app.get('/all', (c) => {

@@ -845,9 +845,35 @@ export async function renderAgentEdit(el, id) {
       <div class="form-section-title">Agent Loop <span class="text-dim text-sm">(empty = use global default)</span></div>
 
       <div class="form-group">
+        <label>Agent Loop Enabled</label>
+        <select name="agentLoopEnabled">
+          <option value="" ${agent.agentLoop?.enabled == null ? 'selected' : ''}>Inherit global</option>
+          <option value="true" ${agent.agentLoop?.enabled === true ? 'selected' : ''}>On</option>
+          <option value="false" ${agent.agentLoop?.enabled === false ? 'selected' : ''}>Off</option>
+        </select>
+        <span class="text-dim text-sm">Override global agent loop setting for this bot</span>
+      </div>
+
+      <div class="form-group">
         <label>Loop Interval</label>
         <input type="text" name="agentLoopEvery" value="${escapeHtml(agent.agentLoop?.every || '')}" placeholder="${escapeHtml(defaults.agentLoopInterval || '6h')}">
         <span class="text-dim text-sm">How often this bot runs autonomously (e.g. 30m, 1h, 6h, 1d)</span>
+      </div>
+
+      <div class="form-group">
+        <label>Standing Directives</label>
+        <textarea name="agentLoopDirectives" rows="3" placeholder="One directive per line — ongoing behavioral instructions for the agent loop">${escapeHtml((agent.agentLoop?.directives || []).join('\n'))}</textarea>
+        <span class="text-dim text-sm">Ongoing instructions injected into strategist/planner/executor prompts (max 10, 500 chars each)</span>
+      </div>
+
+      <div class="form-group">
+        <label>Preset Directives</label>
+        <div class="checkbox-group">
+          <label class="${(agent.agentLoop?.presetDirectives || []).includes('conversation-review') ? 'checked' : ''}">
+            <input type="checkbox" name="presetDirectives" value="conversation-review" ${(agent.agentLoop?.presetDirectives || []).includes('conversation-review') ? 'checked' : ''}>
+            Conversation Review <span class="text-dim text-sm">— periodically review session logs for quality improvements</span>
+          </label>
+        </div>
       </div>
 
       ${
@@ -1087,11 +1113,51 @@ export async function renderAgentEdit(el, id) {
 
     // Agent loop overrides
     const agentLoopEvery = form.agentLoopEvery.value.trim() || undefined;
+    const agentLoopEnabledVal = form.agentLoopEnabled.value;
+    const agentLoopEnabled =
+      agentLoopEnabledVal === 'true' ? true : agentLoopEnabledVal === 'false' ? false : undefined;
+    const directivesRaw = form.agentLoopDirectives.value.trim();
+    const agentLoopDirectives = directivesRaw
+      ? directivesRaw
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .slice(0, 10)
+      : undefined;
+    const presetCheckboxes = form.querySelectorAll
+      ? el.querySelectorAll('input[name="presetDirectives"]:checked')
+      : [];
+    const presetDirectives = Array.from(presetCheckboxes).map((cb) => cb.value);
+
+    const agentLoopPatch = { ...agent.agentLoop };
+    let agentLoopChanged = false;
+
     if (agentLoopEvery !== undefined) {
-      patch.agentLoop = { ...agent.agentLoop, every: agentLoopEvery };
+      agentLoopPatch.every = agentLoopEvery;
+      agentLoopChanged = true;
     } else if (agent.agentLoop?.every) {
-      // Clear the every field but keep other agentLoop settings
-      patch.agentLoop = { ...agent.agentLoop, every: undefined };
+      agentLoopPatch.every = undefined;
+      agentLoopChanged = true;
+    }
+
+    if (agentLoopEnabled !== agent.agentLoop?.enabled) {
+      agentLoopPatch.enabled = agentLoopEnabled;
+      agentLoopChanged = true;
+    }
+    if (JSON.stringify(agentLoopDirectives) !== JSON.stringify(agent.agentLoop?.directives)) {
+      agentLoopPatch.directives = agentLoopDirectives;
+      agentLoopChanged = true;
+    }
+    if (
+      JSON.stringify(presetDirectives) !== JSON.stringify(agent.agentLoop?.presetDirectives || [])
+    ) {
+      agentLoopPatch.presetDirectives = presetDirectives.length > 0 ? presetDirectives : undefined;
+      agentLoopChanged = true;
+    }
+
+    if (agentLoopChanged) {
+      const hasValues = Object.values(agentLoopPatch).some((v) => v !== undefined);
+      patch.agentLoop = hasValues ? agentLoopPatch : undefined;
     }
 
     // TTS overrides

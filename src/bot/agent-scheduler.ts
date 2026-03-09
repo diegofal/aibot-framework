@@ -4,6 +4,7 @@ import type { BotConfig } from '../config';
 import type { Logger } from '../logger';
 import type { AgentLoopResult, BotScheduleInfo } from './agent-loop';
 import { parseDurationMs } from './agent-loop';
+import { PRESET_DIRECTIVE_DEFINITIONS } from './agent-loop-prompts';
 import type { RecentAction } from './agent-loop-utils';
 import { computeCyclesUntilStrategist } from './agent-strategist';
 import type { BotContext } from './types';
@@ -81,6 +82,7 @@ export class AgentScheduler {
         const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
         const configEvery = botConfig?.agentLoop?.every ?? this.ctx.config.agentLoop.every;
         if (s.nextCheckIn && s.nextCheckIn !== configEvery) {
+          // biome-ignore lint/style/noNonNullAssertion: guaranteed by loop over botSchedules keys
           const restored = this.botSchedules.get(botId)!;
           this.ctx.logger.info(
             { botId, stale: s.nextCheckIn, current: configEvery },
@@ -351,9 +353,25 @@ export class AgentScheduler {
 
   // --- Schedule management ---
 
+  /** Check if agent loop is enabled for a specific bot (per-bot override → global) */
+  isAgentLoopEnabledForBot(botId: string): boolean {
+    const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+    const perBotEnabled = botConfig?.agentLoop?.enabled;
+    // undefined = inherit global; explicit true/false = override
+    return perBotEnabled ?? true;
+  }
+
   syncSchedules(): void {
     const now = Date.now();
     for (const botId of this.ctx.runningBots) {
+      // Skip bots with agent loop explicitly disabled
+      if (!this.isAgentLoopEnabledForBot(botId)) {
+        if (this.botSchedules.has(botId)) {
+          this.botSchedules.delete(botId);
+          this.ctx.logger.debug({ botId }, 'Agent loop: removed disabled bot from schedule');
+        }
+        continue;
+      }
       if (!this.botSchedules.has(botId)) {
         const staggerOffset = this.botSchedules.size * 30_000;
         this.botSchedules.set(botId, {
@@ -449,6 +467,8 @@ export class AgentScheduler {
       if (this.botLoops.has(botId)) continue;
       const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
       if (!botConfig) continue;
+      // Skip bots with agent loop explicitly disabled
+      if (!this.isAgentLoopEnabledForBot(botId)) continue;
       const promise = this.runBotLoop(botId, botConfig);
       this.botLoops.set(botId, promise);
     }
@@ -495,6 +515,8 @@ export class AgentScheduler {
         retryCount: sched.retryCount,
         lastErrorMessage: sched.lastErrorMessage,
         isExecutingLoop: this.runningBotIds.has(botId),
+        agentLoopEnabled: this.isAgentLoopEnabledForBot(botId),
+        directives: resolveDirectives(botConfig),
       });
     }
     return schedules;
@@ -585,4 +607,14 @@ export class AgentScheduler {
     this.botLoops.delete(botId);
     botLogger.info({ botId, mode }, 'Bot loop stopped');
   }
+}
+
+/** Resolve directives for a bot: custom directives + expanded preset directives */
+export function resolveDirectives(botConfig: BotConfig | undefined): string[] {
+  if (!botConfig) return [];
+  const custom = botConfig.agentLoop?.directives ?? [];
+  const presets = (botConfig.agentLoop?.presetDirectives ?? []).flatMap(
+    (p) => PRESET_DIRECTIVE_DEFINITIONS[p] ?? []
+  );
+  return [...custom, ...presets];
 }

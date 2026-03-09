@@ -215,7 +215,7 @@
 
         <div class="page-header">
           <h1>Backlog</h1>
-          <p>Feature backlog organized by epic. Click to expand. Last updated: <strong>2026-03-06</strong>.</p>
+          <p>Feature backlog organized by epic. Click to expand. Last updated: <strong>2026-03-08</strong>.</p>
         </div>
 
         <!-- ============================================================ -->
@@ -495,6 +495,245 @@
                     <li>Unit tests: register, heartbeat, prune, search</li>
                     <li>Integration tests: REST API</li>
                     <li>Update architecture docs, README, CHANGELOG</li>
+                  </ul>
+                </div>
+              </details>
+
+            </ul>
+          </div>
+        </details>
+
+        <!-- ======================== EPIC: OpenClaw Adoptions ======================== -->
+        <details class="epic">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title">OpenClaw Adoptions</span>
+            <span class="epic-count">3 stories &middot; selective</span>
+            <span class="badge badge-purple">Designed</span>
+          </summary>
+          <div class="epic-body">
+            <p class="epic-desc">
+              Selective adoptions from OpenClaw analysis (<code>productions/openclone/05_openclaw-adoptions.md</code>).
+              Only features with verified value and existing code to build on. Full analysis in <code>productions/openclone/01-05</code>.
+            </p>
+
+            <div class="phase-label">Sprint 1 &mdash; High priority</div>
+            <ul class="story-list">
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">GAP-E1: Error Classification Unificada</span>
+                  <span class="badge badge-red">Critical</span>
+                </summary>
+                <div class="story-body">
+                  <p>Three competing error classifiers exist (<code>agent-retry-engine.ts</code>, <code>llm-resilience.ts</code>, <code>model-failover/failover-error.ts</code>).
+                     The best one (<code>classifyFailoverReason()</code> &mdash; RegExp, 3-stage hierarchy) is never called from the main retry path.
+                     A 402 billing error triggers 3 useless retries instead of immediate skip.</p>
+                  <div class="sub-label">Implementation (~4-6h)</div>
+                  <ul>
+                    <li>Delegate <code>classifyError()</code> in <code>agent-retry-engine.ts</code> to <code>classifyFailoverReason()</code></li>
+                    <li>Add <code>auth_permanent</code> and <code>model_not_found</code> to <code>FailoverReason</code> type</li>
+                    <li>Deprecate <code>classifyLLMError()</code> in <code>llm-resilience.ts</code></li>
+                    <li>Billing/auth UX error messages in ConversationPipeline</li>
+                  </ul>
+                  <div class="sub-label">Files</div>
+                  <ul>
+                    <li><code>src/bot/agent-retry-engine.ts</code></li>
+                    <li><code>src/bot/model-failover/failover-error.ts</code></li>
+                    <li><code>src/bot/llm-resilience.ts</code></li>
+                  </ul>
+                  <div class="sub-label">Justification</div>
+                  <p>Prerequisite for any real multi-provider setup. Backward-compatible (adds optional <code>failoverReason</code> field). Code already exists in repo &mdash; just needs wiring.</p>
+                  <div class="sub-label">Deep-dive</div>
+                  <p><code>productions/openclone/02_error-classification-deep-dive.md</code></p>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">GAP-4: Activate skill-md-adapter (declarative skills)</span>
+                </summary>
+                <div class="story-body">
+                  <p>A complete adapter for OpenClaw-style Markdown skills already exists at <code>src/core/skill-md-adapter/</code> (7 files: parser, validator, loader, framework-bridge)
+                     but is not connected to the bot boot lifecycle.</p>
+                  <div class="sub-label">Implementation (~1 day)</div>
+                  <ul>
+                    <li>Integrate <code>SkillMdLoader</code> into bot boot sequence</li>
+                    <li>Add <code>externalSkillsPath</code> to bot config schema</li>
+                    <li>Port <code>weather</code> skill from OpenClaw as smoke test</li>
+                  </ul>
+                  <div class="sub-label">Files</div>
+                  <ul>
+                    <li><code>src/core/skill-md-adapter/</code> (existing, complete)</li>
+                    <li><code>src/bot/bot-manager.ts</code> (boot integration)</li>
+                    <li>Config schema</li>
+                  </ul>
+                  <div class="sub-label">Note</div>
+                  <p>Scope reduced from original proposal: port additional skills on-demand, not speculatively.</p>
+                  <div class="sub-label">Deep-dive</div>
+                  <p><code>productions/openclone/03_skills-gap-analysis.md</code></p>
+                </div>
+              </details>
+
+            </ul>
+
+            <div class="phase-label">Deferred &mdash; When consumers exist</div>
+            <ul class="story-list">
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">GAP-3: Hook System / Lifecycle Events (8 hooks)</span>
+                  <span class="badge badge-dim">Deferred</span>
+                </summary>
+                <div class="story-body">
+                  <p>8 typed hooks (5 void + 3 modifying) for pipeline extensibility. Design complete.
+                     <code>ToolExecutor</code> already extends <code>EventEmitter</code> with 5 event types &mdash; 40% done.</p>
+                  <div class="sub-label">Implementation (~3 days)</div>
+                  <ul>
+                    <li>New <code>src/core/hooks/</code> module (HookRegistry + HookRunner)</li>
+                    <li>Wire into <code>conversation-pipeline.ts</code> and <code>agent-loop.ts</code></li>
+                    <li>Expose existing ToolExecutor events as public hook API</li>
+                  </ul>
+                  <div class="sub-label">Why deferred</div>
+                  <p>No consumers today. Implement when WhatsApp/Discord adapters need pipeline interception.
+                     Designing hooks without real consumers risks wrong interfaces (YAGNI).</p>
+                  <div class="sub-label">Deep-dive</div>
+                  <p><code>productions/openclone/04_plugin-architecture-analysis.md</code>, <code>05_hook-system-deep-dive.md</code></p>
+                </div>
+              </details>
+
+            </ul>
+          </div>
+        </details>
+
+        <!-- ======================== EPIC: Tenant Data Isolation ======================== -->
+        <details class="epic">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title">Tenant Data Isolation (Physical)</span>
+            <span class="epic-count">5 stories &middot; 2 phases</span>
+            <span class="badge badge-dim">Audit Complete</span>
+          </summary>
+          <div class="epic-body">
+            <p class="epic-desc">
+              Soul files and productions are correctly scoped per-tenant under <code>data/tenants/{tid}/bots/{botId}/</code>.
+              However, sessions, conversations, and shared JSON stores remain in global directories with only logical isolation (by globally-unique botId).
+              This works correctly today but prevents per-tenant data export/deletion and creates bot ID namespace pressure across tenants.
+              <code>resolveTenantPaths()</code> in <code>src/tenant/tenant-paths.ts</code> already computes tenant-scoped session paths but nothing uses them.
+            </p>
+
+            <div class="phase-label">Phase 1 &mdash; Physical path isolation (3 stories)</div>
+            <ul class="story-list">
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">SessionManager &mdash; tenant-scoped session storage</span>
+                </summary>
+                <div class="story-body">
+                  <p>Currently <code>SessionManager</code> (<code>src/session.ts</code>) is instantiated once globally with <code>config.session.dataDir</code>.
+                     All tenants share <code>data/sessions/</code>, <code>sessions.json</code> metadata, and <code>active-conversations.json</code>.</p>
+                  <div class="sub-label">Options</div>
+                  <ul>
+                    <li><strong>A:</strong> Per-tenant SessionManager instances (cleanest isolation, higher memory)</li>
+                    <li><strong>B:</strong> Single instance with tenant-prefixed paths (less change, shared metadata file)</li>
+                  </ul>
+                  <div class="sub-label">Current state</div>
+                  <p><code>resolveTenantPaths().sessionsDir</code> already returns <code>data/tenants/{tid}/bots/{botId}/sessions/</code> but is unused.
+                     <code>clearBotSessions(botId)</code> works via prefix matching &mdash; no data leak, just co-location.</p>
+                  <div class="sub-label">Files</div>
+                  <ul>
+                    <li><code>src/session.ts</code> &mdash; constructor, initialize(), transcript paths</li>
+                    <li><code>src/index.ts</code> &mdash; SessionManager instantiation</li>
+                    <li><code>src/bot/bot-manager.ts</code> &mdash; passes SessionManager to BotContext</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">ConversationsService &mdash; tenant-scoped conversation storage</span>
+                </summary>
+                <div class="story-body">
+                  <p><code>ConversationsService</code> uses a single <code>config.conversations.baseDir</code> (<code>data/conversations/</code>).
+                     All tenants' conversations are stored in <code>data/conversations/{botId}/</code>.</p>
+                  <div class="sub-label">Impact</div>
+                  <ul>
+                    <li>Web routes filter via <code>scopeBots()</code> (application-level), not filesystem</li>
+                    <li>Export/import (<code>bot-export-service.ts</code>) reads from global path</li>
+                    <li>Bot reset (<code>deleteAllForBot</code>) works by botId directory &mdash; correct but co-located</li>
+                  </ul>
+                  <div class="sub-label">Files</div>
+                  <ul>
+                    <li><code>src/conversations/service.ts</code> &mdash; <code>botDir()</code>, <code>conversationsPath()</code></li>
+                    <li><code>src/bot/bot-manager.ts:141</code> &mdash; instantiation</li>
+                    <li><code>src/bot/bot-export-service.ts</code> &mdash; export/import paths</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Shared JSON stores &mdash; tenant-scoped persistence paths</span>
+                </summary>
+                <div class="story-body">
+                  <p>Several stores persist to global <code>dataDir</code> paths shared across tenants:</p>
+                  <ul>
+                    <li><code>ask-human/answered.json</code> &mdash; AskHumanStore (<code>src/bot/ask-human-store.ts</code>)</li>
+                    <li><code>ask-permission/history.json</code> &mdash; AskPermissionStore (<code>src/bot/ask-permission-store.ts</code>)</li>
+                    <li><code>collaboration/tracker.json</code> &mdash; CollaborationTracker (<code>src/collaboration-tracker.ts</code>)</li>
+                    <li><code>collaboration/sessions.json</code> &mdash; CollaborationSessionManager (<code>src/collaboration-session.ts</code>)</li>
+                    <li><code>schedules.json</code> &mdash; AgentScheduler (<code>src/bot/agent-scheduler.ts</code>)</li>
+                  </ul>
+                  <p>All are internally scoped by botId (which is globally unique), so no data leaks.
+                     All <code>clearForBot()</code> methods persist to disk after clearing.</p>
+                  <div class="sub-label">Note</div>
+                  <p>Lower priority than sessions/conversations. These are small operational stores.
+                     Moving them only matters for per-tenant backup/restore or compliance deletion.</p>
+                </div>
+              </details>
+
+            </ul>
+
+            <div class="phase-label">Phase 2 &mdash; Namespace &amp; compliance (2 stories)</div>
+            <ul class="story-list">
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Bot ID namespacing &mdash; auto-prefix with tenantId</span>
+                </summary>
+                <div class="story-body">
+                  <p>Bot IDs are currently globally unique (<code>agents.ts:79</code> rejects duplicates across all tenants).
+                     Tenant A creating bot <code>"support"</code> blocks Tenant B from the same name.</p>
+                  <div class="sub-label">Proposed</div>
+                  <ul>
+                    <li>Auto-prefix tenant bot IDs: <code>{tenantId}:{botName}</code> or <code>{tenantId}__{botName}</code></li>
+                    <li>Uniqueness check scoped to tenant, not global</li>
+                    <li>Display name remains unqualified in UI</li>
+                  </ul>
+                  <div class="sub-label">Impact</div>
+                  <p>Touches all botId references: session keys, file paths, config persistence, web routes, Telegram bot registration.
+                     Breaking change &mdash; requires migration for existing tenant bots.</p>
+                </div>
+              </details>
+
+              <details class="story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Per-tenant data export &amp; deletion</span>
+                </summary>
+                <div class="story-body">
+                  <p>Enable exporting or deleting ALL data for a tenant (GDPR-style). Requires physical isolation from Phase 1.</p>
+                  <ul>
+                    <li><code>DELETE /api/tenants/:id/data</code> &mdash; remove all tenant data</li>
+                    <li><code>GET /api/tenants/:id/export</code> &mdash; download tenant data archive</li>
+                    <li>Enumerate all data stores, collect by tenant, package or purge</li>
                   </ul>
                 </div>
               </details>

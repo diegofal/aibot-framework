@@ -58,7 +58,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     );
     const claudePath = config.improve?.claudePath ?? 'claude';
     const timeout = config.improve?.timeout ?? 300_000;
-    return claudeGenerate(prompt, {
+    const result = await claudeGenerate(prompt, {
       systemPrompt,
       claudePath,
       model: config.claudeCli?.model,
@@ -66,6 +66,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
       maxLength,
       logger,
     });
+    return result.response;
   }
 
   // Tool-enabled path: use LLMClient abstraction
@@ -77,7 +78,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     logger.warn({ botId }, 'webGenerate: no LLMClient for bot, falling back to Claude CLI');
     const claudePath = config.improve?.claudePath ?? 'claude';
     const timeout = config.improve?.timeout ?? 300_000;
-    return claudeGenerate(prompt, {
+    const result = await claudeGenerate(prompt, {
       systemPrompt,
       claudePath,
       model: config.claudeCli?.model,
@@ -85,6 +86,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
       maxLength,
       logger,
     });
+    return result.response;
   }
 
   const toolRegistry = botManager.getToolRegistry();
@@ -96,7 +98,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     logger.info({ botId }, 'webGenerate: no tools after dashboard filter, using Claude CLI');
     const claudePath = config.improve?.claudePath ?? 'claude';
     const timeout = config.improve?.timeout ?? 300_000;
-    return claudeGenerate(prompt, {
+    const result = await claudeGenerate(prompt, {
       systemPrompt,
       claudePath,
       model: config.claudeCli?.model,
@@ -104,6 +106,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
       maxLength,
       logger,
     });
+    return result.response;
   }
 
   const toolExecutor = toolRegistry.createExecutor(0, botId);
