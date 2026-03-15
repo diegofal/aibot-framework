@@ -244,23 +244,51 @@ export async function renderConversationChat(el, botId, conversationId) {
         });
         startPolling();
       },
-      onSend: async (text) => {
+      onApprove: async (action, messageId) => {
+        const res = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${conversationId}/approve`,
+          { method: 'POST', body: { action, messageId } }
+        );
+        if (res.status === 'approved') {
+          // Tool was executed — start polling for the follow-up bot reply
+          generating = true;
+        }
+        // Refresh full thread to get updated approval status and any new messages
+        const freshData = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${conversationId}`
+        );
+        if (freshData.messages) {
+          threadMessages.length = 0;
+          threadMessages.push(...freshData.messages);
+        }
+        renderThreadUI();
+        if (generating) startPolling();
+      },
+      onSend: async (text, images, documents) => {
         // Optimistic add
         threadMessages.push({
           id: `temp-${Date.now()}`,
           role: 'human',
           content: text,
+          images: images || undefined,
+          documents: documents
+            ? documents.map((d) => ({ name: d.name, mimeType: d.mimeType, size: d.content.length }))
+            : undefined,
           createdAt: new Date().toISOString(),
         });
         generating = true;
         errorMsg = null;
         renderThreadUI();
 
+        const body = { message: text };
+        if (images && images.length > 0) body.images = images;
+        if (documents && documents.length > 0) body.documents = documents;
+
         const res = await api(
           `/api/conversations/${encodeURIComponent(botId)}/${conversationId}/messages`,
           {
             method: 'POST',
-            body: { message: text },
+            body,
           }
         );
 

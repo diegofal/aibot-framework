@@ -258,7 +258,10 @@ async function runOllamaReview(opts: QualityReviewOptions): Promise<string> {
       filesWritten++;
     }
 
-    logger.info({ outputLen: output.length, filesWritten }, 'Soul quality review: complete');
+    logger.info(
+      { outputLen: llmResult.text.length, filesWritten },
+      'Soul quality review: complete'
+    );
     return summary;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

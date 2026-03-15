@@ -197,6 +197,7 @@
         <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
         <a href="use-cases.html">Use Cases</a>
+        <a href="testing-guide.html">Testing Guide</a>
         <a href="backlog.html">Backlog</a>
       </nav>
     </aside>
@@ -795,6 +796,21 @@
                 <li><code>jobId</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Job ID (for "remove" and "run")</span></li>
                 <li><code>deleteAfterRun</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Delete after first execution</span></li>
                 <li><code>includeDisabled</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Include disabled jobs in list</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- send_message -->
+          <div class="tool-card">
+            <h4 class="tool-name">send_message</h4>
+            <div class="tool-desc">Channel-agnostic message sending with contact directory lookup. Searches contacts by name, @username, or contact ID. If the recipient is unknown and the LLM has their details, it can register them inline. Supports Telegram, WhatsApp, and web widget delivery.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>recipient</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Name, @username, or contact ID</span></li>
+                <li><code>message</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; Message text (max 4000 chars)</span></li>
+                <li><code>channel</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; telegram | whatsapp | web | auto (default: auto)</span></li>
+                <li><code>register</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Register new contact if not found: { displayName, channelKind, address, username? }</span></li>
               </ul>
             </div>
           </div>
@@ -1525,6 +1541,64 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
           <code>skillsFolders.paths[]</code> using <code>resolve() + startsWith()</code>.
           Requests targeting directories outside the allowed paths are rejected with
           <code>403 Forbidden</code>.
+        </p>
+
+        <h3>Tool Permission Matrix</h3>
+        <p>
+          <code>src/bot/tool-permissions.ts</code> defines a per-tool access control matrix with two execution contexts:
+        </p>
+        <ul>
+          <li><strong>agent-loop</strong> &mdash; autonomous agent execution (no human in the loop)</li>
+          <li><strong>conversation</strong> &mdash; any user-facing interaction, regardless of channel (Telegram, REST, WhatsApp, WebSocket)</li>
+        </ul>
+        <p>Each tool gets one of four permission levels per context:</p>
+        <ul>
+          <li><strong>free</strong> &mdash; no restriction</li>
+          <li><strong>inform</strong> &mdash; bot explains intent before executing</li>
+          <li><strong>confirm</strong> &mdash; bot asks for explicit user confirmation</li>
+          <li><strong>blocked</strong> &mdash; tool removed from LLM definitions (not available)</li>
+        </ul>
+        <p>
+          Most sensitive tools (exec, file_write, file_edit, browser, process, create_tool,
+          create_agent, improve, twitter_post) use <strong>confirm</strong> in conversations,
+          enabling <strong>inline approval</strong> &mdash; the user confirms or denies in chat.
+          Only <code>phone_call</code> remains blocked in conversations (too dangerous).
+          Agent loop uses <code>confirm</code> for these tools, gated by the dashboard
+          <code>ask_permission</code> flow. Per-bot overrides are stored in
+          <code>bots.json &rarr; toolPermissions</code> (partial overrides only).
+        </p>
+        <h4>Inline Approval (conversation mode)</h4>
+        <p>
+          <code>src/bot/inline-approval.ts</code> implements a two-turn inline approval
+          mechanism for <code>confirm</code>-level tools in conversations:
+        </p>
+        <ol>
+          <li><strong>Turn 1:</strong> LLM calls a confirm tool &rarr;
+            <code>ToolExecutor</code> intercepts, stores the call in
+            <code>InlineApprovalStore</code>, returns a synthetic result telling the
+            LLM to ask the user for confirmation.</li>
+          <li><strong>Turn 2:</strong> User responds &rarr;
+            <code>ConversationPipeline</code> classifies the response
+            (approve/deny/unrelated via keyword matching, no LLM).
+            Approved &rarr; tool executes, result injected into history.
+            Denied &rarr; action cancelled. Unrelated &rarr; pending kept,
+            LLM re-asks.</li>
+        </ol>
+        <p>
+          The store is in-memory (no disk persistence) &mdash; pending approvals are
+          ephemeral. Auto-expires after 10 minutes. One pending per session.
+        </p>
+        <p>
+          <strong>Enforcement layers:</strong> (1) <code>ToolRegistry.getDefinitionsForBot()</code>
+          filters blocked tools from LLM definitions, (2) <code>ToolExecutor.execute()</code>
+          intercepts confirm tools (inline approval) or rejects blocked tools,
+          (3) <code>SystemPromptBuilder</code> injects a
+          &ldquo;Sensitive Action Protocol&rdquo; block listing inform/confirm tools.
+        </p>
+        <p>
+          Dashboard: the bot edit form exposes trusted channel checkboxes and an editable
+          permission matrix table under &ldquo;Tool Permissions&rdquo;. Only overrides that
+          differ from defaults are persisted.
         </p>
 
         <h3>AI Generation</h3>

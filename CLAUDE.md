@@ -42,6 +42,11 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `types.ts` | `BotContext` interface compartido + `SeenUser` |
 | `bot-manager.ts` | Facade slim: constructor, `startBot`, `stopBot`, `sendMessage`, API pública |
 | `tenant-facade.ts` | Tenant/billing/metering — delegado desde BotManager |
+| `user-directory.ts` | Persistent contact directory: auto-tracks users from all channels, supports manual registration, find by name/username/address |
+| `tool-permissions.ts` | Permission matrix: per-tool access control (free/inform/confirm/blocked) across agent-loop, conv-owner, conv-external modes |
+| `inline-approval.ts` | Two-turn inline approval for confirm-level tools in conversations: InlineApprovalStore, classifyApprovalResponse, describeToolCall |
+| `llm-query-log.ts` | Persistent JSONL log per bot of every LLM call — traceability for conversation, agent-loop, memory, compaction, topic guard |
+| `hooks.ts` | EventEmitter-based lifecycle hooks: message_received/sent, before/after_llm_call, before/after_tool_call, before_compaction, agent_loop_cycle |
 | `tool-registry.ts` | Inicialización de tools, categorías (`TOOL_CATEGORIES`), pre-selección por categoría, filtro collaboration-safe |
 | `tool-executor.ts` | Ejecución de tools con lifecycle events, retry y loop detection |
 | `tool-loop-detector.ts` | 4-strategy tool loop detection: circuit breaker, poll no-progress, ping-pong, generic repeat |
@@ -71,6 +76,7 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `soul-lint.ts` | Lint estructural de soul directory (sin LLM) |
 | `soul-memory-consolidator.ts` | Consolidación de daily logs → MEMORY.md |
 | `soul-quality-reviewer.ts` | Quality review de soul files (Claude CLI) |
+| `hooks.ts` | Lifecycle hook system: `HookEmitter` con 8 eventos (message_received/sent, before/after_llm_call, before/after_tool_call, before_compaction, agent_loop_cycle) |
 | `index.ts` | Barrel re-export de `BotManager` |
 
 ### Módulos Channel (`src/channel/`)
@@ -80,8 +86,26 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `types.ts` | `InboundMessage`, `Channel`, `ChannelKind` — interfaces canal-agnósticas |
 | `telegram.ts` | Adapter grammy Context → InboundMessage + Channel |
 | `rest.ts` | Adapter REST API request → InboundMessage + Channel (collect-reply pattern) |
-| `websocket.ts` | Adapter WebSocket connection → InboundMessage + Channel (widget chat) |
-| `whatsapp.ts` | Adapter WhatsApp Cloud API → InboundMessage + Channel (webhook signature verification, message extraction) |
+| `websocket.ts` | Adapter WebSocket connection → InboundMessage + Channel (widget chat), `streamToWebSocket()` |
+| `whatsapp.ts` | Adapter WhatsApp Cloud API → InboundMessage + Channel (webhook signature, message extraction, image sending, interactive buttons, status tracking) |
+| `discord.ts` | Adapter Discord REST API → InboundMessage + Channel (2000-char splitting) |
+| `discord-gateway.ts` | Discord Gateway WebSocket: heartbeat, identify, MESSAGE_CREATE dispatch, auto-reconnect |
+| `outbound.ts` | Factory de canales de salida para mensajes proactivos: Telegram (bot.api), WhatsApp (Cloud API), web (session append), Discord (stub) |
+| `index.ts` | Barrel re-export |
+
+### Módulos A2A (`src/a2a/`)
+
+| Archivo | Responsabilidad |
+|---|---|
+| `types.ts` | A2A v0.3.0 tipos: `AgentCard`, `A2AMessage`, `Task`, `TaskState`, JSON-RPC, error codes |
+| `task-store.ts` | `TaskStore` — CRUD de tasks in-memory con TTL pruning, session grouping |
+| `agent-card-builder.ts` | `buildAgentCard()` — genera AgentCard desde BotConfig + ToolDefinitions |
+| `executor.ts` | Headless LLM executor: A2AMessage → ChatMessage → LLM → A2AMessage |
+| `server.ts` | `A2AServer` — HTTP JSON-RPC handler: `message/send`, `tasks/get`, `tasks/cancel`, agent card discovery, directory endpoints |
+| `client.ts` | `A2AClient` — HTTP client para agentes A2A externos con agent card caching |
+| `client-pool.ts` | `A2AClientPool` — pool de clientes con `discoverAll()` |
+| `tool-adapter.ts` | Convierte skills de agentes A2A externos en framework Tools (`a2a_<agent>_<skill>`) |
+| `directory.ts` | `AgentDirectory` — registry de agentes con heartbeat, stale pruning, skill search |
 | `index.ts` | Barrel re-export |
 
 ### Módulos MCP (`src/mcp/`)
@@ -124,22 +148,28 @@ Las dependencias circulares (delegation/collaborate tools → CollaborationManag
 ```
 BotManager (facade)
   ├── TenantFacade            (tenant/billing/metering)
+  ├── UserDirectory            (persistent contact directory, JSONL per bot)
+  ├── HookEmitter             (lifecycle hooks: message/llm/tool/compaction/agent-loop events)
   ├── McpClientPool           (MCP server connections, shared pool)
-  ├── ToolRegistry            (sin deps de módulo, registra MCP tools)
+  ├── LlmQueryLog             (persistent JSONL traceability log for all LLM calls)
+  ├── SecurityAudit           (startup audit with 24h cooldown, non-blocking)
+  ├── ToolRegistry            (sin deps de módulo, registra MCP + A2A + SKILL.md tools, wires send_message)
   ├── SystemPromptBuilder     (lee ToolRegistry.getDefinitions())
   ├── MemoryFlusher           (sin deps de módulo)
   ├── GroupActivation         (sin deps de módulo)
   ├── ContextCompactor        (usa MemoryFlusher, LLMClient, SessionManager)
-  ├── ConversationPipeline    (usa SystemPromptBuilder, MemoryFlusher, ToolRegistry, ContextCompactor, Channel)
+  ├── ConversationPipeline    (usa SystemPromptBuilder, MemoryFlusher, ToolRegistry, ContextCompactor, Channel, streaming)
   ├── CollaborationManager    (usa SystemPromptBuilder, ToolRegistry)
   ├── TelegramPoller          (polling loop, inyectado en startTelegramBot)
   ├── BotResetService         (reset soul/memory/sessions/stores)
   ├── BotExportService        (export/import bots as .tar.gz archives)
   ├── HandlerRegistrar        (usa ConversationPipeline, GroupActivation, ConversationGate)
   │   └── ConversationGate    (auth, grupo, bot-to-bot gates)
+  ├── A2AServer               (A2A JSON-RPC server + AgentDirectory)
+  ├── DiscordGateway          (Discord WebSocket gateway, per-bot)
   └── AgentLoop               (orquestador)
       ├── AgentScheduler      (scheduling, concurrency, sleep)
-      ├── AgentRetryEngine    (retry con backoff)
+      ├── AgentRetryEngine    (retry con backoff, unified error classification via FailoverLLMClient)
       ├── AgentPlanner        (LLM planner)
       ├── AgentStrategist     (strategist, goals)
       └── AgentLoopUtils      (funciones puras)

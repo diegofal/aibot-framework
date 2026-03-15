@@ -42,7 +42,13 @@ export function telegramToInbound(
  * Create a Channel that sends replies through a grammy Context.
  */
 export function telegramChannel(ctx: Context): Channel {
-  return {
+  const chatId = ctx.chat?.id;
+  const channel: Channel & {
+    /** Streaming support: send initial message, returns message_id */
+    _sendMessage?: (text: string) => Promise<number>;
+    /** Streaming support: edit existing message by message_id */
+    _editMessage?: (messageId: number, text: string) => Promise<void>;
+  } = {
     kind: 'telegram',
 
     async sendText(text: string) {
@@ -57,5 +63,22 @@ export function telegramChannel(ctx: Context): Channel {
       await ctx.replyWithChatAction('record_voice');
       await ctx.replyWithVoice(new InputFile(new Uint8Array(audioBuffer), filename));
     },
+
+    // Streaming handles for progressive message delivery
+    async _sendMessage(text: string): Promise<number> {
+      const msg = await ctx.reply(text);
+      return msg.message_id;
+    },
+
+    async _editMessage(messageId: number, text: string): Promise<void> {
+      if (!chatId) return;
+      try {
+        await ctx.api.editMessageText(chatId, messageId, text);
+      } catch {
+        // Edit may fail if text unchanged or message deleted
+      }
+    },
   };
+
+  return channel;
 }

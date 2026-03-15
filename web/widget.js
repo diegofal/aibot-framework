@@ -34,11 +34,24 @@
     userHash: scriptTag?.getAttribute('data-user-hash') || '',
   };
 
+  const MAX_ATTACHMENTS = 4;
+  const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB per file
+  const ALLOWED_DOC_TYPES = [
+    'application/pdf',
+    'text/plain',
+    'text/markdown',
+    'text/csv',
+    'text/html',
+    'application/json',
+  ];
+
   let config = {};
   let ws = null;
   let chatId = null;
   let isOpen = false;
   let container = null;
+  let pendingImages = []; // { base64, dataUrl }
+  let pendingDocs = []; // { name, mimeType, content }
 
   // --- Styles ---
   const STYLES =
@@ -85,6 +98,9 @@
     }\n\
     .aibot-widget-msg.user { align-self: flex-end; }\n\
     .aibot-widget-msg.bot { align-self: flex-start; }\n\
+    .aibot-widget-msg img {\n\
+      max-width: 100%; max-height: 200px; border-radius: 8px; margin-top: 6px; display: block;\n\
+    }\n\
     .aibot-widget-typing {\n\
       align-self: flex-start; padding: 10px 14px; border-radius: 14px; font-size: 14px;\n\
     }\n\
@@ -94,9 +110,28 @@
     .aibot-widget-typing span:nth-child(2) { animation-delay: 0.2s; }\n\
     .aibot-widget-typing span:nth-child(3) { animation-delay: 0.4s; }\n\
     @keyframes aibot-dot { 0%,60%,100% { opacity: 0.3; } 30% { opacity: 1; } }\n\
+    .aibot-widget-input-wrap {\n\
+      border-top: 1px solid;\n\
+    }\n\
+    .aibot-widget-img-preview {\n\
+      display: flex; gap: 6px; padding: 6px 12px 0; flex-wrap: wrap;\n\
+    }\n\
+    .aibot-widget-img-preview:empty { display: none; }\n\
+    .aibot-widget-img-chip {\n\
+      position: relative; display: inline-block;\n\
+    }\n\
+    .aibot-widget-img-chip img {\n\
+      width: 48px; height: 48px; object-fit: cover; border-radius: 6px;\n\
+    }\n\
+    .aibot-widget-img-chip button {\n\
+      position: absolute; top: -4px; right: -4px;\n\
+      width: 18px; height: 18px; border-radius: 50%; border: none;\n\
+      background: rgba(0,0,0,0.6); color: #fff; font-size: 11px; line-height: 1;\n\
+      cursor: pointer; display: flex; align-items: center; justify-content: center;\n\
+      padding: 0;\n\
+    }\n\
     .aibot-widget-input {\n\
       display: flex; padding: 10px 12px; gap: 8px;\n\
-      border-top: 1px solid;\n\
     }\n\
     .aibot-widget-input textarea {\n\
       flex: 1; border: none; outline: none; resize: none;\n\
@@ -109,6 +144,10 @@
       font-size: 16px; flex-shrink: 0;\n\
     }\n\
     .aibot-widget-input button:disabled { opacity: 0.5; cursor: default; }\n\
+    .aibot-widget-attach-btn {\n\
+      background: transparent !important; opacity: 0.6;\n\
+    }\n\
+    .aibot-widget-attach-btn:hover { opacity: 1; }\n\
     .aibot-widget-status {\n\
       font-size: 11px; text-align: center; padding: 4px;\n\
     }\n\
@@ -120,7 +159,7 @@
     .aibot-theme-light .aibot-widget-msg.user { background: #2563eb; color: #fff; }\n\
     .aibot-theme-light .aibot-widget-msg.bot { background: #f3f4f6; color: #1f2937; }\n\
     .aibot-theme-light .aibot-widget-typing { background: #f3f4f6; color: #6b7280; }\n\
-    .aibot-theme-light .aibot-widget-input { border-color: #e5e7eb; background: #fff; }\n\
+    .aibot-theme-light .aibot-widget-input-wrap { border-color: #e5e7eb; background: #fff; }\n\
     .aibot-theme-light .aibot-widget-input textarea { background: #f3f4f6; color: #1f2937; }\n\
     .aibot-theme-light .aibot-widget-input button { background: #2563eb; color: #fff; }\n\
     .aibot-theme-light .aibot-widget-status { color: #9ca3af; }\n\
@@ -132,7 +171,7 @@
     .aibot-theme-dark .aibot-widget-msg.user { background: #6366f1; color: #fff; }\n\
     .aibot-theme-dark .aibot-widget-msg.bot { background: #2a2a3e; color: #e5e7eb; }\n\
     .aibot-theme-dark .aibot-widget-typing { background: #2a2a3e; color: #9ca3af; }\n\
-    .aibot-theme-dark .aibot-widget-input { border-color: #333; background: #1e1e2e; }\n\
+    .aibot-theme-dark .aibot-widget-input-wrap { border-color: #333; background: #1e1e2e; }\n\
     .aibot-theme-dark .aibot-widget-input textarea { background: #2a2a3e; color: #e5e7eb; }\n\
     .aibot-theme-dark .aibot-widget-input button { background: #6366f1; color: #fff; }\n\
     .aibot-theme-dark .aibot-widget-status { color: #6b7280; }\n\
@@ -156,6 +195,136 @@
       else e.appendChild(children);
     }
     return e;
+  }
+
+  // --- File helpers ---
+  function totalAttachments() {
+    return pendingImages.length + pendingDocs.length;
+  }
+
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      if (file.size > MAX_FILE_BYTES) {
+        reject(new Error(`File exceeds ${MAX_FILE_BYTES / 1024 / 1024}MB limit`));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        const base64 = dataUrl.split(',')[1];
+        resolve({ base64, dataUrl });
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function guessMimeType(name) {
+    const ext = name.split('.').pop()?.toLowerCase();
+    const map = {
+      txt: 'text/plain',
+      md: 'text/markdown',
+      csv: 'text/csv',
+      json: 'application/json',
+      html: 'text/html',
+      htm: 'text/html',
+      pdf: 'application/pdf',
+    };
+    return map[ext] || 'text/plain';
+  }
+
+  function addPendingImage(imgData) {
+    if (totalAttachments() >= MAX_ATTACHMENTS) return;
+    pendingImages.push(imgData);
+    renderImagePreviews();
+  }
+
+  function removePendingImage(index) {
+    pendingImages.splice(index, 1);
+    renderImagePreviews();
+  }
+
+  function addPendingDoc(docData) {
+    if (totalAttachments() >= MAX_ATTACHMENTS) return;
+    pendingDocs.push(docData);
+    renderDocPreviews();
+  }
+
+  function removePendingDoc(index) {
+    pendingDocs.splice(index, 1);
+    renderDocPreviews();
+  }
+
+  function renderImagePreviews() {
+    const previewArea = container._imgPreview;
+    if (!previewArea) return;
+    previewArea.innerHTML = '';
+    pendingImages.forEach((img, i) => {
+      const chip = el('div', { className: 'aibot-widget-img-chip' }, [
+        el('img', { src: img.dataUrl }),
+        el('button', { onClick: () => removePendingImage(i) }, '\u2715'),
+      ]);
+      previewArea.appendChild(chip);
+    });
+  }
+
+  function renderDocPreviews() {
+    const previewArea = container._docPreview;
+    if (!previewArea) return;
+    previewArea.innerHTML = '';
+    pendingDocs.forEach((doc, i) => {
+      const chip = el(
+        'div',
+        {
+          className: 'aibot-widget-img-chip',
+          style:
+            'display:flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(0,0,0,0.05);border-radius:8px;font-size:12px',
+        },
+        [
+          document.createTextNode(`\uD83D\uDCC4 ${doc.name}`),
+          el('button', { onClick: () => removePendingDoc(i) }, '\u2715'),
+        ]
+      );
+      previewArea.appendChild(chip);
+    });
+  }
+
+  async function handleFiles(files) {
+    for (const file of files) {
+      if (totalAttachments() >= MAX_ATTACHMENTS) break;
+      if (file.size > MAX_FILE_BYTES) {
+        console.warn('[AIBotWidget] File too large:', file.name);
+        continue;
+      }
+
+      if (file.type.startsWith('image/')) {
+        try {
+          const imgData = await readFileAsBase64(file);
+          addPendingImage(imgData);
+        } catch (err) {
+          console.warn('[AIBotWidget]', err.message);
+        }
+      } else if (
+        ALLOWED_DOC_TYPES.includes(file.type) ||
+        file.name.match(/\.(txt|md|csv|json|html|htm|pdf)$/i)
+      ) {
+        const mimeType = file.type || guessMimeType(file.name);
+        try {
+          if (mimeType === 'application/pdf') {
+            const buffer = await file.arrayBuffer();
+            const base64 = btoa(
+              new Uint8Array(buffer).reduce((s, b) => s + String.fromCharCode(b), '')
+            );
+            addPendingDoc({ name: file.name, mimeType, content: base64 });
+          } else {
+            const text = await file.text();
+            addPendingDoc({ name: file.name, mimeType, content: text });
+          }
+        } catch (err) {
+          console.warn('[AIBotWidget]', err.message);
+        }
+      }
+    }
   }
 
   // --- Widget ---
@@ -215,14 +384,43 @@
     ]);
     const messages = el('div', { className: 'aibot-widget-messages' });
     const status = el('div', { className: 'aibot-widget-status' }, 'Connecting...');
+
+    // File input (hidden)
+    const fileInput = el('input', {
+      type: 'file',
+      accept: 'image/*,.pdf,.txt,.md,.csv,.json,.html,.htm',
+      multiple: 'true',
+      style: 'display:none',
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) handleFiles(fileInput.files);
+      fileInput.value = '';
+    });
+
     const textarea = el('textarea', { rows: '1', placeholder: 'Type a message...' });
+    const attachBtn = el(
+      'button',
+      {
+        className: 'aibot-widget-attach-btn',
+        onClick: () => fileInput.click(),
+        'aria-label': 'Attach file',
+      },
+      '\uD83D\uDCCE'
+    );
     const sendBtn = el('button', { disabled: 'true', onClick: sendMessage }, '\u27A4');
-    const inputBar = el('div', { className: 'aibot-widget-input' }, [textarea, sendBtn]);
+    const imgPreview = el('div', { className: 'aibot-widget-img-preview' });
+    const docPreview = el('div', { className: 'aibot-widget-img-preview' });
+    const inputWrap = el('div', { className: 'aibot-widget-input-wrap' }, [
+      imgPreview,
+      docPreview,
+      el('div', { className: 'aibot-widget-input' }, [attachBtn, textarea, sendBtn]),
+    ]);
 
     panel.appendChild(header);
     panel.appendChild(messages);
     panel.appendChild(status);
-    panel.appendChild(inputBar);
+    panel.appendChild(inputWrap);
+    panel.appendChild(fileInput);
     container.appendChild(panel);
 
     // Store refs
@@ -232,6 +430,8 @@
     container._status = status;
     container._textarea = textarea;
     container._sendBtn = sendBtn;
+    container._imgPreview = imgPreview;
+    container._docPreview = docPreview;
     container._typing = null;
 
     // Textarea auto-resize + enter to send
@@ -244,6 +444,39 @@
         e.preventDefault();
         sendMessage();
       }
+    });
+
+    // Paste support (images and files)
+    textarea.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const pasteFiles = [];
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) pasteFiles.push(file);
+        }
+      }
+      if (pasteFiles.length > 0) {
+        e.preventDefault();
+        handleFiles(pasteFiles);
+      }
+    });
+
+    // Drag & drop support on the messages area
+    messages.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    messages.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const files = [];
+      for (const item of e.dataTransfer.items || []) {
+        if (item.kind === 'file') {
+          files.push(item.getAsFile());
+        }
+      }
+      if (files.length > 0) handleFiles(files);
     });
 
     connect();
@@ -287,6 +520,12 @@
 
       if (data.type === 'message' && data.role === 'bot') {
         removeTyping();
+        if (data.approval) {
+          addApprovalMessage(data.content, data.approval);
+        } else {
+          addMessage('bot', data.content);
+        }
+      } else if (data.type === 'approval_result') {
         addMessage('bot', data.content);
       } else if (data.type === 'typing') {
         showTyping();
@@ -339,16 +578,113 @@
 
   function sendMessage() {
     const text = container._textarea.value.trim();
-    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const images = pendingImages.map((img) => img.base64);
+    const docs = pendingDocs.map((d) => ({
+      name: d.name,
+      mimeType: d.mimeType,
+      content: d.content,
+    }));
+    if (
+      (!text && images.length === 0 && docs.length === 0) ||
+      !ws ||
+      ws.readyState !== WebSocket.OPEN
+    )
+      return;
 
-    addMessage('user', text);
-    ws.send(JSON.stringify({ type: 'message', message: text }));
+    const displayText = text || (docs.length > 0 ? '(document attached)' : '(image)');
+    addMessage(
+      'user',
+      displayText,
+      pendingImages.map((img) => img.dataUrl)
+    );
+
+    const payload = { type: 'message', message: displayText };
+    if (images.length > 0) payload.images = images;
+    if (docs.length > 0) payload.documents = docs;
+    ws.send(JSON.stringify(payload));
+
     container._textarea.value = '';
     container._textarea.style.height = 'auto';
+    pendingImages = [];
+    pendingDocs = [];
+    renderImagePreviews();
+    renderDocPreviews();
   }
 
-  function addMessage(role, content) {
-    const msg = el('div', { className: `aibot-widget-msg ${role}` }, content);
+  function addMessage(role, content, imageDataUrls) {
+    const msg = el('div', { className: `aibot-widget-msg ${role}` });
+    if (content) {
+      const textNode = document.createTextNode(content);
+      msg.appendChild(textNode);
+    }
+    if (imageDataUrls && imageDataUrls.length > 0) {
+      for (const dataUrl of imageDataUrls) {
+        const img = el('img', { src: dataUrl });
+        msg.appendChild(img);
+      }
+    }
+    container._messages.appendChild(msg);
+    scrollToBottom();
+  }
+
+  function addApprovalMessage(content, approval) {
+    const msg = el('div', { className: 'aibot-widget-msg bot' });
+    if (content) {
+      msg.appendChild(document.createTextNode(content));
+    }
+    const card = el('div', {
+      className: 'aibot-widget-approval',
+      style:
+        'border-left:3px solid #6366f1;background:rgba(99,102,241,0.08);padding:10px;border-radius:6px;margin-top:8px;font-size:13px',
+    });
+    card.appendChild(
+      el('div', { style: 'font-weight:600;margin-bottom:4px' }, 'Tool Permission Request')
+    );
+    card.appendChild(
+      el('div', { style: 'font-family:monospace;color:#6366f1' }, approval.toolName)
+    );
+    card.appendChild(
+      el('div', { style: 'opacity:0.7;font-size:12px;margin:4px 0 8px' }, approval.description)
+    );
+
+    const actions = el('div', { style: 'display:flex;gap:8px' });
+    const approveBtn = el(
+      'button',
+      {
+        style:
+          'padding:4px 14px;border:none;border-radius:6px;background:#22c55e;color:#fff;cursor:pointer;font-size:13px',
+        onClick: () => {
+          approveBtn.disabled = true;
+          denyBtn.disabled = true;
+          ws.send(JSON.stringify({ type: 'approval_response', action: 'approve' }));
+          card.style.opacity = '0.6';
+          card.querySelector('div:last-child').innerHTML =
+            '<span style="color:#22c55e">Approved</span>';
+        },
+      },
+      'Approve'
+    );
+    const denyBtn = el(
+      'button',
+      {
+        style:
+          'padding:4px 14px;border:none;border-radius:6px;background:#ef4444;color:#fff;cursor:pointer;font-size:13px',
+        onClick: () => {
+          approveBtn.disabled = true;
+          denyBtn.disabled = true;
+          ws.send(JSON.stringify({ type: 'approval_response', action: 'deny' }));
+          card.style.opacity = '0.6';
+          card.querySelector('div:last-child').innerHTML =
+            '<span style="color:#ef4444">Denied</span>';
+        },
+      },
+      'Deny'
+    );
+    actions.appendChild(approveBtn);
+    actions.appendChild(denyBtn);
+    card.appendChild(actions);
+
+    msg.appendChild(card);
     container._messages.appendChild(msg);
     scrollToBottom();
   }

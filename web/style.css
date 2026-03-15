@@ -231,6 +231,7 @@ tr:hover td {
 input[type="text"],
 input[type="number"],
 input[type="password"],
+input[type="date"],
 select,
 textarea {
   width: 100%;
@@ -1350,6 +1351,7 @@ textarea {
   padding: 6px 10px;
   border-radius: var(--radius);
   font-size: 12px;
+  width: auto;
 }
 .activity-container {
   background: var(--bg-card);
@@ -1429,6 +1431,48 @@ textarea {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-dim);
+}
+
+/* LLM Query Log */
+.llm-stats-bar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: "SF Mono", SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+.llm-stats-bar:empty {
+  display: none;
+}
+.llm-stat {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--text-dim);
+}
+.llm-stat strong {
+  color: var(--text);
+}
+.llm-date-pills {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.llm-date-pills:empty {
+  display: none;
+}
+.llm-error-row {
+  background: rgba(248, 113, 113, 0.05);
+}
+.llm-error-row:hover {
+  background: rgba(248, 113, 113, 0.1);
 }
 
 /* Responsive */
@@ -1615,4 +1659,39 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Approval card */
+.approval-card {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-card);
+  padding: 12px;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+.approval-header {
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.approval-tool {
+  font-family: monospace;
+  color: var(--accent);
+}
+.approval-desc {
+  color: var(--text-dim);
+  font-size: 0.9em;
+  margin: 4px 0 8px;
+}
+.approval-actions {
+  display: flex;
+  gap: 8px;
+}
+.approval-card.approved {
+  border-left-color: var(--green);
+  opacity: 0.7;
+}
+.approval-card.denied {
+  border-left-color: var(--red);
+  opacity: 0.7;
 }

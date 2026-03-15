@@ -652,7 +652,16 @@ describe('ConversationPipeline', () => {
 
   describe('tools integration', () => {
     it('should pass tools to LLM when bot has tools', async () => {
-      const toolDefs = [{ name: 'web_search', description: 'Search the web' }];
+      const toolDefs = [
+        {
+          type: 'function',
+          function: {
+            name: 'web_search',
+            description: 'Search the web',
+            parameters: { type: 'object', properties: {} },
+          },
+        },
+      ];
 
       (mockToolRegistry.getDefinitionsForBot as jest.Mock).mockReturnValue(toolDefs as any);
 

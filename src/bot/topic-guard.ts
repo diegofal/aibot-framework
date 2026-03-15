@@ -45,6 +45,7 @@ export class TopicGuard {
     const failOpen = config.failOpen !== false; // default true
     const strictness = config.strictness || 'moderate';
 
+    const guardStartMs = Date.now();
     try {
       const prompt = this.buildClassifierPrompt(message, config, strictness);
 
@@ -89,6 +90,7 @@ export class TopicGuard {
           !lower.includes('"on_topic":false');
       }
 
+      const guardDurationMs = Date.now() - guardStartMs;
       logger.info(
         {
           botId,
@@ -98,10 +100,31 @@ export class TopicGuard {
         },
         'Topic guard result'
       );
+      this.ctx.llmQueryLog?.append({
+        timestamp: new Date().toISOString(),
+        botId,
+        caller: 'topic_guard',
+        model,
+        backend: this.ctx.getLLMClient(botId).backend,
+        temperature: 0.1,
+        durationMs: guardDurationMs,
+        success: true,
+      });
 
       return onTopic ? { allowed: true } : { allowed: false, reason };
     } catch (err) {
+      const guardDurationMs = Date.now() - guardStartMs;
       logger.warn({ err, botId }, `Topic guard failed, ${failOpen ? 'allowing' : 'blocking'}`);
+      this.ctx.llmQueryLog?.append({
+        timestamp: new Date().toISOString(),
+        botId,
+        caller: 'topic_guard',
+        model: config.model || 'claude-haiku-4-5-20251001',
+        backend: this.ctx.getLLMClient(botId).backend,
+        durationMs: guardDurationMs,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return failOpen ? { allowed: true } : { allowed: false, reason: 'guard_error' };
     }
   }

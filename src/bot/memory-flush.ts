@@ -39,6 +39,7 @@ export class MemoryFlusher {
       let summary: string;
       const claudePath = this.ctx.config.improve?.claudePath;
       const model = this.ctx.getActiveModel(botId);
+      const flushStartMs = Date.now();
       if (claudePath) {
         try {
           const fullPrompt = messages.map((m) => `${m.role}: ${m.content}`).join('\n\n');
@@ -59,6 +60,18 @@ export class MemoryFlusher {
       } else {
         summary = (await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 })).text;
       }
+      this.ctx.llmQueryLog?.append({
+        timestamp: new Date().toISOString(),
+        botId,
+        userId,
+        caller: 'memory_flush',
+        model,
+        backend: claudePath ? 'claude-cli' : 'ollama',
+        temperature: 0.3,
+        messageCount: messages.length,
+        durationMs: Date.now() - flushStartMs,
+        success: true,
+      });
 
       if (summary.trim()) {
         soulLoader.appendDailyMemory(summary.trim(), userId);
@@ -109,6 +122,7 @@ export class MemoryFlusher {
       let response: string;
       const claudePath = this.ctx.config.improve?.claudePath;
       const model = this.ctx.getActiveModel(botId);
+      const scoringStartMs = Date.now();
 
       if (claudePath) {
         try {
@@ -130,6 +144,18 @@ export class MemoryFlusher {
       } else {
         response = (await this.ctx.ollamaClient.chat(messages, { model, temperature: 0.3 })).text;
       }
+      this.ctx.llmQueryLog?.append({
+        timestamp: new Date().toISOString(),
+        botId,
+        userId,
+        caller: 'memory_flush',
+        model,
+        backend: claudePath ? 'claude-cli' : 'ollama',
+        temperature: 0.3,
+        messageCount: messages.length,
+        durationMs: Date.now() - scoringStartMs,
+        success: true,
+      });
 
       const facts = this.parseScoredFacts(response);
 

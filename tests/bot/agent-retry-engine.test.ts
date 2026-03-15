@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'bun:test';
 import type { AgentLoopResult } from '../../src/bot/agent-loop';
 import {
+  classifyError,
   computeRetryDelay,
   executeSingleBotWithRetry,
   isRetryableError,
@@ -554,5 +555,107 @@ describe('executeSingleBotWithRetry', () => {
     expect(result.summary).toBe('Bot stopped during retry');
     expect(result.durationMs).toBe(0);
     expect(mockOpts.executeFn).not.toHaveBeenCalled();
+  });
+
+  test('originalError with status 402 (billing) — no retry', async () => {
+    const errorResult = makeErrorResult('Agent loop error: payment required', {
+      originalError: { status: 402, message: 'Payment required' },
+    });
+    mockOpts.executeFn.mockResolvedValueOnce(errorResult);
+
+    const result = await executeSingleBotWithRetry(
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
+    );
+
+    expect(result.status).toBe('error');
+    expect(mockOpts.executeFn).toHaveBeenCalledTimes(1);
+    expect(mockOpts.sleepFn).not.toHaveBeenCalled();
+  });
+
+  test('originalError with status 429 — retries with contextual delay', async () => {
+    const errorResult = makeErrorResult('Agent loop error: too many requests', {
+      originalError: { status: 429, message: 'Too many requests' },
+    });
+    const successResult = makeResult();
+
+    mockOpts.executeFn.mockResolvedValueOnce(errorResult).mockResolvedValueOnce(successResult);
+
+    const result = await executeSingleBotWithRetry(
+      'bot1',
+      botConfig,
+      retryConfig,
+      noopLogger,
+      mockOpts
+    );
+
+    expect(result.status).toBe('completed');
+    expect(result.retryAttempt).toBe(1);
+    expect(mockOpts.sleepFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// classifyError — structured error objects via failover classifier
+// ---------------------------------------------------------------------------
+describe('classifyError — failover classifier wiring', () => {
+  test('error object with status 402 → PERMANENT (billing)', () => {
+    const classified = classifyError({ status: 402, message: 'Payment required' });
+    expect(classified.type).toBe('PERMANENT');
+    expect(classified.failoverReason).toBe('billing');
+  });
+
+  test('error object with status 429 → CONTEXTUAL (rate limit)', () => {
+    const classified = classifyError({ status: 429, message: 'Too many requests' });
+    expect(classified.type).toBe('CONTEXTUAL');
+    expect(classified.failoverReason).toBe('rate_limit');
+  });
+
+  test('error with nested { response: { status: 429 } } → CONTEXTUAL', () => {
+    const classified = classifyError({ response: { status: 429 }, message: 'rate limited' });
+    expect(classified.type).toBe('CONTEXTUAL');
+    expect(classified.failoverReason).toBe('rate_limit');
+  });
+
+  test('error with nested cause chain → extracts status code', () => {
+    const classified = classifyError({
+      message: 'request failed',
+      cause: { status: 402, message: 'billing error' },
+    });
+    expect(classified.type).toBe('PERMANENT');
+    expect(classified.failoverReason).toBe('billing');
+  });
+
+  test('error with code RESOURCE_EXHAUSTED → CONTEXTUAL (rate limit via message pattern)', () => {
+    const classified = classifyError({ code: 'RESOURCE_EXHAUSTED', message: 'resource exhausted' });
+    expect(classified.type).toBe('CONTEXTUAL');
+    expect(classified.failoverReason).toBe('rate_limit');
+  });
+
+  test('error with code EHOSTUNREACH → TRANSIENT (timeout)', () => {
+    const classified = classifyError({ code: 'EHOSTUNREACH', message: 'host unreachable' });
+    expect(classified.type).toBe('TRANSIENT');
+    expect(classified.failoverReason).toBe('timeout');
+  });
+
+  test('plain string input still works (backward compat)', () => {
+    const classified = classifyError('authentication failed');
+    expect(classified.type).toBe('PERMANENT');
+    expect(classified.failoverReason).toBeUndefined();
+  });
+
+  test('plain string rate limit still works', () => {
+    const classified = classifyError('rate limit exceeded');
+    expect(classified.type).toBe('CONTEXTUAL');
+    expect(classified.failoverReason).toBeUndefined();
+  });
+
+  test('unknown error object falls through to string patterns', () => {
+    const classified = classifyError(new Error('Something went wrong'));
+    expect(classified.type).toBe('UNKNOWN');
+    expect(classified.failoverReason).toBeUndefined();
   });
 });

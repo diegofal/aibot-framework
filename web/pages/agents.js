@@ -55,6 +55,36 @@ function karmaTrendBadge(trend) {
   return '<span class="badge badge-disabled">&#8594; stable</span>';
 }
 
+function renderPermissionMatrixRows(defaults, agent) {
+  const levels = defaults.permissionLevels;
+  const overrides = agent.toolPermissions || {};
+  return Object.keys(defaults.defaultToolPermissions)
+    .sort()
+    .map((tool) => {
+      const def = defaults.defaultToolPermissions[tool];
+      const ov = overrides[tool] || {};
+      const modes = [
+        { key: 'agentLoop', def: def.agentLoop, ov: ov.agentLoop },
+        { key: 'conversation', def: def.conversation, ov: ov.conversation },
+      ];
+      const cells = modes
+        .map((m) => {
+          const hasOverride = m.ov !== undefined && m.ov !== null;
+          const style = `font-size:0.85em${hasOverride ? ';font-weight:bold;color:var(--accent)' : ''}`;
+          const options = levels
+            .map((l) => {
+              const sel = (hasOverride ? m.ov : m.def) === l ? ' selected' : '';
+              return `<option value="${l}"${sel}>${l}</option>`;
+            })
+            .join('');
+          return `<td style="padding:4px;text-align:center"><select data-tool="${escapeHtml(tool)}" data-mode="${m.key}" data-default="${m.def}" style="${style}">${options}</select></td>`;
+        })
+        .join('');
+      return `<tr><td style="padding:4px;font-family:monospace">${escapeHtml(tool)}</td>${cells}</tr>`;
+    })
+    .join('');
+}
+
 function renderAgentLoopResult(r) {
   const sections = [];
 
@@ -1183,6 +1213,36 @@ export async function renderAgentEdit(el, id) {
           : ''
       }
 
+      ${
+        defaults.defaultToolPermissions
+          ? `
+      <div class="form-separator"></div>
+      <div class="form-section-title">Tool Permissions</div>
+
+      <div class="form-group">
+        <label>Permission Matrix <span class="text-dim text-sm">(override defaults per tool)</span></label>
+        <details>
+          <summary class="text-dim text-sm" style="cursor:pointer;margin-bottom:8px">Show/hide matrix (${Object.keys(defaults.defaultToolPermissions).length} tools)</summary>
+          <div style="max-height:400px;overflow:auto">
+          <table class="perm-matrix" style="width:100%;font-size:0.85em;border-collapse:collapse">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:4px">Tool</th>
+                <th style="padding:4px">Agent Loop</th>
+                <th style="padding:4px">Conversation</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${renderPermissionMatrixRows(defaults, agent)}
+            </tbody>
+          </table>
+          </div>
+        </details>
+      </div>
+      `
+          : ''
+      }
+
       <div class="actions">
         <button type="submit" class="btn btn-primary">Save</button>
         <button type="button" class="btn" id="btn-generate-soul">Generate Soul</button>
@@ -1351,6 +1411,22 @@ export async function renderAgentEdit(el, id) {
       ).map((i) => i.value);
       const disabledSkills = defaults.availableSkills.filter((s) => !checkedSkills.includes(s));
       patch.disabledSkills = disabledSkills.length > 0 ? disabledSkills : [];
+    }
+
+    // Tool permissions (only send overrides that differ from defaults)
+    if (defaults.defaultToolPermissions) {
+      const overrides = {};
+      form.querySelectorAll('.perm-matrix select').forEach((sel) => {
+        const tool = sel.dataset.tool;
+        const mode = sel.dataset.mode;
+        const defVal = sel.dataset.default;
+        const val = sel.value;
+        if (val !== defVal) {
+          if (!overrides[tool]) overrides[tool] = {};
+          overrides[tool][mode] = val;
+        }
+      });
+      patch.toolPermissions = Object.keys(overrides).length > 0 ? overrides : null;
     }
 
     // Agent loop overrides

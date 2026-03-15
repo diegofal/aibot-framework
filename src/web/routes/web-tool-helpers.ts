@@ -1,4 +1,6 @@
 import type { BotManager } from '../../bot';
+import type { InlineApprovalStore } from '../../bot/inline-approval';
+import type { PermissionMode } from '../../bot/tool-permissions';
 import { claudeGenerate } from '../../claude-cli';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
@@ -33,6 +35,12 @@ export interface WebGenerateOptions {
   enableTools?: boolean;
   /** When provided, used as the full message array (system + history + user). Overrides prompt/systemPrompt. */
   messages?: ChatMessage[];
+  /** Permission mode for tool-level access control */
+  permissionMode?: PermissionMode;
+  /** Inline approval store for conversation-mode confirm interception */
+  inlineApprovalStore?: InlineApprovalStore;
+  /** Session key for inline approval store keying */
+  sessionKey?: string;
 }
 
 /**
@@ -109,7 +117,15 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     return result.response;
   }
 
-  const toolExecutor = toolRegistry.createExecutor(0, botId);
+  const toolExecutor = toolRegistry.createExecutor(
+    0,
+    botId,
+    undefined,
+    undefined,
+    opts.permissionMode,
+    opts.inlineApprovalStore,
+    opts.sessionKey
+  );
   const model = botManager.getActiveModel(botId);
 
   // Build message array: use explicit messages if provided, otherwise wrap prompt/systemPrompt

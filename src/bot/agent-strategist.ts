@@ -24,6 +24,8 @@ export interface StrategistResult {
   focus?: string;
   /** Single concrete deliverable for this session */
   single_deliverable?: string;
+  /** How well the deliverable aligns with the agent's identity/soul (0.0-1.0) */
+  alignment_confidence?: number;
   reflection: string;
   next_strategy_in?: string;
 }
@@ -40,9 +42,15 @@ export function parseStrategistResult(
     validate: (parsed) => {
       if (!(parsed.focus || parsed.single_deliverable) || !parsed.reflection) return null;
       const deliverable = String(parsed.single_deliverable || parsed.focus);
+      const rawConfidence = parsed.alignment_confidence;
+      const alignmentConfidence =
+        typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1
+          ? rawConfidence
+          : undefined;
       return {
         goal_operations: Array.isArray(parsed.goal_operations) ? parsed.goal_operations : [],
         single_deliverable: deliverable,
+        alignment_confidence: alignmentConfidence,
         focus: deliverable,
         reflection: String(parsed.reflection),
         next_strategy_in: parsed.next_strategy_in ? String(parsed.next_strategy_in) : undefined,
@@ -121,6 +129,22 @@ export async function runStrategistWithRetry(
 
     const result = parseStrategistResult(raw, logger);
     if (result) {
+      // Soul alignment gate: if confidence is below threshold, force retry
+      if (
+        result.alignment_confidence !== undefined &&
+        result.alignment_confidence < 0.6 &&
+        attempt < maxRetries
+      ) {
+        logger.warn(
+          {
+            attempt,
+            confidence: result.alignment_confidence,
+            deliverable: result.single_deliverable,
+          },
+          'Agent loop: strategist alignment confidence too low, retrying with temperature 0'
+        );
+        continue;
+      }
       if (attempt > 0) {
         logger.info({ attempt }, 'Agent loop: strategist succeeded on retry');
       }

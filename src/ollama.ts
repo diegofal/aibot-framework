@@ -246,6 +246,144 @@ export class OllamaClient {
   }
 
   /**
+   * Streaming variant of generate — yields tokens as they arrive via NDJSON.
+   * Returns the final LLMResponse as the generator return value.
+   */
+  async *generateStream(
+    prompt: string,
+    options: GenerateOptions = {}
+  ): AsyncGenerator<string, LLMResponse> {
+    const model = options.model || this.config.models.primary;
+
+    this.logger.debug({ model, prompt: prompt.slice(0, 100) }, 'Streaming generate with Ollama');
+
+    const response = await fetch(`${this.config.baseUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(this.config.timeout),
+      body: JSON.stringify({
+        model,
+        prompt,
+        system: options.system,
+        stream: true,
+        options: {
+          temperature: options.temperature,
+          num_predict: options.maxTokens,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+    }
+    if (!response.body) {
+      throw new Error('No response body for streaming');
+    }
+
+    let fullText = '';
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let finalUsage: import('./core/llm-client').TokenUsage | undefined;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split('\n').filter(Boolean)) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.response) {
+              fullText += parsed.response;
+              yield parsed.response;
+            }
+            if (parsed.done) {
+              finalUsage = ollamaUsage(model, parsed.prompt_eval_count, parsed.eval_count);
+            }
+          } catch {
+            /* skip malformed NDJSON lines */
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    return { text: fullText, usage: finalUsage };
+  }
+
+  /**
+   * Streaming variant of chat — yields tokens as they arrive via NDJSON.
+   * Does NOT support tool calling (tools require full responses for
+   * structured parsing). Use non-streaming chat() when tools are needed.
+   */
+  async *chatStream(
+    messages: ChatMessage[],
+    options: ChatOptions = {}
+  ): AsyncGenerator<string, LLMResponse> {
+    const model = options.model || this.config.models.primary;
+
+    this.logger.debug({ model, messageCount: messages.length }, 'Streaming chat with Ollama');
+
+    const response = await fetch(`${this.config.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(this.config.timeout),
+      body: JSON.stringify({
+        model,
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          ...(m.images && m.images.length > 0 ? { images: m.images } : {}),
+        })),
+        stream: true,
+        options: {
+          temperature: options.temperature,
+          num_predict: options.maxTokens,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+    }
+    if (!response.body) {
+      throw new Error('No response body for streaming');
+    }
+
+    let fullText = '';
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let finalUsage: import('./core/llm-client').TokenUsage | undefined;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split('\n').filter(Boolean)) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.message?.content) {
+              fullText += parsed.message.content;
+              yield parsed.message.content;
+            }
+            if (parsed.done) {
+              finalUsage = ollamaUsage(model, parsed.prompt_eval_count, parsed.eval_count);
+            }
+          } catch {
+            /* skip malformed NDJSON lines */
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    return { text: fullText, usage: finalUsage };
+  }
+
+  /**
    * Generate embeddings for text using Ollama
    */
   async embed(text: string, model: string): Promise<{ embedding: number[]; model: string }> {

@@ -83,6 +83,10 @@ export interface AgentLoopResult {
     models: Record<string, { promptTokens: number; completionTokens: number }>;
     total: number;
   };
+  /** Alignment warnings from post-execution coherence check */
+  alignmentWarnings?: string[];
+  /** Original error object for structured classification (status codes, error codes) */
+  originalError?: unknown;
 }
 
 interface ExecuteLoopDetail {
@@ -97,6 +101,7 @@ interface ExecuteLoopDetail {
   selectedToolCategories?: string[];
   executorToolCount?: number;
   tokenUsage?: AgentLoopResult['tokenUsage'];
+  alignmentWarnings?: string[];
 }
 
 function buildTokenUsageSummary(
@@ -392,6 +397,17 @@ export class AgentLoop {
       phase: 'start',
     });
 
+    const currentSchedule = this.scheduler.getSchedule(botId);
+    const cycleNumber = (currentSchedule?.continuousCycleCount ?? 0) + 1;
+
+    // Emit agent_loop_cycle started hook
+    this.ctx.hooks?.emitHook('agent_loop_cycle', {
+      botId,
+      cycle: cycleNumber,
+      status: 'started',
+      timestamp: Date.now(),
+    });
+
     try {
       const startMs = Date.now();
 
@@ -529,6 +545,16 @@ export class AgentLoop {
         { botId, durationMs, priority: detail.priority, isIdle },
         'Agent loop completed for bot'
       );
+
+      // Emit agent_loop_cycle completed/idle hook
+      this.ctx.hooks?.emitHook('agent_loop_cycle', {
+        botId,
+        cycle: cycleNumber,
+        status: isIdle ? 'idle' : 'completed',
+        durationMs,
+        timestamp: Date.now(),
+      });
+
       return {
         botId,
         botName: botConfig.name,
@@ -553,6 +579,15 @@ export class AgentLoop {
       const errorMsg = `Agent loop error: ${err instanceof Error ? err.message : String(err)}`;
       botLogger.error({ botId, error: errorMsg }, 'Agent loop failed for bot');
 
+      // Emit agent_loop_cycle error hook
+      this.ctx.hooks?.emitHook('agent_loop_cycle', {
+        botId,
+        cycle: cycleNumber,
+        status: 'error',
+        durationMs,
+        timestamp: Date.now(),
+      });
+
       if (!options?.suppressSideEffects) {
         logToMemory(this.ctx, botId, `[ERROR] ${errorMsg}`);
 
@@ -571,6 +606,7 @@ export class AgentLoop {
         plan: [],
         toolCalls: [],
         strategistRan: false,
+        originalError: err,
       };
     }
   }
@@ -723,6 +759,18 @@ export class AgentLoop {
             tokensOut: strategistResult?.usage?.completionTokens,
           },
         });
+        this.ctx.llmQueryLog?.append({
+          timestamp: new Date().toISOString(),
+          botId,
+          caller: 'strategist',
+          model: strategistResult?.usage?.model ?? model,
+          backend: llmClient.backend,
+          promptTokens: strategistResult?.usage?.promptTokens,
+          completionTokens: strategistResult?.usage?.completionTokens,
+          totalTokens: strategistResult?.usage?.totalTokens,
+          durationMs: Date.now() - strategistStartMs,
+          success: true,
+        });
       } catch (err) {
         this.ctx.activityStream?.publish({
           type: 'llm:error',
@@ -734,6 +782,16 @@ export class AgentLoop {
             durationMs: Date.now() - strategistStartMs,
             error: err instanceof Error ? err.message : String(err),
           },
+        });
+        this.ctx.llmQueryLog?.append({
+          timestamp: new Date().toISOString(),
+          botId,
+          caller: 'strategist',
+          model,
+          backend: llmClient.backend,
+          durationMs: Date.now() - strategistStartMs,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
         });
         throw err;
       }
@@ -921,6 +979,18 @@ export class AgentLoop {
             tokensOut: continuousResult.usage?.completionTokens,
           },
         });
+        this.ctx.llmQueryLog?.append({
+          timestamp: new Date().toISOString(),
+          botId,
+          caller: 'planner',
+          model: continuousResult.usage?.model ?? model,
+          backend: llmClient.backend,
+          promptTokens: continuousResult.usage?.promptTokens,
+          completionTokens: continuousResult.usage?.completionTokens,
+          totalTokens: continuousResult.usage?.totalTokens,
+          durationMs: Date.now() - plannerStartMs,
+          success: true,
+        });
       } catch (err) {
         this.ctx.activityStream?.publish({
           type: 'llm:error',
@@ -932,6 +1002,16 @@ export class AgentLoop {
             durationMs: Date.now() - plannerStartMs,
             error: err instanceof Error ? err.message : String(err),
           },
+        });
+        this.ctx.llmQueryLog?.append({
+          timestamp: new Date().toISOString(),
+          botId,
+          caller: 'planner',
+          model,
+          backend: llmClient.backend,
+          durationMs: Date.now() - plannerStartMs,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
         });
         throw err;
       }
@@ -1003,6 +1083,18 @@ export class AgentLoop {
             tokensOut: plannerResult.usage?.completionTokens,
           },
         });
+        this.ctx.llmQueryLog?.append({
+          timestamp: new Date().toISOString(),
+          botId,
+          caller: 'planner',
+          model: plannerResult.usage?.model ?? model,
+          backend: llmClient.backend,
+          promptTokens: plannerResult.usage?.promptTokens,
+          completionTokens: plannerResult.usage?.completionTokens,
+          totalTokens: plannerResult.usage?.totalTokens,
+          durationMs: Date.now() - plannerStartMs,
+          success: true,
+        });
       } catch (err) {
         this.ctx.activityStream?.publish({
           type: 'llm:error',
@@ -1014,6 +1106,16 @@ export class AgentLoop {
             durationMs: Date.now() - plannerStartMs,
             error: err instanceof Error ? err.message : String(err),
           },
+        });
+        this.ctx.llmQueryLog?.append({
+          timestamp: new Date().toISOString(),
+          botId,
+          caller: 'planner',
+          model,
+          backend: llmClient.backend,
+          durationMs: Date.now() - plannerStartMs,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
         });
         throw err;
       }
@@ -1223,6 +1325,20 @@ export class AgentLoop {
           tokensOut: executorUsage?.completionTokens,
         },
       });
+      this.ctx.llmQueryLog?.append({
+        timestamp: new Date().toISOString(),
+        botId,
+        caller: 'executor',
+        model: executorUsage?.model ?? model,
+        backend: llmClient.backend,
+        temperature: 0.7,
+        promptTokens: executorUsage?.promptTokens,
+        completionTokens: executorUsage?.completionTokens,
+        totalTokens: executorUsage?.totalTokens,
+        toolCount: executorDefs.length,
+        durationMs: Date.now() - executorStartMs,
+        success: true,
+      });
 
       toolCallLog.push(...executor.getExecutionLog());
 
@@ -1250,6 +1366,18 @@ export class AgentLoop {
           durationMs: Date.now() - executorStartMs,
           error: err instanceof Error ? err.message : String(err),
         },
+      });
+      this.ctx.llmQueryLog?.append({
+        timestamp: new Date().toISOString(),
+        botId,
+        caller: 'executor',
+        model,
+        backend: llmClient.backend,
+        temperature: 0.7,
+        toolCount: executorDefs.length,
+        durationMs: Date.now() - executorStartMs,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
       });
       toolCallLog.push(...executor.getExecutionLog());
 
@@ -1288,6 +1416,36 @@ export class AgentLoop {
       },
     });
 
+    // Post-execution soul alignment check — use productions coherence heuristic on written files
+    let alignmentWarnings: string[] | undefined;
+    if (this.ctx.productionsService && botConfig.productions?.enabled !== false) {
+      const fileOps = toolCallLog.filter(
+        (t) => (t.name === 'file_write' || t.name === 'file_edit') && t.success
+      );
+      if (fileOps.length > 0) {
+        const warnings: string[] = [];
+        for (const op of fileOps) {
+          const relativePath = String(op.args?.path ?? op.args?.relativePath ?? '');
+          if (!relativePath) continue;
+          try {
+            const coherence = this.ctx.productionsService.checkCoherence(botId, relativePath);
+            if (!coherence.coherent) {
+              warnings.push(`${relativePath}: ${coherence.issues.join('; ')}`);
+            }
+          } catch {
+            // Non-fatal
+          }
+        }
+        if (warnings.length > 0) {
+          alignmentWarnings = warnings;
+          botLogger.warn(
+            { botId, warnings },
+            'Agent loop: post-execution alignment check found issues'
+          );
+        }
+      }
+    }
+
     const tokenUsage = buildTokenUsageSummary(
       strategistResult?.usage,
       plannerTokenUsage,
@@ -1310,6 +1468,7 @@ export class AgentLoop {
           ? { warnings: loopWarnings, blocks: loopBlocks, stats: loopDetectionStats }
           : undefined,
       tokenUsage,
+      alignmentWarnings,
     };
   }
 

@@ -212,7 +212,22 @@ export class ContextCompactor {
 
     const llmClient = this.ctx.getLLMClient(botId);
     const model = this.ctx.getActiveModel(botId);
+    const startMs = Date.now();
     const result = await llmClient.chat(summaryMessages, { model, temperature: 0.3 });
+    this.ctx.llmQueryLog?.append({
+      timestamp: new Date().toISOString(),
+      botId,
+      caller: 'compaction',
+      model: result.usage?.model ?? model,
+      backend: llmClient.backend,
+      temperature: 0.3,
+      promptTokens: result.usage?.promptTokens,
+      completionTokens: result.usage?.completionTokens,
+      totalTokens: result.usage?.totalTokens,
+      messageCount: summaryMessages.length,
+      durationMs: Date.now() - startMs,
+      success: true,
+    });
     return result.text;
   }
 

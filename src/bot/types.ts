@@ -22,8 +22,11 @@ import type { ActivityStream } from './activity-stream';
 import type { AgentFeedbackStore } from './agent-feedback-store';
 import type { AskHumanStore } from './ask-human-store';
 import type { AskPermissionStore } from './ask-permission-store';
+import type { InlineApprovalStore } from './inline-approval';
+import type { LlmQueryLog } from './llm-query-log';
 import type { TenantFacade } from './tenant-facade';
 import type { ToolAuditLog } from './tool-audit-log';
+import type { UserDirectory } from './user-directory';
 
 export interface SeenUser {
   id: number;
@@ -66,6 +69,7 @@ export interface BotContext {
   readonly askPermissionStore: AskPermissionStore;
   readonly agentFeedbackStore: AgentFeedbackStore;
   readonly toolAuditLog?: ToolAuditLog;
+  readonly llmQueryLog?: LlmQueryLog;
   readonly productionsService?: ProductionsService;
   readonly conversationsService?: ConversationsService;
   readonly activityStream?: ActivityStream;
@@ -75,6 +79,9 @@ export interface BotContext {
   readonly webhookService?: import('../tenant/webhook-service').WebhookService;
   readonly analyticsService?: import('../tenant/analytics-service').AnalyticsService;
   readonly customizationService?: import('../tenant/customization').CustomizationService;
+  readonly userDirectory?: UserDirectory;
+  readonly inlineApprovalStore?: InlineApprovalStore;
+  readonly hooks?: import('./hooks').HookEmitter;
 
   // Helper methods
   getActiveModel(botId: string): string;

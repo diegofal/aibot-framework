@@ -142,6 +142,7 @@ function formatFileSize(bytes) {
  * @param {string} [opts.error] - Error message to display (replaces "is thinking")
  * @param {function} [opts.onRetry] - Callback when user clicks retry button
  * @param {string} [opts.botId] - Bot ID for file previews
+ * @param {function} [opts.onApprove] - Callback(action, messageId) when user clicks approve/deny
  */
 export function renderThread(container, opts) {
   const {
@@ -153,6 +154,7 @@ export function renderThread(container, opts) {
     error,
     onRetry,
     botId,
+    onApprove,
   } = opts;
 
   // Build messages list: legacy fields first (if no thread array), then thread
@@ -179,10 +181,57 @@ export function renderThread(container, opts) {
       const timeStr = msg.createdAt
         ? `<span class="text-dim text-sm" style="margin-left:8px">${timeAgo(msg.createdAt)}</span>`
         : '';
+      let imageHtml = '';
+      if (msg.images && msg.images.length > 0) {
+        imageHtml =
+          '<div class="bubble-images" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">';
+        for (const img of msg.images) {
+          const src = img.startsWith('data:') ? img : `data:image/png;base64,${img}`;
+          imageHtml += `<img src="${src}" style="max-width:180px;max-height:140px;border-radius:6px;cursor:pointer" onclick="window.open(this.src)">`;
+        }
+        imageHtml += '</div>';
+      }
+      let docHtml = '';
+      if (msg.documents && msg.documents.length > 0) {
+        docHtml =
+          '<div class="bubble-docs" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">';
+        for (const doc of msg.documents) {
+          const sizeStr = doc.size != null ? ` (${formatFileSize(doc.size)})` : '';
+          docHtml += `<div class="file-chip" style="cursor:default">&#128196; ${escapeHtml(doc.name)}${sizeStr}</div>`;
+        }
+        docHtml += '</div>';
+      }
+      let approvalHtml = '';
+      if (msg.approval) {
+        const isPending = msg.approval.status === 'pending';
+        approvalHtml = `
+          <div class="approval-card ${msg.approval.status}">
+            <div class="approval-header">Tool Permission Request</div>
+            <div class="approval-tool">${escapeHtml(msg.approval.toolName)}</div>
+            <div class="approval-desc">${escapeHtml(msg.approval.description)}</div>
+            ${
+              isPending
+                ? `
+              <div class="approval-actions">
+                <button class="btn btn-primary btn-sm approval-btn" data-action="approve" data-msg-id="${msg.id}">Approve</button>
+                <button class="btn btn-sm approval-btn" data-action="deny" data-msg-id="${msg.id}" style="background:var(--red);color:#fff">Deny</button>
+              </div>
+            `
+                : `
+              <div class="approval-resolved">
+                <span class="badge ${msg.approval.status === 'approved' ? 'badge-success' : 'badge-error'}">
+                  ${msg.approval.status === 'approved' ? 'Approved' : 'Denied'}
+                </span>
+              </div>
+            `
+            }
+          </div>`;
+      }
+
       html += `
         <div class="bubble ${bubbleClass}">
           <div class="bubble-role">${roleLabel}${timeStr}</div>
-          ${escapeHtml(msg.content)}
+          ${escapeHtml(msg.content)}${imageHtml}${docHtml}${approvalHtml}
         </div>`;
 
       // Render file attachments
@@ -216,8 +265,14 @@ export function renderThread(container, opts) {
   // Input area
   html += `
     <div class="thread-input-area">
-      <textarea class="thread-input" rows="2" placeholder="Type a message..."></textarea>
-      <button class="btn btn-primary btn-sm thread-send-btn"${generating || error ? ' disabled' : ''}>Send</button>
+      <div class="thread-img-preview" style="display:flex;gap:4px;flex-wrap:wrap;padding:0 0 4px"></div>
+      <div class="thread-doc-preview" style="display:flex;gap:4px;flex-wrap:wrap;padding:0 0 4px"></div>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <button class="btn btn-sm thread-attach-btn" title="Attach file" style="padding:4px 8px;font-size:16px"${generating || error ? ' disabled' : ''}>&#128206;</button>
+        <input type="file" class="thread-file-input" accept="image/*,.pdf,.txt,.md,.csv,.json,.html,.htm" multiple style="display:none">
+        <textarea class="thread-input" rows="2" placeholder="Type a message..."></textarea>
+        <button class="btn btn-primary btn-sm thread-send-btn"${generating || error ? ' disabled' : ''}>Send</button>
+      </div>
     </div>`;
 
   container.innerHTML = html;
@@ -237,15 +292,154 @@ export function renderThread(container, opts) {
     });
   }
 
+  // File upload state
+  const threadPendingImages = [];
+  const threadPendingDocs = []; // { name, mimeType, content, size }
+  const imgPreviewEl = container.querySelector('.thread-img-preview');
+  const docPreviewEl = container.querySelector('.thread-doc-preview');
+  const fileInput = container.querySelector('.thread-file-input');
+  const attachBtn = container.querySelector('.thread-attach-btn');
+
+  const ALLOWED_DOC_TYPES = [
+    'application/pdf',
+    'text/plain',
+    'text/markdown',
+    'text/csv',
+    'text/html',
+    'application/json',
+  ];
+  const MAX_TOTAL_ATTACHMENTS = 4;
+  const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
+  function totalAttachments() {
+    return threadPendingImages.length + threadPendingDocs.length;
+  }
+
+  function renderImgPreviews() {
+    if (!imgPreviewEl) return;
+    imgPreviewEl.innerHTML = '';
+    threadPendingImages.forEach((img, i) => {
+      const chip = document.createElement('div');
+      chip.style.cssText = 'position:relative;display:inline-block';
+      chip.innerHTML = `<img src="${img.dataUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:4px"><button style="position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;border:none;background:rgba(0,0,0,0.6);color:#fff;font-size:10px;cursor:pointer;padding:0;line-height:1;display:flex;align-items:center;justify-content:center">&times;</button>`;
+      chip.querySelector('button').addEventListener('click', () => {
+        threadPendingImages.splice(i, 1);
+        renderImgPreviews();
+      });
+      imgPreviewEl.appendChild(chip);
+    });
+  }
+
+  function renderDocPreviews() {
+    if (!docPreviewEl) return;
+    docPreviewEl.innerHTML = '';
+    threadPendingDocs.forEach((doc, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'file-chip';
+      chip.style.cssText =
+        'position:relative;display:inline-flex;align-items:center;gap:4px;padding:4px 8px;cursor:default';
+      const sizeStr = doc.size != null ? ` (${formatFileSize(doc.size)})` : '';
+      chip.innerHTML = `&#128196; ${escapeHtml(doc.name)}${sizeStr} <button style="margin-left:4px;width:16px;height:16px;border-radius:50%;border:none;background:rgba(0,0,0,0.6);color:#fff;font-size:10px;cursor:pointer;padding:0;line-height:1;display:flex;align-items:center;justify-content:center">&times;</button>`;
+      chip.querySelector('button').addEventListener('click', () => {
+        threadPendingDocs.splice(i, 1);
+        renderDocPreviews();
+      });
+      docPreviewEl.appendChild(chip);
+    });
+  }
+
+  function handleThreadFiles(files) {
+    for (const file of files) {
+      if (totalAttachments() >= MAX_TOTAL_ATTACHMENTS) break;
+      if (file.size > MAX_FILE_SIZE) continue;
+
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result;
+          const base64 = dataUrl.split(',')[1];
+          threadPendingImages.push({ base64, dataUrl });
+          renderImgPreviews();
+        };
+        reader.readAsDataURL(file);
+      } else if (
+        ALLOWED_DOC_TYPES.includes(file.type) ||
+        file.name.match(/\.(txt|md|csv|json|html|htm|pdf)$/i)
+      ) {
+        const mimeType = file.type || guessMimeType(file.name);
+        if (mimeType === 'application/pdf') {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const base64 = btoa(
+              new Uint8Array(reader.result).reduce((s, b) => s + String.fromCharCode(b), '')
+            );
+            threadPendingDocs.push({ name: file.name, mimeType, content: base64, size: file.size });
+            renderDocPreviews();
+          };
+          reader.readAsArrayBuffer(file);
+        } else {
+          const reader = new FileReader();
+          reader.onload = () => {
+            threadPendingDocs.push({
+              name: file.name,
+              mimeType,
+              content: reader.result,
+              size: file.size,
+            });
+            renderDocPreviews();
+          };
+          reader.readAsText(file);
+        }
+      }
+    }
+  }
+
+  function guessMimeType(name) {
+    const ext = name.split('.').pop()?.toLowerCase();
+    const map = {
+      txt: 'text/plain',
+      md: 'text/markdown',
+      csv: 'text/csv',
+      json: 'application/json',
+      html: 'text/html',
+      htm: 'text/html',
+      pdf: 'application/pdf',
+    };
+    return map[ext] || 'text/plain';
+  }
+
+  if (attachBtn && fileInput) {
+    attachBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) handleThreadFiles(fileInput.files);
+      fileInput.value = '';
+    });
+  }
+
   // Wire send button + Enter key
   const textarea = container.querySelector('.thread-input');
   const sendBtn = container.querySelector('.thread-send-btn');
 
   function doSend() {
     const text = textarea.value.trim();
-    if (!text || generating) return;
+    const images = threadPendingImages.map((img) => img.base64);
+    const docs = threadPendingDocs.map((d) => ({
+      name: d.name,
+      mimeType: d.mimeType,
+      content: d.content,
+    }));
+    if ((!text && images.length === 0 && docs.length === 0) || generating) return;
     textarea.value = '';
-    if (onSend) onSend(text);
+    threadPendingImages.length = 0;
+    threadPendingDocs.length = 0;
+    renderImgPreviews();
+    renderDocPreviews();
+    if (onSend)
+      onSend(
+        text || (docs.length > 0 ? '(document attached)' : '(image)'),
+        images.length > 0 ? images : undefined,
+        docs.length > 0 ? docs : undefined
+      );
   }
 
   sendBtn.addEventListener('click', doSend);
@@ -256,10 +450,46 @@ export function renderThread(container, opts) {
     }
   });
 
+  // Paste support on textarea (images and files)
+  if (textarea) {
+    textarea.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const pasteFiles = [];
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) pasteFiles.push(file);
+        }
+      }
+      if (pasteFiles.length > 0) {
+        e.preventDefault();
+        handleThreadFiles(pasteFiles);
+      }
+    });
+  }
+
   // Wire retry button
   const retryBtn = container.querySelector('.thread-retry-btn');
   if (retryBtn && onRetry) {
     retryBtn.addEventListener('click', onRetry);
+  }
+
+  // Wire approval buttons
+  if (onApprove) {
+    for (const btn of container.querySelectorAll('.approval-btn')) {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        const msgId = btn.dataset.msgId;
+        if (action && msgId) {
+          // Disable buttons immediately to prevent double-click
+          for (const b of container.querySelectorAll(`.approval-btn[data-msg-id="${msgId}"]`)) {
+            b.disabled = true;
+          }
+          onApprove(action, msgId);
+        }
+      });
+    }
   }
 }
 

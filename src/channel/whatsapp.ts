@@ -65,7 +65,8 @@ export interface WhatsAppMessage {
 export interface WhatsAppConfig {
   phoneNumberId: string;
   accessToken: string;
-  verifyToken: string;
+  /** Webhook verification token — only needed for inbound webhook setup */
+  verifyToken?: string;
   appSecret?: string;
 }
 
@@ -177,6 +178,145 @@ export function extractMessages(
         results.push({
           message: msg,
           contactName: contactMap.get(msg.from),
+          phoneNumberId: value.metadata.phone_number_id,
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+// --- Image sending ---
+
+/**
+ * Build the JSON payload for a WhatsApp image message (pure, no I/O).
+ */
+export function buildImagePayload(
+  recipientPhone: string,
+  phoneNumberId: string,
+  imageUrl: string,
+  caption?: string
+): Record<string, unknown> {
+  return {
+    messaging_product: 'whatsapp',
+    to: recipientPhone,
+    type: 'image',
+    image: {
+      link: imageUrl,
+      ...(caption && { caption }),
+    },
+  };
+}
+
+/**
+ * Send an image via WhatsApp Cloud API.
+ */
+export async function sendWhatsAppImage(
+  phoneNumber: string,
+  config: WhatsAppConfig,
+  imageUrl: string,
+  caption?: string
+): Promise<void> {
+  const url = `https://graph.facebook.com/v21.0/${config.phoneNumberId}/messages`;
+  const body = buildImagePayload(phoneNumber, config.phoneNumberId, imageUrl, caption);
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`WhatsApp image send failed: ${resp.status} ${text}`);
+  }
+}
+
+// --- Interactive messages (buttons) ---
+
+/**
+ * Build the JSON payload for a WhatsApp interactive button message (pure, no I/O).
+ */
+export function buildInteractivePayload(
+  recipientPhone: string,
+  phoneNumberId: string,
+  bodyText: string,
+  buttons: Array<{ id: string; title: string }>
+): Record<string, unknown> {
+  return {
+    messaging_product: 'whatsapp',
+    to: recipientPhone,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: bodyText },
+      action: {
+        buttons: buttons.map((b) => ({
+          type: 'reply',
+          reply: { id: b.id, title: b.title },
+        })),
+      },
+    },
+  };
+}
+
+/**
+ * Send an interactive button message via WhatsApp Cloud API.
+ * Useful for inline-approval confirm/deny flows.
+ */
+export async function sendWhatsAppInteractive(
+  phoneNumber: string,
+  config: WhatsAppConfig,
+  bodyText: string,
+  buttons: Array<{ id: string; title: string }>
+): Promise<void> {
+  const url = `https://graph.facebook.com/v21.0/${config.phoneNumberId}/messages`;
+  const payload = buildInteractivePayload(phoneNumber, config.phoneNumberId, bodyText, buttons);
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`WhatsApp interactive send failed: ${resp.status} ${text}`);
+  }
+}
+
+// --- Status event extraction ---
+
+export interface WhatsAppStatusEvent {
+  messageId: string;
+  status: 'sent' | 'delivered' | 'read' | 'failed';
+  timestamp: number;
+  recipientId: string;
+  phoneNumberId: string;
+}
+
+/**
+ * Extract status events from a WhatsApp webhook payload (pure, no I/O).
+ * WhatsApp sends delivery/read receipts under entry[].changes[].value.statuses[].
+ */
+export function extractStatuses(payload: WhatsAppWebhookPayload): WhatsAppStatusEvent[] {
+  const results: WhatsAppStatusEvent[] = [];
+
+  for (const entry of payload.entry) {
+    for (const change of entry.changes) {
+      if (change.field !== 'messages') continue;
+      const value = change.value;
+      if (!value.statuses) continue;
+
+      for (const s of value.statuses) {
+        results.push({
+          messageId: s.id,
+          status: s.status,
+          timestamp: Number.parseInt(s.timestamp, 10) * 1000,
+          recipientId: s.recipient_id,
           phoneNumberId: value.metadata.phone_number_id,
         });
       }

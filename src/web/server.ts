@@ -12,7 +12,9 @@ import { join as joinPath, resolve as resolvePath } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
+import { A2AServer } from '../a2a/server';
 import type { BotManager } from '../bot';
+import { describeToolCall } from '../bot/inline-approval';
 import { wsChannel, wsToInbound } from '../channel/websocket';
 import type { WsChatData } from '../channel/websocket';
 import type { Config } from '../config';
@@ -339,6 +341,36 @@ export function startWebServer(deps: WebServerDeps): void {
     mcpServer.start().catch((err) => {
       logger.warn({ err }, 'Failed to auto-start MCP exposed server');
     });
+  }
+
+  // --- A2A Protocol server (agent-to-agent communication) ---
+  if (config.a2a?.enabled) {
+    const toolRegistry = deps.botManager.getToolRegistry();
+    const a2aServer = new A2AServer(
+      config.bots.map((b) => b.id),
+      (botId: string) => {
+        const bot = config.bots.find((b) => b.id === botId);
+        if (!bot) return null;
+        const webHost = config.web.host === '0.0.0.0' ? '127.0.0.1' : config.web.host;
+        return {
+          baseUrl: `http://${webHost}:${config.web.port}`,
+          botConfig: bot,
+          toolDefinitions: toolRegistry.getDefinitions(),
+        };
+      },
+      {
+        getLLMClient: (botId: string) => deps.botManager.getLLMClient(botId),
+        getSystemPrompt: (botId: string) => deps.botManager.getSystemPrompt(botId),
+      },
+      logger,
+      {
+        basePath: config.a2a.basePath,
+        maxTasks: config.a2a.maxTasks,
+        taskTtlMs: config.a2a.taskTtlMs,
+      }
+    );
+    a2aServer.mount(app, config.a2a.basePath);
+    logger.info({ basePath: config.a2a.basePath }, 'A2A protocol server mounted');
   }
 
   app.route(
@@ -713,16 +745,70 @@ export function startWebServer(deps: WebServerDeps): void {
           ws.send(JSON.stringify({ type: 'history', lines: parsed }));
         }
       },
-      message(ws, raw) {
+      async message(ws, raw) {
         // Chat WebSocket messages
         if (ws.data?.type === 'chat') {
           // biome-ignore lint/style/noNonNullAssertion: botId is guaranteed set during ws upgrade
           const botId = ws.data.botId!;
-          let parsed: { type?: string; message?: string };
+          let parsed: {
+            type?: string;
+            action?: string;
+            message?: string;
+            images?: string[];
+            documents?: { name: string; mimeType: string; content: string }[];
+          };
           try {
             parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
           } catch {
             ws.send(JSON.stringify({ type: 'error', error: 'Invalid JSON' }));
+            return;
+          }
+
+          // Handle approval responses from widget
+          if (parsed.type === 'approval_response') {
+            const action = parsed.action;
+            if (action !== 'approve' && action !== 'deny') {
+              ws.send(JSON.stringify({ type: 'error', error: 'Invalid approval action' }));
+              return;
+            }
+            // Session key must match the one used by ConversationPipeline
+            const senderId = ws.data.senderId!;
+            const sessionKey = `bot:${botId}:private:${Number(senderId) || 0}`;
+            const store = deps.botManager.getInlineApprovalStore();
+            const pending = store.consumePending(sessionKey);
+            if (!pending) {
+              ws.send(JSON.stringify({ type: 'error', error: 'No pending approval' }));
+              return;
+            }
+            if (action === 'approve') {
+              try {
+                const toolRegistry = deps.botManager.getToolRegistry();
+                const executor = toolRegistry.createExecutor(0, botId);
+                const result = await executor(pending.toolName, pending.args);
+                const resultText = result.content ?? JSON.stringify(result);
+                ws.send(
+                  JSON.stringify({
+                    type: 'approval_result',
+                    content: `Tool \`${pending.toolName}\` executed:\n${resultText}`,
+                  })
+                );
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : 'Unknown error';
+                ws.send(
+                  JSON.stringify({
+                    type: 'approval_result',
+                    content: `Tool \`${pending.toolName}\` failed: ${errMsg}`,
+                  })
+                );
+              }
+            } else {
+              ws.send(
+                JSON.stringify({
+                  type: 'approval_result',
+                  content: `Tool \`${pending.toolName}\` was denied.`,
+                })
+              );
+            }
             return;
           }
 
@@ -731,6 +817,68 @@ export function startWebServer(deps: WebServerDeps): void {
               JSON.stringify({ type: 'error', error: 'Send { type: "message", message: "..." }' })
             );
             return;
+          }
+
+          // Validate images: max 4, max 10MB total base64 payload
+          let images: string[] | undefined;
+          if (Array.isArray(parsed.images) && parsed.images.length > 0) {
+            if (parsed.images.length > 4) {
+              ws.send(JSON.stringify({ type: 'error', error: 'Maximum 4 images per message' }));
+              return;
+            }
+            const totalBytes = parsed.images.reduce(
+              (sum, img) => sum + (typeof img === 'string' ? img.length : 0),
+              0
+            );
+            if (totalBytes > 10 * 1024 * 1024) {
+              ws.send(
+                JSON.stringify({ type: 'error', error: 'Total image payload exceeds 10MB limit' })
+              );
+              return;
+            }
+            images = parsed.images.filter(
+              (img): img is string => typeof img === 'string' && img.length > 0
+            );
+          }
+
+          // Process documents: extract text and prepend to message
+          let messageText = parsed.message.trim();
+          if (Array.isArray(parsed.documents) && parsed.documents.length > 0) {
+            const ALLOWED_DOC_MIME_TYPES = new Set([
+              'application/pdf',
+              'text/plain',
+              'text/markdown',
+              'text/csv',
+              'text/html',
+              'application/json',
+            ]);
+            const docs = parsed.documents.slice(0, 4);
+            const textParts: string[] = [];
+            for (const doc of docs) {
+              if (!doc.name || !doc.mimeType || !doc.content) continue;
+              if (!ALLOWED_DOC_MIME_TYPES.has(doc.mimeType)) continue;
+              if (doc.content.length > 50_000) continue;
+              try {
+                let text: string;
+                if (doc.mimeType === 'application/pdf') {
+                  const buffer = Buffer.from(doc.content, 'base64');
+                  // @ts-ignore -- pdf-parse has no type declarations
+                  const pdfParse = (await import('pdf-parse')).default;
+                  const data = (await pdfParse(buffer)) as { text: string };
+                  text = data.text;
+                } else {
+                  text = doc.content;
+                }
+                const truncated =
+                  text.length > 50_000 ? `${text.slice(0, 50_000)}\n... [truncated]` : text;
+                textParts.push(`Content of "${doc.name}":\n\n${truncated}`);
+              } catch (err) {
+                logger.warn({ err, docName: doc.name }, 'WS: Failed to extract document text');
+              }
+            }
+            if (textParts.length > 0) {
+              messageText = `${textParts.join('\n\n---\n\n')}\n\n---\n\n${messageText}`;
+            }
           }
 
           const chatData: WsChatData = {
@@ -743,17 +891,42 @@ export function startWebServer(deps: WebServerDeps): void {
             senderName: ws.data.senderName,
           };
 
-          const msg = wsToInbound(chatData, parsed.message.trim());
+          const msg = wsToInbound(chatData, messageText, images);
           const channel = wsChannel(ws as unknown as import('bun').ServerWebSocket<WsChatData>);
 
-          deps.botManager.handleChannelMessage(msg, channel, botId).catch((err) => {
-            logger.error({ err, botId, chatId: ws.data.chatId }, 'WebSocket chat handler failed');
-            try {
-              ws.send(JSON.stringify({ type: 'error', error: 'Failed to generate response' }));
-            } catch {
-              /* connection closed */
-            }
-          });
+          deps.botManager
+            .handleChannelMessage(msg, channel, botId)
+            .then(() => {
+              // After pipeline completes, check if a confirm-level tool is pending approval
+              const approvalSessionKey = `bot:${botId}:private:${Number(ws.data.senderId) || 0}`;
+              const store = deps.botManager.getInlineApprovalStore();
+              const pending = store.getPending(approvalSessionKey);
+              if (pending) {
+                try {
+                  ws.send(
+                    JSON.stringify({
+                      type: 'message',
+                      role: 'bot',
+                      content: '',
+                      approval: {
+                        toolName: pending.toolName,
+                        description: describeToolCall(pending.toolName, pending.args),
+                      },
+                    })
+                  );
+                } catch {
+                  /* connection closed */
+                }
+              }
+            })
+            .catch((err) => {
+              logger.error({ err, botId, chatId: ws.data.chatId }, 'WebSocket chat handler failed');
+              try {
+                ws.send(JSON.stringify({ type: 'error', error: 'Failed to generate response' }));
+              } catch {
+                /* connection closed */
+              }
+            });
         }
         // No client->server messages needed for logs/activity
       },

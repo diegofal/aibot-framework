@@ -6,7 +6,9 @@ import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { ProductionsService } from '../productions/service';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
+import { type InlineApprovalStore, describeToolCall } from './inline-approval';
 import type { LoopDetectionResult, ToolLoopDetector } from './tool-loop-detector';
+import { type PermissionMode, getPermissionLevel } from './tool-permissions';
 import type { BotContext } from './types';
 
 /**
@@ -115,6 +117,12 @@ export interface ToolExecutorOptions {
   loopDetector?: ToolLoopDetector;
   /** Tenant root directory for path sandboxing (multi-tenant mode) */
   tenantRoot?: string;
+  /** Permission mode for tool-level access control */
+  permissionMode?: PermissionMode;
+  /** Inline approval store for conversation-mode confirm interception */
+  inlineApprovalStore?: InlineApprovalStore;
+  /** Session key for inline approval store keying */
+  sessionKey?: string;
 }
 
 /**
@@ -173,6 +181,9 @@ export class ToolExecutor extends EventEmitter {
 
     // Auto-bridge tool events to activity stream (if available)
     this.bridgeToActivityStream();
+
+    // Bridge tool events to lifecycle hooks (if available)
+    this.bridgeToHooks();
   }
 
   /**
@@ -255,6 +266,35 @@ export class ToolExecutor extends EventEmitter {
           error: `[loop-blocked] ${e.message}`.slice(0, 300),
           phase: 'loop-detection',
         },
+      })
+    );
+  }
+
+  /**
+   * Bridge own tool lifecycle events to the central HookEmitter
+   * so skills/extensions can listen via `hooks.onHook('before_tool_call', ...)`.
+   */
+  private bridgeToHooks(): void {
+    const hooks = this.ctx.hooks;
+    if (!hooks) return;
+
+    this.on('tool:start', (e) =>
+      hooks.emitHook('before_tool_call', {
+        botId: e.botId,
+        toolName: e.toolName,
+        args: e.args,
+        timestamp: e.timestamp,
+      })
+    );
+
+    this.on('tool:end', (e) =>
+      hooks.emitHook('after_tool_call', {
+        botId: e.botId,
+        toolName: e.toolName,
+        args: e.args,
+        success: e.success,
+        durationMs: e.durationMs,
+        timestamp: e.timestamp,
       })
     );
   }
@@ -381,6 +421,66 @@ export class ToolExecutor extends EventEmitter {
     if (this.disabledTools.has(name)) {
       this.logger.warn({ tool: name, botId }, 'Disabled tool requested');
       return this.buildFailResult(name, args, startMs, `Tool "${name}" is not available`, 'lookup');
+    }
+
+    // Permission matrix safety net: block tools that shouldn't be available in this mode
+    if (this.options.permissionMode) {
+      const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+      const level = getPermissionLevel(
+        name,
+        this.options.permissionMode,
+        botConfig?.toolPermissions
+      );
+      if (level === 'blocked') {
+        this.logger.warn(
+          { tool: name, botId, mode: this.options.permissionMode },
+          'Tool blocked by permission matrix'
+        );
+        return this.buildFailResult(
+          name,
+          args,
+          startMs,
+          `Tool "${name}" is not available in this context`,
+          'lookup'
+        );
+      }
+
+      // Inline approval interception: confirm-level tools in conversation mode
+      if (level === 'confirm' && this.options.inlineApprovalStore && this.options.sessionKey) {
+        this.options.inlineApprovalStore.setPending(this.options.sessionKey, {
+          toolName: name,
+          args,
+          createdAt: Date.now(),
+          botId,
+          sessionKey: this.options.sessionKey,
+        });
+        this.logger.info(
+          { tool: name, botId, sessionKey: this.options.sessionKey },
+          'Tool requires inline approval, pending user confirmation'
+        );
+        const description = describeToolCall(name, args);
+        const durationMs = Date.now() - startMs;
+        const syntheticContent = `⏳ This action requires user approval. I need to ask the user to confirm: ${description}. Do NOT retry this tool — wait for the user's next message.`;
+        this.logExecution(name, args, true, syntheticContent, durationMs);
+        this.emit('tool:end', {
+          toolName: name,
+          args,
+          success: true,
+          result: syntheticContent,
+          durationMs,
+          retryAttempts: 0,
+          botId,
+          chatId,
+          timestamp: Date.now(),
+        });
+        return {
+          toolName: name,
+          args,
+          durationMs,
+          content: syntheticContent,
+          success: true,
+        };
+      }
     }
 
     // Find the tool

@@ -65,9 +65,17 @@ let logOffset = 0;
 let logLoading = false;
 let logHasMore = true;
 
+// LLM tab state
+let llmContainer = null;
+let llmActiveBot = '';
+let llmActiveDate = '';
+let llmActiveCaller = '';
+let llmEntries = [];
+let llmLoading = false;
+
 // Shared
 let countBadge = null;
-let activeTab = 'events'; // 'events' | 'logs'
+let activeTab = 'events'; // 'events' | 'logs' | 'llm'
 
 /* ── Shared helpers ────────────────────────────────────────── */
 
@@ -78,6 +86,14 @@ function formatTime(ts) {
 
 function updateCount() {
   if (!countBadge) return;
+  if (activeTab === 'llm') {
+    const visible = llmContainer
+      ? Array.from(llmContainer.children).filter((c) => !c.classList.contains('prod-empty-state'))
+          .length
+      : 0;
+    countBadge.textContent = visible;
+    return;
+  }
   const c = activeTab === 'events' ? evContainer : logContainer;
   countBadge.textContent = c ? c.children.length : 0;
 }
@@ -394,6 +410,165 @@ function logConnectWS() {
   };
 }
 
+/* ── LLM Queries tab ──────────────────────────────────────── */
+
+const CALLER_COLORS = {
+  conversation: '#818cf8',
+  planner: '#fbbf24',
+  strategist: '#a78bfa',
+  executor: '#34d399',
+  memory_flush: '#f472b6',
+  compaction: '#fb923c',
+  topic_guard: '#22d3ee',
+  overflow_retry: '#f87171',
+};
+
+function llmMatchesFilter(entry) {
+  if (llmActiveCaller && entry.caller !== llmActiveCaller) return false;
+  return true;
+}
+
+function llmComputeStats(entries) {
+  let total = 0;
+  let success = 0;
+  let fail = 0;
+  let tokens = 0;
+  let durationSum = 0;
+  for (const e of entries) {
+    if (!llmMatchesFilter(e)) continue;
+    total++;
+    if (e.success) success++;
+    else fail++;
+    tokens += e.totalTokens || 0;
+    durationSum += e.durationMs || 0;
+  }
+  return { total, success, fail, tokens, avgDuration: total ? Math.round(durationSum / total) : 0 };
+}
+
+function llmRenderStats(stats) {
+  const bar = document.getElementById('llm-stats-bar');
+  if (!bar) return;
+  bar.innerHTML = `
+    <span class="llm-stat"><strong>${stats.total}</strong> queries</span>
+    <span class="llm-stat" style="color:var(--green)"><strong>${stats.success}</strong> ok</span>
+    <span class="llm-stat" style="color:var(--red)"><strong>${stats.fail}</strong> fail</span>
+    <span class="llm-stat"><strong>${stats.tokens.toLocaleString()}</strong> tokens</span>
+    <span class="llm-stat"><strong>${stats.avgDuration}</strong>ms avg</span>
+  `;
+}
+
+function llmCreateEntryEl(entry) {
+  const div = document.createElement('div');
+  const isError = !entry.success;
+  div.className = `activity-event${isError ? ' llm-error-row' : ''}`;
+
+  const color = CALLER_COLORS[entry.caller] || '#8b8d97';
+  const tokIn = entry.promptTokens || 0;
+  const tokOut = entry.completionTokens || 0;
+  const tokTotal = entry.totalTokens || 0;
+
+  div.innerHTML = `<span class="activity-time">${formatTime(entry.timestamp)}</span><span class="activity-type-badge" style="background:${color}20;color:${color};border:1px solid ${color}40">${escapeHtml(entry.caller)}</span><span class="activity-data" style="flex:none"><strong>${escapeHtml(entry.model)}</strong></span><span class="activity-data" style="flex:none;color:var(--text-dim)">${escapeHtml(entry.backend)}</span><span class="activity-data" style="flex:none">${tokIn}/${tokOut}/${tokTotal} tok</span><span class="activity-data" style="flex:none">${entry.durationMs}ms</span>${isError ? `<span class="badge badge-error">ERR</span>` : `<span class="badge badge-ok">OK</span>`}${entry.botId ? `<span class="activity-bot-tag">${escapeHtml(entry.botId)}</span>` : ''}`;
+
+  div.addEventListener('click', () => {
+    const existing = div.querySelector('.activity-detail');
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const detail = document.createElement('pre');
+    detail.className = 'activity-detail';
+    detail.textContent = JSON.stringify(entry, null, 2);
+    div.appendChild(detail);
+  });
+
+  return div;
+}
+
+function llmRender() {
+  if (!llmContainer) return;
+  llmContainer.innerHTML = '';
+  let count = 0;
+  for (const entry of llmEntries) {
+    if (!llmMatchesFilter(entry)) continue;
+    llmContainer.appendChild(llmCreateEntryEl(entry));
+    count++;
+  }
+  llmRenderStats(llmComputeStats(llmEntries));
+  if (activeTab === 'llm') updateCount();
+  if (count === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'prod-empty-state';
+    empty.textContent = llmActiveBot
+      ? 'No LLM queries for this date'
+      : 'Select an agent to view LLM query logs';
+    llmContainer.appendChild(empty);
+  }
+}
+
+async function llmLoad() {
+  if (!llmActiveBot || llmLoading) return;
+  llmLoading = true;
+
+  const bots = llmActiveBot === '__all__' ? [] : [llmActiveBot];
+
+  try {
+    if (bots.length === 0) {
+      // Fetch agent list, then fetch for each
+      const agents = await api('/api/agents');
+      const allEntries = [];
+      const fetches = (Array.isArray(agents) ? agents : []).map(async (a) => {
+        try {
+          const data = await api(
+            `/api/agents/${encodeURIComponent(a.id)}/llm-log?date=${llmActiveDate}`
+          );
+          if (data.entries) allEntries.push(...data.entries);
+        } catch {
+          /* skip */
+        }
+      });
+      await Promise.all(fetches);
+      allEntries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+      llmEntries = allEntries;
+    } else {
+      const data = await api(
+        `/api/agents/${encodeURIComponent(llmActiveBot)}/llm-log?date=${llmActiveDate}`
+      );
+      llmEntries = data.entries || [];
+      // Render date pills
+      llmRenderDatePills(data.availableDates || []);
+    }
+    llmRender();
+  } catch {
+    llmEntries = [];
+    llmRender();
+  }
+  llmLoading = false;
+}
+
+function llmRenderDatePills(dates) {
+  const container = document.getElementById('llm-date-pills');
+  if (!container) return;
+  if (!dates.length) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = dates
+    .slice(0, 14)
+    .map(
+      (d) =>
+        `<button class="btn btn-sm${d === llmActiveDate ? ' btn-primary' : ''}" data-date="${d}">${d}</button>`
+    )
+    .join('');
+  container.querySelectorAll('button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      llmActiveDate = btn.dataset.date;
+      const datePicker = document.getElementById('llm-date-picker');
+      if (datePicker) datePicker.value = llmActiveDate;
+      llmLoad();
+    });
+  });
+}
+
 /* ── Tab switching ─────────────────────────────────────────── */
 
 function switchTab(tab) {
@@ -407,15 +582,22 @@ function switchTab(tab) {
   // Toggle panels
   const evPanel = document.getElementById('ev-panel');
   const logPanel = document.getElementById('log-panel');
+  const llmPanel = document.getElementById('llm-panel');
   if (evPanel) evPanel.style.display = tab === 'events' ? '' : 'none';
   if (logPanel) logPanel.style.display = tab === 'logs' ? '' : 'none';
+  if (llmPanel) llmPanel.style.display = tab === 'llm' ? '' : 'none';
 
   // Update pause button to reflect active tab's state
   const pauseBtn = document.getElementById('activity-pause');
   if (pauseBtn) {
-    const isPaused = tab === 'events' ? evPaused : logPaused;
-    pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
-    pauseBtn.classList.toggle('btn-primary', isPaused);
+    if (tab === 'llm') {
+      pauseBtn.style.display = 'none';
+    } else {
+      pauseBtn.style.display = '';
+      const isPaused = tab === 'events' ? evPaused : logPaused;
+      pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+      pauseBtn.classList.toggle('btn-primary', isPaused);
+    }
   }
 
   updateCount();
@@ -444,9 +626,17 @@ export async function renderActivity(el) {
   logLoading = false;
   logHasMore = true;
 
+  // LLM tab reset
+  llmActiveBot = '';
+  llmActiveDate = new Date().toISOString().slice(0, 10);
+  llmActiveCaller = '';
+  llmEntries = [];
+  llmLoading = false;
+
   // Determine initial tab from URL
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
-  activeTab = params.get('tab') === 'logs' ? 'logs' : 'events';
+  activeTab =
+    params.get('tab') === 'logs' ? 'logs' : params.get('tab') === 'llm' ? 'llm' : 'events';
 
   // Fetch agents for filter dropdowns
   let agents = [];
@@ -479,6 +669,7 @@ export async function renderActivity(el) {
     <div class="activity-tabs">
       <button class="activity-tab${activeTab === 'events' ? ' active' : ''}" data-tab="events">Events</button>
       <button class="activity-tab${activeTab === 'logs' ? ' active' : ''}" data-tab="logs">System Logs</button>
+      <button class="activity-tab${activeTab === 'llm' ? ' active' : ''}" data-tab="llm">LLM Queries</button>
     </div>
     <div id="ev-panel" style="display:${activeTab === 'events' ? '' : 'none'}">
       <div class="activity-toolbar">
@@ -515,12 +706,37 @@ export async function renderActivity(el) {
       </div>
       <div class="log-container" id="log-container"></div>
     </div>
+    <div id="llm-panel" style="display:${activeTab === 'llm' ? '' : 'none'}">
+      <div class="activity-toolbar">
+        <select class="activity-filter" id="llm-bot-filter">
+          <option value="">— Select Agent —</option>
+          <option value="__all__">All Agents</option>
+          ${agentOptions}
+        </select>
+        <input type="date" class="activity-filter" id="llm-date-picker" value="${new Date().toISOString().slice(0, 10)}">
+        <select class="activity-filter" id="llm-caller-filter">
+          <option value="">All Callers</option>
+          <option value="conversation">conversation</option>
+          <option value="planner">planner</option>
+          <option value="strategist">strategist</option>
+          <option value="executor">executor</option>
+          <option value="memory_flush">memory_flush</option>
+          <option value="compaction">compaction</option>
+          <option value="topic_guard">topic_guard</option>
+          <option value="overflow_retry">overflow_retry</option>
+        </select>
+      </div>
+      <div class="llm-stats-bar" id="llm-stats-bar"></div>
+      <div class="llm-date-pills" id="llm-date-pills"></div>
+      <div class="activity-container" id="llm-container"></div>
+    </div>
   `;
 
   // Grab DOM refs
   countBadge = document.getElementById('activity-count');
   evContainer = document.getElementById('activity-container');
   logContainer = document.getElementById('log-container');
+  llmContainer = document.getElementById('llm-container');
 
   // ── Tab click handlers ──
   el.querySelectorAll('.activity-tab').forEach((btn) => {
@@ -555,10 +771,13 @@ export async function renderActivity(el) {
       evContainer.innerHTML = '';
       evOffset = 0;
       evHasMore = true;
-    } else {
+    } else if (activeTab === 'logs') {
       logContainer.innerHTML = '';
       logOffset = 0;
       logHasMore = true;
+    } else if (activeTab === 'llm') {
+      llmEntries = [];
+      llmRender();
     }
     updateCount();
   });
@@ -592,6 +811,26 @@ export async function renderActivity(el) {
   document.getElementById('log-search').addEventListener('input', (e) => {
     logSearchTerm = e.target.value.toLowerCase();
     logRefilterAll();
+  });
+
+  // ── LLM tab filters ──
+  document.getElementById('llm-bot-filter').addEventListener('change', (e) => {
+    llmActiveBot = e.target.value;
+    if (llmActiveBot) llmLoad();
+    else {
+      llmEntries = [];
+      llmRender();
+    }
+  });
+
+  document.getElementById('llm-date-picker').addEventListener('change', (e) => {
+    llmActiveDate = e.target.value;
+    if (llmActiveBot) llmLoad();
+  });
+
+  document.getElementById('llm-caller-filter').addEventListener('change', (e) => {
+    llmActiveCaller = e.target.value;
+    llmRender();
   });
 
   // ── Auto-scroll + scroll-up-to-load-more for both containers ──
@@ -638,7 +877,9 @@ export function destroyActivity() {
   }
   evContainer = null;
   logContainer = null;
+  llmContainer = null;
   countBadge = null;
   evPauseBuffer = [];
   logPauseBuffer = [];
+  llmEntries = [];
 }

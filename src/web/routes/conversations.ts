@@ -1,12 +1,43 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
+import { describeToolCall } from '../../bot/inline-approval';
 import type { BotConfig, Config } from '../../config';
 import type { ConversationsService } from '../../conversations/service';
 import type { Logger } from '../../logger';
 import type { ChatMessage } from '../../ollama';
 import type { ProductionsService } from '../../productions/service';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import type { ApprovalRequest, DocumentRef } from '../../types/thread';
 import { webGenerate } from './web-tool-helpers';
+
+const ALLOWED_DOC_MIME_TYPES = new Set([
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/html',
+  'application/json',
+]);
+
+const MAX_DOC_CONTENT_CHARS = 50_000;
+const MAX_DOCS = 4;
+
+async function extractDocumentText(doc: {
+  name: string;
+  mimeType: string;
+  content: string;
+}): Promise<string> {
+  if (doc.mimeType === 'application/pdf') {
+    // content is base64-encoded PDF
+    const buffer = Buffer.from(doc.content, 'base64');
+    // @ts-ignore -- pdf-parse has no type declarations
+    const pdfParse = (await import('pdf-parse')).default;
+    const data = (await pdfParse(buffer)) as { text: string };
+    return data.text;
+  }
+  // For text-based types, content is already text
+  return doc.content;
+}
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
@@ -109,6 +140,7 @@ export function conversationsRoutes(deps: {
           ...recentMessages.map((m) => ({
             role: (m.role === 'human' ? 'user' : 'assistant') as ChatMessage['role'],
             content: m.content,
+            ...(m.images && m.images.length > 0 ? { images: m.images } : {}),
           })),
         ];
 
@@ -124,6 +156,9 @@ export function conversationsRoutes(deps: {
           'Web conversation: calling LLM…'
         );
 
+        const inlineApprovalStore = botManager.getInlineApprovalStore();
+        const sessionKey = `web:${botId}:${id}`;
+
         const response = await webGenerate({
           prompt: '',
           systemPrompt: '',
@@ -133,9 +168,32 @@ export function conversationsRoutes(deps: {
           logger,
           maxLength: 3000,
           messages,
+          permissionMode: 'conversation',
+          inlineApprovalStore,
+          sessionKey,
         });
 
-        conversationsService.addMessage(botId, id, 'bot', response);
+        // Check if the LLM triggered a confirm-level tool (pending approval)
+        const pending = inlineApprovalStore.getPending(sessionKey);
+        if (pending) {
+          const approval: ApprovalRequest = {
+            toolName: pending.toolName,
+            description: describeToolCall(pending.toolName, pending.args),
+            status: 'pending',
+          };
+          conversationsService.addMessage(
+            botId,
+            id,
+            'bot',
+            response,
+            undefined,
+            undefined,
+            undefined,
+            approval
+          );
+        } else {
+          conversationsService.addMessage(botId, id, 'bot', response);
+        }
 
         // Write to daily memory
         soulLoader.appendDailyMemory(
@@ -284,10 +342,75 @@ export function conversationsRoutes(deps: {
     const botId = c.req.param('botId');
     if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
-    const body = await c.req.json<{ message?: string }>();
+    const body = await c.req.json<{
+      message?: string;
+      images?: string[];
+      documents?: { name: string; mimeType: string; content: string }[];
+    }>();
 
     if (!body.message || typeof body.message !== 'string' || !body.message.trim()) {
       return c.json({ error: 'Missing "message" string in body' }, 400);
+    }
+
+    // Validate images if provided
+    const images: string[] | undefined =
+      Array.isArray(body.images) && body.images.length > 0
+        ? body.images
+            .filter((img): img is string => typeof img === 'string' && img.length > 0)
+            .slice(0, 4)
+        : undefined;
+
+    // Validate and process documents if provided
+    let documentsMeta: DocumentRef[] | undefined;
+    let docTextPrefix = '';
+    if (Array.isArray(body.documents) && body.documents.length > 0) {
+      const docs = body.documents.slice(0, MAX_DOCS);
+      // Validate MIME types and content size
+      for (const doc of docs) {
+        if (!ALLOWED_DOC_MIME_TYPES.has(doc.mimeType)) {
+          return c.json(
+            {
+              error: `Unsupported document type: ${doc.mimeType}. Allowed: ${[...ALLOWED_DOC_MIME_TYPES].join(', ')}`,
+            },
+            400
+          );
+        }
+        if (typeof doc.content !== 'string' || doc.content.length > MAX_DOC_CONTENT_CHARS) {
+          return c.json(
+            {
+              error: `Document "${doc.name}" content exceeds ${MAX_DOC_CONTENT_CHARS} character limit`,
+            },
+            400
+          );
+        }
+      }
+
+      documentsMeta = [];
+      const textParts: string[] = [];
+      for (const doc of docs) {
+        try {
+          const text = await extractDocumentText(doc);
+          const truncated =
+            text.length > MAX_DOC_CONTENT_CHARS
+              ? `${text.slice(0, MAX_DOC_CONTENT_CHARS)}\n... [truncated]`
+              : text;
+          textParts.push(`Content of "${doc.name}":\n\n${truncated}`);
+          documentsMeta.push({
+            name: doc.name,
+            mimeType: doc.mimeType,
+            size:
+              doc.mimeType === 'application/pdf'
+                ? Math.ceil(doc.content.length * 0.75) // approximate decoded size from base64
+                : doc.content.length,
+          });
+        } catch (err) {
+          logger.warn({ err, docName: doc.name }, 'Failed to extract document text');
+          return c.json({ error: `Failed to process document "${doc.name}"` }, 400);
+        }
+      }
+      if (textParts.length > 0) {
+        docTextPrefix = `${textParts.join('\n\n---\n\n')}\n\n---\n\n`;
+      }
     }
 
     const conversation = conversationsService.getConversation(botId, id);
@@ -301,6 +424,9 @@ export function conversationsRoutes(deps: {
       return c.json({ error: 'Already generating a response' }, 409);
     }
 
+    // Prepend document text to the user message for LLM consumption
+    const fullMessage = docTextPrefix + body.message.trim();
+
     // If this is a pending inbox conversation with an ask_human question, resolve it
     let inboxResolved = false;
     let message: ReturnType<typeof conversationsService.addMessage> | undefined;
@@ -310,10 +436,7 @@ export function conversationsRoutes(deps: {
       conversation.inboxStatus === 'pending' &&
       conversation.askHumanQuestionId
     ) {
-      const answered = botManager.answerAskHuman(
-        conversation.askHumanQuestionId,
-        body.message.trim()
-      );
+      const answered = botManager.answerAskHuman(conversation.askHumanQuestionId, fullMessage);
       if (answered) {
         // answerAskHuman already wrote the human message and marked as answered
         // Retrieve the written message to return to frontend
@@ -327,7 +450,15 @@ export function conversationsRoutes(deps: {
     }
 
     if (!inboxResolved) {
-      message = conversationsService.addMessage(botId, id, 'human', body.message.trim());
+      message = conversationsService.addMessage(
+        botId,
+        id,
+        'human',
+        fullMessage,
+        undefined,
+        images,
+        documentsMeta
+      );
       if (!message) {
         return c.json({ error: 'Failed to add message' }, 500);
       }
@@ -384,6 +515,77 @@ export function conversationsRoutes(deps: {
 
     generateBotReply(botId, id, conversation);
     return c.json({ status: 'generating' });
+  });
+
+  // Approve or deny a pending tool confirmation
+  app.post('/:botId/:id/approve', async (c) => {
+    const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
+    const id = c.req.param('id');
+
+    const conversation = conversationsService.getConversation(botId, id);
+    if (!conversation) {
+      return c.json({ error: 'Conversation not found' }, 404);
+    }
+
+    const body = await c.req.json<{ action: 'approve' | 'deny'; messageId?: string }>();
+    if (body.action !== 'approve' && body.action !== 'deny') {
+      return c.json({ error: 'Invalid action, must be "approve" or "deny"' }, 400);
+    }
+
+    const sessionKey = `web:${botId}:${id}`;
+    const store = botManager.getInlineApprovalStore();
+    const pending = store.consumePending(sessionKey);
+    if (!pending) {
+      return c.json({ error: 'No pending approval' }, 404);
+    }
+
+    // Update the approval status on the original message
+    if (body.messageId) {
+      conversationsService.updateApprovalStatus(
+        botId,
+        id,
+        body.messageId,
+        body.action === 'approve' ? 'approved' : 'denied'
+      );
+    }
+
+    if (body.action === 'approve') {
+      try {
+        const toolRegistry = botManager.getToolRegistry();
+        const executor = toolRegistry.createExecutor(0, botId);
+        const result = await executor(pending.toolName, pending.args);
+        const resultText = result.content ?? JSON.stringify(result);
+        conversationsService.addMessage(
+          botId,
+          id,
+          'bot',
+          `Tool \`${pending.toolName}\` executed:\n${resultText}`
+        );
+
+        // Continue the conversation with the tool result so the bot can respond naturally
+        generateBotReply(botId, id, conversation);
+
+        return c.json({ status: 'approved', result: resultText });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        conversationsService.addMessage(
+          botId,
+          id,
+          'bot',
+          `Tool \`${pending.toolName}\` failed: ${errMsg}`
+        );
+        return c.json({ status: 'error', error: errMsg }, 500);
+      }
+    } else {
+      conversationsService.addMessage(
+        botId,
+        id,
+        'bot',
+        `Tool \`${pending.toolName}\` was denied by the user.`
+      );
+      return c.json({ status: 'denied' });
+    }
   });
 
   return app;

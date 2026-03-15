@@ -11,12 +11,13 @@ describe('resolveAgentConfig soulDir for skill cron jobs', () => {
       maxHistory: 50,
     },
     productions: { baseDir: './productions' },
+    multiTenant: { dataDir: './data/tenants' },
   } as any;
 
-  it('resolves soulDir to per-bot subdirectory when bot has no soulDir override', () => {
+  it('resolves soulDir to data/tenants/__admin__/bots/{id}/soul when bot has no soulDir override', () => {
     const botConfig = { id: 'finny', soulDir: undefined } as any;
     const resolved = resolveAgentConfig(minimalGlobalConfig, botConfig);
-    expect(resolved.soulDir).toBe('./config/soul/finny');
+    expect(resolved.soulDir).toBe('./data/tenants/__admin__/bots/finny/soul');
   });
 
   it('uses explicit bot soulDir override when provided', () => {
@@ -32,8 +33,8 @@ describe('resolveAgentConfig soulDir for skill cron jobs', () => {
     const resolved1 = resolveAgentConfig(minimalGlobalConfig, bot1);
     const resolved2 = resolveAgentConfig(minimalGlobalConfig, bot2);
 
-    expect(resolved1.soulDir).toBe('./config/soul/finny');
-    expect(resolved2.soulDir).toBe('./config/soul/makemylifeeasier');
+    expect(resolved1.soulDir).toBe('./data/tenants/__admin__/bots/finny/soul');
+    expect(resolved2.soulDir).toBe('./data/tenants/__admin__/bots/makemylifeeasier/soul');
     expect(resolved1.soulDir).not.toBe(resolved2.soulDir);
   });
 });

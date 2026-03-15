@@ -1,5 +1,8 @@
+import type { ServerWebSocket } from 'bun';
 import { type Context, InputFile } from 'grammy';
 import type { Channel, InboundMessage } from '../channel/types';
+import { streamToWebSocket } from '../channel/websocket';
+import type { WsChatData } from '../channel/websocket';
 import type { BotConfig } from '../config';
 import { resolveAgentConfig, resolveTtsConfig } from '../config';
 import { localDateStr } from '../date-utils';
@@ -7,6 +10,7 @@ import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { generateSpeech } from '../tts';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
+import { classifyApprovalResponse, describeToolCall } from './inline-approval';
 import {
   CircuitBreaker,
   DEFAULT_CIRCUIT_CONFIG,
@@ -16,7 +20,9 @@ import {
 } from './llm-resilience';
 import type { MemoryFlusher } from './memory-flush';
 import type { SystemPromptBuilder } from './system-prompt-builder';
-import { sendLongMessage } from './telegram-utils';
+import { sendLongMessage, streamToChannel } from './telegram-utils';
+import { ToolExecutor } from './tool-executor';
+import type { PermissionMode } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
 import { TopicGuard, type TopicGuardConfig } from './topic-guard';
 import type { BotContext } from './types';
@@ -156,7 +162,8 @@ export class ConversationPipeline {
     const sessionConfig = this.ctx.config.session;
     const webToolsConfig = this.ctx.config.webTools;
     const maxToolRounds = config.maxToolRounds ?? webToolsConfig?.maxToolRounds;
-    const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id);
+    const permissionMode: PermissionMode = 'conversation';
+    const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id, permissionMode);
     const hasTools = botToolDefs.length > 0;
     const chatId = ctx.chat?.id;
     const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
@@ -172,6 +179,8 @@ export class ConversationPipeline {
         userId: ctx.from?.id,
         textPreview: userText.substring(0, 120),
         hasImages: !!(images && images.length > 0),
+        toolCount: botToolDefs.length,
+        toolNames: botToolDefs.map((d) => d.function.name),
       },
       '🔄 handleConversation start'
     );
@@ -225,6 +234,80 @@ export class ConversationPipeline {
       const history = sessionConfig.enabled
         ? this.ctx.sessionManager.getHistory(serializedKey, resolved.maxHistory)
         : [];
+
+      // ─── Inline approval resolution (Telegram path) ───
+      const inlineStoreTg = this.ctx.inlineApprovalStore;
+      const pendingTg = inlineStoreTg?.getPending(serializedKey);
+      if (pendingTg) {
+        const intent = classifyApprovalResponse(userText);
+        if (intent === 'approve') {
+          inlineStoreTg?.consumePending(serializedKey);
+          botLogger.info(
+            { tool: pendingTg.toolName, sessionKey: serializedKey },
+            'Inline approval: user approved'
+          );
+          const approvalTenantRoot =
+            config.tenantId && this.ctx.config.multiTenant?.enabled
+              ? `${this.ctx.config.multiTenant.dataDir ?? './data/tenants'}/${config.tenantId}`
+              : undefined;
+          const executor = new ToolExecutor(this.ctx, {
+            botId: config.id,
+            chatId: chatId ?? 0,
+            userId,
+            tenantRoot: approvalTenantRoot,
+            tools: this.toolRegistry.getToolsForBot(config.id),
+          });
+          const result = await executor.execute(pendingTg.toolName, pendingTg.args);
+          history.push(
+            { role: 'assistant', content: `[Tool ${pendingTg.toolName} approved and executed]` },
+            { role: 'user', content: `Tool result: ${result.content}` }
+          );
+          if (sessionConfig.enabled) {
+            this.ctx.sessionManager.appendMessages(
+              serializedKey,
+              [
+                {
+                  role: 'assistant',
+                  content: `[Tool ${pendingTg.toolName} approved and executed]`,
+                },
+                { role: 'user', content: `Tool result: ${result.content}` },
+              ],
+              resolved.maxHistory
+            );
+          }
+        } else if (intent === 'deny') {
+          inlineStoreTg?.consumePending(serializedKey);
+          botLogger.info(
+            { tool: pendingTg.toolName, sessionKey: serializedKey },
+            'Inline approval: user denied'
+          );
+          history.push({
+            role: 'assistant',
+            content: `[User denied ${pendingTg.toolName}. Action cancelled.]`,
+          });
+          if (sessionConfig.enabled) {
+            this.ctx.sessionManager.appendMessages(
+              serializedKey,
+              [
+                {
+                  role: 'assistant',
+                  content: `[User denied ${pendingTg.toolName}. Action cancelled.]`,
+                },
+              ],
+              resolved.maxHistory
+            );
+          }
+        } else {
+          botLogger.info(
+            { tool: pendingTg.toolName, sessionKey: serializedKey },
+            'Inline approval: unrelated response, keeping pending'
+          );
+          history.push({
+            role: 'system',
+            content: `[Pending approval: ${pendingTg.toolName} — ${describeToolCall(pendingTg.toolName, pendingTg.args)}. Ask the user again to confirm yes or no.]`,
+          });
+        }
+      }
 
       // Await RAG pre-fetch
       const ragContext = await ragPromise;
@@ -285,6 +368,7 @@ export class ConversationPipeline {
         isGroup,
         ragContext,
         userId,
+        permissionMode,
       });
 
       // In groups, prefix messages with sender name
@@ -392,7 +476,15 @@ export class ConversationPipeline {
               temperature: resolved.temperature,
               tools: hasTools ? botToolDefs : undefined,
               toolExecutor: hasTools
-                ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
+                ? this.toolRegistry.createExecutor(
+                    chatId,
+                    config.id,
+                    userId,
+                    tenantRoot,
+                    permissionMode,
+                    inlineStoreTg,
+                    serializedKey
+                  )
                 : undefined,
               maxToolRounds,
             }),
@@ -450,7 +542,15 @@ export class ConversationPipeline {
                 temperature: resolved.temperature,
                 tools: hasTools ? botToolDefs : undefined,
                 toolExecutor: hasTools
-                  ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
+                  ? this.toolRegistry.createExecutor(
+                      chatId,
+                      config.id,
+                      userId,
+                      tenantRoot,
+                      permissionMode,
+                      inlineStoreTg,
+                      serializedKey
+                    )
                   : undefined,
                 maxToolRounds,
               }),
@@ -496,6 +596,21 @@ export class ConversationPipeline {
               caller: 'conversation',
             },
           });
+          this.ctx.llmQueryLog?.append({
+            timestamp: new Date().toISOString(),
+            botId: config.id,
+            chatId,
+            userId,
+            caller: 'conversation',
+            model: activeModel,
+            backend: llmBackend,
+            temperature: resolved.temperature,
+            messageCount: currentMessages.length,
+            durationMs: llmResult.totalDurationMs ?? 0,
+            attempts: llmResult.attempts,
+            success: false,
+            error: error.message,
+          });
           throw new Error(`LLM call failed: ${error.message}`);
         }
 
@@ -527,6 +642,24 @@ export class ConversationPipeline {
             tokensIn: tokenUsage?.promptTokens,
             tokensOut: tokenUsage?.completionTokens,
           },
+        });
+        this.ctx.llmQueryLog?.append({
+          timestamp: new Date().toISOString(),
+          botId: config.id,
+          chatId,
+          userId,
+          caller: 'conversation',
+          model: tokenUsage?.model ?? activeModel,
+          backend: llmBackend,
+          temperature: resolved.temperature,
+          promptTokens: tokenUsage?.promptTokens,
+          completionTokens: tokenUsage?.completionTokens,
+          totalTokens: tokenUsage?.totalTokens,
+          messageCount: currentMessages.length,
+          toolCount: hasTools ? botToolDefs.length : 0,
+          durationMs: llmResult.totalDurationMs ?? 0,
+          attempts: llmResult.attempts,
+          success: true,
         });
 
         // Persist messages to session
@@ -724,7 +857,8 @@ export class ConversationPipeline {
     const sessionConfig = this.ctx.config.session;
     const webToolsConfig = this.ctx.config.webTools;
     const maxToolRounds = config.maxToolRounds ?? webToolsConfig?.maxToolRounds;
-    const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id);
+    const permissionMode: PermissionMode = 'conversation';
+    const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id, permissionMode);
     const hasTools = botToolDefs.length > 0;
     const isGroup = msg.chatType === 'group' || msg.chatType === 'supergroup';
     const botLogger = this.ctx.getBotLogger(config.id);
@@ -743,6 +877,19 @@ export class ConversationPipeline {
       },
       'handleChannelMessage start'
     );
+
+    // Emit message_received lifecycle hook
+    this.ctx.hooks?.emitHook('message_received', {
+      botId: config.id,
+      channelKind: msg.channelKind ?? 'unknown',
+      chatId: Number(msg.chatId) || 0,
+      userId: msg.sender.id,
+      text: msg.text,
+      timestamp: Date.now(),
+    });
+
+    // Auto-track sender in user directory
+    this.ctx.userDirectory?.track(config.id, msg);
 
     // Resolve userId for user isolation
     // Auto-enable user isolation for tenant bots (BaaS multi-tenant)
@@ -788,6 +935,81 @@ export class ConversationPipeline {
       const history = sessionConfig.enabled
         ? this.ctx.sessionManager.getHistory(sessionKey, resolved.maxHistory)
         : [];
+
+      // ─── Inline approval resolution ───
+      // If there's a pending confirm tool call from the previous turn, resolve it
+      // before proceeding with the normal pipeline.
+      const inlineStore = this.ctx.inlineApprovalStore;
+      const pending = inlineStore?.getPending(sessionKey);
+      if (pending) {
+        const intent = classifyApprovalResponse(msg.text);
+        if (intent === 'approve') {
+          inlineStore?.consumePending(sessionKey);
+          botLogger.info({ tool: pending.toolName, sessionKey }, 'Inline approval: user approved');
+
+          // Resolve tenant root early for the executor
+          const approvalTenantRoot =
+            config.tenantId && this.ctx.config.multiTenant?.enabled
+              ? `${this.ctx.config.multiTenant.dataDir ?? './data/tenants'}/${config.tenantId}`
+              : undefined;
+
+          // Execute the pending tool WITHOUT permissionMode (bypass confirm check)
+          const executor = new ToolExecutor(this.ctx, {
+            botId: config.id,
+            chatId: Number(msg.chatId) || 0,
+            userId,
+            tenantRoot: approvalTenantRoot,
+            tools: this.toolRegistry.getToolsForBot(config.id),
+          });
+          const result = await executor.execute(pending.toolName, pending.args);
+
+          // Inject result into history so the LLM knows what happened
+          history.push(
+            { role: 'assistant', content: `[Tool ${pending.toolName} approved and executed]` },
+            { role: 'user', content: `Tool result: ${result.content}` }
+          );
+          // Also persist these synthetic messages to the session
+          if (sessionConfig.enabled) {
+            this.ctx.sessionManager.appendMessages(
+              sessionKey,
+              [
+                { role: 'assistant', content: `[Tool ${pending.toolName} approved and executed]` },
+                { role: 'user', content: `Tool result: ${result.content}` },
+              ],
+              resolved.maxHistory
+            );
+          }
+        } else if (intent === 'deny') {
+          inlineStore?.consumePending(sessionKey);
+          botLogger.info({ tool: pending.toolName, sessionKey }, 'Inline approval: user denied');
+          history.push({
+            role: 'assistant',
+            content: `[User denied ${pending.toolName}. Action cancelled.]`,
+          });
+          if (sessionConfig.enabled) {
+            this.ctx.sessionManager.appendMessages(
+              sessionKey,
+              [
+                {
+                  role: 'assistant',
+                  content: `[User denied ${pending.toolName}. Action cancelled.]`,
+                },
+              ],
+              resolved.maxHistory
+            );
+          }
+        } else {
+          // Unrelated message — keep pending, inject context for LLM to re-ask
+          botLogger.info(
+            { tool: pending.toolName, sessionKey },
+            'Inline approval: unrelated response, keeping pending'
+          );
+          history.push({
+            role: 'system',
+            content: `[Pending approval: ${pending.toolName} — ${describeToolCall(pending.toolName, pending.args)}. Ask the user again to confirm yes or no.]`,
+          });
+        }
+      }
 
       // Await RAG
       const ragContext = await ragPromise;
@@ -848,6 +1070,7 @@ export class ConversationPipeline {
         isGroup,
         ragContext,
         userId,
+        permissionMode,
       });
 
       // In groups, prefix messages with sender name
@@ -934,104 +1157,229 @@ export class ConversationPipeline {
 
         const chatId = Number(msg.chatId) || 0;
 
-        // LLM call with resilience
-        let llmResult = await executeWithResilience(
-          () =>
-            this.ctx.getLLMClient(config.id).chat(currentMessages, {
+        // Emit before_llm_call lifecycle hook
+        const llmCallStartMs = Date.now();
+        this.ctx.hooks?.emitHook('before_llm_call', {
+          botId: config.id,
+          caller: `channel:${msg.channelKind}`,
+          messageCount: currentMessages.length,
+          timestamp: llmCallStartMs,
+        });
+
+        // ─── Streaming path ───
+        // Streaming is only used when: enabled in config, backend supports it,
+        // no tools are involved (tools need full responses), and not a voice message.
+        const streamingConfig = this.ctx.config.conversation.streaming ?? {
+          enabled: false,
+          editIntervalMs: 800,
+          minChunkChars: 50,
+        };
+        const llmClient = this.ctx.getLLMClient(config.id);
+        const canStream =
+          streamingConfig.enabled &&
+          !hasTools &&
+          !msg.isVoice &&
+          typeof llmClient.chatStream === 'function';
+
+        let response: string;
+        let tokenUsage: import('../core/llm-client').TokenUsage | undefined;
+        let llmDurationMs: number;
+        let llmAttempts = 1;
+
+        if (canStream) {
+          botLogger.info(
+            { chatId: msg.chatId, channelKind: msg.channelKind },
+            'Using streaming path'
+          );
+          try {
+            const stream = llmClient.chatStream?.(currentMessages, {
               model: activeModel,
               temperature: resolved.temperature,
-              tools: hasTools ? botToolDefs : undefined,
-              toolExecutor: hasTools
-                ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
-                : undefined,
-              maxToolRounds,
-            }),
-          `channel-pipeline.chat:${msg.channelKind}`,
-          {
-            retryConfig: {
-              maxRetries: 3,
-              baseDelayMs: 1000,
-              maxDelayMs: 15000,
-              backoffMultiplier: 2,
-            },
-            circuitBreaker: this.circuitBreaker,
-            logger: botLogger,
+            });
+
+            // Deliver tokens progressively depending on channel kind
+            if (msg.channelKind === 'web' && (channel as any)._ws) {
+              // WebSocket streaming — the _ws handle is attached by the ws server
+              response = await streamToWebSocket((channel as any)._ws, stream);
+            } else if (
+              msg.channelKind === 'telegram' &&
+              (channel as any)._sendMessage &&
+              (channel as any)._editMessage
+            ) {
+              // Telegram streaming via edit-message
+              response = await streamToChannel(
+                (channel as any)._sendMessage,
+                (channel as any)._editMessage,
+                stream,
+                streamingConfig.editIntervalMs,
+                streamingConfig.minChunkChars
+              );
+            } else {
+              // Generic channel — collect full text, then send normally
+              let collected = '';
+              const gen = stream;
+              let iterResult = await gen.next();
+              while (!iterResult.done) {
+                collected += iterResult.value;
+                iterResult = await gen.next();
+              }
+              // iterResult.value is the LLMResponse return value
+              const llmResponse = iterResult.value as import('../core/llm-client').LLMResponse;
+              response = llmResponse.text || collected;
+              tokenUsage = llmResponse.usage;
+            }
+
+            llmDurationMs = Date.now() - llmCallStartMs;
+
+            // Emit after_llm_call
+            this.ctx.hooks?.emitHook('after_llm_call', {
+              botId: config.id,
+              caller: `channel:${msg.channelKind}`,
+              durationMs: llmDurationMs,
+              tokenCount: tokenUsage?.totalTokens,
+              success: true,
+              timestamp: Date.now(),
+            });
+          } catch (streamErr) {
+            // Streaming failed — fall through to non-streaming path below
+            botLogger.warn({ err: streamErr }, 'Streaming failed, falling back to non-streaming');
+            // Reset canStream to let the normal path execute
+            response = '';
+            tokenUsage = undefined;
+            llmDurationMs = 0;
+            // Re-throw to be caught below or let normal path handle it
+            throw streamErr;
           }
-        );
-
-        // Overflow retry
-        let overflowRetries = 0;
-        while (
-          !llmResult.success &&
-          llmResult.error?.category === 'context_length' &&
-          overflowRetries < compactionConfig.maxOverflowRetries
-        ) {
-          overflowRetries++;
-          botLogger.warn({ attempt: overflowRetries }, 'Context overflow, emergency compaction');
-          const emergency = await this.contextCompactor.maybeCompact(
-            currentMessages,
-            sessionKey,
-            config.id,
-            { ...compactionConfig, thresholdRatio: 0.1, keepRecentMessages: 2 },
-            userId
-          );
-          currentMessages = emergency.messages;
-
-          llmResult = await executeWithResilience(
+        } else {
+          // ─── Non-streaming path (original) ───
+          // LLM call with resilience
+          let llmResult = await executeWithResilience(
             () =>
-              this.ctx.getLLMClient(config.id).chat(currentMessages, {
+              llmClient.chat(currentMessages, {
                 model: activeModel,
                 temperature: resolved.temperature,
                 tools: hasTools ? botToolDefs : undefined,
                 toolExecutor: hasTools
-                  ? this.toolRegistry.createExecutor(chatId, config.id, userId, tenantRoot)
+                  ? this.toolRegistry.createExecutor(
+                      chatId,
+                      config.id,
+                      userId,
+                      tenantRoot,
+                      permissionMode,
+                      inlineStore,
+                      sessionKey
+                    )
                   : undefined,
                 maxToolRounds,
               }),
             `channel-pipeline.chat:${msg.channelKind}`,
             {
               retryConfig: {
-                maxRetries: 1,
+                maxRetries: 3,
                 baseDelayMs: 1000,
-                maxDelayMs: 5000,
+                maxDelayMs: 15000,
                 backoffMultiplier: 2,
               },
               circuitBreaker: this.circuitBreaker,
               logger: botLogger,
             }
           );
-        }
 
-        if (!llmResult.success) {
-          const error = llmResult.error ?? {
-            message: 'unknown error',
-            category: 'unknown' as const,
-          };
-          this.ctx.activityStream?.publish({
-            type: 'llm:error',
+          // Overflow retry
+          let overflowRetries = 0;
+          while (
+            !llmResult.success &&
+            llmResult.error?.category === 'context_length' &&
+            overflowRetries < compactionConfig.maxOverflowRetries
+          ) {
+            overflowRetries++;
+            botLogger.warn({ attempt: overflowRetries }, 'Context overflow, emergency compaction');
+            const emergency = await this.contextCompactor.maybeCompact(
+              currentMessages,
+              sessionKey,
+              config.id,
+              { ...compactionConfig, thresholdRatio: 0.1, keepRecentMessages: 2 },
+              userId
+            );
+            currentMessages = emergency.messages;
+
+            llmResult = await executeWithResilience(
+              () =>
+                llmClient.chat(currentMessages, {
+                  model: activeModel,
+                  temperature: resolved.temperature,
+                  tools: hasTools ? botToolDefs : undefined,
+                  toolExecutor: hasTools
+                    ? this.toolRegistry.createExecutor(
+                        chatId,
+                        config.id,
+                        userId,
+                        tenantRoot,
+                        permissionMode,
+                        inlineStore,
+                        sessionKey
+                      )
+                    : undefined,
+                  maxToolRounds,
+                }),
+              `channel-pipeline.chat:${msg.channelKind}`,
+              {
+                retryConfig: {
+                  maxRetries: 1,
+                  baseDelayMs: 1000,
+                  maxDelayMs: 5000,
+                  backoffMultiplier: 2,
+                },
+                circuitBreaker: this.circuitBreaker,
+                logger: botLogger,
+              }
+            );
+          }
+
+          // Emit after_llm_call lifecycle hook (covers both success and failure)
+          this.ctx.hooks?.emitHook('after_llm_call', {
             botId: config.id,
+            caller: `channel:${msg.channelKind}`,
+            durationMs: llmResult.totalDurationMs ?? Date.now() - llmCallStartMs,
+            tokenCount: llmResult.data?.usage?.totalTokens,
+            success: llmResult.success,
             timestamp: Date.now(),
-            data: {
-              error: error.message,
-              category: error.category,
-              durationMs: llmResult.totalDurationMs,
-              attempts: llmResult.attempts,
-              backend: llmBackend,
-              caller: `channel:${msg.channelKind}`,
-            },
           });
-          throw new Error(`LLM call failed: ${error.message}`);
-        }
 
-        const response = llmResult.data?.text ?? '';
-        const tokenUsage = llmResult.data?.usage;
+          if (!llmResult.success) {
+            const error = llmResult.error ?? {
+              message: 'unknown error',
+              category: 'unknown' as const,
+            };
+            this.ctx.activityStream?.publish({
+              type: 'llm:error',
+              botId: config.id,
+              timestamp: Date.now(),
+              data: {
+                error: error.message,
+                category: error.category,
+                durationMs: llmResult.totalDurationMs,
+                attempts: llmResult.attempts,
+                backend: llmBackend,
+                caller: `channel:${msg.channelKind}`,
+              },
+            });
+            throw new Error(`LLM call failed: ${error.message}`);
+          }
+
+          response = llmResult.data?.text ?? '';
+          tokenUsage = llmResult.data?.usage;
+          llmDurationMs = llmResult.totalDurationMs ?? Date.now() - llmCallStartMs;
+          llmAttempts = llmResult.attempts;
+        }
 
         botLogger.info(
           {
             chatId: msg.chatId,
             responseLength: response.length,
-            attempts: llmResult.attempts,
-            durationMs: llmResult.totalDurationMs,
+            attempts: llmAttempts,
+            durationMs: llmDurationMs,
+            streaming: canStream,
           },
           'LLM response received'
         );
@@ -1041,8 +1389,8 @@ export class ConversationPipeline {
           timestamp: Date.now(),
           data: {
             responseLength: response.length,
-            durationMs: llmResult.totalDurationMs,
-            attempts: llmResult.attempts,
+            durationMs: llmDurationMs,
+            attempts: llmAttempts,
             backend: llmBackend,
             caller: `channel:${msg.channelKind}`,
             model: tokenUsage?.model,
@@ -1065,8 +1413,8 @@ export class ConversationPipeline {
           );
         }
 
-        // Send reply through channel
-        if (response.trim()) {
+        // Send reply through channel (skip if already streamed)
+        if (response.trim() && !canStream) {
           if (msg.isVoice && this.ctx.config.media.tts && channel.sendVoice) {
             try {
               const ttsConfig = resolveTtsConfig(this.ctx.config.media.tts, config);
@@ -1079,6 +1427,24 @@ export class ConversationPipeline {
           } else {
             await sendLongMessage((t) => channel.sendText(t), response);
           }
+
+          // Emit message_sent lifecycle hook
+          this.ctx.hooks?.emitHook('message_sent', {
+            botId: config.id,
+            channelKind: msg.channelKind ?? 'unknown',
+            chatId: Number(msg.chatId) || 0,
+            text: response,
+            timestamp: Date.now(),
+          });
+        } else if (response.trim() && canStream) {
+          // Response was already streamed to the channel — emit the lifecycle hook
+          this.ctx.hooks?.emitHook('message_sent', {
+            botId: config.id,
+            channelKind: msg.channelKind ?? 'unknown',
+            chatId: Number(msg.chatId) || 0,
+            text: response,
+            timestamp: Date.now(),
+          });
         }
 
         // Tenant metering

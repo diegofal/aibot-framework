@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import { AVAILABLE_PRESETS } from '../../bot/agent-loop-prompts';
 import { resolveDirectives } from '../../bot/agent-scheduler';
+import { DEFAULT_PERMISSIONS } from '../../bot/tool-permissions';
 import { type BotConfig, type Config, persistBots, resolveAgentConfig } from '../../config';
 import type { SkillRegistry } from '../../core/skill-registry';
 import type { Logger } from '../../logger';
@@ -71,6 +72,8 @@ export function agentsRoutes(deps: {
       availableSkills: deps.botManager.getExternalSkillNames(),
       ttsEnabled: !!deps.config.media?.tts,
       ttsVoiceId: deps.config.media?.tts?.voiceId,
+      defaultToolPermissions: DEFAULT_PERMISSIONS,
+      permissionLevels: ['free', 'inform', 'confirm', 'blocked'],
     });
   });
 
@@ -180,6 +183,10 @@ export function agentsRoutes(deps: {
       } else {
         bot.tts = undefined;
       }
+    }
+    if ('toolPermissions' in body) {
+      const tp = body.toolPermissions;
+      bot.toolPermissions = tp && Object.keys(tp).length > 0 ? tp : undefined;
     }
 
     persistBots(deps.configPath, deps.config.bots);
@@ -412,6 +419,18 @@ export function agentsRoutes(deps: {
       deps.logger.error({ botId: id, error: message }, 'Soul generation failed');
       return c.json({ error: message }, 500);
     }
+  });
+
+  // Get LLM query log for an agent
+  app.get('/:id/llm-log', (c) => {
+    const bot = findBotScoped(c, c.req.param('id'));
+    if (!bot) return c.json({ error: 'Agent not found' }, 404);
+
+    const llmQueryLog = deps.botManager.getLlmQueryLog();
+    const date = c.req.query('date') || new Date().toISOString().slice(0, 10);
+    const entries = llmQueryLog.getEntries(bot.id, date);
+    const availableDates = llmQueryLog.getAvailableDates(bot.id);
+    return c.json({ date, entries, availableDates });
   });
 
   // Get directives for an agent

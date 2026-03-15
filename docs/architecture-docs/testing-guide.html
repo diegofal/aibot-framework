@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Testing Guide - AIBot Framework Architecture</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<button class="hamburger" id="hamburger" aria-label="Toggle sidebar">&#9776;</button>
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">AIBot Framework<small>Architecture Docs</small></div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="bot-core.html">Bot Core Modules</a>
+      <a href="data-flows.html">Data Flows</a>
+      <a href="tools-skills.html">Tools &amp; Skills</a>
+      <a href="memory-soul.html">Memory &amp; Soul</a>
+      <a href="agent-loop.html">Agent Loop</a>
+      <a href="web-dashboard.html">Web Dashboard</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="simplifications.html">Simplifications</a>
+      <a href="multi-tenancy.html">Multi-Tenancy</a>
+      <a href="use-cases.html">Use Cases</a>
+      <a href="testing-guide.html" class="active">Testing Guide</a>
+      <a href="backlog.html">Backlog</a>
+    </nav>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <h1>Testing Guide</h1>
+    <p>How to test each feature of the framework — automated tests, manual verification, and integration testing.</p>
+
+    <!-- ================================================================ -->
+    <h2>Running All Tests</h2>
+    <pre><code>bun test                    # Full suite (~3200 tests, ~48s)
+bun test --watch            # Watch mode for development
+bun test tests/some-file.ts # Run a specific test file</code></pre>
+    <p>The test suite uses <code>bun:test</code> with <code>vi</code> mocks. One pre-existing failure in <code>conversation-pipeline.test.ts</code> (ToolDefinition format) is known and unrelated to new features.</p>
+
+    <!-- ================================================================ -->
+    <h2 id="streaming">1. Streaming Responses</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/streaming.test.ts    # 15 tests</code></pre>
+    <p>Covers: config schema validation, <code>streamToChannel</code> (progressive edits, throttling, single chunk, empty stream), <code>streamToWebSocket</code> (event sequence, closed connection), Ollama NDJSON parsing, LLMClient interface conformance.</p>
+
+    <h3>Config</h3>
+    <p>Streaming is <strong>enabled by default</strong> for all bots via <code>conversation.streaming</code>:</p>
+    <pre><code>{
+  "conversation": {
+    "streaming": {
+      "enabled": true,       // default: true — applies to all bots
+      "editIntervalMs": 800, // throttle Telegram edits (200-5000ms)
+      "minChunkChars": 50    // min chars before triggering an edit
+    }
+  }
+}</code></pre>
+
+    <h3>Manual Testing</h3>
+    <table>
+      <tr><th>Channel</th><th>What happens</th><th>How to verify</th></tr>
+      <tr>
+        <td>Telegram</td>
+        <td>Bot sends an initial message, then edits it progressively as tokens arrive. You see the response "typing out" in real-time.</td>
+        <td>Send a message to a Telegram bot. The reply should appear and grow character by character. Check logs for <code>"Using streaming path"</code>.</td>
+      </tr>
+      <tr>
+        <td>WebSocket (widget)</td>
+        <td>Widget receives <code>stream_start</code>, multiple <code>stream_chunk</code> events, then <code>stream_end</code> with full text.</td>
+        <td>Open the dashboard chat or embedded widget. Send a message. The response should appear progressively. Check browser DevTools WS frames.</td>
+      </tr>
+      <tr>
+        <td>REST API</td>
+        <td>Tokens are collected internally, then returned as a single response (no streaming over HTTP).</td>
+        <td>Call <code>POST /api/v1/chat/:botId</code>. Response arrives as a single JSON body.</td>
+      </tr>
+    </table>
+
+    <h3>When streaming is NOT used</h3>
+    <ul>
+      <li>Claude CLI backend (doesn't support streaming)</li>
+      <li>Tool-calling conversations (LLM needs structured responses)</li>
+      <li>Voice messages (TTS needs complete text)</li>
+      <li>When <code>streaming.enabled: false</code> in config</li>
+    </ul>
+
+    <h3>Troubleshooting</h3>
+    <ul>
+      <li><strong>Streaming doesn't work on Telegram</strong>: Check that the Telegram channel adapter is providing <code>_sendMessage</code> and <code>_editMessage</code> handles. Check logs for <code>"Streaming failed, falling back"</code>.</li>
+      <li><strong>Messages appear in bursts</strong>: Increase <code>editIntervalMs</code> (Telegram rate-limits edits).</li>
+      <li><strong>Streaming works but falls back</strong>: The LLM client must expose <code>chatStream()</code> — only <code>OllamaLLMClient</code> does. Claude CLI bots always use the non-streaming path.</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="model-failover">2. Model Failover</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/bot/model-failover/   # All failover tests</code></pre>
+    <p>Covers: error classification (9 FailoverReasons), cooldown escalation, candidate chain traversal, backend-scoped skips, abort-chain logic.</p>
+
+    <h3>Config</h3>
+    <pre><code>{
+  "failover": {
+    "enabled": true,
+    "cooldownEnabled": true,
+    "candidates": [
+      { "backend": "ollama", "model": "qwen2.5:32b" },
+      { "backend": "ollama", "model": "llama3.2:8b" },
+      { "backend": "claude-cli" }
+    ]
+  }
+}</code></pre>
+    <p>If <code>candidates</code> is omitted, the chain is synthesized automatically from <code>ollama.models.primary</code>, <code>ollama.models.fallbacks</code>, and <code>claudeCli</code>.</p>
+
+    <h3>Manual Testing</h3>
+    <ol>
+      <li>Set <code>failover.enabled: true</code> in <code>config/config.json</code></li>
+      <li>Start the bot normally</li>
+      <li>Stop Ollama: <code>systemctl stop ollama</code></li>
+      <li>Send a message to the bot — it should fall back to Claude CLI</li>
+      <li>Check logs for <code>"LLM failover: candidate 0 failed"</code> and successful response from the fallback</li>
+      <li>Restart Ollama — next request should use Ollama again (cooldown clears on success)</li>
+    </ol>
+
+    <h3>Error Classification Behavior</h3>
+    <table>
+      <tr><th>Error Type</th><th>FailoverReason</th><th>Action</th></tr>
+      <tr><td>HTTP 401/403</td><td>auth</td><td>Skip ALL models on this backend</td></tr>
+      <tr><td>HTTP 402</td><td>billing</td><td>Skip ALL models on this backend, long cooldown (5h+)</td></tr>
+      <tr><td>HTTP 429</td><td>rate_limit</td><td>Skip this model, try next</td></tr>
+      <tr><td>HTTP 502/503/504, ECONNREFUSED</td><td>timeout</td><td>Skip this model, try next</td></tr>
+      <tr><td>Context too long</td><td>context_length</td><td>Abort entire chain (no model will help)</td></tr>
+      <tr><td>HTTP 400, model not found</td><td>format</td><td>Abort entire chain (request is wrong)</td></tr>
+    </table>
+
+    <!-- ================================================================ -->
+    <h2 id="security-audit">3. Security Audit</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code># Security check modules have unit tests in the security/ directory
+bun test tests/bot/model-failover/   # Includes error classification used by audit</code></pre>
+
+    <h3>Config</h3>
+    <pre><code>{
+  "security": {
+    "auditOnStartup": true,  // default: true
+    "cooldownMs": 86400000   // 24 hours between audits
+  }
+}</code></pre>
+
+    <h3>Manual Testing</h3>
+    <ol>
+      <li>Start any bot with <code>security.auditOnStartup: true</code> (default)</li>
+      <li>Check logs for one of:
+        <ul>
+          <li><code>"Security audit: clean"</code> — no issues found</li>
+          <li><code>"Security audit: warnings found"</code> — non-critical issues</li>
+          <li><code>"Security audit: CRITICAL issues found"</code> — critical security issues</li>
+        </ul>
+      </li>
+      <li>Check the Activity page in the dashboard — a <code>security:audit</code> event should appear with findings</li>
+      <li>The audit runs once per 24h per bot (cooldown file: <code>.last-security-audit</code> in soul dir)</li>
+      <li>Delete the cooldown file to force a re-audit: <code>rm data/tenants/__admin__/bots/&lt;botId&gt;/soul/.last-security-audit</code></li>
+    </ol>
+
+    <h3>What gets checked</h3>
+    <ul>
+      <li><strong>Config secrets</strong> — API keys in config, .env file exposure</li>
+      <li><strong>Filesystem permissions</strong> — World-writable directories, insecure file modes</li>
+      <li><strong>Dangerous config flags</strong> — Risky configuration combinations</li>
+      <li><strong>Model hygiene</strong> — Model configuration issues</li>
+      <li><strong>Tool source scan</strong> (opt-in) — Dynamic tool code analysis</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="hooks">4. Lifecycle Hooks</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/hooks.test.ts   # 9 tests</code></pre>
+
+    <h3>Available Hooks</h3>
+    <table>
+      <tr><th>Event</th><th>Emitted from</th><th>When</th></tr>
+      <tr><td><code>message_received</code></td><td>ConversationPipeline</td><td>User message arrives (any channel)</td></tr>
+      <tr><td><code>message_sent</code></td><td>ConversationPipeline</td><td>Bot reply delivered to channel</td></tr>
+      <tr><td><code>before_llm_call</code></td><td>ConversationPipeline</td><td>Before calling LLM for response</td></tr>
+      <tr><td><code>after_llm_call</code></td><td>ConversationPipeline</td><td>After LLM response (success or failure)</td></tr>
+      <tr><td><code>before_tool_call</code></td><td>ToolExecutor</td><td>Before executing any tool</td></tr>
+      <tr><td><code>after_tool_call</code></td><td>ToolExecutor</td><td>After tool execution completes</td></tr>
+      <tr><td><code>before_compaction</code></td><td>ContextCompactor</td><td>Before context compaction runs</td></tr>
+      <tr><td><code>agent_loop_cycle</code></td><td>AgentLoop</td><td>Agent loop cycle start/complete/idle/error</td></tr>
+    </table>
+
+    <h3>Manual Testing</h3>
+    <p>To verify hooks fire, add a temporary listener in a skill or in <code>bot-manager.ts</code> after <code>HookEmitter</code> creation:</p>
+    <pre><code>// In bot-manager.ts constructor, after this.hookEmitter = new HookEmitter():
+this.hookEmitter.onHook('message_received', (e) => {
+  console.log('HOOK: message_received', e.botId, e.text.slice(0, 50));
+});
+this.hookEmitter.onHook('after_tool_call', (e) => {
+  console.log('HOOK: after_tool_call', e.toolName, e.success, e.durationMs + 'ms');
+});</code></pre>
+    <p>Then send messages and use tools — the console should show the hook events.</p>
+
+    <!-- ================================================================ -->
+    <h2 id="memory-decay">5. Memory Temporal Decay</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/memory-temporal-decay.test.ts   # 22 tests</code></pre>
+    <p>Covers: decay function (zero age, half-life, floor, future timestamps), MMR diversity reranking, config schema.</p>
+
+    <h3>Config</h3>
+    <pre><code>{
+  "soul": {
+    "search": {
+      "temporalDecay": {
+        "enabled": true,      // default: true
+        "halfLifeDays": 30,   // memories lose half their decay bonus after 30 days
+        "weight": 0.3         // 30% of score is time-based, 70% is relevance
+      },
+      "mmr": {
+        "enabled": false,     // Maximal Marginal Relevance for diversity
+        "lambda": 0.7         // 1.0 = pure relevance, 0.0 = pure diversity
+      }
+    }
+  }
+}</code></pre>
+
+    <h3>Manual Testing</h3>
+    <ol>
+      <li>Have a bot with existing memories spanning multiple days</li>
+      <li>Use the <code>memory_search</code> tool to search for a topic</li>
+      <li>Recent memories should rank higher than older ones with similar relevance</li>
+      <li>Compare results with <code>temporalDecay.enabled: false</code> to see the difference</li>
+    </ol>
+
+    <!-- ================================================================ -->
+    <h2 id="skill-md">6. SKILL.md Adapter</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/cron/skill-souldir-injection.test.ts   # Verifies skill loading doesn't break</code></pre>
+    <p>The adapter itself has ~56 unit tests in <code>tests/skill-md-adapter/</code> (if present).</p>
+
+    <h3>Manual Testing</h3>
+    <ol>
+      <li>Create a skill folder with a <code>SKILL.md</code> file:
+        <pre><code>mkdir -p skills-external/my-skill
+cat > skills-external/my-skill/SKILL.md &lt;&lt;'EOF'
+---
+name: my-test-skill
+description: A test declarative skill
+---
+
+# My Test Skill
+
+This skill demonstrates SKILL.md format.
+
+## Tools
+
+### greet
+Greets the user by name.
+
+Parameters:
+- `name` (string, required): The person's name
+
+EOF</code></pre>
+      </li>
+      <li>Add the directory to config:
+        <pre><code>{
+  "skillsFolders": {
+    "paths": ["./skills-external"]
+  }
+}</code></pre>
+      </li>
+      <li>Restart the bot</li>
+      <li>Check logs for <code>"Discovered external skill directories"</code> and the skill name</li>
+      <li>The skill's tools should appear in the Tools page of the dashboard</li>
+    </ol>
+
+    <!-- ================================================================ -->
+    <h2 id="whatsapp">7. WhatsApp Integration</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/whatsapp-integration.test.ts   # 26 tests</code></pre>
+    <p>Covers: webhook signature verification, message extraction, <code>whatsappToInbound</code> conversion, image/interactive payload builders, status event parsing, channel creation.</p>
+
+    <h3>Config</h3>
+    <pre><code>// In bots.json, add whatsapp config to a bot:
+{
+  "id": "my-bot",
+  "name": "My Bot",
+  "whatsapp": {
+    "phoneNumberId": "123456789",      // From Meta Developer Console
+    "accessToken": "EAAx...",          // Permanent access token
+    "verifyToken": "my-verify-token",  // For webhook verification
+    "appSecret": "abc123..."           // For webhook signature validation
+  }
+}</code></pre>
+
+    <h3>Setup</h3>
+    <ol>
+      <li>Create a Meta/WhatsApp Business app at <a href="https://developers.facebook.com">developers.facebook.com</a></li>
+      <li>Get the Phone Number ID and permanent access token</li>
+      <li>Set webhook URL to <code>https://your-domain/api/whatsapp/webhook</code></li>
+      <li>Subscribe to <code>messages</code> webhook field</li>
+      <li>Configure the verify token to match your config</li>
+    </ol>
+
+    <h3>Manual Testing</h3>
+    <table>
+      <tr><th>Feature</th><th>How to trigger</th><th>What to verify</th></tr>
+      <tr>
+        <td>Text messages</td>
+        <td>Send a WhatsApp message to your bot number</td>
+        <td>Bot replies via WhatsApp. Check logs for <code>"whatsapp message"</code></td>
+      </tr>
+      <tr>
+        <td>Image receiving</td>
+        <td>Send a photo to the bot via WhatsApp</td>
+        <td>Image URL appears in logs. Bot processes it if vision-capable model is used.</td>
+      </tr>
+      <tr>
+        <td>Interactive buttons (inline approval)</td>
+        <td>Ask the bot to do something that requires a <code>confirm</code>-level tool (e.g. "write a file called test.txt"). The bot will ask for confirmation.</td>
+        <td>WhatsApp shows approve/deny buttons. Tapping "Approve" executes the tool. Tapping "Deny" cancels it.</td>
+      </tr>
+      <tr>
+        <td>Image sending</td>
+        <td>Bot generates or references an image URL in its response</td>
+        <td>Image is sent via WhatsApp Cloud API media upload</td>
+      </tr>
+      <tr>
+        <td>Status tracking</td>
+        <td>Send a message and wait</td>
+        <td>Logs show <code>"WhatsApp status"</code> entries with <code>delivered</code> and <code>read</code> events</td>
+      </tr>
+    </table>
+
+    <h3>About Interactive Buttons (Inline Approval)</h3>
+    <p>When the LLM calls a <code>confirm</code>-level tool (like <code>file_write</code>, <code>exec</code>, <code>browser</code>) in a WhatsApp conversation:</p>
+    <ol>
+      <li>The tool call is intercepted by <code>InlineApprovalStore</code></li>
+      <li>The LLM is told to ask the user for confirmation</li>
+      <li>On WhatsApp, this appears as a message with two buttons: "Approve" and "Deny"</li>
+      <li>The user's response (button tap or text "yes"/"no") is classified and the tool executes or is rejected</li>
+    </ol>
+    <p><strong>Note:</strong> The interactive buttons are only sent when the WhatsApp channel adapter detects a confirm-level tool. Regular text messages use normal replies.</p>
+
+    <!-- ================================================================ -->
+    <h2 id="discord">8. Discord Channel</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/discord-adapter.test.ts   # 19 tests</code></pre>
+    <p>Covers: <code>discordToInbound</code> conversion (text, images, DMs, guilds), <code>splitDiscordMessage</code> (edge cases), channel construction, gateway event handling (Hello, READY, MESSAGE_CREATE, heartbeat, bot filtering, channel filtering).</p>
+
+    <h3>Config</h3>
+    <pre><code>// In bots.json, add discord config to a bot:
+{
+  "id": "my-bot",
+  "name": "My Bot",
+  "discord": {
+    "token": "MTIz...",                    // Bot token from Discord Developer Portal
+    "applicationId": "123456789",          // Application ID (optional)
+    "guildIds": ["987654321"],             // Guilds to listen in (optional, all if empty)
+    "channelIds": ["111222333", "444555"]  // Channels to listen in (optional, all if empty)
+  }
+}</code></pre>
+
+    <h3>Setup</h3>
+    <ol>
+      <li>Create a bot at <a href="https://discord.com/developers/applications">discord.com/developers/applications</a></li>
+      <li>Enable "Message Content Intent" in Bot settings (required to read message text)</li>
+      <li>Generate a bot token</li>
+      <li>Invite the bot to your server with <code>bot</code> and <code>applications.commands</code> scopes</li>
+      <li>Add the config to your bot in <code>bots.json</code></li>
+    </ol>
+
+    <h3>Manual Testing</h3>
+    <ol>
+      <li>Add the Discord config to a bot and start the framework</li>
+      <li>Check logs for <code>"Discord gateway: ready"</code> — confirms successful connection</li>
+      <li>Send a message in a Discord channel the bot can see</li>
+      <li>The bot should respond in the same channel</li>
+      <li>Test long messages (>2000 chars) — they should be automatically split</li>
+      <li>Test in DMs — bot should respond in DM too</li>
+    </ol>
+
+    <h3>Limitations</h3>
+    <ul>
+      <li>Uses Discord REST API + raw Gateway WebSocket (no <code>discord.js</code> dependency)</li>
+      <li>Outbound proactive messaging is not yet supported (requires cached channel IDs)</li>
+      <li>No slash commands — only message-based interaction</li>
+      <li>Auto-reconnects on disconnect with 5s delay</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="a2a">9. A2A Protocol (Agent-to-Agent)</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/a2a/   # 62+ tests across 5 files</code></pre>
+    <p>Covers: TaskStore CRUD/TTL/cancel, AgentCardBuilder, ToolAdapter, A2A types, AgentDirectory (heartbeat, pruning, search).</p>
+
+    <h3>Config</h3>
+    <pre><code>{
+  "a2a": {
+    "enabled": true,              // Exposes ALL running bots as A2A agents
+    "basePath": "/a2a",           // URL prefix
+    "maxTasks": 1000,             // Max concurrent tasks in memory
+    "taskTtlMs": 3600000,         // 1 hour TTL for completed tasks
+    "agents": [                   // External A2A agents to connect to
+      {
+        "name": "external-agent",
+        "url": "https://other-server/a2a/agent1",
+        "timeout": 60000
+      }
+    ]
+  }
+}</code></pre>
+    <p><strong>Scope:</strong> A2A is a <em>server-level</em> setting — when enabled, it exposes all configured bots as A2A endpoints. Each bot gets its own <code>/a2a/:botId</code> route. External clients (other A2A servers, Claude Desktop, custom apps) can communicate with any bot through the protocol.</p>
+
+    <h3>Manual Testing</h3>
+
+    <h4>Step 1: Enable and verify agent card</h4>
+    <pre><code># Set a2a.enabled: true in config, restart
+# Then fetch an agent card:
+curl http://localhost:3000/a2a/my-bot/.well-known/agent.json | jq .</code></pre>
+    <p>Should return:</p>
+    <pre><code>{
+  "name": "My Bot",
+  "description": "Agent My Bot",
+  "url": "http://127.0.0.1:3000/a2a/my-bot",
+  "version": "1.0.0",
+  "capabilities": { "streaming": false, "stateTransitionHistory": true },
+  "skills": [...]
+}</code></pre>
+
+    <h4>Step 2: Send a message</h4>
+    <pre><code>curl -X POST http://localhost:3000/a2a/my-bot \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "message/send",
+    "params": {
+      "message": {
+        "role": "user",
+        "parts": [{ "type": "text", "text": "Hello, who are you?" }]
+      }
+    },
+    "id": "test-1"
+  }' | jq .</code></pre>
+    <p>Should return a task with status <code>"completed"</code> and the bot's response in <code>messages</code>.</p>
+
+    <h4>Step 3: Get a task</h4>
+    <pre><code>curl -X POST http://localhost:3000/a2a/my-bot \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tasks/get",
+    "params": { "id": "TASK_ID_FROM_STEP_2" },
+    "id": "test-2"
+  }' | jq .</code></pre>
+
+    <h4>Step 4: Agent directory</h4>
+    <pre><code># Register an external agent
+curl -X POST http://localhost:3000/a2a/directory/register \
+  -H "Content-Type: application/json" \
+  -d '{"name": "test-agent", "url": "http://example.com/a2a/test", "skills": []}'
+
+# List all agents
+curl http://localhost:3000/a2a/directory/agents | jq .
+
+# Search by skill
+curl "http://localhost:3000/a2a/directory/agents?q=search" | jq .
+
+# Heartbeat
+curl -X POST http://localhost:3000/a2a/directory/heartbeat \
+  -H "Content-Type: application/json" \
+  -d '{"name": "test-agent"}'</code></pre>
+
+    <!-- ================================================================ -->
+    <h2 id="tool-permissions">10. Tool Permissions</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/tool-permissions.test.ts
+bun test tests/inline-approval.test.ts   # 74 tests</code></pre>
+
+    <h3>How it works</h3>
+    <p>Every tool has a permission level in two contexts:</p>
+    <table>
+      <tr><th>Level</th><th>Agent Loop</th><th>Conversation</th></tr>
+      <tr><td><code>free</code></td><td>No restriction</td><td>No restriction</td></tr>
+      <tr><td><code>inform</code></td><td>Bot explains before executing</td><td>Bot explains before executing</td></tr>
+      <tr><td><code>confirm</code></td><td>Uses <code>ask_permission</code> dashboard flow</td><td>Uses inline approval (two-turn)</td></tr>
+      <tr><td><code>blocked</code></td><td>Not available</td><td>Not available</td></tr>
+    </table>
+
+    <h3>Manual Testing</h3>
+    <ol>
+      <li>Ask the bot to "run the command <code>ls</code>" in a conversation — <code>exec</code> is <code>confirm</code> level, so the bot should ask for approval</li>
+      <li>Reply "yes" — the command should execute</li>
+      <li>Or reply "no" — the action should be canceled</li>
+      <li>Check the dashboard Agents page → bot edit → Tool Permissions tab to see/modify the matrix</li>
+    </ol>
+
+    <!-- ================================================================ -->
+    <h2 id="outbound">11. Outbound Channels &amp; send_message</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/send-message.test.ts
+bun test tests/outbound-channel.test.ts
+bun test tests/user-directory.test.ts</code></pre>
+
+    <h3>Manual Testing</h3>
+    <ol>
+      <li>Chat with the bot on Telegram (or any channel) — it auto-registers you in the contact directory</li>
+      <li>In the agent loop or another conversation, ask: "Send a message to &lt;your name&gt; saying hello"</li>
+      <li>The bot uses <code>send_message</code> tool → looks up your contact → delivers via the best available channel</li>
+      <li>If the contact isn't found, the bot asks for their details and registers them inline</li>
+    </ol>
+
+    <!-- ================================================================ -->
+    <h2 id="error-classification">12. Unified Error Classification</h2>
+
+    <h3>Automated Tests</h3>
+    <pre><code>bun test tests/bot/agent-retry-engine.test.ts   # 30+ tests</code></pre>
+
+    <h3>How it works</h3>
+    <p>All LLM errors pass through <code>classifyFailoverReason()</code> which checks (in order):</p>
+    <ol>
+      <li>HTTP status code (most reliable)</li>
+      <li>Node.js error code (<code>ECONNREFUSED</code>, <code>ETIMEDOUT</code>, etc.)</li>
+      <li>Message regex patterns (last resort)</li>
+    </ol>
+    <p>The result determines retry behavior in the agent loop AND failover decisions in <code>FailoverLLMClient</code>.</p>
+
+    <!-- ================================================================ -->
+    <h2 id="summary">Quick Reference: All Test Commands</h2>
+    <pre><code># Full suite
+bun test
+
+# Per feature
+bun test tests/streaming.test.ts              # Streaming responses
+bun test tests/bot/model-failover/            # Model failover + error classification
+bun test tests/bot/agent-retry-engine.test.ts # Retry engine + error classification
+bun test tests/hooks.test.ts                  # Lifecycle hooks
+bun test tests/memory-temporal-decay.test.ts  # Memory temporal decay + MMR
+bun test tests/whatsapp-integration.test.ts   # WhatsApp (images, buttons, status)
+bun test tests/discord-adapter.test.ts        # Discord adapter + gateway
+bun test tests/a2a/                           # A2A protocol (all modules)
+bun test tests/tool-permissions.test.ts       # Tool permission matrix
+bun test tests/inline-approval.test.ts        # Inline approval (confirm tools)
+bun test tests/send-message.test.ts           # send_message tool
+bun test tests/outbound-channel.test.ts       # Outbound channel factory
+bun test tests/user-directory.test.ts         # User directory</code></pre>
+
+  </main>
+</div>
+
+<script>
+  const hamburger = document.getElementById('hamburger');
+  const sidebar   = document.getElementById('sidebar');
+  const backdrop  = document.getElementById('sidebar-backdrop');
+  function toggleSidebar() { sidebar.classList.toggle('open'); backdrop.classList.toggle('open'); }
+  hamburger.addEventListener('click', toggleSidebar);
+  backdrop.addEventListener('click', toggleSidebar);
+</script>
+</body>
+</html>

@@ -8,6 +8,7 @@ import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import {
   extractMessages,
+  extractStatuses,
   verifyWebhookSignature,
   whatsappChannel,
   whatsappToInbound,
@@ -32,8 +33,7 @@ export function whatsappWebhookRoutes(deps: {
     phoneNumberId: string
   ): { botId: string; waConfig: WhatsAppConfig } | null {
     for (const bot of config.bots) {
-      // biome-ignore lint/suspicious/noExplicitAny: bot config shape extended at runtime
-      const wa = (bot as any).whatsapp as WhatsAppConfig | undefined;
+      const wa = bot.whatsapp;
       if (wa?.phoneNumberId === phoneNumberId) {
         return { botId: bot.id, waConfig: wa };
       }
@@ -49,8 +49,7 @@ export function whatsappWebhookRoutes(deps: {
 
     // Find any bot with a matching verifyToken
     const verifyToken = config.bots
-      // biome-ignore lint/suspicious/noExplicitAny: bot config shape extended at runtime
-      .map((b) => ((b as any).whatsapp as WhatsAppConfig | undefined)?.verifyToken)
+      .map((b) => b.whatsapp?.verifyToken)
       .find((t) => t && t === token);
 
     if (mode === 'subscribe' && verifyToken) {
@@ -106,6 +105,22 @@ export function whatsappWebhookRoutes(deps: {
       } catch (err: unknown) {
         logger.error({ err, botId, from: message.from }, 'WhatsApp message handling failed');
       }
+    }
+
+    // --- Process status events (delivered / read / failed) ---
+    const statuses = extractStatuses(payload);
+    for (const status of statuses) {
+      const resolved = resolveWaConfig(status.phoneNumberId);
+      if (!resolved) continue;
+      logger.info(
+        {
+          botId: resolved.botId,
+          messageId: status.messageId,
+          status: status.status,
+          recipientId: status.recipientId,
+        },
+        `WhatsApp status: ${status.status}`
+      );
     }
 
     // Always return 200 to Meta to prevent retries

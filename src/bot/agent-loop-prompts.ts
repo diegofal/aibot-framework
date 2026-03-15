@@ -297,6 +297,13 @@ Tools you create require human approval before becoming available.
     : ''
 }
 
+SOUL ALIGNMENT (non-negotiable):
+Every plan item MUST directly serve your identity and goals as defined above.
+- If a task cannot be justified by a specific goal or motivation, it is OFF-BRAND and BANNED.
+- If unsure, choose inaction over off-brand action.
+- Do NOT invent new purposes not grounded in your identity/soul.
+- Creative exploration is allowed ONLY within the scope of your stated purpose.
+
 SINGLE-FOCUS MODE INSTRUCTIONS:
 1. Break the assigned deliverable into 1-3 concrete steps
 2. Each step must directly contribute to completing the deliverable
@@ -435,6 +442,13 @@ Tools you create require human approval before becoming available.
     : ''
 }
 
+SOUL ALIGNMENT (non-negotiable):
+Every plan item MUST directly serve your identity and goals as defined above.
+- If a task cannot be justified by a specific goal or motivation, it is OFF-BRAND and BANNED.
+- If unsure, choose inaction over off-brand action.
+- Do NOT invent new purposes not grounded in your identity/soul.
+- Creative exploration is allowed ONLY within the scope of your stated purpose.
+
 SINGLE-FOCUS MODE INSTRUCTIONS:
 1. Break the assigned deliverable into 1-3 concrete steps
 2. Each step must directly contribute to completing the deliverable
@@ -534,6 +548,10 @@ ${
 Current date/time: ${input.datetime}
 
 ## Instructions
+
+SOUL ALIGNMENT CHECK:
+Before creating any file, verify it serves your stated identity and goals.
+If mid-execution the work drifts from your core purpose, STOP and note the misalignment.
 
 Execute the plan above using your available tools. Work through each step methodically.
 If at any point you need information, approval, or a decision from the human operator, use the \`ask_human\` tool. It queues a question to the human inbox (non-blocking) and the answer arrives in your next cycle. Using ask_human is a valid, productive action.
@@ -670,6 +688,8 @@ export interface StrategistResult {
    * The executor will STOP after completing this deliverable.
    */
   single_deliverable: string;
+  /** How well the deliverable aligns with the agent's identity/soul (0.0-1.0) */
+  alignment_confidence?: number;
   reflection: string;
   next_strategy_in?: string;
 }
@@ -710,6 +730,7 @@ Analyze the agent's current state and assign a SINGLE, CONCRETE deliverable for 
 3. **Relevance**: Do current goals still align with the agent's identity and motivations?
 4. **Gaps**: Are there obvious goals missing given the agent's purpose?
 5. **Patterns**: Is the agent stuck in a loop (same goal, same activity, no progress)?
+6. **Soul Alignment**: The deliverable MUST directly serve the agent's identity and motivations. An off-brand deliverable is worse than no deliverable.
 
 ## Single-Focus Execution Mode (STRICT)
 
@@ -775,12 +796,13 @@ JSON Schema:
   - notes: string (optional context)
   - outcome: string (for complete: what was achieved) — optional
 - single_deliverable: string (ONE specific, bounded, achievable task — 5-15 minutes max)
+- alignment_confidence: number (0.0-1.0, how well the deliverable serves the agent's identity/soul — below 0.6 triggers re-derivation)
 - focus: string (deprecated, use single_deliverable)
 - reflection: string (brief analysis of the agent's current state and trajectory)
 - next_strategy_in: string (when to run strategist again, e.g. "4h", "8h", "1d")
 
 Example:
-{"goal_operations":[{"action":"complete","goal":"set up monitoring","outcome":"Monitoring dashboard deployed and working"},{"action":"add","goal":"Explore partnership opportunities with DeFi protocols","priority":"high"}],"single_deliverable":"Send 3 partnership outreach messages to DeFi protocols identified in the research phase","reflection":"Agent has been stuck optimizing internal tools for 3 days instead of pursuing its core mission of community growth. Time to execute, not plan.","next_strategy_in":"6h"}`;
+{"goal_operations":[{"action":"complete","goal":"set up monitoring","outcome":"Monitoring dashboard deployed and working"},{"action":"add","goal":"Explore partnership opportunities with DeFi protocols","priority":"high"}],"single_deliverable":"Send 3 partnership outreach messages to DeFi protocols identified in the research phase","alignment_confidence":0.9,"reflection":"Agent has been stuck optimizing internal tools for 3 days instead of pursuing its core mission of community growth. Time to execute, not plan.","next_strategy_in":"6h"}`;
 
   const prompt =
     'Perform a strategic review and assign ONE concrete deliverable for the next session. Remember: the executor will STOP after completing this ONE deliverable. Make it specific, achievable, and bounded. Respond with ONLY the JSON object.';

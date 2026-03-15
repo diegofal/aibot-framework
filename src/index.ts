@@ -189,11 +189,18 @@ async function main() {
       }
     }
 
-    // Register skill jobs PER BOT in CronService
+    // Register skill jobs PER BOT in CronService (only for bots that have the skill)
+    const registeredSkillJobs = new Set<string>(); // track valid "skillId:jobId:botId" combos
     for (const skill of skillRegistry.getAll()) {
       if (!skill.jobs) continue;
       for (const job of skill.jobs) {
         for (const botConfig of config.bots) {
+          // Only register job if this bot actually uses this skill
+          if (botConfig.skills && !botConfig.skills.includes(skill.id)) continue;
+
+          const comboKey = `${skill.id}:${job.id}:${botConfig.id}`;
+          registeredSkillJobs.add(comboKey);
+
           const existingJobs = await cronService.list({ includeDisabled: true });
           const alreadyExists = existingJobs.some(
             (j) =>
@@ -214,6 +221,22 @@ async function main() {
               'Skill job registered in CronService (per-bot)'
             );
           }
+        }
+      }
+    }
+
+    // Clean up orphaned skill jobs (bot removed skill, bot deleted, etc.)
+    {
+      const allJobs = await cronService.list({ includeDisabled: true });
+      for (const j of allJobs) {
+        if (j.payload.kind !== 'skillJob' || !j.payload.botId) continue;
+        const comboKey = `${j.payload.skillId}:${j.payload.jobId}:${j.payload.botId}`;
+        if (!registeredSkillJobs.has(comboKey)) {
+          await cronService.remove(j.id);
+          logger.info(
+            { jobId: j.id, skillId: j.payload.skillId, jobName: j.name, botId: j.payload.botId },
+            'Removed orphaned skill job (bot no longer has this skill)'
+          );
         }
       }
     }

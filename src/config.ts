@@ -268,6 +268,16 @@ export const BotConfigSchema = z.object({
   userIdentityVerification: UserIdentityVerificationConfigSchema,
   topicGuard: TopicGuardConfigSchema,
   allowedWritePaths: z.array(z.string()).optional(),
+  // Tool permission matrix (per-tool overrides: agent-loop vs conversation)
+  toolPermissions: z
+    .record(
+      z.string(),
+      z.object({
+        agentLoop: z.enum(['free', 'inform', 'confirm', 'blocked']).optional(),
+        conversation: z.enum(['free', 'inform', 'confirm', 'blocked']).optional(),
+      })
+    )
+    .optional(),
   // Multi-tenant hosting fields
   tenantId: z.string().optional(),
   apiKey: z.string().optional(),
@@ -285,6 +295,24 @@ export const BotConfigSchema = z.object({
       stripeSubscriptionId: z.string().optional(),
       currentPeriodStart: z.string().datetime().optional(),
       currentPeriodEnd: z.string().datetime().optional(),
+    })
+    .optional(),
+  // WhatsApp Cloud API configuration (per-bot channel)
+  whatsapp: z
+    .object({
+      phoneNumberId: z.string(),
+      accessToken: z.string(),
+      verifyToken: z.string().optional(),
+      appSecret: z.string().optional(),
+    })
+    .optional(),
+  // Discord channel configuration (per-bot)
+  discord: z
+    .object({
+      token: z.string(),
+      applicationId: z.string().optional(),
+      guildIds: z.array(z.string()).optional(),
+      channelIds: z.array(z.string()).optional(),
     })
     .optional(),
 });
@@ -330,12 +358,21 @@ const CompactionConfigSchema = z
   })
   .default({});
 
+const StreamingConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    editIntervalMs: z.number().int().min(200).max(5000).default(800),
+    minChunkChars: z.number().int().min(10).max(500).default(50),
+  })
+  .default({});
+
 const ConversationConfigSchema = z.object({
   enabled: z.boolean().default(true),
   systemPrompt: z.string().default('You are a helpful assistant.'),
   temperature: z.number().min(0).max(2).default(0.7),
   maxHistory: z.number().int().positive().default(20),
   compaction: CompactionConfigSchema,
+  streaming: StreamingConfigSchema,
 });
 
 const WebToolsSearchConfigSchema = z.object({
@@ -425,6 +462,14 @@ export const MMRConfigSchema = z
   })
   .default({});
 
+export const TemporalDecayConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    halfLifeDays: z.number().min(1).max(365).default(30),
+    weight: z.number().min(0).max(1).default(0.3),
+  })
+  .default({});
+
 const MemorySearchConfigSchema = z.object({
   enabled: z.boolean().default(false),
   embeddingModel: z.string().default(''),
@@ -441,6 +486,7 @@ const MemorySearchConfigSchema = z.object({
   watchEnabled: z.boolean().default(true),
   autoRag: AutoRagConfigSchema,
   mmr: MMRConfigSchema,
+  temporalDecay: TemporalDecayConfigSchema,
 });
 
 const MemoryFlushConfigSchema = z
@@ -712,6 +758,46 @@ export const McpConfigSchema = z
   })
   .default({});
 
+const SecurityConfigSchema = z
+  .object({
+    auditOnStartup: z.boolean().default(true),
+    cooldownMs: z.number().int().positive().default(86_400_000), // 24h
+  })
+  .default({});
+
+const FailoverConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    candidates: z
+      .array(
+        z.object({
+          backend: z.string(),
+          model: z.string().optional(),
+        })
+      )
+      .optional(),
+    cooldownEnabled: z.boolean().default(true),
+  })
+  .default({});
+
+const A2AConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    basePath: z.string().default('/a2a'),
+    maxTasks: z.number().int().positive().default(1000),
+    taskTtlMs: z.number().int().positive().default(3_600_000),
+    agents: z
+      .array(
+        z.object({
+          name: z.string(),
+          url: z.string().url(),
+          timeout: z.number().int().positive().default(60_000),
+        })
+      )
+      .default([]),
+  })
+  .default({});
+
 const MultiTenantConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -765,7 +851,10 @@ const ConfigSchema = z.object({
   reddit: RedditConfigSchema.optional(),
   twitter: TwitterConfigSchema.optional(),
   calendar: CalendarConfigSchema.optional(),
+  security: SecurityConfigSchema,
+  failover: FailoverConfigSchema,
   multiTenant: MultiTenantConfigSchema,
+  a2a: A2AConfigSchema,
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
 });
@@ -817,6 +906,7 @@ export type RedditConfig = z.infer<typeof RedditConfigSchema>;
 export type TwitterConfig = z.infer<typeof TwitterConfigSchema>;
 export type CalendarConfig = z.infer<typeof CalendarConfigSchema>;
 export type CompactionConfig = z.infer<typeof CompactionConfigSchema>;
+export type StreamingConfig = z.infer<typeof StreamingConfigSchema>;
 export type SkillsFoldersConfig = z.infer<typeof SkillsFoldersConfigSchema>;
 export type McpConfig = z.infer<typeof McpConfigSchema>;
 export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
@@ -826,6 +916,9 @@ export type UserIsolationConfig = z.infer<typeof UserIsolationConfigSchema>;
 export type UserIdentityVerificationConfig = z.infer<typeof UserIdentityVerificationConfigSchema>;
 export type TopicGuardConfig = z.infer<typeof TopicGuardConfigSchema>;
 export type MultiTenantConfig = z.infer<typeof MultiTenantConfigSchema>;
+export type SecurityConfig = z.infer<typeof SecurityConfigSchema>;
+export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
+export type A2AConfig = z.infer<typeof A2AConfigSchema>;
 
 /**
  * Substitute environment variables in strings
@@ -953,7 +1046,9 @@ export function resolveAgentConfig(
   return {
     model: botConfig.model ?? defaultModel,
     llmBackend: botConfig.llmBackend,
-    soulDir: botConfig.soulDir ?? `${globalConfig.soul.dir}/${botConfig.id}`,
+    soulDir:
+      botConfig.soulDir ??
+      `${globalConfig.multiTenant?.dataDir ?? './data/tenants'}/__admin__/bots/${botConfig.id}/soul`,
     workDir:
       botConfig.workDir ??
       `${globalConfig.productions?.baseDir ?? './productions'}/${botConfig.id}`,
@@ -989,7 +1084,7 @@ export function resolveAgentConfigWithTenant(
   const dataDir = globalConfig.multiTenant?.dataDir ?? './data/tenants';
   const defaultSoulDir = tenantId
     ? `${dataDir}/${tenantId}/bots/${botConfig.id}/soul`
-    : `${globalConfig.soul.dir}/${botConfig.id}`;
+    : `${dataDir}/__admin__/bots/${botConfig.id}/soul`;
   const defaultWorkDir = tenantId
     ? `${dataDir}/${tenantId}/bots/${botConfig.id}/productions`
     : `${globalConfig.productions?.baseDir ?? './productions'}/${botConfig.id}`;

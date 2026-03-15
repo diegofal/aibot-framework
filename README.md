@@ -22,7 +22,11 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
 - **TTS & STT** — ElevenLabs voice responses + Whisper transcription for voice messages
 - **Permissions system** — Human-in-the-loop approval queue for sensitive agent actions
 - **Productions & karma** — Track and review bot outputs, score quality with time-decayed karma
-- **Multi-backend LLM** — Ollama (local) + Claude CLI with automatic fallback
+- **Multi-backend LLM** — Ollama (local) + Claude CLI with model failover orchestrator, cooldown tracking, and error classification
+- **Lifecycle hooks** — 8 EventEmitter-based hooks (message, LLM, tool, compaction, agent loop) for skill/extension integration
+- **Streaming responses** — Token-by-token streaming for Ollama with progressive Telegram message editing and WebSocket chunk events
+- **A2A Protocol** — Agent-to-agent communication (v0.3.0) with JSON-RPC server, client, agent directory, and skill-to-tool adaptation
+- **Multi-channel** — Telegram, WhatsApp (Cloud API), REST, WebSocket widget, Discord (Gateway + REST)
 
 ## Quick Start
 
@@ -122,6 +126,21 @@ src/
 │   ├── reddit/             #   Reddit browsing & posting
 │   ├── calendar/           #   Calendar management
 │   └── example/            #   Template for new skills
+├── channel/                # Channel adapters (multi-platform)
+│   ├── telegram.ts         #   Grammy Context adapter
+│   ├── whatsapp.ts         #   WhatsApp Cloud API (images, buttons, status)
+│   ├── discord.ts          #   Discord REST API adapter
+│   ├── discord-gateway.ts  #   Discord Gateway WebSocket
+│   ├── websocket.ts        #   Widget chat + streaming
+│   ├── rest.ts             #   REST API adapter
+│   └── outbound.ts         #   Proactive message delivery factory
+├── a2a/                    # Agent-to-Agent Protocol (v0.3.0)
+│   ├── server.ts           #   JSON-RPC handler + directory endpoints
+│   ├── client.ts           #   HTTP client for external agents
+│   ├── directory.ts        #   Agent registry with heartbeat/discovery
+│   ├── task-store.ts       #   In-memory task lifecycle
+│   ├── executor.ts         #   Headless LLM message processor
+│   └── tool-adapter.ts     #   A2A skills → framework tools
 ├── mcp/                    # Model Context Protocol (bidirectional)
 │   ├── client.ts           #   Connect to external MCP servers
 │   ├── client-pool.ts      #   Multi-server connection pool
@@ -129,9 +148,9 @@ src/
 │   ├── agent-bridge.ts     #   Agent-to-agent via MCP
 │   ├── tool-adapter.ts     #   MCP ↔ framework tool conversion
 │   └── tool-bridge-server.ts  #   Claude CLI ↔ framework tools
-├── memory/                 # Semantic search & RAG
+├── memory/                 # Semantic search & RAG (with temporal decay)
 │   └── manager.ts          #   Hybrid vector + FTS5 search (SQLite)
-├── core/                   # Skill loader, registry, config schemas
+├── core/                   # Skill loader, registry, config schemas, SKILL.md adapter
 ├── karma/                  # Per-bot quality scoring (0-100)
 ├── productions/            # Bot output tracking & review
 ├── tenant/                 # Multi-tenant BaaS infrastructure
@@ -161,7 +180,7 @@ Autonomous planner-executor pattern running on configurable intervals. The **pla
 
 ### Soul & Memory
 
-Each bot has layered personality files (`IDENTITY.md`, `SOUL.md`, `MOTIVATIONS.md`, `GOALS.md`) in `souls/<botId>/`. Daily memory logs capture facts with timestamps. Memory consolidation merges daily logs into `MEMORY.md` via Claude CLI. Semantic search uses hybrid vector + FTS5 via SQLite for RAG-augmented conversations.
+Each bot has layered personality files (`IDENTITY.md`, `SOUL.md`, `MOTIVATIONS.md`, `GOALS.md`) in `souls/<botId>/`. Daily memory logs capture facts with timestamps. Memory consolidation merges daily logs into `MEMORY.md` via Claude CLI. Semantic search uses hybrid vector + FTS5 via SQLite for RAG-augmented conversations with exponential temporal decay scoring (recent memories ranked higher, configurable half-life).
 
 ### Context Compaction
 
@@ -185,7 +204,31 @@ Human-in-the-loop approval queue via the `ask_permission` tool. Agents request p
 
 ### Skills System
 
-Plugin architecture with `skill.json` manifests and declarative `SKILL.md` format. Skills register commands, scheduled jobs, message handlers, and callback handlers. External skills from configurable directories are loaded with namespace isolation. Per-bot `disabledSkills` control. The framework includes a skill page discovery system for browsing available skills.
+Plugin architecture with `skill.json` manifests and declarative `SKILL.md` format (auto-discovered on boot alongside `.ts` skills). Skills register commands, scheduled jobs, message handlers, and callback handlers. External skills from configurable directories are loaded with namespace isolation. Per-bot `disabledSkills` control. The framework includes a skill page discovery system for browsing available skills.
+
+### Lifecycle Hooks
+
+EventEmitter-based `HookEmitter` with 8 typed events: `message_received`, `message_sent`, `before_llm_call`, `after_llm_call`, `before_tool_call`, `after_tool_call`, `before_compaction`, `agent_loop_cycle`. Skills and extensions register listeners via `ctx.hooks?.onHook(event, handler)`. Wired into ConversationPipeline, ToolExecutor, and AgentLoop.
+
+### Streaming Responses
+
+Token-by-token streaming for Ollama backend (opt-in via `conversation.streaming`). Telegram messages are sent once then progressively edited with throttling. WebSocket channels receive `stream_start`/`stream_chunk`/`stream_end` events. Claude CLI falls back to non-streaming behavior. Tool-calling and voice conversations always use non-streaming.
+
+### Multi-Channel Support
+
+Channel-agnostic architecture with adapters for Telegram (grammy), WhatsApp Cloud API (images, interactive buttons, status tracking), Discord (REST API + Gateway WebSocket, no discord.js), REST API, and WebSocket widget. Outbound channel factory enables proactive messaging across all channels via the `send_message` tool with contact directory lookup.
+
+### A2A Protocol
+
+Agent-to-Agent communication following the v0.3.0 spec. JSON-RPC server (`message/send`, `tasks/get`, `tasks/cancel`) with `.well-known/agent.json` discovery. Agent directory with registration, heartbeat, stale pruning, and skill search. HTTP client + client pool for connecting to external A2A agents. Tool adapter converts external agent skills into framework tools (`a2a_{agent}_{skill}`).
+
+### Security Audit
+
+Automated security checks on bot startup (24h cooldown): filesystem permissions, config secrets, dangerous config flags, model hygiene, and optional tool source scanning. Results logged and surfaced in the activity stream. Configurable via `security.auditOnStartup`.
+
+### Model Failover
+
+`FailoverLLMClient` wraps LLM calls with ordered candidate chains, error classification (auth/billing/rate_limit/timeout/context_length/format), cooldown tracking, and smart skip/abort logic. Backend-scoped errors (auth, billing) skip all models on that backend. Format/context_length errors abort the chain. Configurable via `failover` config block.
 
 ### Tools
 
@@ -260,6 +303,10 @@ Configuration lives in `config/config.json`, validated at startup by Zod schemas
 - **`mcp`** — MCP server connections and tool exposure settings
 - **`agentProposals`** — Agent self-creation: enabled, maxAgents, maxProposalsPerBot
 - **`collaboration`** — Bot-to-bot rate limits, visible max turns, session TTL
+- **`failover`** — Model failover candidates, cooldown, enable/disable
+- **`security`** — Startup audit enable/disable, cooldown
+- **`a2a`** — A2A protocol: basePath, maxTasks, taskTtlMs, external agent URLs
+- **`conversation.streaming`** — Streaming responses: enabled, editIntervalMs, minChunkChars
 
 Copy `config/config.example.json` to `config/config.json` and run `bun run setup` for guided configuration.
 

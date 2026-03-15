@@ -69,7 +69,7 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
       if (!botId) {
         return {
           success: false,
-          content: 'ask_permission requires _botId (only available in agent loop)',
+          content: 'ask_permission requires _botId context injection',
         };
       }
 

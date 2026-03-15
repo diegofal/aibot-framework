@@ -27,6 +27,7 @@
       <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
         <a href="use-cases.html">Use Cases</a>
+        <a href="testing-guide.html">Testing Guide</a>
         <a href="backlog.html">Backlog</a>
     </nav>
   </aside>
@@ -139,6 +140,7 @@
           <tbody>
             <tr><td>splitMessage</td><td>text: string, maxLength?: number</td><td>Splits text into chunks at newline boundaries respecting the 4096-char Telegram limit</td></tr>
             <tr><td>sendLongMessage</td><td>send: (text: string) =&gt; Promise, text: string</td><td>Splits a long message and sends each chunk via the provided send callback</td></tr>
+            <tr><td>streamToChannel</td><td>sendMessage, editMessage, stream, editIntervalMs?, minChunkChars?</td><td>Stream LLM output by sending an initial message then progressively editing it. Throttled by interval and minimum chars accumulated. Works with Telegram edit-message-text pattern.</td></tr>
           </tbody>
         </table>
         <h4>Dependencies</h4>
@@ -174,11 +176,48 @@
           <tbody>
             <tr><td>prefetchMemoryContext</td><td>userText: string, isGroup: boolean, botLogger: Logger</td><td>Runs RAG search in parallel and returns formatted memory context or null. Filters out today/yesterday daily logs and short queries.</td></tr>
             <tr><td>handleConversation</td><td>ctx: Context, config: BotConfig, serializedKey: string, userText: string, images?: string[], sessionText?: string</td><td>Full pipeline: session expiry check, proactive memory flush, RAG await, system prompt build, LLM call with tools, session persist, reply with typing indicator.</td></tr>
-            <tr><td>handleChannelMessage</td><td>msg: InboundMessage, channel: Channel, config: BotConfig, sessionKey: string</td><td>Channel-agnostic pipeline entry point. Same LLM/session/RAG/tools/compaction pipeline as handleConversation but decoupled from grammy Context. Used by REST API, web widget, and MCP channels. Returns the response text.</td></tr>
+            <tr><td>handleChannelMessage</td><td>msg: InboundMessage, channel: Channel, config: BotConfig, sessionKey: string</td><td>Channel-agnostic pipeline entry point. Same LLM/session/RAG/tools/compaction pipeline as handleConversation but decoupled from grammy Context. Used by REST API, web widget, and MCP channels. Returns the response text. Images are forwarded from <code>InboundMessage.images</code>.</td></tr>
           </tbody>
         </table>
+        <h4>Image &amp; Document Support</h4>
+        <p>
+          Both <code>handleConversation</code> and <code>handleChannelMessage</code> propagate
+          base64-encoded images through the pipeline. The channel layer carries images via
+          <code>InboundMessage.images</code> (<code>src/channel/types.ts</code>) and the session
+          layer via <code>ThreadMessage.images</code> (<code>src/types/thread.ts</code>).
+          The WebSocket adapter (<code>src/channel/websocket.ts</code>) accepts an optional
+          <code>images</code> parameter in <code>wsToInbound()</code> with a server-side guard
+          of max 4 images / 10 MB total. For the Claude CLI backend,
+          <code>ClaudeCliLLMClient.chat()</code> includes graceful degradation: when images are
+          present it appends a marker text noting the count, since Claude CLI does not support
+          inline vision.
+        </p>
+        <p>
+          File attachments are supported via an optional <code>documents?: DocumentRef[]</code>
+          field on <code>ThreadMessage</code> (<code>src/types/thread.ts</code>), where
+          <code>DocumentRef = &#123; name: string; mimeType: string; size?: number &#125;</code>.
+          The REST conversations route (<code>src/web/routes/conversations.ts</code>) accepts a
+          <code>documents</code> array in the POST body, extracts text content (PDF via
+          <code>pdf-parse</code>, plain-text MIME types directly), and prepends the extracted
+          text to the user message before it enters the pipeline. The WebSocket server
+          (<code>src/channel/websocket.ts</code>) applies the same inline document processing
+          for widget clients.
+        </p>
+        <h4>Streaming Responses</h4>
+        <p>
+          When <code>conversation.streaming.enabled</code> is <code>true</code> and the LLM backend supports
+          streaming (<code>chatStream?()</code> on <code>LLMClient</code>), the channel-agnostic pipeline
+          (<code>handleChannelMessage</code>) delivers tokens progressively instead of waiting for the full
+          response. Streaming is only used when no tools are involved (tools require complete responses for
+          structured parsing) and the message is not a voice note. For Telegram channels, the pipeline uses
+          <code>streamToChannel()</code> (edit-message pattern, throttled by <code>editIntervalMs</code> and
+          <code>minChunkChars</code>). For WebSocket channels, <code>streamToWebSocket()</code> sends
+          <code>stream_start</code>, <code>stream_chunk</code>, and <code>stream_end</code> events. For
+          other channels, tokens are collected and sent as a single message. Claude CLI does not implement
+          <code>chatStream</code>, so streaming is Ollama-only. The feature is opt-in and disabled by default.
+        </p>
         <h4>Dependencies</h4>
-        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./context-compaction</code> (ContextCompactor), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./topic-guard</code> (TopicGuard), <code>./telegram-utils</code> (sendLongMessage), <code>../channel/types</code> (Channel, InboundMessage)</p>
+        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./context-compaction</code> (ContextCompactor), <code>./system-prompt-builder</code> (SystemPromptBuilder), <code>./tool-registry</code> (ToolRegistry), <code>./topic-guard</code> (TopicGuard), <code>./telegram-utils</code> (sendLongMessage, streamToChannel), <code>../channel/websocket</code> (streamToWebSocket), <code>../channel/types</code> (Channel, InboundMessage)</p>
       </div>
 
       <!-- handler-registrar.ts -->
@@ -1274,6 +1313,8 @@
             <tr><td>CollaborationTracker</td><td><code>data/collaboration/tracker.json</code></td><td>JSON: { records }</td></tr>
             <tr><td>CollaborationSessionManager</td><td><code>data/collaboration/sessions.json</code></td><td>JSON: { sessions }</td></tr>
             <tr><td>ToolAuditLog</td><td><code>data/tool-audit/{botId}/YYYY-MM-DD.jsonl</code></td><td>Append-only JSONL, daily rotation</td></tr>
+            <tr><td>LlmQueryLog</td><td><code>data/llm-query-log/{botId}/YYYY-MM-DD.jsonl</code></td><td>Append-only JSONL, daily rotation — every LLM call traced</td></tr>
+            <tr><td>UserDirectory</td><td><code>data/user-directory/{botId}.jsonl</code></td><td>Append-only JSONL, last-write-wins per contact ID</td></tr>
           </tbody>
         </table>
 
@@ -1283,6 +1324,16 @@
           daily JSONL files. Subscribes to <code>tool:end</code> events from <code>ToolExecutor</code>
           in the agent loop. Each entry records timestamp, botId, chatId, toolName, args, success,
           result (truncated to 500 chars), durationMs, and retryAttempts.
+        </p>
+
+        <h4>New Module: llm-query-log.ts</h4>
+        <p>
+          <code>src/bot/llm-query-log.ts</code> &mdash; Persists LLM query entries to daily JSONL
+          files for full traceability. Each entry records timestamp, botId, caller
+          (conversation/planner/strategist/executor/memory_flush/compaction/topic_guard),
+          model, backend, temperature, token counts, duration, attempts, success/error.
+          API: <code>append()</code>, <code>getEntries()</code>, <code>getAvailableDates()</code>,
+          <code>clearForBot()</code>. Exposed via <code>GET /api/agents/:id/llm-log</code>.
         </p>
 
         <h4>New Module: activity-stream.ts &mdash; LLM Diagnostics</h4>
@@ -1299,6 +1350,22 @@
           planner, strategist, executor, feedback). Stats are in-memory only and reset on restart.
           The <code>clearForBot()</code> method also clears LLM stats. API endpoints at
           <code>GET /api/agent-loop/llm-stats[/:botId]</code>.
+        </p>
+
+        <h4>New Module: hooks.ts</h4>
+        <p>
+          <code>src/bot/hooks.ts</code> &mdash; EventEmitter-based lifecycle hook system.
+          <code>HookEmitter</code> provides type-safe <code>emitHook()</code>, <code>onHook()</code>,
+          and <code>onceHook()</code> methods across 8 event types: <code>message_received</code>,
+          <code>message_sent</code>, <code>before_llm_call</code>, <code>after_llm_call</code>,
+          <code>before_tool_call</code>, <code>after_tool_call</code>, <code>before_compaction</code>,
+          <code>agent_loop_cycle</code>. Instantiated in <code>BotManager</code> and available via
+          <code>BotContext.hooks</code> (optional). Hook emissions are wired into
+          <code>ConversationPipeline.handleChannelMessage()</code> (message received/sent, LLM calls),
+          <code>ToolExecutor</code> (bridged from tool:start/tool:end events), and
+          <code>AgentLoop.runSingleBot()</code> (cycle start/complete/idle/error).
+          Skills and extensions register listeners via <code>ctx.hooks?.onHook('event', handler)</code>.
+          Max listeners set to 50.
         </p>
 
         <h4>Data NOT Persisted</h4>

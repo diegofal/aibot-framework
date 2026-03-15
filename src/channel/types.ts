@@ -38,7 +38,7 @@ export interface InboundMessage {
   timestamp: number;
 }
 
-export type ChannelKind = 'telegram' | 'rest' | 'web' | 'mcp' | 'whatsapp';
+export type ChannelKind = 'telegram' | 'rest' | 'web' | 'mcp' | 'whatsapp' | 'discord';
 
 /**
  * A channel's reply interface — the pipeline calls these methods to send

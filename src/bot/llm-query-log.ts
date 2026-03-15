@@ -1,0 +1,95 @@
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Logger } from '../logger';
+
+export interface LlmQueryEntry {
+  timestamp: string;
+  botId: string;
+  chatId?: number;
+  userId?: string;
+  caller:
+    | 'conversation'
+    | 'planner'
+    | 'strategist'
+    | 'executor'
+    | 'memory_flush'
+    | 'compaction'
+    | 'overflow_retry'
+    | 'topic_guard';
+  model: string;
+  backend: string;
+  temperature?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  messageCount?: number;
+  toolCount?: number;
+  durationMs: number;
+  attempts?: number;
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Persists LLM query entries to daily JSONL files for traceability.
+ * Path: {dataDir}/{botId}/YYYY-MM-DD.jsonl
+ */
+export class LlmQueryLog {
+  constructor(
+    private dataDir: string,
+    private logger: Logger
+  ) {}
+
+  /** Append an LLM query entry to the daily JSONL file. */
+  append(entry: LlmQueryEntry): void {
+    try {
+      const date = entry.timestamp.slice(0, 10); // YYYY-MM-DD
+      const botDir = join(this.dataDir, entry.botId);
+      mkdirSync(botDir, { recursive: true });
+      const filePath = join(botDir, `${date}.jsonl`);
+      appendFileSync(filePath, `${JSON.stringify(entry)}\n`, 'utf-8');
+    } catch (err) {
+      this.logger.warn({ err, botId: entry.botId }, 'LlmQueryLog: failed to append entry');
+    }
+  }
+
+  /** Read all entries for a bot on a given date. */
+  getEntries(botId: string, date: string): LlmQueryEntry[] {
+    const filePath = join(this.dataDir, botId, `${date}.jsonl`);
+    if (!existsSync(filePath)) return [];
+
+    const entries: LlmQueryEntry[] = [];
+    const lines = readFileSync(filePath, 'utf-8').trim().split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        entries.push(JSON.parse(line));
+      } catch {
+        this.logger.warn(
+          { botId, line: line.slice(0, 100) },
+          'LlmQueryLog: skipping malformed line'
+        );
+      }
+    }
+    return entries;
+  }
+
+  /** Remove all LLM query log files for a bot. Returns true if the directory existed. */
+  clearForBot(botId: string): boolean {
+    const botDir = join(this.dataDir, botId);
+    if (!existsSync(botDir)) return false;
+    rmSync(botDir, { recursive: true });
+    return true;
+  }
+
+  /** List available dates for a bot (sorted newest first). */
+  getAvailableDates(botId: string): string[] {
+    const botDir = join(this.dataDir, botId);
+    if (!existsSync(botDir)) return [];
+
+    return readdirSync(botDir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => f.replace('.jsonl', ''))
+      .sort()
+      .reverse();
+  }
+}

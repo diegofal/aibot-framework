@@ -32,6 +32,31 @@ interface SearchOpts {
   userId?: string;
 }
 
+/**
+ * Compute exponential temporal decay factor for a memory result.
+ * Recent memories get a boost, but old memories are never fully penalized.
+ *
+ * @param indexedAt - ISO timestamp of when the chunk was indexed
+ * @param halfLifeDays - Number of days for the decay half-life
+ * @param weight - How much the decay influences the final score (0-1)
+ * @param now - Current time (injectable for testing)
+ * @returns Multiplier in range [1 - weight, 1], where 1 = brand new, (1-weight) = very old
+ */
+export function computeTemporalDecay(
+  indexedAt: string,
+  halfLifeDays: number,
+  weight: number,
+  now: Date = new Date()
+): number {
+  const indexedDate = new Date(indexedAt);
+  const ageDays = (now.getTime() - indexedDate.getTime()) / (1000 * 60 * 60 * 24);
+  if (ageDays <= 0) return 1;
+
+  const decayFactor = Math.exp((-ageDays * Math.LN2) / halfLifeDays);
+  // Score range: [1 - weight, 1] — recent items get full score, old items get (1-weight) floor
+  return 1 - weight + weight * decayFactor;
+}
+
 interface ChunkRow {
   id: number;
   content: string;
@@ -40,11 +65,13 @@ interface ChunkRow {
   embedding: Buffer | null;
   file_path: string;
   source_type: string;
+  last_indexed_at: string;
 }
 
 interface FtsRow {
   rowid: number;
   rank: number;
+  last_indexed_at: string;
 }
 
 const STOP_WORDS = new Set([
@@ -121,6 +148,8 @@ export async function hybridSearch(
   // Score maps: chunkId → score
   const vectorScores = new Map<number, number>();
   const keywordScores = new Map<number, number>();
+  // Track indexed timestamp per chunk for temporal decay
+  const chunkTimestamps = new Map<number, string>();
 
   // --- Vector search ---
   const botId = opts.botId;
@@ -131,10 +160,10 @@ export async function hybridSearch(
       query
     );
     const vectorSql = userPathPattern
-      ? `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
+      ? `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type, f.last_indexed_at
          FROM chunks c JOIN files f ON c.file_id = f.id
          WHERE c.embedding IS NOT NULL AND (f.path LIKE ? OR f.path LIKE ? OR f.path LIKE ?)`
-      : `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
+      : `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type, f.last_indexed_at
          FROM chunks c JOIN files f ON c.file_id = f.id
          WHERE c.embedding IS NOT NULL AND (f.path LIKE ? OR f.path LIKE ?)`;
 
@@ -150,6 +179,9 @@ export async function hybridSearch(
       const sim = cosineSimilarity(queryEmbedding, chunkEmb);
       if (sim > 0) {
         vectorScores.set(chunk.id, sim);
+        if (chunk.last_indexed_at) {
+          chunkTimestamps.set(chunk.id, chunk.last_indexed_at);
+        }
       }
     }
   } catch (err) {
@@ -171,13 +203,13 @@ export async function hybridSearch(
     if (ftsQuery) {
       // Join FTS results with chunks→files to filter by bot path prefix
       const ftsSql = userPathPattern
-        ? `SELECT fts.rowid, fts.rank FROM chunks_fts fts
+        ? `SELECT fts.rowid, fts.rank, f.last_indexed_at FROM chunks_fts fts
            JOIN chunks c ON c.id = fts.rowid
            JOIN files f ON f.id = c.file_id
            WHERE chunks_fts MATCH ?
              AND (f.path LIKE ? OR f.path LIKE ? OR f.path LIKE ?)
            ORDER BY fts.rank LIMIT 50`
-        : `SELECT fts.rowid, fts.rank FROM chunks_fts fts
+        : `SELECT fts.rowid, fts.rank, f.last_indexed_at FROM chunks_fts fts
            JOIN chunks c ON c.id = fts.rowid
            JOIN files f ON f.id = c.file_id
            WHERE chunks_fts MATCH ?
@@ -192,6 +224,9 @@ export async function hybridSearch(
         // BM25 rank is negative (lower = better), convert to 0-1 score
         const score = 1 / (1 + Math.abs(row.rank));
         keywordScores.set(row.rowid, score);
+        if (row.last_indexed_at && !chunkTimestamps.has(row.rowid)) {
+          chunkTimestamps.set(row.rowid, row.last_indexed_at);
+        }
       }
     }
   } catch (err) {
@@ -213,10 +248,21 @@ export async function hybridSearch(
   const allChunkIds = new Set([...vectorScores.keys(), ...keywordScores.keys()]);
   const merged: { chunkId: number; score: number; source: 'vector' | 'keyword' | 'both' }[] = [];
 
+  // Temporal decay config
+  const decay = config.temporalDecay ?? { enabled: true, halfLifeDays: 30, weight: 0.3 };
+
   for (const chunkId of allChunkIds) {
     const vScore = vectorScores.get(chunkId) ?? 0;
     const kScore = keywordScores.get(chunkId) ?? 0;
-    const score = config.vectorWeight * vScore + config.keywordWeight * kScore;
+    let score = config.vectorWeight * vScore + config.keywordWeight * kScore;
+
+    // Apply temporal decay: boost recent memories, floor old ones
+    if (decay.enabled) {
+      const timestamp = chunkTimestamps.get(chunkId);
+      if (timestamp) {
+        score *= computeTemporalDecay(timestamp, decay.halfLifeDays, decay.weight);
+      }
+    }
 
     let source: 'vector' | 'keyword' | 'both';
     if (vScore > 0 && kScore > 0) source = 'both';
@@ -235,7 +281,7 @@ export async function hybridSearch(
   // Fetch chunk data for results
   const results: MemorySearchResult[] = [];
   const getChunk = db.prepare<ChunkRow, [number]>(
-    `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type
+    `SELECT c.id, c.content, c.start_line, c.end_line, c.embedding, f.path as file_path, f.source_type, f.last_indexed_at
      FROM chunks c JOIN files f ON c.file_id = f.id
      WHERE c.id = ?`
   );

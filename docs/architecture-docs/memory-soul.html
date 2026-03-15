@@ -35,6 +35,7 @@
         <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
         <a href="use-cases.html">Use Cases</a>
+        <a href="testing-guide.html">Testing Guide</a>
         <a href="backlog.html">Backlog</a>
       </nav>
     </aside>
@@ -169,8 +170,8 @@
             </tr>
             <tr>
               <td><code>search.ts</code></td>
-              <td>Hybrid search combining vector similarity (cosine) and keyword matching (FTS5/BM25). Bilingual stop-word filtering (Spanish + English). Core Memory results boosted by importance weighting.</td>
-              <td><code>hybridSearch()</code></td>
+              <td>Hybrid search combining vector similarity (cosine) and keyword matching (FTS5/BM25). Bilingual stop-word filtering (Spanish + English). Core Memory results boosted by importance weighting. Exponential temporal decay boosts recent memories (configurable via <code>soul.search.temporalDecay</code>).</td>
+              <td><code>hybridSearch()</code>, <code>computeTemporalDecay()</code></td>
             </tr>
             <tr>
               <td><code>session-indexer.ts</code></td>
@@ -288,10 +289,15 @@ score = 1 / (1 + |bm25_rank|)</code></pre>
 
         <p>Results are filtered by <code>minScore</code>, sorted descending, and limited to <code>maxResults</code>.</p>
 
+        <h3>Temporal Decay (Enabled by Default)</h3>
+        <p>After merging vector + keyword scores, an exponential temporal decay is applied to boost recent memories. The decay uses each chunk's <code>last_indexed_at</code> timestamp from the files table:</p>
+        <pre><code>decayMultiplier = (1 - weight) + weight * exp(-ageDays * ln2 / halfLifeDays)</code></pre>
+        <p>With defaults (<code>halfLifeDays: 30</code>, <code>weight: 0.3</code>), a brand-new memory gets full score (1.0x), a 30-day-old memory gets 0.85x, and very old memories floor at 0.7x. Configurable via <code>soul.search.temporalDecay</code> (<code>enabled</code>, <code>halfLifeDays</code>, <code>weight</code>).</p>
+
         <h3>MMR Diversity Re-ranking (Opt-in)</h3>
-        <p>After score-based ranking and before Core Memory merge, an optional <strong>Maximal Marginal Relevance (MMR)</strong> step can re-rank results to reduce near-duplicate chunks. Enabled via <code>soul.search.mmr.enabled: true</code> in config.</p>
+        <p>After temporal decay and score-based ranking, an optional <strong>Maximal Marginal Relevance (MMR)</strong> step can re-rank results to reduce near-duplicate chunks. Enabled via <code>soul.search.mmr.enabled: true</code> in config.</p>
         <p>MMR iteratively selects items that maximize: <code>&lambda; &times; relevance &minus; (1&minus;&lambda;) &times; max_similarity_to_selected</code>. Text similarity is computed using Jaccard distance on tokenized content. The <code>lambda</code> parameter (default 0.7) controls the balance: higher values favor relevance, lower values favor diversity.</p>
-        <pre><code>Pipeline: vector + keyword &rarr; score merge &rarr; build results &rarr; <strong>MMR</strong> &rarr; core memory merge &rarr; return</code></pre>
+        <pre><code>Pipeline: vector + keyword &rarr; score merge &rarr; <strong>temporal decay</strong> &rarr; build results &rarr; <strong>MMR</strong> &rarr; core memory merge &rarr; return</code></pre>
 
         <p>Core Memory entries with <code>importance >= 7</code> are prioritized above regular results. Lower-importance core entries fill remaining slots.</p>
 

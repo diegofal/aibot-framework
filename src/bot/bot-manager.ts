@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Bot } from 'grammy';
 import { type AgentInfo, AgentRegistry } from '../agent-registry';
@@ -6,7 +6,12 @@ import { CollaborationSessionManager } from '../collaboration-session';
 import { CollaborationTracker } from '../collaboration-tracker';
 import type { BotConfig, Config } from '../config';
 import { resolveAgentConfig, resolveAgentConfigWithTenant } from '../config';
-import { type LLMClient, LLMClientWithFallback, createLLMClient } from '../core/llm-client';
+import {
+  FailoverLLMClient,
+  type LLMClient,
+  LLMClientWithFallback,
+  createLLMClient,
+} from '../core/llm-client';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import type { Logger } from '../logger';
@@ -46,6 +51,9 @@ import { ContextCompactor } from './context-compaction';
 import { ConversationPipeline } from './conversation-pipeline';
 import { GroupActivation } from './group-activation';
 import { HandlerRegistrar } from './handler-registrar';
+import { HookEmitter } from './hooks';
+import { InlineApprovalStore } from './inline-approval';
+import { LlmQueryLog } from './llm-query-log';
 import { MemoryFlusher } from './memory-flush';
 import { runStartupSoulCheck } from './soul-health-check';
 import { SystemPromptBuilder } from './system-prompt-builder';
@@ -55,6 +63,7 @@ import { TenantFacade } from './tenant-facade';
 import { ToolAuditLog } from './tool-audit-log';
 import { ToolRegistry } from './tool-registry';
 import type { BotContext, SeenUser } from './types';
+import { UserDirectory } from './user-directory';
 
 export class BotManager {
   // Shared mutable state
@@ -92,6 +101,7 @@ export class BotManager {
   private conversationsService: ConversationsService;
   private karmaService?: KarmaService;
   private toolAuditLog: ToolAuditLog;
+  private llmQueryLog: LlmQueryLog;
   private tenantFacade: TenantFacade;
   private activityStream: ActivityStream;
   private botResetService: BotResetService;
@@ -101,6 +111,9 @@ export class BotManager {
   private customizationService?: CustomizationService;
   private webhookService?: WebhookService;
   private analyticsService?: AnalyticsService;
+  private userDirectory: UserDirectory;
+  private inlineApprovalStore: InlineApprovalStore;
+  private hookEmitter: HookEmitter;
   private botContext!: BotContext;
   private mcpConnected = false;
   private restartAttempts = new Map<string, number[]>();
@@ -162,6 +175,9 @@ export class BotManager {
 
     // Initialize tool audit log
     this.toolAuditLog = new ToolAuditLog(join(dataDir, 'tool-audit'), logger);
+
+    // Initialize LLM query log
+    this.llmQueryLog = new LlmQueryLog(join(dataDir, 'llm-query-log'), logger);
 
     // Initialize productions service if enabled
     if (config.productions?.enabled !== false) {
@@ -234,6 +250,19 @@ export class BotManager {
       productionsBaseDir: config.productions?.baseDir ?? './productions',
     });
 
+    // Initialize user directory
+    this.userDirectory = new UserDirectory(dataDir, logger);
+    logger.info('User directory initialized');
+
+    // Initialize inline approval store (in-memory, for conversation-mode confirm tools)
+    this.inlineApprovalStore = new InlineApprovalStore();
+
+    // Initialize lifecycle hook emitter
+    this.hookEmitter = new HookEmitter();
+
+    // Diagnostic: warn about bots with soul files in legacy config/ path
+    this.checkSoulSourceConsistency();
+
     // Build shared BotContext
     const ctx: BotContext = {
       config,
@@ -264,12 +293,16 @@ export class BotManager {
       askPermissionStore: this.askPermissionStore,
       agentFeedbackStore: this.agentFeedbackStore,
       toolAuditLog: this.toolAuditLog,
+      llmQueryLog: this.llmQueryLog,
       productionsService: this.productionsService,
       conversationsService: this.conversationsService,
       activityStream: this.activityStream,
       mcpClientPool: this.mcpClientPool,
       mcpAgentBridge: this.mcpAgentBridge,
       tenantFacade: this.tenantFacade,
+      userDirectory: this.userDirectory,
+      inlineApprovalStore: this.inlineApprovalStore,
+      hooks: this.hookEmitter,
 
       getActiveModel: (botId: string) => this.getActiveModel(botId),
       getLLMClient: (botId: string) => this.getLLMClient(botId),
@@ -455,6 +488,23 @@ export class BotManager {
           : resolveAgentConfig(this.config, config);
       this.activeModels.set(config.id, resolved.model);
 
+      // Soul migration: copy from legacy config/soul/{id} to data/ if needed
+      const legacySoulDir = join(this.config.soul.dir, config.id);
+      if (resolved.soulDir !== legacySoulDir && existsSync(legacySoulDir)) {
+        if (!existsSync(resolved.soulDir)) {
+          cpSync(legacySoulDir, resolved.soulDir, { recursive: true });
+          botLogger.info(
+            { from: legacySoulDir, to: resolved.soulDir },
+            'Soul migrated from legacy config/ to data/'
+          );
+        } else {
+          botLogger.warn(
+            { legacy: legacySoulDir, current: resolved.soulDir },
+            'Soul exists in BOTH legacy config/ and data/. Using data/.'
+          );
+        }
+      }
+
       // Ensure workDir and soulDir exist (creates tenant dirs for multi-tenant)
       mkdirSync(resolved.workDir, { recursive: true });
       mkdirSync(resolved.soulDir, { recursive: true });
@@ -471,11 +521,12 @@ export class BotManager {
           llmBackend: resolved.llmBackend,
           claudeModel: this.config.claudeCli?.model,
           claudeTimeout: config.agentLoop?.claudeTimeout ?? this.config.agentLoop.claudeTimeout,
+          failoverConfig: this.config.failover,
         },
         this.ollamaClient,
         botLogger
       );
-      if (llmClient instanceof LLMClientWithFallback) {
+      if (llmClient instanceof LLMClientWithFallback || llmClient instanceof FailoverLLMClient) {
         llmClient.onFallback = (event) => {
           this.activityStream.publish({
             type: 'llm:fallback',
@@ -520,6 +571,14 @@ export class BotManager {
           model: healthCheckConfig.model,
           ollamaClient: healthCheckConfig.llmBackend === 'ollama' ? this.ollamaClient : undefined,
         }).catch((err) => botLogger.warn({ err }, 'Soul health check failed (non-fatal)'));
+      }
+
+      // Background security audit (non-blocking, 24h cooldown)
+      const securityConfig = this.config.security;
+      if (securityConfig?.auditOnStartup !== false) {
+        this.runSecurityAudit(config.id, resolved.soulDir, botLogger).catch((err) =>
+          botLogger.warn({ err }, 'Security audit failed (non-fatal)')
+        );
       }
 
       const token = config.token?.trim();
@@ -669,6 +728,57 @@ export class BotManager {
       { telegramUserId: me.id, username: me.username },
       'Registered in agent registry'
     );
+  }
+
+  private async runSecurityAudit(botId: string, soulDir: string, logger: Logger): Promise<void> {
+    const cooldownMs = this.config.security?.cooldownMs ?? 86_400_000;
+    const cooldownFile = join(soulDir, '.last-security-audit');
+
+    // Check cooldown
+    try {
+      const lastCheck = Number(readFileSync(cooldownFile, 'utf-8').trim());
+      if (Number.isFinite(lastCheck) && Date.now() - lastCheck < cooldownMs) {
+        logger.debug({ botId }, 'Security audit: skipping (cooldown)');
+        return;
+      }
+    } catch {
+      /* no cooldown file */
+    }
+
+    const { runSecurityAudit, formatReportText } = await import('./security/audit');
+
+    const report = await runSecurityAudit({
+      botDir: soulDir,
+      configPath: this.configPath,
+    });
+
+    // Log results
+    if (report.summary.critical > 0) {
+      logger.warn({ botId, summary: report.summary }, 'Security audit: CRITICAL issues found');
+    } else if (report.summary.warn > 0) {
+      logger.info({ botId, summary: report.summary }, 'Security audit: warnings found');
+    } else {
+      logger.info({ botId }, 'Security audit: clean');
+    }
+
+    // Surface in activity stream
+    if (this.activityStream) {
+      this.activityStream.publish({
+        type: 'security:audit',
+        botId,
+        timestamp: Date.now(),
+        data: {
+          summary: report.summary,
+          durationMs: report.meta.durationMs,
+          findings: report.findings
+            .slice(0, 5)
+            .map((f: any) => ({ severity: f.severity, title: f.title })),
+        },
+      });
+    }
+
+    // Write cooldown
+    writeFileSync(cooldownFile, String(Date.now()), 'utf-8');
   }
 
   private registerHeadless(config: BotConfig, botLogger: Logger): void {
@@ -1024,8 +1134,34 @@ export class BotManager {
     return this.ollamaClient;
   }
 
+  getLlmQueryLog(): LlmQueryLog {
+    return this.llmQueryLog;
+  }
+
+  /** Warn about bots that have soul files in the legacy config/soul/ path */
+  private checkSoulSourceConsistency(): void {
+    const legacyBaseDir = this.config.soul.dir;
+    for (const bot of this.config.bots) {
+      if (bot.soulDir) continue; // explicitly configured, skip
+      const legacyDir = join(legacyBaseDir, bot.id);
+      if (existsSync(legacyDir)) {
+        const resolved = resolveAgentConfig(this.config, bot);
+        if (resolved.soulDir !== legacyDir) {
+          this.logger.warn(
+            { botId: bot.id, legacyDir, resolvedDir: resolved.soulDir },
+            'Soul files found in legacy config/ path — will be migrated on startBot'
+          );
+        }
+      }
+    }
+  }
+
   getToolRegistry(): ToolRegistry {
     return this.toolRegistry;
+  }
+
+  getInlineApprovalStore(): InlineApprovalStore {
+    return this.inlineApprovalStore;
   }
 
   getMcpClientPool(): McpClientPool {
@@ -1034,6 +1170,21 @@ export class BotManager {
 
   buildSystemPrompt(options: import('./system-prompt-builder').SystemPromptOptions): string {
     return this.systemPromptBuilder.build(options);
+  }
+
+  /**
+   * Build a system prompt for the given botId in conversation mode (channel-agnostic).
+   * Used by A2A protocol executor for headless message processing.
+   */
+  async getSystemPrompt(botId: string): Promise<string> {
+    const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+    if (!botConfig) throw new Error(`Bot not found: ${botId}`);
+    return this.systemPromptBuilder.build({
+      mode: 'conversation',
+      botId,
+      botConfig,
+      isGroup: false,
+    });
   }
 
   async prefetchMemoryContext(query: string, botId: string): Promise<string | null> {

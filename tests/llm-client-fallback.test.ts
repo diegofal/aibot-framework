@@ -178,6 +178,7 @@ describe('LLMClientWithFallback', () => {
         fallbackBackend: 'ollama',
         error: 'timeout',
         method: 'generate',
+        reason: 'timeout',
       });
     });
 
@@ -199,6 +200,7 @@ describe('LLMClientWithFallback', () => {
         fallbackBackend: 'ollama',
         error: 'connection refused',
         method: 'chat',
+        reason: 'unknown',
       });
     });
 

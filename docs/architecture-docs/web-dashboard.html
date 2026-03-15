@@ -35,6 +35,7 @@
       <a href="simplifications.html">Simplifications</a>
         <a href="multi-tenancy.html">Multi-Tenancy</a>
         <a href="use-cases.html">Use Cases</a>
+        <a href="testing-guide.html">Testing Guide</a>
         <a href="backlog.html">Backlog</a>
     </nav>
   </aside>
@@ -1306,15 +1307,21 @@ compaction                            // Context compaction
 
         <div class="card">
           <h3>Activity (unified)</h3>
-          <p>Unified real-time monitoring page with two tabs:</p>
+          <p>Unified monitoring page with three tabs:</p>
           <ul>
             <li><strong>Events</strong> — Structured bot events (tool calls, LLM, agent phases,
                 memory, collaboration) via <code>/ws/activity</code>. Filter by agent and event type.</li>
             <li><strong>System Logs</strong> — Pino log output (debug/info/warn/error) via
                 <code>/ws/logs</code>. Filter by level, agent, and free-text search.</li>
+            <li><strong>LLM Queries</strong> — Persistent LLM query log browser via REST
+                (<code>GET /api/agents/:id/llm-log?date=YYYY-MM-DD</code>). Filter by agent, date, and
+                caller (conversation/planner/strategist/executor/memory_flush/compaction/topic_guard/overflow_retry).
+                Stats summary bar (total queries, success/fail, tokens, avg duration). Date quick-nav pills.
+                Click-to-expand full JSON detail. "All Agents" merges logs client-side.</li>
           </ul>
-          <p>Both WebSockets run in parallel so neither tab loses events while viewing the other.
-             Pause/Resume and Clear act on the active tab. The old <code>#/logs</code> route
+          <p>Events and System Logs WebSockets run in parallel so neither tab loses events while viewing the other.
+             Pause/Resume acts on the active streaming tab (hidden for LLM Queries which uses historical REST data).
+             Clear acts on the active tab. The old <code>#/logs</code> route
              redirects to <code>#/activity?tab=logs</code>.</p>
         </div>
 

@@ -2,18 +2,23 @@ import { resolve } from 'node:path';
 import {
   type LoadedExternalSkill,
   discoverProductionSkillPaths,
-  discoverSkillDirs,
-  loadExternalSkill,
 } from '../core/external-skill-loader';
 import { type ExternalToolCronDeps, adaptExternalTool } from '../core/external-tool-adapter';
+import {
+  discoverSkillDirsExtended,
+  loadExternalSkillUnified,
+} from '../core/skill-md-adapter/framework-bridge';
 import type { ToolExecuteFn } from '../core/types';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { adaptAllMcpTools } from '../mcp/tool-adapter';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
+import type { InlineApprovalStore } from './inline-approval';
 import { ToolExecutor } from './tool-executor';
+import { type PermissionMode, getBlockedTools } from './tool-permissions';
 import type { BotContext } from './types';
 
+import { createOutboundChannel } from '../channel/outbound';
 import { AgentProposalStore } from '../tools/agent-proposal-store';
 import { createArchiveFileTool } from '../tools/archive-file';
 import { type AskHumanDeps, createAskHumanTool } from '../tools/ask-human';
@@ -44,6 +49,7 @@ import { createProcessTool } from '../tools/process';
 import { createProductionLogTool } from '../tools/production-log';
 import { createRecallMemoryTool } from '../tools/recall-memory';
 import { createRedditHotTool, createRedditReadTool, createRedditSearchTool } from '../tools/reddit';
+import { createSendMessageTool } from '../tools/send-message';
 import { createSendProactiveMessageTool } from '../tools/send-proactive-message';
 import { createSignalCompletionTool } from '../tools/signal-completion';
 import {
@@ -110,6 +116,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'moltbook_register',
     'create_agent',
     'send_proactive_message',
+    'send_message',
   ],
   browser: ['browser'],
   production: ['read_production_log', 'archive_file', 'create_tool', 'signal_completion'],
@@ -415,6 +422,27 @@ export class ToolRegistry {
     );
     logger.info('send_proactive_message tool initialized');
 
+    // Channel-agnostic send_message tool (with contact directory lookup)
+    if (this.ctx.userDirectory) {
+      const outboundDeps = {
+        getTelegramBot: (botId: string) =>
+          this.ctx.bots?.get(botId) ?? this.ctx.bots?.values().next().value,
+        getWhatsAppConfig: (botId: string) => {
+          const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+          return botConfig?.whatsapp ?? undefined;
+        },
+        sessionManager: this.ctx.sessionManager,
+      };
+      tools.push(
+        createSendMessageTool({
+          userDirectory: this.ctx.userDirectory,
+          createOutboundChannel: (botId, contact) =>
+            createOutboundChannel(outboundDeps, botId, contact),
+        })
+      );
+      logger.info('send_message tool initialized');
+    }
+
     // Productions tools
     if (this.ctx.productionsService) {
       tools.push(createProductionLogTool(this.ctx.productionsService));
@@ -531,37 +559,37 @@ export class ToolRegistry {
 
     // Collect from configured skillsFolders.paths
     const configuredPaths = config.skillsFolders?.paths ?? [];
-    const configuredDirs = discoverSkillDirs(configuredPaths);
+    const configuredEntries = discoverSkillDirsExtended(configuredPaths);
 
     // Collect from auto-discovered production directories
     const productionEntries = discoverProductionSkillPaths(
       config.productions?.baseDir ?? './productions'
     );
-    const productionDirs = discoverSkillDirs(productionEntries.map((e) => e.path));
+    const productionSkillEntries = discoverSkillDirsExtended(productionEntries.map((e) => e.path));
 
     // Build botName lookup: resolved dir → botName
     const dirToBotName = new Map<string, string>();
     for (const entry of productionEntries) {
       const resolved = resolve(entry.path);
-      for (const dir of productionDirs) {
-        if (resolve(dir).startsWith(resolved)) {
-          dirToBotName.set(resolve(dir), entry.botName);
+      for (const skillEntry of productionSkillEntries) {
+        if (resolve(skillEntry.dir).startsWith(resolved)) {
+          dirToBotName.set(resolve(skillEntry.dir), entry.botName);
         }
       }
     }
 
     // Deduplicate by resolved absolute path
     const seen = new Set<string>();
-    const allDirs: string[] = [];
-    for (const dir of [...configuredDirs, ...productionDirs]) {
-      const abs = resolve(dir);
+    const allEntries: Array<{ dir: string; type: 'json' | 'skillmd' }> = [];
+    for (const entry of [...configuredEntries, ...productionSkillEntries]) {
+      const abs = resolve(entry.dir);
       if (!seen.has(abs)) {
         seen.add(abs);
-        allDirs.push(dir);
+        allEntries.push(entry);
       }
     }
 
-    if (allDirs.length === 0) {
+    if (allEntries.length === 0) {
       if (configuredPaths.length > 0 || productionEntries.length > 0) {
         logger.info(
           { configuredPaths, productionPaths: productionEntries.map((e) => e.path) },
@@ -573,16 +601,16 @@ export class ToolRegistry {
 
     logger.info(
       {
-        count: allDirs.length,
+        count: allEntries.length,
         configuredPaths,
         productionPaths: productionEntries.map((e) => e.path),
       },
       'Discovered external skill directories'
     );
 
-    for (const dir of allDirs) {
+    for (const { dir, type } of allEntries) {
       try {
-        const loaded = await loadExternalSkill(dir, logger);
+        const loaded = await loadExternalSkillUnified(dir, logger, type);
         const { manifest, handlers, warnings } = loaded;
 
         // Tag with bot name if from a production directory
@@ -722,9 +750,19 @@ export class ToolRegistry {
 
   /**
    * Get tool definitions filtered for a specific bot (respects disabledTools + dynamic scope).
+   * When permissionMode is provided, also filters out tools that are 'blocked' for that mode.
    */
-  getDefinitionsForBot(botId: string): ToolDefinition[] {
+  getDefinitionsForBot(botId: string, permissionMode?: PermissionMode): ToolDefinition[] {
     const excluded = this.getExcludedSet(botId);
+
+    // Add permission-blocked tools
+    if (permissionMode) {
+      const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+      const allNames = this.ctx.toolDefinitions.map((d) => d.function.name);
+      const blocked = getBlockedTools(permissionMode, allNames, botConfig?.toolPermissions);
+      for (const name of blocked) excluded.add(name);
+    }
+
     if (excluded.size === 0) return this.ctx.toolDefinitions;
     return this.ctx.toolDefinitions.filter((d) => !excluded.has(d.function.name));
   }
@@ -786,7 +824,10 @@ export class ToolRegistry {
     chatId: number,
     botId: string,
     userId?: string,
-    tenantRoot?: string
+    tenantRoot?: string,
+    permissionMode?: PermissionMode,
+    inlineApprovalStore?: InlineApprovalStore,
+    sessionKey?: string
   ): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
     const executor = new ToolExecutor(this.ctx, {
       botId,
@@ -795,6 +836,9 @@ export class ToolRegistry {
       tenantRoot,
       tools: this.getToolsForBot(botId),
       karmaService: this.karmaService,
+      permissionMode,
+      inlineApprovalStore,
+      sessionKey,
     });
     return executor.createCallback();
   }

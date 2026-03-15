@@ -79,10 +79,10 @@ describe('resolveAgentConfigWithTenant', () => {
     expect(result.maxHistory).toBe(200); // bot wins
   });
 
-  test('soulDir and workDir always use bot or global defaults', () => {
+  test('soulDir and workDir use data/ paths (not legacy config/soul/)', () => {
     const tenantConfig = { model: 'tenant-model' };
     const result = resolveAgentConfigWithTenant(globalConfig, tenantConfig, botConfig);
-    expect(result.soulDir).toBe('./config/soul/bot-1');
+    expect(result.soulDir).toContain('__admin__/bots/bot-1/soul');
     expect(result.workDir).toBe('./productions/bot-1');
   });
 

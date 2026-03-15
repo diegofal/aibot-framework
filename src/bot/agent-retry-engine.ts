@@ -1,6 +1,7 @@
 import type { AgentLoopRetryConfig, BotConfig } from '../config';
 import type { Logger } from '../logger';
 import type { AgentLoopResult } from './agent-loop';
+import { type FailoverReason, classifyFailoverReason } from './model-failover/failover-error';
 
 /** Classification types for errors — determines retry strategy */
 export type ErrorClassification = 'TRANSIENT' | 'PERMANENT' | 'CONTEXTUAL' | 'UNKNOWN';
@@ -9,6 +10,8 @@ export interface ClassifiedError {
   type: ErrorClassification;
   code?: string;
   message: string;
+  /** Structured failover reason when classified from an error object */
+  failoverReason?: FailoverReason;
 }
 
 /** TRANSIENT: retry with normal exponential backoff (network, timeouts, server errors) */
@@ -58,7 +61,56 @@ const CONTEXTUAL_PATTERNS = ['rate limit', '429', 'quota', 'too many requests', 
  * - CONTEXTUAL: rate limits/quotas → retry with special delay
  * - UNKNOWN: unclassified → conservative retry
  */
+/** Map FailoverReason → ErrorClassification */
+const FAILOVER_TO_CLASSIFICATION: Record<FailoverReason, ErrorClassification | null> = {
+  auth: 'PERMANENT',
+  billing: 'PERMANENT',
+  context_length: 'PERMANENT',
+  format: 'PERMANENT',
+  rate_limit: 'CONTEXTUAL',
+  timeout: 'TRANSIENT',
+  unknown: null, // fall through to string patterns
+};
+
 export function classifyError(error: unknown): ClassifiedError {
+  // 1. Try structured classification for non-string values that carry
+  //    status codes or error codes (the high-confidence signals).
+  //    Only trust the failover classifier when it found structural data —
+  //    message-only matches are handled below with the right priority order.
+  if (error != null && typeof error !== 'string') {
+    const failover = classifyFailoverReason(error);
+    if (failover && failover.statusCode != null) {
+      const mapped = FAILOVER_TO_CLASSIFICATION[failover.reason];
+      if (mapped) {
+        return {
+          type: mapped,
+          code: failover.statusCode.toString(),
+          message: failover.message,
+          failoverReason: failover.reason,
+        };
+      }
+    }
+    // Also trust error-code based classification (Node network errors)
+    if (failover && !failover.statusCode) {
+      const e = error as Record<string, unknown>;
+      const hasErrorCode =
+        typeof e.code === 'string' ||
+        (e.cause && typeof e.cause === 'object' && typeof (e.cause as any).code === 'string');
+      if (hasErrorCode) {
+        const mapped = FAILOVER_TO_CLASSIFICATION[failover.reason];
+        if (mapped) {
+          return {
+            type: mapped,
+            code: String(e.code ?? (e.cause as any)?.code),
+            message: failover.message,
+            failoverReason: failover.reason,
+          };
+        }
+      }
+    }
+  }
+
+  // 2. Fall back to string pattern matching
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
   const originalMsg = error instanceof Error ? error.message : String(error);
 
@@ -190,7 +242,7 @@ export async function executeSingleBotWithRetry(
       return lastResult;
     }
 
-    const classified = classifyError(lastResult.summary);
+    const classified = classifyError(lastResult.originalError ?? lastResult.summary);
 
     if (classified.type === 'PERMANENT') {
       botLogger.warn(

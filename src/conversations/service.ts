@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import type { FileRef, ThreadMessage } from '../types/thread';
+import type { ApprovalRequest, DocumentRef, FileRef, ThreadMessage } from '../types/thread';
 
 export type ConversationType = 'general' | 'productions' | 'inbox';
 export type InboxStatus = 'pending' | 'answered' | 'dismissed' | 'timed_out';
@@ -198,7 +198,10 @@ export class ConversationsService {
     conversationId: string,
     role: 'human' | 'bot',
     content: string,
-    files?: FileRef[]
+    files?: FileRef[],
+    images?: string[],
+    documents?: DocumentRef[],
+    approval?: ApprovalRequest
   ): ThreadMessage | null {
     const convos = this.readConversations(botId);
     const idx = convos.findIndex((c) => c.id === conversationId);
@@ -211,6 +214,9 @@ export class ConversationsService {
       role,
       content,
       ...(files && files.length > 0 ? { files } : {}),
+      ...(images && images.length > 0 ? { images } : {}),
+      ...(documents && documents.length > 0 ? { documents } : {}),
+      ...(approval ? { approval } : {}),
       createdAt: new Date().toISOString(),
     };
 
@@ -231,6 +237,35 @@ export class ConversationsService {
 
     this.writeConversations(botId, convos);
     return message;
+  }
+
+  /** Update the approval status on a message that has an approval field. */
+  updateApprovalStatus(
+    botId: string,
+    conversationId: string,
+    messageId: string,
+    status: 'approved' | 'denied'
+  ): boolean {
+    const path = this.messagesPath(botId, conversationId);
+    if (!existsSync(path)) return false;
+    const lines = readFileSync(path, 'utf-8').trim().split('\n').filter(Boolean);
+    let found = false;
+    const updated = lines.map((line) => {
+      try {
+        const msg = JSON.parse(line) as ThreadMessage;
+        if (msg.id === messageId && msg.approval) {
+          msg.approval.status = status;
+          found = true;
+          return JSON.stringify(msg);
+        }
+      } catch {
+        /* keep original */
+      }
+      return line;
+    });
+    if (!found) return false;
+    writeFileSync(path, `${updated.join('\n')}\n`, 'utf-8');
+    return true;
   }
 
   markInboxStatus(botId: string, conversationId: string, status: InboxStatus): Conversation | null {

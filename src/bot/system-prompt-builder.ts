@@ -3,6 +3,7 @@ import { resolveAgentConfig } from '../config';
 import { HUMANIZER_PROMPT } from '../humanizer-prompt';
 import type { KarmaService } from '../karma/service';
 import type { CustomizationService } from '../tenant/customization';
+import { type PermissionMode, buildSensitiveActionProtocol } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
 import type { BotContext } from './types';
 
@@ -16,6 +17,8 @@ export interface SystemPromptOptions {
   ragContext?: string | null;
   /** User ID for per-user core memory isolation */
   userId?: string;
+  /** Permission mode for Sensitive Action Protocol injection */
+  permissionMode?: PermissionMode;
 }
 
 export class SystemPromptBuilder {
@@ -61,6 +64,16 @@ export class SystemPromptBuilder {
 
     if (mode === 'conversation') {
       prompt = this.appendConversationToolBlocks(prompt, defs, botConfig, ragContext);
+      // Sensitive Action Protocol — inform/confirm guidance based on permission matrix
+      if (options.permissionMode) {
+        const toolNames = defs.map((d) => d.function.name);
+        const protocol = buildSensitiveActionProtocol(
+          options.permissionMode,
+          toolNames,
+          botConfig.toolPermissions
+        );
+        if (protocol) prompt += protocol;
+      }
     } else if (mode === 'autonomous') {
       prompt = this.appendAutonomousToolBlocks(prompt, defs, botConfig);
     } else {

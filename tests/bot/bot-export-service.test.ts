@@ -24,15 +24,19 @@ function createMockLogger() {
 }
 
 function makeBot(overrides: Partial<BotConfig> = {}): BotConfig {
+  const id = (overrides.id as string) || 'test-bot';
   return {
-    id: 'test-bot',
+    id,
     name: 'Test Bot',
     token: 'secret-token-12345678',
     enabled: true,
     skills: ['skill1', 'skill2'],
+    soulDir: join(SOUL_DIR, id),
     ...overrides,
   };
 }
+
+const DATA_DIR = join(TEST_DIR, 'data', 'tenants');
 
 function makeConfig(bots: BotConfig[] = [makeBot()]): Config {
   return {
@@ -45,6 +49,7 @@ function makeConfig(bots: BotConfig[] = [makeBot()]): Config {
     conversation: {} as any,
     agentLoop: {} as any,
     paths: { data: join(TEST_DIR, 'data') } as any,
+    multiTenant: { dataDir: DATA_DIR } as any,
   } as Config;
 }
 

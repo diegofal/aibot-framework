@@ -31,6 +31,7 @@ const mockConfig = {
 function makeDeps(overrides?: Record<string, unknown>) {
   const svc = new ConversationsService(TEST_DIR);
 
+  const { InlineApprovalStore } = require('../../../src/bot/inline-approval');
   const mockBotManager = {
     getSoulLoader: () => ({
       appendDailyMemory: mock(() => {}),
@@ -42,6 +43,7 @@ function makeDeps(overrides?: Record<string, unknown>) {
       getDefinitionsForBot: () => [],
       createExecutor: () => async () => ({ success: true, content: 'ok' }),
     }),
+    getInlineApprovalStore: () => new InlineApprovalStore(),
     buildSystemPrompt: mock(() => 'Unified system prompt for testing'),
     prefetchMemoryContext: mock(() => Promise.resolve(null)),
   };
