@@ -1560,38 +1560,53 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
         </ul>
         <p>
           Most sensitive tools (exec, file_write, file_edit, browser, process, create_tool,
-          create_agent, improve, twitter_post) use <strong>confirm</strong> in conversations,
-          enabling <strong>inline approval</strong> &mdash; the user confirms or denies in chat.
+          create_agent, improve, twitter_post) use <strong>confirm</strong> in conversations.
           Only <code>phone_call</code> remains blocked in conversations (too dangerous).
-          Agent loop uses <code>confirm</code> for these tools, gated by the dashboard
-          <code>ask_permission</code> flow. Per-bot overrides are stored in
+          Per-bot overrides are stored in
           <code>bots.json &rarr; toolPermissions</code> (partial overrides only).
         </p>
-        <h4>Inline Approval (conversation mode)</h4>
+        <h4>Confirm Tool Behavior by Path</h4>
+        <table>
+          <tr><th>Path</th><th>Confirm tool behavior</th></tr>
+          <tr>
+            <td>Dashboard conversations (webGenerate)</td>
+            <td>Inline approval cards via <code>InlineApprovalStore</code> &mdash; visual Approve/Deny buttons in the web UI</td>
+          </tr>
+          <tr>
+            <td>Telegram / WhatsApp / Discord / WebSocket / REST channels</td>
+            <td><code>AskPermissionStore.request()</code> &rarr; dashboard Permissions page. Tool execution blocks until operator approves/denies. LLM receives real result or denial.</td>
+          </tr>
+          <tr>
+            <td>Agent loop</td>
+            <td><code>ask_permission</code> &rarr; dashboard Permissions page (unchanged)</td>
+          </tr>
+        </table>
+        <h4>Inline Approval (dashboard web conversations)</h4>
         <p>
           <code>src/bot/inline-approval.ts</code> implements a two-turn inline approval
-          mechanism for <code>confirm</code>-level tools in conversations:
+          mechanism for <code>confirm</code>-level tools in dashboard web conversations:
         </p>
         <ol>
           <li><strong>Turn 1:</strong> LLM calls a confirm tool &rarr;
             <code>ToolExecutor</code> intercepts, stores the call in
             <code>InlineApprovalStore</code>, returns a synthetic result telling the
             LLM to ask the user for confirmation.</li>
-          <li><strong>Turn 2:</strong> User responds &rarr;
-            <code>ConversationPipeline</code> classifies the response
-            (approve/deny/unrelated via keyword matching, no LLM).
-            Approved &rarr; tool executes, result injected into history.
-            Denied &rarr; action cancelled. Unrelated &rarr; pending kept,
-            LLM re-asks.</li>
+          <li><strong>Turn 2:</strong> User clicks Approve/Deny in the UI &rarr;
+            the <code>/approve</code> endpoint executes or denies the tool.</li>
         </ol>
+        <h4>Channel Approval (Telegram, WhatsApp, etc.)</h4>
         <p>
-          The store is in-memory (no disk persistence) &mdash; pending approvals are
-          ephemeral. Auto-expires after 10 minutes. One pending per session.
+          When a confirm-level tool is called without an <code>InlineApprovalStore</code>
+          (i.e. from a messaging channel), the <code>ToolExecutor</code> creates a request
+          in <code>AskPermissionStore</code> and <strong>awaits</strong> the returned promise.
+          The tool call blocks until the operator approves or denies via the dashboard
+          Permissions page. On approval, the tool executes normally and the LLM receives
+          the real result. On denial, the LLM receives a denial message.
         </p>
         <p>
           <strong>Enforcement layers:</strong> (1) <code>ToolRegistry.getDefinitionsForBot()</code>
           filters blocked tools from LLM definitions, (2) <code>ToolExecutor.execute()</code>
-          intercepts confirm tools (inline approval) or rejects blocked tools,
+          intercepts confirm tools (inline approval or ask_permission) or rejects blocked tools,
           (3) <code>SystemPromptBuilder</code> injects a
           &ldquo;Sensitive Action Protocol&rdquo; block listing inform/confirm tools.
         </p>
@@ -1599,6 +1614,28 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
           Dashboard: the bot edit form exposes trusted channel checkboxes and an editable
           permission matrix table under &ldquo;Tool Permissions&rdquo;. Only overrides that
           differ from defaults are persisted.
+        </p>
+
+        <h4>Claude CLI Native Tool Blocking</h4>
+        <p>
+          When the bot uses <code>llmBackend: "claude-cli"</code>, Claude CLI has built-in native
+          tools (Bash, Read, Write, Edit, WebFetch, WebSearch) that are not subject to the
+          <code>--allowedTools</code> flag. To prevent permission bypass, blocked framework tools
+          are mapped to their Claude CLI native equivalents via <code>NATIVE_TOOL_MAP</code> and
+          passed as <code>--disallowedTools</code> to the CLI:
+        </p>
+        <table>
+          <tr><th>Framework tool</th><th>Claude CLI native</th></tr>
+          <tr><td>exec</td><td>Bash</td></tr>
+          <tr><td>file_write</td><td>Write</td></tr>
+          <tr><td>file_edit</td><td>Edit</td></tr>
+          <tr><td>file_read</td><td>Read</td></tr>
+          <tr><td>browser</td><td>WebFetch, WebSearch</td></tr>
+        </table>
+        <p>
+          <code>getBlockedNativeTools()</code> computes the disallowed list from the permission
+          matrix. The list flows through <code>ChatOptions.blockedNativeTools</code> &rarr;
+          <code>ClaudeCliLLMClient</code> &rarr; <code>claudeGenerateWithTools()</code>.
         </p>
 
         <h3>AI Generation</h3>

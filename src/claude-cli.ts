@@ -88,8 +88,6 @@ export async function claudeGenerate(
           isTimeout,
           stdoutLen: stdout.length,
           stderrLen: stderr.length,
-          stdoutPreview: stdout.slice(0, 500) || '(empty)',
-          stderrPreview: stderr.slice(0, 500) || '(empty)',
         },
         'Claude CLI failed'
       );
@@ -143,6 +141,8 @@ export interface ClaudeToolCallRecord {
 export interface ClaudeGenerateWithToolsOptions extends ClaudeGenerateOptions {
   tools: ToolDefinition[];
   toolExecutor: ToolExecutor;
+  /** Claude CLI native tools to block via --disallowedTools (e.g. 'Bash', 'Write'). */
+  disallowedNativeTools?: string[];
 }
 
 /**
@@ -258,6 +258,9 @@ export async function claudeGenerateWithTools(
       '--allowedTools',
       allowedTools.join(','),
     ];
+    if (opts.disallowedNativeTools && opts.disallowedNativeTools.length > 0) {
+      args.push('--disallowedTools', opts.disallowedNativeTools.join(','));
+    }
     if (opts.model) {
       args.push('--model', opts.model);
     }
@@ -303,8 +306,6 @@ export async function claudeGenerateWithTools(
           durationMs,
           isTimeout,
           toolCalls: toolCalls.length,
-          stdoutPreview: stdout.slice(0, 500) || '(empty)',
-          stderrPreview: stderr.slice(0, 500) || '(empty)',
         },
         'Claude CLI (MCP tools) failed'
       );

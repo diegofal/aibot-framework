@@ -91,6 +91,9 @@ const ERROR_CODE_MAP: Record<string, FailoverReason> = {
   EAI_AGAIN: 'timeout', // DNS temporary failure
   EHOSTUNREACH: 'timeout',
   ENETUNREACH: 'timeout',
+  EHOSTDOWN: 'timeout', // host is down (OpenClaw failover pattern)
+  ENETRESET: 'timeout', // connection reset by network (not peer)
+  ESOCKETTIMEDOUT: 'timeout', // socket-level timeout (some HTTP libs)
   UND_ERR_CONNECT_TIMEOUT: 'timeout',
   UND_ERR_HEADERS_TIMEOUT: 'timeout',
   UND_ERR_BODY_TIMEOUT: 'timeout',

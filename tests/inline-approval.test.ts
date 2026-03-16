@@ -362,6 +362,157 @@ describe('ConversationsService.updateApprovalStatus', () => {
   });
 });
 
+// ─── Channel confirm → ask_permission flow ───
+
+describe('ToolExecutor channel confirm → askPermissionStore', () => {
+  it('blocks tool execution until askPermissionStore resolves approved', async () => {
+    // Minimal BotContext mock with askPermissionStore
+    let resolvePermission!: (decision: 'approved' | 'denied') => void;
+    const permissionPromise = new Promise<'approved' | 'denied'>((res) => {
+      resolvePermission = res;
+    });
+
+    const mockAskPermissionStore = {
+      request: (
+        _botId: string,
+        _action: string,
+        _resource: string,
+        _desc: string,
+        _urgency: string
+      ) => ({
+        id: 'perm-1',
+        promise: permissionPromise,
+      }),
+    };
+
+    const mockTool = {
+      definition: {
+        function: {
+          name: 'exec',
+          description: 'Execute command',
+          parameters: { type: 'object', properties: {}, required: [] },
+        },
+      },
+      execute: async () => ({ success: true, content: 'executed' }),
+    };
+
+    const { ToolExecutor } = await import('../src/bot/tool-executor');
+    const ctx = {
+      askPermissionStore: mockAskPermissionStore,
+      config: { bots: [{ id: 'bot1' }] },
+      tools: [mockTool],
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    } as any;
+
+    const executor = new ToolExecutor(ctx, {
+      botId: 'bot1',
+      chatId: 0,
+      permissionMode: 'conversation',
+      // No inlineApprovalStore → channel path
+    });
+
+    // Start execution (will block on promise)
+    const resultPromise = executor.execute('exec', { command: 'whoami' });
+
+    // Simulate dashboard approval after a tick
+    setTimeout(() => resolvePermission('approved'), 10);
+
+    const result = await resultPromise;
+    expect(result.success).toBe(true);
+    expect(result.content).toBe('executed');
+  });
+
+  it('returns denial when askPermissionStore resolves denied', async () => {
+    let resolvePermission!: (decision: 'approved' | 'denied') => void;
+    const permissionPromise = new Promise<'approved' | 'denied'>((res) => {
+      resolvePermission = res;
+    });
+
+    const mockAskPermissionStore = {
+      request: () => ({ id: 'perm-2', promise: permissionPromise }),
+    };
+
+    const mockTool = {
+      definition: {
+        function: {
+          name: 'exec',
+          description: 'Execute command',
+          parameters: { type: 'object', properties: {}, required: [] },
+        },
+      },
+      execute: async () => ({ success: true, content: 'should not reach' }),
+    };
+
+    const { ToolExecutor } = await import('../src/bot/tool-executor');
+    const ctx = {
+      askPermissionStore: mockAskPermissionStore,
+      config: { bots: [{ id: 'bot1' }] },
+      tools: [mockTool],
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    } as any;
+
+    const executor = new ToolExecutor(ctx, {
+      botId: 'bot1',
+      chatId: 0,
+      permissionMode: 'conversation',
+    });
+
+    const resultPromise = executor.execute('exec', { command: 'rm -rf /' });
+    setTimeout(() => resolvePermission('denied'), 10);
+
+    const result = await resultPromise;
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('denied');
+  });
+
+  it('uses inlineApprovalStore (dashboard) when both stores are available', () => {
+    // When inlineApprovalStore + sessionKey are provided, it should use inline path
+    // (dashboard web path), NOT the askPermissionStore path
+    const store = new InlineApprovalStore();
+    const mockAskPermissionStore = {
+      request: () => {
+        throw new Error('Should not be called');
+      },
+    };
+
+    const mockTool = {
+      definition: {
+        function: {
+          name: 'exec',
+          description: 'Execute command',
+          parameters: { type: 'object', properties: {}, required: [] },
+        },
+      },
+      execute: async () => ({ success: true, content: 'executed' }),
+    };
+
+    // We verify by checking that inlineApprovalStore.setPending gets called
+    // instead of askPermissionStore.request
+    const { ToolExecutor } = require('../src/bot/tool-executor');
+    const ctx = {
+      askPermissionStore: mockAskPermissionStore,
+      config: { bots: [{ id: 'bot1' }] },
+      tools: [mockTool],
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    } as any;
+
+    const executor = new ToolExecutor(ctx, {
+      botId: 'bot1',
+      chatId: 0,
+      permissionMode: 'conversation',
+      inlineApprovalStore: store,
+      sessionKey: 'web:bot1:conv1',
+    });
+
+    // Execute — should use inline store, not throw from askPermissionStore
+    executor.execute('exec', { command: 'ls' }).then((result: any) => {
+      expect(store.hasPending('web:bot1:conv1')).toBe(true);
+      expect(result.success).toBe(true);
+      expect(result.content).toContain('approval');
+    });
+  });
+});
+
 // ─── WebGenerateOptions inline approval fields ───
 
 describe('WebGenerateOptions inline approval fields', () => {

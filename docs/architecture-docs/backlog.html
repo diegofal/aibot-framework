@@ -217,7 +217,7 @@
 
         <div class="page-header">
           <h1>Backlog</h1>
-          <p>Feature backlog organized by epic. Click to expand. Last updated: <strong>2026-03-08</strong>.</p>
+          <p>Feature backlog organized by epic. Click to expand. Last updated: <strong>2026-03-16</strong>.</p>
         </div>
 
         <!-- ============================================================ -->
@@ -228,298 +228,23 @@
           <span class="count">planned work, pending implementation</span>
         </div>
 
-        <!-- ======================== EPIC: A2A ======================== -->
-        <details class="epic">
-          <summary>
-            <span class="chevron">&#9654;</span>
-            <span class="epic-title">A2A Protocol (Agent-to-Agent)</span>
-            <span class="epic-count">16 stories &middot; 2 phases</span>
-            <span class="badge badge-purple">Designed</span>
-          </summary>
-          <div class="epic-body">
-            <p class="epic-desc">
-              Native TypeScript implementation of A2A v0.3.0 in the existing web server.
-              Makes every bot a standards-compliant A2A agent. Enables discovery, consumption, and collaboration with external A2A agents.
-              Builds on existing MCP infrastructure patterns in <code>src/mcp/</code>.
-            </p>
-
-            <div class="phase-label">Phase 1 &mdash; A2A Server + Client (11 stories)</div>
-            <ul class="story-list">
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Types &mdash; A2A v0.3.0 protocol type definitions</span>
-                </summary>
-                <div class="story-body">
-                  <p>Create <code>src/a2a/types.ts</code>.</p>
-                  <ul>
-                    <li><code>A2aAgentCard</code>, <code>A2aSkill</code>, <code>A2aCapabilities</code></li>
-                    <li><code>A2aMessage</code>, <code>A2aPart</code> (TextPart, DataPart, FilePart)</li>
-                    <li><code>A2aTask</code>, <code>TaskState</code>, <code>TaskStatus</code></li>
-                    <li><code>MessageSendParams</code>, <code>MessageSendResult</code></li>
-                  </ul>
-                  <div class="sub-label">References</div>
-                  <p>Reuse JSON-RPC base from <code>src/mcp/types.ts</code>. See <a href="https://google.github.io/A2A/">A2A spec</a>.</p>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Config &mdash; schema and defaults</span>
-                </summary>
-                <div class="story-body">
-                  <p>Add <code>a2a</code> block to <code>src/config.ts</code> (Zod schema) and <code>config/config.json</code>.</p>
-                  <ul>
-                    <li><code>server.enabled</code>, <code>server.basePath</code> (default <code>/a2a</code>), <code>server.authToken</code></li>
-                    <li><code>clients[]</code> &mdash; <code>{ name, url, autoConnect, authToken? }</code></li>
-                    <li><code>directory.enabled</code>, <code>directory.remoteUrl</code>, <code>directory.heartbeatIntervalMs</code>, <code>directory.staleTtlMs</code></li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Agent Card Builder &mdash; auto-generate from bot config</span>
-                </summary>
-                <div class="story-body">
-                  <p>Create <code>src/a2a/agent-card-builder.ts</code>.</p>
-                  <ul>
-                    <li><code>buildAgentCard(botConfig, toolDefs, baseUrl)</code> &rarr; <code>A2aAgentCard</code></li>
-                    <li>Group tools by <code>TOOL_CATEGORIES</code> into A2A skills</li>
-                    <li>Extract description from soul system prompt</li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Task Store &mdash; in-memory task lifecycle</span>
-                </summary>
-                <div class="story-body">
-                  <p>Create <code>src/a2a/task-store.ts</code>.</p>
-                  <ul>
-                    <li><code>create()</code>, <code>get()</code>, <code>update()</code>, <code>cancel()</code></li>
-                    <li>States: submitted &rarr; working &rarr; completed / failed / canceled</li>
-                    <li>TTL-based cleanup</li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Executor &mdash; headless LLM + tools message processor</span>
-                </summary>
-                <div class="story-body">
-                  <p>Create <code>src/a2a/executor.ts</code>. Processes A2A messages without Telegram or sessions.</p>
-                  <ul>
-                    <li>Extract text from A2A Message parts</li>
-                    <li>Build system prompt via <code>SystemPromptBuilder</code></li>
-                    <li>Get tools via <code>ToolRegistry.getDefinitionsForBot(botId)</code></li>
-                    <li>Call LLM, return A2A Message + Task status</li>
-                  </ul>
-                  <div class="sub-label">Reference</div>
-                  <p><code>src/bot/conversation-pipeline.ts</code> &mdash; adapt without Telegram deps.</p>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Server &mdash; JSON-RPC HTTP handler</span>
-                </summary>
-                <div class="story-body">
-                  <p>Create <code>src/a2a/server.ts</code>.</p>
-                  <ul>
-                    <li>Per-bot routes: <code>GET /a2a/:botId/.well-known/agent-card.json</code>, <code>POST /a2a/:botId/</code></li>
-                    <li>JSON-RPC: <code>message/send</code>, <code>tasks/get</code>, <code>tasks/cancel</code></li>
-                    <li>Bearer token auth, rate limiting</li>
-                  </ul>
-                  <div class="sub-label">Reference</div>
-                  <p><code>src/mcp/server.ts</code> &mdash; same HTTP pattern.</p>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Web integration &mdash; mount routes, wire lifecycle</span>
-                </summary>
-                <div class="story-body">
-                  <ul>
-                    <li>Mount in <code>src/web/server.ts</code> under <code>config.a2a.server.basePath</code></li>
-                    <li><code>startA2a()</code> / <code>stopA2a()</code> in <code>BotManager</code></li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Client + Pool &mdash; consume external A2A agents</span>
-                </summary>
-                <div class="story-body">
-                  <p>Create <code>src/a2a/client.ts</code> and <code>src/a2a/client-pool.ts</code>.</p>
-                  <ul>
-                    <li><code>A2aClient</code>: <code>fetchAgentCard()</code>, <code>sendMessage()</code>, <code>getTask()</code></li>
-                    <li><code>A2aClientPool</code>: manages connections, <code>connectAll()</code>, <code>getAllAgents()</code></li>
-                  </ul>
-                  <div class="sub-label">Reference</div>
-                  <p><code>src/mcp/client.ts</code> + <code>client-pool.ts</code></p>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Tool Adapter &mdash; external agents as framework tools</span>
-                </summary>
-                <div class="story-body">
-                  <p>Create <code>src/a2a/tool-adapter.ts</code>.</p>
-                  <ul>
-                    <li><code>adaptA2aAgent(agentCard, client)</code> &rarr; <code>Tool[]</code></li>
-                    <li>Naming: <code>a2a_&lt;agentName&gt;_&lt;skillId&gt;</code></li>
-                    <li><code>ToolRegistry.registerA2aTools()</code></li>
-                  </ul>
-                  <div class="sub-label">Reference</div>
-                  <p><code>src/mcp/tool-adapter.ts</code></p>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Collaboration &mdash; A2A as transport in CollaborationManager</span>
-                </summary>
-                <div class="story-body">
-                  <ul>
-                    <li>Route to <code>A2aClientPool</code> when target is <code>a2a-external</code></li>
-                    <li>Register A2A agents in <code>AgentRegistry</code></li>
-                    <li><code>isTargetAvailable()</code> checks MCP + A2A</li>
-                  </ul>
-                  <div class="sub-label">Reference</div>
-                  <p><code>src/bot/collaboration.ts</code> &mdash; <code>mcpCollaborationStep()</code></p>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Tests &mdash; unit tests for all Phase 1 modules</span>
-                </summary>
-                <div class="story-body">
-                  <ul>
-                    <li>Types: serialization / deserialization</li>
-                    <li>Agent Card Builder: valid cards from real config</li>
-                    <li>Task Store: lifecycle, TTL, concurrency</li>
-                    <li>Executor: message processing, tool calls, errors</li>
-                    <li>Server: JSON-RPC dispatch, auth, rate limiting</li>
-                    <li>Client: fetch, send, timeout, errors</li>
-                    <li>Tool Adapter: naming, execution, result mapping</li>
-                  </ul>
-                </div>
-              </details>
-
-            </ul>
-
-            <div class="phase-label">Phase 2 &mdash; Agent Directory (5 stories)</div>
-            <ul class="story-list">
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Directory service &mdash; registry with health tracking</span>
-                </summary>
-                <div class="story-body">
-                  <p>Create <code>src/a2a/directory.ts</code>.</p>
-                  <ul>
-                    <li><code>register()</code>, <code>unregister()</code>, <code>heartbeat()</code>, <code>list()</code>, <code>search()</code>, <code>prune()</code></li>
-                    <li>Health: online / stale / offline via heartbeat TTL</li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Directory REST API &mdash; HTTP endpoints</span>
-                </summary>
-                <div class="story-body">
-                  <ul>
-                    <li><code>POST /api/directory/register</code></li>
-                    <li><code>DELETE /api/directory/:name</code></li>
-                    <li><code>POST /api/directory/:name/heartbeat</code></li>
-                    <li><code>GET /api/directory</code> (filters: <code>?skill=</code>, <code>?tag=</code>, <code>?q=</code>)</li>
-                    <li><code>GET /api/directory/:name</code></li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Auto-registration &mdash; local + remote directory</span>
-                </summary>
-                <div class="story-body">
-                  <ul>
-                    <li>Auto-register on bot start when A2A enabled</li>
-                    <li>Register with remote directory if <code>config.a2a.directory.remoteUrl</code> set</li>
-                    <li>Periodic heartbeat, unregister on stop</li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Dashboard page &mdash; agent discovery UI</span>
-                </summary>
-                <div class="story-body">
-                  <ul>
-                    <li>Page at <code>/directory</code> listing registered agents</li>
-                    <li>Name, description, skills, status indicator</li>
-                    <li>Search/filter, Agent Card link, connectivity test</li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Phase 2 tests + docs</span>
-                </summary>
-                <div class="story-body">
-                  <ul>
-                    <li>Unit tests: register, heartbeat, prune, search</li>
-                    <li>Integration tests: REST API</li>
-                    <li>Update architecture docs, README, CHANGELOG</li>
-                  </ul>
-                </div>
-              </details>
-
-            </ul>
-          </div>
-        </details>
+        <!-- A2A Protocol moved to Done section below -->
 
         <!-- ======================== EPIC: OpenClaw Adoptions ======================== -->
         <details class="epic">
           <summary>
             <span class="chevron">&#9654;</span>
             <span class="epic-title">OpenClaw Adoptions</span>
-            <span class="epic-count">3 stories &middot; selective</span>
-            <span class="badge badge-purple">Designed</span>
+            <span class="epic-count">1 story remaining</span>
+            <span class="badge badge-yellow">Partially Complete</span>
           </summary>
           <div class="epic-body">
             <p class="epic-desc">
               Selective adoptions from OpenClaw analysis (<code>productions/openclone/05_openclaw-adoptions.md</code>).
-              Only features with verified value and existing code to build on. Full analysis in <code>productions/openclone/01-05</code>.
+              GAP-3 (Hook System) and GAP-4 (SKILL.md Adapter) are now implemented. GAP-E1 (Error Classification) remains.
             </p>
 
-            <div class="phase-label">Sprint 1 &mdash; High priority</div>
+            <div class="phase-label">Remaining</div>
             <ul class="story-list">
 
               <details class="story">
@@ -529,9 +254,9 @@
                   <span class="badge badge-red">Critical</span>
                 </summary>
                 <div class="story-body">
-                  <p>Three competing error classifiers exist (<code>agent-retry-engine.ts</code>, <code>llm-resilience.ts</code>, <code>model-failover/failover-error.ts</code>).
-                     The best one (<code>classifyFailoverReason()</code> &mdash; RegExp, 3-stage hierarchy) is never called from the main retry path.
-                     A 402 billing error triggers 3 useless retries instead of immediate skip.</p>
+                  <p>Three competing error classifiers still exist (<code>agent-retry-engine.ts</code>, <code>llm-resilience.ts</code>, <code>model-failover/failover-error.ts</code>).
+                     <code>agent-retry-engine</code> partially bridges to <code>classifyFailoverReason()</code> but <code>llm-resilience.ts</code> remains completely independent.
+                     A 402 billing error triggers useless retries instead of immediate skip.</p>
                   <div class="sub-label">Implementation (~4-6h)</div>
                   <ul>
                     <li>Delegate <code>classifyError()</code> in <code>agent-retry-engine.ts</code> to <code>classifyFailoverReason()</code></li>
@@ -552,58 +277,34 @@
                 </div>
               </details>
 
-              <details class="story">
+            </ul>
+
+            <div class="phase-label">Done</div>
+            <ul class="story-list">
+
+              <details class="story done-story">
                 <summary>
                   <span class="chevron">&#9654;</span>
                   <span class="story-title">GAP-4: Activate skill-md-adapter (declarative skills)</span>
+                  <span class="badge badge-green">Done</span>
                 </summary>
                 <div class="story-body">
-                  <p>A complete adapter for OpenClaw-style Markdown skills already exists at <code>src/core/skill-md-adapter/</code> (7 files: parser, validator, loader, framework-bridge)
-                     but is not connected to the bot boot lifecycle.</p>
-                  <div class="sub-label">Implementation (~1 day)</div>
-                  <ul>
-                    <li>Integrate <code>SkillMdLoader</code> into bot boot sequence</li>
-                    <li>Add <code>externalSkillsPath</code> to bot config schema</li>
-                    <li>Port <code>weather</code> skill from OpenClaw as smoke test</li>
-                  </ul>
-                  <div class="sub-label">Files</div>
-                  <ul>
-                    <li><code>src/core/skill-md-adapter/</code> (existing, complete)</li>
-                    <li><code>src/bot/bot-manager.ts</code> (boot integration)</li>
-                    <li>Config schema</li>
-                  </ul>
-                  <div class="sub-label">Note</div>
-                  <p>Scope reduced from original proposal: port additional skills on-demand, not speculatively.</p>
-                  <div class="sub-label">Deep-dive</div>
-                  <p><code>productions/openclone/03_skills-gap-analysis.md</code></p>
+                  <p>Implemented as <code>loadExternalSkillUnified()</code> in <code>src/bot/tool-registry.ts</code>.
+                     SKILL.md files are loaded during bot boot and converted to framework tools.</p>
                 </div>
               </details>
 
-            </ul>
-
-            <div class="phase-label">Deferred &mdash; When consumers exist</div>
-            <ul class="story-list">
-
-              <details class="story">
+              <details class="story done-story">
                 <summary>
                   <span class="chevron">&#9654;</span>
                   <span class="story-title">GAP-3: Hook System / Lifecycle Events (8 hooks)</span>
-                  <span class="badge badge-dim">Deferred</span>
+                  <span class="badge badge-green">Done</span>
                 </summary>
                 <div class="story-body">
-                  <p>8 typed hooks (5 void + 3 modifying) for pipeline extensibility. Design complete.
-                     <code>ToolExecutor</code> already extends <code>EventEmitter</code> with 5 event types &mdash; 40% done.</p>
-                  <div class="sub-label">Implementation (~3 days)</div>
-                  <ul>
-                    <li>New <code>src/core/hooks/</code> module (HookRegistry + HookRunner)</li>
-                    <li>Wire into <code>conversation-pipeline.ts</code> and <code>agent-loop.ts</code></li>
-                    <li>Expose existing ToolExecutor events as public hook API</li>
-                  </ul>
-                  <div class="sub-label">Why deferred</div>
-                  <p>No consumers today. Implement when WhatsApp/Discord adapters need pipeline interception.
-                     Designing hooks without real consumers risks wrong interfaces (YAGNI).</p>
-                  <div class="sub-label">Deep-dive</div>
-                  <p><code>productions/openclone/04_plugin-architecture-analysis.md</code>, <code>05_hook-system-deep-dive.md</code></p>
+                  <p>Implemented as <code>HookEmitter</code> in <code>src/bot/hooks.ts</code> with 8 events:
+                     <code>message_received</code>, <code>message_sent</code>, <code>before_llm_call</code>, <code>after_llm_call</code>,
+                     <code>before_tool_call</code>, <code>after_tool_call</code>, <code>before_compaction</code>, <code>agent_loop_cycle</code>.
+                     Wired into conversation pipeline, tool executor, and agent loop.</p>
                 </div>
               </details>
 
@@ -744,62 +445,7 @@
           </div>
         </details>
 
-        <!-- ======================== EPIC: Multi-Channel ======================== -->
-        <details class="epic">
-          <summary>
-            <span class="chevron">&#9654;</span>
-            <span class="epic-title">Multi-Channel Messaging</span>
-            <span class="epic-count">2 stories</span>
-            <span class="badge badge-dim">Research</span>
-          </summary>
-          <div class="epic-body">
-            <p class="epic-desc">
-              Abstract the Telegram-specific transport layer into a <code>MessagingPlatform</code> interface
-              to support WhatsApp, Discord, and future channels without duplicating core logic.
-            </p>
-
-            <ul class="story-list">
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">WhatsApp Integration</span>
-                  <span class="badge badge-dim">Research</span>
-                </summary>
-                <div class="story-body">
-                  <p>Bot is Telegram-only via grammy. Minimal abstraction (<code>TelegramClient</code> interface).</p>
-                  <div class="sub-label">Options</div>
-                  <table>
-                    <thead><tr><th>Option</th><th>Approach</th><th>Trade-offs</th></tr></thead>
-                    <tbody>
-                      <tr><td><strong>A</strong></td><td>WhatsApp Business Cloud API (Meta)</td><td>Free user-initiated (24h). Requires FB Business account.</td></tr>
-                      <tr><td><strong>B</strong></td><td>Via Twilio / MessageBird</td><td>Friendlier API. Twilio partially integrated. Extra cost.</td></tr>
-                      <tr><td><strong>C</strong></td><td>whatsapp-web.js / Baileys</td><td>Free but ban risk. Not for production.</td></tr>
-                    </tbody>
-                  </table>
-                  <div class="sub-label">Required refactoring</div>
-                  <ul>
-                    <li><code>TelegramClient</code> &rarr; <code>MessagingPlatform</code> interface</li>
-                    <li>Handler adapter layer (grammy &rarr; platform-agnostic)</li>
-                    <li>Media handling, session keys, Telegram-specific features</li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="story">
-                <summary>
-                  <span class="chevron">&#9654;</span>
-                  <span class="story-title">Discord Integration</span>
-                  <span class="badge badge-dim">Deferred</span>
-                </summary>
-                <div class="story-body">
-                  <p>Blocked by WhatsApp / <code>MessagingPlatform</code> abstraction. Library: <code>discord.js</code>.</p>
-                </div>
-              </details>
-
-            </ul>
-          </div>
-        </details>
+        <!-- Multi-Channel Messaging moved to Done section below -->
 
         <!-- ======================== EPIC: Social ======================== -->
         <details class="epic">
@@ -885,7 +531,7 @@
           </div>
           <div class="idea-card">
             <h4>A2A Streaming</h4>
-            <p><code>message/stream</code> SSE for long-running agent tasks. Depends on A2A Phase 1.</p>
+            <p><code>message/stream</code> SSE for long-running agent tasks. A2A Phase 1+2 complete &mdash; streaming is next.</p>
           </div>
           <div class="idea-card">
             <h4>Social Media Pipeline</h4>
@@ -909,11 +555,109 @@
         <!--  DONE                                                         -->
         <!-- ============================================================ -->
         <div class="category-header">
-          <h2 id="done">Done &mdash; Pending Manual Testing</h2>
-          <span class="count">2 items</span>
+          <h2 id="done">Done</h2>
+          <span class="count">4 epics</span>
         </div>
 
-        <!-- ======================== EPIC: Audio ======================== -->
+        <!-- ======================== EPIC: A2A (DONE) ======================== -->
+        <details class="epic done-epic">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title">A2A Protocol (Agent-to-Agent)</span>
+            <span class="epic-count">Phase 1 + 2 complete &middot; 10 files</span>
+            <span class="badge badge-green">Done</span>
+          </summary>
+          <div class="epic-body">
+            <p class="epic-desc">
+              Native TypeScript implementation of A2A v0.3.0. Every bot is a standards-compliant A2A agent.
+              10 files in <code>src/a2a/</code>: types, agent-card-builder, task-store, executor, server, client, client-pool, tool-adapter, directory, index.
+              JSON-RPC server with <code>message/send</code>, <code>tasks/get</code>, <code>tasks/cancel</code>.
+              Agent Directory with heartbeat, stale pruning, and skill search.
+              Completed 2026-03-15 (commit <code>6434c46</code>).
+            </p>
+
+            <div class="phase-label">Phase 1 &mdash; Server + Client (11 stories) &mdash; All Done</div>
+            <ul class="story-list">
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Types &mdash; A2A v0.3.0 protocol type definitions</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p><code>src/a2a/types.ts</code></p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Config &mdash; schema and defaults</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p>A2A config block in <code>src/config.ts</code> and <code>config/config.json</code>.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Agent Card Builder</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p><code>src/a2a/agent-card-builder.ts</code></p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Task Store &mdash; in-memory task lifecycle</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p><code>src/a2a/task-store.ts</code> with TTL pruning and session grouping.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Executor &mdash; headless LLM message processor</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p><code>src/a2a/executor.ts</code></p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Server &mdash; JSON-RPC HTTP handler</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p><code>src/a2a/server.ts</code> with agent card discovery and directory endpoints.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Web integration &mdash; mounted in web server</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p>Routes mounted in <code>src/web/server.ts</code>.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Client + Pool</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p><code>src/a2a/client.ts</code> + <code>client-pool.ts</code> with agent card caching and <code>discoverAll()</code>.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Tool Adapter</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p><code>src/a2a/tool-adapter.ts</code>. External agents as <code>a2a_&lt;agent&gt;_&lt;skill&gt;</code> tools.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Collaboration &mdash; A2A as transport</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p>Integrated in <code>CollaborationManager</code>.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Tests</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p>Unit tests for all Phase 1 modules.</p></div></details>
+            </ul>
+
+            <div class="phase-label">Phase 2 &mdash; Agent Directory (5 stories) &mdash; All Done</div>
+            <ul class="story-list">
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Directory service &mdash; registry with health tracking</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p><code>src/a2a/directory.ts</code> with heartbeat, stale pruning, skill search.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Directory REST API</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p>Endpoints in <code>src/a2a/server.ts</code>.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Auto-registration</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p>Local + remote directory registration.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Dashboard page</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p>Agent discovery UI at <code>/directory</code>.</p></div></details>
+              <details class="story done-story"><summary><span class="chevron">&#9654;</span><span class="story-title">Phase 2 tests + docs</span><span class="badge badge-green">Done</span></summary><div class="story-body"><p>Tests and documentation updated.</p></div></details>
+            </ul>
+          </div>
+        </details>
+
+        <!-- ======================== EPIC: Multi-Channel (DONE) ======================== -->
+        <details class="epic done-epic">
+          <summary>
+            <span class="chevron">&#9654;</span>
+            <span class="epic-title">Multi-Channel Messaging</span>
+            <span class="epic-count">7 adapters &middot; channel abstraction complete</span>
+            <span class="badge badge-green">Done</span>
+          </summary>
+          <div class="epic-body">
+            <p class="epic-desc">
+              Channel-agnostic abstraction in <code>src/channel/</code> with <code>Channel</code>, <code>InboundMessage</code>, and <code>ChannelKind</code> interfaces.
+              7 adapters: Telegram, REST, WebSocket, WhatsApp, Discord, Discord Gateway, Outbound.
+              Conversation pipeline is fully channel-agnostic via <code>handleChannelMessage()</code>.
+              Completed 2026-03-15 (commit <code>6434c46</code>).
+            </p>
+
+            <ul class="story-list">
+              <details class="story done-story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">WhatsApp Integration</span>
+                  <span class="badge badge-green">Done</span>
+                </summary>
+                <div class="story-body">
+                  <p><code>src/channel/whatsapp.ts</code> &mdash; WhatsApp Business Cloud API (Meta).
+                     Webhook signature verification, message extraction, image sending, interactive buttons, status tracking.</p>
+                </div>
+              </details>
+
+              <details class="story done-story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Discord Integration</span>
+                  <span class="badge badge-green">Done</span>
+                </summary>
+                <div class="story-body">
+                  <p><code>src/channel/discord.ts</code> (REST adapter, 2000-char splitting) + <code>src/channel/discord-gateway.ts</code> (Gateway WebSocket: heartbeat, identify, MESSAGE_CREATE dispatch, auto-reconnect).</p>
+                </div>
+              </details>
+
+              <details class="story done-story">
+                <summary>
+                  <span class="chevron">&#9654;</span>
+                  <span class="story-title">Channel abstraction layer</span>
+                  <span class="badge badge-green">Done</span>
+                </summary>
+                <div class="story-body">
+                  <p><code>src/channel/types.ts</code> with <code>Channel</code>, <code>InboundMessage</code>, <code>ChannelKind</code>.
+                     <code>src/channel/outbound.ts</code> for proactive messaging across all channels.</p>
+                </div>
+              </details>
+            </ul>
+          </div>
+        </details>
+
+        <!-- ======================== EPIC: Audio (DONE) ======================== -->
         <details class="epic done-epic">
           <summary>
             <span class="chevron">&#9654;</span>

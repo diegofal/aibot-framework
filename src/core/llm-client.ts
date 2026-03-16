@@ -131,6 +131,7 @@ export class ClaudeCliLLMClient implements LLMClient {
         systemPrompt: system,
         tools: opts.tools ?? [],
         toolExecutor: opts.toolExecutor ?? (async () => ''),
+        disallowedNativeTools: opts.blockedNativeTools,
       });
 
       return { text: result.response, usage: result.usage };

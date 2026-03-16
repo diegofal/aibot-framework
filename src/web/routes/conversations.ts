@@ -129,6 +129,7 @@ export function conversationsRoutes(deps: {
           botConfig: botConfig as BotConfig,
           isGroup: false,
           ragContext,
+          permissionMode: 'conversation',
         });
 
         // Append conversation-type overlay

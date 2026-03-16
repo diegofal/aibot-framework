@@ -98,7 +98,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
   }
 
   const toolRegistry = botManager.getToolRegistry();
-  const allDefs = toolRegistry.getDefinitionsForBot(botId);
+  const allDefs = toolRegistry.getDefinitionsForBot(botId, opts.permissionMode);
   const filteredDefs = allDefs.filter((d) => !DASHBOARD_EXCLUDED_TOOLS.has(d.function.name));
 
   if (filteredDefs.length === 0) {

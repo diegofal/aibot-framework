@@ -82,6 +82,39 @@ export const DEFAULT_PERMISSIONS: Record<string, ToolPermissionEntry> = {
   signal_completion: { agentLoop: 'free', conversation: 'free' },
 };
 
+/**
+ * Mapping from framework tool names → Claude CLI native tool equivalents.
+ * When a framework tool is blocked, the corresponding Claude CLI native tools
+ * must also be disabled via --disallowedTools to prevent bypass.
+ */
+export const NATIVE_TOOL_MAP: Record<string, string[]> = {
+  exec: ['Bash'],
+  file_write: ['Write'],
+  file_edit: ['Edit'],
+  file_read: ['Read'],
+  browser: ['WebFetch', 'WebSearch'],
+};
+
+/**
+ * Given a list of blocked framework tool names, return the Claude CLI native
+ * tool names that should be disabled via --disallowedTools.
+ */
+export function getBlockedNativeTools(
+  mode: PermissionMode,
+  allToolNames: string[],
+  botOverrides?: Record<string, Partial<ToolPermissionEntry>>
+): string[] {
+  const blocked = getBlockedTools(mode, allToolNames, botOverrides);
+  const nativeTools = new Set<string>();
+  for (const toolName of blocked) {
+    const natives = NATIVE_TOOL_MAP[toolName];
+    if (natives) {
+      for (const n of natives) nativeTools.add(n);
+    }
+  }
+  return [...nativeTools];
+}
+
 const MODE_KEYS: Record<PermissionMode, keyof ToolPermissionEntry> = {
   'agent-loop': 'agentLoop',
   conversation: 'conversation',
@@ -152,7 +185,7 @@ export function buildSensitiveActionProtocol(
   }
 
   if (confirmTools.length > 0) {
-    block += `These tools require explicit user confirmation. When you need one, describe what you want to do and ask the user to approve. The system will intercept the call and ask the user — you'll get the result after they respond: ${confirmTools.join(', ')}.\n`;
+    block += `These tools require operator approval. Call them normally when needed — the system will pause execution and request approval from the operator through the dashboard. You will receive the result after approval. Do NOT ask for permission yourself in text — just call the tool and let the system handle confirmation: ${confirmTools.join(', ')}.\n`;
   }
 
   block += 'For all other tools, proceed normally without extra confirmation.';

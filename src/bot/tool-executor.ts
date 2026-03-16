@@ -446,40 +446,70 @@ export class ToolExecutor extends EventEmitter {
       }
 
       // Inline approval interception: confirm-level tools in conversation mode
-      if (level === 'confirm' && this.options.inlineApprovalStore && this.options.sessionKey) {
-        this.options.inlineApprovalStore.setPending(this.options.sessionKey, {
-          toolName: name,
-          args,
-          createdAt: Date.now(),
-          botId,
-          sessionKey: this.options.sessionKey,
-        });
-        this.logger.info(
-          { tool: name, botId, sessionKey: this.options.sessionKey },
-          'Tool requires inline approval, pending user confirmation'
-        );
-        const description = describeToolCall(name, args);
-        const durationMs = Date.now() - startMs;
-        const syntheticContent = `⏳ This action requires user approval. I need to ask the user to confirm: ${description}. Do NOT retry this tool — wait for the user's next message.`;
-        this.logExecution(name, args, true, syntheticContent, durationMs);
-        this.emit('tool:end', {
-          toolName: name,
-          args,
-          success: true,
-          result: syntheticContent,
-          durationMs,
-          retryAttempts: 0,
-          botId,
-          chatId,
-          timestamp: Date.now(),
-        });
-        return {
-          toolName: name,
-          args,
-          durationMs,
-          content: syntheticContent,
-          success: true,
-        };
+      if (level === 'confirm') {
+        // Dashboard web path: use inline approval store (UI cards)
+        if (this.options.inlineApprovalStore && this.options.sessionKey) {
+          this.options.inlineApprovalStore.setPending(this.options.sessionKey, {
+            toolName: name,
+            args,
+            createdAt: Date.now(),
+            botId,
+            sessionKey: this.options.sessionKey,
+          });
+          this.logger.info(
+            { tool: name, botId, sessionKey: this.options.sessionKey },
+            'Tool requires inline approval, pending user confirmation'
+          );
+          const description = describeToolCall(name, args);
+          const durationMs = Date.now() - startMs;
+          const syntheticContent = `⏳ This action requires user approval. I need to ask the user to confirm: ${description}. Do NOT retry this tool — wait for the user's next message.`;
+          this.logExecution(name, args, true, syntheticContent, durationMs);
+          this.emit('tool:end', {
+            toolName: name,
+            args,
+            success: true,
+            result: syntheticContent,
+            durationMs,
+            retryAttempts: 0,
+            botId,
+            chatId,
+            timestamp: Date.now(),
+          });
+          return {
+            toolName: name,
+            args,
+            durationMs,
+            content: syntheticContent,
+            success: true,
+          };
+        }
+        // Channel path (Telegram, WhatsApp, Discord, etc.): use ask_permission → dashboard
+        if (this.ctx.askPermissionStore) {
+          const description = describeToolCall(name, args);
+          const { promise } = this.ctx.askPermissionStore.request(
+            botId,
+            name,
+            description,
+            `Conversation tool: ${name}(${Object.keys(args).join(', ')})`,
+            'high'
+          );
+          this.logger.info(
+            { tool: name, botId },
+            'Tool requires dashboard approval, waiting for permission decision'
+          );
+          // Block until dashboard user approves/denies
+          const decision = await promise;
+          if (decision !== 'approved') {
+            return this.buildFailResult(
+              name,
+              args,
+              startMs,
+              `Tool "${name}" was denied by the operator`,
+              'execution'
+            );
+          }
+          // Approved — fall through to normal tool execution below
+        }
       }
     }
 

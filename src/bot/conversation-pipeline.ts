@@ -10,7 +10,6 @@ import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { generateSpeech } from '../tts';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
-import { classifyApprovalResponse, describeToolCall } from './inline-approval';
 import {
   CircuitBreaker,
   DEFAULT_CIRCUIT_CONFIG,
@@ -21,8 +20,7 @@ import {
 import type { MemoryFlusher } from './memory-flush';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { sendLongMessage, streamToChannel } from './telegram-utils';
-import { ToolExecutor } from './tool-executor';
-import type { PermissionMode } from './tool-permissions';
+import { type PermissionMode, getBlockedNativeTools } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
 import { TopicGuard, type TopicGuardConfig } from './topic-guard';
 import type { BotContext } from './types';
@@ -165,6 +163,12 @@ export class ConversationPipeline {
     const permissionMode: PermissionMode = 'conversation';
     const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id, permissionMode);
     const hasTools = botToolDefs.length > 0;
+    const allToolNames = (this.ctx.toolDefinitions ?? []).map((d) => d.function.name);
+    const blockedNativeTools = getBlockedNativeTools(
+      permissionMode,
+      allToolNames,
+      config.toolPermissions
+    );
     const chatId = ctx.chat?.id;
     const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
     const botLogger = this.ctx.getBotLogger(config.id);
@@ -234,80 +238,6 @@ export class ConversationPipeline {
       const history = sessionConfig.enabled
         ? this.ctx.sessionManager.getHistory(serializedKey, resolved.maxHistory)
         : [];
-
-      // ─── Inline approval resolution (Telegram path) ───
-      const inlineStoreTg = this.ctx.inlineApprovalStore;
-      const pendingTg = inlineStoreTg?.getPending(serializedKey);
-      if (pendingTg) {
-        const intent = classifyApprovalResponse(userText);
-        if (intent === 'approve') {
-          inlineStoreTg?.consumePending(serializedKey);
-          botLogger.info(
-            { tool: pendingTg.toolName, sessionKey: serializedKey },
-            'Inline approval: user approved'
-          );
-          const approvalTenantRoot =
-            config.tenantId && this.ctx.config.multiTenant?.enabled
-              ? `${this.ctx.config.multiTenant.dataDir ?? './data/tenants'}/${config.tenantId}`
-              : undefined;
-          const executor = new ToolExecutor(this.ctx, {
-            botId: config.id,
-            chatId: chatId ?? 0,
-            userId,
-            tenantRoot: approvalTenantRoot,
-            tools: this.toolRegistry.getToolsForBot(config.id),
-          });
-          const result = await executor.execute(pendingTg.toolName, pendingTg.args);
-          history.push(
-            { role: 'assistant', content: `[Tool ${pendingTg.toolName} approved and executed]` },
-            { role: 'user', content: `Tool result: ${result.content}` }
-          );
-          if (sessionConfig.enabled) {
-            this.ctx.sessionManager.appendMessages(
-              serializedKey,
-              [
-                {
-                  role: 'assistant',
-                  content: `[Tool ${pendingTg.toolName} approved and executed]`,
-                },
-                { role: 'user', content: `Tool result: ${result.content}` },
-              ],
-              resolved.maxHistory
-            );
-          }
-        } else if (intent === 'deny') {
-          inlineStoreTg?.consumePending(serializedKey);
-          botLogger.info(
-            { tool: pendingTg.toolName, sessionKey: serializedKey },
-            'Inline approval: user denied'
-          );
-          history.push({
-            role: 'assistant',
-            content: `[User denied ${pendingTg.toolName}. Action cancelled.]`,
-          });
-          if (sessionConfig.enabled) {
-            this.ctx.sessionManager.appendMessages(
-              serializedKey,
-              [
-                {
-                  role: 'assistant',
-                  content: `[User denied ${pendingTg.toolName}. Action cancelled.]`,
-                },
-              ],
-              resolved.maxHistory
-            );
-          }
-        } else {
-          botLogger.info(
-            { tool: pendingTg.toolName, sessionKey: serializedKey },
-            'Inline approval: unrelated response, keeping pending'
-          );
-          history.push({
-            role: 'system',
-            content: `[Pending approval: ${pendingTg.toolName} — ${describeToolCall(pendingTg.toolName, pendingTg.args)}. Ask the user again to confirm yes or no.]`,
-          });
-        }
-      }
 
       // Await RAG pre-fetch
       const ragContext = await ragPromise;
@@ -481,12 +411,11 @@ export class ConversationPipeline {
                     config.id,
                     userId,
                     tenantRoot,
-                    permissionMode,
-                    inlineStoreTg,
-                    serializedKey
+                    permissionMode
                   )
                 : undefined,
               maxToolRounds,
+              blockedNativeTools,
             }),
           'conversation-pipeline.chat',
           {
@@ -547,12 +476,11 @@ export class ConversationPipeline {
                       config.id,
                       userId,
                       tenantRoot,
-                      permissionMode,
-                      inlineStoreTg,
-                      serializedKey
+                      permissionMode
                     )
                   : undefined,
                 maxToolRounds,
+                blockedNativeTools,
               }),
             'conversation-pipeline.chat',
             {
@@ -860,6 +788,12 @@ export class ConversationPipeline {
     const permissionMode: PermissionMode = 'conversation';
     const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id, permissionMode);
     const hasTools = botToolDefs.length > 0;
+    const allToolNames = (this.ctx.toolDefinitions ?? []).map((d) => d.function.name);
+    const blockedNativeTools = getBlockedNativeTools(
+      permissionMode,
+      allToolNames,
+      config.toolPermissions
+    );
     const isGroup = msg.chatType === 'group' || msg.chatType === 'supergroup';
     const botLogger = this.ctx.getBotLogger(config.id);
 
@@ -935,81 +869,6 @@ export class ConversationPipeline {
       const history = sessionConfig.enabled
         ? this.ctx.sessionManager.getHistory(sessionKey, resolved.maxHistory)
         : [];
-
-      // ─── Inline approval resolution ───
-      // If there's a pending confirm tool call from the previous turn, resolve it
-      // before proceeding with the normal pipeline.
-      const inlineStore = this.ctx.inlineApprovalStore;
-      const pending = inlineStore?.getPending(sessionKey);
-      if (pending) {
-        const intent = classifyApprovalResponse(msg.text);
-        if (intent === 'approve') {
-          inlineStore?.consumePending(sessionKey);
-          botLogger.info({ tool: pending.toolName, sessionKey }, 'Inline approval: user approved');
-
-          // Resolve tenant root early for the executor
-          const approvalTenantRoot =
-            config.tenantId && this.ctx.config.multiTenant?.enabled
-              ? `${this.ctx.config.multiTenant.dataDir ?? './data/tenants'}/${config.tenantId}`
-              : undefined;
-
-          // Execute the pending tool WITHOUT permissionMode (bypass confirm check)
-          const executor = new ToolExecutor(this.ctx, {
-            botId: config.id,
-            chatId: Number(msg.chatId) || 0,
-            userId,
-            tenantRoot: approvalTenantRoot,
-            tools: this.toolRegistry.getToolsForBot(config.id),
-          });
-          const result = await executor.execute(pending.toolName, pending.args);
-
-          // Inject result into history so the LLM knows what happened
-          history.push(
-            { role: 'assistant', content: `[Tool ${pending.toolName} approved and executed]` },
-            { role: 'user', content: `Tool result: ${result.content}` }
-          );
-          // Also persist these synthetic messages to the session
-          if (sessionConfig.enabled) {
-            this.ctx.sessionManager.appendMessages(
-              sessionKey,
-              [
-                { role: 'assistant', content: `[Tool ${pending.toolName} approved and executed]` },
-                { role: 'user', content: `Tool result: ${result.content}` },
-              ],
-              resolved.maxHistory
-            );
-          }
-        } else if (intent === 'deny') {
-          inlineStore?.consumePending(sessionKey);
-          botLogger.info({ tool: pending.toolName, sessionKey }, 'Inline approval: user denied');
-          history.push({
-            role: 'assistant',
-            content: `[User denied ${pending.toolName}. Action cancelled.]`,
-          });
-          if (sessionConfig.enabled) {
-            this.ctx.sessionManager.appendMessages(
-              sessionKey,
-              [
-                {
-                  role: 'assistant',
-                  content: `[User denied ${pending.toolName}. Action cancelled.]`,
-                },
-              ],
-              resolved.maxHistory
-            );
-          }
-        } else {
-          // Unrelated message — keep pending, inject context for LLM to re-ask
-          botLogger.info(
-            { tool: pending.toolName, sessionKey },
-            'Inline approval: unrelated response, keeping pending'
-          );
-          history.push({
-            role: 'system',
-            content: `[Pending approval: ${pending.toolName} — ${describeToolCall(pending.toolName, pending.args)}. Ask the user again to confirm yes or no.]`,
-          });
-        }
-      }
 
       // Await RAG
       const ragContext = await ragPromise;
@@ -1265,12 +1124,11 @@ export class ConversationPipeline {
                       config.id,
                       userId,
                       tenantRoot,
-                      permissionMode,
-                      inlineStore,
-                      sessionKey
+                      permissionMode
                     )
                   : undefined,
                 maxToolRounds,
+                blockedNativeTools,
               }),
             `channel-pipeline.chat:${msg.channelKind}`,
             {
@@ -1315,12 +1173,11 @@ export class ConversationPipeline {
                         config.id,
                         userId,
                         tenantRoot,
-                        permissionMode,
-                        inlineStore,
-                        sessionKey
+                        permissionMode
                       )
                     : undefined,
                   maxToolRounds,
+                  blockedNativeTools,
                 }),
               `channel-pipeline.chat:${msg.channelKind}`,
               {

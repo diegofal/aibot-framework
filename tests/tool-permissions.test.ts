@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import {
   DEFAULT_PERMISSIONS,
+  NATIVE_TOOL_MAP,
   type PermissionMode,
   type ToolPermissionEntry,
   buildSensitiveActionProtocol,
+  getBlockedNativeTools,
   getBlockedTools,
   getPermissionLevel,
 } from '../src/bot/tool-permissions';
@@ -118,6 +120,99 @@ describe('tool-permissions', () => {
       expect(result).not.toBeNull();
       expect(result).toContain('exec');
       expect(result).toContain('confirmation');
+    });
+  });
+
+  describe('getBlockedNativeTools', () => {
+    it('returns empty when no tools are blocked', () => {
+      const allTools = ['get_datetime', 'web_search', 'memory_search'];
+      const result = getBlockedNativeTools('conversation', allTools);
+      expect(result).toHaveLength(0);
+    });
+
+    it('maps blocked exec to Bash native tool', () => {
+      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
+        exec: { conversation: 'blocked' },
+      };
+      const allTools = ['exec', 'get_datetime', 'web_search'];
+      const result = getBlockedNativeTools('conversation', allTools, overrides);
+      expect(result).toContain('Bash');
+      expect(result).toHaveLength(1);
+    });
+
+    it('maps blocked file_write to Write native tool', () => {
+      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
+        file_write: { conversation: 'blocked' },
+      };
+      const allTools = ['file_write', 'exec'];
+      const result = getBlockedNativeTools('conversation', allTools, overrides);
+      expect(result).toContain('Write');
+      expect(result).not.toContain('Bash');
+    });
+
+    it('maps blocked browser to WebFetch and WebSearch', () => {
+      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
+        browser: { conversation: 'blocked' },
+      };
+      const allTools = ['browser', 'exec'];
+      const result = getBlockedNativeTools('conversation', allTools, overrides);
+      expect(result).toContain('WebFetch');
+      expect(result).toContain('WebSearch');
+      expect(result).not.toContain('Bash');
+    });
+
+    it('accumulates native tools from multiple blocked framework tools', () => {
+      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
+        exec: { conversation: 'blocked' },
+        file_write: { conversation: 'blocked' },
+        file_read: { conversation: 'blocked' },
+        browser: { conversation: 'blocked' },
+      };
+      const allTools = ['exec', 'file_write', 'file_read', 'browser'];
+      const result = getBlockedNativeTools('conversation', allTools, overrides);
+      expect(result).toContain('Bash');
+      expect(result).toContain('Write');
+      expect(result).toContain('Read');
+      expect(result).toContain('WebFetch');
+      expect(result).toContain('WebSearch');
+      expect(result).toHaveLength(5);
+    });
+
+    it('uses agent-loop mode correctly', () => {
+      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
+        exec: { agentLoop: 'blocked' },
+      };
+      const allTools = ['exec', 'get_datetime'];
+      const result = getBlockedNativeTools('agent-loop', allTools, overrides);
+      expect(result).toContain('Bash');
+    });
+
+    it('ignores blocked tools that have no native mapping', () => {
+      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
+        phone_call: { conversation: 'blocked' },
+      };
+      const allTools = ['phone_call', 'exec'];
+      const result = getBlockedNativeTools('conversation', allTools, overrides);
+      // phone_call is blocked but has no native tool mapping
+      expect(result).toHaveLength(0);
+    });
+  });
+
+  describe('NATIVE_TOOL_MAP', () => {
+    it('covers exec, file_write, file_edit, file_read, browser', () => {
+      expect(NATIVE_TOOL_MAP).toHaveProperty('exec');
+      expect(NATIVE_TOOL_MAP).toHaveProperty('file_write');
+      expect(NATIVE_TOOL_MAP).toHaveProperty('file_edit');
+      expect(NATIVE_TOOL_MAP).toHaveProperty('file_read');
+      expect(NATIVE_TOOL_MAP).toHaveProperty('browser');
+    });
+
+    it('maps to correct Claude CLI native tools', () => {
+      expect(NATIVE_TOOL_MAP.exec).toEqual(['Bash']);
+      expect(NATIVE_TOOL_MAP.file_write).toEqual(['Write']);
+      expect(NATIVE_TOOL_MAP.file_edit).toEqual(['Edit']);
+      expect(NATIVE_TOOL_MAP.file_read).toEqual(['Read']);
+      expect(NATIVE_TOOL_MAP.browser).toEqual(['WebFetch', 'WebSearch']);
     });
   });
 

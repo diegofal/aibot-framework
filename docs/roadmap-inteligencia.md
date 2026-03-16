@@ -21,9 +21,9 @@ A continuacion, las 10 mejoras priorizadas.
 
 ---
 
-## 1. Soporte Multi-Proveedor de LLM (Prioridad: CRITICA)
+## 1. Soporte Multi-Proveedor de LLM (Prioridad: CRITICA) — IMPLEMENTADO
 
-**Estado actual:** AIBot esta atado exclusivamente a Ollama (modelos locales).
+**Estado actual:** ~~AIBot esta atado exclusivamente a Ollama (modelos locales).~~ **IMPLEMENTADO.** Multi-provider LLM con model failover en `src/bot/model-failover/` (4 archivos: failover-error, failover-orchestrator, model-fallback, cooldown-tracker). Soporta Anthropic, OpenAI, Google, Ollama con failover automático, error classification (9 FailoverReasons), y cooldown por modelo. `FailoverLLMClient` es drop-in replacement.
 
 **Lo que tiene OpenClaw:** Soporte para 20+ proveedores (Anthropic, OpenAI,
 Google, Bedrock, Together, Ollama, etc.) con rotacion de perfiles de
@@ -47,10 +47,10 @@ estos modelos, AIBot tiene un techo de inteligencia artificial.
 
 ---
 
-## 2. Compactacion Inteligente de Contexto (Prioridad: CRITICA)
+## 2. Compactacion Inteligente de Contexto (Prioridad: CRITICA) — IMPLEMENTADO
 
-**Estado actual:** AIBot carga los ultimos N mensajes (`maxHistory`, default 20)
-y resetea sesiones por tiempo/dia. No hay manejo de ventana de contexto.
+**Estado actual:** ~~AIBot carga los ultimos N mensajes (`maxHistory`, default 20)
+y resetea sesiones por tiempo/dia. No hay manejo de ventana de contexto.~~ **IMPLEMENTADO.** `src/bot/context-compaction.ts` con token estimation, truncation, LLM-based summarization, overflow retry. Integrado con `MemoryFlusher` y `SessionManager`.
 
 **Lo que tiene OpenClaw:** Compactacion automatica cuando se acerca al limite de
 la ventana de contexto. Estima tokens por mensaje, divide el historial en chunks,
@@ -74,10 +74,10 @@ descartarlo.
 
 ---
 
-## 3. Streaming de Respuestas (Prioridad: ALTA)
+## 3. Streaming de Respuestas (Prioridad: ALTA) — IMPLEMENTADO
 
-**Estado actual:** AIBot espera la respuesta completa del LLM antes de enviarla.
-El usuario ve "escribiendo..." durante todo el procesamiento.
+**Estado actual:** ~~AIBot espera la respuesta completa del LLM antes de enviarla.
+El usuario ve "escribiendo..." durante todo el procesamiento.~~ **IMPLEMENTADO.** Ollama token-by-token streaming integrado en `ConversationPipeline`. Streaming compatible con WebSocket (widget chat) via `streamToWebSocket()` en `src/channel/websocket.ts`.
 
 **Lo que tiene OpenClaw:** Streaming en tiempo real a nivel de token, con
 streaming tambien durante ejecucion de tools. El usuario ve la respuesta
@@ -149,11 +149,11 @@ resolver sin el.
 
 ---
 
-## 6. Pipeline de Hooks / Middleware (Prioridad: MEDIA-ALTA)
+## 6. Pipeline de Hooks / Middleware (Prioridad: MEDIA-ALTA) — IMPLEMENTADO
 
-**Estado actual:** AIBot tiene un pipeline lineal fijo: mensaje -> debounce ->
+**Estado actual:** ~~AIBot tiene un pipeline lineal fijo: mensaje -> debounce ->
 session -> LLM -> respuesta. Las skills solo pueden registrar commands y
-`onMessage`.
+`onMessage`.~~ **IMPLEMENTADO.** `HookEmitter` en `src/bot/hooks.ts` con 8 eventos: `message_received`, `message_sent`, `before_llm_call`, `after_llm_call`, `before_tool_call`, `after_tool_call`, `before_compaction`, `agent_loop_cycle`. Wired en conversation pipeline, tool executor, y agent loop.
 
 **Lo que tiene OpenClaw:** Sistema de hooks con 15+ puntos de intervencion:
 `before_agent_start`, `message_received`, `before_tool_call`,
@@ -177,11 +177,11 @@ plugin de cache puede interceptar respuestas repetidas.
 
 ---
 
-## 7. Failover Avanzado y Recuperacion de Errores (Prioridad: MEDIA)
+## 7. Failover Avanzado y Recuperacion de Errores (Prioridad: MEDIA) — PARCIALMENTE IMPLEMENTADO
 
-**Estado actual:** AIBot tiene fallback basico de modelos (lista de fallbacks en
+**Estado actual:** ~~AIBot tiene fallback basico de modelos (lista de fallbacks en
 Ollama). Si falla la llamada, intenta el siguiente modelo. No hay clasificacion
-de errores ni cooldowns.
+de errores ni cooldowns.~~ **PARCIALMENTE IMPLEMENTADO.** Model failover con 9 `FailoverReason` types, cooldown tracker, failover orchestrator en `src/bot/model-failover/`. Agent retry engine con backoff exponencial en `src/bot/agent-retry-engine.ts`. **Pendiente:** unificación de 3 clasificadores de errores fragmentados (GAP-E1).
 
 **Lo que tiene OpenClaw:** Clasificacion detallada de errores (auth, billing,
 rate_limit, timeout, context_overflow, tool_error), cooldowns por perfil
@@ -230,9 +230,9 @@ apps web, tomar screenshots, interactuar con servicios que no tienen API.
 
 ---
 
-## 9. Soporte Multi-Canal (Prioridad: MEDIA)
+## 9. Soporte Multi-Canal (Prioridad: MEDIA) — IMPLEMENTADO
 
-**Estado actual:** AIBot solo soporta Telegram via grammy.
+**Estado actual:** ~~AIBot solo soporta Telegram via grammy.~~ **IMPLEMENTADO.** 7 channel adapters en `src/channel/`: Telegram, REST, WebSocket, WhatsApp (Cloud API), Discord (REST + Gateway WebSocket), Outbound. Abstracción `Channel`/`InboundMessage`/`ChannelKind` en `src/channel/types.ts`. Pipeline channel-agnostic via `handleChannelMessage()`.
 
 **Lo que tiene OpenClaw:** 15+ canales (WhatsApp, Discord, Slack, Signal,
 iMessage, Matrix, Teams, etc.) unificados bajo una sola API de mensajeria.
@@ -281,43 +281,43 @@ y que las respuestas mantienen calidad.
 
 ## Matriz de Prioridad
 
-| # | Mejora | Prioridad | Esfuerzo | Impacto en Inteligencia |
-|---|--------|-----------|----------|------------------------|
-| 1 | Multi-Proveedor LLM | CRITICA | Alto | Directo - acceso a mejores modelos |
-| 2 | Compactacion de Contexto | CRITICA | Medio | Directo - conversaciones mas largas |
-| 3 | Streaming de Respuestas | ALTA | Medio | Indirecto - UX de inteligencia |
-| 4 | Subagentes / Multi-Agente | ALTA | Alto | Directo - tareas complejas |
-| 5 | Razonamiento Extendido | ALTA | Medio | Directo - mejor razonamiento |
-| 6 | Pipeline de Hooks | MEDIA-ALTA | Medio | Indirecto - extensibilidad |
-| 7 | Failover Avanzado | MEDIA | Medio | Indirecto - confiabilidad |
-| 8 | Herramientas de Navegador | MEDIA | Alto | Directo - mas capacidades |
-| 9 | Soporte Multi-Canal | MEDIA | Alto | Indirecto - alcance |
-| 10 | Testing y Evaluacion | MEDIA | Medio | Indirecto - calidad sostenida |
+| # | Mejora | Prioridad | Esfuerzo | Impacto en Inteligencia | Estado |
+|---|--------|-----------|----------|------------------------|--------|
+| 1 | Multi-Proveedor LLM | CRITICA | Alto | Directo - acceso a mejores modelos | **DONE** |
+| 2 | Compactacion de Contexto | CRITICA | Medio | Directo - conversaciones mas largas | **DONE** |
+| 3 | Streaming de Respuestas | ALTA | Medio | Indirecto - UX de inteligencia | **DONE** |
+| 4 | Subagentes / Multi-Agente | ALTA | Alto | Directo - tareas complejas | Pendiente |
+| 5 | Razonamiento Extendido | ALTA | Medio | Directo - mejor razonamiento | Pendiente |
+| 6 | Pipeline de Hooks | MEDIA-ALTA | Medio | Indirecto - extensibilidad | **DONE** |
+| 7 | Failover Avanzado | MEDIA | Medio | Indirecto - confiabilidad | **PARCIAL** (GAP-E1 pendiente) |
+| 8 | Herramientas de Navegador | MEDIA | Alto | Directo - mas capacidades | Pendiente |
+| 9 | Soporte Multi-Canal | MEDIA | Alto | Indirecto - alcance | **DONE** |
+| 10 | Testing y Evaluacion | MEDIA | Medio | Indirecto - calidad sostenida | Pendiente |
 
 ---
 
 ## Orden de Implementacion Sugerido
 
 ```
-Fase 1 - Fundamentos (desbloquea todo lo demas)
-  [1] Multi-Proveedor LLM
-  [2] Compactacion de Contexto
+Fase 1 - Fundamentos ✅ COMPLETADA
+  [1] Multi-Proveedor LLM ✅
+  [2] Compactacion de Contexto ✅
 
-Fase 2 - Experiencia (el bot se siente mas inteligente)
-  [3] Streaming de Respuestas
-  [5] Razonamiento Extendido
+Fase 2 - Experiencia (parcial)
+  [3] Streaming de Respuestas ✅
+  [5] Razonamiento Extendido — pendiente
 
-Fase 3 - Arquitectura (el bot puede hacer mas)
-  [6] Pipeline de Hooks
-  [7] Failover Avanzado
+Fase 3 - Arquitectura (parcial)
+  [6] Pipeline de Hooks ✅
+  [7] Failover Avanzado — parcial (GAP-E1 pendiente)
 
-Fase 4 - Capacidades (el bot llega a mas)
+Fase 4 - Capacidades — pendiente
   [4] Subagentes / Multi-Agente
   [8] Herramientas de Navegador
 
-Fase 5 - Escala (el bot crece)
-  [9] Soporte Multi-Canal
-  [10] Testing y Evaluacion
+Fase 5 - Escala (parcial)
+  [9] Soporte Multi-Canal ✅
+  [10] Testing y Evaluacion — pendiente
 ```
 
 ---

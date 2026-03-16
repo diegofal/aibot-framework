@@ -34,6 +34,7 @@ import {
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
 import { ToolLoopDetector } from './tool-loop-detector';
+import { type PermissionMode, getBlockedNativeTools } from './tool-permissions';
 import { TOOL_CATEGORY_NAMES, type ToolCategory, type ToolRegistry } from './tool-registry';
 import type { BotContext } from './types';
 
@@ -839,14 +840,21 @@ export class AgentLoop {
     }
 
     // Get available tools (respecting disabled tools from both global and per-bot)
+    const agentPermissionMode: PermissionMode = 'agent-loop';
     const allDisabled = new Set([
       ...(botConfig.disabledTools ?? []),
       ...(globalConfig.disabledTools ?? []),
       ...(botOverride?.disabledTools ?? []),
     ]);
-    const baseDefs = this.toolRegistry.getDefinitionsForBot(botId);
+    const baseDefs = this.toolRegistry.getDefinitionsForBot(botId, agentPermissionMode);
     const defs = baseDefs.filter((d) => !allDisabled.has(d.function.name));
     const availableToolNames = defs.map((d) => d.function.name);
+    const allToolNames = (this.ctx.toolDefinitions ?? []).map((d) => d.function.name);
+    const blockedNativeTools = getBlockedNativeTools(
+      agentPermissionMode,
+      allToolNames,
+      botConfig.toolPermissions
+    );
 
     // Phase 1: Planner
     if (checkTimeout && !checkTimeout('before_planner')) {
@@ -1306,6 +1314,7 @@ export class AgentLoop {
             tools: executorDefs,
             toolExecutor: executor.createCallback(),
             maxToolRounds,
+            blockedNativeTools,
           }),
         'Executor phase',
         executorTimeoutMs
@@ -1583,14 +1592,21 @@ export class AgentLoop {
       'update_identity',
       'save_memory',
     ]);
+    const feedbackPermissionMode: PermissionMode = 'agent-loop';
     const allDisabled = new Set([
       ...(botConfig.disabledTools ?? []),
       ...(globalConfig.disabledTools ?? []),
       ...(botOverride?.disabledTools ?? []),
     ]);
-    const baseDefs = this.toolRegistry.getDefinitionsForBot(botId);
+    const baseDefs = this.toolRegistry.getDefinitionsForBot(botId, feedbackPermissionMode);
     const defs = baseDefs.filter(
       (d) => feedbackToolNames.has(d.function.name) && !allDisabled.has(d.function.name)
+    );
+    const feedbackAllToolNames = (this.ctx.toolDefinitions ?? []).map((d) => d.function.name);
+    const feedbackBlockedNativeTools = getBlockedNativeTools(
+      feedbackPermissionMode,
+      feedbackAllToolNames,
+      botConfig.toolPermissions
     );
 
     botLogger.info(
@@ -1665,6 +1681,7 @@ export class AgentLoop {
             tools: defs,
             toolExecutor: executor.createCallback(),
             maxToolRounds: 5,
+            blockedNativeTools: feedbackBlockedNativeTools,
           });
           response = feedbackResult.text;
           this.ctx.activityStream?.publish({
