@@ -9,6 +9,7 @@ import {
   classifyFailoverReason,
   shouldAbortChain,
 } from '../bot/model-failover/failover-error';
+import { ALL_DISALLOWED_NATIVE_TOOLS } from '../bot/tool-permissions';
 import { claudeGenerate, claudeGenerateWithTools } from '../claude-cli';
 import type { Logger } from '../logger';
 import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
@@ -131,7 +132,7 @@ export class ClaudeCliLLMClient implements LLMClient {
         systemPrompt: system,
         tools: opts.tools ?? [],
         toolExecutor: opts.toolExecutor ?? (async () => ''),
-        disallowedNativeTools: opts.blockedNativeTools,
+        disallowedNativeTools: ALL_DISALLOWED_NATIVE_TOOLS,
       });
 
       return { text: result.response, usage: result.usage };

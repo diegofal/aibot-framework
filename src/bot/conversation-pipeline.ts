@@ -20,7 +20,7 @@ import {
 import type { MemoryFlusher } from './memory-flush';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { sendLongMessage, streamToChannel } from './telegram-utils';
-import { type PermissionMode, getBlockedNativeTools } from './tool-permissions';
+import type { PermissionMode } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
 import { TopicGuard, type TopicGuardConfig } from './topic-guard';
 import type { BotContext } from './types';
@@ -163,12 +163,6 @@ export class ConversationPipeline {
     const permissionMode: PermissionMode = 'conversation';
     const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id, permissionMode);
     const hasTools = botToolDefs.length > 0;
-    const allToolNames = (this.ctx.toolDefinitions ?? []).map((d) => d.function.name);
-    const blockedNativeTools = getBlockedNativeTools(
-      permissionMode,
-      allToolNames,
-      config.toolPermissions
-    );
     const chatId = ctx.chat?.id;
     const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
     const botLogger = this.ctx.getBotLogger(config.id);
@@ -415,7 +409,6 @@ export class ConversationPipeline {
                   )
                 : undefined,
               maxToolRounds,
-              blockedNativeTools,
             }),
           'conversation-pipeline.chat',
           {
@@ -480,7 +473,6 @@ export class ConversationPipeline {
                     )
                   : undefined,
                 maxToolRounds,
-                blockedNativeTools,
               }),
             'conversation-pipeline.chat',
             {
@@ -788,12 +780,6 @@ export class ConversationPipeline {
     const permissionMode: PermissionMode = 'conversation';
     const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id, permissionMode);
     const hasTools = botToolDefs.length > 0;
-    const allToolNames = (this.ctx.toolDefinitions ?? []).map((d) => d.function.name);
-    const blockedNativeTools = getBlockedNativeTools(
-      permissionMode,
-      allToolNames,
-      config.toolPermissions
-    );
     const isGroup = msg.chatType === 'group' || msg.chatType === 'supergroup';
     const botLogger = this.ctx.getBotLogger(config.id);
 
@@ -1128,7 +1114,6 @@ export class ConversationPipeline {
                     )
                   : undefined,
                 maxToolRounds,
-                blockedNativeTools,
               }),
             `channel-pipeline.chat:${msg.channelKind}`,
             {
@@ -1177,7 +1162,6 @@ export class ConversationPipeline {
                       )
                     : undefined,
                   maxToolRounds,
-                  blockedNativeTools,
                 }),
               `channel-pipeline.chat:${msg.channelKind}`,
               {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  ALL_DISALLOWED_NATIVE_TOOLS,
   DEFAULT_PERMISSIONS,
   NATIVE_TOOL_MAP,
   type PermissionMode,
   type ToolPermissionEntry,
   buildSensitiveActionProtocol,
-  getBlockedNativeTools,
   getBlockedTools,
   getPermissionLevel,
 } from '../src/bot/tool-permissions';
@@ -123,78 +123,27 @@ describe('tool-permissions', () => {
     });
   });
 
-  describe('getBlockedNativeTools', () => {
-    it('returns empty when no tools are blocked', () => {
-      const allTools = ['get_datetime', 'web_search', 'memory_search'];
-      const result = getBlockedNativeTools('conversation', allTools);
-      expect(result).toHaveLength(0);
+  describe('ALL_DISALLOWED_NATIVE_TOOLS', () => {
+    it('contains all native tools from NATIVE_TOOL_MAP', () => {
+      const allFromMap = new Set(Object.values(NATIVE_TOOL_MAP).flat());
+      for (const tool of allFromMap) {
+        expect(ALL_DISALLOWED_NATIVE_TOOLS).toContain(tool);
+      }
+      expect(ALL_DISALLOWED_NATIVE_TOOLS).toHaveLength(allFromMap.size);
     });
 
-    it('maps blocked exec to Bash native tool', () => {
-      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
-        exec: { conversation: 'blocked' },
-      };
-      const allTools = ['exec', 'get_datetime', 'web_search'];
-      const result = getBlockedNativeTools('conversation', allTools, overrides);
-      expect(result).toContain('Bash');
-      expect(result).toHaveLength(1);
+    it('includes Bash, Read, Write, Edit, WebFetch, WebSearch', () => {
+      expect(ALL_DISALLOWED_NATIVE_TOOLS).toContain('Bash');
+      expect(ALL_DISALLOWED_NATIVE_TOOLS).toContain('Read');
+      expect(ALL_DISALLOWED_NATIVE_TOOLS).toContain('Write');
+      expect(ALL_DISALLOWED_NATIVE_TOOLS).toContain('Edit');
+      expect(ALL_DISALLOWED_NATIVE_TOOLS).toContain('WebFetch');
+      expect(ALL_DISALLOWED_NATIVE_TOOLS).toContain('WebSearch');
     });
 
-    it('maps blocked file_write to Write native tool', () => {
-      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
-        file_write: { conversation: 'blocked' },
-      };
-      const allTools = ['file_write', 'exec'];
-      const result = getBlockedNativeTools('conversation', allTools, overrides);
-      expect(result).toContain('Write');
-      expect(result).not.toContain('Bash');
-    });
-
-    it('maps blocked browser to WebFetch and WebSearch', () => {
-      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
-        browser: { conversation: 'blocked' },
-      };
-      const allTools = ['browser', 'exec'];
-      const result = getBlockedNativeTools('conversation', allTools, overrides);
-      expect(result).toContain('WebFetch');
-      expect(result).toContain('WebSearch');
-      expect(result).not.toContain('Bash');
-    });
-
-    it('accumulates native tools from multiple blocked framework tools', () => {
-      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
-        exec: { conversation: 'blocked' },
-        file_write: { conversation: 'blocked' },
-        file_read: { conversation: 'blocked' },
-        browser: { conversation: 'blocked' },
-      };
-      const allTools = ['exec', 'file_write', 'file_read', 'browser'];
-      const result = getBlockedNativeTools('conversation', allTools, overrides);
-      expect(result).toContain('Bash');
-      expect(result).toContain('Write');
-      expect(result).toContain('Read');
-      expect(result).toContain('WebFetch');
-      expect(result).toContain('WebSearch');
-      expect(result).toHaveLength(5);
-    });
-
-    it('uses agent-loop mode correctly', () => {
-      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
-        exec: { agentLoop: 'blocked' },
-      };
-      const allTools = ['exec', 'get_datetime'];
-      const result = getBlockedNativeTools('agent-loop', allTools, overrides);
-      expect(result).toContain('Bash');
-    });
-
-    it('ignores blocked tools that have no native mapping', () => {
-      const overrides: Record<string, Partial<ToolPermissionEntry>> = {
-        phone_call: { conversation: 'blocked' },
-      };
-      const allTools = ['phone_call', 'exec'];
-      const result = getBlockedNativeTools('conversation', allTools, overrides);
-      // phone_call is blocked but has no native tool mapping
-      expect(result).toHaveLength(0);
+    it('has no duplicates', () => {
+      const unique = new Set(ALL_DISALLOWED_NATIVE_TOOLS);
+      expect(ALL_DISALLOWED_NATIVE_TOOLS).toHaveLength(unique.size);
     });
   });
 

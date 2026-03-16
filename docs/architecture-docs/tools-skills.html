@@ -1619,13 +1619,14 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
         <h4>Claude CLI Native Tool Blocking</h4>
         <p>
           When the bot uses <code>llmBackend: "claude-cli"</code>, Claude CLI has built-in native
-          tools (Bash, Read, Write, Edit, WebFetch, WebSearch) that are not subject to the
-          <code>--allowedTools</code> flag. To prevent permission bypass, blocked framework tools
-          are mapped to their Claude CLI native equivalents via <code>NATIVE_TOOL_MAP</code> and
-          passed as <code>--disallowedTools</code> to the CLI:
+          tools (Bash, Read, Write, Edit, WebFetch, WebSearch) that bypass the
+          <code>--allowedTools</code> flag and have their own permission system incompatible with
+          non-interactive mode (<code>-p</code>). To ensure our permission matrix is the single
+          source of truth, <code>ClaudeCliLLMClient</code> <strong>always</strong> passes
+          <code>--disallowedTools</code> for all native tools that have MCP equivalents:
         </p>
         <table>
-          <tr><th>Framework tool</th><th>Claude CLI native</th></tr>
+          <tr><th>Framework tool</th><th>Claude CLI native (always disabled)</th></tr>
           <tr><td>exec</td><td>Bash</td></tr>
           <tr><td>file_write</td><td>Write</td></tr>
           <tr><td>file_edit</td><td>Edit</td></tr>
@@ -1633,9 +1634,10 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
           <tr><td>browser</td><td>WebFetch, WebSearch</td></tr>
         </table>
         <p>
-          <code>getBlockedNativeTools()</code> computes the disallowed list from the permission
-          matrix. The list flows through <code>ChatOptions.blockedNativeTools</code> &rarr;
-          <code>ClaudeCliLLMClient</code> &rarr; <code>claudeGenerateWithTools()</code>.
+          The constant <code>ALL_DISALLOWED_NATIVE_TOOLS</code> in <code>tool-permissions.ts</code>
+          is passed by <code>ClaudeCliLLMClient.chat()</code> to
+          <code>claudeGenerateWithTools()</code> automatically for every tool-enabled call.
+          This forces Claude CLI to use our MCP tools exclusively.
         </p>
 
         <h3>AI Generation</h3>

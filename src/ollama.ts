@@ -20,8 +20,6 @@ export interface ChatOptions {
   tools?: ToolDefinition[];
   toolExecutor?: ToolExecutor;
   maxToolRounds?: number;
-  /** Claude CLI native tools to block via --disallowedTools (e.g. 'Bash', 'Write'). */
-  blockedNativeTools?: string[];
   /** @internal Prevent recursive fallback loops */
   _skipFallbacks?: boolean;
 }

@@ -84,8 +84,10 @@ export const DEFAULT_PERMISSIONS: Record<string, ToolPermissionEntry> = {
 
 /**
  * Mapping from framework tool names → Claude CLI native tool equivalents.
- * When a framework tool is blocked, the corresponding Claude CLI native tools
- * must also be disabled via --disallowedTools to prevent bypass.
+ * Claude CLI has built-in tools (Bash, Read, Write, etc.) that bypass
+ * --allowedTools. We must disable ALL of them via --disallowedTools so
+ * Claude CLI is forced to use our MCP tools, which go through our
+ * permission matrix.
  */
 export const NATIVE_TOOL_MAP: Record<string, string[]> = {
   exec: ['Bash'],
@@ -96,24 +98,13 @@ export const NATIVE_TOOL_MAP: Record<string, string[]> = {
 };
 
 /**
- * Given a list of blocked framework tool names, return the Claude CLI native
- * tool names that should be disabled via --disallowedTools.
+ * All Claude CLI native tools that have MCP equivalents in our framework.
+ * Always passed as --disallowedTools to force Claude CLI to use our MCP
+ * tools exclusively (which respect the permission matrix).
  */
-export function getBlockedNativeTools(
-  mode: PermissionMode,
-  allToolNames: string[],
-  botOverrides?: Record<string, Partial<ToolPermissionEntry>>
-): string[] {
-  const blocked = getBlockedTools(mode, allToolNames, botOverrides);
-  const nativeTools = new Set<string>();
-  for (const toolName of blocked) {
-    const natives = NATIVE_TOOL_MAP[toolName];
-    if (natives) {
-      for (const n of natives) nativeTools.add(n);
-    }
-  }
-  return [...nativeTools];
-}
+export const ALL_DISALLOWED_NATIVE_TOOLS: string[] = [
+  ...new Set(Object.values(NATIVE_TOOL_MAP).flat()),
+];
 
 const MODE_KEYS: Record<PermissionMode, keyof ToolPermissionEntry> = {
   'agent-loop': 'agentLoop',
