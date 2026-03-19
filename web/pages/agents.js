@@ -262,6 +262,11 @@ export async function renderAgents(el) {
             ? `<button class="btn btn-sm" data-action="run-loop" data-id="${agent.id}">Run Loop</button>`
             : ''
         }
+        ${
+          agent.running && agent.skills.includes('reflection')
+            ? `<button class="btn btn-sm" data-action="reflect" data-id="${agent.id}">Reflect</button>`
+            : ''
+        }
         <button class="btn btn-sm" data-action="edit" data-id="${agent.id}">Edit</button>
         <button class="btn btn-sm" data-action="clone" data-id="${agent.id}">Clone</button>
         <button class="btn btn-sm" data-action="export" data-id="${agent.id}">Export</button>
@@ -317,6 +322,36 @@ export async function renderAgents(el) {
       }
       btn.disabled = false;
       btn.textContent = 'Run Loop';
+    } else if (action === 'reflect') {
+      btn.disabled = true;
+      btn.textContent = 'Reflecting...';
+      try {
+        const res = await api(`/api/agents/${encodeURIComponent(id)}/skills/reflection/reflect`, {
+          method: 'POST',
+        });
+        if (res.error) {
+          alert(`Reflect error: ${res.error}`);
+        } else {
+          const escaped = (res.result || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          showModal(`
+            <div class="modal-title">Reflection Result</div>
+            <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5">${escaped}</div>
+            <div style="margin-top:8px;font-size:12px;color:var(--text-dim)">Completed in ${(res.durationMs / 1000).toFixed(1)}s</div>
+            <div class="modal-actions">
+              <button class="btn" id="reflect-result-close">Close</button>
+            </div>
+          `);
+          document.getElementById('modal').style.maxWidth = '700px';
+          document.getElementById('reflect-result-close').addEventListener('click', () => {
+            document.getElementById('modal').style.maxWidth = '';
+            closeModal();
+          });
+        }
+      } catch (err) {
+        alert(`Reflect failed: ${err.message}`);
+      }
+      btn.disabled = false;
+      btn.textContent = 'Reflect';
     } else if (action === 'edit') {
       location.hash = `#/agents/${id}/edit`;
     } else if (action === 'clone') {
@@ -458,14 +493,19 @@ export async function renderAgents(el) {
 }
 
 export async function renderAgentDetail(el, id) {
-  const [agent, skills, defaults, karmaData, loopState, llmStatsRes] = await Promise.all([
-    api(`/api/agents/${id}`),
-    api('/api/skills'),
-    api('/api/agents/defaults'),
-    api(`/api/karma/${encodeURIComponent(id)}`),
-    api('/api/agent-loop'),
-    api(`/api/agent-loop/llm-stats/${encodeURIComponent(id)}`),
-  ]);
+  const [agent, skills, defaults, karmaData, loopState, llmStatsRes, reflections] =
+    await Promise.all([
+      api(`/api/agents/${id}`),
+      api('/api/skills'),
+      api('/api/agents/defaults'),
+      api(`/api/karma/${encodeURIComponent(id)}`),
+      api('/api/agent-loop'),
+      api(`/api/agent-loop/llm-stats/${encodeURIComponent(id)}`),
+      api(`/api/agents/${encodeURIComponent(id)}/reflections`).catch(() => ({
+        entries: [],
+        motivationsVersions: [],
+      })),
+    ]);
 
   const llmStats = llmStatsRes?.stats;
 
@@ -616,6 +656,62 @@ export async function renderAgentDetail(el, id) {
         : ''
     }
 
+    ${
+      reflections.entries?.length || reflections.motivationsVersions?.length
+        ? `
+    <div class="detail-card" style="margin-top:16px">
+      <div class="flex-between mb-16">
+        <span style="font-weight:600">Reflection Journal</span>
+        <span class="text-dim text-sm">Last: ${reflections.lastReflection?.date || 'never'}</span>
+      </div>
+      ${
+        reflections.entries?.length
+          ? `
+      <div id="reflection-entries">
+        ${reflections.entries
+          .slice(0, 20)
+          .map(
+            (e, i) => `
+          <div style="padding:8px 0;${i < Math.min(reflections.entries.length, 20) - 1 ? 'border-bottom:1px solid var(--border)' : ''}">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span class="badge badge-disabled">${escapeHtml(e.date)}</span>
+              <span class="text-dim text-sm">${escapeHtml(e.time)}</span>
+              ${e.hasMotivationsBackup ? `<button class="btn btn-sm" data-action="view-motivations" data-date="${escapeHtml(e.date)}">Motivations</button>` : ''}
+            </div>
+            <div style="font-size:13px;line-height:1.5">${escapeHtml(e.journal)}</div>
+          </div>
+        `
+          )
+          .join('')}
+      </div>
+      ${reflections.entries.length > 20 ? `<button class="btn btn-sm" id="btn-load-more-reflections" style="margin-top:8px">Show all ${reflections.entries.length} entries</button>` : ''}
+      `
+          : '<p class="text-dim text-sm">No journal entries yet.</p>'
+      }
+      ${
+        reflections.motivationsVersions?.length
+          ? `
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        <div class="text-dim text-sm" style="margin-bottom:8px">MOTIVATIONS.md versions (${reflections.motivationsVersions.length})</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${reflections.motivationsVersions
+            .slice(0, 10)
+            .map(
+              (v) =>
+                `<button class="btn btn-sm" data-action="view-motivations-version" data-version="${escapeHtml(v)}">${escapeHtml(v.replace('T', ' '))}</button>`
+            )
+            .join('')}
+          ${reflections.motivationsVersions.length > 10 ? `<span class="text-dim text-sm" style="align-self:center">+${reflections.motivationsVersions.length - 10} more</span>` : ''}
+        </div>
+      </div>
+      `
+          : ''
+      }
+    </div>
+    `
+        : ''
+    }
+
     ${llmStats ? buildLlmStatsCard(llmStats) : ''}
 
     <div class="actions">
@@ -630,6 +726,11 @@ export async function renderAgentDetail(el, id) {
         agent.running
           ? `<button class="btn" id="btn-run-loop">Run Agent Loop</button>`
           : `<button class="btn btn-danger" id="btn-reset">Reset</button>`
+      }
+      ${
+        agent.running && agent.skills.includes('reflection')
+          ? `<button class="btn" id="btn-reflect">Reflect</button>`
+          : ''
       }
     </div>
     <div id="agent-loop-result"></div>
@@ -694,6 +795,179 @@ export async function renderAgentDetail(el, id) {
 
       runLoopBtn.disabled = false;
       runLoopBtn.textContent = 'Run Agent Loop';
+    });
+  }
+
+  // Reflect button in detail view
+  const reflectBtn = document.getElementById('btn-reflect');
+  if (reflectBtn) {
+    reflectBtn.addEventListener('click', async () => {
+      reflectBtn.disabled = true;
+      reflectBtn.textContent = 'Reflecting...';
+      try {
+        const res = await api(`/api/agents/${encodeURIComponent(id)}/skills/reflection/reflect`, {
+          method: 'POST',
+        });
+        if (res.error) {
+          alert(`Reflect error: ${res.error}`);
+        } else {
+          const escaped = (res.result || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          showModal(`
+            <div class="modal-title">Reflection Result</div>
+            <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5">${escaped}</div>
+            <div style="margin-top:8px;font-size:12px;color:var(--text-dim)">Completed in ${(res.durationMs / 1000).toFixed(1)}s</div>
+            <div class="modal-actions">
+              <button class="btn" id="reflect-detail-close">Close</button>
+            </div>
+          `);
+          document.getElementById('modal').style.maxWidth = '700px';
+          document.getElementById('reflect-detail-close').addEventListener('click', () => {
+            document.getElementById('modal').style.maxWidth = '';
+            closeModal();
+          });
+        }
+      } catch (err) {
+        alert(`Reflect failed: ${err.message}`);
+      }
+      reflectBtn.disabled = false;
+      reflectBtn.textContent = 'Reflect';
+    });
+  }
+
+  // Reflection Journal — View Motivations buttons
+  for (const btn of document.querySelectorAll('[data-action="view-motivations"]')) {
+    btn.addEventListener('click', async () => {
+      const date = btn.dataset.date;
+      // Find matching version(s) for this date
+      const matching = (reflections.motivationsVersions || []).filter((v) => v.startsWith(date));
+      if (!matching.length) {
+        alert('No MOTIVATIONS backup found for this date.');
+        return;
+      }
+      const version = matching[0]; // most recent for that date
+      btn.disabled = true;
+      btn.textContent = 'Loading...';
+      try {
+        const res = await api(
+          `/api/agents/${encodeURIComponent(id)}/reflections/motivations/${encodeURIComponent(version)}`
+        );
+        if (res.error) {
+          alert(`Error: ${res.error}`);
+        } else {
+          showModal(`
+            <div class="modal-title">MOTIVATIONS.md — ${escapeHtml(version)}</div>
+            <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5;font-family:monospace">${escapeHtml(res.content)}</div>
+            <div class="modal-actions">
+              <button class="btn" id="motivations-close">Close</button>
+            </div>
+          `);
+          document.getElementById('modal').style.maxWidth = '700px';
+          document.getElementById('motivations-close').addEventListener('click', () => {
+            document.getElementById('modal').style.maxWidth = '';
+            closeModal();
+          });
+        }
+      } catch (err) {
+        alert(`Failed to load: ${err.message}`);
+      }
+      btn.disabled = false;
+      btn.textContent = 'Motivations';
+    });
+  }
+
+  // Reflection Journal — Direct version buttons
+  for (const btn of document.querySelectorAll('[data-action="view-motivations-version"]')) {
+    btn.addEventListener('click', async () => {
+      const version = btn.dataset.version;
+      btn.disabled = true;
+      const origText = btn.textContent;
+      btn.textContent = 'Loading...';
+      try {
+        const res = await api(
+          `/api/agents/${encodeURIComponent(id)}/reflections/motivations/${encodeURIComponent(version)}`
+        );
+        if (res.error) {
+          alert(`Error: ${res.error}`);
+        } else {
+          showModal(`
+            <div class="modal-title">MOTIVATIONS.md — ${escapeHtml(version)}</div>
+            <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5;font-family:monospace">${escapeHtml(res.content)}</div>
+            <div class="modal-actions">
+              <button class="btn" id="motivations-close">Close</button>
+            </div>
+          `);
+          document.getElementById('modal').style.maxWidth = '700px';
+          document.getElementById('motivations-close').addEventListener('click', () => {
+            document.getElementById('modal').style.maxWidth = '';
+            closeModal();
+          });
+        }
+      } catch (err) {
+        alert(`Failed to load: ${err.message}`);
+      }
+      btn.disabled = false;
+      btn.textContent = origText;
+    });
+  }
+
+  // Load more reflections
+  const loadMoreBtn = document.getElementById('btn-load-more-reflections');
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+      const container = document.getElementById('reflection-entries');
+      container.innerHTML = reflections.entries
+        .map(
+          (e, i) => `
+        <div style="padding:8px 0;${i < reflections.entries.length - 1 ? 'border-bottom:1px solid var(--border)' : ''}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span class="badge badge-disabled">${escapeHtml(e.date)}</span>
+            <span class="text-dim text-sm">${escapeHtml(e.time)}</span>
+            ${e.hasMotivationsBackup ? `<button class="btn btn-sm" data-action="view-motivations" data-date="${escapeHtml(e.date)}">Motivations</button>` : ''}
+          </div>
+          <div style="font-size:13px;line-height:1.5">${escapeHtml(e.journal)}</div>
+        </div>
+      `
+        )
+        .join('');
+      loadMoreBtn.remove();
+      // Re-wire motivations buttons for new entries
+      for (const btn of document.querySelectorAll('[data-action="view-motivations"]')) {
+        btn.addEventListener('click', async () => {
+          const date = btn.dataset.date;
+          const matching = (reflections.motivationsVersions || []).filter((v) =>
+            v.startsWith(date)
+          );
+          if (!matching.length) {
+            alert('No MOTIVATIONS backup found for this date.');
+            return;
+          }
+          btn.disabled = true;
+          btn.textContent = 'Loading...';
+          try {
+            const res = await api(
+              `/api/agents/${encodeURIComponent(id)}/reflections/motivations/${encodeURIComponent(matching[0])}`
+            );
+            if (res.error) {
+              alert(`Error: ${res.error}`);
+            } else {
+              showModal(`
+                <div class="modal-title">MOTIVATIONS.md — ${escapeHtml(matching[0])}</div>
+                <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5;font-family:monospace">${escapeHtml(res.content)}</div>
+                <div class="modal-actions"><button class="btn" id="motivations-close">Close</button></div>
+              `);
+              document.getElementById('modal').style.maxWidth = '700px';
+              document.getElementById('motivations-close').addEventListener('click', () => {
+                document.getElementById('modal').style.maxWidth = '';
+                closeModal();
+              });
+            }
+          } catch (err) {
+            alert(`Failed to load: ${err.message}`);
+          }
+          btn.disabled = false;
+          btn.textContent = 'Motivations';
+        });
+      }
     });
   }
 }
