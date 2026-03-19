@@ -108,7 +108,8 @@ const MESSAGE_PATTERNS: Array<{ pattern: RegExp; reason: FailoverReason }> = [
   { pattern: /context.{0,20}(length|limit|window|overflow)/i, reason: 'context_length' },
   { pattern: /too many tokens/i, reason: 'context_length' },
   { pattern: /maximum.{0,10}(context|token)/i, reason: 'context_length' },
-  { pattern: /prompt is too (long|large)/i, reason: 'context_length' },
+  { pattern: /prompt (?:is )?too (long|large)/i, reason: 'context_length' },
+  { pattern: /exceeded max context length/i, reason: 'context_length' },
   { pattern: /exceeds? .{0,20}(token|context) (limit|length)/i, reason: 'context_length' },
 
   // Rate limits (when no status code available)

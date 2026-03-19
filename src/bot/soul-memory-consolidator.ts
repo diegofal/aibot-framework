@@ -36,10 +36,20 @@ export function getUnconsolidatedLogs(soulDir: string): string[] {
   }
 }
 
+/**
+ * Compute exponential decay weight for a memory entry.
+ * Returns 1.0 for today, 0.5 at halfLifeDays, ~0.1 at ~3.3 half-lives.
+ */
+export function computeTemporalWeight(entryDate: Date, halfLifeDays = 7): number {
+  const ageDays = (Date.now() - entryDate.getTime()) / 86_400_000;
+  return 0.5 ** (ageDays / halfLifeDays);
+}
+
 function buildConsolidationPrompt(
   soulDir: string,
   existingMemory: string | null,
-  dailyLogContents: Array<{ date: string; content: string }>
+  dailyLogContents: Array<{ date: string; content: string }>,
+  decayHalfLifeDays?: number
 ): string {
   const parts = [
     'You are a memory consolidation agent for an AI bot.',
@@ -59,7 +69,8 @@ function buildConsolidationPrompt(
     '6. Keep the language consistent with the existing content.',
     '7. Be concise — this is a consolidated summary, not a raw dump.',
     '8. Keep ALL factual information about real people, preferences, relationships.',
-    '9. The file should start with a metadata header:',
+    '9. TEMPORAL DECAY: Entries marked [LOW RELEVANCE] should be compressed into 1-line summaries or merged with related entries. Entries marked [AGING] should be kept but condensed. Recent entries (last 2-3 days) should be preserved in full detail.',
+    '10. The file should start with a metadata header:',
     '   ```',
     '   <!-- last-consolidated: YYYY-MM-DD -->',
     '   ```',
@@ -72,7 +83,16 @@ function buildConsolidationPrompt(
 
   parts.push('## Daily Logs to Merge');
   for (const { date, content } of dailyLogContents) {
-    parts.push(`### ${date}`, '```', content, '```', '');
+    const entryDate = new Date(`${date}T00:00:00Z`);
+    const halfLife = decayHalfLifeDays ?? 7;
+    const weight = computeTemporalWeight(entryDate, halfLife);
+    const weightTag =
+      weight < 0.1
+        ? ' [LOW RELEVANCE — compress aggressively]'
+        : weight < 0.3
+          ? ' [AGING — summarize briefly]'
+          : '';
+    parts.push(`### ${date}${weightTag}`, '```', content, '```', '');
   }
 
   parts.push(
@@ -93,6 +113,8 @@ export interface ConsolidateMemoryOptions {
   timeout?: number;
   ollamaClient?: OllamaClient;
   model?: string;
+  /** Half-life in days for temporal decay during consolidation (default: 7) */
+  decayHalfLifeDays?: number;
 }
 
 async function generateConsolidation(
@@ -215,7 +237,12 @@ export async function consolidateMemory(
     return { merged: 0, archived: 0 };
   }
 
-  const prompt = buildConsolidationPrompt(soulDir, existingMemory, dailyLogContents);
+  const prompt = buildConsolidationPrompt(
+    soulDir,
+    existingMemory,
+    dailyLogContents,
+    opts.decayHalfLifeDays
+  );
 
   logger.info(
     { logCount: dailyLogContents.length, hasExisting: !!existingMemory, backend },

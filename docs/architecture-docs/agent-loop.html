@@ -120,8 +120,8 @@
             </tr>
             <tr>
               <td><code>agent-loop-utils.ts</code></td>
-              <td>159</td>
-              <td>Shared utilities: <code>buildRecentActionsDigest</code>, <code>isSimilarSummary</code>, <code>isRepetitiveAction</code>, <code>scanFileTree</code>, <code>logToMemory</code>, <code>sendReport</code>.</td>
+              <td>~280</td>
+              <td>Shared utilities: <code>buildRecentActionsDigest</code>, <code>isSimilarSummary</code>, <code>isRepetitiveAction</code>, <code>scanFileTree</code>, <code>logToMemory</code>, <code>sendReport</code>. Behavioral pattern classification: <code>classifyAction</code>, <code>computeActionDiversity</code>, <code>detectUnconsumedOutput</code>.</td>
             </tr>
             <tr>
               <td><code>agent-retry-engine.ts</code></td>
@@ -340,6 +340,34 @@
   focus: string;           // 1-2 sentence directive for next cycles
   reflection: string;      // Analysis of agent's current state
   next_strategy_in?: string; // Suggested next run, e.g. "6h"
+}</code></pre>
+
+          <h4>Behavioral Pattern Analysis</h4>
+          <p>
+            The strategist prompt includes a <strong>Behavioral Pattern Analysis</strong> section that instructs the LLM
+            to classify recent actions into types (CONTENT, OUTREACH, RESEARCH, ASSESSMENT, MAINTENANCE) and detect
+            behavioral ruts (&gt;70% same type) and engagement gaps (outputs without feedback).
+          </p>
+          <p>
+            When the agent loop computes behavioral metrics from recent actions, a <strong>Current Behavioral State</strong>
+            section is injected with concrete data: Shannon entropy, dominant action type %, and engagement ratio.
+            This gives the strategist evidence-based signals to force mode shifts (e.g., switch from content creation
+            to assessment or outreach).
+          </p>
+
+          <h4>Engagement Gate</h4>
+          <p>
+            Configurable per-bot via <code>agentLoop.engagementGate</code>. Detects when a bot produces outputs
+            without confirmed feedback. Two modes:
+          </p>
+          <ul>
+            <li><code>soft</code> (default): Warning injected into planner prompt</li>
+            <li><code>hard</code>: Blocks content creation in planner until feedback is received</li>
+          </ul>
+<pre><code>engagementGate: {
+  enabled: true,    // default
+  mode: 'soft',     // 'soft' | 'hard'
+  threshold: 5      // outputs without feedback before trigger
 }</code></pre>
 
           <h4>Retry Behavior</h4>

@@ -14,6 +14,8 @@ import {
 } from './agent-loop-prompts';
 import {
   buildRecentActionsDigest,
+  computeActionDiversity,
+  detectUnconsumedOutput,
   isRepetitiveAction,
   isSimilarSummary,
   logToMemory,
@@ -500,12 +502,19 @@ export class AgentLoop {
 
       // Memory logging with dedup and idle suppression
       if (idleSuppression && isIdle) {
-        if (schedule && schedule.consecutiveIdleCycles === 1) {
+        // Only log idle to daily memory once per 24h to suppress noise
+        const shouldLogIdle =
+          schedule &&
+          (schedule.consecutiveIdleCycles === 1 ||
+            schedule.lastIdleLoggedAt === null ||
+            Date.now() - schedule.lastIdleLoggedAt > 86_400_000);
+        if (shouldLogIdle && schedule) {
           logToMemory(
             this.ctx,
             botId,
             '[agent-loop] Idle — no novel action found. Awaiting next trigger.'
           );
+          schedule.lastIdleLoggedAt = Date.now();
         }
       } else {
         const memoryEvery = botConfig.agentLoop?.continuousMemoryEvery ?? 5;
@@ -725,6 +734,33 @@ export class AgentLoop {
         timestamp: Date.now(),
         phase: 'strategist:start',
       });
+
+      // Compute behavioral state for strategist injection
+      let behavioralState: string | undefined;
+      if (schedule && schedule.recentActions.length > 0) {
+        const diversity = computeActionDiversity(schedule.recentActions);
+        const engagement = detectUnconsumedOutput(
+          schedule.recentActions,
+          botConfig.agentLoop?.engagementGate?.threshold ?? 5
+        );
+        const lines: string[] = [];
+        lines.push(
+          `Action diversity: entropy=${diversity.entropy.toFixed(2)}, dominant=${diversity.dominantType} (${Math.round(diversity.dominantPct * 100)}%)`
+        );
+        if (diversity.isRut) {
+          lines.push(
+            `⚠️ BEHAVIORAL RUT DETECTED — agent has been doing ${diversity.dominantType} for ${Math.round(diversity.dominantPct * schedule.recentActions.length)} of last ${schedule.recentActions.length} cycles`
+          );
+        }
+        lines.push(
+          `Engagement: ${engagement.outputCount} outputs produced, ${engagement.feedbackCount} feedback received (ratio ${engagement.outputCount}:${Math.max(engagement.feedbackCount, 1)})`
+        );
+        if (engagement.gateTriggered) {
+          lines.push('⚠️ ENGAGEMENT GAP — production far exceeds confirmed consumption');
+        }
+        behavioralState = lines.join('\n');
+      }
+
       const strategistStartMs = Date.now();
       this.ctx.activityStream?.publish({
         type: 'llm:start',
@@ -743,6 +779,7 @@ export class AgentLoop {
               datetime,
               soulLoader,
               directives: directives.length > 0 ? directives : undefined,
+              behavioralState,
             }),
           'Strategist',
           strategistTimeoutMs
@@ -897,6 +934,25 @@ export class AgentLoop {
     // Resolve allowed write paths for this bot (default: productions/)
     const allowedWritePaths = botConfig.allowedWritePaths ?? ['productions/'];
 
+    // Build engagement gate note for planner injection
+    let engagementGateNote: string | undefined;
+    const engagementGateCfg = botConfig.agentLoop?.engagementGate;
+    const engagementGateEnabled = engagementGateCfg?.enabled !== false; // default true
+    if (engagementGateEnabled && schedule && schedule.recentActions.length > 0) {
+      const engagement = detectUnconsumedOutput(
+        schedule.recentActions,
+        engagementGateCfg?.threshold ?? 5
+      );
+      if (engagement.gateTriggered) {
+        const mode = engagementGateCfg?.mode ?? 'soft';
+        if (mode === 'hard') {
+          engagementGateNote = `## ⛔ ENGAGEMENT GATE (HARD)\n\nCONTENT CREATION IS BLOCKED until you get feedback from the recipient.\n${engagement.outputCount} outputs produced with ${engagement.feedbackCount} feedback received.\nOnly ASSESSMENT or OUTREACH deliverables are allowed. Use ask_human to check in with the operator.`;
+        } else {
+          engagementGateNote = `## ⚠️ ENGAGEMENT GATE (SOFT)\n\n${engagement.outputCount} outputs produced with ${engagement.feedbackCount} feedback received.\nConsider prioritizing ASSESSMENT or OUTREACH over creating more content.\nProduction without feedback is waste — check if your outputs are being consumed.`;
+        }
+      }
+    }
+
     // Build active users summary for agent loop user awareness
     const uaCfg = botOverride?.userAwareness ?? globalConfig.userAwareness;
     let activeUsersSummary: string | null = null;
@@ -952,6 +1008,7 @@ export class AgentLoop {
         allowedWritePaths,
         directives: directives.length > 0 ? directives : undefined,
         activeUsersSummary: activeUsersSummary || undefined,
+        engagementGateNote,
       });
 
       const plannerStartMs = Date.now();
@@ -1056,6 +1113,7 @@ export class AgentLoop {
         allowedWritePaths,
         directives: directives.length > 0 ? directives : undefined,
         activeUsersSummary: activeUsersSummary || undefined,
+        engagementGateNote,
       });
 
       const plannerStartMs = Date.now();

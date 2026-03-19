@@ -1,6 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Bot } from 'grammy';
+import { Bot, InputFile } from 'grammy';
 import { type AgentInfo, AgentRegistry } from '../agent-registry';
 import { CollaborationSessionManager } from '../collaboration-session';
 import { CollaborationTracker } from '../collaboration-tracker';
@@ -770,9 +770,10 @@ export class BotManager {
         data: {
           summary: report.summary,
           durationMs: report.meta.durationMs,
-          findings: report.findings
-            .slice(0, 5)
-            .map((f: any) => ({ severity: f.severity, title: f.title })),
+          findings: report.findings.slice(0, 5).map((f: { severity: string; title: string }) => ({
+            severity: f.severity,
+            title: f.title,
+          })),
         },
       });
     }
@@ -1366,6 +1367,79 @@ export class BotManager {
   }
   getRunningTenantBots(tenantId: string) {
     return this.tenantFacade.getRunningTenantBots(tenantId);
+  }
+
+  // --- Operator: Skill Command Execution ---
+
+  /**
+   * Execute a skill command headlessly (no Telegram context required).
+   * Usable from API endpoints, cron jobs, or internal triggers.
+   */
+  async executeSkillCommand(
+    botId: string,
+    skillId: string,
+    command: string,
+    args: string[] = []
+  ): Promise<string> {
+    if (!this.runningBots.has(botId)) {
+      throw new Error(`Bot ${botId} is not running`);
+    }
+
+    const skill = this.skillRegistry.get(skillId);
+    if (!skill) {
+      throw new Error(`Skill not found: ${skillId}`);
+    }
+
+    const botConfig = this.config.bots.find((b) => b.id === botId);
+    if (!botConfig || !botConfig.skills.includes(skillId)) {
+      throw new Error(`Bot ${botId} does not have skill ${skillId} enabled`);
+    }
+
+    const cmdHandler = skill.commands?.[command];
+    if (!cmdHandler) {
+      throw new Error(`Command not found: ${command} in skill ${skillId}`);
+    }
+
+    const baseContext = this.skillRegistry.getContext(skillId);
+    if (!baseContext) {
+      throw new Error(`Skill context not initialized: ${skillId}`);
+    }
+
+    const bot = this.bots.get(botId);
+    const telegramClient: import('../core/types').TelegramClient = {
+      async sendMessage(chatId, text, options?) {
+        if (bot) await bot.api.sendMessage(chatId, text, options as Record<string, unknown>);
+      },
+      async sendDocument(chatId, document, options?) {
+        if (bot) {
+          const opts = (options || {}) as Record<string, unknown>;
+          const file = Buffer.isBuffer(document)
+            ? new InputFile(new Uint8Array(document), opts.filename as string | undefined)
+            : document;
+          await bot.api.sendDocument(
+            chatId,
+            file as Parameters<typeof bot.api.sendDocument>[1],
+            opts as Record<string, unknown>
+          );
+        }
+      },
+      async answerCallbackQuery() {
+        /* no-op for headless */
+      },
+      async editMessageText() {
+        /* no-op for headless */
+      },
+    };
+
+    const skillContext: import('../core/types').SkillContext = {
+      ...baseContext,
+      telegram: telegramClient,
+      soulDir: resolveAgentConfig(this.config, botConfig).soulDir,
+      botId,
+    };
+
+    const result = await cmdHandler.handler(args, skillContext);
+    return result || '(no output)';
   }
 
   // --- Billing Integration ---

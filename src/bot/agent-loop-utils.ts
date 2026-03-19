@@ -13,6 +13,183 @@ export interface RecentAction {
   planSummary: string;
 }
 
+// ── Behavioral Pattern Classification ──
+
+export type ActionType =
+  | 'CONTENT'
+  | 'OUTREACH'
+  | 'RESEARCH'
+  | 'ASSESSMENT'
+  | 'MAINTENANCE'
+  | 'IDLE';
+
+/** Keyword sets for action type classification — each match scores +1 */
+const TYPE_KEYWORDS: Array<[ActionType, RegExp]> = [
+  ['IDLE', /\b(idle|no.?action|waiting|no.?novel|skip|nothing)\w*/gi],
+  ['CONTENT', /\b(creat|writ|generat|produc|draft|compos|file_write|file_edit|archiv)\w*/gi],
+  [
+    'OUTREACH',
+    /\b(send|nudg|check.?in|ask_human|outreach|contact|email|notif|proactiv|reach.?out)\w*/gi,
+  ],
+  [
+    'RESEARCH',
+    /\b(search|research|web_search|web_fetch|investig|analyz|explor|fetch|browse|scrap)\w*/gi,
+  ],
+  [
+    'ASSESSMENT',
+    /\b(review|evaluat|assess|measur|feedback|impact|result|diagnos|audit|verif|test)\w*/gi,
+  ],
+  [
+    'MAINTENANCE',
+    /\b(goal|memory|consolidat|updat.*soul|updat.*identity|improv|reflect|maintain|clean|organiz|manage_goals|save_memory|update_soul)\w*/gi,
+  ],
+];
+
+/**
+ * Classify an action summary into a behavioral type using keyword scoring.
+ * Each matching keyword adds +1 to the type's score; highest score wins.
+ */
+export function classifyAction(summary: string): ActionType {
+  if (!summary || summary.trim().length === 0) return 'IDLE';
+  const s = summary.toLowerCase();
+
+  const scores: Record<ActionType, number> = {
+    CONTENT: 0,
+    OUTREACH: 0,
+    RESEARCH: 0,
+    ASSESSMENT: 0,
+    MAINTENANCE: 0,
+    IDLE: 0,
+  };
+
+  for (const [type, pattern] of TYPE_KEYWORDS) {
+    // Reset lastIndex for global regex
+    pattern.lastIndex = 0;
+    const matches = s.match(pattern);
+    if (matches) scores[type] += matches.length;
+  }
+
+  // IDLE is a special case — if any idle keyword matches, return immediately
+  if (scores.IDLE > 0) return 'IDLE';
+
+  // Priority order for tie-breaking: outreach > assessment > research > content > maintenance
+  let best: ActionType = 'MAINTENANCE';
+  let bestScore = 0;
+  for (const type of [
+    'MAINTENANCE',
+    'CONTENT',
+    'RESEARCH',
+    'ASSESSMENT',
+    'OUTREACH',
+  ] as ActionType[]) {
+    if (scores[type] >= bestScore && scores[type] > 0) {
+      bestScore = scores[type];
+      best = type;
+    }
+  }
+
+  return best;
+}
+
+export interface ActionDiversityResult {
+  entropy: number;
+  dominantType: ActionType;
+  dominantPct: number;
+  distribution: Record<ActionType, number>;
+  isRut: boolean;
+}
+
+/**
+ * Compute Shannon entropy of action type distribution.
+ * Returns 0.0 (monotony) to ~1.79 (uniform across 6 types).
+ */
+export function computeActionDiversity(recentActions: RecentAction[]): ActionDiversityResult {
+  const allTypes: ActionType[] = [
+    'CONTENT',
+    'OUTREACH',
+    'RESEARCH',
+    'ASSESSMENT',
+    'MAINTENANCE',
+    'IDLE',
+  ];
+  const distribution: Record<ActionType, number> = {
+    CONTENT: 0,
+    OUTREACH: 0,
+    RESEARCH: 0,
+    ASSESSMENT: 0,
+    MAINTENANCE: 0,
+    IDLE: 0,
+  };
+
+  if (recentActions.length === 0) {
+    return { entropy: 0, dominantType: 'IDLE', dominantPct: 0, distribution, isRut: false };
+  }
+
+  for (const action of recentActions) {
+    const type = classifyAction(action.planSummary);
+    distribution[type]++;
+  }
+
+  const total = recentActions.length;
+  let entropy = 0;
+  let dominantType: ActionType = 'IDLE';
+  let dominantCount = 0;
+
+  for (const type of allTypes) {
+    if (distribution[type] > dominantCount) {
+      dominantCount = distribution[type];
+      dominantType = type;
+    }
+    const p = distribution[type] / total;
+    if (p > 0) {
+      entropy -= p * Math.log2(p);
+    }
+  }
+
+  const dominantPct = dominantCount / total;
+  const isRut = entropy < 0.5 || dominantPct > 0.7;
+
+  return { entropy, dominantType, dominantPct, distribution, isRut };
+}
+
+export interface UnconsumedOutputResult {
+  outputCount: number;
+  feedbackCount: number;
+  ratio: number;
+  gateTriggered: boolean;
+}
+
+/**
+ * Count outputs produced vs feedback received in recent actions.
+ */
+export function detectUnconsumedOutput(
+  recentActions: RecentAction[],
+  threshold = 5
+): UnconsumedOutputResult {
+  let outputCount = 0;
+  let feedbackCount = 0;
+
+  for (const action of recentActions) {
+    const type = classifyAction(action.planSummary);
+    if (type === 'CONTENT' || type === 'OUTREACH') {
+      outputCount++;
+    }
+    // Detect feedback signals: responses received, confirmations, assessments with results
+    const s = action.planSummary.toLowerCase();
+    if (
+      /\b(received|confirmed|responded|feedback|approved|denied|answer)\w*/i.test(s) ||
+      type === 'ASSESSMENT'
+    ) {
+      feedbackCount++;
+    }
+  }
+
+  const ratio = outputCount / Math.max(feedbackCount, 1);
+  const gateTriggered = outputCount >= threshold && feedbackCount === 0;
+
+  return { outputCount, feedbackCount, ratio, gateTriggered };
+}
+
 /**
  * Build a digest of recent actions for the planner to detect repetition.
  */
@@ -49,6 +226,30 @@ export function buildRecentActionsDigest(recentActions: RecentAction[]): string 
   if (exhausted.length > 0) {
     lines.push('');
     lines.push(`EXHAUSTED PATTERNS (done 3+ times): ${exhausted.join(', ')}`);
+  }
+
+  // Action type diversity analysis
+  const diversity = computeActionDiversity(recentActions);
+  const typeCounts = Object.entries(diversity.distribution)
+    .filter(([, count]) => count > 0)
+    .map(([type, count]) => `${type}:${count}`)
+    .join(', ');
+  lines.push('');
+  lines.push(
+    `Action types: ${typeCounts} (entropy=${diversity.entropy.toFixed(2)}, dominant=${diversity.dominantType} ${Math.round(diversity.dominantPct * 100)}%)`
+  );
+
+  if (diversity.isRut) {
+    lines.push(
+      `⚠️ BEHAVIORAL RUT — ${Math.round(diversity.dominantPct * 100)}% of recent actions are ${diversity.dominantType}. Your next action MUST be a DIFFERENT type.`
+    );
+  }
+
+  const engagement = detectUnconsumedOutput(recentActions);
+  if (engagement.gateTriggered) {
+    lines.push(
+      `⚠️ ENGAGEMENT GAP — ${engagement.outputCount} outputs produced, ${engagement.feedbackCount} feedback received. Production without feedback is waste. Prioritize ASSESSMENT or OUTREACH.`
+    );
   }
 
   return lines.join('\n');

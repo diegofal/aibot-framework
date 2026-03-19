@@ -183,6 +183,7 @@ export async function runStrategist(
     datetime: string;
     soulLoader: ReturnType<BotContext['getSoulLoader']>;
     directives?: string[];
+    behavioralState?: string;
   }
 ): Promise<StrategistResultWithUsage | null> {
   const llmClient = ctx.getLLMClient(botId);
@@ -201,6 +202,7 @@ export async function runStrategist(
     recentMemory,
     datetime: soulContext.datetime,
     directives: soulContext.directives,
+    behavioralState: soulContext.behavioralState,
   });
 
   const result = await runStrategistWithRetry(llmClient, input, model, botLogger);

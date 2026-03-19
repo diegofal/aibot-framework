@@ -37,6 +37,8 @@ export interface PlannerPromptInput {
   directives?: string[];
   /** Summary of recently active users for proactive engagement */
   activeUsersSummary?: string;
+  /** Engagement gate warning/block text injected by behavioral analysis */
+  engagementGateNote?: string;
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -73,6 +75,8 @@ export interface ContinuousPlannerPromptInput {
   directives?: string[];
   /** Summary of recently active users for proactive engagement */
   activeUsersSummary?: string;
+  /** Engagement gate warning/block text injected by behavioral analysis */
+  engagementGateNote?: string;
 }
 
 export interface PlannerResult {
@@ -274,7 +278,7 @@ ${input.focus}
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
 `
       : ''
-}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}
+}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}${input.engagementGateNote ? `\n${input.engagementGateNote}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -409,7 +413,7 @@ ${input.focus}
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
 `
       : ''
-}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}
+}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}${input.engagementGateNote ? `\n${input.engagementGateNote}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -669,6 +673,8 @@ export interface StrategistPromptInput {
   datetime: string;
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** Behavioral state analysis from action diversity computation */
+  behavioralState?: string;
 }
 
 export interface StrategistResult {
@@ -721,6 +727,23 @@ ${input.recentMemory || '(no recent memory)'}
 
 Current date/time: ${input.datetime}
 
+## Behavioral Pattern Analysis
+
+Before assigning the next deliverable, classify the agent's recent actions into TYPES:
+- CONTENT: writing files, creating activities, producing documents
+- OUTREACH: sending messages, check-ins, nudges
+- RESEARCH: web searches, reading external data
+- ASSESSMENT: evaluating outcomes, reviewing impact, getting feedback
+- MAINTENANCE: updating goals, consolidating memory, archiving
+
+If >70% of recent actions are the SAME TYPE → the agent is in a behavioral rut.
+Your deliverable MUST be a DIFFERENT type. If the agent has been creating content for 5+ cycles,
+assign an ASSESSMENT or OUTREACH deliverable instead.
+
+ENGAGEMENT CHECK: If the agent has produced 5+ outputs (files, reports, messages) without
+confirmed consumption or feedback from the recipient, the NEXT deliverable must be of type
+ASSESSMENT or OUTREACH — NOT more content creation. Production without feedback is waste.
+${input.behavioralState ? `\n## Current Behavioral State\n\n${input.behavioralState}\n` : ''}
 ## Your Task
 
 Analyze the agent's current state and assign a SINGLE, CONCRETE deliverable for the next session. Consider:

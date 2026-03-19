@@ -173,10 +173,11 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     goals: goals || undefined,
   });
 
-  const analysisRaw = await ctx.llm.generate(analysisInput.prompt, {
+  const analysisResult = await ctx.llm.generate(analysisInput.prompt, {
     system: analysisInput.system,
     temperature: 0.4,
   });
+  const analysisRaw = analysisResult?.text ?? '';
 
   const analysis = await parseJsonResponse<AnalysisResult>(ctx, analysisRaw);
   if (!analysis) {
@@ -228,10 +229,11 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     originalMotivations: getInitialMotivations(),
   });
 
-  const improvementRaw = await ctx.llm.generate(improvementInput.prompt, {
+  const improvementResult = await ctx.llm.generate(improvementInput.prompt, {
     system: improvementInput.system,
     temperature: 0.5,
   });
+  const improvementRaw = improvementResult?.text ?? '';
 
   const improvement = await parseJsonResponse<ImprovementResult>(ctx, improvementRaw);
   if (!improvement) {
@@ -302,12 +304,13 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
             "Reflection: compacting yesterday's log"
           );
           const compactionInput = buildCompactionPrompt(yesterdayContent);
-          const compacted = await ctx.llm.generate(compactionInput.prompt, {
+          const compactedResult = await ctx.llm.generate(compactionInput.prompt, {
             system: compactionInput.system,
             temperature: 0.2,
           });
+          const compacted = compactedResult?.text ?? '';
 
-          if (compacted?.trim()) {
+          if (compacted.trim()) {
             writeFileSync(yesterdayPath, `${compacted.trim()}\n`, 'utf-8');
             ctx.logger.info(
               { yesterday, before: lineCount, after: compacted.split('\n').length },
@@ -392,6 +395,10 @@ function parseLastReflectionDate(motivations: string): string | null {
  * Parse a JSON response from the LLM, with one retry on failure.
  */
 async function parseJsonResponse<T>(ctx: SkillContext, raw: string): Promise<T | null> {
+  if (!raw || typeof raw !== 'string') {
+    ctx.logger.error('parseJsonResponse: received non-string input');
+    return null;
+  }
   // Strip markdown fences if present
   let cleaned = raw.trim();
   if (cleaned.startsWith('```')) {
@@ -407,9 +414,10 @@ async function parseJsonResponse<T>(ctx: SkillContext, raw: string): Promise<T |
   // Retry: ask LLM to fix the JSON
   try {
     const fixPrompt = buildJsonFixPrompt(cleaned);
-    const fixed = await ctx.llm.generate(fixPrompt, {
+    const fixedResult = await ctx.llm.generate(fixPrompt, {
       temperature: 0.1,
     });
+    const fixed = fixedResult?.text ?? '';
 
     let fixedCleaned = fixed.trim();
     if (fixedCleaned.startsWith('```')) {

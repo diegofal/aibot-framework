@@ -57,6 +57,7 @@ import { onboardingRoutes } from './routes/onboarding';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
 import { settingsRoutes } from './routes/settings';
+import { skillCommandRoutes } from './routes/skill-commands';
 import { skillsRoutes } from './routes/skills';
 import { statusRoutes } from './routes/status';
 import { tenantConfigRoutes } from './routes/tenant-config';
@@ -164,6 +165,15 @@ export function startWebServer(deps: WebServerDeps): void {
       botManager: deps.botManager,
       logger,
       memoryManager: deps.botManager.getMemoryManager(),
+    })
+  );
+  app.route(
+    '/api/agents',
+    skillCommandRoutes({
+      config,
+      botManager: deps.botManager,
+      skillRegistry: deps.skillRegistry,
+      logger,
     })
   );
   app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager, config }));
@@ -772,7 +782,7 @@ export function startWebServer(deps: WebServerDeps): void {
               return;
             }
             // Session key must match the one used by ConversationPipeline
-            const senderId = ws.data.senderId!;
+            const senderId = ws.data.senderId ?? '';
             const sessionKey = `bot:${botId}:private:${Number(senderId) || 0}`;
             const store = deps.botManager.getInlineApprovalStore();
             const pending = store.consumePending(sessionKey);

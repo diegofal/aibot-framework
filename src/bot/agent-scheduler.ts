@@ -21,6 +21,8 @@ export interface BotSchedule {
   sessionStartAt: number | null;
   recentActions: RecentAction[];
   consecutiveIdleCycles: number;
+  /** Timestamp of last idle log written to daily memory (suppress noise) */
+  lastIdleLoggedAt: number | null;
   lastLoggedSummary: string | null;
   retryCount: number;
   lastErrorMessage: string | null;
@@ -441,6 +443,7 @@ export class AgentScheduler {
         sessionStartAt: null,
         recentActions: [],
         consecutiveIdleCycles: 0,
+        lastIdleLoggedAt: null,
         lastLoggedSummary: null,
         retryCount: 0,
         lastErrorMessage: null,

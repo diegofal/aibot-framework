@@ -132,6 +132,14 @@ export const BotAgentLoopOverrideSchema = z
       .optional(),
     /** Per-bot agent loop enable/disable — undefined = inherit global setting */
     enabled: z.boolean().optional(),
+    /** Engagement gate: detect when a bot produces outputs without confirmed feedback */
+    engagementGate: z
+      .object({
+        enabled: z.boolean().default(true),
+        mode: z.enum(['soft', 'hard']).default('soft'),
+        threshold: z.number().int().min(1).max(50).default(5),
+      })
+      .optional(),
     /** Standing directives: ongoing behavioral instructions injected into strategist/planner/executor prompts */
     directives: z.array(z.string().max(500)).max(10).optional(),
     /** Preset directive bundles — predefined behavioral instruction sets */
