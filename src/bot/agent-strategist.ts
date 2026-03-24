@@ -28,6 +28,8 @@ export interface StrategistResult {
   alignment_confidence?: number;
   reflection: string;
   next_strategy_in?: string;
+  /** Trait adjustments proposed by strategist (max ±0.05 per trait) */
+  trait_adjustments?: Record<string, number>;
 }
 
 /**
@@ -47,6 +49,14 @@ export function parseStrategistResult(
         typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1
           ? rawConfidence
           : undefined;
+      // Extract trait_adjustments if present
+      const traitAdj =
+        parsed.trait_adjustments &&
+        typeof parsed.trait_adjustments === 'object' &&
+        !Array.isArray(parsed.trait_adjustments)
+          ? (parsed.trait_adjustments as Record<string, number>)
+          : undefined;
+
       return {
         goal_operations: Array.isArray(parsed.goal_operations) ? parsed.goal_operations : [],
         single_deliverable: deliverable,
@@ -54,6 +64,7 @@ export function parseStrategistResult(
         focus: deliverable,
         reflection: String(parsed.reflection),
         next_strategy_in: parsed.next_strategy_in ? String(parsed.next_strategy_in) : undefined,
+        trait_adjustments: traitAdj,
       };
     },
     label: 'strategist',
@@ -184,6 +195,12 @@ export async function runStrategist(
     soulLoader: ReturnType<BotContext['getSoulLoader']>;
     directives?: string[];
     behavioralState?: string;
+    outcomeStats?: string;
+    traitState?: string;
+    environmentContext?: string;
+    crystallizationContext?: string;
+    goalPerformance?: string;
+    peerInsights?: string;
   }
 ): Promise<StrategistResultWithUsage | null> {
   const llmClient = ctx.getLLMClient(botId);
@@ -203,6 +220,12 @@ export async function runStrategist(
     datetime: soulContext.datetime,
     directives: soulContext.directives,
     behavioralState: soulContext.behavioralState,
+    outcomeStats: soulContext.outcomeStats,
+    traitState: soulContext.traitState,
+    environmentContext: soulContext.environmentContext,
+    crystallizationContext: soulContext.crystallizationContext,
+    goalPerformance: soulContext.goalPerformance,
+    peerInsights: soulContext.peerInsights,
   });
 
   const result = await runStrategistWithRetry(llmClient, input, model, botLogger);
@@ -258,6 +281,7 @@ export function applyGoalOperations(
           status: 'pending',
           priority: op.priority ?? 'medium',
           notes: op.notes,
+          source: `strategist:${localDateStr()}`,
         });
         logger.debug({ goal: op.goal }, 'Strategist: added goal');
         break;

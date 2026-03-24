@@ -89,6 +89,15 @@ export function agentLoopRoutes(deps: {
     return c.json({ stats });
   });
 
+  // Get evolution state for a bot
+  app.get('/evolution/:botId', (c) => {
+    const botId = c.req.param('botId');
+    if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
+    const state = deps.botManager.getEvolutionState(botId);
+    if (!state) return c.json({ enabled: false, modules: {} });
+    return c.json(state);
+  });
+
   // Run agent loop for a single bot
   app.post('/run/:botId', async (c) => {
     const botId = c.req.param('botId');

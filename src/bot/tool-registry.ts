@@ -117,6 +117,8 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'create_agent',
     'send_proactive_message',
     'send_message',
+    'mesh_publish',
+    'mesh_query',
   ],
   browser: ['browser'],
   production: ['read_production_log', 'archive_file', 'create_tool', 'signal_completion'],
@@ -146,11 +148,28 @@ export class ToolRegistry {
   /** Maps namespaced tool name → originating skill ID */
   private externalToolToSkill: Map<string, string> = new Map();
   private karmaService?: KarmaService;
+  private knowledgeMesh?: import('./knowledge-mesh').KnowledgeMesh;
 
   constructor(private ctx: BotContext) {}
 
   setKarmaService(ks: KarmaService): void {
     this.karmaService = ks;
+  }
+
+  /**
+   * Set the knowledge mesh and register mesh tools.
+   * Called after evolution modules are initialized in bot-manager.
+   */
+  setKnowledgeMesh(mesh: import('./knowledge-mesh').KnowledgeMesh): void {
+    this.knowledgeMesh = mesh;
+    // Register mesh tools now that mesh is available
+    const { createMeshPublishTool, createMeshQueryTool } = require('../tools/mesh');
+    const tools = this.ctx.tools;
+    const meshPublish = createMeshPublishTool(() => this.knowledgeMesh ?? null);
+    const meshQuery = createMeshQueryTool(() => this.knowledgeMesh ?? null);
+    tools.push(meshPublish, meshQuery);
+    this.ctx.toolDefinitions.push(meshPublish.definition, meshQuery.definition);
+    this.ctx.logger.info('mesh_publish + mesh_query tools registered');
   }
 
   /**

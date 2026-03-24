@@ -13,8 +13,6 @@ export interface PendingQuestion {
   resolve: (answer: string) => void;
   reject: (reason: Error) => void;
   createdAt: number;
-  timeoutMs: number;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 export interface PendingQuestionInfo {
@@ -24,8 +22,6 @@ export interface PendingQuestionInfo {
   question: string;
   conversationId?: string;
   createdAt: number;
-  timeoutMs: number;
-  remainingMs: number;
 }
 
 export interface AnsweredQuestion {
@@ -108,23 +104,10 @@ export class AskHumanStore {
    * Register a pending question. Returns a promise that resolves with the human's answer.
    * The caller is responsible for sending the Telegram message and calling setMessageId().
    */
-  ask(
-    botId: string,
-    chatId: number,
-    question: string,
-    timeoutMs: number
-  ): { id: string; promise: Promise<string> } {
+  ask(botId: string, chatId: number, question: string): { id: string; promise: Promise<string> } {
     const id = randomUUID();
 
     const { promise, resolve, reject } = this.createDeferredPromise<string>();
-
-    const timer = setTimeout(() => {
-      const entry = this.pending.get(id);
-      const conversationId = entry?.conversationId;
-      this.cleanup(id);
-      this.onTimeout?.(id, botId, conversationId);
-      reject(new Error('Question timed out — no response received'));
-    }, timeoutMs);
 
     const entry: PendingQuestion = {
       id,
@@ -135,8 +118,6 @@ export class AskHumanStore {
       resolve,
       reject,
       createdAt: Date.now(),
-      timeoutMs,
-      timer,
     };
 
     this.pending.set(id, entry);
@@ -249,7 +230,6 @@ export class AskHumanStore {
     const entry = this.pending.get(questionId);
     if (!entry) return;
 
-    clearTimeout(entry.timer);
     this.pending.delete(questionId);
 
     const compositeKey = `${entry.botId}:${entry.chatId}`;
@@ -277,11 +257,8 @@ export class AskHumanStore {
   }
 
   getAll(): PendingQuestionInfo[] {
-    const now = Date.now();
     const result: PendingQuestionInfo[] = [];
     for (const entry of this.pending.values()) {
-      const elapsed = now - entry.createdAt;
-      const remainingMs = Math.max(0, entry.timeoutMs - elapsed);
       result.push({
         id: entry.id,
         botId: entry.botId,
@@ -289,8 +266,6 @@ export class AskHumanStore {
         question: entry.question,
         conversationId: entry.conversationId,
         createdAt: entry.createdAt,
-        timeoutMs: entry.timeoutMs,
-        remainingMs,
       });
     }
     return result;
@@ -354,12 +329,9 @@ export class AskHumanStore {
 
   /** Returns pending (unanswered) questions for a bot. */
   getPendingForBot(botId: string): PendingQuestionInfo[] {
-    const now = Date.now();
     const results: PendingQuestionInfo[] = [];
     for (const entry of this.pending.values()) {
       if (entry.botId !== botId) continue;
-      const elapsed = now - entry.createdAt;
-      const remainingMs = Math.max(0, entry.timeoutMs - elapsed);
       results.push({
         id: entry.id,
         botId: entry.botId,
@@ -367,8 +339,6 @@ export class AskHumanStore {
         question: entry.question,
         conversationId: entry.conversationId,
         createdAt: entry.createdAt,
-        timeoutMs: entry.timeoutMs,
-        remainingMs,
       });
     }
     return results;
@@ -379,7 +349,6 @@ export class AskHumanStore {
     // Reject + remove pending questions for this bot
     for (const [id, entry] of this.pending) {
       if (entry.botId === botId) {
-        clearTimeout(entry.timer);
         entry.reject(new Error('AskHumanStore cleared for bot reset'));
         this.pending.delete(id);
         const compositeKey = `${entry.botId}:${entry.chatId}`;
@@ -400,7 +369,6 @@ export class AskHumanStore {
 
   dispose(): void {
     for (const entry of this.pending.values()) {
-      clearTimeout(entry.timer);
       entry.reject(new Error('AskHumanStore disposed'));
     }
     this.pending.clear();

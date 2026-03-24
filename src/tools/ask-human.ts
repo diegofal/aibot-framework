@@ -7,9 +7,6 @@ import type { Logger } from '../logger';
 import type { FileRef } from '../types/thread';
 import type { Tool, ToolResult } from './types';
 
-const MAX_TIMEOUT_MINUTES = 120;
-const DEFAULT_TIMEOUT_MINUTES = 30;
-
 export interface AskHumanDeps {
   store: AskHumanStore;
   getBotInstance: (botId: string) => Bot | undefined;
@@ -38,10 +35,6 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
             question: {
               type: 'string',
               description: 'The question to ask the human operator',
-            },
-            timeout_minutes: {
-              type: 'number',
-              description: `Minutes to wait for a response (default: ${DEFAULT_TIMEOUT_MINUTES}, max: ${MAX_TIMEOUT_MINUTES})`,
             },
             files: {
               type: 'array',
@@ -78,14 +71,8 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
         };
       }
 
-      const timeoutMinutes = Math.min(
-        Math.max(1, Number(args.timeout_minutes) || DEFAULT_TIMEOUT_MINUTES),
-        MAX_TIMEOUT_MINUTES
-      );
-      const timeoutMs = timeoutMinutes * 60_000;
-
       // Register the question in the store (always works — visible in web inbox)
-      const { id, promise } = deps.store.ask(botId, chatId, question, timeoutMs);
+      const { id, promise } = deps.store.ask(botId, chatId, question);
       promise.catch((err) => {
         logger.info(
           { questionId: id, botId, reason: err.message },
@@ -164,7 +151,7 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
       }
 
       logger.info(
-        { questionId: id, botId, chatId: chatId || null, timeoutMinutes },
+        { questionId: id, botId, chatId: chatId || null },
         'ask_human: question queued to inbox (non-blocking)'
       );
 

@@ -39,6 +39,10 @@ export interface PlannerPromptInput {
   activeUsersSummary?: string;
   /** Engagement gate warning/block text injected by behavioral analysis */
   engagementGateNote?: string;
+  /** Outcome ledger recent productions summary */
+  outcomeRecent?: string;
+  /** Environmental sensor context */
+  environmentContext?: string;
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -77,6 +81,10 @@ export interface ContinuousPlannerPromptInput {
   activeUsersSummary?: string;
   /** Engagement gate warning/block text injected by behavioral analysis */
   engagementGateNote?: string;
+  /** Outcome ledger recent productions summary */
+  outcomeRecent?: string;
+  /** Environmental sensor context */
+  environmentContext?: string;
 }
 
 export interface PlannerResult {
@@ -278,7 +286,7 @@ ${input.focus}
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
 `
       : ''
-}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}${input.engagementGateNote ? `\n${input.engagementGateNote}\n` : ''}
+}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}${input.engagementGateNote ? `\n${input.engagementGateNote}\n` : ''}${input.outcomeRecent ? `\n${input.outcomeRecent}\n` : ''}${input.environmentContext ? `\n${input.environmentContext}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -413,7 +421,7 @@ ${input.focus}
 Prioritize actions aligned with this focus. If the focus contradicts your goals, trust the focus — the strategist has a broader view.
 `
       : ''
-}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}${input.engagementGateNote ? `\n${input.engagementGateNote}\n` : ''}
+}${input.karmaBlock ? `\n${input.karmaBlock}\n` : ''}${buildHumanQuestionsSection(input.answeredQuestions, input.pendingQuestions)}${buildPermissionDecisionsSection(input.resolvedPermissions, input.pendingPermissions)}${input.recentActionsDigest ? `\n${input.recentActionsDigest}\n` : ''}${input.autonomousCyclesNote ? `\n${input.autonomousCyclesNote}\n` : ''}${input.activeUsersSummary ? `\n${input.activeUsersSummary}\n` : ''}${input.engagementGateNote ? `\n${input.engagementGateNote}\n` : ''}${input.outcomeRecent ? `\n${input.outcomeRecent}\n` : ''}${input.environmentContext ? `\n${input.environmentContext}\n` : ''}
 ## Recent Memory
 
 ${input.recentMemory || '(no recent memory)'}
@@ -675,6 +683,18 @@ export interface StrategistPromptInput {
   directives?: string[];
   /** Behavioral state analysis from action diversity computation */
   behavioralState?: string;
+  /** Outcome ledger stats for production tracking */
+  outcomeStats?: string;
+  /** Current trait state for mechanical personality */
+  traitState?: string;
+  /** Environmental sensor context */
+  environmentContext?: string;
+  /** Crystallization candidates (repeated tool patterns) */
+  crystallizationContext?: string;
+  /** Goal genealogy performance stats */
+  goalPerformance?: string;
+  /** Peer insights from knowledge mesh */
+  peerInsights?: string;
 }
 
 export interface StrategistResult {
@@ -698,6 +718,8 @@ export interface StrategistResult {
   alignment_confidence?: number;
   reflection: string;
   next_strategy_in?: string;
+  /** Trait adjustments proposed by strategist (max ±0.05 per trait) */
+  trait_adjustments?: Record<string, number>;
 }
 
 export function buildStrategistPrompt(input: StrategistPromptInput): {
@@ -743,7 +765,7 @@ assign an ASSESSMENT or OUTREACH deliverable instead.
 ENGAGEMENT CHECK: If the agent has produced 5+ outputs (files, reports, messages) without
 confirmed consumption or feedback from the recipient, the NEXT deliverable must be of type
 ASSESSMENT or OUTREACH — NOT more content creation. Production without feedback is waste.
-${input.behavioralState ? `\n## Current Behavioral State\n\n${input.behavioralState}\n` : ''}
+${input.behavioralState ? `\n## Current Behavioral State\n\n${input.behavioralState}\n` : ''}${input.outcomeStats ? `\n## Production Outcomes\n\n${input.outcomeStats}\n` : ''}${input.traitState ? `\n${input.traitState}\n` : ''}${input.environmentContext ? `\n${input.environmentContext}\n` : ''}${input.crystallizationContext ? `\n${input.crystallizationContext}\n` : ''}${input.goalPerformance ? `\n${input.goalPerformance}\n` : ''}${input.peerInsights ? `\n${input.peerInsights}\n` : ''}
 ## Your Task
 
 Analyze the agent's current state and assign a SINGLE, CONCRETE deliverable for the next session. Consider:
@@ -823,9 +845,19 @@ JSON Schema:
 - focus: string (deprecated, use single_deliverable)
 - reflection: string (brief analysis of the agent's current state and trajectory)
 - next_strategy_in: string (when to run strategist again, e.g. "4h", "8h", "1d")
+- trait_adjustments: object (optional — propose small shifts to mechanical personality traits, max ±0.05 per trait)
+
+## Trait Adjustments
+If a "Current Trait State" section is present above, you may propose trait_adjustments to shift the agent's mechanical parameters.
+Each trait ranges 0.1-0.9. Propose small deltas (max ±0.05 per cycle). Only adjust traits where behavioral evidence supports the change:
+- High stale rate / low engagement → increase sociability (+0.03), decrease independence (-0.02)
+- Stuck in a content rut → decrease depth (-0.03), increase curiosity (+0.04)
+- Good engagement and varied actions → increase independence (+0.02)
+- Too many errors → increase caution (+0.04), decrease risk_tolerance (-0.03)
+Omit trait_adjustments or use {} if no changes are warranted.
 
 Example:
-{"goal_operations":[{"action":"complete","goal":"set up monitoring","outcome":"Monitoring dashboard deployed and working"},{"action":"add","goal":"Explore partnership opportunities with DeFi protocols","priority":"high"}],"single_deliverable":"Send 3 partnership outreach messages to DeFi protocols identified in the research phase","alignment_confidence":0.9,"reflection":"Agent has been stuck optimizing internal tools for 3 days instead of pursuing its core mission of community growth. Time to execute, not plan.","next_strategy_in":"6h"}`;
+{"goal_operations":[{"action":"complete","goal":"set up monitoring","outcome":"Monitoring dashboard deployed and working"},{"action":"add","goal":"Explore partnership opportunities with DeFi protocols","priority":"high"}],"single_deliverable":"Send 3 partnership outreach messages to DeFi protocols identified in the research phase","alignment_confidence":0.9,"reflection":"Agent has been stuck optimizing internal tools for 3 days instead of pursuing its core mission of community growth. Time to execute, not plan.","next_strategy_in":"6h","trait_adjustments":{"curiosity":0.03,"sociability":0.02,"independence":-0.02}}`;
 
   const prompt =
     'Perform a strategic review and assign ONE concrete deliverable for the next session. Remember: the executor will STOP after completing this ONE deliverable. Make it specific, achievable, and bounded. Respond with ONLY the JSON object.';

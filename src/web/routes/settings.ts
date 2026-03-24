@@ -323,7 +323,71 @@ export function settingsRoutes(deps: {
     return c.json(cli);
   });
 
+  // ── Evolution settings ──
+
+  app.get('/evolution', (c) => {
+    return c.json(deps.config.evolution ?? {});
+  });
+
+  app.patch('/evolution', async (c) => {
+    const body = await c.req.json();
+    const evo = deps.config.evolution;
+
+    // Master switch
+    if (body.enabled !== undefined) evo.enabled = !!body.enabled;
+
+    // Per-module toggles
+    const modules = [
+      'outcomeLedger',
+      'traitRegisters',
+      'adaptivePlanning',
+      'skillCrystallizer',
+      'knowledgeMesh',
+      'goalGenealogy',
+    ] as const;
+    for (const mod of modules) {
+      if (body[mod]?.enabled !== undefined) {
+        (evo[mod] as { enabled: boolean }).enabled = !!body[mod].enabled;
+      }
+    }
+
+    // Sensors (nested toggles)
+    if (body.sensors !== undefined) {
+      const s = body.sensors;
+      if (s.enabled !== undefined) evo.sensors.enabled = !!s.enabled;
+      if (s.time?.enabled !== undefined) evo.sensors.time.enabled = !!s.time.enabled;
+      if (s.rss?.enabled !== undefined) evo.sensors.rss.enabled = !!s.rss.enabled;
+      if (s.rss?.feeds !== undefined && Array.isArray(s.rss.feeds))
+        evo.sensors.rss.feeds = s.rss.feeds;
+      if (s.channelActivity?.enabled !== undefined)
+        evo.sensors.channelActivity.enabled = !!s.channelActivity.enabled;
+      if (s.webhook?.enabled !== undefined) evo.sensors.webhook.enabled = !!s.webhook.enabled;
+      if (s.webhook?.secret !== undefined) evo.sensors.webhook.secret = s.webhook.secret;
+    }
+
+    // Numeric params
+    if (body.outcomeLedger?.staleTtlHours !== undefined) {
+      evo.outcomeLedger.staleTtlHours = Number(body.outcomeLedger.staleTtlHours);
+    }
+    if (body.adaptivePlanning?.minAdjustmentIntervalHours !== undefined) {
+      evo.adaptivePlanning.minAdjustmentIntervalHours = Number(
+        body.adaptivePlanning.minAdjustmentIntervalHours
+      );
+    }
+
+    persistEvolution(deps.configPath, evo);
+    deps.logger.info({ enabled: evo.enabled }, 'Evolution settings updated via API');
+
+    return c.json(evo);
+  });
+
   return app;
+}
+
+function persistEvolution(configPath: string, evolution: Config['evolution']): void {
+  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+  raw.evolution = evolution;
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
 }
 
 function persistMcp(configPath: string, mcp: Config['mcp']): void {

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { ProductionsService } from '../productions/service';
+import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import { type InlineApprovalStore, describeToolCall } from './inline-approval';
 import type { LoopDetectionResult, ToolLoopDetector } from './tool-loop-detector';
@@ -726,6 +727,22 @@ export class ToolExecutor extends EventEmitter {
             }
           }
 
+          // ─── GAP-TR1: Truncate oversized tool results ───
+          // Prevents single tool results from consuming disproportionate context window.
+          // Smart tail preservation keeps error messages visible even when output is huge.
+          if (validatedResult.content && typeof validatedResult.content === 'string') {
+            const contextTokens =
+              this.ctx.config.conversation.compaction.contextWindows.ollamaTokens;
+            const contextChars = contextTokens ? tokensToChars(contextTokens) : undefined;
+
+            const truncation = truncateToolResultContent(validatedResult.content, contextChars);
+            if (truncation.wasTruncated) {
+              validatedResult.content = truncation.content;
+              this.logger.debug(
+                `[ToolExecutor] Result truncated: ${truncation.originalLength.toLocaleString()} → ${truncation.content.length.toLocaleString()} chars (strategy: ${truncation.strategy})`
+              );
+            }
+          }
           // Record in loop detector
           if (this.loopDetector) {
             this.loopDetector.recordCall(name, args);

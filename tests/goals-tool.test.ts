@@ -3,7 +3,9 @@ import {
   type GoalEntry,
   createGoalsTool,
   findGoalIndex,
+  parseGoals,
   resolveGoalParam,
+  serializeGoals,
 } from '../src/tools/goals';
 
 const mockLogger = {
@@ -385,5 +387,65 @@ describe('manage_goals tool with aliases', () => {
     const stored = loader.readGoals() ?? '';
     expect(stored).toContain('status: blocked');
     expect(stored).toContain('notes: Waiting on infra');
+  });
+});
+
+describe('GoalEntry source field', () => {
+  test('parseGoals handles source metadata', () => {
+    const content = `## Active Goals
+- [ ] Improve emotional support
+  - status: pending
+  - priority: high
+  - source: reflection:2026-03-23
+- [ ] Learn new topics
+  - status: pending
+  - priority: medium
+`;
+    const { active } = parseGoals(content);
+    expect(active).toHaveLength(2);
+    expect(active[0].source).toBe('reflection:2026-03-23');
+    expect(active[1].source).toBeUndefined();
+  });
+
+  test('serializeGoals emits source field', () => {
+    const active: GoalEntry[] = [
+      {
+        text: 'Goal with source',
+        status: 'pending',
+        priority: 'high',
+        source: 'strategist:2026-03-23',
+      },
+    ];
+    const result = serializeGoals(active, []);
+    expect(result).toContain('source: strategist:2026-03-23');
+  });
+
+  test('goals without source still parse and serialize correctly', () => {
+    const active: GoalEntry[] = [{ text: 'Legacy goal', status: 'pending', priority: 'medium' }];
+    const serialized = serializeGoals(active, []);
+    expect(serialized).not.toContain('source:');
+
+    const parsed = parseGoals(serialized);
+    expect(parsed.active[0].text).toBe('Legacy goal');
+    expect(parsed.active[0].source).toBeUndefined();
+  });
+
+  test('roundtrip preserves source through serialize/parse', () => {
+    const active: GoalEntry[] = [
+      {
+        text: 'Tracked goal',
+        status: 'in_progress',
+        priority: 'high',
+        source: 'reflection:2026-03-20',
+        notes: 'important',
+      },
+      { text: 'Untracked goal', status: 'pending', priority: 'low' },
+    ];
+    const serialized = serializeGoals(active, []);
+    const parsed = parseGoals(serialized);
+
+    expect(parsed.active[0].source).toBe('reflection:2026-03-20');
+    expect(parsed.active[0].notes).toBe('important');
+    expect(parsed.active[1].source).toBeUndefined();
   });
 });

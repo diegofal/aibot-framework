@@ -206,7 +206,11 @@ export class LLMClientWithFallback implements LLMClient {
         method: 'generate',
         reason,
       });
-      return this.fallback.generate(prompt, opts);
+      // Strip model when crossing backends — the primary's model name
+      // (e.g. "claude") is not valid for the fallback (e.g. Ollama).
+      const fallbackOpts =
+        this.primary.backend !== this.fallback.backend ? { ...opts, model: undefined } : opts;
+      return this.fallback.generate(prompt, fallbackOpts);
     }
   }
 
@@ -237,7 +241,11 @@ export class LLMClientWithFallback implements LLMClient {
         method: 'chat',
         reason,
       });
-      return this.fallback.chat(messages, opts);
+      // Strip model when crossing backends — the primary's model name
+      // (e.g. "claude") is not valid for the fallback (e.g. Ollama).
+      const fallbackOpts =
+        this.primary.backend !== this.fallback.backend ? { ...opts, model: undefined } : opts;
+      return this.fallback.chat(messages, fallbackOpts);
     }
   }
 }
@@ -282,8 +290,8 @@ export class FailoverLLMClient implements LLMClient {
       onError: ({ attempt, index }) => {
         if (index > 0) {
           this.onFallback?.({
-            primaryBackend: (this.candidates[0]?.backend as any) ?? this.primary.backend,
-            fallbackBackend: attempt.backend as any,
+            primaryBackend: (this.candidates[0]?.backend as string) ?? this.primary.backend,
+            fallbackBackend: attempt.backend as string,
             error: attempt.error,
             method: 'generate',
             reason: attempt.reason ?? undefined,
@@ -320,8 +328,8 @@ export class FailoverLLMClient implements LLMClient {
       onError: ({ attempt, index }) => {
         if (index > 0) {
           this.onFallback?.({
-            primaryBackend: (this.candidates[0]?.backend as any) ?? this.primary.backend,
-            fallbackBackend: attempt.backend as any,
+            primaryBackend: (this.candidates[0]?.backend as string) ?? this.primary.backend,
+            fallbackBackend: attempt.backend as string,
             error: attempt.error,
             method: 'chat',
             reason: attempt.reason ?? undefined,

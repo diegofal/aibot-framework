@@ -147,7 +147,26 @@ async function main() {
           const botConfig = config.bots.find((b) => b.id === payload.botId);
           if (botConfig) {
             const resolved = resolveAgentConfig(config, botConfig);
-            context = { ...context, soulDir: resolved.soulDir, botId: payload.botId };
+
+            // Build operational state for skills
+            const botState: import('./core/types').SkillContext['botState'] = {};
+            const karmaService = botManager.getKarmaService();
+            if (karmaService) {
+              botState.karmaBlock = karmaService.renderForPrompt(payload.botId);
+            }
+            const loopState = botManager.getAgentLoopState();
+            const schedule = loopState.botSchedules.find((s) => s.botId === payload.botId);
+            if (schedule?.recentActionsSummary?.length) {
+              botState.recentActionsDigest = schedule.recentActionsSummary.join('\n');
+            }
+
+            context = {
+              ...context,
+              soulDir: resolved.soulDir,
+              botId: payload.botId,
+              workDir: resolved.workDir,
+              botState,
+            };
           }
         }
 

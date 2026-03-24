@@ -5,6 +5,12 @@ import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import {
+  type AdaptiveParams,
+  computeAdaptiveAdjustments,
+  computeAdaptiveMetrics,
+  createDefaultAdaptiveParams,
+} from './adaptive-planning';
 import type { AgentFeedback } from './agent-feedback-store';
 import {
   buildContinuousPlannerPrompt,
@@ -14,6 +20,7 @@ import {
 } from './agent-loop-prompts';
 import {
   buildRecentActionsDigest,
+  classifyAction,
   computeActionDiversity,
   detectUnconsumedOutput,
   isRepetitiveAction,
@@ -181,6 +188,14 @@ export class AgentLoop {
   private scheduler: AgentScheduler;
   private karmaService: KarmaService | null = null;
 
+  // ── Evolution modules (Phase 1-4) ──
+  private outcomeLedger: import('./outcome-ledger').OutcomeLedger | null = null;
+  private traitRegisters: import('./trait-registers').TraitRegisters | null = null;
+  private sensorManager: import('./sensors/sensor-manager').SensorManager | null = null;
+  private skillCrystallizer: import('./skill-crystallizer').SkillCrystallizer | null = null;
+  private knowledgeMesh: import('./knowledge-mesh').KnowledgeMesh | null = null;
+  private goalGenealogy: import('./goal-genealogy').GoalGenealogy | null = null;
+
   constructor(
     private ctx: BotContext,
     private systemPromptBuilder: SystemPromptBuilder,
@@ -195,6 +210,162 @@ export class AgentLoop {
 
   setKarmaService(karmaService: KarmaService): void {
     this.karmaService = karmaService;
+  }
+
+  // ── Evolution module setters ──
+
+  setOutcomeLedger(ledger: import('./outcome-ledger').OutcomeLedger): void {
+    this.outcomeLedger = ledger;
+  }
+
+  setTraitRegisters(registers: import('./trait-registers').TraitRegisters): void {
+    this.traitRegisters = registers;
+  }
+
+  setSensorManager(manager: import('./sensors/sensor-manager').SensorManager): void {
+    this.sensorManager = manager;
+  }
+
+  setSkillCrystallizer(crystallizer: import('./skill-crystallizer').SkillCrystallizer): void {
+    this.skillCrystallizer = crystallizer;
+  }
+
+  setKnowledgeMesh(mesh: import('./knowledge-mesh').KnowledgeMesh): void {
+    this.knowledgeMesh = mesh;
+  }
+
+  setGoalGenealogy(genealogy: import('./goal-genealogy').GoalGenealogy): void {
+    this.goalGenealogy = genealogy;
+  }
+
+  /**
+   * Get evolution state for a bot — used by dashboard API.
+   * Returns null if evolution is not enabled.
+   */
+  getEvolutionState(botId: string): {
+    enabled: boolean;
+    modules: Record<string, boolean>;
+    outcomeStats?: {
+      total: number;
+      produced: number;
+      consumed: number;
+      validated: number;
+      stale: number;
+      rejected: number;
+      consumptionRate: number;
+      avgScore: number;
+    };
+    recentOutcomes?: Array<{
+      id: string;
+      timestamp: number;
+      type: string;
+      description: string;
+      status: string;
+      score?: number;
+    }>;
+    traits?: Record<string, number>;
+    traitParams?: {
+      executorTemperature: number;
+      plannerTemperature: number;
+      askHumanCheckInCycles: number;
+      maxToolRoundsBonus: number;
+      webToolAlwaysIncluded: boolean;
+      idleCyclesBeforeAbandon: number;
+    };
+    traitHistory?: Array<{ timestamp: number; source: string; traits: Record<string, number> }>;
+    sensorCount?: number;
+    cachedSensorEvents?: Array<{
+      sensorId: string;
+      category: string;
+      summary: string;
+      relevance: number;
+    }>;
+    meshEntryCount?: number;
+    meshRecent?: Array<{
+      sourceBotId: string;
+      topic: string;
+      insight: string;
+      confidence: number;
+      timestamp: number;
+    }>;
+  } | null {
+    const hasAny =
+      this.outcomeLedger ||
+      this.traitRegisters ||
+      this.sensorManager ||
+      this.skillCrystallizer ||
+      this.knowledgeMesh ||
+      this.goalGenealogy;
+    if (!hasAny) return null;
+
+    const modules: Record<string, boolean> = {
+      outcomeLedger: !!this.outcomeLedger,
+      traitRegisters: !!this.traitRegisters,
+      sensors: !!this.sensorManager,
+      skillCrystallizer: !!this.skillCrystallizer,
+      knowledgeMesh: !!this.knowledgeMesh,
+      goalGenealogy: !!this.goalGenealogy,
+    };
+
+    // Outcome stats
+    const outcomeStats = this.outcomeLedger?.getStats(botId) ?? undefined;
+    const recentOutcomes =
+      this.outcomeLedger?.getRecent(botId, 10)?.map((e) => ({
+        id: e.id,
+        timestamp: e.timestamp,
+        type: e.type,
+        description: e.description,
+        status: e.status,
+        score: e.score,
+      })) ?? undefined;
+
+    // Traits
+    let traits: Record<string, number> | undefined;
+    let traitParams: Record<string, number> | undefined;
+    let traitHistory: Array<Record<string, unknown>> | undefined;
+    if (this.traitRegisters) {
+      traits = this.traitRegisters.load(botId) as Record<string, number> | undefined;
+      traitParams = this.traitRegisters.getParameters(botId);
+      traitHistory = this.traitRegisters.getHistory(botId).slice(-5);
+    }
+
+    // Sensors
+    const sensorCount = this.sensorManager?.getSensorCount() ?? undefined;
+    const cachedSensorEvents =
+      this.sensorManager?.getCachedEvents(botId)?.map((e) => ({
+        sensorId: e.sensorId,
+        category: e.category,
+        summary: e.summary,
+        relevance: e.relevance,
+      })) ?? undefined;
+
+    // Knowledge mesh
+    const meshEntryCount = this.knowledgeMesh?.getEntryCount() ?? undefined;
+    const meshRecent =
+      this.knowledgeMesh
+        ?.getAll()
+        ?.slice(-5)
+        ?.map((e) => ({
+          sourceBotId: e.sourceBotId,
+          topic: e.topic,
+          insight: e.insight,
+          confidence: e.confidence,
+          timestamp: e.timestamp,
+        })) ?? undefined;
+
+    return {
+      enabled: true,
+      modules,
+      outcomeStats,
+      recentOutcomes,
+      traits,
+      traitParams,
+      traitHistory,
+      sensorCount,
+      cachedSensorEvents,
+      meshEntryCount,
+      meshRecent,
+    };
   }
 
   /** Delegate: clear scheduler state for a specific bot (used by BotResetService). */
@@ -500,6 +671,24 @@ export class AgentLoop {
         }
       }
 
+      // Outcome ledger: record production-class actions
+      if (this.outcomeLedger && schedule && !isIdle) {
+        const planSummary = detail.plan.join('; ').slice(0, 200);
+        const actionType = classifyAction(planSummary);
+        if (actionType === 'CONTENT' || actionType === 'OUTREACH') {
+          const toolNames = detail.toolCalls.map((t) => t.name);
+          this.outcomeLedger.record(botId, planSummary, toolNames, actionType);
+        }
+        // Sweep stale entries at start of each cycle
+        this.outcomeLedger.sweepStale(botId);
+      }
+
+      // Trait registers: apply strategist-proposed adjustments
+      if (this.traitRegisters && detail.strategistRan && schedule) {
+        // The strategist result's trait_adjustments are applied in executeLoop
+        // after the strategist phase — see the strategist section below
+      }
+
       // Memory logging with dedup and idle suppression
       if (idleSuppression && isIdle) {
         // Only log idle to daily memory once per 24h to suppress noise
@@ -769,6 +958,20 @@ export class AgentLoop {
         data: { caller: 'strategist', backend: llmClient.backend },
       });
       try {
+        // Build evolution context for strategist
+        const outcomeStats = this.outcomeLedger?.renderStatsForPrompt(botId) ?? undefined;
+        const traitState = this.traitRegisters?.renderForPrompt(botId) ?? undefined;
+        const envContext = this.sensorManager
+          ? ((await this.sensorManager.getEnvironmentBlock(botId)) ?? undefined)
+          : undefined;
+        const crystContext = schedule
+          ? (this.skillCrystallizer?.renderForPrompt(botId, schedule.recentActions) ?? undefined)
+          : undefined;
+        const goalPerfContext = this.goalGenealogy?.renderForPrompt([]) ?? undefined;
+        const peerContext = this.knowledgeMesh
+          ? (this.knowledgeMesh.getRelevantInsights(botId, motivations) ?? undefined)
+          : undefined;
+
         strategistResult = await withTimeout(
           () =>
             runStrategist(this.ctx, botId, botConfig, botLogger, {
@@ -780,6 +983,12 @@ export class AgentLoop {
               soulLoader,
               directives: directives.length > 0 ? directives : undefined,
               behavioralState,
+              outcomeStats,
+              traitState,
+              environmentContext: envContext,
+              crystallizationContext: crystContext,
+              goalPerformance: goalPerfContext,
+              peerInsights: peerContext,
             }),
           'Strategist',
           strategistTimeoutMs
@@ -838,6 +1047,35 @@ export class AgentLoop {
         strategistReflection = strategistResult.reflection;
         focus = strategistResult.focus;
         goals = soulLoader.readGoals?.() || '';
+
+        // Apply trait adjustments proposed by strategist
+        if (this.traitRegisters && strategistResult.trait_adjustments) {
+          try {
+            this.traitRegisters.adjust(
+              botId,
+              strategistResult.trait_adjustments as Record<string, number>,
+              'strategist'
+            );
+            botLogger.debug(
+              { botId, adjustments: strategistResult.trait_adjustments },
+              'Applied strategist trait adjustments'
+            );
+          } catch (err) {
+            botLogger.warn({ err, botId }, 'Failed to apply trait adjustments');
+          }
+        }
+
+        // Skill crystallization check (piggybacking on strategist cadence)
+        if (this.skillCrystallizer && schedule) {
+          try {
+            const proposals = this.skillCrystallizer.analyze(botId, schedule.recentActions);
+            for (const proposal of proposals) {
+              this.skillCrystallizer.submit(botId, proposal);
+            }
+          } catch (err) {
+            botLogger.debug({ err, botId }, 'Skill crystallization check failed');
+          }
+        }
       }
       this.ctx.activityStream?.publish({
         type: 'agent:phase',
@@ -953,6 +1191,12 @@ export class AgentLoop {
       }
     }
 
+    // Build evolution context for planner
+    const outcomeRecent = this.outcomeLedger?.renderRecentForPrompt(botId) ?? undefined;
+    const plannerEnvContext = this.sensorManager
+      ? ((await this.sensorManager.getEnvironmentBlock(botId)) ?? undefined)
+      : undefined;
+
     // Build active users summary for agent loop user awareness
     const uaCfg = botOverride?.userAwareness ?? globalConfig.userAwareness;
     let activeUsersSummary: string | null = null;
@@ -1009,6 +1253,8 @@ export class AgentLoop {
         directives: directives.length > 0 ? directives : undefined,
         activeUsersSummary: activeUsersSummary || undefined,
         engagementGateNote,
+        outcomeRecent,
+        environmentContext: plannerEnvContext,
       });
 
       const plannerStartMs = Date.now();
@@ -1114,6 +1360,8 @@ export class AgentLoop {
         directives: directives.length > 0 ? directives : undefined,
         activeUsersSummary: activeUsersSummary || undefined,
         engagementGateNote,
+        outcomeRecent,
+        environmentContext: plannerEnvContext,
       });
 
       const plannerStartMs = Date.now();
@@ -1338,7 +1586,11 @@ export class AgentLoop {
 
     // Per-bot override → global config → default 30. Session timeout guard (80% of maxDurationMs)
     // and per-operation withTimeout already prevent runaway execution.
-    const maxToolRounds = botOverride?.maxToolRounds ?? globalConfig.maxToolRounds;
+    // Trait-derived parameters (or defaults if no trait registers)
+    const traitParams = this.traitRegisters?.getParameters(botId);
+    const executorTemperature = traitParams?.executorTemperature ?? 0.7;
+    const maxToolRoundsBase = botOverride?.maxToolRounds ?? globalConfig.maxToolRounds;
+    const maxToolRounds = maxToolRoundsBase + (traitParams?.maxToolRoundsBonus ?? 0);
     this.ctx.activityStream?.publish({
       type: 'agent:phase',
       botId,
@@ -1362,7 +1614,7 @@ export class AgentLoop {
         () =>
           llmClient.chat(messages, {
             model,
-            temperature: 0.7,
+            temperature: executorTemperature,
             tools: executorDefs,
             toolExecutor: executor.createCallback(),
             maxToolRounds,
@@ -1391,7 +1643,7 @@ export class AgentLoop {
         caller: 'executor',
         model: executorUsage?.model ?? model,
         backend: llmClient.backend,
-        temperature: 0.7,
+        temperature: executorTemperature,
         promptTokens: executorUsage?.promptTokens,
         completionTokens: executorUsage?.completionTokens,
         totalTokens: executorUsage?.totalTokens,
@@ -1433,7 +1685,7 @@ export class AgentLoop {
         caller: 'executor',
         model,
         backend: llmClient.backend,
-        temperature: 0.7,
+        temperature: executorTemperature,
         toolCount: executorDefs.length,
         durationMs: Date.now() - executorStartMs,
         success: false,

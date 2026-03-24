@@ -817,7 +817,6 @@ export class ProductionsService {
         headingCount++;
       } else if (
         trimmed.length > 20 &&
-        !/^[-*+|>]/.test(trimmed) &&
         !/^[-=_*]{3,}$/.test(trimmed)
       ) {
         paragraphCount++;

@@ -349,6 +349,59 @@ export class BotManager {
       this.collaborationManager.setKarmaService(this.karmaService);
     }
 
+    // Initialize evolution modules — gated by config.evolution.enabled
+    if (config.evolution?.enabled) {
+      const evoConfig = config.evolution;
+      const enabledModules: string[] = [];
+
+      if (evoConfig.outcomeLedger.enabled) {
+        const { OutcomeLedger } = require('./outcome-ledger');
+        const ledger = new OutcomeLedger(join(dataDir, 'outcome-ledger'), logger);
+        this.agentLoop.setOutcomeLedger(ledger);
+        enabledModules.push('outcomeLedger');
+      }
+
+      if (evoConfig.traitRegisters.enabled) {
+        const { TraitRegisters } = require('./trait-registers');
+        const registers = new TraitRegisters(join(dataDir, 'tenants/__admin__/bots'), logger);
+        this.agentLoop.setTraitRegisters(registers);
+        enabledModules.push('traitRegisters');
+      }
+
+      if (evoConfig.sensors.enabled) {
+        const { SensorManager } = require('./sensors/sensor-manager');
+        const sensorMgr = new SensorManager(logger, dataDir);
+        sensorMgr.configure(evoConfig.sensors);
+        this.agentLoop.setSensorManager(sensorMgr);
+        enabledModules.push('sensors');
+      }
+
+      if (evoConfig.skillCrystallizer.enabled) {
+        const { SkillCrystallizer } = require('./skill-crystallizer');
+        // biome-ignore lint/suspicious/noExplicitAny: dynamicToolStore is conditionally available
+        const dynamicStore = (this as Record<string, unknown>).dynamicToolStore ?? null;
+        const crystallizer = new SkillCrystallizer(dynamicStore, logger);
+        this.agentLoop.setSkillCrystallizer(crystallizer);
+        enabledModules.push('skillCrystallizer');
+      }
+
+      if (evoConfig.knowledgeMesh.enabled) {
+        const { KnowledgeMesh } = require('./knowledge-mesh');
+        const mesh = new KnowledgeMesh(join(dataDir, 'shared', 'knowledge-mesh.jsonl'), logger);
+        this.agentLoop.setKnowledgeMesh(mesh);
+        this.toolRegistry.setKnowledgeMesh(mesh);
+        enabledModules.push('knowledgeMesh');
+      }
+
+      if (evoConfig.goalGenealogy.enabled) {
+        const { GoalGenealogy } = require('./goal-genealogy');
+        this.agentLoop.setGoalGenealogy(new GoalGenealogy());
+        enabledModules.push('goalGenealogy');
+      }
+
+      logger.info({ modules: enabledModules }, 'Evolution modules initialized');
+    }
+
     // Initialize tools (with lazy callbacks for circular deps)
     this.toolRegistry.initializeAll(
       () => this.collaborationManager,
@@ -945,6 +998,10 @@ export class BotManager {
     return this.agentLoop.getState();
   }
 
+  getEvolutionState(botId: string) {
+    return this.agentLoop.getEvolutionState(botId);
+  }
+
   wakeAgentLoop(): void {
     this.agentLoop.wakeUp();
   }
@@ -1431,11 +1488,26 @@ export class BotManager {
       },
     };
 
+    const resolved = resolveAgentConfig(this.config, botConfig);
+
+    // Build operational state for skills
+    const botState: import('../core/types').SkillContext['botState'] = {};
+    if (this.karmaService) {
+      botState.karmaBlock = this.karmaService.renderForPrompt(botId);
+    }
+    const loopState = this.agentLoop.getState();
+    const schedule = loopState.botSchedules.find((s) => s.botId === botId);
+    if (schedule?.recentActionsSummary?.length) {
+      botState.recentActionsDigest = schedule.recentActionsSummary.join('\n');
+    }
+
     const skillContext: import('../core/types').SkillContext = {
       ...baseContext,
       telegram: telegramClient,
-      soulDir: resolveAgentConfig(this.config, botConfig).soulDir,
+      soulDir: resolved.soulDir,
       botId,
+      workDir: resolved.workDir,
+      botState,
     };
 
     const result = await cmdHandler.handler(args, skillContext);

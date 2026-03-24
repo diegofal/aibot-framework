@@ -117,6 +117,7 @@ export interface GoalEntry {
   notes?: string;
   completed?: string;
   outcome?: string;
+  source?: string;
 }
 
 /**
@@ -320,6 +321,7 @@ export function parseGoals(content: string | null): {
       else if (key === 'notes') currentGoal.notes = value;
       else if (key === 'completed') currentGoal.completed = value;
       else if (key === 'outcome') currentGoal.outcome = value;
+      else if (key === 'source') currentGoal.source = value;
     }
   }
 
@@ -338,6 +340,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       lines.push(`  - status: ${g.status}`);
       lines.push(`  - priority: ${g.priority}`);
       if (g.notes) lines.push(`  - notes: ${g.notes}`);
+      if (g.source) lines.push(`  - source: ${g.source}`);
     }
   }
 

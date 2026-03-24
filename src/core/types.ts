@@ -84,6 +84,13 @@ export interface SkillContext {
   claudeCliModel?: string;
   /** Execute another registered tool by name. Absent if not wired at init time. */
   tools?: { execute: ToolExecuteFn };
+  /** Bot's working directory (productions, files, etc.) */
+  workDir?: string;
+  /** Pre-rendered operational state for skills that need it */
+  botState?: {
+    karmaBlock?: string;
+    recentActionsDigest?: string;
+  };
 }
 
 export interface CallbackQueryData {

@@ -171,6 +171,21 @@ export const BotAgentLoopOverrideSchema = z
         maxUsers: z.number().int().min(1).max(20).optional(),
       })
       .optional(),
+    /** Per-bot evolution module override */
+    evolution: z
+      .object({
+        enabled: z.boolean().optional(),
+        sensors: z
+          .object({
+            rss: z
+              .object({
+                feeds: z.array(z.string()).optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+      })
+      .optional(),
   })
   .optional();
 
@@ -737,7 +752,7 @@ const McpServerEntrySchema = z.object({
   env: z.record(z.string()).optional(),
   url: z.string().url().optional(),
   headers: z.record(z.string()).optional(),
-  timeout: z.number().int().positive().default(30_000),
+  timeout: z.number().int().positive().default(60_000),
   autoReconnect: z.boolean().default(true),
   toolPrefix: z.string().optional(),
   allowedTools: z.array(z.string()).optional(),
@@ -785,6 +800,64 @@ const FailoverConfigSchema = z
       )
       .optional(),
     cooldownEnabled: z.boolean().default(true),
+  })
+  .default({});
+
+const EvolutionConfigSchema = z
+  .object({
+    /** Master switch — ON by default, disable individual modules as needed */
+    enabled: z.boolean().default(true),
+    outcomeLedger: z
+      .object({
+        enabled: z.boolean().default(true),
+        staleTtlHours: z.number().int().positive().default(72),
+      })
+      .default({}),
+    traitRegisters: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .default({}),
+    adaptivePlanning: z
+      .object({
+        enabled: z.boolean().default(true),
+        minAdjustmentIntervalHours: z.number().int().positive().default(6),
+      })
+      .default({}),
+    sensors: z
+      .object({
+        enabled: z.boolean().default(true),
+        time: z.object({ enabled: z.boolean().default(true) }).default({}),
+        rss: z
+          .object({
+            enabled: z.boolean().default(false),
+            feeds: z.array(z.string()).default([]),
+          })
+          .default({}),
+        channelActivity: z.object({ enabled: z.boolean().default(true) }).default({}),
+        webhook: z
+          .object({
+            enabled: z.boolean().default(false),
+            secret: z.string().optional(),
+          })
+          .default({}),
+      })
+      .default({}),
+    skillCrystallizer: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .default({}),
+    knowledgeMesh: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .default({}),
+    goalGenealogy: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .default({}),
   })
   .default({});
 
@@ -863,6 +936,7 @@ const ConfigSchema = z.object({
   failover: FailoverConfigSchema,
   multiTenant: MultiTenantConfigSchema,
   a2a: A2AConfigSchema,
+  evolution: EvolutionConfigSchema,
   logging: LoggingConfigSchema,
   paths: PathsConfigSchema,
 });
@@ -927,6 +1001,7 @@ export type MultiTenantConfig = z.infer<typeof MultiTenantConfigSchema>;
 export type SecurityConfig = z.infer<typeof SecurityConfigSchema>;
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 export type A2AConfig = z.infer<typeof A2AConfigSchema>;
+export type EvolutionConfig = z.infer<typeof EvolutionConfigSchema>;
 
 /**
  * Substitute environment variables in strings

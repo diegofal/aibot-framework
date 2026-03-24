@@ -375,8 +375,7 @@ export async function renderAgents(el) {
       // Cycle: Auto → On → Off → Auto
       const current = agent?.agentLoop?.enabled;
       const next = current == null ? true : current === true ? false : undefined;
-      const patch = { agentLoop: { ...agent?.agentLoop, enabled: next } };
-      if (next === undefined) patch.agentLoop.enabled = undefined;
+      const patch = { agentLoop: { ...agent?.agentLoop, enabled: next ?? null } };
       btn.disabled = true;
       const res = await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
       btn.disabled = false;
@@ -493,7 +492,7 @@ export async function renderAgents(el) {
 }
 
 export async function renderAgentDetail(el, id) {
-  const [agent, skills, defaults, karmaData, loopState, llmStatsRes, reflections] =
+  const [agent, skills, defaults, karmaData, loopState, llmStatsRes, reflections, evoState] =
     await Promise.all([
       api(`/api/agents/${id}`),
       api('/api/skills'),
@@ -505,6 +504,7 @@ export async function renderAgentDetail(el, id) {
         entries: [],
         motivationsVersions: [],
       })),
+      api(`/api/agent-loop/evolution/${encodeURIComponent(id)}`).catch(() => null),
     ]);
 
   const llmStats = llmStatsRes?.stats;
@@ -561,6 +561,20 @@ export async function renderAgentDetail(el, id) {
         ? 'Off'
         : `<span class="text-dim">${defaults.agentLoop?.loopDetection?.enabled !== false ? 'On' : 'Off'} (global)</span>`;
 
+  // Evolution: per-bot override → global default
+  const evoPerBot = agent.agentLoop?.evolution?.enabled;
+  const evoGlobal = defaults.evolution?.enabled ?? false;
+  const evoEffective = evoPerBot ?? evoGlobal;
+  const evolutionDisplay = evoEffective
+    ? '<span class="badge badge-ok">On</span>'
+    : '<span class="badge badge-disabled">Off</span>';
+
+  const alEngagementGate = agent.agentLoop?.engagementGate;
+  const egEffective = alEngagementGate?.enabled !== false;
+  const engagementGateDisplay = egEffective
+    ? `${alEngagementGate?.mode ?? 'soft'} (threshold: ${alEngagementGate?.threshold ?? 5})`
+    : '<span class="badge badge-disabled">Off</span>';
+
   const systemPromptDisplay = agent.conversation?.systemPrompt
     ? escapeHtml(agent.conversation.systemPrompt).substring(0, 120) +
       (agent.conversation.systemPrompt.length > 120 ? '...' : '')
@@ -601,6 +615,8 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim">Max Tool Rounds</td><td>${maxToolRoundsDisplay}</td></tr>
         <tr><td class="text-dim">Strategist</td><td>${strategistDisplay}</td></tr>
         <tr><td class="text-dim">Loop Detection</td><td>${loopDetectionDisplay}</td></tr>
+        <tr><td class="text-dim">Evolution</td><td>${evolutionDisplay}</td></tr>
+        <tr><td class="text-dim">Engagement Gate</td><td>${engagementGateDisplay}</td></tr>
         ${
           agent.running
             ? `<tr><td class="text-dim">Loop Status</td><td>${
@@ -713,6 +729,8 @@ export async function renderAgentDetail(el, id) {
     }
 
     ${llmStats ? buildLlmStatsCard(llmStats) : ''}
+
+    ${buildEvolutionCard(evoState)}
 
     <div class="actions">
       ${
@@ -970,6 +988,176 @@ export async function renderAgentDetail(el, id) {
       }
     });
   }
+}
+
+function buildEvolutionCard(evo) {
+  if (!evo || !evo.enabled) return '';
+
+  const activeModules = Object.entries(evo.modules || {})
+    .filter(([, v]) => v)
+    .map(([k]) => k);
+
+  // Outcome stats KPIs
+  let outcomeHtml = '';
+  if (evo.outcomeStats && evo.outcomeStats.total > 0) {
+    const s = evo.outcomeStats;
+    const rateColor =
+      s.consumptionRate >= 0.5
+        ? 'var(--green)'
+        : s.consumptionRate >= 0.2
+          ? 'var(--orange)'
+          : 'var(--red)';
+    outcomeHtml = `
+      <div class="text-dim text-sm" style="margin-bottom:4px;margin-top:12px;text-transform:uppercase;letter-spacing:0.3px">Production Outcomes (7d)</div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="text-align:center"><div style="font-size:24px;font-weight:700">${s.total}</div><div class="text-dim text-sm">Total</div></div>
+        <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:var(--green)">${s.consumed + s.validated}</div><div class="text-dim text-sm">Consumed</div></div>
+        <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:var(--orange)">${s.stale}</div><div class="text-dim text-sm">Stale</div></div>
+        <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:var(--red)">${s.rejected}</div><div class="text-dim text-sm">Rejected</div></div>
+        <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:${rateColor}">${Math.round(s.consumptionRate * 100)}%</div><div class="text-dim text-sm">Rate</div></div>
+      </div>`;
+  }
+
+  // Recent outcomes list
+  let recentHtml = '';
+  if (evo.recentOutcomes?.length) {
+    const statusIcon = (s) =>
+      s === 'consumed'
+        ? '✓'
+        : s === 'validated'
+          ? '★'
+          : s === 'stale'
+            ? '⏳'
+            : s === 'rejected'
+              ? '✗'
+              : '○';
+    const statusColor = (s) =>
+      s === 'consumed' || s === 'validated'
+        ? 'var(--green)'
+        : s === 'stale'
+          ? 'var(--orange)'
+          : s === 'rejected'
+            ? 'var(--red)'
+            : 'var(--text-dim)';
+    recentHtml = `
+      <div class="text-dim text-sm" style="margin-bottom:4px;margin-top:12px;text-transform:uppercase;letter-spacing:0.3px">Recent Productions</div>
+      ${evo.recentOutcomes
+        .map((o) => {
+          const ago = Math.round((Date.now() - o.timestamp) / 3_600_000);
+          return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px">
+          <span style="color:${statusColor(o.status)};font-weight:600">${statusIcon(o.status)}</span>
+          <span class="text-dim text-sm">${ago}h</span>
+          <span>${escapeHtml(o.description)}</span>
+          <span class="badge badge-${o.status === 'consumed' || o.status === 'validated' ? 'ok' : o.status === 'stale' ? 'disabled' : o.status === 'rejected' ? 'error' : 'disabled'}">${o.status}</span>
+        </div>`;
+        })
+        .join('')}`;
+  }
+
+  // Trait bars
+  let traitsHtml = '';
+  if (evo.traits) {
+    const traitNames = [
+      'curiosity',
+      'caution',
+      'sociability',
+      'persistence',
+      'creativity',
+      'independence',
+      'depth',
+      'risk_tolerance',
+    ];
+    const traitColor = (v) => (v > 0.7 ? 'var(--green)' : v < 0.3 ? 'var(--red)' : 'var(--accent)');
+    traitsHtml = `
+      <div class="text-dim text-sm" style="margin-bottom:4px;margin-top:12px;text-transform:uppercase;letter-spacing:0.3px">Trait Registers</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:13px">
+        ${traitNames
+          .map((name) => {
+            const val = evo.traits[name] ?? 0.5;
+            const pct = Math.round(val * 100);
+            return `<div style="display:flex;align-items:center;gap:8px">
+            <span class="text-dim" style="width:100px;text-align:right">${name.replace('_', ' ')}</span>
+            <div style="flex:1;height:6px;background:var(--surface-2,#2a2d36);border-radius:3px;overflow:hidden;min-width:60px">
+              <div style="width:${pct}%;height:100%;background:${traitColor(val)};border-radius:3px"></div>
+            </div>
+            <span style="width:32px;font-family:monospace;font-size:11px">${val.toFixed(2)}</span>
+          </div>`;
+          })
+          .join('')}
+      </div>`;
+  }
+
+  // Derived parameters
+  let paramsHtml = '';
+  if (evo.traitParams) {
+    const p = evo.traitParams;
+    paramsHtml = `
+      <div class="text-dim text-sm" style="margin-bottom:4px;margin-top:12px;text-transform:uppercase;letter-spacing:0.3px">Derived Parameters</div>
+      <table style="font-size:13px">
+        <tr><td class="text-dim" style="width:180px">Executor Temperature</td><td>${p.executorTemperature.toFixed(2)}</td></tr>
+        <tr><td class="text-dim">Planner Temperature</td><td>${p.plannerTemperature.toFixed(2)}</td></tr>
+        <tr><td class="text-dim">Ask Human Check-in</td><td>every ${p.askHumanCheckInCycles} cycles</td></tr>
+        <tr><td class="text-dim">Tool Rounds Bonus</td><td>+${p.maxToolRoundsBonus}</td></tr>
+        <tr><td class="text-dim">Web Tools Always On</td><td>${p.webToolAlwaysIncluded ? 'Yes' : 'No'}</td></tr>
+      </table>`;
+  }
+
+  // Sensors
+  let sensorsHtml = '';
+  if (evo.cachedSensorEvents?.length) {
+    sensorsHtml = `
+      <div class="text-dim text-sm" style="margin-bottom:4px;margin-top:12px;text-transform:uppercase;letter-spacing:0.3px">Sensor Readings</div>
+      ${evo.cachedSensorEvents
+        .map(
+          (e) => `
+        <div style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:13px">
+          <span class="badge">${e.category}</span>
+          <span>${escapeHtml(e.summary)}</span>
+          <span class="text-dim text-sm">(${(e.relevance * 100).toFixed(0)}%)</span>
+        </div>
+      `
+        )
+        .join('')}`;
+  } else if (evo.sensorCount) {
+    sensorsHtml = `<div class="text-dim text-sm" style="margin-top:8px">${evo.sensorCount} sensor(s) configured — readings appear after next cycle</div>`;
+  }
+
+  // Knowledge mesh
+  let meshHtml = '';
+  if (evo.meshEntryCount > 0) {
+    meshHtml = `
+      <div class="text-dim text-sm" style="margin-bottom:4px;margin-top:12px;text-transform:uppercase;letter-spacing:0.3px">Knowledge Mesh (${evo.meshEntryCount} entries)</div>
+      ${(evo.meshRecent || [])
+        .map(
+          (e) => `
+        <div style="padding:3px 0;font-size:13px">
+          <span class="badge">${escapeHtml(e.sourceBotId)}</span>
+          <span style="font-weight:600">${escapeHtml(e.topic)}</span>
+          — ${escapeHtml(e.insight.substring(0, 100))}
+          <span class="text-dim text-sm">(${(e.confidence * 100).toFixed(0)}% conf)</span>
+        </div>
+      `
+        )
+        .join('')}`;
+  }
+
+  return `
+    <div class="detail-card" style="margin-top:16px">
+      <div class="flex-between mb-16">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-weight:600">Evolution</span>
+          <span class="badge badge-ok">Active</span>
+        </div>
+        <span class="text-dim text-sm">${activeModules.length} module${activeModules.length !== 1 ? 's' : ''}: ${activeModules.join(', ')}</span>
+      </div>
+      ${outcomeHtml}
+      ${recentHtml}
+      ${traitsHtml}
+      ${paramsHtml}
+      ${sensorsHtml}
+      ${meshHtml}
+      ${!outcomeHtml && !traitsHtml && !sensorsHtml && !meshHtml ? '<div class="text-dim" style="font-size:13px">No evolution data yet — run an agent loop cycle to populate.</div>' : ''}
+    </div>`;
 }
 
 function buildLlmStatsCard(stats) {
@@ -1393,6 +1581,46 @@ export async function renderAgentEdit(el, id) {
         </div>
       </details>
 
+      <details class="form-details">
+        <summary class="form-details-summary">Evolution & Behavioral</summary>
+        <div class="form-group">
+          <label>Evolution System</label>
+          <select name="evolutionEnabled">
+            <option value="true" ${(agent.agentLoop?.evolution?.enabled ?? defaults.evolution?.enabled ?? false) ? 'selected' : ''}>On</option>
+            <option value="false" ${!(agent.agentLoop?.evolution?.enabled ?? defaults.evolution?.enabled ?? false) ? 'selected' : ''}>Off</option>
+          </select>
+          <span class="text-dim text-sm">Outcome ledger, trait registers, sensors, skill crystallizer, knowledge mesh, goal genealogy</span>
+        </div>
+
+        <div class="form-group">
+          <label>Engagement Gate</label>
+          <select name="engagementGateEnabled">
+            <option value="true" ${agent.agentLoop?.engagementGate?.enabled !== false ? 'selected' : ''}>On</option>
+            <option value="false" ${agent.agentLoop?.engagementGate?.enabled === false ? 'selected' : ''}>Off</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Gate Mode</label>
+            <select name="engagementGateMode">
+              <option value="" ${!agent.agentLoop?.engagementGate?.mode ? 'selected' : ''}>Default (soft)</option>
+              <option value="soft" ${agent.agentLoop?.engagementGate?.mode === 'soft' ? 'selected' : ''}>Soft</option>
+              <option value="hard" ${agent.agentLoop?.engagementGate?.mode === 'hard' ? 'selected' : ''}>Hard</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Gate Threshold</label>
+            <input type="number" name="engagementGateThreshold" min="1" max="50" value="${agent.agentLoop?.engagementGate?.threshold ?? ''}" placeholder="5">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>RSS Feeds (sensors)</label>
+          <textarea name="evolutionRssFeeds" rows="3" placeholder="One URL per line">${escapeHtml((agent.agentLoop?.evolution?.sensors?.rss?.feeds || []).join('\n'))}</textarea>
+          <span class="text-dim text-sm">RSS/Atom feed URLs for the environmental sensor. Bot will detect new articles relevant to its goals.</span>
+        </div>
+      </details>
+
       <div class="form-group">
         <label>Standing Directives</label>
         <textarea name="agentLoopDirectives" rows="3" placeholder="One directive per line — ongoing behavioral instructions for the agent loop">${escapeHtml((agent.agentLoop?.directives || []).join('\n'))}</textarea>
@@ -1734,8 +1962,8 @@ export async function renderAgentEdit(el, id) {
 
     const agentLoopPatch = { ...agent.agentLoop };
 
-    // Core fields
-    agentLoopPatch.enabled = agentLoopEnabled;
+    // Core fields (use null for "inherit global" so JSON serialization preserves the intent to clear)
+    agentLoopPatch.enabled = agentLoopEnabled ?? null;
     agentLoopPatch.every = agentLoopEvery;
     agentLoopPatch.mode = form.agentLoopMode.value === 'continuous' ? 'continuous' : undefined;
     agentLoopPatch.maxToolRounds = numOrUndef('agentLoopMaxToolRounds');
@@ -1811,6 +2039,30 @@ export async function renderAgentEdit(el, id) {
     } else {
       agentLoopPatch.loopDetection = undefined;
     }
+
+    // Evolution sub-object
+    const evoEnabled = form.evolutionEnabled?.value === 'true';
+    const evoRssFeeds = form.evolutionRssFeeds?.value?.trim();
+    const evoRssFeedsArr = evoRssFeeds
+      ? evoRssFeeds
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    agentLoopPatch.evolution = {
+      enabled: evoEnabled,
+      ...(evoRssFeedsArr.length > 0 ? { sensors: { rss: { feeds: evoRssFeedsArr } } } : {}),
+    };
+
+    // Engagement gate sub-object
+    const egEnabled = form.engagementGateEnabled?.value === 'true';
+    const egMode = form.engagementGateMode?.value || undefined;
+    const egThreshold = numOrUndef('engagementGateThreshold');
+    agentLoopPatch.engagementGate = {
+      enabled: egEnabled,
+      ...(egMode ? { mode: egMode } : {}),
+      ...(egThreshold != null ? { threshold: egThreshold } : {}),
+    };
 
     {
       const hasValues = Object.values(agentLoopPatch).some((v) => v !== undefined);

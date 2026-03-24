@@ -16,6 +16,9 @@ export function buildAnalysisPrompt(input: {
   motivations: string;
   recentLogs: string;
   goals?: string;
+  productions?: string;
+  karma?: string;
+  recentActions?: string;
 }): { system: string; prompt: string } {
   const system = `You are the introspective layer of an AI personality. Your job is to privately evaluate recent behavior by comparing it against the personality's soul, identity, and motivations.
 
@@ -36,7 +39,7 @@ ${input.motivations}
 
 ## Recent Daily Memory Logs (new since last reflection)
 ${input.recentLogs}
-${input.goals ? `\n## Current Goals\n${input.goals}\n` : ''}
+${input.goals ? `\n## Current Goals\n${input.goals}\n` : ''}${input.productions ? `\n## Productions (file tree)\n${input.productions}\n` : ''}${input.karma ? `\n## Karma\n${input.karma}\n` : ''}${input.recentActions ? `\n## Recent Agent Loop Actions\n${input.recentActions}\n` : ''}
 ---
 
 Analyze my recent behavior across these dimensions:
@@ -47,6 +50,7 @@ Analyze my recent behavior across these dimensions:
 4. **Patterns**: Recurring themes? Am I being asked similar things repeatedly?
 5. **Alignment**: Are my current motivations still relevant, or do they need updating?
 6. **Breadth**: Are my Core Drives still general principles that would work with anyone, or have they become too specific to recent people/situations? Am I exploring diverse topics, or stuck in a loop? What areas of growth am I neglecting?
+7. **Operational**: Review karma trends, agent loop actions, and productions. Am I producing tangible outputs? Is my karma reflecting good work? Are my actions diverse or stuck in a rut?
 
 Respond with this exact JSON structure:
 {
@@ -55,7 +59,8 @@ Respond with this exact JSON structure:
   "gaps": "things that could have been handled better",
   "patterns": "recurring themes or repeated asks",
   "alignment": "whether current motivations are still relevant",
-  "breadth": "assessment of generality vs overfitting to recent context"
+  "breadth": "assessment of generality vs overfitting to recent context",
+  "operational": "assessment of tangible output, karma trends, and action diversity (omit if no operational data available)"
 }`;
 
   return { system, prompt };
@@ -112,11 +117,15 @@ export function buildImprovementPrompt(input: {
     patterns: string;
     alignment: string;
     breadth: string;
+    operational?: string;
   };
   trigger: 'manual' | 'cron';
   date: string;
   discoveries?: string | null;
   originalMotivations?: string;
+  productions?: string;
+  karma?: string;
+  recentActions?: string;
 }): { system: string; prompt: string } {
   const discoveriesRule = input.discoveries
     ? '\n- Incorporate relevant web discoveries into Current Focus, Open Questions, and Self-Observations where appropriate.'
@@ -163,7 +172,7 @@ ${input.motivations}
 - Gaps: ${input.analysis.gaps}
 - Patterns: ${input.analysis.patterns}
 - Alignment: ${input.analysis.alignment}
-- Breadth: ${input.analysis.breadth}${discoveriesSection}${baselineSection}
+- Breadth: ${input.analysis.breadth}${input.analysis.operational ? `\n- Operational: ${input.analysis.operational}` : ''}${input.productions ? `\n\n## Productions (file tree)\n${input.productions}` : ''}${input.karma ? `\n\n## Karma\n${input.karma}` : ''}${input.recentActions ? `\n\n## Recent Agent Loop Actions\n${input.recentActions}` : ''}${discoveriesSection}${baselineSection}
 
 ---
 
@@ -177,12 +186,15 @@ Based on this analysis, generate:
 
 4. **soul_changed**: Boolean — true only if soul_patch is not null.
 
+5. **suggested_goals**: An array of 0-3 new goals addressing genuine gaps found in the analysis. Each goal has text, priority (high/medium/low), and optional notes. Rules: only suggest goals for real gaps not already covered by existing goals. An empty array is perfectly fine — do not invent goals just to fill the field.
+
 Respond with this exact JSON structure:
 {
   "motivations": "complete MOTIVATIONS.md content",
   "soul_patch": null,
   "journal_entry": "2-3 sentence summary",
-  "soul_changed": false
+  "soul_changed": false,
+  "suggested_goals": [{"text": "goal description", "priority": "medium", "notes": "optional context"}]
 }`;
 
   return { system, prompt };

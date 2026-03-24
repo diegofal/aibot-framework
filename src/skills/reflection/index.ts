@@ -1,9 +1,11 @@
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { scanFileTree } from '../../bot/agent-loop-utils';
 import type { Skill, SkillContext } from '../../core/types';
 import { localDateStr, localTimeStr } from '../../date-utils';
 import type { ChatMessage } from '../../ollama';
 import { backupSoulFile } from '../../soul';
+import { parseGoals, serializeGoals } from '../../tools/goals';
 import type { Tool, ToolResult } from '../../tools/types';
 import { createWebFetchTool } from '../../tools/web-fetch';
 import { createWebSearchTool } from '../../tools/web-search';
@@ -40,6 +42,7 @@ interface AnalysisResult {
   patterns: string;
   alignment: string;
   breadth: string;
+  operational?: string;
 }
 
 interface ImprovementResult {
@@ -47,6 +50,7 @@ interface ImprovementResult {
   soul_patch: string | null;
   journal_entry: string;
   soul_changed: boolean;
+  suggested_goals?: Array<{ text: string; priority?: string; notes?: string }>;
 }
 
 // Max chars for context sent to LLM
@@ -54,6 +58,9 @@ const MAX_MEMORY_CHARS = 3000;
 const MAX_SOUL_CHARS = 1500;
 const MAX_MOTIVATIONS_CHARS = 1000;
 const MAX_DISCOVERY_CHARS = 2000;
+const MAX_PRODUCTIONS_CHARS = 1500;
+const MAX_KARMA_CHARS = 500;
+const MAX_ACTIONS_CHARS = 1000;
 
 // Soul safety guards
 const MIN_SOUL_LENGTH = 50;
@@ -163,6 +170,20 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
   const cappedMotivations = motivations.slice(0, MAX_MOTIVATIONS_CHARS);
   const cappedLogs = recentLogs.slice(0, MAX_MEMORY_CHARS);
 
+  // Gather operational context (productions, karma, recent actions)
+  let productions: string | undefined;
+  if (ctx.workDir) {
+    try {
+      const tree = scanFileTree(ctx.workDir);
+      if (tree) productions = tree.slice(0, MAX_PRODUCTIONS_CHARS);
+    } catch {
+      // workDir may not exist yet
+    }
+  }
+
+  const karma = ctx.botState?.karmaBlock?.slice(0, MAX_KARMA_CHARS) || undefined;
+  const recentActions = ctx.botState?.recentActionsDigest?.slice(0, MAX_ACTIONS_CHARS) || undefined;
+
   // Step 2 — Analyze ("The Mirror")
   ctx.logger.info('Reflection: running analysis (The Mirror)');
   const analysisInput = buildAnalysisPrompt({
@@ -171,6 +192,9 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     motivations: cappedMotivations,
     recentLogs: cappedLogs,
     goals: goals || undefined,
+    productions,
+    karma,
+    recentActions,
   });
 
   const analysisResult = await ctx.llm.generate(analysisInput.prompt, {
@@ -227,6 +251,9 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     date: today,
     discoveries,
     originalMotivations: getInitialMotivations(),
+    productions,
+    karma,
+    recentActions,
   });
 
   const improvementResult = await ctx.llm.generate(improvementInput.prompt, {
@@ -282,6 +309,40 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     const logPath = join(soulDir, 'memory', `${dateStr}.md`);
     appendFileSync(logPath, `- [${timeStr}] [reflection] ${improvement.journal_entry}\n`, 'utf-8');
     ctx.logger.info('Journal entry appended to daily log');
+  }
+
+  // Step 4.6 — Append suggested goals (never modifies existing)
+  if (improvement.suggested_goals?.length) {
+    try {
+      const goalsContent = readSoulFile(soulDir, 'GOALS.md');
+      const { active, completed } = parseGoals(goalsContent);
+      const today = localDateStr();
+      let goalsAdded = 0;
+
+      for (const sg of improvement.suggested_goals) {
+        // Dedup: check if first 30 chars of the goal text already exist
+        const prefix = sg.text.slice(0, 30).toLowerCase();
+        const isDuplicate = active.some((g) => g.text.toLowerCase().includes(prefix));
+        if (isDuplicate) continue;
+
+        active.push({
+          text: sg.text,
+          status: 'pending',
+          priority: sg.priority ?? 'medium',
+          notes: sg.notes,
+          source: `reflection:${today}`,
+        });
+        goalsAdded++;
+      }
+
+      if (goalsAdded > 0) {
+        const goalsPath = join(soulDir, 'GOALS.md');
+        writeFileSync(goalsPath, serializeGoals(active, completed), 'utf-8');
+        ctx.logger.info({ goalsAdded }, 'Reflection: appended suggested goals');
+      }
+    } catch (err) {
+      ctx.logger.warn({ err }, 'Reflection: failed to append suggested goals');
+    }
   }
 
   // Step 4.5 — Compact yesterday's log (if enabled and over threshold)
@@ -351,26 +412,45 @@ function readSoulFile(soulDir: string, filename: string): string | null {
 
 /**
  * Read daily memory logs from sinceDate onwards.
+ * Scans both `memory/` and `memory/archive/` to catch archived logs.
+ * Deduplicates by date (preferring non-archive version) and sorts.
  */
 function readDailyLogsSince(soulDir: string, sinceDate: string): string {
   const memoryDir = join(soulDir, 'memory');
-  const parts: string[] = [];
+  const archiveDir = join(memoryDir, 'archive');
+  const fileMap = new Map<string, string>(); // date -> full path
 
-  try {
-    const files = (readdirSync(memoryDir) as string[])
-      .filter((f: string) => f.endsWith('.md') && f !== 'legacy.md')
-      .filter((f: string) => f.replace('.md', '') > sinceDate)
-      .sort();
+  // Scan a directory for daily log files
+  const scanDir = (dir: string, isArchive: boolean) => {
+    try {
+      const files = (readdirSync(dir) as string[])
+        .filter((f: string) => f.endsWith('.md') && f !== 'legacy.md')
+        .filter((f: string) => f.replace('.md', '') > sinceDate);
 
-    for (const file of files) {
-      const content = readFileSync(join(memoryDir, file), 'utf-8').trim();
-      if (content) {
+      for (const file of files) {
         const date = file.replace('.md', '');
-        parts.push(`### ${date}\n${content}`);
+        // Non-archive version takes precedence over archive
+        if (!isArchive || !fileMap.has(date)) {
+          fileMap.set(date, join(dir, file));
+        }
       }
+    } catch {
+      // Directory may not exist
     }
-  } catch {
-    // No memory dir yet
+  };
+
+  scanDir(archiveDir, true);
+  scanDir(memoryDir, false);
+
+  const parts: string[] = [];
+  const sortedDates = [...fileMap.keys()].sort();
+
+  for (const date of sortedDates) {
+    const filepath = fileMap.get(date)!;
+    const content = readFileSync(filepath, 'utf-8').trim();
+    if (content) {
+      parts.push(`### ${date}\n${content}`);
+    }
   }
 
   return parts.join('\n\n');

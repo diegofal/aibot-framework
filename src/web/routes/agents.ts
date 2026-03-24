@@ -68,6 +68,7 @@ export function agentsRoutes(deps: {
         retry: deps.config.agentLoop.retry,
         loopDetection: deps.config.agentLoop.loopDetection,
       },
+      evolution: deps.config.evolution,
       availableTools: deps.botManager.getAvailableToolNames(),
       availableSkills: deps.botManager.getExternalSkillNames(),
       ttsEnabled: !!deps.config.media?.tts,
@@ -162,8 +163,13 @@ export function agentsRoutes(deps: {
     }
     if ('agentLoop' in body) {
       const al = body.agentLoop;
-      if (al && Object.values(al).some((v: unknown) => v !== undefined)) {
-        bot.agentLoop = { ...bot.agentLoop, ...al };
+      if (al && Object.values(al).some((v: unknown) => v !== undefined && v !== null)) {
+        // Merge, but treat null values as "delete this key" (undefined is lost in JSON serialization)
+        const merged = { ...bot.agentLoop, ...al } as Record<string, unknown>;
+        for (const k of Object.keys(merged)) {
+          if (merged[k] === null) delete merged[k];
+        }
+        bot.agentLoop = merged as typeof bot.agentLoop;
       } else {
         bot.agentLoop = undefined;
       }

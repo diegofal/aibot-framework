@@ -269,7 +269,7 @@ export async function claudeGenerateWithTools(
     }
 
     opts.logger.info(
-      { toolCount: opts.tools.length, callbackPort, tmpDir },
+      { toolCount: opts.tools.length, callbackPort },
       'Claude CLI: starting MCP tool bridge'
     );
 

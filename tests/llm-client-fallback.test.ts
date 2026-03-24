@@ -159,6 +159,50 @@ describe('LLMClientWithFallback', () => {
     });
   });
 
+  describe('cross-backend model stripping', () => {
+    test('strips model from opts when falling back from claude-cli to ollama (chat)', async () => {
+      const primary = mockClient('claude-cli');
+      primary.chat = mock(() => Promise.reject(new Error('CLI timeout')));
+      const fallback = mockClient('ollama', 'fallback-response');
+      const logger = mockLogger();
+      const client = new LLMClientWithFallback(primary, fallback, logger);
+
+      await client.chat(dummyMessages, { model: 'claude' });
+
+      expect(fallback.chat).toHaveBeenCalledTimes(1);
+      const passedOpts = (fallback.chat as any).mock.calls[0][1];
+      expect(passedOpts.model).toBeUndefined();
+    });
+
+    test('strips model from opts when falling back from claude-cli to ollama (generate)', async () => {
+      const primary = mockClient('claude-cli');
+      primary.generate = mock(() => Promise.reject(new Error('CLI timeout')));
+      const fallback = mockClient('ollama', 'fallback-response');
+      const logger = mockLogger();
+      const client = new LLMClientWithFallback(primary, fallback, logger);
+
+      await client.generate('test', { model: 'claude' });
+
+      expect(fallback.generate).toHaveBeenCalledTimes(1);
+      const passedOpts = (fallback.generate as any).mock.calls[0][1];
+      expect(passedOpts.model).toBeUndefined();
+    });
+
+    test('preserves model when falling back within same backend', async () => {
+      const primary = mockClient('ollama');
+      primary.chat = mock(() => Promise.reject(new Error('model overloaded')));
+      const fallback = mockClient('ollama', 'fallback-response');
+      const logger = mockLogger();
+      const client = new LLMClientWithFallback(primary, fallback, logger);
+
+      await client.chat(dummyMessages, { model: 'qwen3.5:397b-cloud' });
+
+      expect(fallback.chat).toHaveBeenCalledTimes(1);
+      const passedOpts = (fallback.chat as any).mock.calls[0][1];
+      expect(passedOpts.model).toBe('qwen3.5:397b-cloud');
+    });
+  });
+
   describe('onFallback callback', () => {
     test('fires on generate fallback', async () => {
       const primary = mockClient('claude-cli');

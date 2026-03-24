@@ -864,7 +864,7 @@
           <!-- manage_goals -->
           <div class="tool-card">
             <h4 class="tool-name">manage_goals</h4>
-            <div class="tool-desc">Manage structured goals in GOALS.md. Track tasks, projects, and objectives that persist in the soul directory and are visible during reflection and agent loop cycles. Supports listing, adding, updating status, and completing goals with outcomes.</div>
+            <div class="tool-desc">Manage structured goals in GOALS.md. Track tasks, projects, and objectives that persist in the soul directory and are visible during reflection and agent loop cycles. Supports listing, adding, updating status, and completing goals with outcomes. Goals carry an optional <code>source</code> tag (e.g. <code>reflection:2026-03-23</code>, <code>strategist:2026-03-23</code>) for provenance tracking.</div>
             <div class="tool-params">
               <strong>Parameters</strong>
               <ul>
@@ -1144,7 +1144,7 @@
               <h3>Self-Reflection</h3>
               <span class="skill-id">reflection</span>
             </div>
-            <div class="skill-desc">Nightly self-reflection and evolving motivations system. Runs on a cron schedule to review the day's memories, update MOTIVATIONS.md, and optionally send a reflection summary via Telegram. Falls back from Claude Code to Ollama for summarization.</div>
+            <div class="skill-desc">Nightly self-reflection and evolving motivations system. Runs on a cron schedule to review the day's memories (including archived logs from <code>memory/archive/</code>), update MOTIVATIONS.md, and optionally send a reflection summary via Telegram. Gathers operational context &mdash; productions file tree, karma score/trends, and recent agent loop actions &mdash; for a 7-dimension analysis (consistency, people, gaps, patterns, alignment, breadth, operational). Can suggest new goals with <code>source: reflection:YYYY-MM-DD</code> tagging, appended to GOALS.md with deduplication.</div>
             <div class="skill-meta">
               <span class="badge badge-purple">v1.0.0</span>
               <span class="tag">config: soulDir, claudePath, telegramChatId, notifyOnReflection, cronSchedule</span>
