@@ -130,8 +130,12 @@ export const BotAgentLoopOverrideSchema = z
         executorMs: z.number().int().positive().optional(),
       })
       .optional(),
-    /** Per-bot agent loop enable/disable — undefined = inherit global setting */
-    enabled: z.boolean().optional(),
+    /** Per-bot agent loop enable/disable — undefined/null = inherit global setting */
+    enabled: z
+      .boolean()
+      .nullable()
+      .optional()
+      .transform((v) => v ?? undefined),
     /** Engagement gate: detect when a bot produces outputs without confirmed feedback */
     engagementGate: z
       .object({

@@ -13,6 +13,7 @@ export interface ApprovalRequest {
   toolName: string;
   description: string; // human-readable from describeToolCall()
   status: 'pending' | 'approved' | 'denied';
+  args?: Record<string, unknown>; // tool arguments, persisted as fallback for approval after restart
 }
 
 export interface ThreadMessage {

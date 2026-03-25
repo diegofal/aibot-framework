@@ -5,7 +5,6 @@ export type CronSchedule =
 
 export type CronPayload =
   | { kind: 'message'; text: string; chatId: number; botId: string }
-  | { kind: 'memory_note'; text: string; botId: string }
   | {
       kind: 'skillJob';
       skillId: string;
@@ -18,7 +17,6 @@ export type CronPayload =
 
 export type CronPayloadPatch =
   | { kind: 'message'; text?: string; chatId?: number; botId?: string }
-  | { kind: 'memory_note'; text?: string; botId?: string }
   | {
       kind: 'skillJob';
       skillId?: string;

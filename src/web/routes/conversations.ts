@@ -181,6 +181,7 @@ export function conversationsRoutes(deps: {
             toolName: pending.toolName,
             description: describeToolCall(pending.toolName, pending.args),
             status: 'pending',
+            args: pending.args,
           };
           conversationsService.addMessage(
             botId,
@@ -536,7 +537,23 @@ export function conversationsRoutes(deps: {
 
     const sessionKey = `web:${botId}:${id}`;
     const store = botManager.getInlineApprovalStore();
-    const pending = store.consumePending(sessionKey);
+    let pending = store.consumePending(sessionKey);
+
+    // Fallback: if in-memory/disk store lost the entry, recover from persisted message
+    if (!pending && body.messageId) {
+      const messages = conversationsService.getMessages(botId, id);
+      const msg = messages?.find((m) => m.id === body.messageId);
+      if (msg?.approval?.status === 'pending' && msg.approval.toolName && msg.approval.args) {
+        pending = {
+          toolName: msg.approval.toolName,
+          args: msg.approval.args,
+          createdAt: Date.now(),
+          botId,
+          sessionKey,
+        };
+      }
+    }
+
     if (!pending) {
       return c.json({ error: 'No pending approval' }, 404);
     }

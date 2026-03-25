@@ -6,9 +6,11 @@
  * The user's next message is classified as approve/deny/unrelated and the pending
  * tool call is resolved accordingly.
  *
- * In-memory only — pending approvals are ephemeral (1 turn). If the bot restarts,
- * they are lost, which is correct behavior.
+ * Persisted to disk so approvals survive server restarts.
  */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export interface PendingInlineApproval {
   toolName: string;
@@ -22,9 +24,21 @@ const EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 
 export class InlineApprovalStore {
   private pending = new Map<string, PendingInlineApproval>();
+  private filePath: string | null;
+
+  constructor(dataDir?: string) {
+    if (dataDir) {
+      if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+      this.filePath = join(dataDir, 'inline-approvals.json');
+      this.loadFromDisk();
+    } else {
+      this.filePath = null;
+    }
+  }
 
   setPending(sessionKey: string, approval: PendingInlineApproval): void {
     this.pending.set(sessionKey, approval);
+    this.persistToDisk();
   }
 
   getPending(sessionKey: string): PendingInlineApproval | undefined {
@@ -32,6 +46,7 @@ export class InlineApprovalStore {
     if (!entry) return undefined;
     if (Date.now() - entry.createdAt > EXPIRY_MS) {
       this.pending.delete(sessionKey);
+      this.persistToDisk();
       return undefined;
     }
     return entry;
@@ -39,16 +54,48 @@ export class InlineApprovalStore {
 
   consumePending(sessionKey: string): PendingInlineApproval | undefined {
     const entry = this.getPending(sessionKey);
-    if (entry) this.pending.delete(sessionKey);
+    if (entry) {
+      this.pending.delete(sessionKey);
+      this.persistToDisk();
+    }
     return entry;
   }
 
   clearPending(sessionKey: string): void {
     this.pending.delete(sessionKey);
+    this.persistToDisk();
   }
 
   hasPending(sessionKey: string): boolean {
     return this.getPending(sessionKey) !== undefined;
+  }
+
+  private loadFromDisk(): void {
+    if (!this.filePath || !existsSync(this.filePath)) return;
+    try {
+      const raw = readFileSync(this.filePath, 'utf-8');
+      const entries: PendingInlineApproval[] = JSON.parse(raw);
+      const now = Date.now();
+      for (const entry of entries) {
+        if (now - entry.createdAt <= EXPIRY_MS) {
+          this.pending.set(entry.sessionKey, entry);
+        }
+      }
+    } catch {
+      // Corrupted file — start fresh
+    }
+  }
+
+  private persistToDisk(): void {
+    if (!this.filePath) return;
+    try {
+      const dir = dirname(this.filePath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const entries = Array.from(this.pending.values());
+      writeFileSync(this.filePath, JSON.stringify(entries, null, 2), 'utf-8');
+    } catch {
+      // Best-effort — don't crash on write failure
+    }
   }
 }
 

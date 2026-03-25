@@ -94,9 +94,7 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
               payload:
                 j.payload.kind === 'message'
                   ? { kind: 'message', text: j.payload.text }
-                  : j.payload.kind === 'memory_note'
-                    ? { kind: 'memory_note', text: j.payload.text }
-                    : { kind: 'skillJob', skillId: j.payload.skillId, jobId: j.payload.jobId },
+                  : { kind: 'skillJob', skillId: j.payload.skillId, jobId: j.payload.jobId },
             }));
             return { success: true, content: JSON.stringify(summary) };
           }
@@ -174,7 +172,7 @@ async function doAdd(
   cronService: CronService,
   args: Record<string, unknown>,
   schedule: { kind: string; at?: string; everyMs?: number; expr?: string; tz?: string },
-  chatId: number,
+  chatId: number | undefined,
   botId: string,
   logger: { info: (obj: unknown, msg?: string) => void }
 ): Promise<ToolResult> {
@@ -222,9 +220,15 @@ async function doAdd(
 
   const deleteAfterRun = typeof args.deleteAfterRun === 'boolean' ? args.deleteAfterRun : undefined;
 
-  const payload = chatId
-    ? { kind: 'message' as const, text, chatId, botId }
-    : { kind: 'memory_note' as const, text, botId };
+  if (!chatId) {
+    return {
+      success: false,
+      content:
+        'Cannot create cron job: missing chat context. Cron jobs can only be created from a conversation.',
+    };
+  }
+
+  const payload = { kind: 'message' as const, text, chatId, botId };
 
   const job = await cronService.add({
     name,

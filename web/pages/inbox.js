@@ -265,6 +265,27 @@ export async function renderInboxChat(el, botId, conversationId) {
 
         startPolling();
       },
+      onApprove: async (action, messageId) => {
+        const res = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${conversationId}/approve`,
+          { method: 'POST', body: { action, messageId } }
+        );
+        if (res.error) {
+          showToast?.(res.error, 'error');
+        }
+        if (res.status === 'approved') {
+          generating = true;
+        }
+        const freshData = await api(
+          `/api/conversations/${encodeURIComponent(botId)}/${conversationId}`
+        );
+        if (freshData.messages) {
+          threadMessages.length = 0;
+          threadMessages.push(...freshData.messages);
+        }
+        renderThreadUI();
+        if (generating) startPolling();
+      },
     });
   }
 

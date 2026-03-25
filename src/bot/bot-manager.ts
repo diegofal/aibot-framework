@@ -254,8 +254,8 @@ export class BotManager {
     this.userDirectory = new UserDirectory(dataDir, logger);
     logger.info('User directory initialized');
 
-    // Initialize inline approval store (in-memory, for conversation-mode confirm tools)
-    this.inlineApprovalStore = new InlineApprovalStore();
+    // Initialize inline approval store (persisted to disk for confirm-level tool approvals)
+    this.inlineApprovalStore = new InlineApprovalStore(join(dataDir, 'inline-approval'));
 
     // Initialize lifecycle hook emitter
     this.hookEmitter = new HookEmitter();
@@ -378,7 +378,6 @@ export class BotManager {
 
       if (evoConfig.skillCrystallizer.enabled) {
         const { SkillCrystallizer } = require('./skill-crystallizer');
-        // biome-ignore lint/suspicious/noExplicitAny: dynamicToolStore is conditionally available
         const dynamicStore = (this as Record<string, unknown>).dynamicToolStore ?? null;
         const crystallizer = new SkillCrystallizer(dynamicStore, logger);
         this.agentLoop.setSkillCrystallizer(crystallizer);

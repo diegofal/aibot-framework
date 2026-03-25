@@ -249,6 +249,9 @@ export async function renderConversationChat(el, botId, conversationId) {
           `/api/conversations/${encodeURIComponent(botId)}/${conversationId}/approve`,
           { method: 'POST', body: { action, messageId } }
         );
+        if (res.error) {
+          showToast?.(res.error, 'error');
+        }
         if (res.status === 'approved') {
           // Tool was executed — start polling for the follow-up bot reply
           generating = true;

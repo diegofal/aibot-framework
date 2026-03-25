@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Removed
+- **Cron `memory_note` payload type** — Removed the `memory_note` cron payload that silently wrote reminder text to a bot's daily memory log with no guarantee of action. Cron jobs now require a `chatId` (always available from conversation context). Creating a cron without chat context returns an error instead of silently degrading. Removed 7 existing memory_note jobs and cleaned up stale `[cron reminder:]` entries from bot memory logs.
+- **Orphaned intel-gatherer crons** — Removed 8 orphaned `daily-intel-collection` cron jobs for bots that don't have `intel-gatherer` in their skills list. Only `default` bot retains it. Orphans accumulated because the startup cleanup only iterated `config.bots`, missing dynamically-created bots.
+
+### Fixed
+- **Config validation crash: `agentLoop.enabled: null`** — Dashboard toggle persisted `null` for per-bot `agentLoop.enabled`, but Zod schema only accepted `boolean | undefined`. Now accepts `null` and normalizes it to `undefined` (inherit global setting).
+- **Inline approval buttons not working**: Approve/Deny buttons on web conversations did nothing when clicked. Root cause: the `InlineApprovalStore` was purely in-memory, so pending approvals were lost on server restart. Now persisted to disk. Added fallback: if both memory and disk are lost, the approve route recovers tool name + args from the persisted message. Frontend now shows error toast on failure instead of silently re-rendering.
+
 ### Added
 - **Evolution System Config & Settings**: New `evolution` config section in `config.json` with master `enabled: false` (opt-in) and per-module toggles for all 7 evolution modules. Per-bot override via `agentLoop.evolution` (kill switch + per-bot RSS feeds). Settings route `GET/PATCH /api/settings/evolution` for dashboard control. Initialization wired in `bot-manager.ts` — lazy `require()` imports so modules are only loaded when enabled. Follows karma pattern: Zod schema → bot-manager init → settings route.
 
@@ -164,7 +172,6 @@
 
 ### Added
 - **Per-bot `maxToolRounds` for conversations** — Each bot can now override the global `webTools.maxToolRounds` limit via `maxToolRounds` in its bot config. This controls how many tool call rounds the LLM can execute during a conversation or collaboration turn. Also raised the global ceiling from 10 to 50.
-- **Chatless cron scheduling (`memory_note` payload)** — Bots in agent-loop mode (no Telegram chat) can now schedule cron reminders. Previously, `cron add` rejected with "missing chat context" because all jobs required a `chatId` for Telegram message delivery. New `kind: 'memory_note'` payload writes the reminder text to the bot's daily memory log when it fires, so the bot picks it up on its next agent loop iteration.
 
 ### Fixed
 - **Productions: nested folder creation** — LLMs redundantly including the workDir prefix in file paths (e.g. `productions/bot/file.md` instead of `file.md`) caused `resolve()` to double the path, creating `productions/bot/productions/bot/file.md`. Added prefix stripping in `tool-executor.ts` before `resolve()`. Also added a subdirectory guard that flattens any nested path (except `archived/`) to root level.
