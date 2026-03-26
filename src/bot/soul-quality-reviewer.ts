@@ -73,6 +73,8 @@ function buildQualityReviewPrompt(
     '2. Keep the language consistent (if files are in Spanish, edit in Spanish).',
     "3. Make targeted, minimal edits. Don't rewrite entire files unnecessarily.",
     '4. Back up files before editing is handled automatically — just edit directly.',
+    '5. **File boundaries are strict**: SOUL.md = personality, voice, tone, behavioral rules. MOTIVATIONS.md = Core Drives, Current Focus, Open Questions, Self-Observations. NEVER copy content from one file into the other. If SOUL.md is missing personality content, generate new personality content — do NOT paste motivations into it.',
+    "6. **Core Drives must match identity**: If MOTIVATIONS.md Core Drives are generic and don't match the bot's IDENTITY.md role/vibe (e.g. a news bot with drives about \"being a genuine friend\"), rewrite them to match the bot's actual purpose.",
     ''
   );
 

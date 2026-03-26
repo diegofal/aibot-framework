@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 export interface SoulLintIssue {
   file: string;
@@ -22,7 +22,18 @@ const STALE_PLACEHOLDERS = [
   'ninguna todavia',
   'none yet',
   'populated by first reflection',
+  'will be populated by first reflection',
+  'will be generated on first reflection',
   'se poblara con',
+];
+
+/**
+ * Default template Core Drive phrases that indicate template contamination
+ * when found in non-default bots.
+ */
+const DEFAULT_TEMPLATE_DRIVES = [
+  'be a genuine friend, not a service',
+  'prioritize emotional connection over correctness',
 ];
 
 export function lintSoulDirectory(soulDir: string): SoulLintIssue[] {
@@ -55,18 +66,34 @@ export function lintSoulDirectory(soulDir: string): SoulLintIssue[] {
     }
   }
 
-  // Check MOTIVATIONS.md for stale placeholders
+  // Check MOTIVATIONS.md for stale placeholders and template contamination
   const motivationsPath = join(soulDir, 'MOTIVATIONS.md');
   if (existsSync(motivationsPath)) {
     try {
-      const content = readFileSync(motivationsPath, 'utf-8').toLowerCase();
+      const content = readFileSync(motivationsPath, 'utf-8');
+      const contentLower = content.toLowerCase();
       for (const placeholder of STALE_PLACEHOLDERS) {
-        if (content.includes(placeholder)) {
+        if (contentLower.includes(placeholder)) {
           issues.push({
             file: 'MOTIVATIONS.md',
             severity: 'warning',
             message: `Contains stale placeholder: "${placeholder}"`,
           });
+        }
+      }
+
+      // Detect default template Core Drives in non-default bots
+      const botId = basename(dirname(soulDir));
+      if (botId !== 'default') {
+        for (const phrase of DEFAULT_TEMPLATE_DRIVES) {
+          if (contentLower.includes(phrase)) {
+            issues.push({
+              file: 'MOTIVATIONS.md',
+              severity: 'warning',
+              message: `Core Drives contain default template text ("${phrase}") — likely copied from the default bot and not tailored for this bot's identity`,
+            });
+            break; // one warning is enough
+          }
         }
       }
     } catch {

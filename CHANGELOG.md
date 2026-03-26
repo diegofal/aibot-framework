@@ -2,7 +2,12 @@
 
 ## Unreleased
 
+### Improved
+- **Cron dashboard: show instruction/message text in list and detail views**: The cron detail page now correctly displays the instruction text for `instruction`-type jobs (was falling through to skillJob layout showing empty Skill ID/Job ID). Added a "Payload" column to the cron list table with a preview of the text or skill info. Create form now supports `instruction` as a selectable type. Edit modal preserves the correct payload kind.
+
 ### Fixed
+- **Soul template contamination — Core Drives bleeding across bots**: `getInitialMotivations()` in the reflection skill hardcoded generic Core Drives from the default bot ("Be a genuine friend, not a service"). Every new bot inherited these on first reflection run, and the reflection system never corrected them because its rules were too conservative to touch Core Drives. Fixed by: (1) replacing hardcoded Core Drives with placeholders in `getInitialMotivations()`, (2) adding reflection prompt rules to generate identity-aligned Core Drives when placeholders or generic text is detected, (3) adding template contamination detection to `soul-lint.ts`, (4) adding file-boundary and identity-alignment rules to `soul-quality-reviewer.ts` to prevent cross-file contamination (probable cause of Maestro's SOUL.md = MOTIVATIONS.md duplication), (5) replacing stale hardcoded baseline reference in reflection with `.baseline/MOTIVATIONS.md` reader. Applied content fixes to 5 affected bots: Maestro (SOUL.md was duplicate of MOTIVATIONS.md), job-seeker (MOTIVATIONS.md + SOUL.md had embedded template), actividades-emma, monetize, news (all had default template Core Drives).
+
 - **Cron jobs sending raw instruction text instead of processing it**: Cron jobs created by the LLM (via `cron` tool) always used `message` payload kind, which sent text directly to Telegram without LLM processing. Added new `instruction` payload kind that routes the text through the full conversation pipeline (`handleChannelMessage`), enabling the LLM to process the instruction with tools and generate a real response. The `cron` tool now defaults to `instruction` kind; `message` is opt-in for simple verbatim reminders. New `handleCronInstruction()` method on `BotManager` creates a synthetic `InboundMessage` + `Channel` for pipeline entry.
 
 ### Removed

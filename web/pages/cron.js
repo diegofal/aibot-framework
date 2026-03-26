@@ -14,7 +14,7 @@ export async function renderCron(el) {
       jobs.length === 0
         ? '<p class="text-dim">No cron jobs configured.</p>'
         : `<table>
-          <thead><tr><th>Name</th><th>Schedule</th><th>Enabled</th><th>Next Run</th><th>Last Run</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Name</th><th>Schedule</th><th>Payload</th><th>Enabled</th><th>Next Run</th><th>Last Run</th><th>Actions</th></tr></thead>
           <tbody id="cron-tbody"></tbody>
         </table>`
     }
@@ -46,9 +46,11 @@ export async function renderCron(el) {
     }
 
     const tr = document.createElement('tr');
+    const payloadSummary = formatPayloadSummary(job.payload);
     tr.innerHTML = `
       <td><a href="#/cron/${job.id}">${escapeHtml(job.name)}</a></td>
       <td class="text-dim text-sm">${escapeHtml(scheduleText)}</td>
+      <td class="text-sm">${payloadSummary}</td>
       <td>
         <label class="toggle">
           <input type="checkbox" ${job.enabled ? 'checked' : ''} data-action="toggle" data-id="${job.id}">
@@ -126,10 +128,10 @@ export async function renderCronDetail(el, id) {
 
   const scheduleText = formatSchedule(job.schedule);
   let payloadHtml;
-  if (job.payload.kind === 'message') {
+  if (job.payload.kind === 'message' || job.payload.kind === 'instruction') {
     payloadHtml = `<tr><td class="text-dim">Bot ID</td><td>${escapeHtml(job.payload.botId)}</td></tr>
        <tr><td class="text-dim">Chat ID</td><td>${job.payload.chatId}</td></tr>
-       <tr><td class="text-dim">Text</td><td>${escapeHtml(job.payload.text)}</td></tr>`;
+       <tr><td class="text-dim">${job.payload.kind === 'instruction' ? 'Instruction' : 'Text'}</td><td><pre style="white-space:pre-wrap;margin:0;font-family:inherit">${escapeHtml(job.payload.text)}</pre></td></tr>`;
   } else {
     const skillDefault = resolveSkillDefault(skills, job.payload.skillId);
     const backendDisplay = job.payload.llmBackend
@@ -271,6 +273,7 @@ export async function renderCronCreate(el) {
         <label>Type</label>
         <select name="kind" id="job-kind">
           <option value="message">Message</option>
+          <option value="instruction">Instruction</option>
           <option value="skillJob">Skill Job</option>
         </select>
       </div>
@@ -286,7 +289,8 @@ export async function renderCronCreate(el) {
   const payloadFields = document.getElementById('payload-fields');
 
   function renderPayloadFields() {
-    if (kindSelect.value === 'message') {
+    if (kindSelect.value === 'message' || kindSelect.value === 'instruction') {
+      const isInstruction = kindSelect.value === 'instruction';
       payloadFields.innerHTML = `
         <div class="form-group">
           <label>Bot ID</label>
@@ -299,8 +303,9 @@ export async function renderCronCreate(el) {
           <input type="number" name="chatId" required placeholder="e.g. -100123456">
         </div>
         <div class="form-group">
-          <label>Message Text</label>
-          <textarea name="text" required placeholder="Hello!"></textarea>
+          <label>${isInstruction ? 'Instruction' : 'Message Text'}</label>
+          <textarea name="text" required rows="${isInstruction ? 6 : 3}" placeholder="${isInstruction ? 'Instruction to process through LLM pipeline...' : 'Hello!'}"></textarea>
+          ${isInstruction ? '<div class="text-dim text-sm mt-8">Instructions are processed through the LLM pipeline (not sent as raw text)</div>' : ''}
         </div>
       `;
     } else {
@@ -356,9 +361,9 @@ export async function renderCronCreate(el) {
     const kind = form.kind.value;
 
     let payload;
-    if (kind === 'message') {
+    if (kind === 'message' || kind === 'instruction') {
       payload = {
-        kind: 'message',
+        kind,
         text: form.text.value,
         chatId: Number(form.chatId.value),
         botId: form.botId.value,
@@ -390,7 +395,7 @@ export async function renderCronCreate(el) {
 }
 
 function showCronEditModal(job, el, id, skills, onSaved) {
-  const isMessage = job.payload.kind === 'message';
+  const isMessage = job.payload.kind === 'message' || job.payload.kind === 'instruction';
   const isSkillJob = job.payload.kind === 'skillJob';
   const jobId = id || job.id;
   const scheduleExpr =
@@ -419,8 +424,8 @@ function showCronEditModal(job, el, id, skills, onSaved) {
       isMessage
         ? `
       <div class="form-group">
-        <label>Text</label>
-        <textarea id="edit-text">${escapeHtml(job.payload.text)}</textarea>
+        <label>${job.payload.kind === 'instruction' ? 'Instruction' : 'Text'}</label>
+        <textarea id="edit-text" rows="${job.payload.kind === 'instruction' ? 6 : 3}">${escapeHtml(job.payload.text)}</textarea>
       </div>
       <div class="form-group">
         <label>Chat ID</label>
@@ -481,7 +486,7 @@ function showCronEditModal(job, el, id, skills, onSaved) {
 
     if (isMessage) {
       patch.payload = {
-        kind: 'message',
+        kind: job.payload.kind,
         text: document.getElementById('edit-text').value,
         chatId: Number(document.getElementById('edit-chatId').value),
       };
@@ -591,6 +596,16 @@ function formatDuration(ms) {
 function truncate(str, max) {
   if (!str || str.length <= max) return str;
   return `${str.slice(0, max)}…`;
+}
+
+function formatPayloadSummary(payload) {
+  if (payload.kind === 'message') {
+    return `<span class="badge">msg</span> <span class="text-dim">${escapeHtml(truncate(payload.text, 60))}</span>`;
+  }
+  if (payload.kind === 'instruction') {
+    return `<span class="badge badge-ok">instr</span> <span class="text-dim">${escapeHtml(truncate(payload.text, 60))}</span>`;
+  }
+  return `<span class="badge">skill</span> <span class="text-dim">${escapeHtml(payload.skillId)}/${escapeHtml(payload.jobId)}</span>`;
 }
 
 function formatOutput(output) {

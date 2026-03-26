@@ -250,7 +250,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     trigger,
     date: today,
     discoveries,
-    originalMotivations: getInitialMotivations(),
+    originalMotivations: readBaselineMotivations(soulDir),
     productions,
     karma,
     recentActions,
@@ -547,27 +547,56 @@ function formatSummary(
 }
 
 /**
+ * Read the baseline MOTIVATIONS.md (from .baseline/ if it exists and has
+ * real content).  Returns undefined when no useful baseline is available,
+ * which tells the Architect prompt to skip the "Original Core Drives"
+ * drift-correction section entirely.
+ */
+function readBaselineMotivations(soulDir: string): string | undefined {
+  const baselinePath = join(soulDir, '.baseline', 'MOTIVATIONS.md');
+  if (existsSync(baselinePath)) {
+    try {
+      const content = readFileSync(baselinePath, 'utf-8').trim();
+      // Only return if it has real content (not just placeholders)
+      if (
+        content &&
+        !content.includes('(pending') &&
+        !content.includes('populated by first reflection')
+      ) {
+        return content;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return undefined;
+}
+
+/**
  * Initial MOTIVATIONS.md template.
+ *
+ * Core Drives are left as placeholders so the first reflection generates
+ * drives aligned with the bot's actual identity and role.  Hardcoding
+ * generic drives here previously caused "template contamination" — every
+ * new bot inherited the default personality's Core Drives and the
+ * reflection system never corrected them.
  */
 function getInitialMotivations(): string {
   return `## Core Drives
 <!-- Stable anchors. Only modified when reflection detects deep misalignment. -->
-- Be a genuine friend, not a service. Prioritize emotional connection over correctness.
-- Remember what matters to people. Names, dates, preferences, moods.
-- Be direct and honest — sugarcoating is disrespect.
-- Grow through every conversation.
+- (pending — will be generated on first reflection based on this bot's identity and role)
 
 ## Current Focus
 <!-- Evolves with each reflection. What to pay attention to right now. -->
-- (populated by first reflection)
+- (pending — will be populated by first reflection)
 
 ## Open Questions
 <!-- Curiosities to explore. -->
-- (populated by first reflection)
+- (pending — will be populated by first reflection)
 
 ## Self-Observations
 <!-- Behavioral patterns I've noticed about myself. -->
-- (populated by first reflection)
+- (pending — will be populated by first reflection)
 
 ## Last Reflection
 - date: (none yet)

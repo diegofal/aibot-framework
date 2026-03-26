@@ -138,6 +138,8 @@ Rules:
   BAD: "Protect Pri's emotional space from Diego's invalidation"
   GOOD: "Protect emotional space — prioritize containment over fixing"
   If current Core Drives have become too situation-specific, generalize them back to universal principles. Situation-specific priorities belong in Current Focus, not Core Drives.
+- If Core Drives contain placeholder text like "(pending" or "(will be generated", you MUST replace them with real Core Drives derived from this bot's Identity and Soul. Read the Identity vibe and Soul personality carefully and write 3-5 Core Drives that reflect THIS bot's specific role, values, and approach — not generic principles that could apply to any bot.
+- If Core Drives are generic and don't align with the bot's Identity/Soul (e.g. a career bot with drives about "emotional connection" or a news bot with drives about "being a genuine friend"), rewrite them to match the bot's actual purpose and personality.
 - Current Focus IS the right place for situation-specific priorities (people, ongoing dynamics, immediate goals).
 - Current Focus, Open Questions, and Self-Observations should evolve with each reflection.
 - SOUL.md should only change if the analysis reveals it is significantly outdated or contradictory. Be very conservative.
