@@ -21,6 +21,10 @@ SCHEDULE TYPES (schedule object):
 - Interval: { "kind": "every", "everyMs": <milliseconds> } — fires repeatedly at the given interval.
 - Cron expression: { "kind": "cron", "expr": "<5-field cron>", "tz": "<timezone>" } — standard cron schedule.
 
+PAYLOAD MODES (payloadKind):
+- "instruction" (default): The text is processed by the AI when the job fires. Use for tasks that require thinking, research, tool usage, or generating content (e.g. "generate a news briefing", "check the weather and report").
+- "message": The text is sent verbatim as a notification. Use for simple reminders like "Time to take your medicine" or "Meeting in 30 minutes".
+
 IMPORTANT: Always use get_datetime first to know the current time before calculating schedule timestamps.`,
         parameters: {
           type: 'object',
@@ -58,6 +62,12 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
               type: 'string',
               description: 'Job ID (for "remove" and "run" actions)',
             },
+            payloadKind: {
+              type: 'string',
+              enum: ['message', 'instruction'],
+              description:
+                '"instruction" (default): text is processed by AI with tools when the job fires. "message": text sent verbatim as notification.',
+            },
             includeDisabled: {
               type: 'boolean',
               description: 'Include disabled jobs in list (for "list" action)',
@@ -94,7 +104,9 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
               payload:
                 j.payload.kind === 'message'
                   ? { kind: 'message', text: j.payload.text }
-                  : { kind: 'skillJob', skillId: j.payload.skillId, jobId: j.payload.jobId },
+                  : j.payload.kind === 'instruction'
+                    ? { kind: 'instruction', text: j.payload.text }
+                    : { kind: 'skillJob', skillId: j.payload.skillId, jobId: j.payload.jobId },
             }));
             return { success: true, content: JSON.stringify(summary) };
           }
@@ -228,7 +240,11 @@ async function doAdd(
     };
   }
 
-  const payload = { kind: 'message' as const, text, chatId, botId };
+  const payloadKind = (args.payloadKind as string) || 'instruction';
+  const payload =
+    payloadKind === 'message'
+      ? { kind: 'message' as const, text, chatId, botId }
+      : { kind: 'instruction' as const, text, chatId, botId };
 
   const job = await cronService.add({
     name,

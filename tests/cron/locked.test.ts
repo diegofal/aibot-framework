@@ -9,6 +9,7 @@ function createState(): CronServiceState {
       storePath: '/tmp/test-cron-store',
       cronEnabled: true,
       sendMessage: async () => {},
+      sendInstruction: async () => undefined,
       resolveSkillHandler: () => undefined,
       nowMs: () => Date.now(),
     },

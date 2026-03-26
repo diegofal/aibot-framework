@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- **Cron jobs sending raw instruction text instead of processing it**: Cron jobs created by the LLM (via `cron` tool) always used `message` payload kind, which sent text directly to Telegram without LLM processing. Added new `instruction` payload kind that routes the text through the full conversation pipeline (`handleChannelMessage`), enabling the LLM to process the instruction with tools and generate a real response. The `cron` tool now defaults to `instruction` kind; `message` is opt-in for simple verbatim reminders. New `handleCronInstruction()` method on `BotManager` creates a synthetic `InboundMessage` + `Channel` for pipeline entry.
+
 ### Removed
 - **Cron `memory_note` payload type** — Removed the `memory_note` cron payload that silently wrote reminder text to a bot's daily memory log with no guarantee of action. Cron jobs now require a `chatId` (always available from conversation context). Creating a cron without chat context returns an error instead of silently degrading. Removed 7 existing memory_note jobs and cleaned up stale `[cron reminder:]` entries from bot memory logs.
 - **Orphaned intel-gatherer crons** — Removed 8 orphaned `daily-intel-collection` cron jobs for bots that don't have `intel-gatherer` in their skills list. Only `default` bot retains it. Orphans accumulated because the startup cleanup only iterated `config.bots`, missing dynamically-created bots.

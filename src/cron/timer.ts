@@ -166,6 +166,19 @@ async function executeJobCore(
     }
   }
 
+  if (job.payload.kind === 'instruction') {
+    try {
+      const response = await state.deps.sendInstruction(
+        job.payload.chatId,
+        job.payload.text,
+        job.payload.botId
+      );
+      return { status: 'ok', output: response || 'Instruction processed' };
+    } catch (err) {
+      return { status: 'error', error: String(err) };
+    }
+  }
+
   if (job.payload.kind === 'skillJob') {
     const handler = state.deps.resolveSkillHandler(job.payload);
     if (!handler) {

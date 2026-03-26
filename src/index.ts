@@ -126,6 +126,9 @@ async function main() {
       sendMessage: async (chatId: number, text: string, botId: string) => {
         await botManager.sendMessage(chatId, text, botId);
       },
+      sendInstruction: async (chatId: number, text: string, botId: string) => {
+        return await botManager.handleCronInstruction(chatId, text, botId);
+      },
       resolveSkillHandler: (payload) => {
         const skill = skillRegistry.get(payload.skillId);
         if (!skill?.jobs) return undefined;

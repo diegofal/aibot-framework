@@ -910,6 +910,37 @@ export class BotManager {
     await sendLongMessage((t) => bot.api.sendMessage(chatId, t), text);
   }
 
+  /**
+   * Process a cron instruction through the full conversation pipeline.
+   * Creates a synthetic InboundMessage + Channel and delegates to handleChannelMessage.
+   */
+  async handleCronInstruction(chatId: number, text: string, botId: string): Promise<string> {
+    const bot = this.bots.get(botId);
+    if (!bot) throw new Error(`Bot not found for cron instruction: ${botId}`);
+
+    const msg: import('../channel/types').InboundMessage = {
+      messageId: `cron-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      channelKind: 'telegram',
+      text,
+      chatId: String(chatId),
+      chatType: 'private',
+      sender: { id: String(chatId), firstName: 'Cron' },
+      timestamp: Date.now(),
+    };
+
+    const channel: import('../channel/types').Channel = {
+      kind: 'telegram',
+      async sendText(t: string) {
+        await sendLongMessage((chunk) => bot.api.sendMessage(chatId, chunk), t);
+      },
+      async showTyping() {
+        await bot.api.sendChatAction(chatId, 'typing');
+      },
+    };
+
+    return this.handleChannelMessage(msg, channel, botId);
+  }
+
   isRunning(botId: string): boolean {
     return this.runningBots.has(botId);
   }
