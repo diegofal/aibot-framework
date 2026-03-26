@@ -25,6 +25,9 @@ PAYLOAD MODES (payloadKind):
 - "instruction" (default): The text is processed by the AI when the job fires. Use for tasks that require thinking, research, tool usage, or generating content (e.g. "generate a news briefing", "check the weather and report").
 - "message": The text is sent verbatim as a notification. Use for simple reminders like "Time to take your medicine" or "Meeting in 30 minutes".
 
+CHAT ID:
+When creating a cron job from within a conversation, the chatId is auto-detected. When creating from the agent loop (no conversation context), you MUST provide the chatId parameter explicitly — use the operator/owner's chat ID.
+
 IMPORTANT: Always use get_datetime first to know the current time before calculating schedule timestamps.`,
         parameters: {
           type: 'object',
@@ -62,6 +65,11 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
               type: 'string',
               description: 'Job ID (for "remove" and "run" actions)',
             },
+            chatId: {
+              type: 'number',
+              description:
+                'Target chat ID for job delivery. Required when creating cron jobs outside a conversation (e.g. from agent loop). In conversations, auto-detected from context.',
+            },
             payloadKind: {
               type: 'string',
               enum: ['message', 'instruction'],
@@ -80,7 +88,7 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
 
     async execute(args, logger): Promise<ToolResult> {
       const action = args.action as string;
-      const _chatId = args._chatId as number | undefined;
+      const _chatId = (args.chatId as number | undefined) || (args._chatId as number | undefined);
       const _botId = args._botId as string | undefined;
 
       try {
@@ -236,7 +244,7 @@ async function doAdd(
     return {
       success: false,
       content:
-        'Cannot create cron job: missing chat context. Cron jobs can only be created from a conversation.',
+        'Cannot create cron job: missing chat context. Provide an explicit chatId parameter, or create the job from within a conversation.',
     };
   }
 

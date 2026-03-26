@@ -97,4 +97,49 @@ describe('cron tool payloadKind', () => {
     const addArgs = svc._addMock.mock.calls[0][0];
     expect(addArgs.payload.kind).toBe('instruction');
   });
+
+  it('accepts explicit chatId from agent loop (no _chatId context)', async () => {
+    const svc = makeCronService();
+    const tool = createCronTool(svc as any);
+
+    const result = await tool.execute(
+      {
+        action: 'add',
+        name: 'Agent loop briefing',
+        schedule: { kind: 'cron', expr: '0 6 * * *', tz: 'America/Argentina/Buenos_Aires' },
+        text: 'Generate morning briefing',
+        chatId: 796164002,
+        _chatId: 0, // agent loop injects 0
+        _botId: 'news',
+      },
+      mockLogger
+    );
+
+    expect(result.success).toBe(true);
+    expect(svc._addMock).toHaveBeenCalledTimes(1);
+    const addArgs = svc._addMock.mock.calls[0][0];
+    expect(addArgs.payload.chatId).toBe(796164002);
+    expect(addArgs.payload.kind).toBe('instruction');
+  });
+
+  it('fails when no chatId available at all', async () => {
+    const svc = makeCronService();
+    const tool = createCronTool(svc as any);
+
+    const result = await tool.execute(
+      {
+        action: 'add',
+        name: 'No context job',
+        schedule: { kind: 'cron', expr: '0 9 * * *' },
+        text: 'Do something',
+        _chatId: 0,
+        _botId: 'bot1',
+      },
+      mockLogger
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.content).toContain('chatId');
+    expect(svc._addMock).not.toHaveBeenCalled();
+  });
 });
