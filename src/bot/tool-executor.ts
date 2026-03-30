@@ -732,7 +732,7 @@ export class ToolExecutor extends EventEmitter {
           // Smart tail preservation keeps error messages visible even when output is huge.
           if (validatedResult.content && typeof validatedResult.content === 'string') {
             const contextTokens =
-              this.ctx.config.conversation.compaction.contextWindows.ollamaTokens;
+              this.ctx.config.conversation?.compaction?.contextWindows?.ollamaTokens;
             const contextChars = contextTokens ? tokensToChars(contextTokens) : undefined;
 
             const truncation = truncateToolResultContent(validatedResult.content, contextChars);
