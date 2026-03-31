@@ -1,5 +1,11 @@
 import type { Skill, SkillContext } from '../../core/types';
 
+interface ToolResult {
+  success: boolean;
+  message?: string;
+  data?: Record<string, unknown>;
+}
+
 interface Reminder {
   id: string;
   text: string;
@@ -183,7 +189,7 @@ export const handlers: Record<
           : { kind: 'at', at: scheduledAt.toISOString() };
 
       const jobName = recurring ? `reminder-recurring-${id}` : `reminder-${id}`;
-      await ctx.cron.add({
+      await ctx.cron?.add({
         name: jobName,
         schedule,
         text: `⏰ Reminder: ${text}`,
@@ -251,7 +257,7 @@ export const handlers: Record<
 
       // Cancel the cron job if it exists
       if (reminder.jobId) {
-        await ctx.cron.remove({ jobId: reminder.jobId }).catch(() => {
+        await ctx.cron?.remove({ jobId: reminder.jobId }).catch(() => {
           ctx.logger.warn({ jobId: reminder.jobId }, 'Failed to cancel cron job');
         });
       }
@@ -293,12 +299,12 @@ export const handlers: Record<
 
       // Cancel old job
       if (reminder.jobId) {
-        await ctx.cron.remove({ jobId: reminder.jobId }).catch(() => {});
+        await ctx.cron?.remove({ jobId: reminder.jobId }).catch(() => {});
       }
 
       // Create new job
       const jobName = `reminder-${id}-snoozed`;
-      await ctx.cron.add({
+      await ctx.cron?.add({
         name: jobName,
         schedule: { kind: 'at', at: snoozeUntil.toISOString() },
         text: `⏰ Reminder: ${reminder.text}`,
@@ -333,7 +339,7 @@ export const handlers: Record<
 
       // Cancel the cron job
       if (reminder.jobId) {
-        await ctx.cron.remove({ jobId: reminder.jobId }).catch(() => {});
+        await ctx.cron?.remove({ jobId: reminder.jobId }).catch(() => {});
       }
 
       reminder.completed = true;
@@ -397,7 +403,7 @@ const skill: Skill = {
             return 'Usage: /remind set <text> in 5 minutes\n/remind set <text> at 3pm\n/remind set <text> tomorrow at 9am';
           }
 
-          const result = await handlers.reminders_set({ text, when }, ctx);
+          const result = (await handlers.reminders_set({ text, when }, ctx)) as ToolResult;
           if (result.success) {
             return `✅ Reminder set: "${text}" for ${result.data?.formatted}`;
           }
@@ -406,12 +412,15 @@ const skill: Skill = {
 
         // list: /remind list
         if (subcommand === 'list') {
-          const result = await handlers.reminders_list({ include_completed: false }, ctx);
+          const result = (await handlers.reminders_list(
+            { include_completed: false },
+            ctx
+          )) as ToolResult;
           if (!result.success) {
             return `❌ Failed: ${result.message}`;
           }
 
-          const reminders = result.data as Reminder[];
+          const reminders = result.data as unknown as Reminder[];
           if (reminders.length === 0) {
             return '📭 No active reminders. Set one with /remind set <text> in 5 minutes';
           }
@@ -431,7 +440,7 @@ const skill: Skill = {
           const id = args[1];
           if (!id) return 'Usage: /remind delete <id>';
 
-          const result = await handlers.reminders_delete({ id }, ctx);
+          const result = (await handlers.reminders_delete({ id }, ctx)) as ToolResult;
           if (result.success) {
             return `✅ Reminder \`${id}\` deleted`;
           }
@@ -444,7 +453,7 @@ const skill: Skill = {
           const duration = args.slice(2).join(' ');
           if (!id || !duration) return 'Usage: /remind snooze <id> 30 minutes';
 
-          const result = await handlers.reminders_snooze({ id, duration }, ctx);
+          const result = (await handlers.reminders_snooze({ id, duration }, ctx)) as ToolResult;
           if (result.success) {
             const snoozed = new Date(result.data?.snoozedUntil as string);
             return `😴 Reminder \`${id}\` snoozed until ${snoozed.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
@@ -457,7 +466,7 @@ const skill: Skill = {
           const id = args[1];
           if (!id) return 'Usage: /remind done <id>';
 
-          const result = await handlers.reminders_complete({ id }, ctx);
+          const result = (await handlers.reminders_complete({ id }, ctx)) as ToolResult;
           if (result.success) {
             return `✅ Reminder \`${id}\` marked complete`;
           }

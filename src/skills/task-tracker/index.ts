@@ -1,5 +1,13 @@
 import type { Skill, SkillContext } from '../../core/types';
 
+interface ToolResult {
+  success: boolean;
+  message?: string;
+  task?: Task;
+  tasks?: Task[];
+  count?: number;
+}
+
 interface Task {
   id: string;
   title: string;
@@ -255,12 +263,14 @@ const skill: Skill = {
             title = title.replace(dueMatch[0], '').trim();
           }
 
-          const result = await handlers.task_add({ title, priority, dueDate, tags }, ctx);
+          const result = (await handlers.task_add(
+            { title, priority, dueDate, tags },
+            ctx
+          )) as ToolResult;
           if (!result.success) {
             return `❌ ${result.message}`;
           }
-          const task = (result as { task: Task }).task;
-          return `✅ Task added: ${formatTask(task)}`;
+          return `✅ Task added: ${formatTask(result.task as Task)}`;
         }
 
         // List tasks
@@ -280,9 +290,9 @@ const skill: Skill = {
             }
           }
 
-          const result = await handlers.task_list(listArgs, ctx);
-          const tasks = (result as { tasks: Task[]; count: number }).tasks;
-          const count = (result as { count: number }).count;
+          const result = (await handlers.task_list(listArgs, ctx)) as ToolResult;
+          const tasks = result.tasks ?? [];
+          const count = result.count ?? 0;
 
           if (count === 0) {
             return '📭 No tasks found.';
@@ -299,12 +309,11 @@ const skill: Skill = {
             return 'Usage: /task done <task-id>';
           }
 
-          const result = await handlers.task_complete({ taskId }, ctx);
+          const result = (await handlers.task_complete({ taskId }, ctx)) as ToolResult;
           if (!result.success) {
             return `❌ ${result.message}`;
           }
-          const task = (result as { task: Task }).task;
-          return `✅ Completed: ${task.title}`;
+          return `✅ Completed: ${(result.task as Task).title}`;
         }
 
         // Delete task
@@ -314,12 +323,11 @@ const skill: Skill = {
             return 'Usage: /task delete <task-id>';
           }
 
-          const result = await handlers.task_delete({ taskId }, ctx);
+          const result = (await handlers.task_delete({ taskId }, ctx)) as ToolResult;
           if (!result.success) {
             return `❌ ${result.message}`;
           }
-          const task = (result as { task: Task }).task;
-          return `🗑️ Deleted: ${task.title}`;
+          return `🗑️ Deleted: ${(result.task as Task).title}`;
         }
 
         // Change priority
@@ -332,12 +340,11 @@ const skill: Skill = {
             return 'Usage: /task priority <task-id> <high|medium|low>';
           }
 
-          const result = await handlers.task_prioritize({ taskId, priority }, ctx);
+          const result = (await handlers.task_prioritize({ taskId, priority }, ctx)) as ToolResult;
           if (!result.success) {
             return `❌ ${result.message}`;
           }
-          const task = (result as { task: Task }).task;
-          return `🔄 Priority set to ${priority}: ${task.title}`;
+          return `🔄 Priority set to ${priority}: ${(result.task as Task).title}`;
         }
 
         // Unknown command

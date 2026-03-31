@@ -91,6 +91,16 @@ export interface SkillContext {
     karmaBlock?: string;
     recentActionsDigest?: string;
   };
+  /** Cron service for scheduling jobs. Only available when cron is enabled. */
+  cron?: {
+    add(opts: {
+      name: string;
+      schedule: unknown;
+      text: string;
+      deleteAfterRun?: boolean;
+    }): Promise<void>;
+    remove(opts: { jobId: string }): Promise<void>;
+  };
 }
 
 export interface CallbackQueryData {
