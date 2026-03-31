@@ -201,8 +201,8 @@ export class TemplateService {
       tts: overrides.tts ?? base.tts,
       userIsolation: overrides.userIsolation ?? base.userIsolation ?? { enabled: true },
       groupActivation: (overrides.groupActivation ??
-        base.groupActivation) as BotConfig['groupActivation'],
-    } as BotConfig;
+        base.groupActivation) as TemplateConfig['groupActivation'],
+    } as unknown as BotConfig;
 
     // Track instance
     const instance: TemplateInstance = {
@@ -252,6 +252,7 @@ export class TemplateService {
    * Extract a TemplateConfig from an existing BotConfig.
    */
   static extractTemplateConfig(botConfig: BotConfig): TemplateConfig {
+    const raw = botConfig as Record<string, unknown>;
     return {
       name: botConfig.name,
       description: botConfig.description,
@@ -259,11 +260,11 @@ export class TemplateService {
       llmBackend: botConfig.llmBackend,
       conversation: botConfig.conversation,
       skills: botConfig.skills,
-      tools: botConfig.tools as TemplateConfig['tools'],
+      tools: raw.tools as TemplateConfig['tools'],
       agentLoop: botConfig.agentLoop as Record<string, unknown>,
       tts: botConfig.tts as Record<string, unknown>,
       userIsolation: botConfig.userIsolation,
-      groupActivation: botConfig.groupActivation as Record<string, unknown>,
+      groupActivation: raw.groupActivation as Record<string, unknown>,
     };
   }
 }

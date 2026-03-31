@@ -1,8 +1,8 @@
 import type { BotManager } from '../bot/bot-manager';
 import type { BotConfig } from '../config';
 import type { Logger } from '../logger';
-import type { TenantManager } from './manager';
-import type { Tenant, UsageEventType } from './types';
+import type { Tenant, TenantManager } from './manager';
+import type { UsageEventType } from './types';
 
 /**
  * TenantAwareBotManager wraps BotManager with multi-tenant isolation.
@@ -105,7 +105,12 @@ export class TenantAwareBotManager {
     }
 
     // Check bot count limit for tenant's plan
-    if (!this.tenantManager.canCreateBot(botConfig.tenantId, this.botManager)) {
+    if (
+      !this.tenantManager.canCreateBot(
+        botConfig.tenantId,
+        this.botManager as unknown as Parameters<TenantManager['canCreateBot']>[1]
+      )
+    ) {
       const planLimits = this.tenantManager.getPlanLimits(tenant.plan);
       return {
         success: false,
@@ -388,7 +393,7 @@ export class TenantAwareBotManager {
    */
   getAskHumanPending(
     tenantId: string
-  ): Array<{ id: string; botId: string; question: string; timestamp: string }> {
+  ): Array<{ id: string; botId: string; question: string; timestamp: number }> {
     const allPending = this.botManager.getAskHumanPending();
     const tenantBotIds = new Set(this.getTenantBots(tenantId).map((b) => b.id));
 
@@ -398,7 +403,7 @@ export class TenantAwareBotManager {
         id: q.id,
         botId: q.botId,
         question: q.question,
-        timestamp: q.timestamp,
+        timestamp: q.createdAt,
       }));
   }
 
