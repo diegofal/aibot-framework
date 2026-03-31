@@ -15,7 +15,7 @@ export interface TenantRoutesDeps {
 
 export function tenantRoutes(deps: TenantRoutesDeps) {
   const { tenantManager, logger } = deps;
-  const app = new Hono();
+  const app = new Hono<{ Variables: { tenant: TenantContext } }>();
 
   // Create a new tenant
   app.post('/', async (c) => {
