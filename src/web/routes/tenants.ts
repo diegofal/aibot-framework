@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
+import type { BotManager } from '../../bot';
+import type { Config } from '../../config';
+import type { Logger } from '../../logger';
+import type { Tenant, TenantManager } from '../../tenant/manager';
+import type { TenantContext } from '../../tenant/middleware';
 import { PLAN_RATE_LIMITS } from '../../tenant/rate-limiter';
-import type { BotManager } from '../bot';
-import type { Config } from '../config';
-import type { Logger } from '../logger';
-import type { Tenant, TenantManager } from '../tenant/manager';
 
 export interface TenantRoutesDeps {
   tenantManager: TenantManager;
@@ -73,7 +74,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
 
   // Get tenant by ID (requires API key)
   app.get('/me', async (c) => {
-    const tenant = c.get('tenant') as { tenantId: string } | undefined;
+    const tenant = c.get('tenant') as TenantContext | undefined;
 
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
@@ -106,7 +107,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
 
   // Update tenant
   app.patch('/me', async (c) => {
-    const tenant = c.get('tenant') as { tenantId: string } | undefined;
+    const tenant = c.get('tenant') as TenantContext | undefined;
 
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
@@ -144,7 +145,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
 
   // Regenerate identity secret
   app.post('/me/identity-secret/regenerate', async (c) => {
-    const tenant = c.get('tenant') as { tenantId: string } | undefined;
+    const tenant = c.get('tenant') as TenantContext | undefined;
 
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
@@ -168,7 +169,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
 
   // Regenerate API key
   app.post('/me/api-key/regenerate', async (c) => {
-    const tenant = c.get('tenant') as { tenantId: string } | undefined;
+    const tenant = c.get('tenant') as TenantContext | undefined;
 
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
@@ -191,7 +192,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
 
   // Get usage stats
   app.get('/me/usage', async (c) => {
-    const tenant = c.get('tenant') as { tenantId: string } | undefined;
+    const tenant = c.get('tenant') as TenantContext | undefined;
 
     if (!tenant) {
       return c.json({ error: 'Unauthorized' }, 401);
@@ -317,7 +318,7 @@ export function tenantRoutes(deps: TenantRoutesDeps) {
 
       // When clearing, explicitly delete the field so it doesn't persist as undefined in JSON
       if (maxRequestsPerMinute === null) {
-        (updated as Record<string, unknown>).rateLimitOverride = undefined;
+        (updated as unknown as Record<string, unknown>).rateLimitOverride = undefined;
       }
 
       const effectiveRateLimit =
