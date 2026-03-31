@@ -190,11 +190,3 @@ export class StripeBillingProvider implements BillingProvider {
     }
   }
 }
-
-export interface WebhookResult {
-  type: 'payment_succeeded' | 'payment_failed' | 'subscription_canceled' | 'unhandled';
-  tenantId?: string;
-  stripeCustomerId?: string;
-  stripeSubscriptionId?: string;
-  invoiceId?: string;
-}
