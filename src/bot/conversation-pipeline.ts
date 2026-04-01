@@ -167,6 +167,11 @@ export class ConversationPipeline {
     const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
     const botLogger = this.ctx.getBotLogger(config.id);
 
+    if (!chatId) {
+      botLogger.warn('No chat ID found, skipping message processing');
+      return;
+    }
+
     const senderName = isGroup ? (ctx.from?.first_name ?? 'Unknown') : undefined;
     botLogger.info(
       {
@@ -357,10 +362,8 @@ export class ConversationPipeline {
             );
             clearInterval(typingInterval);
             await sendLongMessage(
-              ctx,
-              'Sorry, the message quota for this service has been exceeded. Please try again later or contact support.',
-              undefined,
-              botLogger
+              (t) => ctx.reply(t),
+              'Sorry, the message quota for this service has been exceeded. Please try again later or contact support.'
             );
             return;
           }
@@ -1041,6 +1044,14 @@ export class ConversationPipeline {
               model: activeModel,
               temperature: resolved.temperature,
             });
+
+            if (!stream) {
+              botLogger.warn(
+                { chatId: msg.chatId },
+                'chatStream not available, falling back to non-streaming'
+              );
+              throw new Error('Streaming requested but chatStream is not available');
+            }
 
             // Deliver tokens progressively depending on channel kind
             if (msg.channelKind === 'web' && (channel as any)._ws) {
