@@ -54,7 +54,7 @@ function createMockConfig(overrides: Record<string, any> = {}) {
   return {
     id: 'bot1',
     name: 'TestBot',
-    authorizedUsers: [],
+    allowedUsers: [],
     mentionPatterns: [],
     ...overrides,
   } as any;
@@ -103,7 +103,7 @@ describe('ConversationGate', () => {
 
   it('blocks unauthorized users', async () => {
     const ctx = createMockCtx();
-    const config = createMockConfig({ authorizedUsers: [999] });
+    const config = createMockConfig({ allowedUsers: [999] });
     const gate = new ConversationGate(ctx, createMockGroupActivation());
     const result = await gate.evaluate(createMockGrammyCtx(), config, mockLogger);
     expect(result.allowed).toBe(false);
