@@ -270,7 +270,7 @@ export class ConversationGate {
 
   private isAuthorized(userId: number | undefined, config: BotConfig): boolean {
     if (!userId) return false;
-    if (!config.authorizedUsers || config.authorizedUsers.length === 0) return true;
-    return config.authorizedUsers.includes(userId);
+    if (!config.allowedUsers || config.allowedUsers.length === 0) return true;
+    return config.allowedUsers.includes(userId);
   }
 }

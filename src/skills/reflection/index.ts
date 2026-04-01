@@ -670,12 +670,12 @@ async function runExploration(
     maxToolRounds: opts.maxToolRounds ?? 4,
   });
 
-  if (!response || !response.trim()) {
+  if (!response || !response.text?.trim()) {
     return null;
   }
 
   // Cap the output
-  return response.slice(0, maxChars);
+  return response.text.slice(0, maxChars);
 }
 
 export default skill;
