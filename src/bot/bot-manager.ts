@@ -30,11 +30,12 @@ import { ConversationsService } from '../conversations/service';
 import { KarmaService } from '../karma/service';
 import { ProductionsService } from '../productions/service';
 import { AnalyticsService } from '../tenant/analytics-service';
-import type { BillingProvider } from '../tenant/billing';
 import { CustomizationService } from '../tenant/customization';
 import type { TenantManagerConfig } from '../tenant/manager';
+import type { Tenant } from '../tenant/manager';
 import { TemplateService } from '../tenant/template-service';
-import type { Tenant, UsageEventType } from '../tenant/types';
+import type { BillingProvider } from '../tenant/types';
+import type { UsageEventType } from '../tenant/types';
 import { WebhookService } from '../tenant/webhook-service';
 import { ActivityStream } from './activity-stream';
 import { type AgentFeedback, AgentFeedbackStore } from './agent-feedback-store';
@@ -1265,7 +1266,7 @@ export class BotManager {
    * Used by A2A protocol executor for headless message processing.
    */
   async getSystemPrompt(botId: string): Promise<string> {
-    const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
+    const botConfig = this.config.bots.find((b: BotConfig) => b.id === botId);
     if (!botConfig) throw new Error(`Bot not found: ${botId}`);
     return this.systemPromptBuilder.build({
       mode: 'conversation',

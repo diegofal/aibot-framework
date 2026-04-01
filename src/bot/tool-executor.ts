@@ -858,7 +858,7 @@ export class ToolExecutor extends EventEmitter {
           `Tool execution failed after ${attempt + 1} attempt(s): ${lastError}`,
           'execution',
           attempt,
-          lastError as Error
+          lastError ?? undefined
         );
       }
     }

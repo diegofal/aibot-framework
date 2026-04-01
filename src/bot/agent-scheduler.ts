@@ -391,6 +391,7 @@ export class AgentScheduler {
           lastLoggedSummary: null,
           retryCount: 0,
           lastErrorMessage: null,
+          lastIdleLoggedAt: null,
           cyclesSinceAskHuman: 0,
         });
         this.ctx.logger.debug({ botId, staggerOffset }, 'Agent loop: added new bot to schedule');

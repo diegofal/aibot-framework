@@ -265,7 +265,7 @@ export class HandlerRegistrar {
       {
         toolsEnabled: hasTools,
         mediaEnabled: !!this.ctx.mediaHandler,
-        groupActivation: config.groupActivation,
+        groupActivation: config.id, // log bot id — groupActivation is on HandlerRegistrar, not BotConfig
       },
       'Native conversation handler registered'
     );

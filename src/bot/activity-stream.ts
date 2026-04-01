@@ -25,7 +25,8 @@ export type ActivityEventType =
   | 'collab:start'
   | 'collab:end'
   | 'compaction'
-  | 'karma:change';
+  | 'karma:change'
+  | 'security:audit';
 
 export type LlmCaller = 'conversation' | 'planner' | 'strategist' | 'executor' | 'feedback';
 
