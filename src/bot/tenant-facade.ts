@@ -1,8 +1,8 @@
 import type { BotConfig, Config } from '../config';
 import type { Logger } from '../logger';
-import { type BillingProvider, NoOpBillingProvider } from '../tenant/billing';
-import { TenantManager, type TenantManagerConfig } from '../tenant/manager';
-import type { Tenant, UsageEventType } from '../tenant/types';
+import { NoOpBillingProvider } from '../tenant/billing';
+import { type Tenant, TenantManager, type TenantManagerConfig } from '../tenant/manager';
+import type { BillingProvider, UsageEventType } from '../tenant/types';
 
 export interface TenantFacadeDeps {
   config: Config;
