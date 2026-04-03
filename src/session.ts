@@ -495,7 +495,7 @@ export class SessionManager {
     }
 
     // Check active reply window for this user
-    if (botId && this.isActive(botId, ctx.chat?.id, ctx.from?.id)) {
+    if (botId && ctx.chat?.id && this.isActive(botId, ctx.chat.id, ctx.from?.id)) {
       return 'replyWindow';
     }
 
