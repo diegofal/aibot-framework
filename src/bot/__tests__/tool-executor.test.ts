@@ -10,13 +10,14 @@ import type { BotContext, Tool } from '../types';
 
 // Mock logger factory
 const createMockLogger = (): Logger => {
-  const logger: Logger = {
+  const logger = {
     debug: jest.fn(),
     info: jest.fn(),
     warn: jest.fn(),
     error: jest.fn(),
-    child: jest.fn(() => logger),
-  };
+    child: jest.fn(),
+  } as unknown as Logger;
+  (logger.child as jest.Mock).mockReturnValue(logger);
   return logger;
 };
 
@@ -62,7 +63,7 @@ describe('ToolExecutor', () => {
   describe('basic execution', () => {
     it('should execute a tool successfully', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', { foo: 'bar' });
@@ -84,7 +85,7 @@ describe('ToolExecutor', () => {
 
     it('should return error for disabled tool', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
       ctx.config.bots[0].disabledTools = ['test_tool'];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
@@ -96,7 +97,7 @@ describe('ToolExecutor', () => {
     });
 
     it('should return error for unknown tool', async () => {
-      ctx.tools = [];
+      (ctx as { tools: Tool[] }).tools = [];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('unknown_tool', {});
@@ -107,7 +108,7 @@ describe('ToolExecutor', () => {
 
     it('should filter tools via toolFilter option', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, {
         botId: 'test-bot',
@@ -124,7 +125,7 @@ describe('ToolExecutor', () => {
   describe('EventEmitter hooks', () => {
     it('should emit tool:start event', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const startHandler = jest.fn();
@@ -143,7 +144,7 @@ describe('ToolExecutor', () => {
 
     it('should emit tool:end event on success', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const endHandler = jest.fn();
@@ -168,7 +169,7 @@ describe('ToolExecutor', () => {
       const tool = createMockTool({
         execute: jest.fn(() => Promise.reject(new Error('execution failed'))),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const endHandler = jest.fn();
@@ -223,7 +224,7 @@ describe('ToolExecutor', () => {
       const tool = createMockTool({
         execute: jest.fn(() => Promise.reject(new Error('boom'))),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const errorHandler = jest.fn();
@@ -259,7 +260,7 @@ describe('ToolExecutor', () => {
           })
         ),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -285,7 +286,7 @@ describe('ToolExecutor', () => {
           })
         ),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -312,7 +313,7 @@ describe('ToolExecutor', () => {
           })
         ),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const errorHandler = jest.fn();
@@ -345,7 +346,7 @@ describe('ToolExecutor', () => {
           })
         ),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -363,7 +364,7 @@ describe('ToolExecutor', () => {
           })
         ),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -389,7 +390,7 @@ describe('ToolExecutor', () => {
           })
         ),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -422,7 +423,7 @@ describe('ToolExecutor', () => {
         },
         execute,
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -455,7 +456,7 @@ describe('ToolExecutor', () => {
         },
         execute,
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       await executor.execute('test_tool', {});
@@ -491,7 +492,7 @@ describe('ToolExecutor', () => {
         },
         execute,
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -524,7 +525,7 @@ describe('ToolExecutor', () => {
         },
         execute,
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -548,7 +549,7 @@ describe('ToolExecutor', () => {
         },
         execute,
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -577,7 +578,7 @@ describe('ToolExecutor', () => {
         },
         execute,
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const result = await executor.execute('test_tool', {});
@@ -591,7 +592,7 @@ describe('ToolExecutor', () => {
   describe('execution logging', () => {
     it('should log executions when enableLogging is true', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, {
         botId: 'test-bot',
@@ -613,7 +614,7 @@ describe('ToolExecutor', () => {
 
     it('should not log when enableLogging is false', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, {
         botId: 'test-bot',
@@ -628,7 +629,7 @@ describe('ToolExecutor', () => {
 
     it('should clear execution log', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, {
         botId: 'test-bot',
@@ -652,7 +653,7 @@ describe('ToolExecutor', () => {
           })
         ),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, {
         botId: 'test-bot',
@@ -670,7 +671,7 @@ describe('ToolExecutor', () => {
   describe('createCallback', () => {
     it('should return ToolResult without metadata', async () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const callback = executor.createCallback();
@@ -708,7 +709,7 @@ describe('ToolExecutor', () => {
           },
         },
       });
-      ctx.tools = [tool1, tool2];
+      (ctx as { tools: Tool[] }).tools = [tool1, tool2];
       ctx.config.bots[0].disabledTools = ['tool1'];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
@@ -722,7 +723,7 @@ describe('ToolExecutor', () => {
   describe('isToolAvailable', () => {
     it('should return true for available tools', () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       expect(executor.isToolAvailable('test_tool')).toBe(true);
@@ -730,7 +731,7 @@ describe('ToolExecutor', () => {
 
     it('should return false for disabled tools', () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
       ctx.config.bots[0].disabledTools = ['test_tool'];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
@@ -744,7 +745,7 @@ describe('ToolExecutor', () => {
 
     it('should respect toolFilter', () => {
       const tool = createMockTool();
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, {
         botId: 'test-bot',
@@ -792,7 +793,7 @@ describe('ToolExecutor', () => {
           },
         },
       });
-      ctx.tools = [delegateTool, collaborateTool, normalTool];
+      (ctx as { tools: Tool[] }).tools = [delegateTool, collaborateTool, normalTool];
 
       const executor = createCollaborationToolExecutor(ctx, 'test-bot', 123);
 
@@ -833,7 +834,7 @@ describe('ToolExecutor', () => {
           })
         ),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const errorHandler = jest.fn();
@@ -848,7 +849,7 @@ describe('ToolExecutor', () => {
       const tool = createMockTool({
         execute: jest.fn(() => Promise.reject(new Error('runtime error'))),
       });
-      ctx.tools = [tool];
+      (ctx as { tools: Tool[] }).tools = [tool];
 
       const executor = new ToolExecutor(ctx, { botId: 'test-bot', chatId: 123 });
       const errorHandler = jest.fn();

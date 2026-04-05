@@ -5,14 +5,15 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import type { Context } from 'grammy';
 import type { BotConfig } from '../../config';
+import type { LLMClient } from '../../core/llm-client';
 import type { Logger } from '../../logger';
 import type { CoreMemoryManager } from '../../memory/core-memory';
-import type { MemoryManager } from '../../memory/memory-manager';
-import type { ChatMessage, LLMClient } from '../../ollama';
+import type { MemoryManager } from '../../memory/manager';
+import type { ChatMessage } from '../../ollama';
+import type { SessionManager } from '../../session';
 import { ContextCompactor } from '../context-compaction';
 import { ConversationPipeline } from '../conversation-pipeline';
 import type { MemoryFlusher } from '../memory-flush';
-import type { SessionManager } from '../session-manager';
 import type { SystemPromptBuilder } from '../system-prompt-builder';
 import type { ToolRegistry } from '../tool-registry';
 import type { BotContext } from '../types';
@@ -196,8 +197,8 @@ describe('ConversationPipeline', () => {
 
     it('should prefix group messages with sender name', async () => {
       const ctx = createMockContext({
-        chat: { id: 123456, type: 'supergroup' },
-        from: { id: 789, first_name: 'Alice' },
+        chat: { id: 123456, type: 'supergroup', title: 'Test Group' },
+        from: { id: 789, first_name: 'Alice', is_bot: false },
       });
       const config = createMockBotConfig();
       const userText = 'Hello everyone';
@@ -286,8 +287,8 @@ describe('ConversationPipeline', () => {
 
     it('should mark user active in groups', async () => {
       const ctx = createMockContext({
-        chat: { id: 123456, type: 'supergroup' },
-        from: { id: 789, first_name: 'Bob' },
+        chat: { id: 123456, type: 'supergroup', title: 'Test Group' },
+        from: { id: 789, first_name: 'Bob', is_bot: false },
       });
       const config = createMockBotConfig();
 
@@ -717,14 +718,14 @@ describe('ConversationPipeline', () => {
 
   describe('prefetchMemoryContext standalone', () => {
     it('should return null when RAG is disabled', async () => {
-      const result = await pipeline.prefetchMemoryContext('Hello', false, mockLogger);
+      const result = await pipeline.prefetchMemoryContext('Hello', false, mockLogger, 'test-bot');
       expect(result).toBeNull();
     });
 
     it('should return null for short queries', async () => {
       (mockBotContext.config.soul.search.autoRag as any).enabled = true;
 
-      const result = await pipeline.prefetchMemoryContext('Hi', false, mockLogger);
+      const result = await pipeline.prefetchMemoryContext('Hi', false, mockLogger, 'test-bot');
       expect(result).toBeNull();
     });
 
@@ -743,7 +744,8 @@ describe('ConversationPipeline', () => {
       const result = await pipeline.prefetchMemoryContext(
         'What are my preferences',
         false,
-        mockLogger
+        mockLogger,
+        'test-bot'
       );
 
       expect(result).toContain('Relevant Memory Context');
@@ -759,7 +761,7 @@ describe('ConversationPipeline', () => {
 
       (mockMemoryManager.search as jest.Mock).mockResolvedValue([]);
 
-      await pipeline.prefetchMemoryContext('[Alice]: Hello everyone', true, mockLogger);
+      await pipeline.prefetchMemoryContext('[Alice]: Hello everyone', true, mockLogger, 'test-bot');
 
       // Should search with stripped query (4th arg is botId, 5th is userId)
       expect(mockMemoryManager.search).toHaveBeenCalledWith(
@@ -1322,7 +1324,7 @@ describe('ConversationPipeline', () => {
       );
 
       // Verify the fetch was called with the bot-specific voiceId in the URL
-      const fetchCall = (globalThis.fetch as jest.Mock).mock.calls[0];
+      const fetchCall = (globalThis.fetch as unknown as jest.Mock).mock.calls[0];
       expect(fetchCall[0]).toContain('bot-specific-voice');
       expect(fetchCall[0]).not.toContain('global-voice');
       expect((ctx as any).replyWithVoice).toHaveBeenCalledTimes(1);
