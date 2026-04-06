@@ -9,6 +9,7 @@
     "setup": "bun run scripts/setup.ts",
     "add-skill": "bun run scripts/add-skill.ts",
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome format --write ."
   },
@@ -17,7 +18,7 @@
     "@types/marked": "^6.0.0",
     "croner": "^10.0.1",
     "grammy": "^1.31.0",
-    "hono": "^4.11.9",
+    "hono": "^4.12.11",
     "js-yaml": "^4.1.0",
     "marked": "^17.0.2",
     "pdf-parse": "^1.1.1",
@@ -31,6 +32,6 @@
     "@biomejs/biome": "^1.9.4",
     "@types/bun": "latest",
     "@types/js-yaml": "^4.0.9",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.2"
   }
 }
