@@ -11,6 +11,53 @@ export interface ExecToolConfig {
   processToolConfig?: ProcessToolConfig;
 }
 
+/**
+ * Environment variable whitelist for child processes.
+ * Only these vars are forwarded — everything else (API keys, secrets, tokens) is stripped.
+ * This prevents accidental secret leakage to arbitrary shell commands.
+ */
+const ENV_WHITELIST = [
+  // System essentials
+  'PATH',
+  'HOME',
+  'USER',
+  'SHELL',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  // Runtime
+  'NODE_ENV',
+  'BUN_INSTALL',
+  'EDITOR',
+  'VISUAL',
+  'PAGER',
+  // Git
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+  // Terminal
+  'TERM',
+  'COLORTERM',
+  'FORCE_COLOR',
+  'NO_COLOR',
+];
+
+function buildSafeEnv(): Record<string, string> {
+  const safeEnv: Record<string, string> = {};
+  for (const key of ENV_WHITELIST) {
+    if (process.env[key] != null) {
+      safeEnv[key] = process.env[key] as string;
+    }
+  }
+  // Always force TERM=dumb for predictable output parsing
+  safeEnv.TERM = 'dumb';
+  return safeEnv;
+}
+
 /** Commands that are always blocked regardless of config */
 const BUILTIN_DENIED = [
   /\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?\/\s*$/, // rm -rf / or rm /
@@ -115,7 +162,7 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
             stdout: 'pipe',
             stderr: 'pipe',
             stdin: 'pipe',
-            env: { ...process.env, TERM: 'dumb' },
+            env: buildSafeEnv(),
           });
 
           const { sessionId, pid } = registerProcess(
@@ -144,7 +191,7 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
           cwd,
           stdout: 'pipe',
           stderr: 'pipe',
-          env: { ...process.env, TERM: 'dumb' },
+          env: buildSafeEnv(),
         });
 
         // Enforce timeout
