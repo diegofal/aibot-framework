@@ -58,14 +58,30 @@ describe('Admin Auth Middleware', () => {
     expect(body.ok).toBe(true);
   });
 
-  test('allows request when ADMIN_API_KEY is not set', async () => {
+  test('rejects all requests when ADMIN_API_KEY is not set (fail-closed)', async () => {
     process.env.ADMIN_API_KEY = undefined;
-    // Need to recreate the middleware to pick up the unset env var
-    const openApp = new Hono();
-    openApp.use('*', createAdminAuthMiddleware(noopLogger));
-    openApp.get('/admin/test', (c) => c.json({ ok: true }));
+    // Recreate middleware to pick up the unset env var
+    const closedApp = new Hono();
+    closedApp.use('*', createAdminAuthMiddleware(noopLogger));
+    closedApp.get('/admin/test', (c) => c.json({ ok: true }));
 
-    const res = await openApp.request('/admin/test');
-    expect(res.status).toBe(200);
+    // Without ADMIN_API_KEY, even unauthenticated requests must be rejected (503)
+    const res = await closedApp.request('/admin/test');
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error).toContain('not configured');
+  });
+
+  test('rejects authenticated requests when ADMIN_API_KEY is not set (fail-closed)', async () => {
+    process.env.ADMIN_API_KEY = undefined;
+    const closedApp = new Hono();
+    closedApp.use('*', createAdminAuthMiddleware(noopLogger));
+    closedApp.get('/admin/test', (c) => c.json({ ok: true }));
+
+    // Even with a Bearer token, if ADMIN_API_KEY isn't set, reject with 503
+    const res = await closedApp.request('/admin/test', {
+      headers: { Authorization: 'Bearer some-key' },
+    });
+    expect(res.status).toBe(503);
   });
 });
