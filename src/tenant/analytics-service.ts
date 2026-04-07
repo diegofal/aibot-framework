@@ -16,7 +16,8 @@ export type AnalyticsEventType =
   | 'conversation.ended'
   | 'conversation.resolved'
   | 'tool.called'
-  | 'error.occurred';
+  | 'error.occurred'
+  | 'topic_guard.blocked';
 
 export interface AnalyticsEvent {
   type: AnalyticsEventType;

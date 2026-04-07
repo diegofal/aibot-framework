@@ -269,7 +269,7 @@ export class ConversationPipeline {
           // Record analytics
           if (config.tenantId) {
             this.ctx.analyticsService?.record({
-              type: 'topic_guard.blocked' as any,
+              type: 'topic_guard.blocked',
               tenantId: config.tenantId,
               botId: config.id,
               chatId: String(chatId ?? ''),
@@ -573,7 +573,7 @@ export class ConversationPipeline {
           userId,
           caller: 'conversation',
           model: tokenUsage?.model ?? activeModel,
-          backend: llmBackend,
+          backend: tokenUsage?.backend ?? llmBackend,
           temperature: resolved.temperature,
           promptTokens: tokenUsage?.promptTokens,
           completionTokens: tokenUsage?.completionTokens,
@@ -890,7 +890,7 @@ export class ConversationPipeline {
           // Record analytics
           if (config.tenantId) {
             this.ctx.analyticsService?.record({
-              type: 'topic_guard.blocked' as any,
+              type: 'topic_guard.blocked',
               tenantId: config.tenantId,
               botId: config.id,
               chatId: msg.chatId,
@@ -1054,18 +1054,21 @@ export class ConversationPipeline {
             }
 
             // Deliver tokens progressively depending on channel kind
-            if (msg.channelKind === 'web' && (channel as any)._ws) {
+            if (msg.channelKind === 'web' && channel._ws) {
               // WebSocket streaming — the _ws handle is attached by the ws server
-              response = await streamToWebSocket((channel as any)._ws, stream);
+              response = await streamToWebSocket(
+                channel._ws as ServerWebSocket<WsChatData>,
+                stream
+              );
             } else if (
               msg.channelKind === 'telegram' &&
-              (channel as any)._sendMessage &&
-              (channel as any)._editMessage
+              channel._sendMessage &&
+              channel._editMessage
             ) {
               // Telegram streaming via edit-message
               response = await streamToChannel(
-                (channel as any)._sendMessage,
-                (channel as any)._editMessage,
+                channel._sendMessage,
+                channel._editMessage,
                 stream,
                 streamingConfig.editIntervalMs,
                 streamingConfig.minChunkChars
@@ -1243,7 +1246,7 @@ export class ConversationPipeline {
             responseLength: response.length,
             durationMs: llmDurationMs,
             attempts: llmAttempts,
-            backend: llmBackend,
+            backend: tokenUsage?.backend ?? llmBackend,
             caller: `channel:${msg.channelKind}`,
             model: tokenUsage?.model,
             tokensIn: tokenUsage?.promptTokens,

@@ -55,4 +55,13 @@ export interface Channel {
 
   /** Send a voice reply (optional — channels that don't support voice can throw/no-op) */
   sendVoice?(audioBuffer: Buffer, filename?: string): Promise<void>;
+
+  // --- Optional streaming support (channel-specific) ---
+
+  /** WebSocket handle for progressive streaming (web channel) */
+  readonly _ws?: unknown;
+  /** Send initial streaming message, returns message id for subsequent edits (telegram) */
+  readonly _sendMessage?: (text: string) => Promise<number>;
+  /** Edit an existing message by id for progressive updates (telegram) */
+  readonly _editMessage?: (messageId: number, text: string) => Promise<void>;
 }
