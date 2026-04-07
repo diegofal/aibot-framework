@@ -1,4 +1,5 @@
 import type { Context, Next } from 'hono';
+import { safeCompare } from '../crypto-utils';
 import type { Logger } from '../logger';
 import type { SessionStore } from '../tenant/session-store';
 
@@ -45,7 +46,7 @@ export function createAdminAuthMiddleware(logger: Logger, sessionStore?: Session
     }
 
     // ADMIN_API_KEY check
-    if (token !== adminKey) {
+    if (!safeCompare(token, adminKey)) {
       logger.warn({ tokenPrefix: token.slice(0, 8) }, 'Invalid admin key attempt');
       return c.json({ error: 'Forbidden: invalid admin key' }, 403);
     }

@@ -1,4 +1,5 @@
 import type { Context, Next } from 'hono';
+import { safeCompare } from '../crypto-utils';
 import type { Logger } from '../logger';
 import type { TenantManager } from '../tenant/manager';
 import type { SessionStore } from '../tenant/session-store';
@@ -52,7 +53,7 @@ export function createTenantAuthMiddleware(
     if (!tenant) {
       // Allow admin key to pass through as a super-tenant
       const adminKey = process.env.ADMIN_API_KEY;
-      if (adminKey && token === adminKey) {
+      if (safeCompare(token, adminKey)) {
         c.set('tenant', { tenantId: '__admin__', apiKey: token, plan: 'enterprise' });
         return next();
       }

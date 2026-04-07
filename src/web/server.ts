@@ -20,6 +20,7 @@ import type { WsChatData } from '../channel/websocket';
 import type { Config } from '../config';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
+import { safeCompare } from '../crypto-utils';
 import type { Logger } from '../logger';
 import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
@@ -648,7 +649,7 @@ export function startWebServer(deps: WebServerDeps): void {
             if (!session) return new Response('Unauthorized', { status: 401 });
           } else {
             const adminKey = process.env.ADMIN_API_KEY;
-            const isAdmin = adminKey && token === adminKey;
+            const isAdmin = safeCompare(token, adminKey);
             const isTenant = tenantManager?.getTenantByApiKey(token);
             if (!isAdmin && !isTenant) return new Response('Unauthorized', { status: 401 });
           }
