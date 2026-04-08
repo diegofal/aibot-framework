@@ -26,6 +26,7 @@ import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
 import { AdminCredentialStore } from '../tenant/admin-credentials';
 import { createAdminAuthMiddleware } from '../tenant/admin-middleware';
+import { createAuthRateLimitMiddleware } from '../tenant/auth-rate-limiter';
 import { verifyUserIdentity } from '../tenant/identity-verification';
 import { TenantManager } from '../tenant/manager';
 import { createTenantAuthMiddleware } from '../tenant/middleware';
@@ -123,6 +124,16 @@ export function startWebServer(deps: WebServerDeps): void {
 
     logger.info('Multi-tenant API authentication and rate limiting enabled');
   }
+
+  // --- Auth endpoint rate limiting (brute-force protection) ---
+  // Works in both single-tenant and multi-tenant modes.
+  // Uses IP + email-based sliding window — no tenant context needed.
+  const { middleware: authRateLimitMw, limiter: authRateLimiter } =
+    createAuthRateLimitMiddleware(logger);
+  app.use('/api/auth/login', authRateLimitMw);
+  app.use('/api/auth/admin-setup', authRateLimitMw);
+  // Cleanup auth rate limiter entries periodically
+  setInterval(() => authRateLimiter.cleanup(), 5 * 60_000);
 
   // API routes
   app.route(
