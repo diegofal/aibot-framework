@@ -1,7 +1,11 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": ["data/**", "config/**", "productions/**"]
+    "ignore": [
+      "data/**",
+      "config/**",
+      "productions/**"
+    ]
   },
   "organizeImports": {
     "enabled": true
@@ -35,7 +39,11 @@
   },
   "overrides": [
     {
-      "include": ["tests/**", "src/bot/__tests__/**"],
+      "include": [
+        "tests/**",
+        "src/bot/__tests__/**",
+        "src/__tests__/**"
+      ],
       "linter": {
         "rules": {
           "suspicious": {
