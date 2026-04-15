@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 import { locked } from '../../src/cron/locked';
 import type { CronServiceState } from '../../src/cron/service';
 
@@ -21,16 +21,6 @@ function createState(): CronServiceState {
 }
 
 describe('locked()', () => {
-  let consoleSpy: ReturnType<typeof spyOn>;
-
-  beforeEach(() => {
-    consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    consoleSpy.mockRestore();
-  });
-
   it('propagates fn() result to caller', async () => {
     const state = createState();
     const result = await locked(state, async () => 42);
@@ -46,10 +36,11 @@ describe('locked()', () => {
     ).rejects.toThrow('boom');
   });
 
-  it('resolveChain logs errors but does not reject', async () => {
+  it('resolveChain logs errors via logger, not console', async () => {
     const state = createState();
+    const loggerSpy = spyOn(state.deps.logger, 'error');
 
-    // First call fails — the chain error is swallowed but logged
+    // First call fails — the chain error is swallowed but logged via Pino
     try {
       await locked(state, async () => {
         throw new Error('first-fail');
@@ -61,8 +52,8 @@ describe('locked()', () => {
     // Wait a tick for resolveChain to fire
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(consoleSpy).toHaveBeenCalled();
-    const args = consoleSpy.mock.calls.flat();
+    expect(loggerSpy).toHaveBeenCalled();
+    const args = loggerSpy.mock.calls.flat();
     expect(args.some((a: unknown) => String(a).includes('Swallowed chain error'))).toBe(true);
 
     // Second call succeeds — the resolved chain doesn't block it

@@ -1,21 +1,24 @@
+import type { Logger } from '../logger';
 import type { CronServiceState } from './service';
 
 const storeLocks = new Map<string, Promise<void>>();
 
-const resolveChain = (promise: Promise<unknown>) =>
+const resolveChain = (promise: Promise<unknown>, logger: Logger) =>
   promise.then(
     () => undefined,
     (err) => {
-      console.error('[cron/locked] Swallowed chain error:', err);
+      logger.error({ err }, '[cron/locked] Swallowed chain error');
     }
   );
 
 export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
-  const storePath = state.deps.storePath;
+  const { logger, storePath } = state.deps;
   const storeOp = storeLocks.get(storePath) ?? Promise.resolve();
-  const next = Promise.all([resolveChain(state.op), resolveChain(storeOp)]).then(fn);
+  const next = Promise.all([resolveChain(state.op, logger), resolveChain(storeOp, logger)]).then(
+    fn
+  );
 
-  const keepAlive = resolveChain(next);
+  const keepAlive = resolveChain(next, logger);
   state.op = keepAlive;
   storeLocks.set(storePath, keepAlive);
 
