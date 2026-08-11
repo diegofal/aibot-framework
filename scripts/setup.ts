@@ -5,6 +5,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { buildOllamaHeaders } from '../src/core/ollama-http';
 
 const BOLD = '\x1b[1m';
 const GREEN = '\x1b[32m';
@@ -75,7 +76,9 @@ async function main() {
   // Test Ollama connection
   log('\n🔌 Testing Ollama connection...', BLUE);
   try {
-    const res = await fetch(`${exampleConfig.ollama.baseUrl}/api/tags`);
+    const res = await fetch(`${exampleConfig.ollama.baseUrl}/api/tags`, {
+      headers: buildOllamaHeaders(process.env.OLLAMA_API_KEY),
+    });
     if (res.ok) {
       const data = await res.json();
       log(`✅ Ollama connected! Available models: ${data.models?.length || 0}`, GREEN);

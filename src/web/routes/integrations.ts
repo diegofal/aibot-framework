@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import { claudeGenerate, claudeGenerateWithTools } from '../../claude-cli';
 import type { Config } from '../../config';
+import { buildOllamaHeaders } from '../../core/ollama-http';
 import type { Logger } from '../../logger';
 import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
 
@@ -29,6 +30,7 @@ export function integrationsRoutes(deps: {
 
     try {
       const response = await fetch(`${baseUrl}/api/tags`, {
+        headers: buildOllamaHeaders(deps.config.ollama.apiKey),
         signal: AbortSignal.timeout(10_000),
       });
 

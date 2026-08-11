@@ -2,6 +2,7 @@ import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
 import { ollamaUsage } from '../ollama';
 import type { ToolCall } from '../tools/types';
 import type { TokenUsage } from './llm-client';
+import { buildOllamaJsonHeaders } from './ollama-http';
 import type { ToolCallingStrategy } from './tool-runner';
 
 /**
@@ -13,7 +14,9 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     private ollama: OllamaClient,
     private baseUrl: string,
     private logger: { debug: (...args: unknown[]) => void },
-    private timeout = 300_000
+    private timeout = 300_000,
+    /** Bearer credential for Ollama Cloud; omitted for a local daemon. */
+    private apiKey?: string
   ) {}
 
   async chat(
@@ -45,7 +48,7 @@ export class NativeToolStrategy implements ToolCallingStrategy {
 
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildOllamaJsonHeaders(this.apiKey),
       signal: AbortSignal.timeout(this.timeout),
       body: JSON.stringify(body),
     });

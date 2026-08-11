@@ -372,6 +372,17 @@ const StartupModelValidationConfigSchema = z
 
 const OllamaConfigSchema = z.object({
   baseUrl: z.string().url(),
+  /**
+   * Bearer credential for Ollama Cloud. Leave unset (or blank) for a local
+   * daemon, which needs no auth — the header is then omitted entirely.
+   *
+   * Setting this lets `baseUrl` point straight at `https://ollama.com`,
+   * removing the need for a local daemon sidecar. Note that Ollama Cloud
+   * serves no embedding models, so `soul.search` still requires a daemon.
+   *
+   * Use `"${OLLAMA_API_KEY}"` rather than a literal; never log this value.
+   */
+  apiKey: z.string().optional(),
   timeout: z.number().int().positive().default(300_000),
   models: z.object({
     primary: z.string(),

@@ -2,6 +2,11 @@ import type { OllamaConfig } from './config';
 import type { LLMResponse, TokenUsage } from './core/llm-client';
 import { createLoopDetector } from './core/loop-detector';
 import { NativeToolStrategy } from './core/native-tool-strategy';
+import {
+  buildOllamaHeaders,
+  buildOllamaJsonHeaders,
+  describeEmbedFailure,
+} from './core/ollama-http';
 import { runToolLoop } from './core/tool-runner';
 import type { Logger } from './logger';
 import type { ToolCall, ToolDefinition, ToolExecutor } from './tools/types';
@@ -86,7 +91,7 @@ export class OllamaClient {
 
       const response = await fetch(`${this.config.baseUrl}/api/generate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildOllamaJsonHeaders(this.config.apiKey),
         signal: AbortSignal.timeout(this.config.timeout),
         body: JSON.stringify({
           model,
@@ -178,7 +183,8 @@ export class OllamaClient {
           this,
           this.config.baseUrl,
           this.logger,
-          this.config.timeout
+          this.config.timeout,
+          this.config.apiKey
         );
         return await runToolLoop(
           strategy,
@@ -199,7 +205,8 @@ export class OllamaClient {
         this,
         this.config.baseUrl,
         this.logger,
-        this.config.timeout
+        this.config.timeout,
+        this.config.apiKey
       );
       const result = await strategy.chat(messages, resolvedOptions);
       this.logger.debug(
@@ -259,7 +266,7 @@ export class OllamaClient {
 
     const response = await fetch(`${this.config.baseUrl}/api/generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildOllamaJsonHeaders(this.config.apiKey),
       signal: AbortSignal.timeout(this.config.timeout),
       body: JSON.stringify({
         model,
@@ -327,7 +334,7 @@ export class OllamaClient {
 
     const response = await fetch(`${this.config.baseUrl}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildOllamaJsonHeaders(this.config.apiKey),
       signal: AbortSignal.timeout(this.config.timeout),
       body: JSON.stringify({
         model,
@@ -398,7 +405,7 @@ export class OllamaClient {
 
       const response = await fetch(`${this.config.baseUrl}/api/embed`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildOllamaJsonHeaders(this.config.apiKey),
         signal: AbortSignal.timeout(this.config.timeout),
         body: JSON.stringify({
           model: embeddingModel,
@@ -407,7 +414,17 @@ export class OllamaClient {
       });
 
       if (!response.ok) {
-        throw new Error(`Ollama embed API error: ${response.status} ${response.statusText}`);
+        // Ollama Cloud answers /api/embed with 401 "unauthorized" even for a
+        // key that chats fine, because it hosts no embedding models. Reporting
+        // that as an auth failure sends people to rotate a working key.
+        throw new Error(
+          describeEmbedFailure({
+            baseUrl: this.config.baseUrl,
+            status: response.status,
+            statusText: response.statusText,
+            model: embeddingModel,
+          })
+        );
       }
 
       const data = (await response.json()) as { model: string; embeddings: number[][] };
@@ -434,6 +451,7 @@ export class OllamaClient {
   async ping(): Promise<boolean> {
     try {
       const response = await fetch(`${this.config.baseUrl}/api/tags`, {
+        headers: buildOllamaHeaders(this.config.apiKey),
         signal: AbortSignal.timeout(5_000),
       });
       return response.ok;
@@ -448,6 +466,7 @@ export class OllamaClient {
   async listModels(): Promise<string[]> {
     try {
       const response = await fetch(`${this.config.baseUrl}/api/tags`, {
+        headers: buildOllamaHeaders(this.config.apiKey),
         signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) {

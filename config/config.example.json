@@ -1,6 +1,7 @@
 {
   "ollama": {
-    "baseUrl": "http://127.0.0.1:11434",
+    "baseUrl": "${OLLAMA_BASE_URL}",
+    "apiKey": "${OLLAMA_API_KEY}",
     "timeout": 300000,
     "models": {
       "primary": "kimi-k2.6:cloud",

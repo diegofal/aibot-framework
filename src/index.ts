@@ -4,6 +4,7 @@ import { BotManager } from './bot';
 import { ModelValidationError, runStartupModelValidation } from './bot/model-failover';
 import { loadConfig, resolveAgentConfig } from './config';
 import { createLLMClient } from './core/llm-client';
+import { describeEmbeddingBackendGap } from './core/ollama-http';
 import { SkillRegistry } from './core/skill-registry';
 import { CronService } from './cron';
 import { createLogger } from './logger';
@@ -58,6 +59,17 @@ async function main() {
 
       logger.error({ jobId: runSingleJob }, 'Job not found');
       process.exit(1);
+    }
+
+    // Semantic search against a backend with no embedding models fails once
+    // per indexed file with a misleading "model not found". Say so up front.
+    {
+      const gap = describeEmbeddingBackendGap({
+        baseUrl: config.ollama.baseUrl,
+        searchEnabled: config.soul.search?.enabled ?? false,
+        embeddingModel: config.soul.search?.embeddingModel,
+      });
+      if (gap) logger.error({ baseUrl: config.ollama.baseUrl }, gap);
     }
 
     // Probe every configured model before anything depends on one. Non-fatal

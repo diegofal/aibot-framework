@@ -3,6 +3,8 @@
  * Test Ollama connection and list available models
  */
 
+import { buildOllamaHeaders } from '../src/core/ollama-http';
+
 const BOLD = '\x1b[1m';
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
@@ -15,6 +17,8 @@ function log(message: string, color = '') {
 
 async function main() {
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
+  // Required when baseUrl points at Ollama Cloud rather than a local daemon.
+  const authHeaders = buildOllamaHeaders(process.env.OLLAMA_API_KEY);
 
   log('╔══════════════════════════════════════════════════════════╗', BOLD);
   log('║            Ollama Connection Test                        ║', BOLD);
@@ -25,7 +29,7 @@ async function main() {
   try {
     // Test connection
     log('🔌 Connecting to Ollama...', BLUE);
-    const res = await fetch(`${baseUrl}/api/tags`);
+    const res = await fetch(`${baseUrl}/api/tags`, { headers: authHeaders });
 
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -54,7 +58,7 @@ async function main() {
     log('🤖 Testing text generation...', BLUE);
     const testRes = await fetch(`${baseUrl}/api/generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: data.models[0]?.name || 'llama3.3',
         prompt: 'Say "Hello" in one word',
