@@ -326,6 +326,7 @@ const config = await loadConfig('./config/config.json');
             </tr>
           </tbody>
         </table>
+        <p><span class="badge badge-yellow">Deployment</span> Models whose tag ends in <code>:cloud</code> / <code>-cloud</code> execute on Ollama&rsquo;s hosted GPUs &mdash; the local daemon is only a proxy, so a CPU-only host is sufficient. Every entry in <code>fallbacks</code> must be cloud-capable when deploying to a GPU-less VM: a local model such as <code>mistral</code> or <code>qwen2.5-coder:32b</code> leaves the primary working while the failover path fails silently, and it only surfaces during an outage. See <a href="../deployment-cloud.md">deployment-cloud.md</a>.</p>
       </div>
 
       <!-- LoggingConfigSchema -->

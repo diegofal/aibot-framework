@@ -3,8 +3,8 @@
     "baseUrl": "http://127.0.0.1:11434",
     "timeout": 300000,
     "models": {
-      "primary": "llama3.3",
-      "fallbacks": ["mistral"]
+      "primary": "kimi-k2.6:cloud",
+      "fallbacks": ["nemotron-3-super:cloud", "gpt-oss:120b-cloud"]
     }
   },
 

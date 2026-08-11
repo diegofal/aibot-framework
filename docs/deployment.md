@@ -52,8 +52,8 @@ Edit `config/config.json`:
   "ollama": {
     "baseUrl": "http://127.0.0.1:11434",
     "models": {
-      "primary": "llama3.3",
-      "fallbacks": ["mistral"]
+      "primary": "kimi-k2.6:cloud",
+      "fallbacks": ["nemotron-3-super:cloud", "gpt-oss:120b-cloud"]
     }
   },
   "skills": {
