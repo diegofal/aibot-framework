@@ -405,6 +405,19 @@ const CompactionConfigSchema = z
         claudeCliTokens: z.number().int().positive().default(180_000),
       })
       .default({}),
+    /**
+     * Per-model context windows, keyed by exact Ollama tag. Merged over the
+     * built-in table in `src/bot/model-failover/model-context-windows.ts`.
+     *
+     * `contextWindows.ollamaTokens` is an upper bound; the effective budget is
+     * clamped to the smallest window in `ollama.models` (primary + fallbacks)
+     * so a prompt can survive a failover to any candidate. A `context_length`
+     * error aborts the whole chain, so this is what makes it safe to order
+     * fallbacks by latency rather than by context size. Add an entry here when
+     * you put a model in the chain that the built-in table does not know —
+     * unknown tags impose no clamp.
+     */
+    modelContextWindows: z.record(z.number().int().positive()).default({}),
     thresholdRatio: z.number().min(0.1).max(0.95).default(0.75),
     keepRecentMessages: z.number().int().min(2).default(6),
     maxMessageChars: z.number().int().positive().default(15_000),

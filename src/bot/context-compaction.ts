@@ -1,6 +1,7 @@
 import type { CompactionConfig } from '../config';
 import type { ChatMessage } from '../ollama';
 import type { MemoryFlusher } from './memory-flush';
+import { type ChainContextWindow, resolveChainContextWindow } from './model-failover';
 import type { BotContext } from './types';
 
 export const COMPACTION_SUMMARY_PREFIX = '[CONTEXT_SUMMARY]';
@@ -24,14 +25,61 @@ export function estimateMessagesTokens(messages: ChatMessage[]): number {
   return total;
 }
 
-/** Resolve context window size based on the LLM backend */
+/** The Ollama candidate chain a prompt may end up being sent to. */
+export interface OllamaModelChain {
+  primary?: string;
+  fallbacks?: string[];
+}
+
+/** Flatten a chain config into the ordered list of tags a prompt can reach. */
+export function chainModels(chain: OllamaModelChain | undefined): string[] {
+  if (!chain) return [];
+  return [chain.primary, ...(chain.fallbacks ?? [])].filter((m): m is string => !!m?.trim());
+}
+
+/**
+ * Clamp the operator's configured Ollama budget to the smallest context window
+ * in the candidate chain.
+ *
+ * This is what lets `ollama.models.fallbacks` be ordered by latency instead of
+ * by context size. A `context_length` error aborts the whole chain
+ * (`shouldAbortChain`), so historically the roomiest model had to go first;
+ * once every prompt is built to fit the smallest member, no member can
+ * overflow and the ordering constraint disappears.
+ *
+ * Clamping is one-directional on purpose: it never *raises* the configured
+ * budget, and an unrecognised tag contributes no constraint at all rather than
+ * a guess. See `model-context-windows.ts`.
+ */
+export function clampToChainContextWindow(
+  configuredTokens: number,
+  chain: OllamaModelChain | undefined,
+  overrides?: Readonly<Record<string, number>>
+): { tokens: number; chain: ChainContextWindow } {
+  const resolved = resolveChainContextWindow(chainModels(chain), overrides);
+  const tokens =
+    resolved.tokens === undefined ? configuredTokens : Math.min(configuredTokens, resolved.tokens);
+  return { tokens, chain: resolved };
+}
+
+/**
+ * Resolve the effective context window for a backend.
+ *
+ * For Ollama the configured value is an upper bound, not the answer: the
+ * prompt has to survive a failover to any candidate, so the budget is clamped
+ * to the chain minimum when `chain` is supplied.
+ */
 export function resolveContextWindow(
   backend: 'ollama' | 'claude-cli',
-  config: CompactionConfig
+  config: CompactionConfig,
+  chain?: OllamaModelChain
 ): number {
-  return backend === 'claude-cli'
-    ? config.contextWindows.claudeCliTokens
-    : config.contextWindows.ollamaTokens;
+  if (backend === 'claude-cli') return config.contextWindows.claudeCliTokens;
+  return clampToChainContextWindow(
+    config.contextWindows.ollamaTokens,
+    chain,
+    config.modelContextWindows
+  ).tokens;
 }
 
 /** Check if a message is a compaction summary */
@@ -99,7 +147,13 @@ export class ContextCompactor {
     }
 
     const backend = this.ctx.getLLMClient(botId).backend;
-    const contextWindow = resolveContextWindow(backend, config);
+    const modelChain = this.ctx.config.ollama?.models;
+    const chainWindow = clampToChainContextWindow(
+      config.contextWindows.ollamaTokens,
+      modelChain,
+      config.modelContextWindows
+    );
+    const contextWindow = resolveContextWindow(backend, config, modelChain);
     const totalTokens = estimateMessagesTokens(messages);
     const threshold = contextWindow * config.thresholdRatio;
 
@@ -109,7 +163,23 @@ export class ContextCompactor {
 
     const botLogger = this.ctx.getBotLogger(botId);
     botLogger.info(
-      { totalTokens, threshold, contextWindow, messageCount: messages.length },
+      {
+        totalTokens,
+        threshold,
+        contextWindow,
+        messageCount: messages.length,
+        // Surfaces WHY the budget is what it is: which chain member is the
+        // binding constraint, and which tags we had no data for.
+        ...(backend === 'ollama'
+          ? {
+              configuredContextWindow: config.contextWindows.ollamaTokens,
+              chainLimitingModel: chainWindow.chain.limitingModel,
+              chainUnknownModels: chainWindow.chain.unknownModels.length
+                ? chainWindow.chain.unknownModels
+                : undefined,
+            }
+          : {}),
+      },
       'Context compaction triggered'
     );
 

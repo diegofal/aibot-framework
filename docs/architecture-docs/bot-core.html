@@ -582,8 +582,28 @@
         <ul class="inline-list">
           <li><code>ContextCompactor</code> (class)</li>
         </ul>
+        <h4>Context budget is bounded by the model chain, not the primary</h4>
+        <p>
+          <code>resolveContextWindow(backend, config, chain?)</code> treats
+          <code>conversation.compaction.contextWindows.ollamaTokens</code> as an upper bound and clamps it
+          to the <strong>smallest context window across <code>ollama.models</code></strong> (primary plus
+          every fallback) via <code>clampToChainContextWindow()</code>. Windows are resolved from
+          <code>src/bot/model-failover/model-context-windows.ts</code>, overridable per tag through
+          <code>conversation.compaction.modelContextWindows</code>.
+        </p>
+        <p>
+          The reason is failover, not the primary: a <code>context_length</code> error maps to
+          <code>shouldAbortChain()</code>, so a prompt that fits the primary but overflows a fallback
+          terminates the whole candidate chain. Budgeting to the chain minimum makes every candidate able
+          to accept the prompt, which is what allows <code>ollama.models.fallbacks</code> to be ordered by
+          latency instead of by context size. Clamping is one-directional (it never raises the configured
+          value), and an unrecognised tag contributes no clamp rather than a guessed one &mdash; unknown
+          tags surface as <code>chainUnknownModels</code> on the <code>Context compaction triggered</code>
+          log line. <code>tool-executor.ts</code> applies the same clamped budget when truncating oversized
+          tool results.
+        </p>
         <h4>Dependencies</h4>
-        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>../core/llm-client</code> (LLMClient), <code>../session</code> (SessionManager)</p>
+        <p><code>./types</code> (BotContext), <code>./memory-flush</code> (MemoryFlusher), <code>./model-failover</code> (resolveChainContextWindow), <code>../core/llm-client</code> (LLMClient), <code>../session</code> (SessionManager)</p>
       </div>
 
       <!-- soul-health-check.ts -->

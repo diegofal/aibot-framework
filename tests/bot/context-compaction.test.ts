@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   COMPACTION_SUMMARY_PREFIX,
   ContextCompactor,
+  chainModels,
+  clampToChainContextWindow,
   estimateMessagesTokens,
   estimateTokens,
   isCompactionSummary,
@@ -96,6 +98,128 @@ describe('resolveContextWindow', () => {
     const custom = { ...config, contextWindows: { ollamaTokens: 4096, claudeCliTokens: 100_000 } };
     expect(resolveContextWindow('ollama', custom)).toBe(4096);
     expect(resolveContextWindow('claude-cli', custom)).toBe(100_000);
+  });
+
+  // The budget must survive a failover into ANY chain member, so it is bounded
+  // by the smallest window in the chain rather than by the primary's.
+  describe('chain-minimum clamping', () => {
+    const roomy: CompactionConfig = {
+      ...config,
+      contextWindows: { ollamaTokens: 500_000, claudeCliTokens: 180_000 },
+    };
+
+    test('clamps to the chain minimum, not the primary window', () => {
+      expect(
+        resolveContextWindow('ollama', roomy, {
+          primary: 'kimi-k2.6:cloud', // 256K
+          fallbacks: ['gpt-oss:120b-cloud', 'nemotron-3-super:cloud'], // 128K, 256K
+        })
+      ).toBe(128_000);
+    });
+
+    test('fallback order does not change the budget', () => {
+      const fast = resolveContextWindow('ollama', roomy, {
+        primary: 'kimi-k2.6:cloud',
+        fallbacks: ['gpt-oss:120b-cloud', 'nemotron-3-super:cloud'],
+      });
+      const roomiestFirst = resolveContextWindow('ollama', roomy, {
+        primary: 'kimi-k2.6:cloud',
+        fallbacks: ['nemotron-3-super:cloud', 'gpt-oss:120b-cloud'],
+      });
+      expect(fast).toBe(roomiestFirst);
+    });
+
+    test('adding a smaller model to the chain tightens the budget', () => {
+      expect(
+        resolveContextWindow('ollama', roomy, {
+          primary: 'kimi-k2.6:cloud',
+          fallbacks: ['gpt-oss:120b-cloud', 'qwen2.5-coder:32b'],
+        })
+      ).toBe(32_768);
+    });
+
+    test('never raises the configured budget above ollamaTokens', () => {
+      expect(
+        resolveContextWindow('ollama', config, {
+          primary: 'kimi-k2.6:cloud',
+          fallbacks: ['gpt-oss:120b-cloud'],
+        })
+      ).toBe(8192);
+    });
+
+    test('an unknown chain member imposes no clamp', () => {
+      expect(
+        resolveContextWindow('ollama', roomy, {
+          primary: 'kimi-k2.6:cloud',
+          fallbacks: ['nobody-listed-this:cloud'],
+        })
+      ).toBe(256_000);
+      expect(
+        resolveContextWindow('ollama', roomy, { primary: 'nobody-listed-this:cloud' })
+      ).toBe(500_000);
+    });
+
+    test('modelContextWindows overrides feed the clamp', () => {
+      const withOverride = {
+        ...roomy,
+        modelContextWindows: { 'nobody-listed-this:cloud': 16_000 },
+      };
+      expect(
+        resolveContextWindow('ollama', withOverride, {
+          primary: 'kimi-k2.6:cloud',
+          fallbacks: ['nobody-listed-this:cloud'],
+        })
+      ).toBe(16_000);
+    });
+
+    test('claude-cli is unaffected by the ollama chain', () => {
+      expect(
+        resolveContextWindow('claude-cli', roomy, {
+          primary: 'kimi-k2.6:cloud',
+          fallbacks: ['qwen2.5-coder:32b'],
+        })
+      ).toBe(180_000);
+    });
+
+    test('omitting the chain preserves the pre-existing behaviour', () => {
+      expect(resolveContextWindow('ollama', roomy)).toBe(500_000);
+    });
+  });
+});
+
+describe('clampToChainContextWindow', () => {
+  test('reports which chain member is the binding constraint', () => {
+    const result = clampToChainContextWindow(500_000, {
+      primary: 'kimi-k2.6:cloud',
+      fallbacks: ['gpt-oss:120b-cloud'],
+    });
+    expect(result.tokens).toBe(128_000);
+    expect(result.chain.limitingModel).toBe('gpt-oss:120b-cloud');
+  });
+
+  test('reports unknown chain members for diagnosis', () => {
+    const result = clampToChainContextWindow(500_000, {
+      primary: 'kimi-k2.6:cloud',
+      fallbacks: ['mystery:cloud'],
+    });
+    expect(result.chain.unknownModels).toEqual(['mystery:cloud']);
+  });
+
+  test('undefined chain leaves the configured value alone', () => {
+    expect(clampToChainContextWindow(500_000, undefined).tokens).toBe(500_000);
+  });
+});
+
+describe('chainModels', () => {
+  test('flattens primary + fallbacks in order', () => {
+    expect(chainModels({ primary: 'a', fallbacks: ['b', 'c'] })).toEqual(['a', 'b', 'c']);
+  });
+
+  test('tolerates missing pieces', () => {
+    expect(chainModels(undefined)).toEqual([]);
+    expect(chainModels({})).toEqual([]);
+    expect(chainModels({ primary: 'a' })).toEqual(['a']);
+    expect(chainModels({ primary: '  ', fallbacks: ['b'] })).toEqual(['b']);
   });
 });
 

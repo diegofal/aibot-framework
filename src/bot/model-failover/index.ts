@@ -22,6 +22,13 @@ export {
 } from './cooldown-tracker';
 
 export {
+  MODEL_CONTEXT_WINDOWS,
+  resolveModelContextWindow,
+  resolveChainContextWindow,
+  type ChainContextWindow,
+} from './model-context-windows';
+
+export {
   runStartupModelValidation,
   validateConfiguredModels,
   collectConfiguredModels,

@@ -53,7 +53,7 @@ Edit `config/config.json`:
     "baseUrl": "http://127.0.0.1:11434",
     "models": {
       "primary": "kimi-k2.6:cloud",
-      "fallbacks": ["nemotron-3-super:cloud", "gpt-oss:120b-cloud"]
+      "fallbacks": ["gpt-oss:120b-cloud", "nemotron-3-super:cloud"]
     }
   },
   "skills": {

@@ -7,6 +7,7 @@ import type { Logger } from '../logger';
 import { ProductionsService } from '../productions/service';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
+import { clampToChainContextWindow } from './context-compaction';
 import { type InlineApprovalStore, describeToolCall } from './inline-approval';
 import type { LoopDetectionResult, ToolLoopDetector } from './tool-loop-detector';
 import { type PermissionMode, getPermissionLevel } from './tool-permissions';
@@ -731,8 +732,17 @@ export class ToolExecutor extends EventEmitter {
           // Prevents single tool results from consuming disproportionate context window.
           // Smart tail preservation keeps error messages visible even when output is huge.
           if (validatedResult.content && typeof validatedResult.content === 'string') {
-            const contextTokens =
-              this.ctx.config.conversation?.compaction?.contextWindows?.ollamaTokens;
+            const compaction = this.ctx.config.conversation?.compaction;
+            const configuredTokens = compaction?.contextWindows?.ollamaTokens;
+            // Budget against the smallest window the prompt could be replayed
+            // into on failover, not the configured ceiling.
+            const contextTokens = configuredTokens
+              ? clampToChainContextWindow(
+                  configuredTokens,
+                  this.ctx.config.ollama?.models,
+                  compaction?.modelContextWindows
+                ).tokens
+              : undefined;
             const contextChars = contextTokens ? tokensToChars(contextTokens) : undefined;
 
             const truncation = truncateToolResultContent(validatedResult.content, contextChars);
