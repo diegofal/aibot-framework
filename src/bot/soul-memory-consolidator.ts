@@ -7,6 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { resolveClaudeBin } from '../claude-cli';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
@@ -142,7 +143,14 @@ async function generateConsolidation(
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const claudeArgs = [claudePath, '-p', prompt, '--output-format', 'text'];
+  const claudeArgs = [
+    resolveClaudeBin(claudePath),
+    '-p',
+    prompt,
+    '--output-format',
+    'text',
+    '--dangerouslySkipPermissions',
+  ];
   if (opts.claudeModel) {
     claudeArgs.push('--model', opts.claudeModel);
   }

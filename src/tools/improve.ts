@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { resolveClaudeBin } from '../claude-cli';
 import type { Logger } from '../logger';
 import { backupSoulFile } from '../soul';
 import type { Tool, ToolResult } from './types';
@@ -136,7 +137,13 @@ export async function runImprove(opts: {
   );
 
   try {
-    const claudeArgs = ['-p', prompt, '--allowedTools', 'Read,Edit,Write,Glob,Grep'];
+    const claudeArgs = [
+      '-p',
+      prompt,
+      '--allowedTools',
+      'Read,Edit,Write,Glob,Grep',
+      '--dangerouslySkipPermissions',
+    ];
     if (claudeModel) {
       claudeArgs.push('--model', claudeModel);
     }
@@ -146,7 +153,7 @@ export async function runImprove(opts: {
     env.CLAUDECODE = undefined;
     env.TERM = 'dumb';
 
-    const proc = Bun.spawn([claudePath, ...claudeArgs], {
+    const proc = Bun.spawn([resolveClaudeBin(claudePath), ...claudeArgs], {
       cwd: resolve(soulDir), // Soul dir — Claude needs file access but shouldn't see project root
       stdout: 'pipe',
       stderr: 'pipe',

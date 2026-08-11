@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { resolveClaudeBin } from '../claude-cli';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
@@ -185,7 +186,14 @@ async function runClaudeCliReview(opts: QualityReviewOptions): Promise<string> {
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const claudeArgs = [claudePath, '-p', prompt, '--allowedTools', 'Read,Edit,Write'];
+  const claudeArgs = [
+    resolveClaudeBin(claudePath),
+    '-p',
+    prompt,
+    '--allowedTools',
+    'Read,Edit,Write',
+    '--dangerouslySkipPermissions',
+  ];
   if (claudeModel) {
     claudeArgs.push('--model', claudeModel);
   }

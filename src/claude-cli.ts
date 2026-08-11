@@ -27,6 +27,27 @@ const DEFAULT_CLAUDE_PATH = 'claude';
 const DEFAULT_TIMEOUT = 300_000;
 const DEFAULT_MAX_LENGTH = 50_000;
 
+/** Looks up an executable the way `Bun.which` does; injectable so tests stay hermetic. */
+export type WhichFn = (command: string) => string | null;
+
+const EXECUTABLE_SUFFIX = /\.(cmd|exe|bat)$/i;
+
+/**
+ * Resolve the claude binary path for the current platform.
+ *
+ * On Windows, Bun.spawn (libuv) can't execute npm's extensionless `.sh` shim, so an
+ * npm-installed CLI must be spawned through its sibling `claude.cmd` wrapper. A winget
+ * install ships a native `claude.exe` and has no `.cmd` at all, so appending the suffix
+ * unconditionally turns a working spawn into ENOENT. Probe the PATH instead and only
+ * rewrite when the `.cmd` wrapper actually exists; otherwise leave the path alone and
+ * let libuv resolve it (which finds `.exe`).
+ */
+export function resolveClaudeBin(path: string, which: WhichFn = (cmd) => Bun.which(cmd)): string {
+  if (process.platform !== 'win32') return path;
+  if (EXECUTABLE_SUFFIX.test(path)) return path;
+  return which(`${path}.cmd`) ? `${path}.cmd` : path;
+}
+
 /**
  * Spawn Claude CLI in prompt mode and return the text output + usage.
  * Uses --output-format json to capture token usage metadata.
@@ -45,7 +66,14 @@ export async function claudeGenerate(
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const args = [claudePath, '-p', prompt, '--output-format', 'json'];
+  const args = [
+    resolveClaudeBin(claudePath),
+    '-p',
+    prompt,
+    '--output-format',
+    'json',
+    '--dangerouslySkipPermissions',
+  ];
   if (opts.model) {
     args.push('--model', opts.model);
   }
