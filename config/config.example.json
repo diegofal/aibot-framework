@@ -1,4 +1,8 @@
 {
+  "startup": {
+    "autoStartBots": true
+  },
+
   "ollama": {
     "baseUrl": "${OLLAMA_BASE_URL}",
     "apiKey": "${OLLAMA_API_KEY}",

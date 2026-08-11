@@ -1,5 +1,6 @@
 import { type Bot, GrammyError } from 'grammy';
 import type { Logger } from '../logger';
+import { TELEGRAM_CONFLICT_EXPLANATION } from './telegram-errors';
 
 /** Brief pause between polls to prevent Telegram server-side session overlap → 409 */
 const POLL_INTERVAL_MS = 500;
@@ -96,12 +97,16 @@ export class TelegramPoller {
           if (consecutive409 >= MAX_409_CONSECUTIVE || elapsed >= MAX_409_DURATION_MS) {
             this.logger.error(
               { botId, consecutive409, elapsedMs: elapsed },
-              'Sustained 409 conflict — giving up'
+              `Sustained 409 conflict — giving up. ${TELEGRAM_CONFLICT_EXPLANATION}`
             );
             throw err;
           }
 
           const delay = Math.min(3_000 * consecutive409, 30_000);
+          // One or two 409s are routine on restart: Telegram keeps the previous
+          // getUpdates session open for a moment. A third means a real second
+          // consumer, so that is where the diagnosis belongs — and no extra log
+          // call is added at debug level, to keep a normal restart quiet.
           if (consecutive409 <= 2) {
             this.logger.debug(
               { botId, attempt: consecutive409, delay },
@@ -110,7 +115,7 @@ export class TelegramPoller {
           } else {
             this.logger.warn(
               { botId, attempt: consecutive409, delay },
-              'getUpdates 409 — backing off'
+              `getUpdates 409 — backing off. ${TELEGRAM_CONFLICT_EXPLANATION}`
             );
           }
           await this.sleep(delay, signal);

@@ -954,8 +954,26 @@ const MultiTenantConfigSchema = z
   })
   .default({});
 
+/**
+ * Boot-time process behaviour.
+ *
+ * `autoStartBots` is the only thing standing between an unattended host reboot
+ * and a silent outage, so it defaults ON. It is turned OFF for one situation:
+ * a cutover, where the container must be up and inspectable while the previous
+ * instance still owns the Telegram tokens. `AIBOT_AUTOSTART_BOTS` exists for
+ * the same case and wins over the file, because during a cutover the config
+ * lives inside a Docker volume and `.env` is the only surface an operator can
+ * reach without exec'ing into the container.
+ */
+const StartupConfigSchema = z
+  .object({
+    autoStartBots: z.boolean().default(true),
+  })
+  .default({});
+
 const ConfigSchema = z.object({
   bots: z.array(BotConfigSchema).default([]),
+  startup: StartupConfigSchema,
   ollama: OllamaConfigSchema,
   skills: SkillsConfigSchema,
   conversation: ConversationConfigSchema.default({}),
@@ -1058,6 +1076,7 @@ export type SecurityConfig = z.infer<typeof SecurityConfigSchema>;
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 export type A2AConfig = z.infer<typeof A2AConfigSchema>;
 export type EvolutionConfig = z.infer<typeof EvolutionConfigSchema>;
+export type StartupConfig = z.infer<typeof StartupConfigSchema>;
 
 /**
  * Substitute environment variables in strings

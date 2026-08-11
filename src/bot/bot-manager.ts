@@ -46,6 +46,7 @@ import {
   type PermissionHistoryEntry,
   type PermissionRequestInfo,
 } from './ask-permission-store';
+import { BotDisabledError } from './auto-start';
 import { BotResetService } from './bot-reset';
 import { CollaborationManager } from './collaboration';
 import { ContextCompactor } from './context-compaction';
@@ -58,6 +59,7 @@ import { LlmQueryLog } from './llm-query-log';
 import { MemoryFlusher } from './memory-flush';
 import { runStartupSoulCheck } from './soul-health-check';
 import { SystemPromptBuilder } from './system-prompt-builder';
+import { describeTelegramStartFailure, isTelegramConflictError } from './telegram-errors';
 import { TelegramPoller } from './telegram-poller';
 import { sendLongMessage } from './telegram-utils';
 import { TenantFacade } from './tenant-facade';
@@ -530,6 +532,23 @@ export class BotManager {
       return;
     }
 
+    // `enabled` is the single runtime authority for whether a bot may run, and
+    // this is the choke point that makes it one: boot-time auto-start, the
+    // dashboard route, the multi-tenant path and the auto-restart timer all
+    // arrive here. Enforcing it only in the dashboard's client-side "Start All"
+    // filter, as before, meant a disabled bot could be started by any direct
+    // API call — and now that `enabled: true` brings a bot back on every boot,
+    // "disabled" has to be a promise the runtime keeps.
+    if (config.enabled === false) {
+      // Logged here, not only at the call site, so a refused start is visible
+      // even when a caller swallows the rejection.
+      this.logger.warn(
+        { botId: config.id },
+        'Refusing to start agent: disabled in config (enabled: false)'
+      );
+      throw new BotDisabledError(config.id);
+    }
+
     try {
       const botLogger = this.getBotLogger(config.id);
 
@@ -646,7 +665,15 @@ export class BotManager {
           await this.startTelegramBot({ ...config, token }, botLogger);
           mode = 'telegram';
         } catch (err) {
-          botLogger.warn({ err }, 'Telegram token invalid — starting in headless mode');
+          // Every non-401 failure used to be reported as "token invalid", which
+          // sends the operator to rotate a perfectly good token. That matters
+          // more now that this path runs unattended at boot, when the most
+          // likely causes are a still-running previous instance (409) and an
+          // API that is not reachable yet.
+          botLogger.warn(
+            { err },
+            `Telegram start failed — falling back to headless mode. ${describeTelegramStartFailure(err)}`
+          );
           this.registerHeadless(config, botLogger);
         }
       } else {
@@ -727,7 +754,10 @@ export class BotManager {
     const pollingPromise = poller.start(bot, config.id, ac.signal);
 
     pollingPromise.catch(async (err) => {
-      botLogger.error({ error: err, botId: config.id }, 'Polling failed');
+      botLogger.error(
+        { error: err, botId: config.id, conflict: isTelegramConflictError(err) },
+        `Polling failed. ${describeTelegramStartFailure(err)}`
+      );
 
       await this.cleanupBot(config.id);
 
@@ -756,6 +786,16 @@ export class BotManager {
         this.restartTimers.delete(config.id);
         const botConfig = this.config.bots.find((b) => b.id === config.id);
         if (!botConfig || this.runningBots.has(config.id)) return;
+        // The operator may have disabled the bot while it was flapping. Report
+        // that as a decision, not as a failed restart, and do not let startBot()
+        // throw BotDisabledError into a bare timer callback.
+        if (botConfig.enabled === false) {
+          botLogger.info(
+            { botId: config.id },
+            'Auto-restart skipped: agent is disabled (enabled: false)'
+          );
+          return;
+        }
         try {
           await this.startBot(botConfig);
           botLogger.info({ botId: config.id }, 'Auto-restart succeeded');

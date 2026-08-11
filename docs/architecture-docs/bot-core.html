@@ -1167,7 +1167,7 @@
       <!-- ================================================================ -->
       <div class="category-header">
         <h2>Facade</h2>
-        <span class="count">4 modules</span>
+        <span class="count">6 modules</span>
       </div>
 
       <!-- bot-manager.ts -->
@@ -1209,7 +1209,7 @@
         <table class="methods-table">
           <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td>startBot</td><td>config: BotConfig</td><td>Starts a bot: sets up LLM client, soul loader, feedback loading, soul health check, Telegram polling or headless mode, registers in agent registry</td></tr>
+            <tr><td>startBot</td><td>config: BotConfig</td><td>Starts a bot: sets up LLM client, soul loader, feedback loading, soul health check, Telegram polling or headless mode, registers in agent registry. <strong>Throws <code>BotDisabledError</code> when <code>config.enabled === false</code></strong> &mdash; the single choke point that makes <code>enabled</code> the runtime authority for every caller (boot auto-start, dashboard route, tenant path, poller auto-restart)</td></tr>
             <tr><td>stopBot</td><td>botId: string</td><td>Stops polling and cleans up all bot state</td></tr>
             <tr><td>resetBot</td><td>botId: string</td><td>Full reset (22 steps): clears sessions, soul files (baseline restore), goals, memory, versions, feedback, core memory, index, ask-human/ask-permission stores, dynamic tools, karma, production skill tools (runtime + disk + config refs), conversations, tool audit logs, entire productions directory, agent scheduler state, collaboration tracker records, collaboration sessions, and activity stream events</td></tr>
             <tr><td>sendMessage</td><td>chatId, text, botId</td><td>Sends a message via a bot's Telegram instance</td></tr>
@@ -1304,6 +1304,58 @@
         </table>
         <h4>Dependencies</h4>
         <p><code>./types</code>, <code>../config</code>, <code>../soul</code>, <code>../memory/manager</code>, <code>../logger</code></p>
+      </div>
+
+      <!-- auto-start.ts -->
+      <div class="module-section" id="auto-start">
+        <h3>auto-start.ts</h3>
+        <div class="file-path">src/bot/auto-start.ts</div>
+        <p class="responsibility">
+          Everything that gives <code>bots[].enabled</code> runtime meaning. Called from
+          <code>src/index.ts</code> after the web server is listening: walks
+          <code>config.bots</code> <strong>sequentially</strong>, skips anything
+          <code>enabled: false</code>, and catches per-bot failures so one bot that cannot
+          start takes neither the others nor the process down. Sequential rather than
+          concurrent because each start does real work (<code>getMe</code>, soul migration,
+          soul loader I/O, a spawned health check) and because it matches the dashboard's
+          <em>Start All</em>. Resolving the escape hatch lives here too, as does
+          <code>BotDisabledError</code> &mdash; kept in this leaf module so the web routes can
+          import it without pulling in the whole bot graph.
+        </p>
+        <h4>Exports</h4>
+        <table class="methods-table">
+          <thead><tr><th>Export</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>autoStartEnabledBots(deps)</code></td><td>Starts every enabled bot; never rejects. Returns <code>{ started, skippedDisabled, skippedAlreadyRunning, notAttempted, failed }</code>. Honours <code>isRunning()</code> (no double start) and <code>isShuttingDown()</code> (stops mid-sequence on SIGTERM). Flags Telegram 409 failures as <code>conflict</code> and names the cause in the log.</td></tr>
+            <tr><td><code>resolveAutoStart(opts)</code></td><td><code>AIBOT_AUTOSTART_BOTS</code> over <code>startup.autoStartBots</code>. Accepts <code>true/false</code>, <code>1/0</code>, <code>yes/no</code>, <code>on/off</code>; an unparseable value warns and defers to the config file.</td></tr>
+            <tr><td><code>BotDisabledError</code></td><td>Thrown by <code>startBot()</code> for a disabled bot; carries <code>code: 'agent_disabled'</code> so <code>POST /api/agents/:id/start</code> can answer <code>409</code> instead of <code>500</code>.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>../config</code> (types), <code>../logger</code> (types), <code>./telegram-errors</code></p>
+      </div>
+
+      <!-- telegram-errors.ts -->
+      <div class="module-section" id="telegram-errors">
+        <h3>telegram-errors.ts</h3>
+        <div class="file-path">src/bot/telegram-errors.ts</div>
+        <p class="responsibility">
+          Shared classification of Telegram Bot API failures, so the poller, the auto-restart
+          path and boot-time auto-start cannot drift into three differently-worded versions of
+          the same diagnosis. 409 earns the module: Telegram allows one <code>getUpdates</code>
+          consumer per token, the second one flaps, and the symptom reads as &ldquo;the bot is
+          flaky&rdquo; rather than as a duplicate instance &mdash; which is also the most likely
+          way an automatic boot-time start fails during a botched cutover. Detection is
+          structural (<code>error_code</code>, falling back to message text) rather than
+          <code>instanceof GrammyError</code>, because the error may arrive wrapped.
+        </p>
+        <h4>Exports</h4>
+        <ul class="inline-list">
+          <li><code>isTelegramConflictError</code></li>
+          <li><code>isTelegramUnauthorizedError</code></li>
+          <li><code>describeTelegramStartFailure</code></li>
+          <li><code>TELEGRAM_CONFLICT_EXPLANATION</code></li>
+        </ul>
       </div>
 
       <!-- ================================================================ -->

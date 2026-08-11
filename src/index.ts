@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { BotManager } from './bot';
+import { BotManager, autoStartEnabledBots, resolveAutoStart } from './bot';
 import { ModelValidationError, runStartupModelValidation } from './bot/model-failover';
 import { loadConfig, resolveAgentConfig } from './config';
 import { createLLMClient } from './core/llm-client';
@@ -279,7 +279,8 @@ async function main() {
 
     await cronService.start();
 
-    // Initialize bot manager (bots start stopped — use dashboard to start them)
+    // Initialize bot manager. Bots are started further down, after the web
+    // server is listening — see the auto-start block.
     logger.info('Initializing bot manager...');
     botManager = new BotManager(
       skillRegistry,
@@ -318,11 +319,13 @@ async function main() {
       });
     }
 
-    logger.info('All systems operational');
-    logger.info('Press Ctrl+C to stop');
-
-    // Handle graceful shutdown
+    // Handle graceful shutdown. Registered BEFORE auto-start, because bringing
+    // N bots up is the slowest part of boot and a SIGTERM arriving mid-sequence
+    // must still stop what is already running instead of killing the process
+    // with pollers alive.
+    let shuttingDown = false;
     const shutdown = async () => {
+      shuttingDown = true;
       logger.info('Shutting down...');
       await botManager.stopAll();
       cronService.stop();
@@ -334,6 +337,29 @@ async function main() {
 
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
+
+    // Start every enabled bot. This is what makes a restart self-healing: the
+    // container coming back is otherwise not the same as the bot coming back.
+    // Placed after startWebServer() so the dashboard is already reachable while
+    // bots come up (and still reachable if one of them cannot).
+    const autoStart = resolveAutoStart({ configured: config.startup.autoStartBots, logger });
+    if (autoStart.enabled) {
+      await autoStartEnabledBots({
+        bots: config.bots,
+        startBot: (bot) => botManager.startBot(bot),
+        isRunning: (botId) => botManager.isRunning(botId),
+        isShuttingDown: () => shuttingDown,
+        logger,
+      });
+    } else {
+      logger.warn(
+        { source: autoStart.source },
+        'Auto-start is DISABLED — no agent will be started at boot and nothing will poll Telegram until you start one (dashboard or POST /api/agents/:id/start)'
+      );
+    }
+
+    logger.info('All systems operational');
+    logger.info('Press Ctrl+C to stop');
 
     // Keep process alive
     await new Promise(() => {});

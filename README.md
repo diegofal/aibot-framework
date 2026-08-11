@@ -82,8 +82,10 @@ See [docs/deployment-cloud.md](docs/deployment-cloud.md) for the full VPS runboo
 
 ```
 src/
-├── bot/                    # Bot core (40 modules)
+├── bot/                    # Bot core (42 modules)
 │   ├── bot-manager.ts      #   Facade: constructor, start/stop, sendMessage
+│   ├── auto-start.ts       #   Boot-time start of enabled bots, `enabled` guard
+│   ├── telegram-errors.ts  #   Shared Telegram failure diagnosis (409/401)
 │   ├── conversation-pipeline.ts  #   Session expiry, RAG, LLM call, reply
 │   ├── conversation-gate.ts      #   Auth, group, bot-to-bot gates
 │   ├── context-compaction.ts     #   LLM-based context summarization
@@ -245,6 +247,10 @@ Automated security checks on bot startup (24h cooldown): filesystem permissions,
 
 `ollama.apiKey` (optional, env-substitutable as `${OLLAMA_API_KEY}`) sends `Authorization: Bearer <key>` on every Ollama call — `/api/chat`, `/api/generate`, `/api/embed`, `/api/tags`, both streaming variants, the native tool-calling path and the startup probe. With no key configured the header is omitted entirely, so local-daemon usage is unchanged. This lets `ollama.baseUrl` point at `https://ollama.com` directly, making the Ollama daemon sidecar optional (`docker compose --profile local-ollama`) and dropping ~2 GB from the deployment. **Caveat: Ollama Cloud hosts no embedding models**, so `soul.search` requires a local daemon; the mismatch is reported explicitly at startup rather than failing per-file at runtime.
 
+### Bot Lifecycle & Boot-Time Auto-Start
+
+`bots[].enabled` is the runtime authority for whether a bot runs. On every process start, `autoStartEnabledBots()` (`src/bot/auto-start.ts`) starts every enabled bot — sequentially, catching per-bot failures so one bad bot takes neither the others nor the process down — so a host reboot or redeploy brings agents back without a human. `BotManager.startBot()` refuses a bot whose config says `enabled: false`, from any caller (boot, dashboard route, multi-tenant path, poller auto-restart), and `POST /api/agents/:id/start` reports that as `409 agent_disabled` rather than a generic error. Because the dashboard has both a Start button and an Enabled toggle, a disabled agent shows **Enable & Start**, which calls `?enable=true` to set and persist `enabled` before starting — so going live is one click and survives the next restart. Stop is transient and does not clear `enabled`; the toggle is how an agent stays down. Auto-start defaults on and can be suppressed for a cutover with `startup.autoStartBots: false` or `AIBOT_AUTOSTART_BOTS=false` (the env var wins). Telegram 409 — a second consumer on the same token, the likely failure of an unattended start mid-cutover — is diagnosed in one shared place (`src/bot/telegram-errors.ts`) so the log names the cause instead of saying "polling failed". See `docs/deployment-cloud.md` §4.1.
+
 ### Startup Model Validation
 
 Probes every configured model at boot (primary, fallbacks, `soul.healthCheck.model`, per-bot overrides) with a one-token generation, concurrently and deduplicated. A real inference call is required because retired Ollama cloud tags keep appearing in `/api/tags` after the hosted backend stops serving them. Failures are graded: a retired or unknown model (`410`/`404`) logs at `error`, while a busy or slow one (`503`/`429`/timeout) logs at `warn`. An unreachable daemon produces one message rather than one per model. Non-fatal by default; configurable via `ollama.startupValidation` (`enabled`, `timeoutMs`, `strict`, `modelTimeoutMs`). `modelTimeoutMs` gives a single slow tag a longer budget — `nemotron-3-super:cloud` otherwise exceeds the 20 s default on every boot, and a permanent warning is one nobody reads.
@@ -305,7 +311,8 @@ Productions track and review bot outputs with approve/reject, ratings, and threa
 
 Configuration lives in `config/config.json`, validated at startup by Zod schemas in `src/config.ts`. Key sections:
 
-- **`bots[]`** — Per-bot: token, model, allowedUsers, disabledTools, disabledSkills, workDir, llmBackend, tts overrides
+- **`bots[]`** — Per-bot: token, `enabled` (starts at boot; a disabled bot cannot be started at all), model, allowedUsers, disabledTools, disabledSkills, workDir, llmBackend, tts overrides
+- **`startup`** — `autoStartBots` (default `true`): start every enabled bot at boot. Override with `AIBOT_AUTOSTART_BOTS`
 - **`ollama`** — URL, primary/fallback models, timeout, embedding model, `startupValidation` (boot-time model probe)
 - **`agentLoop`** — Interval, maxDuration, retry, concurrency, idle suppression
 - **`soul`** — Health check, memory consolidation, search config

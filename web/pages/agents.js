@@ -254,8 +254,10 @@ export async function renderAgents(el) {
       <td class="actions">
         ${
           agent.running
-            ? `<button class="btn btn-sm btn-danger" data-action="stop" data-id="${agent.id}">Stop</button>`
-            : `<button class="btn btn-sm" data-action="start" data-id="${agent.id}">Start</button>`
+            ? `<button class="btn btn-sm btn-danger" data-action="stop" data-id="${agent.id}" title="Stops the agent now. This is transient: with Enabled on, it starts again on the next restart. Turn Enabled off to keep it down.">Stop</button>`
+            : agent.enabled === false
+              ? `<button class="btn btn-sm" data-action="enable-start" data-id="${agent.id}" title="This agent is disabled, so the server refuses a plain Start. This turns Enabled on (saved to bots.json, so it also starts on boot) and starts it now.">Enable &amp; Start</button>`
+              : `<button class="btn btn-sm" data-action="start" data-id="${agent.id}">Start</button>`
         }
         ${
           agent.running
@@ -284,10 +286,13 @@ export async function renderAgents(el) {
     const action = btn.dataset.action;
     const id = btn.dataset.id;
 
-    if (action === 'start') {
+    if (action === 'start' || action === 'enable-start') {
       btn.disabled = true;
       btn.textContent = 'Starting...';
-      const res = await api(`/api/agents/${id}/start`, { method: 'POST' });
+      // ?enable=true is what makes the button honest: a disabled agent is
+      // refused by the server, so this path enables it (persisted) first.
+      const query = action === 'enable-start' ? '?enable=true' : '';
+      const res = await api(`/api/agents/${id}/start${query}`, { method: 'POST' });
       if (res.error) alert(`Failed to start: ${res.error}`);
       renderAgents(el);
     } else if (action === 'stop') {
@@ -464,7 +469,9 @@ export async function renderAgents(el) {
   document.getElementById('btn-start-all').addEventListener('click', async () => {
     const stoppedAgents = agents.filter((a) => a.enabled && !a.running);
     if (stoppedAgents.length === 0) {
-      alert('All enabled agents are already running.');
+      alert(
+        'All enabled agents are already running. Disabled agents are skipped — use "Enable & Start" on a row to bring one live.'
+      );
       return;
     }
 
@@ -599,7 +606,7 @@ export async function renderAgentDetail(el, id) {
       <table>
         <tr><td class="text-dim" style="width:140px">ID</td><td>${escapeHtml(agent.id)}</td></tr>
         <tr><td class="text-dim">Token</td><td><code>${escapeHtml(agent.token)}</code></td></tr>
-        <tr><td class="text-dim">Enabled</td><td>${agent.enabled ? 'Yes' : 'No'}</td></tr>
+        <tr><td class="text-dim">Enabled</td><td>${agent.enabled ? 'Yes <span class="text-dim">&mdash; starts automatically on boot</span>' : 'No <span class="text-dim">&mdash; never started, on boot or on request</span>'}</td></tr>
         <tr><td class="text-dim">Model</td><td>${modelDisplay}</td></tr>
         <tr><td class="text-dim">Soul Dir</td><td>${soulDirDisplay}</td></tr>
         <tr><td class="text-dim">Work Dir</td><td>${workDirDisplay}</td></tr>
@@ -735,8 +742,10 @@ export async function renderAgentDetail(el, id) {
     <div class="actions">
       ${
         agent.running
-          ? `<button class="btn btn-danger" id="btn-toggle">Stop</button>`
-          : `<button class="btn btn-primary" id="btn-toggle">Start</button>`
+          ? `<button class="btn btn-danger" id="btn-toggle" title="Stops the agent now. This is transient: with Enabled on, it starts again on the next restart.">Stop</button>`
+          : agent.enabled === false
+            ? `<button class="btn btn-primary" id="btn-toggle" title="This agent is disabled, so the server refuses a plain Start. This turns Enabled on (saved) and starts it now.">Enable &amp; Start</button>`
+            : `<button class="btn btn-primary" id="btn-toggle">Start</button>`
       }
       <a href="#/agents/${agent.id}/edit" class="btn">Edit</a>
       <button class="btn" id="btn-clone">Clone</button>
@@ -756,9 +765,11 @@ export async function renderAgentDetail(el, id) {
 
   document.getElementById('btn-toggle').addEventListener('click', async (e) => {
     e.target.disabled = true;
+    const startPath =
+      agent.enabled === false ? `/api/agents/${id}/start?enable=true` : `/api/agents/${id}/start`;
     const res = agent.running
       ? await api(`/api/agents/${id}/stop`, { method: 'POST' })
-      : await api(`/api/agents/${id}/start`, { method: 'POST' });
+      : await api(startPath, { method: 'POST' });
     if (res.error) alert(res.error);
     renderAgentDetail(el, id);
   });

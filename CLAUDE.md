@@ -40,7 +40,9 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | Archivo | Responsabilidad |
 |---|---|
 | `types.ts` | `BotContext` interface compartido + `SeenUser` |
-| `bot-manager.ts` | Facade slim: constructor, `startBot`, `stopBot`, `sendMessage`, API pública |
+| `bot-manager.ts` | Facade slim: constructor, `startBot` (rechaza bots con `enabled: false`), `stopBot`, `sendMessage`, API pública |
+| `auto-start.ts` | Semántica runtime de `enabled`: arranque de bots al boot (secuencial, per-bot failure aislado), escape hatch (`startup.autoStartBots` / `AIBOT_AUTOSTART_BOTS`), `BotDisabledError` |
+| `telegram-errors.ts` | Clasificación compartida de errores Telegram: 409 (otro consumidor en el token), 401, resto — mensajes únicos para poller, auto-restart y auto-start |
 | `tenant-facade.ts` | Tenant/billing/metering — delegado desde BotManager |
 | `user-directory.ts` | Persistent contact directory: auto-tracks users from all channels, supports manual registration, find by name/username/address |
 | `tool-permissions.ts` | Permission matrix: per-tool access control (free/inform/confirm/blocked) across agent-loop, conv-owner, conv-external modes |

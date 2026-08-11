@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import { AVAILABLE_PRESETS } from '../../bot/agent-loop-prompts';
 import { resolveDirectives } from '../../bot/agent-scheduler';
+import { BotDisabledError } from '../../bot/auto-start';
 import { DEFAULT_PERMISSIONS } from '../../bot/tool-permissions';
 import { type BotConfig, type Config, persistBots, resolveAgentConfig } from '../../config';
 import type { SkillRegistry } from '../../core/skill-registry';
@@ -220,7 +221,14 @@ export function agentsRoutes(deps: {
     return c.json({ ok: true });
   });
 
-  // Start agent
+  // Start agent.
+  //
+  // `enabled: false` is now enforced by BotManager.startBot(), so this route
+  // must translate that refusal into something actionable rather than a 500.
+  // `?enable=true` is the explicit "go live" form: it flips `enabled` (and
+  // persists it, so the agent also survives a restart) and then starts. The
+  // dashboard uses it behind a button labelled "Enable & Start", so the side
+  // effect is stated in the UI rather than applied silently.
   app.post('/:id/start', async (c) => {
     const id = c.req.param('id');
     const bot = findBotScoped(c, id);
@@ -233,11 +241,34 @@ export function agentsRoutes(deps: {
       return c.json({ error: 'Agent already running' }, 400);
     }
 
+    const enableRequested = c.req.query('enable') === 'true';
+    if (bot.enabled === false) {
+      if (!enableRequested) {
+        deps.logger.warn({ botId: id }, 'Start refused: agent is disabled');
+        return c.json(
+          {
+            error: `Agent "${id}" is disabled. Enable it first, or call this route with ?enable=true to enable and start it in one step.`,
+            code: 'agent_disabled',
+          },
+          409
+        );
+      }
+      bot.enabled = true;
+      persistBots(deps.configPath, deps.config.bots);
+      deps.logger.info({ botId: id }, 'Agent enabled via start?enable=true');
+    }
+
     try {
       await deps.botManager.startBot(bot);
       deps.logger.info({ botId: id }, 'Agent started via API');
-      return c.json({ ok: true, running: true });
+      return c.json({ ok: true, running: true, enabled: bot.enabled });
     } catch (err: unknown) {
+      // A BotDisabledError here means the config changed underneath us between
+      // the check above and the call; report it the same way rather than as 500.
+      if (err instanceof BotDisabledError) {
+        deps.logger.warn({ botId: id }, 'Start refused: agent is disabled');
+        return c.json({ error: err.message, code: err.code }, 409);
+      }
       const message = err instanceof Error ? err.message : 'Failed to start agent';
       deps.logger.error({ botId: id, error: message }, 'Start failed');
       return c.json({ error: message }, 500);

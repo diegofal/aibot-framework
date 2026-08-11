@@ -125,6 +125,12 @@ const config = await loadConfig('./config/config.json');
               <td>Array of bot definitions — loaded from <code>bots.json</code>, not from this file</td>
             </tr>
             <tr>
+              <td><code>startup</code></td>
+              <td><code>StartupConfigSchema</code></td>
+              <td>No (defaults)</td>
+              <td>Boot behaviour: <code>autoStartBots</code> (default <code>true</code>) &mdash; start every <code>enabled</code> bot at process start</td>
+            </tr>
+            <tr>
               <td><code>ollama</code></td>
               <td><code>OllamaConfigSchema</code></td>
               <td>Yes</td>
@@ -296,6 +302,26 @@ const config = await loadConfig('./config/config.json');
 
       <!-- ---- Infrastructure Schemas ---- -->
       <h3>Infrastructure</h3>
+
+      <!-- StartupConfigSchema -->
+      <div class="card">
+        <h3><code>StartupConfigSchema</code></h3>
+        <p>Boot behaviour. Read once, in <code>src/index.ts</code>.</p>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Default</th><th>Validation</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>autoStartBots</code></td>
+              <td>boolean</td>
+              <td><code>true</code></td>
+              <td>&mdash;</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><span class="badge badge-yellow">Deployment</span> When true (the default), every bot with <code>enabled: true</code> is started at boot by <code>autoStartEnabledBots()</code>. The environment variable <code>AIBOT_AUTOSTART_BOTS</code> overrides this field &mdash; deliberately, because during a cutover <code>config.json</code> is inside a Docker volume while <code>.env</code> is next to <code>docker compose up</code>. It accepts <code>true/false</code>, <code>1/0</code>, <code>yes/no</code>, <code>on/off</code>; an unparseable value warns and defers to this field rather than guessing. It defaults to <em>on</em> because an unattended host that comes back with no bots running is a silent outage; the reason to turn it off is a cutover, where the container must be up while another instance still owns the Telegram tokens. See the bot lifecycle note in section 4.</p>
+      </div>
 
       <!-- OllamaConfigSchema -->
       <div class="card">
@@ -2048,7 +2074,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>enabled</code></td>
               <td>boolean</td>
               <td><code>true</code></td>
-              <td>Whether the bot should be started</td>
+              <td><strong>The runtime authority for whether a bot runs.</strong> <code>true</code> means the bot is started automatically on every process start (<code>autoStartEnabledBots()</code> from <code>src/index.ts</code>); <code>false</code> means <code>BotManager.startBot()</code> <em>refuses</em> to start it, from any caller &mdash; boot, <code>POST /api/agents/:id/start</code> (which answers <code>409 agent_disabled</code>), the multi-tenant path, and the poller auto-restart timer. It also gates which bots startup model validation probes a <code>model</code> override for, and which peers <code>SystemPromptBuilder</code> lists. See the lifecycle note below.</td>
             </tr>
             <tr>
               <td><code>allowedUsers</code></td>
@@ -2149,6 +2175,18 @@ const config = await loadConfig('./config/config.json');
           </tbody>
         </table>
       </div>
+
+      <h4>Bot lifecycle: <code>enabled</code> is desired state, <code>running</code> is current state</h4>
+
+      <p><span class="badge badge-yellow">Deployment</span> <strong><code>src/index.ts</code> starts every enabled bot at boot.</strong> After the web server is listening (so the dashboard is reachable even if a bot cannot start), it calls <code>autoStartEnabledBots()</code> from <code>src/bot/auto-start.ts</code>, which walks <code>config.bots</code> sequentially, skips anything <code>enabled: false</code>, and catches per-bot failures so one bad bot cannot take the others or the process down. Before this existed, a host reboot or <code>docker compose up -d --build</code> came up with zero running bots and stayed there until a human pressed Start &mdash; <code>restart: unless-stopped</code> restarts the container, not the bot.</p>
+
+      <p><span class="badge badge-high">Correctness</span> <code>BotManager.startBot()</code> is the single choke point that gives <code>enabled</code> teeth: it throws <code>BotDisabledError</code> for a bot whose config says <code>enabled: false</code>, so boot-time start, the dashboard route, <code>TenantFacade.startBotWithTenant()</code> and the poller auto-restart timer all obey the same rule. Previously the flag was enforced only in the dashboard&rsquo;s client-side <em>Start All</em> filter, so any direct API call started a disabled bot without complaint. The auto-restart timer additionally checks the flag itself, so disabling a flapping bot ends the restart cycle with an explanatory log line rather than a failed attempt.</p>
+
+      <p><span class="badge badge-cyan">UX</span> The dashboard keeps a per-agent Enabled toggle <em>and</em> a Start button, so the guard could have turned Start into a dead control for exactly the agents an operator is trying to bring up. Instead, a disabled agent renders <strong>Enable &amp; Start</strong>, which calls <code>POST /api/agents/:id/start?enable=true</code>: the route sets <code>enabled: true</code>, persists <code>bots.json</code>, and then starts. Plain <code>Start</code> on a disabled agent returns <code>409</code> with <code>code: "agent_disabled"</code> and a message naming both remedies. Stopping an agent does <em>not</em> clear <code>enabled</code>, so a stop is transient and the agent returns on the next restart; the toggle is how an operator keeps one down.</p>
+
+      <p><span class="badge badge-yellow">Deployment</span> Auto-start can be suppressed with <code>startup.autoStartBots: false</code> or the <code>AIBOT_AUTOSTART_BOTS</code> environment variable (which wins over the file, since during a cutover the config lives inside a Docker volume and <code>.env</code> does not). It defaults to <em>on</em>: the availability gap is the failure that matters for an unattended host. A fresh deployment remains inert regardless, because <code>config/bots.example.json</code> ships every bot <code>"enabled": false</code>. See <a href="../deployment-cloud.md">deployment-cloud.md</a> &sect;4.1.</p>
+
+      <p><span class="badge badge-high">Correctness</span> The boot-time start&rsquo;s most likely failure is Telegram <code>409 Conflict</code> &mdash; a previous instance still polling the same token during a botched cutover. <code>src/bot/telegram-errors.ts</code> centralises that diagnosis so the poller, the auto-restart path and auto-start all report it in the same words instead of a generic &ldquo;polling failed&rdquo;. The first one or two 409s stay at <code>debug</code>, because Telegram holds the previous <code>getUpdates</code> session open briefly after a normal restart and a warning present on every clean restart is a warning nobody reads.</p>
 
       <h4>Example bot entry</h4>
 
