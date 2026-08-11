@@ -3,7 +3,7 @@
     "id": "default",
     "name": "AIBot",
     "token": "${TELEGRAM_BOT_TOKEN}",
-    "enabled": true,
+    "enabled": false,
     "allowedUsers": [],
     "skills": ["example", "humanizer", "reflection", "calibrate", "improve"],
     "mentionPatterns": ["bot"],

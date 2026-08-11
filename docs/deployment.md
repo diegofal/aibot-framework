@@ -175,70 +175,22 @@ pm2 logs aibot
 pm2 monit
 ```
 
-### Option 3: Docker
+### Option 3: Docker (recommended for cloud hosts)
 
-Create `Dockerfile`:
-
-```dockerfile
-FROM oven/bun:1
-
-WORKDIR /app
-
-# Copy package files
-COPY package.json bun.lockb ./
-
-# Install dependencies
-RUN bun install --frozen-lockfile
-
-# Copy source code
-COPY . .
-
-# Create data directories
-RUN mkdir -p data/logs data/intel/raw data/intel/trends data/intel/html
-
-# Expose ports (if needed)
-# EXPOSE 3000
-
-# Start bot
-CMD ["bun", "run", "start"]
-```
-
-Create `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-
-services:
-  aibot:
-    build: .
-    restart: unless-stopped
-    environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - OLLAMA_BASE_URL=http://ollama:11434
-    volumes:
-      - ./config:/app/config
-      - ./data:/app/data
-    depends_on:
-      - ollama
-
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    volumes:
-      - ollama_data:/root/.ollama
-    ports:
-      - "11434:11434"
-
-volumes:
-  ollama_data:
-```
-
-Deploy:
+A production `Dockerfile`, `.dockerignore` and `docker-compose.yml` ship in the
+repository root. Do not hand-roll your own — the shipped ones handle non-root
+execution, volume seeding, `tar` for agent export/import, SIGTERM forwarding to
+the graceful-shutdown handler, and a loopback-only web bind.
 
 ```bash
-docker-compose up -d
-docker-compose logs -f aibot
+cp .env.example .env    # fill in secrets
+docker compose up -d --build
+docker compose logs -f aibot
 ```
+
+Full runbook — provisioning, Ollama Cloud sign-in, safe dashboard access over
+an SSH tunnel, agent migration, backups and log rotation — is in
+**[deployment-cloud.md](./deployment-cloud.md)**.
 
 ## Scheduling
 

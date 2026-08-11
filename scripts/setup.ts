@@ -54,6 +54,10 @@ async function main() {
   const botToken = await prompt('Enter your Telegram bot token:');
   if (botToken) {
     exampleBots[0].token = botToken;
+    // bots.example.json ships every bot disabled so a container seeded from it
+    // is inert. Typing a token into this wizard is the deliberate opt-in, so
+    // undo that here — it still starts nothing; the dashboard does that.
+    exampleBots[0].enabled = true;
   }
 
   const allowedUsers = await prompt('Allowed user IDs (comma-separated, or leave empty for all):');

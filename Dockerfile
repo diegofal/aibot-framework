@@ -1,0 +1,97 @@
+# syntax=docker/dockerfile:1
+
+# ---------------------------------------------------------------------------
+# AIBot Framework — production image
+#
+# Bun version is pinned to match .github/workflows/ci.yml (1.3.11) so the
+# lockfile resolution in the image is identical to the one CI validates.
+#
+# Ollama is NOT installed here — it runs as a separate service. See the
+# rationale block in docker-compose.yml and docs/deployment-cloud.md.
+# ---------------------------------------------------------------------------
+
+# --- Stage 1: dependencies -------------------------------------------------
+FROM oven/bun:1.3.11-slim AS deps
+
+WORKDIR /app
+
+# Playwright is a package.json dependency but its browser binaries are a
+# ~400 MB download we deliberately keep out of the default image.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+COPY package.json bun.lock ./
+
+# --production omits devDependencies (biome, typescript, @types/*) — Bun runs
+# the TypeScript sources directly, so none of them are needed at runtime.
+RUN bun install --frozen-lockfile --production
+
+
+# --- Stage 2: runtime ------------------------------------------------------
+FROM oven/bun:1.3.11-slim AS runtime
+
+# tar          — BotExportService shells out to the `tar` binary for
+#                agent export/import (src/bot/bot-export-service.ts).
+# ca-certificates — outbound TLS to api.telegram.org and LLM/tool APIs.
+# tzdata       — config.datetime.timezone is applied via process.env.TZ.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends tar ca-certificates tzdata \
+  && rm -rf /var/lib/apt/lists/*
+
+# --- OPTIONAL: browser tools (config.browserTools.enabled) -----------------
+# Chromium plus its shared libraries adds roughly 500 MB. Uncomment this block
+# ONLY if you enable browserTools; then rebuild the image.
+#
+# RUN apt-get update \
+#   && apt-get install -y --no-install-recommends \
+#        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+#        libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+#        libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+#   && rm -rf /var/lib/apt/lists/*
+# ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
+# RUN mkdir -p /app/.playwright && chown bun:bun /app/.playwright
+# USER bun
+# RUN bunx playwright install chromium
+# USER root
+# ---------------------------------------------------------------------------
+
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+COPY --from=deps /app/node_modules ./node_modules
+
+# Explicit copies rather than `COPY . .` — the image can never pick up
+# config/config.json, config/bots.json, .env, data/ or productions/ even if
+# .dockerignore is edited incorrectly later.
+COPY package.json tsconfig.json ./
+COPY src ./src
+COPY web ./web
+COPY scripts ./scripts
+
+# Config templates are staged outside the volume mount point. The entrypoint
+# seeds an empty /app/config from here on first boot without ever overwriting
+# an operator's live files.
+COPY config/config.example.json config/bots.example.json config/sources.yml ./config-defaults/
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+# The oven/bun base image already provides an unprivileged `bun` user (uid 1000).
+# These directories are created and chowned in the image so that fresh named
+# volumes mounted over them inherit the correct ownership.
+RUN mkdir -p /app/config /app/data/logs /app/productions \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh \
+  && chown -R bun:bun /app
+
+VOLUME ["/app/config", "/app/data", "/app/productions"]
+
+# Only reachable when config.web.enabled is true. Publish it to 127.0.0.1 only —
+# single-tenant mode has no authentication on /api/*.
+EXPOSE 3000
+
+USER bun
+
+# Exec form so `bun` becomes PID 1 and receives SIGTERM directly, which fires
+# the SIGTERM handler in src/index.ts (stopAll → cron stop → session dispose).
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["bun", "run", "src/index.ts"]

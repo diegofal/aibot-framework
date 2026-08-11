@@ -45,6 +45,15 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
    bun run start
    ```
 
+**Or run it containerised** (recommended for an always-on cloud host):
+
+```bash
+cp .env.example .env    # fill in secrets
+docker compose up -d --build
+```
+
+See [docs/deployment-cloud.md](docs/deployment-cloud.md) for the full VPS runbook.
+
 ## Architecture Overview
 
 ```
@@ -389,6 +398,7 @@ bun run format
 - **[docs/tools.md](docs/tools.md)** — Tools reference
 - **[docs/soul-and-memory.md](docs/soul-and-memory.md)** — Memory and personality system
 - **[docs/deployment.md](docs/deployment.md)** — Deployment and configuration guide
+- **[docs/deployment-cloud.md](docs/deployment-cloud.md)** — Cloud/VPS runbook: Docker Compose, Ollama Cloud, SSH-tunnelled dashboard, backups, log rotation
 - **[docs/architecture-docs/](docs/architecture-docs/)** — Interactive HTML documentation with dependency graphs and diagrams
 
 ## Tech Stack
@@ -396,6 +406,7 @@ bun run format
 | Component | Technology |
 |-----------|-----------|
 | Runtime | [Bun](https://bun.sh) |
+| Container | Docker + Compose (`Dockerfile`, `docker-compose.yml`) |
 | Language | TypeScript |
 | Bot framework | [grammY](https://grammy.dev) |
 | Web server | [Hono](https://hono.dev) |

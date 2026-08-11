@@ -1,0 +1,65 @@
+# The Dockerfile uses explicit COPY paths rather than `COPY . .`, so this file
+# is a second layer of defence. Nothing listed here may ever reach the image.
+
+# --- Secrets and live operator state (NEVER copy into an image) ------------
+.env
+.env.*
+!.env.example
+config/config.json
+config/bots.json
+config/soul/
+data/
+productions/
+*.pem
+*.key
+
+# --- Dependencies (reinstalled from bun.lock inside the build) ------------
+node_modules/
+bun.lockb
+# This project installs with Bun; package-lock.json is a stale artifact.
+package-lock.json
+
+# --- VCS and CI -----------------------------------------------------------
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# --- Tests and test artifacts --------------------------------------------
+tests/
+src/**/__tests__/
+.test-*/
+coverage/
+
+# --- Logs, backups, temporary files ---------------------------------------
+*.log
+logs/
+*.tmp
+temp/
+*.bak
+*.tar.gz
+*~
+
+# --- Docs and repo metadata (not needed at runtime) -----------------------
+docs/
+*.md
+!config/*.example.json
+
+# --- Editor / OS ----------------------------------------------------------
+.vscode/
+.idea/
+.claude/
+.cursor/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# --- Build output and deploy configs --------------------------------------
+dist/
+*.tsbuildinfo
+.vercel/
+vercel.json
+Dockerfile
+docker-compose.yml
+.dockerignore

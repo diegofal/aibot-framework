@@ -390,6 +390,7 @@ const config = await loadConfig('./config/config.json');
             </tr>
           </tbody>
         </table>
+        <p><span class="badge badge-yellow">Deployment</span> <code>file</code> (conventionally <code>./data/logs/aibot.log</code>) is appended to by a <code>pino/file</code> transport with <strong>no rotation</strong> &mdash; it grows without bound and will fill a small disk. The dashboard tails this same file via <code>fs.watch()</code> plus a byte offset in <code>src/web/server.ts</code>, so external rotation must use <code>copytruncate</code> to preserve the inode; a rename-based rotation silently stops the live log stream. Rotation config in <a href="../deployment-cloud.md">deployment-cloud.md</a>.</p>
       </div>
 
       <!-- PathsConfigSchema -->

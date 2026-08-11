@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { MemorySearchConfig } from '../config';
 import type { Logger } from '../logger';
@@ -8,10 +8,18 @@ import type { EmbeddingService } from './embeddings';
 import { serializeEmbedding } from './schema';
 
 /**
- * Recursively discover all .md files under soulDir
+ * Recursively discover all .md files under soulDir.
+ *
+ * A missing root is an empty result, not an error: on a fresh install (and on
+ * a fresh Docker config volume in particular) `config/soul/` does not exist
+ * until the first agent writes to it, and `soul.search.enabled: true` would
+ * otherwise take the whole process down with an ENOENT during startup
+ * reindexing — a crash loop caused by having nothing to index yet.
  */
 export function discoverFiles(soulDir: string): string[] {
   const results: string[] = [];
+
+  if (!existsSync(soulDir)) return results;
 
   function walk(dir: string) {
     const entries = readdirSync(dir, { withFileTypes: true });

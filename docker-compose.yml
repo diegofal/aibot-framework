@@ -1,0 +1,137 @@
+# ---------------------------------------------------------------------------
+# AIBot Framework — single-host VPS deployment.
+#
+#   docker compose up -d --build
+#   docker compose logs -f aibot
+#
+# Two topologies, selected by whether the ollama sidecar is started:
+#
+#   docker compose up -d --build                        # direct to Ollama Cloud
+#   docker compose --profile local-ollama up -d --build # with the daemon sidecar
+#
+# Direct-to-cloud needs OLLAMA_BASE_URL=https://ollama.com and OLLAMA_API_KEY
+# in .env, drops ~2 GB of image and one container, and makes a 1 GB host
+# viable — but Ollama Cloud serves no embedding models, so soul.search must be
+# disabled. Use the sidecar profile if you need embeddings or local models.
+#
+# Read docs/deployment-cloud.md before the first boot. Two things bite people:
+#   1. config.example.json reads "${OLLAMA_BASE_URL}", so .env drives it — but
+#      only for a FRESH config volume. An existing config/config.json is never
+#      overwritten by the entrypoint; edit it in place.
+#   2. The dashboard has no authentication in single-tenant mode.
+# ---------------------------------------------------------------------------
+
+services:
+  aibot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aibot-framework:latest
+    restart: unless-stopped
+
+    # Telegram is consumed through a long-polling getUpdates loop
+    # (src/bot/telegram-poller.ts), and Telegram allows exactly one active
+    # getUpdates consumer per bot token. A second replica makes both instances
+    # flap with HTTP 409 Conflict and drops messages. This must stay 1.
+    # NOTE: `deploy` is only honoured by Swarm; under plain `docker compose`
+    # it is advisory. The real guard is operational — never start a second
+    # container, and never leave the old host running during a migration.
+    deploy:
+      replicas: 1
+
+    env_file:
+      - .env
+
+    environment:
+      # Consumed where config/config.json interpolates "${VAR}".
+      # Defaults to the sidecar's hostname; override in .env with
+      # https://ollama.com (plus OLLAMA_API_KEY) to run without the sidecar.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      # Overridden at runtime by config.datetime.timezone; set here so early
+      # startup logs (before config load) use the right zone.
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+
+    # SECURITY: bound to loopback on purpose.
+    # In single-tenant mode (multiTenant.enabled = false) there is NO auth
+    # middleware on the dashboard or on any /api/* route, and
+    # GET /api/agents/:id/export streams a bot's full soul, memory and config
+    # as a .tar.gz to any caller. Publishing this on 0.0.0.0 is a
+    # data-exfiltration hole. Reach it over an SSH tunnel instead:
+    #   ssh -L 3000:127.0.0.1:3000 user@your-host
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    volumes:
+      # config/ is runtime-mutable: the dashboard rewrites config.json and
+      # bots.json, and config/soul/ holds every agent's identity and memory.
+      - aibot_config:/app/config
+      # data/ holds sessions, cron, karma, tools, agent-proposals,
+      # conversations, tenants, logs and the optional memory.db RAG index.
+      - aibot_data:/app/data
+      # productions/ holds agent-authored artefacts.
+      - aibot_productions:/app/productions
+
+    # Reaps zombies from the tar/claude subprocesses spawned via Bun.spawn.
+    init: true
+
+    # Give the SIGTERM handler in src/index.ts room to stop every bot,
+    # halt cron and flush sessions before the container is killed.
+    stop_grace_period: 30s
+
+    # Rotates the container's stdout stream. This does NOT bound
+    # data/logs/aibot.log — see the log rotation section in
+    # docs/deployment-cloud.md for that.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # No `depends_on: ollama`. The sidecar is behind an optional profile, and a
+    # depends_on edge to a service excluded by profiles makes `docker compose
+    # up` fail outright on the direct-to-cloud path. Ordering is not a
+    # correctness requirement here: startup model validation is non-fatal and
+    # the failover chain retries, so the app tolerates a daemon that comes up a
+    # moment later.
+
+  # Ollama runs as a sidecar rather than being baked into the app image:
+  #   - `ollama signin` writes credentials to ~/.ollama; keeping them in their
+  #     own volume means rebuilding or restarting the bot never disturbs the
+  #     authenticated session.
+  #   - one long-running process per container keeps PID 1 signal handling
+  #     clean, so the bot's graceful shutdown is not proxied through a
+  #     supervisor.
+  #   - the official image is versioned and updated independently of this repo.
+  # With a :cloud model the daemon is only a thin proxy to Ollama's hosted
+  # GPUs, so this container needs no GPU and very little RAM.
+  #
+  # OPTIONAL since direct Ollama Cloud auth landed. Start it with
+  # `--profile local-ollama`. You need it for exactly two things:
+  #   - embeddings (`soul.search`) — Ollama Cloud hosts no embedding models;
+  #   - genuinely local (non-`:cloud`) model tags.
+  # Otherwise set OLLAMA_BASE_URL=https://ollama.com + OLLAMA_API_KEY and skip
+  # it, saving ~2 GB of image and one container.
+  ollama:
+    profiles: ["local-ollama"]
+    # Pin to a specific tag once you have verified one against your host.
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      # Holds the signed-in Ollama Cloud credentials and any pulled models.
+      - ollama_data:/root/.ollama
+    # Deliberately NOT published to the host — only the aibot service needs it,
+    # and it reaches it over the compose network. Uncomment only for debugging,
+    # and keep the loopback bind:
+    # ports:
+    #   - "127.0.0.1:11434:11434"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  aibot_config:
+  aibot_data:
+  aibot_productions:
+  ollama_data:

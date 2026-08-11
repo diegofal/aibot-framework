@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings even when checked out on Windows —
+# a CRLF shebang makes the Docker entrypoint fail with "not found".
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
+Dockerfile text eol=lf
