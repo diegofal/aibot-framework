@@ -322,11 +322,37 @@ const config = await loadConfig('./config/config.json');
               <td><code>models.fallbacks</code></td>
               <td>string[]</td>
               <td>&mdash; (optional)</td>
+            </tr>
+            <tr>
+              <td><code>startupValidation.enabled</code></td>
+              <td>boolean</td>
+              <td><code>true</code></td>
               <td>&mdash;</td>
+            </tr>
+            <tr>
+              <td><code>startupValidation.timeoutMs</code></td>
+              <td>number</td>
+              <td><code>20000</code></td>
+              <td>Positive integer</td>
+            </tr>
+            <tr>
+              <td><code>startupValidation.strict</code></td>
+              <td>boolean</td>
+              <td><code>false</code></td>
+              <td>&mdash;</td>
+            </tr>
+            <tr>
+              <td><code>startupValidation.modelTimeoutMs</code></td>
+              <td>Record&lt;string, number&gt;</td>
+              <td><code>{}</code></td>
+              <td>Per-tag override of <code>timeoutMs</code>; positive integers</td>
             </tr>
           </tbody>
         </table>
         <p><span class="badge badge-yellow">Deployment</span> Models whose tag ends in <code>:cloud</code> / <code>-cloud</code> execute on Ollama&rsquo;s hosted GPUs &mdash; the local daemon is only a proxy, so a CPU-only host is sufficient. Every entry in <code>fallbacks</code> must be cloud-capable when deploying to a GPU-less VM: a local model such as <code>mistral</code> or <code>qwen2.5-coder:32b</code> leaves the primary working while the failover path fails silently, and it only surfaces during an outage. See <a href="../deployment-cloud.md">deployment-cloud.md</a>.</p>
+        <p><span class="badge badge-cyan">Startup</span> <code>startupValidation</code> controls the boot-time probe implemented in <code>src/bot/model-failover/model-validation.ts</code> and invoked from <code>src/index.ts</code>. It issues a one-token generation against every configured model &mdash; primary, each fallback, <code>soul.healthCheck.model</code> when that runs on Ollama, and every enabled bot&rsquo;s <code>model</code> override &mdash; concurrently, deduplicated by tag. <code>/api/tags</code> is deliberately <em>not</em> the health signal, for two independent reasons: retired cloud tags keep appearing there after the hosted backend stops serving them, and <code>https://ollama.com/api/tags</code> answers <code>200</code> with the full catalogue to a request carrying <strong>no <code>Authorization</code> header at all</strong> (measured 2026-08-11), so its status says nothing about whether the credentials work. It is used for reachability only; the per-model <code>/api/generate</code> probe, which does require credentials, is authoritative. Failures are graded &mdash; <code>410</code>/<code>404</code>/&ldquo;retired&rdquo; is logged as <code>error</code> (<code>Configured LLM model is GONE</code>), <code>401</code>/<code>403</code> is logged as a single <code>error</code> (<code>OLLAMA AUTHENTICATION FAILED</code>) whose wording depends on whether <code>baseUrl</code> is Ollama Cloud with a key, Ollama Cloud without one, or a local daemon whose own sign-in is missing, and <code>503</code>/<code>429</code>/timeouts are logged as <code>warn</code>. <code>strict</code> reacts to the <em>gone</em> and <em>unauthorized</em> classes &mdash; both are facts about the configuration &mdash; and never to transient ones. An unreachable daemon yields a single message instead of one error per model. Non-fatal unless <code>strict</code> is set.</p>
+        <p><span class="badge badge-high">Correctness</span> The report distinguishes <code>daemonReachable</code> from <code>authOk</code>, because a reachable endpoint that refuses every credentialled call is not a completed validation. A <code>401</code> used to fall through to the <code>unknown</code> class and be logged as &ldquo;busy, cold or slow&rdquo; &mdash; the quietest possible way to report a dead API key.</p>
+        <p><code>modelTimeoutMs</code> raises the budget for one tag without slowing every boot. It exists because <code>nemotron-3-super:cloud</code> needs ~36&nbsp;s for a one-token probe and therefore emits a &ldquo;could not verify&rdquo; warning on every boot &mdash; and a permanent warning is one nobody reads, which defeats the validator&rsquo;s only job. It ships empty deliberately: probes run concurrently, so the largest override is the worst-case added boot time, and paying that on every boot to silence an intermittent warning is a bad trade for most deployments.</p>
       </div>
 
       <!-- LoggingConfigSchema -->

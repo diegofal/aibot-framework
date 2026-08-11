@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { BotManager } from './bot';
+import { ModelValidationError, runStartupModelValidation } from './bot/model-failover';
 import { loadConfig, resolveAgentConfig } from './config';
 import { createLLMClient } from './core/llm-client';
 import { SkillRegistry } from './core/skill-registry';
@@ -57,6 +58,15 @@ async function main() {
 
       logger.error({ jobId: runSingleJob }, 'Job not found');
       process.exit(1);
+    }
+
+    // Probe every configured model before anything depends on one. Non-fatal
+    // unless ollama.startupValidation.strict is set.
+    try {
+      await runStartupModelValidation({ config, logger });
+    } catch (error) {
+      if (error instanceof ModelValidationError) throw error;
+      logger.warn({ err: error }, 'Startup model validation could not run');
     }
 
     // Migrate flat soul layout to per-bot subdirectories (idempotent)

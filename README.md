@@ -230,6 +230,10 @@ Automated security checks on bot startup (24h cooldown): filesystem permissions,
 
 `FailoverLLMClient` wraps LLM calls with ordered candidate chains, error classification (auth/billing/rate_limit/timeout/context_length/format), cooldown tracking, and smart skip/abort logic. Backend-scoped errors (auth, billing) skip all models on that backend. Format/context_length errors abort the chain. Configurable via `failover` config block.
 
+### Startup Model Validation
+
+Probes every configured model at boot (primary, fallbacks, `soul.healthCheck.model`, per-bot overrides) with a one-token generation, concurrently and deduplicated. A real inference call is required because retired Ollama cloud tags keep appearing in `/api/tags` after the hosted backend stops serving them. Failures are graded: a retired or unknown model (`410`/`404`) logs at `error`, while a busy or slow one (`503`/`429`/timeout) logs at `warn`. An unreachable daemon produces one message rather than one per model. Non-fatal by default; configurable via `ollama.startupValidation` (`enabled`, `timeoutMs`, `strict`, `modelTimeoutMs`). `modelTimeoutMs` gives a single slow tag a longer budget — `nemotron-3-super:cloud` otherwise exceeds the 20 s default on every boot, and a permanent warning is one nobody reads.
+
 ### Tools
 
 41 LLM-callable tools across 11 categories: web (search, fetch, browser), files (read, write, edit), execution, soul/memory management, goals, collaboration, cron, social media (Reddit, Twitter), calendar, core memory, permissions, productions, and MCP. Dynamic tool creation allows bots to build new tools at runtime (with human approval). Per-bot `disabledTools` filtering. Tool categories enable pre-selection by domain. Tool loop detection (4 strategies) prevents LLMs from getting stuck in repetitive patterns.
@@ -287,7 +291,7 @@ Productions track and review bot outputs with approve/reject, ratings, and threa
 Configuration lives in `config/config.json`, validated at startup by Zod schemas in `src/config.ts`. Key sections:
 
 - **`bots[]`** — Per-bot: token, model, allowedUsers, disabledTools, disabledSkills, workDir, llmBackend, tts overrides
-- **`ollama`** — URL, default model, timeout, embedding model
+- **`ollama`** — URL, primary/fallback models, timeout, embedding model, `startupValidation` (boot-time model probe)
 - **`agentLoop`** — Interval, maxDuration, retry, concurrency, idle suppression
 - **`soul`** — Health check, memory consolidation, search config
 - **`conversation.compaction`** — Token limit, max summary tokens, truncation strategy

@@ -344,6 +344,32 @@ export const BotConfigSchema = z.object({
     .optional(),
 });
 
+/**
+ * Startup probe of every configured model. Enabled by default because a
+ * retired cloud tag is otherwise invisible: it keeps showing up in
+ * `/api/tags` while the failover chain quietly absorbs the failure.
+ */
+const StartupModelValidationConfigSchema = z
+  .object({
+    // Defaults must stay in sync with DEFAULT_STARTUP_VALIDATION in
+    // src/bot/model-failover/model-validation.ts, which covers callers that
+    // bypass this schema.
+    enabled: z.boolean().default(true),
+    /** Per-model budget; probes run concurrently so this bounds total cost. */
+    timeoutMs: z.number().int().positive().default(20_000),
+    /** When true, a model that is gone aborts startup instead of only warning. */
+    strict: z.boolean().default(false),
+    /**
+     * Per-model overrides of `timeoutMs`, keyed by exact tag. Reasoning models
+     * burn thinking tokens before emitting anything, so a one-token probe can
+     * outlast the global budget and warn on every boot — and a permanent
+     * warning is one nobody reads. Probes run concurrently, so the largest
+     * value here is the worst-case added boot time.
+     */
+    modelTimeoutMs: z.record(z.number().int().positive()).default({}),
+  })
+  .default({});
+
 const OllamaConfigSchema = z.object({
   baseUrl: z.string().url(),
   timeout: z.number().int().positive().default(300_000),
@@ -351,6 +377,7 @@ const OllamaConfigSchema = z.object({
     primary: z.string(),
     fallbacks: z.array(z.string()).optional(),
   }),
+  startupValidation: StartupModelValidationConfigSchema,
 });
 
 const LoggingConfigSchema = z.object({
@@ -948,6 +975,7 @@ const ConfigSchema = z.object({
 export type Config = z.infer<typeof ConfigSchema>;
 export type BotConfig = z.infer<typeof BotConfigSchema>;
 export type OllamaConfig = z.infer<typeof OllamaConfigSchema>;
+export type StartupModelValidationConfig = z.infer<typeof StartupModelValidationConfigSchema>;
 export type LoggingConfig = z.infer<typeof LoggingConfigSchema>;
 export type PathsConfig = z.infer<typeof PathsConfigSchema>;
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;

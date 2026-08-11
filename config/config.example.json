@@ -5,6 +5,11 @@
     "models": {
       "primary": "kimi-k2.6:cloud",
       "fallbacks": ["nemotron-3-super:cloud", "gpt-oss:120b-cloud"]
+    },
+    "startupValidation": {
+      "enabled": true,
+      "timeoutMs": 20000,
+      "strict": false
     }
   },
 
