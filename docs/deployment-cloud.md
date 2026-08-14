@@ -1,7 +1,18 @@
-# Cloud Deployment Runbook
+# Docker Deployment Runbook
 
-Operator guide for moving AIBot Framework off a local machine onto a small
-always-on Linux host, using Docker Compose.
+Operator guide for running AIBot Framework under Docker Compose, whether the
+host is a rented Linux VPS or the Windows machine on your desk.
+
+Most of this document is host-agnostic — the container, the volumes, the
+Ollama Cloud authentication and the cutover rules are identical either way.
+Two sections are specific:
+
+- **§7** assumes a remote host and reaches the dashboard over an SSH tunnel.
+- **§13** covers **running this locally on Windows as your primary
+  deployment**, which is a supported configuration and not a lesser one. If
+  that is what you are doing, read §13 first, then §5 for the Ollama Cloud
+  keypair, then §9 for backups — local Docker makes backups *more* urgent,
+  not less, because everything lives inside the WSL2 virtual disk.
 
 For non-containerised deployment (systemd, PM2) see
 [deployment.md](./deployment.md). This document supersedes the Docker section
@@ -260,17 +271,31 @@ is genuinely what drives them.
 
 > **`OLLAMA_BASE_URL` must never be `127.0.0.1` in a container.** Inside the
 > container, loopback is the container itself, so the sidecar is never reached
-> and every LLM call fails while the daemon sits there healthy. The compose
-> default (`${OLLAMA_BASE_URL:-http://ollama:11434}`) does **not** protect you:
-> a value present in `.env` is not absent, `env_file` injects it, and a value
-> in `.env` is what compose interpolates. `.env.example` therefore now ships
-> `http://ollama:11434` — change it to `http://127.0.0.1:11434` only when
-> running the framework directly on the host with `bun run src/index.ts`.
+> and every LLM call fails while the daemon sits there healthy.
+>
+> This used to be a live footgun, because compose interpolated the container's
+> value from the *same* variable: `${OLLAMA_BASE_URL:-http://ollama:11434}`.
+> The `:-` default only applies when the variable is absent, and anyone who
+> also runs the framework natively (`bun run src/index.ts`) has
+> `OLLAMA_BASE_URL=http://127.0.0.1:11434` sitting in `.env` for exactly that
+> purpose. It is not absent. The host-native value was silently inherited by
+> the container and every LLM call failed.
+>
+> The compose file now reads a **different** variable for the container:
+>
+> ```yaml
+> OLLAMA_BASE_URL: ${AIBOT_OLLAMA_URL:-http://ollama:11434}
+> ```
+>
+> `environment` outranks `env_file`, so whatever `OLLAMA_BASE_URL` your `.env`
+> carries for host-native use, the container gets the sidecar. One `.env` is
+> now correct in both worlds. To run the container against Ollama Cloud
+> directly, set `AIBOT_OLLAMA_URL=https://ollama.com` — not `OLLAMA_BASE_URL`.
 >
 > Verify after any change:
 >
 > ```bash
-> docker compose exec aibot sh -c 'echo $OLLAMA_BASE_URL'
+> docker compose exec aibot sh -c 'echo $OLLAMA_BASE_URL'   # want http://ollama:11434
 > ```
 
 ---
@@ -333,21 +358,76 @@ until you do.
 
 **2. Copy the keypair from an already-signed-in machine (fully non-interactive).**
 
-This is the route for automated provisioning, and it is verified working:
+This is the route for automated provisioning, and it is verified working
+(re-confirmed 2026-08-13 on Docker Engine 29.6.2 / ollama 0.32.6).
+
+> ### The trap: the sidecar already has a keypair, and it is the wrong one
+>
+> **`~/.ollama/id_ed25519` being present does not mean the daemon is signed
+> in.** On its very first start the daemon *generates its own* keypair if none
+> exists. That key is perfectly valid and completely useless: it is registered
+> to no ollama.com account, so every `:cloud` call returns 401.
+>
+> This is why "copy the keypair in" reads as a no-op to anyone who checks
+> first — they `ls /root/.ollama`, see `id_ed25519` and `id_ed25519.pub`
+> already sitting there, conclude the step is done, and spend the next hour
+> debugging the API key instead. **You are overwriting, not creating.**
+>
+> Compare fingerprints rather than filenames. The public key is not secret:
+>
+> ```bash
+> ssh-keygen -lf ~/.ollama/id_ed25519.pub                    # your registered key
+> docker compose exec ollama cat /root/.ollama/id_ed25519.pub > /tmp/vol.pub
+> ssh-keygen -lf /tmp/vol.pub                                # what the sidecar uses
+> ```
+>
+> Different fingerprints mean the daemon is running on its self-generated key
+> and `:cloud` cannot work, no matter what else you configure.
 
 ```bash
 docker compose --profile local-ollama up -d ollama
+
+# Keep the daemon's self-generated pair aside so this is reversible.
+docker compose exec ollama sh -c \
+  'cp -a /root/.ollama/id_ed25519 /root/.ollama/id_ed25519.container-generated.bak'
+
 docker compose cp ~/.ollama/id_ed25519     ollama:/root/.ollama/id_ed25519
 docker compose cp ~/.ollama/id_ed25519.pub ollama:/root/.ollama/id_ed25519.pub
+
+# docker cp preserves neither owner nor mode. The daemon runs as root and
+# ignores a private key that is group- or world-readable.
+docker compose exec --user root ollama sh -c \
+  'chown root:root /root/.ollama/id_ed25519* && chmod 600 /root/.ollama/id_ed25519'
+
 docker compose restart ollama
 ```
 
+The daemon reads the keypair at startup, so the restart is required, not
+cosmetic.
+
+Then prove it with a real inference call rather than trusting the absence of
+errors — `ollama ls` and `/api/tags` both succeed on an unsigned daemon:
+
+```bash
+docker compose exec -T aibot bun -e '
+  const r = await fetch("http://ollama:11434/api/chat", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({model:"kimi-k2.6:cloud",
+      messages:[{role:"user",content:"say OK"}], stream:false})});
+  console.log(r.status, (await r.text()).slice(0,200));'
+```
+
+`200` and a reply means the identity took. `401` means it did not.
+
 Credentials live in the `ollama_data` volume (`/root/.ollama`), so they survive
-restarts and rebuilds of the bot image. Treat `id_ed25519` as a secret: it is
-your ollama.com identity, and copying it into a volume creates a second copy of
-it. On Windows use `$USERPROFILE/.ollama/...` and remember
-`export MSYS_NO_PATHCONV=1` in Git Bash, or the container-side path is rewritten
-into a Windows path and the copy fails.
+restarts, `docker compose down`, and rebuilds of the bot image. Treat
+`id_ed25519` as a secret: it is your ollama.com identity, and copying it into a
+volume creates a second copy of it. Back it up (§9) — it is 387 bytes and
+cannot be regenerated, only re-registered.
+
+On Windows the source is `%USERPROFILE%\.ollama\`, and in Git Bash you must
+`export MSYS_NO_PATHCONV=1` first or the container-side path is rewritten into
+a Windows path and the copy silently lands somewhere useless. See §13.
 
 Leave `OLLAMA_API_KEY` blank in this topology. Setting it is harmless — the
 daemon ignores it — but it makes the startup validator report
@@ -643,16 +723,39 @@ pgrep -af 'bun run src/index.ts'
 ```
 
 The authoritative check is from Telegram's side, and it needs no access to
-either host. Ask the API who is polling; if a second consumer is alive, this
-returns 409:
+either host — which matters, because the old process is often on a machine you
+cannot reach.
 
 ```bash
-curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates?timeout=0&offset=-1"
+docker compose exec -T aibot bun /app/scripts/docker/telegram-probe.ts
 ```
 
-`{"ok":true,...}` means the token is yours alone. `409 Conflict` means someone
-else is still on it — find them before starting the new bot. (Run this from a
-shell where the token will not land in your history; it is a live credential.)
+This calls only `getMe` and `getWebhookInfo` for every bot in `bots.json`. Both
+are pure reads: no updates consumed, no offsets confirmed, no long poll
+terminated. It reports which tokens are real, which are rejected, which are
+placeholders, and the current `pending_update_count`. Tokens are never printed,
+including in error strings that echo them back.
+
+**The safe cutover test** uses that pending count:
+
+1. Run the probe and note `pending` for the bot you are about to enable.
+2. Send the bot a Telegram message from your phone.
+3. Run the probe again.
+
+`pending` went **up** — nothing is draining the queue, so the token is yours
+alone and you can enable it here. `pending` stayed **0** — something else is
+consuming updates. Find and stop it first.
+
+> **Why not `getUpdates?timeout=0&offset=-1`?** It is the widely repeated
+> advice and this runbook used to give it, but it is not a trustworthy
+> detector. When two `getUpdates` requests contend, Telegram may terminate the
+> *existing* consumer rather than reject the newcomer — so the probe can come
+> back a clean `{"ok":true}` while having just knocked your live production bot
+> off its poll. It answers the question by breaking the thing you were trying
+> not to break. The pending-count test above is both safe and unambiguous.
+>
+> `offset=-1` has a second problem: it confirms updates up to the last one,
+> which can discard queued messages the other instance had not yet processed.
 
 Keep the old machine's `config/`, `data/` and `productions/` directories
 untouched until the new host has been running cleanly for a few days.
@@ -736,48 +839,107 @@ validation.
 
 ## 9. Backups
 
-Everything worth keeping is in three named volumes. Nothing lives in the
-image, and nothing lives in the database, because there is no database.
+Everything worth keeping is in named volumes. Nothing lives in the image, and
+nothing lives in a database, because there is no database.
 
-| Volume | Contents |
-|---|---|
-| `aibot_config` | `config.json`, `bots.json` (**tokens**), `config/soul/` — every agent's identity, motivations, goals and memory |
-| `aibot_data` | sessions, cron jobs, karma, dynamic tools, agent proposals, conversations, tenants, logs, `memory.db` |
-| `aibot_productions` | agent-authored artefacts |
+| Volume | Contents | Backed up |
+|---|---|---|
+| `aibot_config` | `config.json`, `bots.json` (**tokens**), `config/soul/` — every agent's identity, motivations, goals and memory | in full |
+| `aibot_data` | sessions, cron jobs, karma, dynamic tools, agent proposals, conversations, tenants, logs, `memory.db` | in full |
+| `aibot_productions` | agent-authored artefacts | in full |
+| `ollama_data` | the ed25519 Ollama Cloud identity, plus pulled model blobs | **keypair only** |
 
-`aibot_config` is the one you cannot rebuild. Back it up somewhere off-host.
+`aibot_config` is the one you cannot rebuild.
 
-```bash
-#!/bin/bash
-# /usr/local/bin/aibot-backup.sh
-set -euo pipefail
-DEST=/var/backups/aibot
-DATE=$(date +%F)
-mkdir -p "$DEST"
+`ollama_data` is deliberately partial. The model blobs are a few hundred
+megabytes that `ollama pull` recreates in minutes; the 387-byte keypair is an
+account identity that cannot be regenerated. Copying blobs nightly to save a
+re-pull is a bad trade, so the script takes the key and leaves the rest. With
+that split the whole backup is tens of kilobytes and takes about four seconds.
 
-# Quiescing first keeps the JSONL stores and memory.db internally consistent.
-docker compose -f /path/to/aibot-framework/docker-compose.yml stop aibot
+### The script
 
-for v in aibot_config aibot_data aibot_productions; do
-  docker run --rm \
-    -v "${v}:/src:ro" -v "${DEST}:/dst" \
-    busybox tar -czf "/dst/${v}-${DATE}.tar.gz" -C /src .
-done
-
-docker compose -f /path/to/aibot-framework/docker-compose.yml start aibot
-find "$DEST" -name '*.tar.gz' -mtime +30 -delete
-```
+`scripts/docker/backup.ts` handles both directions. It is TypeScript rather
+than shell on purpose: `Bun.spawn` passes argv straight through, which
+sidesteps the MSYS path mangling that rewrites container-absolute paths like
+`/v` into `C:/Program Files/Git/v` under Git Bash.
 
 ```bash
-sudo chmod +x /usr/local/bin/aibot-backup.sh
-# 04:00 daily
-echo '0 4 * * * root /usr/local/bin/aibot-backup.sh' | sudo tee /etc/cron.d/aibot-backup
+bun scripts/docker/backup.ts backup            # -> ../aibot-backups/aibot-backup-<ts>/
+bun scripts/docker/backup.ts backup --out E:/backups/aibot
+bun scripts/docker/backup.ts list
 ```
 
-Restore is the same operation inverted: stop the stack, extract the tarball
-into the volume with a `busybox tar -xzf` run, start it again.
+It stops the `aibot` container for the few seconds the snapshot takes and
+restarts it afterwards. That quiescing is what keeps the JSONL stores and
+`memory.db` internally consistent; pass `--no-stop` only if you accept a fuzzy
+snapshot. Each backup directory carries a `manifest.json` describing what was
+captured, which is what `restore` reads.
 
-Test a restore at least once. An untested backup is a hypothesis.
+Schedule it. On Linux, cron:
+
+```bash
+echo '0 4 * * * root cd /path/to/aibot-framework && /usr/local/bin/bun scripts/docker/backup.ts backup' \
+  | sudo tee /etc/cron.d/aibot-backup
+```
+
+On Windows use Task Scheduler — see §13.5.
+
+### Restore
+
+Restoring into throwaway volumes first is the whole point of having a restore
+command, so that is the default posture: overwriting the live volumes requires
+both `--force` and a stopped stack.
+
+```bash
+# Rehearsal — into parallel volumes, live state untouched
+bun scripts/docker/backup.ts restore ../aibot-backups/aibot-backup-<ts> --prefix restoretest_
+
+# Real recovery
+docker compose --profile local-ollama stop
+bun scripts/docker/backup.ts restore ../aibot-backups/aibot-backup-<ts> --force
+docker compose --profile local-ollama up -d
+```
+
+A restore into `ollama_data` writes only the keypair, so re-pull the embedding
+model afterwards on a rebuilt host:
+
+```bash
+docker compose --profile local-ollama exec ollama ollama pull nomic-embed-text
+```
+
+### Verifying a restore, properly
+
+An untested backup is a hypothesis. Comparing file listings is not a test —
+extract into throwaway volumes and **boot the application against them**:
+
+```bash
+docker run -d --name restoretest-app \
+  --network aibot-framework_default \
+  -e AIBOT_AUTOSTART_BOTS=false \
+  -e OLLAMA_BASE_URL=http://ollama:11434 \
+  -v restoretest_aibot_config:/app/config \
+  -v restoretest_aibot_data:/app/data \
+  -v restoretest_aibot_productions:/app/productions \
+  aibot-framework:latest
+
+docker logs restoretest-app | grep 'All systems operational'
+docker exec restoretest-app bun -e \
+  'console.log(JSON.parse(require("fs").readFileSync("/app/config/bots.json","utf8")).length + " bots")'
+
+docker rm -f restoretest-app
+docker volume rm restoretest_aibot_config restoretest_aibot_data \
+                 restoretest_aibot_productions restoretest_ollama_data
+```
+
+`AIBOT_AUTOSTART_BOTS=false` is not optional here. The restored `bots.json`
+carries real `enabled: true` flags and real tokens, and a rehearsal container
+that starts polling will 409-fight the production one you are rehearsing
+*for*.
+
+One expected difference when comparing a restore against the live volumes:
+`data/logs/aibot.log` will be larger in the live copy, because the app kept
+appending after the snapshot. Every other file should be byte-identical.
 
 ---
 
@@ -866,6 +1028,21 @@ docker compose down                    # stop (volumes are preserved)
 docker compose up -d --build           # deploy a new version
 ```
 
+With the sidecar, every one of these needs `--profile local-ollama` or compose
+will leave the `ollama` service out of the operation — including `down`, which
+then stops the bot and leaves the daemon running.
+
+### Operator scripts
+
+Three helpers live in `scripts/docker/`. They are ordinary Bun scripts with no
+dependencies beyond the repo.
+
+| Script | Purpose |
+|---|---|
+| `backup.ts` | Back up and restore the named volumes (§9). |
+| `load-config.ts` | Seed a host `config/` into the config volume with container-safe rewrites (§13.3). |
+| `telegram-probe.ts` | Non-destructive token check; the safe cutover test (§6). Runs inside the container. |
+
 **Every one of the commands that restarts the process restarts your enabled
 bots.** Restart, rebuild and host reboot all come back up polling (§4.1), so a
 config edit applied with `docker compose restart` completes on its own — and,
@@ -914,4 +1091,169 @@ changes the config schema.
 | `Ollama embed API error … NOT an authentication problem` | `soul.search` is on while pointing at Ollama Cloud. The underlying `401 unauthorized` is not about your key. Disable search, or switch to the sidecar topology. See §1.1. |
 | `Ollama daemon is unreachable` at startup | With the sidecar topology: it is not running (did you pass `--profile local-ollama`?), or `ollama.baseUrl` does not point at it (`http://ollama:11434` under Compose). |
 | Dashboard unreachable through the tunnel | `web.enabled` is false, or `web.host` is `127.0.0.1` inside the container so the publish rule cannot reach it. Set it to `0.0.0.0`. |
+| Dashboard loads but every panel is empty; `/api/*` returns 401 `Missing Authorization header` | `multiTenant.enabled: true`. The dashboard needs a login. `GET /api/auth/status` tells you whether an admin account exists yet; if `adminSetupRequired` is true, create one in the browser. See §13.4. |
+| `:cloud` models 401 even though `~/.ollama/id_ed25519` exists in the volume | The daemon generated its own keypair on first boot and that key is registered to nobody. Compare fingerprints, do not compare filenames. See §5 topology B. |
+| Container LLM calls fail while host-native runs work | `.env` carries `OLLAMA_BASE_URL=http://127.0.0.1:11434` for host use. Compose now reads `AIBOT_OLLAMA_URL` for the container so this cannot leak; if you are on an older compose file, that is the bug. See §4. |
+| `No manifest.json in D:\d\aibot-backups\...` from the backup script | A Git Bash `/d/...` path reached a native Windows binary. The script translates MSYS paths now; if you hit it, pass `D:/...` instead. |
 | Disk full | `data/logs/aibot.log`. See §10. |
+
+---
+
+## 13. Local Docker on Windows as the primary deployment
+
+Running the stack permanently on your own Windows machine is a supported
+configuration, not a development compromise. It removes the hosting bill and
+keeps every token and soul file on hardware you own. What it costs you is the
+things a VPS gives away: an always-on machine, an off-machine copy of your
+data, and a filesystem your normal backups can see. §13.5 is therefore the
+most important part of this section.
+
+Verified end to end on 2026-08-13: Windows 10 26200, Docker Desktop 4.84.0 /
+Engine 29.6.2 / Compose v5.3.1, WSL2 backend.
+
+### 13.1 What differs from a VPS
+
+| | VPS | Local Windows |
+|---|---|---|
+| Reaching the dashboard | SSH tunnel (§7) | direct to `http://127.0.0.1:3000` — the publish rule already restricts it to loopback |
+| Where volumes physically live | `/var/lib/docker/volumes` on a disk your host backups cover | inside the **WSL2 virtual disk** (`ext4.vhdx`), which ordinary Windows backup tools do not understand |
+| Uptime | continuous | your machine sleeps, reboots for updates, and loses power |
+| Off-machine copy | usually a given | **you have none unless you make one** |
+
+The middle two rows are the real risk. A Docker Desktop factory reset, a WSL
+corruption or an uninstall takes every named volume with it, and File History
+will not have a copy because it never saw the files.
+
+### 13.2 Bring-up
+
+Run everything from the repository root. In Git Bash, export
+`MSYS_NO_PATHCONV=1` **first** — without it, container-absolute paths in
+`docker` arguments get rewritten into Windows paths and commands fail in
+confusing ways. PowerShell does not have this problem.
+
+```bash
+export MSYS_NO_PATHCONV=1
+
+docker compose --profile local-ollama up -d --build
+docker compose --profile local-ollama ps
+docker compose logs -f aibot          # wait for "All systems operational"
+```
+
+The `local-ollama` profile is not optional if you want `soul.search`: Ollama
+Cloud serves no embedding models (§1.1), so the sidecar is the only source of
+`/api/embed`.
+
+> **Building while another tool is editing `src/`.** `docker build` snapshots
+> the working tree, so an in-flight edit gets baked into the image. To build a
+> specific commit regardless of what the tree currently looks like, build from
+> a detached worktree:
+>
+> ```bash
+> git worktree add ../aibot-docker-build <commit>
+> docker build -t aibot-framework:latest ../aibot-docker-build
+> docker compose --profile local-ollama up -d --no-build
+> git worktree remove ../aibot-docker-build
+> ```
+>
+> `--no-build` is what stops compose from rebuilding from the live tree and
+> undoing this.
+
+### 13.3 Getting your existing config into the volume
+
+The named volume is the source of truth once the stack runs — the dashboard
+rewrites `config.json`, `bots.json` and `config/soul/` at runtime. Your host
+`config/` directory is not mounted, and should not be: it lives on the Windows
+filesystem, which WSL2 reaches over a slow translation layer with awkward
+ownership semantics, and `config/soul/` is written constantly.
+
+So the host copy is seeded *into* the volume once:
+
+```bash
+bun scripts/docker/load-config.ts            # dry run — prints every rewrite
+bun scripts/docker/load-config.ts --apply
+docker compose --profile local-ollama restart aibot
+```
+
+A config written for host-native use contains values that are wrong in a
+container, and the script rewrites exactly those:
+
+| Setting | Why it is rewritten |
+|---|---|
+| `ollama.baseUrl` | `http://127.0.0.1:11434` is the container itself. Becomes `"${OLLAMA_BASE_URL}"`, which compose resolves to the sidecar. |
+| `fileTools.basePath` | A dev-machine checkout path does not exist in the image. Becomes `/app`. |
+| `fileTools.allowedPaths` | Entries that exist on neither the host nor the image are dropped rather than silently failing at call time. |
+| `web.host` | Forced to `0.0.0.0` — a container-internal bind. The `127.0.0.1:3000:3000` publish rule is what keeps it private. |
+
+`bots.json` is copied verbatim, including `enabled` flags. Nothing in this
+script decides whether a bot polls Telegram; `AIBOT_AUTOSTART_BOTS` does
+(§4.1).
+
+It refuses to overwrite a volume config that differs from the shipped example,
+because that difference may be dashboard edits. Take a backup, then re-run
+with `--force`.
+
+### 13.4 The dashboard
+
+```
+http://127.0.0.1:3000
+```
+
+No tunnel, no proxy. Confirm it is loopback-only rather than assuming:
+
+```powershell
+Get-NetTCPConnection -LocalPort 3000 -State Listen | Select-Object LocalAddress
+# want exactly: 127.0.0.1
+```
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/    # 200
+curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 http://<your-LAN-IP>:3000/   # must fail
+```
+
+A LAN-reachable dashboard is a data-exfiltration hole in single-tenant mode
+(§7), so treat a successful second command as an incident.
+
+**If `multiTenant.enabled` is true**, `/api/*` is behind auth and the
+dashboard shows a first-run setup screen until an admin account exists:
+
+```bash
+curl -s http://127.0.0.1:3000/api/auth/status
+# {"multiTenantEnabled":true,"adminSetupRequired":true}
+```
+
+Create the account in the browser. On loopback this is arguably the better
+posture — single-tenant mode has no auth at all — but the API returns 401 for
+everything until you do it, which reads like a broken dashboard.
+
+### 13.5 Backups are not optional here
+
+All state is inside the WSL2 virtual disk. Set up §9's script *before* you
+consider the deployment finished, and point it at a real Windows directory.
+
+```powershell
+schtasks /Create /TN "AIBot Backup" /SC DAILY /ST 04:00 ^
+  /TR "cmd /c cd /d D:\aibot-framework && bun scripts\docker\backup.ts backup"
+```
+
+Then do the §9 restore rehearsal at least once, and put the backup directory
+somewhere that syncs off the machine. A backup on the same disk as the thing
+it protects covers exactly one failure mode.
+
+### 13.6 Survivability
+
+Verified behaviour, and worth knowing which of these is safe:
+
+| Command | Volumes | Bots afterwards |
+|---|---|---|
+| `docker compose restart` | kept | enabled bots restart (unless `AIBOT_AUTOSTART_BOTS=false`) |
+| `docker compose down` | **kept** | restart on the next `up -d` |
+| `docker compose up -d --build` | kept | enabled bots restart |
+| Windows reboot | kept | `restart: unless-stopped` brings the stack back once Docker Desktop starts |
+| `docker compose down -v` | **DESTROYED** | every soul and memory gone, no undo |
+
+Enable **Start Docker Desktop when you log in**, or nothing comes back after a
+reboot until you notice.
+
+The one genuinely local failure mode: if the machine sleeps, the bot stops
+polling Telegram and resumes on wake. Telegram queues updates for 24 hours, so
+short sleeps lose nothing, but a laptop lid closed for a weekend does.

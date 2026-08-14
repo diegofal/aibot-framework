@@ -44,9 +44,17 @@ services:
 
     environment:
       # Consumed where config/config.json interpolates "${VAR}".
-      # Defaults to the sidecar's hostname; override in .env with
-      # https://ollama.com (plus OLLAMA_API_KEY) to run without the sidecar.
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      #
+      # Deliberately interpolated from AIBOT_OLLAMA_URL, not from
+      # OLLAMA_BASE_URL. The same .env is usually shared with host-native runs
+      # (`bun run src/index.ts`), where OLLAMA_BASE_URL points at
+      # http://127.0.0.1:11434 — correct on the host, and a container's own
+      # empty loopback in here. `environment` outranks `env_file`, so this line
+      # overrides whatever OLLAMA_BASE_URL .env happens to carry.
+      #
+      # To run without the sidecar, set AIBOT_OLLAMA_URL=https://ollama.com in
+      # .env (plus OLLAMA_API_KEY) and drop the local-ollama profile.
+      OLLAMA_BASE_URL: ${AIBOT_OLLAMA_URL:-http://ollama:11434}
       # Overridden at runtime by config.datetime.timezone; set here so early
       # startup logs (before config load) use the right zone.
       TZ: ${TZ:-America/Argentina/Buenos_Aires}
