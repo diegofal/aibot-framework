@@ -2456,13 +2456,16 @@ function showExportModal(botId) {
     <div class="modal-title">Export Agent: ${escapeHtml(botId)}</div>
     <p class="text-dim mb-16">Select what to include in the export archive (.tar.gz). Soul files are always included.</p>
     <div class="form-group">
-      <label><input type="checkbox" id="export-productions"> Include productions</label>
+      <label><input type="checkbox" id="export-productions" checked> Include productions</label>
     </div>
     <div class="form-group">
-      <label><input type="checkbox" id="export-conversations"> Include conversations</label>
+      <label><input type="checkbox" id="export-conversations" checked> Include conversations</label>
     </div>
     <div class="form-group">
-      <label><input type="checkbox" id="export-karma"> Include karma</label>
+      <label><input type="checkbox" id="export-karma" checked> Include karma</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="export-sessions" checked> Include Telegram sessions / chat history</label>
     </div>
     <div class="modal-actions">
       <button class="btn" id="export-cancel">Cancel</button>
@@ -2475,11 +2478,13 @@ function showExportModal(botId) {
     const productions = document.getElementById('export-productions').checked;
     const conversations = document.getElementById('export-conversations').checked;
     const karma = document.getElementById('export-karma').checked;
+    const sessions = document.getElementById('export-sessions').checked;
 
     const params = new URLSearchParams();
-    if (productions) params.set('productions', 'true');
-    if (conversations) params.set('conversations', 'true');
-    if (karma) params.set('karma', 'true');
+    if (!productions) params.set('productions', 'false');
+    if (!conversations) params.set('conversations', 'false');
+    if (!karma) params.set('karma', 'false');
+    if (!sessions) params.set('sessions', 'false');
 
     const url = `/api/agents/${encodeURIComponent(botId)}/export?${params}`;
     const btn = document.getElementById('export-confirm');

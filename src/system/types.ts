@@ -16,8 +16,8 @@ export const SYSTEM_EXPORT_KIND = 'aibot-system-export';
  *
  * - `config` — global `config/config.json` only (sanitized).
  * - `agents` — the bot roster (`config/bots.json`) plus one nested per-bot
- *   bundle per agent: soul, core memory, and optionally productions,
- *   conversations and karma. The roster travels with the agents, not with the
+ *   bundle per agent: soul, core memory, productions, conversations, karma
+ *   and Telegram sessions (all included by default). The roster travels with the agents, not with the
  *   config, because "move my agents to a fresh install" must not overwrite the
  *   target's global settings.
  * - `data` — cron jobs, sessions, dynamic tools, agent proposals, karma,
@@ -49,7 +49,12 @@ export interface AgentInventoryEntry {
   name: string;
   files: number;
   bytes: number;
-  includes: { productions: boolean; conversations: boolean; karma: boolean };
+  includes: {
+    productions: boolean;
+    conversations: boolean;
+    karma: boolean;
+    sessions: boolean;
+  };
 }
 
 export interface ExclusionNote {

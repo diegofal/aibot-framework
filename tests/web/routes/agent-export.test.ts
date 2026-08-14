@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotConfig, Config } from '../../../src/config';
+import { unpackTarGz } from '../../../src/system/tar-archive';
 import { agentExportRoutes } from '../../../src/web/routes/agent-export';
 
 const TEST_DIR = join(import.meta.dir, '..', '..', '..', '.test-export-routes');
@@ -41,6 +42,7 @@ function makeConfig(bots: BotConfig[] = [makeBot()]): Config {
     productions: { baseDir: PROD_DIR, enabled: true } as any,
     conversations: { baseDir: CONV_DIR } as any,
     karma: { baseDir: KARMA_DIR, enabled: true } as any,
+    session: { dataDir: join(TEST_DIR, 'data', 'sessions') } as any,
     ollama: { models: { primary: 'test-model' } } as any,
     conversation: {} as any,
     agentLoop: {} as any,
@@ -101,6 +103,44 @@ describe('agentExportRoutes', () => {
 
       const buffer = Buffer.from(await res.arrayBuffer());
       expect(buffer.length).toBeGreaterThan(0);
+    });
+
+    it('includes extras by default and excludes them when query flags are false', async () => {
+      const bot = makeBot();
+      const config = makeConfig([bot]);
+      const soulDir = join(SOUL_DIR, 'test-bot');
+      mkdirSync(join(soulDir, 'memory'), { recursive: true });
+      writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Test Bot\n');
+
+      const prodDir = join(PROD_DIR, 'test-bot');
+      mkdirSync(prodDir, { recursive: true });
+      writeFileSync(join(prodDir, 'file1.md'), '# Production 1');
+
+      const sessionDir = join(TEST_DIR, 'data', 'sessions');
+      mkdirSync(join(sessionDir, 'transcripts', 'test-bot'), { recursive: true });
+      writeFileSync(
+        join(sessionDir, 'sessions.json'),
+        JSON.stringify({ 'bot:test-bot:private:1': { key: 'bot:test-bot:private:1' } })
+      );
+      writeFileSync(
+        join(sessionDir, 'transcripts', 'test-bot', 'bot-test-bot-private-1.jsonl'),
+        '{"role":"user"}\n'
+      );
+
+      const app = createApp(makeDeps(config));
+
+      const includedRes = await app.request('/api/agents/test-bot/export');
+      const included = unpackTarGz(Buffer.from(await includedRes.arrayBuffer()));
+      expect(included.files.has('productions/file1.md')).toBe(true);
+      expect(included.files.has('sessions/sessions.json')).toBe(true);
+      expect(included.files.has('sessions/transcripts/bot-test-bot-private-1.jsonl')).toBe(true);
+
+      const excludedRes = await app.request(
+        '/api/agents/test-bot/export?productions=false&sessions=false&conversations=0&karma=no'
+      );
+      const excluded = unpackTarGz(Buffer.from(await excludedRes.arrayBuffer()));
+      expect(excluded.files.has('productions/file1.md')).toBe(false);
+      expect([...excluded.files.keys()].some((path) => path.startsWith('sessions/'))).toBe(false);
     });
 
     it('returns 404 for non-existent bot', async () => {

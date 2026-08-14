@@ -14,6 +14,9 @@ config/config.json
 data/
 *.log
 
+# Scratch directory the export-service tests write into the repo root
+.test-export-service/
+
 # Build output
 dist/
 *.tsbuildinfo

@@ -393,9 +393,9 @@ export async function renderSettings(el) {
 
       <div class="form-group">
         <label>Per-agent extras</label>
-        <label><input type="checkbox" id="sysx-productions"> Include productions</label>
-        <label><input type="checkbox" id="sysx-conversations"> Include conversation logs</label>
-        <label><input type="checkbox" id="sysx-karma"> Include karma</label>
+        <label><input type="checkbox" id="sysx-productions" checked> Include productions</label>
+        <label><input type="checkbox" id="sysx-conversations" checked> Include conversation logs</label>
+        <label><input type="checkbox" id="sysx-karma" checked> Include karma</label>
       </div>
 
       <div class="actions" style="margin-top:12px">
@@ -824,9 +824,9 @@ function setupSystemBackupCard() {
     }
 
     const params = new URLSearchParams({ sections: sections.join(',') });
-    if (document.getElementById('sysx-productions').checked) params.set('productions', 'true');
-    if (document.getElementById('sysx-conversations').checked) params.set('conversations', 'true');
-    if (document.getElementById('sysx-karma').checked) params.set('karma', 'true');
+    if (!document.getElementById('sysx-productions').checked) params.set('productions', 'false');
+    if (!document.getElementById('sysx-conversations').checked) params.set('conversations', 'false');
+    if (!document.getElementById('sysx-karma').checked) params.set('karma', 'false');
 
     btn.disabled = true;
     btn.textContent = 'Building bundle...';

@@ -7,6 +7,14 @@ import type { CoreMemoryManager } from '../../memory/core-memory';
 import type { MemoryManager } from '../../memory/manager';
 import { getTenantId, isBotAccessible } from '../../tenant/tenant-scoping';
 
+function includeFlag(value: string | undefined, defaultOn = true): boolean {
+  if (value === undefined || value === '') return defaultOn;
+  const v = value.toLowerCase();
+  if (v === 'false' || v === '0' || v === 'no' || v === 'off') return false;
+  if (v === 'true' || v === '1' || v === 'yes' || v === 'on') return true;
+  return defaultOn;
+}
+
 export function agentExportRoutes(deps: {
   config: Config;
   configPath: string;
@@ -32,12 +40,18 @@ export function agentExportRoutes(deps: {
       return c.json({ error: 'Agent not found' }, 404);
     }
 
-    const productions = c.req.query('productions') === 'true';
-    const conversations = c.req.query('conversations') === 'true';
-    const karma = c.req.query('karma') === 'true';
+    const productions = includeFlag(c.req.query('productions'));
+    const conversations = includeFlag(c.req.query('conversations'));
+    const karma = includeFlag(c.req.query('karma'));
+    const sessions = includeFlag(c.req.query('sessions'));
 
     try {
-      const buffer = await service.exportBot(botId, { productions, conversations, karma });
+      const buffer = await service.exportBot(botId, {
+        productions,
+        conversations,
+        karma,
+        sessions,
+      });
 
       const date = new Date().toISOString().slice(0, 10);
       const filename = `${botId}-export-${date}.tar.gz`;

@@ -1,5 +1,14 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import type { BotConfig, Config } from '../config';
 import { persistBots, resolveAgentConfig } from '../config';
 import type { Logger } from '../logger';
@@ -15,6 +24,7 @@ export interface ExportOptions {
   productions?: boolean;
   conversations?: boolean;
   karma?: boolean;
+  sessions?: boolean;
 }
 
 export interface ImportOptions {
@@ -41,12 +51,88 @@ interface ExportManifest {
     productions: boolean;
     conversations: boolean;
     karma: boolean;
+    sessions: boolean;
   };
 }
 
 /** `.versions/` is soul-file history: large, regenerable, and never restored. */
 function excludeSoulVersions(relativePath: string): boolean {
   return !relativePath.split('/').includes('.versions');
+}
+
+/** Optional extras default on; only an explicit `false` skips them. */
+function includeOptional(flag: boolean | undefined): boolean {
+  return flag !== false;
+}
+
+function escapeRegExpChars(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const TRANSCRIPT_CHAT_TYPES = 'private|group|supergroup|channel';
+
+function transcriptFilePattern(botId: string): RegExp {
+  return new RegExp(`^bot-${escapeRegExpChars(botId)}-(${TRANSCRIPT_CHAT_TYPES})-.*\\.jsonl$`);
+}
+
+/**
+ * Import writes soul files to `soul.dir/<id>` (legacy). `resolveAgentConfig`
+ * defaults `soulDir` to the tenant tree, which is often empty on production
+ * hosts that never set a per-bot override. Prefer a candidate that actually
+ * exists so the archive is not an empty `soul/`.
+ */
+function resolveExportSoulDir(botId: string, botConfig: BotConfig, config: Config): string | null {
+  const resolved = resolveAgentConfig(config, botConfig);
+  const candidates = [
+    botConfig.soulDir,
+    join(config.soul?.dir ?? './config/soul', botId),
+    resolved.soulDir,
+  ];
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function readJsonObject(path: string): Record<string, unknown> {
+  if (!existsSync(path)) return {};
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf-8'));
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      return raw as Record<string, unknown>;
+    }
+  } catch {
+    // Corrupt index: treat as empty so a restore can still merge.
+  }
+  return {};
+}
+
+function sliceByPrefix(
+  record: Record<string, unknown>,
+  prefix: string
+): Record<string, unknown> | null {
+  const sliced: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key.startsWith(prefix)) sliced[key] = value;
+  }
+  return Object.keys(sliced).length > 0 ? sliced : null;
+}
+
+function rewritePrefixedKey(key: string, sourcePrefix: string, targetPrefix: string): string {
+  if (sourcePrefix === targetPrefix) return key;
+  if (!key.startsWith(sourcePrefix)) return key;
+  return `${targetPrefix}${key.slice(sourcePrefix.length)}`;
+}
+
+function rewriteTranscriptFilename(
+  filename: string,
+  sourceBotId: string,
+  targetBotId: string
+): string {
+  if (sourceBotId === targetBotId) return filename;
+  const prefix = `bot-${sourceBotId}-`;
+  if (!filename.startsWith(prefix)) return filename;
+  return `bot-${targetBotId}-${filename.slice(prefix.length)}`;
 }
 
 export class BotExportService {
@@ -69,7 +155,6 @@ export class BotExportService {
     const botConfig = this.config.bots.find((b) => b.id === botId);
     if (!botConfig) throw new Error(`Bot not found: ${botId}`);
 
-    const resolved = resolveAgentConfig(this.config, botConfig);
     const entries: TarEntry[] = [];
 
     // The roster sanitizer is the single place that knows which bot fields are
@@ -81,14 +166,14 @@ export class BotExportService {
       data: Buffer.from(JSON.stringify(sanitizedConfig, null, 2), 'utf-8'),
     });
 
-    const soulDir = resolved.soulDir;
-    if (existsSync(soulDir)) {
+    const soulDir = resolveExportSoulDir(botId, botConfig, this.config);
+    if (soulDir) {
       entries.push(
         ...collectDirEntries(soulDir, 'soul', { filter: (path) => excludeSoulVersions(path) })
       );
     } else {
       entries.push({ path: 'soul' });
-      this.logger.warn({ botId, soulDir }, 'Export: soul directory missing, exporting empty');
+      this.logger.warn({ botId }, 'Export: soul directory missing, exporting empty');
     }
 
     let coreMemoryExported = false;
@@ -109,17 +194,25 @@ export class BotExportService {
       }
     }
 
-    if (opts.productions) {
+    const includeProductions = includeOptional(opts.productions);
+    const includeConversations = includeOptional(opts.conversations);
+    const includeKarma = includeOptional(opts.karma);
+    const includeSessions = includeOptional(opts.sessions);
+
+    if (includeProductions) {
       const prodDir = botConfig.productions?.dir ?? join(this.config.productions.baseDir, botId);
       if (existsSync(prodDir)) entries.push(...collectDirEntries(prodDir, 'productions'));
     }
-    if (opts.conversations) {
+    if (includeConversations) {
       const convDir = join(this.config.conversations.baseDir, botId);
       if (existsSync(convDir)) entries.push(...collectDirEntries(convDir, 'conversations'));
     }
-    if (opts.karma) {
+    if (includeKarma) {
       const karmaDir = join(this.config.karma.baseDir, botId);
       if (existsSync(karmaDir)) entries.push(...collectDirEntries(karmaDir, 'karma'));
+    }
+    if (includeSessions) {
+      entries.push(...this.collectSessionEntries(botId));
     }
 
     const manifest: ExportManifest = {
@@ -130,9 +223,10 @@ export class BotExportService {
       includes: {
         soul: true,
         coreMemory: coreMemoryExported,
-        productions: !!opts.productions,
-        conversations: !!opts.conversations,
-        karma: !!opts.karma,
+        productions: includeProductions,
+        conversations: includeConversations,
+        karma: includeKarma,
+        sessions: includeSessions,
       },
     };
     entries.push({
@@ -147,7 +241,12 @@ export class BotExportService {
     const entries = await this.collectBotEntries(botId, opts);
     const buffer = packTarGz(entries);
     this.logger.info(
-      { botId, size: buffer.length, productions: !!opts.productions },
+      {
+        botId,
+        size: buffer.length,
+        productions: includeOptional(opts.productions),
+        sessions: includeOptional(opts.sessions),
+      },
       'Bot exported successfully'
     );
     return buffer;
@@ -237,6 +336,12 @@ export class BotExportService {
       writeArchiveToDisk(subtree(archive, prefix), target);
     }
 
+    // Sessions live in a shared directory — never wipe the whole tree the way
+    // productions/conversations/karma can. Merge this bot's slice only.
+    if (hasSubtree(archive, 'sessions')) {
+      this.restoreSessions(archive, manifest.botId || importedConfig.id, botId, !!opts.overwrite);
+    }
+
     // Blank token + enabled:false is load-bearing: boot-time auto-start would
     // otherwise have the new instance poll a token the source may still own.
     const newConfig: BotConfig = {
@@ -274,6 +379,198 @@ export class BotExportService {
     this.logger.info({ botId, botName, warnings }, 'Bot imported successfully');
 
     return { botId, botName, warnings, created: !existing || !opts.overwrite };
+  }
+
+  /**
+   * Slice the shared session store down to this bot. Transcripts from both the
+   * nested `transcripts/<botId>/` layout and the legacy flat directory land
+   * under `sessions/transcripts/<filename>` so the archive does not require
+   * the per-bot subdirectory.
+   */
+  private collectSessionEntries(botId: string): TarEntry[] {
+    const sessionDir = this.config.session?.dataDir ?? './data/sessions';
+    const entries: TarEntry[] = [];
+
+    const sessions = sliceByPrefix(readJsonObject(join(sessionDir, 'sessions.json')), `bot:${botId}:`);
+    if (sessions) {
+      entries.push({
+        path: 'sessions/sessions.json',
+        data: Buffer.from(JSON.stringify(sessions, null, 2), 'utf-8'),
+      });
+    }
+
+    const active = sliceByPrefix(
+      readJsonObject(join(sessionDir, 'active-conversations.json')),
+      `${botId}:`
+    );
+    if (active) {
+      entries.push({
+        path: 'sessions/active-conversations.json',
+        data: Buffer.from(JSON.stringify(active, null, 2), 'utf-8'),
+      });
+    }
+
+    const seen = new Set<string>();
+    const nestedDir = join(sessionDir, 'transcripts', botId);
+    if (existsSync(nestedDir)) {
+      for (const entry of collectDirEntries(nestedDir, 'sessions/transcripts')) {
+        const filename = entry.path.split('/').pop();
+        if (filename) seen.add(filename);
+        entries.push(entry);
+      }
+    }
+
+    const flatDir = join(sessionDir, 'transcripts');
+    if (existsSync(flatDir)) {
+      const pattern = transcriptFilePattern(botId);
+      let children: string[] = [];
+      try {
+        children = readdirSync(flatDir);
+      } catch {
+        children = [];
+      }
+      for (const child of children) {
+        if (seen.has(child) || !pattern.test(child)) continue;
+        const hostPath = join(flatDir, child);
+        let stats: ReturnType<typeof statSync>;
+        try {
+          stats = statSync(hostPath);
+        } catch {
+          continue;
+        }
+        if (!stats.isFile()) continue;
+        seen.add(child);
+        entries.push({
+          path: `sessions/transcripts/${child}`,
+          data: readFileSync(hostPath),
+          mtime: stats.mtime,
+        });
+      }
+    }
+
+    return entries;
+  }
+
+  private restoreSessions(
+    archive: TarArchive,
+    sourceBotId: string,
+    targetBotId: string,
+    overwrite: boolean
+  ): void {
+    const sessionDir = this.config.session?.dataDir ?? './data/sessions';
+    mkdirSync(sessionDir, { recursive: true });
+
+    const sessionsArchive = subtree(archive, 'sessions');
+    const sessionPrefix = { source: `bot:${sourceBotId}:`, target: `bot:${targetBotId}:` };
+    const activePrefix = { source: `${sourceBotId}:`, target: `${targetBotId}:` };
+
+    this.mergeJsonSlice(
+      join(sessionDir, 'sessions.json'),
+      sessionsArchive.files.get('sessions.json'),
+      sessionPrefix.source,
+      sessionPrefix.target,
+      overwrite,
+      true
+    );
+    this.mergeJsonSlice(
+      join(sessionDir, 'active-conversations.json'),
+      sessionsArchive.files.get('active-conversations.json'),
+      activePrefix.source,
+      activePrefix.target,
+      overwrite,
+      false
+    );
+
+    const transcriptsRoot = join(sessionDir, 'transcripts');
+    const targetTranscripts = join(transcriptsRoot, targetBotId);
+    if (overwrite) {
+      if (existsSync(targetTranscripts)) {
+        rmSync(targetTranscripts, { recursive: true, force: true });
+      }
+      this.deleteLegacyTranscripts(transcriptsRoot, targetBotId);
+    }
+
+    const transcriptTree = subtree(sessionsArchive, 'transcripts');
+    if (transcriptTree.files.size === 0) return;
+
+    const rewritten: TarArchive = { files: new Map(), dirs: new Set() };
+    for (const [path, data] of transcriptTree.files) {
+      const filename = path.split('/').pop() ?? path;
+      rewritten.files.set(rewriteTranscriptFilename(filename, sourceBotId, targetBotId), data);
+    }
+    writeArchiveToDisk(rewritten, targetTranscripts);
+  }
+
+  private mergeJsonSlice(
+    targetPath: string,
+    archiveData: Buffer | undefined,
+    sourcePrefix: string,
+    targetPrefix: string,
+    overwrite: boolean,
+    rewriteInnerKey: boolean
+  ): void {
+    const current = readJsonObject(targetPath);
+    if (overwrite) {
+      for (const key of Object.keys(current)) {
+        if (key.startsWith(targetPrefix)) delete current[key];
+      }
+    }
+    if (archiveData) {
+      let incoming: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(archiveData.toString('utf-8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          incoming = parsed as Record<string, unknown>;
+        }
+      } catch {
+        incoming = {};
+      }
+      for (const [key, value] of Object.entries(incoming)) {
+        if (!key.startsWith(sourcePrefix)) continue;
+        const nextKey = rewritePrefixedKey(key, sourcePrefix, targetPrefix);
+        let nextValue = value;
+        if (
+          rewriteInnerKey &&
+          nextValue &&
+          typeof nextValue === 'object' &&
+          !Array.isArray(nextValue) &&
+          'key' in nextValue &&
+          typeof (nextValue as { key: unknown }).key === 'string'
+        ) {
+          nextValue = {
+            ...(nextValue as Record<string, unknown>),
+            key: rewritePrefixedKey(
+              (nextValue as { key: string }).key,
+              sourcePrefix,
+              targetPrefix
+            ),
+          };
+        }
+        current[nextKey] = nextValue;
+      }
+    }
+    mkdirSync(dirname(targetPath), { recursive: true });
+    writeFileSync(targetPath, `${JSON.stringify(current, null, 2)}\n`, 'utf-8');
+  }
+
+  private deleteLegacyTranscripts(transcriptsRoot: string, botId: string): void {
+    if (!existsSync(transcriptsRoot)) return;
+    const pattern = transcriptFilePattern(botId);
+    let children: string[] = [];
+    try {
+      children = readdirSync(transcriptsRoot);
+    } catch {
+      return;
+    }
+    for (const child of children) {
+      if (!pattern.test(child)) continue;
+      const hostPath = join(transcriptsRoot, child);
+      try {
+        if (statSync(hostPath).isFile()) unlinkSync(hostPath);
+      } catch {
+        // Best-effort cleanup; merge still proceeds.
+      }
+    }
   }
 
   private async restoreCoreMemory(jsonl: string, botId: string, warnings: string[]): Promise<void> {

@@ -1259,10 +1259,30 @@
           Full bot backup and restoration as portable <code>.tar.gz</code> archives. Exports include:
           manifest, sanitized config (no tokens and no WhatsApp/Discord/tenant credentials &mdash;
           the roster sanitizer in <code>src/system/config-sanitizer.ts</code> decides what counts as
-          a secret), soul directory (excludes <code>.versions/</code>), core memory (JSONL), and
-          optionally productions, conversations, and karma. Import supports ID/name overrides,
-          conflict detection (409), and overwrite mode. Also re-indexes soul files for RAG search
-          and handles core memory import with a standalone SQLite fallback.
+          a secret), soul directory (excludes <code>.versions/</code>), core memory (JSONL),
+          productions, conversations, karma, and Telegram sessions. Optional extras
+          (productions, conversations, karma, sessions) are included by default and skipped only
+          when the corresponding option is explicitly <code>false</code>. Import supports ID/name
+          overrides, conflict detection (409), and overwrite mode. Also re-indexes soul files for
+          RAG search and handles core memory import with a standalone SQLite fallback.
+        </p>
+        <p class="responsibility">
+          Soul lookup does not trust <code>resolveAgentConfig().soulDir</code> alone. Import writes
+          to the legacy <code>soul.dir/&lt;id&gt;</code> path, while the resolver defaults to the
+          tenant tree &mdash; often empty on production hosts. <code>collectBotEntries</code> picks
+          the first candidate that exists on disk: <code>botConfig.soulDir</code>, then
+          <code>join(config.soul.dir, botId)</code>, then the tenant default.
+        </p>
+        <p class="responsibility">
+          Telegram sessions are sliced from the shared <code>session.dataDir</code>
+          (<code>sessions.json</code> keys <code>bot:&lt;id&gt;:</code>,
+          <code>active-conversations.json</code> keys <code>&lt;id&gt;:</code>, transcripts from
+          both <code>transcripts/&lt;id&gt;/</code> and legacy flat
+          <code>transcripts/bot-&lt;id&gt;-*.jsonl</code>) into <code>sessions/</code> in the
+          archive. Restore merges the shared JSON files, writes transcripts to
+          <code>transcripts/&lt;targetId&gt;/</code>, and rewrites keys and filenames when
+          <code>newBotId</code> is set. The dashboard inbox under
+          <code>conversations.baseDir</code> is a different store.
         </p>
         <p class="responsibility">
           Archiving is pure JavaScript (<code>src/system/tar-archive.ts</code>): no <code>tar</code>

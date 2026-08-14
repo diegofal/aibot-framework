@@ -303,7 +303,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents/:id/export</code></td>
-              <td>Download agent as .tar.gz archive (soul, config, core_memory; optional: productions, conversations, karma via query params)</td>
+              <td>Download agent as .tar.gz archive (soul, config, core_memory, plus productions, conversations, karma, and Telegram sessions). Query params default on; <code>false</code>/<code>0</code>/<code>no</code>/<code>off</code> excludes. New <code>sessions</code> param.</td>
               <td><code>agent-export.ts</code></td>
             </tr>
             <tr>
@@ -315,7 +315,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/system/export</code></td>
-              <td>Download the whole instance as .tar.gz (config, roster, all agents, cron, sessions, tools, proposals, tenants). Query: <code>sections</code>, <code>agents</code>, <code>productions</code>, <code>conversations</code>, <code>karma</code>. No secret values are included.</td>
+              <td>Download the whole instance as .tar.gz (config, roster, all agents, cron, sessions, tools, proposals, tenants). Query: <code>sections</code>, <code>agents</code>, <code>productions</code>, <code>conversations</code>, <code>karma</code>, <code>sessions</code>. Extras default on; pass <code>false</code> to omit. No secret values are included.</td>
               <td><code>system-export.ts</code></td>
             </tr>
             <tr>

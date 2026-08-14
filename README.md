@@ -307,7 +307,7 @@ Dual auth system supporting both human users and programmatic access:
 
 ### Bot Export/Import
 
-Portable `.tar.gz` archives for full bot backup and restoration via `BotExportService`. Includes manifest, sanitized config (no tokens, no WhatsApp/Discord credentials), soul directory, core memory (JSONL), and optionally productions, conversations, and karma. Import supports ID/name overrides, conflict detection, and post-import RAG reindexing. Archiving is pure JS — no `tar` binary and no temp-directory staging.
+Portable `.tar.gz` archives for full bot backup and restoration via `BotExportService`. Includes manifest, sanitized config (no tokens, no WhatsApp/Discord credentials), soul directory, core memory (JSONL), productions, conversations, karma, and Telegram sessions (extras included by default; pass `false` to omit). Import supports ID/name overrides, conflict detection, and post-import RAG reindexing. Archiving is pure JS — no `tar` binary and no temp-directory staging.
 
 ### System Export/Import
 

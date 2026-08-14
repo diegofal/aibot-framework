@@ -213,9 +213,12 @@ describe('system export', () => {
     expect(manifest.inventory.excluded.some((note) => note.path === 'data/memory.db')).toBe(true);
   });
 
-  it('omits productions unless requested', async () => {
-    const { buffer } = await sourceService().export();
-    expect(unpackTarGz(buffer).files.has('agents/coach/productions/article.md')).toBe(false);
+  it('includes productions by default and omits them when opted out', async () => {
+    const included = unpackTarGz((await sourceService().export()).buffer);
+    expect(included.files.has('agents/coach/productions/article.md')).toBe(true);
+
+    const excluded = unpackTarGz((await sourceService().export({ productions: false })).buffer);
+    expect(excluded.files.has('agents/coach/productions/article.md')).toBe(false);
   });
 
   it('uses only POSIX separators so a Windows export restores on Linux', async () => {

@@ -45,9 +45,10 @@ agents/<id>/           one nested per-agent bundle per agent
   config.json
   soul/                soul directory, minus .versions/
   core_memory.jsonl    core memory entries
-  productions/         only with --productions
-  conversations/       only with --conversations
-  karma/               only with --karma
+  productions/         included by default; omit with --no-productions
+  conversations/       included by default; omit with --no-conversations
+  karma/               included by default; omit with --no-karma
+  sessions/            this agent's Telegram sessions (included by default; --no-sessions)
 data/cron/             cron job definitions and run history
 data/sessions/         conversation sessions and transcripts
 data/tools/            dynamic tools
@@ -128,23 +129,27 @@ bun run export:system -- --out <file.tar.gz> [options]
 | `--out <file>` | Destination archive (required) |
 | `--sections <list>` | `config`, `agents`, `data`, `tenants`, or `all` (default: `all`) |
 | `--agents <ids>` | Comma-separated agent ids (default: every agent) |
-| `--productions` | Include each agent's productions directory |
-| `--conversations` | Include each agent's conversation logs |
-| `--karma` | Include each agent's karma data |
+| `--productions` | No-op (productions are included by default) |
+| `--conversations` | No-op (conversation logs are included by default) |
+| `--karma` | No-op (karma data is included by default) |
+| `--no-productions` | Omit each agent's productions directory |
+| `--no-conversations` | Omit each agent's conversation logs |
+| `--no-karma` | Omit each agent's karma data |
+| `--no-sessions` | Omit per-agent Telegram sessions from `agents/<id>/` (the `data` section still carries the shared session store) |
 | `--config <path>` | Path to `config.json` (default: `<root>/config/config.json`) |
 | `--root <dir>` | Instance root (default: current directory) |
 | `--force` | Overwrite `--out` if it exists |
 | `--json` | Print the manifest as JSON instead of a summary |
 
 ```bash
-# Everything, including productions
-bun run export:system -- --out ../full-backup.tar.gz --productions
+# Everything (productions, conversations, karma, and per-agent sessions included)
+bun run export:system -- --out ../full-backup.tar.gz
 
-# Just the agents, to seed a fresh install
+# Just the agents, to seed a fresh install (still includes per-agent sessions)
 bun run export:system -- --out ../agents.tar.gz --sections agents
 
-# Two specific agents with their outputs
-bun run export:system -- --out ../coach.tar.gz --sections agents --agents coach,soporte --productions
+# Two specific agents, without productions
+bun run export:system -- --out ../coach.tar.gz --sections agents --agents coach,soporte --no-productions
 
 # Export an instance that lives somewhere else
 bun run export:system -- --out ../b.tar.gz --root /srv/aibot
@@ -185,12 +190,12 @@ bun run import:system -- --in ../full-backup.tar.gz --sections agents --agents c
 
 | Method | Route | Notes |
 |---|---|---|
-| `GET` | `/api/system/export` | Downloads the bundle. Query: `sections`, `agents`, `productions`, `conversations`, `karma`. |
+| `GET` | `/api/system/export` | Downloads the bundle. Query: `sections`, `agents`, `productions`, `conversations`, `karma`, `sessions`. Extras default on; pass `false` to omit. |
 | `GET` | `/api/system/export/manifest` | Returns the manifest as JSON without the payload. |
 | `POST` | `/api/system/import` | `multipart/form-data` (field `file`) or a raw `application/gzip` body. Query: `sections`, `agents`, `overwrite`, `dryRun`. |
 
 ```bash
-curl -o backup.tar.gz 'http://127.0.0.1:3000/api/system/export?sections=all&productions=true'
+curl -o backup.tar.gz 'http://127.0.0.1:3000/api/system/export?sections=all'
 
 curl 'http://127.0.0.1:3000/api/system/export/manifest' | jq '.inventory'
 

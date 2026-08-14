@@ -83,6 +83,7 @@ export interface SystemExportOptions {
   productions?: boolean;
   conversations?: boolean;
   karma?: boolean;
+  sessions?: boolean;
 }
 
 export interface SystemExportResult {
@@ -183,7 +184,10 @@ export class SystemExportService {
       { path: 'data/screenshots', reason: 'Browser tool output — regenerable' },
       { path: 'data/intel', reason: 'Intel gatherer cache — regenerable' },
       { path: '.env', reason: 'Secrets — recreate from REQUIRED_ENV.txt on the target' },
-      { path: 'productions/', reason: 'Included per agent only when explicitly requested' }
+      {
+        path: 'productions/',
+        reason: 'Included per agent by default; omit with productions=false / --no-productions',
+      }
     );
 
     const checksums: Record<string, string> = {};
@@ -300,6 +304,7 @@ export class SystemExportService {
         productions: opts.productions,
         conversations: opts.conversations,
         karma: opts.karma,
+        sessions: opts.sessions,
       });
 
       let bytes = 0;
@@ -318,9 +323,10 @@ export class SystemExportService {
         files,
         bytes,
         includes: {
-          productions: !!opts.productions,
-          conversations: !!opts.conversations,
-          karma: !!opts.karma,
+          productions: opts.productions !== false,
+          conversations: opts.conversations !== false,
+          karma: opts.karma !== false,
+          sessions: opts.sessions !== false,
         },
       });
     }

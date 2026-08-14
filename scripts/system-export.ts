@@ -4,7 +4,8 @@
  *
  *   bun run export:system -- --out ../aibot-backup.tar.gz
  *   bun run export:system -- --out /backups/agents.tar.gz --sections agents
- *   bun run export:system -- --out ./b.tar.gz --agents coach,soporte --productions
+ *   bun run export:system -- --out ./b.tar.gz --agents coach,soporte
+ *   bun run export:system -- --out ./b.tar.gz --no-productions
  *
  * Writes a `.tar.gz` containing a sanitized configuration, the bot roster, one
  * nested per-agent bundle per bot, and the selected data directories. No secret
@@ -28,9 +29,14 @@ Options:
   --out <file>        Destination archive (required)
   --sections <list>   config,agents,data,tenants or "all"   (default: all)
   --agents <ids>      Comma-separated bot ids to include    (default: all bots)
-  --productions       Include each agent's productions directory
-  --conversations     Include each agent's conversation logs
-  --karma             Include each agent's karma data
+  --productions       (no-op; productions are included by default)
+  --conversations     (no-op; conversation logs are included by default)
+  --karma             (no-op; karma data is included by default)
+  --no-productions    Omit each agent's productions directory
+  --no-conversations  Omit each agent's conversation logs
+  --no-karma          Omit each agent's karma data
+  --no-sessions       Omit per-agent Telegram sessions from agents/<id>/
+                      (the data section still carries the shared session store)
   --config <path>     Path to config.json  (default: <root>/config/config.json)
   --root <dir>        Instance root        (default: current directory)
   --force             Overwrite --out if it already exists
@@ -80,9 +86,10 @@ async function main(): Promise<void> {
       ?.split(',')
       .map((id) => id.trim())
       .filter(Boolean),
-    productions: args.flags.has('productions'),
-    conversations: args.flags.has('conversations'),
-    karma: args.flags.has('karma'),
+    productions: !args.flags.has('no-productions'),
+    conversations: !args.flags.has('no-conversations'),
+    karma: !args.flags.has('no-karma'),
+    sessions: !args.flags.has('no-sessions'),
   });
 
   mkdirSync(dirname(outPath), { recursive: true });

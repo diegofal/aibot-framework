@@ -40,6 +40,14 @@ function isTruthy(value: string | undefined): boolean {
   return value === 'true' || value === '1' || value === 'yes';
 }
 
+function includeFlag(value: string | undefined, defaultOn = true): boolean {
+  if (value === undefined || value === '') return defaultOn;
+  const v = value.toLowerCase();
+  if (v === 'false' || v === '0' || v === 'no' || v === 'off') return false;
+  if (v === 'true' || v === '1' || v === 'yes' || v === 'on') return true;
+  return defaultOn;
+}
+
 /** Comma-separated query parameter -> trimmed list. */
 function csv(value: string | undefined): string[] | undefined {
   if (!value) return undefined;
@@ -99,9 +107,10 @@ export function systemExportRoutes(deps: SystemExportRouteDeps) {
       const { buffer, manifest } = await exportService().export({
         sections: parseSections(c.req.query('sections')),
         agentIds: csv(c.req.query('agents')),
-        productions: isTruthy(c.req.query('productions')),
-        conversations: isTruthy(c.req.query('conversations')),
-        karma: isTruthy(c.req.query('karma')),
+        productions: includeFlag(c.req.query('productions')),
+        conversations: includeFlag(c.req.query('conversations')),
+        karma: includeFlag(c.req.query('karma')),
+        sessions: includeFlag(c.req.query('sessions')),
       });
 
       const date = new Date().toISOString().slice(0, 10);

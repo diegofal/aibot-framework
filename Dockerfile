@@ -29,12 +29,10 @@ RUN bun install --frozen-lockfile --production
 # --- Stage 2: runtime ------------------------------------------------------
 FROM oven/bun:1.3.11-slim AS runtime
 
-# tar          — BotExportService shells out to the `tar` binary for
-#                agent export/import (src/bot/bot-export-service.ts).
 # ca-certificates — outbound TLS to api.telegram.org and LLM/tool APIs.
 # tzdata       — config.datetime.timezone is applied via process.env.TZ.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends tar ca-certificates tzdata \
+  && apt-get install -y --no-install-recommends ca-certificates tzdata \
   && rm -rf /var/lib/apt/lists/*
 
 # --- OPTIONAL: browser tools (config.browserTools.enabled) -----------------

@@ -25,6 +25,7 @@ const SOUL_DIR = join(TEST_DIR, 'soul');
 const PROD_DIR = join(TEST_DIR, 'productions');
 const CONV_DIR = join(TEST_DIR, 'conversations');
 const KARMA_DIR = join(TEST_DIR, 'karma');
+const SESSION_DIR = join(TEST_DIR, 'data', 'sessions');
 const CONFIG_PATH = join(TEST_DIR, 'config.json');
 const BOTS_PATH = join(TEST_DIR, 'bots.json');
 
@@ -60,6 +61,7 @@ function makeConfig(bots: BotConfig[] = [makeBot()]): Config {
     productions: { baseDir: PROD_DIR, enabled: true } as any,
     conversations: { baseDir: CONV_DIR } as any,
     karma: { baseDir: KARMA_DIR, enabled: true } as any,
+    session: { dataDir: SESSION_DIR } as any,
     ollama: { models: { primary: 'test-model' } } as any,
     conversation: {} as any,
     agentLoop: {} as any,
@@ -77,6 +79,59 @@ function createMockCoreMemory(entries: any[] = []) {
     search: mock(async () => []),
     renderForSystemPrompt: mock(() => ''),
   } as any;
+}
+
+function writeSoul(botId: string) {
+  const soulDir = join(SOUL_DIR, botId);
+  mkdirSync(join(soulDir, 'memory'), { recursive: true });
+  writeFileSync(join(soulDir, 'IDENTITY.md'), `name: ${botId}\n`);
+}
+
+function plantSessions(
+  botId: string,
+  opts: { nested?: boolean; legacy?: boolean; extraBot?: string } = {}
+) {
+  mkdirSync(join(SESSION_DIR, 'transcripts', botId), { recursive: true });
+
+  const sessions: Record<string, { key: string; messageCount: number }> = {
+    [`bot:${botId}:private:111`]: { key: `bot:${botId}:private:111`, messageCount: 3 },
+  };
+  const active: Record<string, number> = {
+    [`${botId}:-100:111`]: 1_700_000_000_000,
+  };
+
+  if (opts.extraBot) {
+    sessions[`bot:${opts.extraBot}:private:222`] = {
+      key: `bot:${opts.extraBot}:private:222`,
+      messageCount: 1,
+    };
+    active[`${opts.extraBot}:-100:222`] = 1_700_000_000_001;
+    mkdirSync(join(SESSION_DIR, 'transcripts', opts.extraBot), { recursive: true });
+    writeFileSync(
+      join(SESSION_DIR, 'transcripts', opts.extraBot, `bot-${opts.extraBot}-private-222.jsonl`),
+      '{"role":"user","content":"other"}\n'
+    );
+    writeFileSync(
+      join(SESSION_DIR, 'transcripts', `bot-${opts.extraBot}-group-888.jsonl`),
+      '{"role":"user","content":"other-legacy"}\n'
+    );
+  }
+
+  writeFileSync(join(SESSION_DIR, 'sessions.json'), JSON.stringify(sessions, null, 2));
+  writeFileSync(join(SESSION_DIR, 'active-conversations.json'), JSON.stringify(active, null, 2));
+
+  if (opts.nested !== false) {
+    writeFileSync(
+      join(SESSION_DIR, 'transcripts', botId, `bot-${botId}-private-111.jsonl`),
+      '{"role":"user","content":"hi"}\n'
+    );
+  }
+  if (opts.legacy) {
+    writeFileSync(
+      join(SESSION_DIR, 'transcripts', `bot-${botId}-group-999.jsonl`),
+      '{"role":"user","content":"legacy"}\n'
+    );
+  }
 }
 
 describe('BotExportService', () => {
@@ -171,6 +226,7 @@ describe('BotExportService', () => {
       const logger = createMockLogger();
       const service = new BotExportService(config, CONFIG_PATH, logger, () => coreMemory);
 
+      const buffer = await service.exportBot('test-bot');
       const archive = extract(buffer);
       expect(archive.has('core_memory.jsonl')).toBe(true);
       const lines = archive.text('core_memory.jsonl').trim().split('\n');
@@ -179,7 +235,7 @@ describe('BotExportService', () => {
       expect(JSON.parse(lines[1]).key).toBe('primary');
     });
 
-    it('includes productions when opted in', async () => {
+    it('includes productions by default and excludes them when opted out', async () => {
       const bot = makeBot();
       const config = makeConfig([bot]);
       const soulDir = join(SOUL_DIR, 'test-bot');
@@ -193,9 +249,12 @@ describe('BotExportService', () => {
       const logger = createMockLogger();
       const service = new BotExportService(config, CONFIG_PATH, logger);
 
-      const buffer = await service.exportBot('test-bot', { productions: true });
-
-      expect(extract(buffer).has('productions/file1.md')).toBe(true);
+      expect(extract(await service.exportBot('test-bot')).has('productions/file1.md')).toBe(true);
+      expect(
+        extract(await service.exportBot('test-bot', { productions: false })).has(
+          'productions/file1.md'
+        )
+      ).toBe(false);
     });
 
     it('warns when soul dir is missing', async () => {
@@ -580,6 +639,231 @@ describe('BotExportService', () => {
 
       const buffer = await service.exportBot('test-bot');
       expect(extract(buffer).json('manifest.json').includes.coreMemory).toBe(false);
+    });
+  });
+
+  describe('Telegram sessions', () => {
+    it('includes this bot\'s sessions by default and excludes them when opted out', async () => {
+      const bot = makeBot();
+      const config = makeConfig([bot]);
+      writeSoul('test-bot');
+      plantSessions('test-bot', { extraBot: 'other-bot', legacy: true });
+
+      const service = new BotExportService(config, CONFIG_PATH, createMockLogger());
+
+      const included = extract(await service.exportBot('test-bot'));
+      expect(included.json('manifest.json').includes.sessions).toBe(true);
+      expect(included.has('sessions/sessions.json')).toBe(true);
+      expect(included.has('sessions/active-conversations.json')).toBe(true);
+      expect(included.has('sessions/transcripts/bot-test-bot-private-111.jsonl')).toBe(true);
+      expect(included.has('sessions/transcripts/bot-test-bot-group-999.jsonl')).toBe(true);
+
+      const slicedSessions = included.json('sessions/sessions.json');
+      expect(slicedSessions['bot:test-bot:private:111']).toBeDefined();
+      expect(slicedSessions['bot:other-bot:private:222']).toBeUndefined();
+
+      const slicedActive = included.json('sessions/active-conversations.json');
+      expect(slicedActive['test-bot:-100:111']).toBeDefined();
+      expect(slicedActive['other-bot:-100:222']).toBeUndefined();
+
+      expect(included.has('sessions/transcripts/bot-other-bot-private-222.jsonl')).toBe(false);
+      expect(included.has('sessions/transcripts/bot-other-bot-group-888.jsonl')).toBe(false);
+      expect(
+        included.paths().some((path) => path.startsWith('sessions/transcripts/other-bot/'))
+      ).toBe(false);
+
+      const excluded = extract(await service.exportBot('test-bot', { sessions: false }));
+      expect(excluded.json('manifest.json').includes.sessions).toBe(false);
+      expect(excluded.paths().some((path) => path.startsWith('sessions/'))).toBe(false);
+    });
+
+    it('collects both nested and legacy-flat transcripts into sessions/transcripts/', async () => {
+      const bot = makeBot();
+      const config = makeConfig([bot]);
+      writeSoul('test-bot');
+      plantSessions('test-bot', { nested: true, legacy: true });
+
+      const service = new BotExportService(config, CONFIG_PATH, createMockLogger());
+      const archive = extract(await service.exportBot('test-bot'));
+
+      expect(archive.has('sessions/transcripts/bot-test-bot-private-111.jsonl')).toBe(true);
+      expect(archive.has('sessions/transcripts/bot-test-bot-group-999.jsonl')).toBe(true);
+      expect(archive.has('sessions/transcripts/test-bot/bot-test-bot-private-111.jsonl')).toBe(
+        false
+      );
+    });
+
+    it('merges imported sessions.json without clobbering another bot\'s keys', async () => {
+      const source = makeBot({ id: 'source-bot' });
+      writeSoul('source-bot');
+      plantSessions('source-bot');
+      const exportBuffer = await new BotExportService(
+        makeConfig([source]),
+        CONFIG_PATH,
+        createMockLogger()
+      ).exportBot('source-bot');
+
+      rmSync(TEST_DIR, { recursive: true, force: true });
+      mkdirSync(TEST_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
+      writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
+      plantSessions('other-bot');
+
+      const importConfig = makeConfig([]);
+      await new BotExportService(importConfig, CONFIG_PATH, createMockLogger()).importBot(
+        exportBuffer,
+        { newBotId: 'imported-bot' }
+      );
+
+      const merged = JSON.parse(readFileSync(join(SESSION_DIR, 'sessions.json'), 'utf-8'));
+      expect(merged['bot:other-bot:private:111']).toBeDefined();
+      expect(merged['bot:imported-bot:private:111']).toBeDefined();
+      expect(merged['bot:source-bot:private:111']).toBeUndefined();
+
+      const active = JSON.parse(
+        readFileSync(join(SESSION_DIR, 'active-conversations.json'), 'utf-8')
+      );
+      expect(active['other-bot:-100:111']).toBeDefined();
+      expect(active['imported-bot:-100:111']).toBeDefined();
+    });
+
+    it('overwrite replaces this bot\'s sessions and leaves others intact', async () => {
+      const bot = makeBot({ id: 'overwrite-bot' });
+      writeSoul('overwrite-bot');
+      plantSessions('overwrite-bot');
+      const exportBuffer = await new BotExportService(
+        makeConfig([bot]),
+        CONFIG_PATH,
+        createMockLogger()
+      ).exportBot('overwrite-bot');
+
+      rmSync(TEST_DIR, { recursive: true, force: true });
+      mkdirSync(TEST_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
+      writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
+
+      mkdirSync(join(SESSION_DIR, 'transcripts', 'overwrite-bot'), { recursive: true });
+      writeFileSync(
+        join(SESSION_DIR, 'sessions.json'),
+        JSON.stringify({
+          'bot:overwrite-bot:private:999': {
+            key: 'bot:overwrite-bot:private:999',
+            messageCount: 99,
+          },
+          'bot:other-bot:private:222': { key: 'bot:other-bot:private:222', messageCount: 1 },
+        })
+      );
+      writeFileSync(
+        join(SESSION_DIR, 'active-conversations.json'),
+        JSON.stringify({
+          'overwrite-bot:-100:999': 1,
+          'other-bot:-100:222': 2,
+        })
+      );
+      writeFileSync(
+        join(SESSION_DIR, 'transcripts', 'overwrite-bot', 'bot-overwrite-bot-private-999.jsonl'),
+        '{"role":"user","content":"stale"}\n'
+      );
+      writeFileSync(
+        join(SESSION_DIR, 'transcripts', 'bot-overwrite-bot-group-888.jsonl'),
+        '{"role":"user","content":"stale-legacy"}\n'
+      );
+
+      const existing = makeBot({ id: 'overwrite-bot', token: 'keep-token' });
+      await new BotExportService(
+        makeConfig([existing]),
+        CONFIG_PATH,
+        createMockLogger()
+      ).importBot(exportBuffer, { overwrite: true });
+
+      const merged = JSON.parse(readFileSync(join(SESSION_DIR, 'sessions.json'), 'utf-8'));
+      expect(merged['bot:overwrite-bot:private:111']).toBeDefined();
+      expect(merged['bot:overwrite-bot:private:999']).toBeUndefined();
+      expect(merged['bot:other-bot:private:222']).toBeDefined();
+
+      const active = JSON.parse(
+        readFileSync(join(SESSION_DIR, 'active-conversations.json'), 'utf-8')
+      );
+      expect(active['overwrite-bot:-100:111']).toBeDefined();
+      expect(active['overwrite-bot:-100:999']).toBeUndefined();
+      expect(active['other-bot:-100:222']).toBeDefined();
+
+      expect(
+        existsSync(
+          join(SESSION_DIR, 'transcripts', 'overwrite-bot', 'bot-overwrite-bot-private-111.jsonl')
+        )
+      ).toBe(true);
+      expect(
+        existsSync(
+          join(SESSION_DIR, 'transcripts', 'overwrite-bot', 'bot-overwrite-bot-private-999.jsonl')
+        )
+      ).toBe(false);
+      expect(existsSync(join(SESSION_DIR, 'transcripts', 'bot-overwrite-bot-group-888.jsonl'))).toBe(
+        false
+      );
+    });
+
+    it('rewrites session keys, active-conversation keys, and transcript filenames for newBotId', async () => {
+      const source = makeBot({ id: 'old-id' });
+      writeSoul('old-id');
+      plantSessions('old-id', { legacy: true });
+      const exportBuffer = await new BotExportService(
+        makeConfig([source]),
+        CONFIG_PATH,
+        createMockLogger()
+      ).exportBot('old-id');
+
+      rmSync(TEST_DIR, { recursive: true, force: true });
+      mkdirSync(TEST_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
+      writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
+
+      await new BotExportService(makeConfig([]), CONFIG_PATH, createMockLogger()).importBot(
+        exportBuffer,
+        { newBotId: 'new-id' }
+      );
+
+      const merged = JSON.parse(readFileSync(join(SESSION_DIR, 'sessions.json'), 'utf-8'));
+      expect(merged['bot:new-id:private:111']).toBeDefined();
+      expect(merged['bot:new-id:private:111'].key).toBe('bot:new-id:private:111');
+      expect(merged['bot:old-id:private:111']).toBeUndefined();
+
+      const active = JSON.parse(
+        readFileSync(join(SESSION_DIR, 'active-conversations.json'), 'utf-8')
+      );
+      expect(active['new-id:-100:111']).toBeDefined();
+      expect(active['old-id:-100:111']).toBeUndefined();
+
+      expect(
+        existsSync(join(SESSION_DIR, 'transcripts', 'new-id', 'bot-new-id-private-111.jsonl'))
+      ).toBe(true);
+      expect(
+        existsSync(join(SESSION_DIR, 'transcripts', 'new-id', 'bot-new-id-group-999.jsonl'))
+      ).toBe(true);
+      expect(
+        existsSync(join(SESSION_DIR, 'transcripts', 'new-id', 'bot-old-id-private-111.jsonl'))
+      ).toBe(false);
+    });
+  });
+
+  describe('soul path fallback', () => {
+    it('exports soul files from the legacy soul.dir path when soulDir is unset', async () => {
+      const bot = makeBot({ id: 'legacy-soul', soulDir: undefined });
+      const config = makeConfig([bot]);
+      const legacySoul = join(SOUL_DIR, 'legacy-soul');
+      mkdirSync(legacySoul, { recursive: true });
+      writeFileSync(join(legacySoul, 'IDENTITY.md'), 'name: Legacy Soul\n');
+      writeFileSync(join(legacySoul, 'SOUL.md'), '# From legacy path\n');
+
+      const tenantSoul = join(DATA_DIR, '__admin__', 'bots', 'legacy-soul', 'soul');
+      expect(existsSync(tenantSoul)).toBe(false);
+
+      const service = new BotExportService(config, CONFIG_PATH, createMockLogger());
+      const archive = extract(await service.exportBot('legacy-soul'));
+
+      expect(archive.has('soul/IDENTITY.md')).toBe(true);
+      expect(archive.has('soul/SOUL.md')).toBe(true);
+      expect(archive.text('soul/IDENTITY.md')).toContain('Legacy Soul');
     });
   });
 });
