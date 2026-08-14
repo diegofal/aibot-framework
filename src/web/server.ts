@@ -62,6 +62,7 @@ import { settingsRoutes } from './routes/settings';
 import { skillCommandRoutes } from './routes/skill-commands';
 import { skillsRoutes } from './routes/skills';
 import { statusRoutes } from './routes/status';
+import { systemExportRoutes } from './routes/system-export';
 import { tenantConfigRoutes } from './routes/tenant-config';
 import { tenantRoutes } from './routes/tenants';
 import { toolsRoutes } from './routes/tools';
@@ -172,6 +173,16 @@ export function startWebServer(deps: WebServerDeps): void {
   app.route(
     '/api/agents',
     agentExportRoutes({
+      config,
+      configPath: deps.configPath,
+      botManager: deps.botManager,
+      logger,
+      memoryManager: deps.botManager.getMemoryManager(),
+    })
+  );
+  app.route(
+    '/api/system',
+    systemExportRoutes({
       config,
       configPath: deps.configPath,
       botManager: deps.botManager,

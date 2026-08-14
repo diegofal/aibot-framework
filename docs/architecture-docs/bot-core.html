@@ -1254,28 +1254,81 @@
       <!-- bot-export-service.ts -->
       <div class="module-section" id="bot-export-service">
         <h3>bot-export-service.ts</h3>
-        <div class="file-path">src/bot/bot-export-service.ts &middot; 391 lines</div>
+        <div class="file-path">src/bot/bot-export-service.ts</div>
         <p class="responsibility">
           Full bot backup and restoration as portable <code>.tar.gz</code> archives. Exports include:
-          manifest, sanitized config (no tokens), soul directory (excludes <code>.versions/</code>),
-          core memory (JSONL), and optionally productions, conversations, and karma. Import supports
-          ID/name overrides, conflict detection (409), and overwrite mode. Also re-indexes soul files
-          for RAG search and handles core memory import with Ollama fallback.
+          manifest, sanitized config (no tokens and no WhatsApp/Discord/tenant credentials &mdash;
+          the roster sanitizer in <code>src/system/config-sanitizer.ts</code> decides what counts as
+          a secret), soul directory (excludes <code>.versions/</code>), core memory (JSONL), and
+          optionally productions, conversations, and karma. Import supports ID/name overrides,
+          conflict detection (409), and overwrite mode. Also re-indexes soul files for RAG search
+          and handles core memory import with a standalone SQLite fallback.
+        </p>
+        <p class="responsibility">
+          Archiving is pure JavaScript (<code>src/system/tar-archive.ts</code>): no <code>tar</code>
+          binary, no <code>/tmp</code> staging. The previous implementation shelled out to
+          <code>tar</code> and staged files under a hardcoded <code>/tmp</code>, which fails on
+          Windows and in container images without <code>tar</code> installed.
         </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">
           <li><code>BotExportService</code></li>
+          <li><code>ConflictError</code></li>
         </ul>
         <h4>Key Methods</h4>
         <table class="methods-table">
           <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td>exportBot</td><td>botId: string, options</td><td>Creates a .tar.gz archive containing bot config, soul files, core memory, and optional extras.</td></tr>
-            <tr><td>importBot</td><td>archivePath: string, options</td><td>Imports a bot from archive with conflict detection, ID/name overrides, and post-import reindexing.</td></tr>
+            <tr><td>collectBotEntries</td><td>botId: string, options</td><td>Gathers the bot's portable state as in-memory archive entries. Used by <code>exportBot</code> and by the system exporter, which nests them under <code>agents/&lt;id&gt;/</code>.</td></tr>
+            <tr><td>exportBot</td><td>botId: string, options</td><td>Packs <code>collectBotEntries</code> into a .tar.gz buffer.</td></tr>
+            <tr><td>restoreBotArchive</td><td>archive: TarArchive, options</td><td>Restores one bot from an already-extracted archive. <code>persistRoster: false</code> lets the system importer batch a single bots.json write.</td></tr>
+            <tr><td>importBot</td><td>buffer: Buffer, options</td><td>Unpacks a .tar.gz and delegates to <code>restoreBotArchive</code>.</td></tr>
           </tbody>
         </table>
         <h4>Dependencies</h4>
-        <p><code>./types</code>, <code>../config</code>, <code>../memory/manager</code>, <code>../memory/core-memory</code>, <code>../logger</code>, <code>node:fs</code>, <code>node:path</code></p>
+        <p><code>../config</code>, <code>../memory/core-memory</code>, <code>../memory/schema</code>, <code>../logger</code>, <code>../system/tar-archive</code>, <code>../system/archive-fs</code>, <code>../system/config-sanitizer</code>, <code>node:fs</code>, <code>node:path</code></p>
+      </div>
+
+      <!-- system export/import -->
+      <div class="module-section" id="system-export">
+        <h3>System export/import (<code>src/system/</code>)</h3>
+        <div class="file-path">src/system/*.ts</div>
+        <p class="responsibility">
+          Whole-instance backup and restore: everything needed to stand up an equivalent instance on
+          another machine. Composes the per-bot exporter rather than duplicating it, so souls and
+          core memory are collected in exactly one place. See
+          <a href="../system-backup-restore.md">docs/system-backup-restore.md</a> for the operator
+          guide.
+        </p>
+        <table class="methods-table">
+          <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td><code>tar-archive.ts</code></td><td>Pure-JS tar + gzip (POSIX ustar with PAX long paths). No external binary, no temp files. Normalizes Windows separators and drive letters; rejects traversal paths on both pack and extract.</td></tr>
+            <tr><td><code>archive-fs.ts</code></td><td>Directory walking into archive entries, subtree selection, writing an extracted subtree to disk, sha256.</td></tr>
+            <tr><td><code>config-sanitizer.ts</code></td><td>The security boundary. Replaces secrets with <code>${VAR}</code> placeholders (key-name sweep + value-shape sweep + known-path map), drops machine-specific settings, scrubs credentials embedded in file content, renders <code>REQUIRED_ENV.txt</code>.</td></tr>
+            <tr><td><code>effective-config.ts</code></td><td>A <code>Config</code>-shaped object built from raw JSON without Zod, so export/import work on a machine whose config does not validate or whose env vars are unset.</td></tr>
+            <tr><td><code>system-export-service.ts</code></td><td>Assembles the bundle: sanitized config, roster, nested per-agent bundles, data directories, tenant tree, manifest with per-file checksums.</td></tr>
+            <tr><td><code>system-import-service.ts</code></td><td>Validates kind/version/checksums, refuses while bots run, plans every collision before writing, restores the selected sections, reports missing env vars.</td></tr>
+            <tr><td><code>types.ts</code></td><td><code>SYSTEM_EXPORT_VERSION</code>, <code>SYSTEM_EXPORT_KIND</code>, section parsing, manifest shape.</td></tr>
+          </tbody>
+        </table>
+        <h4>Bundle layout</h4>
+        <pre><code>manifest.json          kind, versions, source host, inventory, security report, checksums
+REQUIRED_ENV.txt       every variable the target operator must supply
+config/config.json     sanitized global config (secrets -> ${VAR}, host settings dropped)
+config/bots.json       roster: token "", enabled false, channel secrets -> ${VAR}
+agents/&lt;id&gt;/...        one nested per-bot bundle per agent (soul, core memory, extras)
+data/...               cron, sessions, tools, agent-proposals, karma, contacts
+tenants/...            tenant tree minus per-bot soul directories (carried by agents/)</code></pre>
+        <h4>Deliberately excluded</h4>
+        <p>
+          <code>data/memory.db</code> (vector index &mdash; regenerated from soul files; embeddings
+          are model-specific so a stale index silently degrades RAG), <code>data/logs</code>,
+          <code>data/screenshots</code>, <code>data/intel</code>, soul <code>.versions/</code>,
+          <code>.env</code>, and machine-specific config keys (<code>ollama.baseUrl</code> becomes a
+          placeholder; <code>improve.claudePath</code>, <code>web.host</code>/<code>port</code>,
+          <code>soul.search.dbPath</code>, absolute paths are dropped).
+        </p>
       </div>
 
       <!-- bot-reset.ts -->

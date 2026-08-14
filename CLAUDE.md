@@ -81,6 +81,20 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `hooks.ts` | Lifecycle hook system: `HookEmitter` con 8 eventos (message_received/sent, before/after_llm_call, before/after_tool_call, before_compaction, agent_loop_cycle) |
 | `index.ts` | Barrel re-export de `BotManager` |
 
+### Módulos System (`src/system/`)
+
+Export/import de la instancia completa. Guía de operador: `docs/system-backup-restore.md`.
+
+| Archivo | Responsabilidad |
+|---|---|
+| `tar-archive.ts` | tar + gzip puro JS (ustar + PAX para paths largos). Sin binario `tar`, sin staging en `/tmp`. Normaliza separadores Windows y rechaza paths con traversal |
+| `archive-fs.ts` | Walk de directorios → entradas de archivo, selección de subárboles, escritura a disco, sha256 |
+| `config-sanitizer.ts` | **Frontera de seguridad**: secretos → `${VAR}`, drop de settings machine-specific, scrub de credenciales embebidas en contenido, `REQUIRED_ENV.txt`. Debe recibir el JSON **crudo**, nunca el `Config` cargado (`loadConfig` ya expandió los `${VAR}`) |
+| `effective-config.ts` | `Config` mínimo construido desde JSON crudo sin Zod — para máquinas cuyo config no valida o cuyas env vars no están seteadas |
+| `system-export-service.ts` | Arma el bundle: config saneado, roster, un bundle per-bot anidado por agente (vía `BotExportService.collectBotEntries`), directorios de data, tenants, manifest con checksums |
+| `system-import-service.ts` | Valida kind/versión/checksums, rechaza si hay bots corriendo, planifica todas las colisiones antes de escribir, restaura las secciones pedidas |
+| `types.ts` | `SYSTEM_EXPORT_VERSION`, `SYSTEM_EXPORT_KIND`, secciones, forma del manifest |
+
 ### Módulos Channel (`src/channel/`)
 
 | Archivo | Responsabilidad |

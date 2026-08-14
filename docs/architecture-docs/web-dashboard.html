@@ -312,8 +312,38 @@
               <td>Upload .tar.gz to import an agent (multipart/form-data). Supports <code>newBotId</code>, <code>newBotName</code>, <code>overwrite</code> query params.</td>
               <td><code>agent-export.ts</code></td>
             </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/system/export</code></td>
+              <td>Download the whole instance as .tar.gz (config, roster, all agents, cron, sessions, tools, proposals, tenants). Query: <code>sections</code>, <code>agents</code>, <code>productions</code>, <code>conversations</code>, <code>karma</code>. No secret values are included.</td>
+              <td><code>system-export.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/system/export/manifest</code></td>
+              <td>Inspect what an export would contain without downloading the payload.</td>
+              <td><code>system-export.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/system/import</code></td>
+              <td>Restore a system bundle. Query: <code>sections</code>, <code>agents</code>, <code>overwrite</code>, <code>dryRun</code>. Refuses while any agent runs; 409 on collisions without <code>overwrite</code>; 422 on a version/kind mismatch. Restored agents land disabled with empty tokens.</td>
+              <td><code>system-export.ts</code></td>
+            </tr>
           </tbody>
         </table>
+
+        <p class="responsibility">
+          <strong>Do not expose <code>/api/system/*</code>.</strong> In single-tenant mode the
+          dashboard has no authentication and these routes mount unconditionally, so a single
+          <code>GET /api/system/export</code> returns every soul, session transcript and setting in
+          the instance. Keep <code>web.host</code> on <code>127.0.0.1</code> or put an
+          authenticating reverse proxy in front. Setting
+          <code>AIBOT_SYSTEM_EXPORT_REQUIRE_ADMIN_KEY=true</code> requires
+          <code>ADMIN_API_KEY</code> (Bearer or <code>X-Admin-Key</code>) on these routes only; it
+          is opt-in so that configuring <code>ADMIN_API_KEY</code> for <code>/api/admin/*</code>
+          does not silently break a local no-auth dashboard.
+        </p>
       </div>
 
       <!-- --- Agent Loop --- -->

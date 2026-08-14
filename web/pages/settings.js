@@ -1,4 +1,4 @@
-import { api, getAuthContext } from './shared.js';
+import { api, getAuthContext, getAuthToken } from './shared.js';
 
 export async function renderSettings(el) {
   const { role } = getAuthContext();
@@ -366,7 +366,66 @@ export async function renderSettings(el) {
         <span class="text-dim text-sm" id="save-status"></span>
       </div>
     </form>
+
+    <div class="detail-card" id="system-backup-card">
+      <div class="form-section-title">System Backup &amp; Restore</div>
+      <p class="text-dim text-sm mb-16">
+        Export this whole instance as a portable <code>.tar.gz</code>: global settings, the agent
+        roster, every agent's soul and core memory, cron jobs, sessions, dynamic tools and agent
+        proposals. Secrets are never included — credentials are replaced with
+        <code>\${VAR}</code> placeholders and listed in <code>REQUIRED_ENV.txt</code> inside the
+        bundle. Machine-specific settings (Ollama URL, Claude path, web host/port, absolute paths)
+        and the regenerable vector index are left out on purpose.
+      </p>
+      <p class="text-dim text-sm mb-16">
+        The bundle still contains every soul and conversation transcript. Treat it as sensitive,
+        and never expose this dashboard to a public network. The same operations are available
+        offline via <code>bun run export:system</code> and <code>bun run import:system</code>.
+      </p>
+
+      <div class="form-group">
+        <label>Sections</label>
+        <label><input type="checkbox" class="sysx-section" value="config" checked> Global config</label>
+        <label><input type="checkbox" class="sysx-section" value="agents" checked> Agents (roster, souls, core memory)</label>
+        <label><input type="checkbox" class="sysx-section" value="data" checked> Data (cron, sessions, tools, proposals, karma)</label>
+        <label><input type="checkbox" class="sysx-section" value="tenants" checked> Tenants / billing state</label>
+      </div>
+
+      <div class="form-group">
+        <label>Per-agent extras</label>
+        <label><input type="checkbox" id="sysx-productions"> Include productions</label>
+        <label><input type="checkbox" id="sysx-conversations"> Include conversation logs</label>
+        <label><input type="checkbox" id="sysx-karma"> Include karma</label>
+      </div>
+
+      <div class="actions" style="margin-top:12px">
+        <button type="button" class="btn btn-primary btn-sm" id="sysx-export-btn">Download System Export</button>
+        <span class="text-dim text-sm" id="sysx-export-status"></span>
+      </div>
+
+      <div class="form-separator" style="margin:16px 0"></div>
+
+      <div class="form-group">
+        <label>Restore a bundle</label>
+        <input type="file" id="sysx-import-file" accept=".tar.gz,.gz">
+        <p class="text-dim text-sm mt-8">
+          Stop every agent first. Restored agents always land disabled with an empty Telegram
+          token, so nothing starts polling on its own.
+        </p>
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="sysx-import-overwrite"> Overwrite anything that already exists</label>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-sm" id="sysx-preview-btn">Preview (dry run)</button>
+        <button type="button" class="btn btn-sm" id="sysx-import-btn">Restore</button>
+        <span class="text-dim text-sm" id="sysx-import-status"></span>
+      </div>
+      <pre id="sysx-import-output" class="text-dim text-sm" style="white-space:pre-wrap;margin-top:12px"></pre>
+    </div>
   `;
+
+  setupSystemBackupCard();
 
   // --- Skill Folders UI logic ---
   const currentSfPaths = [...sfPaths];
@@ -710,4 +769,169 @@ export async function renderSettings(el) {
       }, 3000);
     }
   });
+}
+
+/**
+ * Wires the system backup card.
+ *
+ * Requests carry the dashboard session token when there is one. If the server
+ * has AIBOT_SYSTEM_EXPORT_REQUIRE_ADMIN_KEY enabled it answers 401, and the
+ * key is asked for once and sent as X-Admin-Key — it is never persisted.
+ */
+function setupSystemBackupCard() {
+  let adminKey = null;
+
+  function authHeaders() {
+    const headers = {};
+    const token = getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (adminKey) headers['X-Admin-Key'] = adminKey;
+    return headers;
+  }
+
+  async function withAdminKeyRetry(send) {
+    let res = await send();
+    if (res.status === 401) {
+      adminKey = prompt('This server requires ADMIN_API_KEY for system export/import:');
+      if (!adminKey) return res;
+      res = await send();
+    }
+    return res;
+  }
+
+  function selectedSections() {
+    return [...document.querySelectorAll('.sysx-section:checked')].map((input) => input.value);
+  }
+
+  function importParams(extra = {}) {
+    const params = new URLSearchParams();
+    const sections = selectedSections();
+    if (sections.length > 0) params.set('sections', sections.join(','));
+    if (document.getElementById('sysx-import-overwrite').checked) params.set('overwrite', 'true');
+    for (const [key, value] of Object.entries(extra)) params.set(key, value);
+    return params;
+  }
+
+  document.getElementById('sysx-export-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('sysx-export-btn');
+    const status = document.getElementById('sysx-export-status');
+    const sections = selectedSections();
+
+    if (sections.length === 0) {
+      status.textContent = 'Select at least one section';
+      status.style.color = 'var(--red)';
+      return;
+    }
+
+    const params = new URLSearchParams({ sections: sections.join(',') });
+    if (document.getElementById('sysx-productions').checked) params.set('productions', 'true');
+    if (document.getElementById('sysx-conversations').checked) params.set('conversations', 'true');
+    if (document.getElementById('sysx-karma').checked) params.set('karma', 'true');
+
+    btn.disabled = true;
+    btn.textContent = 'Building bundle...';
+    status.textContent = '';
+
+    try {
+      const res = await withAdminKeyRetry(() =>
+        fetch(`/api/system/export?${params}`, { headers: authHeaders() })
+      );
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Export failed' }));
+        status.textContent = err.error || 'Export failed';
+        status.style.color = 'var(--red)';
+        return;
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = match?.[1] || 'aibot-system-export.tar.gz';
+      link.click();
+      URL.revokeObjectURL(link.href);
+
+      status.textContent = `Downloaded (${(blob.size / 1024).toFixed(1)} KB)`;
+      status.style.color = 'var(--green)';
+    } catch (err) {
+      status.textContent = `Export failed: ${err.message || err}`;
+      status.style.color = 'var(--red)';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Download System Export';
+    }
+  });
+
+  async function runImport(dryRun) {
+    const file = document.getElementById('sysx-import-file').files?.[0];
+    const status = document.getElementById('sysx-import-status');
+    const output = document.getElementById('sysx-import-output');
+
+    if (!file) {
+      status.textContent = 'Select a bundle first';
+      status.style.color = 'var(--red)';
+      return;
+    }
+    if (!dryRun && !confirm('Restore this bundle into the running instance? Stop all agents first.')) {
+      return;
+    }
+
+    status.textContent = dryRun ? 'Previewing...' : 'Restoring...';
+    status.style.color = '';
+    output.textContent = '';
+
+    const form = new FormData();
+    form.append('file', file);
+    const params = importParams(dryRun ? { dryRun: 'true' } : {});
+
+    try {
+      const res = await withAdminKeyRetry(() =>
+        fetch(`/api/system/import?${params}`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: form,
+        })
+      );
+      const result = await res.json();
+
+      if (!res.ok) {
+        status.textContent = 'Failed';
+        status.style.color = 'var(--red)';
+        output.textContent = result.error || 'Import failed';
+        return;
+      }
+
+      const lines = [
+        dryRun ? 'Dry run — nothing was written.' : 'Restore complete.',
+        `Sections: ${result.sections.join(', ')}`,
+        `Agents: ${result.agents.map((agent) => agent.botId).join(', ') || '(none)'}`,
+        `Files written: ${result.filesWritten}`,
+      ];
+      if (result.collisions.length > 0) {
+        lines.push(
+          `Existing items ${dryRun ? 'that would be' : ''} replaced (${result.collisions.length}): ${result.collisions.slice(0, 15).join(', ')}`
+        );
+      }
+      if (result.missingEnv.length > 0) {
+        lines.push(`Environment variables still missing: ${result.missingEnv.join(', ')}`);
+      }
+      for (const warning of result.warnings) lines.push(`! ${warning}`);
+      if (!dryRun) {
+        lines.push('', 'Every restored agent is disabled with an empty token. Add tokens and enable them manually.');
+      }
+
+      status.textContent = dryRun ? 'Preview ready' : 'Restored';
+      status.style.color = 'var(--green)';
+      output.textContent = lines.join('\n');
+    } catch (err) {
+      status.textContent = 'Failed';
+      status.style.color = 'var(--red)';
+      output.textContent = String(err.message || err);
+    }
+  }
+
+  document.getElementById('sysx-preview-btn').addEventListener('click', () => runImport(true));
+  document.getElementById('sysx-import-btn').addEventListener('click', () => runImport(false));
 }

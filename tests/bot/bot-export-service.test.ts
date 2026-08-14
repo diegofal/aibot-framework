@@ -4,6 +4,21 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { BotExportService, ConflictError } from '../../src/bot/bot-export-service';
 import type { BotConfig, Config } from '../../src/config';
+import { packTarGz, unpackTarGz } from '../../src/system/tar-archive';
+
+/**
+ * Read an export archive in-process. These assertions used to spawn `tar`,
+ * which made the whole suite fail on any host without the binary.
+ */
+function extract(buffer: Buffer) {
+  const { files } = unpackTarGz(buffer);
+  return {
+    has: (path: string) => files.has(path),
+    text: (path: string) => files.get(path)?.toString('utf-8') ?? '',
+    json: (path: string) => JSON.parse(files.get(path)?.toString('utf-8') ?? 'null'),
+    paths: () => [...files.keys()],
+  };
+}
 
 const TEST_DIR = join(import.meta.dir, '..', '..', '.test-export-service');
 const SOUL_DIR = join(TEST_DIR, 'soul');
@@ -95,32 +110,22 @@ describe('BotExportService', () => {
       expect(buffer).toBeInstanceOf(Buffer);
       expect(buffer.length).toBeGreaterThan(0);
 
-      // Verify it's a valid tar.gz by extracting
-      const verifyDir = join(TEST_DIR, 'verify');
-      mkdirSync(verifyDir, { recursive: true });
-      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
-      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
+      const archive = extract(buffer);
+      expect(archive.has('manifest.json')).toBe(true);
+      expect(archive.has('config.json')).toBe(true);
+      expect(archive.has('soul/IDENTITY.md')).toBe(true);
+      expect(archive.has('soul/SOUL.md')).toBe(true);
+      expect(archive.has('soul/MEMORY.md')).toBe(true);
+      expect(archive.has('soul/memory/legacy.md')).toBe(true);
 
-      expect(existsSync(join(verifyDir, 'manifest.json'))).toBe(true);
-      expect(existsSync(join(verifyDir, 'config.json'))).toBe(true);
-      expect(existsSync(join(verifyDir, 'soul', 'IDENTITY.md'))).toBe(true);
-      expect(existsSync(join(verifyDir, 'soul', 'SOUL.md'))).toBe(true);
-      expect(existsSync(join(verifyDir, 'soul', 'MEMORY.md'))).toBe(true);
-      expect(existsSync(join(verifyDir, 'soul', 'memory', 'legacy.md'))).toBe(true);
-
-      // Verify manifest
-      const manifest = JSON.parse(readFileSync(join(verifyDir, 'manifest.json'), 'utf-8'));
+      const manifest = archive.json('manifest.json');
       expect(manifest.version).toBe(1);
       expect(manifest.botId).toBe('test-bot');
       expect(manifest.botName).toBe('Test Bot');
       expect(manifest.includes.soul).toBe(true);
 
       // Verify config is sanitized (no token)
-      const exportedConfig = JSON.parse(readFileSync(join(verifyDir, 'config.json'), 'utf-8'));
+      const exportedConfig = archive.json('config.json');
       expect(exportedConfig.token).toBe('');
       expect(exportedConfig.id).toBe('test-bot');
     });
@@ -139,16 +144,8 @@ describe('BotExportService', () => {
 
       const buffer = await service.exportBot('test-bot');
 
-      const verifyDir = join(TEST_DIR, 'verify');
-      mkdirSync(verifyDir, { recursive: true });
-      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
-      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
-
-      expect(existsSync(join(verifyDir, 'soul', '.versions'))).toBe(false);
+      const archive = extract(buffer);
+      expect(archive.paths().some((path) => path.includes('.versions'))).toBe(false);
     });
 
     it('throws for non-existent bot', async () => {
@@ -174,19 +171,9 @@ describe('BotExportService', () => {
       const logger = createMockLogger();
       const service = new BotExportService(config, CONFIG_PATH, logger, () => coreMemory);
 
-      const buffer = await service.exportBot('test-bot');
-
-      const verifyDir = join(TEST_DIR, 'verify');
-      mkdirSync(verifyDir, { recursive: true });
-      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
-      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
-
-      expect(existsSync(join(verifyDir, 'core_memory.jsonl'))).toBe(true);
-      const lines = readFileSync(join(verifyDir, 'core_memory.jsonl'), 'utf-8').trim().split('\n');
+      const archive = extract(buffer);
+      expect(archive.has('core_memory.jsonl')).toBe(true);
+      const lines = archive.text('core_memory.jsonl').trim().split('\n');
       expect(lines).toHaveLength(2);
       expect(JSON.parse(lines[0]).key).toBe('name');
       expect(JSON.parse(lines[1]).key).toBe('primary');
@@ -208,16 +195,7 @@ describe('BotExportService', () => {
 
       const buffer = await service.exportBot('test-bot', { productions: true });
 
-      const verifyDir = join(TEST_DIR, 'verify');
-      mkdirSync(verifyDir, { recursive: true });
-      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
-      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
-
-      expect(existsSync(join(verifyDir, 'productions', 'file1.md'))).toBe(true);
+      expect(extract(buffer).has('productions/file1.md')).toBe(true);
     });
 
     it('warns when soul dir is missing', async () => {
@@ -401,19 +379,58 @@ describe('BotExportService', () => {
       expect(coreMemory.set).toHaveBeenCalledTimes(1);
     });
 
-    it('throws on invalid archive (missing manifest)', async () => {
-      // Create a tar.gz with no manifest
-      const stagingDir = join(TEST_DIR, 'bad-archive');
-      mkdirSync(stagingDir, { recursive: true });
-      writeFileSync(join(stagingDir, 'random.txt'), 'not a bot export');
+    it('drops a relative soulDir override that points away from the restored files', async () => {
+      // Build the archive by hand: the export path resolves soulDir to an
+      // absolute path, which the sanitizer already strips.
+      const manifest = {
+        version: 1,
+        botId: 'ovr',
+        botName: 'Override Bot',
+        exportDate: new Date().toISOString(),
+        includes: {
+          soul: true,
+          coreMemory: false,
+          productions: false,
+          conversations: false,
+          karma: false,
+        },
+      };
+      const exportBuffer = packTarGz([
+        { path: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) },
+        {
+          path: 'config.json',
+          data: Buffer.from(
+            JSON.stringify({
+              id: 'ovr',
+              name: 'Override Bot',
+              token: '',
+              enabled: false,
+              skills: [],
+              soulDir: './config/soul/Improve my life',
+              workDir: './work/ovr',
+            })
+          ),
+        },
+        { path: 'soul/IDENTITY.md', data: Buffer.from('name: Override Bot\n') },
+      ]);
 
-      const archivePath = join(TEST_DIR, 'bad.tar.gz');
-      const proc = Bun.spawn(['tar', '-czf', archivePath, '-C', stagingDir, '.'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
-      const buffer = readFileSync(archivePath) as Buffer;
+      const importConfig = makeConfig([]);
+      const service = new BotExportService(importConfig, CONFIG_PATH, createMockLogger());
+      const result = await service.importBot(exportBuffer);
+
+      expect(result.warnings.some((w) => w.includes('Soul directory override'))).toBe(true);
+      expect(result.warnings.some((w) => w.includes('Work directory override'))).toBe(true);
+
+      const bots = JSON.parse(readFileSync(BOTS_PATH, 'utf-8'));
+      expect(bots[0].soulDir).toBeUndefined();
+      expect(bots[0].workDir).toBeUndefined();
+      expect(existsSync(join(SOUL_DIR, 'ovr', 'IDENTITY.md'))).toBe(true);
+    });
+
+    it('throws on invalid archive (missing manifest)', async () => {
+      const buffer = packTarGz([
+        { path: 'random.txt', data: Buffer.from('not a bot export', 'utf-8') },
+      ]);
 
       const config = makeConfig([]);
       const logger = createMockLogger();
@@ -507,7 +524,9 @@ describe('BotExportService', () => {
       const rows = db
         .prepare('SELECT category, key, value, importance FROM core_memory WHERE bot_id = ?')
         .all('imported-fallback') as any[];
-      db.close();
+      // close(true) is required on Windows: a deferred close keeps the SQLite
+      // file locked and the afterEach cleanup then fails with EBUSY.
+      db.close(true);
 
       expect(rows).toHaveLength(2);
       const pri = rows.find((r: any) => r.key === 'pri');
@@ -531,17 +550,7 @@ describe('BotExportService', () => {
       const service = new BotExportService(config, CONFIG_PATH, logger, () => coreMemory);
 
       const buffer = await service.exportBot('test-bot');
-      const verifyDir = join(TEST_DIR, 'verify');
-      mkdirSync(verifyDir, { recursive: true });
-      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
-      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
-
-      const manifest = JSON.parse(readFileSync(join(verifyDir, 'manifest.json'), 'utf-8'));
-      expect(manifest.includes.coreMemory).toBe(true);
+      expect(extract(buffer).json('manifest.json').includes.coreMemory).toBe(true);
     });
 
     it('sets coreMemory: false when no entries exist', async () => {
@@ -556,17 +565,7 @@ describe('BotExportService', () => {
       const service = new BotExportService(config, CONFIG_PATH, logger, () => coreMemory);
 
       const buffer = await service.exportBot('test-bot');
-      const verifyDir = join(TEST_DIR, 'verify');
-      mkdirSync(verifyDir, { recursive: true });
-      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
-      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
-
-      const manifest = JSON.parse(readFileSync(join(verifyDir, 'manifest.json'), 'utf-8'));
-      expect(manifest.includes.coreMemory).toBe(false);
+      expect(extract(buffer).json('manifest.json').includes.coreMemory).toBe(false);
     });
 
     it('sets coreMemory: false when no CoreMemoryManager provided', async () => {
@@ -580,17 +579,7 @@ describe('BotExportService', () => {
       const service = new BotExportService(config, CONFIG_PATH, logger);
 
       const buffer = await service.exportBot('test-bot');
-      const verifyDir = join(TEST_DIR, 'verify');
-      mkdirSync(verifyDir, { recursive: true });
-      writeFileSync(join(TEST_DIR, 'test.tar.gz'), buffer);
-      const proc = Bun.spawn(['tar', '-xzf', join(TEST_DIR, 'test.tar.gz'), '-C', verifyDir], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.exited;
-
-      const manifest = JSON.parse(readFileSync(join(verifyDir, 'manifest.json'), 'utf-8'));
-      expect(manifest.includes.coreMemory).toBe(false);
+      expect(extract(buffer).json('manifest.json').includes.coreMemory).toBe(false);
     });
   });
 });

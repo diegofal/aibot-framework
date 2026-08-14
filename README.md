@@ -161,6 +161,12 @@ src/
 │   └── tool-bridge-server.ts  #   Claude CLI ↔ framework tools
 ├── memory/                 # Semantic search & RAG (with temporal decay)
 │   └── manager.ts          #   Hybrid vector + FTS5 search (SQLite)
+├── system/                 # Whole-instance export/import
+│   ├── tar-archive.ts      #   Pure-JS tar + gzip (no tar binary, no /tmp)
+│   ├── config-sanitizer.ts #   Secret redaction → ${VAR}, machine-specific drops
+│   ├── system-export-service.ts  #   Bundle assembly + manifest/checksums
+│   ├── system-import-service.ts  #   Validation, collision planning, restore
+│   └── effective-config.ts #   Zod-free config slice for disaster recovery
 ├── core/                   # Skill loader, registry, config schemas, SKILL.md adapter
 ├── karma/                  # Per-bot quality scoring (0-100)
 ├── productions/            # Bot output tracking & review
@@ -301,7 +307,21 @@ Dual auth system supporting both human users and programmatic access:
 
 ### Bot Export/Import
 
-Portable `.tar.gz` archives for full bot backup and restoration via `BotExportService`. Includes manifest, sanitized config (no tokens), soul directory, core memory (JSONL), and optionally productions, conversations, and karma. Import supports ID/name overrides, conflict detection, and post-import RAG reindexing.
+Portable `.tar.gz` archives for full bot backup and restoration via `BotExportService`. Includes manifest, sanitized config (no tokens, no WhatsApp/Discord credentials), soul directory, core memory (JSONL), and optionally productions, conversations, and karma. Import supports ID/name overrides, conflict detection, and post-import RAG reindexing. Archiving is pure JS — no `tar` binary and no temp-directory staging.
+
+### System Export/Import
+
+Whole-instance backup: global config, the agent roster, every agent's soul and core memory, cron jobs, sessions, dynamic tools, agent proposals, karma, contacts and tenant state, in one `.tar.gz`. Composes `BotExportService` per agent rather than duplicating it.
+
+**No secret value ever enters a bundle** — credentials become `${VAR}` placeholders listed in `REQUIRED_ENV.txt`, and credentials embedded in file content are scrubbed. Machine-specific settings (`ollama.baseUrl`, `improve.claudePath`, `web.host`/`port`, absolute paths) and the regenerable vector index are left out on purpose. Restored agents always land `enabled: false` with an empty token.
+
+```bash
+bun run export:system -- --out ../backup.tar.gz
+bun run import:system -- --in ../backup.tar.gz        # prints the plan
+bun run import:system -- --in ../backup.tar.gz --yes  # applies it
+```
+
+Also at `GET /api/system/export` and `POST /api/system/import`, and in the dashboard under Settings → System Backup & Restore. **Never expose `/api/system/*` publicly** — see [docs/system-backup-restore.md](docs/system-backup-restore.md).
 
 ### Productions & Karma
 

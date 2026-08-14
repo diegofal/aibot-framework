@@ -7,6 +7,8 @@ bun.lockb
 config/bots.json
 config/config.json
 .env
+.env.*
+!.env.example
 
 # Data and logs
 data/

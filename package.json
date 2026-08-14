@@ -8,6 +8,8 @@
     "start": "bun run src/index.ts",
     "setup": "bun run scripts/setup.ts",
     "add-skill": "bun run scripts/add-skill.ts",
+    "export:system": "bun run scripts/system-export.ts",
+    "import:system": "bun run scripts/system-import.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
