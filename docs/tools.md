@@ -31,9 +31,15 @@ El loop de tools funciona así:
 
 1. El LLM recibe mensajes + definiciones de tools
 2. Si responde con `tool_calls`, se ejecuta cada tool y se agregan los resultados como mensajes `role: 'tool'`
-3. Se repite hasta `maxToolRounds` iteraciones (default: 5, configurable via `config.webTools.maxToolRounds`)
+3. Se repite hasta `maxToolRounds` iteraciones (default: **15**, configurable via `config.webTools.maxToolRounds`; per-bot override via `BotConfig.maxToolRounds`)
 4. En la última ronda se omiten las tools para forzar respuesta de texto
 5. Si se agotan las rondas, retorna un mensaje fallback
+
+> **Resolución de `maxToolRounds`:** se usa el helper compartido `resolveMaxToolRounds(config, botConfig)` (per-bot override > global). Aplicado en `webGenerate` (dashboard), `ConversationPipeline` (Telegram), y `Collaboration` (bot-to-bot).
+>
+> **Semántica del loop detector:** `maxToolRounds` cuenta **rondas** del LLM; el breaker global cuenta **llamadas** individuales de tools (un round puede consumir varias si el LLM devuelve múltiples `tool_calls` en paralelo). El techo es `2 * maxToolRounds` como margen de seguridad.
+>
+> **Limpieza del break:** cuando `cleanBreak: true` (opt-in, solo en el path `webGenerate`), el detector emite una ronda final sin tools pidiéndole al LLM que resuma, y devuelve la respuesta del modelo en vez del marcador `[Loop stopped: …]`. Si la ronda de resumen vuelve vacía, se usa un mensaje fallback constante.
 
 > **Nota:** El backend Claude CLI NO soporta tool calling. `LLMClientWithFallback` rutea automáticamente al fallback Ollama cuando se necesitan tools.
 

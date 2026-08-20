@@ -214,6 +214,7 @@ Documento vivo para trackear features futuras, ideas y estado de proyectos en pr
 - **A2A Streaming** — Soporte `message/stream` SSE para tareas largas (scraping, razonamiento multi-step). A2A Phase 1+2 ya están implementados
 - **Integración con APIs de calendario de terceros** — Más allá de Calendly/Google: Outlook Calendar, Cal.com
 - **Social media posting pipeline** — Composición de contenido → revisión humana → publicación coordinada en Twitter + Reddit
+- **Productions — refresh `Created` timestamp on `file_edit`** — currently `tool-executor.ts` calls `injectFrontmatter` only on `file_write`, not on `file_edit`. After a heavy edit the dashboard displays a misleadingly old "Created" date. Out of scope for the `productions/service.ts` split (Cycle 0–9 plan) but worth a separate fix later. References: `src/bot/tool-executor.ts:662–729`, `src/productions/service.ts:555–606` (`Frontmatter.injectFrontmatter`).
 - Ver Proyectos 4-7 arriba para las integraciones planificadas con estado y próximos pasos
 
 ---

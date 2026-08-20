@@ -170,6 +170,15 @@ src/
 ├── core/                   # Skill loader, registry, config schemas, SKILL.md adapter
 ├── karma/                  # Per-bot quality scoring (0-100)
 ├── productions/            # Bot output tracking & review
+│   ├── service.ts          #   Slim facade (~800 lines)
+│   ├── paths.ts            #   Path resolution + traversal guard
+│   ├── frontmatter.ts      #   YAML frontmatter read/write
+│   ├── summary.ts          #   Daily summary I/O
+│   ├── html.ts             #   Index.html emitter (no JS)
+│   ├── files.ts            #   File I/O (archive, read, write, renumber)
+│   ├── changelog.ts        #   JSONL parse / filter / stats
+│   ├── tree.ts             #   Directory walker with enrichment
+│   └── types.ts            #   ProductionEntry, TreeNode, Evaluation
 ├── tenant/                 # Multi-tenant BaaS infrastructure
 │   ├── manager.ts          #   Tenant CRUD & API key management
 │   ├── rate-limiter.ts     #   Sliding-window rate limiting

@@ -89,6 +89,14 @@ EXPOSE 3000
 
 USER bun
 
+# Lightweight liveness probe — /api/status is public (no auth) and returns
+# 200 + JSON while the web server is up. A hung process (e.g. every LLM call
+# stuck in timeout) leaves PID 1 alive but this endpoint silent, so Docker
+# marks the container unhealthy and `restart: unless-stopped` can take over.
+# `bun -e` avoids needing curl/wget in the slim image.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+  CMD bun -e "fetch('http://127.0.0.1:3000/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 # Exec form so `bun` becomes PID 1 and receives SIGTERM directly, which fires
 # the SIGTERM handler in src/index.ts (stopAll → cron stop → session dispose).
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

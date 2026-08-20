@@ -1559,9 +1559,13 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
           <li><strong>blocked</strong> &mdash; tool removed from LLM definitions (not available)</li>
         </ul>
         <p>
-          Most sensitive tools (exec, file_write, file_edit, browser, process, create_tool,
-          create_agent, improve, twitter_post) use <strong>confirm</strong> in conversations.
-          Only <code>phone_call</code> remains blocked in conversations (too dangerous).
+          Conversation uses the same tool set as the agent. Sensitive tools
+          (exec, file_write, file_edit, browser, process, create_tool,
+          create_agent, improve, twitter_post, phone_call) use <strong>confirm</strong>
+          and pause for operator approval. <code>blocked</code> in conversation is
+          coerced to <code>confirm</code> so a matrix override cannot hide a tool the
+          agent still has &mdash; <code>disabledTools</code> is how a tool is removed.
+          Dashboard conversations no longer strip collaboration/telephony tools either.
           Per-bot overrides are stored in
           <code>bots.json &rarr; toolPermissions</code> (partial overrides only).
         </p>

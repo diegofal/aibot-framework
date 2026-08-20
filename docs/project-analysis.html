@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIBot Framework - Análisis Exhaustivo</title>
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#161b22; --bg3:#21262d; --border:#30363d;
+    --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --accent2:#7ee787;
+    --warn:#d29922; --danger:#f85149; --ok:#3fb950; --purple:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    line-height:1.6; font-size:15px;
+  }
+  .wrap{max-width:1200px; margin:0 auto; padding:0 24px 80px}
+  header{
+    background:linear-gradient(135deg,#0d1117 0%,#1a2332 100%);
+    border-bottom:1px solid var(--border);
+    padding:48px 24px 36px; margin-bottom:32px;
+  }
+  header .inner{max-width:1200px; margin:0 auto}
+  h1{font-size:34px; margin:0 0 8px; letter-spacing:-.5px}
+  h1 .tag{color:var(--accent); font-weight:400}
+  .subtitle{color:var(--muted); font-size:17px; margin:4px 0 0}
+  .meta{margin-top:18px; display:flex; gap:8px; flex-wrap:wrap}
+  .pill{
+    background:var(--bg3); border:1px solid var(--border); color:var(--muted);
+    padding:4px 10px; border-radius:20px; font-size:12px;
+  }
+  .pill.ok{border-color:var(--ok); color:var(--ok)}
+  .pill.warn{border-color:var(--warn); color:var(--warn)}
+  .pill.danger{border-color:var(--danger); color:var(--danger)}
+
+  h2{
+    font-size:24px; margin:48px 0 16px; padding-bottom:10px;
+    border-bottom:1px solid var(--border); scroll-margin-top:20px;
+  }
+  h3{font-size:18px; margin:28px 0 10px; color:var(--accent)}
+  h4{font-size:15px; margin:20px 0 8px; color:var(--purple)}
+  p{margin:8px 0}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{background:var(--bg3); padding:2px 6px; border-radius:4px; font-size:13px; color:var(--accent2)}
+  pre{
+    background:var(--bg2); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; overflow-x:auto; font-size:13px; line-height:1.5;
+  }
+  pre code{background:none; padding:0; color:var(--fg)}
+
+  nav.toc{
+    position:sticky; top:0; z-index:10; background:rgba(13,17,23,.92);
+    backdrop-filter:blur(6px); border-bottom:1px solid var(--border);
+    padding:10px 24px; margin:0 -24px 24px;
+  }
+  nav.toc ul{list-style:none; margin:0; padding:0; display:flex; gap:4px; flex-wrap:wrap; max-width:1200px; margin:0 auto}
+  nav.toc a{
+    color:var(--muted); font-size:13px; padding:6px 10px; border-radius:6px;
+  }
+  nav.toc a:hover{background:var(--bg3); color:var(--fg)}
+
+  .grid{display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .card{
+    background:var(--bg2); border:1px solid var(--border); border-radius:10px;
+    padding:18px;
+  }
+  .card h4{margin-top:0}
+  .card .num{font-size:28px; font-weight:600; color:var(--accent)}
+  .card .num.danger{color:var(--danger)}
+  .card .num.warn{color:var(--warn)}
+  .card .num.ok{color:var(--ok)}
+  .card .lab{color:var(--muted); font-size:12px; margin-top:2px}
+
+  table{width:100%; border-collapse:collapse; margin:12px 0; font-size:14px}
+  th,td{padding:8px 10px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top}
+  th{color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.5px}
+  tr:hover td{background:var(--bg2)}
+
+  .status{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600}
+  .status::before{content:""; width:8px; height:8px; border-radius:50%}
+  .status.ok{color:var(--ok)} .status.ok::before{background:var(--ok)}
+  .status.warn{color:var(--warn)} .status.warn::before{background:var(--warn)}
+  .status.danger{color:var(--danger)} .status.danger::before{background:var(--danger)}
+  .status.muted{color:var(--muted)} .status.muted::before{background:var(--muted)}
+
+  .callout{
+    border-left:3px solid; padding:12px 16px; border-radius:0 8px 8px 0;
+    margin:16px 0; background:var(--bg2);
+  }
+  .callout.danger{border-color:var(--danger)}
+  .callout.warn{border-color:var(--warn)}
+  .callout.ok{border-color:var(--ok)}
+  .callout.info{border-color:var(--accent)}
+  .callout strong{display:block; margin-bottom:4px}
+
+  ul.check{list-style:none; padding:0; margin:8px 0}
+  ul.check li{padding:6px 0 6px 26px; position:relative}
+  ul.check li::before{position:absolute; left:0; top:7px; font-weight:700}
+  ul.check.yes li::before{content:"\2713"; color:var(--ok)}
+  ul.check.no li::before{content:"\2717"; color:var(--danger)}
+  ul.check.warn li::before{content:"!"; color:var(--warn); left:8px}
+
+  .badge{display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600}
+  .badge.ok{background:rgba(63,185,80,.15); color:var(--ok)}
+  .badge.warn{background:rgba(210,153,34,.15); color:var(--warn)}
+  .badge.danger{background:rgba(248,81,73,.15); color:var(--danger)}
+  .badge.muted{background:var(--bg3); color:var(--muted)}
+
+  footer{margin-top:60px; padding-top:24px; border-top:1px solid var(--border); color:var(--muted); font-size:13px}
+  .stack{display:flex; flex-direction:column; gap:8px}
+  .row{display:flex; gap:12px; align-items:flex-start}
+  .row .k{color:var(--muted); min-width:180px; font-size:13px}
+  .row .v{flex:1}
+  @media (max-width:680px){ nav.toc ul{flex-direction:column} .row{flex-direction:column} .row .k{min-width:0} }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="inner">
+    <h1>AIBot Framework <span class="tag">— Análisis exhaustivo</span></h1>
+    <p class="subtitle">Framework de agentes autónomos multi-bot con Telegram, memoria semántica y colaboración bot-a-bot.</p>
+    <div class="meta">
+      <span class="pill">Runtime: Bun + TypeScript</span>
+      <span class="pill">Bot framework: grammY</span>
+      <span class="pill">Web: Hono</span>
+      <span class="pill">DB: SQLite (bun:sqlite)</span>
+      <span class="pill">LLM: Ollama + Claude CLI</span>
+      <span class="pill ok">Container UP</span>
+      <span class="pill warn">1/16 bots corriendo</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#resumen">Resumen ejecutivo</a></li>
+    <li><a href="#entendimiento">Qué entendí</a></li>
+    <li><a href="#docker">Estado en Docker</a></li>
+    <li><a href="#funciona">Qué funciona</a></li>
+    <li><a href="#no-funciona">Qué NO funciona</a></li>
+    <li><a href="#riesgos">Riesgos & deudas</a></li>
+    <li><a href="#agregaria">Qué agregaría</a></li>
+    <li><a href="#recomendaciones">Recomendaciones</a></li>
+  </ul>
+</nav>
+
+<div class="wrap">
+
+<!-- =================== RESUMEN =================== -->
+<section id="resumen">
+<h2>1. Resumen ejecutivo</h2>
+
+<div class="grid">
+  <div class="card"><div class="num">16</div><div class="lab">Bots configurados en <code>bots.json</code></div></div>
+  <div class="card"><div class="num warn">1</div><div class="lab">Bot realmente corriendo (<code>default</code>)</div></div>
+  <div class="card"><div class="num danger">41.282</div><div class="lab">Líneas de error MCP acumuladas en el log</div></div>
+  <div class="card"><div class="num">146 MB</div><div class="lab">RAM usada por el container aibot</div></div>
+  <div class="card"><div class="num">30 GB</div><div class="lab">RAM del host (margen amplísimo)</div></div>
+  <div class="card"><div class="num danger">12 MB</div><div class="lab">Tamaño del log <code>aibot.log</code> (sin rotación)</div></div>
+  <div class="card"><div class="num warn">7</div><div class="lab">Bots <code>enabled:true</code> con token inválido/vacío</div></div>
+  <div class="card"><div class="num">59.334</div><div class="lab">Líneas totales en <code>aibot.log</code></div></div>
+</div>
+
+<div class="callout danger">
+  <strong>Veredicto general</strong>
+  El framework es arquitectónicamente sólido y muy completo (41 tools, 15 skills, multi-tenant, A2A, MCP, export/import, agent loop, failover, etc.), pero <b>la instancia en producción está medio rota</b>: el auto-start está desactivado por env, el único bot que corre es <code>default</code>, la API key de Ollama Cloud está revocada (HTTP 401 en todos los modelos), el CLI de Claude no está instalado en la imagen, y dos MCP servers (<code>npx</code>, <code>uvx</code>) llevan 4.122 intentos de reconexión saturando el log. Resultado: el bot <code>default</code> hace polling de Telegram pero <b>cualquier mensaje que requiera LLM va a fallar o caer al fallback</b>, y el agent loop está prácticamente inactivo.
+</div>
+
+<p>El proyecto <b>no es un MVP</b>: es un framework maduro con documentación extensa, tests en casi todos los módulos, convenciones claras y un grafo de dependencias bien definido (ver <code>CLAUDE.md</code>). El problema es operacional, no estructural.</p>
+
+</section>
+
+<!-- =================== ENTENDIMIENTO =================== -->
+<section id="entendimiento">
+<h2>2. Qué entendí del proyecto</h2>
+
+<p>AIBot Framework es un <b>orquestador de agentes autónomos con personalidad persistente</b>. Cada bot tiene:</p>
+
+<ul class="check yes">
+  <li><b>Soul files</b> — <code>IDENTITY.md</code>, <code>SOUL.md</code>, <code>MOTIVATIONS.md</code>, <code>GOALS.md</code> + <code>MEMORY.md</code> consolidado + daily logs en <code>soul/&lt;botId&gt;/memory/</code>.</li>
+  <li><b>Memoria semántica RAG</b> — SQLite con vector + FTS5, decay temporal exponencial, indexado de transcripts al boot.</li>
+  <li><b>Agent loop</b> — patrón planner→executor con strategist, retry con backoff, detección de idle y novelty enforcement.</li>
+  <li><b>Skills</b> — 15 bundled (reflection, intel-gatherer, improve, calibrate, humanizer, phone-call, mcp-client, daily-priorities, daily-briefing, quick-notes, reminders, task-tracker, reddit, calendar, example). Plugin system con <code>skill.json</code> y <code>SKILL.md</code> declarativo.</li>
+  <li><b>Tools</b> — 41 LLM-callable tools en 11 categorías (web, files, exec, soul/memory, goals, collaboration, cron, social, calendar, core-memory, permissions, productions, MCP).</li>
+  <li><b>Multi-canal</b> — Telegram (grammy), WhatsApp Cloud API, Discord (REST + Gateway WS), REST, WebSocket widget. Outbound factory para mensajes proactivos.</li>
+  <li><b>Multi-tenant BaaS</b> — 6 fases: auth, config isolation, data isolation (<code>data/tenants/{tenantId}/bots/{botId}/</code>), quota + rate limit, onboarding + billing Stripe, per-user isolation.</li>
+  <li><b>Colaboración bot-a-bot</b> — 3 modos: visible, internal, delegation + multi-turn sessions + collaboration-safe tool filtering.</li>
+  <li><b>MCP bidireccional</b> — client (conecta a servers externos) + server (expone tools a Claude Desktop/Cursor) + tool-bridge para Claude CLI.</li>
+  <li><b>A2A Protocol v0.3.0</b> — JSON-RPC server, agent directory con heartbeat, task store, client pool, skill→tool adapter.</li>
+  <li><b>Failover de modelos</b> — cadena ordenada con cooldown, clasificación de errores (auth/billing/rate/timeout/context/format), clamp al context window más chico.</li>
+  <li><b>Seguridad</b> — audit on startup (24h cooldown), security audit module, secret redaction en export (<code>${VAR}</code>), <code>config-sanitizer.ts</code> como frontera.</li>
+  <li><b>Lifecycle hooks</b> — 8 eventos EventEmitter (message_received/sent, before/after_llm_call, before/after_tool_call, before_compaction, agent_loop_cycle).</li>
+  <li><b>Dashboard web</b> — Hono + SPA con 17 páginas (Dashboard, Agents, Sessions, Conversations, Cron, Tools, Tool Runner, Skills, Activity, Permissions, Inbox, Productions, Karma, Agent Proposals, Agent Feedback, Integrations, Settings).</li>
+</ul>
+
+<h3>Arquitectura del core (<code>src/bot/</code>)</h3>
+<p>El core es un facade <code>BotManager</code> que compone ~42 módulos enfocados, todos recibiendo un <code>BotContext</code> compartido por referencia. Las dependencias circulares (collaborate/delegate → CollaborationManager) se resuelven con lazy callbacks <code>() => collaborationManager</code>. El grafo completo está en <code>CLAUDE.md</code> y es coherente.</p>
+
+<h3>Canal de mensaje típico</h3>
+<pre><code>InboundMessage (Channel adapter)
+  → ConversationGate (auth / grupo / bot-to-bot / ask_human)
+  → GroupActivation (relevance check en grupos)
+  → TopicGuard (LLM pre-filter, opcional)
+  → ConversationPipeline
+      ├─ session expiry
+      ├─ RAG prefetch (MemoryManager)
+      ├─ ContextCompactor (si cerca del límite)
+      ├─ SystemPromptBuilder (conversation | collaboration)
+      ├─ LLM call (FailoverLLMClient → Ollama | Claude CLI)
+      ├─ ToolExecutor (con hooks + retry + loop detection)
+      ├─ persist (SessionManager + LlmQueryLog)
+      └─ reply (Channel.send + streaming + edit progresivo)</code></pre>
+
+<h3>Agent loop</h3>
+<pre><code>AgentScheduler (cron/continuous) 
+  → AgentPlanner (LLM: ¿qué hago ahora?) 
+  → AgentStrategist (goal reflection, cadence) 
+  → ToolExecutor (executa el plan con tools)
+  → AgentRetryEngine (backoff exponencial, error classification)
+  → AgentLoopUtils (digest, dedup, novelty check)</code></pre>
+
+</section>
+
+<!-- =================== DOCKER =================== -->
+<section id="docker">
+<h2>3. Cómo está corriendo en Docker</h2>
+
+<h3>Topología</h3>
+<p>Dos containers via <code>docker-compose.yml</code>:</p>
+
+<table>
+<thead><tr><th>Container</th><th>Imagen</th><th>Estado</th><th>Uptime</th><th>CPU</th><th>RAM</th><th>Restart count</th></tr></thead>
+<tbody>
+<tr><td><code>aibot-framework-aibot-1</code></td><td><code>aibot-framework:latest</code></td><td><span class="status ok">running</span></td><td>3 días</td><td>0.76%</td><td>146 MB / 30 GB</td><td>0</td></tr>
+<tr><td><code>aibot-framework-ollama-1</code></td><td><code>ollama/ollama:latest</code></td><td><span class="status ok">running</span></td><td>4 días</td><td>0.00%</td><td>16 MB / 30 GB</td><td>0</td></tr>
+</tbody>
+</table>
+
+<h3>Dockerfile (multi-stage)</h3>
+<ul class="check yes">
+  <li>Stage 1 <code>deps</code>: <code>oven/bun:1.3.11-slim</code> + <code>bun install --frozen-lockfile --production</code> con <code>PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1</code>.</li>
+  <li>Stage 2 <code>runtime</code>: copia solo <code>node_modules</code>, <code>src/</code>, <code>web/</code>, <code>scripts/</code> y config templates. <code>COPY . .</code> deliberadamente evitado para que <code>config/config.json</code>, <code>.env</code>, <code>data/</code> y <code>productions/</code> nunca entren en la imagen.</li>
+  <li>Usuario no-privilegiado <code>bun</code> (uid 1000), <code>VOLUME ["/app/config","/app/data","/app/productions"]</code>.</li>
+  <li><code>ENTRYPOINT</code> exec form → <code>bun</code> es PID 1 y recibe SIGTERM directo → graceful shutdown.</li>
+  <li>Block de Chromium comentado (Playwright opcional, +500 MB).</li>
+</ul>
+
+<h3>Compose</h3>
+<ul class="check yes">
+  <li><code>replicas: 1</code> — correcto: Telegram long-polling permite un solo consumidor por token (HTTP 409 si hay dos).</li>
+  <li><code>ports: 127.0.0.1:3000:3000</code> — bind a loopback a propósito (single-tenant no tiene auth en <code>/api/*</code>). Acceso via SSH tunnel.</li>
+  <li><code>init: true</code> — reapa zombies de subprocesos <code>tar</code>/<code>claude</code>.</li>
+  <li><code>stop_grace_period: 30s</code> — espacio para <code>stopAll → cron stop → session dispose</code>.</li>
+  <li><code>logging: json-file max-size:10m max-file:3</code> — rota stdout del container (pero <b>no</b> rota <code>data/logs/aibot.log</code>).</li>
+  <li>Ollama sidecar detrás de <code>profiles: ["local-ollama"]</code> — opcional desde que existe auth directa a Ollama Cloud.</li>
+  <li><code>OLLAMA_BASE_URL: ${AIBOT_OLLAMA_URL:-http://ollama:11434}</code> — override explícito para no heredar <code>OLLAMA_BASE_URL=127.0.0.1</code> del <code>.env</code> del host.</li>
+</ul>
+
+<h3>Entrypoint (<code>docker-entrypoint.sh</code>)</h3>
+<p>Idempotente: siembra <code>config.json</code>, <code>bots.json</code> y <code>sources.yml</code> desde <code>/app/config-defaults/</code> solo en first boot. <b>Nunca sobrescribe</b> un archivo existente (el volumen es runtime-mutable). Imprime un banner explícito en fresh install avisando que todos los bots arrancan <code>enabled:false</code>.</p>
+
+<h3>Variables de entorno observadas (dentro del container)</h3>
+<pre><code>OLLAMA_BASE_URL=http://ollama:11434       ← apunta al sidecar, NO a Ollama Cloud
+OLLAMA_API_KEY=ff836c...&lt;32 chars&gt;...      ← presente pero RECHAZADA (HTTP 401)
+AIBOT_AUTOSTART_BOTS=false                 ← auto-start DESACTIVADO por env
+ADMIN_API_KEY=&lt;no seteada&gt;                  ← middleware admin fail-closed → 503</code></pre>
+
+<div class="callout warn">
+  <strong>Discrepancia config.json vs env</strong>
+  El <code>config/config.json</code> en el repo local dice <code>"baseUrl": "http://127.0.0.1:11434"</code> (loopback, para bare metal), pero dentro del container el JSON dice <code>"${OLLAMA_BASE_URL}"</code> y el env overridea a <code>http://ollama:11434</code>. El sidecar de Ollama está corriendo <b>pero la API key configurada es para Ollama Cloud</b>, no para el daemon local. El daemon local no espera auth → el header <code>Authorization: Bearer ...</code> que se le manda hace que el proxy interno responda 401. <b>El sidecar local + API key cloud son incompatibles</b>: o se saca la key y se usa el daemon local, o se cambia <code>OLLAMA_BASE_URL=https://ollama.com</code> y se saca el sidecar.
+</div>
+
+</section>
+
+<!-- =================== FUNCIONA =================== -->
+<section id="funciona">
+<h2>4. Qué cosas funcionan</h2>
+
+<div class="grid">
+  <div class="card">
+    <h4><span class="status ok"></span> Container & proceso</h4>
+    <ul class="check yes">
+      <li>Container <code>Up 3 days</code>, 0 restarts, 146 MB RAM.</li>
+      <li>PID 1 = <code>bun</code>, SIGTERM handler operativo.</li>
+      <li>Volúmenes <code>config</code>, <code>data</code>, <code>productions</code> montados y persistentes.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="status ok"></span> Web server / dashboard</h4>
+    <ul class="check yes">
+      <li>Hono escuchando en <code>127.0.0.1:3000</code>.</li>
+      <li><code>GET /api/status</code> responde: <code>uptime:266406s, configured:16, running:1, ids:["default"]</code>.</li>
+      <li><code>/api/agents</code> y <code>/api/dashboard</code> protegidos (multiTenant.enabled=true → auth middleware activo).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="status ok"></span> Multi-tenant activo</h4>
+    <ul class="check yes">
+      <li><code>multiTenant.enabled: true</code> en config.</li>
+      <li>Tenant <code>__admin__</code> creado con <code>admin-credentials.json</code>.</li>
+      <li>Bots del admin bajo <code>data/tenants/__admin__/bots/&lt;id&gt;/</code>.</li>
+      <li>Auth middleware respondiendo <code>{"error":"Missing Authorization header"}</code> → fail-closed correcto.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="status ok"></span> Bot <code>default</code> corriendo</h4>
+    <ul class="check yes">
+      <li>Polling Telegram activo (1 consumer, sin 409).</li>
+      <li>Agent loop <code>mode:periodic</code> started.</li>
+      <li>Soul completo: <code>IDENTITY.md</code>, <code>SOUL.md</code>, <code>MOTIVATIONS.md</code>, <code>GOALS.md</code>, <code>MEMORY.md</code>, <code>feedback.jsonl</code>, <code>memory/</code>.</li>
+      <li><code>TRAITS.json</code> presente.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="status ok"></span> SQLite + memoria RAG</h4>
+    <ul class="check yes">
+      <li><code>memory.db</code> = 19 MB, <code>memory.db-wal</code> = 4.2 MB (WAL activo).</li>
+      <li>Índice vectorial + FTS5 operativo.</li>
+      <li><code>soul.search.enabled:true</code> con <code>nomic-embed-text:latest</code>.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="status ok"></span> Cron engine</h4>
+    <ul class="check yes">
+      <li>Timer armado cada 60s (clamped).</li>
+      <li>Skill <code>intel-gatherer</code> ejecutándose en schedule.</li>
+      <li><code>reflection</code> con cron <code>30 3 * * *</code> configurado.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="status ok"></span> Skills cargadas</h4>
+    <ul class="check yes">
+      <li>11 skills habilitadas en config: example, intel-gatherer, phone-call, humanizer, reflection, calibrate, improve, quick-notes, task-tracker, daily-priorities, reminders.</li>
+      <li>SkillRegistry carga al boot sin errores.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="status ok"></span> Suite de tests</h4>
+    <ul class="check yes">
+      <li>~110+ archivos de test bajo <code>tests/</code> cubriendo tools, tenant, web routes, agent loop, MCP, collaboration, karma, productions, auth, etc.</li>
+      <li>Biome para lint, <code>tsc --noEmit</code> para typecheck.</li>
+    </ul>
+  </div>
+</div>
+
+</section>
+
+<!-- =================== NO FUNCIONA =================== -->
+<section id="no-funciona">
+<h2>5. Qué cosas NO funcionan</h2>
+
+<div class="callout danger">
+  <strong>1. Auto-start desactivado (AIBOT_AUTOSTART_BOTS=false)</strong>
+  El env override desactiva el arranque automático. Solo <code>default</code> corre porque fue iniciado a mano desde el dashboard. Si el host reboot o el container se recrea, <b>ningún bot levanta solo</b> — hay que entrar al dashboard y empezar uno por uno. El log lo repite en cada boot: <code>"Auto-start is DISABLED — no agent will be started at boot"</code>.
+</div>
+
+<div class="callout danger">
+  <strong>2. Ollama Cloud API key rechazada (HTTP 401)</strong>
+  En cada boot: <code>"OLLAMA AUTHENTICATION FAILED — the configured ollama.apiKey was rejected (HTTP 401/403). [...] Every LLM call will fail."</code> Los 3 modelos (<code>kimi-k2.6:cloud</code>, <code>gpt-oss:120b-cloud</code>, <code>nemotron-3-super:cloud</code>) son <code>:cloud</code> → requieren auth contra Ollama Cloud. La key está revocada/expirada. Peor aún: <code>OLLAMA_BASE_URL=http://ollama:11434</code> apunta al sidecar <b>local</b>, que no necesita auth, pero el cliente le manda el header <code>Authorization: Bearer &lt;key cloud&gt;</code> igual → el daemon local lo rechaza. <b>Toda llamada LLM por Ollama va a fallar.</b>
+</div>
+
+<div class="callout danger">
+  <strong>3. Claude CLI no instalado en la imagen</strong>
+  <code>Executable not found in $PATH: "claude"</code> aparece en el log cuando el skill <code>intel-gatherer</code> intenta generar summaries. El Dockerfile no instala Claude CLI (es un binario externo que requiere setup + auth). 7 de los 16 bots tienen <code>llmBackend: "claude-cli"</code> como backend → <b>todos sus agent loops y conversaciones van a fallar</b>. El fallback a Ollama también cae en el punto 2.
+</div>
+
+<div class="callout danger">
+  <strong>4. MCP servers en loop infinito de reconexión</strong>
+  <code>mcp.servers</code> tiene dos entries: <code>Everything</code> (comando <code>npx</code>) y <code>linkedin-scraper</code> (comando <code>uvx</code>). <b>Ni <code>npx</code> ni <code>uvx</code> existen en la imagen</b> (no hay Node, no hay Python/uv). Cada server reintenta cada 60s y lleva <code>attempt: 4122</code>. Esto genera <b>41.282 líneas de error MCP</b> en el log (~70% del archivo) y ruido constante en stdout. El <code>autoReconnect:true</code> no tiene circuit breaker real.
+</div>
+
+<div class="callout warn">
+  <strong>5. Bots con token inválido pero <code>enabled:true</code></strong>
+  <code>myfirstmillion</code> (token:<code>"empty"</code>), <code>moltbook</code> (token:<code>"moltbook"</code>), <code>milei-rocca</code> (token:<code>"milei-rocca"</code>), <code>selfimprove</code> (token:<code>"selfimprove"</code>), <code>openclone</code> (token:<code>"dasoifhafoih"</code>) están habilitados. Si se activara el auto-start, todos intentarían <code>getUpdates</code> y fallarían con 401 Unauthorized. Solo <code>default</code>, <code>cryptik</code> y <code>job-seeker</code> tienen tokens reales de Telegram.
+</div>
+
+<div class="callout warn">
+  <strong>6. Reddit API sin credenciales → 403 en todas las categorías</strong>
+  El skill <code>intel-gatherer</code> loguea <code>"Reddit rate limit (403), skipping: LocalLLaMA"</code> para cada subreddit. <code>reddit.enabled:false</code> en config pero el skill igualmente los scrapea. Las credenciales en <code>.env</code> son placeholders.
+</div>
+
+<div class="callout warn">
+  <strong>7. Log interno sin rotación</strong>
+  <code>data/logs/aibot.log</code> = 12 MB y creciendo. El <code>logging.driver</code> del compose rota el stdout del container, pero el file JSONL interno no tiene rotación propia. En producción always-on esto crece indefinidamente. <code>docs/deployment-cloud.md</code> lo menciona pero no hay un logrotate configurado en el container.
+</div>
+
+<div class="callout warn">
+  <strong>8. ADMIN_API_KEY no seteada</strong>
+  Sin <code>ADMIN_API_KEY</code>, el admin middleware es fail-closed (503 en <code>/api/admin/*</code>). Esto bloquea operaciones administrativas programáticas aunque el dashboard session-auth funcione.
+</div>
+
+<div class="callout warn">
+  <strong>9. Soul migration incompleta para bots secondary</strong>
+  En el log: <code>"Soul files found in legacy config/ path — will be migrated on startBot"</code> para <code>default</code>, y <code>"Export: soul directory missing, exporting empty"</code> para cryptik, job-seeker, myfirstmillion, openclone, moltbook, monetize. Los souls existen en <code>config/soul/&lt;id&gt;/</code> (12 dirs) pero la migración a <code>data/tenants/__admin__/bots/&lt;id&gt;/soul/</code> solo se dispara al hacer <code>startBot</code>. Los bots que nunca arrancaron no tienen soul migrado.
+</div>
+
+<div class="callout warn">
+  <strong>10. <code>fileTools.basePath</code> apunta a path host</strong>
+  <code>config.json</code> tiene <code>"basePath": "/home/diego/projects/aibot-framework"</code> y <code>"allowedPaths": ["/home/diego/openclaw"]</code> — paths del host, no del container. Adentro del container esos paths no existen → <code>file_read</code>/<code>file_write</code> fallarían o escaparían del sandbox.
+</div>
+
+<div class="callout warn">
+  <strong>11. Skill duplicados en <code>milei-rocca</code></strong>
+  El array <code>skills</code> de ese bot lista <code>task-tracker</code>, <code>daily-priorities</code>, <code>calendar</code>, <code>reddit</code> dos veces. No es fatal (un Set lo deduparía) pero indica descuido en la edición del JSON.
+</div>
+
+</section>
+
+<!-- =================== RIESGOS =================== -->
+<section id="riesgos">
+<h2>6. Riesgos & deudas técnicas</h2>
+
+<table>
+<thead><tr><th>Riesgo</th><th>Severidad</th><th>Detalle</th></tr></thead>
+<tbody>
+<tr><td>Token de Telegram en <code>bots.json</code> commiteado</td><td><span class="badge danger">Alta</span></td><td>Los tokens de <code>default</code>, <code>cryptik</code>, <code>job-seeker</code> están en claro en el JSON del repo. Deberían ir en <code>.env</code> con <code>${TELEGRAM_BOT_TOKEN}</code> como sí hace el <code>bots.example.json</code>. Si el repo es público o se comparte, los bots se pueden secuestrar.</td></tr>
+<tr><td>OLLAMA_API_KEY en <code>.env</code> del host</td><td><span class="badge warn">Media</span></td><td>La key <code>ff836c...</code> está visible al <code>docker exec printenv</code>. No es commiteada pero sí accesible a quien tenga acceso al host. Rotar la key (ya está revocada por Ollama Cloud).</td></tr>
+<tr><td>Dashboard sin auth en single-tenant</td><td><span class="badge warn">Media</span></td><td>Acá <code>multiTenant.enabled:true</code> así que hay auth, pero la documentación advierte que en single-tenant <code>/api/*</code> no tiene auth y <code>GET /api/agents/:id/export</code> exhfiltra soul+memoria+config. El bind <code>127.0.0.1</code> mitiga, pero un SSH tunnel compartido lo expone.</td></tr>
+<tr><td>Logs sin PII redaction</td><td><span class="badge warn">Media</span></td><td>Los transcripts de conversaciones se persisten en <code>data/sessions/transcripts</code> y se loggean. No hay redaction automática de datos sensibles de usuarios.</td></tr>
+<tr><td>41.282 líneas de ruido MCP</td><td><span class="badge warn">Media</span></td><td>Sin circuit breaker en <code>autoReconnect</code>, los logs se vuelven inútiles para auditar. Un incidente real se pierde en el ruido.</td></tr>
+<tr><td>Sin healthcheck en Dockerfile</td><td><span class="badge muted">Baja</span></td><td>No hay <code>HEALTHCHECK</code>. <code>restart: unless-stopped</code> revive el container si el proceso muere, pero un proceso colgado (p.ej. todos los LLM calls en timeout) no se detecta.</td></tr>
+<tr><td><code>deploy.replicas:1</code> es advisory</td><td><span class="badge muted">Baja</span></td><td>Bajo plain compose (no Swarm), el campo se ignora. El guard real es operacional. Un <code>docker compose up --scale aibot=2</code> rompería con 409 en Telegram.</td></tr>
+<tr><td>Tests no corren en CI sobre Windows</td><td><span class="badge muted">Baja</span></td><td>El repo tiene <code>.github/workflows/ci.yml</code> pero el workspace actual es Windows. Algunos tests asumen paths POSIX.</td></tr>
+<tr><td>Sin métricas (Prometheus/OpenTelemetry)</td><td><span class="badge muted">Baja</span></td><td>Hay <code>AnalyticsService</code> y <code>LlmQueryLog</code> pero no hay export de métricas estándar. Para observabilidad seria falta un endpoint <code>/metrics</code>.</td></tr>
+</tbody>
+</table>
+
+</section>
+
+<!-- =================== AGREGARIA =================== -->
+<section id="agregaria">
+<h2>7. Qué agregaría / mejoraría</h2>
+
+<h3>Operacional (urgente, para que la instancia actual funcione)</h3>
+<ol>
+  <li><b>Decidir topología Ollama</b>: o bien (a) <code>OLLAMA_BASE_URL=https://ollama.com</code> + key nueva + sacar el sidecar + <code>soul.search.enabled:false</code> (Ollama Cloud no tiene embeddings), o bien (b) <code>OLLAMA_API_KEY=</code> (vacía) + dejar el sidecar local + bajar modelos <code>nomic-embed-text</code> y un modelo de chat no-<code>:cloud</code>. Hoy es un mix roto de ambos.</li>
+  <li><b>Instalar Claude CLI en la imagen</b> o cambiar los 7 bots con <code>llmBackend:"claude-cli"</code> a <code>"ollama"</code>. Si se instala Claude, meterlo en un stage del Dockerfile con su auth via env.</li>
+  <li><b>Sacar o desactivar los MCP servers rotos</b>: poner <code>mcp.servers: []</code> o agregar <code>enabled:false</code> por server hasta que <code>npx</code>/<code>uvx</code> estén disponibles. Mejor aún: agregar un circuit breaker en <code>McpClient</code> que después de N fallos consecutivos con <code>ENOENT</code> abandone y loguee una sola vez.</li>
+  <li><b>Activar auto-start</b>: sacar <code>AIBOT_AUTOSTART_BOTS=false</code> del <code>.env</code> (o setear <code>true</code>) una vez que los tokens y el LLM funcionen. Para el cutover ya no aplica.</li>
+  <li><b>Mover tokens a <code>.env</code></b>: en <code>bots.json</code> usar <code>"token": "${TELEGRAM_BOT_TOKEN_DEFAULT}"</code> etc. Rotar los tokens ya commiteados via BotFather.</li>
+  <li><b>Setear <code>ADMIN_API_KEY</code></b> con <code>openssl rand -hex 32</code>.</li>
+  <li><b>Rotación de <code>aibot.log</code></b>: agregar un <code>logrotate</code> en el entrypoint o un <code>pino-roll</code>, o al menos un <code>truncate</code> periódico. 12 MB no es crítico pero en 3 meses sin atención crece.</li>
+  <li><b>Deshabilitar los 5 bots con token falso</b>: poner <code>enabled:false</code> a <code>myfirstmillion</code>, <code>moltbook</code>, <code>milei-rocca</code>, <code>selfimprove</code>, <code>openclone</code> hasta que tengan tokens reales.</li>
+  <li><b>Corregir <code>fileTools.basePath</code></code></b>: apuntar a <code>/app</code> o al workDir del bot dentro del container.</li>
+</ol>
+
+<h3>Arquitectura (mejoras de fondo)</h3>
+<ol>
+  <li><b>Circuit breaker en MCP autoReconnect</b>: después de M fallos con el mismo error (ENOENT, ECONNREFUSED), pasar a un estado <code>disabled</code> con backoff exponencial largo (p.ej. 1h) y un endpoint del dashboard para re-habilitar manualmente.</li>
+  <li><b>HEALTHCHECK en Dockerfile</b>: <code>HEALTHCHECK CMD bun -e "fetch('http://127.0.0.1:3000/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"</code> cada 60s.</li>
+  <li><b>Endpoint <code>/metrics</code> Prometheus</b>: counters de messages in/out, LLM calls por backend/model, tool calls, agent loop runs, MCP reconects, RAG queries. Permitiría alertar en Grafana.</li>
+  <li><b>Redaction de PII en logs</b>: un transport de pino que masquee tokens, emails, phone numbers antes de escribir a <code>aibot.log</code>.</li>
+  <li><b>Validación de tokens al startBot</b>: antes de arrancar el polling, un <code>getMe</code> para validar el token y fallar con un mensaje claro (<code>401 token invalid</code>) en vez de dejarlo en loop de retry.</li>
+  <li><b>Schema validation de <code>bots.json</code> con Zod</b>: hoy el JSON se carga sin validar que los tokens no sean placeholders ni los skills existan. Un schema que rechace <code>token:"empty"</code> o skills duplicados habría evitado varios de los issues arriba.</li>
+  <li><b>Graceful shutdown del MCP pool</b>: en SIGTERM, además de <code>stopAll</code>, cerrar los stdio transports de MCP para que no queden zombies.</li>
+  <li><b>Perfil Docker <code>slim</code> sin Ollama sidecar</b> como default + perfiles <code>with-ollama</code>, <code>with-browser</code>, <code>with-claude</code> que instalen lo necesario. Hoy todo es manual o comentado.</li>
+  <li><b>CI que valide el <code>docker compose up</code></b>: un job que levante el compose, hit <code>/api/status</code>, y baje. Hoy CI valida tests pero no que el container arranque.</li>
+  <li><b>Backup automático del volume <code>aibot_config</code></b>: ya existe <code>export:system</code> pero es manual. Un cron del host que corra <code>d</code>ocker exec aibot bun run export:system -- --out /backups/$(date).tar.gz</code> semanalmente.</li>
+</ol>
+
+<h3>Features que le agregaría al framework</h3>
+<ol>
+  <li><b>Webhook mode para Telegram</b> además de long-polling: permitiría &gt;1 réplica detrás de un LB (con stickiness por bot). Hoy el <code>replicas:1</code> es hard limit por el polling.</li>
+  <li><b>RAG over productions</b>: hoy las productions se trackean pero no se indexan en <code>memory.db</code>. Un bot podría回忆ar sus outputs previos relevantes.</li>
+  <li><b>Skill marketplace</b>: el <code>find-skills</code> existe en opencode pero no en aibot. Un registry de skills instalables via <code>bun run add-skill &lt;url&gt;</code>.</li>
+  <li><b>Streaming de tool calls al dashboard</b>: además de <code>/ws/activity</code>, un panel que muestre tool calls en vuelo con sus argumentos y resultados en tiempo real.</li>
+  <li><b>A/B de system prompts</b>: el <code>SystemPromptBuilder</code> es determinista. Poder variantar y medir karma por variante.</li>
+  <li><b>Multi-modelo por intención</b>: un router que mande <code>reflection</code> a un modelo grande y <code>topic-guard</code> a uno chico/fast. Hoy failover es lineal, no por task.</li>
+  <li><b>Memory compaction en background</b>: hoy la consolidación es parte del health check. Un job separado que corra nightly sin bloquear el agent loop.</li>
+  <li><b>Per-bot rate limit de LLM cost</b>: el tenant rate limit es por request HTTP, no por token de LLM. Un bot en loop podría quemar el budget de Ollama Cloud.</li>
+</ol>
+
+</section>
+
+<!-- =================== RECOMENDACIONES =================== -->
+<section id="recomendaciones">
+<h2>8. Plan de acción recomendado (por orden)</h2>
+
+<table>
+<thead><tr><th>#</th><th>Acción</th><th>Esfuerzo</th><th>Impacto</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Sacar <code>AIBOT_AUTOSTART_BOTS=false</code> del <code>.env</code> (o setear <code>true</code>)</td><td>5 min</td><td><span class="badge ok">Alto</span></td></tr>
+<tr><td>2</td><td>Decidir topología Ollama: Cloud (key nueva, sin sidecar, search off) <b>o</b> local (key vacía, sidecar on, bajar modelos)</td><td>15 min</td><td><span class="badge ok">Crítico</span></td></tr>
+<tr><td>3</td><td>Vaciar <code>mcp.servers</code> en <code>config.json</code> hasta tener <code>npx</code>/<code>uvx</code> en la imagen</td><td>5 min</td><td><span class="badge ok">Alto</span></td></tr>
+<tr><td>4</td><td>Deshabilitar los 5 bots con token falso (<code>enabled:false</code>)</td><td>5 min</td><td><span class="badge warn">Medio</span></td></tr>
+<tr><td>5</td><td>Mover tokens de <code>bots.json</code> a <code>.env</code> + rotar via BotFather</td><td>20 min</td><td><span class="badge ok">Alto</span></td></tr>
+<tr><td>6</td><td>Setear <code>ADMIN_API_KEY</code></td><td>2 min</td><td><span class="badge warn">Medio</span></td></tr>
+<tr><td>7</td><td>Cambiar <code>llmBackend</code> de los 7 bots de <code>claude-cli</code> a <code>ollama</code> (o instalar Claude)</td><td>10 min</td><td><span class="badge ok">Alto</span></td></tr>
+<tr><td>8</td><td>Corregir <code>fileTools.basePath</code> a un path del container</td><td>5 min</td><td><span class="badge warn">Medio</span></td></tr>
+<tr><td>9</td><td>Rebuild + <code>docker compose up -d --build</code></td><td>5 min</td><td><span class="badge ok">Alto</span></td></tr>
+<tr><td>10</td><td>Verificar <code>/api/status</code> muestra &gt;1 bot running y logs limpios</td><td>5 min</td><td><span class="badge ok">Alto</span></td></tr>
+<tr><td>11</td><td>Agregar <code>HEALTHCHECK</code> + circuit breaker MCP + rotación de log</td><td>2-3h</td><td><span class="badge warn">Medio</span></td></tr>
+<tr><td>12</td><td>Agregar <code>/metrics</code> Prometheus + alertas básicas</td><td>1 día</td><td><span class="badge warn">Medio</span></td></tr>
+</tbody>
+</table>
+
+<div class="callout ok">
+  <strong>Conclusión</strong>
+  El framework es de calidad alta — arquitectura modular, tests, docs, features de nivel production (multi-tenant, A2A, MCP, export/import, failover, security audit). El problema es 100% operacional: la instancia corriendo tiene la key de Ollama revocada, Claude CLI no instalado, MCP en loop, auto-start apagado y bots con tokens falsos habilitados. Las primeras 9 acciones de la tabla de arriba (~1h de trabajo) restauran la instancia a un estado funcional. El resto es mejora de fondo.
+</div>
+
+</section>
+
+<footer>
+  Generado por análisis automatizado del repo <code>D:\aibot-framework</code> + inspección del Docker runtime. <br>
+  Fuentes: <code>README.md</code>, <code>CLAUDE.md</code>, <code>package.json</code>, <code>Dockerfile</code>, <code>docker-compose.yml</code>, <code>docker-entrypoint.sh</code>, <code>.env.example</code>, <code>config/config.json</code>, <code>config/bots.json</code>, <code>src/index.ts</code>, <code>docker inspect</code>, <code>docker stats</code>, <code>docker logs</code>, <code>/app/data/logs/aibot.log</code>, <code>GET /api/status</code>. <br>
+  Fecha: Aug 17, 2026.
+</footer>
+
+</div>
+</body>
+</html>

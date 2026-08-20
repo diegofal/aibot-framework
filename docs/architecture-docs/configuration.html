@@ -1097,8 +1097,8 @@ const config = await loadConfig('./config/config.json');
             <tr>
               <td><code>maxToolRounds</code></td>
               <td>number</td>
-              <td><code>10</code></td>
-              <td>min: 1, max: 20 (integer)</td>
+              <td><code>30</code></td>
+              <td>min: 1, max: 50 (integer)</td>
             </tr>
             <tr>
               <td><code>maxDurationMs</code></td>
@@ -1503,8 +1503,8 @@ const config = await loadConfig('./config/config.json');
             <tr>
               <td><code>maxToolRounds</code></td>
               <td>number</td>
-              <td><code>5</code></td>
-              <td>min: 1, max: 50 (integer). Per-bot <code>maxToolRounds</code> in <code>BotConfigSchema</code> takes priority.</td>
+              <td><code>15</code></td>
+              <td>min: 1, max: 50 (integer). Per-bot <code>maxToolRounds</code> in <code>BotConfigSchema</code> takes priority. The loop-detector ceiling is <code>2 × maxToolRounds</code> (counts individual tool calls, not rounds).</td>
             </tr>
           </tbody>
         </table>

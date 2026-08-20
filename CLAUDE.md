@@ -16,6 +16,13 @@ NO buscar en internet la documentacion de OpenClaw - usar el codigo fuente local
 - Al implementar features, solo escribir codigo. El commit/push es decision del usuario.
 - Antes de refactorizar, agregar features, o corregir bugs en el bot core: SIEMPRE leer la sección "Arquitectura del Bot" más abajo para entender qué módulo modificar y cómo se relacionan entre sí.
 - Cada cambio de código debe incluir o actualizar tests unitarios en `tests/`. Ejecutar `bun test` antes de considerar el trabajo terminado.
+- **Flujo TDD obligatorio** para todo código nuevo o refactor de código existente:
+  1. **Red**: escribir primero el test que describe el comportamiento deseado (o el contrato que se va a mantener durante un refactor). El test debe fallar de forma explícita antes de tocar la implementación.
+  2. **Green**: escribir el mínimo de código de producción para que el test pase. No agregar funcionalidad extra.
+  3. **Refactor**: limpiar el código de producción sin romper los tests. Re-correr `bun test`.
+  4. **Cobertura por función**: toda función/método público nuevo debe tener al menos un test dedicado. Para ramas con comportamiento divergente (errores, edge cases, valores límite), agregar un test por rama.
+  5. **Alineación con el plan**: antes de cada ciclo, confirmar que la función que se está implementando está en el plan acordado. Si surge trabajo fuera del plan, anotarlo como follow-up pero no implementarlo en el mismo ciclo.
+  6. **Puerta de salida**: un cambio no se considera terminado hasta que `bun test` corre limpio para los archivos tocados y los tests pre-existentes no se rompen.
 - Cualquier cambio relevante debe agregarse al archivo `CHANGELOG.md` en la raíz del proyecto.
 - Cualquier cambio que afecte la arquitectura, módulos, tools, skills, rutas web, config schemas, o memoria debe reflejarse en la documentación en `docs/architecture-docs/`. Actualizar la página HTML correspondiente para mantener la documentación sincronizada con el código.
 - Cambios que afecten la lista de skills, tools, sistemas core, páginas del dashboard, estructura del proyecto, o stack tecnológico deben reflejarse también en `README.md`.

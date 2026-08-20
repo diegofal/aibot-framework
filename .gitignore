@@ -51,3 +51,6 @@ improvements.md
 productions/
 !src/productions/
 .vercel
+
+# diagram-design plugin local profile
+.diagram-design
