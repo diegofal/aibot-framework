@@ -400,9 +400,19 @@ export class AgentLoop {
 
   /** Manual trigger — runs immediately for all periodic bots in parallel */
   async runNow(): Promise<AgentLoopResult[]> {
+    return this.runSelected(undefined);
+  }
+
+  /** Manual trigger for a subset of bots. When `botIds` is omitted or empty,
+   * every running periodic bot is run (same as runNow()). Unknown and
+   * non-running ids are silently skipped so a stale dashboard selection does
+   * not 500 the whole call. */
+  async runSelected(botIds?: string[]): Promise<AgentLoopResult[]> {
     const runningBotIds = this.scheduler.getRunningBotIds();
     const promises: Promise<AgentLoopResult>[] = [];
+    const wanted = botIds && botIds.length > 0 ? new Set(botIds) : null;
     for (const botId of this.ctx.runningBots) {
+      if (wanted && !wanted.has(botId)) continue;
       if (runningBotIds.has(botId)) continue;
       const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
       if (!botConfig) continue;

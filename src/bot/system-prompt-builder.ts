@@ -45,7 +45,7 @@ export class SystemPromptBuilder {
     const { mode, botId, botConfig, isGroup, ragContext } = options;
     const resolved = resolveAgentConfig(this.ctx.config, botConfig);
     const soulLoader = this.ctx.getSoulLoader(botId);
-    const defs = this.toolRegistry.getDefinitionsForBot(botId);
+    const defs = this.toolRegistry.getDefinitionsForBot(botId, options.permissionMode);
 
     let prompt = soulLoader.composeSystemPrompt(options.userId) ?? resolved.systemPrompt;
 

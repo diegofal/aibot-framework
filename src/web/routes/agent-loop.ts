@@ -17,6 +17,12 @@ export function agentLoopRoutes(deps: {
     return !bot || isBotAccessible(bot, getTenantId(c));
   }
 
+  /** Whether the caller may run the loop across every bot at once. */
+  function canRunAll(c: import('hono').Context): boolean {
+    const tenantId = getTenantId(c);
+    return !tenantId || tenantId === '__admin__';
+  }
+
   // Get agent loop status
   app.get('/', (c) => {
     const state = deps.botManager.getAgentLoopState();
@@ -33,19 +39,42 @@ export function agentLoopRoutes(deps: {
     });
   });
 
-  // Run agent loop for all bots (admin-only in multi-tenant mode)
+  // Run agent loop for all bots or a subset (admin only — a non-admin
+  // tenant must scope to its own bots via /run/:botId so it cannot trigger
+  // loops on bots it cannot see). Send a JSON body `{ "botIds": ["a","b"] }`
+  // to run only those bots; omit the body to run every running periodic bot.
   app.post('/run', async (c) => {
-    if (getTenantId(c)) {
+    if (!canRunAll(c)) {
       return c.json({ error: 'Use per-bot endpoint /run/:botId instead' }, 403);
     }
+
+    let botIds: string[] | undefined;
+    const contentType = c.req.header('content-type') ?? '';
+    if (contentType.includes('application/json')) {
+      try {
+        const body = await c.req.json<{ botIds?: unknown }>();
+        if (Array.isArray(body.botIds) && body.botIds.every((v) => typeof v === 'string')) {
+          botIds = body.botIds as string[];
+        }
+      } catch {
+        // Empty or invalid body — treat as "run all".
+      }
+    }
+
+    if (botIds && botIds.length > 0) {
+      deps.logger.info({ botIds }, 'Agent loop: manual run triggered for subset via API');
+      const results = await deps.botManager.runAgentLoopSelected(botIds);
+      return c.json({ ok: true, results });
+    }
+
     deps.logger.info('Agent loop: manual run triggered via API');
     const results = await deps.botManager.runAgentLoopAll();
     return c.json({ ok: true, results });
   });
 
-  // Graceful stop — drain executing cycles then stop (admin-only in multi-tenant mode)
+  // Graceful stop — drain executing cycles then stop (admin only)
   app.post('/stop-safe', async (c) => {
-    if (getTenantId(c)) {
+    if (!canRunAll(c)) {
       return c.json({ error: 'Global stop not available for tenants' }, 403);
     }
     deps.logger.info('Agent loop: graceful stop triggered via API');

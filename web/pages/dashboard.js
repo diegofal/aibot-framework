@@ -250,36 +250,36 @@ export async function renderDashboard(el) {
       </div>`
       : '';
 
-  el.innerHTML = `
-    <div class="page-title">Dashboard</div>
+    el.innerHTML = `
+      <div class="page-title">Dashboard</div>
 
-    ${inboxBanner}
+      ${inboxBanner}
 
-    <div class="detail-card">
-      <div class="flex-between mb-16">
-        <div style="display:flex;align-items:center;gap:12px">
-          <span style="font-weight:600;font-size:16px">Agent Loop</span>
-          ${enabledBadge}
-          ${runningBadge}
-          ${drainingBadge}
+      <div class="detail-card">
+        <div class="flex-between mb-16">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span style="font-weight:600;font-size:16px">Agent Loop</span>
+            ${enabledBadge}
+            ${runningBadge}
+            ${drainingBadge}
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" id="btn-run-now" ${loopState.running ? 'disabled' : ''}>Run Now</button>
+            ${loopState.enabled || loopState.draining ? `<button class="btn btn-danger" id="btn-stop-safe" ${loopState.draining ? 'disabled' : ''}>${loopState.draining ? 'Draining...' : 'Stop All Safe'}</button>` : ''}
+          </div>
         </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-primary" id="btn-run-now" ${loopState.running ? 'disabled' : ''}>Run Now</button>
-          ${loopState.enabled || loopState.draining ? `<button class="btn btn-danger" id="btn-stop-safe" ${loopState.draining ? 'disabled' : ''}>${loopState.draining ? 'Draining...' : 'Stop All Safe'}</button>` : ''}
+        <div style="display:flex;gap:24px;font-size:13px;color:var(--text-dim);margin-bottom:16px">
+          <span>Default Interval: <strong style="color:var(--text)">${escapeHtml(loopState.defaultInterval || '--')}</strong></span>
+          <span>Next run: <strong style="color:var(--text)">${nextRunText}</strong></span>
+          <span>Last run: <strong style="color:var(--text)">${lastRunText}</strong></span>
         </div>
-      </div>
-      <div style="display:flex;gap:24px;font-size:13px;color:var(--text-dim);margin-bottom:16px">
-        <span>Default Interval: <strong style="color:var(--text)">${escapeHtml(loopState.defaultInterval || '--')}</strong></span>
-        <span>Next run: <strong style="color:var(--text)">${nextRunText}</strong></span>
-        <span>Last run: <strong style="color:var(--text)">${lastRunText}</strong></span>
-      </div>
 
-      ${
-        loopState.botSchedules?.length
-          ? `
-        <div class="text-dim text-sm mb-16" style="font-weight:500">Bot Schedules</div>
-        <table class="results-table" style="margin-bottom:16px">
-          <thead><tr><th>Bot</th><th>Mode</th><th>Activity</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Retries</th><th>Strategist</th></tr></thead>
+        ${
+          loopState.botSchedules?.length
+            ? `
+        <div class="text-dim text-sm mb-16" style="font-weight:500">Bot Schedules <span style="font-weight:400">— tick the bots to run on the next click of Run Now; leave all blank to run every running bot.</span></div>
+        <table id="loop-bot-table" class="results-table" style="margin-bottom:16px">
+          <thead><tr><th><span class="text-dim text-sm" style="font-weight:500">Run</span><br><a href="#" id="loop-select-all" style="text-decoration:none">All</a> / <a href="#" id="loop-select-none" style="text-decoration:none">None</a></th><th>Bot</th><th>Mode</th><th>Activity</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Retries</th><th>Strategist</th></tr></thead>
           <tbody>
             ${loopState.botSchedules
               .map((s) => {
@@ -301,6 +301,7 @@ export async function renderDashboard(el) {
                   : '<span class="text-dim">Idle</span>';
                 return `
               <tr>
+                <td class="checkbox-group" style="padding:6px 12px"><label style="padding:2px 8px;font-size:12px"><input type="checkbox" value="${escapeHtml(s.botId)}"></label></td>
                 <td>${escapeHtml(s.botName)}</td>
                 <td>${modeBadge(s.mode || 'periodic')}</td>
                 <td>${activityCell}</td>
@@ -316,8 +317,8 @@ export async function renderDashboard(el) {
           </tbody>
         </table>
       `
-          : ''
-      }
+            : ''
+        }
 
       <div id="loop-results">
         ${
@@ -350,10 +351,16 @@ export async function renderDashboard(el) {
     runBtn.disabled = true;
     runBtn.textContent = 'Running...';
     const resultsDiv = document.getElementById('loop-results');
-    resultsDiv.innerHTML = '<p class="text-dim text-sm">Executing agent loop for all bots...</p>';
+
+    // Gather selected bot ids from the checkbox group. Empty selection means
+    // "run every running periodic bot" (server default).
+    const selected = [...document.querySelectorAll('#loop-bot-table input[type="checkbox"]:checked')].map((b) => b.value);
+    const body = selected.length > 0 ? { botIds: selected } : undefined;
+    const scopeText = selected.length > 0 ? `${selected.length} bot(s)` : 'all bots';
+    resultsDiv.innerHTML = `<p class="text-dim text-sm">Executing agent loop for ${escapeHtml(scopeText)}...</p>`;
 
     try {
-      const res = await api('/api/agent-loop/run', { method: 'POST' });
+      const res = await api('/api/agent-loop/run', { method: 'POST', body });
       if (res.error) {
         resultsDiv.innerHTML = `<p class="text-dim text-sm" style="color:var(--red)">Error: ${escapeHtml(res.error)}</p>`;
       } else {
@@ -367,6 +374,31 @@ export async function renderDashboard(el) {
 
     runBtn.disabled = false;
     runBtn.textContent = 'Run Now';
+  });
+
+  // Toggle checkbox styling — the CSS hides the real input and styles the
+  // label, so the `.checked` class on the parent label must be kept in sync
+  // with the input state for the selection to be visible to the user.
+  document.querySelectorAll('#loop-bot-table input[type="checkbox"]').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      inp.parentElement.classList.toggle('checked', inp.checked);
+    });
+  });
+
+  // Select all / Clear buttons for the bot scope checkboxes
+  function setLoopBotCheckboxes(checked) {
+    document.querySelectorAll('#loop-bot-table input[type="checkbox"]').forEach((b) => {
+      b.checked = checked;
+      b.parentElement.classList.toggle('checked', checked);
+    });
+  }
+  document.getElementById('loop-select-all')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setLoopBotCheckboxes(true);
+  });
+  document.getElementById('loop-select-none')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setLoopBotCheckboxes(false);
   });
 
   // Stop All Safe button

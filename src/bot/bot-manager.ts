@@ -1061,6 +1061,10 @@ export class BotManager {
     return this.agentLoop.runNow();
   }
 
+  async runAgentLoopSelected(botIds: string[]): Promise<AgentLoopResult[]> {
+    return this.agentLoop.runSelected(botIds);
+  }
+
   async runAgentLoop(botId: string): Promise<AgentLoopResult> {
     return this.agentLoop.runOne(botId);
   }

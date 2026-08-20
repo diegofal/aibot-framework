@@ -24,6 +24,8 @@ export interface TokenUsage {
 export interface LLMResponse {
   text: string;
   usage?: TokenUsage;
+  /** Set only on abnormal termination. Absent on a normal text completion. */
+  stopReason?: 'loop-break' | 'exhausted';
 }
 
 export interface LLMGenerateOptions {

@@ -1734,6 +1734,7 @@ export async function renderAgentEdit(el, id) {
 
       <div class="form-group">
         <label>Permission Matrix <span class="text-dim text-sm">(override defaults per tool)</span></label>
+        <p class="text-dim text-sm" style="margin:4px 0 8px">Conversation never hides a tool the agent has. <code>blocked</code> there is treated as <code>confirm</code> (operator approval). To remove a tool entirely, disable it on the agent.</p>
         <details>
           <summary class="text-dim text-sm" style="cursor:pointer;margin-bottom:8px">Show/hide matrix (${Object.keys(defaults.defaultToolPermissions).length} tools)</summary>
           <div style="max-height:400px;overflow:auto">

@@ -66,8 +66,8 @@ export const DEFAULT_PERMISSIONS: Record<string, ToolPermissionEntry> = {
   // Social posting
   twitter_post: { agentLoop: 'confirm', conversation: 'confirm' },
 
-  // Communication — phone_call stays blocked (too dangerous for inline approval)
-  phone_call: { agentLoop: 'confirm', conversation: 'blocked' },
+  // Communication — confirm so the operator still gates the call
+  phone_call: { agentLoop: 'confirm', conversation: 'confirm' },
   send_proactive_message: { agentLoop: 'free', conversation: 'inform' },
   send_message: { agentLoop: 'free', conversation: 'inform' },
   cron: { agentLoop: 'free', conversation: 'inform' },
@@ -114,6 +114,13 @@ const MODE_KEYS: Record<PermissionMode, keyof ToolPermissionEntry> = {
 /**
  * Look up the permission level for a tool in a given mode.
  * Priority: bot overrides > defaults > 'free' fallback (unknown tools are allowed).
+ *
+ * Conversation never hides a tool the agent has. `disabledTools` / feature flags
+ * are how a tool is removed from the agent; `blocked` here used to strip it from
+ * the LLM's tool list while the system prompt still advertised it. That is the
+ * discrepancy that made Finny claim it had no `exec`. Conversation `blocked` is
+ * therefore treated as `confirm` — the tool stays available and still needs
+ * operator approval (inline card on the dashboard, ask_permission on channels).
  */
 export function getPermissionLevel(
   toolName: string,
@@ -122,20 +129,18 @@ export function getPermissionLevel(
 ): PermissionLevel {
   const key = MODE_KEYS[mode];
 
-  // Bot override takes priority
+  let level: PermissionLevel = 'free';
+
   const override = botOverrides?.[toolName];
   if (override && override[key] !== undefined) {
-    return override[key]!;
+    level = override[key]!;
+  } else {
+    const defaultEntry = DEFAULT_PERMISSIONS[toolName];
+    if (defaultEntry) level = defaultEntry[key];
   }
 
-  // Default matrix
-  const defaultEntry = DEFAULT_PERMISSIONS[toolName];
-  if (defaultEntry) {
-    return defaultEntry[key];
-  }
-
-  // Unknown tools default to 'free'
-  return 'free';
+  if (mode === 'conversation' && level === 'blocked') return 'confirm';
+  return level;
 }
 
 /**

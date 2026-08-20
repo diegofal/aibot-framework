@@ -35,8 +35,20 @@ describe('tool-permissions', () => {
       const overrides: Record<string, Partial<ToolPermissionEntry>> = {
         my_custom_tool: { conversation: 'blocked' },
       };
-      expect(getPermissionLevel('my_custom_tool', 'conversation', overrides)).toBe('blocked');
+      // Conversation blocked is coerced to confirm so the tool stays available.
+      expect(getPermissionLevel('my_custom_tool', 'conversation', overrides)).toBe('confirm');
       expect(getPermissionLevel('my_custom_tool', 'agent-loop', overrides)).toBe('free');
+    });
+
+    it('coerces conversation blocked to confirm, including per-bot overrides', () => {
+      expect(
+        getPermissionLevel('exec', 'conversation', { exec: { conversation: 'blocked' } })
+      ).toBe('confirm');
+      expect(
+        getPermissionLevel('phone_call', 'conversation', {
+          phone_call: { conversation: 'blocked' },
+        })
+      ).toBe('confirm');
     });
 
     it('safe tools are free everywhere', () => {
@@ -47,12 +59,16 @@ describe('tool-permissions', () => {
     });
 
     it('dangerous tools require confirm in conversation by default', () => {
-      // Most dangerous tools now use inline approval (confirm) instead of blocked
-      for (const tool of ['exec', 'process', 'browser', 'file_write', 'file_edit']) {
+      for (const tool of [
+        'exec',
+        'process',
+        'browser',
+        'file_write',
+        'file_edit',
+        'phone_call',
+      ]) {
         expect(getPermissionLevel(tool, 'conversation')).toBe('confirm');
       }
-      // phone_call stays blocked — too dangerous for inline approval
-      expect(getPermissionLevel('phone_call', 'conversation')).toBe('blocked');
     });
 
     it('dangerous tools are confirm in agent-loop by default', () => {
@@ -63,17 +79,10 @@ describe('tool-permissions', () => {
   });
 
   describe('getBlockedTools', () => {
-    it('returns blocked tools for conversation mode', () => {
+    it('returns no blocked tools for conversation mode', () => {
       const allTools = ['get_datetime', 'exec', 'file_read', 'web_search', 'browser', 'phone_call'];
       const blocked = getBlockedTools('conversation', allTools);
-      // exec and browser are now confirm (inline approval), not blocked
-      expect(blocked).not.toContain('exec');
-      expect(blocked).not.toContain('browser');
-      // phone_call stays blocked
-      expect(blocked).toContain('phone_call');
-      expect(blocked).not.toContain('get_datetime');
-      expect(blocked).not.toContain('web_search');
-      expect(blocked).not.toContain('file_read');
+      expect(blocked).toHaveLength(0);
     });
 
     it('returns empty for agent-loop (no tools blocked by default)', () => {
@@ -82,13 +91,13 @@ describe('tool-permissions', () => {
       expect(blocked).toHaveLength(0);
     });
 
-    it('respects overrides', () => {
+    it('does not drop conversation-blocked overrides from the tool list', () => {
       const overrides: Record<string, Partial<ToolPermissionEntry>> = {
         web_search: { conversation: 'blocked' },
       };
       const blocked = getBlockedTools('conversation', ['web_search', 'get_datetime'], overrides);
-      expect(blocked).toContain('web_search');
-      expect(blocked).not.toContain('get_datetime');
+      expect(blocked).not.toContain('web_search');
+      expect(getPermissionLevel('web_search', 'conversation', overrides)).toBe('confirm');
     });
   });
 

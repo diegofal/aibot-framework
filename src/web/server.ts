@@ -55,6 +55,7 @@ import { filesRoutes } from './routes/files';
 import { integrationsRoutes } from './routes/integrations';
 import { karmaRoutes } from './routes/karma';
 import { mcpRoutes } from './routes/mcp';
+import { metricsRoutes } from './routes/metrics';
 import { onboardingRoutes } from './routes/onboarding';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
@@ -146,6 +147,7 @@ export function startWebServer(deps: WebServerDeps): void {
     chatHistoryRoutes({ config, sessionManager: deps.sessionManager, logger })
   );
   app.route('/api/status', statusRoutes({ config, botManager: deps.botManager }));
+  app.route('/metrics', metricsRoutes({ config, botManager: deps.botManager }));
   app.route(
     '/api/auth',
     authRoutes({ config, tenantManager, sessionStore, adminCredentialStore, logger })
