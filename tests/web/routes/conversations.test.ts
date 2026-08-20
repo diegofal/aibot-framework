@@ -437,6 +437,47 @@ describe('conversations routes', () => {
       );
       expect(res.status).toBe(404);
     });
+
+    test('fallback path passes the built system prompt to claudeGenerate when no LLMClient is registered', async () => {
+      const deps = makeDeps();
+      const app = makeApp(deps);
+
+      const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'Fallback reply' }));
+      mock.module('../../../src/claude-cli', () => ({
+        claudeGenerate: mockClaudeGenerate,
+      }));
+
+      // Force the Claude-CLI fallback branch by making getLLMClient throw.
+      const originalGetLLMClient = deps.botManager.getLLMClient;
+      (deps.botManager as any).getLLMClient = () => {
+        throw new Error('No LLMClient registered for bot bot1');
+      };
+
+      const convo = deps.conversationsService.createConversation('bot1');
+
+      try {
+        await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Hello bot' }),
+        });
+
+        await tick(500);
+
+        // The fallback must receive the built system prompt, not an empty string.
+        const hasCall = mockClaudeGenerate.mock.calls.some((callArgs) => {
+          const opts = callArgs[1] as any;
+          return (
+            typeof opts.systemPrompt === 'string' &&
+            opts.systemPrompt.length > 0 &&
+            opts.systemPrompt.includes('You are')
+          );
+        });
+        expect(hasCall).toBe(true);
+      } finally {
+        (deps.botManager as any).getLLMClient = originalGetLLMClient;
+      }
+    });
   });
 
   describe('POST /:botId (inbox type)', () => {

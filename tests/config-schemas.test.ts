@@ -119,9 +119,9 @@ describe('BotConfigSchema maxToolRounds', () => {
 });
 
 describe('WebToolsConfigSchema maxToolRounds', () => {
-  test('defaults to 5', () => {
+  test('defaults to 15', () => {
     const result = WebToolsConfigSchema.parse({});
-    expect(result.maxToolRounds).toBe(5);
+    expect(result.maxToolRounds).toBe(15);
   });
 
   test('accepts up to 50', () => {
@@ -131,6 +131,11 @@ describe('WebToolsConfigSchema maxToolRounds', () => {
 
   test('rejects above 50', () => {
     expect(() => WebToolsConfigSchema.parse({ maxToolRounds: 51 })).toThrow();
+  });
+
+  test('an explicit maxToolRounds still wins over the default', () => {
+    const result = WebToolsConfigSchema.parse({ maxToolRounds: 5 });
+    expect(result.maxToolRounds).toBe(5);
   });
 });
 

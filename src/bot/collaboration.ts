@@ -1,6 +1,6 @@
 import type { AgentInfo } from '../agent-registry';
 import type { BotConfig } from '../config';
-import { resolveAgentConfig } from '../config';
+import { resolveAgentConfig, resolveMaxToolRounds } from '../config';
 import type { KarmaService } from '../karma/service';
 import type { McpToolCallResult } from '../mcp/types';
 import type { ChatMessage } from '../ollama';
@@ -170,7 +170,7 @@ export class CollaborationManager {
       temperature: resolved.temperature,
       tools: hasTools ? collabDefs : undefined,
       toolExecutor: executor,
-      maxToolRounds: respondingConfig.maxToolRounds ?? this.ctx.config.webTools?.maxToolRounds,
+      maxToolRounds: resolveMaxToolRounds(this.ctx.config, respondingConfig),
     });
     return result.text;
   }
@@ -462,7 +462,7 @@ export class CollaborationManager {
           temperature: resolved.temperature,
           tools: hasTools ? collabTools.definitions : undefined,
           toolExecutor: executor,
-          maxToolRounds: targetConfig.maxToolRounds ?? this.ctx.config.webTools?.maxToolRounds,
+          maxToolRounds: resolveMaxToolRounds(this.ctx.config, targetConfig),
         }),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Collaboration step timeout')), timeout)

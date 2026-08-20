@@ -1,4 +1,4 @@
-import type { OllamaConfig } from './config';
+import { DEFAULT_MAX_TOOL_ROUNDS, type OllamaConfig } from './config';
 import type { LLMResponse, TokenUsage } from './core/llm-client';
 import { createLoopDetector } from './core/loop-detector';
 import { NativeToolStrategy } from './core/native-tool-strategy';
@@ -25,6 +25,12 @@ export interface ChatOptions {
   tools?: ToolDefinition[];
   toolExecutor?: ToolExecutor;
   maxToolRounds?: number;
+  /** Return a clean summarization instead of the `[Loop stopped: …]` marker on detector break. */
+  cleanBreak?: boolean;
+  /** Identifying context for the loop break — forwarded into the runToolLoop options. */
+  loopContext?: { botId?: string; conversationId?: string; caller?: string };
+  /** Observer hook fired once when the loop detector breaks. Forwarded into runToolLoop options. */
+  onLoopBreak?: (info: import('./core/tool-runner').LoopBreakInfo) => void;
   /** @internal Prevent recursive fallback loops */
   _skipFallbacks?: boolean;
 }
@@ -178,7 +184,7 @@ export class OllamaClient {
 
       // If tools are provided, delegate to the generic tool loop
       if (hasTools) {
-        const maxRounds = resolvedOptions.maxToolRounds ?? 5;
+        const maxRounds = resolvedOptions.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
         const strategy = new NativeToolStrategy(
           this,
           this.config.baseUrl,
@@ -195,6 +201,9 @@ export class OllamaClient {
             toolExecutor: resolvedOptions.toolExecutor!,
             logger: this.logger,
             loopDetector: createLoopDetector(maxRounds),
+            cleanBreak: resolvedOptions.cleanBreak,
+            loopContext: resolvedOptions.loopContext,
+            onLoopBreak: resolvedOptions.onLoopBreak,
           },
           resolvedOptions
         );

@@ -344,5 +344,40 @@ describe('LoopDetector', () => {
 
       expect(detector.check().action).toBe('warn');
     });
+
+    it('break result reports the totalCalls that triggered it', () => {
+      const maxRounds = 3;
+      const detector = createLoopDetector(maxRounds);
+      const limit = maxRounds * 2;
+
+      for (let i = 0; i < limit; i++) {
+        detector.recordCall('tool', { i }, `result${i}`);
+      }
+
+      const check = detector.check();
+      expect(check.action).toBe('break');
+      expect(check.totalCalls).toBe(limit);
+      expect(check.detector).toBe('global');
+    });
+
+    it('break result identifies which detector fired', () => {
+      // 4 identical calls → repeat detector
+      const repeatDetector = createLoopDetector(50);
+      for (let i = 0; i < 4; i++) {
+        repeatDetector.recordCall('tool', { same: true }, `result${i}`);
+      }
+      const repeatCheck = repeatDetector.check();
+      expect(repeatCheck.action).toBe('break');
+      expect(repeatCheck.detector).toBe('repeat');
+
+      // 3 identical results → no-progress detector
+      const noProgressDetector = createLoopDetector(50);
+      for (let i = 0; i < 3; i++) {
+        noProgressDetector.recordCall('tool', { a: i }, 'same result');
+      }
+      const noProgressCheck = noProgressDetector.check();
+      expect(noProgressCheck.action).toBe('break');
+      expect(noProgressCheck.detector).toBe('no-progress');
+    });
   });
 });

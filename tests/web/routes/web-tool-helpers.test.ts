@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 import type { Config } from '../../../src/config';
 import type { Logger } from '../../../src/logger';
-import { DASHBOARD_EXCLUDED_TOOLS, webGenerate } from '../../../src/web/routes/web-tool-helpers';
+import { webGenerate } from '../../../src/web/routes/web-tool-helpers';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -52,7 +52,7 @@ describe('webGenerate', () => {
     mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
   });
 
-  test('enableTools: true calls llmClient.chat with filtered tools', async () => {
+  test('enableTools: true calls llmClient.chat with the agent\'s full tool set', async () => {
     const mockChat = mock(() => Promise.resolve({ text: 'tool-enabled response' }));
 
     const mockToolDefs = [
@@ -106,11 +106,10 @@ describe('webGenerate', () => {
     expect(result).toBe('tool-enabled response');
     expect(mockChat).toHaveBeenCalledTimes(1);
 
-    // Verify tools passed to chat exclude DASHBOARD_EXCLUDED_TOOLS
     const chatArgs = mockChat.mock.calls[0];
     const toolsPassed = (chatArgs[1] as any).tools;
-    expect(toolsPassed).toHaveLength(2); // web_search + file_read, NOT delegate_to_bot
-    expect(toolsPassed.find((t: any) => t.function.name === 'delegate_to_bot')).toBeUndefined();
+    expect(toolsPassed).toHaveLength(3);
+    expect(toolsPassed.find((t: any) => t.function.name === 'delegate_to_bot')).toBeTruthy();
     expect(toolsPassed.find((t: any) => t.function.name === 'web_search')).toBeTruthy();
     expect(toolsPassed.find((t: any) => t.function.name === 'file_read')).toBeTruthy();
 
@@ -120,23 +119,7 @@ describe('webGenerate', () => {
     expect(systemMsg.content).toContain('You have access to tools');
   });
 
-  test('DASHBOARD_EXCLUDED_TOOLS filters all expected tools', () => {
-    const expected = [
-      'delegate_to_bot',
-      'collaborate',
-      'ask_human',
-      'ask_permission',
-      'signal_completion',
-      'phone_call',
-      'create_agent',
-    ];
-    for (const name of expected) {
-      expect(DASHBOARD_EXCLUDED_TOOLS.has(name)).toBe(true);
-    }
-    expect(DASHBOARD_EXCLUDED_TOOLS.size).toBe(expected.length);
-  });
-
-  test('falls back to text-only when no tools available after filtering', async () => {
+  test('falls back to text-only when the agent has no tools', async () => {
     const mockClaudeGenerate = mock(() => Promise.resolve({ response: 'fallback response' }));
     mock.module('../../../src/claude-cli', () => ({
       claudeGenerate: mockClaudeGenerate,
@@ -146,33 +129,13 @@ describe('webGenerate', () => {
       '../../../src/web/routes/web-tool-helpers'
     );
 
-    // All tools are excluded
-    const mockToolDefs = [
-      {
-        type: 'function' as const,
-        function: {
-          name: 'delegate_to_bot',
-          description: 'Delegate',
-          parameters: { type: 'object' as const, properties: {} },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'collaborate',
-          description: 'Collab',
-          parameters: { type: 'object' as const, properties: {} },
-        },
-      },
-    ];
-
     const mockBotManager = {
       getLLMClient: () => ({
         chat: mock(() => Promise.resolve({ text: '' })),
         backend: 'claude-cli',
       }),
       getToolRegistry: () => ({
-        getDefinitionsForBot: () => mockToolDefs,
+        getDefinitionsForBot: () => [],
         createExecutor: () => mock(async () => ({ success: true, content: 'ok' })),
       }),
     };
@@ -189,7 +152,6 @@ describe('webGenerate', () => {
     expect(result).toBe('fallback response');
     expect(mockClaudeGenerate).toHaveBeenCalledTimes(1);
 
-    // Restore
     const { claudeGenerate: orig } = await import('../../../src/claude-cli');
     mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
   });
@@ -295,5 +257,233 @@ describe('webGenerate', () => {
 
     expect(result).toBe('default tools response');
     expect(mockChat).toHaveBeenCalledTimes(1);
+  });
+
+  test('forwards config.webTools.maxToolRounds to llmClient.chat', async () => {
+    const mockChat = mock(() => Promise.resolve({ text: 'routed' }));
+
+    const mockBotManager = {
+      getLLMClient: () => ({ chat: mockChat, backend: 'claude-cli' }),
+      getActiveModel: () => 'claude-sonnet',
+      getToolRegistry: () => ({
+        getDefinitionsForBot: () => [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'web_search',
+              description: 'Search',
+              parameters: { type: 'object' as const, properties: {} },
+            },
+          },
+        ],
+        createExecutor: () => mock(async () => ({ success: true, content: 'ok' })),
+      }),
+    };
+
+    const configWithGlobal = {
+      bots: [{ id: 'bot1', name: 'TestBot' }],
+      webTools: { maxToolRounds: 15 },
+      improve: { claudePath: 'claude', timeout: 30_000 },
+    } as unknown as Config;
+
+    await webGenerate({
+      prompt: 'Test',
+      systemPrompt: 'Sys',
+      botId: 'bot1',
+      botManager: mockBotManager as any,
+      config: configWithGlobal,
+      logger: noopLogger,
+    });
+
+    const chatOpts = mockChat.mock.calls[0][1] as any;
+    expect(chatOpts.maxToolRounds).toBe(15);
+  });
+
+  test('per-bot maxToolRounds overrides the global', async () => {
+    const mockChat = mock(() => Promise.resolve({ text: 'routed' }));
+
+    const mockBotManager = {
+      getLLMClient: () => ({ chat: mockChat, backend: 'claude-cli' }),
+      getActiveModel: () => 'claude-sonnet',
+      getToolRegistry: () => ({
+        getDefinitionsForBot: () => [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'web_search',
+              description: 'Search',
+              parameters: { type: 'object' as const, properties: {} },
+            },
+          },
+        ],
+        createExecutor: () => mock(async () => ({ success: true, content: 'ok' })),
+      }),
+    };
+
+    const configWithPerBot = {
+      bots: [{ id: 'bot1', name: 'TestBot', maxToolRounds: 40 }],
+      webTools: { maxToolRounds: 15 },
+      improve: { claudePath: 'claude', timeout: 30_000 },
+    } as unknown as Config;
+
+    await webGenerate({
+      prompt: 'Test',
+      systemPrompt: 'Sys',
+      botId: 'bot1',
+      botManager: mockBotManager as any,
+      config: configWithPerBot,
+      logger: noopLogger,
+    });
+
+    const chatOpts = mockChat.mock.calls[0][1] as any;
+    expect(chatOpts.maxToolRounds).toBe(40);
+  });
+
+  test('an explicit opts.maxToolRounds beats both config sources', async () => {
+    const mockChat = mock(() => Promise.resolve({ text: 'routed' }));
+
+    const mockBotManager = {
+      getLLMClient: () => ({ chat: mockChat, backend: 'claude-cli' }),
+      getActiveModel: () => 'claude-sonnet',
+      getToolRegistry: () => ({
+        getDefinitionsForBot: () => [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'web_search',
+              description: 'Search',
+              parameters: { type: 'object' as const, properties: {} },
+            },
+          },
+        ],
+        createExecutor: () => mock(async () => ({ success: true, content: 'ok' })),
+      }),
+    };
+
+    const configWithBoth = {
+      bots: [{ id: 'bot1', name: 'TestBot', maxToolRounds: 40 }],
+      webTools: { maxToolRounds: 15 },
+      improve: { claudePath: 'claude', timeout: 30_000 },
+    } as unknown as Config;
+
+    await webGenerate({
+      prompt: 'Test',
+      systemPrompt: 'Sys',
+      botId: 'bot1',
+      botManager: mockBotManager as any,
+      config: configWithBoth,
+      logger: noopLogger,
+      maxToolRounds: 3,
+    });
+
+    const chatOpts = mockChat.mock.calls[0][1] as any;
+    expect(chatOpts.maxToolRounds).toBe(3);
+  });
+
+  test('omits maxToolRounds when nothing is configured', async () => {
+    const mockChat = mock(() => Promise.resolve({ text: 'routed' }));
+
+    const mockBotManager = {
+      getLLMClient: () => ({ chat: mockChat, backend: 'claude-cli' }),
+      getActiveModel: () => 'claude-sonnet',
+      getToolRegistry: () => ({
+        getDefinitionsForBot: () => [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'web_search',
+              description: 'Search',
+              parameters: { type: 'object' as const, properties: {} },
+            },
+          },
+        ],
+        createExecutor: () => mock(async () => ({ success: true, content: 'ok' })),
+      }),
+    };
+
+    await webGenerate({
+      prompt: 'Test',
+      systemPrompt: 'Sys',
+      botId: 'bot1',
+      botManager: mockBotManager as any,
+      config: mockConfig,
+      logger: noopLogger,
+    });
+
+    const chatOpts = mockChat.mock.calls[0][1] as any;
+    expect('maxToolRounds' in chatOpts).toBe(false);
+  });
+
+  test('passes cleanBreak: true to llmClient.chat', async () => {
+    const mockChat = mock(() => Promise.resolve({ text: 'routed' }));
+
+    const mockBotManager = {
+      getLLMClient: () => ({ chat: mockChat, backend: 'claude-cli' }),
+      getActiveModel: () => 'claude-sonnet',
+      getToolRegistry: () => ({
+        getDefinitionsForBot: () => [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'web_search',
+              description: 'Search',
+              parameters: { type: 'object' as const, properties: {} },
+            },
+          },
+        ],
+        createExecutor: () => mock(async () => ({ success: true, content: 'ok' })),
+      }),
+    };
+
+    await webGenerate({
+      prompt: 'Test',
+      systemPrompt: 'Sys',
+      botId: 'bot1',
+      botManager: mockBotManager as any,
+      config: mockConfig,
+      logger: noopLogger,
+    });
+
+    const chatOpts = mockChat.mock.calls[0][1] as any;
+    expect(chatOpts.cleanBreak).toBe(true);
+  });
+
+  test('passes loopContext { botId, caller } to llmClient.chat', async () => {
+    const mockChat = mock(() => Promise.resolve({ text: 'routed' }));
+
+    const mockBotManager = {
+      getLLMClient: () => ({ chat: mockChat, backend: 'claude-cli' }),
+      getActiveModel: () => 'claude-sonnet',
+      getToolRegistry: () => ({
+        getDefinitionsForBot: () => [
+          {
+            type: 'function' as const,
+            function: {
+              name: 'web_search',
+              description: 'Search',
+              parameters: { type: 'object' as const, properties: {} },
+            },
+          },
+        ],
+        createExecutor: () => mock(async () => ({ success: true, content: 'ok' })),
+      }),
+    };
+
+    await webGenerate({
+      prompt: 'Test',
+      systemPrompt: 'Sys',
+      botId: 'bot1',
+      botManager: mockBotManager as any,
+      config: mockConfig,
+      logger: noopLogger,
+      loopContext: { conversationId: 'conv1', caller: 'web-conversation' },
+    });
+
+    const chatOpts = mockChat.mock.calls[0][1] as any;
+    expect(chatOpts.loopContext).toEqual({
+      botId: 'bot1',
+      conversationId: 'conv1',
+      caller: 'web-conversation',
+    });
   });
 });

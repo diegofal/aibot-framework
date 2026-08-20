@@ -1,8 +1,17 @@
 import { createHash } from 'node:crypto';
 
+export type LoopBreakDetector = 'global' | 'repeat' | 'no-progress';
+
+export interface LoopCheckResult {
+  action: 'continue' | 'warn' | 'break';
+  message?: string;
+  detector?: LoopBreakDetector;
+  totalCalls?: number;
+}
+
 export interface LoopDetector {
   recordCall(name: string, args: Record<string, unknown>, result: string): void;
-  check(): { action: 'continue' | 'warn' | 'break'; message?: string };
+  check(): LoopCheckResult;
   reset(): void;
 }
 
@@ -20,6 +29,8 @@ export function createLoopDetector(maxToolRounds: number): LoopDetector {
   const callHashes = new Map<string, number>(); // hash(name+args) → count
   const resultHashes = new Map<string, number>(); // hash(name+result) → count
   let totalCalls = 0;
+  // NOTE: maxToolRounds counts LLM *rounds*; totalCalls counts *individual tool calls*.
+  // A round with parallel tool calls consumes several. 2x is the safety headroom.
   const globalLimit = maxToolRounds * 2;
 
   return {
@@ -34,10 +45,15 @@ export function createLoopDetector(maxToolRounds: number): LoopDetector {
       resultHashes.set(resultKey, (resultHashes.get(resultKey) ?? 0) + 1);
     },
 
-    check(): { action: 'continue' | 'warn' | 'break'; message?: string } {
+    check(): LoopCheckResult {
       // Global circuit breaker
       if (totalCalls >= globalLimit) {
-        return { action: 'break', message: `Exceeded ${globalLimit} total tool calls` };
+        return {
+          action: 'break',
+          message: `Exceeded ${globalLimit} total tool calls`,
+          detector: 'global',
+          totalCalls,
+        };
       }
 
       // Repeat detector: same call 4+ times → break, 3 times → warn
@@ -46,6 +62,8 @@ export function createLoopDetector(maxToolRounds: number): LoopDetector {
           return {
             action: 'break',
             message: 'Same tool call repeated 4+ times with identical arguments',
+            detector: 'repeat',
+            totalCalls,
           };
         }
         if (count >= 3) {
@@ -59,7 +77,12 @@ export function createLoopDetector(maxToolRounds: number): LoopDetector {
       // No-progress detector: same result 2+ times → warn
       for (const [, count] of resultHashes) {
         if (count >= 3) {
-          return { action: 'break', message: 'Same tool returning identical results repeatedly' };
+          return {
+            action: 'break',
+            message: 'Same tool returning identical results repeatedly',
+            detector: 'no-progress',
+            totalCalls,
+          };
         }
         if (count >= 2) {
           return {

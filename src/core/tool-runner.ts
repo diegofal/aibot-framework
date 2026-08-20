@@ -2,7 +2,7 @@ import type { Logger } from '../logger';
 import type { ChatMessage, ChatOptions } from '../ollama';
 import type { ToolCall, ToolDefinition, ToolExecutor } from '../tools/types';
 import type { LLMResponse, TokenUsage } from './llm-client';
-import type { LoopDetector } from './loop-detector';
+import type { LoopBreakDetector, LoopDetector } from './loop-detector';
 
 /**
  * Abstraction for an LLM that can return tool calls.
@@ -13,6 +13,16 @@ export interface ToolCallingStrategy {
     messages: ChatMessage[],
     opts: ChatOptions
   ): Promise<{ content: string; toolCalls?: ToolCall[]; usage?: TokenUsage }>;
+}
+
+export interface LoopBreakInfo {
+  botId?: string;
+  conversationId?: string;
+  caller?: string;
+  round: number;
+  totalCalls?: number;
+  detector?: LoopBreakDetector;
+  message?: string;
 }
 
 export interface ToolRunnerOptions {
@@ -27,6 +37,12 @@ export interface ToolRunnerOptions {
    * summary-like response).
    */
   deliverable?: string;
+  /** Return a clean summarization instead of the `[Loop stopped: …]` marker on detector break. */
+  cleanBreak?: boolean;
+  /** Identifying context for the loop break — folded into the warn payload and onLoopBreak callback. */
+  loopContext?: { botId?: string; conversationId?: string; caller?: string };
+  /** Observer hook fired once when the loop detector breaks. Listener errors are swallowed. */
+  onLoopBreak?: (info: LoopBreakInfo) => void;
 }
 
 /** Accumulate token usage across multiple rounds, merging by model. */
@@ -45,6 +61,9 @@ export function mergeTokenUsage(
 }
 
 const MEMORY_TOOL_NAMES = new Set(['save_memory', 'core_memory_append', 'core_memory_replace']);
+
+const LOOP_BREAK_FALLBACK =
+  'I reached the tool-call limit for this turn. Send "continue" and I will pick up where I left off.';
 
 const PHANTOM_SAVE_PATTERN =
   /(?:guardado|guard[oé]|saved|stored|lo guardo|lo anoto|anotado)[\s,.].*?(?:memoria|memory|core.memory)/i;
@@ -96,11 +115,48 @@ export async function runToolLoop(
     if (opts.loopDetector && round > 0) {
       const check = opts.loopDetector.check();
       if (check.action === 'break') {
-        opts.logger.warn({ round, message: check.message }, 'Tool loop detector: breaking');
+        const info: LoopBreakInfo = {
+          ...(opts.loopContext ?? {}),
+          round,
+          totalCalls: check.totalCalls,
+          detector: check.detector,
+          message: check.message,
+        };
+        opts.logger.warn(info, 'Tool loop detector: breaking');
+        if (opts.onLoopBreak) {
+          try {
+            opts.onLoopBreak(info);
+          } catch (err) {
+            opts.logger.warn(
+              { err: err instanceof Error ? err.message : String(err) },
+              'onLoopBreak listener threw'
+            );
+          }
+        }
+
+        if (opts.cleanBreak) {
+          workingMessages.push({
+            role: 'system',
+            content: `You have reached the tool-call safety limit (${check.message}). Do NOT call any more tools. Summarize what you accomplished so far and what remains.`,
+          });
+          const final = await strategy.chat(workingMessages, {
+            ...chatOptions,
+            tools: undefined,
+            toolExecutor: undefined,
+          });
+          accumulatedUsage = mergeTokenUsage(accumulatedUsage, final.usage);
+          return {
+            text: final.content || LOOP_BREAK_FALLBACK,
+            usage: accumulatedUsage,
+            stopReason: 'loop-break',
+          };
+        }
+
         const lastContent = workingMessages.filter((m) => m.role === 'assistant').pop()?.content;
         return {
           text: `${lastContent || ''}\n\n[Loop stopped: ${check.message}]`,
           usage: accumulatedUsage,
+          stopReason: 'loop-break',
         };
       }
       if (check.action === 'warn' && check.message) {
@@ -178,5 +234,6 @@ export async function runToolLoop(
   return {
     text: 'I was unable to complete the request within the allowed number of steps.',
     usage: accumulatedUsage,
+    stopReason: 'exhausted',
   };
 }

@@ -3,23 +3,9 @@ import type { InlineApprovalStore } from '../../bot/inline-approval';
 import type { PermissionMode } from '../../bot/tool-permissions';
 import { claudeGenerate } from '../../claude-cli';
 import type { Config } from '../../config';
+import { resolveMaxToolRounds } from '../../config';
 import type { Logger } from '../../logger';
 import type { ChatMessage } from '../../ollama';
-
-/**
- * Tools that should never be available in dashboard interactions.
- * These are agent-loop / collaboration / telephony tools that make no sense
- * when a human is directly chatting with a bot via the web UI.
- */
-export const DASHBOARD_EXCLUDED_TOOLS = new Set([
-  'delegate_to_bot',
-  'collaborate',
-  'ask_human',
-  'ask_permission',
-  'signal_completion',
-  'phone_call',
-  'create_agent',
-]);
 
 const TOOL_AWARENESS_SUFFIX =
   '\n\nYou have access to tools (web search, file operations, memory, etc.). Use them when needed to provide accurate, up-to-date information.';
@@ -41,6 +27,10 @@ export interface WebGenerateOptions {
   inlineApprovalStore?: InlineApprovalStore;
   /** Session key for inline approval store keying */
   sessionKey?: string;
+  /** Explicit tool-round budget. Overrides both the per-bot and global config values. */
+  maxToolRounds?: number;
+  /** Identifying context for the loop break — merged with botId and default caller. */
+  loopContext?: { conversationId?: string; caller?: string };
 }
 
 /**
@@ -98,8 +88,10 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
   }
 
   const toolRegistry = botManager.getToolRegistry();
-  const allDefs = toolRegistry.getDefinitionsForBot(botId, opts.permissionMode);
-  const filteredDefs = allDefs.filter((d) => !DASHBOARD_EXCLUDED_TOOLS.has(d.function.name));
+  // Same set the agent has. Conversation `blocked` is coerced to `confirm` in
+  // getPermissionLevel, so this is not a reduced toolbox — confirm tools still
+  // pause for the inline approval card.
+  const filteredDefs = toolRegistry.getDefinitionsForBot(botId, opts.permissionMode);
 
   if (filteredDefs.length === 0) {
     // No tools available after filtering — use text-only path
@@ -134,6 +126,9 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     { role: 'user', content: prompt },
   ];
 
+  const botConfig = config.bots?.find((b) => b.id === botId);
+  const maxToolRounds = opts.maxToolRounds ?? resolveMaxToolRounds(config, botConfig);
+
   logger.info(
     {
       botId,
@@ -141,6 +136,7 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
       model,
       toolCount: filteredDefs.length,
       messageCount: chatMessages.length,
+      maxToolRounds,
     },
     'webGenerate: calling LLM with tools'
   );
@@ -149,6 +145,9 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     model,
     tools: filteredDefs,
     toolExecutor,
+    cleanBreak: true,
+    loopContext: { caller: 'webGenerate', botId, ...(opts.loopContext ?? {}) },
+    ...(maxToolRounds !== undefined ? { maxToolRounds } : {}),
   });
   return result.text;
 }

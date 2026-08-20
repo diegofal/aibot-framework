@@ -162,7 +162,7 @@ export function conversationsRoutes(deps: {
 
         const response = await webGenerate({
           prompt: '',
-          systemPrompt: '',
+          systemPrompt,
           botId,
           botManager,
           config,
@@ -172,6 +172,7 @@ export function conversationsRoutes(deps: {
           permissionMode: 'conversation',
           inlineApprovalStore,
           sessionKey,
+          loopContext: { conversationId: id, caller: 'web-conversation' },
         });
 
         // Check if the LLM triggered a confirm-level tool (pending approval)

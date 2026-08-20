@@ -4,7 +4,7 @@ import type { Channel, InboundMessage } from '../channel/types';
 import { streamToWebSocket } from '../channel/websocket';
 import type { WsChatData } from '../channel/websocket';
 import type { BotConfig } from '../config';
-import { resolveAgentConfig, resolveTtsConfig } from '../config';
+import { resolveAgentConfig, resolveMaxToolRounds, resolveTtsConfig } from '../config';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
@@ -158,8 +158,7 @@ export class ConversationPipeline {
   ): Promise<void> {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
-    const webToolsConfig = this.ctx.config.webTools;
-    const maxToolRounds = config.maxToolRounds ?? webToolsConfig?.maxToolRounds;
+    const maxToolRounds = resolveMaxToolRounds(this.ctx.config, config);
     const permissionMode: PermissionMode = 'conversation';
     const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id, permissionMode);
     const hasTools = botToolDefs.length > 0;
@@ -778,8 +777,7 @@ export class ConversationPipeline {
   ): Promise<string> {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
-    const webToolsConfig = this.ctx.config.webTools;
-    const maxToolRounds = config.maxToolRounds ?? webToolsConfig?.maxToolRounds;
+    const maxToolRounds = resolveMaxToolRounds(this.ctx.config, config);
     const permissionMode: PermissionMode = 'conversation';
     const botToolDefs = this.toolRegistry.getDefinitionsForBot(config.id, permissionMode);
     const hasTools = botToolDefs.length > 0;

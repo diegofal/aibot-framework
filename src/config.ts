@@ -394,6 +394,8 @@ const OllamaConfigSchema = z.object({
 const LoggingConfigSchema = z.object({
   level: z.enum(['debug', 'info', 'warn', 'error']),
   file: z.string().optional(),
+  fileMaxSize: z.union([z.string(), z.number()]).optional(),
+  fileLimit: z.number().optional(),
 });
 
 const PathsConfigSchema = z.object({
@@ -517,13 +519,15 @@ const DatetimeToolConfigSchema = z.object({
   locale: z.string().default('es-AR'),
 });
 
+/** Default tool-call rounds for a conversation turn. The loop-detector ceiling is 2x this. */
+export const DEFAULT_MAX_TOOL_ROUNDS = 15;
+
 export const WebToolsConfigSchema = z.object({
   enabled: z.boolean().default(false),
   search: WebToolsSearchConfigSchema.optional(),
   fetch: WebToolsFetchConfigSchema.optional(),
-  maxToolRounds: z.number().int().min(1).max(50).default(5),
+  maxToolRounds: z.number().int().min(1).max(50).default(DEFAULT_MAX_TOOL_ROUNDS),
 });
-
 const AutoRagConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -1186,6 +1190,19 @@ export interface ResolvedAgentConfig {
   systemPrompt: string;
   temperature: number;
   maxHistory: number;
+}
+
+/**
+ * Resolve the conversation tool-round budget for a bot.
+ * Per-bot `BotConfig.maxToolRounds` wins over the global `webTools.maxToolRounds`.
+ * Returns undefined only when neither is set — the caller then falls back to the
+ * backend default (see DEFAULT_MAX_TOOL_ROUNDS).
+ */
+export function resolveMaxToolRounds(
+  config: Pick<Config, 'webTools'>,
+  botConfig?: Pick<BotConfig, 'maxToolRounds'>
+): number | undefined {
+  return botConfig?.maxToolRounds ?? config.webTools?.maxToolRounds;
 }
 
 /**
