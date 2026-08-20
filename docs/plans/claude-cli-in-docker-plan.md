@@ -278,12 +278,26 @@ converted both files and made `dash` fail with `Syntax error: end of file unexpe
 syntax-checking the entrypoint in a container before building. Any future scripted edit to those two
 files must write bytes, not text.
 
-## Follow-up found during execution (NOT implemented — out of the agreed plan)
+## Correction (post-merge)
 
-**`claudeGenerate` treats an error response as a successful answer.** With the CLI installed but not
-logged in, `claude -p ... --output-format json` exits **0** and returns
-`{"is_error": true, ..., "result": "Not logged in · Please run /login"}`. `claude-cli.ts` reads
-`parsed.result` without inspecting `is_error`, so that string is returned as the model's reply and
-would reach a Telegram user verbatim. The boot preflight now makes the condition visible, but the
-runtime path still mis-handles it. Fix would be a two-line `is_error` guard in `claudeGenerate` plus
-a red test. Left out because it is outside the plan's agreed scope (CLAUDE.md TDD rule 5).
+An earlier revision of these findings claimed that an unauthenticated CLI "exits 0"
+and that `claudeGenerate` would return `"Not logged in · Please run /login"` to a
+user as though it were the model's answer, and recommended an `is_error` guard as
+a follow-up.
+
+**That was wrong, and the follow-up is withdrawn.** The original measurement piped
+the CLI into `head`, so the shell reported `head`'s exit status rather than the
+CLI's. Measured properly:
+
+```
+$ claude -p hi --output-format json --dangerously-skip-permissions; echo $?
+{"is_error":true,...,"result":"Not logged in · Please run /login"}
+1
+```
+
+Exit code **1**. `claudeGenerate` already checks `exitCode !== 0` and throws, so
+the failover chain handles it and no user ever sees that string. No guard needed.
+
+What remains true, and is what the preflight is actually for: the failure is
+invisible to the operator. Every call is absorbed by failover, so the claude-cli
+backend simply never contributes and nothing in the logs explains why.

@@ -283,9 +283,10 @@ One `docker compose exec -it aibot claude auth login` therefore survives redeplo
 
 A boot preflight (`src/bot/claude-cli-preflight.ts`) reports the binary, its version and whether a
 login is present, warning only when the backend is actually in the failover chain. This matters
-because an unauthenticated CLI exits 0 and returns `"Not logged in"` as its result text, which
-would otherwise be relayed to a user as if the model had said it. Opt out with
-`claudeCli.enabled: false`. See [docs/deployment-cloud.md](docs/deployment-cloud.md) §11.1.
+because an unauthenticated CLI fails *silently from the operator's point of view*: it exits 1, so
+`claudeGenerate` throws and the failover chain quietly moves on to Ollama — the backend never
+contributes and nothing in the logs says why. Opt out with `claudeCli.enabled: false`. See
+[docs/deployment-cloud.md](docs/deployment-cloud.md) §11.1.
 
 ### Tools
 

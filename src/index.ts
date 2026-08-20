@@ -34,9 +34,9 @@ async function main() {
     logger.info({ platform: process.platform, node: process.version }, 'System info');
 
     // Claude CLI preflight — non-fatal, bounded. The claude-cli backend joins the
-    // failover chain by default, and an unauthenticated CLI does not fail loudly:
-    // it exits 0 with "Not logged in · Please run /login" as its result text,
-    // which would otherwise reach a user as if the model had said it.
+    // failover chain by default. An unauthenticated CLI exits 1, so claudeGenerate
+    // throws and failover absorbs it — safe, but silent: the backend never
+    // contributes and nothing says why. Surface it once, here.
     void (async () => {
       const claudeCliInChain = resolveCandidatesFromConfig(config).some(
         (candidate) => candidate.backend === 'claude-cli'

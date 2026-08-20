@@ -312,10 +312,10 @@
         <p class="responsibility">
           Boot-time probe for the Claude CLI backend. <code>resolveCandidatesFromConfig()</code> puts
           <code>claude-cli</code> in the failover chain unless <code>claudeCli.enabled</code> is false, so a
-          missing binary or a missing login is a silent failure waiting to happen. Worse, an
-          unauthenticated CLI does not error: it exits 0 with
-          <code>"result": "Not logged in &middot; Please run /login"</code>, which
-          <code>claudeGenerate</code> would return as if it were the model's answer. Called from
+          missing binary or a missing login means a backend that fails on every call. It fails
+          safely — an unauthenticated CLI exits 1, so <code>claudeGenerate</code> throws and failover
+          moves on — but silently: every attempt is absorbed and nothing in the logs says the
+          backend is unusable. Called from
           <code>src/index.ts</code> after config load; logs <code>info</code> when healthy and
           <code>warn</code> only when the backend is in the chain <em>and</em> unusable. Never throws
           &mdash; a preflight that breaks boot is worse than the problem it reports.

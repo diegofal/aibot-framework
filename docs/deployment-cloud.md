@@ -1056,10 +1056,11 @@ docker compose exec aibot claude -p 'reply with OK' --output-format json
 ```
 
 A working install returns JSON whose `result` is the model's reply. If the CLI is
-not logged in you get **HTTP-success-shaped output**, not an error: exit code 0 and
-`"result": "Not logged in · Please run /login"`. That string would otherwise reach
-a user as if the model had said it, which is why the framework runs a preflight at
-boot and logs
+not logged in it exits **1** with `{"is_error": true, "result": "Not logged in ·
+Please run /login"}`. That is safe — `claudeGenerate` throws on the non-zero exit
+and the failover chain falls through to Ollama — but it is invisible: every call
+is quietly absorbed and nothing says the backend is unusable. Hence the boot
+preflight, which logs
 
 ```
 Claude CLI v2.1.237 installed but not logged in — run "claude auth login" (config dir: /app/data/claude)

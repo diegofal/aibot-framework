@@ -72,9 +72,9 @@ if [ "$seeded_bots" = 1 ]; then
 BANNER
 fi
 
-# An unauthenticated Claude CLI does not fail loudly: it exits 0 and returns
-# "Not logged in" as its result text, which the framework would relay to a
-# user as if the model had said it. Say it here instead, once, at boot.
+# An unauthenticated Claude CLI exits 1, so the framework's failover chain
+# absorbs every call and the backend silently never contributes. Say it here
+# instead, once, at boot.
 if [ ! -f "$CLAUDE_CONFIG_DIR/.credentials.json" ]; then
   cat <<'CLAUDEBANNER'
 [entrypoint] ------------------------------------------------------------

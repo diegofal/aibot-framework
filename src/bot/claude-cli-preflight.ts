@@ -3,13 +3,16 @@
  *
  * `resolveCandidatesFromConfig` puts `claude-cli` in the failover chain by
  * default, so a container without the binary — or with the binary but no
- * login — ships a backend that fails on first use. Worse, an unauthenticated
- * CLI does not fail loudly: `claude -p ... --output-format json` exits 0 with
- * `"result": "Not logged in · Please run /login"`, which `claudeGenerate`
- * happily returns as if it were the model's answer. Measured against the
- * pinned CLI (2.1.237).
+ * login — ships a backend that fails on every single call.
  *
- * This module makes that state visible at boot instead of in a user's chat.
+ * It fails safely: an unauthenticated CLI exits 1 with
+ * `{"is_error": true, "result": "Not logged in · Please run /login"}`, so
+ * `claudeGenerate` throws on the non-zero exit and the failover chain moves on
+ * to the next candidate. Measured against the pinned CLI (2.1.237).
+ *
+ * It also fails *silently*: every attempt is absorbed by failover, so nothing
+ * in the logs says the backend is unusable — it just never contributes. This
+ * module makes that state visible once at boot instead.
  * Every dependency is injectable so the tests stay hermetic — the same shape
  * as `resolveClaudeBin`'s `WhichFn` in src/claude-cli.ts.
  *
