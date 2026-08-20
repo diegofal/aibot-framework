@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { McpClient, type McpServerConfig } from '../../src/mcp/client';
 import type { McpTransport } from '../../src/mcp/protocol';
@@ -202,5 +202,107 @@ describe('McpClient', () => {
   it('should throw for sse transport without url', () => {
     const client = new McpClient(makeConfig({ transport: 'sse', url: undefined }), mockLogger);
     expect(() => (client as any).createTransport()).toThrow("requires 'url'");
+  });
+
+  describe('circuit breaker', () => {
+    it('should disable the server after MAX_RECONNECT_ATTEMPTS with the same error', async () => {
+      // Force createTransport to throw a stable error message on every call,
+      // simulating a missing executable (ENOENT).
+      const stableError = 'Executable not found in $PATH: "npx"';
+      const client = new McpClient(
+        makeConfig({ autoReconnect: false, name: 'broken' }),
+        mockLogger
+      );
+      (client as any).createTransport = () => {
+        throw new Error(stableError);
+      };
+
+      // autoReconnect is off so connect() rejects without scheduling. We
+      // drive the reconnect cycle manually to keep the test deterministic.
+      await expect(client.connect()).rejects.toThrow(stableError);
+      expect(client.status).toBe('error');
+
+      // Stub setTimeout so scheduleReconnect does not arm a real timer.
+      const origSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = (() => undefined) as unknown as typeof setTimeout;
+      try {
+        // The first call seeds lastErrorMessage; subsequent calls with the
+        // same error trip the breaker once reconnectAttempts reaches the cap.
+        const MAX = (McpClient as any).MAX_RECONNECT_ATTEMPTS;
+        for (let i = 0; i < MAX; i++) {
+          (client as any).scheduleReconnect(stableError);
+        }
+
+        // The next call with the same error must trip the circuit breaker.
+        (client as any).scheduleReconnect(stableError);
+      } finally {
+        globalThis.setTimeout = origSetTimeout;
+      }
+
+      expect(client.status).toBe('disabled');
+
+      // A disabled client must not expose any tools.
+      expect(client.tools).toEqual([]);
+
+      await client.disconnect();
+    });
+
+    it('should not disable when errors differ', async () => {
+      const client = new McpClient(
+        makeConfig({ autoReconnect: false, name: 'flaky' }),
+        mockLogger
+      );
+      (client as any).createTransport = () => {
+        throw new Error('first error');
+      };
+
+      // autoReconnect is off so connect() rejects without scheduling.
+      await expect(client.connect()).rejects.toThrow('first error');
+
+      // Stub setTimeout so scheduleReconnect does not arm a real timer.
+      const origSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = (() => undefined) as unknown as typeof setTimeout;
+      try {
+        // Feed a different error each time — the circuit breaker must NOT trip.
+        const MAX = (McpClient as any).MAX_RECONNECT_ATTEMPTS;
+        for (let i = 0; i < MAX + 2; i++) {
+          (client as any).scheduleReconnect(`different-error-${i}`);
+        }
+      } finally {
+        globalThis.setTimeout = origSetTimeout;
+      }
+
+      expect(client.status).not.toBe('disabled');
+
+      await client.disconnect();
+    });
+
+    it('should reset lastErrorMessage on successful connect', async () => {
+      const client = new McpClient(makeConfig({ autoReconnect: false }), mockLogger);
+      const transport = new MockTransport();
+
+      let callCount = 0;
+      (client as any).createTransport = () => {
+        callCount++;
+        if (callCount === 1) throw new Error('transient');
+        return transport;
+      };
+
+      // First attempt fails. autoReconnect is off so no timer is scheduled,
+      // but the error message is still captured by connect()'s catch block.
+      await expect(client.connect()).rejects.toThrow('transient');
+
+      // Simulate a prior failed reconnect cycle having set lastErrorMessage.
+      (client as any).lastErrorMessage = 'transient';
+      (client as any).reconnectAttempts = 3;
+
+      // Second attempt succeeds and must clear the circuit-breaker state.
+      await client.connect();
+      expect(client.status).toBe('connected');
+      expect((client as any).lastErrorMessage).toBeNull();
+      expect((client as any).reconnectAttempts).toBe(0);
+
+      await client.disconnect();
+    });
   });
 });

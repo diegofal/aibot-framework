@@ -30,7 +30,7 @@ export interface McpServerConfig {
   deniedTools?: string[];
 }
 
-export type McpClientStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+export type McpClientStatus = 'disconnected' | 'connecting' | 'connected' | 'error' | 'disabled';
 
 export class McpClient {
   private transport: McpTransport | null = null;
@@ -39,7 +39,9 @@ export class McpClient {
   private _serverInfo: McpInitializeResult['serverInfo'] | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  private lastErrorMessage: string | null = null;
   private static readonly MAX_RECONNECT_DELAY = 60_000;
+  private static readonly MAX_RECONNECT_ATTEMPTS = 10;
 
   constructor(
     readonly serverConfig: McpServerConfig,
@@ -125,6 +127,7 @@ export class McpClient {
 
       this._status = 'connected';
       this.reconnectAttempts = 0;
+      this.lastErrorMessage = null;
       this.logger.info(
         {
           server: this.serverConfig.name,
@@ -136,6 +139,7 @@ export class McpClient {
       );
     } catch (err) {
       this._status = 'error';
+      const errMsg = err instanceof Error ? err.message : String(err);
       this.logger.error({ server: this.serverConfig.name, err }, 'Failed to connect to MCP server');
 
       // Clean up failed transport
@@ -143,7 +147,7 @@ export class McpClient {
       this.transport = null;
 
       if (this.serverConfig.autoReconnect) {
-        this.scheduleReconnect();
+        this.scheduleReconnect(errMsg);
       }
 
       throw err;
@@ -248,6 +252,7 @@ export class McpClient {
   async disconnect(): Promise<void> {
     this.clearReconnectTimer();
     this._status = 'disconnected';
+    this.lastErrorMessage = null;
 
     if (this.transport) {
       await this.transport.close().catch(() => {});
@@ -285,8 +290,29 @@ export class McpClient {
     throw new Error(`Unknown transport: ${this.serverConfig.transport}`);
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(errMsg?: string): void {
     this.clearReconnectTimer();
+
+    // Circuit breaker: if the same error repeats past the attempt cap, abandon
+    // and mark the server disabled so it stops flooding the log. A missing
+    // executable (ENOENT) or a refused connection will never fix itself on a
+    // 60 s timer — the operator has to install the binary or fix the URL.
+    const sameError = errMsg !== undefined && errMsg === this.lastErrorMessage;
+    if (sameError && this.reconnectAttempts >= McpClient.MAX_RECONNECT_ATTEMPTS) {
+      this._status = 'disabled';
+      this.logger.error(
+        {
+          server: this.serverConfig.name,
+          attempts: this.reconnectAttempts,
+          err: errMsg,
+        },
+        'MCP server disabled after repeated failures with the same error — fix the underlying cause and restart, or re-enable from the dashboard'
+      );
+      return;
+    }
+
+    // Track the error message for the next call's sameError check.
+    if (errMsg !== undefined) this.lastErrorMessage = errMsg;
 
     const delay = Math.min(1000 * 2 ** this.reconnectAttempts, McpClient.MAX_RECONNECT_DELAY);
     this.reconnectAttempts++;

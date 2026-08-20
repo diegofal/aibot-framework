@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { AgentRegistry } from '../../src/agent-registry';
 import { CollaborationTracker } from '../../src/collaboration-tracker';
 import { type ExternalAgent, McpAgentBridge } from '../../src/mcp/agent-bridge';
@@ -35,6 +35,13 @@ beforeEach(() => {
     (this as any)._tools = [];
     (this as any)._serverInfo = null;
   };
+});
+
+afterEach(() => {
+  // Restore the real prototype methods so the monkey-patch does not leak
+  // into other test files (client.test.ts exercises the real connect).
+  McpClient.prototype.connect = originalConnect;
+  McpClient.prototype.disconnect = originalDisconnect;
 });
 
 function makeAgent(id: string): ExternalAgent {
