@@ -22,7 +22,7 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
 - **TTS & STT** — ElevenLabs voice responses + Whisper transcription for voice messages
 - **Permissions system** — Human-in-the-loop approval queue for sensitive agent actions
 - **Productions & karma** — Track and review bot outputs, score quality with time-decayed karma
-- **Multi-backend LLM** — Ollama (local) + Claude CLI with model failover orchestrator, cooldown tracking, and error classification
+- **Multi-backend LLM** — Ollama (local) + Claude CLI with model failover orchestrator, cooldown tracking, and error classification. The Docker image ships the `claude` CLI pinned and preflighted at boot; authenticate it once with `docker compose exec -it aibot claude auth login`
 - **Lifecycle hooks** — 8 EventEmitter-based hooks (message, LLM, tool, compaction, agent loop) for skill/extension integration
 - **Streaming responses** — Token-by-token streaming for Ollama with progressive Telegram message editing and WebSocket chunk events
 - **A2A Protocol** — Agent-to-agent communication (v0.3.0) with JSON-RPC server, client, agent directory, and skill-to-tool adaptation
@@ -270,6 +270,23 @@ Automated security checks on bot startup (24h cooldown): filesystem permissions,
 
 Probes every configured model at boot (primary, fallbacks, `soul.healthCheck.model`, per-bot overrides) with a one-token generation, concurrently and deduplicated. A real inference call is required because retired Ollama cloud tags keep appearing in `/api/tags` after the hosted backend stops serving them. Failures are graded: a retired or unknown model (`410`/`404`) logs at `error`, while a busy or slow one (`503`/`429`/timeout) logs at `warn`. An unreachable daemon produces one message rather than one per model. Non-fatal by default; configurable via `ollama.startupValidation` (`enabled`, `timeoutMs`, `strict`, `modelTimeoutMs`). `modelTimeoutMs` gives a single slow tag a longer budget — `nemotron-3-super:cloud` otherwise exceeds the 20 s default on every boot, and a permanent warning is one nobody reads.
 
+### Claude CLI Backend
+
+The image installs Claude Code at a pinned version (`ARG CLAUDE_CLI_VERSION`), as the unprivileged
+`bun` user, with `RUN claude --version` as a build-time gate. `claude-cli` is in the model failover
+chain by default, and soul quality review, memory consolidation and the improve tool all shell out
+to it, so the binary being absent used to mean a backend that could never answer.
+
+Credentials live in `CLAUDE_CONFIG_DIR=/app/data/claude`, inside the data volume rather than the
+CLI default `~/.claude` — the latter is in the container layer and is destroyed by every rebuild.
+One `docker compose exec -it aibot claude auth login` therefore survives redeploys.
+
+A boot preflight (`src/bot/claude-cli-preflight.ts`) reports the binary, its version and whether a
+login is present, warning only when the backend is actually in the failover chain. This matters
+because an unauthenticated CLI exits 0 and returns `"Not logged in"` as its result text, which
+would otherwise be relayed to a user as if the model had said it. Opt out with
+`claudeCli.enabled: false`. See [docs/deployment-cloud.md](docs/deployment-cloud.md) §11.1.
+
 ### Tools
 
 41 LLM-callable tools across 11 categories: web (search, fetch, browser), files (read, write, edit), execution, soul/memory management, goals, collaboration, cron, social media (Reddit, Twitter), calendar, core memory, permissions, productions, and MCP. Dynamic tool creation allows bots to build new tools at runtime (with human approval). Per-bot `disabledTools` filtering. Tool categories enable pre-selection by domain. Tool loop detection (4 strategies) prevents LLMs from getting stuck in repetitive patterns.
@@ -448,7 +465,7 @@ bun run format
 | Web server | [Hono](https://hono.dev) |
 | Database | SQLite (via bun:sqlite) |
 | LLM (local) | [Ollama](https://ollama.ai) |
-| LLM (cloud) | Claude CLI |
+| LLM (cloud) | Claude CLI (shipped in the Docker image, pinned to 2.1.237) |
 | TTS | [ElevenLabs](https://elevenlabs.io) |
 | STT | [Whisper](https://platform.openai.com/docs/guides/speech-to-text) (OpenAI) |
 | Validation | [Zod](https://zod.dev) |

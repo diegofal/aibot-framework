@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { resolveClaudeBin } from '../claude-cli';
+import { SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
@@ -192,7 +192,7 @@ async function runClaudeCliReview(opts: QualityReviewOptions): Promise<string> {
     prompt,
     '--allowedTools',
     'Read,Edit,Write',
-    '--dangerouslySkipPermissions',
+    SKIP_PERMISSIONS_FLAG,
   ];
   if (claudeModel) {
     claudeArgs.push('--model', claudeModel);

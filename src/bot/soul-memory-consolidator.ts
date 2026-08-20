@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { resolveClaudeBin } from '../claude-cli';
+import { SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
@@ -149,7 +149,7 @@ async function generateConsolidation(
     prompt,
     '--output-format',
     'text',
-    '--dangerouslySkipPermissions',
+    SKIP_PERMISSIONS_FLAG,
   ];
   if (opts.claudeModel) {
     claudeArgs.push('--model', opts.claudeModel);

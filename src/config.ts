@@ -674,6 +674,15 @@ const HumanizerConfigSchema = z.object({
 
 export const ClaudeCliConfigSchema = z
   .object({
+    /**
+     * Whether the claude-cli backend joins the failover chain.
+     *
+     * `resolveCandidatesFromConfig` (src/bot/model-failover/model-fallback.ts)
+     * reads this to decide. It must be declared here or Zod strips it during
+     * load and the operator's opt-out silently does nothing — the candidate
+     * gets added regardless of what config.json says.
+     */
+    enabled: z.boolean().default(true),
     model: z.string().optional(),
   })
   .default({});

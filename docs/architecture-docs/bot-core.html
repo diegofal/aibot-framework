@@ -305,6 +305,43 @@
         <p><code>./types</code> (BotContext). Uses <code>ctx.agentRegistry</code>, <code>ctx.sessionManager</code>, <code>ctx.getLLMClient()</code>.</p>
       </div>
 
+      <!-- claude-cli-preflight.ts -->
+      <div class="module-section" id="claude-cli-preflight">
+        <h3>claude-cli-preflight.ts</h3>
+        <div class="file-path">src/bot/claude-cli-preflight.ts &middot; ~150 lines</div>
+        <p class="responsibility">
+          Boot-time probe for the Claude CLI backend. <code>resolveCandidatesFromConfig()</code> puts
+          <code>claude-cli</code> in the failover chain unless <code>claudeCli.enabled</code> is false, so a
+          missing binary or a missing login is a silent failure waiting to happen. Worse, an
+          unauthenticated CLI does not error: it exits 0 with
+          <code>"result": "Not logged in &middot; Please run /login"</code>, which
+          <code>claudeGenerate</code> would return as if it were the model's answer. Called from
+          <code>src/index.ts</code> after config load; logs <code>info</code> when healthy and
+          <code>warn</code> only when the backend is in the chain <em>and</em> unusable. Never throws
+          &mdash; a preflight that breaks boot is worse than the problem it reports.
+        </p>
+        <h4>Exported Functions &amp; Interfaces</h4>
+        <ul class="inline-list">
+          <li><code>checkClaudeCli</code></li>
+          <li><code>formatPreflight</code></li>
+          <li><code>resolveConfigDir</code></li>
+          <li><code>ClaudeCliPreflight</code></li>
+          <li><code>CredentialState</code></li>
+          <li><code>RunFn</code></li>
+        </ul>
+        <h4>Key Methods</h4>
+        <table class="methods-table">
+          <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>checkClaudeCli</td><td>{ claudePath, which?, run?, configDir?, exists? }</td><td>Resolves the binary via <code>resolveClaudeBin</code>, probes <code>--version</code> with a 10s bound, then looks for <code>.credentials.json</code> in the config dir. Returns <code>{ available, version?, configDir, credentials, reason? }</code>. On darwin an absent file reports <code>unknown</code>, not <code>missing</code> &mdash; macOS keeps the login in the Keychain.</td></tr>
+            <tr><td>formatPreflight</td><td>result: ClaudeCliPreflight</td><td>One-line boot summary; names <code>claude auth login</code> when the install is present but unauthenticated.</td></tr>
+            <tr><td>resolveConfigDir</td><td>explicit?: string</td><td>Mirrors the CLI's own order: explicit &rarr; <code>$CLAUDE_CONFIG_DIR</code> &rarr; <code>~/.claude</code>. In Docker this is <code>/app/data/claude</code>, inside the data volume so a login survives image rebuilds.</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>../claude-cli</code> (resolveClaudeBin, WhichFn), <code>node:os</code>, <code>node:path</code>. Every side effect is injectable so tests stay hermetic.</p>
+      </div>
+
       <!-- topic-guard.ts -->
       <div class="module-section" id="topic-guard">
         <h3>topic-guard.ts</h3>

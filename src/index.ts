@@ -1,7 +1,9 @@
 import { existsSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { BotManager, autoStartEnabledBots, resolveAutoStart } from './bot';
+import { checkClaudeCli, formatPreflight } from './bot/claude-cli-preflight';
 import { ModelValidationError, runStartupModelValidation } from './bot/model-failover';
+import { resolveCandidatesFromConfig } from './bot/model-failover/model-fallback';
 import { loadConfig, resolveAgentConfig } from './config';
 import { createLLMClient } from './core/llm-client';
 import { describeEmbeddingBackendGap } from './core/ollama-http';
@@ -30,6 +32,29 @@ async function main() {
 
     logger.info('Starting AIBot Framework v1.0.0');
     logger.info({ platform: process.platform, node: process.version }, 'System info');
+
+    // Claude CLI preflight — non-fatal, bounded. The claude-cli backend joins the
+    // failover chain by default, and an unauthenticated CLI does not fail loudly:
+    // it exits 0 with "Not logged in · Please run /login" as its result text,
+    // which would otherwise reach a user as if the model had said it.
+    void (async () => {
+      const claudeCliInChain = resolveCandidatesFromConfig(config).some(
+        (candidate) => candidate.backend === 'claude-cli'
+      );
+      const preflight = await checkClaudeCli({
+        claudePath: config.improve?.claudePath ?? 'claude',
+      });
+      const summary = formatPreflight(preflight);
+      // Only actionable when the backend is actually wired in — an Ollama-only
+      // deployment that set claudeCli.enabled=false does not need the noise.
+      if (claudeCliInChain && (!preflight.available || preflight.credentials === 'missing')) {
+        logger.warn({ preflight }, summary);
+      } else {
+        logger.info({ preflight }, summary);
+      }
+    })().catch(() => {
+      /* preflight must never break boot */
+    });
 
     // Load skills
     logger.info('Loading skills...');

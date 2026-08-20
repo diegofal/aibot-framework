@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { resolveClaudeBin } from '../claude-cli';
+import { SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
 import type { Logger } from '../logger';
 import { backupSoulFile } from '../soul';
 import type { Tool, ToolResult } from './types';
@@ -142,7 +142,7 @@ export async function runImprove(opts: {
       prompt,
       '--allowedTools',
       'Read,Edit,Write,Glob,Grep',
-      '--dangerouslySkipPermissions',
+      SKIP_PERMISSIONS_FLAG,
     ];
     if (claudeModel) {
       claudeArgs.push('--model', claudeModel);

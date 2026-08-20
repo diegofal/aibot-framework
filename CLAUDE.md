@@ -80,6 +80,7 @@ El API pública es `BotManager` — se importa desde `src/bot/index.ts`.
 | `agent-loop-prompts.ts` | Prompt builders para planner, strategist, executor, feedback |
 | `agent-loop-user-context.ts` | Active users summary for planner injection (coach/student awareness) |
 | `topic-guard.ts` | LLM-based topic pre-filter: blocks off-topic messages before full pipeline |
+| `claude-cli-preflight.ts` | Boot probe for the Claude CLI: binary on PATH, version, credentials in `CLAUDE_CONFIG_DIR`. Injectable deps, never throws |
 | `llm-json-parser.ts` | Parser genérico de JSON desde output LLM |
 | `soul-health-check.ts` | Orquestador: lint + consolidación + quality review |
 | `soul-lint.ts` | Lint estructural de soul directory (sin LLM) |
