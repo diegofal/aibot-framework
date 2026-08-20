@@ -114,14 +114,6 @@ describe('ProductionsService', () => {
     });
   });
 
-  describe('rewritePath', () => {
-    test('rewrites path to productions dir', () => {
-      const result = service.rewritePath('bot1', 'src/tools/example.ts');
-      expect(result).toContain('bot1');
-      expect(result).toContain('src__tools__example.ts');
-    });
-  });
-
   describe('logProduction', () => {
     test('creates changelog entry with generated id', () => {
       const entry = service.logProduction({
@@ -486,16 +478,15 @@ describe('ProductionsService', () => {
   });
 
   describe('updateContent', () => {
-    test('writes content to file with absolute path', () => {
+    test('writes content to file with relative path', () => {
       const dir = service.resolveDir('bot1');
-      const filePath = join(dir, 'test-file.ts');
-      writeFileSync(filePath, 'original content', 'utf-8');
+      writeFileSync(join(dir, 'test-file.ts'), 'original content', 'utf-8');
 
       const created = service.logProduction({
         timestamp: new Date().toISOString(),
         botId: 'bot1',
         tool: 'file_write',
-        path: filePath,
+        path: 'test-file.ts',
         action: 'create',
         description: 'test',
         size: 16,
@@ -505,8 +496,24 @@ describe('ProductionsService', () => {
       const ok = service.updateContent('bot1', created.id, 'updated content');
       expect(ok).toBe(true);
 
-      const content = readFileSync(filePath, 'utf-8');
+      const content = readFileSync(join(dir, 'test-file.ts'), 'utf-8');
       expect(content).toBe('updated content');
+    });
+
+    test('rejects absolute path', () => {
+      const entry = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/etc/passwd',
+        action: 'create',
+        description: 'absolute path',
+        size: 0,
+        trackOnly: false,
+      });
+
+      const ok = service.updateContent('bot1', entry.id, 'malicious content');
+      expect(ok).toBe(false);
     });
 
     test('writes content to file with relative path', () => {
@@ -538,16 +545,15 @@ describe('ProductionsService', () => {
   });
 
   describe('getFileContent', () => {
-    test('reads file content for production entry with absolute path', () => {
+    test('reads file content for production entry with relative path', () => {
       const dir = service.resolveDir('bot1');
-      const filePath = join(dir, 'readable.ts');
-      writeFileSync(filePath, 'hello world', 'utf-8');
+      writeFileSync(join(dir, 'readable.ts'), 'hello world', 'utf-8');
 
       const created = service.logProduction({
         timestamp: new Date().toISOString(),
         botId: 'bot1',
         tool: 'file_write',
-        path: filePath,
+        path: 'readable.ts',
         action: 'create',
         description: 'test',
         size: 11,
@@ -556,6 +562,22 @@ describe('ProductionsService', () => {
 
       const content = service.getFileContent('bot1', created.id);
       expect(content).toBe('hello world');
+    });
+
+    test('rejects absolute path', () => {
+      const entry = service.logProduction({
+        timestamp: new Date().toISOString(),
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/etc/passwd',
+        action: 'create',
+        description: 'absolute path',
+        size: 0,
+        trackOnly: false,
+      });
+
+      const content = service.getFileContent('bot1', entry.id);
+      expect(content).toBeNull();
     });
 
     test('reads file content for production entry with relative path', () => {

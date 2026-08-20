@@ -19,7 +19,6 @@ export interface CoherenceCheck {
 
 export interface SummaryData {
   summary?: string;
-  plan?: string;
   error?: string;
   generatedAt: string;
 }
@@ -40,7 +39,7 @@ export interface ProductionEntry {
   id: string;
   timestamp: string; // ISO
   botId: string;
-  tool: string; // file_write | file_edit | exec
+  tool: string; // free-form: file_write | file_edit | exec | archive | ...
   path: string; // file path (relative to productions dir or basePath)
   action: 'create' | 'edit' | 'delete' | 'archive';
   description: string;

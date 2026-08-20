@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Productions Architecture — AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    .meta {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 16px 0 32px;
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+    .meta strong { color: var(--text); font-weight: 600; }
+    .meta .pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 10px;
+      background: rgba(52, 211, 153, 0.15);
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    h2 { margin: 48px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    h3 { margin: 28px 0 12px; font-size: 16px; }
+    h4 { margin: 20px 0 8px; font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+    p, li { line-height: 1.65; }
+    ul, ol { padding-left: 24px; margin: 8px 0 16px; }
+    li { margin: 4px 0; }
+    code { font-family: var(--mono); font-size: 13px; padding: 1px 6px; background: rgba(108, 140, 255, 0.08); border-radius: 4px; }
+    pre { font-family: var(--mono); font-size: 13px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 12px 0; line-height: 1.5; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+    thead th { text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); border-bottom: 2px solid var(--border); }
+    tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tbody tr:hover { background: var(--bg-hover); }
+    blockquote {
+      border-left: 3px solid var(--accent);
+      padding: 8px 16px;
+      margin: 12px 0;
+      background: rgba(108, 140, 255, 0.05);
+      border-radius: 0 6px 6px 0;
+      color: var(--text-dim);
+      font-size: 14px;
+    }
+    blockquote p { margin: 4px 0; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+    .file-tree {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 16px 0;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .file-tree .facade { color: var(--accent); }
+    .file-tree .pure { color: var(--green); }
+    .file-tree .io { color: var(--orange); }
+    .file-tree .types { color: var(--text-dim); }
+    .module-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 12px 0;
+    }
+    .module-card h4 { margin-top: 0; }
+    .module-card .pure { color: var(--green); font-weight: 600; }
+    .module-card .io { color: var(--orange); font-weight: 600; }
+    .module-card .mixed { color: var(--accent); font-weight: 600; }
+    .signature {
+      font-family: var(--mono);
+      font-size: 13px;
+      background: rgba(108, 140, 255, 0.05);
+      border-left: 3px solid var(--accent);
+      padding: 8px 12px;
+      margin: 8px 0;
+    }
+    .toc {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 16px 0 32px;
+      font-size: 14px;
+    }
+    .toc h4 { margin: 0 0 8px; color: var(--text-dim); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+    .toc ol { padding-left: 20px; margin: 0; }
+  </style>
+</head>
+<body>
+<button class="hamburger" id="hamburger" aria-label="Toggle sidebar">&#9776;</button>
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">AIBot Framework<small>Architecture Docs</small></div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="bot-core.html">Bot Core Modules</a>
+      <a href="data-flows.html">Data Flows</a>
+      <a href="tools-skills.html">Tools &amp; Skills</a>
+      <a href="memory-soul.html">Memory &amp; Soul</a>
+      <a href="agent-loop.html">Agent Loop</a>
+      <a href="web-dashboard.html">Web Dashboard</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="simplifications.html">Simplifications</a>
+      <a href="multi-tenancy.html">Multi-Tenancy</a>
+      <a href="use-cases.html">Use Cases</a>
+      <a href="testing-guide.html">Testing Guide</a>
+      <a href="backlog.html">Backlog</a>
+      <a href="productions.html" class="active">Productions Architecture</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>Productions Architecture <span class="pill">As-built</span></h1>
+    <p>The as-built module layout of <code>src/productions/</code> after the refactor documented in
+      <a href="productions-refactor.md">Productions Refactor (Plan)</a>. The plan split the 1,573-line
+      monolith into focused modules; this page describes what landed.</p>
+
+    <div class="meta">
+      <span><strong>Source</strong> <code>src/productions/</code></span>
+      <span><strong>Modules</strong> 9 + types.ts</span>
+      <span><strong>Tests</strong> 10 files in <code>tests/productions/</code></span>
+      <span><strong>Cycles</strong> 0.5 → 9 done</span>
+    </div>
+
+    <div class="toc">
+      <h4>On this page</h4>
+      <ol>
+        <li><a href="#layout">Module layout</a></li>
+        <li><a href="#composition">Facade composition</a></li>
+        <li><a href="#modules">Module reference</a></li>
+        <li><a href="#contracts">Contract tests</a></li>
+        <li><a href="#tests">Test surface</a></li>
+        <li><a href="#flow">Index rebuild flow</a></li>
+      </ol>
+    </div>
+
+    <h2 id="layout">1. Module layout</h2>
+    <p>The 9 files in <code>src/productions/</code> split the previous monolith into single-purpose modules.
+      The facade (<code>service.ts</code>) owns the side effects; the other modules are pure functions
+      or thin I/O wrappers.</p>
+
+    <div class="file-tree">
+<pre>
+src/productions/
+├── <span class="facade">service.ts</span>     621 lines  <span class="types"># Slim facade: public API + composition</span>
+├── <span class="facade">index.ts</span>        5 lines  <span class="types"># Barrel: re-exports ProductionsService only (§6.5)</span>
+├── <span class="pure">paths.ts</span>        140 lines  <span class="types"># Path resolution, traversal guard, INDEX/TREE excludes</span>
+├── <span class="pure">frontmatter.ts</span>  246 lines  <span class="types"># YAML frontmatter, content quality, coherence</span>
+├── <span class="pure">summary.ts</span>      66 lines  <span class="types"># Daily summary read/write</span>
+├── <span class="io">html.ts</span>         433 lines  <span class="types"># Index.html emitter (no &lt;script&gt;)</span>
+├── <span class="io">files.ts</span>        228 lines  <span class="types"># File I/O (archive, getFileContent, updateContent, renumber, countFilesInDir)</span>
+├── <span class="pure">changelog.ts</span>   335 lines  <span class="types"># JSONL parse / filter / stats / public API (loadChangelog, updateEntry, removeEntry, …)</span>
+├── <span class="io">tree.ts</span>        112 lines  <span class="types"># Directory walker + entry-map builder</span>
+├── <span class="mixed">cleanup.ts</span>    180 lines  <span class="types"># Auto-cleanup analysis + 1-hour throttle (CleanupScheduler)</span>
+└── <span class="types">types.ts</span>       52 lines  <span class="types"># ProductionEntry, TreeNode, Evaluation</span>
+</pre>
+    </div>
+
+    <p>Total: 2,418 lines across 11 modules. The facade went from 1,573 lines to 621 (−61%). Per
+      <a href="productions-refactor.md">the plan</a> §4.3, the original 150–200 target was unreachable
+      at the current comment density; the chosen path is to trim historical narration and accept the
+      ~620-line target. The remaining bulk is the public API surface (35 methods) + the karma/soul/activity
+      side effects in <code>evaluate</code> that §4.1 keeps on the facade.</p>
+
+    <h2 id="composition">2. Facade composition</h2>
+
+    <blockquote>
+      <p><strong>The C2 architecture</strong>: submodules are pure functions returning data; the facade
+        owns the side effects. Every public method on <code>ProductionsService</code> is a thin wrapper
+        that delegates to a submodule and adds the side effect (JSONL append, rebuildIndex, log line).</p>
+    </blockquote>
+
+    <p>The linear composition for index rebuild is the load-bearing example. It demonstrates the architectural
+      decision: the recursion that existed under the old architecture is gone.</p>
+
+    <h3>2.1 The "no recursion" composition</h3>
+    <pre>src/productions/service.ts:
+
+  <span style="color:var(--green)">// Cycle 8: linear composition. No recursive call back into rebuildIndex.</span>
+  rebuildIndex(botId: string): void {
+    const dir = this.resolveDir(botId);
+    const soulDir = resolve('config/soul', botId);
+
+    const candidates = this.runCleanup(botId);
+    if (candidates && candidates.length > 0) {
+      const archived = this.applyArchiveBatch(dir, botId, candidates);
+      if (archived > 0) {
+        this.logger.info({ botId, archived }, 'Auto-cleanup completed');
+      }
+    }
+
+    rebuildIndexPure(botId, dir, soulDir);
+  }</pre>
+
+    <p>The three calls do not invoke each other. <code>runCleanup</code> returns a list of
+      <code>{path, reason}</code> candidates (or <code>null</code> when throttled). <code>applyArchiveBatch</code>
+      moves the files and appends JSONL entries via <code>archiveFilePure</code> + <code>appendEntry</code>.
+      <code>rebuildIndexPure</code> emits the index.html. The throttle on <code>runCleanup</code>
+      is no longer load-bearing — the cycle does not exist.</p>
+
+    <h3>2.2 The "pure submodule" composition</h3>
+    <p>For each public method, the facade does three things: build the context, delegate to the pure
+      function, take the side effect. Example:</p>
+
+    <pre>src/productions/service.ts:
+
+  getStats(botId: string): { ... } {
+    const dir = this.resolveDir(botId);
+    const changelogPath = join(dir, 'changelog.jsonl');
+    const entries = readEntriesPure(changelogPath);    // <span style="color:var(--green)">// changelog.ts: JSONL → ProductionEntry[]</span>
+    return getStatsFromEntriesPure(entries);            // <span style="color:var(--green)">// changelog.ts: pure reduction</span>
+  }</pre>
+
+    <p>No config checks, no logger calls, no I/O — the work is done by the pure module. The same shape
+      applies to <code>getChangelog</code>, <code>getAllEntries</code>, <code>getDirectoryTree</code>,
+      <code>getEntry</code>, and the read-modify-write mutations (<code>evaluate</code>,
+      <code>setCoherenceCheck</code>, <code>addThreadMessage</code>, <code>deleteProduction</code>,
+      <code>deleteByPath</code>) — they all read with <code>readEntriesPure</code>, mutate the
+      in-memory array, then write with <code>writeEntriesPure</code>.</p>
+
+    <h2 id="modules">3. Module reference</h2>
+
+    <p>Legend: <span class="pure">pure</span> = no config, no logger, no facade; <span class="io">I/O</span> = thin wrappers
+      over <code>node:fs</code>; <span class="mixed">mixed</span> = pure data + I/O.</p>
+
+    <div class="module-card">
+      <h4>paths.ts <span class="pure">pure</span></h4>
+      <p>Path resolution and the single source of truth for traversal validation.</p>
+      <div class="signature">resolveDir(config, botId) → string</div>
+      <div class="signature">isTrackOnly(config, botId) → boolean</div>
+      <div class="signature">isEnabled(config, botId) → boolean</div>
+      <div class="signature">resolveFilePath(dir, entry) → string | null</div>
+      <div class="signature">assertWithinDir(dir, relativePath) → boolean</div>
+      <p>Constants: <code>INDEX_EXCLUDES</code>, <code>TREE_EXCLUDES</code>.</p>
+      <p>Called by every module that touches the filesystem (8 call sites total). The single
+        <code>assertWithinDir</code> validator handles <code>..</code>, absolute paths, and Windows
+        prefix-sibling bypass.</p>
+    </div>
+
+    <div class="module-card">
+      <h4>frontmatter.ts <span class="pure">pure</span></h4>
+      <p>YAML frontmatter injection/parsing, content quality assessment, coherence heuristics.</p>
+      <div class="signature">assessContentQuality(content) → { ratio, isTemplate }</div>
+      <div class="signature">injectFrontmatter(content, filePath, timestamp?) → string</div>
+      <div class="signature">parseFrontmatter(content) → string | null</div>
+      <div class="signature">resolveCreatedAt(absPath, relPath, birthtime, map) → Date</div>
+      <div class="signature">extractDescription(content) → string</div>
+      <div class="signature">checkCoherence(content) → { coherent, issues }</div>
+    </div>
+
+    <div class="module-card">
+      <h4>summary.ts <span class="io">I/O</span></h4>
+      <p>Daily summary JSON read/write.</p>
+      <div class="signature">readSummary(dir) → SummaryData | null</div>
+      <div class="signature">writeSummary(dir, data) → void</div>
+      <p>Constant: <code>SUMMARY_FILENAME</code>. The <code>plan</code> field was removed in Cycle 3
+        (LLM-generated plans were dropped from the payload).</p>
+    </div>
+
+    <div class="module-card">
+      <h4>html.ts <span class="io">I/O</span></h4>
+      <p>Self-contained SPA index.html emitter. No <code>&lt;script&gt;</code> tag.</p>
+      <div class="signature">formatDatetime(d) → string</div>
+      <div class="signature">escHtml(s) → string</div>
+      <div class="signature">fileIcon(name) → string</div>
+      <div class="signature">formatSize(bytes) → string</div>
+      <div class="signature">parseFirstSectionAsBullets(content) → string[]</div>
+      <div class="signature">readActiveGoals(soulDir) → GoalInfo[]</div>
+      <div class="signature">getFileDescription(content, path) → string</div>
+      <div class="signature">buildIndexHtml(botId, files, goals, dirCount, totalSize) → string</div>
+      <div class="signature">rebuildIndexPure(botId, dir, soulDir) → void</div>
+      <p>The vendored <code>marked.min.js</code> is gone. The HTML is fully self-contained — no
+        client-side JS, no external assets.</p>
+    </div>
+
+    <div class="module-card">
+      <h4>files.ts <span class="io">I/O</span></h4>
+      <p>File operations on the production directory. Pure I/O — takes <code>{dir}</code> + path,
+        returns data or moves files.</p>
+      <div class="signature">archiveFile({dir}, relPath, reason) → { ok, entry } | { ok: false }</div>
+      <div class="signature">getFileContent({dir}, relPath) → { content, size } | null</div>
+      <div class="signature">updateContent({dir}, relPath, content) → boolean</div>
+      <div class="signature">getNextNumber({dir}, relativeDir) → string</div>
+      <div class="signature">renumberFile({dir}, relPath) → string</div>
+      <p>Every function validates its path via <code>assertWithinDir</code> (R1 fix). The 4th
+        <code>skipRebuild</code> parameter on <code>archiveFile</code> is gone — the recursion is
+        broken at the composition layer.</p>
+    </div>
+
+    <div class="module-card">
+      <h4>changelog.ts <span class="mixed">mixed</span></h4>
+      <p>JSONL read/parse/filter/stats. Pure for data, I/O for the file operations.</p>
+      <div class="signature">parseEntries(lines) → ProductionEntry[]</div>
+      <div class="signature">filterEntries(entries, {since, status, botId}) → ProductionEntry[]</div>
+      <div class="signature">sortByTimestamp(entries, order?) → ProductionEntry[]</div>
+      <div class="signature">filterApproved(entries) → ProductionEntry[]</div>
+      <div class="signature">filterRejected(entries) → ProductionEntry[]</div>
+      <div class="signature">getStatsFromEntries(entries) → Stats</div>
+      <div class="signature">serializeEntries(entries) → string</div>
+      <div class="signature">readEntries(path) → ProductionEntry[]</div>
+      <div class="signature">writeEntries(path, entries) → void</div>
+      <div class="signature">appendEntry(path, entry) → void</div>
+      <p>The pure functions make the read-modify-write mutations in <code>service.ts</code> testable
+        without a filesystem. <code>filterEntries</code> is the C4 contract (<code>getAllEntries</code>
+        honors <code>since</code>).</p>
+    </div>
+
+    <div class="module-card">
+      <h4>tree.ts <span class="io">I/O</span></h4>
+      <p>Directory walker with changelog enrichment. Reusable I/O.</p>
+      <div class="signature">walkTree({dir, entryMap, excludes}) → TreeNode[]</div>
+      <p>Called by <code>service.getDirectoryTree</code> after the facade builds the entry map.
+        The walker respects <code>TREE_EXCLUDES</code> at every level and skips absolute-path entries
+        (review-4 B1 fix).</p>
+    </div>
+
+    <div class="module-card">
+      <h4>service.ts <span class="facade">facade</span></h4>
+      <p>The public API. Every method is a thin wrapper that composes the pure modules and owns the
+        logger/config side effects.</p>
+      <p>Public methods: <code>logProduction</code>, <code>getChangelog</code>, <code>getEntry</code>,
+        <code>getAllEntries</code>, <code>getStats</code>, <code>getStats</code>, <code>evaluate</code>,
+        <code>setAiResponse</code>, <code>setCoherenceCheck</code>, <code>addThreadMessage</code>,
+        <code>deleteProduction</code>, <code>deleteByPath</code>, <code>updateContent</code>,
+        <code>getFileContent</code>, <code>getFileContentByPath</code>, <code>archiveFile</code>,
+        <code>getNextNumber</code>, <code>renumberFile</code>, <code>rebuildIndex</code>,
+        <code>getDirectoryTree</code>, <code>getAllDirectoryTrees</code>, <code>getAllBotStats</code>,
+        <code>readActiveGoals</code>, <code>readSummary</code>, <code>writeSummary</code>,
+        <code>resolveDir</code>, <code>isTrackOnly</code>, <code>isEnabled</code>,
+        <code>checkCoherence</code>, plus the static <code>assessContentQuality</code>,
+        <code>injectFrontmatter</code>, <code>parseFrontmatter</code>, <code>resolveCreatedAt</code>,
+        <code>extractDescription</code>.</p>
+      <p>Private state: <code>lastCleanupAt</code> (1-hour throttle for runCleanup).</p>
+    </div>
+
+    <h2 id="contracts">4. Contract tests</h2>
+    <p>Four contracts are pinned by <code>tests/productions/contracts.test.ts</code>. These are the gates
+      that the refactor must not regress.</p>
+
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Contract</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>C1</td><td><code>archiveFile</code> rejects paths with <code>..</code></td><td style="color:var(--green)">✅ green</td></tr>
+        <tr><td>C2</td><td><code>archiveFile</code> rejects absolute paths</td><td style="color:var(--green)">✅ green</td></tr>
+        <tr><td>C704</td><td><code>getAllEntries</code> honors <code>since</code></td><td style="color:var(--green)">✅ green</td></tr>
+        <tr><td>C5</td><td><code>getDirectoryTree</code> returns <code>[]</code> for disabled bots</td><td style="color:var(--green)">✅ green</td></tr>
+      </tbody>
+    </table>
+
+    <p>C1, C2, C4, C5 are all green. The contracts exist because the original code had subtle holes
+      (the <code>includes('..')</code> over-broad check, the missing <code>since</code> parameter, the
+      lazy <code>enabled</code> bypass in tree walking).</p>
+
+    <h2 id="tests">5. Test surface</h2>
+
+    <p>10 test files in <code>tests/productions/</code>, 283 tests. The full productions suite
+      (including the pre-existing <code>tests/productions.test.ts</code> with 122 tests) is 530 pass,
+      0 fail. The pre-existing <code>productions-index.test.ts</code> path-normalization
+      test that was confirmed on unmodified <code>main</code> before Cycle 0.5 has since been
+      fixed — the test-local <code>guardSubdir</code> helper used a hard-coded <code>'/'</code>
+      separator check, which silently failed on Windows because <code>path.relative()</code> returns
+      backslashes there. The fix uses <code>path.sep</code>. The full productions suite is now clean.</p>
+
+    <table>
+      <thead>
+        <tr><th>File</th><th>Tests</th><th>Module</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>assert-within-dir.test.ts</code></td><td>11</td><td>paths.ts</td></tr>
+        <tr><td><code>paths.test.ts</code></td><td>42</td><td>paths.ts</td></tr>
+        <tr><td><code>frontmatter.test.ts</code></td><td>48</td><td>frontmatter.ts</td></tr>
+        <tr><td><code>summary.test.ts</code></td><td>11</td><td>summary.ts</td></tr>
+        <tr><td><code>html.test.ts</code></td><td>46</td><td>html.ts</td></tr>
+        <tr><td><code>files.test.ts</code></td><td>41</td><td>files.ts</td></tr>
+        <tr><td><code>changelog.test.ts</code></td><td>50</td><td>changelog.ts</td></tr>
+        <tr><td><code>tree.test.ts</code></td><td>14</td><td>tree.ts</td></tr>
+        <tr><td><code>cleanup.test.ts</code></td><td>14</td><td>cleanup.ts</td></tr>
+        <tr><td><code>contracts.test.ts</code></td><td>6 (C1, C2, C4, C5)</td><td>facade</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="flow">6. Index rebuild flow</h2>
+
+    <p>The end-to-end flow that demonstrates the architectural property — no recursion, linear composition:</p>
+
+    <pre>rebuildIndex(botId)
+  │
+  ├─→ runCleanup(botId)→ cleanupScheduler.runCleanup
+  │     │
+  │     └─→ analyzeCleanup(dir, now, coherenceCheck)
+  │           ├─→ reads changelog.jsonl (readEntries)
+  │           ├─→ walks dir, builds hashMap
+  │           └─→ returns Array&lt;{path, reason}&gt;
+  │     │
+  │     └─→ CleanupScheduler enforces 1-hour throttle
+  │           (returns null if &lt; 1h since last call)
+  │
+  ├─→ applyArchiveBatch(dir, botId, candidates)
+  │     │
+  │     └─→ for each candidate:
+  │           ├─→ archiveFilePure({dir}, path, reason) → {ok, entry}
+  │           ├─→ appendChangelog(path, entry)  ← writes JSONL
+  │           └─→ count++
+  │
+  └─→ rebuildIndexPure(botId, dir, soulDir)
+        │
+        ├─→ walks dir, builds file list
+        ├─→ buildEntryMap(dir) → Map<path, entry>
+        ├─→ reads GOALS.md (readActiveGoalsPure)
+        ├─→ buildIndexHtml(...) → string
+        └─→ writeFileSync(index.html)</pre>
+
+    <p>Under the old architecture, step 1 (runCleanup) called back into <code>rebuildIndex</code> at the
+      end of the batch, which called <code>runCleanup</code> again. The throttle (1/hour) kept the
+      recursion bounded — but it was a real smell. The new architecture is flat: <code>cleanup.ts</code>
+      owns the analysis + throttle state together (§4.2); the facade owns the side effects
+      (<code>applyArchiveBatch</code> + <code>rebuildIndexPure</code>, §4.1). No recursion. The order is the
+      order.</p>
+
+    <hr>
+
+    <p style="color:var(--text-dim); font-size:13px;">
+      Plan: <a href="productions-refactor.md">Productions Refactor (Plan)</a> ·
+      Last updated: 2026-08-19
+    </p>
+
+  </main>
+</div>
+<script src="sidebar.js"></script>
+</body>
+</html>

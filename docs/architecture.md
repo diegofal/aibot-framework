@@ -101,13 +101,26 @@ src/
 ├── cron/                       # CronService — schedule engine
 │   └── index.ts                # 3 schedule types, REST API, disk persistence
 │
+├── productions/                # Bot output tracking & review (modular facade)
+│   ├── service.ts              #   Slim facade (~620 lines) — public API + composition
+│   ├── index.ts                #   Barrel: re-exports ProductionsService only
+│   ├── paths.ts                #   Path resolution, traversal guard, INDEX/TREE excludes
+│   ├── frontmatter.ts          #   YAML frontmatter, content quality, coherence
+│   ├── summary.ts              #   Daily summary read/write
+│   ├── html.ts                 #   Index.html emitter (no <script>)
+│   ├── files.ts                #   File I/O (archive, getFileContent, updateContent, renumber)
+│   ├── changelog.ts            #   JSONL parse / filter / stats / public API
+│   ├── tree.ts                 #   Directory walker + entry-map builder
+│   ├── cleanup.ts              #   Auto-cleanup analysis + 1-hour throttle scheduler
+│   └── types.ts                #   ProductionEntry, TreeNode, Evaluation
+│
 └── web/                        # Web dashboard
     ├── server.ts               # Hono app, Bun.serve, WebSocket log streaming
     └── routes/                 # REST API route modules
         ├── status.ts           # GET /api/status
         ├── agents.ts           # CRUD /api/agents (+ AI soul generation)
         ├── sessions.ts         # GET /api/sessions
-        ├── cron.ts             # CRUD /api/cron
+        ├── cron.ts             # GET /api/cron
         ├── settings.ts         # GET/PUT /api/settings
         ├── skills.ts           # GET /api/skills
         ├── tools.ts            # CRUD /api/tools (dynamic tool approval)

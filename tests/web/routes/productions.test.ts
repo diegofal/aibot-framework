@@ -219,10 +219,8 @@ describe('productions routes', () => {
       expect(data.status).toBe('generating');
 
       // Resolve the pending generation so it doesn't leak
-      // (route now calls claudeGenerate twice: summary + plan)
+      // (Cycle 3: only one claudeGenerate call — summary)
       resolveGenerate?.('done');
-      await tick();
-      resolveGenerate?.('plan done');
       await tick();
 
       // Restore
@@ -253,8 +251,8 @@ describe('productions routes', () => {
         method: 'POST',
       });
 
-      // Wait for background async to complete (summary + plan generation = 2 claudeGenerate calls)
-      await tick();
+      // Wait for background async to complete (Cycle 3: only summary gen,
+      // no plan LLM call).
       await tick();
 
       expect(deps.productionsService.writeSummary).toHaveBeenCalledTimes(1);
@@ -263,13 +261,11 @@ describe('productions routes', () => {
       expect(callArgs[1].summary).toBe(
         'The bot is focused on writing articles about technology trends.'
       );
-      expect(callArgs[1].plan).toBe(
-        'The bot is focused on writing articles about technology trends.'
-      );
+      expect(callArgs[1].plan).toBeUndefined();
       expect(callArgs[1].generatedAt).toBeTruthy();
 
-      // Verify prompts: 1st = summary, 2nd = plan
-      expect(mockClaudeGenerate).toHaveBeenCalledTimes(2);
+      // Verify the summary prompt was sent (only one call now).
+      expect(mockClaudeGenerate).toHaveBeenCalledTimes(1);
       const prompt = mockClaudeGenerate.mock.calls[0][0] as string;
       expect(prompt).toContain('TestBot');
       expect(prompt).toContain('Productions Stats');

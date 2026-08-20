@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import type { Config } from '../src/config';
 import { ProductionsService } from '../src/productions/service';
 
@@ -637,7 +637,11 @@ describe('Path normalization — workDir prefix stripping and subdir guard', () 
   function guardSubdir(workDir: string, resolved: string): string {
     const absWork = resolve(workDir);
     const rel = relative(absWork, resolved);
-    if (rel.includes('/') && !rel.startsWith('archived/') && !rel.startsWith('..')) {
+    // On POSIX, relative() returns forward slashes; on Windows, backslashes.
+    // Use the OS separator so nested subdirs are flattened on both platforms.
+    const isNested = rel.includes(sep) || rel.includes('/');
+    const isArchived = rel.startsWith('archived/') || rel.startsWith(`archived${sep}`);
+    if (isNested && !isArchived && !rel.startsWith('..')) {
       return join(absWork, basename(resolved));
     }
     return resolved;

@@ -489,28 +489,8 @@ export function productionsRoutes(deps: {
           enableTools: false,
         });
 
-        // Generate strategic plan section
-        let plan: string | undefined;
-        try {
-          const planPrompt = `${sections.slice(0, -1).join('\n\n')}\n\n## Task\n\nAnalyze the strategy and plan behind this bot's productions. What themes connect the files? What is the bot building toward? What gaps exist? What should it focus on next? Be specific — cite file names and content when relevant.`;
-          const planSystemPrompt = `You are a strategic analyst reviewing an AI bot's body of work. Identify the overarching strategy, recurring themes, gaps in coverage, and recommend next priorities. Write in the bot's language. Keep output under 500 words. No markdown headers, no preamble, no sign-off.`;
-          plan = await webGenerate({
-            prompt: planPrompt,
-            systemPrompt: planSystemPrompt,
-            botId,
-            botManager,
-            config,
-            logger,
-            maxLength: 3000,
-            enableTools: false,
-          });
-        } catch (planErr) {
-          logger.warn({ err: planErr, botId }, 'Failed to generate plan section (non-fatal)');
-        }
-
         productionsService.writeSummary(botId, {
           summary,
-          plan,
           generatedAt: new Date().toISOString(),
         });
         productionsService.rebuildIndex(botId);
