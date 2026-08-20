@@ -1,4 +1,11 @@
 import {
+  closeFullscreenViewer,
+  copyTextToClipboard,
+  downloadTextFile,
+  flashButtonLabel,
+  openFullscreenViewer,
+} from './file-actions.js';
+import {
   api,
   closeModal,
   escapeHtml,
@@ -7,6 +14,34 @@ import {
   showModal,
   timeAgo,
 } from './shared.js';
+
+function attachFileActions(panel, { path, name, content }) {
+  if (!panel) return;
+  const copyBtn = panel.querySelector('#viewer-copy');
+  const downloadBtn = panel.querySelector('#viewer-download');
+  const fullscreenBtn = panel.querySelector('#viewer-fullscreen');
+  const enabled = content != null;
+  if (copyBtn) copyBtn.disabled = !enabled;
+  if (downloadBtn) downloadBtn.disabled = !enabled;
+  if (fullscreenBtn) fullscreenBtn.disabled = !enabled;
+  if (!enabled) return;
+
+  copyBtn?.addEventListener('click', async () => {
+    const ok = await copyTextToClipboard(content);
+    flashButtonLabel(copyBtn, ok ? 'Copied' : 'Failed');
+  });
+  downloadBtn?.addEventListener('click', () => {
+    downloadTextFile(path || name, content);
+  });
+  fullscreenBtn?.addEventListener('click', () => {
+    openFullscreenViewer({
+      titleHtml: escapeHtml(path || name),
+      bodyHtml: renderContent(content, name),
+      path: path || name,
+      content,
+    });
+  });
+}
 
 // --- Shared context menu & multi-select helpers ---
 let _activeContextMenu = null;
@@ -587,6 +622,11 @@ export async function renderProductions(el) {
       panel.innerHTML = `
         <div class="prod-file-viewer-title">
           <a href="#/productions/${encodeURIComponent(botId)}" style="font-size:13px;font-weight:400">${escapeHtml(botLabel)}</a> / ${escapeHtml(node.path)}
+          <div class="prod-file-actions">
+            <button class="btn btn-sm" id="viewer-copy" title="Copy contents">Copy</button>
+            <button class="btn btn-sm" id="viewer-download" title="Download file">Download</button>
+            <button class="btn btn-sm" id="viewer-fullscreen" title="View fullscreen">Fullscreen</button>
+          </div>
         </div>
         ${
           entry
@@ -624,6 +664,8 @@ export async function renderProductions(el) {
             : `<div style="margin-top:12px"><span class="text-dim text-sm">This file is not tracked in the changelog.</span></div>`
         }
       `;
+
+      attachFileActions(panel, { path: node.path, name: node.name, content });
 
       if (!entry) return;
 
@@ -899,6 +941,7 @@ let _prodIntervals = [];
 export function destroyProductions() {
   for (const id of _prodIntervals) clearInterval(id);
   _prodIntervals = [];
+  closeFullscreenViewer();
 }
 
 export async function renderBotProductions(el, botId) {
@@ -1254,7 +1297,14 @@ export async function renderBotProductions(el, botId) {
 
     function renderViewer() {
       panel.innerHTML = `
-        <div class="prod-file-viewer-title">${escapeHtml(node.path)}</div>
+        <div class="prod-file-viewer-title">
+          ${escapeHtml(node.path)}
+          <div class="prod-file-actions">
+            <button class="btn btn-sm" id="viewer-copy" title="Copy contents">Copy</button>
+            <button class="btn btn-sm" id="viewer-download" title="Download file">Download</button>
+            <button class="btn btn-sm" id="viewer-fullscreen" title="View fullscreen">Fullscreen</button>
+          </div>
+        </div>
         ${
           entry
             ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:12px;align-items:center">
@@ -1291,6 +1341,8 @@ export async function renderBotProductions(el, botId) {
             : `<div style="margin-top:12px"><span class="text-dim text-sm">This file is not tracked in the changelog.</span></div>`
         }
       `;
+
+      attachFileActions(panel, { path: node.path, name: node.name, content });
 
       if (!entry) return;
 

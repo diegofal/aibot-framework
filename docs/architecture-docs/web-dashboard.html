@@ -789,6 +789,7 @@
 
       <p style="color: var(--text-dim); font-size: 13px;">
         Always mounted. JSONL-backed storage under <code>data/conversations/{botId}/</code>.
+        Dashboard chat uses the agent's full tool set; <code>confirm</code>-level tools pause for inline approval.
       </p>
 
       <div style="overflow-x: auto;">
@@ -835,7 +836,7 @@
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/conversations/:botId/:id/messages</code></td>
-              <td>Send human message; triggers bot reply via unified conversation pipeline (fire-and-forget). Uses same SystemPromptBuilder + RAG pre-fetch as Telegram. Body: <code>{ message: string }</code></td>
+              <td>Send human message; triggers bot reply via unified conversation pipeline (fire-and-forget). Same SystemPromptBuilder + RAG + the agent's full tool set as Telegram. Body: <code>{ message: string }</code></td>
               <td><code>conversations.ts</code></td>
             </tr>
             <tr>
@@ -1297,6 +1298,25 @@ compaction                            // Context compaction
           <p>Creative production tracking. Lists each bot's outputs (files, text, etc.)
              with evaluation workflow: approve/reject with 1-5 ratings and written feedback.
              AI-generated summaries of recent work via Claude CLI.</p>
+          <p>Each open production exposes three file-viewer actions in the title row &mdash;
+             <strong>Copy</strong>, <strong>Download</strong>, and <strong>Fullscreen</strong>.
+             Copy uses <code>navigator.clipboard.writeText</code> with a hidden-textarea +
+             <code>execCommand('copy')</code> fallback for plain-HTTP contexts; the button
+             flashes "Copied" / "Failed". Download writes a Blob (mime from extension) with
+             the basename of the original path. Fullscreen renders the same <code>renderContent()</code>
+             output (wrapped in <code>.production-content</code>) in a fixed full-viewport
+             overlay (<code>z-index: 200</code>, above the modal overlay) with its own wired
+             Copy / Download / Close actions and Escape-to-close; the overlay is torn down
+             automatically when the user navigates away from the Productions page
+             (<code>destroyProductions</code> calls <code>closeFullscreenViewer</code> from
+             <code>file-actions.js</code>, which both <code>renderProductions()</code> and
+             <code>renderBotProductions()</code> invoke at entry). All three actions live in
+             <code>web/pages/file-actions.js</code>, which is also reusable from other viewers.
+             Pure helpers (<code>getMimeType</code>, <code>downloadFilename</code>,
+             <code>flashButtonLabel</code>) are unit-tested in
+             <code>tests/web/pages/file-actions.test.ts</code>; DOM helpers exercised manually.
+             No backend changes &mdash; Bearer auth prevents plain anchor downloads, so the
+             actions work entirely from the content string already in memory.</p>
         </div>
 
         <div class="card">
