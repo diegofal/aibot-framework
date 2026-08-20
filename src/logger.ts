@@ -1,9 +1,15 @@
 import pino from 'pino';
 import type { LoggerOptions } from 'pino';
+import { redactPii } from './redact-pii';
 
 export interface LogConfig {
   level: 'debug' | 'info' | 'warn' | 'error';
   file?: string;
+  /** Max size of each log file before rotation. Accepts plain bytes (number)
+   * or a string with a unit suffix (k, m, g). Default: "10m". */
+  fileMaxSize?: string | number;
+  /** Number of rotated log files to keep. Default: 5. */
+  fileLimit?: number;
 }
 
 export type Logger = pino.Logger;
@@ -30,9 +36,28 @@ const REDACTED_PATHS = [
 ];
 
 export function createLogger(config: LogConfig): Logger {
+  const fileMaxSize = config.fileMaxSize ?? '10m';
+  const fileLimit = config.fileLimit ?? 5;
   const options: LoggerOptions = {
     level: config.level,
     redact: { paths: REDACTED_PATHS, censor: '[REDACTED]' },
+    // Scrub PII patterns (emails, phone numbers, tokens, long hex keys) from
+    // the formatted message and any string-valued metadata before the record
+    // reaches the transports. Complements the field-level `redact` above,
+    // which only covers known object paths.
+    formatters: {
+      log(record: Record<string, unknown>) {
+        if (typeof record.msg === 'string') {
+          record.msg = redactPii(record.msg) as string;
+        }
+        for (const key in record) {
+          if (key !== 'msg' && typeof record[key] === 'string') {
+            record[key] = redactPii(record[key]);
+          }
+        }
+        return record;
+      },
+    },
     transport: config.file
       ? {
           targets: [
@@ -46,11 +71,14 @@ export function createLogger(config: LogConfig): Logger {
               },
             },
             {
-              target: 'pino/file',
+              target: 'pino-roll',
               level: config.level,
               options: {
-                destination: config.file,
+                file: config.file,
+                size: fileMaxSize,
+                limit: { count: fileLimit },
                 mkdir: true,
+                frequency: 'daily',
               },
             },
           ],
