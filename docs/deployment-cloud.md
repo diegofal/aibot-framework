@@ -1012,11 +1012,90 @@ option today.
 | Component | Status in the default image | To enable |
 |---|---|---|
 | **Playwright / Chromium** (`browserTools`) | Not installed. The npm package is present; the ~400 MB browser binary is not. | Uncomment the marked block in the `Dockerfile`, rebuild, set `browserTools.enabled: true`. |
-| **`claude` CLI** (`llmBackend: "claude-cli"`) | Not installed. | Soul quality review, memory consolidation and the improve tool degrade without it — mostly gracefully. Add an install step to the Dockerfile and mount its credentials if you need it. |
+| **`claude` CLI** (`llmBackend: "claude-cli"`) | **Installed and pinned** (Claude Code 2.1.237, `ARG CLAUDE_CLI_VERSION`). Needs a one-time login — see 11.1. | Nothing to enable. Without a login, soul quality review, memory consolidation and the improve tool stop working; with `claudeCli.enabled: false` the backend leaves the failover chain entirely. |
 | **RAG / semantic search** (`soul.search`) | Available; `bun:sqlite` is built into Bun. **Requires the Ollama sidecar** — Ollama Cloud hosts no embedding models. | Start the sidecar (`--profile local-ollama`), point `ollama.baseUrl` at it, set `soul.search.enabled: true`, and pull `nomic-embed-text`. Adds `data/memory.db` to the data volume. |
 | **Ollama daemon sidecar** | Behind the `local-ollama` compose profile; **not started by default**. | `docker compose --profile local-ollama up -d`. Needed only for embeddings or genuinely local models — see §1.1. |
 
 ---
+
+### 11.1 Authenticating the `claude` CLI
+
+The image ships the CLI but no credentials — nothing secret is ever baked into a
+layer. Log in once, inside the running container:
+
+```bash
+docker compose exec -it aibot claude auth login
+```
+
+Follow the printed URL, paste the code back, and you are done. Check it with:
+
+```bash
+docker compose exec aibot claude auth status
+docker compose exec aibot claude --version          # 2.1.237
+```
+
+**Never run this with `-u root`.** The app runs as `bun` (uid 1000); credentials
+written as root land in the volume unreadable by the process that needs them.
+
+#### Where the login is stored, and why it survives rebuilds
+
+`CLAUDE_CONFIG_DIR=/app/data/claude`, which is inside the `aibot_data` named
+volume. The CLI's own default (`~/.claude`) lives in the container filesystem
+layer and is destroyed by every `docker compose up -d --build`, which would mean
+logging in again after each deploy. Under `/app/data` the login persists across
+restarts, rebuilds and image upgrades. It is deleted only if you delete the data
+volume — the same event that would take your sessions and memory with it.
+
+This also means the login is **part of your backup surface**: `data/claude/.credentials.json`
+holds a live OAuth token. Treat a `data/` backup as a secret-bearing artefact.
+
+#### Verifying it end to end
+
+```bash
+docker compose exec aibot claude -p 'reply with OK' --output-format json
+```
+
+A working install returns JSON whose `result` is the model's reply. If the CLI is
+not logged in you get **HTTP-success-shaped output**, not an error: exit code 0 and
+`"result": "Not logged in · Please run /login"`. That string would otherwise reach
+a user as if the model had said it, which is why the framework runs a preflight at
+boot and logs
+
+```
+Claude CLI v2.1.237 installed but not logged in — run "claude auth login" (config dir: /app/data/claude)
+```
+
+as a **warning** whenever the claude-cli backend is in the failover chain without a
+usable login. A healthy boot logs `Claude CLI v2.1.237 ready (config dir: …)` at
+info level. The container also prints a one-time `[entrypoint]` banner on any boot
+that finds no credentials.
+
+#### Non-interactive hosts
+
+Where `exec -it` is not possible, generate a long-lived token on a machine where
+you are already logged in and pass it through `.env`:
+
+```bash
+claude setup-token          # on your workstation
+```
+
+Then set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` (the variable is shipped commented
+out). Anything on the container's environment reaches the CLI, because
+`claudeGenerate` hands its child a copy of `process.env`. **Do not add the variable
+to the compose `environment:` block**: an exported-but-empty value shadows the
+on-disk login, so a blank line there would break the normal flow for everyone.
+
+#### Turning it off
+
+Set `claudeCli.enabled: false` in `config/config.json`. The backend then leaves the
+failover chain and the preflight goes quiet. The binary stays in the image.
+
+**Size note:** the CLI is a single bundled executable of ~335 MB, and `curl`
+(needed by the installer) adds ~28 MB, so enabling it took the image from
+538 MB to 993 MB. That is the price of having the backend work at all; if disk
+is tight on your host and you run Ollama-only, say so and the install can be put
+behind a build ARG (`--build-arg INSTALL_CLAUDE_CLI=false`) instead.
+
 
 ## 12. Operating
 

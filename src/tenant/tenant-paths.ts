@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /**
  * Resolve data paths for a tenant.
@@ -68,5 +68,18 @@ export function isPathWithinTenant(path: string, tenantRoot: string): boolean {
   if (!tenantRoot) return true; // single-tenant mode
   const resolvedPath = resolve(path);
   const resolvedRoot = resolve(tenantRoot);
-  return resolvedPath.startsWith(`${resolvedRoot}/`) || resolvedPath === resolvedRoot;
+
+  // Compared with `relative()` rather than a string prefix: `resolve()` returns
+  // backslash-separated paths on Windows, so the previous hard-coded
+  // `startsWith(`${root}/`)` never matched there and every tenant-sandboxed file
+  // operation was denied. Same defect the productions module hit in
+  // `guardSubdir` — `assertWithinDir` in src/productions/paths.ts is the
+  // reference implementation this mirrors.
+  //
+  // `relative()` also keeps the prefix-sibling case correct: t1 -> t10/file
+  // yields `../t10/file`, which is rejected below.
+  const rel = relative(resolvedRoot, resolvedPath);
+  if (rel === '') return true; // the root itself
+  if (isAbsolute(rel)) return false; // different drive on Windows
+  return rel !== '..' && !rel.startsWith(`..${sep}`);
 }

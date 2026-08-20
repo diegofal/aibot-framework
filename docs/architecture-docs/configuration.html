@@ -269,6 +269,12 @@ const config = await loadConfig('./config/config.json');
               <td>Karma system: base directory, initial score, decay</td>
             </tr>
             <tr>
+              <td><code>claudeCli</code></td>
+              <td><code>ClaudeCliConfigSchema</code></td>
+              <td>No (defaults)</td>
+              <td>Claude CLI backend: <code>enabled</code> (failover-chain membership), <code>model</code></td>
+            </tr>
+            <tr>
               <td><code>improve</code></td>
               <td><code>ImproveToolConfigSchema</code></td>
               <td>No (defaults)</td>
@@ -1665,6 +1671,22 @@ const config = await loadConfig('./config/config.json');
               <td><code>20</code></td>
               <td>&mdash;</td>
             </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ClaudeCliConfigSchema -->
+      <div class="card">
+        <h3><code>ClaudeCliConfigSchema</code></h3>
+        <p>The Claude CLI LLM backend. The Docker image ships the binary pinned to 2.1.237; see
+        <code>docs/deployment-cloud.md</code> &sect;11.1 for the one-time login.</p>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Default</th><th>Validation</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether <code>claude-cli</code> joins the model failover chain, read by <code>resolveCandidatesFromConfig()</code> in <code>src/bot/model-failover/model-fallback.ts</code>. Must be declared here or Zod strips it at load and the opt-out silently does nothing.</td></tr>
+            <tr><td><code>model</code></td><td><code>string?</code></td><td><code>undefined</code></td><td>Passed to the CLI as <code>--model</code>; omitted means the CLI default.</td></tr>
           </tbody>
         </table>
       </div>

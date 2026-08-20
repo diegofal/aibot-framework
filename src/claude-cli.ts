@@ -23,6 +23,16 @@ export interface ClaudeGenerateOptions {
   systemPrompt?: string;
 }
 
+/**
+ * Permission-bypass flag for headless runs.
+ *
+ * Claude Code parses flags with commander, which does not accept a camelCase
+ * spelling of a kebab-case option: `--dangerouslySkipPermissions` is rejected
+ * with `error: unknown option` and the spawn dies before reaching the model.
+ * Exported so every call site spells it the one way that works.
+ */
+export const SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
+
 const DEFAULT_CLAUDE_PATH = 'claude';
 const DEFAULT_TIMEOUT = 300_000;
 const DEFAULT_MAX_LENGTH = 50_000;
@@ -72,7 +82,7 @@ export async function claudeGenerate(
     prompt,
     '--output-format',
     'json',
-    '--dangerouslySkipPermissions',
+    SKIP_PERMISSIONS_FLAG,
   ];
   if (opts.model) {
     args.push('--model', opts.model);

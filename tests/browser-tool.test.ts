@@ -1,8 +1,30 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { BrowserToolsConfig } from '../src/config';
 import { createBrowserTool } from '../src/tools/browser';
 import { addRefsToSnapshot } from '../src/tools/browser-snapshot';
 import type { Tool } from '../src/tools/types';
+
+/**
+ * Force the "no browser installed" condition these tests are written against.
+ *
+ * Three tests here assert that a URL survives validation and then fails in the
+ * browser layer ("fails at browser level"). They assumed Chromium would be
+ * absent in CI, so the launch would fail instantly. On a machine that *does*
+ * have Chromium the launch instead hangs: even with launchTimeout set to 1s,
+ * Playwright reports the timeout but takes ~32s to return, blowing bun's 5s
+ * per-test budget and timing the tests out.
+ *
+ * Pointing the browser registry at a path with no binaries makes the launch fail
+ * in ~250ms with the same "Navigation failed" result on every machine, so these
+ * tests assert URL validation rather than what is installed on the host.
+ */
+const REAL_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH;
+process.env.PLAYWRIGHT_BROWSERS_PATH = '/aibot-test-no-browsers';
+
+afterAll(() => {
+  if (REAL_BROWSERS_PATH === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+  else process.env.PLAYWRIGHT_BROWSERS_PATH = REAL_BROWSERS_PATH;
+});
 
 const noopLogger = {
   info: () => {},

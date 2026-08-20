@@ -12,6 +12,7 @@ import {
   TwitterConfigSchema,
   WebToolsConfigSchema,
 } from '../src/config';
+import { resolveCandidatesFromConfig } from '../src/bot/model-failover/model-fallback';
 
 describe('GlobalAgentLoopConfigSchema', () => {
   test('defaults claudeTimeout to 300_000', () => {
@@ -336,5 +337,41 @@ describe('ClaudeCliConfigSchema', () => {
   test('accepts undefined model', () => {
     const result = ClaudeCliConfigSchema.parse({ model: undefined });
     expect(result.model).toBeUndefined();
+  });
+
+  // `resolveCandidatesFromConfig` reads `claudeCli.enabled` to decide whether the
+  // claude-cli backend joins the failover chain. Until the schema declared the
+  // field, Zod stripped it during load and the operator's escape hatch was a
+  // no-op — the candidate was added no matter what config.json said.
+  test('defaults enabled to true', () => {
+    const result = ClaudeCliConfigSchema.parse({});
+    expect(result.enabled).toBe(true);
+  });
+
+  test('preserves an explicit enabled: false instead of stripping it', () => {
+    const result = ClaudeCliConfigSchema.parse({ enabled: false });
+    expect(result.enabled).toBe(false);
+  });
+
+  test('rejects a non-boolean enabled', () => {
+    expect(() => ClaudeCliConfigSchema.parse({ enabled: 'no' })).toThrow();
+  });
+
+  test('a parsed enabled:false config drops the claude-cli failover candidate', () => {
+    const parsed = ClaudeCliConfigSchema.parse({ enabled: false, model: 'sonnet' });
+    const candidates = resolveCandidatesFromConfig({
+      ollama: { models: { primary: 'qwen3:8b' } },
+      claudeCli: parsed,
+    });
+    expect(candidates.some((c) => c.backend === 'claude-cli')).toBe(false);
+  });
+
+  test('a parsed default config keeps the claude-cli failover candidate', () => {
+    const parsed = ClaudeCliConfigSchema.parse({});
+    const candidates = resolveCandidatesFromConfig({
+      ollama: { models: { primary: 'qwen3:8b' } },
+      claudeCli: parsed,
+    });
+    expect(candidates.some((c) => c.backend === 'claude-cli')).toBe(true);
   });
 });

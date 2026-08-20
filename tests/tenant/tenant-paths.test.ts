@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { isPathWithinTenant, resolveTenantPaths } from '../../src/tenant/tenant-paths';
 
@@ -14,8 +15,8 @@ describe('resolveTenantPaths', () => {
     });
 
     expect(paths.tenantRoot).toBe('');
-    expect(paths.soulDir).toBe('config/soul/my-bot');
-    expect(paths.workDir).toBe('productions/my-bot');
+    expect(paths.soulDir).toBe(join('config', 'soul', 'my-bot'));
+    expect(paths.workDir).toBe(join('productions', 'my-bot'));
     expect(paths.sessionsDir).toBe('./data/sessions');
     expect(paths.memoryDbPath).toBe('./data/memory.db');
   });
@@ -29,11 +30,11 @@ describe('resolveTenantPaths', () => {
       defaultProductionsDir: './productions',
     });
 
-    expect(paths.tenantRoot).toBe('data/tenants/tenant-abc');
-    expect(paths.soulDir).toBe('data/tenants/tenant-abc/bots/sales-bot/soul');
-    expect(paths.workDir).toBe('data/tenants/tenant-abc/bots/sales-bot/productions');
-    expect(paths.sessionsDir).toBe('data/tenants/tenant-abc/bots/sales-bot/sessions');
-    expect(paths.memoryDbPath).toBe('data/tenants/tenant-abc/memory.db');
+    expect(paths.tenantRoot).toBe(join('data', 'tenants', 'tenant-abc'));
+    expect(paths.soulDir).toBe(join('data', 'tenants', 'tenant-abc', 'bots', 'sales-bot', 'soul'));
+    expect(paths.workDir).toBe(join('data', 'tenants', 'tenant-abc', 'bots', 'sales-bot', 'productions'));
+    expect(paths.sessionsDir).toBe(join('data', 'tenants', 'tenant-abc', 'bots', 'sales-bot', 'sessions'));
+    expect(paths.memoryDbPath).toBe(join('data', 'tenants', 'tenant-abc', 'memory.db'));
   });
 
   test('different tenants get different paths', () => {

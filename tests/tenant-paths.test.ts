@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { describe, expect, it } from 'bun:test';
 import { isPathWithinTenant, resolveTenantPaths } from '../src/tenant/tenant-paths';
 
@@ -11,8 +12,8 @@ describe('resolveTenantPaths', () => {
       defaultProductionsDir: './productions',
     });
     expect(result.tenantRoot).toBe('');
-    expect(result.soulDir).toBe('config/soul/bot1');
-    expect(result.workDir).toBe('productions/bot1');
+    expect(result.soulDir).toBe(join('config', 'soul', 'bot1'));
+    expect(result.workDir).toBe(join('productions', 'bot1'));
   });
 
   it('returns tenant-scoped paths when tenantId is provided', () => {
@@ -23,9 +24,9 @@ describe('resolveTenantPaths', () => {
       defaultSoulDir: './config/soul',
       defaultProductionsDir: './productions',
     });
-    expect(result.tenantRoot).toBe('data/tenants/tenant-abc');
-    expect(result.soulDir).toBe('data/tenants/tenant-abc/bots/bot1/soul');
-    expect(result.workDir).toBe('data/tenants/tenant-abc/bots/bot1/productions');
+    expect(result.tenantRoot).toBe(join('data', 'tenants', 'tenant-abc'));
+    expect(result.soulDir).toBe(join('data', 'tenants', 'tenant-abc', 'bots', 'bot1', 'soul'));
+    expect(result.workDir).toBe(join('data', 'tenants', 'tenant-abc', 'bots', 'bot1', 'productions'));
   });
 
   it('handles absolute dataDir', () => {
@@ -36,9 +37,9 @@ describe('resolveTenantPaths', () => {
       defaultSoulDir: './config/soul',
       defaultProductionsDir: './productions',
     });
-    expect(result.tenantRoot).toBe('/var/data/tenants/tenant-xyz');
-    expect(result.soulDir).toBe('/var/data/tenants/tenant-xyz/bots/mybot/soul');
-    expect(result.workDir).toBe('/var/data/tenants/tenant-xyz/bots/mybot/productions');
+    expect(result.tenantRoot).toBe(join('/var/data/tenants', 'tenant-xyz'));
+    expect(result.soulDir).toBe(join('/var/data/tenants', 'tenant-xyz', 'bots', 'mybot', 'soul'));
+    expect(result.workDir).toBe(join('/var/data/tenants', 'tenant-xyz', 'bots', 'mybot', 'productions'));
   });
 
   it('handles different bot IDs', () => {

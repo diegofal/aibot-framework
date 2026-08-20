@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
@@ -596,7 +596,11 @@ export class ToolExecutor extends EventEmitter {
           if (name === 'file_write') {
             const resolved = effectiveArgs.path as string;
             const absWork = resolve(workDir);
-            const rel = relative(absWork, resolved);
+            // Separators normalized to '/' before the comparisons below:
+            // `relative()` returns backslashes on Windows, so the raw string
+            // never contained '/' there and this safety net silently did
+            // nothing — file_write could create subdirectories in workDir.
+            const rel = relative(absWork, resolved).split(sep).join('/');
             if (rel.includes('/') && !rel.startsWith('archived/') && !rel.startsWith('..')) {
               const flat = join(absWork, basename(resolved));
               this.logger.warn(

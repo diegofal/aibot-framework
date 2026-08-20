@@ -31,9 +31,33 @@ FROM oven/bun:1.3.11-slim AS runtime
 
 # ca-certificates — outbound TLS to api.telegram.org and LLM/tool APIs.
 # tzdata       — config.datetime.timezone is applied via process.env.TZ.
+# curl         — used by the Claude CLI installer below.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates tzdata \
+  && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
   && rm -rf /var/lib/apt/lists/*
+
+# --- Claude CLI ------------------------------------------------------------
+# Installed by default rather than behind a flag: resolveCandidatesFromConfig()
+# puts `claude-cli` in the failover chain unless claudeCli.enabled is false, so
+# an image without it ships a backend that can never answer.
+#
+# Installed as `bun`, never as root, for two reasons: the installer puts
+# everything under $HOME (/home/bun, resolved from /etc/passwd), and the CLI
+# refuses --dangerously-skip-permissions when running as uid 0. Do NOT "fix" a
+# future permission error by switching this to root.
+#
+# Placed before the source COPYs so editing src/ does not re-download it, and
+# before CLAUDE_CONFIG_DIR is set so `claude install` cannot write into what
+# becomes a volume mount point at runtime.
+ARG CLAUDE_CLI_VERSION=2.1.237
+USER bun
+RUN curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_CLI_VERSION}"
+ENV PATH="/home/bun/.local/bin:${PATH}"
+# Build-time gate: a moved installer or a bad pin fails the build here instead
+# of surfacing later as a soul health check that quietly stopped working.
+RUN claude --version
+USER root
+# ---------------------------------------------------------------------------
 
 # --- OPTIONAL: browser tools (config.browserTools.enabled) -----------------
 # Chromium plus its shared libraries adds roughly 500 MB. Uncomment this block
@@ -54,8 +78,16 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# CLAUDE_CONFIG_DIR points into the data volume on purpose. The CLI default
+# (~/.claude) lives in the container layer and is destroyed by every rebuild,
+# so the operator would have to log in again after each deploy. Under /app/data
+# the login survives `docker compose up -d --build`.
+# DISABLE_AUTOUPDATER keeps the pinned version pinned: an image that silently
+# upgrades itself at runtime is not a reproducible image.
 ENV NODE_ENV=production \
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    CLAUDE_CONFIG_DIR=/app/data/claude \
+    DISABLE_AUTOUPDATER=1
 
 COPY --from=deps /app/node_modules ./node_modules
 
@@ -77,7 +109,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # The oven/bun base image already provides an unprivileged `bun` user (uid 1000).
 # These directories are created and chowned in the image so that fresh named
 # volumes mounted over them inherit the correct ownership.
-RUN mkdir -p /app/config /app/data/logs /app/productions \
+RUN mkdir -p /app/config /app/data/logs /app/data/claude /app/productions \
   && chmod +x /usr/local/bin/docker-entrypoint.sh \
   && chown -R bun:bun /app
 

@@ -611,10 +611,17 @@ export class BotExportService {
         this.logger.info({ botId, imported }, 'Import: core memory entries restored');
     }
 
-    // `close(true)` releases the file handle immediately. A deferred close
-    // leaves the SQLite file locked on Windows, which turns any follow-up
-    // operation on the data directory into an EBUSY failure.
-    fallbackDb?.close(true);
+    // Close is best-effort on purpose. `close(true)` throws `database is locked`
+    // on Windows (measured on bun 1.3.9) and that exception used to propagate
+    // out of restoreBotArchive, failing the whole import *after* every entry had
+    // already been written. Losing an import over a file handle is the wrong
+    // trade. Note the handle is not actually released until process exit on
+    // Windows either way — see tests/helpers/temp-dir.ts.
+    try {
+      fallbackDb?.close();
+    } catch (err) {
+      this.logger.warn({ err, dbPath }, 'Import: failed to close fallback memory database');
+    }
   }
 }
 

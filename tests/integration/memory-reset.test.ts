@@ -7,6 +7,7 @@ import type { MemorySearchConfig } from '../../src/config';
 import type { Logger } from '../../src/logger';
 import { MemoryManager } from '../../src/memory/manager';
 import { initializeMemoryDb } from '../../src/memory/schema';
+import { createTempDir, removeTempDir } from '../helpers/temp-dir';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -27,15 +28,17 @@ describe('MemoryManager per-bot cleanup', () => {
   let dbPath: string;
 
   beforeEach(() => {
-    tmpDir = join(tmpdir(), `memory-reset-test-${Date.now()}`);
+    // Date.now() is not unique enough when several tests start in the same
+    // millisecond, and on Windows the SQLite handle outlives close(), so a
+    // reused directory would carry another test's rows. See helpers/temp-dir.ts.
+    tmpDir = createTempDir('memory-reset-test');
     dbPath = join(tmpDir, 'memory.db');
-    mkdirSync(tmpDir, { recursive: true });
     db = initializeMemoryDb(dbPath, noopLogger);
   });
 
   afterEach(() => {
     db.close();
-    rmSync(tmpDir, { recursive: true, force: true });
+    removeTempDir(tmpDir);
   });
 
   function insertFile(path: string, sourceType = 'memory'): number {

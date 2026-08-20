@@ -238,7 +238,13 @@ describe('exec tool', () => {
   describe('output truncation', () => {
     test('truncates output exceeding maxOutputLength', async () => {
       const tool = createExecTool({ maxOutputLength: 50 });
-      const result = await tool.execute({ command: 'python3 -c "print(\'x\' * 200)"' }, logger);
+      // Generated with a shell builtin rather than python3, which is not
+      // installed on every dev machine (notably Windows). The test is about
+      // truncation, not about which interpreter produced the bytes.
+      const result = await tool.execute(
+        { command: 'for i in $(seq 1 200); do printf x; done' },
+        logger
+      );
       expect(result.success).toBe(true);
       expect(result.content).toContain('truncated');
       expect(result.content).toContain('total chars');
@@ -275,7 +281,10 @@ describe('exec tool', () => {
       const result = await tool.execute({ command: 'sleep 30' }, logger);
       const elapsed = Date.now() - start;
 
-      // Should finish well before 30s
+      // Should finish well before 30s. This is the regression guard for
+      // killProcessTree(): killing only the spawned `bash` left the `sleep`
+      // holding the inherited stdout pipe, so the awaited read did not resolve
+      // until the command ended on its own and the timeout enforced nothing.
       expect(elapsed).toBeLessThan(5000);
       // Process was killed
       expect(result.content).toContain('Exit code:');

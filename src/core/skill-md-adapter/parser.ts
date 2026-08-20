@@ -13,7 +13,11 @@ export class SkillMdParser {
    * Parse a SKILL.md file into a structured document
    */
   parse(filePath: string): SkillDocument {
-    const content = readFileSync(filePath, 'utf-8');
+    // Line endings are normalized before anything looks at the text. The
+    // section and parameter patterns below are written against '\n', and a
+    // SKILL.md authored on Windows (or checked out with core.autocrlf) would
+    // otherwise lose tool parameters silently — no error, just a shorter list.
+    const content = readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n');
     const { frontmatter, body, frontmatterEndLine } = this.splitFrontmatter(content);
 
     // Parse YAML frontmatter

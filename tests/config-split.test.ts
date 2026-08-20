@@ -33,9 +33,9 @@ afterEach(() => {
 
 describe('botsPathFromConfigPath', () => {
   test('derives bots.json sibling path', () => {
-    expect(botsPathFromConfigPath('/a/b/config.json')).toBe('/a/b/bots.json');
+    expect(botsPathFromConfigPath('/a/b/config.json')).toBe(join('/a/b', 'bots.json'));
     expect(botsPathFromConfigPath('/home/user/config/config.json')).toBe(
-      '/home/user/config/bots.json'
+      join('/home/user/config', 'bots.json')
     );
   });
 });
