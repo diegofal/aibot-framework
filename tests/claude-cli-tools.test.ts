@@ -71,7 +71,10 @@ describe('claudeGenerateWithTools', () => {
 
     try {
       await claudeGenerateWithTools('Hello', {
-        claudePath: '/bin/false', // exits immediately with code 1
+        // Resolved off PATH rather than hard-coded as /bin/false, which does not
+        // exist on Windows and made the spawn fail with ENOENT before the code
+        // under test was reached.
+        claudePath: 'false', // exits immediately with code 1
         timeout: 5_000,
         logger: mockLogger(),
         tools: sampleTools,

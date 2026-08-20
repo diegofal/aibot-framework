@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { BotExportService, ConflictError } from '../../src/bot/bot-export-service';
 import type { BotConfig, Config } from '../../src/config';
 import { packTarGz, unpackTarGz } from '../../src/system/tar-archive';
+import { createTempDir, removeTempDir } from '../helpers/temp-dir';
 
 /**
  * Read an export archive in-process. These assertions used to spawn `tar`,
@@ -20,14 +21,31 @@ function extract(buffer: Buffer) {
   };
 }
 
-const TEST_DIR = join(import.meta.dir, '..', '..', '.test-export-service');
-const SOUL_DIR = join(TEST_DIR, 'soul');
-const PROD_DIR = join(TEST_DIR, 'productions');
-const CONV_DIR = join(TEST_DIR, 'conversations');
-const KARMA_DIR = join(TEST_DIR, 'karma');
-const SESSION_DIR = join(TEST_DIR, 'data', 'sessions');
-const CONFIG_PATH = join(TEST_DIR, 'config.json');
-const BOTS_PATH = join(TEST_DIR, 'bots.json');
+// One scratch directory per test. A shared directory cannot work here: the
+// SQLite-fallback test opens a memory DB, and on Windows Bun holds that file
+// handle until the process exits, so the directory can never be deleted again.
+// See tests/helpers/temp-dir.ts for the measurements.
+let TEST_DIR: string;
+let SOUL_DIR: string;
+let PROD_DIR: string;
+let CONV_DIR: string;
+let KARMA_DIR: string;
+let SESSION_DIR: string;
+let CONFIG_PATH: string;
+let BOTS_PATH: string;
+let DATA_DIR: string;
+
+function assignPaths(root: string): void {
+  TEST_DIR = root;
+  SOUL_DIR = join(TEST_DIR, 'soul');
+  PROD_DIR = join(TEST_DIR, 'productions');
+  CONV_DIR = join(TEST_DIR, 'conversations');
+  KARMA_DIR = join(TEST_DIR, 'karma');
+  SESSION_DIR = join(TEST_DIR, 'data', 'sessions');
+  CONFIG_PATH = join(TEST_DIR, 'config.json');
+  BOTS_PATH = join(TEST_DIR, 'bots.json');
+  DATA_DIR = join(TEST_DIR, 'data', 'tenants');
+}
 
 function createMockLogger() {
   return {
@@ -52,7 +70,6 @@ function makeBot(overrides: Partial<BotConfig> = {}): BotConfig {
   };
 }
 
-const DATA_DIR = join(TEST_DIR, 'data', 'tenants');
 
 function makeConfig(bots: BotConfig[] = [makeBot()]): Config {
   return {
@@ -136,15 +153,14 @@ function plantSessions(
 
 describe('BotExportService', () => {
   beforeEach(() => {
-    rmSync(TEST_DIR, { recursive: true, force: true });
-    mkdirSync(TEST_DIR, { recursive: true });
+    assignPaths(createTempDir('aibot-export-service'));
     // Write minimal config files for persistBots
     writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
     writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
   });
 
   afterEach(() => {
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    removeTempDir(TEST_DIR);
   });
 
   describe('exportBot', () => {
@@ -315,7 +331,7 @@ describe('BotExportService', () => {
       );
 
       // Clean up and create fresh state for import
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -354,7 +370,7 @@ describe('BotExportService', () => {
         name: 'Original Bot',
       });
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -372,7 +388,7 @@ describe('BotExportService', () => {
     it('throws ConflictError when bot already exists', async () => {
       const exportBuffer = await createExportBuffer({ id: 'existing-bot' });
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -391,7 +407,7 @@ describe('BotExportService', () => {
         { 'IDENTITY.md': 'name: New Version\n' }
       );
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -423,7 +439,7 @@ describe('BotExportService', () => {
         { coreMemory: coreEntries }
       );
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -505,7 +521,7 @@ describe('BotExportService', () => {
         { productions: { 'article.md': '# Article' } }
       );
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -527,7 +543,7 @@ describe('BotExportService', () => {
         { 'IDENTITY.md': 'name: Reindex Bot\n', 'SOUL.md': '# Soul\nTest' }
       );
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -564,7 +580,7 @@ describe('BotExportService', () => {
         { coreMemory: coreEntries }
       );
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -583,9 +599,10 @@ describe('BotExportService', () => {
       const rows = db
         .prepare('SELECT category, key, value, importance FROM core_memory WHERE bot_id = ?')
         .all('imported-fallback') as any[];
-      // close(true) is required on Windows: a deferred close keeps the SQLite
-      // file locked and the afterEach cleanup then fails with EBUSY.
-      db.close(true);
+      // Plain close(): `close(true)` throws `database is locked` on Windows
+      // (bun 1.3.9). Neither form actually releases the handle there, which is
+      // why this suite uses a throwaway directory per test.
+      db.close();
 
       expect(rows).toHaveLength(2);
       const pri = rows.find((r: any) => r.key === 'pri');
@@ -703,7 +720,7 @@ describe('BotExportService', () => {
         createMockLogger()
       ).exportBot('source-bot');
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -737,7 +754,7 @@ describe('BotExportService', () => {
         createMockLogger()
       ).exportBot('overwrite-bot');
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -813,7 +830,7 @@ describe('BotExportService', () => {
         createMockLogger()
       ).exportBot('old-id');
 
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTempDir(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
       writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');

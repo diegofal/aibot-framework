@@ -90,6 +90,32 @@ function isAllowed(command: string, allowedPatterns: RegExp[]): boolean {
   return allowedPatterns.some((p) => p.test(command));
 }
 
+/**
+ * Kill a spawned command and everything it started.
+ *
+ * `proc.kill()` signals only the `bash` we spawned. Its children survive, and
+ * because they inherited the stdout pipe, the awaited read never resolves while
+ * one is alive — so on Windows a timed-out `sleep 30` ran its full 30 seconds
+ * and the timeout enforced nothing at all. Windows has no process groups to
+ * signal, so the tree is torn down with taskkill /T.
+ *
+ * POSIX keeps the plain kill: it is sufficient for the common case here and
+ * avoids reaching for process-group semantics this tool never set up.
+ */
+function killProcessTree(proc: { pid?: number; kill: () => void }): void {
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      Bun.spawnSync(['taskkill', '/pid', String(proc.pid), '/T', '/F'], {
+        stdout: 'ignore',
+        stderr: 'ignore',
+      });
+    }
+    proc.kill();
+  } catch {
+    // Best-effort: the process may already be gone.
+  }
+}
+
 export function createExecTool(config: ExecToolConfig = {}): Tool {
   const timeout = config.timeout ?? 30_000;
   const maxOutput = config.maxOutputLength ?? 10_000;
@@ -196,9 +222,7 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
 
         // Enforce timeout
         const timer = setTimeout(() => {
-          try {
-            proc.kill();
-          } catch {}
+          killProcessTree(proc);
         }, timeout);
 
         const [stdout, stderr] = await Promise.all([

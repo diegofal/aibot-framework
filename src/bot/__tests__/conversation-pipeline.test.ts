@@ -763,12 +763,14 @@ describe('ConversationPipeline', () => {
 
       await pipeline.prefetchMemoryContext('[Alice]: Hello everyone', true, mockLogger, 'test-bot');
 
-      // Should search with stripped query (4th arg is botId, 5th is userId)
+      // Should search with stripped query (4th arg is botId, 5th is userId).
+      // botId is forwarded, not dropped: search must stay scoped to the calling
+      // bot, otherwise one bot's RAG prefetch can surface another bot's memory.
       expect(mockMemoryManager.search).toHaveBeenCalledWith(
         'Hello everyone',
         expect.any(Number),
         expect.any(Number),
-        undefined, // botId (not passed in standalone call)
+        'test-bot',
         undefined // userId
       );
     });

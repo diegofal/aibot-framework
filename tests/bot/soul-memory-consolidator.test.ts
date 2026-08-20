@@ -16,6 +16,29 @@ function createMockLogger() {
   } as any;
 }
 
+/**
+ * Write a stub standing in for the `claude` binary, printing `lines` and exiting 0.
+ *
+ * Platform-split because Windows cannot execute a `#!/bin/sh` script — spawning
+ * one fails with ENOENT, which is not the condition these tests are about. A
+ * `.cmd` wrapper is executable there, and `resolveClaudeBin()` passes a path
+ * that already ends in `.cmd` through unchanged.
+ */
+function writeStubClaude(name: string, lines: string[]): string {
+  if (process.platform === 'win32') {
+    const path = join(TEST_DIR, `${name}.cmd`);
+    // cmd.exe treats < > & | ^ as operators inside echo, so they are escaped.
+    const escaped = lines.map((l) => l.replace(/[<>&|^]/g, (c) => `^${c}`));
+    writeFileSync(path, ['@echo off', ...escaped.map((l) => `echo ${l}`)].join('\r\n') + '\r\n');
+    return path;
+  }
+  const path = join(TEST_DIR, `${name}.sh`);
+  writeFileSync(path, ['#!/bin/sh', ...lines.map((l) => `echo '${l}'`)].join('\n') + '\n', {
+    mode: 0o755,
+  });
+  return path;
+}
+
 describe('getUnconsolidatedLogs', () => {
   beforeEach(() => {
     rmSync(TEST_DIR, { recursive: true, force: true });
@@ -190,16 +213,16 @@ describe('consolidateMemory', () => {
   it('rejects output missing <!-- last-consolidated: --> header', async () => {
     const logger = createMockLogger();
     writeFileSync(join(TEST_DIR, 'memory', '2026-01-15.md'), '# Jan 15\nFact');
-    // Use printf to output text without the header
+    // Stub emits plausible content with no <!-- last-consolidated: --> marker.
+    const stub = writeStubClaude('no-header', ['# Memory', 'Some consolidated text']);
     const result = await consolidateMemory({
       soulDir: TEST_DIR,
-      claudePath: '/bin/sh',
+      claudePath: stub,
       timeout: 5_000,
       logger,
     });
 
-    // /bin/sh with -p flag runs in privileged mode and outputs nothing useful
-    // The output won't contain <!-- last-consolidated: so it gets rejected
+    // Output lacks the header, so the consolidation must be rejected outright.
     expect(result.merged).toBe(0);
     expect(result.archived).toBe(0);
   });
@@ -211,11 +234,8 @@ describe('consolidateMemory', () => {
     writeFileSync(join(TEST_DIR, 'MEMORY.md'), largeContent);
     writeFileSync(join(TEST_DIR, 'memory', '2026-01-15.md'), '# Jan 15\nSmall fact');
 
-    // Use a script that outputs something with the header but much smaller
-    const scriptPath = join(TEST_DIR, 'tiny-output.sh');
-    writeFileSync(scriptPath, '#!/bin/sh\necho "<!-- last-consolidated: 2026-01-15 -->"', {
-      mode: 0o755,
-    });
+    // Stub outputs the header but far less content than the existing MEMORY.md
+    const scriptPath = writeStubClaude('tiny-output', ['<!-- last-consolidated: 2026-01-15 -->']);
 
     const result = await consolidateMemory({
       soulDir: TEST_DIR,

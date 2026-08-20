@@ -1,33 +1,64 @@
-import { beforeEach, describe, expect, test, vi } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test, vi } from 'bun:test';
 import { TenantFacade, type TenantFacadeDeps } from '../../src/bot/tenant-facade';
 
-vi.mock('../../src/tenant/manager', () => ({
-  TenantManager: vi.fn().mockImplementation(() => ({
-    createTenant: vi.fn(),
-    getTenant: vi.fn(),
-    getTenantByApiKey: vi.fn(),
-    listTenants: vi.fn().mockReturnValue([]),
-    updateTenant: vi.fn(),
-    deleteTenant: vi.fn(),
-    regenerateApiKey: vi.fn(),
-    recordUsage: vi.fn(),
-    getCurrentMonthUsage: vi.fn(),
-    checkQuota: vi.fn(),
-    canCreateBot: vi.fn(),
-    rotateUsage: vi.fn().mockReturnValue({ archived: 0, kept: 0 }),
-  })),
-}));
+const MANAGER_MODULE = '../../src/tenant/manager';
+const BILLING_MODULE = '../../src/tenant/billing';
 
-vi.mock('../../src/tenant/billing', () => ({
-  NoOpBillingProvider: vi.fn().mockImplementation(() => ({
-    createCustomer: vi.fn().mockResolvedValue('cust_123'),
-    createSubscription: vi.fn(),
-    cancelSubscription: vi.fn(),
-    updateSubscription: vi.fn(),
-    getInvoiceUrl: vi.fn(),
-    handleWebhook: vi.fn(),
-  })),
-}));
+/**
+ * Module mocks are process-global and permanent in bun: `vi.mock` is an alias
+ * for `mock.module`, which rewrites the module registry for every test file that
+ * runs afterwards in the same process — not just this one.
+ *
+ * Left unrestored, tests/tenant/usage-rotation.test.ts (which runs later)
+ * constructed its TenantManager from the stub below and got the canned
+ * `{ archived: 0, kept: 0 }` back, failing three assertions for reasons nowhere
+ * near its own code.
+ *
+ * So the real exports are snapshotted into plain objects first, and the mocks
+ * are installed and torn down around this file's tests. The snapshot has to be a
+ * copy: a `import { TenantManager }` binding is live, so `mock.module` rewrites
+ * it in place and a captured reference would point at the stub by teardown.
+ */
+let realManagerModule: Record<string, unknown>;
+let realBillingModule: Record<string, unknown>;
+
+beforeAll(async () => {
+  realManagerModule = { ...(await import(MANAGER_MODULE)) };
+  realBillingModule = { ...(await import(BILLING_MODULE)) };
+
+  mock.module(MANAGER_MODULE, () => ({
+    TenantManager: vi.fn().mockImplementation(() => ({
+      createTenant: vi.fn(),
+      getTenant: vi.fn(),
+      getTenantByApiKey: vi.fn(),
+      listTenants: vi.fn().mockReturnValue([]),
+      updateTenant: vi.fn(),
+      deleteTenant: vi.fn(),
+      regenerateApiKey: vi.fn(),
+      recordUsage: vi.fn(),
+      getCurrentMonthUsage: vi.fn(),
+      checkQuota: vi.fn(),
+      canCreateBot: vi.fn(),
+      rotateUsage: vi.fn().mockReturnValue({ archived: 0, kept: 0 }),
+    })),
+  }));
+
+  mock.module(BILLING_MODULE, () => ({
+    NoOpBillingProvider: vi.fn().mockImplementation(() => ({
+      createCustomer: vi.fn().mockResolvedValue('cust_123'),
+      createSubscription: vi.fn(),
+      cancelSubscription: vi.fn(),
+      updateSubscription: vi.fn(),
+      getInvoiceUrl: vi.fn(),
+      handleWebhook: vi.fn(),
+    })),
+  }));
+});
+
+afterAll(() => {
+  mock.module(MANAGER_MODULE, () => realManagerModule);
+  mock.module(BILLING_MODULE, () => realBillingModule);
+});
 
 const mockDeps = {
   config: { bots: [] } as any,
