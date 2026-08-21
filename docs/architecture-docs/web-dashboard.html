@@ -66,7 +66,11 @@
             into focused route modules (one file per domain).</li>
         <li><strong>SPA Frontend</strong> &mdash; Static files are served from the <code>web/</code> directory
             via Hono's <code>serveStatic</code> middleware, with a fallback to <code>index.html</code> for
-            client-side routing.</li>
+            client-side routing. <code>dashboardNoCache</code> (<code>src/web/static-cache.ts</code>) runs
+            ahead of it and stamps <code>Cache-Control: no-cache</code> on HTML/CSS/JS, because the asset
+            links carry no version query &mdash; without it a cached <code>style.css</code> survives a deploy
+            and hides the new UI. API JSON, images and fonts are untouched, and a handler that already set
+            its own <code>Cache-Control</code> wins.</li>
         <li><strong>WebSocket</strong> &mdash; A dedicated <code>/ws/logs</code> endpoint streams real-time
             log entries to connected dashboard clients.</li>
       </ul>
@@ -244,6 +248,12 @@
               <td><span class="badge badge-medium">PATCH</span></td>
               <td><code>/api/agents/:id</code></td>
               <td>Update agent fields (name, token, enabled, skills, model, conversation overrides, etc.)</td>
+              <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PATCH</span></td>
+              <td><code>/api/agents/bulk</code></td>
+              <td>Apply one patch to many agents: <code>{ ids: string[], patch: Partial&lt;BotConfig&gt; }</code>. Shares <code>applyBotPatch()</code> with <code>PATCH /:id</code>, validates before mutating, writes <code>bots.json</code> once, and returns <code>{ updated, notFound, agents }</code> so a stale id does not discard the rest of the edit. Registered <em>before</em> <code>/:id</code> — Hono matches in registration order, so <code>/:id</code> would otherwise capture "bulk" as an agent id.</td>
               <td><code>agents.ts</code></td>
             </tr>
             <tr>
@@ -1217,7 +1227,10 @@ compaction                            // Context compaction
       <p>
         The frontend is a single-page application served from the <code>web/</code> directory.
         Hono's <code>serveStatic</code> middleware serves assets, with a wildcard fallback to
-        <code>index.html</code> for client-side routing. The dashboard includes the following pages:
+        <code>index.html</code> for client-side routing. Under Docker the directory is baked into the
+        image (<code>COPY web ./web</code>), so host-side edits only reach the container through the
+        <code>./web:/app/web:ro</code> bind in <code>docker-compose.override.yml</code> or a rebuild.
+        The dashboard includes the following pages:
       </p>
 
       <div class="card-grid cols-2">

@@ -23,6 +23,10 @@ NO buscar en internet la documentacion de OpenClaw - usar el codigo fuente local
   4. **Cobertura por función**: toda función/método público nuevo debe tener al menos un test dedicado. Para ramas con comportamiento divergente (errores, edge cases, valores límite), agregar un test por rama.
   5. **Alineación con el plan**: antes de cada ciclo, confirmar que la función que se está implementando está en el plan acordado. Si surge trabajo fuera del plan, anotarlo como follow-up pero no implementarlo en el mismo ciclo.
   6. **Puerta de salida**: un cambio no se considera terminado hasta que `bun test` corre limpio para los archivos tocados y los tests pre-existentes no se rompen.
+- **Verificación de cambios en el frontend (`web/`)**: lo que corre en `127.0.0.1:3000` es el contenedor `aibot-framework-aibot-1`, y el `Dockerfile` hace `COPY web ./web` — los assets están horneados en la imagen. Editar `web/style.css` o `web/pages/*.js` en el host NO cambia nada en el contenedor por sí solo, y el fallo es silencioso: el navegador muestra la UI vieja y ningún log lo menciona. Antes de decir que un cambio de UI está listo, verificar que llegó:
+  1. `docker-compose.override.yml` (versionado, se mergea solo) monta `./web` sobre `/app/web` en modo read-only, así que un refresh del navegador alcanza. Si el contenedor se levantó con `-f docker-compose.yml` solamente, el montaje no está.
+  2. Cambios en `src/` siguen necesitando `docker compose up -d --build`.
+  3. Comprobar el asset servido, no el archivo del repo: `curl -s http://127.0.0.1:3000/style.css | grep <lo-que-cambiaste>`.
 - Cualquier cambio relevante debe agregarse al archivo `CHANGELOG.md` en la raíz del proyecto.
 - Cualquier cambio que afecte la arquitectura, módulos, tools, skills, rutas web, config schemas, o memoria debe reflejarse en la documentación en `docs/architecture-docs/`. Actualizar la página HTML correspondiente para mantener la documentación sincronizada con el código.
 - Cambios que afecten la lista de skills, tools, sistemas core, páginas del dashboard, estructura del proyecto, o stack tecnológico deben reflejarse también en `README.md`.

@@ -1,0 +1,24 @@
+# ---------------------------------------------------------------------------
+# Dev override — merged automatically by `docker compose up`, no -f needed.
+#
+# Why this exists: Dockerfile line `COPY web ./web` bakes the dashboard's
+# static assets into the image. Editing web/style.css or web/pages/*.js on the
+# host therefore changes NOTHING in the running container until the image is
+# rebuilt, and the failure is silent — the browser shows the old UI and no log
+# says why. This mounts the host's web/ over the image's copy, so a plain
+# browser refresh picks up frontend edits.
+#
+# Scope: web/ only. Anything under src/ is server-side and still needs
+#   docker compose up -d --build
+# (or at least a restart, since Bun reads the TS at boot).
+#
+# Read-only on purpose: the container must never write into the repo checkout.
+#
+# To run without it — a deploy that must serve exactly what the image holds:
+#   docker compose -f docker-compose.yml up -d
+# ---------------------------------------------------------------------------
+
+services:
+  aibot:
+    volumes:
+      - ./web:/app/web:ro

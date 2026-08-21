@@ -69,6 +69,7 @@ import { tenantRoutes } from './routes/tenants';
 import { toolsRoutes } from './routes/tools';
 import { webhookRoutes } from './routes/webhooks';
 import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
+import { dashboardNoCache } from './static-cache';
 
 export type WebServerDeps = {
   config: Config;
@@ -547,7 +548,10 @@ export function startWebServer(deps: WebServerDeps): void {
     }
   });
 
-  // Static files from web/ directory
+  // Static files from web/ directory.
+  // dashboardNoCache first: the asset links carry no version query, so a
+  // cached style.css or app.js survives a deploy and hides the new UI.
+  app.use('/*', dashboardNoCache);
   app.use('/*', serveStatic({ root: './web' }));
 
   // Fallback: serve index.html for SPA routing
