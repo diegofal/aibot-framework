@@ -191,6 +191,12 @@ export async function renderAgents(el) {
     for (const s of loopState.botSchedules) executingMap[s.botId] = s.isExecutingLoop;
   }
 
+  // Same option list the per-row selector uses, so a bulk edit and a single edit
+  // mean exactly the same thing. 'claude-cli' is included by /api/agents/defaults.
+  const bulkModelOptions = (defaults.availableModels || [])
+    .map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`)
+    .join('');
+
   el.innerHTML = `
     <div class="flex-between mb-16">
       <div class="page-title">Agents <span class="count">${agents.length}</span></div>
@@ -200,8 +206,18 @@ export async function renderAgents(el) {
         <button class="btn btn-primary" id="btn-new-agent">+ New Agent</button>
       </div>
     </div>
+    <div id="bulk-bar" class="mb-16" style="display:none;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px">
+      <span id="bulk-count"></span>
+      <select id="bulk-model" style="font-size:12px;padding:2px 4px;max-width:220px">
+        <option value="">Global (${escapeHtml(defaults.model)})</option>
+        ${bulkModelOptions}
+      </select>
+      <button class="btn btn-sm btn-primary" id="bulk-apply">Apply to selected</button>
+      <button class="btn btn-sm" id="bulk-clear">Clear selection</button>
+      <span id="bulk-status" class="text-dim"></span>
+    </div>
     <table>
-      <thead><tr><th>Name</th><th>ID</th><th>Enabled</th><th>Model</th><th>Status</th><th>Agent Loop</th><th>Productions</th><th>Karma</th><th>LLM Calls</th><th>Tokens</th><th>Fallbacks</th><th>Skills</th><th>Actions</th></tr></thead>
+      <thead><tr><th style="width:28px"><input type="checkbox" id="bulk-select-all" title="Select all"></th><th>Name</th><th>ID</th><th>Enabled</th><th>Model</th><th>Status</th><th>Agent Loop</th><th>Productions</th><th>Karma</th><th>LLM Calls</th><th>Tokens</th><th>Fallbacks</th><th>Skills</th><th>Actions</th></tr></thead>
       <tbody id="agents-tbody"></tbody>
     </table>
   `;
@@ -236,6 +252,7 @@ export async function renderAgents(el) {
       : '<span class="text-dim">0</span>';
 
     tr.innerHTML = `
+      <td><input type="checkbox" class="bulk-select" data-id="${agent.id}"></td>
       <td><a href="#/agents/${agent.id}">${escapeHtml(agent.name)}</a></td>
       <td class="text-dim">${escapeHtml(agent.id)}</td>
       <td><label class="toggle"><input type="checkbox" data-action="toggle-enabled" data-id="${agent.id}" ${agent.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label></td>
@@ -465,6 +482,77 @@ export async function renderAgents(el) {
       renderAgents(el);
     }
   });
+
+
+  // --- Bulk model / backend edit -------------------------------------------
+  // The per-row selector conflates backend and model ('claude-cli' is offered as
+  // if it were a model), so the same mapping is used here: picking claude-cli
+  // switches the backend and clears the per-agent model override.
+  const bulkBar = document.getElementById('bulk-bar');
+  const bulkCount = document.getElementById('bulk-count');
+  const bulkStatus = document.getElementById('bulk-status');
+  const selectAll = document.getElementById('bulk-select-all');
+
+  function selectedIds() {
+    return [...document.querySelectorAll('.bulk-select:checked')].map((cb) => cb.dataset.id);
+  }
+
+  function refreshBulkBar() {
+    const n = selectedIds().length;
+    bulkBar.style.display = n > 0 ? 'flex' : 'none';
+    bulkCount.textContent = `${n} selected`;
+    bulkStatus.textContent = '';
+    const boxes = document.querySelectorAll('.bulk-select');
+    selectAll.checked = n > 0 && n === boxes.length;
+    selectAll.indeterminate = n > 0 && n < boxes.length;
+  }
+
+  tbody.addEventListener('change', (e) => {
+    if (e.target.classList.contains('bulk-select')) refreshBulkBar();
+  });
+
+  selectAll.addEventListener('change', () => {
+    for (const cb of document.querySelectorAll('.bulk-select')) cb.checked = selectAll.checked;
+    refreshBulkBar();
+  });
+
+  document.getElementById('bulk-clear').addEventListener('click', () => {
+    for (const cb of document.querySelectorAll('.bulk-select')) cb.checked = false;
+    refreshBulkBar();
+  });
+
+  document.getElementById('bulk-apply').addEventListener('click', async (ev) => {
+    const ids = selectedIds();
+    if (ids.length === 0) return;
+
+    const value = document.getElementById('bulk-model').value.trim();
+    const patch =
+      value === 'claude-cli'
+        ? { model: null, llmBackend: 'claude-cli' }
+        : { model: value || null, llmBackend: null };
+
+    const label = value || 'the global default';
+    if (!confirm(`Set ${ids.length} agent(s) to ${label}?`)) return;
+
+    ev.target.disabled = true;
+    bulkStatus.textContent = 'Applying...';
+    const res = await api('/api/agents/bulk', { method: 'PATCH', body: { ids, patch } });
+    ev.target.disabled = false;
+
+    if (res.error) {
+      bulkStatus.textContent = '';
+      alert(`Bulk update failed: ${res.error}`);
+      return;
+    }
+    // Unknown ids are reported rather than fatal, so surface them instead of
+    // letting a partially-applied edit look like a clean success.
+    if (res.notFound?.length) {
+      alert(`Updated ${res.updated.length}. Not found: ${res.notFound.join(', ')}`);
+    }
+    renderAgents(el);
+  });
+
+  refreshBulkBar();
 
   document.getElementById('btn-start-all').addEventListener('click', async () => {
     const stoppedAgents = agents.filter((a) => a.enabled && !a.running);

@@ -133,6 +133,70 @@ export function agentsRoutes(deps: {
     return c.json({ ...newBot, token: maskToken(newBot.token) }, 201);
   });
 
+  /**
+   * Bulk-update several agents in one call.
+   *
+   * Registered BEFORE `/:id` deliberately: Hono matches routes in registration
+   * order, so `/:id` would otherwise capture "bulk" as an agent id and answer
+   * 404. (An agent literally named "bulk" is therefore unreachable via
+   * `PATCH /:id`; it can still be edited through this endpoint.)
+   *
+   * Unknown ids are reported rather than fatal, so one stale id in a selection
+   * does not discard the rest of the operator's edit. The whole set is written
+   * once at the end instead of per agent.
+   */
+  app.patch('/bulk', async (c) => {
+    const body = await c.req
+      .json<{ ids?: unknown; patch?: Partial<BotConfig> }>()
+      .catch(() => null);
+
+    const ids = body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return c.json({ error: 'ids must be a non-empty array of agent ids' }, 400);
+    }
+
+    const patch = body?.patch;
+    if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) {
+      return c.json({ error: 'patch must contain at least one field' }, 400);
+    }
+
+    // Validated before anything is mutated, so a bad value cannot leave half the
+    // selection updated.
+    if (patch.llmBackend !== undefined && patch.llmBackend !== null) {
+      const backend = patch.llmBackend as string;
+      if (backend !== '' && backend !== 'ollama' && backend !== 'claude-cli') {
+        return c.json({ error: "llmBackend must be 'ollama' or 'claude-cli'" }, 400);
+      }
+    }
+
+    const updated: string[] = [];
+    const notFound: string[] = [];
+    const agents: unknown[] = [];
+
+    for (const rawId of ids) {
+      const id = String(rawId);
+      const bot = findBotScoped(c, id);
+      if (!bot) {
+        notFound.push(id);
+        continue;
+      }
+      applyBotPatch(bot, patch);
+      updated.push(bot.id);
+      agents.push({
+        ...bot,
+        token: maskToken(bot.token),
+        running: deps.botManager.isRunning(bot.id),
+      });
+    }
+
+    if (updated.length > 0) {
+      persistBots(deps.configPath, deps.config.bots);
+      deps.logger.info({ updated, patch }, 'Bulk agent update applied');
+    }
+
+    return c.json({ updated, notFound, agents });
+  });
+
   // Update agent
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
@@ -141,60 +205,7 @@ export function agentsRoutes(deps: {
 
     const body = await c.req.json<Partial<BotConfig>>();
 
-    if (body.name !== undefined) bot.name = body.name;
-    if (body.token !== undefined) bot.token = body.token;
-    if (body.enabled !== undefined) bot.enabled = body.enabled;
-    if (body.skills !== undefined) bot.skills = [...new Set(body.skills)];
-    if (body.allowedUsers !== undefined) bot.allowedUsers = body.allowedUsers;
-    if (body.mentionPatterns !== undefined) bot.mentionPatterns = body.mentionPatterns;
-    if (body.disabledTools !== undefined) bot.disabledTools = body.disabledTools;
-    if (body.disabledSkills !== undefined) bot.disabledSkills = body.disabledSkills;
-
-    // Per-agent override fields (undefined = clear override, use global default)
-    if ('model' in body) bot.model = body.model || undefined;
-    if ('llmBackend' in body) bot.llmBackend = body.llmBackend || undefined;
-    if ('soulDir' in body) bot.soulDir = body.soulDir || undefined;
-    if ('workDir' in body) bot.workDir = body.workDir || undefined;
-    if ('conversation' in body) {
-      if (body.conversation && Object.values(body.conversation).some((v) => v !== undefined)) {
-        bot.conversation = body.conversation;
-      } else {
-        bot.conversation = undefined;
-      }
-    }
-    if ('agentLoop' in body) {
-      const al = body.agentLoop;
-      if (al && Object.values(al).some((v: unknown) => v !== undefined && v !== null)) {
-        // Merge, but treat null values as "delete this key" (undefined is lost in JSON serialization)
-        const merged = { ...bot.agentLoop, ...al } as Record<string, unknown>;
-        for (const k of Object.keys(merged)) {
-          if (merged[k] === null) delete merged[k];
-        }
-        bot.agentLoop = merged as typeof bot.agentLoop;
-      } else {
-        bot.agentLoop = undefined;
-      }
-    }
-    if ('productions' in body) {
-      const prod = body.productions;
-      if (prod && Object.values(prod).some((v: unknown) => v !== undefined)) {
-        bot.productions = { ...bot.productions, ...prod };
-      } else {
-        bot.productions = undefined;
-      }
-    }
-    if ('tts' in body) {
-      const tts = body.tts;
-      if (tts && Object.values(tts).some((v: unknown) => v !== undefined)) {
-        bot.tts = tts;
-      } else {
-        bot.tts = undefined;
-      }
-    }
-    if ('toolPermissions' in body) {
-      const tp = body.toolPermissions;
-      bot.toolPermissions = tp && Object.keys(tp).length > 0 ? tp : undefined;
-    }
+    applyBotPatch(bot, body);
 
     persistBots(deps.configPath, deps.config.bots);
 
@@ -527,6 +538,74 @@ export function agentsRoutes(deps: {
   });
 
   return app;
+}
+
+/**
+ * Apply a partial agent update in place.
+ *
+ * Shared by `PATCH /:id` and `PATCH /bulk` so the two cannot drift: a field
+ * handled by one but not the other is the kind of gap nobody notices until an
+ * operator finds a bulk edit silently dropping half their change.
+ *
+ * Per-agent override fields treat an empty value as "clear the override and
+ * fall back to the global default", which is why they test `in body` rather
+ * than `!== undefined`.
+ */
+export function applyBotPatch(bot: BotConfig, body: Partial<BotConfig>): void {
+  if (body.name !== undefined) bot.name = body.name;
+  if (body.token !== undefined) bot.token = body.token;
+  if (body.enabled !== undefined) bot.enabled = body.enabled;
+  if (body.skills !== undefined) bot.skills = [...new Set(body.skills)];
+  if (body.allowedUsers !== undefined) bot.allowedUsers = body.allowedUsers;
+  if (body.mentionPatterns !== undefined) bot.mentionPatterns = body.mentionPatterns;
+  if (body.disabledTools !== undefined) bot.disabledTools = body.disabledTools;
+  if (body.disabledSkills !== undefined) bot.disabledSkills = body.disabledSkills;
+
+  // Per-agent override fields (undefined = clear override, use global default)
+  if ('model' in body) bot.model = body.model || undefined;
+  if ('llmBackend' in body) bot.llmBackend = body.llmBackend || undefined;
+  if ('soulDir' in body) bot.soulDir = body.soulDir || undefined;
+  if ('workDir' in body) bot.workDir = body.workDir || undefined;
+  if ('conversation' in body) {
+    if (body.conversation && Object.values(body.conversation).some((v) => v !== undefined)) {
+      bot.conversation = body.conversation;
+    } else {
+      bot.conversation = undefined;
+    }
+  }
+  if ('agentLoop' in body) {
+    const al = body.agentLoop;
+    if (al && Object.values(al).some((v: unknown) => v !== undefined && v !== null)) {
+      // Merge, but treat null values as "delete this key" (undefined is lost in JSON serialization)
+      const merged = { ...bot.agentLoop, ...al } as Record<string, unknown>;
+      for (const k of Object.keys(merged)) {
+        if (merged[k] === null) delete merged[k];
+      }
+      bot.agentLoop = merged as typeof bot.agentLoop;
+    } else {
+      bot.agentLoop = undefined;
+    }
+  }
+  if ('productions' in body) {
+    const prod = body.productions;
+    if (prod && Object.values(prod).some((v: unknown) => v !== undefined)) {
+      bot.productions = { ...bot.productions, ...prod };
+    } else {
+      bot.productions = undefined;
+    }
+  }
+  if ('tts' in body) {
+    const tts = body.tts;
+    if (tts && Object.values(tts).some((v: unknown) => v !== undefined)) {
+      bot.tts = tts;
+    } else {
+      bot.tts = undefined;
+    }
+  }
+  if ('toolPermissions' in body) {
+    const tp = body.toolPermissions;
+    bot.toolPermissions = tp && Object.keys(tp).length > 0 ? tp : undefined;
+  }
 }
 
 function maskToken(token: string): string {
