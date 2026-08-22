@@ -567,12 +567,12 @@
           <!-- ask_human -->
           <div class="tool-card">
             <h4 class="tool-name">ask_human</h4>
-            <div class="tool-desc">Ask the human operator a question. Non-blocking: the question is queued to the web inbox and optionally sent as a Telegram notification. The answer will be injected into the bot's next agent loop cycle. Continue working on other tasks in the meantime.</div>
+            <div class="tool-desc">Ask the human operator a question. Non-blocking: the question is queued to the web inbox and optionally sent as a Telegram notification. The answer will be injected into the bot's next agent loop cycle. Continue working on other tasks in the meantime. <strong>Protocol</strong> (<code>config.askHuman</code>): at most <code>maxChars</code> (600) characters, exactly one question, ideally 2&ndash;4 short <code>options</code> the operator can pick with a button; only one question may be pending per bot, and a question nobody answers within <code>autoCloseHours</code> (72 h) is auto-closed with a note in the bot's daily memory.</div>
             <div class="tool-params">
               <strong>Parameters</strong>
               <ul>
-                <li><code>question</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The question to ask the human operator</span></li>
-                <li><code>timeout_minutes</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Minutes to wait for response (default: 30, max: 120)</span></li>
+                <li><code>question</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; The single question to ask the human operator (max <code>askHuman.maxChars</code>; longer questions are rejected with guidance to put details in a file)</span></li>
+                <li><code>options</code> <span class="param-type">string[]</span> <span class="param-desc">&mdash; Optional 2&ndash;4 short answer choices (max 80 chars each) shown as quick-reply buttons in the inbox and listed in the Telegram notification, e.g. <code>["Yes", "No", "Later"]</code></span></li>
                 <li><code>files</code> <span class="param-type">string[]</span> <span class="param-desc">&mdash; File paths relevant to this question (relative to working directory). Files are attached to the inbox message as previable chips.</span></li>
               </ul>
             </div>
@@ -794,6 +794,7 @@
                 <li><code>schedule</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Schedule config: { kind: "at"|"every"|"cron", at?, everyMs?, expr?, tz? }</span></li>
                 <li><code>text</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Reminder/message text (for "add")</span></li>
                 <li><code>jobId</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Job ID (for "remove" and "run")</span></li>
+                <li><code>chatId</code> <span class="param-type">number | string</span> <span class="param-desc">&mdash; Target chat for delivery. Auto-detected inside a conversation; required from the agent loop. <code>"operator"</code> (or the operator's configured email) resolves to <code>config.operator.telegramChatId</code>; when that is unset the tool fails with <code>Operator chat id not configured (config.operator.telegramChatId)</code> rather than guessing</span></li>
                 <li><code>deleteAfterRun</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Delete after first execution</span></li>
                 <li><code>includeDisabled</code> <span class="param-type">boolean</span> <span class="param-desc">&mdash; Include disabled jobs in list</span></li>
               </ul>

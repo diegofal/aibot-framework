@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { CronService } from '../../cron';
-import type { CronJobCreate, CronJobPatch } from '../../cron/types';
+import type { CronJob, CronJobCreate, CronJobPatch } from '../../cron/types';
 import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
 
 export function cronRoutes(deps: { cronService: CronService; config: Config }) {
@@ -85,6 +85,33 @@ export function cronRoutes(deps: { cronService: CronService; config: Config }) {
       }
       throw err;
     }
+  });
+
+  // Force-run every enabled job whose last run errored (tenant-scoped).
+  // Must be registered before /:id/run so 'rerun-failed' isn't read as an id.
+  app.post('/rerun-failed', async (c) => {
+    const jobs = await deps.cronService.list({ includeDisabled: true });
+    const allowed = allowedBotIds(c);
+    const isFailing = (j: CronJob) =>
+      j.enabled !== false && j.state?.lastStatus === 'error' && isJobAccessible(j, allowed);
+    const failing = jobs.filter(isFailing);
+
+    const results: Array<{ id: string; name: string; ran: boolean; reason?: string }> = [];
+    for (const job of failing) {
+      try {
+        const result = await deps.cronService.run(job.id, 'force');
+        results.push({ id: job.id, name: job.name, ran: result.ran, reason: result.reason });
+      } catch (err: unknown) {
+        results.push({
+          id: job.id,
+          name: job.name,
+          ran: false,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return c.json({ ok: true, attempted: results.length, results });
   });
 
   // Rerun a cron job immediately

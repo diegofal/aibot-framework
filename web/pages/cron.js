@@ -5,10 +5,21 @@ export async function renderCron(el) {
 
   const [jobs, skills] = await Promise.all([api('/api/cron'), api('/api/skills')]);
 
+  const failedCount = jobs.filter(
+    (j) => j.enabled !== false && j.state?.lastStatus === 'error'
+  ).length;
+
   el.innerHTML = `
     <div class="flex-between mb-16">
       <div class="page-title">Cron Jobs <span class="count">${jobs.length}</span></div>
-      <a href="#/cron/new" class="btn btn-primary">+ New Job</a>
+      <div style="display:flex;gap:8px">
+        ${
+          failedCount > 0
+            ? `<button class="btn btn-sm" id="cron-rerun-failed-btn">Re-run failed (${failedCount})</button>`
+            : ''
+        }
+        <a href="#/cron/new" class="btn btn-primary">+ New Job</a>
+      </div>
     </div>
     ${
       jobs.length === 0
@@ -117,6 +128,22 @@ export async function renderCron(el) {
     await api(`/api/cron/${delBtn.dataset.id}`, { method: 'DELETE' });
     renderCron(el);
   });
+
+  const rerunFailedBtn = document.getElementById('cron-rerun-failed-btn');
+  if (rerunFailedBtn) {
+    rerunFailedBtn.addEventListener('click', async () => {
+      rerunFailedBtn.disabled = true;
+      rerunFailedBtn.textContent = 'Re-running…';
+      try {
+        const res = await api('/api/cron/rerun-failed', { method: 'POST' });
+        const succeeded = (res.results || []).filter((r) => r.ran).length;
+        rerunFailedBtn.textContent = `Re-ran ${succeeded}/${res.attempted}`;
+      } catch {
+        rerunFailedBtn.textContent = 'Error';
+      }
+      setTimeout(() => renderCron(el), 1500);
+    });
+  }
 }
 
 export async function renderCronDetail(el, id) {

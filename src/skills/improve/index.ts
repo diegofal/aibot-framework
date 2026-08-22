@@ -68,11 +68,15 @@ const skill: Skill = {
           ctx.logger.info({ focus, context }, 'Improve command invoked');
 
           // Send immediate feedback
+          // ctx.session is optional (only built when config.session.enabled and a chat
+          // exists); this progress ping is decorative, so skip it when there is no chat.
           const chatId = ctx.session?.chatId;
-          await ctx.telegram.sendMessage(
-            chatId,
-            `🔧 Starting soul improvement (focus: ${focus})... This may take a few minutes.`
-          );
+          if (chatId !== undefined) {
+            await ctx.telegram.sendMessage(
+              chatId,
+              `🔧 Starting soul improvement (focus: ${focus})... This may take a few minutes.`
+            );
+          }
 
           const result = await runImprove({
             claudePath,

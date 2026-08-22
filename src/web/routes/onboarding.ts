@@ -18,7 +18,8 @@ export interface OnboardingRoutesDeps {
 
 export function onboardingRoutes(deps: OnboardingRoutesDeps) {
   const { tenantManager, botManager, config, logger } = deps;
-  const app = new Hono();
+  // `tenant` is populated by the tenant auth middleware (src/tenant/middleware.ts).
+  const app = new Hono<{ Variables: { tenant: TenantContext } }>();
 
   // POST /onboarding/signup — create tenant + auto-setup directories
   app.post('/signup', async (c) => {

@@ -109,7 +109,10 @@ export function createAuthRateLimitMiddleware(
       : ipResult.remaining;
     c.header('X-RateLimit-Remaining', String(remaining));
 
-    return next();
+    // `next()` resolves to void; the declared middleware type is
+    // Promise<Response | undefined>, so hand back undefined explicitly.
+    await next();
+    return undefined;
   };
 
   // Expose limiter for testing and cleanup registration

@@ -206,6 +206,18 @@
         </table>
       </div>
 
+      <p>
+        Two sibling packages sit <em>outside</em> the facade and are mounted directly by
+        <code>src/web/server.ts</code>: <code>src/stats/</code> (read-only Stats &amp; Behaviour aggregations,
+        <code>/api/stats</code>) reads <code>BotManager.getAgentLoopState()</code> /
+        <code>getChannelState()</code> plus the data directories, and <code>src/hygiene/</code>
+        (deterministic maintenance routines, <code>/api/hygiene</code>) receives
+        <code>toolSucceededRecently</code> from the tool-audit log and <code>channelStateOf</code> from
+        <code>BotManager.getChannelState()</code>. Neither writes runtime bot state. Module tables for both live
+        in <code>CLAUDE.md</code>; behaviour is described on the <a href="web-dashboard.html">Web Dashboard</a>,
+        <a href="operator-api.html">Operator API</a> and <a href="memory-soul.html">Memory &amp; Soul</a> pages.
+      </p>
+
       <!-- ============================================================
            Section: Dependency Graph
            ============================================================ -->

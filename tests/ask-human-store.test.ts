@@ -410,3 +410,67 @@ describe('ask_human tool', () => {
     if (existsSync(CONV_TEST_DIR)) rmSync(CONV_TEST_DIR, { recursive: true });
   });
 });
+
+describe('AskHumanStore auto-close primitives', () => {
+  const HOUR = 3_600_000;
+
+  test('ask() keeps options and exposes them through getAll()/getPendingForBot()', () => {
+    const store = new AskHumanStore(makeLogger());
+    store.ask('bot1', 0, 'Pick?', ['A', 'B']);
+    expect(store.getAll()[0].options).toEqual(['A', 'B']);
+    expect(store.getPendingForBot('bot1')[0].options).toEqual(['A', 'B']);
+  });
+
+  test('ask() without options leaves the field undefined', () => {
+    const store = new AskHumanStore(makeLogger());
+    store.ask('bot1', 0, 'Plain?');
+    expect(store.getAll()[0].options).toBeUndefined();
+  });
+
+  test('closeStale() rejects only questions older than maxAgeMs and returns them', async () => {
+    const store = new AskHumanStore(makeLogger());
+    const t0 = Date.parse('2026-08-10T09:00:00Z');
+    const old = store.ask('bot1', 0, 'Old?');
+    const fresh = store.ask('bot2', 0, 'Fresh?');
+    old.promise.catch(() => {});
+    fresh.promise.catch(() => {});
+    store.setCreatedAt(old.id, t0);
+    store.setCreatedAt(fresh.id, t0 + 70 * HOUR);
+
+    const closed = store.closeStale(72 * HOUR, t0 + 73 * HOUR);
+
+    expect(closed.map((q) => q.id)).toEqual([old.id]);
+    expect(store.getPendingCount()).toBe(1);
+    expect(store.hasPendingForBot('bot1')).toBe(false);
+    expect(store.hasPendingForBot('bot2')).toBe(true);
+    await expect(old.promise).rejects.toThrow(/auto-closed after 72h/);
+  });
+
+  test('closeStale() can be scoped to one bot', () => {
+    const store = new AskHumanStore(makeLogger());
+    const t0 = 0;
+    const a = store.ask('bot-a', 0, 'A?');
+    const b = store.ask('bot-b', 0, 'B?');
+    a.promise.catch(() => {});
+    b.promise.catch(() => {});
+    store.setCreatedAt(a.id, t0);
+    store.setCreatedAt(b.id, t0);
+
+    const closed = store.closeStale(HOUR, 10 * HOUR, 'bot-a');
+    expect(closed.map((q) => q.botId)).toEqual(['bot-a']);
+    expect(store.hasPendingForBot('bot-b')).toBe(true);
+  });
+
+  test('closeStale() does not fire onDismiss or onTimeout — the caller owns the close', () => {
+    const onDismiss = mock(() => {});
+    const onTimeout = mock(() => {});
+    const store = new AskHumanStore(makeLogger(), undefined, { onDismiss, onTimeout });
+    const { id, promise } = store.ask('bot1', 0, 'Old?');
+    promise.catch(() => {});
+    store.setCreatedAt(id, 0);
+
+    store.closeStale(HOUR, 10 * HOUR);
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+});

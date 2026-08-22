@@ -1,3 +1,5 @@
+import type { ChannelStatus } from './bot/telegram-errors';
+
 export interface AgentInfo {
   botId: string;
   name: string;
@@ -12,6 +14,8 @@ export interface AgentInfo {
   mcpServerName?: string;
   /** Tenant ID for multi-tenant isolation (bots can only collaborate within same tenant) */
   tenantId?: string;
+  /** Outcome of the last channel start: telegram/ok, or why the bot is headless. */
+  channel?: ChannelStatus;
 }
 
 /**
@@ -37,6 +41,14 @@ export class AgentRegistry {
       }
       this.agents.delete(botId);
     }
+  }
+
+  /** Record the channel outcome for a registered bot. False when the bot is unknown. */
+  setChannel(botId: string, channel: ChannelStatus): boolean {
+    const info = this.agents.get(botId);
+    if (!info) return false;
+    info.channel = channel;
+    return true;
   }
 
   getByBotId(botId: string): AgentInfo | undefined {

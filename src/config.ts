@@ -84,6 +84,26 @@ export const GlobalAgentLoopConfigSchema = z
     phaseTimeouts: PhaseTimeoutsSchema,
     strategist: StrategistConfigSchema,
     retry: AgentLoopRetryConfigSchema,
+    /**
+     * Which backend the planner and strategist (`generate()` phases) run on.
+     * `inherit` follows the bot's `llmBackend`; an explicit value forces one
+     * backend fleet-wide. Per-bot `agentLoop.plannerBackend` wins over this.
+     */
+    plannerBackend: z.enum(['inherit', 'ollama', 'claude-cli']).default('inherit'),
+    /**
+     * Fleet-wide backend circuit breaker for CONTEXTUAL (429 / quota) errors.
+     * After `threshold` consecutive 429s on one backend the circuit opens for
+     * `cooldownMs` (or `weeklyQuotaCooldownMs` when the error mentions a weekly
+     * usage limit); bots whose planner backend is open skip their cycle.
+     */
+    circuitBreaker: z
+      .object({
+        enabled: z.boolean().default(true),
+        threshold: z.number().int().min(1).max(50).default(3),
+        cooldownMs: z.number().int().positive().default(30 * 60_000),
+        weeklyQuotaCooldownMs: z.number().int().positive().default(6 * 3_600_000),
+      })
+      .default({}),
     /** Tool loop detection for agent-loop executor phase */
     loopDetection: LoopDetectionConfigSchema,
     /** User awareness: scan sessions to show active users in planner prompt */
@@ -107,6 +127,8 @@ export const BotAgentLoopOverrideSchema = z
     mode: z.enum(['periodic', 'continuous']).default('periodic'),
     continuousPauseMs: z.number().int().min(0).default(5_000),
     continuousMemoryEvery: z.number().int().min(1).default(5),
+    /** Planner/strategist backend for this bot — undefined = inherit global `agentLoop.plannerBackend` */
+    plannerBackend: z.enum(['inherit', 'ollama', 'claude-cli']).optional(),
     strategist: z
       .object({
         enabled: z.boolean().optional(),
@@ -140,8 +162,14 @@ export const BotAgentLoopOverrideSchema = z
     engagementGate: z
       .object({
         enabled: z.boolean().default(true),
-        mode: z.enum(['soft', 'hard']).default('soft'),
+        /** `hard` (default) downgrades CONTENT plans to idle while the gate is triggered; `soft` only annotates the prompt */
+        mode: z.enum(['soft', 'hard']).default('hard'),
         threshold: z.number().int().min(1).max(50).default(5),
+        /**
+         * How far back the gate looks for outputs and feedback. Matches the
+         * 7-day retention of `BotSchedule.feedbackEvents`.
+         */
+        lookbackHours: z.number().int().min(1).max(24 * 30).default(168),
       })
       .optional(),
     /** Standing directives: ongoing behavioral instructions injected into strategist/planner/executor prompts */
@@ -235,6 +263,28 @@ const BotTtsOverrideSchema = z
   })
   .optional();
 
+const TraitNameSchema = z.enum([
+  'curiosity',
+  'caution',
+  'sociability',
+  'persistence',
+  'creativity',
+  'independence',
+  'depth',
+  'risk_tolerance',
+]);
+
+/**
+ * Operator guard rails on TRAITS.json. `pinned` values win on load and after
+ * every adjustment; `locked` traits ignore strategist/adaptive deltas.
+ */
+const BotTraitsConfigSchema = z
+  .object({
+    pinned: z.record(TraitNameSchema, z.number().min(0).max(1)).optional(),
+    locked: z.array(TraitNameSchema).optional(),
+  })
+  .optional();
+
 const BotProductionsConfigSchema = z
   .object({
     dir: z.string().optional(),
@@ -273,7 +323,17 @@ const TopicGuardConfigSchema = z
 export const BotConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
-  token: z.string().optional().default(''),
+  /**
+   * Telegram bot token. `null` is the explicit "headless on purpose" value and
+   * is normalised to '' so every consumer keeps seeing a string; a non-empty
+   * string that is not token-shaped is reported as a placeholder and never
+   * sent to Telegram (see `classifyTelegramToken`).
+   */
+  token: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((v) => v ?? ''),
   enabled: z.boolean().default(true),
   allowedUsers: z.array(z.number()).optional(),
   skills: z.array(z.string()),
@@ -294,6 +354,8 @@ export const BotConfigSchema = z.object({
   userIsolation: UserIsolationConfigSchema,
   userIdentityVerification: UserIdentityVerificationConfigSchema,
   topicGuard: TopicGuardConfigSchema,
+  /** Trait pinning / locking — see TraitRegisters */
+  traits: BotTraitsConfigSchema,
   allowedWritePaths: z.array(z.string()).optional(),
   // Tool permission matrix (per-tool overrides: agent-loop vs conversation)
   toolPermissions: z
@@ -684,6 +746,16 @@ export const ClaudeCliConfigSchema = z
      */
     enabled: z.boolean().default(true),
     model: z.string().optional(),
+    /**
+     * Whether a failed claude-cli call may be silently re-issued to Ollama.
+     *
+     * Default false. It used to be implicit and unconditional: every failed
+     * Claude call fell through to Ollama Cloud, which is how a fleet of
+     * claude-cli bots drained a shared Ollama weekly quota while the query log
+     * still recorded `backend: 'claude-cli'`. Turn it on only with a quota you
+     * are willing to spend that way; an explicit `failover` chain is better.
+     */
+    crossBackendFallback: z.boolean().default(false),
   })
   .default({});
 
@@ -768,13 +840,33 @@ const ConversationsFeatureConfigSchema = z
   })
   .default({});
 
-const KarmaConfigSchema = z
+/**
+ * Delta credited per outcome kind. A kind worth 0 is never written to the
+ * ledger, so `novelAction: 0` (default) removes the per-cycle activity credit
+ * without unwiring the hook.
+ */
+const KarmaRewardsSchema = z
+  .object({
+    novelAction: z.number().default(0),
+    productionApproved: z.number().default(3),
+    productionRejected: z.number().default(-1),
+    askAnswered: z.number().default(2),
+    humanReply: z.number().default(3),
+    collaborateCompleted: z.number().default(0),
+    toolError: z.number().default(-1),
+  })
+  .default({});
+
+export const KarmaConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
     baseDir: z.string().default('./data/karma'),
     initialScore: z.number().default(50),
     decayDays: z.number().default(30),
     dedupCooldownMinutes: z.number().default(60),
+    rewards: KarmaRewardsSchema,
+    /** At most one humanReply credit per bot within this window; 0 disables the cooldown */
+    humanReplyCooldownHours: z.number().min(0).default(6),
   })
   .default({});
 
@@ -984,9 +1076,44 @@ const StartupConfigSchema = z
   })
   .default({});
 
+/**
+ * The human the bots report to. Before this existed, a bot that needed the
+ * operator's Telegram chat id scraped it out of another bot's cron payload.
+ * `send_proactive_message` and `cron` resolve `chatId: "operator"` (or the
+ * literal `email`) to `telegramChatId`; every field is optional so a fresh
+ * install stays valid.
+ */
+export const OperatorConfigSchema = z.object({
+  name: z.string().optional(),
+  telegramChatId: z.number().int().optional(),
+  email: z.string().optional(),
+  notifyOnAsk: z.boolean().optional(),
+  /**
+   * Proactive-message throttle. Once every bot could resolve `chatId:
+   * "operator"`, one of them sent three Telegram messages in 13 minutes.
+   * Per-bot cooldown defaults to 60 min and the fleet-wide rolling-24 h cap to
+   * 10 messages (`DEFAULT_PROACTIVE_*` in `tools/send-proactive-message.ts`,
+   * applied when these are unset); 0 disables that limit.
+   */
+  proactiveCooldownMinutes: z.number().nonnegative().optional(),
+  proactiveDailyCap: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * ask_human protocol limits. The numbers come from the inbox data: asks at or
+ * under 600 chars with one question got answered, longer ones did not, and a
+ * pending ask that nobody answers in three days is not going to be.
+ */
+export const AskHumanConfigSchema = z.object({
+  maxChars: z.number().int().positive().default(600),
+  autoCloseHours: z.number().positive().default(72),
+});
+
 const ConfigSchema = z.object({
   bots: z.array(BotConfigSchema).default([]),
   startup: StartupConfigSchema,
+  operator: OperatorConfigSchema.default({}),
+  askHuman: AskHumanConfigSchema.default({}),
   ollama: OllamaConfigSchema,
   skills: SkillsConfigSchema,
   conversation: ConversationConfigSchema.default({}),
@@ -1029,6 +1156,8 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type BotConfig = z.infer<typeof BotConfigSchema>;
+export type OperatorConfig = z.infer<typeof OperatorConfigSchema>;
+export type AskHumanConfig = z.infer<typeof AskHumanConfigSchema>;
 export type OllamaConfig = z.infer<typeof OllamaConfigSchema>;
 export type StartupModelValidationConfig = z.infer<typeof StartupModelValidationConfigSchema>;
 export type LoggingConfig = z.infer<typeof LoggingConfigSchema>;

@@ -131,30 +131,31 @@ export class ProductionsService {
       'Production evaluated'
     );
 
-    // Karma: adjust based on evaluation
+    // Karma: outcome-based — the delta comes from config.karma.rewards
+    // (productionApproved / productionRejected); a 0 reward writes nothing.
     if (karmaService) {
-      let delta: number;
-      let reason: string;
-      if (evaluation.status === 'rejected') {
-        delta = -10;
-        reason = `Production rejected: "${updated.path}"`;
-        karmaService.addEvent(botId, delta, reason, 'production', { rating: evaluation.rating });
-      } else if (evaluation.rating != null) {
-        delta = evaluation.rating >= 4 ? (evaluation.rating === 5 ? 10 : 5) : evaluation.rating;
-        reason = `Production approved: "${updated.path}" (rating: ${evaluation.rating}/5)`;
-        karmaService.addEvent(botId, delta, reason, 'production', { rating: evaluation.rating });
-      } else {
-        delta = 3;
-        reason = `Production approved: "${updated.path}"`;
-        karmaService.addEvent(botId, delta, reason, 'production');
-      }
-
-      activityStream?.publish({
-        type: 'karma:change',
-        botId,
-        timestamp: Date.now(),
-        data: { delta, reason, source: 'production', path: updated.path },
+      const kind = evaluation.status === 'rejected' ? 'productionRejected' : 'productionApproved';
+      const ratingSuffix = evaluation.rating != null ? ` (rating: ${evaluation.rating}/5)` : '';
+      const reason = `Production ${evaluation.status}: "${updated.path}"${ratingSuffix}`;
+      const event = karmaService.recordOutcome(botId, kind, reason, {
+        rating: evaluation.rating,
+        path: updated.path,
       });
+
+      if (event) {
+        activityStream?.publish({
+          type: 'karma:change',
+          botId,
+          timestamp: Date.now(),
+          data: {
+            delta: event.delta,
+            reason,
+            source: 'production',
+            kind,
+            path: updated.path,
+          },
+        });
+      }
     }
 
     // Write feedback to bot memory

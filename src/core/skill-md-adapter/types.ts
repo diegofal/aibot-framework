@@ -51,14 +51,17 @@ export type SkillCategory =
   | 'browser'
   | 'production';
 
-export interface AibotMetadata {
+// Declared as a type alias rather than an interface so it carries an implicit
+// index signature and stays assignable to Record<string, unknown> (see
+// framework-bridge.ts, which hands it to ExternalSkillManifest.config).
+export type AibotMetadata = {
   emoji?: string;
   category?: SkillCategory;
   requires?: SkillRequirements;
   permissions?: string[];
   disabledByDefault?: boolean;
   maxRetries?: number;
-}
+};
 
 export interface SkillMetadata {
   aibot?: AibotMetadata;

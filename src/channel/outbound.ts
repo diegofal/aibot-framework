@@ -16,8 +16,35 @@ import { type WhatsAppConfig, whatsappChannel } from './whatsapp';
 
 export interface OutboundChannelDeps {
   getTelegramBot: (botId: string) => Bot | undefined;
+  /**
+   * Any live Telegram instance in the fleet. Most bots run headless (no valid
+   * token of their own) and used to be undeliverable for that reason alone —
+   * one live Telegram connection is enough to reach a chat id.
+   */
+  getAnyTelegramBot?: () => Bot | undefined;
   getWhatsAppConfig: (botId: string) => WhatsAppConfig | undefined;
   sessionManager: SessionManager;
+}
+
+/**
+ * Append an assistant message to a bot's private web session — the transcript
+ * the widget replays on reconnect. Shared by the web outbound channel, the
+ * proactive message tool and the cron instruction fallback so the three cannot
+ * drift apart on how a session key is derived.
+ */
+export function appendWebSessionMessage(
+  sessionManager: SessionManager,
+  botId: string,
+  address: string,
+  text: string
+): void {
+  const sessionKey = sessionManager.serializeKey({
+    botId,
+    chatType: 'private',
+    chatId: 0,
+    userId: Number(address) || undefined,
+  });
+  sessionManager.appendMessages(sessionKey, [{ role: 'assistant', content: text }], 100);
 }
 
 /**
@@ -31,7 +58,10 @@ export function createOutboundChannel(
 ): Channel | null {
   switch (contact.kind) {
     case 'telegram': {
-      const bot = deps.getTelegramBot(botId);
+      // A headless bot has no instance of its own; the fleet's live Telegram
+      // connection delivers for it. Null stays for the genuinely undeliverable
+      // case: no Telegram instance anywhere, or an address that is not a chat id.
+      const bot = deps.getTelegramBot(botId) ?? deps.getAnyTelegramBot?.();
       if (!bot) return null;
       const chatId = Number(contact.address);
       if (Number.isNaN(chatId)) return null;
@@ -53,20 +83,10 @@ export function createOutboundChannel(
     }
 
     case 'web': {
-      const sessionKey = deps.sessionManager.serializeKey({
-        botId,
-        chatType: 'private',
-        chatId: 0,
-        userId: Number(contact.address) || undefined,
-      });
       return {
         kind: 'web',
         async sendText(text: string) {
-          deps.sessionManager.appendMessages(
-            sessionKey,
-            [{ role: 'assistant', content: text }],
-            100
-          );
+          appendWebSessionMessage(deps.sessionManager, botId, contact.address, text);
         },
         async showTyping() {
           // no-op — no persistent connection

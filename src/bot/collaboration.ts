@@ -715,6 +715,17 @@ export class CollaborationManager {
       botLogger.info({ sessionId, sourceBotId, targetBotId }, 'Collaboration session ended');
     }
 
+    // Credit the initiator for a collaboration that actually finished. A
+    // timeout or a failed step throws above and never reaches here. The
+    // default reward is 0, so this writes nothing until an operator raises
+    // `karma.rewards.collaborateCompleted`.
+    this.karmaService?.recordOutcome(
+      sourceBotId,
+      'collaborateCompleted',
+      `Collaboration with ${targetName} completed in ${turnCount} turn(s)`,
+      { targetBotId, sessionId, turns: turnCount }
+    );
+
     return {
       sessionId: sessionId!,
       transcript: transcriptLines.join('\n'),

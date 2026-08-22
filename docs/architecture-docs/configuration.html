@@ -131,6 +131,18 @@ const config = await loadConfig('./config/config.json');
               <td>Boot behaviour: <code>autoStartBots</code> (default <code>true</code>) &mdash; start every <code>enabled</code> bot at process start</td>
             </tr>
             <tr>
+              <td><code>operator</code></td>
+              <td><code>OperatorConfigSchema</code></td>
+              <td>No (defaults)</td>
+              <td>The human the bots report to: <code>name</code>, <code>telegramChatId</code>, <code>email</code>, <code>notifyOnAsk</code>, <code>proactiveCooldownMinutes</code>, <code>proactiveDailyCap</code>. Resolves <code>chatId: "operator"</code> in <code>send_proactive_message</code> and <code>cron</code>, and throttles proactive sends</td>
+            </tr>
+            <tr>
+              <td><code>askHuman</code></td>
+              <td><code>AskHumanConfigSchema</code></td>
+              <td>No (defaults)</td>
+              <td><code>ask_human</code> protocol limits: <code>maxChars</code> (600), <code>autoCloseHours</code> (72)</td>
+            </tr>
+            <tr>
               <td><code>ollama</code></td>
               <td><code>OllamaConfigSchema</code></td>
               <td>Yes</td>
@@ -194,7 +206,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>agentLoop</code></td>
               <td><code>GlobalAgentLoopConfigSchema</code></td>
               <td>No (defaults)</td>
-              <td>Autonomous agent loop: scheduling, tool rounds, strategist</td>
+              <td>Autonomous agent loop: scheduling, tool rounds, strategist, <code>plannerBackend</code>, <code>circuitBreaker</code></td>
             </tr>
             <tr>
               <td><code>web</code></td>
@@ -266,7 +278,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>karma</code></td>
               <td><code>KarmaConfigSchema</code></td>
               <td>No (defaults)</td>
-              <td>Karma system: base directory, initial score, decay</td>
+              <td>Karma system: base directory, initial score, decay, outcome <code>rewards</code>, <code>humanReplyCooldownHours</code></td>
             </tr>
             <tr>
               <td><code>claudeCli</code></td>
@@ -327,6 +339,82 @@ const config = await loadConfig('./config/config.json');
           </tbody>
         </table>
         <p><span class="badge badge-yellow">Deployment</span> When true (the default), every bot with <code>enabled: true</code> is started at boot by <code>autoStartEnabledBots()</code>. The environment variable <code>AIBOT_AUTOSTART_BOTS</code> overrides this field &mdash; deliberately, because during a cutover <code>config.json</code> is inside a Docker volume while <code>.env</code> is next to <code>docker compose up</code>. It accepts <code>true/false</code>, <code>1/0</code>, <code>yes/no</code>, <code>on/off</code>; an unparseable value warns and defers to this field rather than guessing. It defaults to <em>on</em> because an unattended host that comes back with no bots running is a silent outage; the reason to turn it off is a cutover, where the container must be up while another instance still owns the Telegram tokens. See the bot lifecycle note in section 4.</p>
+      </div>
+
+      <!-- OperatorConfigSchema -->
+      <div class="card">
+        <h3><code>OperatorConfigSchema</code></h3>
+        <p>The human the bots report to. Every field is optional so a fresh install stays valid.</p>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Default</th><th>Validation</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>name</code></td>
+              <td>string</td>
+              <td>&mdash; (optional)</td>
+              <td>&mdash;</td>
+            </tr>
+            <tr>
+              <td><code>telegramChatId</code></td>
+              <td>number</td>
+              <td>&mdash; (optional)</td>
+              <td>Integer. Target of <code>chatId: "operator"</code></td>
+            </tr>
+            <tr>
+              <td><code>email</code></td>
+              <td>string</td>
+              <td>&mdash; (optional)</td>
+              <td>Also accepted as the operator alias in <code>chatId</code> (case-insensitive)</td>
+            </tr>
+            <tr>
+              <td><code>notifyOnAsk</code></td>
+              <td>boolean</td>
+              <td>&mdash; (optional)</td>
+              <td>When <code>true</code>, <code>ask_human</code> also messages the operator (bot name, question truncated to <code>OPERATOR_ASK_PREVIEW_CHARS</code> = 300, quick-reply options), deduped against the asking bot's own notification. A missing chat id, a missing bot instance or a failed send are logged and never fail the ask</td>
+            </tr>
+            <tr>
+              <td><code>proactiveCooldownMinutes</code></td>
+              <td>number</td>
+              <td>&mdash; (optional; <code>60</code> applied)</td>
+              <td>Non-negative. Minimum gap between two <code>send_proactive_message</code> calls <em>from the same bot</em>. Unset falls back to <code>DEFAULT_PROACTIVE_COOLDOWN_MINUTES</code> (60) in <code>src/tools/send-proactive-message.ts</code>; <code>0</code> disables the cooldown</td>
+            </tr>
+            <tr>
+              <td><code>proactiveDailyCap</code></td>
+              <td>number</td>
+              <td>&mdash; (optional; <code>10</code> applied)</td>
+              <td>Non-negative integer. Proactive messages allowed <em>fleet-wide</em> in a rolling 24&nbsp;h window (<code>PROACTIVE_FLEET_WINDOW_MS</code>). Unset falls back to <code>DEFAULT_PROACTIVE_DAILY_CAP</code> (10); <code>0</code> disables the cap</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><span class="badge badge-yellow">2026-08-22</span> The throttle exists because one bot sent the operator three Telegram messages in thirteen minutes. A throttled call returns <code>success: false</code> naming the ISO time the bot may send again; quota is consumed only after a delivery actually succeeds, and argument-validation failures never reach the throttle. The cap is genuinely fleet-wide &mdash; <code>ToolRegistry</code> builds <code>send_proactive_message</code> once per <code>BotManager</code>.</p>
+        <p><span class="badge badge-yellow">Why</span> Before this block existed, a bot that needed the operator's Telegram chat id scraped it out of another bot's cron payload &mdash; which worked until it did not, and silently went to the wrong person when it did not. <code>send_proactive_message</code> and <code>cron</code> resolve <code>chatId: "operator"</code> (or the literal <code>email</code>) through <code>resolveOperatorTarget()</code>; with no <code>telegramChatId</code> configured they fail with <code>Operator chat id not configured (config.operator.telegramChatId)</code> rather than guessing.</p>
+      </div>
+
+      <!-- AskHumanConfigSchema -->
+      <div class="card">
+        <h3><code>AskHumanConfigSchema</code></h3>
+        <p><code>ask_human</code> protocol limits. The numbers come from ten days of inbox data: asks at or under 600 chars with one question got answered, longer ones did not, and a pending ask nobody answers in three days is not going to be.</p>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Default</th><th>Validation</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>maxChars</code></td>
+              <td>number</td>
+              <td><code>600</code></td>
+              <td>Positive integer. Longer questions are rejected by the tool with guidance to put details in a file</td>
+            </tr>
+            <tr>
+              <td><code>autoCloseHours</code></td>
+              <td>number</td>
+              <td><code>72</code></td>
+              <td>Positive. Pending asks older than this are auto-closed (inbox status <code>closed</code>, daily-memory note) by <code>sweepStaleAskHumanQuestions()</code>, which runs on every <code>ask_human</code> call for the calling bot</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <!-- OllamaConfigSchema -->
@@ -1154,6 +1242,18 @@ const config = await loadConfig('./config/config.json');
               <td>(defaults)</td>
               <td>Nested <code>LoopDetectionConfigSchema</code>. Tool loop detection for agent-loop executor phase.</td>
             </tr>
+            <tr>
+              <td><code>plannerBackend</code></td>
+              <td>enum</td>
+              <td><code>'inherit'</code></td>
+              <td><code>'inherit' | 'ollama' | 'claude-cli'</code>. Which backend the planner and strategist (<code>generate()</code> phases) run on, always on the <em>bare</em> client for that backend. <code>inherit</code> follows the bot's <code>llmBackend</code>; the per-bot <code>agentLoop.plannerBackend</code> wins over this. Exists because <code>LLMClientWithFallback.generate()</code> silently re-issued failed Claude CLI calls to Ollama and burned the Ollama Cloud weekly quota.</td>
+            </tr>
+            <tr>
+              <td><code>circuitBreaker</code></td>
+              <td>object</td>
+              <td>(defaults)</td>
+              <td>Fleet-wide per-backend circuit breaker for CONTEXTUAL (429 / quota) errors on the planner path: <code>enabled</code> (<code>true</code>), <code>threshold</code> (<code>3</code>, 1&ndash;50 consecutive failures), <code>cooldownMs</code> (<code>1800000</code>, 30 min), <code>weeklyQuotaCooldownMs</code> (<code>21600000</code>, 6 h, used when the error text mentions a weekly usage limit). Bots whose planner backend is open skip their cycle with <code>skippedReason: 'circuit-open:&lt;backend&gt;'</code>.</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1313,8 +1413,40 @@ const config = await loadConfig('./config/config.json');
               <td>&mdash; (optional)</td>
               <td>Duration string</td>
             </tr>
+            <tr>
+              <td><code>plannerBackend</code></td>
+              <td>enum</td>
+              <td>&mdash; (optional)</td>
+              <td><code>'inherit' | 'ollama' | 'claude-cli'</code>. Per-bot planner/strategist backend; undefined inherits the global <code>agentLoop.plannerBackend</code></td>
+            </tr>
+            <tr>
+              <td><code>engagementGate.enabled</code></td>
+              <td>boolean</td>
+              <td><code>true</code></td>
+              <td>&mdash;</td>
+            </tr>
+            <tr>
+              <td><code>engagementGate.mode</code></td>
+              <td>enum</td>
+              <td><code>'hard'</code></td>
+              <td><code>'soft' | 'hard'</code>. <code>hard</code> (default since 2026-08-21) downgrades CONTENT plans to idle while the gate is triggered; <code>soft</code> only annotates the planner prompt</td>
+            </tr>
+            <tr>
+              <td><code>engagementGate.threshold</code></td>
+              <td>number</td>
+              <td><code>5</code></td>
+              <td>1&ndash;50 (integer). Outputs with zero human feedback before the gate triggers</td>
+            </tr>
+            <tr>
+              <td><code>engagementGate.lookbackHours</code></td>
+              <td>number</td>
+              <td><code>168</code></td>
+              <td>1&ndash;720 (integer). How far back durable output and feedback are counted. 168&nbsp;h = 7 days, matching the retention of <code>BotSchedule.feedbackEvents</code></td>
+            </tr>
           </tbody>
         </table>
+        <p><span class="badge badge-yellow">Note</span> <code>engagementGate</code> exists <strong>only</strong> on the per-bot override. <code>GlobalAgentLoopConfigSchema</code> has no <code>engagementGate</code> block, so a fleet-wide <code>agentLoop.engagementGate.lookbackHours</code> key does not exist; when the per-bot block is absent the runtime falls back to <code>enabled: true</code>, <code>mode: 'hard'</code>, <code>threshold: 5</code> and <code>ENGAGEMENT_GATE_LOOKBACK_HOURS</code> (7&nbsp;&times;&nbsp;24).</p>
+        <p><span class="badge badge-yellow">2026-08-22</span> The gate now counts <strong>durable</strong> output &mdash; outcome-ledger <code>CONTENT</code>/<code>OUTREACH</code> entries, falling back to the production changelog &mdash; produced after the last human feedback signal, instead of the in-memory recent-actions window that reset on every restart. See <a href="agent-loop.html#engagement-gate">Agent Loop &sect; Engagement Gate</a>.</p>
       </div>
 
       <!-- ---- Tool Schemas ---- -->
@@ -1687,8 +1819,10 @@ const config = await loadConfig('./config/config.json');
           <tbody>
             <tr><td><code>enabled</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Whether <code>claude-cli</code> joins the model failover chain, read by <code>resolveCandidatesFromConfig()</code> in <code>src/bot/model-failover/model-fallback.ts</code>. Must be declared here or Zod strips it at load and the opt-out silently does nothing.</td></tr>
             <tr><td><code>model</code></td><td><code>string?</code></td><td><code>undefined</code></td><td>Passed to the CLI as <code>--model</code>; omitted means the CLI default.</td></tr>
+            <tr><td><code>crossBackendFallback</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Whether a failed <code>claude-cli</code> call may be silently re-issued to Ollama. Read by <code>createLLMClient()</code> via <code>CreateLLMClientOptions.crossBackendFallback</code>, wired in <code>bot-manager.ts</code>.</td></tr>
           </tbody>
         </table>
+        <p><span class="badge badge-red">Behaviour change 2026-08-22</span> This used to be implicit and on. With no <code>failover</code> chain configured, <code>createLLMClient()</code> returned <code>LLMClientWithFallback(claude, ollama)</code> for <em>every</em> <code>llmBackend: 'claude-cli'</code> caller &mdash; the reflection skill, the soul health check, the quality reviewer, the memory consolidator and the whole conversation path, not just the agent-loop planner &mdash; so a fleet of claude-cli bots drained a shared Ollama Cloud weekly quota while the llm-query-log still said <code>backend: 'claude-cli'</code>. A <code>claude-cli</code> bot now gets the bare <code>ClaudeCliLLMClient</code> unless this is turned on. Prefer an explicit <code>failover</code> chain, where <code>orderCandidatesByBackend()</code> puts the bot's own backend first.</p>
       </div>
 
       <!-- ImproveToolConfigSchema -->
@@ -2001,7 +2135,7 @@ const config = await loadConfig('./config/config.json');
       <!-- KarmaConfigSchema -->
       <div class="card">
         <h3><code>KarmaConfigSchema</code></h3>
-        <p>Karma scoring system for user interactions.</p>
+        <p>Per-bot quality score (0&ndash;100, time-decayed), <strong>outcome-based</strong>: every credit or debit is an outcome kind whose delta comes from <code>rewards</code>. A kind worth 0 is never written to the ledger, so <code>novelAction: 0</code> (the default) removes the per-cycle activity credit without unwiring the hook.</p>
         <table class="methods-table">
           <thead>
             <tr><th>Field</th><th>Type</th><th>Default</th><th>Validation</th></tr>
@@ -2030,6 +2164,60 @@ const config = await loadConfig('./config/config.json');
               <td>number</td>
               <td><code>30</code></td>
               <td>Number of days before decay</td>
+            </tr>
+            <tr>
+              <td><code>dedupCooldownMinutes</code></td>
+              <td>number</td>
+              <td><code>60</code></td>
+              <td>Automated negative events with the same dedup key (e.g. the same tool error) are written at most once per window</td>
+            </tr>
+            <tr>
+              <td><code>rewards.novelAction</code></td>
+              <td>number</td>
+              <td><code>0</code></td>
+              <td>A non-idle, non-repeated agent-loop cycle (activity, not impact)</td>
+            </tr>
+            <tr>
+              <td><code>rewards.productionApproved</code></td>
+              <td>number</td>
+              <td><code>3</code></td>
+              <td>Operator approved a production (rating no longer scales the delta)</td>
+            </tr>
+            <tr>
+              <td><code>rewards.productionRejected</code></td>
+              <td>number</td>
+              <td><code>-1</code></td>
+              <td>Operator rejected a production</td>
+            </tr>
+            <tr>
+              <td><code>rewards.askAnswered</code></td>
+              <td>number</td>
+              <td><code>2</code></td>
+              <td>A human answered an <code>ask_human</code> question (source <code>engagement</code>)</td>
+            </tr>
+            <tr>
+              <td><code>rewards.humanReply</code></td>
+              <td>number</td>
+              <td><code>3</code></td>
+              <td>A human replied to the bot (source <code>engagement</code>); rate-limited by <code>humanReplyCooldownHours</code></td>
+            </tr>
+            <tr>
+              <td><code>rewards.collaborateCompleted</code></td>
+              <td>number</td>
+              <td><code>0</code></td>
+              <td>A bot-to-bot collaboration finished (declared; not recorded by any call site yet)</td>
+            </tr>
+            <tr>
+              <td><code>rewards.toolError</code></td>
+              <td>number</td>
+              <td><code>-1</code></td>
+              <td>A tool call failed (execution / validation)</td>
+            </tr>
+            <tr>
+              <td><code>humanReplyCooldownHours</code></td>
+              <td>number</td>
+              <td><code>6</code></td>
+              <td>min: 0. At most one <code>humanReply</code> credit per bot within this window; <code>0</code> disables the cooldown</td>
             </tr>
           </tbody>
         </table>
@@ -2088,9 +2276,9 @@ const config = await loadConfig('./config/config.json');
             </tr>
             <tr>
               <td><code>token</code></td>
-              <td>string</td>
+              <td>string | null</td>
               <td><code>''</code></td>
-              <td>Telegram Bot API token (use <code>${ENV_VAR}</code> syntax)</td>
+              <td>Telegram Bot API token (use <code>${ENV_VAR}</code> syntax). <code>null</code> is the explicit &ldquo;headless on purpose&rdquo; value and is normalised to <code>''</code>. A non-empty string that is not token-shaped (<code>^\d{6,}:[A-Za-z0-9_-]{30,}$</code>) is reported as channel state <code>placeholder</code> and is never sent to Telegram; an empty one is <code>missing</code>. See <code>classifyTelegramToken()</code> in <code>src/bot/telegram-errors.ts</code></td>
             </tr>
             <tr>
               <td><code>enabled</code></td>
@@ -2187,6 +2375,12 @@ const config = await loadConfig('./config/config.json');
               <td>object</td>
               <td>&mdash; (optional)</td>
               <td>Topic guard pre-filter config. Fields: <code>enabled</code> (bool), <code>model</code> (string, defaults to claude-haiku), <code>botPurpose</code> (string, required when enabled), <code>allowedTopics</code> (string[]), <code>blockedTopics</code> (string[]), <code>strictness</code> ('loose'|'moderate'|'strict', default 'moderate'), <code>failOpen</code> (bool, default true), <code>customRejectMessage</code> (string).</td>
+            </tr>
+            <tr>
+              <td><code>traits</code></td>
+              <td>object</td>
+              <td>&mdash; (optional)</td>
+              <td>Operator guard rails on <code>TRAITS.json</code> (<code>BotTraitsConfigSchema</code>): <code>pinned</code> (record of trait name &rarr; 0&ndash;1; always wins on load and after every adjustment, persisted with history source <code>'pinned'</code>) and <code>locked</code> (trait names whose strategist / reflection / adaptive deltas are dropped). Trait names: <code>curiosity</code>, <code>caution</code>, <code>sociability</code>, <code>persistence</code>, <code>creativity</code>, <code>independence</code>, <code>depth</code>, <code>risk_tolerance</code>. Resolved live from the bot list by <code>TraitRegisters</code>.</td>
             </tr>
             <tr>
               <td><code>allowedWritePaths</code></td>

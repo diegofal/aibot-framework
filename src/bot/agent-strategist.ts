@@ -201,10 +201,17 @@ export async function runStrategist(
     crystallizationContext?: string;
     goalPerformance?: string;
     peerInsights?: string;
-  }
+  },
+  /**
+   * Client + model to run on. The agent loop passes the planner-backend
+   * selection so the strategist honours `agentLoop.plannerBackend` and never
+   * goes through the bot client's silent cross-backend fallback. Defaults to
+   * the bot client for callers that predate the option.
+   */
+  llm?: { client: LLMClient; model: string }
 ): Promise<StrategistResultWithUsage | null> {
-  const llmClient = ctx.getLLMClient(botId);
-  const model = ctx.getActiveModel(botId);
+  const llmClient = llm?.client ?? ctx.getLLMClient(botId);
+  const model = llm?.model ?? ctx.getActiveModel(botId);
 
   const sevenDaysAgo = localDateStr(new Date(Date.now() - 7 * 86_400_000));
   const recentMemory = soulContext.soulLoader.readDailyLogsSince(sevenDaysAgo);

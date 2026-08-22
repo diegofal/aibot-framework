@@ -14,7 +14,8 @@ export interface BillingRoutesDeps {
 
 export function billingRoutes(deps: BillingRoutesDeps) {
   const { tenantManager, botManager, config, logger } = deps;
-  const app = new Hono();
+  // `tenant` is populated by the tenant auth middleware (src/tenant/middleware.ts).
+  const app = new Hono<{ Variables: { tenant: TenantContext } }>();
 
   // GET /billing/status — current plan, usage, and billing info
   app.get('/status', async (c) => {

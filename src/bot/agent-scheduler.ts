@@ -1,13 +1,32 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BotConfig } from '../config';
+import type { KarmaService } from '../karma/service';
+import type { KarmaOutcomeKind } from '../karma/types';
 import type { Logger } from '../logger';
 import type { AgentLoopResult, BotScheduleInfo } from './agent-loop';
 import { parseDurationMs } from './agent-loop';
 import { PRESET_DIRECTIVE_DEFINITIONS } from './agent-loop-prompts';
-import type { RecentAction } from './agent-loop-utils';
+import {
+  type FeedbackEvent,
+  type FeedbackSource,
+  HUMAN_INBOUND_HOOK,
+  type HumanInboundEvent,
+  type RecentAction,
+} from './agent-loop-utils';
 import { computeCyclesUntilStrategist } from './agent-strategist';
 import type { BotContext } from './types';
+
+/** Human feedback signals that earn karma; agent_feedback is tracked but not credited */
+const FEEDBACK_KARMA_KIND: Partial<
+  Record<FeedbackSource, { kind: KarmaOutcomeKind; reason: string }>
+> = {
+  ask_human: { kind: 'askAnswered', reason: 'A human answered an ask_human question' },
+  human_message: { kind: 'humanReply', reason: 'A human replied to the bot' },
+};
+
+/** How long recorded human feedback events are kept on the schedule */
+const FEEDBACK_EVENT_RETENTION_MS = 7 * 24 * 3_600_000;
 
 export interface BotSchedule {
   nextRunAt: number;
@@ -28,6 +47,10 @@ export interface BotSchedule {
   lastErrorMessage: string | null;
   /** Number of consecutive cycles without an ask_human tool call */
   cyclesSinceAskHuman: number;
+  /** Human feedback signals (ask_human answers, agent feedback, inbound messages) — feeds the engagement gate */
+  feedbackEvents: FeedbackEvent[];
+  /** Why the last cycle was skipped (e.g. `circuit-open:ollama`); null when it ran */
+  skippedReason: string | null;
 }
 
 /**
@@ -49,6 +72,9 @@ export class AgentScheduler {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private draining = false;
   private drainingResolve: (() => void) | null = null;
+  private karmaService: KarmaService | null = null;
+  /** Bound listener for `HUMAN_INBOUND_HOOK`, attached while the loop runs */
+  private humanInboundListener: ((event: HumanInboundEvent) => void) | null = null;
   private static readonly FLUSH_DEBOUNCE_MS = 10_000;
 
   constructor(
@@ -73,10 +99,13 @@ export class AgentScheduler {
       const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
       for (const [botId, schedule] of Object.entries(raw)) {
         const s = schedule as BotSchedule;
-        // Restore without lastResult (verbose, regenerated at runtime)
+        // Restore without lastResult (verbose, regenerated at runtime).
+        // Fields added after a schedule was persisted are backfilled.
         this.botSchedules.set(botId, {
           ...s,
           lastResult: null,
+          feedbackEvents: Array.isArray(s.feedbackEvents) ? s.feedbackEvents : [],
+          skippedReason: s.skippedReason ?? null,
         });
 
         // Reconcile nextCheckIn with current config — the persisted schedule
@@ -185,11 +214,13 @@ export class AgentScheduler {
     }
     if (this.enabled) return;
     this.enabled = true;
+    this.subscribeHumanInbound();
     this.loopPromise = this.runLoop();
   }
 
   stop(): void {
     this.enabled = false;
+    this.unsubscribeHumanInbound();
     for (const c of this.sleepControllers) c.abort();
     // Flush synchronously before clearing maps
     if (this.flushTimer) {
@@ -217,6 +248,10 @@ export class AgentScheduler {
     if (!this.enabled) return;
     if (!this.ctx.runningBots.has(botId)) return;
 
+    // An immediate run is requested on human inbound messages — that is a
+    // feedback signal for the engagement gate, whether or not the bot is busy.
+    this.recordFeedbackEvent(botId, 'human_message');
+
     if (this.runningBotIds.has(botId)) {
       // Bot is currently executing — queue a pending wake
       this.pendingWakeRequests.add(botId);
@@ -232,6 +267,83 @@ export class AgentScheduler {
     }
     this.ctx.logger.info({ botId }, 'Agent loop: immediate run triggered (bot idle)');
     this.wakeUp();
+  }
+
+  /**
+   * Listen for human messages arriving on the channel-agnostic pipeline
+   * (REST, web/WebSocket, WhatsApp, Discord). Telegram is not part of this —
+   * its message buffer already records the signal via `requestImmediateRun()`,
+   * so listening here as well would double-count it.
+   */
+  private subscribeHumanInbound(): void {
+    if (this.humanInboundListener || !this.ctx.hooks) return;
+    const listener = (event: HumanInboundEvent): void => {
+      try {
+        this.recordFeedbackEvent(event.botId, 'human_message');
+      } catch (err) {
+        this.ctx.logger.warn(
+          { err, botId: event?.botId },
+          'Agent loop: failed to record human inbound feedback'
+        );
+      }
+    };
+    this.humanInboundListener = listener;
+    this.ctx.hooks.on(HUMAN_INBOUND_HOOK, listener);
+  }
+
+  private unsubscribeHumanInbound(): void {
+    if (!this.humanInboundListener) return;
+    this.ctx.hooks?.off(HUMAN_INBOUND_HOOK, this.humanInboundListener);
+    this.humanInboundListener = null;
+  }
+
+  /**
+   * Record a human feedback signal for the engagement gate. Called when an
+   * ask_human answer or dashboard feedback is consumed by a cycle, on every
+   * human inbound Telegram message (via requestImmediateRun) and on every
+   * human message from any other channel (via the human_inbound hook).
+   */
+  recordFeedbackEvent(botId: string, source: FeedbackSource): void {
+    const schedule = this.botSchedules.get(botId);
+    if (!schedule) return;
+    const now = Date.now();
+    const cutoff = now - FEEDBACK_EVENT_RETENTION_MS;
+    schedule.feedbackEvents = [
+      ...(schedule.feedbackEvents ?? []).filter((e) => e.timestamp >= cutoff),
+      { timestamp: now, source },
+    ];
+    this.schedulePersist();
+    this.creditFeedbackKarma(botId, source);
+  }
+
+  /** Wire the karma ledger so human feedback signals earn engagement karma. */
+  setKarmaService(karmaService: KarmaService): void {
+    this.karmaService = karmaService;
+  }
+
+  /**
+   * Outcome-based karma: an answered ask_human or a human reply is real
+   * engagement, unlike a completed cycle. Deltas and the humanReply cooldown
+   * live in KarmaService (config.karma.rewards) — a 0 reward is a no-op.
+   */
+  private creditFeedbackKarma(botId: string, source: FeedbackSource): void {
+    if (!this.karmaService || this.ctx.config?.karma?.enabled === false) return;
+    const mapping = FEEDBACK_KARMA_KIND[source];
+    if (!mapping) return;
+    try {
+      const event = this.karmaService.recordOutcome(botId, mapping.kind, mapping.reason, {
+        feedbackSource: source,
+      });
+      if (!event) return;
+      this.ctx.activityStream?.publish({
+        type: 'karma:change',
+        botId,
+        timestamp: Date.now(),
+        data: { delta: event.delta, reason: event.reason, source: event.source, kind: event.kind },
+      });
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId, source }, 'Agent loop: failed to credit feedback karma');
+    }
   }
 
   /** Returns true if a pending wake was consumed for the given bot. */
@@ -393,6 +505,8 @@ export class AgentScheduler {
           lastErrorMessage: null,
           lastIdleLoggedAt: null,
           cyclesSinceAskHuman: 0,
+          feedbackEvents: [],
+          skippedReason: null,
         });
         this.ctx.logger.debug({ botId, staggerOffset }, 'Agent loop: added new bot to schedule');
       }
@@ -431,6 +545,8 @@ export class AgentScheduler {
         schedule.retryCount = 0;
         schedule.lastErrorMessage = null;
       }
+      schedule.skippedReason =
+        result.status === 'skipped' ? (result.skippedReason ?? result.summary) : null;
     } else {
       this.botSchedules.set(botId, {
         nextRunAt: now + sleepMs,
@@ -449,6 +565,9 @@ export class AgentScheduler {
         retryCount: 0,
         lastErrorMessage: null,
         cyclesSinceAskHuman: 0,
+        feedbackEvents: [],
+        skippedReason:
+          result.status === 'skipped' ? (result.skippedReason ?? result.summary) : null,
       });
     }
     this.schedulePersist();
@@ -518,6 +637,7 @@ export class AgentScheduler {
         recentActionsSummary: sched.recentActions.slice(-5).map((a) => a.planSummary),
         retryCount: sched.retryCount,
         lastErrorMessage: sched.lastErrorMessage,
+        skippedReason: sched.skippedReason ?? null,
         isExecutingLoop: this.runningBotIds.has(botId),
         agentLoopEnabled: this.isAgentLoopEnabledForBot(botId),
         directives: resolveDirectives(botConfig),

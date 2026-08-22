@@ -84,6 +84,17 @@ export const TOOL_CATEGORY_NAMES = [
 
 export type ToolCategory = (typeof TOOL_CATEGORY_NAMES)[number];
 
+/**
+ * Drop matching tools from a shared array without replacing the reference.
+ * `BotContext.tools` is `readonly` because BotManager and the registry hold the
+ * same array; reassigning would desync them.
+ */
+function removeToolsInPlace(tools: Tool[], shouldRemove: (t: Tool) => boolean): void {
+  for (let i = tools.length - 1; i >= 0; i--) {
+    if (shouldRemove(tools[i])) tools.splice(i, 1);
+  }
+}
+
 export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
   web: ['web_search', 'web_fetch'],
   memory: [
@@ -367,7 +378,9 @@ export class ToolRegistry {
 
     // Cron tool
     if (config.cron.enabled) {
-      tools.push(createCronTool(this.ctx.cronService));
+      tools.push(
+        createCronTool(this.ctx.cronService, { getOperator: () => this.ctx.config.operator })
+      );
       logger.info('Cron tool initialized');
     }
 
@@ -415,6 +428,7 @@ export class ToolRegistry {
     // Proactive messaging tool (for agent loop user awareness)
     tools.push(
       createSendProactiveMessageTool({
+        getOperator: () => this.ctx.config.operator,
         sendTelegramMessage: async (chatId: number, text: string) => {
           // Find a running bot instance to send through
           const bot = this.ctx.bots?.values().next().value;
@@ -526,7 +540,9 @@ export class ToolRegistry {
     const oldMcpNames = TOOL_CATEGORIES.mcp;
     if (oldMcpNames.length > 0) {
       const oldSet = new Set(oldMcpNames);
-      this.ctx.tools = this.ctx.tools.filter((t) => !oldSet.has(t.definition.function.name));
+      // In place: BotManager shares this exact array by reference, so replacing
+      // it would leave the manager holding the pre-filter copy.
+      removeToolsInPlace(this.ctx.tools, (t) => oldSet.has(t.definition.function.name));
       for (const name of oldMcpNames) {
         TOOL_TO_CATEGORY.delete(name);
       }
@@ -902,9 +918,7 @@ export class ToolRegistry {
       }
     }
 
-    this.ctx.tools = this.ctx.tools.filter(
-      (t) => !removedToolNames.has(t.definition.function.name)
-    );
+    removeToolsInPlace(this.ctx.tools, (t) => removedToolNames.has(t.definition.function.name));
     this.ctx.toolDefinitions.length = 0;
     this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
 

@@ -445,3 +445,157 @@ describe('KarmaService', () => {
     });
   });
 });
+
+// ── Outcome-based karma (rewards table) ──
+
+describe('KarmaService.recordOutcome', () => {
+  let service: KarmaService;
+
+  beforeEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    service = new KarmaService(makeConfig(), noopLogger);
+  });
+
+  afterEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test('default rewards table matches the outcome-based design', () => {
+    expect(service.getRewards()).toEqual({
+      novelAction: 0,
+      productionApproved: 3,
+      productionRejected: -1,
+      askAnswered: 2,
+      humanReply: 3,
+      collaborateCompleted: 0,
+      toolError: -1,
+    });
+  });
+
+  test('novelAction is worth 0 by default → no event written, returns null', () => {
+    const ev = service.recordOutcome('bot1', 'novelAction', 'Novel action: researched X');
+    expect(ev).toBeNull();
+    expect(service.getAllEvents('bot1')).toHaveLength(0);
+    expect(service.getScore('bot1')).toBe(50);
+  });
+
+  test('config.rewards overrides a single kind without touching the others', () => {
+    const svc = new KarmaService(makeConfig({ rewards: { novelAction: 1 } }), noopLogger);
+    expect(svc.getRewards().novelAction).toBe(1);
+    expect(svc.getRewards().productionApproved).toBe(3);
+    const ev = svc.recordOutcome('bot1', 'novelAction', 'Novel action: researched X');
+    expect(ev?.delta).toBe(1);
+    expect(ev?.source).toBe('agent-loop');
+  });
+
+  test('productionApproved / productionRejected use the production source and carry metadata', () => {
+    const ok = service.recordOutcome('bot1', 'productionApproved', 'Production approved: "a.md"', {
+      rating: 5,
+    });
+    expect(ok?.delta).toBe(3);
+    expect(ok?.source).toBe('production');
+    expect(ok?.kind).toBe('productionApproved');
+    expect(ok?.metadata?.rating).toBe(5);
+
+    const bad = service.recordOutcome('bot1', 'productionRejected', 'Production rejected: "b.md"');
+    expect(bad?.delta).toBe(-1);
+    expect(bad?.source).toBe('production');
+    expect(service.getScore('bot1')).toBe(52);
+  });
+
+  test('askAnswered and humanReply are credited under the engagement source', () => {
+    const ask = service.recordOutcome('bot1', 'askAnswered', 'Operator answered a question');
+    expect(ask?.delta).toBe(2);
+    expect(ask?.source).toBe('engagement');
+    const reply = service.recordOutcome('bot1', 'humanReply', 'Human replied in conversation');
+    expect(reply?.delta).toBe(3);
+    expect(reply?.source).toBe('engagement');
+  });
+
+  test('toolError stays -1 with the tool source (existing dedup applies)', () => {
+    const first = service.recordOutcome('bot1', 'toolError', 'Tool error: file_read — ENOENT');
+    expect(first?.delta).toBe(-1);
+    expect(first?.source).toBe('tool');
+    const second = service.recordOutcome('bot1', 'toolError', 'Tool error: file_read — ENOENT');
+    expect(second).toBeNull();
+  });
+
+  test('humanReply is credited at most once per bot per cooldown window (6h default)', () => {
+    const a = service.recordOutcome('bot1', 'humanReply', 'Human replied');
+    const b = service.recordOutcome('bot1', 'humanReply', 'Human replied again');
+    expect(a).not.toBeNull();
+    expect(b).toBeNull();
+    // Another bot is independent
+    expect(service.recordOutcome('bot2', 'humanReply', 'Human replied')).not.toBeNull();
+    // Other kinds are not affected by the humanReply cooldown
+    expect(service.recordOutcome('bot1', 'askAnswered', 'Answered')).not.toBeNull();
+    expect(service.recordOutcome('bot1', 'askAnswered', 'Answered again')).not.toBeNull();
+  });
+
+  test('humanReply cooldown window is configurable (0 disables it)', () => {
+    const svc = new KarmaService(makeConfig({ humanReplyCooldownHours: 0 }), noopLogger);
+    expect(svc.recordOutcome('bot1', 'humanReply', 'Human replied')).not.toBeNull();
+    expect(svc.recordOutcome('bot1', 'humanReply', 'Human replied')).not.toBeNull();
+  });
+
+  test('unknown kind is rejected with null and no write', () => {
+    const ev = service.recordOutcome('bot1', 'bogus' as any, 'nope');
+    expect(ev).toBeNull();
+    expect(service.getAllEvents('bot1')).toHaveLength(0);
+  });
+});
+
+describe('KarmaService breakdown', () => {
+  let service: KarmaService;
+
+  beforeEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    service = new KarmaService(makeConfig(), noopLogger);
+  });
+
+  afterEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test('getKarmaScore returns a 30-day breakdown by source and by kind', () => {
+    service.recordOutcome('bot1', 'productionApproved', 'Production approved: "a.md"');
+    service.recordOutcome('bot1', 'productionApproved', 'Production approved: "b.md"');
+    service.recordOutcome('bot1', 'askAnswered', 'Answered');
+    service.recordOutcome('bot1', 'toolError', 'Tool error: x — boom');
+    service.addEvent('bot1', 4, 'Operator bonus', 'manual');
+
+    const score = service.getKarmaScore('bot1');
+    expect(score.breakdown.windowDays).toBe(30);
+    expect(score.breakdown.bySource).toEqual({
+      production: 6,
+      engagement: 2,
+      tool: -1,
+      manual: 4,
+    });
+    expect(score.breakdown.byKind).toEqual({
+      productionApproved: 6,
+      askAnswered: 2,
+      toolError: -1,
+    });
+  });
+
+  test('breakdown ignores events older than the window', () => {
+    const old = {
+      id: 'old',
+      botId: 'bot1',
+      timestamp: new Date(Date.now() - 40 * 86_400_000).toISOString(),
+      delta: 10,
+      reason: 'ancient',
+      source: 'production',
+    };
+    const path = join(TEST_DIR, 'bot1', 'events.jsonl');
+    service.addEvent('bot1', 1, 'recent', 'manual');
+    const recent = readFileSync(path, 'utf-8');
+    const { writeFileSync } = require('node:fs');
+    writeFileSync(path, `${JSON.stringify(old)}\n${recent}`, 'utf-8');
+
+    const breakdown = service.getBreakdown('bot1');
+    expect(breakdown.bySource).toEqual({ manual: 1 });
+    expect(breakdown.byKind).toEqual({});
+  });
+});

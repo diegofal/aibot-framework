@@ -99,12 +99,16 @@ export function agentLoopRoutes(deps: {
     const allowedBotIds = new Set(
       deps.config.bots.filter((b) => b.tenantId === tenantId).map((b) => b.id)
     );
-    const filtered: Record<string, unknown> = {};
-    if (stats && typeof stats === 'object') {
-      for (const [key, value] of Object.entries(stats as Record<string, unknown>)) {
-        if (allowedBotIds.has(key)) filtered[key] = value;
-      }
-    }
+    // getLlmStats() with no botId returns LlmBotStats[]; filter on each entry's
+    // own botId. Treating it as a map keyed by bot id matched array indices
+    // ("0", "1", …) instead, so every tenant received an empty object.
+    const filtered = Array.isArray(stats)
+      ? stats.filter((s) => allowedBotIds.has(s.botId))
+      : Object.fromEntries(
+          Object.entries(stats as unknown as Record<string, unknown>).filter(([k]) =>
+            allowedBotIds.has(k)
+          )
+        );
     return c.json({ stats: filtered });
   });
 

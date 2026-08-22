@@ -27,6 +27,9 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
 - **Streaming responses** — Token-by-token streaming for Ollama with progressive Telegram message editing and WebSocket chunk events
 - **A2A Protocol** — Agent-to-agent communication (v0.3.0) with JSON-RPC server, client, agent directory, and skill-to-tool adaptation
 - **Multi-channel** — Telegram, WhatsApp (Cloud API), REST, WebSocket widget, Discord (Gateway + REST)
+- **Stats & Behaviour** — Read-only fleet/bot/behaviour/infra aggregations over the on-disk telemetry (LLM calls, tools, outputs, asks, goals, karma, traits, backends, cron, channel state) with a one-word posture per bot
+- **Hygiene routines** — Deterministic, LLM-free maintenance for souls, memory logs, productions and the data directory; preview is side-effect free, apply backs up and never deletes
+- **Agent-loop resilience** — Planner/strategist pinned to a backend (`agentLoop.plannerBackend`), a fleet-wide per-backend circuit breaker for 429/quota errors, and a hard engagement gate fed by real human feedback
 
 ## Quick Start
 
@@ -91,8 +94,9 @@ src/
 │   ├── context-compaction.ts     #   LLM-based context summarization
 │   ├── collaboration.ts    #   Bot-to-bot collaboration modes
 │   ├── agent-loop.ts       #   Autonomous agent orchestrator
-│   ├── agent-planner.ts    #   LLM planner with retry
+│   ├── agent-planner.ts    #   LLM planner with retry + planner backend selection
 │   ├── agent-strategist.ts #   Goal reflection and cadence
+│   ├── agent-retry-engine.ts #  Retry with backoff + fleet-wide backend circuit breaker
 │   ├── tool-registry.ts    #   Tool init, executor, filtering
 │   ├── system-prompt-builder.ts  #   Prompt composition
 │   ├── ask-permission-store.ts   #   Human-in-the-loop approval queue
@@ -167,6 +171,17 @@ src/
 │   ├── system-export-service.ts  #   Bundle assembly + manifest/checksums
 │   ├── system-import-service.ts  #   Validation, collision planning, restore
 │   └── effective-config.ts #   Zod-free config slice for disaster recovery
+├── stats/                  # Stats & Behaviour aggregations (read-only, 60 s cache)
+│   ├── types.ts            #   Frozen API contract: FleetResponse, BotDetailResponse, ...
+│   ├── posture.ts          #   computePosture(): dormant/unknown/blocked/idle/standby/active
+│   ├── readers/            #   One reader per on-disk source (llm-query-log, tool-audit, souls, ...)
+│   ├── fleet-aggregator.ts #   /api/stats/fleet + /api/stats/bots/:botId
+│   ├── behaviour-aggregator.ts # /api/stats/behaviour
+│   └── infra-aggregator.ts #   /api/stats/infra
+├── hygiene/                # Deterministic maintenance routines (preview + apply)
+│   ├── registry.ts         #   HygieneRegistry + HygieneHistory (runs.jsonl)
+│   ├── fs-safe.ts          #   .versions backups, _trash batches, path guards
+│   └── routines/           #   goal-lint, soul-structure, memory-hygiene, productions-triage, data-cleanup
 ├── core/                   # Skill loader, registry, config schemas, SKILL.md adapter
 ├── karma/                  # Per-bot quality scoring (0-100)
 ├── productions/            # Bot output tracking & review
@@ -203,6 +218,14 @@ The conversation pipeline handles session management, RAG prefetch, LLM calls, t
 ### Agent Loop
 
 Autonomous planner-executor pattern running on configurable intervals. The **planner** decides what to do based on goals, memory, karma, and recent actions. The **strategist** handles goal reflection and focus. The **executor** runs plans with full tool access. Includes exponential backoff retry, idle detection, and novelty enforcement to prevent busywork.
+
+Three resilience mechanisms guard the `generate()` phases (planner + strategist):
+
+- **Planner backend pinning** — `agentLoop.plannerBackend: 'inherit' | 'ollama' | 'claude-cli'` (global, per-bot override). `inherit` follows the bot's `llmBackend`, and the planner always runs on the *bare* client for that backend: `LLMClientWithFallback` used to re-issue any failed Claude CLI `generate()` to Ollama silently, which is how claude-cli bots exhausted the Ollama Cloud weekly quota. The executor keeps the full wrapper because tool calling needs it.
+- **Backend circuit breaker** — `agentLoop.circuitBreaker { enabled, threshold: 3, cooldownMs: 30 min, weeklyQuotaCooldownMs: 6 h }`, fleet-wide per backend. After `threshold` consecutive 429/quota errors the circuit opens and every bot on that backend skips its cycle (`skippedReason: 'circuit-open:<backend>'`) with one info log, no retries and no `[ERROR]` spam in daily memory; one half-open probe is let through after the cooldown.
+- **Engagement gate (hard by default)** — after `threshold` (5) outputs with zero human feedback, CONTENT plans are downgraded to idle until the bot earns feedback with OUTREACH/ASSESSMENT work. Feedback is counted from production approvals/rejections, answered `ask_human` questions, dashboard feedback and human inbound messages — never from the bot's own action log. Output is counted from **durable** state (the outcome ledger, falling back to the production changelog) since the last feedback signal, inside `bots[].agentLoop.engagementGate.lookbackHours` (default `168`); the in-memory action window it used to count resets on every restart, which left the gate inert.
+
+A quota outage is not always visible as one: `classifyError()` reads the structured `apiErrorStatus` before any text matching (a Claude CLI 429 blob contains `"permission_denials":[]`, which used to make it look permanent), and when the CLI names a reset time the circuit breaker uses that instant as the cooldown end, clamped to `[1 min, weeklyQuotaCooldownMs]`. An identical error is appended to a bot's daily memory at most once every 6 hours.
 
 ### Soul & Memory
 
@@ -244,6 +267,10 @@ Token-by-token streaming for Ollama backend (opt-in via `conversation.streaming`
 
 Channel-agnostic architecture with adapters for Telegram (grammy), WhatsApp Cloud API (images, interactive buttons, status tracking), Discord (REST API + Gateway WebSocket, no discord.js), REST API, and WebSocket widget. Outbound channel factory enables proactive messaging across all channels via the `send_message` tool with contact directory lookup.
 
+**Headless bots run cron instructions too.** `handleCronInstruction()` no longer needs the bot's own Telegram connection: delivery resolves own instance → any live fleet instance → the bot's web session, and the synthetic message carries the real `channelKind`. A `null` outbound channel now means genuinely undeliverable. The trade-off to know about: a headless bot's cron reply delivered through another bot's Telegram connection arrives **from that other bot's account**.
+
+A human message arriving on REST, WebSocket, WhatsApp or Discord emits the `human_inbound` event from `handleChannelMessage()`, which `AgentScheduler` turns into an engagement-gate feedback signal and `humanReply` karma. Peer agents, MCP traffic, synthetic messages and cron-generated messages are excluded.
+
 ### A2A Protocol
 
 Agent-to-Agent communication following the v0.3.0 spec. JSON-RPC server (`message/send`, `tasks/get`, `tasks/cancel`) with `.well-known/agent.json` discovery. Agent directory with registration, heartbeat, stale pruning, and skill search. HTTP client + client pool for connecting to external A2A agents. Tool adapter converts external agent skills into framework tools (`a2a_{agent}_{skill}`).
@@ -255,6 +282,8 @@ Automated security checks on bot startup (24h cooldown): filesystem permissions,
 ### Model Failover
 
 `FailoverLLMClient` wraps LLM calls with ordered candidate chains, error classification (auth/billing/rate_limit/timeout/context_length/format), cooldown tracking, and smart skip/abort logic. Backend-scoped errors (auth, billing) skip all models on that backend. Format/context_length errors abort the chain. Configurable via `failover` config block.
+
+**Chains lead with the bot's own backend.** `orderCandidatesByBackend()` reorders the resolved candidates so a `claude-cli` bot tries Claude first, and `resolveOllamaModels()` reads the Ollama client's configured models — the primary used to be `ollamaClient.toString()`, i.e. the literal string `[object Object]`.
 
 **Fallback ordering: fastest first, not roomiest first.** This was inverted on 2026-08-11. A context_length error aborts the chain, so the old rule was to order fallbacks from the largest context window down — which forced `nemotron-3-super:cloud` (256K, but a reasoning model measured at **35.6 s** to first token) ahead of `gpt-oss:120b-cloud` (128K, **836 ms**), taxing every primary failure with a ~35 s stall. Instead, `resolveContextWindow()` now clamps the compaction budget to the **smallest context window in the active chain** (`src/bot/model-failover/model-context-windows.ts`), so no candidate can overflow and ordering is free to follow latency. When you add a model the table does not know, register it in `conversation.compaction.modelContextWindows` — unknown tags impose no clamp rather than a guessed one. See `docs/deployment-cloud.md` §5.
 
@@ -288,6 +317,16 @@ because an unauthenticated CLI fails *silently from the operator's point of view
 contributes and nothing in the logs says why. Opt out with `claudeCli.enabled: false`. See
 [docs/deployment-cloud.md](docs/deployment-cloud.md) §11.1.
 
+**Cross-backend fallback is opt-in and off by default** (`claudeCli.crossBackendFallback`, default
+`false`). With no `failover` chain configured, `createLLMClient()` used to wrap every
+`llmBackend: 'claude-cli'` bot in `LLMClientWithFallback(claude, ollama)`, so *any* failed Claude
+call was silently re-issued to Ollama — the reflection skill, the soul health check, the quality
+reviewer, the memory consolidator and the whole conversation path, not just the agent-loop planner.
+A `claude-cli` bot now gets the bare client unless the flag is turned on. Errors from the CLI arrive
+as `ClaudeCliError`, carrying `exitCode`, `apiErrorStatus`, `terminalReason` and the parsed
+`resetsAt` instant, so a rate limit is classified and cooled down correctly instead of looking
+permanent.
+
 ### Tools
 
 41 LLM-callable tools across 11 categories: web (search, fetch, browser), files (read, write, edit), execution, soul/memory management, goals, collaboration, cron, social media (Reddit, Twitter), calendar, core memory, permissions, productions, and MCP. Dynamic tool creation allows bots to build new tools at runtime (with human approval). Per-bot `disabledTools` filtering. Tool categories enable pre-selection by domain. Tool loop detection (4 strategies) prevents LLMs from getting stuck in repetitive patterns.
@@ -298,7 +337,7 @@ Three modes: **visible** (public multi-turn with @mentions), **internal** (behin
 
 ### Web Dashboard & API
 
-Hono-based server with SPA frontend and WebSocket log streaming. Pages: Dashboard (agent loop status), Agents (CRUD, soul generation), Sessions, Cron, Tools (dynamic tool approval), Skills, Productions (review & feedback), Karma, Integrations, Settings. 25+ REST API endpoints.
+Hono-based server with SPA frontend and WebSocket log streaming. Pages: Dashboard (agent loop status), Agents (CRUD, soul generation), Stats & Behaviour (fleet, bot detail, behaviour, infra, hygiene), Sessions, Cron, Tools (dynamic tool approval), Skills, Productions (review & feedback), Karma, Integrations, Settings. 25+ REST API endpoints.
 
 ### Multi-Tenant BaaS
 
@@ -352,16 +391,39 @@ Also at `GET /api/system/export` and `POST /api/system/import`, and in the dashb
 
 ### Productions & Karma
 
-Productions track and review bot outputs with approve/reject, ratings, and threaded feedback. Karma is a time-decayed quality score (0-100) based on production evaluations, tool errors, novelty, and manual adjustments. Injected into planner prompts so bots learn from their track record.
+Productions track and review bot outputs with approve/reject, ratings, and threaded feedback. Karma is a time-decayed quality score (0-100) that is **outcome-based**: every credit or debit is an outcome kind whose delta comes from `config.karma.rewards` — defaults `productionApproved: 3`, `productionRejected: -1`, `askAnswered: 2`, `humanReply: 3` (at most once per bot per `humanReplyCooldownHours`, 6), `toolError: -1`, `novelAction: 0`, `collaborateCompleted: 0`. A kind worth 0 is never written, so a completed cycle earns nothing unless an operator turns it back on. `GET /api/karma/:botId` returns a `breakdown` (raw deltas by source and by kind over 30 days) that the dashboard shows as "Score composition". Injected into planner prompts so bots learn from their track record.
+
+Personality traits (`TRAITS.json`, eight 0.1–0.9 registers that mechanically tune temperature, tool rounds and check-in cadence) can be guarded per bot with `bots[].traits { pinned: { sociability: 0.3 }, locked: ["independence"] }`: pinned values always win, locked traits ignore strategist/reflection deltas, and the strategist prompt no longer prescribes a universal "low engagement → more sociable" direction — a delta needs a concrete observation about this agent and must agree with its identity.
+
+### Stats & Behaviour
+
+`src/stats/` aggregates the telemetry the framework already writes (llm-query-log, tool-audit, outcome ledger, karma, scheduler state, conversations, sessions, cron, knowledge mesh, soul files, log tail) into four read-only, tenant-scoped endpoints cached for 60 s: `GET /api/stats/fleet?window=24h|7d|30d` (one row per bot: backend, channel state, posture, LLM/tool/output/engagement/goals/karma/traits/soul/cycle stats), `GET /api/stats/bots/:botId` (goal detail, trait history, recent cycles, daily series, asks, top errors), `GET /api/stats/behaviour` (production without feedback, ask economics by question length, collaboration graph, mesh output, trait variance/drift) and `GET /api/stats/infra` (backend 429/401, security audit, cron, Telegram channel states, log noise, boots). Nothing throws on missing data; a fresh bot yields zeros. `computePosture()` summarises each bot as `dormant`, `unknown`, `blocked`, `idle`, `standby` or `active` (first matching rule wins).
+
+### Hygiene Routines
+
+`src/hygiene/` holds deterministic, LLM-free maintenance with `preview` (no writes) and `apply`: `goal-lint` (archived goals under Active, duplicate titles, oversized notes, stale blocks, dead triggers), `soul-structure` (soul lint, SOUL = MOTIVATIONS, missing MEMORY.md/TRAITS.json, stale Current Focus, failed last review), `memory-hygiene` (PII redaction, stale "tool unavailable" constraints, pending daily logs), `productions-triage` (stale unreviewed, duplicate numbering, orphan changelog refs, unnumbered files) and the fleet-wide `data-cleanup` (orphan karma/soul dirs, legacy config souls, old Claude CLI transcripts; config findings are report-only). Apply backs up every soul file to `.versions/<file>.<ISO>.bak` and **never deletes** — cleanup moves paths into `data/_trash/<stamp>/` with a `manifest.json`. Runs are logged to `data/hygiene/runs.jsonl`. API: `GET /api/hygiene/routines`, `POST /api/hygiene/run { routine, botId?, apply?, options? }`, `GET /api/hygiene/history`.
+
+Routine options are surfaced as checkboxes on each routine card at `#/stats/hygiene`: `productions-triage` takes `archiveStale` and `pruneOrphans` (the latter rewrites `changelog.jsonl` without its orphan lines after backing it up to `.versions/`, keeping every other line byte-identical), `memory-hygiene` takes `redactCustody`. `data-cleanup`'s `skills-are-tools` finding no longer fires for a name that is both a real skill and a tool — `improve` is both, and was being reported on six bots every run.
+
+### Channel State, Operator Contact & ask_human Protocol
+
+- **Channel state** — every bot start records `ChannelState = 'ok' | 'revoked' | 'placeholder' | 'missing' | 'error'`. A placeholder (`"nothing"`, the bot id) or missing token never calls Telegram and starts headless at `info`; a real-shaped token that Telegram rejects is `revoked` (401) or `error`. `bots[].token: null` is the explicit "headless on purpose" value. Exposed as `channel` on `GET /api/agents` and `bots.channels[]` on `GET /api/status`.
+- **Operator contact** — `config.operator { name, telegramChatId, email, notifyOnAsk, proactiveCooldownMinutes, proactiveDailyCap }`. `send_proactive_message` and `cron` accept `chatId: "operator"` (or the operator's email) so bots stop copying numeric chat ids from other jobs; unset contact returns `Operator chat id not configured (config.operator.telegramChatId)`.
+- **Proactive-message throttle** — one `send_proactive_message` per bot per `proactiveCooldownMinutes` (60 when unset) and `proactiveDailyCap` messages fleet-wide per rolling 24 h (10 when unset); `0` disables either limit. A throttled call returns `success: false` naming the ISO time the bot may send again, and quota is only consumed once a delivery succeeds. Added after one bot sent the operator three Telegram messages in thirteen minutes.
+- **ask_human protocol** — `config.askHuman { maxChars: 600, autoCloseHours: 72 }`. Questions over `maxChars` are rejected, `options` (2–4 short strings) become quick-reply buttons in the inbox, multi-question asks get a tip, and pending asks older than `autoCloseHours` are closed (`inboxStatus: 'closed'`) with a daily-memory note so a forgotten ask cannot block a bot. With `operator.notifyOnAsk: true` the configured operator is also pinged with the bot name, the question (truncated to 300 chars) and the options — deduped against the asking bot's own notification, and a failed notification never fails the ask.
 
 ## Configuration
 
 Configuration lives in `config/config.json`, validated at startup by Zod schemas in `src/config.ts`. Key sections:
 
-- **`bots[]`** — Per-bot: token, `enabled` (starts at boot; a disabled bot cannot be started at all), model, allowedUsers, disabledTools, disabledSkills, workDir, llmBackend, tts overrides
+- **`bots[]`** — Per-bot: token (`null` = headless on purpose; a non-token-shaped string is reported as `placeholder` and never sent to Telegram), `enabled` (starts at boot; a disabled bot cannot be started at all), model, allowedUsers, disabledTools, disabledSkills, workDir, llmBackend, tts overrides, `agentLoop.plannerBackend`, `agentLoop.engagementGate { enabled, mode, threshold, lookbackHours: 168 }` (per-bot only — there is no global `agentLoop.engagementGate`), `traits { pinned, locked }`
 - **`startup`** — `autoStartBots` (default `true`): start every enabled bot at boot. Override with `AIBOT_AUTOSTART_BOTS`
+- **`operator`** — The human the bots report to: `name`, `telegramChatId`, `email`, `notifyOnAsk`, `proactiveCooldownMinutes` (60 when unset), `proactiveDailyCap` (10 when unset) — all optional. `chatId: "operator"` in `send_proactive_message` / `cron` resolves to `telegramChatId`; `notifyOnAsk` also pings the operator on every `ask_human`
+- **`claudeCli`** — `enabled` (default `true`), `model`, `crossBackendFallback` (default **`false`**: a failed `claude-cli` call is *not* silently re-issued to Ollama)
+- **`askHuman`** — `maxChars` (default `600`), `autoCloseHours` (default `72`)
+- **`karma`** — `enabled`, `baseDir`, `initialScore`, `decayDays`, `dedupCooldownMinutes`, `rewards` (delta per outcome kind: `novelAction: 0`, `productionApproved: 3`, `productionRejected: -1`, `askAnswered: 2`, `humanReply: 3`, `collaborateCompleted: 0`, `toolError: -1`), `humanReplyCooldownHours: 6`
 - **`ollama`** — URL, primary/fallback models, timeout, embedding model, `startupValidation` (boot-time model probe)
-- **`agentLoop`** — Interval, maxDuration, retry, concurrency, idle suppression
+- **`agentLoop`** — Interval, maxDuration, retry, concurrency, idle suppression, `plannerBackend` (`inherit` | `ollama` | `claude-cli`), `circuitBreaker` (`enabled`, `threshold: 3`, `cooldownMs: 1800000`, `weeklyQuotaCooldownMs: 21600000`)
 - **`soul`** — Health check, memory consolidation, search config
 - **`conversation.compaction`** — Token limit, max summary tokens, truncation strategy
 - **`productions`** — Base dir, track-only mode
@@ -408,6 +470,10 @@ Copy `config/config.example.json` to `config/config.json` and run `bun run setup
 ```
 Dashboard        — Agent loop schedules, last results, run-now, safe stop
 Agents           — Bot CRUD, soul generation, start/stop, tools config, export/import
+Stats & Behaviour — Fleet table (posture, channel, LLM/tool/output/engagement per bot, 24h/7d/30d),
+                   Bot detail (goals, traits, cycles, daily series, asks, errors, hygiene panel),
+                   Behaviour (production without feedback, ask economics, collaboration graph, drift),
+                   Infra (backends, security audit, cron, Telegram states, log noise), Hygiene (preview/apply, history)
 Sessions         — Conversation transcripts with pagination
 Conversations    — Web-based chat interface for direct bot conversations
 Cron             — Job management, force-run, run logs

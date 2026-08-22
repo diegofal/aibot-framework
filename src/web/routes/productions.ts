@@ -697,10 +697,9 @@ export function productionsRoutes(deps: {
     }
 
     // Get soul loader for feedback-to-memory
-    const soulLoaders = (botManager as Record<string, unknown>).soulLoaders as
-      | Map<string, unknown>
-      | undefined;
-    const soulLoader = soulLoaders?.get(botId);
+    // findSoulLoader is the public accessor over the same soulLoaders map that this
+    // used to reach into via a cast (and is what the other handlers in this file use).
+    const soulLoader = botManager.findSoulLoader(botId);
 
     const karmaService = botManager.getKarmaService();
     const activityStream = botManager.getActivityStream();

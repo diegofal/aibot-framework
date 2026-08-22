@@ -23,6 +23,206 @@ export interface ClaudeGenerateOptions {
   systemPrompt?: string;
 }
 
+/** Structured fields lifted out of the CLI's `--output-format json` result object. */
+export interface ClaudeCliResultFields {
+  /** HTTP status the CLI reported for the upstream API call (e.g. 429). */
+  apiErrorStatus?: number;
+  isError?: boolean;
+  /** e.g. `api_error`. */
+  terminalReason?: string;
+  /** The human-facing `result` string. */
+  resultText?: string;
+  /** Absolute instant parsed out of a `resets <time>` hint in `resultText`. */
+  resetsAt?: Date;
+}
+
+/**
+ * A non-zero Claude CLI exit, carrying whatever the CLI told us in structured
+ * form.
+ *
+ * The `message` is deliberately kept in the historical
+ * `Claude CLI exited with code N: <detail>` shape so logs and existing tests
+ * still read well — but callers must classify on the typed fields, never on
+ * the message. The raw JSON blob contains keys such as `permission_denials`
+ * that look like auth failures to a naive substring matcher, which is how a
+ * rate limit used to be mistaken for a permanent credential error.
+ */
+export class ClaudeCliError extends Error {
+  readonly exitCode: number;
+  readonly apiErrorStatus?: number;
+  readonly isError?: boolean;
+  readonly terminalReason?: string;
+  readonly resultText?: string;
+  readonly resetsAt?: Date;
+
+  constructor(message: string, exitCode: number, fields: ClaudeCliResultFields = {}) {
+    super(message);
+    this.name = 'ClaudeCliError';
+    this.exitCode = exitCode;
+    this.apiErrorStatus = fields.apiErrorStatus;
+    this.isError = fields.isError;
+    this.terminalReason = fields.terminalReason;
+    this.resultText = fields.resultText;
+    this.resetsAt = fields.resetsAt;
+  }
+}
+
+/** `resets 12:20pm`, `resets 9am`, `resets 14:20` — meridiem optional. */
+const RESETS_TIME_PATTERN = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
+/** The IANA zone the CLI parenthesises after the time. */
+const RESETS_TZ_PATTERN = /resets[^(]*\(([^)]+)\)/i;
+
+/** Offset (ms) between a zone's wall clock and UTC at a given instant. */
+function timeZoneOffsetMs(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(instant);
+  const p: Record<string, string> = {};
+  for (const part of parts) p[part.type] = part.value;
+  const asUtc = Date.UTC(
+    Number(p.year),
+    Number(p.month) - 1,
+    Number(p.day),
+    Number(p.hour),
+    Number(p.minute),
+    Number(p.second)
+  );
+  // Zone offsets are always whole minutes; rounding drops the sub-second
+  // remainder of `instant` so the computed reset lands on an exact minute.
+  return Math.round((asUtc - instant.getTime()) / 60_000) * 60_000;
+}
+
+/** Next instant at which the named zone's wall clock reads hour:minute. */
+function zonedNextOccurrence(
+  hour: number,
+  minute: number,
+  timeZone: string,
+  now: Date
+): Date | undefined {
+  try {
+    const offset = timeZoneOffsetMs(now, timeZone);
+    const wallNow = new Date(now.getTime() + offset);
+    const year = wallNow.getUTCFullYear();
+    const month = wallNow.getUTCMonth();
+    const day = wallNow.getUTCDate();
+
+    for (const dayShift of [0, 1]) {
+      const wallTarget = Date.UTC(year, month, day + dayShift, hour, minute, 0, 0);
+      // One refinement pass covers DST transitions between the two instants.
+      let ts = wallTarget - offset;
+      ts = wallTarget - timeZoneOffsetMs(new Date(ts), timeZone);
+      if (ts > now.getTime()) return new Date(ts);
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Same, on the host's local clock — used when no usable zone was given. */
+function localNextOccurrence(hour: number, minute: number, now: Date): Date {
+  const at = new Date(now.getTime());
+  at.setHours(hour, minute, 0, 0);
+  if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+  return at;
+}
+
+/**
+ * Parse a `resets <time> (<zone>)` hint into an absolute instant.
+ *
+ * Defensive by construction: anything unparseable yields `undefined` and
+ * nothing ever throws. A time that has already passed today means tomorrow.
+ */
+export function parseResetsAt(text: string, now: Date = new Date()): Date | undefined {
+  try {
+    if (!text) return undefined;
+    const match = RESETS_TIME_PATTERN.exec(text);
+    if (!match) return undefined;
+
+    let hour = Number(match[1]);
+    const minute = match[2] ? Number(match[2]) : 0;
+    const meridiem = match[3]?.toLowerCase();
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return undefined;
+
+    if (meridiem) {
+      if (hour < 1 || hour > 12) return undefined;
+      if (meridiem === 'pm' && hour !== 12) hour += 12;
+      if (meridiem === 'am' && hour === 12) hour = 0;
+    } else if (hour > 23) {
+      return undefined;
+    }
+
+    const timeZone = RESETS_TZ_PATTERN.exec(text)?.[1]?.trim();
+    const zoned = timeZone ? zonedNextOccurrence(hour, minute, timeZone, now) : undefined;
+    return zoned ?? localNextOccurrence(hour, minute, now);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Lift the structured fields out of a CLI result JSON blob; `{}` when it isn't one. */
+function parseClaudeResultFields(raw: string, now?: Date): ClaudeCliResultFields {
+  const text = raw?.trim();
+  if (!text || text[0] !== '{') return {};
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+  const obj = parsed as Record<string, unknown>;
+  const looksLikeResult =
+    obj.type === 'result' ||
+    'is_error' in obj ||
+    'subtype' in obj ||
+    'api_error_status' in obj ||
+    'terminal_reason' in obj ||
+    'result' in obj;
+  if (!looksLikeResult) return {};
+
+  const fields: ClaudeCliResultFields = {};
+  const status = obj.api_error_status;
+  if (typeof status === 'number' && Number.isFinite(status)) fields.apiErrorStatus = status;
+  else if (typeof status === 'string' && /^\d{3}$/.test(status))
+    fields.apiErrorStatus = Number(status);
+  if (typeof obj.is_error === 'boolean') fields.isError = obj.is_error;
+  if (typeof obj.terminal_reason === 'string') fields.terminalReason = obj.terminal_reason;
+  if (typeof obj.result === 'string') {
+    fields.resultText = obj.result;
+    fields.resetsAt = parseResetsAt(obj.result, now);
+  }
+  return fields;
+}
+
+/**
+ * Build the typed error for a non-zero CLI exit.
+ *
+ * `detail` is what goes into the message (stderr when present, stdout
+ * otherwise); `rawStdout` is always searched for the JSON result object, so a
+ * structured rate limit is still recognised when stderr carried the message.
+ */
+export function createClaudeCliError(
+  exitCode: number,
+  detail: string,
+  rawStdout: string,
+  opts: { now?: Date } = {}
+): ClaudeCliError {
+  const fromStdout = parseClaudeResultFields(rawStdout, opts.now);
+  const fields =
+    Object.keys(fromStdout).length > 0 ? fromStdout : parseClaudeResultFields(detail, opts.now);
+  return new ClaudeCliError(`Claude CLI exited with code ${exitCode}: ${detail}`, exitCode, fields);
+}
+
 /**
  * Permission-bypass flag for headless runs.
  *
@@ -32,6 +232,21 @@ export interface ClaudeGenerateOptions {
  * Exported so every call site spells it the one way that works.
  */
 export const SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
+
+/**
+ * Model aliases the installed Claude CLI accepts for `--model` (`claude --help`
+ * documents them as rolling aliases for the latest release of each tier), plus
+ * the empty value meaning "omit --model and let the CLI use its own default".
+ * This is the single source of truth for any UI offering a model choice for
+ * the claude-cli backend — never hardcode the list a second time.
+ */
+export const CLAUDE_CLI_MODEL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: '', label: "CLI default (whatever's configured on the container)" },
+  { value: 'opus', label: 'Opus — most capable, slowest, most expensive' },
+  { value: 'sonnet', label: 'Sonnet — balanced (recommended default)' },
+  { value: 'haiku', label: 'Haiku — fastest, cheapest' },
+  { value: 'fable', label: 'Fable' },
+];
 
 const DEFAULT_CLAUDE_PATH = 'claude';
 const DEFAULT_TIMEOUT = 300_000;
@@ -130,7 +345,7 @@ export async function claudeGenerate(
         'Claude CLI failed'
       );
 
-      throw new Error(`Claude CLI exited with code ${exitCode}: ${detail}`);
+      throw createClaudeCliError(exitCode, detail, stdout);
     }
 
     let output: string;
@@ -348,7 +563,7 @@ export async function claudeGenerateWithTools(
         'Claude CLI (MCP tools) failed'
       );
 
-      throw new Error(`Claude CLI exited with code ${exitCode}: ${detail}`);
+      throw createClaudeCliError(exitCode, detail, stdout);
     }
 
     // Parse JSON output — Claude CLI --output-format json wraps result

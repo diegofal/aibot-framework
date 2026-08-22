@@ -17,6 +17,7 @@ export interface Tenant {
     messagesPerMonth: number;
     apiCallsPerMonth: number;
     storageBytes: number;
+    maxBots: number;
   };
   rateLimitOverride?: number; // custom max requests/min, overrides plan default
   identitySecret?: string; // HMAC secret for end-user identity verification (widget/REST)
@@ -25,6 +26,8 @@ export interface Tenant {
     stripeSubscriptionId?: string;
     currentPeriodStart?: string;
     currentPeriodEnd?: string;
+    /** Written by TenantFacade.handleWebhook from Stripe payment/subscription events. */
+    status?: 'active' | 'past_due' | 'canceled' | 'unpaid';
   };
 }
 

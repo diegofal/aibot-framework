@@ -182,8 +182,20 @@ export const PLAN_DEFINITIONS: Record<
 /**
  * Billing provider interface for Stripe integration
  */
+/**
+ * Minimal tenant identity a billing provider needs to open a customer record.
+ * Both the rich `Tenant` above and the persisted `Tenant` in `./manager` satisfy
+ * this, so `BillingProvider.createCustomer` accepts either shape.
+ */
+export interface BillingCustomer {
+  id: string;
+  name: string;
+  email: string;
+  plan: Tenant['plan'];
+}
+
 export interface BillingProvider {
-  createCustomer(tenant: Tenant): Promise<string>; // returns stripeCustomerId
+  createCustomer(tenant: BillingCustomer): Promise<string>; // returns stripeCustomerId
   createSubscription(tenantId: string, plan: string): Promise<string>; // returns stripeSubscriptionId
   cancelSubscription(tenantId: string): Promise<void>;
   updateSubscription(tenantId: string, newPlan: string): Promise<void>;

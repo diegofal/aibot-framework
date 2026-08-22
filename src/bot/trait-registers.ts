@@ -5,6 +5,11 @@
  * These traits mechanically alter agent loop parameters (temperature, tool
  * selection, frequency) — they are NOT prompt text. The LLM can propose
  * trait adjustments via the strategist or reflection skill.
+ *
+ * Operators can declare a per-bot `TraitPolicy` (bot config `traits`):
+ * `pinned` values win on load and after every adjustment, `locked` traits
+ * silently drop strategist/adaptive deltas. This keeps a reactive identity
+ * from drifting toward "more sociable" just because nobody is talking to it.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -43,7 +48,23 @@ export interface DerivedParameters {
   idleCyclesBeforeAbandon: number;
 }
 
-export type TraitSource = 'strategist' | 'reflection' | 'adaptive';
+/** `pinned` is written by the framework when an operator pin overrides a stored value */
+export type TraitSource = 'strategist' | 'reflection' | 'adaptive' | 'pinned';
+
+/** Operator guard rails for one bot (bot config `traits`) */
+export interface TraitPolicy {
+  pinned?: Partial<Record<TraitName, number>>;
+  locked?: TraitName[];
+}
+
+export type TraitPolicyResolver = (botId: string) => TraitPolicy | undefined;
+
+/** How far the current traits have moved from their first persisted snapshot */
+export interface TraitDrift {
+  baseline: TraitSet;
+  current: TraitSet;
+  delta: Record<TraitName, number>;
+}
 
 interface TraitSnapshot {
   timestamp: number;
@@ -78,6 +99,7 @@ const MAX_DELTA: Record<TraitSource, number> = {
   strategist: 0.05,
   reflection: 0.15,
   adaptive: 0.03,
+  pinned: 1,
 };
 
 // ── Default traits ──
@@ -123,14 +145,39 @@ export function deriveParameters(traits: TraitSet): DerivedParameters {
 export class TraitRegisters {
   /** In-memory cache: botId → TraitSet */
   private cache = new Map<string, TraitSet>();
+  /** Explicit per-bot policies (take precedence over the resolver) */
+  private policies = new Map<string, TraitPolicy | undefined>();
 
   constructor(
     private soulBaseDir: string,
-    private logger: Logger
+    private logger: Logger,
+    private policyResolver?: TraitPolicyResolver
   ) {}
 
   /**
+   * Set (or clear with `undefined`) the policy for a bot. Invalidates the
+   * cache so the next `load` re-applies pins.
+   */
+  setPolicy(botId: string, policy: TraitPolicy | undefined): void {
+    this.policies.set(botId, policy);
+    this.cache.delete(botId);
+  }
+
+  /** Effective policy for a bot: explicit `setPolicy` first, then the resolver. */
+  getPolicy(botId: string): TraitPolicy | undefined {
+    if (this.policies.has(botId)) return this.policies.get(botId);
+    try {
+      return this.policyResolver?.(botId);
+    } catch (err) {
+      this.logger.warn({ err, botId }, 'TraitRegisters: policy resolver failed');
+      return undefined;
+    }
+  }
+
+  /**
    * Load traits for a bot. Creates defaults if no file exists.
+   * Pinned values always win; when a pin changes a stored value the file is
+   * rewritten (source `pinned`) so anything reading TRAITS.json agrees.
    */
   load(botId: string): TraitSet {
     const cached = this.cache.get(botId);
@@ -140,7 +187,9 @@ export class TraitRegisters {
     if (existsSync(filePath)) {
       try {
         const raw: TraitFile = JSON.parse(readFileSync(filePath, 'utf-8'));
-        const traits = this.validateTraits(raw.current);
+        const stored = this.validateTraits(raw.current);
+        const traits = this.applyPins(botId, stored);
+        if (!traitsEqual(stored, traits)) this.save(botId, traits, 'pinned');
         this.cache.set(botId, traits);
         return { ...traits };
       } catch (err) {
@@ -149,37 +198,67 @@ export class TraitRegisters {
     }
 
     const defaults = createDefaultTraits();
-    this.cache.set(botId, defaults);
-    this.save(botId, defaults, 'adaptive'); // persist defaults
-    return { ...defaults };
+    this.save(botId, defaults, 'adaptive'); // persist defaults (the drift baseline)
+    const traits = this.applyPins(botId, defaults);
+    if (!traitsEqual(defaults, traits)) this.save(botId, traits, 'pinned');
+    this.cache.set(botId, traits);
+    return { ...traits };
   }
 
   /**
    * Apply bounded trait adjustments from a given source.
-   * Returns the new trait set.
+   * Deltas for locked traits are dropped (logged once per call at debug);
+   * pinned traits are restored afterwards. Returns the new trait set.
    */
   adjust(botId: string, adjustments: Partial<TraitSet>, source: TraitSource): TraitSet {
     const current = this.load(botId);
     const maxDelta = MAX_DELTA[source];
+    const policy = this.getPolicy(botId);
+    const locked = new Set<TraitName>(policy?.locked ?? []);
+    const pinnedKeys = new Set<TraitName>(
+      Object.keys(policy?.pinned ?? {}).filter((k) =>
+        TRAIT_NAMES.includes(k as TraitName)
+      ) as TraitName[]
+    );
 
+    const dropped: Partial<Record<TraitName, number>> = {};
+    let applied = 0;
     for (const key of TRAIT_NAMES) {
       const delta = adjustments[key];
       if (delta === undefined) continue;
+      if (locked.has(key) || pinnedKeys.has(key)) {
+        dropped[key] = delta;
+        continue;
+      }
 
       // Clamp delta to max for this source
       const clampedDelta = Math.max(-maxDelta, Math.min(maxDelta, delta));
       current[key] = clamp(current[key] + clampedDelta, CLAMP_MIN, CLAMP_MAX);
+      applied++;
     }
 
-    this.save(botId, current, source);
-    this.cache.set(botId, current);
+    if (Object.keys(dropped).length > 0) {
+      this.logger.debug(
+        { botId, source, dropped },
+        'TraitRegisters: dropped deltas for locked/pinned traits'
+      );
+    }
+
+    if (applied === 0) {
+      // Nothing changed — do not write a history entry for a no-op
+      return { ...current };
+    }
+
+    const result = this.applyPins(botId, current);
+    this.save(botId, result, source);
+    this.cache.set(botId, result);
 
     this.logger.info(
-      { botId, source, adjustments, result: summarizeTraits(current) },
+      { botId, source, adjustments, result: summarizeTraits(result) },
       'TraitRegisters: traits adjusted'
     );
 
-    return { ...current };
+    return { ...result };
   }
 
   /**
@@ -196,6 +275,7 @@ export class TraitRegisters {
   renderForPrompt(botId: string): string {
     const traits = this.load(botId);
     const params = deriveParameters(traits);
+    const policy = this.getPolicy(botId);
 
     const lines: string[] = ['## Current Trait State'];
     lines.push('');
@@ -212,6 +292,25 @@ export class TraitRegisters {
     lines.push(`  max_tool_rounds_bonus: +${params.maxToolRoundsBonus}`);
     lines.push(`  web_tools_always_included: ${params.webToolAlwaysIncluded}`);
     lines.push(`  idle_cycles_before_abandon: ${params.idleCyclesBeforeAbandon}`);
+
+    const locked = policy?.locked ?? [];
+    const pinned = Object.entries(policy?.pinned ?? {}).filter(([k]) =>
+      TRAIT_NAMES.includes(k as TraitName)
+    );
+    if (locked.length > 0 || pinned.length > 0) {
+      lines.push('');
+      if (locked.length > 0) {
+        lines.push(`Locked traits (proposals ignored): ${locked.join(', ')}`);
+      }
+      if (pinned.length > 0) {
+        lines.push(
+          `Pinned traits (fixed by the operator): ${pinned
+            .map(([k, v]) => `${k}=${Number(v).toFixed(2)}`)
+            .join(', ')}`
+        );
+      }
+    }
+
     lines.push('');
     lines.push(
       `You may propose trait_adjustments (max ±${MAX_DELTA.strategist} per trait per cycle).`
@@ -237,11 +336,42 @@ export class TraitRegisters {
     }
   }
 
+  /**
+   * Drift since the first persisted snapshot. Baseline = first `adaptive`
+   * history entry (the defaults written on first load); falls back to the
+   * first history entry of any source, then to the defaults.
+   */
+  getDrift(botId: string): TraitDrift {
+    const history = this.getHistory(botId);
+    const baselineSnapshot = history.find((s) => s.source === 'adaptive') ?? history[0];
+    const baseline = this.validateTraits(baselineSnapshot?.traits ?? createDefaultTraits());
+    const current = this.load(botId);
+    const delta = {} as Record<TraitName, number>;
+    for (const key of TRAIT_NAMES) {
+      delta[key] = round2(current[key] - baseline[key]);
+    }
+    return { baseline, current, delta };
+  }
+
   // ── Internal ──
 
   private getFilePath(botId: string): string {
     const dir = join(this.soulBaseDir, botId);
     return join(dir, 'TRAITS.json');
+  }
+
+  /** Returns a copy of `traits` with the bot's pinned values forced in (clamped). */
+  private applyPins(botId: string, traits: TraitSet): TraitSet {
+    const pinned = this.getPolicy(botId)?.pinned;
+    if (!pinned) return { ...traits };
+    const result = { ...traits };
+    for (const key of TRAIT_NAMES) {
+      const val = pinned[key];
+      if (typeof val === 'number' && !Number.isNaN(val)) {
+        result[key] = clamp(val, CLAMP_MIN, CLAMP_MAX);
+      }
+    }
+    return result;
   }
 
   private save(botId: string, traits: TraitSet, source: TraitSource): void {
@@ -286,6 +416,14 @@ export class TraitRegisters {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function traitsEqual(a: TraitSet, b: TraitSet): boolean {
+  return TRAIT_NAMES.every((k) => a[k] === b[k]);
 }
 
 function renderBar(value: number): string {

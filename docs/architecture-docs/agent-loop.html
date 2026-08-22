@@ -111,7 +111,7 @@
             <tr>
               <td><code>agent-scheduler.ts</code></td>
               <td>353</td>
-              <td><code>AgentScheduler</code> class: per-bot scheduling, concurrency semaphore (maxConcurrent), interruptible sleep, bot loop lifecycle, schedule sync, staggered starts, sleep computation, idle tracking. Per-bot enable/disable via <code>agentLoop.enabled</code>. <code>resolveDirectives()</code> helper merges custom + preset directives.</td>
+              <td><code>AgentScheduler</code> class: per-bot scheduling, concurrency semaphore (maxConcurrent), interruptible sleep, bot loop lifecycle, schedule sync, staggered starts, sleep computation, idle tracking. Per-bot enable/disable via <code>agentLoop.enabled</code>. <code>resolveDirectives()</code> helper merges custom + preset directives. <code>recordFeedbackEvent()</code> keeps human feedback signals on the schedule (<code>feedbackEvents</code>, 7-day retention) for the engagement gate; <code>skippedReason</code> records why the last cycle was skipped (e.g. <code>circuit-open:ollama</code>).</td>
             </tr>
             <tr>
               <td><code>agent-strategist.ts</code></td>
@@ -121,17 +121,17 @@
             <tr>
               <td><code>agent-loop-utils.ts</code></td>
               <td>~280</td>
-              <td>Shared utilities: <code>buildRecentActionsDigest</code>, <code>isSimilarSummary</code>, <code>isRepetitiveAction</code>, <code>scanFileTree</code>, <code>logToMemory</code>, <code>sendReport</code>. Behavioral pattern classification: <code>classifyAction</code>, <code>computeActionDiversity</code>, <code>detectUnconsumedOutput</code>.</td>
+              <td>Shared utilities: <code>buildRecentActionsDigest</code>, <code>isSimilarSummary</code>, <code>isRepetitiveAction</code>, <code>scanFileTree</code>, <code>logToMemory</code>, <code>sendReport</code>. Behavioral pattern classification: <code>classifyAction</code>, <code>computeActionDiversity</code>, <code>detectUnconsumedOutput</code>. Engagement gate: <code>countFeedbackSignals</code> (production evaluations, ask_human answers, dashboard feedback, human messages) and <code>evaluateEngagementGate</code> (hard-mode enforcement).</td>
             </tr>
             <tr>
               <td><code>agent-retry-engine.ts</code></td>
               <td>141</td>
-              <td><code>isRetryableError</code>, <code>computeRetryDelay</code>, <code>resolveRetryConfig</code>, <code>executeSingleBotWithRetry</code>. Transient error detection, exponential backoff with jitter, side-effect suppression.</td>
+              <td><code>isRetryableError</code>, <code>computeRetryDelay</code>, <code>resolveRetryConfig</code>, <code>executeSingleBotWithRetry</code>. Transient error detection, exponential backoff with jitter, side-effect suppression. <code>BackendCircuitBreaker</code>: fleet-wide per-backend circuit for 429/quota errors (<code>recordFailure</code>, <code>recordSuccess</code>, <code>shouldSkip</code>, <code>isOpen</code>, <code>getState</code>), <code>isWeeklyQuotaError</code>.</td>
             </tr>
             <tr>
               <td><code>agent-planner.ts</code></td>
               <td>69</td>
-              <td><code>parsePlannerResult</code>, <code>runPlannerWithRetry</code>. Unified planner for both periodic and continuous modes with temperature fallback.</td>
+              <td><code>parsePlannerResult</code>, <code>runPlannerWithRetry</code>. Unified planner for both periodic and continuous modes with temperature fallback. Planner backend selection: <code>resolvePlannerBackend</code>, <code>resolvePlannerModel</code>, <code>selectPlannerClient</code> (see <a href="#planner-backend">Planner Backend</a>).</td>
             </tr>
             <tr>
               <td><code>llm-json-parser.ts</code></td>
@@ -478,6 +478,54 @@
         </div>
 
         <!-- ============================================================ -->
+        <!-- 5b. Planner Backend -->
+        <!-- ============================================================ -->
+        <h2 id="planner-backend">Planner Backend</h2>
+        <p>
+          The planner and the strategist are <code>generate()</code> calls; the executor is a tool-calling
+          <code>chat()</code>. Until August 2026 all three went through the bot's wrapped client, and
+          <code>LLMClientWithFallback.generate()</code> re-issues any non-permanent Claude CLI failure to the
+          Ollama fallback <em>silently</em> &mdash; so the planner and strategist of every claude-cli bot ended
+          up running on <code>glm-5.2:cloud</code>, exhausted the shared Ollama Cloud weekly quota, and the
+          llm-query-log kept saying <code>backend: 'claude-cli'</code>.
+        </p>
+        <div class="module-section">
+          <h4>Configuration</h4>
+<pre><code>// agentLoop.plannerBackend (global) — per-bot agentLoop.plannerBackend wins
+plannerBackend: 'inherit' | 'ollama' | 'claude-cli'   // default 'inherit'</code></pre>
+          <table>
+            <thead>
+              <tr><th>Function</th><th>Role</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>resolvePlannerBackend(globalAgentLoop, botConfig)</code></td><td>Per-bot setting &rarr; global setting &rarr; <code>inherit</code>, which follows the bot's own <code>llmBackend</code> (<code>ollama</code> when unset).</td></tr>
+              <tr><td><code>resolvePlannerModel(backend, botConfig, config, activeModel)</code></td><td>The bot's active model is only valid on the bot's own backend &mdash; a claude-cli bot's <code>"claude"</code> must never be sent to Ollama. A cross-backend planner gets that backend's default (<code>ollama.models.primary</code> or <code>claudeCli.model</code>).</td></tr>
+              <tr><td><code>selectPlannerClient(botClient, backend, opts)</code></td><td>Calls <code>LLMClient.getBackendClient(backend)</code> to unwrap <code>LLMClientWithFallback</code> / <code>FailoverLLMClient</code> to the bare client for that backend. For an ollama bot pinned to claude-cli, <code>AgentLoop</code> lazily builds a bare <code>ClaudeCliLLMClient</code> (cached per bot). Falls back to the bot client with a warning when nothing matches.</td></tr>
+              <tr><td><code>runStrategist(…, llm?)</code></td><td>Accepts <code>{ client, model }</code> so the strategist honours the same selection.</td></tr>
+            </tbody>
+          </table>
+          <p>
+            The executor keeps the bot client &mdash; tool calling needs the full wrapper. Activity-stream
+            <code>llm:start/end</code> events and the llm-query-log record the planner backend and model
+            actually used, so the query log can be trusted again when attributing quota.
+          </p>
+          <h4>The wider fix: cross-backend fallback is opt-in</h4>
+          <p>
+            <span class="badge badge-yellow">2026-08-22</span> Pinning the planner only fixed the planner.
+            The root cause was <code>createLLMClient()</code> itself: with no <code>failover</code> chain
+            configured it returned <code>LLMClientWithFallback(claude, ollama)</code> for <em>every</em>
+            <code>llmBackend: 'claude-cli'</code> caller &mdash; the reflection skill, the soul health check,
+            the quality reviewer, the memory consolidator and the whole conversation path, not just the agent
+            loop. A <code>claude-cli</code> bot now gets the bare <code>ClaudeCliLLMClient</code> unless
+            <code>claudeCli.crossBackendFallback</code> (default <code>false</code>) is turned on. With
+            <code>failover.enabled</code>, <code>orderCandidatesByBackend()</code> puts the bot's own backend
+            first in the chain and <code>resolveOllamaModels()</code> supplies the real configured Ollama
+            models &mdash; the primary used to be <code>ollamaClient.toString()</code>, the literal string
+            <code>[object Object]</code>.
+          </p>
+        </div>
+
+        <!-- ============================================================ -->
         <!-- 6. Executor -->
         <!-- ============================================================ -->
         <h2 id="executor">Executor</h2>
@@ -507,11 +555,14 @@
         </div>
 
         <div class="module-section">
-          <h3>Proportional Karma Penalties</h3>
+          <h3>Karma on the Executor Path</h3>
           <p>
-            Tool errors are scored proportionally per tool name: if &gt;50% of a tool's calls in a cycle
-            failed, delta is <code>-1</code>; if &le;50% failed, delta is <code>0</code> (logged as
-            <code>Minor:</code> for visibility but no score impact). Each tool is evaluated independently.
+            Tool errors are debited per failing call by <code>ToolExecutor</code> through
+            <code>KarmaService.recordOutcome(botId, 'toolError', …)</code> (execution and validation phases,
+            <code>rewards.toolError</code> = <code>-1</code> by default, deduped per tool + message by the
+            automated-negative cooldown). A non-repeated cycle is worth <code>rewards.novelAction</code>
+            (<code>0</code> by default &mdash; activity is not impact); a repeated plan still costs <code>-2</code>.
+            See <a href="#karma-traits">Karma Outcomes &amp; Trait Policy</a>.
           </p>
         </div>
 
@@ -714,6 +765,124 @@
         </div>
 
         <!-- ============================================================ -->
+        <!-- 7b. Engagement Gate -->
+        <!-- ============================================================ -->
+        <h2 id="engagement-gate">Engagement Gate</h2>
+        <p>
+          Production without feedback is waste. The gate compares outputs produced against human feedback
+          received and, in <strong>hard</strong> mode (the default since 2026-08-21), refuses to let the bot
+          produce more content until somebody reacts.
+        </p>
+        <p>
+          <span class="badge badge-yellow">2026-08-22</span> The hard gate shipped on 2026-08-21 was
+          <em>inert in production</em>. <code>detectUnconsumedOutput()</code> counted the in-memory
+          <code>recentActions</code> window, which is rebuilt from scratch on every restart &mdash; so bots
+          sitting at 51&ndash;65 unconsumed outputs never reached the threshold. The output count now comes
+          from <strong>durable</strong> state.
+        </p>
+        <div class="module-section">
+          <h4>Configuration (<code>BotAgentLoopOverrideSchema.engagementGate</code>)</h4>
+          <p>
+            Per-bot only &mdash; <code>bots[].agentLoop.engagementGate</code>. There is no
+            <code>agentLoop.engagementGate</code> on <code>GlobalAgentLoopConfigSchema</code>; when the block is
+            absent the runtime defaults below apply.
+          </p>
+<pre><code>engagementGate: {
+  enabled: true,        // default true
+  mode: 'hard',         // 'hard' (default) downgrades CONTENT plans to idle; 'soft' only annotates the prompt
+  threshold: 5,         // outputs with zero feedback before the gate triggers (1–50)
+  lookbackHours: 168    // how far back durable output and feedback are counted (1–720; 7 days, matching
+                        // BotSchedule.feedbackEvents retention)
+}</code></pre>
+          <h4>Where the output count comes from</h4>
+          <table>
+            <thead>
+              <tr><th>Source</th><th>What is counted</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Outcome ledger (preferred)</td><td><code>countOutputsSince()</code> &mdash; entries of type <code>CONTENT</code> or <code>OUTREACH</code></td></tr>
+              <tr><td>Production changelog (fallback)</td><td><code>countProductionOutputsSince()</code> &mdash; <code>create</code> and <code>edit</code> actions</td></tr>
+              <tr><td>Neither wired</td><td><code>AgentLoop.countDurableOutputs()</code> returns <code>null</code> and the gate falls back to the in-memory <code>recentActions</code> window</td></tr>
+            </tbody>
+          </table>
+          <p>
+            <code>resolveDurableOutputCount()</code> picks the ledger when it has anything, the changelog
+            otherwise. The <em>anchor</em> is <code>FeedbackSignals.lastFeedbackAt</code> &mdash; only output
+            produced <em>after</em> the last human signal counts &mdash; falling back to the start of the
+            lookback window. <code>UnconsumedOutputResult</code> reports which path was taken as
+            <code>outputSource: 'durable' | 'recent-actions'</code>, alongside
+            <code>externalFeedbackCount</code>.
+          </p>
+          <h4>Feedback sources (<code>countFeedbackSignals()</code>)</h4>
+          <table>
+            <thead>
+              <tr><th>Source</th><th>Where it comes from</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>productionEvaluations</code></td><td>Production changelog entries approved or rejected by the operator (<code>ProductionsService.getChangelog</code>)</td></tr>
+              <tr><td><code>askHumanAnswers</code></td><td><code>ask_human</code> answers consumed by a cycle &mdash; answers are now consumed <em>before</em> the strategist so they count for the same cycle</td></tr>
+              <tr><td><code>agentFeedback</code></td><td>Dashboard agent-feedback entries processed at cycle start</td></tr>
+              <tr><td><code>humanMessages</code></td><td>Human inbound messages &mdash; the <code>human_inbound</code> event (below) on REST, WebSocket, WhatsApp and Discord &mdash; plus human-role messages in dashboard conversations</td></tr>
+            </tbody>
+          </table>
+          <h4>The <code>human_inbound</code> event</h4>
+          <p>
+            <span class="badge badge-yellow">2026-08-22</span>
+            <code>ConversationPipeline.handleChannelMessage()</code> emits
+            <code>human_inbound</code> (<code>HUMAN_INBOUND_HOOK</code>, declared in
+            <code>agent-loop-utils.ts</code>) with
+            <code>{ botId, channelKind, chatId, userId?, timestamp }</code>.
+            <code>AgentScheduler</code> subscribes on <code>start()</code> and unsubscribes on
+            <code>stop()</code>, turning each event into a <code>human_message</code> feedback event and a
+            <code>humanReply</code> karma credit. The exported predicate
+            <code>isHumanInboundMessage(msg, { isPeerAgent })</code> filters out peer agents (resolved
+            through <code>AgentRegistry</code>), <code>channelKind: 'mcp'</code>, <code>synthetic: true</code>,
+            <code>cron-</code>-prefixed message ids and blank text.
+          </p>
+          <p>
+            The event travels on the raw <code>EventEmitter</code>, deliberately outside the typed
+            <code>HookEvents</code> map &mdash; <code>src/bot/hooks.ts</code> still declares exactly eight
+            lifecycle events. Telegram never calls <code>handleChannelMessage()</code>, so it cannot
+            double-count; <strong>but it does not count at all either</strong>:
+            <code>AgentScheduler.requestImmediateRun()</code> is only reachable through
+            <code>BotManager.requestImmediateAgentRun()</code>, which has no callers outside tests.
+          </p>
+          <p>
+            Answers, feedback and messages are kept as <code>BotSchedule.feedbackEvents</code>
+            (<code>AgentScheduler.recordFeedbackEvent()</code>, 7-day retention, persisted with the schedule)
+            because the stores they come from are consumed destructively. Every source is best-effort: a
+            failing service contributes zero rather than breaking the cycle. The total is passed to
+            <code>detectUnconsumedOutput(recentActions, threshold, externalFeedbackCount)</code>, so a bot that is
+            actually being answered is not gated, and to <code>buildRecentActionsDigest()</code> for the prompt.
+          </p>
+          <p>
+            <span class="badge badge-red">Removed 2026-08-22</span> <code>detectUnconsumedOutput()</code> used
+            to scan the bot's <em>own</em> plan summaries for
+            <code>received|confirmed|responded|feedback|approved|denied|answer</code> and count a match as
+            feedback &mdash; a bot could un-gate itself simply by writing the word "feedback" in a summary.
+            A self-run <strong>ASSESSMENT</strong> plan also used to count. Both are gone: feedback is now
+            exactly the externally-sourced count.
+          </p>
+          <h4>Enforcement (<code>evaluateEngagementGate()</code>)</h4>
+          <p>
+            When the gate is triggered (<code>outputCount &ge; threshold</code> and <code>feedbackCount === 0</code>)
+            the planner prompt carries a <em>HARD ENGAGEMENT GATE</em> note. If the planner still returns a plan
+            classified as <strong>CONTENT</strong>, the cycle is downgraded to idle with the summary
+            <code>Engagement gate: content blocked until feedback (N outputs, 0 feedback)</code>, an
+            <code>agent:idle</code> activity event and a <code>warn</code> log listing the feedback signals.
+            OUTREACH, ASSESSMENT, RESEARCH and MAINTENANCE plans pass &mdash; they are how the bot earns
+            feedback. Soft mode never blocks.
+          </p>
+          <p>
+            The trigger log line (<code>info</code>, "Agent loop: engagement gate triggered") carries
+            <code>outputCount</code>, <code>outputSource</code>, <code>feedbackCount</code>,
+            <code>lastFeedbackAt</code> and <code>mode</code>, so an operator can tell a genuine gate from a
+            cold-start artefact. The hard-block <code>warn</code> adds the full
+            <code>feedbackSignals</code> breakdown and the first three plan steps.
+          </p>
+        </div>
+
+        <!-- ============================================================ -->
         <!-- 8. Ask-Human Flow -->
         <!-- ============================================================ -->
         <h2 id="ask-human">Ask-Human Flow</h2>
@@ -735,6 +904,7 @@
   chatId: number;
   question: string;
   messageId: number | null;  // Telegram message ID
+  options?: string[];        // 2–4 quick-reply choices
   createdAt: number;
   timeoutMs: number;
   // + resolve/reject callbacks, timer
@@ -753,6 +923,7 @@ interface PendingQuestionInfo {
   botId: string;
   chatId: number;
   question: string;
+  options?: string[];
   createdAt: number;
   timeoutMs: number;
   remainingMs: number;  // Computed countdown
@@ -767,8 +938,9 @@ interface PendingQuestionInfo {
               <tr><td>1. Ask</td><td>Agent calls <code>ask_human</code> tool. <code>AskHumanStore.ask()</code> registers the question and returns a promise.</td></tr>
               <tr><td>2. Display</td><td>Question appears in the web dashboard inbox and optionally as a Telegram message.</td></tr>
               <tr><td>3. Answer</td><td>Human answers via web (<code>answerById()</code>) or Telegram reply (<code>handleReply()</code>). Promise resolves.</td></tr>
-              <tr><td>4. Consume</td><td>Next agent loop cycle calls <code>consumeAnswersForBot()</code>. Answered questions are injected into the planner context as top priority.</td></tr>
+              <tr><td>4. Consume</td><td>Next agent loop cycle calls <code>consumeAnswersForBot()</code> before the strategist runs, so the answers count as engagement feedback for that cycle. Answered questions are injected into the planner context as top priority.</td></tr>
               <tr><td>5. Timeout</td><td>Unanswered questions auto-reject after <code>timeoutMs</code>. Timer cleared on answer or dismiss.</td></tr>
+              <tr><td>6. Auto-close</td><td><code>sweepStaleAskHumanQuestions()</code> (run on every <code>ask_human</code> call for the calling bot) calls <code>AskHumanStore.closeStale()</code> on asks older than <code>askHuman.autoCloseHours</code> (72 h): the promise rejects with an auto-close reason, the inbox conversation is marked <code>closed</code>, and a <code>[ask_human] Question auto-closed after 72h without answer: …</code> line is appended to the bot's daily memory so it knows the question went unanswered.</td></tr>
             </tbody>
           </table>
 
@@ -786,6 +958,27 @@ interface PendingQuestionInfo {
             The agent sees this as a timeout and moves on to other work. Pending questions are also listed in
             the planner prompt with instructions not to re-ask.
           </p>
+        </div>
+
+        <div class="module-section">
+          <h3>ask_human Protocol</h3>
+          <div class="file-path">src/tools/ask-human.ts &middot; config.askHuman</div>
+          <div class="responsibility">Limits chosen from ten days of inbox data (27 asks, 20 closed unanswered): every ask that got an answer was at or under 600 characters and asked exactly one thing.</div>
+<pre><code>askHuman: {
+  maxChars: 600,        // questions longer than this are rejected with guidance
+  autoCloseHours: 72    // pending asks older than this are auto-closed
+}</code></pre>
+          <table>
+            <thead>
+              <tr><th>Rule</th><th>Behaviour</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Length</td><td>A question over <code>maxChars</code> fails with "Question too long … put details in a file and reference it via <code>files</code>".</td></tr>
+              <tr><td>Options</td><td><code>options</code> must be 2&ndash;4 strings of at most 80 chars. Stored as <code>options</code> on the pending question and <code>askOptions</code> on the inbox conversation; rendered as quick-reply buttons in the dashboard inbox and appended as <code>Options: a | b</code> to the Telegram notification.</td></tr>
+              <tr><td>One question</td><td>More than one <code>?</code> in the text gets a tip in the tool result ("single-question asks get answered; yours has N").</td></tr>
+              <tr><td>One pending</td><td>A second ask while one is pending returns the age of the pending ask and the auto-close horizon instead of queuing.</td></tr>
+            </tbody>
+          </table>
         </div>
 
         <!-- ============================================================ -->
@@ -852,6 +1045,86 @@ interface ResolvedPermission {
         </div>
 
         <!-- ============================================================ -->
+        <!-- 8c. Karma Outcomes & Trait Policy -->
+        <!-- ============================================================ -->
+        <h2 id="karma-traits">Karma Outcomes &amp; Trait Policy</h2>
+        <p>
+          Two evolution levers were re-based on outcomes in August 2026. Karma used to be mostly activity
+          &mdash; every non-repeated cycle earned a credit, so a bot that produced a lot and was read by nobody
+          outscored one the operator actually answered &mdash; and the strategist prompt prescribed a universal
+          trait direction for low engagement, which slowly turned a reactive watchdog into a sociable one.
+        </p>
+
+        <div class="module-section">
+          <h3>Karma Rewards</h3>
+          <div class="file-path">src/karma/types.ts &middot; src/karma/service.ts &middot; config.karma.rewards</div>
+          <div class="responsibility">Every credit or debit is an <em>outcome kind</em>; the delta is looked up in <code>config.karma.rewards</code>. A kind worth 0 is never written, so hooks stay wired and an operator can switch a credit back on.</div>
+          <table>
+            <thead>
+              <tr><th>Kind</th><th>Default</th><th>Ledger source</th><th>Recorded by</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>novelAction</code></td><td><code>0</code></td><td><code>agent-loop</code></td><td><code>AgentLoop</code>, after a non-idle cycle whose plan was not a repeat (activity, not impact)</td></tr>
+              <tr><td><code>productionApproved</code></td><td><code>3</code></td><td><code>production</code></td><td><code>ProductionsService.evaluate()</code> &mdash; the 1&ndash;5 rating is kept in metadata but no longer scales the delta</td></tr>
+              <tr><td><code>productionRejected</code></td><td><code>-1</code></td><td><code>production</code></td><td><code>ProductionsService.evaluate()</code></td></tr>
+              <tr><td><code>askAnswered</code></td><td><code>2</code></td><td><code>engagement</code></td><td><code>AgentScheduler.recordFeedbackEvent('ask_human')</code> when an answered ask_human question is consumed</td></tr>
+              <tr><td><code>humanReply</code></td><td><code>3</code></td><td><code>engagement</code></td><td><code>AgentScheduler.recordFeedbackEvent('human_message')</code>, driven by the <code>human_inbound</code> event from <code>ConversationPipeline.handleChannelMessage()</code> (REST, WebSocket, WhatsApp, Discord); <strong>at most once per bot per <code>karma.humanReplyCooldownHours</code> (6 h; 0 disables)</strong>. Telegram does not reach this path today &mdash; see <a href="#engagement-gate">Engagement Gate</a></td></tr>
+              <tr><td><code>collaborateCompleted</code></td><td><code>0</code></td><td><code>agent-loop</code></td><td><code>CollaborationManager.initiateCollaboration()</code> when a session reaches its end, crediting the <em>initiating</em> bot with <code>{ targetBotId, sessionId, turns }</code>. Source and step timeouts throw earlier, so a stalled collaboration earns nothing. The <code>0</code> default means nothing is written until an operator raises it</td></tr>
+              <tr><td><code>toolError</code></td><td><code>-1</code></td><td><code>tool</code></td><td><code>ToolExecutor</code> on execution / validation failures</td></tr>
+            </tbody>
+          </table>
+          <p>
+            Dashboard <code>agent_feedback</code> events are tracked for the engagement gate but not credited.
+            The repeated-action penalty (<code>-2</code>, source <code>agent-loop</code>) and manual adjustments
+            still go through <code>addEvent()</code>.
+          </p>
+          <h4>API</h4>
+          <table>
+            <thead>
+              <tr><th>Member</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>recordOutcome(botId, kind, reason, metadata?)</code></td><td>Looks the delta up, files the event under <code>KARMA_KIND_SOURCE[kind]</code>, stamps <code>kind</code> on the event, applies the per-kind cooldown (<code>humanReply</code>), returns the <code>KarmaEvent</code> or <code>null</code> when nothing was written (0 reward, cooldown, unknown kind).</td></tr>
+              <tr><td><code>getRewards()</code></td><td>Effective table: <code>DEFAULT_KARMA_REWARDS</code> merged with config overrides.</td></tr>
+              <tr><td><code>getBreakdown(botId, windowDays = 30)</code></td><td><code>{ windowDays, bySource, byKind }</code> &mdash; raw (undecayed) delta sums over the trailing window: what the score is made of. Returned as <code>breakdown</code> on <code>getKarmaScore()</code> and therefore on <code>GET /api/karma/:botId</code>; rendered by the karma page as the <em>Score composition</em> table.</td></tr>
+              <tr><td><code>renderForPrompt(botId)</code></td><td>The planner karma block now states that karma is earned from outcomes &mdash; approved productions, answered questions, humans replying &mdash; and that activity alone earns nothing.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="module-section">
+          <h3>Trait Policy (pinned / locked)</h3>
+          <div class="file-path">src/bot/trait-registers.ts &middot; bots[].traits</div>
+          <div class="responsibility">Operator guard rails on <code>TRAITS.json</code>, the eight 0.1&ndash;0.9 registers (curiosity, caution, sociability, persistence, creativity, independence, depth, risk_tolerance) that mechanically derive executor/planner temperature, tool-round bonus and ask_human cadence.</div>
+<pre><code>// bots[].traits
+traits: {
+  pinned: { sociability: 0.3 },   // always wins: on load and after every adjustment
+  locked: ["independence"]        // strategist / reflection / adaptive deltas are dropped
+}</code></pre>
+          <table>
+            <thead>
+              <tr><th>Aspect</th><th>Behaviour</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Resolution</td><td><code>TraitRegisters</code> takes a <code>TraitPolicyResolver</code>; <code>BotManager</code> wires it to the live bot list so a config reload picks up new pins. <code>setPolicy(botId, policy)</code> overrides the resolver (and invalidates the cache); <code>getPolicy()</code> returns the effective policy.</td></tr>
+              <tr><td>Pins on load</td><td>When a pin differs from the stored value, <code>load()</code> rewrites <code>TRAITS.json</code> with history source <code>'pinned'</code> (new <code>TraitSource</code>) so anything reading the file agrees.</td></tr>
+              <tr><td>Adjust</td><td><code>adjust()</code> drops deltas for locked <em>and</em> pinned traits (debug log), re-applies pins afterwards, and writes no history entry when nothing changed.</td></tr>
+              <tr><td>Drift</td><td><code>getDrift(botId)</code> &rarr; <code>{ baseline, current, delta }</code>; baseline is the first <code>adaptive</code> history snapshot (the defaults written on first load), falling back to the first entry of any source, then the defaults.</td></tr>
+              <tr><td>Prompt</td><td><code>renderForPrompt()</code> appends <em>Locked traits (proposals ignored)</em> and <em>Pinned traits (fixed by the operator)</em> lines to the Current Trait State block.</td></tr>
+              <tr><td>Evolution state</td><td><code>AgentLoop.getEvolutionState()</code> exposes <code>traitDrift</code> and <code>traitPolicy { pinned, locked }</code> next to <code>traits</code>, <code>traitParams</code> and <code>traitHistory</code>.</td></tr>
+            </tbody>
+          </table>
+          <h4>De-biased strategist guidance (<code>agent-loop-prompts.ts</code>)</h4>
+          <ul>
+            <li>"No change" is the expected answer most cycles &mdash; omit <code>trait_adjustments</code> or send <code>{}</code>. Traits describe who the agent is, not a lever for short-term engagement numbers.</li>
+            <li>Every delta must cite a concrete observation from <em>this</em> agent's recent actions or outcomes (a named action, a repeated error class, an explicit operator request, a rejected production), named in <code>reflection</code>.</li>
+            <li>Identity consistency: a reactive, guardian, watchdog or monitor identity must not drift toward higher sociability or lower independence because engagement is low &mdash; low engagement with no users is evidence about the audience, not the trait. There is no universal direction.</li>
+            <li>Patterns that do count: the same tool error class repeating (caution up / risk_tolerance down), work rejected as shallow (depth up), a confirmed behavioural rut (curiosity up), an explicit operator request for more or less outreach (sociability accordingly).</li>
+            <li>Locked or pinned traits listed in the trait state are not to be proposed.</li>
+          </ul>
+        </div>
+
+        <!-- ============================================================ -->
         <!-- 9. Scheduling -->
         <!-- ============================================================ -->
         <h2 id="scheduling">Scheduling</h2>
@@ -880,6 +1153,9 @@ interface ResolvedPermission {
   lastLoggedSummary: string | null;
   retryCount: number;
   lastErrorMessage: string | null;
+  cyclesSinceAskHuman: number;
+  feedbackEvents: FeedbackEvent[];   // { timestamp, source: 'ask_human' | 'agent_feedback' | 'human_message' }, 7-day retention
+  skippedReason: string | null;      // e.g. 'circuit-open:ollama'; null when the last cycle ran
 }</code></pre>
 
           <h4>Schedule Management</h4>
@@ -1013,6 +1289,28 @@ interface ResolvedPermission {
         </p>
 
         <div class="module-section">
+          <h4>Error classification order (<code>classifyError()</code>)</h4>
+          <p>
+            <span class="badge badge-yellow">2026-08-22</span> A Claude CLI rate limit used to classify as
+            <strong>PERMANENT</strong>: the CLI's JSON error blob contains
+            <code>"permission_denials":[]</code>, and the substring <code>permission</code> matched the
+            PERMANENT pattern list before the CONTEXTUAL check ever ran. A 429 therefore skipped retry
+            entirely and never fed the circuit breaker. Classification now runs in this order:
+          </p>
+          <table>
+            <thead>
+              <tr><th>Step</th><th>Input</th><th>Result</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>1. Structured signals</td><td><code>apiErrorStatus</code> / <code>resetsAt</code> off a <code>ClaudeCliError</code></td><td>429 &rarr; <strong>CONTEXTUAL</strong> (carrying <code>resetsAt</code>), 401/403 &rarr; <strong>PERMANENT</strong>, 5xx &rarr; <strong>TRANSIENT</strong>; anything else falls through</td></tr>
+              <tr><td>2. Failover reason</td><td><code>statusCode</code> / Node <code>code</code> on non-string errors</td><td>Pre-existing structured path, unchanged</td></tr>
+              <tr><td>3. Word-anchored patterns</td><td>The message with JSON keys stripped (<code>"key":</code> removed)</td><td>PERMANENT &rarr; CONTEXTUAL &rarr; TRANSIENT, as before &mdash; a permission word in real prose still classifies as PERMANENT</td></tr>
+            </tbody>
+          </table>
+          <p><code>ClassifiedError</code> gained <code>resetsAt?: Date</code>.</p>
+        </div>
+
+        <div class="module-section">
           <h4>Retry Config</h4>
 <pre><code>// agentLoop.retry (global or per-bot override)
 {
@@ -1043,6 +1341,67 @@ interface ResolvedPermission {
           </p>
         </div>
 
+        <h3>Backend Circuit Breaker</h3>
+        <p>
+          A 429 on Ollama Cloud is a <em>shared</em> quota, so one bot's failure predicts every other bot's.
+          Before the breaker, a quota outage cost every bot three retries per cycle and an <code>[ERROR]</code>
+          line per attempt in its daily memory. <code>BackendCircuitBreaker</code> (in
+          <code>agent-retry-engine.ts</code>, one instance per <code>AgentLoop</code>) is keyed by LLM backend
+          and applies to the planner/strategist path.
+        </p>
+        <div class="module-section">
+          <h4>Config</h4>
+<pre><code>// agentLoop.circuitBreaker
+{
+  enabled: true,
+  threshold: 3,                    // consecutive CONTEXTUAL (429 / quota) failures before the circuit opens
+  cooldownMs: 1_800_000,           // 30 min for an ordinary rate limit
+  weeklyQuotaCooldownMs: 21_600_000 // 6 h when the error text says "weekly usage limit"
+}</code></pre>
+          <h4>State Machine</h4>
+          <table>
+            <thead>
+              <tr><th>Event</th><th>Effect</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>CONTEXTUAL failure</td><td><code>recordFailure()</code> increments the consecutive count; at <code>threshold</code> the circuit opens until <code>now + cooldown</code>.</td></tr>
+              <tr><td>Other failure</td><td>The backend answered, just not with a quota error: the consecutive run resets and the circuit closes.</td></tr>
+              <tr><td>Success</td><td><code>recordSuccess()</code> closes the circuit and forgets past failures.</td></tr>
+              <tr><td>Cycle start while open</td><td><code>shouldSkip()</code> returns <code>skip: true</code>; <code>executeSingleBot()</code> returns <code>status: 'skipped'</code>, <code>skippedReason: 'circuit-open:&lt;backend&gt;'</code> with a single <code>info</code> log, zero duration and no memory write.</td></tr>
+              <tr><td>Cooldown elapsed</td><td>Half-open: exactly one caller is granted a probe (<code>probe: true</code>); everyone else keeps skipping until it reports. A probe that never reports expires after <code>PROBE_TTL_MS</code> (10 min) so a crashed cycle cannot lock a backend out.</td></tr>
+              <tr><td>Failure mid-retry</td><td><code>executeSingleBotWithRetry()</code> checks <code>isCircuitOpen()</code> after every failed attempt and stops the retry ladder at once (retryCount reset, <code>lastErrorMessage</code> kept).</td></tr>
+              <tr><td>Memory</td><td>While the circuit is open the <code>[ERROR]</code> daily-memory line is suppressed &mdash; one line per outage is plenty.</td></tr>
+            </tbody>
+          </table>
+          <h4>Cooldown from the backend's own reset hint</h4>
+          <p>
+            <span class="badge badge-yellow">2026-08-22</span> When the classified error carries
+            <code>resetsAt</code> &mdash; parsed by <code>parseResetsAt()</code> from the Claude CLI's
+            <code>resets 12:20pm (zone)</code> hint &mdash; the cooldown ends at that instant instead of a
+            fixed <code>cooldownMs</code>, clamped to
+            <code>[BackendCircuitBreaker.MIN_RESET_COOLDOWN_MS</code> (60&nbsp;000 ms)<code>,
+            weeklyQuotaCooldownMs]</code>. Without a hint the behaviour is unchanged:
+            <code>weeklyQuotaCooldownMs</code> when <code>isWeeklyQuotaError()</code> matches
+            (<code>/weekly usage limit/i</code>), <code>cooldownMs</code> otherwise.
+          </p>
+          <h4>Daily-memory error memo</h4>
+          <p>
+            The breaker collapses quota outages, but a <strong>PERMANENT</strong> failure &mdash; expired
+            credentials, say &mdash; deliberately does <em>not</em> open the circuit, so it recurred on every
+            cycle and appended the same <code>[ERROR]</code> line to the bot's daily memory each time.
+            <code>AgentLoop</code> now keeps a per-bot memo of the last recorded error and consults the pure
+            helper <code>shouldRecordErrorInMemory(last, message, now, windowMs)</code>
+            (<code>agent-loop-utils.ts</code>, <code>ERROR_MEMO_WINDOW_MS</code> = 6&nbsp;h) before writing.
+            An identical message inside the window is skipped; a different one is always recorded.
+          </p>
+          <h4>Introspection</h4>
+          <p>
+            <code>AgentLoop.getCircuitState()</code> and <code>BotManager.getAgentLoopCircuitState()</code> return
+            <code>Record&lt;backend, { open, halfOpen, until, consecutiveFailures, lastError }&gt;</code>.
+            <code>skippedReason</code> is also surfaced on <code>BotScheduleInfo</code>.
+          </p>
+        </div>
+
         <h3>Public Schedule API: BotScheduleInfo</h3>
         <p>Exposed via <code>AgentLoop.getState()</code> for the web dashboard and API consumers.</p>
 <pre><code>interface BotScheduleInfo {
@@ -1062,6 +1421,10 @@ interface ResolvedPermission {
   recentActionsSummary: string[];  // Last 5 plan summaries
   retryCount: number;
   lastErrorMessage: string | null;
+  skippedReason: string | null;    // e.g. 'circuit-open:ollama'
+  isExecutingLoop: boolean;
+  agentLoopEnabled: boolean;
+  directives: string[];
 }</code></pre>
 
         <!-- ============================================================ -->

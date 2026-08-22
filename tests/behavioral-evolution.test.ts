@@ -175,7 +175,23 @@ describe('detectUnconsumedOutput', () => {
     expect(result.feedbackCount).toBe(0);
   });
 
-  test('does not trigger gate when feedback is present', () => {
+  test('does not trigger gate when external human feedback is present', () => {
+    const actions = makeActions([
+      'Created file A',
+      'Created file B',
+      'Created file C',
+      'Created file D',
+      'Created file E',
+    ]);
+    const result = detectUnconsumedOutput(actions, 5, 1);
+    expect(result.gateTriggered).toBe(false);
+    expect(result.outputCount).toBe(5);
+    expect(result.feedbackCount).toBe(1);
+  });
+
+  test('the bot narrating its own feedback is NOT feedback', () => {
+    // Self-reported keywords used to lift the gate; only structured human
+    // signals (countFeedbackSignals) count now.
     const actions = makeActions([
       'Created file A',
       'Created file B',
@@ -185,12 +201,11 @@ describe('detectUnconsumedOutput', () => {
       'Received confirmation from user',
     ]);
     const result = detectUnconsumedOutput(actions, 5);
-    expect(result.gateTriggered).toBe(false);
-    expect(result.outputCount).toBe(5);
-    expect(result.feedbackCount).toBe(1);
+    expect(result.gateTriggered).toBe(true);
+    expect(result.feedbackCount).toBe(0);
   });
 
-  test('counts assessment actions as feedback', () => {
+  test('an ASSESSMENT the bot runs on itself is NOT feedback', () => {
     const actions = makeActions([
       'Created file A',
       'Created file B',
@@ -200,8 +215,8 @@ describe('detectUnconsumedOutput', () => {
       'Review impact of sent content',
     ]);
     const result = detectUnconsumedOutput(actions, 5);
-    expect(result.gateTriggered).toBe(false);
-    expect(result.feedbackCount).toBeGreaterThan(0);
+    expect(result.gateTriggered).toBe(true);
+    expect(result.feedbackCount).toBe(0);
   });
 
   test('respects custom threshold', () => {
@@ -219,12 +234,12 @@ describe('detectUnconsumedOutput', () => {
       'Created file A',
       'Created file B',
       'Send message to user',
-      'Received feedback from operator',
+      'Drafted a summary of the week',
     ]);
-    const result = detectUnconsumedOutput(actions, 5);
-    expect(result.outputCount).toBe(3); // 2 content + 1 outreach
+    const result = detectUnconsumedOutput(actions, 5, 1);
+    expect(result.outputCount).toBe(4); // 3 content + 1 outreach
     expect(result.feedbackCount).toBe(1);
-    expect(result.ratio).toBe(3);
+    expect(result.ratio).toBe(4);
   });
 });
 
@@ -327,7 +342,9 @@ describe('engagementGate config schema', () => {
       engagementGate: {},
     });
     expect(result.engagementGate.enabled).toBe(true);
-    expect(result.engagementGate.mode).toBe('soft');
+    // Hard by default since the 2026-08 audit: soft mode only annotated the
+    // prompt and bots kept producing unanswered files.
+    expect(result.engagementGate.mode).toBe('hard');
     expect(result.engagementGate.threshold).toBe(5);
   });
 
@@ -369,6 +386,33 @@ describe('strategist prompt behavioral analysis', () => {
     expect(system).toContain('Current Behavioral State');
     expect(system).toContain('entropy=0.12');
     expect(system).toContain('BEHAVIORAL RUT DETECTED');
+  });
+});
+
+describe('strategist prompt trait-adjustment guidance (de-biased)', () => {
+  const { buildStrategistPrompt } = require('../src/bot/agent-loop-prompts');
+  const { system } = buildStrategistPrompt({
+    identity: 'Reactive guardian',
+    soul: 'Test soul',
+    motivations: 'Test motivations',
+    goals: 'Test goals',
+    recentMemory: 'Test memory',
+    datetime: '2026-08-21T12:00:00Z',
+  });
+
+  test('no longer prescribes a universal direction for low engagement', () => {
+    expect(system).not.toContain('increase sociability (+0.03), decrease independence');
+    expect(system).not.toMatch(/low engagement\s*→\s*increase sociability/i);
+    // The worked example must not nudge every bot the same way either
+    expect(system).not.toContain('"sociability":0.02,"independence":-0.02');
+  });
+
+  test('requires a concrete observation per delta, says no-change is the norm, states the identity rule, keeps the cap', () => {
+    expect(system).toContain('concrete observation');
+    expect(system).toMatch(/no change.*expected/i);
+    expect(system).toMatch(/guardian/i);
+    expect(system).toContain('Low engagement with no users is not evidence about the trait');
+    expect(system).toContain('±0.05');
   });
 });
 

@@ -351,6 +351,59 @@ score = 1 / (1 + |bm25_rank|)</code></pre>
         </ol>
         <p>Consolidation and quality review run concurrently since they operate on different files. A cooldown timestamp (<code>.last-health-check</code>) prevents redundant runs.</p>
 
+        <h3>Hygiene Routines</h3>
+        <p>
+          <code>src/hygiene/</code> adds deterministic, <strong>LLM-free</strong> maintenance on top of the health check.
+          Every routine exposes <code>preview</code> (a dry run that writes nothing) and <code>apply</code>, reachable
+          from <code>POST /api/hygiene/run</code> and the dashboard (<code>#/stats/hygiene</code>, or the hygiene panel on
+          <code>#/stats/bot/:botId</code>). The soul directory is resolved exactly like <code>BotManager.startBot()</code>
+          does (<code>resolveAgentConfig</code> / <code>resolveAgentConfigWithTenant</code>), and every write is checked
+          against the allowed roots (<code>assertWithinRoots</code>).
+        </p>
+        <table>
+          <thead>
+            <tr><th>Routine</th><th>Scope</th><th>Finding kinds</th><th>Apply</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>goal-lint</code></td>
+              <td>bot</td>
+              <td><code>archived-in-active</code>, <code>oversized-notes</code> (&gt; 1000 chars), <code>duplicate-title</code> (Jaccard &ge; 0.6), <code>stale-block</code> (blocked/stalled &gt; 14 days), <code>dead-trigger</code> (goal tied to a channel whose state is not <code>ok</code>)</td>
+              <td>Rewrites GOALS.md through the <code>manage_goals</code> parser/serializer: archived goals move to Completed with <code>completed: today</code>, oversized notes are trimmed to 600 chars and the full text appended to <code>memory/&lt;today&gt;.md</code></td>
+            </tr>
+            <tr>
+              <td><code>soul-structure</code></td>
+              <td>bot</td>
+              <td><code>soul-lint</code> (wraps <code>lintSoulDirectory</code>), <code>missing-soul-dir</code>, <code>soul-equals-motivations</code> (prose similarity &ge; 0.9), <code>missing-memory-md</code>, <code>missing-traits</code>, <code>stale-current-focus</code> (&gt; 14 days), <code>last-review-failed</code></td>
+              <td>Only creates an empty <code>MEMORY.md</code> with a header; everything else is report-only</td>
+            </tr>
+            <tr>
+              <td><code>memory-hygiene</code></td>
+              <td>bot</td>
+              <td><code>pii</code> (email, phone, chat-id, money, custody keywords in MEMORY.md and <code>memory/*.md</code>; <code>memory/archive/</code> is left alone), <code>stale-constraint</code> ("tool X unavailable" lines), <code>daily-logs-pending</code> (logs &gt; 7 days old awaiting consolidation)</td>
+              <td>Replaces PII spans with <code>[redacted:&lt;kind&gt;]</code>; appends <code>[stale as of &lt;date&gt;: tool succeeded recently]</code> to a constraint only when the tool-audit log shows that tool succeeding in the last 7 days</td>
+            </tr>
+            <tr>
+              <td><code>productions-triage</code></td>
+              <td>bot</td>
+              <td><code>orphan-reference</code>, <code>unreviewed-stale</code>, <code>unnumbered</code>, <code>duplicate-number</code>, <code>cleanup-candidate</code> (from <code>analyzeCleanup</code>)</td>
+              <td>Archives <code>unreviewed-stale</code> files into <code>archived/</code> via <code>archiveFile</code>, and only with <code>options.archiveStale: true</code></td>
+            </tr>
+            <tr>
+              <td><code>data-cleanup</code></td>
+              <td>fleet</td>
+              <td><code>orphan-karma-dir</code>, <code>orphan-soul-dir</code>, <code>legacy-config-soul</code> (a soul copy under the legacy config root while the live soul is in the data dir), <code>claude-tmp-transcripts</code> (&gt; 7 days), <code>duplicate-skills</code>, <code>skills-are-tools</code></td>
+              <td>Moves the first four into <code>_trash</code>; the config findings are report-only &mdash; <code>bots.json</code> is never rewritten</td>
+            </tr>
+          </tbody>
+        </table>
+        <h4>Backups and the trash batch</h4>
+        <ul>
+          <li><strong><code>.versions/</code></strong> &mdash; before a soul file is rewritten, <code>backupFile()</code> copies it to <code>&lt;dir&gt;/.versions/&lt;name&gt;.&lt;ISO&gt;.bak</code> (same convention as <code>backupSoulFile</code> in <code>src/soul.ts</code>, but hygiene never prunes old backups). Backup paths are returned in <code>HygieneRun.backups</code>.</li>
+          <li><strong><code>_trash/</code></strong> &mdash; <code>data-cleanup</code> never deletes. A <code>TrashBatch</code> renames (or copies + removes across devices) each path into <code>&lt;data&gt;/_trash/&lt;YYYY-MM-DDTHH-mm-ss&gt;/&lt;relative path&gt;</code> and writes a <code>manifest.json</code> (<code>from</code>, <code>to</code>, <code>reason</code>, <code>movedAt</code>) so the move can be reverted by hand.</li>
+          <li><strong>History</strong> &mdash; every run (preview or apply) is appended to <code>&lt;data&gt;/hygiene/runs.jsonl</code>, capped at the last 500.</li>
+        </ul>
+
         <h3>Per-Bot Isolation in Skill Cron Jobs</h3>
         <p>Skill cron jobs (reflection, calibrate, improve) are registered <strong>per-bot</strong> in the CronService. Each job's <code>CronPayload</code> carries a <code>botId</code> field. When the cron service fires a skill job, <code>resolveSkillHandler</code> in <code>src/index.ts</code> looks up the bot config, calls <code>resolveAgentConfig()</code> to determine the per-bot <code>soulDir</code>, and injects it into the <code>SkillContext</code>. Skills never fall back to a shared root directory &mdash; if <code>soulDir</code> is not set, they error and skip execution. The improve skill uses a per-bot concurrency lock (<code>Set&lt;string&gt;</code>) instead of a global boolean, allowing concurrent runs for different bots.</p>
 

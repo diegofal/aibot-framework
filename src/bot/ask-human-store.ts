@@ -10,6 +10,8 @@ export interface PendingQuestion {
   question: string;
   messageId: number | null;
   conversationId?: string;
+  /** Quick-reply choices offered to the operator (2-4 short strings). */
+  options?: string[];
   resolve: (answer: string) => void;
   reject: (reason: Error) => void;
   createdAt: number;
@@ -21,6 +23,7 @@ export interface PendingQuestionInfo {
   chatId: number;
   question: string;
   conversationId?: string;
+  options?: string[];
   createdAt: number;
 }
 
@@ -104,7 +107,13 @@ export class AskHumanStore {
    * Register a pending question. Returns a promise that resolves with the human's answer.
    * The caller is responsible for sending the Telegram message and calling setMessageId().
    */
-  ask(botId: string, chatId: number, question: string): { id: string; promise: Promise<string> } {
+  ask(
+    botId: string,
+    chatId: number,
+    question: string,
+    options?: string[],
+    createdAt: number = Date.now()
+  ): { id: string; promise: Promise<string> } {
     const id = randomUUID();
 
     const { promise, resolve, reject } = this.createDeferredPromise<string>();
@@ -115,9 +124,10 @@ export class AskHumanStore {
       chatId,
       question,
       messageId: null,
+      ...(options && options.length > 0 ? { options } : {}),
       resolve,
       reject,
-      createdAt: Date.now(),
+      createdAt,
     };
 
     this.pending.set(id, entry);
@@ -141,6 +151,50 @@ export class AskHumanStore {
     if (entry) {
       entry.messageId = messageId;
     }
+  }
+
+  /** Override createdAt (tests and restore paths); no-op for unknown ids. */
+  setCreatedAt(questionId: string, createdAt: number): void {
+    const entry = this.pending.get(questionId);
+    if (entry) entry.createdAt = createdAt;
+  }
+
+  /**
+   * Close every pending question older than `maxAgeMs`, optionally for one bot
+   * only. The promise rejects with an auto-close reason so the original
+   * ask_human caller logs it as such. Neither onDismiss nor onTimeout fires:
+   * the sweep that calls this owns the inbox status and the memory note, and
+   * a second callback would race it with a different status.
+   */
+  closeStale(maxAgeMs: number, now: number = Date.now(), botId?: string): PendingQuestionInfo[] {
+    const hours = Math.round((maxAgeMs / 3_600_000) * 100) / 100;
+    const closed: PendingQuestionInfo[] = [];
+    for (const entry of [...this.pending.values()]) {
+      if (botId && entry.botId !== botId) continue;
+      if (now - entry.createdAt <= maxAgeMs) continue;
+      closed.push(this.toInfo(entry));
+      entry.reject(new Error(`Question auto-closed after ${hours}h without answer`));
+      this.cleanup(entry.id);
+    }
+    if (closed.length > 0) {
+      this.logger.info(
+        { count: closed.length, maxAgeMs, botId: botId ?? null },
+        'AskHuman: stale questions auto-closed'
+      );
+    }
+    return closed;
+  }
+
+  private toInfo(entry: PendingQuestion): PendingQuestionInfo {
+    return {
+      id: entry.id,
+      botId: entry.botId,
+      chatId: entry.chatId,
+      question: entry.question,
+      conversationId: entry.conversationId,
+      ...(entry.options ? { options: entry.options } : {}),
+      createdAt: entry.createdAt,
+    };
   }
 
   /**
@@ -259,14 +313,7 @@ export class AskHumanStore {
   getAll(): PendingQuestionInfo[] {
     const result: PendingQuestionInfo[] = [];
     for (const entry of this.pending.values()) {
-      result.push({
-        id: entry.id,
-        botId: entry.botId,
-        chatId: entry.chatId,
-        question: entry.question,
-        conversationId: entry.conversationId,
-        createdAt: entry.createdAt,
-      });
+      result.push(this.toInfo(entry));
     }
     return result;
   }
@@ -332,14 +379,7 @@ export class AskHumanStore {
     const results: PendingQuestionInfo[] = [];
     for (const entry of this.pending.values()) {
       if (entry.botId !== botId) continue;
-      results.push({
-        id: entry.id,
-        botId: entry.botId,
-        chatId: entry.chatId,
-        question: entry.question,
-        conversationId: entry.conversationId,
-        createdAt: entry.createdAt,
-      });
+      results.push(this.toInfo(entry));
     }
     return results;
   }

@@ -9,6 +9,7 @@ import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { generateSpeech } from '../tts';
+import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from './agent-loop-utils';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
 import {
   CircuitBreaker,
@@ -24,6 +25,30 @@ import type { PermissionMode } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
 import { TopicGuard, type TopicGuardConfig } from './topic-guard';
 import type { BotContext } from './types';
+
+/**
+ * Is this inbound message genuine human engagement?
+ *
+ * Excluded:
+ * - bot-to-bot / collaboration traffic (`isPeerAgent`, resolved from the
+ *   agent registry — the same signal `ConversationGate` uses on Telegram)
+ * - agent-protocol channels (`mcp`)
+ * - framework-generated messages: an explicit `synthetic` flag (preferred,
+ *   and what a channel-agnostic cron path should set) or the `cron-` message
+ *   id prefix that `BotManager.handleCronInstruction` currently mints. The
+ *   sender's display name is deliberately NOT matched on.
+ * - empty bodies
+ */
+export function isHumanInboundMessage(
+  msg: InboundMessage & { synthetic?: boolean },
+  opts: { isPeerAgent: boolean }
+): boolean {
+  if (opts.isPeerAgent) return false;
+  if (msg.channelKind === 'mcp') return false;
+  if (msg.synthetic === true) return false;
+  if (typeof msg.messageId === 'string' && msg.messageId.startsWith('cron-')) return false;
+  return typeof msg.text === 'string' && msg.text.trim().length > 0;
+}
 
 export class ConversationPipeline {
   private circuitBreaker: CircuitBreaker;
@@ -761,6 +786,35 @@ export class ConversationPipeline {
     }
   }
 
+  /** Does this sender resolve to another agent in the registry? */
+  private isPeerAgentSender(msg: InboundMessage): boolean {
+    const registry = this.ctx.agentRegistry;
+    if (!registry) return false;
+    try {
+      const numericId = Number(msg.sender.id);
+      if (Number.isFinite(numericId) && registry.getByTelegramUserId?.(numericId)) return true;
+      if (msg.sender.username && registry.getByTelegramUsername?.(msg.sender.username)) return true;
+      if (msg.sender.id && registry.getByBotId?.(msg.sender.id)) return true;
+    } catch {
+      /* best-effort — an unresolvable sender is treated as human */
+    }
+    return false;
+  }
+
+  /** Fire the human-inbound engagement signal for genuine human traffic only. */
+  private emitHumanInbound(msg: InboundMessage, botId: string): void {
+    if (!this.ctx.hooks) return;
+    if (!isHumanInboundMessage(msg, { isPeerAgent: this.isPeerAgentSender(msg) })) return;
+    const event: HumanInboundEvent = {
+      botId,
+      channelKind: msg.channelKind ?? 'unknown',
+      chatId: String(msg.chatId),
+      userId: msg.sender.id,
+      timestamp: Date.now(),
+    };
+    this.ctx.hooks.emit(HUMAN_INBOUND_HOOK, event);
+  }
+
   /**
    * Channel-agnostic conversation pipeline entry point.
    *
@@ -808,6 +862,11 @@ export class ConversationPipeline {
       text: msg.text,
       timestamp: Date.now(),
     });
+
+    // Engagement signal: a human wrote to the bot on a non-Telegram channel.
+    // The Telegram buffer records the same signal via requestImmediateRun(),
+    // so it must not also come through here (it never calls this method).
+    this.emitHumanInbound(msg, config.id);
 
     // Auto-track sender in user directory
     this.ctx.userDirectory?.track(config.id, msg);

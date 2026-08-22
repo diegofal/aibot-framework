@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { type BotConfig, resolveAgentConfig } from '../config';
-import type { TokenUsage } from '../core/llm-client';
+import { ClaudeCliLLMClient, type LLMClient, type TokenUsage } from '../core/llm-client';
 import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
@@ -19,18 +19,33 @@ import {
   buildPlannerPrompt,
 } from './agent-loop-prompts';
 import {
+  type ActionType,
   buildRecentActionsDigest,
   classifyAction,
   computeActionDiversity,
+  countFeedbackSignals,
   detectUnconsumedOutput,
+  evaluateEngagementGate,
   isRepetitiveAction,
   isSimilarSummary,
   logToMemory,
+  resolveDurableOutputCount,
   scanFileTree,
   sendReport,
+  shouldRecordErrorInMemory,
 } from './agent-loop-utils';
-import { type PlannerResultWithUsage, runPlannerWithRetry } from './agent-planner';
 import {
+  type PlannerBackend,
+  type PlannerResultWithUsage,
+  resolvePlannerBackend,
+  resolvePlannerModel,
+  runPlannerWithRetry,
+  selectPlannerClient,
+} from './agent-planner';
+import {
+  BackendCircuitBreaker,
+  type BackendCircuitState,
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
   executeSingleBotWithRetry as _executeSingleBotWithRetry,
   resolveRetryConfig,
 } from './agent-retry-engine';
@@ -74,6 +89,8 @@ export interface AgentLoopResult {
   isIdle?: boolean;
   consecutiveIdleCycles?: number;
   retryAttempt?: number;
+  /** Machine-readable reason for a `skipped` status (e.g. `circuit-open:ollama`) */
+  skippedReason?: string;
   /** Tool categories selected by planner for pre-selection */
   selectedToolCategories?: string[];
   /** Number of tool definitions sent to executor after pre-selection */
@@ -112,6 +129,7 @@ interface ExecuteLoopDetail {
   executorToolCount?: number;
   tokenUsage?: AgentLoopResult['tokenUsage'];
   alignmentWarnings?: string[];
+  loopDetection?: AgentLoopResult['loopDetection'];
 }
 
 function buildTokenUsageSummary(
@@ -152,6 +170,8 @@ export interface BotScheduleInfo {
   recentActionsSummary: string[];
   retryCount: number;
   lastErrorMessage: string | null;
+  /** Why the last cycle was skipped (e.g. `circuit-open:ollama`); null when it ran */
+  skippedReason: string | null;
   isExecutingLoop: boolean;
   /** Whether agent loop is enabled for this bot (per-bot override → global) */
   agentLoopEnabled: boolean;
@@ -184,9 +204,22 @@ export function parseDurationMs(duration: string): number {
   return value * multipliers[unit];
 }
 
+/**
+ * How far back the engagement gate looks for human signals. Matches the
+ * 7-day retention of `BotSchedule.feedbackEvents`. Override per bot with
+ * `agentLoop.engagementGate.lookbackHours`.
+ */
+const ENGAGEMENT_GATE_LOOKBACK_HOURS = 7 * 24;
+
 export class AgentLoop {
   private scheduler: AgentScheduler;
   private karmaService: KarmaService | null = null;
+  /** Fleet-wide per-backend breaker for 429/quota errors on the planner/strategist path */
+  private circuitBreaker: BackendCircuitBreaker;
+  /** Last error written to each bot's daily memory, to avoid repeating it every cycle. */
+  private lastMemoryError = new Map<string, { message: string; at: number }>();
+  /** Lazily built bare Claude CLI clients for ollama bots whose planner is pinned to claude-cli */
+  private plannerClaudeClients = new Map<string, LLMClient>();
 
   // ── Evolution modules (Phase 1-4) ──
   private outcomeLedger: import('./outcome-ledger').OutcomeLedger | null = null;
@@ -206,16 +239,89 @@ export class AgentLoop {
       (botId, botConfig) => this.executeBotWithRetry(botId, botConfig),
       join(ctx.config.paths.data, 'agent-scheduler')
     );
+    this.circuitBreaker = new BackendCircuitBreaker(
+      ctx.config.agentLoop.circuitBreaker ?? DEFAULT_CIRCUIT_BREAKER_CONFIG
+    );
+  }
+
+  /** Per-backend circuit breaker state — read by the dashboard. */
+  getCircuitState(): Record<string, BackendCircuitState> {
+    return this.circuitBreaker.getState();
+  }
+
+  /**
+   * Resolve the client + model for the planner and strategist phases. Honours
+   * `agentLoop.plannerBackend` and unwraps the bot client's fallback wrapper so
+   * those `generate()` calls stay on the chosen backend.
+   */
+  private resolvePlannerLLM(
+    botId: string,
+    botConfig: BotConfig,
+    botClient: LLMClient,
+    activeModel: string,
+    botLogger: Logger
+  ): { backend: PlannerBackend; client: LLMClient; model: string } {
+    const backend = resolvePlannerBackend(this.ctx.config.agentLoop, botConfig);
+    const client = selectPlannerClient(botClient, backend, {
+      logger: botLogger,
+      createClaudeClient: () => {
+        let cached = this.plannerClaudeClients.get(botId);
+        if (!cached) {
+          cached = new ClaudeCliLLMClient(
+            'claude',
+            botConfig.agentLoop?.claudeTimeout ?? this.ctx.config.agentLoop.claudeTimeout,
+            botLogger,
+            this.ctx.config.claudeCli?.model
+          );
+          this.plannerClaudeClients.set(botId, cached);
+        }
+        return cached;
+      },
+    });
+    const model = resolvePlannerModel(backend, botConfig, this.ctx.config, activeModel);
+    return { backend, client, model };
   }
 
   setKarmaService(karmaService: KarmaService): void {
     this.karmaService = karmaService;
+    // Human feedback signals (ask_human answers, human replies) earn engagement karma
+    this.scheduler.setKarmaService(karmaService);
   }
 
   // ── Evolution module setters ──
 
   setOutcomeLedger(ledger: import('./outcome-ledger').OutcomeLedger): void {
     this.outcomeLedger = ledger;
+  }
+
+  /**
+   * Engagement gate input: how many outputs the bot produced since `sinceTs`,
+   * read from durable state so a container restart cannot reset it. The
+   * outcome ledger is authoritative; the production changelog covers bots
+   * whose ledger is not wired. Best-effort — a read failure counts zero.
+   *
+   * Returns `null` when neither durable source exists at all, so the caller
+   * falls back to the in-memory recent-actions window rather than reading a
+   * hard zero and disabling the gate outright.
+   */
+  private countDurableOutputs(botId: string, sinceTs: number): number | null {
+    const hasLedger = !!this.outcomeLedger;
+    const hasProductions = !!this.ctx.productionsService;
+    if (!hasLedger && !hasProductions) return null;
+
+    let outcomeEntries: Array<{ timestamp: number; type: ActionType }> = [];
+    try {
+      outcomeEntries = this.outcomeLedger?.getAllEntries(botId) ?? [];
+    } catch {
+      outcomeEntries = [];
+    }
+    let productionEntries: Array<{ timestamp: string; action: string }> = [];
+    try {
+      productionEntries = this.ctx.productionsService?.getChangelog(botId, { limit: 1000 }) ?? [];
+    } catch {
+      productionEntries = [];
+    }
+    return resolveDurableOutputCount({ outcomeEntries, productionEntries }, sinceTs);
   }
 
   setTraitRegisters(registers: import('./trait-registers').TraitRegisters): void {
@@ -273,6 +379,14 @@ export class AgentLoop {
       idleCyclesBeforeAbandon: number;
     };
     traitHistory?: Array<{ timestamp: number; source: string; traits: Record<string, number> }>;
+    /** Current traits vs the first persisted snapshot */
+    traitDrift?: {
+      baseline: Record<string, number>;
+      current: Record<string, number>;
+      delta: Record<string, number>;
+    };
+    /** Operator guard rails from bot config `traits` */
+    traitPolicy?: { pinned: Record<string, number>; locked: string[] };
     sensorCount?: number;
     cachedSensorEvents?: Array<{
       sensorId: string;
@@ -321,12 +435,41 @@ export class AgentLoop {
 
     // Traits
     let traits: Record<string, number> | undefined;
-    let traitParams: Record<string, number> | undefined;
-    let traitHistory: Array<Record<string, unknown>> | undefined;
+    let traitParams: import('./trait-registers').DerivedParameters | undefined;
+    let traitHistory:
+      | Array<{ timestamp: number; source: string; traits: Record<string, number> }>
+      | undefined;
+    let traitDrift:
+      | {
+          baseline: Record<string, number>;
+          current: Record<string, number>;
+          delta: Record<string, number>;
+        }
+      | undefined;
+    let traitPolicy: { pinned: Record<string, number>; locked: string[] } | undefined;
     if (this.traitRegisters) {
-      traits = this.traitRegisters.load(botId) as Record<string, number> | undefined;
+      // TraitSet is a closed interface; the dashboard payload is an open record.
+      traits = this.traitRegisters.load(botId) as unknown as Record<string, number> | undefined;
       traitParams = this.traitRegisters.getParameters(botId);
-      traitHistory = this.traitRegisters.getHistory(botId).slice(-5);
+      traitHistory = this.traitRegisters
+        .getHistory(botId)
+        .slice(-5)
+        .map((s) => ({
+          timestamp: s.timestamp,
+          source: s.source,
+          traits: s.traits as unknown as Record<string, number>,
+        }));
+      const drift = this.traitRegisters.getDrift(botId);
+      traitDrift = {
+        baseline: drift.baseline as unknown as Record<string, number>,
+        current: drift.current as unknown as Record<string, number>,
+        delta: drift.delta as unknown as Record<string, number>,
+      };
+      const policy = this.traitRegisters.getPolicy(botId);
+      traitPolicy = {
+        pinned: (policy?.pinned ?? {}) as Record<string, number>,
+        locked: policy?.locked ?? [],
+      };
     }
 
     // Sensors
@@ -361,6 +504,8 @@ export class AgentLoop {
       traits,
       traitParams,
       traitHistory,
+      traitDrift,
+      traitPolicy,
       sensorCount,
       cachedSensorEvents,
       meshEntryCount,
@@ -509,12 +654,14 @@ export class AgentLoop {
   private async executeBotWithRetry(botId: string, botConfig: BotConfig): Promise<AgentLoopResult> {
     const retryConfig = resolveRetryConfig(this.ctx.config.agentLoop.retry, botConfig);
     const botLogger = this.ctx.getBotLogger(botId);
+    const plannerBackend = resolvePlannerBackend(this.ctx.config.agentLoop, botConfig);
     return _executeSingleBotWithRetry(botId, botConfig, retryConfig, botLogger, {
       executeFn: (id, cfg, opts) => this.executeSingleBot(id, cfg, opts),
       getSchedule: (id) => this.scheduler.getSchedule(id),
       sleepFn: (ms) => this.scheduler.interruptibleSleep(ms),
       isEnabled: () => this.scheduler.isEnabled(),
       isBotRunning: (id) => this.ctx.runningBots.has(id),
+      isCircuitOpen: () => this.circuitBreaker.isOpen(plannerBackend),
     });
   }
 
@@ -571,6 +718,29 @@ export class AgentLoop {
           strategistRan: false,
         };
       }
+    }
+
+    // Backend circuit breaker: when the planner backend is drowning in 429s
+    // (a shared quota), sit this cycle out — one info line, no retries, no
+    // memory spam — and let the normal schedule bring the bot back.
+    const plannerBackend = resolvePlannerBackend(globalConfig, botConfig);
+    const circuit = this.circuitBreaker.shouldSkip(plannerBackend);
+    if (circuit.skip) {
+      const untilIso = new Date(circuit.until ?? Date.now()).toISOString();
+      const summary = `Agent loop: skipped — ${plannerBackend} circuit open until ${untilIso}`;
+      botLogger.info({ botId, backend: plannerBackend, until: untilIso }, summary);
+      return {
+        botId,
+        botName: botConfig.name,
+        status: 'skipped',
+        summary,
+        skippedReason: `circuit-open:${plannerBackend}`,
+        durationMs: 0,
+        plannerReasoning: '',
+        plan: [],
+        toolCalls: [],
+        strategistRan: false,
+      };
     }
 
     botLogger.info({ botId }, 'Agent loop starting for bot');
@@ -670,14 +840,19 @@ export class AgentLoop {
             data: { delta: -2, reason, source: 'agent-loop' },
           });
         } else {
+          // Outcome-based karma: activity is worth config.karma.rewards.novelAction
+          // (0 by default — a completed cycle is not impact). The hook stays
+          // wired so an operator can turn the credit back on.
           const reason = `Novel action: ${planSummary.slice(0, 80)}`;
-          this.karmaService.addEvent(botId, 1, reason, 'agent-loop');
-          this.ctx.activityStream?.publish({
-            type: 'karma:change',
-            botId,
-            timestamp: Date.now(),
-            data: { delta: 1, reason, source: 'agent-loop' },
-          });
+          const event = this.karmaService.recordOutcome(botId, 'novelAction', reason);
+          if (event) {
+            this.ctx.activityStream?.publish({
+              type: 'karma:change',
+              botId,
+              timestamp: Date.now(),
+              data: { delta: event.delta, reason, source: 'agent-loop', kind: 'novelAction' },
+            });
+          }
         }
       }
 
@@ -798,7 +973,17 @@ export class AgentLoop {
       });
 
       if (!options?.suppressSideEffects) {
-        logToMemory(this.ctx, botId, `[ERROR] ${errorMsg}`);
+        // While the backend circuit is open every failure is the same failure;
+        // one ERROR line per quota outage is plenty for the daily memory. A
+        // PERMANENT failure (expired credentials) never opens the circuit but
+        // recurs every cycle, so the same line is also memoised per bot.
+        if (
+          !this.circuitBreaker.isOpen(plannerBackend) &&
+          shouldRecordErrorInMemory(this.lastMemoryError.get(botId), errorMsg, Date.now())
+        ) {
+          this.lastMemoryError.set(botId, { message: errorMsg, at: Date.now() });
+          logToMemory(this.ctx, botId, `[ERROR] ${errorMsg}`);
+        }
 
         if (botOverride?.reportChatId) {
           await sendReport(this.ctx, botId, botOverride.reportChatId, errorMsg).catch(() => {});
@@ -843,6 +1028,9 @@ export class AgentLoop {
 
     const llmClient = this.ctx.getLLMClient(botId);
     const model = this.ctx.getActiveModel(botId);
+    // Planner + strategist run on the resolved planner backend (bare client);
+    // the executor keeps the bot client (tool calling needs the full wrapper).
+    const plannerLLM = this.resolvePlannerLLM(botId, botConfig, llmClient, model, botLogger);
 
     // Resolve phase timeouts: per-bot override → global config
     const pt = globalConfig.phaseTimeouts;
@@ -906,7 +1094,64 @@ export class AgentLoop {
       soul = soulLoader.readSoul() || '(no soul)';
       motivations = soulLoader.readMotivations() || '(no motivations)';
       goals = soulLoader.readGoals?.() || '';
+      for (let i = 0; i < pendingFeedback.length; i++) {
+        this.scheduler.recordFeedbackEvent(botId, 'agent_feedback');
+      }
     }
+
+    // Consume answered ask_human questions now (before the strategist) so the
+    // answers count as feedback for this cycle's engagement gate; they are
+    // injected into the planner prompt below.
+    const answeredQuestions = this.ctx.askHumanStore.consumeAnswersForBot(botId);
+    for (let i = 0; i < answeredQuestions.length; i++) {
+      this.scheduler.recordFeedbackEvent(botId, 'ask_human');
+    }
+
+    // Engagement gate inputs: durable outputs vs human feedback.
+    //
+    // The recent-actions window lives in memory and resets with the container,
+    // so it can never reach the threshold on a freshly restarted fleet — the
+    // output count comes from the outcome ledger (production changelog as
+    // fallback) counted since the last human signal, which is exactly the
+    // number the operator audit reports and survives restarts.
+    const scheduleForGate = this.scheduler.getSchedule(botId);
+    const engagementGateCfg = botOverride?.engagementGate;
+    const engagementGateEnabled = engagementGateCfg?.enabled !== false; // default true
+    const engagementGateMode = engagementGateCfg?.mode ?? 'hard';
+    const engagementThreshold = engagementGateCfg?.threshold ?? 5;
+    // `lookbackHours` is not in the Zod schema yet — read defensively so the
+    // key works the moment it is added (see agentLoop.engagementGate).
+    const engagementLookbackMs =
+      ((engagementGateCfg as { lookbackHours?: number } | undefined)?.lookbackHours ??
+        ENGAGEMENT_GATE_LOOKBACK_HOURS) * 3_600_000;
+    const engagementWindowStart = Date.now() - engagementLookbackMs;
+    const feedbackSignals = countFeedbackSignals(
+      {
+        productionsService: this.ctx.productionsService,
+        conversationsService: this.ctx.conversationsService,
+        feedbackEvents: scheduleForGate?.feedbackEvents,
+      },
+      botId,
+      engagementWindowStart
+    );
+    // Anchor: everything produced after the last human signal is unconsumed.
+    // With no signal in the window, the window start is the anchor.
+    const engagementAnchor = feedbackSignals.lastFeedbackAt ?? engagementWindowStart;
+    // Feedback *after* the anchor is 0 by construction; the only exception is a
+    // signal we counted but could not timestamp, which must still un-gate.
+    const engagementFeedbackCount =
+      feedbackSignals.lastFeedbackAt === null ? feedbackSignals.total : 0;
+    const durableOutputCount = this.countDurableOutputs(botId, engagementAnchor);
+    // Fallback window (no durable source wired at all) obeys the same anchor.
+    const actionsSinceAnchor = (scheduleForGate?.recentActions ?? []).filter(
+      (a) => a.timestamp > engagementAnchor
+    );
+    const engagement = detectUnconsumedOutput(
+      actionsSinceAnchor,
+      engagementThreshold,
+      engagementFeedbackCount,
+      durableOutputCount ?? undefined
+    );
 
     // Phase 0: Strategist (conditional)
     if (checkTimeout && !checkTimeout('before_strategist')) {
@@ -936,12 +1181,8 @@ export class AgentLoop {
 
       // Compute behavioral state for strategist injection
       let behavioralState: string | undefined;
-      if (schedule && schedule.recentActions.length > 0) {
+      if (schedule && schedule.recentActions.length > 0 && engagement) {
         const diversity = computeActionDiversity(schedule.recentActions);
-        const engagement = detectUnconsumedOutput(
-          schedule.recentActions,
-          botConfig.agentLoop?.engagementGate?.threshold ?? 5
-        );
         const lines: string[] = [];
         lines.push(
           `Action diversity: entropy=${diversity.entropy.toFixed(2)}, dominant=${diversity.dominantType} (${Math.round(diversity.dominantPct * 100)}%)`
@@ -965,7 +1206,7 @@ export class AgentLoop {
         type: 'llm:start',
         botId,
         timestamp: strategistStartMs,
-        data: { caller: 'strategist', backend: llmClient.backend },
+        data: { caller: 'strategist', backend: plannerLLM.backend },
       });
       try {
         // Build evolution context for strategist
@@ -984,32 +1225,40 @@ export class AgentLoop {
 
         strategistResult = await withTimeout(
           () =>
-            runStrategist(this.ctx, botId, botConfig, botLogger, {
-              identity,
-              soul,
-              motivations,
-              goals,
-              datetime,
-              soulLoader,
-              directives: directives.length > 0 ? directives : undefined,
-              behavioralState,
-              outcomeStats,
-              traitState,
-              environmentContext: envContext,
-              crystallizationContext: crystContext,
-              goalPerformance: goalPerfContext,
-              peerInsights: peerContext,
-            }),
+            runStrategist(
+              this.ctx,
+              botId,
+              botConfig,
+              botLogger,
+              {
+                identity,
+                soul,
+                motivations,
+                goals,
+                datetime,
+                soulLoader,
+                directives: directives.length > 0 ? directives : undefined,
+                behavioralState,
+                outcomeStats,
+                traitState,
+                environmentContext: envContext,
+                crystallizationContext: crystContext,
+                goalPerformance: goalPerfContext,
+                peerInsights: peerContext,
+              },
+              { client: plannerLLM.client, model: plannerLLM.model }
+            ),
           'Strategist',
           strategistTimeoutMs
         );
+        this.circuitBreaker.recordSuccess(plannerLLM.backend);
         this.ctx.activityStream?.publish({
           type: 'llm:end',
           botId,
           timestamp: Date.now(),
           data: {
             caller: 'strategist',
-            backend: llmClient.backend,
+            backend: plannerLLM.backend,
             durationMs: Date.now() - strategistStartMs,
             model: strategistResult?.usage?.model,
             tokensIn: strategistResult?.usage?.promptTokens,
@@ -1020,8 +1269,8 @@ export class AgentLoop {
           timestamp: new Date().toISOString(),
           botId,
           caller: 'strategist',
-          model: strategistResult?.usage?.model ?? model,
-          backend: llmClient.backend,
+          model: strategistResult?.usage?.model ?? plannerLLM.model,
+          backend: plannerLLM.backend,
           promptTokens: strategistResult?.usage?.promptTokens,
           completionTokens: strategistResult?.usage?.completionTokens,
           totalTokens: strategistResult?.usage?.totalTokens,
@@ -1035,7 +1284,7 @@ export class AgentLoop {
           timestamp: Date.now(),
           data: {
             caller: 'strategist',
-            backend: llmClient.backend,
+            backend: plannerLLM.backend,
             durationMs: Date.now() - strategistStartMs,
             error: err instanceof Error ? err.message : String(err),
           },
@@ -1044,12 +1293,13 @@ export class AgentLoop {
           timestamp: new Date().toISOString(),
           botId,
           caller: 'strategist',
-          model,
-          backend: llmClient.backend,
+          model: plannerLLM.model,
+          backend: plannerLLM.backend,
           durationMs: Date.now() - strategistStartMs,
           success: false,
           error: err instanceof Error ? err.message : String(err),
         });
+        this.circuitBreaker.recordFailure(plannerLLM.backend, err);
         throw err;
       }
       if (strategistResult) {
@@ -1101,8 +1351,7 @@ export class AgentLoop {
       if (schedule?.lastFocus) focus = schedule.lastFocus;
     }
 
-    // Check for answered questions from previous cycles
-    const answeredQuestions = this.ctx.askHumanStore.consumeAnswersForBot(botId);
+    // Answered questions were consumed above (before the strategist); pending ones are listed here
     const pendingQuestions = this.ctx.askHumanStore.getPendingForBot(botId);
 
     if (answeredQuestions.length > 0) {
@@ -1173,7 +1422,12 @@ export class AgentLoop {
     const toolCategoryList = toolPreSelectionEnabled ? [...TOOL_CATEGORY_NAMES] : undefined;
 
     // Build recent actions digest and karma block for planner context
-    const recentActionsDigest = schedule ? buildRecentActionsDigest(schedule.recentActions) : null;
+    const recentActionsDigest = schedule
+      ? buildRecentActionsDigest(schedule.recentActions, {
+          externalFeedbackCount: engagementFeedbackCount,
+          durableOutputCount: durableOutputCount ?? undefined,
+        })
+      : null;
     const karmaBlock =
       this.karmaService && this.ctx.config.karma?.enabled
         ? this.karmaService.renderForPrompt(botId)
@@ -1184,15 +1438,20 @@ export class AgentLoop {
 
     // Build engagement gate note for planner injection
     let engagementGateNote: string | undefined;
-    const engagementGateCfg = botConfig.agentLoop?.engagementGate;
-    const engagementGateEnabled = engagementGateCfg?.enabled !== false; // default true
-    if (engagementGateEnabled && schedule && schedule.recentActions.length > 0) {
-      const engagement = detectUnconsumedOutput(
-        schedule.recentActions,
-        engagementGateCfg?.threshold ?? 5
-      );
+    if (engagementGateEnabled && engagement) {
       if (engagement.gateTriggered) {
-        const mode = engagementGateCfg?.mode ?? 'soft';
+        botLogger.info(
+          {
+            botId,
+            outputCount: engagement.outputCount,
+            outputSource: engagement.outputSource,
+            feedbackCount: engagement.feedbackCount,
+            lastFeedbackAt: feedbackSignals.lastFeedbackAt,
+            mode: engagementGateMode,
+          },
+          'Agent loop: engagement gate triggered'
+        );
+        const mode = engagementGateMode;
         if (mode === 'hard') {
           engagementGateNote = `## ⛔ ENGAGEMENT GATE (HARD)\n\nCONTENT CREATION IS BLOCKED until you get feedback from the recipient.\n${engagement.outputCount} outputs produced with ${engagement.feedbackCount} feedback received.\nOnly ASSESSMENT or OUTREACH deliverables are allowed. Use ask_human to check in with the operator.`;
         } else {
@@ -1272,22 +1531,24 @@ export class AgentLoop {
         type: 'llm:start',
         botId,
         timestamp: plannerStartMs,
-        data: { caller: 'planner', backend: llmClient.backend, mode: 'continuous' },
+        data: { caller: 'planner', backend: plannerLLM.backend, mode: 'continuous' },
       });
       let continuousResult: PlannerResultWithUsage;
       try {
         continuousResult = await withTimeout(
-          () => runPlannerWithRetry(llmClient, continuousInput, model, botLogger),
+          () =>
+            runPlannerWithRetry(plannerLLM.client, continuousInput, plannerLLM.model, botLogger),
           'Continuous planner',
           plannerTimeoutMs
         );
+        this.circuitBreaker.recordSuccess(plannerLLM.backend);
         this.ctx.activityStream?.publish({
           type: 'llm:end',
           botId,
           timestamp: Date.now(),
           data: {
             caller: 'planner',
-            backend: llmClient.backend,
+            backend: plannerLLM.backend,
             durationMs: Date.now() - plannerStartMs,
             model: continuousResult.usage?.model,
             tokensIn: continuousResult.usage?.promptTokens,
@@ -1298,8 +1559,8 @@ export class AgentLoop {
           timestamp: new Date().toISOString(),
           botId,
           caller: 'planner',
-          model: continuousResult.usage?.model ?? model,
-          backend: llmClient.backend,
+          model: continuousResult.usage?.model ?? plannerLLM.model,
+          backend: plannerLLM.backend,
           promptTokens: continuousResult.usage?.promptTokens,
           completionTokens: continuousResult.usage?.completionTokens,
           totalTokens: continuousResult.usage?.totalTokens,
@@ -1313,7 +1574,7 @@ export class AgentLoop {
           timestamp: Date.now(),
           data: {
             caller: 'planner',
-            backend: llmClient.backend,
+            backend: plannerLLM.backend,
             durationMs: Date.now() - plannerStartMs,
             error: err instanceof Error ? err.message : String(err),
           },
@@ -1322,12 +1583,13 @@ export class AgentLoop {
           timestamp: new Date().toISOString(),
           botId,
           caller: 'planner',
-          model,
-          backend: llmClient.backend,
+          model: plannerLLM.model,
+          backend: plannerLLM.backend,
           durationMs: Date.now() - plannerStartMs,
           success: false,
           error: err instanceof Error ? err.message : String(err),
         });
+        this.circuitBreaker.recordFailure(plannerLLM.backend, err);
         throw err;
       }
 
@@ -1379,22 +1641,23 @@ export class AgentLoop {
         type: 'llm:start',
         botId,
         timestamp: plannerStartMs,
-        data: { caller: 'planner', backend: llmClient.backend, mode: 'periodic' },
+        data: { caller: 'planner', backend: plannerLLM.backend, mode: 'periodic' },
       });
       let plannerResult: PlannerResultWithUsage;
       try {
         plannerResult = await withTimeout(
-          () => runPlannerWithRetry(llmClient, plannerInput, model, botLogger),
+          () => runPlannerWithRetry(plannerLLM.client, plannerInput, plannerLLM.model, botLogger),
           'Planner',
           plannerTimeoutMs
         );
+        this.circuitBreaker.recordSuccess(plannerLLM.backend);
         this.ctx.activityStream?.publish({
           type: 'llm:end',
           botId,
           timestamp: Date.now(),
           data: {
             caller: 'planner',
-            backend: llmClient.backend,
+            backend: plannerLLM.backend,
             durationMs: Date.now() - plannerStartMs,
             model: plannerResult.usage?.model,
             tokensIn: plannerResult.usage?.promptTokens,
@@ -1405,8 +1668,8 @@ export class AgentLoop {
           timestamp: new Date().toISOString(),
           botId,
           caller: 'planner',
-          model: plannerResult.usage?.model ?? model,
-          backend: llmClient.backend,
+          model: plannerResult.usage?.model ?? plannerLLM.model,
+          backend: plannerLLM.backend,
           promptTokens: plannerResult.usage?.promptTokens,
           completionTokens: plannerResult.usage?.completionTokens,
           totalTokens: plannerResult.usage?.totalTokens,
@@ -1420,7 +1683,7 @@ export class AgentLoop {
           timestamp: Date.now(),
           data: {
             caller: 'planner',
-            backend: llmClient.backend,
+            backend: plannerLLM.backend,
             durationMs: Date.now() - plannerStartMs,
             error: err instanceof Error ? err.message : String(err),
           },
@@ -1429,12 +1692,13 @@ export class AgentLoop {
           timestamp: new Date().toISOString(),
           botId,
           caller: 'planner',
-          model,
-          backend: llmClient.backend,
+          model: plannerLLM.model,
+          backend: plannerLLM.backend,
           durationMs: Date.now() - plannerStartMs,
           success: false,
           error: err instanceof Error ? err.message : String(err),
         });
+        this.circuitBreaker.recordFailure(plannerLLM.backend, err);
         throw err;
       }
 
@@ -1452,6 +1716,53 @@ export class AgentLoop {
       phase: 'planner:end',
       data: { planSteps: plan.length, priority, categories: selectedToolCategories },
     });
+
+    // Hard engagement gate: the prompt note asked for no more content; if the
+    // planner still returned a CONTENT plan, downgrade the cycle to idle.
+    if (engagement && plan.length > 0 && priority !== 'none') {
+      const gate = evaluateEngagementGate({
+        plan,
+        engagement,
+        mode: engagementGateMode,
+        enabled: engagementGateEnabled,
+      });
+      if (gate.blocked && gate.summary) {
+        botLogger.warn(
+          {
+            botId,
+            outputCount: engagement.outputCount,
+            feedbackCount: engagement.feedbackCount,
+            feedbackSignals,
+            plan: plan.slice(0, 3),
+          },
+          gate.summary
+        );
+        this.ctx.activityStream?.publish({
+          type: 'agent:idle',
+          botId,
+          timestamp: Date.now(),
+          data: { reasoning: gate.summary },
+        });
+        if (consumedPermissionIds.length > 0) {
+          this.ctx.askPermissionStore.reportExecution(
+            consumedPermissionIds,
+            gate.summary,
+            [],
+            true
+          );
+        }
+        return {
+          summary: gate.summary,
+          plannerReasoning,
+          plan: [],
+          toolCalls: [],
+          priority: 'none',
+          strategistRan,
+          strategistReflection,
+          focus,
+        };
+      }
+    }
 
     if (plan.length === 0 || priority === 'none') {
       this.ctx.activityStream?.publish({

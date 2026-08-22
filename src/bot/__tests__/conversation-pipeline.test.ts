@@ -11,8 +11,10 @@ import type { CoreMemoryManager } from '../../memory/core-memory';
 import type { MemoryManager } from '../../memory/manager';
 import type { ChatMessage } from '../../ollama';
 import type { SessionManager } from '../../session';
+import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from '../agent-loop-utils';
 import { ContextCompactor } from '../context-compaction';
 import { ConversationPipeline } from '../conversation-pipeline';
+import { HookEmitter } from '../hooks';
 import type { MemoryFlusher } from '../memory-flush';
 import type { SystemPromptBuilder } from '../system-prompt-builder';
 import type { ToolRegistry } from '../tool-registry';
@@ -68,9 +70,20 @@ describe('ConversationPipeline', () => {
   let mockCoreMemoryManager: CoreMemoryManager;
   let mockLogger: Logger;
   let pipeline: ConversationPipeline;
+  let mockHooks: HookEmitter;
+  let peerAgentTelegramIds: Set<number>;
+  let mockAgentRegistry: BotContext['agentRegistry'];
 
   beforeEach(() => {
     mockLogger = createMockLogger();
+    mockHooks = new HookEmitter();
+    peerAgentTelegramIds = new Set<number>();
+    mockAgentRegistry = {
+      getByTelegramUserId: (id: number) =>
+        peerAgentTelegramIds.has(id) ? ({ botId: 'peer-bot' } as any) : undefined,
+      getByTelegramUsername: () => undefined,
+      getByBotId: () => undefined,
+    } as unknown as BotContext['agentRegistry'];
 
     mockLLMClient = {
       backend: 'ollama' as const,
@@ -141,6 +154,8 @@ describe('ConversationPipeline', () => {
       sessionManager: mockSessionManager,
       memoryManager: mockMemoryManager,
       coreMemoryManager: mockCoreMemoryManager,
+      hooks: mockHooks,
+      agentRegistry: mockAgentRegistry,
       searchEnabled: true,
       getLLMClient: jest.fn().mockReturnValue(mockLLMClient),
       getActiveModel: jest.fn().mockReturnValue('llama3.1'),
@@ -1330,6 +1345,120 @@ describe('ConversationPipeline', () => {
       expect(fetchCall[0]).toContain('bot-specific-voice');
       expect(fetchCall[0]).not.toContain('global-voice');
       expect((ctx as any).replyWithVoice).toHaveBeenCalledTimes(1);
+    });
+  });
+  describe('human inbound feedback signal (channel-agnostic)', () => {
+    const channel = () => ({
+      kind: 'rest' as const,
+      sendText: jest.fn().mockResolvedValue(undefined),
+      showTyping: jest.fn().mockResolvedValue(undefined),
+    });
+
+    const baseMsg = (overrides: Record<string, unknown> = {}) => ({
+      messageId: 'm-1',
+      channelKind: 'rest',
+      text: 'Hello via REST',
+      chatId: '456',
+      chatType: 'private' as const,
+      sender: { id: '789', firstName: 'TestUser' },
+      timestamp: Date.now(),
+      ...overrides,
+    });
+
+    const collect = (): HumanInboundEvent[] => {
+      const seen: HumanInboundEvent[] = [];
+      mockHooks.on(HUMAN_INBOUND_HOOK, (e: HumanInboundEvent) => seen.push(e));
+      return seen;
+    };
+
+    it('emits exactly one human_inbound event for a REST human message', async () => {
+      const seen = collect();
+      await pipeline.handleChannelMessage(
+        baseMsg() as any,
+        channel() as any,
+        createMockBotConfig(),
+        'user:456'
+      );
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({ botId: 'test-bot', channelKind: 'rest' });
+    });
+
+    it('emits one event for a WebSocket (web) human message', async () => {
+      const seen = collect();
+      await pipeline.handleChannelMessage(
+        baseMsg({ channelKind: 'web' }) as any,
+        channel() as any,
+        createMockBotConfig(),
+        'user:456'
+      );
+      expect(seen).toHaveLength(1);
+    });
+
+    it('emits nothing for a cron-originated synthetic message', async () => {
+      const seen = collect();
+      await pipeline.handleChannelMessage(
+        baseMsg({ messageId: 'cron-1737-abc', channelKind: 'telegram' }) as any,
+        channel() as any,
+        createMockBotConfig(),
+        'user:456'
+      );
+      expect(seen).toHaveLength(0);
+    });
+
+    it('emits nothing for a message explicitly flagged synthetic', async () => {
+      const seen = collect();
+      await pipeline.handleChannelMessage(
+        baseMsg({ synthetic: true }) as any,
+        channel() as any,
+        createMockBotConfig(),
+        'user:456'
+      );
+      expect(seen).toHaveLength(0);
+    });
+
+    it('emits nothing for a bot-to-bot message from a registered peer agent', async () => {
+      peerAgentTelegramIds.add(789);
+      const seen = collect();
+      await pipeline.handleChannelMessage(
+        baseMsg({ channelKind: 'telegram' }) as any,
+        channel() as any,
+        createMockBotConfig(),
+        'user:456'
+      );
+      expect(seen).toHaveLength(0);
+    });
+
+    it('emits nothing for agent-protocol (mcp) traffic', async () => {
+      const seen = collect();
+      await pipeline.handleChannelMessage(
+        baseMsg({ channelKind: 'mcp' }) as any,
+        channel() as any,
+        createMockBotConfig(),
+        'user:456'
+      );
+      expect(seen).toHaveLength(0);
+    });
+
+    it('emits nothing for an empty message body', async () => {
+      const seen = collect();
+      await pipeline.handleChannelMessage(
+        baseMsg({ text: '   ' }) as any,
+        channel() as any,
+        createMockBotConfig(),
+        'user:456'
+      );
+      expect(seen).toHaveLength(0);
+    });
+
+    it('does NOT emit on the Telegram handleConversation path (already counted by requestImmediateRun)', async () => {
+      const seen = collect();
+      await pipeline.handleConversation(
+        createMockContext(),
+        createMockBotConfig(),
+        'user:123',
+        'Hello'
+      );
+      expect(seen).toHaveLength(0);
     });
   });
 });

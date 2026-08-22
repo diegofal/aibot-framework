@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { Bot, InputFile } from 'grammy';
 import { type AgentInfo, AgentRegistry } from '../agent-registry';
+import { appendWebSessionMessage } from '../channel/outbound';
 import { CollaborationSessionManager } from '../collaboration-session';
 import { CollaborationTracker } from '../collaboration-tracker';
 import type { BotConfig, Config } from '../config';
@@ -24,6 +25,7 @@ import { MessageBuffer } from '../message-buffer';
 import type { OllamaClient } from '../ollama';
 import type { SessionManager } from '../session';
 import { SoulLoader } from '../soul';
+import { type AskHumanDeps, sweepStaleAskHumanQuestions } from '../tools/ask-human';
 import type { Tool, ToolDefinition } from '../tools/types';
 
 import { ConversationsService } from '../conversations/service';
@@ -59,7 +61,13 @@ import { LlmQueryLog } from './llm-query-log';
 import { MemoryFlusher } from './memory-flush';
 import { runStartupSoulCheck } from './soul-health-check';
 import { SystemPromptBuilder } from './system-prompt-builder';
-import { describeTelegramStartFailure, isTelegramConflictError } from './telegram-errors';
+import {
+  type ChannelStatus,
+  channelStatusForUnstartedToken,
+  describeTelegramStartFailure,
+  isTelegramConflictError,
+  resolveChannelStart,
+} from './telegram-errors';
 import { TelegramPoller } from './telegram-poller';
 import { sendLongMessage } from './telegram-utils';
 import { TenantFacade } from './tenant-facade';
@@ -98,6 +106,8 @@ export class BotManager {
   private handlerRegistrar: HandlerRegistrar;
   private agentLoop: AgentLoop;
   private askHumanStore: AskHumanStore;
+  /** Hourly auto-close of pending ask_human questions older than askHuman.autoCloseHours. */
+  private askHumanSweepTimer?: ReturnType<typeof setInterval>;
   private askPermissionStore: AskPermissionStore;
   private agentFeedbackStore: AgentFeedbackStore;
   private productionsService?: ProductionsService;
@@ -366,7 +376,12 @@ export class BotManager {
 
       if (evoConfig.traitRegisters.enabled) {
         const { TraitRegisters } = require('./trait-registers');
-        const registers = new TraitRegisters(join(dataDir, 'tenants/__admin__/bots'), logger);
+        // Policy resolver reads the live bot list so config reloads pick up new pins/locks
+        const registers = new TraitRegisters(
+          join(dataDir, 'tenants/__admin__/bots'),
+          logger,
+          (botId: string) => this.config.bots.find((b) => b.id === botId)?.traits
+        );
         this.agentLoop.setTraitRegisters(registers);
         enabledModules.push('traitRegisters');
       }
@@ -404,6 +419,28 @@ export class BotManager {
       logger.info({ modules: enabledModules }, 'Evolution modules initialized');
     }
 
+    // ask_human deps are shared by the tool and by the periodic sweep below: the
+    // tool only sweeps the asking bot's questions, so a bot that stops asking
+    // would otherwise keep a stale question open forever.
+    const askHumanDeps: AskHumanDeps = {
+      store: this.askHumanStore,
+      getBotInstance: (botId: string) => this.bots.get(botId),
+      getBotName: (botId: string) => this.config.bots.find((b) => b.id === botId)?.name ?? botId,
+      conversationsService: this.conversationsService,
+      appendDailyMemory: (botId: string, note: string) =>
+        this.soulLoaders.get(botId)?.appendDailyMemory(note),
+      maxChars: this.config.askHuman?.maxChars,
+      autoCloseHours: this.config.askHuman?.autoCloseHours,
+      // Lets ask_human also notify the operator when operator.notifyOnAsk is on
+      // — same accessor cron and send_proactive_message already receive.
+      getOperator: () => this.config.operator,
+    };
+    this.askHumanSweepTimer = setInterval(
+      () => sweepStaleAskHumanQuestions(askHumanDeps, logger),
+      60 * 60 * 1000
+    );
+    this.askHumanSweepTimer.unref?.();
+
     // Initialize tools (with lazy callbacks for circular deps)
     this.toolRegistry.initializeAll(
       () => this.collaborationManager,
@@ -428,12 +465,7 @@ export class BotManager {
         ) =>
           this.collaborationManager.sendVisibleMessage(chatId, sourceBotId, targetBotId, message),
       }),
-      {
-        store: this.askHumanStore,
-        getBotInstance: (botId: string) => this.bots.get(botId),
-        getBotName: (botId: string) => this.config.bots.find((b) => b.id === botId)?.name ?? botId,
-        conversationsService: this.conversationsService,
-      },
+      askHumanDeps,
       {
         store: this.askPermissionStore,
         getBotInstance: (botId: string) => this.bots.get(botId),
@@ -594,6 +626,7 @@ export class BotManager {
           claudeModel: this.config.claudeCli?.model,
           claudeTimeout: config.agentLoop?.claudeTimeout ?? this.config.agentLoop.claudeTimeout,
           failoverConfig: this.config.failover,
+          crossBackendFallback: this.config.claudeCli?.crossBackendFallback,
         },
         this.ollamaClient,
         botLogger
@@ -653,31 +686,25 @@ export class BotManager {
         );
       }
 
-      const token = config.token?.trim();
-      let mode: 'telegram' | 'headless' = 'headless';
-
       // Add to runningBots BEFORE starting to close the race window where
       // a concurrent startBot() could overlap (runningBots.has() returns false).
       this.runningBots.add(config.id);
 
-      if (token) {
-        try {
-          await this.startTelegramBot({ ...config, token }, botLogger);
-          mode = 'telegram';
-        } catch (err) {
-          // Every non-401 failure used to be reported as "token invalid", which
-          // sends the operator to rotate a perfectly good token. That matters
-          // more now that this path runs unattended at boot, when the most
-          // likely causes are a still-running previous instance (409) and an
-          // API that is not reachable yet.
-          botLogger.warn(
-            { err },
-            `Telegram start failed — falling back to headless mode. ${describeTelegramStartFailure(err)}`
-          );
-          this.registerHeadless(config, botLogger);
-        }
+      // Placeholder/missing tokens never reach Telegram; a shaped token that
+      // fails is recorded as revoked (401) or error and the bot runs headless
+      // either way. The outcome is kept on the agent registry entry so the
+      // dashboard can tell those cases apart (see telegram-errors.ts).
+      const channel = await resolveChannelStart({
+        botId: config.id,
+        token: config.token,
+        logger: botLogger,
+        startTelegram: (token) => this.startTelegramBot({ ...config, token }, botLogger),
+      });
+      const mode: 'telegram' | 'headless' = channel.kind;
+      if (channel.kind === 'telegram') {
+        this.agentRegistry.setChannel(config.id, channel);
       } else {
-        this.registerHeadless(config, botLogger);
+        this.registerHeadless(config, botLogger, channel);
       }
       // Connect MCP servers (once, on first bot start) and register their tools
       if (!this.mcpConnected && this.mcpClientPool.size > 0) {
@@ -875,7 +902,7 @@ export class BotManager {
     writeFileSync(cooldownFile, String(Date.now()), 'utf-8');
   }
 
-  private registerHeadless(config: BotConfig, botLogger: Logger): void {
+  private registerHeadless(config: BotConfig, botLogger: Logger, channel?: ChannelStatus): void {
     this.agentRegistry.register({
       botId: config.id,
       name: config.name,
@@ -883,8 +910,12 @@ export class BotManager {
       description: config.description,
       tools: this.toolRegistry.getDefinitionsForBot(config.id).map((d) => d.function.name),
       tenantId: config.tenantId,
+      channel,
     });
-    botLogger.info('Registered headless bot in agent registry');
+    botLogger.info(
+      { channelState: channel?.state ?? null },
+      'Registered headless bot in agent registry'
+    );
   }
 
   private async cleanupBot(botId: string): Promise<void> {
@@ -954,29 +985,37 @@ export class BotManager {
   /**
    * Process a cron instruction through the full conversation pipeline.
    * Creates a synthetic InboundMessage + Channel and delegates to handleChannelMessage.
+   *
+   * Works for headless bots. `this.bots` only holds the bots that came up with
+   * a valid Telegram token, so requiring an entry there made every instruction
+   * cron owned by a headless bot throw before doing any work. Delivery is
+   * resolved the way `send_proactive_message` resolves it: the bot's own
+   * Telegram instance, else any live one in the fleet, else the bot's web
+   * session.
    */
   async handleCronInstruction(chatId: number, text: string, botId: string): Promise<string> {
-    const bot = this.bots.get(botId);
-    if (!bot) throw new Error(`Bot not found for cron instruction: ${botId}`);
+    const bot = this.bots.get(botId) ?? this.bots.values().next().value;
+    const recorded = this.getChannelState(botId);
+
+    const { kind, channel } = buildCronDelivery(chatId, {
+      telegram: bot?.api,
+      appendToSession: (t) =>
+        appendWebSessionMessage(this.sessionManager, botId, String(chatId), t),
+    });
+
+    this.logger.debug(
+      { botId, chatId, delivery: kind, ownChannel: recorded?.kind ?? 'unknown' },
+      'Cron instruction delivery resolved'
+    );
 
     const msg: import('../channel/types').InboundMessage = {
       messageId: `cron-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      channelKind: 'telegram',
+      channelKind: kind,
       text,
       chatId: String(chatId),
       chatType: 'private',
       sender: { id: String(chatId), firstName: 'Cron' },
       timestamp: Date.now(),
-    };
-
-    const channel: import('../channel/types').Channel = {
-      kind: 'telegram',
-      async sendText(t: string) {
-        await sendLongMessage((chunk) => bot.api.sendMessage(chatId, chunk), t);
-      },
-      async showTyping() {
-        await bot.api.sendChatAction(chatId, 'typing');
-      },
     };
 
     return this.handleChannelMessage(msg, channel, botId);
@@ -990,11 +1029,26 @@ export class BotManager {
     return Array.from(this.runningBots);
   }
 
+  /**
+   * Channel outcome for a bot: what its last start recorded or, for a bot that
+   * has not been started, what the token alone already determines (missing or
+   * placeholder). Undefined for a never-started, real-shaped token — only
+   * Telegram can say whether that one is ok or revoked.
+   */
+  getChannelState(botId: string): ChannelStatus | undefined {
+    const recorded = this.agentRegistry.getByBotId(botId)?.channel;
+    if (recorded) return recorded;
+    const botConfig = this.config.bots.find((b) => b.id === botId);
+    if (!botConfig) return undefined;
+    return channelStatusForUnstartedToken(botConfig.token);
+  }
+
   async stopAll(): Promise<void> {
     this.agentLoop.stop();
     this.messageBuffer.dispose();
     this.collaborationTracker.dispose();
     this.collaborationSessions.dispose();
+    if (this.askHumanSweepTimer) clearInterval(this.askHumanSweepTimer);
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
     this.activityStream.llmStats.flushToDisk();
@@ -1028,6 +1082,7 @@ export class BotManager {
     this.messageBuffer.dispose();
     this.collaborationTracker.dispose();
     this.collaborationSessions.dispose();
+    if (this.askHumanSweepTimer) clearInterval(this.askHumanSweepTimer);
     this.askHumanStore.dispose();
     this.askPermissionStore.dispose();
     this.activityStream.llmStats.flushToDisk();
@@ -1055,6 +1110,11 @@ export class BotManager {
   // Agent loop
   startAgentLoop(): void {
     this.agentLoop.start();
+  }
+
+  /** Per-backend circuit breaker state of the agent loop (dashboard passthrough). */
+  getAgentLoopCircuitState() {
+    return this.agentLoop.getCircuitState();
   }
 
   async runAgentLoopAll(): Promise<AgentLoopResult[]> {
@@ -1600,4 +1660,57 @@ export class BotManager {
   handleWebhook(payload: unknown, signature: string) {
     return this.tenantFacade.handleWebhook(payload, signature);
   }
+}
+
+/** The slice of grammy's `bot.api` a cron instruction needs to reply. */
+export interface CronTelegramApi {
+  sendMessage(chatId: number, text: string): Promise<unknown>;
+  sendChatAction(chatId: number, action: 'typing'): Promise<unknown>;
+}
+
+export interface CronDeliveryDeps {
+  /** A live Telegram instance — the bot's own or any in the fleet. */
+  telegram?: CronTelegramApi;
+  /** Web fallback: append the reply to the bot's session transcript. */
+  appendToSession: (text: string) => void;
+}
+
+/**
+ * Reply channel for a cron instruction. One live Telegram connection anywhere
+ * in the fleet is enough to deliver over Telegram; without one the reply is
+ * appended to the bot's web session and `showTyping` is a no-op that never
+ * throws (a headless bot has nothing to show typing on).
+ */
+export function buildCronDelivery(
+  chatId: number,
+  deps: CronDeliveryDeps
+): { kind: 'telegram' | 'web'; channel: import('../channel/types').Channel } {
+  const telegram = deps.telegram;
+  if (telegram) {
+    return {
+      kind: 'telegram',
+      channel: {
+        kind: 'telegram',
+        async sendText(t: string) {
+          await sendLongMessage((chunk) => telegram.sendMessage(chatId, chunk), t);
+        },
+        async showTyping() {
+          await telegram.sendChatAction(chatId, 'typing');
+        },
+      },
+    };
+  }
+
+  return {
+    kind: 'web',
+    channel: {
+      kind: 'web',
+      async sendText(t: string) {
+        deps.appendToSession(t);
+      },
+      async showTyping() {
+        // no-op — no Telegram connection to show typing on
+      },
+    },
+  };
 }

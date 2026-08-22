@@ -164,6 +164,17 @@
           session expiry with memory flush, RAG context pre-fetching, system prompt composition,
           LLM chat calls with tool execution, history persistence, and reply delivery.
         </p>
+        <p>
+          <span class="badge badge-yellow">2026-08-22</span> <code>handleChannelMessage()</code> also emits
+          <code>human_inbound</code> (<code>HUMAN_INBOUND_HOOK</code>) via
+          <code>emitHumanInbound()</code>, so a human message on REST, WebSocket, WhatsApp or Discord becomes
+          an engagement-gate feedback signal and a <code>humanReply</code> karma credit in
+          <code>AgentScheduler</code>. The exported predicate
+          <code>isHumanInboundMessage(msg, { isPeerAgent })</code> gates it: peer agents (looked up in
+          <code>AgentRegistry</code>), <code>channelKind: 'mcp'</code>, <code>synthetic: true</code>,
+          <code>cron-</code>-prefixed message ids and blank text all emit nothing. The event rides the raw
+          <code>EventEmitter</code>, not the typed <code>HookEvents</code> map.
+        </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">
           <li><code>ConversationPipeline</code></li>
@@ -455,6 +466,13 @@
           ask_human, ask_permission, productions, dynamic tools) based on config flags. Provides per-bot
           filtering (respects <code>disabledTools</code> and dynamic tool scope), collaboration-safe
           tool sets, and executor creation.
+        </p>
+        <p>
+          <span class="badge badge-yellow">2026-08-22</span> <code>BotContext.tools</code> is declared
+          <code>readonly</code> and held <em>by reference</em> by <code>BotManager</code>. The MCP-category
+          reset and the tool-removal path both used to do <code>ctx.tools = ctx.tools.filter(...)</code>,
+          which left the manager pointing at the pre-filter copy. Both now mutate the array in place through
+          the module-private helper <code>removeToolsInPlace(tools, predicate)</code>.
         </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">
@@ -931,7 +949,9 @@
             <tr><td>runBotLoop</td><td>botId: string</td><td>Per-bot async loop with concurrency semaphore</td></tr>
             <tr><td>wakeUp</td><td>(none)</td><td>Interrupts interruptible sleep for immediate re-evaluation</td></tr>
             <tr><td>computeBotSleepMs</td><td>botId: string</td><td>Derives sleep interval from per-bot or global config</td></tr>
-            <tr><td>updateBotSchedule</td><td>botId: string, result: AgentLoopResult</td><td>Updates timestamps, strategist counters, check-in display</td></tr>
+            <tr><td>updateBotSchedule</td><td>botId: string, result: AgentLoopResult</td><td>Updates timestamps, strategist counters, check-in display, <code>skippedReason</code></td></tr>
+            <tr><td>requestImmediateRun</td><td>botId: string</td><td>Runs the bot as soon as possible (wake or pending wake); also records a <code>human_message</code> feedback event</td></tr>
+            <tr><td>recordFeedbackEvent</td><td>botId: string, source: FeedbackSource</td><td>Appends <code>{ timestamp, source }</code> to <code>schedule.feedbackEvents</code> (7-day retention) for the engagement gate; sources <code>ask_human</code>, <code>agent_feedback</code>, <code>human_message</code></td></tr>
           </tbody>
         </table>
         <h4>Dependencies</h4>
@@ -946,6 +966,8 @@
           Extracted from <code>agent-loop.ts</code>. Strategic oversight layer: determines when
           to run the strategist, executes it with retry, parses results via <code>parseLLMJson</code>,
           applies goal operations (add/complete/update/remove), and computes cycles until next run.
+          <code>runStrategist()</code> accepts an optional <code>{ client, model }</code> so the agent loop
+          can run it on the resolved planner backend instead of the bot's wrapped client.
         </p>
         <h4>Exported Functions</h4>
         <ul class="inline-list">
@@ -966,12 +988,19 @@
         <p class="responsibility">
           Extracted from <code>agent-loop.ts</code>. Unified planner for both periodic and continuous
           modes. Parses planner results via <code>parseLLMJson</code> and runs with temperature
-          fallback (0.3 then 0).
+          fallback (0.3 then 0). Also owns planner backend selection: <code>agentLoop.plannerBackend</code>
+          (<code>inherit | ollama | claude-cli</code>, per-bot override wins) decides which backend the
+          planner and strategist run on, and <code>selectPlannerClient()</code> unwraps the bot's
+          fallback/failover wrapper via <code>LLMClient.getBackendClient()</code> so those
+          <code>generate()</code> calls can never be re-issued silently to the other backend.
         </p>
         <h4>Exported Functions</h4>
         <ul class="inline-list">
           <li><code>parsePlannerResult</code></li>
           <li><code>runPlannerWithRetry</code></li>
+          <li><code>resolvePlannerBackend</code></li>
+          <li><code>resolvePlannerModel</code></li>
+          <li><code>selectPlannerClient</code></li>
         </ul>
         <h4>Dependencies</h4>
         <p><code>./llm-json-parser</code>, <code>./agent-loop-prompts</code>, <code>../core/llm-client</code></p>
@@ -985,14 +1014,23 @@
           Extracted from <code>agent-loop.ts</code>. Handles transient error detection
           (<code>isRetryableError</code>), exponential backoff with jitter
           (<code>computeRetryDelay</code>), retry config resolution, and the
-          <code>executeSingleBotWithRetry</code> wrapper with side-effect suppression.
+          <code>executeSingleBotWithRetry</code> wrapper with side-effect suppression. Hosts the
+          <code>BackendCircuitBreaker</code>: a fleet-wide circuit per LLM backend that opens after
+          <code>agentLoop.circuitBreaker.threshold</code> consecutive CONTEXTUAL (429/quota) failures for
+          <code>cooldownMs</code> (or <code>weeklyQuotaCooldownMs</code> on a "weekly usage limit" error),
+          makes bots on that backend skip their cycle, lets a single half-open probe through after the
+          cooldown, and &mdash; via <code>RetryEngineOpts.isCircuitOpen</code> &mdash; stops the retry
+          ladder as soon as the circuit opens.
         </p>
-        <h4>Exported Functions</h4>
+        <h4>Exported Functions / Classes</h4>
         <ul class="inline-list">
           <li><code>isRetryableError</code></li>
           <li><code>computeRetryDelay</code></li>
           <li><code>resolveRetryConfig</code></li>
           <li><code>executeSingleBotWithRetry</code></li>
+          <li><code>BackendCircuitBreaker</code></li>
+          <li><code>isWeeklyQuotaError</code></li>
+          <li><code>DEFAULT_CIRCUIT_BREAKER_CONFIG</code></li>
         </ul>
         <h4>Dependencies</h4>
         <p><code>../config</code>, <code>../logger</code></p>
@@ -1005,11 +1043,18 @@
         <p class="responsibility">
           Extracted from <code>agent-loop.ts</code>. Shared utility functions: recent actions
           digest building, summary deduplication, repetition detection, file tree scanning,
-          memory logging, and Telegram report sending.
+          memory logging, and Telegram report sending. Engagement gate logic:
+          <code>countFeedbackSignals()</code> counts human feedback the action log cannot see (production
+          approvals/rejections, answered ask_human questions, dashboard feedback, human inbound messages),
+          <code>detectUnconsumedOutput()</code> takes that external count, and
+          <code>evaluateEngagementGate()</code> downgrades a CONTENT plan to idle in hard mode.
         </p>
         <h4>Exported Functions</h4>
         <ul class="inline-list">
           <li><code>buildRecentActionsDigest</code></li>
+          <li><code>countFeedbackSignals</code></li>
+          <li><code>detectUnconsumedOutput</code></li>
+          <li><code>evaluateEngagementGate</code></li>
           <li><code>isSimilarSummary</code></li>
           <li><code>isRepetitiveAction</code></li>
           <li><code>scanFileTree</code></li>
@@ -1145,12 +1190,14 @@
         <table class="methods-table">
           <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td>ask</td><td>botId, chatId, question, timeoutMs</td><td>Registers a question with timeout. Returns { id, promise } where promise resolves with the answer.</td></tr>
+            <tr><td>ask</td><td>botId, chatId, question, options?, createdAt?</td><td>Registers a question. <code>options</code> (2&ndash;4 quick-reply strings) is kept on the entry and returned by <code>getAll()</code> / <code>getPendingForBot()</code>. Returns { id, promise } where promise resolves with the answer.</td></tr>
             <tr><td>setMessageId</td><td>questionId: string, messageId: number</td><td>Sets the Telegram message ID for reply-to matching</td></tr>
             <tr><td>handleReply</td><td>chatId, text, replyToMessageId?</td><td>Matches an incoming reply to a pending question by message ID or single-pending fallback</td></tr>
             <tr><td>hasPending</td><td>chatId: number</td><td>Checks if there are pending questions for a chat</td></tr>
             <tr><td>answerById</td><td>id: string, answer: string</td><td>Answers a question from the web dashboard</td></tr>
             <tr><td>dismissById</td><td>id: string</td><td>Dismisses a question (rejects the promise with error)</td></tr>
+            <tr><td>closeStale</td><td>maxAgeMs, now?, botId?</td><td>Rejects and removes every pending question older than <code>maxAgeMs</code> (optionally one bot) with an auto-close reason; returns the closed infos. Fires neither <code>onDismiss</code> nor <code>onTimeout</code> &mdash; the caller (<code>sweepStaleAskHumanQuestions</code>) owns the inbox status and the memory note</td></tr>
+            <tr><td>setCreatedAt</td><td>questionId, createdAt</td><td>Overrides the creation time (tests and restore paths)</td></tr>
             <tr><td>consumeAnswersForBot</td><td>botId: string</td><td>Returns and deletes all answered questions for a bot (consumed by agent loop)</td></tr>
             <tr><td>getPendingForBot</td><td>botId: string</td><td>Returns pending questions for a bot with remaining time</td></tr>
             <tr><td>hasPendingForBot</td><td>botId: string</td><td>Quick check if a bot has any pending questions</td></tr>
@@ -1159,6 +1206,25 @@
             <tr><td>dispose</td><td>(none)</td><td>Clears all timers and rejects all pending promises</td></tr>
           </tbody>
         </table>
+        <h4>Operator notification (2026-08-22)</h4>
+        <p>
+          <code>operator.notifyOnAsk</code> had been in the config schema with nothing reading it. The
+          <code>ask_human</code> tool (<code>src/tools/ask-human.ts</code>) now also notifies the configured
+          operator when the flag is <code>true</code>. The message is built by the exported
+          <code>buildOperatorAskNotification(botName, question, options?)</code>: the asking bot's name, the
+          question truncated to <code>OPERATOR_ASK_PREVIEW_CHARS</code> (<code>300</code>, ellipsis included in
+          the count) and an <code>Options: a | b</code> line when quick replies were supplied.
+        </p>
+        <ul>
+          <li>Target resolved through <code>resolveOperatorTarget()</code> &mdash; the same
+              <code>chatId: "operator"</code> alias used by <code>send_proactive_message</code> and
+              <code>cron</code>.</li>
+          <li>Deduped against the asking bot's own notification when both point at the same chat, so the
+              operator is not messaged twice about one question.</li>
+          <li>Every failure mode is non-fatal and logged: no <code>operator.telegramChatId</code>, no live bot
+              instance to send through, or a <code>sendMessage</code> that throws. <strong>A failed
+              notification never fails the ask.</strong></li>
+        </ul>
         <h4>Dependencies</h4>
         <p><code>../logger</code>, <code>node:crypto</code> (randomUUID)</p>
       </div>
@@ -1254,6 +1320,8 @@
             <tr><td>runAgentLoopAll</td><td>(none)</td><td>Manually triggers all periodic bots</td></tr>
             <tr><td>runAgentLoop</td><td>botId: string</td><td>Triggers a single bot's agent loop cycle</td></tr>
             <tr><td>getAgentLoopState</td><td>(none)</td><td>Returns full agent loop state</td></tr>
+            <tr><td>getAgentLoopCircuitState</td><td>(none)</td><td>Per-backend <code>BackendCircuitBreaker</code> state (<code>open</code>, <code>halfOpen</code>, <code>until</code>, <code>consecutiveFailures</code>, <code>lastError</code>)</td></tr>
+            <tr><td>getChannelState</td><td>botId: string</td><td>The bot's <code>ChannelStatus</code>: what its last start recorded on the agent registry, or &mdash; for a never-started bot &mdash; what the token alone determines (<code>missing</code> / <code>placeholder</code>). <code>undefined</code> for a never-started real-shaped token. Read by <code>/api/agents</code>, <code>/api/status</code>, the stats layer and the hygiene routes</td></tr>
             <tr><td>stopAll</td><td>(none)</td><td>Stops agent loop, message buffer, collaboration, ask-human, ask-permission, and all bots</td></tr>
             <tr><td>getAskHumanPending</td><td>(none)</td><td>Returns pending ask-human questions with bot names</td></tr>
             <tr><td>answerAskHuman</td><td>id, answer</td><td>Answers a pending question and wakes the agent loop</td></tr>
@@ -1265,8 +1333,38 @@
             <tr><td>getKarmaService</td><td>(none)</td><td>Returns KarmaService for web API</td></tr>
             <tr><td>sendVisibleMessage</td><td>chatId, sourceBotId, targetBotId, message</td><td>Delegates to CollaborationManager</td></tr>
             <tr><td>initiateCollaboration</td><td>sourceBotId, targetBotId, topic, maxTurns?</td><td>Delegates to CollaborationManager</td></tr>
+            <tr><td>handleCronInstruction</td><td>botId, chatId, instruction</td><td>Runs a cron <em>instruction</em> job as a synthetic inbound message through the conversation pipeline. No longer requires the bot's own grammy instance &mdash; see below</td></tr>
+            <tr><td>findSoulLoader</td><td>botId: string</td><td>Public accessor for a bot's <code>SoulLoader</code>; replaces the cast into the private <code>soulLoaders</code> map that <code>src/web/routes/productions.ts</code> used</td></tr>
           </tbody>
         </table>
+        <h4>Cron instruction delivery (2026-08-22)</h4>
+        <p>
+          <code>handleCronInstruction()</code> used to look the bot up in <code>this.bots</code> and throw
+          <code>Bot not found for cron instruction: &lt;botId&gt;</code> when it was not there. With seven of
+          eight bots headless, <em>every</em> instruction cron they owned had been failing for days. Delivery
+          now resolves in three steps:
+        </p>
+        <ol>
+          <li>the bot's own grammy instance;</li>
+          <li>any live instance in the fleet (<code>this.bots.values().next().value</code>);</li>
+          <li>the bot's web session, appended through
+              <code>appendWebSessionMessage()</code> from <code>src/channel/outbound.ts</code>.</li>
+        </ol>
+        <p>
+          The module-level helper <code>buildCronDelivery(chatId, { telegram?, appendToSession })</code>
+          (exported from <code>bot-manager.ts</code>) returns
+          <code>{ kind: 'telegram' | 'web', channel }</code>; the web channel's <code>showTyping</code> is a
+          no-op. The synthetic message carries <code>channelKind: kind</code> instead of a hardcoded
+          <code>'telegram'</code>, and its id is prefixed <code>cron-</code> &mdash; which is what keeps it out
+          of the <code>human_inbound</code> engagement signal. <strong>Note:</strong> <code>channelKind</code>
+          is the <em>delivery</em> channel, not the bot's own; the bot's recorded
+          <code>ChannelStatus</code> is logged alongside as <code>ownChannel</code>.
+        </p>
+        <p>
+          <span class="badge badge-yellow">Operator trade-off</span> A headless bot's cron reply delivered
+          through another bot's Telegram connection arrives <strong>from that other bot's account</strong>.
+          The alternative was continuing to drop the job silently.
+        </p>
         <h4>Dependencies</h4>
         <p>Imports all other bot modules: <code>./types</code>, <code>./tool-registry</code>, <code>./system-prompt-builder</code>, <code>./memory-flush</code>, <code>./group-activation</code>, <code>./conversation-pipeline</code>, <code>./collaboration</code>, <code>./handler-registrar</code>, <code>./agent-loop</code>, <code>./ask-human-store</code>, <code>./ask-permission-store</code>, <code>./agent-feedback-store</code>, <code>./telegram-utils</code>, <code>./soul-health-check</code>, <code>./tenant-facade</code>. Also imports infrastructure: <code>grammy</code>, <code>../agent-registry</code>, <code>../config</code>, <code>../collaboration-tracker</code>, <code>../collaboration-session</code>, <code>../media</code>, <code>../message-buffer</code>, <code>../soul</code>, <code>../core/llm-client</code>, <code>../productions/service</code>, <code>../karma/service</code>.</p>
       </div>
@@ -1465,7 +1563,33 @@ tenants/...            tenant tree minus per-bot soul directories (carried by ag
           <li><code>isTelegramUnauthorizedError</code></li>
           <li><code>describeTelegramStartFailure</code></li>
           <li><code>TELEGRAM_CONFLICT_EXPLANATION</code></li>
+          <li><code>ChannelState</code> / <code>ChannelStatus</code></li>
+          <li><code>TELEGRAM_TOKEN_PATTERN</code></li>
+          <li><code>classifyTelegramToken</code></li>
+          <li><code>channelStateFromStartFailure</code></li>
+          <li><code>channelStatusForUnstartedToken</code></li>
+          <li><code>resolveChannelStart</code></li>
         </ul>
+        <h4>Channel State</h4>
+        <p>
+          The August 2026 audit found seven of eight bots logging the same &ldquo;Telegram start failed
+          &mdash; falling back to headless mode&rdquo; line, and nothing downstream could tell a token
+          BotFather had revoked (401) from the literal string <code>"nothing"</code> an operator typed as
+          a placeholder. <code>ChannelState = 'ok' | 'revoked' | 'placeholder' | 'missing' | 'error'</code>
+          makes the distinction explicit, and the one rule that matters operationally is that a token
+          which cannot possibly be valid never reaches Telegram: <code>classifyTelegramToken()</code>
+          returns <code>missing</code> (empty / <code>null</code>), <code>placeholder</code> (any other
+          string that does not match <code>^\d{6,}:[A-Za-z0-9_-]{30,}$</code>) or <code>shaped</code>.
+          <code>resolveChannelStart()</code> never throws: placeholder and missing tokens start headless
+          with one <code>info</code> line; a shaped token is handed to <code>startTelegram()</code>, and a
+          failure becomes a headless start recorded as <code>revoked</code> (401) or <code>error</code>
+          (409, unreachable API, &hellip;) with <code>lastError</code> from
+          <code>describeTelegramStartFailure()</code>. <code>BotManager.startBot()</code> stores the
+          resulting <code>ChannelStatus</code> on the <code>AgentRegistry</code> entry
+          (<code>setChannel</code>), where <code>getChannelState()</code>, the dashboard and the stats layer
+          read it. <code>bots[].token</code> accepts <code>null</code> as the explicit &ldquo;headless on
+          purpose&rdquo; value (normalised to <code>''</code> by the schema).
+        </p>
       </div>
 
       <!-- ================================================================ -->

@@ -2,7 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger';
-import type { KarmaEvent, KarmaScore, KarmaTrend } from './types';
+import {
+  DEFAULT_KARMA_REWARDS,
+  KARMA_KIND_SOURCE,
+  type KarmaBreakdown,
+  type KarmaEvent,
+  type KarmaOutcomeKind,
+  type KarmaRewards,
+  type KarmaScore,
+  type KarmaTrend,
+} from './types';
 
 export interface KarmaConfig {
   enabled: boolean;
@@ -10,13 +19,24 @@ export interface KarmaConfig {
   initialScore: number;
   decayDays: number;
   dedupCooldownMinutes?: number;
+  /** Per-outcome deltas; missing kinds fall back to DEFAULT_KARMA_REWARDS */
+  rewards?: Partial<KarmaRewards>;
+  /** At most one humanReply credit per bot within this window (0 disables the cooldown) */
+  humanReplyCooldownHours?: number;
 }
+
+/** Trailing window the dashboard breakdown is computed over */
+const BREAKDOWN_WINDOW_DAYS = 30;
+const DEFAULT_HUMAN_REPLY_COOLDOWN_HOURS = 6;
 
 export class KarmaService {
   private baseDir: string;
   private initialScore: number;
   private decayDays: number;
   private dedupCooldownMs: number;
+  private rewards: KarmaRewards;
+  /** Per-kind cooldown (ms) applied before any event is written; kinds absent here have none */
+  private outcomeCooldownMs: Partial<Record<KarmaOutcomeKind, number>>;
   /** botId → dedupKey → lastTimestamp (ms) */
   private dedupMap = new Map<string, Map<string, number>>();
 
@@ -28,6 +48,67 @@ export class KarmaService {
     this.initialScore = config.initialScore;
     this.decayDays = config.decayDays;
     this.dedupCooldownMs = (config.dedupCooldownMinutes ?? 60) * 60_000;
+    this.rewards = { ...DEFAULT_KARMA_REWARDS, ...stripUndefined(config.rewards) };
+    this.outcomeCooldownMs = {
+      humanReply:
+        (config.humanReplyCooldownHours ?? DEFAULT_HUMAN_REPLY_COOLDOWN_HOURS) * 3_600_000,
+    };
+  }
+
+  /** Effective rewards table (defaults merged with config overrides) */
+  getRewards(): KarmaRewards {
+    return { ...this.rewards };
+  }
+
+  /**
+   * Record an outcome by kind. The delta comes from the rewards table; a kind
+   * worth 0 is a no-op (returns null) so a hook can stay wired while its
+   * reward is switched off. Some kinds carry a per-bot cooldown (humanReply)
+   * so a chatty operator does not mint karma on every message.
+   */
+  recordOutcome(
+    botId: string,
+    kind: KarmaOutcomeKind,
+    reason: string,
+    metadata?: Record<string, unknown>
+  ): KarmaEvent | null {
+    const delta = this.rewards[kind];
+    const source = KARMA_KIND_SOURCE[kind];
+    if (typeof delta !== 'number' || !source) {
+      this.logger.warn({ botId, kind }, 'Karma outcome ignored: unknown kind');
+      return null;
+    }
+    if (delta === 0) {
+      this.logger.debug({ botId, kind, reason }, 'Karma outcome skipped (reward is 0)');
+      return null;
+    }
+
+    const cooldownMs = this.outcomeCooldownMs[kind];
+    if (cooldownMs && cooldownMs > 0) {
+      if (!this.claimDedupSlot(botId, `outcome:${kind}`, cooldownMs)) {
+        this.logger.debug({ botId, kind }, 'Karma outcome deduped (per-kind cooldown)');
+        return null;
+      }
+    }
+
+    return this.addEvent(botId, delta, reason, source, metadata, kind);
+  }
+
+  /**
+   * Returns true and records `now` when the key is outside its cooldown;
+   * false when a previous claim is still fresh.
+   */
+  private claimDedupSlot(botId: string, key: string, cooldownMs: number): boolean {
+    const now = Date.now();
+    let botDedup = this.dedupMap.get(botId);
+    if (!botDedup) {
+      botDedup = new Map();
+      this.dedupMap.set(botId, botDedup);
+    }
+    const lastSeen = botDedup.get(key);
+    if (lastSeen !== undefined && now - lastSeen < cooldownMs) return false;
+    botDedup.set(key, now);
+    return true;
   }
 
   private getBotDir(botId: string): string {
@@ -72,23 +153,16 @@ export class KarmaService {
     delta: number,
     reason: string,
     source: KarmaEvent['source'],
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
+    kind?: KarmaOutcomeKind
   ): KarmaEvent | null {
     // Only dedup negative events from automated sources
     if (delta < 0 && source !== 'manual' && source !== 'feedback') {
       const dedupKey = KarmaService.extractDedupKey(source, reason);
-      const now = Date.now();
-      let botDedup = this.dedupMap.get(botId);
-      if (!botDedup) {
-        botDedup = new Map();
-        this.dedupMap.set(botId, botDedup);
-      }
-      const lastSeen = botDedup.get(dedupKey);
-      if (lastSeen !== undefined && now - lastSeen < this.dedupCooldownMs) {
+      if (!this.claimDedupSlot(botId, dedupKey, this.dedupCooldownMs)) {
         this.logger.debug({ botId, delta, dedupKey }, 'Karma event deduped (cooldown)');
         return null;
       }
-      botDedup.set(dedupKey, now);
     }
 
     const event: KarmaEvent = {
@@ -98,6 +172,7 @@ export class KarmaService {
       delta,
       reason,
       source,
+      ...(kind ? { kind } : {}),
       metadata,
     };
 
@@ -174,12 +249,29 @@ export class KarmaService {
     return 'stable';
   }
 
+  /**
+   * Raw delta sums over the trailing window, grouped by source and by outcome
+   * kind — shows what the score is made of (activity vs. operator outcomes).
+   */
+  getBreakdown(botId: string, windowDays = BREAKDOWN_WINDOW_DAYS): KarmaBreakdown {
+    const cutoff = Date.now() - windowDays * 86_400_000;
+    const bySource: KarmaBreakdown['bySource'] = {};
+    const byKind: KarmaBreakdown['byKind'] = {};
+    for (const event of this.getAllEvents(botId)) {
+      if (new Date(event.timestamp).getTime() < cutoff) continue;
+      bySource[event.source] = (bySource[event.source] ?? 0) + event.delta;
+      if (event.kind) byKind[event.kind] = (byKind[event.kind] ?? 0) + event.delta;
+    }
+    return { windowDays, bySource, byKind };
+  }
+
   getKarmaScore(botId: string): KarmaScore {
     return {
       botId,
       current: this.getScore(botId),
       trend: this.getTrend(botId),
       recentEvents: this.getRecentEvents(botId),
+      breakdown: this.getBreakdown(botId),
     };
   }
 
@@ -213,6 +305,8 @@ export class KarmaService {
     }
 
     block += `\nYour karma reflects the QUALITY of your work as judged by your operator and the system.
+It is earned from outcomes — productions the operator approves, questions a human answers,
+humans replying to you — and lost on tool errors and rejected work. Activity alone earns nothing.
 Higher karma = more trust and autonomy. Lower karma = you need to change your approach.
 Focus on actions that produce real, original, data-backed output.`;
 
@@ -250,4 +344,13 @@ Focus on actions that produce real, original, data-backed output.`;
       total: all.length,
     };
   }
+}
+
+function stripUndefined<T extends object>(obj: T | undefined): Partial<T> {
+  if (!obj) return {};
+  const out: Partial<T> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+  }
+  return out;
 }

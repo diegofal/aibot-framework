@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import type { ApprovalRequest, DocumentRef, FileRef, ThreadMessage } from '../types/thread';
 
 export type ConversationType = 'general' | 'productions' | 'inbox';
-export type InboxStatus = 'pending' | 'answered' | 'dismissed' | 'timed_out';
+export type InboxStatus = 'pending' | 'answered' | 'dismissed' | 'timed_out' | 'closed';
 
 export interface Conversation {
   id: string;
@@ -26,6 +26,8 @@ export interface Conversation {
   messageCount: number;
   askHumanQuestionId?: string;
   inboxStatus?: InboxStatus;
+  /** Quick-reply choices for an ask_human question (2-4 short strings). */
+  askOptions?: string[];
 }
 
 export class ConversationsService {
@@ -119,7 +121,7 @@ export class ConversationsService {
     botId: string,
     type: ConversationType = 'general',
     title?: string,
-    meta?: { askHumanQuestionId?: string; inboxStatus?: InboxStatus }
+    meta?: { askHumanQuestionId?: string; inboxStatus?: InboxStatus; askOptions?: string[] }
   ): Conversation {
     this.ensureBotDir(botId);
     const now = new Date().toISOString();
@@ -139,6 +141,7 @@ export class ConversationsService {
       messageCount: 0,
       ...(meta?.askHumanQuestionId ? { askHumanQuestionId: meta.askHumanQuestionId } : {}),
       ...(meta?.inboxStatus ? { inboxStatus: meta.inboxStatus } : {}),
+      ...(meta?.askOptions && meta.askOptions.length > 0 ? { askOptions: meta.askOptions } : {}),
     };
     appendFileSync(this.conversationsPath(botId), `${JSON.stringify(convo)}\n`, 'utf-8');
     return convo;

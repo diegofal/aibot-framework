@@ -57,8 +57,13 @@ function convertToolToExternalDef(tool: Tool): ExternalToolDef {
 /**
  * Create handler functions from declarative skill tools
  */
-function createHandlers(skill: DeclarativeSkill): Record<string, Function> {
-  const handlers: Record<string, Function> = {};
+function createHandlers(
+  skill: DeclarativeSkill
+): Record<string, (args: Record<string, unknown>, context: unknown) => Promise<unknown>> {
+  const handlers: Record<
+    string,
+    (args: Record<string, unknown>, context: unknown) => Promise<unknown>
+  > = {};
 
   for (const tool of skill.tools) {
     handlers[tool.definition.function.name] = async (

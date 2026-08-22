@@ -105,7 +105,11 @@ export function whatsappToInbound(
       firstName: contactName,
     },
     images,
-    isVoice: msg.type === 'audio',
+    // Always false: the branch above returns null for every type except 'text' and
+    // 'image', so an 'audio' message never reaches here. Kept explicit rather than
+    // written as `msg.type === 'audio'` (which TS proves unreachable). Supporting
+    // voice notes means handling msg.type === 'audio' in the branch above first.
+    isVoice: false,
     timestamp: Number.parseInt(msg.timestamp, 10) * 1000,
   };
 }

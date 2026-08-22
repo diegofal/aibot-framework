@@ -159,7 +159,7 @@ export class IntelAnalyzer {
             system: 'You are a concise tech news analyst. Output only the summary, no preamble.',
           }
         );
-        sectionSummaries[cat.id] = summary.trim();
+        sectionSummaries[cat.id] = summary.text.trim();
       } catch (err: any) {
         this.logger.warn(
           { error: err.message, category: cat.id },
@@ -186,7 +186,7 @@ export class IntelAnalyzer {
                 'You are a concise tech intelligence analyst. Output only the digest, no preamble.',
             }
           )
-        ).trim();
+        ).text.trim();
       } catch (err: any) {
         this.logger.warn({ error: err.message }, 'LLM global digest failed');
       }

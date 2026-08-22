@@ -1,7 +1,7 @@
 # Roadmap
 
 Documento vivo para trackear features futuras, ideas y estado de proyectos en progreso.
-Última actualización: 2026-03-16.
+Última actualización: 2026-08-21.
 
 ---
 
@@ -205,6 +205,29 @@ Documento vivo para trackear features futuras, ideas y estado de proyectos en pr
 
 - **Discovery Gateway** — El directory evoluciona para rutear requests por capability match, con load balancing y auth centralizado
 - **A2A Streaming** — `message/stream` SSE para tareas largas
+
+---
+
+## Proyecto 9 — Observabilidad operativa y resiliencia del agent loop
+
+**Estado: IMPLEMENTADO (sin commit todavía, 2026-08-21) — karma/traits en progreso**
+
+### Lo que se implementó
+
+- **Stats & Behaviour** (`src/stats/`, `src/web/routes/stats.ts`, `web/pages/stats.js`) — agregaciones de sólo lectura sobre la telemetría en disco, cache de 60 s, tenant-scoped. `GET /api/stats/fleet|bots/:botId|behaviour|infra`. Postura por bot (`computePosture`). UI en `#/stats`, `#/stats/bot/:botId`, `#/stats/behaviour`, `#/stats/infra`, `#/stats/hygiene`.
+- **Hygiene** (`src/hygiene/`, `src/web/routes/hygiene.ts`, `web/pages/hygiene.js`) — cinco rutinas deterministas (`goal-lint`, `soul-structure`, `memory-hygiene`, `productions-triage`, `data-cleanup`) + `all`, con preview sin efectos y apply que respalda en `.versions/` y mueve a `_trash/` en lugar de borrar. Historial en `data/hygiene/runs.jsonl`.
+- **Agent loop** — `agentLoop.plannerBackend` (el planner/strategist corre sobre el cliente bare del backend elegido; corrige el fallback silencioso de `LLMClientWithFallback.generate()` a Ollama), `BackendCircuitBreaker` fleet-wide por backend (`agentLoop.circuitBreaker`), engagement gate en modo `hard` por defecto alimentado por señales humanas reales (`countFeedbackSignals`, `AgentScheduler.recordFeedbackEvent`).
+- **Canal y operador** — `ChannelState` (`ok|revoked|placeholder|missing|error`) expuesto en `/api/agents` y `/api/status`; `bots[].token: null`; `config.operator` con alias `chatId: "operator"` en `send_proactive_message` y `cron`; protocolo `ask_human` (`config.askHuman { maxChars: 600, autoCloseHours: 72 }`, `options` como quick replies, auto-cierre con nota en memoria).
+- **Karma por outcomes + política de traits** — `config.karma.rewards` (`novelAction: 0`, `productionApproved: 3`, `productionRejected: -1`, `askAnswered: 2`, `humanReply: 3` con cooldown `humanReplyCooldownHours: 6`, `toolError: -1`), `KarmaService.recordOutcome`, source `engagement`, `getBreakdown` → `breakdown` en `GET /api/karma/:botId` y tabla "Score composition" en el dashboard; `bots[].traits { pinned, locked }` aplicados por `TraitRegisters` (source `'pinned'`, `getDrift`, `traitDrift`/`traitPolicy` en `getEvolutionState`) y guía de traits del strategist des-sesgada.
+
+### Lo que falta
+
+- `rewards.collaborateCompleted` está definido (default 0) pero ningún call site llama a `recordOutcome(…, 'collaborateCompleted')` todavía; subirlo en config no tiene efecto hasta que `CollaborationManager` lo registre.
+- **Bug de orden en `FailoverLLMClient` con `failover.enabled`** — el modelo primario de Ollama se pasa como `ollamaClient.toString()` y la cadena de candidatos arranca siempre con Ollama, independientemente del `llmBackend` del bot. El pinning del planner lo esquiva (usa el cliente bare), pero el executor y las conversaciones siguen pasando por la cadena. Corregir la construcción de candidatos para respetar el backend del bot.
+- **Feedback de canales no-Telegram** — `requestImmediateRun` registra `human_message` sólo desde el buffer de Telegram; los mensajes entrantes por REST, WebSocket, WhatsApp y Discord todavía no cuentan como feedback para el engagement gate (sí cuentan los mensajes humanos de conversaciones del dashboard). Registrar el evento desde `handleChannelMessage()` para todos los canales.
+- `config.operator.notifyOnAsk` está en el schema pero ningún código lo consume todavía.
+- `BotManager.getAgentLoopCircuitState()` existe pero ninguna ruta lo expone; la pestaña Infra deriva el estado de los backends del log y del llm-query-log, no del circuito.
+- El sweep de `ask_human` (`sweepStaleAskHumanQuestions`) corre en cada llamada a la tool para el bot que llama; no hay un timer periódico que cierre asks de bots que dejaron de preguntar.
 
 ---
 

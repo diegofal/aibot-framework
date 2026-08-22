@@ -19,6 +19,13 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /**
+   * Backend that actually served the call. Callers log this rather than the
+   * client's nominal backend: a wrapper can serve a claude-cli client's call
+   * from Ollama, and the query log used to record the wrapper's backend with
+   * the other backend's model.
+   */
+  backend?: 'ollama' | 'claude-cli';
 }
 
 export interface LLMResponse {
@@ -47,6 +54,13 @@ export interface LLMClient {
    * Does NOT support tool calling — use non-streaming chat() when tools are needed.
    */
   chatStream?(messages: ChatMessage[], opts?: LLMChatOptions): AsyncGenerator<string, LLMResponse>;
+  /**
+   * Return the bare client for one backend, unwrapping fallback/failover
+   * wrappers. Lets a caller (the agent-loop planner) pin a phase to a
+   * specific backend without the wrapper's silent cross-backend fallback.
+   * Returns undefined when the client has no such backend.
+   */
+  getBackendClient?(backend: 'ollama' | 'claude-cli'): LLMClient | undefined;
 }
 
 /**
@@ -56,6 +70,10 @@ export class OllamaLLMClient implements LLMClient {
   readonly backend = 'ollama' as const;
 
   constructor(private ollama: OllamaClient) {}
+
+  getBackendClient(backend: 'ollama' | 'claude-cli'): LLMClient | undefined {
+    return backend === this.backend ? this : undefined;
+  }
 
   generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
     return this.ollama.generate(prompt, opts);
@@ -86,6 +104,10 @@ export class ClaudeCliLLMClient implements LLMClient {
     private logger: Logger,
     private model?: string
   ) {}
+
+  getBackendClient(backend: 'ollama' | 'claude-cli'): LLMClient | undefined {
+    return backend === this.backend ? this : undefined;
+  }
 
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
     const result = await claudeGenerate(prompt, {
@@ -133,7 +155,9 @@ export class ClaudeCliLLMClient implements LLMClient {
         logger: this.logger,
         systemPrompt: system,
         tools: opts.tools ?? [],
-        toolExecutor: opts.toolExecutor ?? (async () => ''),
+        toolExecutor:
+          opts.toolExecutor ??
+          (async () => ({ success: false, content: 'No tool executor configured' })),
         disallowedNativeTools: ALL_DISALLOWED_NATIVE_TOOLS,
       });
 
@@ -158,6 +182,26 @@ export class ClaudeCliLLMClient implements LLMClient {
   }
 }
 
+/**
+ * Shared by the wrapper clients: find the bare client for `backend` among the
+ * wrapped candidates. Clients that predate `getBackendClient` (test doubles,
+ * third-party implementations) are matched on their `backend` tag.
+ */
+function unwrapBackendClient(
+  backend: 'ollama' | 'claude-cli',
+  ...candidates: LLMClient[]
+): LLMClient | undefined {
+  for (const candidate of candidates) {
+    const bare = candidate.getBackendClient
+      ? candidate.getBackendClient(backend)
+      : candidate.backend === backend
+        ? candidate
+        : undefined;
+    if (bare) return bare;
+  }
+  return undefined;
+}
+
 export interface FallbackEvent {
   primaryBackend: 'ollama' | 'claude-cli';
   fallbackBackend: 'ollama' | 'claude-cli';
@@ -179,6 +223,10 @@ export class LLMClientWithFallback implements LLMClient {
     private logger: Logger
   ) {
     this.backend = primary.backend;
+  }
+
+  getBackendClient(backend: 'ollama' | 'claude-cli'): LLMClient | undefined {
+    return unwrapBackendClient(backend, this.primary, this.fallback);
   }
 
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
@@ -282,6 +330,10 @@ export class FailoverLLMClient implements LLMClient {
     };
   }
 
+  getBackendClient(backend: 'ollama' | 'claude-cli'): LLMClient | undefined {
+    return unwrapBackendClient(backend, this.primary, this.fallback);
+  }
+
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
     const result = await runWithModelFallback<LLMResponse>({
       candidates: this.candidates,
@@ -292,8 +344,10 @@ export class FailoverLLMClient implements LLMClient {
       onError: ({ attempt, index }) => {
         if (index > 0) {
           this.onFallback?.({
-            primaryBackend: (this.candidates[0]?.backend as string) ?? this.primary.backend,
-            fallbackBackend: attempt.backend as string,
+            primaryBackend:
+              (this.candidates[0]?.backend as FallbackEvent['primaryBackend'] | undefined) ??
+              this.primary.backend,
+            fallbackBackend: attempt.backend as FallbackEvent['fallbackBackend'],
             error: attempt.error,
             method: 'generate',
             reason: attempt.reason ?? undefined,
@@ -330,8 +384,10 @@ export class FailoverLLMClient implements LLMClient {
       onError: ({ attempt, index }) => {
         if (index > 0) {
           this.onFallback?.({
-            primaryBackend: (this.candidates[0]?.backend as string) ?? this.primary.backend,
-            fallbackBackend: attempt.backend as string,
+            primaryBackend:
+              (this.candidates[0]?.backend as FallbackEvent['primaryBackend'] | undefined) ??
+              this.primary.backend,
+            fallbackBackend: attempt.backend as FallbackEvent['fallbackBackend'],
             error: attempt.error,
             method: 'chat',
             reason: attempt.reason ?? undefined,
@@ -364,6 +420,19 @@ export interface CreateLLMClientOptions {
   claudePath?: string;
   claudeModel?: string;
   claudeTimeout?: number;
+  /** Ollama primary model. Falls back to the model configured on the client. */
+  ollamaModel?: string;
+  /** Ollama fallback models. Falls back to the models configured on the client. */
+  ollamaFallbacks?: string[];
+  /**
+   * Allow a failed call on the bot's own backend to be re-issued on the other
+   * backend. **Off by default** — an implicit claude-cli → Ollama fallback
+   * silently re-ran every failed Claude call against Ollama Cloud and burned
+   * its shared weekly quota. Turn it on only where crossing backends is
+   * genuinely wanted; a configured `failover` candidate chain is the explicit,
+   * ordered way to ask for the same thing.
+   */
+  crossBackendFallback?: boolean;
   failoverConfig?: {
     enabled?: boolean;
     candidates?: Array<{ backend: string; model?: string }>;
@@ -372,10 +441,52 @@ export interface CreateLLMClientOptions {
   cooldownTracker?: ProviderCooldownTracker;
 }
 
+export interface ResolvedOllamaModels {
+  primary?: string;
+  fallbacks?: string[];
+}
+
+/**
+ * The Ollama models to put in a failover chain.
+ *
+ * `OllamaClient` keeps its config private, so read it structurally and let an
+ * explicit option win. (The previous code passed `ollamaClient.toString()` as
+ * the model name, which yields `[object Object]` — never a real model.)
+ */
+export function resolveOllamaModels(
+  ollamaClient: OllamaClient,
+  opts: Pick<CreateLLMClientOptions, 'ollamaModel' | 'ollamaFallbacks'>
+): ResolvedOllamaModels {
+  const configured = (
+    ollamaClient as unknown as { config?: { models?: ResolvedOllamaModels } } | undefined
+  )?.config?.models;
+  return {
+    primary: opts.ollamaModel ?? configured?.primary,
+    fallbacks: opts.ollamaFallbacks ?? configured?.fallbacks,
+  };
+}
+
+/**
+ * Stable partition putting the bot's own backend at the head of the chain.
+ *
+ * The chain must start with the backend the bot was configured for; otherwise
+ * every claude-cli bot's first attempt lands on Ollama, which is neither what
+ * the operator asked for nor what the planner expects.
+ */
+export function orderCandidatesByBackend(
+  candidates: ModelCandidate[],
+  backend: 'ollama' | 'claude-cli'
+): ModelCandidate[] {
+  const own = candidates.filter((c) => c.backend === backend);
+  if (own.length === 0) return [...candidates];
+  return [...own, ...candidates.filter((c) => c.backend !== backend)];
+}
+
 /**
  * Factory: builds the right LLMClient based on skill config.
- * - 'claude-cli' + failover enabled → FailoverLLMClient (multi-candidate chain)
- * - 'claude-cli' → LLMClientWithFallback(claude, ollama)
+ * - failover enabled with >1 candidate → FailoverLLMClient, own backend first
+ * - 'claude-cli' → bare ClaudeCliLLMClient (no implicit Ollama fallback)
+ * - 'claude-cli' + `crossBackendFallback: true` → LLMClientWithFallback(claude, ollama)
  * - default → OllamaLLMClient(ollama)
  */
 export function createLLMClient(
@@ -384,30 +495,43 @@ export function createLLMClient(
   logger: Logger
 ): LLMClient {
   const ollamaLLM = new OllamaLLMClient(ollamaClient);
-
-  if (opts.llmBackend === 'claude-cli') {
-    const claudeLLM = new ClaudeCliLLMClient(
+  const backend: 'ollama' | 'claude-cli' =
+    opts.llmBackend === 'claude-cli' ? 'claude-cli' : 'ollama';
+  const buildClaude = () =>
+    new ClaudeCliLLMClient(
       opts.claudePath || 'claude',
       opts.claudeTimeout ?? 300_000,
       logger,
       opts.claudeModel
     );
 
-    // Use FailoverLLMClient when failover config is provided and enabled
-    if (opts.failoverConfig?.enabled) {
-      const candidates = resolveCandidatesFromConfig({
+  // An explicit, enabled failover chain is the operator asking for a
+  // multi-backend ladder — honoured for either backend.
+  if (opts.failoverConfig?.enabled) {
+    const ollamaModels = resolveOllamaModels(ollamaClient, opts);
+    const candidates = orderCandidatesByBackend(
+      resolveCandidatesFromConfig({
         failover: opts.failoverConfig,
-        ollama: { models: { primary: ollamaClient?.toString?.() } },
+        ollama: { models: ollamaModels },
         claudeCli: { enabled: true, model: opts.claudeModel },
-      });
+      }),
+      backend
+    );
 
-      if (candidates.length > 1) {
-        const cooldownTracker = opts.cooldownTracker ?? new ProviderCooldownTracker();
-        return new FailoverLLMClient(claudeLLM, ollamaLLM, logger, candidates, cooldownTracker);
-      }
+    if (candidates.length > 1) {
+      const cooldownTracker = opts.cooldownTracker ?? new ProviderCooldownTracker();
+      const claudeLLM = buildClaude();
+      const primary = backend === 'claude-cli' ? claudeLLM : ollamaLLM;
+      const secondary = backend === 'claude-cli' ? ollamaLLM : claudeLLM;
+      return new FailoverLLMClient(primary, secondary, logger, candidates, cooldownTracker);
     }
+  }
 
-    return new LLMClientWithFallback(claudeLLM, ollamaLLM, logger);
+  if (backend === 'claude-cli') {
+    const claudeLLM = buildClaude();
+    return opts.crossBackendFallback
+      ? new LLMClientWithFallback(claudeLLM, ollamaLLM, logger)
+      : claudeLLM;
   }
 
   return ollamaLLM;

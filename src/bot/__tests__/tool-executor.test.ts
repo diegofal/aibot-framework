@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, jest } from 'bun:test';
 import { z } from 'zod';
 import type { Logger } from '../../logger';
+import type { Tool } from '../../tools/types';
 import {
   ToolExecutor,
   createCollaborationToolExecutor,
   createToolExecutor,
 } from '../tool-executor';
-import type { BotContext, Tool } from '../types';
+import type { BotContext } from '../types';
 
 // Mock logger factory
 const createMockLogger = (): Logger => {

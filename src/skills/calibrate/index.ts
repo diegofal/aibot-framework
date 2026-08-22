@@ -44,8 +44,13 @@ const skill: Skill = {
         }
         const maxBatches = config.maxBatches || DEFAULT_MAX_BATCHES;
         const timeoutMs = config.sessionTimeoutMs || DEFAULT_TIMEOUT_MS;
+        // Session is optional on SkillContext (only built when config.session.enabled
+        // and a chat is present), and userId is optional even when it is built.
         const chatId = ctx.session?.chatId;
-        const userId = ctx.session?.userId!;
+        const userId = ctx.session?.userId;
+        if (chatId === undefined || userId === undefined) {
+          return '❌ Calibration needs an active chat session.';
+        }
 
         // Concurrency guard
         const existing = getSession(ctx.data, chatId, userId);

@@ -1,3 +1,4 @@
+import type { BotConfig } from '../config';
 import type { LLMClient, TokenUsage } from '../core/llm-client';
 import type { Logger } from '../logger';
 import type { ContinuousPlannerResult, PlannerResult } from './agent-loop-prompts';
@@ -6,6 +7,72 @@ import { TOOL_CATEGORY_NAMES } from './tool-registry';
 
 export interface PlannerResultWithUsage extends PlannerResult {
   usage?: TokenUsage;
+}
+
+// ── Planner backend selection ──
+
+export type PlannerBackendSetting = 'inherit' | 'ollama' | 'claude-cli';
+export type PlannerBackend = 'ollama' | 'claude-cli';
+
+/**
+ * Which backend the planner and strategist run on for a bot.
+ * Per-bot `agentLoop.plannerBackend` → global `agentLoop.plannerBackend` → inherit.
+ * `inherit` follows the bot's own `llmBackend` (ollama when unset).
+ */
+export function resolvePlannerBackend(
+  globalAgentLoop: { plannerBackend?: PlannerBackendSetting },
+  botConfig: Pick<BotConfig, 'llmBackend'> & {
+    agentLoop?: { plannerBackend?: PlannerBackendSetting };
+  }
+): PlannerBackend {
+  const setting =
+    botConfig.agentLoop?.plannerBackend ?? globalAgentLoop.plannerBackend ?? 'inherit';
+  if (setting === 'inherit') return botConfig.llmBackend ?? 'ollama';
+  return setting;
+}
+
+/**
+ * Model name to send with planner/strategist calls. The bot's active model is
+ * only valid on the bot's own backend — a claude-cli bot's "claude" must never
+ * be sent to Ollama — so a cross-backend planner gets that backend's default.
+ */
+export function resolvePlannerModel(
+  backend: PlannerBackend,
+  botConfig: Pick<BotConfig, 'llmBackend'>,
+  config: { ollama: { models: { primary: string } }; claudeCli?: { model?: string } },
+  activeModel: string
+): string {
+  const botBackend = botConfig.llmBackend ?? 'ollama';
+  if (backend === botBackend) return activeModel;
+  if (backend === 'ollama') return config.ollama.models.primary;
+  return config.claudeCli?.model ?? 'claude';
+}
+
+/**
+ * Pick the client the planner/strategist should call.
+ *
+ * Unwraps fallback/failover wrappers so a claude-cli bot's planner runs on the
+ * bare Claude CLI client: `LLMClientWithFallback.generate()` otherwise swallows
+ * every non-permanent Claude failure and re-issues the prompt to Ollama, which
+ * is how planner/strategist traffic from claude-cli bots ended up on the
+ * Ollama quota. When the bot's client has no such backend (an ollama bot asked
+ * for claude-cli) the optional factory builds one; failing that, the bot client
+ * is used as-is with a warning.
+ */
+export function selectPlannerClient(
+  botClient: LLMClient,
+  backend: PlannerBackend,
+  opts: { createClaudeClient?: () => LLMClient; logger?: Pick<Logger, 'warn'> }
+): LLMClient {
+  const bare = botClient.getBackendClient?.(backend);
+  if (bare) return bare;
+  if (!botClient.getBackendClient && botClient.backend === backend) return botClient;
+  if (backend === 'claude-cli' && opts.createClaudeClient) return opts.createClaudeClient();
+  opts.logger?.warn(
+    { requested: backend, botBackend: botClient.backend },
+    'Agent loop: planner backend not available for this bot, using the bot client'
+  );
+  return botClient;
 }
 
 /**

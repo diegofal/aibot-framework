@@ -53,7 +53,7 @@
 
       <h2>Authentication</h2>
       <p>
-        All Operator API endpoints live under <code>/api/agents/</code> and are protected by the existing tenant auth middleware.
+        The skill-command endpoints live under <code>/api/agents/</code>; the read-only telemetry and maintenance endpoints below live under <code>/api/stats/</code> and <code>/api/hygiene/</code>. All are protected by the existing tenant auth middleware.
         Include your API key in the <code>Authorization</code> header:
       </p>
       <pre><code>Authorization: Bearer YOUR_API_KEY</code></pre>
@@ -118,6 +118,170 @@
         </table>
       </div>
 
+      <!-- Channel state -->
+      <div class="card">
+        <h3>Channel State on Agents &amp; Status</h3>
+        <code class="method-badge">GET</code> <code>/api/agents</code> &middot; <code>/api/agents/:botId</code> &middot; <code>/api/status</code>
+        <p>
+          Every agent row carries <code>channel</code>, the outcome of the bot's last channel start
+          (<code>BotManager.getChannelState()</code>), so an operator script can tell a revoked Telegram token
+          from a bot that is headless on purpose. <code>/api/status</code> exposes the same per bot as
+          <code>bots.channels[]</code>.
+        </p>
+        <h4>Shape</h4>
+        <pre><code>{
+  "kind": "telegram" | "headless",
+  "state": "ok" | "revoked" | "placeholder" | "missing" | "error",
+  "lastError": string | null,   // operator-facing cause for revoked / error
+  "checkedAt": string | null    // ISO; null when derived from config alone
+}</code></pre>
+        <table>
+          <tr><th>State</th><th>Meaning</th></tr>
+          <tr><td><code>ok</code></td><td>Telegram polling is up</td></tr>
+          <tr><td><code>revoked</code></td><td>Real-shaped token, Telegram answered 401 &mdash; rotate it in BotFather</td></tr>
+          <tr><td><code>error</code></td><td>Real-shaped token, start failed for another reason (409 duplicate consumer, API unreachable); see <code>lastError</code></td></tr>
+          <tr><td><code>placeholder</code></td><td>A string that cannot be a token (<code>"nothing"</code>, the bot id). Never sent to Telegram; bot runs headless</td></tr>
+          <tr><td><code>missing</code></td><td>Empty or <code>null</code> token (<code>null</code> is the explicit "headless on purpose" value)</td></tr>
+          <tr><td><code>null</code></td><td>Never started and the token is real-shaped &mdash; only Telegram can say</td></tr>
+        </table>
+      </div>
+
+      <!-- Stats -->
+      <div class="card">
+        <h3>Stats &amp; Behaviour</h3>
+        <code class="method-badge">GET</code> <code>/api/stats/fleet?window=24h|7d|30d</code><br>
+        <code class="method-badge">GET</code> <code>/api/stats/bots/:botId?window=</code><br>
+        <code class="method-badge">GET</code> <code>/api/stats/behaviour?window=</code><br>
+        <code class="method-badge">GET</code> <code>/api/stats/infra</code>
+        <p>
+          Read-only aggregations over the on-disk telemetry (<code>src/stats/</code>): per-bot posture, LLM and
+          tool counts, outputs and reviews, ask engagement, goals, karma, trait drift, soul health; cross-bot
+          behaviour views; backend / cron / Telegram / log health. Tenant-scoped, cached 60&nbsp;s, never
+          throws on missing data. Response types are frozen in <code>src/stats/types.ts</code>. Full field
+          list on the <a href="web-dashboard.html">Web Dashboard</a> page.
+        </p>
+        <h4>Posture (first matching rule wins)</h4>
+        <table>
+          <tr><th>Posture</th><th>Rule</th></tr>
+          <tr><td><code>dormant</code></td><td><code>enabled: false</code></td></tr>
+          <tr><td><code>unknown</code></td><td>the agent loop never ran for this bot</td></tr>
+          <tr><td><code>blocked</code></td><td>retrying with an error (retryCount &ge; 3) or every active goal is <code>blocked</code></td></tr>
+          <tr><td><code>idle</code></td><td>no active goals</td></tr>
+          <tr><td><code>standby</code></td><td>&ge; 5 consecutive idle cycles, last run older than 3 days, or no production outcome in 48 h with an idle streak</td></tr>
+          <tr><td><code>active</code></td><td>otherwise</td></tr>
+        </table>
+      </div>
+
+      <!-- Hygiene -->
+      <div class="card">
+        <h3>Hygiene Routines</h3>
+        <code class="method-badge">GET</code> <code>/api/hygiene/routines</code><br>
+        <code class="method-badge">POST</code> <code>/api/hygiene/run</code><br>
+        <code class="method-badge">GET</code> <code>/api/hygiene/history?botId=&amp;limit=</code>
+        <p>
+          Deterministic maintenance without an LLM. <strong>Preview writes nothing; apply backs up and never
+          deletes</strong> (soul files to <code>.versions/&lt;file&gt;.&lt;ISO&gt;.bak</code>, cleanup into
+          <code>data/_trash/&lt;stamp&gt;/</code> with <code>manifest.json</code>). Bot routines need a
+          <code>botId</code> visible to the tenant; <code>data-cleanup</code> and the fleet half of
+          <code>all</code> are admin-only.
+        </p>
+        <h4>Request Body</h4>
+        <pre><code>{
+  "routine": "goal-lint" | "soul-structure" | "memory-hygiene" | "productions-triage" | "data-cleanup" | "all",
+  "botId": "default",          // required for bot-scoped routines
+  "apply": false,              // default false = preview
+  "options": { "archiveStale": true, "staleDays": 7 }   // routine-specific, optional
+}</code></pre>
+        <h4>Response (<code>HygieneRun</code>)</h4>
+        <pre><code>{
+  "runId": "…", "routine": "goal-lint", "botId": "default", "dryRun": true,
+  "startedAt": "…", "finishedAt": "…",
+  "findings": [
+    { "id": "goal-lint:archived-in-active:0", "kind": "archived-in-active", "severity": "warn",
+      "file": "GOALS.md", "line": 12, "message": "…", "fixable": true,
+      "fix": { "action": "move-to-completed", "details": "…" } }
+  ],
+  "applied": [], "skipped": [], "backups": []
+}</code></pre>
+        <h4>Error Cases</h4>
+        <table>
+          <tr><th>Error</th><th>Status</th></tr>
+          <tr><td>Invalid JSON / missing <code>routine</code> / unknown routine / missing <code>botId</code></td><td>400</td></tr>
+          <tr><td>Bot not found (tenant scope)</td><td>404</td></tr>
+          <tr><td>Fleet routine from a non-admin tenant</td><td>403</td></tr>
+          <tr><td>Routine threw while running</td><td>200 with <code>error</code> set on the run</td></tr>
+        </table>
+        <h4>Example</h4>
+        <pre><code>curl -X POST http://localhost:3000/api/hygiene/run \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"routine": "memory-hygiene", "botId": "default", "apply": false}'</code></pre>
+      </div>
+
+      <!-- Karma breakdown -->
+      <div class="card">
+        <h3>Karma Score Composition</h3>
+        <code class="method-badge">GET</code> <code>/api/karma/:botId</code> &middot; <code>/api/karma</code>
+        <p>
+          Karma is outcome-based: each event is an outcome kind whose delta comes from
+          <code>config.karma.rewards</code>. <code>breakdown</code> shows what the score is made of over the
+          trailing 30 days (raw, undecayed sums), so an operator script can tell activity karma from
+          outcome karma.
+        </p>
+        <h4>Response excerpt</h4>
+        <pre><code>{
+  "botId": "default",
+  "current": 57.4,
+  "trend": "rising",
+  "recentEvents": [ { "delta": 2, "source": "engagement", "kind": "askAnswered", "reason": "…" } ],
+  "breakdown": {
+    "windowDays": 30,
+    "bySource": { "production": 6, "engagement": 5, "tool": -3 },
+    "byKind":   { "productionApproved": 6, "askAnswered": 2, "humanReply": 3, "toolError": -3 }
+  }
+}</code></pre>
+        <h4>Score composition (defaults)</h4>
+        <table>
+          <tr><th>Outcome kind</th><th>Delta</th><th>Source</th><th>When</th></tr>
+          <tr><td><code>productionApproved</code></td><td>+3</td><td><code>production</code></td><td>Operator approves a production</td></tr>
+          <tr><td><code>productionRejected</code></td><td>-1</td><td><code>production</code></td><td>Operator rejects a production</td></tr>
+          <tr><td><code>askAnswered</code></td><td>+2</td><td><code>engagement</code></td><td>A human answers an <code>ask_human</code> question</td></tr>
+          <tr><td><code>humanReply</code></td><td>+3</td><td><code>engagement</code></td><td>A human replies to the bot &mdash; max once per bot per 6 h (<code>karma.humanReplyCooldownHours</code>)</td></tr>
+          <tr><td><code>toolError</code></td><td>-1</td><td><code>tool</code></td><td>A tool call fails</td></tr>
+          <tr><td><code>novelAction</code></td><td>0</td><td><code>agent-loop</code></td><td>A non-repeated cycle (off by default; a 0 reward writes nothing)</td></tr>
+          <tr><td><code>collaborateCompleted</code></td><td>0</td><td><code>agent-loop</code></td><td><code>CollaborationManager.initiateCollaboration()</code> completes a session (not on timeout). Worth 0 by default, so nothing is written until an operator raises it</td></tr>
+        </table>
+      </div>
+
+      <!-- Tenant isolation -->
+      <div class="card">
+        <h3>Tenant Isolation on the Chat API</h3>
+        <code class="method-badge">POST</code> <code>/api/v1/chat/:botId</code> &middot;
+        <code class="method-badge">GET</code> <code>/api/v1/chat/:botId/history</code>
+        <p>
+          <span class="badge badge-red">Security fix 2026-08-22</span> Both routes guarded access with
+          <code>c.get('tenantId')</code> &mdash; a context key <strong>nothing ever sets</strong>. The tenant
+          auth middleware stores a <code>TenantContext</code> under <code>tenant</code>, so the guard read
+          <code>undefined</code>, the comparison never ran, and in multi-tenant mode an authenticated tenant
+          could chat with and read the full history of another tenant's bot.
+        </p>
+        <p>
+          Both now use the shared helpers from <code>src/tenant/tenant-scoping.ts</code> &mdash;
+          <code>getTenantId(c)</code> (which reads <code>tenant</code>) and
+          <code>isBotAccessible(botConfig, tenantId)</code> &mdash; and answer <code>404</code> for a bot
+          outside the caller's tenant. An admin context (<code>__admin__</code>) and single-tenant mode are
+          unaffected. Regression test:
+          <code>tests/web/routes/chat-tenant-isolation.test.ts</code>.
+        </p>
+        <p>
+          Related, in the same pass: <code>GET /api/agent-loop/llm-stats</code> filtered
+          <code>BotManager.getLlmStats()</code> &mdash; an <em>array</em> &mdash; with
+          <code>Object.entries()</code> and matched the keys against the caller's bot ids. The keys were array
+          indices, so every non-admin tenant received an empty result. It failed closed, but it failed; the
+          route now filters the array on <code>botId</code>.
+        </p>
+      </div>
+
       <h2>Examples</h2>
 
       <h3>Trigger reflection manually</h3>
@@ -142,6 +306,10 @@
         <tr><td>Core method</td><td><code>src/bot/bot-manager.ts</code> &mdash; <code>executeSkillCommand()</code></td></tr>
         <tr><td>Server mount</td><td><code>src/web/server.ts</code></td></tr>
         <tr><td>Tests</td><td><code>tests/skill-commands.test.ts</code></td></tr>
+        <tr><td>Stats routes</td><td><code>src/web/routes/stats.ts</code> &mdash; aggregators in <code>src/stats/</code>, tests in <code>tests/stats/</code></td></tr>
+        <tr><td>Hygiene routes</td><td><code>src/web/routes/hygiene.ts</code> &mdash; registry and routines in <code>src/hygiene/</code>, tests in <code>tests/hygiene/</code></td></tr>
+        <tr><td>Chat tenant isolation</td><td><code>src/web/routes/chat.ts</code>, <code>src/web/routes/chat-history.ts</code> &mdash; helpers in <code>src/tenant/tenant-scoping.ts</code>, test in <code>tests/web/routes/chat-tenant-isolation.test.ts</code></td></tr>
+        <tr><td>Channel state</td><td><code>src/bot/telegram-errors.ts</code> (<code>resolveChannelStart</code>), <code>src/bot/bot-manager.ts</code> (<code>getChannelState</code>), tests in <code>tests/bot/channel-state.test.ts</code>, <code>tests/web/routes/channel-exposure.test.ts</code></td></tr>
       </table>
 
       <h2>Future Expansions</h2>

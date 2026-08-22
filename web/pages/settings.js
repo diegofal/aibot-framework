@@ -1,3 +1,4 @@
+import { ccliModelSelect } from './settings-helpers.js';
 import { api, getAuthContext, getAuthToken } from './shared.js';
 
 export async function renderSettings(el) {
@@ -104,11 +105,11 @@ export async function renderSettings(el) {
 
     <div class="detail-card" id="claude-cli-card">
       <div class="form-section-title">Claude CLI</div>
-      <p class="text-dim text-sm mb-16">Configure the model used for all Claude CLI invocations (soul generation, quality review, memory consolidation, improve tool, etc.). Leave empty to use Claude CLI's default model.</p>
+      <p class="text-dim text-sm mb-16">Model used by every claude-cli call fleet-wide: the agent loop (planner, strategist, executor) for every bot on the claude-cli backend, plus soul generation, quality review, memory consolidation and the improve tool. "CLI default" leaves it up to whatever's configured on the container.</p>
 
       <div class="form-group">
         <label>Model</label>
-        <input type="text" id="ccli-model" placeholder="e.g. sonnet, opus, claude-sonnet-4-20250514" value="${claudeCli.model || ''}">
+        ${ccliModelSelect(claudeCli)}
       </div>
 
       <div class="actions" style="margin-top:12px">
@@ -825,7 +826,8 @@ function setupSystemBackupCard() {
 
     const params = new URLSearchParams({ sections: sections.join(',') });
     if (!document.getElementById('sysx-productions').checked) params.set('productions', 'false');
-    if (!document.getElementById('sysx-conversations').checked) params.set('conversations', 'false');
+    if (!document.getElementById('sysx-conversations').checked)
+      params.set('conversations', 'false');
     if (!document.getElementById('sysx-karma').checked) params.set('karma', 'false');
 
     btn.disabled = true;
@@ -874,7 +876,10 @@ function setupSystemBackupCard() {
       status.style.color = 'var(--red)';
       return;
     }
-    if (!dryRun && !confirm('Restore this bundle into the running instance? Stop all agents first.')) {
+    if (
+      !dryRun &&
+      !confirm('Restore this bundle into the running instance? Stop all agents first.')
+    ) {
       return;
     }
 
@@ -919,7 +924,10 @@ function setupSystemBackupCard() {
       }
       for (const warning of result.warnings) lines.push(`! ${warning}`);
       if (!dryRun) {
-        lines.push('', 'Every restored agent is disabled with an empty token. Add tokens and enable them manually.');
+        lines.push(
+          '',
+          'Every restored agent is disabled with an empty token. Add tokens and enable them manually.'
+        );
       }
 
       status.textContent = dryRun ? 'Preview ready' : 'Restored';

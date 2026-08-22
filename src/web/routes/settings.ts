@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
+import { CLAUDE_CLI_MODEL_OPTIONS } from '../../claude-cli';
 import type { Config, McpServerEntry } from '../../config';
+
 import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
 import type { Logger } from '../../logger';
 import type { McpServerConfig } from '../../mcp/client';
@@ -306,7 +308,7 @@ export function settingsRoutes(deps: {
   // --- Claude CLI Settings ---
 
   app.get('/claude-cli', (c) => {
-    return c.json(deps.config.claudeCli);
+    return c.json({ ...deps.config.claudeCli, availableModels: CLAUDE_CLI_MODEL_OPTIONS });
   });
 
   app.patch('/claude-cli', async (c) => {

@@ -481,10 +481,13 @@ function main(): void {
     productions: { enabled: true, trackOnly: false },
   }));
 
+  // Deliberate stub: ProductionsService only reads `bots` and `productions` here.
+  // Double cast because the literal is far narrower than Config; the way to remove
+  // it is a narrower constructor param on ProductionsService.
   const config = {
     bots,
     productions: { enabled: true, baseDir: PROD_BASE },
-  } as Config;
+  } as unknown as Config;
 
   const service = new ProductionsService(config, noopLogger);
 

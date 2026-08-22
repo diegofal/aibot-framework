@@ -22,7 +22,29 @@ import { join } from 'node:path';
 import type { ProductionEntry } from './types';
 
 /**
- * Parse JSONL lines into ProductionEntry objects. Skips malformed lines.
+ * Is this parsed JSON value shaped like a ProductionEntry?
+ *
+ * Only `path` is checked: it is the field every consumer dereferences
+ * (tree building, stats, hygiene, the index page), and `node:path`
+ * helpers throw on a non-string. Agents append free-form notes to
+ * changelog.jsonl by hand — those lines parse as JSON but carry no
+ * `path`, and one of them used to take `/api/productions/all-trees`
+ * down with a TypeError, blanking the explorer for every bot.
+ *
+ * Pure.
+ */
+function isProductionEntry(value: unknown): value is ProductionEntry {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as ProductionEntry).path === 'string'
+  );
+}
+
+/**
+ * Parse JSONL lines into ProductionEntry objects. Skips malformed lines
+ * and well-formed JSON that is not a production entry.
  *
  * Pure. Used by readEntries and tests.
  */
@@ -30,7 +52,8 @@ export function parseEntries(lines: string[]): ProductionEntry[] {
   const entries: ProductionEntry[] = [];
   for (const line of lines) {
     try {
-      entries.push(JSON.parse(line) as ProductionEntry);
+      const parsed: unknown = JSON.parse(line);
+      if (isProductionEntry(parsed)) entries.push(parsed);
     } catch {
       // Skip malformed lines (e.g. markdown accidentally written to JSONL).
     }

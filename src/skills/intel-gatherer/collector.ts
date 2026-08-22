@@ -1,6 +1,7 @@
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type {
+  BlockedSource,
   CategoryData,
   GitHubRelease,
   GitHubSource,
@@ -16,11 +17,26 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class IntelCollector {
   private seenIds = new Set<string>();
+  /**
+   * Sources that could not be read this run. Zero posts because nothing matched
+   * and zero posts because every subreddit was rejected look identical in the
+   * totals, so the run summary reports these separately.
+   */
+  private blocked: BlockedSource[] = [];
 
   constructor(
     private logger: Logger,
     private githubToken?: string
   ) {}
+
+  get blockedSources(): BlockedSource[] {
+    return this.blocked;
+  }
+
+  private markBlocked(name: string, reason: string): void {
+    if (this.blocked.some((b) => b.name === name)) return;
+    this.blocked.push({ name, reason });
+  }
 
   /**
    * Fetch Reddit posts from a single subreddit source
@@ -40,6 +56,7 @@ export class IntelCollector {
       if (!res.ok) {
         if (res.status === 403) {
           this.logger.warn(`Reddit rate limit (403), skipping: ${source.name}`);
+          this.markBlocked(source.name, 'HTTP 403');
           return [];
         }
         throw new Error(`HTTP ${res.status}`);
@@ -74,6 +91,7 @@ export class IntelCollector {
         .filter((p: RedditPost) => !this.seenIds.has(p.id));
     } catch (err: any) {
       this.logger.error({ error: err.message, source: source.name }, 'Reddit fetch error');
+      this.markBlocked(source.name, err?.message ?? String(err));
       return [];
     }
   }

@@ -179,7 +179,7 @@
 
       <p>
         All API routes are mounted under <code>/api</code>. The table below lists every endpoint
-        extracted from the 13 route files in <code>src/web/routes/</code>.
+        extracted from the route files in <code>src/web/routes/</code>.
       </p>
 
       <!-- --- Status --- -->
@@ -199,7 +199,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/status</code></td>
-              <td>System status: uptime, start time, configured/running bot counts and IDs</td>
+              <td>System status: uptime, start time, configured/running bot counts and IDs. <code>bots.channels[]</code> lists every visible bot as <code>{ id, running, channel }</code>, where <code>channel</code> is the <code>ChannelStatus</code> recorded at the last start (<code>kind: telegram | headless</code>, <code>state: ok | revoked | placeholder | missing | error</code>, <code>lastError</code>, <code>checkedAt</code>), derived from the token alone for a never-started placeholder/missing token, or <code>null</code> for a never-started real-shaped token</td>
               <td><code>status.ts</code></td>
             </tr>
           </tbody>
@@ -223,7 +223,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents</code></td>
-              <td>List all agents with masked tokens and running status</td>
+              <td>List all agents with masked tokens, running status and <code>channel</code> (the bot's <code>ChannelStatus</code> from <code>BotManager.getChannelState()</code>, or <code>null</code>)</td>
               <td><code>agents.ts</code></td>
             </tr>
             <tr>
@@ -235,7 +235,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents/:id</code></td>
-              <td>Get single agent details</td>
+              <td>Get single agent details (same shape as the list row, including <code>channel</code>)</td>
               <td><code>agents.ts</code></td>
             </tr>
             <tr>
@@ -391,7 +391,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agent-loop/llm-stats</code></td>
-              <td>Per-bot LLM diagnostics: success/fail/fallback counts, avg duration, caller breakdown</td>
+              <td>Per-bot LLM diagnostics: success/fail/fallback counts, avg duration, caller breakdown. <span class="badge badge-yellow">Fixed 2026-08-22</span> The tenant filter treated the array returned by <code>getLlmStats()</code> as a map (<code>Object.entries()</code> over array indices), so non-admin tenants always received an empty result</td>
               <td><code>agent-loop.ts</code></td>
             </tr>
             <tr>
@@ -457,7 +457,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/ask-human</code></td>
-              <td>List all pending ask-human questions with total count</td>
+              <td>List all pending ask-human questions with total count. Each question carries <code>options?: string[]</code> (the 2&ndash;4 quick-reply choices the bot offered, when any)</td>
               <td><code>ask-human.ts</code></td>
             </tr>
             <tr>
@@ -834,7 +834,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/conversations/:botId/:id</code></td>
-              <td>Get conversation with all messages</td>
+              <td>Get conversation with all messages. Inbox conversations carry <code>inboxStatus</code> (<code>pending | answered | dismissed | timed_out | closed</code>) and <code>askOptions?: string[]</code>, which the inbox thread view renders as quick-reply buttons while the status is <code>pending</code></td>
               <td><code>conversations.ts</code></td>
             </tr>
             <tr>
@@ -958,13 +958,13 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/karma</code></td>
-              <td>Get karma scores for all bots</td>
+              <td>Get karma scores for all bots (<code>KarmaScore[]</code>: <code>current</code>, <code>trend</code>, <code>recentEvents</code>, <code>breakdown</code>)</td>
               <td><code>karma.ts</code></td>
             </tr>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/karma/:botId</code></td>
-              <td>Get karma score for a specific bot</td>
+              <td>Get karma score for a specific bot. <code>breakdown { windowDays: 30, bySource, byKind }</code> holds the raw (undecayed) delta sums over the trailing window &mdash; sources <code>production | agent-loop | feedback | goal | manual | tool | engagement</code>, kinds <code>novelAction | productionApproved | productionRejected | askAnswered | humanReply | collaborateCompleted | toolError</code>. Events recorded through <code>recordOutcome()</code> carry <code>kind</code></td>
               <td><code>karma.ts</code></td>
             </tr>
             <tr>
@@ -982,6 +982,148 @@
           </tbody>
         </table>
       </div>
+
+      <!-- --- Stats & Behaviour --- -->
+      <h3>Stats &amp; Behaviour</h3>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        Always mounted. Read-only aggregations over the telemetry already on disk
+        (<code>llm-query-log</code>, <code>tool-audit</code>, outcome ledger, karma, persisted scheduler
+        state, conversations, sessions, cron store, knowledge mesh, soul files, pino log tail) built by
+        <code>src/stats/</code>. Tenant-scoped like <code>/api/karma</code>, never throws on missing data
+        (a fresh bot yields zeros and nulls), each aggregation cached 60&nbsp;s in memory
+        (<code>TtlCache</code>). Response shapes are frozen in <code>src/stats/types.ts</code>; fields may
+        be added, never renamed or removed.
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/stats/fleet?window=24h|7d|30d</code></td>
+              <td><code>FleetResponse</code>: one <code>FleetBotStats</code> per visible bot &mdash; <code>backend</code>/<code>model</code>, <code>channel { kind, state }</code>, live <code>loop</code> state (cadence, mode, next/last run, idle streak, retry count, last error), a one-word <code>posture</code> (<code>active | standby | dormant | blocked | idle | unknown</code>, see <code>computePosture()</code>), <code>lastHumanContactAt</code>, <code>llm</code> (calls, failures, avg duration, tokens, by caller, by model, last error), <code>tools</code> (calls, failures, top tools, loop breaks), <code>output</code> (active/archived files, approved/rejected/unreviewed, outcomes), <code>engagement</code> (asks sent/answered/pending/closed, proactive messages, collaborate calls, mesh posts), <code>goals</code>, <code>karma</code>, <code>traits</code> (current, baseline, drift), <code>soul</code> (last reflection/health check, file sizes, pending daily logs, missing files) and <code>cycles</code>; plus <code>totals</code>. Default window <code>7d</code>. <code>GET /api/stats/</code> is an alias.</td>
+              <td><code>stats.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/stats/bots/:botId?window=</code></td>
+              <td><code>BotDetailResponse</code> = <code>FleetBotStats</code> + <code>goalsDetail[]</code>, <code>traitHistory[]</code>, <code>recentCycles</code>, <code>llmDaily[]</code>, <code>toolsDaily[]</code>, <code>asks[]</code> (title, chars, inbox status, answered at) and <code>topErrors[]</code>. 404 when the bot is not visible to the tenant.</td>
+              <td><code>stats.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/stats/behaviour?window=</code></td>
+              <td><code>BehaviourResponse</code>: <code>productionWithoutFeedback[]</code> (outputs since the last human feedback per bot), <code>askEconomics</code> (sent/answered/median time-to-answer per question-length bucket <code>&lt;300 | 300-600 | 600-1200 | &gt;1200</code>), <code>collaboration</code> graph (nodes + edges with call/failure counts), <code>mesh</code> counts, <code>traitVariance[]</code> over time and <code>fleetDriftVector</code>.</td>
+              <td><code>stats.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/stats/infra</code></td>
+              <td><code>InfraResponse</code>: <code>backends[]</code> (last 429 / 401, last error, failed calls in 24&nbsp;h for <code>ollama</code> and <code>claude-cli</code>), <code>securityAudit[]</code>, <code>cron[]</code> (schedule, last status/error, consecutive errors), <code>telegram[]</code> (per-bot channel state + last error), <code>logNoise[]</code>, <code>boots[]</code>, <code>logBytes</code>.</td>
+              <td><code>stats.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- --- Hygiene --- -->
+      <h3>Hygiene</h3>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        Always mounted. Deterministic, LLM-free maintenance routines from <code>src/hygiene/</code>.
+        <strong>Preview is side-effect free; apply backs up every soul file it rewrites to
+        <code>&lt;dir&gt;/.versions/&lt;file&gt;.&lt;ISO&gt;.bak</code> and never deletes</strong> &mdash;
+        cleanup moves paths into <code>&lt;data&gt;/_trash/&lt;stamp&gt;/</code> with a
+        <code>manifest.json</code>. Bot-scoped routines are tenant-scoped; fleet routines and the fleet
+        half of <code>all</code> are admin-only. Runs are persisted to
+        <code>&lt;data&gt;/hygiene/runs.jsonl</code> (last 500).
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/hygiene/routines</code></td>
+              <td><code>HygieneRoutineInfo[]</code>: <code>goal-lint</code>, <code>soul-structure</code>, <code>memory-hygiene</code>, <code>productions-triage</code> (scope <code>bot</code>), <code>data-cleanup</code> and the virtual <code>all</code> (scope <code>fleet</code>), each with <code>name</code>, <code>description</code>, <code>canApply</code></td>
+              <td><code>hygiene.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/hygiene/run</code></td>
+              <td>Body <code>{ routine, botId?, apply?, options? }</code>. Returns a <code>HygieneRun</code>: <code>runId</code>, <code>dryRun</code>, <code>findings[]</code> (<code>kind</code>, <code>severity: info | warn | critical</code>, <code>file</code>, <code>line</code>, <code>message</code>, <code>fixable</code>, <code>fix { action, details }</code>), <code>applied[]</code>, <code>skipped[]</code>, <code>backups[]</code>, <code>error?</code>. <code>botId</code> is required for bot-scoped routines (400 otherwise, 404 when not visible); fleet routines answer 403 for non-admin tenants. <code>options</code> is routine-specific &mdash; see the option table below. For <code>all</code>, findings are prefixed <code>&lt;botId&gt;:</code> / <code>fleet:</code> and carry <code>botId</code>.</td>
+              <td><code>hygiene.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/hygiene/history?botId=&amp;limit=</code></td>
+              <td>Past <code>HygieneRun</code>s, newest first (default 50). Without <code>botId</code>, non-admin tenants only see runs for their own bots.</td>
+              <td><code>hygiene.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        <strong>Routine options are checkboxes in the UI.</strong> Each routine card at
+        <code>#/stats/hygiene</code> renders the options declared in <code>ROUTINE_OPTIONS</code>
+        (<code>web/pages/stats-helpers.js</code>); <code>optionsFromChecked()</code> turns the ticked boxes
+        into the <code>options</code> object posted to <code>/api/hygiene/run</code> and silently drops any
+        key the table does not know. Preview and Apply share the same checkbox state, and Apply always goes
+        through a two-button confirm (<code>.hyg-confirm-btn</code> / <code>.hyg-cancel-btn</code>, the
+        confirm styled as danger when the fix is destructive).
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr><th>Routine</th><th>Option</th><th>Label</th><th>Effect</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td rowspan="2"><code>productions-triage</code></td>
+              <td><code>archiveStale</code></td>
+              <td>Archive stale unreviewed files</td>
+              <td>Moves <code>unreviewed-stale</code> files into <code>archived/</code> via <code>archiveFile</code>. Never deletes.</td>
+            </tr>
+            <tr>
+              <td><code>pruneOrphans</code></td>
+              <td>Prune orphan changelog entries</td>
+              <td><span class="badge badge-yellow">2026-08-22</span> Enables the <code>prune-changelog</code> fix on <code>orphan-reference</code> findings inside the productions directory: <code>changelog.jsonl</code> is backed up to <code>.versions/changelog.jsonl.&lt;ISO&gt;.bak</code> and rewritten without the orphan lines, every surviving line byte-identical and in order. <code>archive</code> / <code>delete</code> history actions, <code>trackOnly</code> entries, malformed lines, paths outside the directory and reappeared files are all kept.</td>
+            </tr>
+            <tr>
+              <td><code>memory-hygiene</code></td>
+              <td><code>redactCustody</code></td>
+              <td>Also redact family/custody lines</td>
+              <td>Sent as <code>redactKinds: ['email', 'phone', 'chat-id', 'custody']</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        <code>data-cleanup</code>'s <code>skills-are-tools</code> finding no longer fires for a name that is
+        both a real skill and a tool &mdash; <code>improve</code> ships as <code>src/skills/improve</code>
+        <em>and</em> as a tool, and was being reported on six bots on every run. The routine now subtracts the
+        skills that actually exist on disk.
+      </p>
 
       <!-- --- Integrations --- -->
       <h3>Integrations</h3>
@@ -1111,6 +1253,16 @@
         Channel-agnostic REST endpoint for bot conversations. Uses the unified conversation pipeline
         with full tool execution, RAG, session management, and tenant isolation.
         Route file: <code>chat-api.ts</code>.
+      </p>
+      <p>
+        <span class="badge badge-red">Security fix 2026-08-22</span> Both routes guarded access with
+        <code>c.get('tenantId')</code>, which nothing sets &mdash; the tenant auth middleware stores a
+        <code>TenantContext</code> under <code>tenant</code> &mdash; so the guard was unreachable and, in
+        multi-tenant mode, an authenticated tenant could chat with and read the history of another tenant's
+        bot. <code>src/web/routes/chat.ts</code> and <code>src/web/routes/chat-history.ts</code> now use the
+        shared <code>getTenantId(c)</code> + <code>isBotAccessible(...)</code> helpers and answer
+        <code>404</code> for a bot outside the caller's tenant. Regression test:
+        <code>tests/web/routes/chat-tenant-isolation.test.ts</code>.
       </p>
       <div class="table-wrapper">
         <table>
@@ -1259,7 +1411,10 @@ compaction                            // Context compaction
              operator input. Questions are listed with answer and dismiss actions. Badge polling
              via <code>/api/ask-human/count</code>. Messages may include <strong>file attachments</strong>
              shown as clickable chips below the message bubble; clicking a chip opens a modal preview
-             fetched from <code>/api/files/:botId/*path</code>.</p>
+             fetched from <code>/api/files/:botId/*path</code>. When the bot passed
+             <code>options</code> to <code>ask_human</code>, the thread shows them as
+             <strong>quick-reply buttons</strong> above the composer while the conversation is
+             <code>pending</code>; clicking one fills the reply and sends it through the normal path.</p>
         </div>
 
         <div class="card">
@@ -1275,6 +1430,24 @@ compaction                            // Context compaction
           <p>Bot management: create, edit, start, stop, reset, clone, and delete agents.
              Per-agent configuration overrides for model, conversation parameters, and
              agent loop settings. Soul file generation and application.</p>
+        </div>
+
+        <div class="card">
+          <h3>Stats &amp; Behaviour</h3>
+          <p>Sidebar entry right after Agents (<code>web/pages/stats.js</code>, helpers in
+             <code>web/pages/stats-helpers.js</code>). Five views share one shell with tabs and a
+             24h / 7d / 30d window selector persisted in <code>localStorage</code>:
+             <code>#/stats</code> (Fleet &mdash; one row per bot with posture, channel state, backend,
+             LLM/tool/output/engagement/goals/karma columns and sparklines, sortable),
+             <code>#/stats/bot/:botId</code> (goal detail, trait history and drift, recent cycles,
+             daily LLM/tool series, asks, top errors, plus a hygiene panel that previews/applies
+             routines for that bot), <code>#/stats/behaviour</code> (production without feedback,
+             ask economics, collaboration graph, mesh output, trait variance / drift vector),
+             <code>#/stats/infra</code> (backends, security audit, cron, Telegram states, log noise,
+             boots) and <code>#/stats/hygiene</code> (<code>web/pages/hygiene.js</code>: routine
+             picker, bot picker, per-routine option checkboxes, preview/apply with a two-button
+             confirm, grouped findings, run history). Backed by
+             <code>/api/stats/*</code> and <code>/api/hygiene/*</code>.</p>
         </div>
 
         <div class="card">
@@ -1356,7 +1529,13 @@ compaction                            // Context compaction
           <h3>Karma</h3>
           <p>Bot karma scoring system. View current scores for all bots, browse
              paginated event history, and make manual adjustments with reasons.
-             Tracks automatic karma events from production evaluations and other signals.</p>
+             Tracks automatic karma events from production evaluations, engagement (answered
+             asks, human replies) and tool errors, each with its outcome <code>kind</code> and a
+             source badge. The bot page opens with a <strong>Score composition</strong> table
+             (last 30 days, raw deltas by source and by outcome kind, from
+             <code>breakdown</code>) so activity-only karma is visible as a single
+             <code>agent-loop</code> row while outcome-based karma spreads across
+             <code>production</code> / <code>engagement</code>.</p>
         </div>
 
         <div class="card">

@@ -326,14 +326,14 @@ export class ToolExecutor extends EventEmitter {
       timestamp: Date.now(),
     });
 
-    // Karma -1 per tool error (execution and validation phases)
+    // Karma per tool error (execution and validation phases) — delta from
+    // config.karma.rewards.toolError (-1 default), deduped per tool+message.
     if (this.options.karmaService && (phase === 'execution' || phase === 'validation')) {
       const truncatedError = (emitError ?? errorMsg).slice(0, 120);
-      this.options.karmaService.addEvent(
+      this.options.karmaService.recordOutcome(
         botId,
-        -1,
-        `Tool error: ${name} — ${truncatedError}`,
-        'tool'
+        'toolError',
+        `Tool error: ${name} — ${truncatedError}`
       );
     }
 

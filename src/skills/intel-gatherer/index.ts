@@ -141,10 +141,20 @@ async function runCollection(ctx: SkillContext, trigger?: TriggerInfo): Promise<
 
     const llmStatus = llmDigest ? 'yes' : 'no';
 
+    // Zero posts because nothing matched reads the same as zero posts because
+    // every source was rejected. Name the blocked ones so the report cannot
+    // imply coverage it does not have.
+    const blocked = collector.blockedSources;
+    const blockedLine = blocked.length
+      ? `\n- Sources unavailable: ${blocked.length} (${blocked
+          .map((b) => `${b.name}: ${b.reason}`)
+          .join('; ')})`
+      : '';
+
     return `Collection complete!
 
 Summary:
-- Reddit posts: ${totalReddit}
+- Reddit posts: ${totalReddit}${blockedLine}
 - Hacker News: ${totalHN}
 - GitHub releases: ${totalGitHub}
 - Categories: ${sources.categories.length}

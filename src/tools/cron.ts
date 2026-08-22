@@ -1,7 +1,38 @@
+import type { OperatorConfig } from '../config';
 import type { CronService } from '../cron';
+import { OPERATOR_NOT_CONFIGURED_ERROR, resolveOperatorTarget } from './send-proactive-message';
 import type { Tool, ToolResult } from './types';
 
-export function createCronTool(cronService: CronService): Tool {
+export interface CronToolOptions {
+  /** Operator contact from `config.operator`; lets `chatId: "operator"` resolve. */
+  getOperator?: () => OperatorConfig | undefined;
+}
+
+/**
+ * Where a job created by the tool delivers. An explicit `chatId` wins over the
+ * conversation's `_chatId`; the string "operator" (or the operator's email)
+ * resolves through config so bots stop copying numeric ids from other jobs.
+ */
+export function resolveCronChatId(
+  args: Record<string, unknown>,
+  operator: OperatorConfig | undefined
+): { chatId?: number; error?: string } {
+  const raw = args.chatId;
+  if (typeof raw === 'string' && raw.trim()) {
+    const target = resolveOperatorTarget(raw, operator);
+    if (target.kind === 'operator') {
+      return target.chatId ? { chatId: target.chatId } : { error: OPERATOR_NOT_CONFIGURED_ERROR };
+    }
+    const n = Number(raw);
+    if (Number.isFinite(n) && n !== 0) return { chatId: n };
+    return { error: `chatId "${raw}" is neither a numeric chat id nor "operator"` };
+  }
+  if (typeof raw === 'number' && raw !== 0) return { chatId: raw };
+  const fromContext = args._chatId;
+  return { chatId: typeof fromContext === 'number' && fromContext !== 0 ? fromContext : undefined };
+}
+
+export function createCronTool(cronService: CronService, options: CronToolOptions = {}): Tool {
   return {
     definition: {
       type: 'function',
@@ -26,7 +57,7 @@ PAYLOAD MODES (payloadKind):
 - "message": The text is sent verbatim as a notification. Use for simple reminders like "Time to take your medicine" or "Meeting in 30 minutes".
 
 CHAT ID:
-When creating a cron job from within a conversation, the chatId is auto-detected. When creating from the agent loop (no conversation context), you MUST provide the chatId parameter explicitly — use the operator/owner's chat ID.
+When creating a cron job from within a conversation, the chatId is auto-detected. When creating from the agent loop (no conversation context), you MUST provide the chatId parameter explicitly. To deliver to your human operator use chatId: "operator" — it resolves to the configured operator contact. Never guess numeric chat ids or copy them from other jobs.
 
 IMPORTANT: Always use get_datetime first to know the current time before calculating schedule timestamps.`,
         parameters: {
@@ -66,9 +97,9 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
               description: 'Job ID (for "remove" and "run" actions)',
             },
             chatId: {
-              type: 'number',
+              type: ['number', 'string'],
               description:
-                'Target chat ID for job delivery. Required when creating cron jobs outside a conversation (e.g. from agent loop). In conversations, auto-detected from context.',
+                'Target chat ID for job delivery, or "operator" to deliver to the human operator. Required when creating cron jobs outside a conversation (e.g. from agent loop). In conversations, auto-detected from context.',
             },
             payloadKind: {
               type: 'string',
@@ -88,7 +119,6 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
 
     async execute(args, logger): Promise<ToolResult> {
       const action = args.action as string;
-      const _chatId = (args.chatId as number | undefined) || (args._chatId as number | undefined);
       const _botId = args._botId as string | undefined;
 
       try {
@@ -126,6 +156,12 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
                 content: 'Internal error: missing bot context for cron add',
               };
             }
+
+            const resolvedChat = resolveCronChatId(args, options.getOperator?.());
+            if (resolvedChat.error) {
+              return { success: false, content: resolvedChat.error };
+            }
+            const _chatId = resolvedChat.chatId;
 
             const schedule = args.schedule as
               | { kind: string; at?: string; everyMs?: number; expr?: string; tz?: string }

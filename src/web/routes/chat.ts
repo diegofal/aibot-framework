@@ -9,6 +9,7 @@ import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import { verifyUserIdentity } from '../../tenant/identity-verification';
 import type { TenantManager } from '../../tenant/manager';
+import { getTenantId, isBotAccessible } from '../../tenant/tenant-scoping';
 
 export interface ChatRouteDeps {
   config: Config;
@@ -54,8 +55,10 @@ export function chatRoutes(deps: ChatRouteDeps) {
     // In multi-tenant mode, the tenant auth middleware already validates the API key
     // and sets tenant info on the context
     if (config.multiTenant?.enabled && botConfig.tenantId) {
-      const tenantId = c.get('tenantId') as string | undefined;
-      if (tenantId && botConfig.tenantId !== tenantId) {
+      // getTenantId reads `tenant` (TenantContext), which is what the auth
+      // middleware actually sets — reading `tenantId` here left the guard
+      // unreachable and failing open across tenants.
+      if (!isBotAccessible(botConfig, getTenantId(c))) {
         return c.json({ error: 'Bot not found' }, 404);
       }
 

@@ -207,6 +207,36 @@ export async function renderInboxChat(el, botId, conversationId) {
     renderThreadUI();
   }
 
+  /**
+   * Quick-reply buttons for ask_human questions that carry `askOptions`.
+   * Clicking fills the reply textarea and submits through the existing send path.
+   */
+  function renderQuickReplies(container) {
+    const options = Array.isArray(conversation.askOptions)
+      ? conversation.askOptions.filter((o) => typeof o === 'string' && o.trim())
+      : [];
+    const inputArea = container.querySelector('.thread-input-area');
+    if (options.length === 0 || !inputArea || generating) return;
+    if ((conversation.inboxStatus || 'pending') !== 'pending') return;
+
+    const bar = document.createElement('div');
+    bar.className = 'inbox-quick-replies';
+    bar.innerHTML = `<span class="inbox-quick-replies-label text-dim text-sm">Quick reply</span>${options
+      .map((o, i) => `<button class="btn btn-sm inbox-quick-reply" data-idx="${i}">${escapeHtml(o)}</button>`)
+      .join('')}`;
+    inputArea.parentNode.insertBefore(bar, inputArea);
+
+    bar.querySelectorAll('.inbox-quick-reply').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const textarea = container.querySelector('.thread-input');
+        const sendBtn = container.querySelector('.thread-send-btn');
+        if (!textarea || !sendBtn) return;
+        textarea.value = options[Number(btn.dataset.idx)];
+        sendBtn.click();
+      });
+    });
+  }
+
   function renderThreadUI() {
     const container = document.getElementById('inbox-thread-container');
     if (!container) return;
@@ -287,6 +317,8 @@ export async function renderInboxChat(el, botId, conversationId) {
         if (generating) startPolling();
       },
     });
+
+    renderQuickReplies(container);
   }
 
   renderView();

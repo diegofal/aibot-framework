@@ -19,6 +19,12 @@ export interface IntelConfig {
 
 // ── Source definitions (from sources.yml categories) ──
 
+/** A source that could not be read during a collection run. */
+export interface BlockedSource {
+  name: string;
+  reason: string;
+}
+
 export interface RedditSource {
   type: 'reddit';
   name: string;

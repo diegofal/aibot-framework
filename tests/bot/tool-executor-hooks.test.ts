@@ -533,6 +533,12 @@ describe('ToolExecutor Observability Hooks', () => {
           addEvent: (botId: string, delta: number, reason: string, source: string) => {
             events.push({ botId, delta, reason, source });
           },
+          // Outcome-based karma: the executor reports a `toolError` kind and the
+          // service resolves the delta (-1 default) and source ('tool').
+          recordOutcome: (botId: string, kind: string, reason: string) => {
+            if (kind !== 'toolError') throw new Error(`unexpected karma kind ${kind}`);
+            events.push({ botId, delta: -1, reason, source: 'tool' });
+          },
         } as any,
       };
     }

@@ -61,3 +61,104 @@ export function describeTelegramStartFailure(err: unknown): string {
   }
   return `Telegram API call failed: ${messageOf(err)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Channel state
+//
+// The August 2026 audit found seven of eight bots logging the same "Telegram
+// start failed — falling back to headless mode" line, and nothing downstream
+// could tell a token BotFather had revoked (401) from the literal string
+// "nothing" an operator typed as a placeholder. The states below make that
+// distinction explicit, and the one rule that matters operationally is that a
+// token which cannot possibly be valid never reaches Telegram at all.
+// ---------------------------------------------------------------------------
+
+export type ChannelState = 'ok' | 'revoked' | 'placeholder' | 'missing' | 'error';
+
+export interface ChannelStatus {
+  kind: 'telegram' | 'headless';
+  state: ChannelState;
+  /** Operator-facing cause for `revoked` / `error`; null otherwise. */
+  lastError: string | null;
+  /** ISO timestamp of the last start attempt; null when the status is derived from config alone. */
+  checkedAt: string | null;
+}
+
+/** Bot tokens are `<numeric bot id>:<secret>`; the secret is 35 chars today, 30 leaves slack. */
+export const TELEGRAM_TOKEN_PATTERN = /^\d{6,}:[A-Za-z0-9_-]{30,}$/;
+
+export type TelegramTokenClass = 'missing' | 'placeholder' | 'shaped';
+
+/**
+ * `missing` is empty/null/undefined, `placeholder` is any other string that
+ * cannot be a token ("empty", "nothing", the bot id), `shaped` is something
+ * only Telegram can judge.
+ */
+export function classifyTelegramToken(token: string | null | undefined): TelegramTokenClass {
+  const trimmed = token?.trim() ?? '';
+  if (trimmed === '') return 'missing';
+  return TELEGRAM_TOKEN_PATTERN.test(trimmed) ? 'shaped' : 'placeholder';
+}
+
+/** A start failure on a real-shaped token: 401 means revoked, everything else is `error`. */
+export function channelStateFromStartFailure(err: unknown): 'revoked' | 'error' {
+  return isTelegramUnauthorizedError(err) ? 'revoked' : 'error';
+}
+
+/**
+ * Status a bot would have without ever being started. Deterministic for
+ * missing/placeholder tokens; undefined for a shaped token, because whether
+ * it is `ok` or `revoked` is Telegram's call.
+ */
+export function channelStatusForUnstartedToken(
+  token: string | null | undefined
+): ChannelStatus | undefined {
+  const cls = classifyTelegramToken(token);
+  if (cls === 'shaped') return undefined;
+  return { kind: 'headless', state: cls, lastError: null, checkedAt: null };
+}
+
+export interface ResolveChannelStartOpts {
+  botId: string;
+  token: string | null | undefined;
+  /** Brings the Telegram side up (getMe, handlers, poller). Only called for a shaped token. */
+  startTelegram: (token: string) => Promise<void>;
+  logger: Pick<import('../logger').Logger, 'info' | 'warn'>;
+  now?: () => Date;
+}
+
+/**
+ * Decide and perform the channel start for one bot. Never throws: a Telegram
+ * failure becomes a headless start with the reason recorded, which is what
+ * the dashboard and the auto-start summary need to show.
+ */
+export async function resolveChannelStart(opts: ResolveChannelStartOpts): Promise<ChannelStatus> {
+  const checkedAt = (opts.now ?? (() => new Date()))().toISOString();
+  const cls = classifyTelegramToken(opts.token);
+
+  if (cls !== 'shaped') {
+    opts.logger.info(
+      { botId: opts.botId, channelState: cls },
+      `Bot ${opts.botId} starting headless (no Telegram token)`
+    );
+    return { kind: 'headless', state: cls, lastError: null, checkedAt };
+  }
+
+  try {
+    await opts.startTelegram((opts.token as string).trim());
+    return { kind: 'telegram', state: 'ok', lastError: null, checkedAt };
+  } catch (err) {
+    // Every non-401 failure used to be reported as "token invalid", which
+    // sends the operator to rotate a perfectly good token. That matters more
+    // now that this path runs unattended at boot, when the most likely causes
+    // are a still-running previous instance (409) and an API that is not
+    // reachable yet.
+    const state = channelStateFromStartFailure(err);
+    const lastError = describeTelegramStartFailure(err);
+    opts.logger.warn(
+      { err, botId: opts.botId, channelState: state },
+      `Telegram start failed — falling back to headless mode. ${lastError}`
+    );
+    return { kind: 'headless', state, lastError, checkedAt };
+  }
+}

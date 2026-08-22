@@ -33,6 +33,13 @@ import {
   renderSkillEdit,
   renderSkills,
 } from './pages/skills.js';
+import {
+  renderStats,
+  renderStatsBehaviour,
+  renderStatsBot,
+  renderStatsHygiene,
+  renderStatsInfra,
+} from './pages/stats.js';
 import { renderToolRunner } from './pages/tool-runner.js';
 import { renderToolDetail, renderTools } from './pages/tools.js';
 
@@ -88,6 +95,14 @@ const routes = [
   { pattern: /^#\/agents\/([^/]+)\/edit$/, handler: (m) => renderAgentEdit(content, m[1]) },
   { pattern: /^#\/agents\/([^/]+)$/, handler: (m) => renderAgentDetail(content, m[1]) },
   { pattern: /^#\/agents$/, handler: () => renderAgents(content) },
+  {
+    pattern: /^#\/stats\/bot\/([^/]+)$/,
+    handler: (m) => renderStatsBot(content, decodeURIComponent(m[1])),
+  },
+  { pattern: /^#\/stats\/behaviour$/, handler: () => renderStatsBehaviour(content) },
+  { pattern: /^#\/stats\/infra$/, handler: () => renderStatsInfra(content) },
+  { pattern: /^#\/stats\/hygiene$/, handler: () => renderStatsHygiene(content) },
+  { pattern: /^#\/stats$/, handler: () => renderStats(content) },
   {
     pattern: /^#\/sessions\/(.+)$/,
     handler: (m) => renderSessionTranscript(content, decodeURIComponent(m[1])),

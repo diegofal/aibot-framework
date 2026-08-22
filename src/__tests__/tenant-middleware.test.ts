@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Hono } from 'hono';
 import {
+  type TenantContext,
   createQuotaCheckMiddleware,
   createTenantAuthMiddleware,
   createUsageMiddleware,
@@ -73,7 +74,8 @@ describe('tenant auth middleware edge cases', () => {
 
   function buildApp(tenants: Record<string, any> = {}, sessionStore?: SessionStore) {
     const tm = createMockTenantManager(tenants);
-    const app = new Hono();
+    // createTenantAuthMiddleware sets 'tenant' on the context.
+    const app = new Hono<{ Variables: { tenant: TenantContext } }>();
     app.use('/api/*', createTenantAuthMiddleware(tm as any, mockLogger as any, sessionStore));
     app.get('/api/test', (c) => {
       const tenant = c.get('tenant');

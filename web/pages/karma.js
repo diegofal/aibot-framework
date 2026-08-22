@@ -12,10 +12,56 @@ function sourceBadge(source) {
       ? 'badge-disabled'
       : source === 'feedback'
         ? 'eval-badge-approved'
-        : source === 'production'
+        : source === 'production' || source === 'engagement'
           ? 'badge-ok'
-          : 'badge-disabled';
+          : source === 'tool'
+            ? 'badge-error'
+            : 'badge-disabled';
   return `<span class="badge ${cls}">${escapeHtml(source)}</span>`;
+}
+
+function signedDelta(n) {
+  const color = n > 0 ? 'var(--green)' : n < 0 ? 'var(--red)' : 'var(--text-dim)';
+  const sign = n > 0 ? '+' : '';
+  return `<span style="font-weight:600;color:${color};font-family:monospace">${sign}${n}</span>`;
+}
+
+/**
+ * "What the score is made of" — raw delta sums over the last N days grouped by
+ * source and by outcome kind. Activity-only karma shows up as a single
+ * agent-loop row; outcome-based karma spreads across production/engagement.
+ */
+function breakdownTable(breakdown) {
+  if (!breakdown) return '';
+  const sources = Object.entries(breakdown.bySource || {}).sort((a, b) => b[1] - a[1]);
+  const kinds = Object.entries(breakdown.byKind || {}).sort((a, b) => b[1] - a[1]);
+  if (sources.length === 0) {
+    return `<p class="text-dim text-sm">No events in the last ${breakdown.windowDays} days.</p>`;
+  }
+  const sourceRows = sources
+    .map(([src, sum]) => `<tr><td>${sourceBadge(src)}</td><td>${signedDelta(sum)}</td></tr>`)
+    .join('');
+  const kindRows = kinds
+    .map(
+      ([kind, sum]) =>
+        `<tr><td class="text-sm">${escapeHtml(kind)}</td><td>${signedDelta(sum)}</td></tr>`
+    )
+    .join('');
+  return `
+    <div style="display:flex;gap:24px;flex-wrap:wrap">
+      <table style="flex:1;min-width:200px">
+        <thead><tr><th>Source</th><th>Δ</th></tr></thead>
+        <tbody>${sourceRows}</tbody>
+      </table>
+      ${
+        kinds.length > 0
+          ? `<table style="flex:1;min-width:200px">
+        <thead><tr><th>Outcome</th><th>Δ</th></tr></thead>
+        <tbody>${kindRows}</tbody>
+      </table>`
+          : ''
+      }
+    </div>`;
 }
 
 function scoreColor(score) {
@@ -123,6 +169,8 @@ export async function renderBotKarma(el, botId) {
           <div>${trendBadge(scoreData.trend)}</div>
         </div>
       </div>
+      <div style="font-weight:600;margin-bottom:8px">Score composition <span class="text-dim text-sm">(last ${scoreData.breakdown?.windowDays ?? 30} days, raw deltas)</span></div>
+      ${breakdownTable(scoreData.breakdown)}
     </div>
 
     <div class="detail-card mb-16">

@@ -291,7 +291,8 @@ describe('admin-middleware security edge cases', () => {
     process.env.ADMIN_API_KEY = 'correct-key';
     const spyLogger = {
       info: () => {},
-      warn: mock(() => {}),
+      // Typed args so mock.calls is a tuple carrying the logged object below.
+      warn: mock((_obj: { tokenPrefix: string }, _msg?: string) => {}),
       error: mock(() => {}),
       debug: () => {},
       child: () => spyLogger,
@@ -308,9 +309,10 @@ describe('admin-middleware security edge cases', () => {
     expect(spyLogger.warn).toHaveBeenCalledTimes(1);
     // Verify only first 8 chars are logged — never the full key
     const callArgs = spyLogger.warn.mock.calls[0];
-    const loggedObj = callArgs[0];
-    expect(loggedObj.tokenPrefix).toBe('abcdefgh');
-    expect(loggedObj.tokenPrefix.length).toBe(8);
+    expect(callArgs).toBeDefined();
+    const loggedObj = callArgs?.[0];
+    expect(loggedObj?.tokenPrefix).toBe('abcdefgh');
+    expect(loggedObj?.tokenPrefix.length).toBe(8);
   });
 
   it('does NOT call logger.warn for missing/malformed headers (only for actual key mismatch)', async () => {

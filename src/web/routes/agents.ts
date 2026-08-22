@@ -30,6 +30,14 @@ export function agentsRoutes(deps: {
     return bot;
   }
 
+  /**
+   * Channel outcome for the dashboard. Optional-called because route tests
+   * stub BotManager with only the methods they exercise.
+   */
+  function channelOf(botId: string) {
+    return deps.botManager.getChannelState?.(botId) ?? null;
+  }
+
   // List all agents
   app.get('/', (c) => {
     const tenantId = getTenantId(c);
@@ -37,6 +45,7 @@ export function agentsRoutes(deps: {
       ...bot,
       token: maskToken(bot.token),
       running: deps.botManager.isRunning(bot.id),
+      channel: channelOf(bot.id),
     }));
     return c.json(agents);
   });
@@ -87,6 +96,7 @@ export function agentsRoutes(deps: {
       ...bot,
       token: maskToken(bot.token),
       running: deps.botManager.isRunning(bot.id),
+      channel: channelOf(bot.id),
     });
   });
 
@@ -117,6 +127,11 @@ export function agentsRoutes(deps: {
       token: body.token ?? '',
       enabled: body.enabled ?? false,
       skills,
+      // Required on BotConfig (Zod `.default()`); previously omitted here, so a
+      // freshly created agent had them undefined in memory until the next config
+      // reload filled the same defaults in.
+      disabledSkills: body.disabledSkills ?? [],
+      plan: body.plan ?? 'free',
       allowedUsers: body.allowedUsers,
       mentionPatterns: body.mentionPatterns,
       model: body.model,

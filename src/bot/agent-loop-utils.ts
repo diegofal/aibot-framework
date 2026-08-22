@@ -154,46 +154,309 @@ export function computeActionDiversity(recentActions: RecentAction[]): ActionDiv
 
 export interface UnconsumedOutputResult {
   outputCount: number;
+  /** Human signals supplied by the caller (see `countFeedbackSignals`) */
   feedbackCount: number;
+  /** Same value as `feedbackCount` — kept for callers reading the raw input */
+  externalFeedbackCount: number;
   ratio: number;
   gateTriggered: boolean;
+  /** Where `outputCount` came from */
+  outputSource: 'durable' | 'recent-actions';
+}
+
+/** An outcome-ledger entry, reduced to what the gate needs. */
+export interface DurableOutputEntry {
+  timestamp: number;
+  type: ActionType;
+}
+
+/** A production changelog entry, reduced to what the gate needs. */
+export interface ProductionOutputEntry {
+  timestamp: string;
+  action: string;
 }
 
 /**
- * Count outputs produced vs feedback received in recent actions.
+ * Outputs (CONTENT / OUTREACH productions) recorded strictly after `sinceTs`.
+ * Pure over the outcome ledger's persisted shape — the ledger survives
+ * container restarts, unlike the in-memory recent-actions window.
+ */
+export function countOutputsSince(entries: DurableOutputEntry[], sinceTs: number): number {
+  let n = 0;
+  for (const e of entries) {
+    if (!Number.isFinite(e.timestamp) || e.timestamp <= sinceTs) continue;
+    if (e.type === 'CONTENT' || e.type === 'OUTREACH') n++;
+  }
+  return n;
+}
+
+/** Production changelog `create` / `edit` entries recorded strictly after `sinceTs`. */
+export function countProductionOutputsSince(
+  entries: ProductionOutputEntry[],
+  sinceTs: number
+): number {
+  let n = 0;
+  for (const e of entries) {
+    if (e.action !== 'create' && e.action !== 'edit') continue;
+    const t = toMs(e.timestamp);
+    if (Number.isFinite(t) && t > sinceTs) n++;
+  }
+  return n;
+}
+
+/**
+ * Durable output count for the engagement gate: the outcome ledger is the
+ * primary source; the production changelog covers bots whose ledger is not
+ * wired (or was reset) so the gate never silently reads zero.
+ */
+export function resolveDurableOutputCount(
+  sources: {
+    outcomeEntries?: DurableOutputEntry[];
+    productionEntries?: ProductionOutputEntry[];
+  },
+  sinceTs: number
+): number {
+  const fromLedger = countOutputsSince(sources.outcomeEntries ?? [], sinceTs);
+  if (fromLedger > 0) return fromLedger;
+  return countProductionOutputsSince(sources.productionEntries ?? [], sinceTs);
+}
+
+/**
+ * Count outputs produced vs human feedback received.
+ *
+ * `durableOutputCount` — outputs counted from the outcome ledger / production
+ * changelog since the last human signal — is authoritative when supplied: the
+ * `recentActions` window is in-memory and resets on every restart, which made
+ * the gate inert in production. The window count is only a fallback for
+ * callers that have no durable source (the planner digest, tests).
+ *
+ * `externalFeedbackCount` carries the human signals the action log cannot see —
+ * production approvals/rejections, answered ask_human questions, human inbound
+ * messages (see `countFeedbackSignals`). It is the *only* feedback source: a
+ * plan summary that merely mentions "feedback", and an ASSESSMENT the bot
+ * performs on itself, are not feedback from anyone.
  */
 export function detectUnconsumedOutput(
   recentActions: RecentAction[],
-  threshold = 5
+  threshold = 5,
+  externalFeedbackCount = 0,
+  durableOutputCount?: number
 ): UnconsumedOutputResult {
-  let outputCount = 0;
-  let feedbackCount = 0;
-
+  let windowOutputCount = 0;
   for (const action of recentActions) {
     const type = classifyAction(action.planSummary);
-    if (type === 'CONTENT' || type === 'OUTREACH') {
-      outputCount++;
-    }
-    // Detect feedback signals: responses received, confirmations, assessments with results
-    const s = action.planSummary.toLowerCase();
-    if (
-      /\b(received|confirmed|responded|feedback|approved|denied|answer)\w*/i.test(s) ||
-      type === 'ASSESSMENT'
-    ) {
-      feedbackCount++;
-    }
+    if (type === 'CONTENT' || type === 'OUTREACH') windowOutputCount++;
   }
+
+  const useDurable = durableOutputCount !== undefined;
+  const outputCount = useDurable ? durableOutputCount : windowOutputCount;
+  const feedbackCount = externalFeedbackCount;
 
   const ratio = outputCount / Math.max(feedbackCount, 1);
   const gateTriggered = outputCount >= threshold && feedbackCount === 0;
 
-  return { outputCount, feedbackCount, ratio, gateTriggered };
+  return {
+    outputCount,
+    feedbackCount,
+    externalFeedbackCount,
+    ratio,
+    gateTriggered,
+    outputSource: useDurable ? 'durable' : 'recent-actions',
+  };
+}
+
+// ── Human feedback signals ──
+
+/**
+ * Hook event fired by `ConversationPipeline.handleChannelMessage()` once per
+ * genuine human message on any channel (REST, web/WebSocket, WhatsApp,
+ * Discord…). `AgentScheduler` listens for it and records the engagement-gate
+ * feedback event, which is how non-Telegram humans earn `humanReply` karma.
+ *
+ * The Telegram message-buffer path deliberately does NOT emit this — it
+ * already records the same signal through `requestImmediateRun()`, and
+ * emitting here too would double-count it.
+ *
+ * Carried on the shared `HookEmitter` (it extends EventEmitter, so the
+ * framework's own signals do not need a slot in the public `HookEvents` map).
+ */
+export const HUMAN_INBOUND_HOOK = 'human_inbound';
+
+export interface HumanInboundEvent {
+  botId: string;
+  channelKind: string;
+  chatId: string;
+  userId?: string;
+  timestamp: number;
+}
+
+export type FeedbackSource = 'ask_human' | 'agent_feedback' | 'human_message';
+
+/** A human signal recorded on the bot's schedule (the stores it comes from are consumed destructively). */
+export interface FeedbackEvent {
+  timestamp: number;
+  source: FeedbackSource;
+}
+
+export interface FeedbackSignals {
+  total: number;
+  /** Production changelog entries approved or rejected by the operator */
+  productionEvaluations: number;
+  /** ask_human questions that received an answer */
+  askHumanAnswers: number;
+  /** Dashboard agent-feedback entries processed */
+  agentFeedback: number;
+  /** Human inbound messages (channels + dashboard conversations) */
+  humanMessages: number;
+  /**
+   * Timestamp (ms) of the most recent human signal in the window, or null when
+   * none was found. The engagement gate anchors its output count here:
+   * everything produced after the last human signal is unconsumed.
+   */
+  lastFeedbackAt: number | null;
+}
+
+export interface FeedbackSignalDeps {
+  productionsService?: {
+    getChangelog: (
+      botId: string,
+      opts?: { limit?: number; since?: string }
+    ) => Array<{ evaluation?: { status?: string; evaluatedAt?: string } }>;
+  };
+  conversationsService?: {
+    listConversations: (
+      botId: string,
+      opts?: { limit?: number }
+    ) => Array<{
+      id: string;
+      updatedAt: string;
+    }>;
+    getMessages: (
+      botId: string,
+      conversationId: string,
+      opts?: { limit?: number }
+    ) => Array<{ role: string; createdAt: string }>;
+  };
+  feedbackEvents?: FeedbackEvent[];
+}
+
+const toMs = (iso: string | undefined): number => (iso ? new Date(iso).getTime() : Number.NaN);
+
+/**
+ * Count human feedback received since `sinceTs` from every source the
+ * framework has: production evaluations (changelog), schedule-recorded events
+ * (ask_human answers, agent feedback, channel messages) and human-role
+ * messages in dashboard conversations. Every source is best-effort — a failing
+ * service contributes zero rather than breaking the cycle.
+ */
+export function countFeedbackSignals(
+  deps: FeedbackSignalDeps,
+  botId: string,
+  sinceTs: number
+): FeedbackSignals {
+  const signals: FeedbackSignals = {
+    total: 0,
+    productionEvaluations: 0,
+    askHumanAnswers: 0,
+    agentFeedback: 0,
+    humanMessages: 0,
+    lastFeedbackAt: null,
+  };
+
+  const seen = (ts: number): void => {
+    if (!Number.isFinite(ts)) return;
+    if (signals.lastFeedbackAt === null || ts > signals.lastFeedbackAt) signals.lastFeedbackAt = ts;
+  };
+
+  try {
+    const entries = deps.productionsService?.getChangelog(botId, { limit: 500 }) ?? [];
+    for (const entry of entries) {
+      const ev = entry.evaluation;
+      if (!ev || (ev.status !== 'approved' && ev.status !== 'rejected')) continue;
+      const ts = toMs(ev.evaluatedAt);
+      if (ts >= sinceTs) {
+        signals.productionEvaluations++;
+        seen(ts);
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+
+  for (const event of deps.feedbackEvents ?? []) {
+    if (event.timestamp < sinceTs) continue;
+    if (event.source === 'ask_human') signals.askHumanAnswers++;
+    else if (event.source === 'agent_feedback') signals.agentFeedback++;
+    else signals.humanMessages++;
+    seen(event.timestamp);
+  }
+
+  try {
+    const convos = deps.conversationsService?.listConversations(botId, { limit: 100 }) ?? [];
+    for (const convo of convos) {
+      if (toMs(convo.updatedAt) < sinceTs) continue;
+      const messages =
+        deps.conversationsService?.getMessages(botId, convo.id, { limit: 200 }) ?? [];
+      for (const msg of messages) {
+        const ts = toMs(msg.createdAt);
+        if (msg.role === 'human' && ts >= sinceTs) {
+          signals.humanMessages++;
+          seen(ts);
+        }
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+
+  signals.total =
+    signals.productionEvaluations +
+    signals.askHumanAnswers +
+    signals.agentFeedback +
+    signals.humanMessages;
+  return signals;
+}
+
+// ── Engagement gate enforcement ──
+
+export interface EngagementGateDecision {
+  blocked: boolean;
+  actionType: ActionType;
+  /** Canonical cycle summary when blocked */
+  summary?: string;
+}
+
+/**
+ * Hard-mode enforcement: when the gate is triggered and the planner still
+ * returns a CONTENT plan, the cycle is downgraded to idle. OUTREACH,
+ * ASSESSMENT, RESEARCH and MAINTENANCE plans pass — they are how the bot earns
+ * feedback. Soft mode only annotates the prompt and never blocks.
+ */
+export function evaluateEngagementGate(params: {
+  plan: string[];
+  engagement: Pick<UnconsumedOutputResult, 'gateTriggered' | 'outputCount' | 'feedbackCount'>;
+  mode: 'soft' | 'hard';
+  enabled: boolean;
+}): EngagementGateDecision {
+  const actionType = classifyAction(params.plan.join('; ').slice(0, 200));
+  if (!params.enabled || params.mode !== 'hard' || !params.engagement.gateTriggered) {
+    return { blocked: false, actionType };
+  }
+  if (actionType !== 'CONTENT') return { blocked: false, actionType };
+  return {
+    blocked: true,
+    actionType,
+    summary: `Engagement gate: content blocked until feedback (${params.engagement.outputCount} outputs, ${params.engagement.feedbackCount} feedback)`,
+  };
 }
 
 /**
  * Build a digest of recent actions for the planner to detect repetition.
  */
-export function buildRecentActionsDigest(recentActions: RecentAction[]): string | null {
+export function buildRecentActionsDigest(
+  recentActions: RecentAction[],
+  opts?: { externalFeedbackCount?: number; durableOutputCount?: number }
+): string | null {
   if (recentActions.length === 0) return null;
 
   const now = Date.now();
@@ -245,7 +508,12 @@ export function buildRecentActionsDigest(recentActions: RecentAction[]): string 
     );
   }
 
-  const engagement = detectUnconsumedOutput(recentActions);
+  const engagement = detectUnconsumedOutput(
+    recentActions,
+    5,
+    opts?.externalFeedbackCount ?? 0,
+    opts?.durableOutputCount
+  );
   if (engagement.gateTriggered) {
     lines.push(
       `⚠️ ENGAGEMENT GAP — ${engagement.outputCount} outputs produced, ${engagement.feedbackCount} feedback received. Production without feedback is waste. Prioritize ASSESSMENT or OUTREACH.`
@@ -371,4 +639,24 @@ export async function sendReport(
   } catch (err) {
     ctx.getBotLogger(botId).warn({ err, chatId }, 'Agent loop: failed to send report');
   }
+}
+
+/**
+ * How long an identical agent-loop error is suppressed from a bot's daily
+ * memory. The circuit breaker already collapses CONTEXTUAL (quota) outages;
+ * this covers the rest — notably a PERMANENT auth failure, which deliberately
+ * does not open the circuit but does recur on every cycle until an operator
+ * fixes the credential.
+ */
+export const ERROR_MEMO_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/** Whether this error should be appended to the bot's daily memory. */
+export function shouldRecordErrorInMemory(
+  last: { message: string; at: number } | undefined,
+  message: string,
+  now: number,
+  windowMs: number = ERROR_MEMO_WINDOW_MS
+): boolean {
+  if (!last || last.message !== message) return true;
+  return now - last.at >= windowMs;
 }

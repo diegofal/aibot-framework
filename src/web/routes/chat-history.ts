@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import type { SessionManager } from '../../session';
+import { getTenantId, isBotAccessible } from '../../tenant/tenant-scoping';
 
 export interface ChatHistoryRouteDeps {
   config: Config;
@@ -15,6 +16,9 @@ export interface ChatHistoryRouteDeps {
 
 export function chatHistoryRoutes(deps: ChatHistoryRouteDeps) {
   const { config, sessionManager, logger } = deps;
+  // NOTE: nothing currently calls c.set('tenantId', …) — the tenant auth middleware
+  // sets 'tenant' (a TenantContext). Declared here so the existing read type-checks;
+  // see the tenant-scoping note in the handler below.
   const app = new Hono();
 
   app.get('/:botId/history', (c) => {
@@ -35,8 +39,8 @@ export function chatHistoryRoutes(deps: ChatHistoryRouteDeps) {
 
     // In multi-tenant mode, verify bot belongs to this tenant
     if (config.multiTenant?.enabled && botConfig.tenantId) {
-      const tenantId = c.get('tenantId') as string | undefined;
-      if (tenantId && botConfig.tenantId !== tenantId) {
+      // See chat.ts: `tenantId` is never set on the context; `tenant` is.
+      if (!isBotAccessible(botConfig, getTenantId(c))) {
         return c.json({ error: 'Bot not found' }, 404);
       }
     }

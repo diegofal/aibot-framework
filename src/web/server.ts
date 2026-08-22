@@ -24,6 +24,8 @@ import { safeCompare } from '../crypto-utils';
 import type { Logger } from '../logger';
 import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
+import { resolveStatsDirs } from '../stats/paths';
+import { readToolEntries } from '../stats/readers/tool-audit';
 import { AdminCredentialStore } from '../tenant/admin-credentials';
 import { createAdminAuthMiddleware } from '../tenant/admin-middleware';
 import { createAuthRateLimitMiddleware } from '../tenant/auth-rate-limiter';
@@ -52,6 +54,7 @@ import { conversationsRoutes } from './routes/conversations';
 import { cronRoutes } from './routes/cron';
 import { dashboardRoutes } from './routes/dashboard';
 import { filesRoutes } from './routes/files';
+import { hygieneRoutes } from './routes/hygiene';
 import { integrationsRoutes } from './routes/integrations';
 import { karmaRoutes } from './routes/karma';
 import { mcpRoutes } from './routes/mcp';
@@ -62,6 +65,7 @@ import { sessionsRoutes } from './routes/sessions';
 import { settingsRoutes } from './routes/settings';
 import { skillCommandRoutes } from './routes/skill-commands';
 import { skillsRoutes } from './routes/skills';
+import { statsRoutes } from './routes/stats';
 import { statusRoutes } from './routes/status';
 import { systemExportRoutes } from './routes/system-export';
 import { tenantConfigRoutes } from './routes/tenant-config';
@@ -305,6 +309,40 @@ export function startWebServer(deps: WebServerDeps): void {
   if (karmaService) {
     app.route('/api/karma', karmaRoutes({ karmaService, config, logger }));
   }
+
+  // Stats & Behaviour: read-only aggregations over the on-disk telemetry
+  // (llm-query-log, tool-audit, outcome ledger, karma, schedules, souls, logs).
+  app.route(
+    '/api/stats',
+    statsRoutes({
+      config,
+      botManager: deps.botManager,
+      logger,
+      karmaService: karmaService ?? undefined,
+    })
+  );
+
+  // Hygiene routines (goal-lint, soul-structure, memory-hygiene, productions-triage,
+  // data-cleanup). Preview is side-effect free; apply backs up every soul file it
+  // touches and moves (never deletes) anything it cleans up.
+  const statsDirs = resolveStatsDirs(config);
+  app.route(
+    '/api/hygiene',
+    hygieneRoutes({
+      config,
+      logger,
+      botManager: deps.botManager,
+      // memory-hygiene flags "tool X unavailable" notes as stale only when the
+      // tool-audit shows the tool actually succeeding in the last 7 days.
+      toolSucceededRecently: (botId, toolName) => {
+        const now = Date.now();
+        return readToolEntries(statsDirs.toolAudit, botId, now - 7 * 86_400_000, now).some(
+          (e) => e.toolName === toolName && e.success
+        );
+      },
+      channelStateOf: (botId) => deps.botManager.getChannelState(botId)?.state,
+    })
+  );
 
   // Conversations routes (use shared ConversationsService from BotManager)
   const conversationsService = deps.botManager.getConversationsService();

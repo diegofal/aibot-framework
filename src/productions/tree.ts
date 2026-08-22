@@ -105,7 +105,7 @@ export function buildEntryMap(dir: string): Map<string, ProductionEntry> {
   const entries = readEntriesPure(changelogPath);
   const map = new Map<string, ProductionEntry>();
   for (const entry of entries) {
-    if (isAbsolute(entry.path)) continue;
+    if (typeof entry.path !== 'string' || isAbsolute(entry.path)) continue;
     map.set(entry.path, entry);
   }
   return map;
