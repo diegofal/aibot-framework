@@ -564,6 +564,12 @@
             </tr>
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/cron/rerun-failed</code></td>
+              <td>Force-run every enabled job whose last run errored (tenant-scoped). Registered before <code>/:id/run</code> so the literal path isn't read as an id.</td>
+              <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/cron/:id/run</code></td>
               <td>Force-run a cron job immediately</td>
               <td><code>cron.ts</code></td>
@@ -1016,7 +1022,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/stats/bots/:botId?window=</code></td>
-              <td><code>BotDetailResponse</code> = <code>FleetBotStats</code> + <code>goalsDetail[]</code>, <code>traitHistory[]</code>, <code>recentCycles</code>, <code>llmDaily[]</code>, <code>toolsDaily[]</code>, <code>asks[]</code> (title, chars, inbox status, answered at) and <code>topErrors[]</code>. 404 when the bot is not visible to the tenant.</td>
+              <td><code>BotDetailResponse</code> = <code>FleetBotStats</code> + <code>goalsDetail[]</code> (<code>GoalDetail</code>: <code>text</code> is the title field &mdash; not <code>title</code>; <code>notes</code> is the real text, <code>null</code> when absent, alongside <code>notesLength</code>), <code>traitHistory[]</code>, <code>recentCycles</code>, <code>llmDaily[]</code>, <code>toolsDaily[]</code>, <code>asks[]</code> (title, chars, inbox status, answered at) and <code>topErrors[]</code>. 404 when the bot is not visible to the tenant.</td>
               <td><code>stats.ts</code></td>
             </tr>
             <tr>
@@ -1439,7 +1445,10 @@ compaction                            // Context compaction
              24h / 7d / 30d window selector persisted in <code>localStorage</code>:
              <code>#/stats</code> (Fleet &mdash; one row per bot with posture, channel state, backend,
              LLM/tool/output/engagement/goals/karma columns and sparklines, sortable),
-             <code>#/stats/bot/:botId</code> (goal detail, trait history and drift, recent cycles,
+             <code>#/stats/bot/:botId</code> (goal detail via <code>goalsBoard()</code> in
+             <code>stats-helpers.js</code> &mdash; grouped by status, priority chip, completion
+             date, truncated notes/outcome preview, hygiene flags for archived-in-active/
+             duplicate/oversized goals; trait history and drift, recent cycles,
              daily LLM/tool series, asks, top errors, plus a hygiene panel that previews/applies
              routines for that bot), <code>#/stats/behaviour</code> (production without feedback,
              ask economics, collaboration graph, mesh output, trait variance / drift vector),
@@ -1461,7 +1470,9 @@ compaction                            // Context compaction
           <h3>Cron Jobs</h3>
           <p>Scheduled task management: create, edit, enable/disable, force-run, and
              delete cron jobs. View run history with timestamps and results. Supports
-             selective log entry deletion.</p>
+             selective log entry deletion. A "Re-run failed (N)" button appears whenever
+             any enabled job's last run errored, and bulk-retries all of them via
+             <code>POST /api/cron/rerun-failed</code>.</p>
         </div>
 
         <div class="card">

@@ -284,7 +284,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>claudeCli</code></td>
               <td><code>ClaudeCliConfigSchema</code></td>
               <td>No (defaults)</td>
-              <td>Claude CLI backend: <code>enabled</code> (failover-chain membership), <code>model</code></td>
+              <td>Claude CLI backend: <code>enabled</code> (failover-chain membership), <code>model</code> (dropdown in Settings, options from <code>CLAUDE_CLI_MODEL_OPTIONS</code> in <code>src/claude-cli.ts</code> — the same aliases <code>--model</code> accepts, plus an empty "CLI default"; governs every claude-cli call fleet-wide, not just soul generation), <code>crossBackendFallback</code></td>
             </tr>
             <tr>
               <td><code>improve</code></td>
