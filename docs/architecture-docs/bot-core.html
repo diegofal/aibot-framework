@@ -175,6 +175,16 @@
           <code>cron-</code>-prefixed message ids and blank text all emit nothing. The event rides the raw
           <code>EventEmitter</code>, not the typed <code>HookEvents</code> map.
         </p>
+        <p>
+          <span class="badge badge-yellow">2026-08-24</span> The first <code>channel.showTyping()</code>
+          call in <code>handleChannelMessage()</code> is wrapped in the same ignore-errors try/catch as
+          the interval's repeated calls. It used to sit outside that guard: a delivery target the
+          channel has no access to (e.g. a cron reply routed through another bot's Telegram connection,
+          to a chat id that returns "chat not found") threw before the LLM was ever invoked, aborted the
+          whole handler, and surfaced as the generic fallback string — which a caller like
+          <code>handleCronInstruction()</code> then recorded as a normal, successful return value. A
+          typing indicator is cosmetic and must never abort message generation.
+        </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">
           <li><code>ConversationPipeline</code></li>

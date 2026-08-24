@@ -1461,4 +1461,45 @@ describe('ConversationPipeline', () => {
       expect(seen).toHaveLength(0);
     });
   });
+
+  describe('a failing typing indicator must not abort the reply', () => {
+    // Live bug: a cron-originated instruction delivered through another bot's
+    // Telegram instance (buildCronDelivery's fleet fallback) hit a chat id the
+    // fleet had no access to. channel.showTyping() threw "chat not found" —
+    // and because the very first showTyping() call sat *outside* the
+    // try/catch that already protects the interval's repeated calls, it
+    // aborted handleChannelMessage before the LLM was ever invoked. The
+    // handler's outer catch then returned the generic fallback string as a
+    // normal return value, which the cron layer recorded as `status: ok` —
+    // three consecutive days of a real failure reported as healthy.
+    it('still generates and sends a real reply when the first showTyping() call rejects', async () => {
+      const sendText = jest.fn().mockResolvedValue(undefined);
+      const channel = {
+        kind: 'telegram' as const,
+        sendText,
+        showTyping: jest.fn().mockRejectedValue(new Error('Bad Request: chat not found')),
+      };
+      const msg = {
+        messageId: 'cron-1',
+        channelKind: 'telegram' as const,
+        text: 'DAILY MAINTENANCE CHECK',
+        chatId: '-1002672545061',
+        chatType: 'private' as const,
+        sender: { id: 'Cron', firstName: 'Cron' },
+        timestamp: Date.now(),
+      };
+
+      const reply = await pipeline.handleChannelMessage(
+        msg as any,
+        channel as any,
+        createMockBotConfig(),
+        'user:-1002672545061'
+      );
+
+      expect(reply).not.toContain('Failed to generate response');
+      expect(sendText).toHaveBeenCalled();
+      const sentText = sendText.mock.calls[0][0];
+      expect(sentText).not.toContain('Failed to generate response');
+    });
+  });
 });

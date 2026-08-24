@@ -1311,16 +1311,22 @@
         <li><strong>Upgrade</strong> &mdash; <code>Bun.serve</code>'s <code>fetch</code> handler intercepts
             requests to <code>/ws/logs</code> and upgrades them to WebSocket connections.
             All other requests are delegated to the Hono app.</li>
-        <li><strong>History</strong> &mdash; On connect, the last 100 lines of the log file are parsed
-            from disk and sent as a <code>{ type: "history", lines: [...] }</code> message so the
-            client can render a backlog immediately.</li>
-        <li><strong>Live streaming</strong> &mdash; The server uses <code>fs.watch()</code> on the log file
-            (configurable via <code>config.logging.file</code>, defaults to <code>./data/logs/aibot.log</code>).
-            When new bytes are appended, they are read using a tracked file offset, parsed as
-            JSON-lines, and broadcast to all connected clients as
+        <li><strong>History</strong> &mdash; On connect, the last 100 lines are read via
+            <code>readLastLinesRotationAware()</code> (<code>src/web/log-tail.ts</code>) and sent as a
+            <code>{ type: "history", lines: [...] }</code> message so the client can render a backlog
+            immediately.</li>
+        <li><strong>Live streaming</strong> &mdash; The server uses <code>fs.watch()</code> on the log
+            <em>directory</em> (not the fixed file), because pino-roll rotates by writing to numbered
+            siblings (<code>aibot.log.1</code>, <code>.2</code>, …) and stops touching the bare
+            <code>config.logging.file</code> path after the first rotation — a single-file watch would
+            silently go stale forever. On every directory event, <code>pollLogTail()</code> re-resolves
+            whichever file is currently newest by mtime (<code>resolveActiveLogFile()</code>), reads any
+            bytes appended since the last poll, parses them as JSON-lines and broadcasts
             <code>{ type: "logs", lines: [...] }</code>.</li>
-        <li><strong>Rotation handling</strong> &mdash; If the file size shrinks (log rotation or truncation),
-            the offset resets to 0 so the new file contents are picked up from the beginning.</li>
+        <li><strong>Rotation handling</strong> &mdash; When the resolved active file changes (rotation),
+            tailing resumes from the <em>end</em> of the new file — it never replays a rotated file's
+            pre-existing content, since the connect-time history already covers recent lines. If the
+            active file shrinks in place (truncation), the offset resets to 0.</li>
         <li><strong>Cleanup</strong> &mdash; Closed WebSocket connections are removed from the client set.
             Failed sends also trigger client removal.</li>
       </ol>

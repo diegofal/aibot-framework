@@ -191,6 +191,15 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     };
   }
 
+  if (patch.kind === 'instruction' && existing.kind === 'instruction') {
+    return {
+      kind: 'instruction',
+      text: typeof patch.text === 'string' ? patch.text : existing.text,
+      chatId: typeof patch.chatId === 'number' ? patch.chatId : existing.chatId,
+      botId: typeof patch.botId === 'string' ? patch.botId : existing.botId,
+    };
+  }
+
   return existing;
 }
 
@@ -225,6 +234,19 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     if (patch.claudePath) result.claudePath = patch.claudePath;
     if (patch.claudeTimeout) result.claudeTimeout = patch.claudeTimeout;
     return result;
+  }
+
+  if (patch.kind === 'instruction') {
+    if (typeof patch.text !== 'string' || !patch.text) {
+      throw new Error('cron: instruction payload requires text');
+    }
+    if (typeof patch.chatId !== 'number') {
+      throw new Error('cron: instruction payload requires chatId');
+    }
+    if (typeof patch.botId !== 'string' || !patch.botId) {
+      throw new Error('cron: instruction payload requires botId');
+    }
+    return { kind: 'instruction', text: patch.text, chatId: patch.chatId, botId: patch.botId };
   }
 
   throw new Error(`cron: unknown payload kind: ${(patch as any).kind}`);

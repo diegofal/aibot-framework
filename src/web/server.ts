@@ -1,14 +1,5 @@
-import {
-  closeSync,
-  existsSync,
-  fstatSync,
-  openSync,
-  readFileSync,
-  readSync,
-  statSync,
-  watch,
-} from 'node:fs';
-import { join as joinPath, resolve as resolvePath } from 'node:path';
+import { existsSync, readFileSync, statSync, watch } from 'node:fs';
+import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
@@ -37,6 +28,12 @@ import { RateLimiter } from '../tenant/rate-limiter';
 import { SessionStore } from '../tenant/session-store';
 import { TenantConfigStore } from '../tenant/tenant-config-store';
 import { getTenantId, scopeBots } from '../tenant/tenant-scoping';
+import {
+  type LogTailState,
+  pollLogTail,
+  readAllLogLines,
+  readLastLinesRotationAware,
+} from './log-tail';
 import { agentExportRoutes } from './routes/agent-export';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
 import { agentLoopRoutes } from './routes/agent-loop';
@@ -565,8 +562,7 @@ export function startWebServer(deps: WebServerDeps): void {
     const limit = Math.min(Math.max(1, Number(c.req.query('limit') || '100')), 1000);
     const offset = Math.max(0, Number(c.req.query('offset') || '0'));
     try {
-      const text = readFileSync(logFile, 'utf-8') as string;
-      const allLines = text.trimEnd().split('\n').filter(Boolean);
+      const allLines = readAllLogLines(logFile);
       const total = allLines.length;
       const end = total - offset;
       const start = Math.max(0, end - limit);
@@ -607,25 +603,11 @@ export function startWebServer(deps: WebServerDeps): void {
   const wsClients = new Set<ServerWebSocket<WsData>>();
   const activityClients = new Set<ServerWebSocket<WsData>>();
   const chatClients = new Set<ServerWebSocket<WsData>>();
-  let fileOffset = 0;
-
-  function readLastLines(path: string, maxLines: number): string[] {
-    try {
-      const text = readFileSync(path, 'utf-8') as string;
-      const lines = text.trimEnd().split('\n');
-      return lines.slice(-maxLines);
-    } catch {
-      return [];
-    }
-  }
-
-  function getFileSize(path: string): number {
-    try {
-      return statSync(path).size;
-    } catch {
-      return 0;
-    }
-  }
+  // pino-roll rotates by writing to numbered siblings (aibot.log.1, .2, …) and,
+  // once the first rotation happens, stops touching the bare `logFile` path
+  // forever — so tailing/watching that fixed path goes silent after rotation.
+  // logTailState + pollLogTail() always resolve whichever file is newest.
+  const logTailState: LogTailState = { path: null, offset: 0 };
 
   function broadcast(data: string) {
     for (const ws of wsClients) {
@@ -654,51 +636,35 @@ export function startWebServer(deps: WebServerDeps): void {
     broadcastActivity(JSON.stringify({ type: 'activity', event }));
   });
 
-  // Initialize offset to current file size
-  fileOffset = getFileSize(logFile);
+  // Establish the tail baseline at the current end of whichever file is
+  // active right now — never replay history here (the WS 'history' message
+  // sent on connect already covers the last N lines via
+  // readLastLinesRotationAware).
+  pollLogTail(logFile, logTailState);
 
-  // Watch log file for changes
+  // Watch the log DIRECTORY, not the fixed file path: pino-roll's rotation
+  // means the file actually being appended to changes over time, and a
+  // single-file watch never notices once the original path goes stale.
   try {
-    watch(logFile, () => {
-      try {
-        const fd = openSync(logFile, 'r');
-        const stat = fstatSync(fd);
-        const newSize = stat.size;
-
-        if (newSize <= fileOffset) {
-          // File was truncated/rotated — reset
-          fileOffset = 0;
+    watch(dirname(logFile), () => {
+      const chunk = pollLogTail(logFile, logTailState);
+      if (!chunk) return;
+      const rawLines = chunk.trimEnd().split('\n');
+      const parsed: unknown[] = [];
+      for (const line of rawLines) {
+        if (!line) continue;
+        try {
+          parsed.push(JSON.parse(line));
+        } catch {
+          /* skip malformed */
         }
-
-        if (newSize > fileOffset) {
-          const buf = Buffer.alloc(newSize - fileOffset);
-          readSync(fd, buf, 0, buf.length, fileOffset);
-          fileOffset = newSize;
-          closeSync(fd);
-
-          const chunk = buf.toString('utf-8');
-          const rawLines = chunk.trimEnd().split('\n');
-          const parsed: unknown[] = [];
-          for (const line of rawLines) {
-            if (!line) continue;
-            try {
-              parsed.push(JSON.parse(line));
-            } catch {
-              /* skip malformed */
-            }
-          }
-          if (parsed.length > 0) {
-            broadcast(JSON.stringify({ type: 'logs', lines: parsed }));
-          }
-        } else {
-          closeSync(fd);
-        }
-      } catch {
-        /* ignore read errors */
+      }
+      if (parsed.length > 0) {
+        broadcast(JSON.stringify({ type: 'logs', lines: parsed }));
       }
     });
   } catch {
-    logger.warn('Could not watch log file for live streaming');
+    logger.warn('Could not watch log directory for live streaming');
   }
 
   Bun.serve<WsData>({
@@ -810,7 +776,7 @@ export function startWebServer(deps: WebServerDeps): void {
           wsClients.add(ws);
           logger.debug({ clientCount: wsClients.size }, 'WebSocket logs client connected');
           // Send last 100 lines as history
-          const historyLines = readLastLines(logFile, 100);
+          const historyLines = readLastLinesRotationAware(logFile, 100);
           const parsed: unknown[] = [];
           for (const line of historyLines) {
             try {

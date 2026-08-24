@@ -1008,8 +1008,14 @@ export class ConversationPipeline {
       );
       let currentMessages = compResult.messages;
 
-      // Typing indicator
-      await channel.showTyping();
+      // Typing indicator — cosmetic. A rejection here (e.g. delivering a cron
+      // reply through another bot's Telegram instance, chat inaccessible)
+      // must never abort message generation the way an LLM failure does.
+      try {
+        await channel.showTyping();
+      } catch {
+        // Ignore
+      }
       const typingInterval = setInterval(async () => {
         try {
           await channel.showTyping();
