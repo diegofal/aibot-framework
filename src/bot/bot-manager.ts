@@ -12,6 +12,7 @@ import {
   type LLMClient,
   LLMClientWithFallback,
   createLLMClient,
+  resolveClaudeModel,
 } from '../core/llm-client';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
@@ -25,7 +26,14 @@ import { MessageBuffer } from '../message-buffer';
 import type { OllamaClient } from '../ollama';
 import type { SessionManager } from '../session';
 import { SoulLoader } from '../soul';
-import { type AskHumanDeps, sweepStaleAskHumanQuestions } from '../tools/ask-human';
+import { CuriosityService } from './curiosity/service';
+import {
+  type AskHumanDeps,
+  buildAskHumanAnswerNote,
+  createFleetOperatorNotifier,
+  reconcileAskHumanInbox,
+  sweepStaleAskHumanQuestions,
+} from '../tools/ask-human';
 import type { Tool, ToolDefinition } from '../tools/types';
 
 import { ConversationsService } from '../conversations/service';
@@ -59,6 +67,7 @@ import { HookEmitter } from './hooks';
 import { InlineApprovalStore } from './inline-approval';
 import { LlmQueryLog } from './llm-query-log';
 import { MemoryFlusher } from './memory-flush';
+import { listPresets, presetTemplateId, presetToTemplateConfig } from './presets';
 import { runStartupSoulCheck } from './soul-health-check';
 import { SystemPromptBuilder } from './system-prompt-builder';
 import {
@@ -84,6 +93,7 @@ export class BotManager {
   private tools: Tool[] = [];
   private toolDefinitions: ToolDefinition[] = [];
   private soulLoaders: Map<string, SoulLoader> = new Map();
+  private curiosityService: CuriosityService;
   private botLoggers: Map<string, Logger> = new Map();
   private seenUsers: Map<string, Map<number, Map<number, SeenUser>>> = new Map();
   private handledMessageIds: Set<string> = new Set();
@@ -177,6 +187,14 @@ export class BotManager {
         if (conversationId) {
           this.conversationsService.markInboxStatus(botId, conversationId, 'dismissed');
         }
+      },
+      // Durable copy of every operator answer (web or Telegram): the planner
+      // consumes `answeredQuestions` once, the strategist never sees them, and
+      // a failed cycle after the consume used to lose the answer for good.
+      onAnswer: (answered) => {
+        this.soulLoaders
+          .get(answered.botId)
+          ?.appendDailyMemory(buildAskHumanAnswerNote(answered.question, answered.answer));
       },
     });
 
@@ -316,6 +334,11 @@ export class BotManager {
       userDirectory: this.userDirectory,
       inlineApprovalStore: this.inlineApprovalStore,
       hooks: this.hookEmitter,
+      // Operator chat (Telegram operator chat id) → curiosity directive. Public
+      // users never steer: only operator surfaces call this.
+      recordOperatorMessage: (botId: string, text: string) => {
+        this.curiosityService?.recordOperatorMessage(botId, text);
+      },
 
       getActiveModel: (botId: string) => this.getActiveModel(botId),
       getLLMClient: (botId: string) => this.getLLMClient(botId),
@@ -419,6 +442,35 @@ export class BotManager {
       logger.info({ modules: enabledModules }, 'Evolution modules initialized');
     }
 
+    // Curiosity DNA: every bot gets the knowledge map / navigator / dispatch
+    // state. Soul dir comes from the live loader, else the same resolution
+    // startBot uses, so the dashboard can read a stopped bot too.
+    this.curiosityService = new CuriosityService({
+      getSoulDir: (botId) => {
+        const loader = this.soulLoaders.get(botId);
+        if (loader) return loader.getDir();
+        const bot = this.config.bots.find((b) => b.id === botId);
+        if (!bot) return null;
+        try {
+          return bot.tenantId && this.config.multiTenant?.enabled
+            ? resolveAgentConfigWithTenant(this.config, undefined, bot, bot.tenantId).soulDir
+            : resolveAgentConfig(this.config, bot).soulDir;
+        } catch {
+          return null;
+        }
+      },
+      getCuriosityInputs: (botId) => {
+        const bot = this.config.bots.find((b) => b.id === botId);
+        if (!bot) return null;
+        return {
+          global: this.config.agentLoop.curiosity,
+          bot: bot.agentLoop?.curiosity,
+          curiosityTrait: this.agentLoop.getCuriosityTrait(botId),
+        };
+      },
+    });
+    this.agentLoop.setCuriosityService(this.curiosityService);
+
     // ask_human deps are shared by the tool and by the periodic sweep below: the
     // tool only sweeps the asking bot's questions, so a bot that stops asking
     // would otherwise keep a stale question open forever.
@@ -434,7 +486,16 @@ export class BotManager {
       // Lets ask_human also notify the operator when operator.notifyOnAsk is on
       // — same accessor cron and send_proactive_message already receive.
       getOperator: () => this.config.operator,
+      // Headless bots have no Telegram instance of their own; any live one in
+      // the fleet delivers the ping (the reply lands in the dashboard anyway).
+      notifyOperator: createFleetOperatorNotifier(
+        (botId) => this.bots.get(botId),
+        () => this.bots.values().next().value
+      ),
     };
+    // Inbox asks still `pending` that the store does not hold (pre-persistence
+    // restarts) go back into the store so the sweep and the answer paths see them.
+    reconcileAskHumanInbox(askHumanDeps, logger);
     this.askHumanSweepTimer = setInterval(
       () => sweepStaleAskHumanQuestions(askHumanDeps, logger),
       60 * 60 * 1000
@@ -623,7 +684,9 @@ export class BotManager {
       const llmClient = createLLMClient(
         {
           llmBackend: resolved.llmBackend,
-          claudeModel: this.config.claudeCli?.model,
+          // A bot on claude-cli may pin its own Claude model (bots[].model); the
+          // fleet-wide claudeCli.model is the fallback. Ollama bots ignore this.
+          claudeModel: resolveClaudeModel(config, this.config.claudeCli?.model),
           claudeTimeout: config.agentLoop?.claudeTimeout ?? this.config.agentLoop.claudeTimeout,
           failoverConfig: this.config.failover,
           crossBackendFallback: this.config.claudeCli?.crossBackendFallback,
@@ -1304,6 +1367,19 @@ export class BotManager {
     return this.productionsService;
   }
 
+  /**
+   * A message the operator sent a bot from an operator-only surface (the
+   * authenticated dashboard thread). Becomes a curiosity directive.
+   */
+  recordOperatorMessage(botId: string, text: string): boolean {
+    return this.curiosityService.recordOperatorMessage(botId, text);
+  }
+
+  /** Curiosity DNA state for every bot (knowledge map, navigator, dispatches, taste). */
+  getCuriosityService(): CuriosityService {
+    return this.curiosityService;
+  }
+
   getKarmaService(): KarmaService | undefined {
     return this.karmaService;
   }
@@ -1473,6 +1549,15 @@ export class BotManager {
 
     // Initialize BaaS services when multi-tenant is enabled
     this.templateService = new TemplateService(config.dataDir, this.logger);
+    // The agent presets double as read-only templates for tenants (S7).
+    for (const preset of listPresets()) {
+      this.templateService.registerBuiltin({
+        id: presetTemplateId(preset.id),
+        name: preset.name,
+        description: preset.description,
+        config: presetToTemplateConfig(preset),
+      });
+    }
     this.customizationService = new CustomizationService(config.dataDir, this.logger);
     this.webhookService = new WebhookService(config.dataDir, this.logger);
     this.analyticsService = new AnalyticsService(config.dataDir);

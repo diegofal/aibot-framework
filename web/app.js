@@ -1,6 +1,14 @@
+import { AREAS, areaNav, matchRoute, resolveHash, sidebarLinks } from './nav-routes.js';
 import { destroyActivity, renderActivity } from './pages/activity.js';
+import { destroyAgentHome, renderAgentHome } from './pages/agent-home.js';
 import { renderAgentProposals } from './pages/agent-proposals.js';
-import { renderAgentDetail, renderAgentEdit, renderAgents } from './pages/agents.js';
+import { destroyAgentWizard, renderAgentWizard } from './pages/agent-wizard.js';
+import {
+  destroyAgentDetail,
+  renderAgentDetail,
+  renderAgentEdit,
+  renderAgents,
+} from './pages/agents.js';
 import { renderBaasAnalytics } from './pages/baas-analytics.js';
 import { renderBaasCustomizations } from './pages/baas-customizations.js';
 import { renderBaasTemplateDetail, renderBaasTemplates } from './pages/baas-templates.js';
@@ -13,11 +21,15 @@ import {
 } from './pages/conversations.js';
 import { renderCron, renderCronCreate, renderCronDetail } from './pages/cron.js';
 import { renderDashboard } from './pages/dashboard.js';
+import { renderDispatches } from './pages/dispatches.js';
 import { renderBotFeedback, renderFeedback } from './pages/feedback.js';
+import { destroyFleetHome, renderFleetHome } from './pages/fleet-home.js';
 import { destroyInbox, renderInbox, renderInboxChat } from './pages/inbox.js';
 import { renderIntegrations } from './pages/integrations.js';
 import { renderBotKarma, renderKarma } from './pages/karma.js';
+import { stopAllWatches } from './pages/live-presence.js';
 import { renderAdminSetup, renderLogin } from './pages/login.js';
+import { destroyNeedsYou, renderNeedsYou } from './pages/needs-you.js';
 import { destroyPermissions, renderPermissions } from './pages/permissions.js';
 import {
   destroyProductions,
@@ -26,7 +38,7 @@ import {
 } from './pages/productions.js';
 import { renderSessionTranscript, renderSessions } from './pages/sessions.js';
 import { renderSettings } from './pages/settings.js';
-import { clearAuth, getAuthContext, getAuthToken } from './pages/shared.js';
+import { api, clearAuth, getAuthContext, getAuthToken } from './pages/shared.js';
 import {
   renderSkillCreate,
   renderSkillDetail,
@@ -41,12 +53,46 @@ import {
   renderStatsInfra,
 } from './pages/stats.js';
 import { renderToolRunner } from './pages/tool-runner.js';
+import { destroyWork, renderWork } from './pages/work.js';
 import { renderToolDetail, renderTools } from './pages/tools.js';
+import { initPalette } from './ui/palette.js';
+import { initTheme } from './ui/theme.js';
 
-const content = document.getElementById('content');
+// #content holds the area tab strip (#area-nav) and the page slot (#page);
+// pages render into the slot so the strip survives their innerHTML resets.
+const content = document.getElementById('page');
+const areaNavEl = document.getElementById('area-nav');
+const navAreas = document.getElementById('nav-areas');
 const sidebar = document.getElementById('sidebar');
+const navToggle = document.getElementById('nav-toggle');
+const drawerBackdrop = document.getElementById('drawer-backdrop');
+
+// Off-canvas drawer (sidebar under 900px, see "Responsive shell" in style.css)
+function setDrawer(open) {
+  sidebar.classList.toggle('open', open);
+  drawerBackdrop?.classList.toggle('show', open);
+  navToggle?.setAttribute('aria-expanded', String(open));
+}
+navToggle?.addEventListener('click', () => setDrawer(!sidebar.classList.contains('open')));
+drawerBackdrop?.addEventListener('click', () => setDrawer(false));
+sidebar.addEventListener('click', (e) => {
+  if (e.target.closest('a.nav-link')) setDrawer(false);
+});
+initTheme();
 let multiTenantEnabled = false;
 let adminSetupRequired = false;
+let badgeCounts = {};
+
+// Command palette (S8): Ctrl+K / Cmd+K anywhere, plus the sidebar's ⌘K button.
+initPalette({
+  loadAgents: () => api('/api/agents'),
+  ctx: () => navCtx(),
+  api,
+  navigate: (href) => {
+    location.hash = href;
+  },
+  canOpen: () => !document.body.classList.contains('unauthed'),
+});
 
 function authedFetch(url) {
   const token = getAuthToken();
@@ -87,82 +133,95 @@ function updateAuthUI() {
   });
 }
 
-const routes = [
-  { pattern: /^#\/$/, handler: () => renderDashboard(content) },
-  { pattern: /^#\/inbox\/([^/]+)\/([^/]+)$/, handler: (m) => renderInboxChat(content, m[1], m[2]) },
-  { pattern: /^#\/inbox$/, handler: () => renderInbox(content) },
-  { pattern: /^#\/permissions$/, handler: () => renderPermissions(content) },
-  { pattern: /^#\/agents\/([^/]+)\/edit$/, handler: (m) => renderAgentEdit(content, m[1]) },
-  { pattern: /^#\/agents\/([^/]+)$/, handler: (m) => renderAgentDetail(content, m[1]) },
-  { pattern: /^#\/agents$/, handler: () => renderAgents(content) },
-  {
-    pattern: /^#\/stats\/bot\/([^/]+)$/,
-    handler: (m) => renderStatsBot(content, decodeURIComponent(m[1])),
-  },
-  { pattern: /^#\/stats\/behaviour$/, handler: () => renderStatsBehaviour(content) },
-  { pattern: /^#\/stats\/infra$/, handler: () => renderStatsInfra(content) },
-  { pattern: /^#\/stats\/hygiene$/, handler: () => renderStatsHygiene(content) },
-  { pattern: /^#\/stats$/, handler: () => renderStats(content) },
-  {
-    pattern: /^#\/sessions\/(.+)$/,
-    handler: (m) => renderSessionTranscript(content, decodeURIComponent(m[1])),
-  },
-  { pattern: /^#\/sessions$/, handler: () => renderSessions(content) },
-  { pattern: /^#\/cron\/new$/, handler: () => renderCronCreate(content) },
-  { pattern: /^#\/cron\/([^/]+)$/, handler: (m) => renderCronDetail(content, m[1]) },
-  { pattern: /^#\/cron$/, handler: () => renderCron(content) },
-  {
-    pattern: /^#\/conversations\/([^/]+)\/([^/]+)$/,
-    handler: (m) => renderConversationChat(content, m[1], m[2]),
-  },
-  { pattern: /^#\/conversations\/([^/]+)$/, handler: (m) => renderBotConversations(content, m[1]) },
-  { pattern: /^#\/conversations$/, handler: () => renderConversations(content) },
-  {
-    pattern: /^#\/productions\/([^/?]+)(?:\?|$)/,
-    handler: (m) => renderBotProductions(content, m[1]),
-  },
-  { pattern: /^#\/productions(?:\?|$)/, handler: () => renderProductions(content) },
-  { pattern: /^#\/feedback\/([^/]+)$/, handler: (m) => renderBotFeedback(content, m[1]) },
-  { pattern: /^#\/feedback$/, handler: () => renderFeedback(content) },
-  { pattern: /^#\/karma\/([^/]+)$/, handler: (m) => renderBotKarma(content, m[1]) },
-  { pattern: /^#\/karma$/, handler: () => renderKarma(content) },
-  { pattern: /^#\/skills\/new$/, handler: () => renderSkillCreate(content) },
-  {
-    pattern: /^#\/skills\/([^/]+)\/edit$/,
-    handler: (m) => renderSkillEdit(content, decodeURIComponent(m[1])),
-  },
-  {
-    pattern: /^#\/skills\/([^/]+)$/,
-    handler: (m) => renderSkillDetail(content, decodeURIComponent(m[1])),
-  },
-  { pattern: /^#\/skills$/, handler: () => renderSkills(content) },
-  { pattern: /^#\/tool-runner$/, handler: () => renderToolRunner(content) },
-  { pattern: /^#\/tools\/([^/]+)$/, handler: (m) => renderToolDetail(content, m[1]) },
-  { pattern: /^#\/tools$/, handler: () => renderTools(content) },
-  { pattern: /^#\/agent-proposals$/, handler: () => renderAgentProposals(content) },
-  { pattern: /^#\/activity/, handler: () => renderActivity(content) },
-  { pattern: /^#\/integrations$/, handler: () => renderIntegrations(content) },
-  { pattern: /^#\/settings$/, handler: () => renderSettings(content) },
-  {
-    pattern: /^#\/baas\/templates\/([^/]+)$/,
-    handler: (m) => renderBaasTemplateDetail(content, decodeURIComponent(m[1])),
-  },
-  { pattern: /^#\/baas\/templates$/, handler: () => renderBaasTemplates(content) },
-  { pattern: /^#\/baas\/webhooks$/, handler: () => renderBaasWebhooks(content) },
-  { pattern: /^#\/baas\/customizations$/, handler: () => renderBaasCustomizations(content) },
-  { pattern: /^#\/baas\/analytics$/, handler: () => renderBaasAnalytics(content) },
-  { pattern: /^#\/baas\/tenants$/, handler: () => renderBaasTenants(content) },
-];
+/**
+ * Handler name (see ROUTES in nav-routes.js) -> page function. The route
+ * table is data so tests/web/nav-routes.test.ts can prove every legacy hash
+ * still lands on a handler that exists here.
+ */
+const handlers = {
+  fleetHome: () => renderFleetHome(content),
+  agents: () => renderAgents(content),
+  agentWizard: () => renderAgentWizard(content),
+  agentHome: (id) => renderAgentHome(content, id),
+  agentDetail: (id) => renderAgentDetail(content, id),
+  agentEdit: (id) => renderAgentEdit(content, id),
+  needsYou: () => renderNeedsYou(content),
+  inbox: () => renderInbox(content),
+  inboxChat: (botId, id) => renderInboxChat(content, botId, id),
+  permissions: () => renderPermissions(content),
+  agentProposals: () => renderAgentProposals(content),
+  work: () => renderWork(content),
+  dispatches: () => renderDispatches(content),
+  productions: () => renderProductions(content),
+  botProductions: (botId) => renderBotProductions(content, botId),
+  conversations: () => renderConversations(content),
+  botConversations: (botId) => renderBotConversations(content, botId),
+  conversationChat: (botId, id) => renderConversationChat(content, botId, id),
+  sessions: () => renderSessions(content),
+  sessionTranscript: (id) => renderSessionTranscript(content, id),
+  cron: () => renderCron(content),
+  cronCreate: () => renderCronCreate(content),
+  cronDetail: (id) => renderCronDetail(content, id),
+  skills: () => renderSkills(content),
+  skillCreate: () => renderSkillCreate(content),
+  skillDetail: (id) => renderSkillDetail(content, id),
+  skillEdit: (id) => renderSkillEdit(content, id),
+  tools: () => renderTools(content),
+  toolDetail: (name) => renderToolDetail(content, name),
+  toolRunner: () => renderToolRunner(content),
+  stats: () => renderStats(content),
+  statsBot: (id) => renderStatsBot(content, id),
+  statsBehaviour: () => renderStatsBehaviour(content),
+  statsInfra: () => renderStatsInfra(content),
+  statsHygiene: () => renderStatsHygiene(content),
+  karma: () => renderKarma(content),
+  botKarma: (id) => renderBotKarma(content, id),
+  activity: () => renderActivity(content),
+  loop: () => renderDashboard(content),
+  feedback: () => renderFeedback(content),
+  botFeedback: (id) => renderBotFeedback(content, id),
+  settings: () => renderSettings(content),
+  integrations: () => renderIntegrations(content),
+  baasTemplates: () => renderBaasTemplates(content),
+  baasTemplateDetail: (id) => renderBaasTemplateDetail(content, id),
+  baasWebhooks: () => renderBaasWebhooks(content),
+  baasCustomizations: () => renderBaasCustomizations(content),
+  baasAnalytics: () => renderBaasAnalytics(content),
+  baasTenants: () => renderBaasTenants(content),
+};
+
+function navCtx() {
+  return { multiTenant: multiTenantEnabled, role: getAuthContext().role };
+}
+
+/** Sidebar areas + the area tab strip for the current hash (visibility rules live in nav-routes.js). */
+function renderChrome(hash) {
+  const ctx = navCtx();
+  if (navAreas) navAreas.innerHTML = sidebarLinks(hash, ctx, badgeCounts);
+  if (areaNavEl) areaNavEl.innerHTML = areaNav(hash, ctx, badgeCounts);
+}
 
 function navigate() {
+  setDrawer(false);
+  destroyFleetHome();
+  destroyAgentHome();
+  destroyAgentWizard();
+  destroyAgentDetail();
+  stopAllWatches();
+  destroyNeedsYou();
   destroyInbox();
   destroyPermissions();
   destroyActivity();
   destroyProductions();
+  destroyWork();
+  content._dashboardCleanup?.();
+  content._dashboardCleanup = null;
 
   // Auth gate: require login in multi-tenant mode
   if (multiTenantEnabled && !getAuthToken()) {
     sidebar.style.display = 'none';
+    document.body.classList.add('unauthed');
+    if (areaNavEl) areaNavEl.innerHTML = '';
     const existing = document.getElementById('nav-auth-info');
     if (existing) existing.remove();
     if (adminSetupRequired) {
@@ -180,55 +239,28 @@ function navigate() {
     return;
   }
   sidebar.style.display = '';
+  document.body.classList.remove('unauthed');
   updateAuthUI();
 
-  // Toggle BaaS sidebar links based on multi-tenant mode
-  const baasDisplay = multiTenantEnabled ? '' : 'none';
-  document.querySelectorAll('.nav-link-baas').forEach((el) => {
-    el.style.display = baasDisplay;
-  });
-
-  // Hide admin-only BaaS pages from tenant users
-  const auth = getAuthContext();
-  if (auth.role === 'tenant') {
-    document.querySelectorAll('.nav-link-baas-admin').forEach((el) => {
-      el.style.display = 'none';
-    });
-    // Hide admin-only nav links (Settings, Integrations, Tools, Tool Runner)
-    document.querySelectorAll('.nav-link-admin').forEach((el) => {
-      el.style.display = 'none';
-    });
-  }
-
-  const hash = location.hash || '#/';
-  if (hash === '#') {
-    location.hash = '#/';
+  // Legacy hashes (#/karma, #/stats/bot/x, #/inbox/...) redirect to their
+  // canonical place; replace() keeps the back button sane. hashchange re-enters.
+  const raw = location.hash || '#/';
+  const hash = resolveHash(raw);
+  if (hash !== raw) {
+    location.replace(hash);
     return;
   }
 
-  // Redirect legacy #/logs to unified activity page
-  if (hash === '#/logs') {
-    location.hash = '#/activity?tab=logs';
+  renderChrome(hash);
+
+  const hit = matchRoute(hash);
+  if (hit) {
+    handlers[hit.route.handler](...hit.args);
     return;
-  }
-
-  // Update active nav link
-  document.querySelectorAll('.nav-link').forEach((el) => {
-    const page = el.dataset.page;
-    const isActive = page === '' ? hash === '#/' || hash === '#' : hash.startsWith(`#/${page}`);
-    el.classList.toggle('active', isActive);
-  });
-
-  for (const route of routes) {
-    const m = hash.match(route.pattern);
-    if (m) {
-      route.handler(m);
-      return;
-    }
   }
 
   // Default fallback
-  renderDashboard(content);
+  renderFleetHome(content);
 }
 
 window.addEventListener('hashchange', navigate);
@@ -250,43 +282,44 @@ async function loadStatus() {
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
-    document.getElementById('nav-status').textContent =
-      `${data.bots.running}/${data.bots.configured} bots`;
+    const label = `${data.bots.running}/${data.bots.configured} bots`;
+    document.getElementById('nav-status').textContent = label;
+    const top = document.getElementById('topbar-status');
+    if (top) top.textContent = label;
   } catch {
     /* ignore */
   }
 }
 
-// Batched badge polling — single request for all badge counts
+// Badge polling. /api/dashboard/badges feeds the per-queue tab counts; the
+// sidebar's single "Needs You" count comes from /api/needs-you/count (S5), which
+// also counts unreviewed outputs and feedback replies. The two requests run in
+// parallel; either failing leaves the other's numbers in place.
 async function loadBadges() {
-  try {
-    const res = await authedFetch('/api/dashboard/badges');
-    if (!res.ok) return;
-    const data = await res.json();
-    const badges = [
-      ['inbox-badge', data.askHuman],
-      ['feedback-badge', data.agentFeedback],
-      ['permissions-badge', data.askPermission],
-      ['agent-proposals-badge', data.agentProposals],
-    ];
-    for (const [id, count] of badges) {
-      const badge = document.getElementById(id);
-      if (badge) {
-        if (count > 0) {
-          badge.textContent = count;
-          badge.style.display = '';
-        } else {
-          badge.style.display = 'none';
-        }
-      }
-    }
-  } catch {
-    /* ignore */
+  const [legacy, needs] = await Promise.all([
+    authedFetch('/api/dashboard/badges')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    authedFetch('/api/needs-you/count')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+  ]);
+  if (!legacy && !needs) return;
+  const data = { ...badgeCounts, ...(legacy ?? {}) };
+  if (needs && Number.isFinite(Number(needs.count))) data.needs = Number(needs.count);
+  const changed = JSON.stringify(data) !== JSON.stringify(badgeCounts);
+  badgeCounts = data;
+  if (changed && !document.body.classList.contains('unauthed')) {
+    renderChrome(resolveHash(location.hash || '#/'));
   }
 }
+// Pages that resolve an item (Needs You) ask for an immediate re-count.
+window.addEventListener('badges:refresh', () => loadBadges());
 
 // Listen for auth:required events (401 from api())
 window.addEventListener('auth:required', () => navigate());
+
+export { AREAS };
 
 // Boot: load auth status first (multi-tenant + admin setup), then bot status, then navigate
 await loadAuthStatus();

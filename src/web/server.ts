@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
 import { A2AServer } from '../a2a/server';
 import type { BotManager } from '../bot';
+import { avatarUrl, findAvatar } from '../bot/agent-avatar';
 import { describeToolCall } from '../bot/inline-approval';
 import { wsChannel, wsToInbound } from '../channel/websocket';
 import type { WsChatData } from '../channel/websocket';
@@ -15,14 +16,15 @@ import { safeCompare } from '../crypto-utils';
 import type { Logger } from '../logger';
 import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
-import { resolveStatsDirs } from '../stats/paths';
+import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
+import { PresenceTracker } from '../stats/presence-tracker';
 import { readToolEntries } from '../stats/readers/tool-audit';
 import { AdminCredentialStore } from '../tenant/admin-credentials';
 import { createAdminAuthMiddleware } from '../tenant/admin-middleware';
 import { createAuthRateLimitMiddleware } from '../tenant/auth-rate-limiter';
 import { verifyUserIdentity } from '../tenant/identity-verification';
 import { TenantManager } from '../tenant/manager';
-import { createTenantAuthMiddleware } from '../tenant/middleware';
+import { allowsQueryToken, createTenantAuthMiddleware } from '../tenant/middleware';
 import { createRateLimitMiddleware } from '../tenant/rate-limit-middleware';
 import { RateLimiter } from '../tenant/rate-limiter';
 import { SessionStore } from '../tenant/session-store';
@@ -35,7 +37,9 @@ import {
   readLastLinesRotationAware,
 } from './log-tail';
 import { agentExportRoutes } from './routes/agent-export';
+import { agentFaceRoutes } from './routes/agent-face';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
+import { agentHomeRoutes } from './routes/agent-home';
 import { agentLoopRoutes } from './routes/agent-loop';
 import { agentProposalRoutes } from './routes/agent-proposals';
 import { agentsRoutes } from './routes/agents';
@@ -49,6 +53,8 @@ import { chatRoutes } from './routes/chat';
 import { chatHistoryRoutes } from './routes/chat-history';
 import { conversationsRoutes } from './routes/conversations';
 import { cronRoutes } from './routes/cron';
+import { buildCronParseLlmResolver, cronParseRoutes } from './routes/cron-parse';
+import { curiosityRoutes } from './routes/curiosity';
 import { dashboardRoutes } from './routes/dashboard';
 import { filesRoutes } from './routes/files';
 import { hygieneRoutes } from './routes/hygiene';
@@ -56,6 +62,7 @@ import { integrationsRoutes } from './routes/integrations';
 import { karmaRoutes } from './routes/karma';
 import { mcpRoutes } from './routes/mcp';
 import { metricsRoutes } from './routes/metrics';
+import { needsYouRoutes, needsYouSourcesFromBotManager } from './routes/needs-you';
 import { onboardingRoutes } from './routes/onboarding';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
@@ -68,6 +75,7 @@ import { systemExportRoutes } from './routes/system-export';
 import { tenantConfigRoutes } from './routes/tenant-config';
 import { tenantRoutes } from './routes/tenants';
 import { toolsRoutes } from './routes/tools';
+import { ttsRoutes } from './routes/tts';
 import { webhookRoutes } from './routes/webhooks';
 import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
 import { dashboardNoCache } from './static-cache';
@@ -97,7 +105,11 @@ export function startWebServer(deps: WebServerDeps): void {
   let tenantManager: TenantManager | null = null;
   if (config.multiTenant?.enabled) {
     tenantManager = new TenantManager({ dataDir }, logger);
-    const tenantAuth = createTenantAuthMiddleware(tenantManager, logger, sessionStore);
+    // The avatar image is loaded by <img>, which cannot send a Bearer header, so
+    // that one GET may carry the session token as ?token= (like /ws/activity).
+    const tenantAuth = createTenantAuthMiddleware(tenantManager, logger, sessionStore, {
+      allowQueryToken: (c) => allowsQueryToken(c.req.method, c.req.path),
+    });
 
     // Apply tenant auth to regular API routes (skip public, admin, auth, and tenant-specific endpoints)
     app.use('/api/*', async (c, next) => {
@@ -164,6 +176,25 @@ export function startWebServer(deps: WebServerDeps): void {
       logger,
     })
   );
+  // Agent Home (docs/plans/jarvis-fleet-plan.md, S1/S3): the fleet presence map,
+  // the agent page's presence header and home payload. Mounted BEFORE agentsRoutes:
+  // its literal GET /presence must be registered ahead of their GET /:id, which
+  // would otherwise answer it with "Agent not found". The tracker folds activity
+  // events into a live phase / tool per bot; the routes compose the stats readers.
+  const karmaService = deps.botManager.getKarmaService();
+  const presenceTracker = new PresenceTracker().attach(deps.botManager.getActivityStream());
+  app.route(
+    '/api/agents',
+    agentHomeRoutes({
+      config,
+      botManager: deps.botManager,
+      logger,
+      karmaService: karmaService ?? undefined,
+      presence: presenceTracker,
+      pendingPermissions: (botId) =>
+        deps.botManager.getPermissionsPending().filter((r) => r.botId === botId).length,
+    })
+  );
   app.route(
     '/api/agents',
     agentsRoutes({
@@ -172,6 +203,26 @@ export function startWebServer(deps: WebServerDeps): void {
       skillRegistry: deps.skillRegistry,
       configPath: deps.configPath,
       logger,
+    })
+  );
+  // Face and voice (docs/plans/jarvis-fleet-plan.md, S4): avatar upload/serve/
+  // delete in the bot's soul dir, and text-to-speech in the bot's voice. The
+  // voice list is cached fleet-wide under /api/tts.
+  app.route('/api/agents', agentFaceRoutes({ config, logger }));
+  app.route('/api/tts', ttsRoutes({ config, logger }));
+  // Curiosity DNA (docs/plans/curiosity-navigator-plan.md, C7): knowledge map,
+  // frontier, direction and the fleet dispatch inbox, plus operator signals.
+  // Own prefix, so no ordering constraint against agentsRoutes.
+  app.route(
+    '/api/curiosity',
+    curiosityRoutes({
+      config,
+      botManager: deps.botManager,
+      logger,
+      avatarUrlFor: (botId) => {
+        const bot = config.bots.find((b) => b.id === botId);
+        return bot ? avatarUrl(botId, findAvatar(resolveBotPaths(config, bot).soulDir)) : null;
+      },
     })
   );
   app.route(
@@ -204,6 +255,15 @@ export function startWebServer(deps: WebServerDeps): void {
     })
   );
   app.route('/api/sessions', sessionsRoutes({ sessionManager: deps.sessionManager, config }));
+  // Natural-language cron proposals (S8) go first so "parse" is never read as a job id.
+  app.route(
+    '/api/cron',
+    cronParseRoutes({
+      config,
+      logger,
+      llmFor: buildCronParseLlmResolver(deps.botManager, config, logger),
+    })
+  );
   app.route('/api/cron', cronRoutes({ cronService: deps.cronService, config }));
   app.route(
     '/api/settings',
@@ -234,6 +294,17 @@ export function startWebServer(deps: WebServerDeps): void {
   );
 
   app.route('/api/dashboard', dashboardRoutes({ config, botManager: deps.botManager, logger }));
+  // Needs You queue (docs/plans/jarvis-fleet-plan.md, S5): asks, permissions,
+  // proposals, unreviewed productions and feedback replies as one sorted list.
+  // Read-only; actions stay on the routes above and below.
+  app.route(
+    '/api/needs-you',
+    needsYouRoutes({
+      config,
+      logger,
+      sources: needsYouSourcesFromBotManager(deps.botManager),
+    })
+  );
   app.route(
     '/api/integrations',
     integrationsRoutes({ config, botManager: deps.botManager, logger })
@@ -302,7 +373,6 @@ export function startWebServer(deps: WebServerDeps): void {
   }
 
   // Karma routes (only if enabled)
-  const karmaService = deps.botManager.getKarmaService();
   if (karmaService) {
     app.route('/api/karma', karmaRoutes({ karmaService, config, logger }));
   }

@@ -1,4 +1,54 @@
+import { initMenus } from '../ui/index.js';
+import { CUSTOM_VOICE, resolveVoiceChoice, voiceOptions } from './agent-face-helpers.js';
+import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.js';
+import {
+  claudeModelSelect,
+  effectiveModelLabel,
+  showClaudeModelSelect,
+} from './agent-form-helpers.js';
+import { applyPresence, homeTabs, presenceHeader } from './agent-home-helpers.js';
+import { agentsTable } from './agents-list-helpers.js';
+import {
+  DIAL_MEANINGS,
+  LIMIT_DIALS,
+  curiosityFormSection,
+  curiositySummary,
+  previewDials,
+  readCuriosityForm,
+} from './curiosity-helpers.js';
+import { watchAgent } from './live-presence.js';
 import { api, closeModal, escapeHtml, getAuthToken, showModal, timeAgo } from './shared.js';
+
+// Row menus of the agents list (session S3.5): one click-away handler per render.
+let closeAgentMenus = null;
+
+// Live presence header (session S1): one activity link per open agent page.
+let presenceWatch = null;
+
+let detailSpeaker = null;
+
+export function destroyAgentDetail() {
+  presenceWatch?.stop();
+  presenceWatch = null;
+  detailSpeaker?.stop();
+  detailSpeaker = null;
+}
+
+function startPresenceLive(el, id, home) {
+  destroyAgentDetail();
+  if (!home || home.error) return;
+  const identity = home.identity;
+  presenceWatch = watchAgent(id, { onPresence: (p) => applyPresence(el, p, identity) });
+  // Face and voice (session S4): "Change face" inside the avatar, play button
+  // next to the now-line. A removed face re-renders so the seed avatar returns.
+  wireFaceControl(el, id, {
+    onChanged: (avatarUrl) => {
+      identity.avatarUrl = avatarUrl;
+      if (!avatarUrl) renderAgentDetail(el, id);
+    },
+  });
+  detailSpeaker = wireSpeakButton(el, id, () => el.querySelector('#presence-now')?.textContent);
+}
 
 function formatDuration(ms) {
   if (ms < 1000) return `${ms}ms`;
@@ -19,34 +69,10 @@ function formatTokenCount(n) {
   return String(n);
 }
 
-function tokenBreakdownCompact(stats) {
-  if (!stats || !stats.modelBreakdown) return '<span class="text-dim">--</span>';
-  const total = (stats.totalPromptTokens || 0) + (stats.totalCompletionTokens || 0);
-  if (total === 0) return '<span class="text-dim">--</span>';
-
-  const models = Object.keys(stats.modelBreakdown);
-  const totalStr = formatTokenCount(total);
-  if (models.length <= 1) {
-    return `<span title="${models[0] || 'unknown'}: ${total} tokens">${totalStr}</span>`;
-  }
-  const detail = models
-    .map((m) => `${m}: ${formatTokenCount(stats.modelBreakdown[m].totalTokens)}`)
-    .join(', ');
-  return `<span title="${detail}">${totalStr} <span class="text-dim">(${models.length} models)</span></span>`;
-}
-
 function karmaScoreColor(score) {
   if (score >= 70) return 'var(--green)';
   if (score >= 40) return 'var(--orange)';
   return 'var(--red)';
-}
-
-function karmaCompact(score, trend) {
-  if (score == null) return '<span class="text-dim">--</span>';
-  const color = karmaScoreColor(score);
-  const arrow = trend === 'rising' ? '&#8593;' : trend === 'falling' ? '&#8595;' : '';
-  const arrowColor = trend === 'rising' ? 'var(--green)' : trend === 'falling' ? 'var(--red)' : '';
-  return `<span style="font-weight:600;color:${color}">${score}</span>${arrow ? `<span style="color:${arrowColor};margin-left:2px">${arrow}</span>` : ''}`;
 }
 
 function karmaTrendBadge(trend) {
@@ -198,15 +224,15 @@ export async function renderAgents(el) {
     .join('');
 
   el.innerHTML = `
-    <div class="flex-between mb-16">
+    <div class="flex-between mb-16 agents-head">
       <div class="page-title">Agents <span class="count">${agents.length}</span></div>
-      <div style="display:flex;gap:8px">
+      <div class="agents-head-actions">
         <button class="btn" id="btn-start-all">Start All</button>
         <button class="btn" id="btn-import-agent">Import Agent</button>
         <button class="btn btn-primary" id="btn-new-agent">+ New Agent</button>
       </div>
     </div>
-    <div id="bulk-bar" class="mb-16" style="display:none;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px">
+    <div id="bulk-bar" class="bulk-bar mb-16" style="display:none">
       <span id="bulk-count"></span>
       <select id="bulk-model" style="font-size:12px;padding:2px 4px;max-width:220px">
         <option value="">Global (${escapeHtml(defaults.model)})</option>
@@ -216,85 +242,23 @@ export async function renderAgents(el) {
       <button class="btn btn-sm" id="bulk-clear">Clear selection</button>
       <span id="bulk-status" class="text-dim"></span>
     </div>
-    <table>
-      <thead><tr><th style="width:28px"><input type="checkbox" id="bulk-select-all" title="Select all"></th><th>Name</th><th>ID</th><th>Enabled</th><th>Model</th><th>Status</th><th>Agent Loop</th><th>Productions</th><th>Karma</th><th>LLM Calls</th><th>Tokens</th><th>Fallbacks</th><th>Skills</th><th>Actions</th></tr></thead>
-      <tbody id="agents-tbody"></tbody>
-    </table>
+    ${agentsTable(agents, {
+      defaults,
+      karmaMap,
+      llmStatsMap,
+      executingMap,
+      avatarSrc: authedAvatarSrc,
+    })}
   `;
 
-  const tbody = document.getElementById('agents-tbody');
-  for (const agent of agents) {
-    const isExecuting = executingMap[agent.id];
-    const executingDot =
-      agent.running && isExecuting
-        ? ' <span class="processing-pulse" style="margin-left:4px" title="Executing loop cycle"></span>'
-        : '';
-    const statusBadge = agent.running
-      ? `<span class="badge badge-running">Running</span>${executingDot}`
-      : '<span class="badge badge-stopped">Stopped</span>';
+  // One primary button per row; everything else lives in the row menu
+  // (session S3.5). The menu's buttons carry the same data-action attributes
+  // the delegation below has always handled. With no agents there is no
+  // table: a detached tbody keeps the wiring below harmless.
+  closeAgentMenus?.();
+  closeAgentMenus = initMenus(el);
 
-    const tr = document.createElement('tr');
-    const karma = karmaMap[agent.id];
-    const llmStats = llmStatsMap[agent.id];
-    const effectiveModel = agent.llmBackend === 'claude-cli' ? 'claude-cli' : agent.model || '';
-    const modelOptions = (defaults.availableModels || [])
-      .map(
-        (m) =>
-          `<option value="${escapeHtml(m)}"${m === effectiveModel ? ' selected' : ''}>${escapeHtml(m)}</option>`
-      )
-      .join('');
-
-    const callsDisplay = llmStats
-      ? `<span style="color:var(--green)">${llmStats.successCount}</span><span class="text-dim"> / ${llmStats.totalCalls}</span>`
-      : '<span class="text-dim">--</span>';
-    const fallbackDisplay = llmStats?.fallbackCount
-      ? `<span style="color:var(--orange);font-weight:600">${llmStats.fallbackCount}</span>`
-      : '<span class="text-dim">0</span>';
-
-    tr.innerHTML = `
-      <td><input type="checkbox" class="bulk-select" data-id="${agent.id}"></td>
-      <td><a href="#/agents/${agent.id}">${escapeHtml(agent.name)}</a></td>
-      <td class="text-dim">${escapeHtml(agent.id)}</td>
-      <td><label class="toggle"><input type="checkbox" data-action="toggle-enabled" data-id="${agent.id}" ${agent.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label></td>
-      <td><select class="inline-model-select" data-agent-id="${agent.id}" style="font-size:12px;padding:2px 4px;max-width:170px">
-        <option value=""${!effectiveModel ? ' selected' : ''}>Global (${escapeHtml(defaults.model)})</option>
-        ${modelOptions}
-      </select></td>
-      <td>${statusBadge}</td>
-      <td><button class="btn btn-sm${agent.agentLoop?.enabled === false ? ' btn-danger' : ''}" data-action="toggle-loop" data-id="${agent.id}" title="${agent.agentLoop?.enabled == null ? 'Inherit global' : agent.agentLoop.enabled ? 'On' : 'Off'}">${agent.agentLoop?.enabled === false ? 'Off' : agent.agentLoop?.enabled === true ? 'On' : '<span class="text-dim">Auto</span>'}</button></td>
-      <td><button class="btn btn-sm${agent.productions?.enabled === false ? ' btn-danger' : ''}" data-action="toggle-productions" data-id="${agent.id}">${agent.productions?.enabled === false ? 'Off' : 'On'}</button></td>
-      <td><a href="#/karma/${encodeURIComponent(agent.id)}" style="text-decoration:none">${karmaCompact(karma?.current, karma?.trend)}</a></td>
-      <td>${callsDisplay}</td>
-      <td>${tokenBreakdownCompact(llmStats)}</td>
-      <td>${fallbackDisplay}</td>
-      <td class="text-dim">${agent.skills.length}</td>
-      <td class="actions">
-        ${
-          agent.running
-            ? `<button class="btn btn-sm btn-danger" data-action="stop" data-id="${agent.id}" title="Stops the agent now. This is transient: with Enabled on, it starts again on the next restart. Turn Enabled off to keep it down.">Stop</button>`
-            : agent.enabled === false
-              ? `<button class="btn btn-sm" data-action="enable-start" data-id="${agent.id}" title="This agent is disabled, so the server refuses a plain Start. This turns Enabled on (saved to bots.json, so it also starts on boot) and starts it now.">Enable &amp; Start</button>`
-              : `<button class="btn btn-sm" data-action="start" data-id="${agent.id}">Start</button>`
-        }
-        ${
-          agent.running
-            ? `<button class="btn btn-sm" data-action="run-loop" data-id="${agent.id}">Run Loop</button>`
-            : ''
-        }
-        ${
-          agent.running && agent.skills.includes('reflection')
-            ? `<button class="btn btn-sm" data-action="reflect" data-id="${agent.id}">Reflect</button>`
-            : ''
-        }
-        <button class="btn btn-sm" data-action="edit" data-id="${agent.id}">Edit</button>
-        <button class="btn btn-sm" data-action="clone" data-id="${agent.id}">Clone</button>
-        <button class="btn btn-sm" data-action="export" data-id="${agent.id}">Export</button>
-        ${!agent.running ? `<button class="btn btn-sm btn-danger" data-action="reset" data-id="${agent.id}">Reset</button>` : ''}
-        <button class="btn btn-sm btn-danger" data-action="delete" data-id="${agent.id}">Delete</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  }
+  const tbody = document.getElementById('agents-tbody') ?? document.createElement('tbody');
 
   // Event delegation
   tbody.addEventListener('click', async (e) => {
@@ -483,7 +447,6 @@ export async function renderAgents(el) {
     }
   });
 
-
   // --- Bulk model / backend edit -------------------------------------------
   // The per-row selector conflates backend and model ('claude-cli' is offered as
   // if it were a model), so the same mapping is used here: picking claude-cli
@@ -503,6 +466,7 @@ export async function renderAgents(el) {
     bulkCount.textContent = `${n} selected`;
     bulkStatus.textContent = '';
     const boxes = document.querySelectorAll('.bulk-select');
+    if (!selectAll) return;
     selectAll.checked = n > 0 && n === boxes.length;
     selectAll.indeterminate = n > 0 && n < boxes.length;
   }
@@ -511,7 +475,7 @@ export async function renderAgents(el) {
     if (e.target.classList.contains('bulk-select')) refreshBulkBar();
   });
 
-  selectAll.addEventListener('change', () => {
+  selectAll?.addEventListener('change', () => {
     for (const cb of document.querySelectorAll('.bulk-select')) cb.checked = selectAll.checked;
     refreshBulkBar();
   });
@@ -578,7 +542,7 @@ export async function renderAgents(el) {
   });
 
   document.getElementById('btn-new-agent').addEventListener('click', () => {
-    showNewAgentModal(skills, el);
+    showNewAgentModal();
   });
 
   document.getElementById('btn-import-agent').addEventListener('click', () => {
@@ -587,7 +551,7 @@ export async function renderAgents(el) {
 }
 
 export async function renderAgentDetail(el, id) {
-  const [agent, skills, defaults, karmaData, loopState, llmStatsRes, reflections, evoState] =
+  const [agent, skills, defaults, karmaData, loopState, llmStatsRes, reflections, evoState, home] =
     await Promise.all([
       api(`/api/agents/${id}`),
       api('/api/skills'),
@@ -600,6 +564,7 @@ export async function renderAgentDetail(el, id) {
         motivationsVersions: [],
       })),
       api(`/api/agent-loop/evolution/${encodeURIComponent(id)}`).catch(() => null),
+      api(`/api/agents/${encodeURIComponent(id)}/home`).catch(() => null),
     ]);
 
   const llmStats = llmStatsRes?.stats;
@@ -617,10 +582,10 @@ export async function renderAgentDetail(el, id) {
     ? '<span class="badge badge-running">Running</span>'
     : '<span class="badge badge-stopped">Stopped</span>';
 
-  const effectiveModel = agent.llmBackend === 'claude-cli' ? 'claude-cli' : agent.model;
-  const modelDisplay = effectiveModel
-    ? escapeHtml(effectiveModel)
-    : `<span class="text-dim">${escapeHtml(defaults.model)} (global)</span>`;
+  const modelLabel = effectiveModelLabel(agent, defaults);
+  const modelDisplay = modelLabel.global
+    ? `<span class="text-dim">${escapeHtml(modelLabel.text)} (global)</span>`
+    : escapeHtml(modelLabel.text);
 
   const soulDirDisplay = agent.soulDir
     ? escapeHtml(agent.soulDir)
@@ -685,11 +650,43 @@ export async function renderAgentDetail(el, id) {
       ? agent.conversation.maxHistory
       : `<span class="text-dim">${defaults.maxHistory} (global)</span>`;
 
-  el.innerHTML = `
-    <div class="detail-header">
+  const actionsHtml = `
+      ${
+        agent.running
+          ? `<button class="btn btn-danger" id="btn-toggle" title="Stops the agent now. This is transient: with Enabled on, it starts again on the next restart.">Stop</button>`
+          : agent.enabled === false
+            ? `<button class="btn btn-primary" id="btn-toggle" title="This agent is disabled, so the server refuses a plain Start. This turns Enabled on (saved) and starts it now.">Enable &amp; Start</button>`
+            : `<button class="btn btn-primary" id="btn-toggle">Start</button>`
+      }
+      <a href="#/agents/${agent.id}/edit" class="btn">Edit</a>
+      <button class="btn" id="btn-clone">Clone</button>
+      ${
+        agent.running
+          ? `<button class="btn" id="btn-run-loop">Run Agent Loop</button>`
+          : `<button class="btn btn-danger" id="btn-reset">Reset</button>`
+      }
+      ${
+        agent.running && agent.skills.includes('reflection')
+          ? `<button class="btn" id="btn-reflect">Reflect</button>`
+          : ''
+      }
+  `;
+  const hasHome = Boolean(home && !home.error);
+  const headerHtml = hasHome
+    ? presenceHeader(home, {
+        actions: actionsHtml,
+        backHref: `#/agents/${encodeURIComponent(id)}`,
+        avatarSrc: authedAvatarSrc,
+        face: true,
+        voice: Boolean(home.identity?.voiceEnabled),
+      }) + homeTabs(id, 'config')
+    : `<div class="detail-header">
       <a href="#/agents" class="back">&larr;</a>
       <div class="page-title">${escapeHtml(agent.name)} ${statusBadge}</div>
-    </div>
+    </div>`;
+
+  el.innerHTML = `
+    ${headerHtml}
     <div class="detail-card">
       <table>
         <tr><td class="text-dim" style="width:140px">ID</td><td>${escapeHtml(agent.id)}</td></tr>
@@ -712,6 +709,7 @@ export async function renderAgentDetail(el, id) {
         <tr><td class="text-dim">Loop Detection</td><td>${loopDetectionDisplay}</td></tr>
         <tr><td class="text-dim">Evolution</td><td>${evolutionDisplay}</td></tr>
         <tr><td class="text-dim">Engagement Gate</td><td>${engagementGateDisplay}</td></tr>
+        <tr><td class="text-dim">Curiosity</td><td>${escapeHtml(curiositySummary(agent.agentLoop?.curiosity))}</td></tr>
         ${
           agent.running
             ? `<tr><td class="text-dim">Loop Status</td><td>${
@@ -827,29 +825,11 @@ export async function renderAgentDetail(el, id) {
 
     ${buildEvolutionCard(evoState)}
 
-    <div class="actions">
-      ${
-        agent.running
-          ? `<button class="btn btn-danger" id="btn-toggle" title="Stops the agent now. This is transient: with Enabled on, it starts again on the next restart.">Stop</button>`
-          : agent.enabled === false
-            ? `<button class="btn btn-primary" id="btn-toggle" title="This agent is disabled, so the server refuses a plain Start. This turns Enabled on (saved) and starts it now.">Enable &amp; Start</button>`
-            : `<button class="btn btn-primary" id="btn-toggle">Start</button>`
-      }
-      <a href="#/agents/${agent.id}/edit" class="btn">Edit</a>
-      <button class="btn" id="btn-clone">Clone</button>
-      ${
-        agent.running
-          ? `<button class="btn" id="btn-run-loop">Run Agent Loop</button>`
-          : `<button class="btn btn-danger" id="btn-reset">Reset</button>`
-      }
-      ${
-        agent.running && agent.skills.includes('reflection')
-          ? `<button class="btn" id="btn-reflect">Reflect</button>`
-          : ''
-      }
-    </div>
+    ${hasHome ? '' : `<div class="actions">${actionsHtml}</div>`}
     <div id="agent-loop-result"></div>
   `;
+
+  startPresenceLive(el, id, home);
 
   document.getElementById('btn-toggle').addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -1493,6 +1473,10 @@ export async function renderAgentEdit(el, id) {
             .join('')}
         </select>
       </div>
+      <div class="form-group" id="claude-model-group"${agent.llmBackend === 'claude-cli' ? '' : ' hidden'}>
+        <label>Claude model <span class="text-dim" style="text-transform:none;letter-spacing:0">(only for claude-cli; the global default is set in Settings → Claude CLI)</span></label>
+        ${claudeModelSelect(defaults, agent)}
+      </div>
       <div class="form-group">
         <label>System Prompt</label>
         <textarea name="systemPrompt" rows="4" placeholder="${escapeHtml(defaults.systemPrompt)}">${escapeHtml(agent.conversation?.systemPrompt || '')}</textarea>
@@ -1720,6 +1704,12 @@ export async function renderAgentEdit(el, id) {
         </div>
       </details>
 
+      <details class="form-details" id="curiosity-details">
+        <summary class="form-details-summary">Curiosity</summary>
+        <span class="text-dim text-sm">How far this agent may roam and how often it explores. Every dial: closed stays inside, ask proposes crossing to you, open crosses and reports.</span>
+        ${curiosityFormSection(agent.agentLoop?.curiosity)}
+      </details>
+
       <div class="form-group">
         <label>Standing Directives</label>
         <textarea name="agentLoopDirectives" rows="3" placeholder="One directive per line — ongoing behavioral instructions for the agent loop">${escapeHtml((agent.agentLoop?.directives || []).join('\n'))}</textarea>
@@ -1746,11 +1736,12 @@ export async function renderAgentEdit(el, id) {
         <label>Voice</label>
         <div class="input-with-btn">
           <select name="ttsVoiceId" id="tts-voice-select">
-            <option value="">Global default${defaults.ttsVoiceId ? ` (${escapeHtml(defaults.ttsVoiceId)})` : ''}</option>
-            ${agent.tts?.voiceId ? `<option value="${escapeHtml(agent.tts.voiceId)}" selected>${escapeHtml(agent.tts.voiceId)}</option>` : ''}
+            ${voiceOptions([], { selected: agent.tts?.voiceId, defaultVoiceId: defaults.ttsVoiceId })}
           </select>
-          <button type="button" class="btn btn-sm" id="btn-load-voices">Load Voices</button>
+          <button type="button" class="btn btn-sm" id="btn-preview-voice" title="Play the ElevenLabs sample for the selected voice (no credits)">Preview</button>
         </div>
+        <input type="text" name="ttsVoiceCustom" id="tts-voice-custom" class="tts-voice-custom" placeholder="ElevenLabs voice id" value="" hidden>
+        <div class="text-dim text-sm tts-voice-note" id="tts-voice-note">Loading voices…</div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -1893,6 +1884,7 @@ export async function renderAgentEdit(el, id) {
   });
 
   // Toggle continuous fields visibility based on mode
+  wireCuriosityForm(document.getElementById('curiosity-details'));
   const modeSelect = document.querySelector('select[name="agentLoopMode"]');
   if (modeSelect) {
     modeSelect.addEventListener('change', () => {
@@ -1915,45 +1907,66 @@ export async function renderAgentEdit(el, id) {
   }
 
   // Load ElevenLabs voices button
-  const loadVoicesBtn = document.getElementById('btn-load-voices');
-  if (loadVoicesBtn) {
-    loadVoicesBtn.addEventListener('click', async () => {
-      loadVoicesBtn.disabled = true;
-      loadVoicesBtn.textContent = 'Loading...';
-      try {
-        const data = await api('/api/integrations/elevenlabs/voices');
-        if (data.error) {
-          alert(`Failed to load voices: ${data.error}`);
-          return;
-        }
-        const select = document.getElementById('tts-voice-select');
-        const currentValue = select.value;
-        select.innerHTML = `<option value="">Global default${defaults.ttsVoiceId ? ` (${escapeHtml(defaults.ttsVoiceId)})` : ''}</option>`;
-        for (const v of data.voices) {
-          const labelParts = [v.name];
-          if (v.labels) {
-            const tags = [v.labels.gender, v.labels.accent, v.labels.age].filter(Boolean);
-            if (tags.length) labelParts.push(`(${tags.join(', ')})`);
-          }
-          const opt = document.createElement('option');
-          opt.value = v.voice_id;
-          opt.textContent = labelParts.join(' ');
-          if (v.voice_id === currentValue) opt.selected = true;
-          select.appendChild(opt);
-        }
-        loadVoicesBtn.textContent = 'Loaded';
-      } catch (err) {
-        alert(`Failed to load voices: ${err.message}`);
-      } finally {
-        loadVoicesBtn.disabled = false;
-        setTimeout(() => {
-          loadVoicesBtn.textContent = 'Load Voices';
-        }, 2000);
+  // Voice select (session S4): filled from the cached /api/tts/voices, with a
+  // "Custom voice id…" escape hatch and a credit-free preview of the sample.
+  const voiceSelect = document.getElementById('tts-voice-select');
+  if (voiceSelect) {
+    const customInput = document.getElementById('tts-voice-custom');
+    const note = document.getElementById('tts-voice-note');
+    const previewBtn = document.getElementById('btn-preview-voice');
+    let previewAudio = null;
+    const syncCustom = () => {
+      const custom = voiceSelect.value === CUSTOM_VOICE;
+      customInput.hidden = !custom;
+      if (custom) customInput.focus();
+      const opt = voiceSelect.selectedOptions?.[0];
+      previewBtn.disabled = !opt?.dataset.preview;
+    };
+    voiceSelect.addEventListener('change', syncCustom);
+    previewBtn.addEventListener('click', () => {
+      const url = voiceSelect.selectedOptions?.[0]?.dataset.preview;
+      if (!url) return;
+      if (previewAudio) {
+        previewAudio.pause();
+        previewAudio = null;
+        previewBtn.textContent = 'Preview';
+        return;
       }
+      previewAudio = new Audio(url);
+      previewBtn.textContent = 'Stop';
+      previewAudio.addEventListener('ended', () => {
+        previewAudio = null;
+        previewBtn.textContent = 'Preview';
+      });
+      previewAudio.play().catch(() => {
+        previewAudio = null;
+        previewBtn.textContent = 'Preview';
+      });
     });
+    (async () => {
+      const data = await api('/api/tts/voices').catch((err) => ({ error: err.message }));
+      if (!data || data.error) {
+        note.textContent = `Voice list unavailable: ${data?.error || 'request failed'}. You can still paste a voice id.`;
+      } else {
+        voiceSelect.innerHTML = voiceOptions(data.voices, {
+          selected: agent.tts?.voiceId,
+          defaultVoiceId: data.defaultVoiceId || defaults.ttsVoiceId,
+        });
+        note.textContent = `${data.voices.length} ElevenLabs voices. Press play on the agent's header to hear its now-line.`;
+      }
+      syncCustom();
+    })();
+    syncCustom();
   }
 
-  document.getElementById('edit-form').addEventListener('submit', async (e) => {
+  // Show the Claude model picker only while claude-cli is the chosen backend.
+  const editForm = document.getElementById('edit-form');
+  const claudeGroup = document.getElementById('claude-model-group');
+  editForm.model.addEventListener('change', () => {
+    if (claudeGroup) claudeGroup.hidden = !showClaudeModelSelect(editForm.model.value);
+  });
+
+  editForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
     const patch = { name: form.name.value, enabled: form.enabled.checked };
@@ -1971,7 +1984,8 @@ export async function renderAgentEdit(el, id) {
     // Per-agent overrides (use null to clear — undefined is stripped by JSON.stringify)
     const selectedModel = form.model.value.trim();
     if (selectedModel === 'claude-cli') {
-      patch.model = null;
+      // Empty = follow the fleet-wide claudeCli.model; a value pins this agent.
+      patch.model = form.claudeModel?.value.trim() || null;
       patch.llmBackend = 'claude-cli';
     } else {
       patch.model = selectedModel || null;
@@ -2164,6 +2178,10 @@ export async function renderAgentEdit(el, id) {
       ...(egThreshold != null ? { threshold: egThreshold } : {}),
     };
 
+    // Curiosity DNA override (null clears it server-side)
+    agentLoopPatch.curiosity =
+      readCuriosityForm(readCuriosityValues(form), agent.agentLoop?.curiosity) ?? null;
+
     {
       const hasValues = Object.values(agentLoopPatch).some((v) => v !== undefined);
       patch.agentLoop = hasValues ? agentLoopPatch : undefined;
@@ -2171,7 +2189,7 @@ export async function renderAgentEdit(el, id) {
 
     // TTS overrides
     if (defaults.ttsEnabled) {
-      const ttsVoiceId = form.ttsVoiceId?.value || undefined;
+      const ttsVoiceId = resolveVoiceChoice(form.ttsVoiceId?.value, form.ttsVoiceCustom?.value);
       const ttsSpeed =
         form.ttsSpeed?.value !== '' ? Number.parseFloat(form.ttsSpeed.value) : undefined;
       const ttsStability =
@@ -2191,6 +2209,50 @@ export async function renderAgentEdit(el, id) {
 
     await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
     location.hash = `#/agents/${id}`;
+  });
+}
+
+/** Raw values of the Curiosity block, in the shape readCuriosityForm expects. */
+function readCuriosityValues(form) {
+  const dials = {};
+  for (const d of LIMIT_DIALS) dials[d] = form[`curiosityDial_${d}`]?.value ?? '';
+  return {
+    enabled: form.curiosityEnabled?.value ?? '',
+    preset: form.curiosityPreset?.value ?? '',
+    dials,
+    exploreInherit: Boolean(form.curiosityExploreInherit?.checked),
+    exploreRatio: form.curiosityExploreRatio?.value ?? '',
+    dispatchEnabled: form.curiosityDispatchEnabled?.value ?? '',
+    dispatchMaxChars: form.curiosityDispatchMaxChars?.value ?? '',
+  };
+}
+
+/** Live help text: the preset fills "From preset (x)" and each dial explains its level. */
+function wireCuriosityForm(root) {
+  if (!root) return;
+  const preset = root.querySelector('select[name="curiosityPreset"]');
+  const sync = () => {
+    const effective = previewDials(preset?.value || '', {});
+    for (const d of LIMIT_DIALS) {
+      const sel = root.querySelector(`select[name="curiosityDial_${d}"]`);
+      if (!sel) continue;
+      if (sel.options[0]) sel.options[0].textContent = `From preset (${effective[d]})`;
+      const level = sel.value || effective[d];
+      const help = root.querySelector(`[data-dial-help="${d}"]`);
+      if (help) help.textContent = DIAL_MEANINGS[d][level];
+    }
+  };
+  preset?.addEventListener('change', sync);
+  for (const sel of root.querySelectorAll('select[data-dial]'))
+    sel.addEventListener('change', sync);
+  const range = root.querySelector('input[name="curiosityExploreRatio"]');
+  const out = root.querySelector('output[name="curiosityExploreOut"]');
+  const inherit = root.querySelector('input[name="curiosityExploreInherit"]');
+  range?.addEventListener('input', () => {
+    if (out) out.textContent = `${Math.round(Number(range.value) * 100)}%`;
+  });
+  inherit?.addEventListener('change', () => {
+    if (range) range.disabled = inherit.checked;
   });
 }
 
@@ -2416,128 +2478,13 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
   });
 }
 
-async function showNewAgentModal(skills, el) {
-  const defaults = await api('/api/agents/defaults');
-  const models = defaults.availableModels || ['claude-cli'];
-
-  showModal(`
-    <div class="modal-title">New Agent</div>
-    <div class="form-group">
-      <label>ID</label>
-      <input type="text" id="new-id" placeholder="e.g. my-bot">
-    </div>
-    <div class="form-group">
-      <label>Name</label>
-      <input type="text" id="new-name" placeholder="e.g. My Bot">
-    </div>
-    <div class="form-group">
-      <label>Token</label>
-      <input type="password" id="new-token" placeholder="Telegram bot token">
-    </div>
-    <div class="form-separator"></div>
-    <div class="form-section-title">Soul Generation</div>
-    <div class="form-group">
-      <label>Role</label>
-      <input type="text" id="new-role" placeholder="e.g. therapist, coach, assistant, comedian">
-    </div>
-    <div class="form-group">
-      <label>Personality Description</label>
-      <textarea id="new-personality" rows="4" placeholder="Describe the bot's personality, tone, and character traits..."></textarea>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Language</label>
-        <select id="new-language">
-          <option value="Spanish" selected>Spanish</option>
-          <option value="English">English</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Emoji (optional)</label>
-        <input type="text" id="new-emoji" placeholder="AI picks if empty" maxlength="4" style="width:80px">
-      </div>
-    </div>
-    <div class="form-group">
-      <label>Generation Model</label>
-      <select id="new-gen-model">
-        ${models.map((m) => `<option value="${escapeHtml(m)}"${m === 'claude-cli' ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('')}
-      </select>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" id="new-cancel">Cancel</button>
-      <button class="btn btn-primary" id="new-confirm">Create & Generate Soul</button>
-    </div>
-  `);
-
-  document.getElementById('new-cancel').addEventListener('click', closeModal);
-  document.getElementById('new-confirm').addEventListener('click', async () => {
-    const id = document.getElementById('new-id').value.trim();
-    const name = document.getElementById('new-name').value.trim();
-    const token = document.getElementById('new-token').value.trim();
-    const role = document.getElementById('new-role').value.trim();
-    const personalityDescription = document.getElementById('new-personality').value.trim();
-    const language = document.getElementById('new-language').value;
-    const emoji = document.getElementById('new-emoji').value.trim();
-    const selectedModel = document.getElementById('new-gen-model').value;
-
-    if (!id || !name || !token || !role || !personalityDescription) {
-      alert('ID, Name, Token, Role, and Personality Description are required.');
-      return;
-    }
-
-    const llmBackend = selectedModel === 'claude-cli' ? 'claude-cli' : 'ollama';
-    const model = selectedModel === 'claude-cli' ? undefined : selectedModel;
-
-    const btn = document.getElementById('new-confirm');
-    btn.disabled = true;
-    btn.textContent = 'Creating...';
-
-    try {
-      const createResult = await api('/api/agents', {
-        method: 'POST',
-        body: { id, name, token, skills: [], enabled: false },
-      });
-      if (createResult.error) {
-        alert(`Failed to create agent: ${createResult.error}`);
-        btn.disabled = false;
-        btn.textContent = 'Create & Generate Soul';
-        return;
-      }
-
-      btn.textContent = 'Generating soul...';
-
-      const soulResult = await api(`/api/agents/${id}/generate-soul`, {
-        method: 'POST',
-        body: {
-          name,
-          role,
-          personalityDescription,
-          language,
-          emoji: emoji || undefined,
-          llmBackend,
-          model,
-        },
-      });
-
-      if (soulResult.error) {
-        alert(`Agent created, but soul generation failed: ${soulResult.error}`);
-        closeModal();
-        location.hash = `#/agents/${id}/edit`;
-        return;
-      }
-
-      const inputData = { role, personalityDescription, language, emoji, llmBackend, model };
-      showSoulPreviewModal(id, name, soulResult, inputData, {
-        onComplete: () => {
-          location.hash = `#/agents/${id}/edit`;
-        },
-      });
-    } catch (err) {
-      alert(`Failed: ${err.message || err}`);
-      btn.disabled = false;
-      btn.textContent = 'Create & Generate Soul';
-    }
-  });
+/**
+ * "New Agent" opens the three-step wizard (#/agents/new, session S6). The
+ * old modal's fields (id, token, language, emoji, generation model) live in
+ * the wizard's Advanced block on its last step.
+ */
+function showNewAgentModal() {
+  location.hash = '#/agents/new';
 }
 
 function showExportModal(botId) {

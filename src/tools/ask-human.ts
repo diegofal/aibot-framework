@@ -43,8 +43,44 @@ export interface AskHumanDeps {
    * the operator through `resolveOperatorTarget`.
    */
   getOperator?: () => OperatorConfig | undefined;
+  /**
+   * Delivers the `notifyOnAsk` ping to the operator. Injected so a headless
+   * bot (no Telegram instance of its own — seven of eight in the fleet) can
+   * still reach the operator through any live instance, and so tests can
+   * capture the message. Without it the asking bot's own instance is used.
+   * S9 adds web push on this same hook.
+   */
+  notifyOperator?: OperatorNotifier;
   /** Clock, injectable for tests. */
   now?: () => number;
+}
+
+export interface OperatorNotification {
+  chatId: number;
+  /** The bot that asked; the sender may deliver through another one. */
+  botId: string;
+  text: string;
+}
+
+export type OperatorNotifier = (msg: OperatorNotification) => Promise<void>;
+
+/**
+ * The fleet-wide sender BotManager wires: the asking bot's own Telegram
+ * instance when it has one, else any live instance in the fleet (the same
+ * resolution cron instructions and `send_proactive_message` use). Throws
+ * when there is none at all; `notifyOperatorOfAsk` logs that and moves on.
+ */
+export function createFleetOperatorNotifier(
+  getBot: (botId: string) => Bot | undefined,
+  getAnyBot: () => Bot | undefined
+): OperatorNotifier {
+  return async ({ chatId, botId, text }) => {
+    const bot = getBot(botId) ?? getAnyBot();
+    if (!bot) {
+      throw new Error('No live Telegram instance in the fleet to reach the operator');
+    }
+    await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  };
 }
 
 /**
@@ -128,7 +164,156 @@ export function sweepStaleAskHumanQuestions(
       'ask_human: question auto-closed without answer'
     );
   }
+  closeStaleInboxConversations(deps, logger, botId);
   return closed;
+}
+
+/**
+ * Close inbox conversations still `pending` that are older than
+ * `autoCloseHours` and have no live question in the store (a lost store file,
+ * an ask that never got a question id). Startup reconcile restores most of
+ * them, but anything that slips past it — or goes orphan between restarts —
+ * used to stay in Needs You until the next boot. Writes the same memory note
+ * as a store auto-close. Never throws.
+ */
+export function closeStaleInboxConversations(
+  deps: AskHumanDeps,
+  logger: Logger,
+  botId?: string
+): import('../conversations/service').Conversation[] {
+  const conversations = deps.conversationsService;
+  if (!conversations) return [];
+  const hours = deps.autoCloseHours ?? ASK_HUMAN_DEFAULTS.autoCloseHours;
+  const now = (deps.now ?? Date.now)();
+  const closed: import('../conversations/service').Conversation[] = [];
+  let botIds: string[];
+  try {
+    botIds = botId ? [botId] : conversations.getBotIds();
+  } catch (err) {
+    logger.warn({ err }, 'ask_human: failed to list inbox bots for the sweep (non-fatal)');
+    return [];
+  }
+  for (const id of botIds) {
+    try {
+      const live = new Set(deps.store.getPendingForBot(id).map((q) => q.id));
+      const inbox = conversations.listConversations(id, {
+        type: 'inbox',
+        limit: Number.MAX_SAFE_INTEGER,
+      });
+      for (const conv of inbox) {
+        if (conv.inboxStatus !== 'pending') continue;
+        if (conv.askHumanQuestionId && live.has(conv.askHumanQuestionId)) continue;
+        const created = Date.parse(conv.createdAt);
+        if (!Number.isFinite(created) || now - created <= hours * HOUR_MS) continue;
+        const updated = conversations.markInboxStatus(id, conv.id, 'closed');
+        if (!updated) continue;
+        closed.push(updated);
+        try {
+          deps.appendDailyMemory?.(
+            id,
+            `[ask_human] Question auto-closed after ${hours}h without answer: ${truncateTitle(conv.title)}`
+          );
+        } catch (err) {
+          logger.warn(
+            { err, conversationId: conv.id },
+            'ask_human: failed to write memory note (non-fatal)'
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, botId: id }, 'ask_human: failed to sweep inbox conversations (non-fatal)');
+    }
+  }
+  if (closed.length > 0) {
+    logger.info(
+      { count: closed.length, botId: botId ?? null },
+      'ask_human: orphaned inbox conversations auto-closed without answer'
+    );
+  }
+  return closed;
+}
+
+/** How much of the operator's answer the daily-memory note keeps. */
+export const ANSWER_NOTE_MAX_CHARS = 500;
+
+/**
+ * Daily-memory line written when the operator answers an ask. The planner gets
+ * the answer once through `answeredQuestions`; this line is the durable copy:
+ * it reaches the strategist (seven days of daily logs), survives a planner
+ * failure after the answer was consumed, and gets consolidated into MEMORY.md.
+ */
+export function buildAskHumanAnswerNote(question: string, answer: string): string {
+  const flat = answer.replace(/\s+/g, ' ').trim();
+  const clipped =
+    flat.length > ANSWER_NOTE_MAX_CHARS ? `${flat.slice(0, ANSWER_NOTE_MAX_CHARS - 3)}...` : flat;
+  return `[ask_human] Operator answered "${truncateTitle(question.replace(/\s+/g, ' ').trim())}": ${clipped}`;
+}
+
+export interface ReconcileInboxResult {
+  /** Orphaned pending asks put back in the store (sweepable, answerable). */
+  restored: number;
+  /** Orphans the operator had already replied to in chat, marked `answered`. */
+  markedAnswered: number;
+}
+
+/**
+ * Re-attach inbox conversations still marked `pending` whose question the
+ * store does not hold — asks from before pending questions were persisted, or
+ * from a store file that was lost. Without this they stay `pending` forever:
+ * the 72 h sweep never sees them, the Needs-You answer button 404s and a reply
+ * typed in the thread falls through to plain chat instead of reaching the planner.
+ *
+ * An orphan that already carries a human message was answered in chat; it is
+ * marked `answered` rather than re-queued (the bot replied in that thread).
+ * Everything else is restored with the conversation's own `createdAt`, so the
+ * next sweep closes the stale ones and writes the usual memory note.
+ */
+export function reconcileAskHumanInbox(deps: AskHumanDeps, logger: Logger): ReconcileInboxResult {
+  const result: ReconcileInboxResult = { restored: 0, markedAnswered: 0 };
+  const conversations = deps.conversationsService;
+  if (!conversations) return result;
+
+  for (const botId of conversations.getBotIds()) {
+    const pendingIds = new Set(deps.store.getPendingForBot(botId).map((q) => q.id));
+    const inbox = conversations.listConversations(botId, {
+      type: 'inbox',
+      limit: Number.MAX_SAFE_INTEGER,
+    });
+    for (const conv of inbox) {
+      if (conv.inboxStatus !== 'pending' || !conv.askHumanQuestionId) continue;
+      if (pendingIds.has(conv.askHumanQuestionId)) continue;
+      try {
+        const messages = conversations.getMessages(botId, conv.id);
+        if (messages.some((m) => m.role === 'human')) {
+          conversations.markInboxStatus(botId, conv.id, 'answered');
+          result.markedAnswered++;
+          continue;
+        }
+        const question = messages.find((m) => m.role === 'bot')?.content ?? conv.title;
+        const createdAt = Date.parse(conv.createdAt);
+        const restored = deps.store.restorePending({
+          id: conv.askHumanQuestionId,
+          botId,
+          chatId: 0,
+          question,
+          conversationId: conv.id,
+          ...(conv.askOptions && conv.askOptions.length > 0 ? { options: conv.askOptions } : {}),
+          createdAt: Number.isFinite(createdAt) ? createdAt : (deps.now ?? Date.now)(),
+        });
+        if (restored) result.restored++;
+      } catch (err) {
+        logger.warn(
+          { err, botId, conversationId: conv.id },
+          'ask_human: failed to reconcile orphaned inbox conversation (non-fatal)'
+        );
+      }
+    }
+  }
+
+  if (result.restored > 0 || result.markedAnswered > 0) {
+    logger.info(result, 'ask_human: reconciled orphaned pending inbox conversations');
+  }
+  return result;
 }
 
 /**
@@ -165,15 +350,19 @@ async function notifyOperatorOfAsk(
   // The asking bot already wrote into that chat — one ping, not two.
   if (ask.alreadyNotified.has(operatorChatId)) return;
 
-  const bot = deps.getBotInstance(ask.botId);
-  if (!bot) return;
+  const text = buildOperatorAskNotification(deps.getBotName(ask.botId), ask.question, ask.options);
+  let send = deps.notifyOperator;
+  if (!send) {
+    // Legacy path: only the asking bot's own instance can deliver.
+    const bot = deps.getBotInstance(ask.botId);
+    if (!bot) return;
+    send = async (msg) => {
+      await bot.api.sendMessage(msg.chatId, msg.text, { parse_mode: 'Markdown' });
+    };
+  }
 
   try {
-    await bot.api.sendMessage(
-      operatorChatId,
-      buildOperatorAskNotification(deps.getBotName(ask.botId), ask.question, ask.options),
-      { parse_mode: 'Markdown' }
-    );
+    await send({ chatId: operatorChatId, botId: ask.botId, text });
     logger.info(
       { botId: ask.botId, questionId: ask.questionId, chatId: operatorChatId },
       'ask_human: operator notified of the queued question'

@@ -1,155 +1,337 @@
+import {
+  confirmDialog,
+  confirmInline,
+  emptyState,
+  initMenus,
+  showToast,
+  undoable,
+} from '../ui/index.js';
+import { mountAutomationBox } from './automations.js';
+import {
+  apiList,
+  bulkTargets,
+  cronBulkBar,
+  cronErrorState,
+  cronTable,
+  cronToolbar,
+  filterJobs,
+} from './cron-list-helpers.js';
 import { api, closeModal, escapeHtml, showModal, timeAgo } from './shared.js';
+
+// Agent filter + search + sort of the jobs table (session S3.5 / UX overhaul);
+// survives re-renders. The selection is per visit.
+const cronFilter = { botId: '', query: '', sortBy: 'agent' };
+let closeCronMenus = null;
 
 export async function renderCron(el) {
   el.innerHTML = '<div class="page-title">Cron Jobs</div><p class="text-dim">Loading...</p>';
 
-  const [jobs, skills] = await Promise.all([api('/api/cron'), api('/api/skills')]);
+  const [jobsRes, skillsRes, agentsRes] = await Promise.all([
+    api('/api/cron'),
+    api('/api/skills'),
+    api('/api/agents'),
+  ]);
+  const agents = Array.isArray(agentsRes) ? agentsRes : [];
+  const skills = Array.isArray(skillsRes) ? skillsRes : [];
+  const { list: jobs, error } = apiList(jobsRes);
 
-  const failedCount = jobs.filter(
-    (j) => j.enabled !== false && j.state?.lastStatus === 'error'
-  ).length;
+  if (error) {
+    el.innerHTML = `<div class="page-title">Cron Jobs</div>${cronErrorState(error)}`;
+    el.querySelector('[data-action="retry"]')?.addEventListener('click', () => renderCron(el));
+    return;
+  }
+
+  const names = Object.fromEntries(agents.map((a) => [a.id, a.name || a.id]));
+  const selected = new Set();
 
   el.innerHTML = `
     <div class="flex-between mb-16">
-      <div class="page-title">Cron Jobs <span class="count">${jobs.length}</span></div>
-      <div style="display:flex;gap:8px">
-        ${
-          failedCount > 0
-            ? `<button class="btn btn-sm" id="cron-rerun-failed-btn">Re-run failed (${failedCount})</button>`
-            : ''
-        }
-        <a href="#/cron/new" class="btn btn-primary">+ New Job</a>
+      <div class="page-title">Cron Jobs <span class="count" id="cron-count">${jobs.length}</span></div>
+      <div class="ops-head-actions">
+        <span id="cron-rerun-slot"></span>
+        <a href="#/automations/cron/new" class="btn btn-primary" data-page-new>+ New Job</a>
       </div>
     </div>
-    ${
-      jobs.length === 0
-        ? '<p class="text-dim">No cron jobs configured.</p>'
-        : `<table>
-          <thead><tr><th>Name</th><th>Schedule</th><th>Payload</th><th>Enabled</th><th>Next Run</th><th>Last Run</th><th>Actions</th></tr></thead>
-          <tbody id="cron-tbody"></tbody>
-        </table>`
-    }
+    <div id="automation-box"></div>
+    ${jobs.length > 0 ? cronToolbar({ agents, jobs, ...cronFilter }) : ''}
+    <div id="cron-bulk-slot"></div>
+    <div id="cron-table-wrap"></div>
   `;
+
+  // "Tell an agent what to do and when" (S8): parse -> preview -> the same POST /api/cron.
+  mountAutomationBox(document.getElementById('automation-box'), {
+    agents,
+    onCreated: () => renderCron(el),
+  });
+
+  const wrap = document.getElementById('cron-table-wrap');
+  const bulkSlot = document.getElementById('cron-bulk-slot');
+  const rerunSlot = document.getElementById('cron-rerun-slot');
+  const visibleJobs = () => filterJobs(jobs, { ...cronFilter, names });
+  const tableOpts = (filtered) => ({
+    names,
+    nowMs: Date.now(),
+    filtered,
+    sortBy: cronFilter.sortBy,
+    selectable: true,
+    selected,
+  });
+
+  const drawRerun = () => {
+    const failed = jobs.filter((j) => j.enabled !== false && j.state?.lastStatus === 'error');
+    rerunSlot.innerHTML =
+      failed.length > 0
+        ? `<button class="btn btn-sm" id="cron-rerun-failed-btn">Re-run failed (${failed.length})</button>`
+        : '';
+  };
+  const drawBulk = () => {
+    // The selection only counts jobs that still exist and are visible.
+    const visibleIds = new Set(visibleJobs().map((j) => String(j.id)));
+    for (const id of [...selected]) if (!visibleIds.has(id)) selected.delete(id);
+    bulkSlot.innerHTML = cronBulkBar(selected.size);
+    const all = document.getElementById('cron-select-all');
+    if (all) {
+      all.checked = visibleIds.size > 0 && selected.size === visibleIds.size;
+      all.indeterminate = selected.size > 0 && selected.size < visibleIds.size;
+    }
+  };
+  const drawTable = () => {
+    const visible = visibleJobs();
+    wrap.innerHTML = cronTable(visible, tableOpts(visible.length !== jobs.length));
+    document.getElementById('cron-count').textContent = String(jobs.length);
+    drawBulk();
+  };
+  /** Re-render one row in place (keeps scroll position and the rest of the table). */
+  const patchRow = (job) => {
+    const row = wrap.querySelector(`tr[data-id="${CSS.escape(String(job.id))}"]`);
+    if (!row) return drawTable();
+    const tmp = document.createElement('div');
+    tmp.innerHTML = cronTable([job], tableOpts(false));
+    const fresh = tmp.querySelector('tbody tr');
+    if (fresh) row.replaceWith(fresh);
+    drawRerun();
+  };
+  const reloadJob = async (id) => {
+    const fresh = await api(`/api/cron/${encodeURIComponent(id)}`);
+    if (!fresh || fresh.error) return null;
+    const { runs: _runs, ...job } = fresh;
+    const i = jobs.findIndex((j) => j.id === id);
+    if (i >= 0) jobs[i] = job;
+    return job;
+  };
+  const reloadAll = async () => {
+    const fresh = apiList(await api('/api/cron'));
+    if (!fresh.error) jobs.splice(0, jobs.length, ...fresh.list);
+    drawRerun();
+    drawTable();
+  };
+
+  drawRerun();
+  drawTable();
+  closeCronMenus?.();
+  closeCronMenus = initMenus(el);
+
+  document.getElementById('cron-filter-agent')?.addEventListener('change', (e) => {
+    cronFilter.botId = e.target.value;
+    drawTable();
+  });
+  document.getElementById('cron-filter-query')?.addEventListener('input', (e) => {
+    cronFilter.query = e.target.value;
+    drawTable();
+  });
+  document.getElementById('cron-sort')?.addEventListener('change', (e) => {
+    cronFilter.sortBy = e.target.value;
+    drawTable();
+  });
+  document.getElementById('cron-select-all')?.addEventListener('change', (e) => {
+    selected.clear();
+    if (e.target.checked) for (const j of visibleJobs()) selected.add(String(j.id));
+    drawTable();
+  });
 
   if (jobs.length === 0) return;
 
-  const tbody = document.getElementById('cron-tbody');
-  for (const job of jobs) {
-    const scheduleText = formatSchedule(job.schedule);
-    const nextRun = job.state.nextRunAtMs
-      ? timeAgo(new Date(job.state.nextRunAtMs).toISOString(), true)
-      : '<span class="text-dim">--</span>';
-
-    let lastRunHtml = '<span class="text-dim">--</span>';
-    if (job.state.lastStatus) {
-      const badge = `<span class="badge badge-${job.state.lastStatus}">${job.state.lastStatus}</span>`;
-      const ago = job.state.lastRunAtMs
-        ? ` <span class="text-dim text-sm">${timeAgo(new Date(job.state.lastRunAtMs).toISOString())}</span>`
-        : '';
-      const dur =
-        job.state.lastDurationMs != null
-          ? ` <span class="text-dim text-sm">(${formatDuration(job.state.lastDurationMs)})</span>`
-          : '';
-      const err = job.state.lastError
-        ? `<div class="text-sm" style="color:var(--red);margin-top:2px">${escapeHtml(truncate(job.state.lastError, 80))}</div>`
-        : '';
-      lastRunHtml = `${badge}${ago}${dur}${err}`;
+  wrap.addEventListener('change', async (e) => {
+    const box = e.target.closest('input[data-select]');
+    if (box) {
+      if (box.checked) selected.add(box.dataset.select);
+      else selected.delete(box.dataset.select);
+      drawBulk();
+      return;
     }
-
-    const tr = document.createElement('tr');
-    const payloadSummary = formatPayloadSummary(job.payload);
-    tr.innerHTML = `
-      <td><a href="#/cron/${job.id}">${escapeHtml(job.name)}</a></td>
-      <td class="text-dim text-sm">${escapeHtml(scheduleText)}</td>
-      <td class="text-sm">${payloadSummary}</td>
-      <td>
-        <label class="toggle">
-          <input type="checkbox" ${job.enabled ? 'checked' : ''} data-action="toggle" data-id="${job.id}">
-          <span class="toggle-slider"></span>
-        </label>
-      </td>
-      <td class="text-dim text-sm">${nextRun}</td>
-      <td>${lastRunHtml}</td>
-      <td class="actions">
-        <button class="btn btn-sm" data-action="run" data-id="${job.id}">Run</button>
-        <button class="btn btn-sm" data-action="edit" data-id="${job.id}">Edit</button>
-        <button class="btn btn-sm" data-action="logs" data-id="${job.id}">Logs</button>
-        <a href="#/cron/${job.id}" class="btn btn-sm">View</a>
-        <button class="btn btn-sm btn-danger" data-action="delete" data-id="${job.id}">Delete</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  }
-
-  tbody.addEventListener('change', async (e) => {
     const toggle = e.target.closest('input[data-action="toggle"]');
     if (!toggle) return;
-    await api(`/api/cron/${toggle.dataset.id}`, {
+    const id = toggle.dataset.id;
+    toggle.disabled = true;
+    const res = await api(`/api/cron/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: { enabled: toggle.checked },
     });
-    renderCron(el);
+    if (!res || res.error) {
+      toggle.checked = !toggle.checked;
+      toggle.disabled = false;
+      showToast(`Could not update the job: ${res?.error || 'error'}`, { tone: 'danger' });
+      return;
+    }
+    const i = jobs.findIndex((j) => j.id === id);
+    if (i >= 0) jobs[i] = { ...jobs[i], ...res };
+    patchRow(i >= 0 ? jobs[i] : res);
   });
 
-  tbody.addEventListener('click', async (e) => {
+  wrap.addEventListener('click', async (e) => {
     const runBtn = e.target.closest('button[data-action="run"]');
     if (runBtn) {
+      const id = runBtn.dataset.id;
       runBtn.disabled = true;
       runBtn.textContent = 'Running…';
-      try {
-        const res = await api(`/api/cron/${runBtn.dataset.id}/run`, { method: 'POST' });
-        runBtn.textContent = res.ok ? 'Done' : `Failed: ${res.reason || 'error'}`;
-      } catch {
-        runBtn.textContent = 'Error';
+      const res = await api(`/api/cron/${encodeURIComponent(id)}/run`, { method: 'POST' });
+      if (res?.ok) showToast('Job ran', { tone: 'ok' });
+      else showToast(`Run failed: ${res?.reason || res?.error || 'error'}`, { tone: 'danger' });
+      const job = await reloadJob(id);
+      if (job) patchRow(job);
+      else {
+        runBtn.disabled = false;
+        runBtn.textContent = 'Run';
       }
-      setTimeout(() => renderCron(el), 1500);
       return;
     }
 
     const editBtn = e.target.closest('button[data-action="edit"]');
     if (editBtn) {
       const job = jobs.find((j) => j.id === editBtn.dataset.id);
-      if (job) showCronEditModal(job, el, null, skills, () => renderCron(el));
+      if (job)
+        showCronEditModal(job, el, null, skills, async () => {
+          const fresh = await reloadJob(job.id);
+          if (fresh) patchRow(fresh);
+        });
       return;
     }
 
     const logsBtn = e.target.closest('button[data-action="logs"]');
     if (logsBtn) {
       logsBtn.disabled = true;
-      const job = await api(`/api/cron/${logsBtn.dataset.id}`);
+      const job = await api(`/api/cron/${encodeURIComponent(logsBtn.dataset.id)}`);
       logsBtn.disabled = false;
-      showRunLogsModal(job);
+      if (job?.error) showToast(job.error, { tone: 'danger' });
+      else showRunLogsModal(job);
       return;
     }
 
     const delBtn = e.target.closest('button[data-action="delete"]');
     if (!delBtn) return;
-    if (!confirm('Delete this cron job?')) return;
-    await api(`/api/cron/${delBtn.dataset.id}`, { method: 'DELETE' });
-    renderCron(el);
+    const id = delBtn.dataset.id;
+    const job = jobs.find((j) => j.id === id);
+    const row = wrap.querySelector(`tr[data-id="${CSS.escape(id)}"]`);
+    if (row) row.hidden = true;
+    selected.delete(id);
+    drawBulk();
+    const { undone, result } = await undoable(`Deleted "${job?.name ?? id}"`, {
+      commit: () => api(`/api/cron/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+      undo: () => {
+        if (row) row.hidden = false;
+      },
+    }).catch((err) => ({ undone: false, result: { error: err?.message || 'error' } }));
+    if (undone) return;
+    if (result?.error) {
+      if (row) row.hidden = false;
+      showToast(`Delete failed: ${result.error}`, { tone: 'danger' });
+      return;
+    }
+    const i = jobs.findIndex((j) => j.id === id);
+    if (i >= 0) jobs.splice(i, 1);
+    row?.remove();
+    const countEl = document.getElementById('cron-count');
+    if (countEl) countEl.textContent = String(jobs.length);
+    if (rerunSlot.isConnected) drawRerun();
   });
 
-  const rerunFailedBtn = document.getElementById('cron-rerun-failed-btn');
-  if (rerunFailedBtn) {
-    rerunFailedBtn.addEventListener('click', async () => {
-      rerunFailedBtn.disabled = true;
-      rerunFailedBtn.textContent = 'Re-running…';
-      try {
-        const res = await api('/api/cron/rerun-failed', { method: 'POST' });
-        const succeeded = (res.results || []).filter((r) => r.ran).length;
-        rerunFailedBtn.textContent = `Re-ran ${succeeded}/${res.attempted}`;
-      } catch {
-        rerunFailedBtn.textContent = 'Error';
-      }
-      setTimeout(() => renderCron(el), 1500);
-    });
-  }
+  bulkSlot.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-bulk]');
+    if (!btn) return;
+    const action = btn.dataset.bulk;
+    if (action === 'clear') {
+      selected.clear();
+      drawTable();
+      return;
+    }
+    const targets = bulkTargets(jobs, selected, action);
+    if (targets.length === 0) {
+      showToast(`Nothing to ${action} in the selection`, { tone: 'muted' });
+      return;
+    }
+    if (action === 'delete') {
+      const ok = await confirmDialog({
+        title: `Delete ${targets.length} cron job${targets.length === 1 ? '' : 's'}?`,
+        message: 'Their run logs go with them. This cannot be undone.',
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return;
+    }
+    for (const b of bulkSlot.querySelectorAll('button')) b.disabled = true;
+    const call = (j) => {
+      const id = encodeURIComponent(j.id);
+      if (action === 'delete') return api(`/api/cron/${id}`, { method: 'DELETE' });
+      if (action === 'run') return api(`/api/cron/${id}/run`, { method: 'POST' });
+      return api(`/api/cron/${id}`, { method: 'PATCH', body: { enabled: action === 'resume' } });
+    };
+    const results = await Promise.all(
+      targets.map((j) => call(j).catch((err) => ({ error: err?.message || 'error' })))
+    );
+    const failed = results.filter((r) => !r || r.error || r.ok === false).length;
+    const done = targets.length - failed;
+    const verb = { pause: 'Paused', resume: 'Resumed', run: 'Ran', delete: 'Deleted' }[action];
+    showToast(
+      failed
+        ? `${verb} ${done} of ${targets.length} — ${failed} failed`
+        : `${verb} ${done} job${done === 1 ? '' : 's'}`,
+      { tone: failed ? 'danger' : 'ok' }
+    );
+    if (action === 'delete') selected.clear();
+    // Refresh the data without a full page render (keeps scroll, filter and selection).
+    await reloadAll();
+  });
+
+  rerunSlot.addEventListener('click', async (e) => {
+    const rerunFailedBtn = e.target.closest('#cron-rerun-failed-btn');
+    if (!rerunFailedBtn) return;
+    rerunFailedBtn.disabled = true;
+    rerunFailedBtn.textContent = 'Re-running…';
+    const res = await api('/api/cron/rerun-failed', { method: 'POST' });
+    if (res?.error) showToast(`Re-run failed: ${res.error}`, { tone: 'danger' });
+    else {
+      const succeeded = (res.results || []).filter((r) => r.ran).length;
+      showToast(`Re-ran ${succeeded}/${res.attempted}`, { tone: succeeded ? 'ok' : 'danger' });
+    }
+    await reloadAll();
+  });
 }
 
 export async function renderCronDetail(el, id) {
-  const [job, skills] = await Promise.all([api(`/api/cron/${id}`), api('/api/skills')]);
-  if (job.error) {
-    el.innerHTML = '<p>Cron job not found.</p>';
+  el.innerHTML = '<div class="page-title">Cron job</div><p class="text-dim">Loading...</p>';
+  const [job, skills] = await Promise.all([
+    api(`/api/cron/${encodeURIComponent(id)}`),
+    api('/api/skills'),
+  ]);
+  if (!job || job.error) {
+    const notFound = /not found/i.test(job?.error ?? '');
+    el.innerHTML = `
+      <div class="detail-header">
+        <a href="#/automations/cron" class="back">&larr;</a>
+        <div class="page-title">Cron job</div>
+      </div>
+      ${
+        notFound
+          ? emptyState({
+              icon: '◷',
+              title: 'Cron job not found',
+              hint: 'It may have been deleted. Back to the list to see the jobs that exist.',
+              action: '<a href="#/automations/cron" class="btn btn-sm">All cron jobs</a>',
+            })
+          : cronErrorState(job?.error ?? 'Unexpected response', 'Could not load this cron job')
+      }`;
+    el.querySelector('[data-action="retry"]')?.addEventListener('click', () =>
+      renderCronDetail(el, id)
+    );
     return;
   }
 
@@ -171,7 +353,7 @@ export async function renderCronDetail(el, id) {
 
   el.innerHTML = `
     <div class="detail-header">
-      <a href="#/cron" class="back">&larr;</a>
+      <a href="#/automations/cron" class="back">&larr;</a>
       <div class="page-title">${escapeHtml(job.name)}</div>
     </div>
     <div class="detail-card">
@@ -207,7 +389,7 @@ export async function renderCronDetail(el, id) {
         <h3>Recent Runs</h3>
         <button class="btn btn-sm btn-danger" id="btn-clear-logs">Clear Logs</button>
       </div>
-      <table>
+      <table id="cron-detail-runs">
         <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Output</th><th>Error</th><th></th></tr></thead>
         <tbody>
           ${job.runs
@@ -245,14 +427,28 @@ export async function renderCronDetail(el, id) {
   });
 
   document.getElementById('btn-toggle').addEventListener('click', async () => {
-    await api(`/api/cron/${id}`, { method: 'PATCH', body: { enabled: !job.enabled } });
+    const res = await api(`/api/cron/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: { enabled: !job.enabled },
+    });
+    if (res?.error) showToast(`Could not update the job: ${res.error}`, { tone: 'danger' });
     renderCronDetail(el, id);
   });
 
   document.getElementById('btn-delete').addEventListener('click', async () => {
-    if (!confirm('Delete this cron job?')) return;
-    await api(`/api/cron/${id}`, { method: 'DELETE' });
-    location.hash = '#/cron';
+    const ok = await confirmDialog({
+      title: 'Delete this cron job?',
+      message: `"${job.name}" and its run logs will be removed.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    const res = await api(`/api/cron/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (res?.error) {
+      showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
+      return;
+    }
+    showToast('Cron job deleted', { tone: 'ok' });
+    location.hash = '#/automations/cron';
   });
 
   document.getElementById('btn-edit').addEventListener('click', () => {
@@ -262,13 +458,14 @@ export async function renderCronDetail(el, id) {
   const clearLogsBtn = document.getElementById('btn-clear-logs');
   if (clearLogsBtn) {
     clearLogsBtn.addEventListener('click', async () => {
-      if (!confirm('Clear all run logs for this job?')) return;
-      await api(`/api/cron/${id}/runs`, { method: 'DELETE' });
+      if (!confirmInline(clearLogsBtn, { label: 'Click again to clear' })) return;
+      await api(`/api/cron/${encodeURIComponent(id)}/runs`, { method: 'DELETE' });
       renderCronDetail(el, id);
     });
   }
 
-  el.addEventListener('click', async (e) => {
+  // Bound to the runs table (not `el`, which outlives this page and would stack listeners).
+  document.getElementById('cron-detail-runs')?.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-action="delete-run"]');
     if (!btn) return;
     const ts = Number(btn.dataset.ts);
@@ -283,7 +480,7 @@ export async function renderCronCreate(el) {
 
   el.innerHTML = `
     <div class="detail-header">
-      <a href="#/cron" class="back">&larr;</a>
+      <a href="#/automations/cron" class="back">&larr;</a>
       <div class="page-title">New Cron Job</div>
     </div>
     <form id="cron-form" class="detail-card">
@@ -307,7 +504,7 @@ export async function renderCronCreate(el) {
       <div id="payload-fields"></div>
       <div class="actions">
         <button type="submit" class="btn btn-primary">Create</button>
-        <a href="#/cron" class="btn">Cancel</a>
+        <a href="#/automations/cron" class="btn">Cancel</a>
       </div>
     </form>
   `;
@@ -407,7 +604,7 @@ export async function renderCronCreate(el) {
       }
     }
 
-    await api('/api/cron', {
+    const created = await api('/api/cron', {
       method: 'POST',
       body: {
         name: form.name.value,
@@ -416,8 +613,12 @@ export async function renderCronCreate(el) {
         payload,
       },
     });
-
-    location.hash = '#/cron';
+    if (!created || created.error) {
+      showToast(`Could not create the job: ${created?.error || 'error'}`, { tone: 'danger' });
+      return;
+    }
+    showToast('Cron job created', { tone: 'ok' });
+    location.hash = '#/automations/cron';
   });
 }
 
@@ -535,7 +736,14 @@ function showCronEditModal(job, el, id, skills, onSaved) {
       patch.payload = payloadPatch;
     }
 
-    await api(`/api/cron/${jobId}`, { method: 'PATCH', body: patch });
+    const saved = await api(`/api/cron/${encodeURIComponent(jobId)}`, {
+      method: 'PATCH',
+      body: patch,
+    });
+    if (!saved || saved.error) {
+      showToast(`Save failed: ${saved?.error || 'error'}`, { tone: 'danger' });
+      return;
+    }
     closeModal();
     if (onSaved) onSaved();
   });
@@ -580,7 +788,7 @@ function showRunLogsModal(job) {
   const clearAllBtn = document.getElementById('logs-clear-all');
   if (clearAllBtn) {
     clearAllBtn.addEventListener('click', async () => {
-      if (!confirm('Clear all run logs for this job?')) return;
+      if (!confirmInline(clearAllBtn, { label: 'Click again to clear' })) return;
       await api(`/api/cron/${job.id}/runs`, { method: 'DELETE' });
       closeModal();
     });
@@ -623,16 +831,6 @@ function formatDuration(ms) {
 function truncate(str, max) {
   if (!str || str.length <= max) return str;
   return `${str.slice(0, max)}…`;
-}
-
-function formatPayloadSummary(payload) {
-  if (payload.kind === 'message') {
-    return `<span class="badge">msg</span> <span class="text-dim">${escapeHtml(truncate(payload.text, 60))}</span>`;
-  }
-  if (payload.kind === 'instruction') {
-    return `<span class="badge badge-ok">instr</span> <span class="text-dim">${escapeHtml(truncate(payload.text, 60))}</span>`;
-  }
-  return `<span class="badge">skill</span> <span class="text-dim">${escapeHtml(payload.skillId)}/${escapeHtml(payload.jobId)}</span>`;
 }
 
 function formatOutput(output) {

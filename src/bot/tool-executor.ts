@@ -6,7 +6,7 @@ import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { ProductionsService } from '../productions/service';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
-import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
+import type { Tool, ToolDefinition, ToolFailureKind, ToolResult } from '../tools/types';
 import { clampToChainContextWindow } from './context-compaction';
 import { type InlineApprovalStore, describeToolCall } from './inline-approval';
 import type { LoopDetectionResult, ToolLoopDetector } from './tool-loop-detector';
@@ -312,7 +312,8 @@ export class ToolExecutor extends EventEmitter {
     errorMsg: string,
     phase: 'lookup' | 'validation' | 'execution',
     retryAttempts = 0,
-    emitError?: string
+    emitError?: string,
+    failureKind?: ToolFailureKind
   ): ToolExecutionResult {
     const { botId, chatId } = this.options;
     const durationMs = Date.now() - startMs;
@@ -328,7 +329,14 @@ export class ToolExecutor extends EventEmitter {
 
     // Karma per tool error (execution and validation phases) — delta from
     // config.karma.rewards.toolError (-1 default), deduped per tool+message.
-    if (this.options.karmaService && (phase === 'execution' || phase === 'validation')) {
+    // A `blocked` failure is a third party refusing us (bot wall, 403, 429):
+    // not the bot's doing, so it is logged and emitted but never charged.
+    const chargeable = failureKind !== 'blocked';
+    if (
+      chargeable &&
+      this.options.karmaService &&
+      (phase === 'execution' || phase === 'validation')
+    ) {
       const truncatedError = (emitError ?? errorMsg).slice(0, 120);
       this.options.karmaService.recordOutcome(
         botId,
@@ -344,6 +352,7 @@ export class ToolExecutor extends EventEmitter {
       args,
       durationMs,
       retryAttempts,
+      ...(failureKind ? { failureKind } : {}),
     };
     this.logExecution(name, args, false, errorMsg, durationMs);
     this.emit('tool:end', {
@@ -806,7 +815,9 @@ export class ToolExecutor extends EventEmitter {
             startMs,
             validatedResult.content,
             'execution',
-            attempt
+            attempt,
+            undefined,
+            toolResult.failureKind
           );
         }
 

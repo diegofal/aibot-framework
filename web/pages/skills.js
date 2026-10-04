@@ -1,4 +1,9 @@
+import { confirmDialog, emptyState, showToast } from '../ui/index.js';
 import { api, closeModal, escapeHtml, showModal } from './shared.js';
+import { filterSkills, skillsToolbar, validateSkillCreate } from './skills-helpers.js';
+
+// Search + type/status filter of the skills list; survives re-renders.
+const skillsFilter = { query: '', type: '', status: '' };
 
 function typeBadge(type) {
   return type === 'builtin'
@@ -23,89 +28,109 @@ export async function renderSkills(el) {
   el.innerHTML = '<div class="page-title">Skills</div><p class="text-dim">Loading...</p>';
 
   const skills = await api('/api/skills');
-  if (skills.error) {
-    el.innerHTML = `<p style="color:var(--red)">${escapeHtml(skills.error)}</p>`;
+  if (!Array.isArray(skills)) {
+    el.innerHTML = `<div class="page-title">Skills</div>${emptyState({
+      icon: '!',
+      title: 'Could not load skills',
+      hint: skills?.error || 'The server returned an unexpected response.',
+      action: '<button class="btn btn-sm" id="skills-retry">Retry</button>',
+    })}`;
+    document.getElementById('skills-retry')?.addEventListener('click', () => renderSkills(el));
     return;
   }
 
   el.innerHTML = `
     <div class="flex-between mb-16">
-      <div class="page-title">Skills <span class="count">${skills.length}</span></div>
-      <a href="#/skills/new" class="btn btn-primary">+ Create Skill</a>
+      <div class="page-title">Skills <span class="count" id="skills-count">${skills.length}</span></div>
+      <a href="#/automations/skills/new" class="btn btn-primary" data-page-new>+ Create Skill</a>
     </div>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Version</th>
-          <th>Commands / Tools</th>
-          <th>Warnings</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="skills-tbody"></tbody>
-    </table>
+    ${skillsToolbar(skillsFilter)}
+    <p class="text-dim text-sm skills-note">Built-in skills are switched on and off in <code>config.skills.enabled</code>; there is no per-skill toggle here yet.</p>
+    <div id="skills-table-wrap"></div>
   `;
 
-  const tbody = document.getElementById('skills-tbody');
-  for (const skill of skills) {
-    const tr = document.createElement('tr');
+  const wrap = document.getElementById('skills-table-wrap');
+
+  function rowHtml(skill) {
     const countLabel =
       skill.type === 'builtin'
         ? `${(skill.commands || []).length} cmds`
         : `${skill.toolCount || 0} tools`;
-
     const warningBadge = skill.warnings?.length
       ? `<span class="badge badge-error">${skill.warnings.length}</span>`
       : '<span class="text-dim">--</span>';
-
     const actions =
       skill.type === 'external'
-        ? `<a href="#/skills/${encodeURIComponent(skill.id)}/edit" class="btn btn-sm">Edit</a>
+        ? `<a href="#/automations/skills/${encodeURIComponent(skill.id)}/edit" class="btn btn-sm">Edit</a>
          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${escapeHtml(skill.id)}">Delete</button>`
         : '';
-
-    // Muted styling for disabled built-in skills
-    if (skill.type === 'builtin' && skill.enabled === false) {
-      tr.style.opacity = '0.6';
-    }
-
-    tr.innerHTML = `
-      <td><a href="#/skills/${encodeURIComponent(skill.id)}">${escapeHtml(skill.name)}</a></td>
+    const muted = skill.type === 'builtin' && skill.enabled === false ? ' class="skills-row-off"' : '';
+    return `<tr${muted} data-id="${escapeHtml(skill.id)}">
+      <td><a href="#/automations/skills/${encodeURIComponent(skill.id)}">${escapeHtml(skill.name)}</a></td>
       <td>${typeBadge(skill.type)}${enabledBadge(skill)}${botNameBadge(skill)}</td>
       <td class="text-dim">${escapeHtml(skill.version || '--')}</td>
       <td class="text-dim">${countLabel}</td>
       <td>${warningBadge}</td>
       <td class="actions">${actions}</td>
-    `;
-    tbody.appendChild(tr);
+    </tr>`;
   }
 
-  tbody.addEventListener('click', async (e) => {
-    const btn = e.target.closest('button[data-action]');
-    if (!btn) return;
-    const action = btn.dataset.action;
-    const id = btn.dataset.id;
-
-    if (action === 'delete') {
-      if (
-        !confirm(
-          `Delete external skill "${id}"? The skill directory will be removed from disk. This cannot be undone.`
-        )
-      )
-        return;
-      btn.disabled = true;
-      btn.textContent = 'Deleting...';
-      const res = await api(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (res.error) {
-        alert(`Delete failed: ${res.error}`);
-        btn.disabled = false;
-        btn.textContent = 'Delete';
-      } else {
-        renderSkills(el);
-      }
+  function draw() {
+    const visible = filterSkills(skills, skillsFilter);
+    const countEl = document.getElementById('skills-count');
+    if (countEl)
+      countEl.textContent =
+        visible.length === skills.length ? String(skills.length) : `${visible.length}/${skills.length}`;
+    if (visible.length === 0) {
+      wrap.innerHTML =
+        skills.length === 0
+          ? emptyState({ icon: '◇', title: 'No skills yet', hint: 'Create one to give agents new tools.' })
+          : emptyState({ icon: '⌕', title: 'No skills match', hint: 'Clear the filter to see every skill.' });
+      return;
     }
+    wrap.innerHTML = `<table>
+      <thead><tr><th>Name</th><th>Type</th><th>Version</th><th>Commands / Tools</th><th>Warnings</th><th>Actions</th></tr></thead>
+      <tbody id="skills-tbody">${visible.map(rowHtml).join('')}</tbody>
+    </table>`;
+  }
+  draw();
+
+  document.getElementById('skills-filter-query')?.addEventListener('input', (e) => {
+    skillsFilter.query = e.target.value;
+    draw();
+  });
+  document.getElementById('skills-filter-type')?.addEventListener('change', (e) => {
+    skillsFilter.type = e.target.value;
+    draw();
+  });
+  document.getElementById('skills-filter-status')?.addEventListener('change', (e) => {
+    skillsFilter.status = e.target.value;
+    draw();
+  });
+
+  wrap.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action="delete"]');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const ok = await confirmDialog({
+      title: 'Delete skill?',
+      message: `Delete external skill "${id}"? The skill directory is removed from disk. This cannot be undone.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    btn.disabled = true;
+    btn.textContent = 'Deleting...';
+    const res = await api(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (res.error) {
+      showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
+      btn.disabled = false;
+      btn.textContent = 'Delete';
+      return;
+    }
+    const idx = skills.findIndex((s) => s.id === id);
+    if (idx >= 0) skills.splice(idx, 1);
+    draw();
+    showToast(`Deleted skill "${id}"`, { tone: 'ok' });
   });
 }
 
@@ -115,7 +140,7 @@ export async function renderSkillDetail(el, id) {
 
   const skill = await api(`/api/skills/${encodeURIComponent(id)}`);
   if (skill.error) {
-    el.innerHTML = `<div class="detail-header"><a href="#/skills" class="back">&larr;</a><div class="page-title">Skill not found</div></div>`;
+    el.innerHTML = `<div class="detail-header"><a href="#/automations/skills" class="back">&larr;</a><div class="page-title">Skill not found</div></div>`;
     return;
   }
 
@@ -123,7 +148,7 @@ export async function renderSkillDetail(el, id) {
 
   let detailHtml = `
     <div class="detail-header">
-      <a href="#/skills" class="back">&larr;</a>
+      <a href="#/automations/skills" class="back">&larr;</a>
       <div class="page-title">${escapeHtml(skill.name)} ${typeBadge(skill.type)}${enabledBadge(skill)}${botNameBadge(skill)}</div>
     </div>
     <div class="detail-card">
@@ -221,7 +246,7 @@ export async function renderSkillDetail(el, id) {
   if (isExternal) {
     detailHtml += `
       <div class="actions">
-        <a href="#/skills/${encodeURIComponent(id)}/edit" class="btn">Edit</a>
+        <a href="#/automations/skills/${encodeURIComponent(id)}/edit" class="btn">Edit</a>
         <button class="btn btn-danger" id="btn-delete-skill">Delete</button>
       </div>
     `;
@@ -244,16 +269,22 @@ export async function renderSkillDetail(el, id) {
     const deleteBtn = document.getElementById('btn-delete-skill');
     if (deleteBtn) {
       deleteBtn.addEventListener('click', async () => {
-        if (!confirm(`Delete external skill "${id}"? This cannot be undone.`)) return;
+        const ok = await confirmDialog({
+          title: 'Delete skill?',
+          message: `Delete external skill "${id}"? This cannot be undone.`,
+          confirmLabel: 'Delete',
+        });
+        if (!ok) return;
         deleteBtn.disabled = true;
         deleteBtn.textContent = 'Deleting...';
         const res = await api(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (res.error) {
-          alert(`Delete failed: ${res.error}`);
+          showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
           deleteBtn.disabled = false;
           deleteBtn.textContent = 'Delete';
         } else {
-          location.hash = '#/skills';
+          showToast(`Deleted skill "${id}"`, { tone: 'ok' });
+          location.hash = '#/automations/skills';
         }
       });
     }
@@ -270,7 +301,7 @@ export async function renderSkillEdit(el, id) {
   ]);
 
   if (skill.error || skill.type !== 'external') {
-    el.innerHTML = `<div class="detail-header"><a href="#/skills" class="back">&larr;</a><div class="page-title">Cannot edit this skill</div></div><p class="text-dim">Only external skills can be edited.</p>`;
+    el.innerHTML = `<div class="detail-header"><a href="#/automations/skills" class="back">&larr;</a><div class="page-title">Cannot edit this skill</div></div><p class="text-dim">Only external skills can be edited.</p>`;
     return;
   }
 
@@ -279,7 +310,7 @@ export async function renderSkillEdit(el, id) {
 
   el.innerHTML = `
     <div class="detail-header">
-      <a href="#/skills/${encodeURIComponent(id)}" class="back">&larr;</a>
+      <a href="#/automations/skills/${encodeURIComponent(id)}" class="back">&larr;</a>
       <div class="page-title">Edit ${escapeHtml(skill.name)}</div>
     </div>
     <form id="edit-skill-form" class="detail-card">
@@ -322,7 +353,7 @@ export async function renderSkillEdit(el, id) {
       </div>
       <div class="actions">
         <button type="submit" class="btn btn-primary">Save</button>
-        <a href="#/skills/${encodeURIComponent(id)}" class="btn">Cancel</a>
+        <a href="#/automations/skills/${encodeURIComponent(id)}" class="btn">Cancel</a>
       </div>
     </form>
     <div id="save-notice" style="display:none;margin-top:12px;padding:12px;background:var(--surface-2);border-radius:6px;color:var(--orange)">
@@ -349,6 +380,7 @@ export async function renderSkillEdit(el, id) {
 
     const toolForms = form.querySelectorAll('.tool-form');
     const updatedTools = [];
+    for (const err of form.querySelectorAll('.field-error')) err.remove();
     for (const tf of toolForms) {
       const name = tf.querySelector('[name="toolName"]').value.trim();
       const desc = tf.querySelector('[name="toolDesc"]').value.trim();
@@ -357,8 +389,13 @@ export async function renderSkillEdit(el, id) {
       let parameters;
       try {
         parameters = paramsRaw ? JSON.parse(paramsRaw) : { type: 'object', properties: {} };
-      } catch {
-        alert(`Invalid JSON in parameters for tool "${name}"`);
+      } catch (err) {
+        const area = tf.querySelector('[name="toolParams"]');
+        area.insertAdjacentHTML(
+          'afterend',
+          `<div class="field-error" role="alert">Invalid JSON: ${escapeHtml(err.message || 'parse error')}</div>`
+        );
+        area.focus();
         return;
       }
       updatedTools.push({ name, description: desc, parameters });
@@ -394,9 +431,10 @@ export async function renderSkillEdit(el, id) {
     });
 
     if (res.error) {
-      alert(`Save failed: ${res.error}`);
+      showToast(`Save failed: ${res.error}`, { tone: 'danger' });
     } else {
       document.getElementById('save-notice').style.display = '';
+      showToast('Skill saved — restart required to apply.', { tone: 'ok' });
     }
   });
 }
@@ -437,7 +475,7 @@ export async function renderSkillCreate(el) {
   if (folders.length === 0) {
     el.innerHTML = `
       <div class="detail-header">
-        <a href="#/skills" class="back">&larr;</a>
+        <a href="#/automations/skills" class="back">&larr;</a>
         <div class="page-title">Create Skill</div>
       </div>
       <div class="detail-card">
@@ -449,7 +487,7 @@ export async function renderSkillCreate(el) {
 
   el.innerHTML = `
     <div class="detail-header">
-      <a href="#/skills" class="back">&larr;</a>
+      <a href="#/automations/skills" class="back">&larr;</a>
       <div class="page-title">Create Skill</div>
     </div>
     <form id="create-skill-form" class="detail-card">
@@ -484,18 +522,46 @@ export async function renderSkillCreate(el) {
     </form>
   `;
 
-  document.getElementById('btn-generate').addEventListener('click', async () => {
-    const form = document.getElementById('create-skill-form');
-    const id = form.id.value.trim();
-    const name = form.name.value.trim();
-    const description = form.description.value.trim();
-    const purpose = form.purpose.value.trim();
-    const targetFolder = form.targetFolder.value;
-
-    if (!id || !name || !description || !purpose) {
-      alert('All fields are required for AI generation.');
-      return;
+  const form = document.getElementById('create-skill-form');
+  // `form.id` / `form.name` are the form's own properties, not the inputs.
+  const readFields = () => {
+    const v = (n) => String(form.elements.namedItem(n)?.value ?? '').trim();
+    return {
+      id: v('id'),
+      name: v('name'),
+      description: v('description'),
+      purpose: v('purpose'),
+      targetFolder: form.elements.namedItem('targetFolder')?.value ?? '',
+    };
+  };
+  /** Inline errors under each field; returns true when the form is valid. */
+  const showErrors = (errors) => {
+    for (const e of form.querySelectorAll('.field-error')) e.remove();
+    for (const i of form.querySelectorAll('[aria-invalid]')) i.removeAttribute('aria-invalid');
+    let first = null;
+    for (const [field, msg] of Object.entries(errors)) {
+      const input = form.elements.namedItem(field);
+      if (!input) continue;
+      input.setAttribute('aria-invalid', 'true');
+      input.insertAdjacentHTML(
+        'afterend',
+        `<div class="field-error" role="alert">${escapeHtml(msg)}</div>`
+      );
+      first ??= input;
     }
+    first?.focus();
+    return !first;
+  };
+  form.addEventListener('input', (e) => {
+    if (e.target.getAttribute('aria-invalid') !== 'true') return;
+    e.target.removeAttribute('aria-invalid');
+    const next = e.target.nextElementSibling;
+    if (next?.classList.contains('field-error')) next.remove();
+  });
+
+  document.getElementById('btn-generate').addEventListener('click', async () => {
+    const { id, name, description, purpose, targetFolder } = readFields();
+    if (!showErrors(validateSkillCreate({ id, name, description, purpose }, 'ai'))) return;
 
     const btn = document.getElementById('btn-generate');
     btn.disabled = true;
@@ -508,31 +574,25 @@ export async function renderSkillCreate(el) {
       });
 
       if (result.error) {
-        alert(`Generation failed: ${result.error}`);
+        showToast(`Generation failed: ${result.error}`, { tone: 'danger', duration: 6000 });
         btn.disabled = false;
         btn.textContent = 'Generate with AI';
         return;
       }
 
+      btn.disabled = false;
+      btn.textContent = 'Generate with AI';
       showSkillPreviewModal(result, { id, name, targetFolder }, el);
     } catch (err) {
-      alert(`Generation failed: ${err.message || err}`);
+      showToast(`Generation failed: ${err.message || err}`, { tone: 'danger', duration: 6000 });
       btn.disabled = false;
       btn.textContent = 'Generate with AI';
     }
   });
 
   document.getElementById('btn-manual').addEventListener('click', () => {
-    const form = document.getElementById('create-skill-form');
-    const id = form.id.value.trim();
-    const name = form.name.value.trim();
-    const description = form.description.value.trim();
-    const targetFolder = form.targetFolder.value;
-
-    if (!id || !name) {
-      alert('ID and Name are required.');
-      return;
-    }
+    const { id, name, description, targetFolder } = readFields();
+    if (!showErrors(validateSkillCreate({ id, name }, 'manual'))) return;
 
     const skillJson = {
       id,
@@ -605,7 +665,7 @@ function showSkillPreviewModal(generated, meta, parentEl) {
       });
 
       if (result.error) {
-        alert(`Regeneration failed: ${result.error}`);
+        showToast(`Regeneration failed: ${result.error}`, { tone: 'danger', duration: 6000 });
         btn.disabled = false;
         btn.textContent = 'Regenerate';
         return;
@@ -613,7 +673,7 @@ function showSkillPreviewModal(generated, meta, parentEl) {
 
       showSkillPreviewModal(result, meta, parentEl);
     } catch (err) {
-      alert(`Regeneration failed: ${err.message || err}`);
+      showToast(`Regeneration failed: ${err.message || err}`, { tone: 'danger', duration: 6000 });
       btn.disabled = false;
       btn.textContent = 'Regenerate';
     }
@@ -631,16 +691,17 @@ function showSkillPreviewModal(generated, meta, parentEl) {
       });
 
       if (res.error) {
-        alert(`Apply failed: ${res.error}`);
+        showToast(`Apply failed: ${res.error}`, { tone: 'danger', duration: 6000 });
         btn.disabled = false;
         btn.textContent = 'Apply';
         return;
       }
 
       closeModal();
-      location.hash = '#/skills';
+      showToast(`Skill "${name}" created`, { tone: 'ok' });
+      location.hash = '#/automations/skills';
     } catch (err) {
-      alert(`Apply failed: ${err.message || err}`);
+      showToast(`Apply failed: ${err.message || err}`, { tone: 'danger', duration: 6000 });
       btn.disabled = false;
       btn.textContent = 'Apply';
     }

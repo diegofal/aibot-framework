@@ -108,6 +108,11 @@ export class SoulLoader {
     this.maxVersions = config.versioning?.maxVersionsPerFile ?? 10;
   }
 
+  /** The soul directory this loader reads and writes. */
+  getDir(): string {
+    return this.dir;
+  }
+
   /**
    * Create soul directory, memory/ subdirectory, and migrate MEMORY.md → legacy.md
    */

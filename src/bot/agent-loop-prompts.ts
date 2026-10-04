@@ -5,6 +5,8 @@
  */
 
 export interface PlannerPromptInput {
+  /** Curiosity DNA block (src/bot/curiosity/dna.ts + knowledge/frontier/direction) — replaces the inaction-biased alignment rule */
+  curiosityBlock?: string;
   identity: string;
   soul: string;
   motivations: string;
@@ -46,6 +48,8 @@ export interface PlannerPromptInput {
 }
 
 export interface ContinuousPlannerPromptInput {
+  /** Curiosity DNA block (src/bot/curiosity/dna.ts + knowledge/frontier/direction) — replaces the inaction-biased alignment rule */
+  curiosityBlock?: string;
   identity: string;
   soul: string;
   motivations: string;
@@ -235,6 +239,37 @@ export const AVAILABLE_PRESETS = Object.entries(PRESET_DIRECTIVE_DEFINITIONS).ma
   })
 );
 
+/** Legacy soul-alignment rule, or the DNA-aware purpose rule when curiosity is on. */
+function buildAlignmentSection(curiosityBlock?: string): string {
+  if (!curiosityBlock) {
+    return `SOUL ALIGNMENT (non-negotiable):
+Every plan item MUST directly serve your identity and goals as defined above.
+- If a task cannot be justified by a specific goal or motivation, it is OFF-BRAND and BANNED.
+- If unsure, choose inaction over off-brand action.
+- Do NOT invent new purposes not grounded in your identity/soul.
+- Creative exploration is allowed ONLY within the scope of your stated purpose.`;
+  }
+  return `PURPOSE ALIGNMENT:
+Every plan item must serve your purpose or the operator's interest, within the limit dials in "Your DNA".
+- Curiosity is on-brand: exploring within your dials is part of who you are.
+- Busywork is off-brand: bookkeeping about your own logs or process is not progress.
+- A dial set to ASK means propose first; CLOSED means stay inside; the floor always holds.
+- When unsure, choose the action that would teach you the most, not inaction.`;
+}
+
+/** Engagement rule for the strategist — exploration counts once curiosity is on. */
+function buildEngagementCheck(curiosity: boolean): string {
+  if (!curiosity) {
+    return `ENGAGEMENT CHECK: If the agent has produced 5+ outputs (files, reports, messages) without
+confirmed consumption or feedback from the recipient, the NEXT deliverable must be of type
+ASSESSMENT or OUTREACH — NOT more content creation. Production without feedback is waste.`;
+  }
+  return `ENGAGEMENT CHECK: If the agent has produced 5+ outputs without confirmed consumption or
+feedback, do NOT assign more content artifacts. Assign ASSESSMENT, OUTREACH, or EXPLORATION
+(learning recorded to the knowledge map, surfaced to the operator only through a dispatch).
+Operator silence is a reason to explore and find something worth their attention, not to idle.`;
+}
+
 export function buildDirectivesSection(directives?: string[]): string {
   if (!directives?.length) return '';
   return `\n## Operator Directives\n\nYour operator has assigned these standing directives. These are ongoing behavioral instructions (not one-time goals). Factor them into your planning when relevant:\n\n${directives.map((d) => `- ${d}`).join('\n')}\n`;
@@ -263,7 +298,9 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildDirectivesSection(input.directives)}
+}${buildDirectivesSection(input.directives)}${input.curiosityBlock ? `
+${input.curiosityBlock}
+` : ''}
 ${
   input.singleDeliverable
     ? `
@@ -309,12 +346,7 @@ Tools you create require human approval before becoming available.
     : ''
 }
 
-SOUL ALIGNMENT (non-negotiable):
-Every plan item MUST directly serve your identity and goals as defined above.
-- If a task cannot be justified by a specific goal or motivation, it is OFF-BRAND and BANNED.
-- If unsure, choose inaction over off-brand action.
-- Do NOT invent new purposes not grounded in your identity/soul.
-- Creative exploration is allowed ONLY within the scope of your stated purpose.
+${buildAlignmentSection(input.curiosityBlock)}
 
 SINGLE-FOCUS MODE INSTRUCTIONS:
 1. Break the assigned deliverable into 1-3 concrete steps
@@ -398,7 +430,9 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildDirectivesSection(input.directives)}
+}${buildDirectivesSection(input.directives)}${input.curiosityBlock ? `
+${input.curiosityBlock}
+` : ''}
 ${
   input.singleDeliverable
     ? `
@@ -454,12 +488,7 @@ Tools you create require human approval before becoming available.
     : ''
 }
 
-SOUL ALIGNMENT (non-negotiable):
-Every plan item MUST directly serve your identity and goals as defined above.
-- If a task cannot be justified by a specific goal or motivation, it is OFF-BRAND and BANNED.
-- If unsure, choose inaction over off-brand action.
-- Do NOT invent new purposes not grounded in your identity/soul.
-- Creative exploration is allowed ONLY within the scope of your stated purpose.
+${buildAlignmentSection(input.curiosityBlock)}
 
 SINGLE-FOCUS MODE INSTRUCTIONS:
 1. Break the assigned deliverable into 1-3 concrete steps
@@ -673,6 +702,8 @@ If the feedback doesn't require changes (e.g. praise or acknowledgment), explain
 }
 
 export interface StrategistPromptInput {
+  /** Curiosity DNA block (src/bot/curiosity/dna.ts + knowledge/frontier/direction) — replaces the inaction-biased alignment rule */
+  curiosityBlock?: string;
   identity: string;
   soul: string;
   motivations: string;
@@ -741,7 +772,9 @@ ${input.motivations}
 
 ## Current Goals
 
-${input.goals || '(no goals set)'}${buildDirectivesSection(input.directives)}
+${input.goals || '(no goals set)'}${buildDirectivesSection(input.directives)}${input.curiosityBlock ? `
+
+${input.curiosityBlock}` : ''}
 
 ## Recent Activity (last 7 days)
 
@@ -762,9 +795,7 @@ If >70% of recent actions are the SAME TYPE → the agent is in a behavioral rut
 Your deliverable MUST be a DIFFERENT type. If the agent has been creating content for 5+ cycles,
 assign an ASSESSMENT or OUTREACH deliverable instead.
 
-ENGAGEMENT CHECK: If the agent has produced 5+ outputs (files, reports, messages) without
-confirmed consumption or feedback from the recipient, the NEXT deliverable must be of type
-ASSESSMENT or OUTREACH — NOT more content creation. Production without feedback is waste.
+${buildEngagementCheck(!!input.curiosityBlock)}
 ${input.behavioralState ? `\n## Current Behavioral State\n\n${input.behavioralState}\n` : ''}${input.outcomeStats ? `\n## Production Outcomes\n\n${input.outcomeStats}\n` : ''}${input.traitState ? `\n${input.traitState}\n` : ''}${input.environmentContext ? `\n${input.environmentContext}\n` : ''}${input.crystallizationContext ? `\n${input.crystallizationContext}\n` : ''}${input.goalPerformance ? `\n${input.goalPerformance}\n` : ''}${input.peerInsights ? `\n${input.peerInsights}\n` : ''}
 ## Your Task
 
@@ -775,7 +806,7 @@ Analyze the agent's current state and assign a SINGLE, CONCRETE deliverable for 
 3. **Relevance**: Do current goals still align with the agent's identity and motivations?
 4. **Gaps**: Are there obvious goals missing given the agent's purpose?
 5. **Patterns**: Is the agent stuck in a loop (same goal, same activity, no progress)?
-6. **Soul Alignment**: The deliverable MUST directly serve the agent's identity and motivations. An off-brand deliverable is worse than no deliverable.
+${input.curiosityBlock ? "6. **Purpose Alignment**: The deliverable must serve the agent's purpose or the operator's interest within its open dials (see Your DNA). Exploring within the dials is on-brand; busywork is not." : "6. **Soul Alignment**: The deliverable MUST directly serve the agent's identity and motivations. An off-brand deliverable is worse than no deliverable."}
 
 ## Single-Focus Execution Mode (STRICT)
 

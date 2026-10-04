@@ -30,6 +30,7 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
 - **Stats & Behaviour** — Read-only fleet/bot/behaviour/infra aggregations over the on-disk telemetry (LLM calls, tools, outputs, asks, goals, karma, traits, backends, cron, channel state) with a one-word posture per bot
 - **Hygiene routines** — Deterministic, LLM-free maintenance for souls, memory logs, productions and the data directory; preview is side-effect free, apply backs up and never deletes
 - **Agent-loop resilience** — Planner/strategist pinned to a backend (`agentLoop.plannerBackend`), a fleet-wide per-backend circuit breaker for 429/quota errors, and a hard engagement gate fed by real human feedback
+- **Curiosity DNA** — Every bot keeps a knowledge map that compounds, explores a frontier of open questions by expected surprise, sets its own direction with a daily navigator, and sends the operator edited *dispatches* (claim → why it matters → evidence → what to do). Six per-bot limit dials (`closed` / `ask` / `open`) decide how far it may roam; a floor no dial unlocks keeps it safe and honest
 
 ## Quick Start
 
@@ -47,6 +48,8 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
    ```bash
    bun run start
    ```
+
+4. **Create your first agent from the dashboard:** open http://localhost:3000, click **Agents → New Agent** and fill the three-screen wizard (name + purpose, four personality sliders, channels). Pick a **preset** on the first screen to start from a ready-made agent — Assistant (a personal Jarvis), Researcher, Job seeker, Coder or Social — and the purpose, personality, quirks, skills, tools and initial goals are filled in for you (or stay on Custom). The soul is written for you and you are chatting with the new agent in under a minute — no Telegram token required (web chat is always on; Telegram / WhatsApp / Discord can be added on the last screen or later).
 
 **Or run it containerised** (recommended for an always-on cloud host):
 
@@ -104,6 +107,8 @@ src/
 │   ├── bot-reset.ts             #   22-step comprehensive bot reset
 │   ├── tool-loop-detector.ts    #   4-strategy tool loop detection
 │   ├── soul-health-check.ts     #   Soul lint + consolidation
+│   ├── curiosity/          #   Curiosity DNA: knowledge map, frontier, navigator, directives,
+│   │                       #   dispatch editor, taste model (runner.ts is all the loop calls)
 │   └── ...                 #   25+ more focused modules
 ├── tools/                  # 41 LLM-callable tools
 │   ├── browser.ts          #   Playwright browser automation
@@ -227,6 +232,18 @@ Three resilience mechanisms guard the `generate()` phases (planner + strategist)
 
 A quota outage is not always visible as one: `classifyError()` reads the structured `apiErrorStatus` before any text matching (a Claude CLI 429 blob contains `"permission_denials":[]`, which used to make it look permanent), and when the CLI names a reset time the circuit breaker uses that instant as the cooldown end, clamped to `[1 min, weeklyQuotaCooldownMs]`. An identical error is appended to a bot's daily memory at most once every 6 hours.
 
+### Curiosity DNA
+
+Every bot carries six genes — curious, compounding, self-directed, captivating, honest, bold — implemented in `src/bot/curiosity/` and on by default (`agentLoop.curiosity.enabled: false` turns it off, fleet-wide or per bot). It exists because a bot left to the old loop spent 10 of 18 productions on its own tooling and followed a 15-day-old operator message as its only route: the strategist saw only raw logs, novelty was checked by action type and never by topic, and the prompts said "if unsure, choose inaction".
+
+- **Knowledge map** (`KNOWLEDGE.json` in the soul dir) — topics with depth 0–3, findings with evidence and confidence, surprises and open questions. A post-cycle extractor fills it after every non-idle cycle; the strategist, planner and navigator read it instead of starting from raw logs.
+- **Explore / exploit** — a cycle explores when one topic dominates the recent cycles (`maxTopicShare`, default 0.6), after `noSurpriseStreak` cycles without a surprise, or on budget (`exploreRatio`, default 0.25, scaled by the `curiosity` trait and twice as often while the operator is silent). The rut triggers (concentration, no-surprise) only fire once at least one cycle has passed since the last exploration, and an exploration resets the no-surprise streak; idle cycles and cycles whose extraction fails still advance the explore counter. It picks the highest-surprise frontier item its dials allow (items already `exploring` stay selectable with a small bonus, so nothing is stranded). Exploration does not force a strategist pass: when the strategist runs on its own cadence during an explore cycle it gets the DNA block and skips the temperature-0 alignment re-roll; otherwise the planner focus becomes `EXPLORATION: <frontier question>`.
+- **Navigator** — a daily layer above the strategist (`navigatorEvery`, `NAVIGATOR.json`): a retrospective, a direction with 2–3 explore/exploit bets, frontier updates, and goal clean-up; after a failed attempt it retries after min(`navigatorEvery`, 2 h). Operator directives steer until served (`directiveHalfLifeOutputs` 3 / `directiveHalfLifeDays` 7), then become context. Directives come only from operator surfaces — answered asks, dashboard agent feedback, messages from the operator's private Telegram chat (`operator.telegramChatId`) and messages the operator types in a dashboard conversation thread; messages under 15 characters are ignored, and public users (REST, widget, WhatsApp, Discord) never steer.
+- **Dispatches** (`DISPATCHES.jsonl`, `TASTE.json`) — at most one per cycle, chained insight → interest proposal → frontier proposal → digest (a digest at most once per `maxIntervalHours`), through a tough LLM editor (insight, novelty, backing; unbacked claims are dropped, hype words cost points) and an earned cadence: 👍 shortens the gap, 👎 and silence lengthen it (repeat clicks don't compound; inbox-only dispatches never count as ignored). With the cadence closed an insight is held with a heuristic score and no editor call. A fleet-wide daily cap the size of `operator.proactiveDailyCap` applies (its own in-memory counter, not shared with `send_proactive_message`, reset on restart). Delivered to the operator's Telegram through any live fleet instance, or to the dashboard inbox (always the inbox for tenant bots); each dispatch records `deliveredVia`. `DISPATCHES.jsonl` keeps the newest 500.
+- **Limit dials** — `topic`, `purpose`, `instructions`, `method`, `capability`, `identity`, each `closed` / `ask` / `open`, with presets `focused`, `explorer` (default) and `wild`. The floor (safety, no contact beyond the operator, quotas, no destructive writes, approval gates, honesty) holds at every setting.
+
+Costs one extractor call per non-idle cycle, an editor call per dispatch candidate sent while the cadence is open and one navigator call per bot per day, all on the planner backend and logged to the LLM query log as `curiosity:navigator` / `curiosity:extractor` / `curiosity:editor` (tenant usage metering does not count them yet). The DNA block in prompts is capped at 6000 chars (operator directives ≤ 1500 inside it, each clipped to 300). Each bot's begin/finish steps run under a per-bot lock and re-read state after every LLM call. API: `GET /api/curiosity/:botId`, `GET /api/curiosity/dispatches`, and 👍/👎 signals on dispatches, frontier items and direction.
+
 ### Soul & Memory
 
 Each bot has layered personality files (`IDENTITY.md`, `SOUL.md`, `MOTIVATIONS.md`, `GOALS.md`) in `souls/<botId>/`. Daily memory logs capture facts with timestamps. Memory consolidation merges daily logs into `MEMORY.md` via Claude CLI. Semantic search uses hybrid vector + FTS5 via SQLite for RAG-augmented conversations with exponential temporal decay scoring (recent memories ranked higher, configurable half-life).
@@ -337,7 +354,7 @@ Three modes: **visible** (public multi-turn with @mentions), **internal** (behin
 
 ### Web Dashboard & API
 
-Hono-based server with SPA frontend and WebSocket log streaming. Pages: Dashboard (agent loop status), Agents (CRUD, soul generation), Stats & Behaviour (fleet, bot detail, behaviour, infra, hygiene), Sessions, Cron, Tools (dynamic tool approval), Skills, Productions (review & feedback), Karma, Integrations, Settings. 25+ REST API endpoints.
+Hono-based server with SPA frontend and WebSocket log streaming. Seven navigation areas with sub-pages as tabs: **Home** (fleet grid: one live card per agent with posture, now-line, karma, last output and what needs you, plus a condensed "Recent" ticker under the grid: one line per agent per burst of tool runs, five lines with a "more" toggle), **Agents** (fleet list; a three-step **New Agent** wizard at `#/agents/new` — name and purpose with five **presets** (assistant, researcher, job-seeker, coder, social; `GET /api/agents/presets`, also accepted as `preset` by `POST /api/agents`), personality sliders mapped onto the trait registers, channels with inline token validation — that writes the soul and lands in a first chat with no Telegram token; per-agent **Home** with live presence, chat, timeline, goals, traits and karma, an uploadable face and a play button that speaks the now-line in the agent's ElevenLabs voice; Config with CRUD, soul generation and a voice picker), **Needs You** (the Queue: every pending ask, permission, proposal, unreviewed output and feedback reply in one keyboard-driven list; Inbox, Permissions, Proposals and Feedback as history tabs), **Work** (Outputs — every file the agents produced, newest first, with Approve/Reject inline and status/agent filters; Productions file explorer, Conversations, Sessions), **Automations** (Cron — opens with a natural-language box: type "check job boards every 3 hours and message me", pick an agent, and `POST /api/cron/parse` turns it into a previewed, editable cron proposal that one click creates through the normal cron API, with a built-in parser standing in when the agent's LLM is down; Skills, Tools, Tool Runner), **Insights** (Stats, Behaviour, Infra, Hygiene, Karma, Activity, Agent loop, Feedback), **Settings** (Settings, Integrations, BaaS). Old hash routes redirect to their new place (`web/nav-routes.js`). 25+ REST API endpoints. Light/dark theme with a sidebar toggle, a responsive shell (off-canvas drawer under 900px), and a no-build component layer in `web/ui/` (badge, card, empty state, skeleton, KPI, tabs, avatar, sparkline, radar, toast, sheet, compact data table, row overflow menu). A command palette (`Ctrl+K` / `Cmd+K` anywhere, or the ⌘K button in the sidebar) fuzzy-searches agents, pages and actions (start / stop / run now / config per agent, new agent, Needs You, theme) with arrow keys and Enter.
 
 ### Multi-Tenant BaaS
 
@@ -423,7 +440,7 @@ Configuration lives in `config/config.json`, validated at startup by Zod schemas
 - **`askHuman`** — `maxChars` (default `600`), `autoCloseHours` (default `72`)
 - **`karma`** — `enabled`, `baseDir`, `initialScore`, `decayDays`, `dedupCooldownMinutes`, `rewards` (delta per outcome kind: `novelAction: 0`, `productionApproved: 3`, `productionRejected: -1`, `askAnswered: 2`, `humanReply: 3`, `collaborateCompleted: 0`, `toolError: -1`), `humanReplyCooldownHours: 6`
 - **`ollama`** — URL, primary/fallback models, timeout, embedding model, `startupValidation` (boot-time model probe)
-- **`agentLoop`** — Interval, maxDuration, retry, concurrency, idle suppression, `plannerBackend` (`inherit` | `ollama` | `claude-cli`), `circuitBreaker` (`enabled`, `threshold: 3`, `cooldownMs: 1800000`, `weeklyQuotaCooldownMs: 21600000`)
+- **`agentLoop`** — Interval, maxDuration, retry, concurrency, idle suppression, `plannerBackend` (`inherit` | `ollama` | `claude-cli`), `circuitBreaker` (`enabled`, `threshold: 3`, `cooldownMs: 1800000`, `weeklyQuotaCooldownMs: 21600000`), `curiosity` (curiosity DNA defaults: `enabled: true`, `preset: 'explorer'`, `limits`, `exploreRatio: 0.25`, `maxTopicShare: 0.6`, `topicWindow: 8`, `directiveHalfLifeOutputs: 3`, `directiveHalfLifeDays: 7`, `navigatorEvery: '1d'`, `noSurpriseStreak: 3`, `dispatch { enabled, maxChars: 1200, minEditorScore: 0.7, baseIntervalHours: 12, minIntervalHours: 4, maxIntervalHours: 168 }`; the same block per bot at `bots[].agentLoop.curiosity` wins)
 - **`soul`** — Health check, memory consolidation, search config
 - **`conversation.compaction`** — Token limit, max summary tokens, truncation strategy
 - **`productions`** — Base dir, track-only mode
@@ -468,27 +485,32 @@ Copy `config/config.example.json` to `config/config.json` and run `bun run setup
 ## Web Dashboard
 
 ```
-Dashboard        — Agent loop schedules, last results, run-now, safe stop
-Agents           — Bot CRUD, soul generation, start/stop, tools config, export/import
-Stats & Behaviour — Fleet table (posture, channel, LLM/tool/output/engagement per bot, 24h/7d/30d),
-                   Bot detail (goals, traits, cycles, daily series, asks, errors, hygiene panel),
-                   Behaviour (production without feedback, ask economics, collaboration graph, drift),
-                   Infra (backends, security audit, cron, Telegram states, log noise), Hygiene (preview/apply, history)
-Sessions         — Conversation transcripts with pagination
-Conversations    — Web-based chat interface for direct bot conversations
-Cron             — Job management, force-run, run logs
-Tools            — Dynamic tool approval/rejection queue
-Tool Runner      — Execute tools manually with parameter forms
-Skills           — Built-in + external skills browser with SKILL.md viewer
-Activity         — Real-time event feed (Events + System Logs tabs)
-Permissions      — Human-in-the-loop approval queue (approve/deny)
-Inbox            — Pending ask_human requests from agents
-Productions      — File explorer with tree view, evaluation, and discussion threads
-Karma            — Per-bot quality scores, trends, manual adjustment
-Agent Proposals  — Review and approve/reject agent self-creation proposals
-Agent Feedback   — Submit operator feedback to agents
-Integrations     — Ollama diagnostic chat
-Settings         — Session, collaboration, skill folders, MCP servers, memory search
+Home (#/)        — Fleet grid: one live card per agent (avatar, posture, now-line, karma, last output,
+                   asks / outputs to review) + a condensed "Recent" ticker (one line per burst of tool runs)
+Agents           — Compact fleet table (one Stop/Start button + a row menu per agent); per-agent Home (presence, chat, timeline, goals, traits, karma, uploaded
+                   face + "say it aloud" voice button, Mind: direction, knowledge, frontier and
+                   dispatches with 👍/👎), Config (CRUD, soul generation, start/stop, tools
+                   config, export/import, change face), Edit (ElevenLabs voice picker with preview,
+                   Curiosity: preset, six limit dials, exploration share, dispatch settings)
+Needs You        — Queue (asks, permissions, proposals, unreviewed outputs and feedback replies in one
+                   list; j/k a d r o ? keyboard triage, quick-reply chips), plus Inbox, Permissions,
+                   Proposals, Feedback as history tabs; sidebar badge = /api/needs-you/count
+Work             — Outputs (what the agents produced, newest first, Approve/Reject inline, status +
+                   agent filters), Dispatches (fleet inbox of curiosity dispatches, All / Sent / Held /
+                   Proposals, 👍 / 👎 / more like this), Productions (file explorer, evaluation, discussion threads),
+                   Conversations (web chat with a bot), Sessions (transcripts with pagination)
+Automations      — Cron ("Tell an agent what to do and when" natural-language box with a previewed,
+                   editable proposal; compact job list with schedules in words, agent filter, search,
+                   run + row menu), Skills (built-in + external, SKILL.md
+                   viewer), Tools (dynamic tool approval queue), Tool Runner (run a tool with a form)
+Insights         — Stats (fleet table, bot detail), Behaviour, Infra, Hygiene (preview/apply, history),
+                   Karma (scores, trends, manual adjustment), Activity (events, system logs, LLM queries),
+                   Agent loop (schedules, run-now, safe stop, last results), Feedback (operator feedback)
+Settings         — Settings (session, collaboration, skill folders, MCP servers, memory search, backup),
+                   Integrations (Ollama diagnostic chat), BaaS tabs when multi-tenant is on
+Old bookmarks (#/inbox, #/stats/bot/x, #/karma, #/productions/x, #/dispatches, #/logs, #/baas/*, …) redirect.
+Ctrl+K / Cmd+K  — command palette on every page: agents (→ Home), pages, actions (start / stop / run
+                   now / config per agent, new agent, Needs You, theme); ↑↓ Enter Esc.
 ```
 
 ## Development

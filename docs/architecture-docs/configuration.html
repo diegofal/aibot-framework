@@ -206,7 +206,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>agentLoop</code></td>
               <td><code>GlobalAgentLoopConfigSchema</code></td>
               <td>No (defaults)</td>
-              <td>Autonomous agent loop: scheduling, tool rounds, strategist, <code>plannerBackend</code>, <code>circuitBreaker</code></td>
+              <td>Autonomous agent loop: scheduling, tool rounds, strategist, <code>plannerBackend</code>, <code>circuitBreaker</code>, <code>curiosity</code> (fleet-wide curiosity DNA defaults)</td>
             </tr>
             <tr>
               <td><code>web</code></td>
@@ -360,7 +360,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>telegramChatId</code></td>
               <td>number</td>
               <td>&mdash; (optional)</td>
-              <td>Integer. Target of <code>chatId: "operator"</code></td>
+              <td>Integer. Target of <code>chatId: "operator"</code> and of curiosity dispatches (non-tenant bots). Messages from this chat (private only, never a group) become <a href="#curiosity">curiosity directives</a> for the bot they are sent to</td>
             </tr>
             <tr>
               <td><code>email</code></td>
@@ -384,7 +384,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>proactiveDailyCap</code></td>
               <td>number</td>
               <td>&mdash; (optional; <code>10</code> applied)</td>
-              <td>Non-negative integer. Proactive messages allowed <em>fleet-wide</em> in a rolling 24&nbsp;h window (<code>PROACTIVE_FLEET_WINDOW_MS</code>). Unset falls back to <code>DEFAULT_PROACTIVE_DAILY_CAP</code> (10); <code>0</code> disables the cap</td>
+              <td>Non-negative integer. Proactive messages allowed <em>fleet-wide</em> in a rolling 24&nbsp;h window (<code>PROACTIVE_FLEET_WINDOW_MS</code>). Unset falls back to <code>DEFAULT_PROACTIVE_DAILY_CAP</code> (10); <code>0</code> disables the cap. Curiosity dispatches use a cap of the same size but count on their own in-memory limiter (not shared with <code>send_proactive_message</code>; resets on restart)</td>
             </tr>
           </tbody>
         </table>
@@ -1254,6 +1254,12 @@ const config = await loadConfig('./config/config.json');
               <td>(defaults)</td>
               <td>Fleet-wide per-backend circuit breaker for CONTEXTUAL (429 / quota) errors on the planner path: <code>enabled</code> (<code>true</code>), <code>threshold</code> (<code>3</code>, 1&ndash;50 consecutive failures), <code>cooldownMs</code> (<code>1800000</code>, 30 min), <code>weeklyQuotaCooldownMs</code> (<code>21600000</code>, 6 h, used when the error text mentions a weekly usage limit). Bots whose planner backend is open skip their cycle with <code>skippedReason: 'circuit-open:&lt;backend&gt;'</code>.</td>
             </tr>
+            <tr>
+              <td><code>curiosity</code></td>
+              <td>object</td>
+              <td>&mdash; (optional; code defaults apply)</td>
+              <td>Nested <a href="#curiosity"><code>CuriosityConfigSchema</code></a>. Fleet-wide curiosity DNA defaults; per-bot <code>agentLoop.curiosity</code> wins field by field.</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1443,10 +1449,182 @@ const config = await loadConfig('./config/config.json');
               <td><code>168</code></td>
               <td>1&ndash;720 (integer). How far back durable output and feedback are counted. 168&nbsp;h = 7 days, matching the retention of <code>BotSchedule.feedbackEvents</code></td>
             </tr>
+            <tr>
+              <td><code>curiosity</code></td>
+              <td>object</td>
+              <td>&mdash; (optional)</td>
+              <td>Nested <a href="#curiosity"><code>CuriosityConfigSchema</code></a>: limit dials, explore budget, navigator cadence, dispatch settings for this bot. Validated by <code>validateCuriosityPatch</code> on <code>PATCH /api/agents/:id</code> and <code>/bulk</code>; <code>null</code> clears the override</td>
+            </tr>
           </tbody>
         </table>
         <p><span class="badge badge-yellow">Note</span> <code>engagementGate</code> exists <strong>only</strong> on the per-bot override. <code>GlobalAgentLoopConfigSchema</code> has no <code>engagementGate</code> block, so a fleet-wide <code>agentLoop.engagementGate.lookbackHours</code> key does not exist; when the per-bot block is absent the runtime falls back to <code>enabled: true</code>, <code>mode: 'hard'</code>, <code>threshold: 5</code> and <code>ENGAGEMENT_GATE_LOOKBACK_HOURS</code> (7&nbsp;&times;&nbsp;24).</p>
         <p><span class="badge badge-yellow">2026-08-22</span> The gate now counts <strong>durable</strong> output &mdash; outcome-ledger <code>CONTENT</code>/<code>OUTREACH</code> entries, falling back to the production changelog &mdash; produced after the last human feedback signal, instead of the in-memory recent-actions window that reset on every restart. See <a href="agent-loop.html#engagement-gate">Agent Loop &sect; Engagement Gate</a>.</p>
+      </div>
+
+      <!-- CuriosityConfigSchema -->
+      <div class="card" id="curiosity">
+        <h3><code>CuriosityConfigSchema</code></h3>
+        <p>
+          <span class="badge badge-yellow">2026-10-03</span> The curiosity DNA (knowledge map, frontier, navigator,
+          dispatch &mdash; see <a href="agent-loop.html#curiosity">Agent Loop &sect; Curiosity DNA</a>). Lives at
+          <code>agentLoop.curiosity</code> (global) and <code>bots[].agentLoop.curiosity</code> (per bot). Every
+          field is optional at both levels; with no config at all the DNA is <strong>on</strong> with preset
+          <code>explorer</code>. <code>resolveCuriosity(global, bot, curiosityTrait)</code>
+          (<code>src/bot/curiosity/config.ts</code>) layers: <code>CURIOSITY_DEFAULTS</code> &rarr; global &rarr;
+          per bot for scalar fields; dials = preset (per-bot ?? global ?? <code>explorer</code>) &rarr; global
+          explicit dials &rarr; per-bot explicit dials; finally the bot's <code>curiosity</code> trait scales
+          <code>exploreRatio</code>.
+        </p>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Default</th><th>Validation</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>enabled</code></td>
+              <td>boolean</td>
+              <td><code>true</code></td>
+              <td><code>false</code> turns off the whole package for the bot (or fleet): no navigator, no extractor, no dispatches, prompts unchanged</td>
+            </tr>
+            <tr>
+              <td><code>preset</code></td>
+              <td>enum</td>
+              <td><code>'explorer'</code></td>
+              <td><code>'focused' | 'explorer' | 'wild'</code>. Fills every dial not set explicitly</td>
+            </tr>
+            <tr>
+              <td><code>limits.topic</code> &hellip; <code>limits.identity</code></td>
+              <td>enum</td>
+              <td>from preset</td>
+              <td>Six optional dials (<code>topic</code>, <code>purpose</code>, <code>instructions</code>, <code>method</code>, <code>capability</code>, <code>identity</code>), each <code>'closed' | 'ask' | 'open'</code></td>
+            </tr>
+            <tr>
+              <td><code>exploreRatio</code></td>
+              <td>number</td>
+              <td><code>0.25</code></td>
+              <td>0&ndash;0.6. Share of exploration cycles (one every <code>round(1/ratio)</code>). Scaled by the curiosity trait &times;(0.5 + trait), i.e. 0.6&times;&ndash;1.4&times;, capped at <code>MAX_EXPLORE_RATIO</code> = 0.6</td>
+            </tr>
+            <tr>
+              <td><code>maxTopicShare</code></td>
+              <td>number</td>
+              <td><code>0.6</code></td>
+              <td>0.2&ndash;1. One topic above this share of the recent cycle log triggers an exploration cycle (only once at least one cycle has passed since the last exploration)</td>
+            </tr>
+            <tr>
+              <td><code>topicWindow</code></td>
+              <td>number</td>
+              <td><code>8</code></td>
+              <td>3&ndash;30 (integer). Cycles considered for topic concentration (the check needs &ge; 75% of the window filled)</td>
+            </tr>
+            <tr>
+              <td><code>directiveHalfLifeOutputs</code></td>
+              <td>number</td>
+              <td><code>3</code></td>
+              <td>1&ndash;50 (integer). Outputs that answered an operator directive before it is served (becomes context). Directives come only from operator surfaces: answered <code>ask_human</code>, dashboard agent feedback, the operator's private Telegram chat (<code>operator.telegramChatId</code>) and the operator's messages in a dashboard conversation thread; &lt; 15 chars is ignored, public users never steer</td>
+            </tr>
+            <tr>
+              <td><code>directiveHalfLifeDays</code></td>
+              <td>number</td>
+              <td><code>7</code></td>
+              <td>0.5&ndash;90. Age after which a directive is served, whichever comes first</td>
+            </tr>
+            <tr>
+              <td><code>navigatorEvery</code></td>
+              <td>string</td>
+              <td><code>'1d'</code></td>
+              <td>Regex <code>^\d+\s*(m|h|d)$</code>. Navigator cadence (an unparseable value falls back to 1 day). After a failed attempt the navigator retries after min(<code>navigatorEvery</code>, 2 h)</td>
+            </tr>
+            <tr>
+              <td><code>noSurpriseStreak</code></td>
+              <td>number</td>
+              <td><code>3</code></td>
+              <td>1&ndash;20 (integer). Cycles in a row with nothing surprising before an exploration is triggered (only once at least one cycle has passed since the last exploration; an exploration resets the streak)</td>
+            </tr>
+            <tr>
+              <td><code>dispatch.enabled</code></td>
+              <td>boolean</td>
+              <td><code>true</code></td>
+              <td><code>false</code> = no dispatch is built, scored or sent (the knowledge map still grows)</td>
+            </tr>
+            <tr>
+              <td><code>dispatch.maxChars</code></td>
+              <td>number</td>
+              <td><code>1200</code></td>
+              <td>200&ndash;4000 (integer). Hard cap on the dispatch body</td>
+            </tr>
+            <tr>
+              <td><code>dispatch.minEditorScore</code></td>
+              <td>number</td>
+              <td><code>0.7</code></td>
+              <td>0&ndash;1. Editor score an insight needs to be sent (proposals and digests use a fixed 0.5)</td>
+            </tr>
+            <tr>
+              <td><code>dispatch.baseIntervalHours</code></td>
+              <td>number</td>
+              <td><code>12</code></td>
+              <td>1&ndash;720. Starting gap between dispatches; clamped into <code>[min, max]</code></td>
+            </tr>
+            <tr>
+              <td><code>dispatch.minIntervalHours</code></td>
+              <td>number</td>
+              <td><code>4</code></td>
+              <td>1&ndash;720. Shortest gap the operator's 👍 can earn</td>
+            </tr>
+            <tr>
+              <td><code>dispatch.maxIntervalHours</code></td>
+              <td>number</td>
+              <td><code>168</code></td>
+              <td>1&ndash;720 (raised to <code>min</code> if lower). Longest gap 👎 and silence can push to; after this long without a send, held findings go out as a digest (at most one digest per <code>maxIntervalHours</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>Presets</h4>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Preset</th><th>topic</th><th>purpose</th><th>instructions</th><th>method</th><th>capability</th><th>identity</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>focused</code></td><td>closed</td><td>closed</td><td>closed</td><td>open</td><td>closed</td><td>closed</td></tr>
+            <tr><td><code>explorer</code> (default)</td><td>open</td><td>ask</td><td>ask</td><td>open</td><td>ask</td><td>closed</td></tr>
+            <tr><td><code>wild</code></td><td>open</td><td>open</td><td>open</td><td>open</td><td>open</td><td>ask</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Limit dials</h4>
+        <p><code>closed</code> = stays inside; <code>ask</code> = proposes crossing it in a dispatch, the operator approves; <code>open</code> = crosses it and reports afterwards. The meanings below are what the prompt says (<code>DIAL_MEANINGS</code> in <code>dna.ts</code>, mirrored in the edit form).</p>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Dial</th><th>Crossing it means</th><th>Mechanical effect</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>topic</code></td><td>Studies subjects outside its field</td><td>Frontier items at <code>distance &ge; 2</code> cross it</td></tr>
+            <tr><td><code>purpose</code></td><td>Side quests that do not serve its job, because they would interest the operator</td><td>Frontier items without a <code>bridge</code> to the purpose cross it</td></tr>
+            <tr><td><code>instructions</code></td><td>Challenges the operator's direction ("you asked X, I think Y matters more, here's why")</td><td>Prompt only</td></tr>
+            <tr><td><code>method</code></td><td>New output forms: experiments, code, visualisations, debate with another bot</td><td>Prompt only</td></tr>
+            <tr><td><code>capability</code></td><td>Learns skills, builds tools, asks for access it doesn't have</td><td>Prompt only; approval gates still apply at <code>open</code></td></tr>
+            <tr><td><code>identity</code></td><td>Lets interests drift with what it learns</td><td><code>open</code>: navigator/extractor interests are recorded in <code>KNOWLEDGE.json</code>; <code>ask</code>: proposed to the operator as a dispatch; <code>closed</code>: dropped. Trait pins/locks still win</td></tr>
+          </tbody>
+        </table>
+        <p>A frontier item is selectable when no crossed dial is <code>closed</code> and every crossed <code>ask</code> dial has an operator 👍 (<code>evaluateFrontierItem</code>); an operator 👎 always blocks it.</p>
+
+        <h4>The floor (no dial unlocks it)</h4>
+        <ul>
+          <li>No harmful, illegal or deceptive action.</li>
+          <li>No contact with anyone but the operator without approval.</li>
+          <li>Stay within spend, quota and rate limits.</li>
+          <li>No destructive actions; never write outside the allowed paths.</li>
+          <li>Existing approval gates (<code>create_tool</code>, <code>ask_permission</code>, tool permissions) always apply.</li>
+          <li>Honesty: never fabricate evidence, never hype &mdash; a claim that cannot be backed is not an insight.</li>
+        </ul>
+<pre><code>// bots[].agentLoop.curiosity — all optional; global defaults in agentLoop.curiosity
+"curiosity": {
+  "preset": "explorer",
+  "limits": { "identity": "ask" },
+  "exploreRatio": 0.3,
+  "navigatorEvery": "12h",
+  "dispatch": { "maxChars": 900, "minEditorScore": 0.75 }
+}</code></pre>
       </div>
 
       <!-- ---- Tool Schemas ---- -->
@@ -2333,6 +2511,12 @@ const config = await loadConfig('./config/config.json');
               <td>string</td>
               <td>&mdash; (optional)</td>
               <td>Bot description (used in collaboration discovery)</td>
+            </tr>
+            <tr>
+              <td><code>preset</code></td>
+              <td>string</td>
+              <td>&mdash; (optional)</td>
+              <td>Provenance stamp written by <code>POST /api/agents</code> when the agent was created from an agent preset (<code>src/bot/presets.ts</code>: <code>assistant</code>, <code>researcher</code>, <code>job-seeker</code>, <code>coder</code>, <code>social</code>). Informational; nothing reads it at runtime</td>
             </tr>
             <tr>
               <td><code>disabledTools</code></td>
