@@ -155,3 +155,19 @@ docker compose up -d --build
 **Outcome.** Image built and container recreated around 01:47 local; `healthy`. All enabled agents auto-started. Checked in `/app/data/llm-query-log/`: every entry after the rebuild shows `model: "claude-sonnet-5-5"` for all eight bots (planner, executor, curiosity steps); entries before it still say `"claude"`.
 
 **Reversible?** Yes: check out the previous commit and rebuild (no volume or config change).
+
+### 2026-10-04 — Rebuilt the container for the hygiene cleanup fix
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Deploy `fix(hygiene): apply really cleans; one-click fleet cleanup`: `POST /api/hygiene/cleanup`, `HygieneRun.remaining`, and the "Clean up everything" card |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Image built and container recreated around 13:55 local; `healthy`. Verified in the container: `src/web/routes/hygiene.ts` has the `/cleanup` route, `/pages/hygiene.js` serves the "Clean up everything" card, and the route answers 401 without a session (behind auth, not 404). The boot log's only errors are the existing Telegram `getMe` 401s from revoked tokens. The cleanup itself was not run from here; the operator runs it from the page.
+
+**Reversible?** Yes: check out the previous commit and rebuild (no volume or config change from the deploy itself; running the cleanup writes to volumes, with backups and `_trash`).
