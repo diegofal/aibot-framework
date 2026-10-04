@@ -6,6 +6,7 @@ import {
   COMPOSER_MIN_PX,
   attachAutoGrow,
   composerHeight,
+  fitComposer,
 } from '../../web/ui/composer.js';
 
 // 2026-10-04: the Agent Home chat box rendered ~300px wide and two lines tall.
@@ -52,7 +53,10 @@ describe('attachAutoGrow', () => {
     expect(ta.style.height).toBe('260px');
   });
 
-  it('scrolls only once the maximum is reached', () => {
+  it('caps at the maximum and never hides overflow', () => {
+    // Prepass round 1: overflow 'hidden' clipped text set from code (Feedback
+    // "Generate", a restored Inbox draft) until the next keystroke. A stale
+    // size must scroll, never clip.
     const ta = fakeTextarea(1000);
     attachAutoGrow(ta as never, { maxPx: 400 });
     expect(ta.style.height).toBe('400px');
@@ -60,7 +64,7 @@ describe('attachAutoGrow', () => {
     ta.scrollHeight = 60;
     ta.fire('input');
     expect(ta.style.height).toBe(`${COMPOSER_MIN_PX}px`);
-    expect(ta.style.overflowY).toBe('hidden');
+    expect(ta.style.overflowY).not.toBe('hidden');
   });
 
   it('a missing element is a no-op', () => {
@@ -89,5 +93,26 @@ describe('thread composer layout (style.css)', () => {
     const r = rule('.thread-input');
     expect(r).toMatch(/flex:\s*1/);
     expect(r).toMatch(new RegExp(`min-height:\\s*${COMPOSER_MIN_PX}px`));
+  });
+});
+
+describe('fitComposer', () => {
+  it('resizes after a value set from code, with the options given at attach', () => {
+    const ta = fakeTextarea(60);
+    attachAutoGrow(ta as never, { minPx: 64, maxPx: 300 });
+    expect(ta.style.height).toBe('64px');
+    ta.scrollHeight = 500; // e.g. a generated feedback text assigned to .value
+    fitComposer(ta as never);
+    expect(ta.style.height).toBe('300px');
+  });
+
+  it('works on a textarea that was never attached (defaults)', () => {
+    const ta = fakeTextarea(150);
+    fitComposer(ta as never);
+    expect(ta.style.height).toBe('150px');
+  });
+
+  it('a missing element is a no-op', () => {
+    expect(() => fitComposer(null)).not.toThrow();
   });
 });
