@@ -39,6 +39,24 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — Rebuilt the container for the Needs You orphan-output fix (PR #3)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (agent session, approved in chat) |
+| **Why** | Deploy PR #3 (`c862d6f`): Needs You stops listing outputs whose file is gone, so "Clear" no longer fails on them |
+
+```bash
+docker compose up -d --build   # from D:/aibot-framework at 63b6354 (origin/main merged into local main, which carries other sessions' unpushed commits)
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/orph.ts aibot-framework-aibot-1:/tmp/orph.ts
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 sh -c 'bun /tmp/orph.ts'   # read-only: pendingProductionFiles over /app/productions/*/changelog.jsonl
+```
+
+**Outcome.** Container healthy; image has `productionFileStillThere`. Over the live changelogs: 10 unreviewed outputs are orphans (now hidden), 0 outputs left listed. The orphan entries themselves are untouched (pruning = `productions-triage` with `pruneOrphans`, not run). `/tmp/orph.ts` could not be removed (`Operation not permitted`); it lives in the container's writable layer and goes with the next rebuild.
+
+**Reversible?** Yes: check out the previous commit and rebuild.
+
 ### 2026-10-04 — Rebuilt the container for the CI fix and the UX-overhaul follow-ups
 
 | | |
