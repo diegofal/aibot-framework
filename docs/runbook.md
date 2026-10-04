@@ -39,6 +39,22 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — Rebuilt the container for the CI fix and the UX-overhaul follow-ups
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Claude (asked by Diego) |
+| **Why** | `main` at `6bc89bf` changed `src/`: `POST /api/skills/toggle`, `offset` / `before` on `GET /api/curiosity/dispatches`, `assertWithinDir` rejecting Windows-absolute paths. `web/` is bind-mounted, so the new Skills and Dispatches pages were already live against the old server (toggle → 404, "Load older" hidden) |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Built and recreated at 13:19; `healthy` within a minute; auto-start complete; no error-level log lines at boot. Checked inside the container: `app.post('/toggle'` in `src/web/routes/skills.ts`, `parseOffset` in `curiosity.ts`, `win32.isAbsolute` in `src/productions/paths.ts`. Both new routes answer 401 without a login (auth sits in front, as expected). Served `/pages/skills.js` calls `/api/skills/toggle`, and served `/style.css` has no `.tool-runner-*`. One unrelated Telegram `sendMessage` 400 ("can't parse entities") from a bot's own message.
+
+**Reversible?** Yes: check out the previous commit and rebuild (no volume or config change).
+
 ### 2026-10-04 — Rebuilt the container for the curiosity Stats views (PR #2)
 
 | | |
