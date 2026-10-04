@@ -24,12 +24,12 @@ import {
   showToast,
   undoable,
 } from '../ui/index.js';
+import { syncSelectAll } from '../ui/select-all.js';
 import { registerPageShortcuts } from '../ui/shortcuts.js';
 import {
   SHORTCUTS,
   ageGroupOf,
   buildRequest,
-  bulkBar,
   bulkPlan,
   clearChecked,
   createLoadGate,
@@ -38,6 +38,7 @@ import {
   hideItems,
   initialState,
   listBody,
+  listToolbar,
   neutralIds,
   queueSummary,
   reduceKey,
@@ -47,6 +48,7 @@ import {
   shortcutsHelp,
   staleClearIds,
   summarizeBulk,
+  toggleAllVisible,
   toggleChecked,
   unhideItems,
   visibleItems,
@@ -108,10 +110,10 @@ function redrawFilters() {
 }
 
 function redrawBulk() {
-  const bar = root?.querySelector('#needs-bulk');
+  const bar = root?.querySelector('#needs-toolbar');
   if (!bar) return;
-  bar.innerHTML = bulkBar(bulkPlan(state.items, state.checked));
-  bar.hidden = (state.checked ?? []).length === 0;
+  bar.innerHTML = listToolbar(state);
+  syncSelectAll(bar);
 }
 
 function redrawList() {
@@ -488,9 +490,11 @@ export async function renderNeedsYou(el, { bot = null } = {}) {
       </div>
     </div>
     <div id="needs-filters"></div>
-    <div id="needs-bulk" hidden></div>
     <div class="needs-layout">
-      <div class="needs-list" id="needs-list" role="listbox" aria-label="Everything waiting on you" aria-multiselectable="true"></div>
+      <div class="needs-list-col">
+        <div id="needs-toolbar"></div>
+        <div class="needs-list" id="needs-list" role="listbox" aria-label="Everything waiting on you" aria-multiselectable="true"></div>
+      </div>
       <section class="needs-detail" id="needs-detail" aria-live="polite"></section>
     </div>`;
 
@@ -525,7 +529,14 @@ export async function renderNeedsYou(el, { bot = null } = {}) {
     state = setFilter(state, { botId: e.target.value || null });
     redrawAll();
   });
-  el.querySelector('#needs-bulk').addEventListener('click', (e) => {
+  const toolbar = el.querySelector('#needs-toolbar');
+  toolbar.addEventListener('change', (e) => {
+    if (e.target?.id !== 'needs-select-all' || !state) return;
+    state = toggleAllVisible(state);
+    redrawList();
+    redrawBulk();
+  });
+  toolbar.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-bulk]');
     if (btn) onBulkClick(btn.dataset.bulk);
   });

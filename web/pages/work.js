@@ -12,6 +12,7 @@
  * clears the selection. The file tree stays under the Productions tab.
  */
 import { confirmDialog, showToast, skeleton, undoable } from '../ui/index.js';
+import { selectAllBox, selectAllState, syncSelectAll, toggleAll } from '../ui/select-all.js';
 import { registerPageShortcuts } from '../ui/shortcuts.js';
 import { authedAvatarSrc } from './agent-face.js';
 import { prodRequest } from './productions-helpers.js';
@@ -109,6 +110,11 @@ export async function renderWork(el) {
         </div>
       </div>
       ${workFilters({ ...workFilter, agents, counts })}
+      <div class="work-select-row">${selectAllBox({
+        id: 'work-select-all',
+        state: selectAllState(visible.map(entryKey), selected),
+        count: visible.length,
+      })}</div>
       <div id="work-bulk-wrap">${workBulkBar({
         selected: selected.size,
         approvable: bulkTargets(visible, selected, 'approve').length,
@@ -124,6 +130,7 @@ export async function renderWork(el) {
         focusKey,
       })}</div>
     `;
+    syncSelectAll(el);
   };
 
   /** Move the focus ring without a full redraw. */
@@ -238,6 +245,11 @@ export async function renderWork(el) {
   el.addEventListener(
     'change',
     (e) => {
+      if (e.target.id === 'work-select-all') {
+        selected = toggleAll(visibleEntries().map(entryKey), selected);
+        draw();
+        return;
+      }
       if (e.target.matches?.('[data-select]')) {
         const key = e.target.closest('.work-item')?.dataset.key;
         if (key) {

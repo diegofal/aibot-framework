@@ -4036,7 +4036,7 @@ body.ui-sheet-open {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: calc(100vh - 190px);
+  max-height: calc(100vh - 240px);
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -6385,26 +6385,75 @@ select[aria-invalid="true"] {
   color: var(--on-accent);
 }
 .needs-filter-agent {
+  width: auto;
   max-width: 220px;
+  padding: 4px 28px 4px 12px;
+  border-radius: var(--r-pill);
+  background-color: var(--bg-card);
+  font-size: var(--fs-sm);
 }
-.needs-bulk-bar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
+.needs-list-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+/* One bar on top of the list: select-all + count, bulk actions in place. */
+.needs-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--accent);
+  min-height: 42px;
+  padding: 5px 10px 5px 10px; /* box lines up with .needs-check (left: 11px) */
+  border: 1px solid var(--border);
   border-radius: var(--r-lg);
+  background: var(--bg-card);
+  transition: border-color var(--fast), background var(--fast);
+}
+.needs-toolbar.has-selection {
+  border-color: var(--accent);
   background: var(--accent-bg);
 }
-.needs-bulk-count {
+.needs-toolbar-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   margin-right: auto;
-  font-weight: 600;
+  color: var(--text-dim);
   font-size: var(--fs-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.needs-toolbar-select input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.needs-toolbar-select:hover .needs-toolbar-hint {
+  color: var(--text);
+}
+.needs-toolbar-hint {
+  color: var(--text-dim);
+  transition: color var(--fast);
+}
+.needs-toolbar-hint + .text-dim::before {
+  content: '·';
+  margin-right: 10px;
+}
+.needs-toolbar-count {
+  color: var(--text);
+  font-weight: 600;
+}
+.needs-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.needs-toolbar-actions:empty {
+  display: none;
 }
 .needs-group {
   display: flex;
@@ -6572,4 +6621,29 @@ select[aria-invalid="true"] {
 }
 .cur-seg-pending {
   background: var(--border-strong);
+}
+
+/* ── Shared "select all" box (web/ui/select-all.js): Needs You, Work, Skills ── */
+.select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.select-all:hover {
+  color: var(--text);
+}
+.select-all input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+}
+.work-select-row {
+  margin: 0 0 6px;
 }

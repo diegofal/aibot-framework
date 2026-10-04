@@ -12,6 +12,7 @@
  *     href, meta }
  */
 import { avatar, badge, emptyState, esc } from '../ui/index.js';
+import { selectAllState, toggleAll } from '../ui/select-all.js';
 import { ago } from './agent-home-helpers.js';
 
 export const KIND_LABEL = {
@@ -53,7 +54,7 @@ export const SHORTCUTS = [
   ['1 – 4', 'Focus a quick-reply chip (again to unfocus)'],
   ['x', 'Select / unselect the focused item'],
   ['Shift + j / k', 'Extend the selection down / up'],
-  ['*', 'Select every visible item'],
+  ['*', 'Select / unselect every visible item'],
   ['o', "Open the agent's Home"],
   ['Enter', 'Open the item where it lives'],
   ['Ctrl/⌘ + Enter', 'Submit while typing in the reply box'],
@@ -290,6 +291,16 @@ export function checkAllVisible(state) {
   );
 }
 
+/** Select every visible row, or unselect them when they are all selected already. */
+export function toggleAllVisible(state) {
+  const ids = visibleItems(state).map((i) => i.id);
+  const next = toggleAll(ids, state.checked);
+  // Keep the existing order, append the newly selected rows in list order.
+  const before = (state.checked ?? []).filter((id) => next.has(id));
+  const added = ids.filter((id) => next.has(id) && !before.includes(id));
+  return { ...state, checked: [...before, ...added] };
+}
+
 export function clearChecked(state) {
   return { ...state, checked: [] };
 }
@@ -435,7 +446,7 @@ export function reduceKey(state, key, ctx = {}) {
       return { state: addChecked(moved, [item.id, moved.selectedId]), effect: NONE };
     }
     case '*':
-      return { state: checkAllVisible(state), effect: NONE };
+      return { state: toggleAllVisible(state), effect: NONE };
     case 'Escape':
       if ((state.checked ?? []).length > 0) return { state: clearChecked(state), effect: NONE };
       return { state: { ...state, chipIndex: -1, help: false }, effect: NONE };
@@ -553,7 +564,7 @@ export function filterBar(state) {
 </div>`;
 }
 
-/** The bar shown while the selection set is non-empty; '' otherwise. */
+/** Bulk action buttons for the selection set; '' when nothing is selected. */
 export function bulkBar(plan) {
   if (!plan || plan.count === 0) return '';
   const n = plan.count;
@@ -569,11 +580,33 @@ export function bulkBar(plan) {
     nNeutral > 0
       ? `<button type="button" class="btn btn-sm" data-bulk="neutral" title="Questions dismissed, permissions denied, proposals rejected, outputs archived — nothing approved; tools are skipped (reject them explicitly)">Dismiss ${nNeutral}</button>`
       : '';
-  return `<div class="needs-bulk-bar" role="toolbar" aria-label="Bulk actions">
-  <span class="needs-bulk-count">${n} selected</span>
-  ${dismiss}
-  ${archive}${approve}
-  <button type="button" class="btn btn-sm needs-bulk-clear" data-bulk="clear">Clear selection <kbd>Esc</kbd></button>
+  return `${dismiss}${archive}${approve}<button type="button" class="btn btn-sm needs-bulk-clear" data-bulk="clear" title="Clear selection (Esc)">Clear</button>`;
+}
+
+/**
+ * The bar on top of the list: a tri-state select-all box and the count,
+ * with the bulk actions in place once something is selected. '' when the
+ * list is empty.
+ */
+export function listToolbar(state) {
+  const ids = visibleItems(state).map((i) => i.id);
+  if (ids.length === 0) return '';
+  const boxState = selectAllState(ids, state.checked);
+  const plan = bulkPlan(state.items, state.checked);
+  const total = ids.length;
+  const label =
+    plan.count === 0
+      ? `<span class="needs-toolbar-hint">Select all</span><span class="text-dim">${total} item${
+          total === 1 ? '' : 's'
+        }</span>`
+      : `<span class="needs-toolbar-count">${
+          boxState === 'all' ? `All ${total}` : `${plan.count} of ${total}`
+        } selected</span>`;
+  return `<div class="needs-toolbar${plan.count > 0 ? ' has-selection' : ''}" role="toolbar" aria-label="Selection">
+  <label class="needs-toolbar-select" title="${boxState === 'all' ? 'Unselect all' : 'Select all'} (*)"><input type="checkbox" id="needs-select-all" data-state="${boxState}" aria-label="${
+    boxState === 'all' ? 'Unselect all' : 'Select all visible items'
+  }"${boxState === 'all' ? ' checked' : ''}>${label}</label>
+  <div class="needs-toolbar-actions">${bulkBar(plan)}</div>
 </div>`;
 }
 

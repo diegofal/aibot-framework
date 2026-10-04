@@ -1,4 +1,5 @@
 import { confirmDialog, emptyState, showToast } from '../ui/index.js';
+import { selectAllBox, selectAllState, syncSelectAll, toggleAll } from '../ui/select-all.js';
 import { api, closeModal, escapeHtml, showModal } from './shared.js';
 import {
   applyToggleResult,
@@ -122,6 +123,24 @@ export async function renderSkills(el) {
     </tr>`;
   }
 
+  /** Built-in ids under the current filter: the only selectable rows. */
+  const selectableIds = () =>
+    filterSkills(skills, skillsFilter)
+      .filter((sk) => sk.type === 'builtin')
+      .map((sk) => sk.id);
+
+  function drawSelectAll() {
+    const cell = document.getElementById('skills-select-cell');
+    if (!cell) return;
+    const ids = selectableIds();
+    cell.innerHTML = selectAllBox({
+      id: 'skills-select-all',
+      state: selectAllState(ids, selected),
+      count: ids.length,
+    });
+    syncSelectAll(cell);
+  }
+
   function draw() {
     drawBulk();
     const visible = filterSkills(skills, skillsFilter);
@@ -147,9 +166,10 @@ export async function renderSkills(el) {
       return;
     }
     wrap.innerHTML = `<table>
-      <thead><tr><th aria-label="Select"></th><th>Name</th><th>Type</th><th>Version</th><th>Commands / Tools</th><th>Warnings</th><th>Actions</th></tr></thead>
+      <thead><tr><th id="skills-select-cell" aria-label="Select"></th><th>Name</th><th>Type</th><th>Version</th><th>Commands / Tools</th><th>Warnings</th><th>Actions</th></tr></thead>
       <tbody id="skills-tbody">${visible.map(rowHtml).join('')}</tbody>
     </table>`;
+    drawSelectAll();
   }
   draw();
 
@@ -167,11 +187,19 @@ export async function renderSkills(el) {
   });
 
   wrap.addEventListener('change', (e) => {
+    if (e.target.id === 'skills-select-all') {
+      const next = toggleAll(selectableIds(), selected);
+      selected.clear();
+      for (const id of next) selected.add(id);
+      draw();
+      return;
+    }
     const box = e.target.closest('input[data-select]');
     if (!box) return;
     if (box.checked) selected.add(box.dataset.select);
     else selected.delete(box.dataset.select);
     drawBulk();
+    drawSelectAll();
   });
   bulk.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-bulk]');

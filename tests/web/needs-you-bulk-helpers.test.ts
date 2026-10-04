@@ -16,12 +16,14 @@ import {
   initialState,
   kindCounts,
   listBody,
+  listToolbar,
   moveSelection,
   neutralIds,
   reduceKey,
   setFilter,
   staleClearIds,
   summarizeBulk,
+  toggleAllVisible,
   toggleChecked,
   unhideItems,
   visibleItems,
@@ -183,6 +185,39 @@ describe('selection set', () => {
     expect(r.effect.type).toBe('none');
   });
 
+  it('* and the select-all box toggle: all visible selected → unselect them', () => {
+    let r = reduceKey(s0, '*');
+    expect(r.state.checked).toHaveLength(5);
+    r = reduceKey(r.state, '*');
+    expect(r.state.checked).toEqual([]);
+    const once = toggleAllVisible(setFilter(s0, { botId: 'b1' }));
+    expect(once.checked).toEqual(['production:b1:f1', 'ask:old']);
+    expect(toggleAllVisible(once).checked).toEqual([]);
+  });
+
+  it('listToolbar: one bar with the select-all box, count and in-place actions', () => {
+    const idle = listToolbar(s0);
+    expect(idle).toContain('id="needs-select-all"');
+    expect(idle).toContain('data-state="none"');
+    expect(idle).toContain('Select all');
+    expect(idle).toContain('5 items');
+    expect(idle).not.toContain('data-bulk=');
+    expect(idle).not.toContain('has-selection');
+
+    const some = listToolbar(toggleChecked(s0, 'tool:t1'));
+    expect(some).toContain('data-state="some"');
+    expect(some).toContain('1 of 5 selected');
+    expect(some).toContain('has-selection');
+    expect(some).toContain('data-bulk="approve"');
+
+    const all = listToolbar(toggleAllVisible(s0));
+    expect(all).toContain('data-state="all"');
+    expect(all).toContain(' checked');
+    expect(all).toContain('All 5 selected');
+
+    expect(listToolbar(initialState([], null, { nowMs: NOW }))).toBe('');
+  });
+
   it('Shift+J from an unchecked row checks both ends', () => {
     const r = reduceKey(s0, 'J');
     expect(r.state.checked).toEqual(['production:b1:f1', 'production:b2:f2']);
@@ -209,6 +244,7 @@ describe('bulk', () => {
     expect(bar).toContain('data-bulk="approve"');
     expect(bar).toContain('Approve 2');
     expect(bar).toContain('data-bulk="clear"');
+    expect(bar).not.toContain('needs-toolbar-count'); // the count lives in listToolbar
     const noApprove = bulkBar(bulkPlan(items, ['ask:old', 'permission:p1']));
     expect(noApprove).not.toContain('data-bulk="approve"');
     expect(noApprove).not.toContain('data-bulk="archive"');

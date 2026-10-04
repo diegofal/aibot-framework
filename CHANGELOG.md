@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (2026-10-04) — "Select all" on every multi-select list
+- **Why.** Needs You could only select everything with the undocumented `*` key, and Skills had no way to select all rows. Agents and Automations already had a header checkbox.
+- `web/ui/select-all.js`: `selectAllState` (`none`/`some`/`all` over the visible ids), `toggleAll` (select the visible rows, or unselect them when they are all selected already), `selectAllBox` (labelled tri-state checkbox, `Select all N` / `Unselect all`) and `syncSelectAll` (sets `indeterminate`).
+- Needs You: the floating select-all box and the separate sticky bulk bar are merged into one toolbar on top of the list (`listToolbar` in needs-you-helpers): tri-state box lined up with the row checkboxes, `Select all · N items` when idle, `K of N selected` plus Dismiss / Archive / Approve / Clear in place once something is selected (accent tint). `bulkBar` now returns only the buttons. `*` toggles too (`toggleAllVisible`). The agent filter is a compact pill matching the kind chips. Work: the same box above the bulk bar. Skills: in the select column header, over the built-in skills under the current filter. Tools keeps its `Select pending (N)` button.
+- Tests: `tests/web/ui-select-all.test.ts`, two new cases in `tests/web/needs-you-bulk-helpers.test.ts`.
+
 ### Fixed (2026-10-04) — Needs You "Clear" failed on outputs whose file is gone
 - **Why.** "Clear N" on a Needs You group answered `Cleared 0 · N failed — Not found or already resolved`. Every failing item was an unreviewed output whose changelog entry outlived its file (16 in the live fleet: milei-rocca 10, ai-perfectionist 3, cryptik 2, job-seeker 1). The neutral action archives the file, and `archiveFile` can only fail when there is nothing to move.
 - **Fix.** `NeedsYouSources.productionFileExists(botId, path)` (wired to `existsSync` under `ProductionsService.resolveDir`) and `buildProductions` drops outputs whose file is gone: there is nothing to review. Track-only outputs are kept (their files never live in the productions dir), and a probe that throws keeps the item. Orphans stay visible to the hygiene routine `productions-triage` (`orphan-reference`), which prunes them from the changelog with a backup when run with `pruneOrphans`.
