@@ -39,6 +39,26 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — AI Perfectionist repurposed as Diego's AI engineer / FDE research mentor (soul files in the live volume)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1`, `/app/data/tenants/__admin__/bots/ai-perfectionist/soul/` |
+| **Who** | Diego (agent session, approved in chat) |
+| **Why** | Its goals had drifted to its own tooling and to chasing a reply about a deleted file; the operator wants it researching the latest AI engineering practice to make him a great AI engineer / FDE |
+
+```bash
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/aiperf-apply.ts aibot-framework-aibot-1:/tmp/aiperf-apply.ts
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun /tmp/aiperf-apply.ts
+# serializeGoals keeps only the last 10 completed goals and the retired ones had been placed first, so they were cut; rebuilt:
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/aiperf-goals-fix.ts aibot-framework-aibot-1:/tmp/aiperf-goals-fix.ts
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun /tmp/aiperf-goals-fix.ts
+```
+
+**Outcome.** GOALS.md: 5 new active goals (weekly AI Engineer / FDE Brief on Mondays, living FDE skills map, primary-source watchlist, monthly hands-on lab, one calibration question), the 5 old active goals kept in Completed as "retired 2026-10-04"; the 5 oldest completed goals now live only in the backup. MOTIVATIONS.md rewritten around Diego's growth (signal over hype, FDE lens, no goals about its own tooling). IDENTITY.md vibe names the FDE target. NAVIGATOR.json direction cleared so the navigator re-plans next cycle. Config, backend and knowledge map unchanged. Next scheduled run 2026-10-05T02:14Z.
+
+**Reversible?** Yes: backups in `soul/.versions/{GOALS.md,MOTIVATIONS.md,IDENTITY.md,NAVIGATOR.json}.2026-10-04T20-32-11-616Z.bak`; copy them back.
+
 ### 2026-10-04 — Rebuilt the container for PR #4 (absolute paths) and PR #5 (message boxes)
 
 | | |
