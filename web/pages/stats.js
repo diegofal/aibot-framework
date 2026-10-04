@@ -47,18 +47,14 @@ function setWindow(w) {
   }
 }
 
-const TABS = [
-  { id: 'fleet', label: 'Fleet', href: '#/stats' },
-  { id: 'behaviour', label: 'Behaviour', href: '#/stats/behaviour' },
-  { id: 'infra', label: 'Infra', href: '#/stats/infra' },
-  { id: 'hygiene', label: 'Hygiene', href: '#/stats/hygiene' },
-];
-
 /**
- * Page chrome shared by all stats views: title, tabs, optional window selector.
+ * Page chrome shared by all stats views: title + optional window selector.
+ * The Fleet / Behaviour / Infra / Hygiene switch is the Insights area's tab
+ * strip (web/nav-routes.js), so the page no longer draws its own (UX
+ * overhaul phase 4). `activeTab` is kept for call-site compatibility.
  * Returns the body container. `onWindowChange` re-renders the view.
  */
-function shell(el, activeTab, { withWindow = false, onWindowChange, subtitle } = {}) {
+function shell(el, _activeTab, { withWindow = false, onWindowChange, subtitle } = {}) {
   const w = getWindow();
   el.innerHTML = `
     <div class="flex-between mb-16 stats-header">
@@ -74,10 +70,6 @@ function shell(el, activeTab, { withWindow = false, onWindowChange, subtitle } =
           : ''
       }
     </div>
-    <div class="stats-tabs">${TABS.map(
-      (t) =>
-        `<a class="stats-tab${t.id === activeTab ? ' active' : ''}" href="${t.href}">${t.label}</a>`
-    ).join('')}</div>
     <div id="stats-body"><p class="text-dim">Loading...</p></div>`;
   if (withWindow) {
     el.querySelector('#stats-window').addEventListener('change', (e) => {
@@ -171,7 +163,7 @@ function fleetRow(b) {
     flag(b.goals?.oversizedNotes, 'oversized'),
   ].join('');
   return `<tr>
-    <td><a href="#/stats/bot/${id}">${escapeHtml(b.name || b.botId)}</a>${
+    <td><a href="#/insights/stats/bot/${id}">${escapeHtml(b.name || b.botId)}</a>${
       b.enabled === false ? ' <span class="badge badge-disabled">off</span>' : ''
     }<div class="stats-muted-id">${escapeHtml(b.botId)}</div></td>
     <td>${channelPill(b.channel)}</td>
@@ -321,7 +313,6 @@ function traitsPanel(traits) {
     }</div>`;
 }
 
-
 function cyclesList(cycles) {
   const list = Array.isArray(cycles) ? cycles : [];
   if (list.length === 0) return '<p class="text-dim text-sm">No recent cycles.</p>';
@@ -354,7 +345,7 @@ function asksList(asks, botId) {
     <tbody>${list
       .map(
         (a) => `<tr>
-        <td><a href="#/inbox/${encodeURIComponent(botId)}/${encodeURIComponent(a.id)}">${escapeHtml(a.title || a.id)}</a></td>
+        <td><a href="#/needs/inbox/${encodeURIComponent(botId)}/${encodeURIComponent(a.id)}">${escapeHtml(a.title || a.id)}</a></td>
         <td>${pill(a.inboxStatus || 'pending', INBOX_BADGE[a.inboxStatus] || 'badge-disabled')}</td>
         <td class="num text-dim">${formatNumber(a.questionChars)}</td>
         <td class="text-dim">${relativeTime(a.createdAt)}</td>
@@ -483,7 +474,7 @@ export async function renderStatsBot(el, botId) {
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <a href="#/agents/${encodeURIComponent(b.botId)}" class="btn btn-sm">Agent</a>
-        <a href="#/stats" class="btn btn-sm">&larr; Fleet</a>
+        <a href="#/insights/stats" class="btn btn-sm">&larr; Fleet</a>
       </div>
     </div>
     <div class="stats-kpis">${botKpis(b)}</div>
@@ -628,7 +619,7 @@ function pwfBars(list) {
       (r, i) => `<div class="stats-hbar-row" title="${escapeHtml(
         `${r.botId}: ${formatNumber(r.outputsSinceFeedback)} outputs since feedback (${relativeTime(r.lastFeedbackAt)})`
       )}">
-      <a class="stats-hbar-label" href="#/stats/bot/${encodeURIComponent(r.botId)}">${escapeHtml(r.botId)}</a>
+      <a class="stats-hbar-label" href="#/insights/stats/bot/${encodeURIComponent(r.botId)}">${escapeHtml(r.botId)}</a>
       <span class="stats-hbar-track"><span class="stats-hbar-fill${r.outputsSinceFeedback >= 10 ? ' warn' : ''}" style="width:${heights[i]}%"></span></span>
       <span class="num stats-hbar-val">${formatNumber(r.outputsSinceFeedback)}</span>
       <span class="text-dim text-sm">${relativeTime(r.lastFeedbackAt)}</span>
@@ -801,7 +792,7 @@ export async function renderStatsInfra(el) {
     ? `<table class="stats-table"><thead><tr><th>Bot</th><th>State</th><th>Last error</th></tr></thead><tbody>${telegram
         .map(
           (t) =>
-            `<tr><td><a href="#/stats/bot/${encodeURIComponent(t.botId)}">${escapeHtml(t.botId)}</a></td><td>${pill(t.state || 'unknown', channelStateClass(t.state))}</td><td class="text-sm mono stats-ellipsis" title="${escapeHtml(t.lastError || '')}">${escapeHtml(t.lastError || '--')}</td></tr>`
+            `<tr><td><a href="#/insights/stats/bot/${encodeURIComponent(t.botId)}">${escapeHtml(t.botId)}</a></td><td>${pill(t.state || 'unknown', channelStateClass(t.state))}</td><td class="text-sm mono stats-ellipsis" title="${escapeHtml(t.lastError || '')}">${escapeHtml(t.lastError || '--')}</td></tr>`
         )
         .join('')}</tbody></table>`
     : '<p class="text-dim text-sm">No Telegram bots.</p>';
@@ -810,7 +801,7 @@ export async function renderStatsInfra(el) {
     ? `<table class="stats-table"><thead><tr><th>Bot</th><th class="num">Critical</th><th class="num">Warn</th><th class="num">Info</th><th>When</th></tr></thead><tbody>${audit
         .map(
           (a) =>
-            `<tr><td>${a.botId ? `<a href="#/stats/bot/${encodeURIComponent(a.botId)}">${escapeHtml(a.botId)}</a>` : '<span class="text-dim">system</span>'}</td><td class="num ${a.critical ? 'stats-bad' : 'text-dim'}">${formatNumber(a.critical)}</td><td class="num ${a.warn ? 'stats-warn' : 'text-dim'}">${formatNumber(a.warn)}</td><td class="num text-dim">${formatNumber(a.info)}</td><td class="text-dim">${relativeTime(a.at)}</td></tr>`
+            `<tr><td>${a.botId ? `<a href="#/insights/stats/bot/${encodeURIComponent(a.botId)}">${escapeHtml(a.botId)}</a>` : '<span class="text-dim">system</span>'}</td><td class="num ${a.critical ? 'stats-bad' : 'text-dim'}">${formatNumber(a.critical)}</td><td class="num ${a.warn ? 'stats-warn' : 'text-dim'}">${formatNumber(a.warn)}</td><td class="num text-dim">${formatNumber(a.info)}</td><td class="text-dim">${relativeTime(a.at)}</td></tr>`
         )
         .join('')}</tbody></table>`
     : '<p class="text-dim text-sm">No security audit results.</p>';
@@ -819,7 +810,7 @@ export async function renderStatsInfra(el) {
     ? `<table class="stats-table"><thead><tr><th>Job</th><th>Bot</th><th>Schedule</th><th>Status</th><th>Last run</th><th>Next run</th><th class="num">Consec. errors</th><th>Error</th></tr></thead><tbody>${cron
         .map(
           (c) => `<tr class="${c.enabled === false ? 'stats-row-dim' : ''}">
-          <td><a href="#/cron/${encodeURIComponent(c.id)}">${escapeHtml(c.name || c.id)}</a>${c.enabled === false ? ' <span class="badge badge-disabled">off</span>' : ''}</td>
+          <td><a href="#/automations/cron/${encodeURIComponent(c.id)}">${escapeHtml(c.name || c.id)}</a>${c.enabled === false ? ' <span class="badge badge-disabled">off</span>' : ''}</td>
           <td class="text-sm">${escapeHtml(c.botId || '--')}</td>
           <td class="mono text-sm">${escapeHtml(c.schedule || '--')}</td>
           <td>${cronStatusPill(c.lastStatus)}</td>

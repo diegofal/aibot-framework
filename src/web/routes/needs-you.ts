@@ -6,8 +6,9 @@
  *   GET /api/needs-you/count  { count, byKind } for the sidebar badge
  *   POST /api/needs-you/bulk  { ids[], action, note? } → { results: [{ id, ok, error? }] }
  *   POST /api/needs-you/act   { id, action, note? } → { ok } (one item, same path as bulk)
- *   POST /api/needs-you/clear-stale { olderThanHours>=1, kinds?, botId? }
- *                             → { cleared, byKind, results } — neutral action per kind
+ *   POST /api/needs-you/clear-stale { olderThanHours>=1, kinds?, botId?, ids? }
+ *                             → { cleared, byKind, results } — neutral action per kind;
+ *                               `ids` narrows to exactly the rows the operator confirmed
  *
  * Write side (docs/plans/ux-overhaul-plan.md, Phase 1): bulk/act/clear-stale
  * rebuild the viewer's queue (so tenant scoping is exactly GET's) and apply
@@ -183,17 +184,21 @@ export const NEEDS_YOU_SUPPORTED_ACTIONS: Record<NeedsYouKind, readonly NeedsYou
 
 type ConcreteAction = Exclude<NeedsYouBulkAction, 'neutral'>;
 
-/** The neutral action per kind — what `clear-stale` and `neutral` apply. Never approves. */
-export const NEEDS_YOU_NEUTRAL_ACTION: Record<NeedsYouKind, ConcreteAction> = {
+/**
+ * The neutral action per kind — what `clear-stale` and `neutral` apply. Never
+ * approves. Tools have none (`null`): rejecting code is a review, not upkeep,
+ * so a tool needs an explicit `reject`.
+ */
+export const NEEDS_YOU_NEUTRAL_ACTION: Record<NeedsYouKind, ConcreteAction | null> = {
   ask: 'dismiss',
   permission: 'deny',
   proposal: 'reject',
   production: 'archive',
   feedback: 'dismiss',
-  tool: 'reject',
+  tool: null,
 };
 
-/** `clear-stale` without `kinds`: everything but tools (rejecting code is a review, not upkeep). */
+/** `clear-stale` without `kinds`: every kind with a neutral action (all but tools). */
 export const CLEAR_STALE_DEFAULT_KINDS: readonly NeedsYouKind[] = [
   'ask',
   'permission',
@@ -867,6 +872,9 @@ export function resolveBulkAction(
   action: NeedsYouBulkAction
 ): { action: ConcreteAction } | { error: string } {
   const concrete = action === 'neutral' ? NEEDS_YOU_NEUTRAL_ACTION[kind] : action;
+  if (!concrete) {
+    return { error: `${kind} items have no neutral action — reject them explicitly` };
+  }
   if (!NEEDS_YOU_SUPPORTED_ACTIONS[kind].includes(concrete)) {
     return { error: `"${concrete}" is not supported for ${kind} items` };
   }
@@ -1056,7 +1064,7 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
     return c.json({ ok: true });
   });
 
-  // POST /clear-stale { olderThanHours, kinds?, botId? } → { cleared, byKind, results }
+  // POST /clear-stale { olderThanHours, kinds?, botId?, ids? } → { cleared, byKind, results }
   app.post('/clear-stale', async (c) => {
     const body = await readBody(c);
     const hours = body.olderThanHours;
@@ -1072,30 +1080,51 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
         return c.json({ error: `"kinds" must be a subset of ${NEEDS_YOU_KINDS.join(', ')}` }, 400);
       }
       kinds = body.kinds as NeedsYouKind[];
+      const noNeutral = kinds.filter((k) => !NEEDS_YOU_NEUTRAL_ACTION[k]);
+      if (noNeutral.length > 0) {
+        return c.json(
+          { error: `"${noNeutral.join('", "')}" has no neutral action — reject explicitly` },
+          400
+        );
+      }
+    }
+    // `ids`: exactly the rows the operator confirmed. Without it, the server's
+    // view ~5 s later (after the Undo window) would also sweep rows hidden by
+    // other pending actions and items that went stale in the meantime.
+    let only: Set<string> | null = null;
+    if (body.ids !== undefined) {
+      if (
+        !Array.isArray(body.ids) ||
+        body.ids.length > BULK_MAX_IDS ||
+        !body.ids.every((id) => typeof id === 'string' && id)
+      ) {
+        return c.json({ error: `"ids" must be an array of up to ${BULK_MAX_IDS} item ids` }, 400);
+      }
+      only = new Set(body.ids as string[]);
     }
     const botId = typeof body.botId === 'string' && body.botId ? body.botId : null;
     const cutoff = now() - hours * 3_600_000;
-    const items = build(c).filter((i) => {
-      if (!kinds.includes(i.kind)) return false;
+    const matched = build(c).filter((i) => {
+      if (only && !only.has(i.id)) return false;
+      if (!kinds.includes(i.kind) || !NEEDS_YOU_NEUTRAL_ACTION[i.kind]) return false;
       if (botId && i.botId !== botId) return false;
       const t = Date.parse(i.createdAt);
       return Number.isFinite(t) && t < cutoff;
     });
-    const results = runMany(
-      items,
-      items.map((i) => i.id),
-      (item) => NEEDS_YOU_NEUTRAL_ACTION[item.kind],
-      CLEARED_NOTE
-    );
+    const matchedIds = new Set(matched.map((i) => i.id));
+    const items = only
+      ? (body.ids as string[]).filter((id, n, all) => matchedIds.has(id) && all.indexOf(id) === n)
+      : matched.map((i) => i.id);
+    const results = runMany(matched, items, 'neutral', CLEARED_NOTE);
     const byKind = emptyByKind();
-    const kindOf = new Map(items.map((i) => [i.id, i.kind]));
+    const kindOf = new Map(matched.map((i) => [i.id, i.kind]));
     for (const r of results) {
       const k = kindOf.get(r.id);
       if (r.ok && k) byKind[k] += 1;
     }
     const cleared = results.filter((r) => r.ok).length;
     deps.logger.info(
-      { olderThanHours: hours, kinds, botId, matched: items.length, cleared },
+      { olderThanHours: hours, kinds, botId, ids: only?.size ?? null, matched: items.length, cleared },
       'needs-you: cleared stale items'
     );
     return c.json({ cleared, byKind, results });

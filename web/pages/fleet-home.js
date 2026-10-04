@@ -10,16 +10,22 @@
  * badge); live updates ride one `/ws/activity` socket through `watchFleet()`.
  * Card order is fixed at render time so cards do not jump under the cursor.
  */
-import { skeleton } from '../ui/index.js';
+import { showToast, skeleton } from '../ui/index.js';
 import { authedAvatarSrc } from './agent-face.js';
 import {
   TICKER_LIMIT,
   condensedTickerBody,
+  filterFleet,
   fleetCard,
+  fleetErrorState,
+  fleetFilterChips,
+  fleetFilterCounts,
   fleetGrid,
   fleetSummary,
   pushTicker,
+  readFleetFilter,
   sortFleet,
+  writeFleetFilter,
 } from './fleet-home-helpers.js';
 import { watchFleet } from './live-presence.js';
 import { api, escapeHtml } from './shared.js';
@@ -58,12 +64,67 @@ function redrawTicker() {
   }
 }
 
+function storage() {
+  return typeof localStorage !== 'undefined' ? localStorage : null;
+}
+
+/** Rebuild the grid for the current filter (order stays the render-time order). */
+function paintGrid() {
+  if (!state) return;
+  const wrap = state.el.querySelector('#fleet-grid-wrap');
+  const chips = state.el.querySelector('#fleet-chips');
+  if (chips)
+    chips.innerHTML = fleetFilterChips(
+      state.filter,
+      fleetFilterCounts(state.agents, state.presence)
+    );
+  if (!wrap) return;
+  const visible = new Set(filterFleet(state.agents, state.presence, state.filter).map((a) => a.id));
+  const shown = state.order.filter((a) => visible.has(a.id));
+  if (shown.length === 0) {
+    wrap.innerHTML = fleetGrid([], {}, Date.now(), {
+      ...CARD_OPTS,
+      filtered: state.agents.length > 0,
+    });
+    return;
+  }
+  const now = Date.now();
+  wrap.innerHTML = `<div class="fleet-grid">${shown
+    .map((a) => fleetCard(a, state.presence[a.id], now, CARD_OPTS))
+    .join('')}</div>`;
+}
+
 function redrawCards() {
   if (!state) return;
-  const now = Date.now();
-  for (const agent of state.order) {
-    const card = state.el.querySelector(`.fleet-card[data-bot-id="${CSS.escape(agent.id)}"]`);
-    if (card) card.outerHTML = fleetCard(agent, state.presence[agent.id], now, CARD_OPTS);
+  // Cards entering or leaving the filter need a full grid repaint.
+  const visible = filterFleet(state.agents, state.presence, state.filter).map((a) => a.id);
+  const rendered = [...state.el.querySelectorAll('.fleet-card[data-bot-id]')].map(
+    (c) => c.dataset.botId
+  );
+  const sameSet =
+    visible.length === rendered.length && visible.every((id) => rendered.includes(id));
+  if (!sameSet) {
+    paintGrid();
+  } else {
+    const now = Date.now();
+    for (const agent of state.order) {
+      const card = state.el.querySelector(`.fleet-card[data-bot-id="${CSS.escape(agent.id)}"]`);
+      // Keep a card whose quick action is mid-request (or focused) as it is.
+      if (
+        card &&
+        !card.contains(document.activeElement) &&
+        !card.querySelector('[data-quick]:disabled')
+      ) {
+        card.outerHTML = fleetCard(agent, state.presence[agent.id], now, CARD_OPTS);
+      }
+    }
+    const chips = state.el.querySelector('#fleet-chips');
+    if (chips) {
+      chips.innerHTML = fleetFilterChips(
+        state.filter,
+        fleetFilterCounts(state.agents, state.presence)
+      );
+    }
   }
   const sub = state.el.querySelector('#fleet-sub');
   if (sub) sub.textContent = summaryLine(state.agents, state.presence, state.needsYou);
@@ -77,17 +138,84 @@ async function refreshNeedsYou() {
   if (sub) sub.textContent = summaryLine(state.agents, state.presence, state.needsYou);
 }
 
+function onFilterClick(e) {
+  const chip = e.target.closest('[data-fleet-filter]');
+  if (!chip || !state) return;
+  state.filter = chip.dataset.fleetFilter;
+  writeFleetFilter(storage(), state.filter);
+  paintGrid();
+}
+
+const QUICK_PATHS = {
+  start: (id) => `/api/agents/${id}/start`,
+  'enable-start': (id) => `/api/agents/${id}/start?enable=true`,
+  stop: (id) => `/api/agents/${id}/stop`,
+  run: (id) => `/api/agent-loop/run/${id}`,
+};
+
+/** Start / Stop / Run now on a card; never follows the card link. */
+async function onQuickAction(e) {
+  const btn = e.target.closest('[data-quick]');
+  if (!btn || !state) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const action = btn.dataset.quick;
+  const id = btn.dataset.id;
+  const name = state.names[id] || id;
+  const path = QUICK_PATHS[action]?.(encodeURIComponent(id));
+  if (!path) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = action === 'run' ? 'Running…' : action === 'stop' ? 'Stopping…' : 'Starting…';
+  const res = await api(path, { method: 'POST' }).catch((err) => ({ error: err?.message }));
+  btn.disabled = false;
+  btn.textContent = label;
+  if (!res || res.error) {
+    showToast(`${name}: ${res?.error || 'request failed'}`, { tone: 'danger', duration: 8000 });
+    return;
+  }
+  const done = action === 'run' ? 'finished a cycle' : action === 'stop' ? 'stopped' : 'started';
+  showToast(`${name} ${done}`, { tone: 'ok' });
+  if (!state) return;
+  // Reflect the new running state right away; the live presence link catches up.
+  if (action !== 'run') {
+    const running = action !== 'stop';
+    const agent = state.agents.find((a) => a.id === id);
+    if (agent) {
+      agent.running = running;
+      if (action === 'enable-start') agent.enabled = true;
+    }
+    const p = state.presence[id];
+    if (p) {
+      state.presence[id] = {
+        ...p,
+        running,
+        ...(action === 'enable-start' ? { enabled: true } : {}),
+      };
+    }
+    redrawCards();
+  }
+}
+
 export async function renderFleetHome(el) {
   destroyFleetHome();
   el.innerHTML = `<div class="page-title">Fleet</div>${skeleton({ lines: 5 })}`;
 
   const [agentsRes, presenceRes, activityRes, needsRes] = await Promise.all([
-    api('/api/agents').catch(() => []),
+    api('/api/agents').catch((err) => ({ error: err?.message || 'Request failed' })),
     api('/api/agents/presence').catch(() => null),
     api(`/api/activity?limit=${TICKER_LIMIT}`).catch(() => null),
     api('/api/needs-you/count').catch(() => null),
   ]);
-  const agents = Array.isArray(agentsRes) ? agentsRes : [];
+  if (!Array.isArray(agentsRes)) {
+    // A failed request must not read as an empty fleet.
+    el.innerHTML = `<div class="page-title">Fleet</div>${fleetErrorState(agentsRes?.error)}`;
+    el.querySelector('[data-action="fleet-retry"]')?.addEventListener('click', () =>
+      renderFleetHome(el)
+    );
+    return;
+  }
+  const agents = agentsRes;
   const presence = presenceRes?.agents ?? {};
   const names = Object.fromEntries(agents.map((a) => [a.id, a.name || a.id]));
   // /api/activity is oldest -> newest; the ticker wants newest first.
@@ -108,6 +236,7 @@ export async function renderFleetHome(el) {
     tickerExpanded: false,
     needsYou,
     order: sortFleet(agents, presence),
+    filter: readFleetFilter(storage()),
   };
 
   el.innerHTML = `
@@ -117,15 +246,24 @@ export async function renderFleetHome(el) {
         <div class="fleet-sub text-dim" id="fleet-sub">${escapeHtml(summaryLine(agents, presence, needsYou))}</div>
       </div>
       <div class="fleet-head-actions">
-        <a class="btn btn-sm" href="#/insights/loop">Loop controls</a>
-        <a class="btn btn-sm btn-primary" href="#/agents">Agents</a>
+        <a class="btn btn-sm" href="#/automations/loop">Loop controls</a>
+        <a class="btn btn-sm" href="#/agents">Agents</a>
+        <a class="btn btn-sm btn-primary" href="#/agents/new" data-page-new>+ New agent</a>
       </div>
     </div>
+    ${agents.length > 0 ? '<div id="fleet-chips"></div>' : ''}
     <section id="fleet-grid-wrap" aria-label="Agents">${fleetGrid(agents, presence, Date.now(), CARD_OPTS)}</section>
     <section class="fleet-ticker" aria-label="Recent fleet events" aria-live="polite">
       <div class="fleet-ticker-head"><span class="fleet-live-dot"></span> Recent</div>
       <div id="fleet-ticker-body">${condensedTickerBody(ticker, names, Date.now())}</div>
     </section>`;
+
+  paintGrid();
+
+  el.querySelector('#fleet-chips')?.addEventListener('click', onFilterClick);
+  const gridWrap = el.querySelector('#fleet-grid-wrap');
+  gridWrap?.addEventListener('click', onFilterClick);
+  gridWrap?.addEventListener('click', onQuickAction);
 
   el.querySelector('.fleet-ticker')?.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-action]');

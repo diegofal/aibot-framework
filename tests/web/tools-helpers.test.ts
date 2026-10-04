@@ -20,11 +20,29 @@ const all = [
     category: 'github',
   },
   { name: 'calc', description: 'Do <math>', parameters: {}, source: 'dynamic', status: 'pending' },
-  { name: 'joke', description: 'Tell a joke', parameters: {}, source: 'dynamic', status: 'approved' },
+  {
+    name: 'joke',
+    description: 'Tell a joke',
+    parameters: {},
+    source: 'dynamic',
+    status: 'approved',
+  },
 ];
 const dynamic = [
-  { id: 'd1', name: 'calc', createdBy: 'bot-a', createdAt: '2026-01-01T00:00:00Z', status: 'pending' },
-  { id: 'd2', name: 'joke', createdBy: 'bot-b', createdAt: '2026-01-02T00:00:00Z', status: 'approved' },
+  {
+    id: 'd1',
+    name: 'calc',
+    createdBy: 'bot-a',
+    createdAt: '2026-01-01T00:00:00Z',
+    status: 'pending',
+  },
+  {
+    id: 'd2',
+    name: 'joke',
+    createdBy: 'bot-b',
+    createdAt: '2026-01-02T00:00:00Z',
+    status: 'approved',
+  },
 ];
 
 describe('mergeTools', () => {
@@ -44,7 +62,9 @@ describe('mergeTools', () => {
 describe('filterTools / groupTools / pendingIds', () => {
   const merged = mergeTools(all, dynamic);
   it('filters by query over name and description, and by source', () => {
-    expect(filterTools(merged, { query: 'ISSUE' }).map((t) => t.name)).toEqual(['mcp_github_issue']);
+    expect(filterTools(merged, { query: 'ISSUE' }).map((t) => t.name)).toEqual([
+      'mcp_github_issue',
+    ]);
     expect(filterTools(merged, { source: 'dynamic' })).toHaveLength(2);
     expect(filterTools(merged, { source: 'pending' }).map((t) => t.name)).toEqual(['calc']);
     expect(filterTools(merged, {})).toHaveLength(4);

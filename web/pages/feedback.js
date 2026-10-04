@@ -1,3 +1,4 @@
+import { showToast } from '../ui/index.js';
 import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
 function statusBadge(status) {
@@ -11,10 +12,10 @@ export async function renderFeedback(el) {
 
   const bots = await api('/api/agent-feedback');
 
-  if (bots.error) {
+  if (!Array.isArray(bots)) {
     el.innerHTML = `
       <div class="page-title">Agent Feedback</div>
-      <p class="text-dim">${escapeHtml(bots.error)}</p>
+      <p class="text-dim">${escapeHtml(bots?.error || 'Failed to load feedback')}</p>
     `;
     return;
   }
@@ -43,7 +44,7 @@ export async function renderFeedback(el) {
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
     tr.innerHTML = `
-      <td><a href="#/feedback/${encodeURIComponent(bot.botId)}">${escapeHtml(bot.name)}</a></td>
+      <td><a href="#/needs/feedback/${encodeURIComponent(bot.botId)}">${escapeHtml(bot.name)}</a></td>
       <td>${bot.total}</td>
       <td>${bot.pending > 0 ? `<span style="color:var(--orange)">${bot.pending}</span>` : '0'}</td>
       <td class="text-dim">${bot.applied}</td>
@@ -51,7 +52,7 @@ export async function renderFeedback(el) {
     `;
     tr.addEventListener('click', (e) => {
       if (e.target.tagName === 'A') return;
-      location.hash = `#/feedback/${encodeURIComponent(bot.botId)}`;
+      location.hash = `#/needs/feedback/${encodeURIComponent(bot.botId)}`;
     });
     tbody.appendChild(tr);
   }
@@ -61,26 +62,30 @@ export async function renderBotFeedback(el, botId) {
   el.innerHTML = '<div class="page-title">Agent Feedback</div><p class="text-dim">Loading...</p>';
 
   let currentStatus = 'all';
+  /** Threads the operator opened; kept open across reloads (submit, filter, dismiss). */
+  const openThreads = new Set();
+  let botName = botId;
 
   async function load() {
     const statusParam = currentStatus !== 'all' ? `?status=${currentStatus}` : '';
     const data = await api(`/api/agent-feedback/${encodeURIComponent(botId)}${statusParam}`);
 
-    if (data.error) {
+    if (!data || data.error || !Array.isArray(data.entries)) {
       el.innerHTML = `
         <div class="page-title">Agent Feedback</div>
-        <p class="text-dim">${escapeHtml(data.error)}</p>
-        <a href="#/feedback" class="btn btn-sm">&larr; Back</a>
+        <p class="text-dim">${escapeHtml(data?.error || 'Failed to load feedback')}</p>
+        <a href="#/needs/feedback" class="btn btn-sm">&larr; Back</a>
       `;
       return;
     }
 
     const { entries } = data;
+    if (typeof data.botName === 'string' && data.botName) botName = data.botName;
 
     el.innerHTML = `
       <div class="flex-between mb-16">
-        <div class="page-title">${escapeHtml(botId)} Feedback</div>
-        <a href="#/feedback" class="btn btn-sm">&larr; Back</a>
+        <div class="page-title">${escapeHtml(botName)} Feedback</div>
+        <a href="#/needs/feedback" class="btn btn-sm">&larr; Back</a>
       </div>
 
       <div class="detail-card mb-16">
@@ -122,14 +127,19 @@ export async function renderBotFeedback(el, botId) {
       btn.disabled = true;
       btn.textContent = 'Submitting...';
 
-      await api(`/api/agent-feedback/${encodeURIComponent(botId)}`, {
+      const res = await api(`/api/agent-feedback/${encodeURIComponent(botId)}`, {
         method: 'POST',
         body: { content },
       });
-
-      input.value = '';
       btn.disabled = false;
       btn.textContent = 'Submit Feedback';
+      if (!res || res.error) {
+        // Keep the text so nothing typed is lost.
+        showToast(`Submit failed: ${res?.error || 'unknown error'}`, { tone: 'danger' });
+        return;
+      }
+      input.value = '';
+      showToast('Feedback sent', { tone: 'ok' });
       load();
     });
 
@@ -197,7 +207,7 @@ export async function renderBotFeedback(el, botId) {
         }
         <div style="margin-top:8px;display:flex;gap:8px">
           <button class="btn btn-sm reply-btn" data-id="${entry.id}">Reply</button>
-          ${entry.status === 'pending' ? `<button class="btn btn-sm btn-danger dismiss-btn" data-id="${entry.id}">Dismiss</button>` : ''}
+          ${entry.status === 'pending' ? `<button class="btn btn-sm btn-danger dismiss-btn" data-id="${escapeHtml(entry.id)}">Dismiss</button>` : ''}
         </div>
         <div class="thread-area hidden" data-thread-id="${entry.id}"></div>
       `;
@@ -303,15 +313,17 @@ export async function renderBotFeedback(el, botId) {
       card.querySelector(`.reply-btn[data-id="${entry.id}"]`).addEventListener('click', () => {
         threadVisible = !threadVisible;
         if (threadVisible) {
+          openThreads.add(entry.id);
           threadArea.classList.remove('hidden');
           renderCardThread();
         } else {
+          openThreads.delete(entry.id);
           threadArea.classList.add('hidden');
         }
       });
 
       // Auto-open thread if there are existing thread messages
-      if (entry.thread && entry.thread.length > 0) {
+      if ((entry.thread && entry.thread.length > 0) || openThreads.has(entry.id)) {
         threadVisible = true;
         threadArea.classList.remove('hidden');
         renderCardThread();
@@ -324,8 +336,23 @@ export async function renderBotFeedback(el, botId) {
         const id = btn.dataset.id;
         btn.disabled = true;
         btn.textContent = 'Dismissing...';
-        await api(`/api/agent-feedback/${encodeURIComponent(botId)}/${id}`, { method: 'DELETE' });
-        load();
+        const res = await api(
+          `/api/agent-feedback/${encodeURIComponent(botId)}/${encodeURIComponent(id)}`,
+          { method: 'DELETE' }
+        );
+        if (!res || res.error) {
+          showToast(`Dismiss failed: ${res?.error || 'unknown error'}`, { tone: 'danger' });
+          btn.disabled = false;
+          btn.textContent = 'Dismiss';
+          return;
+        }
+        // Patch the card in place: a full reload would collapse every open thread.
+        const card = btn.closest('.detail-card');
+        const badge = card?.querySelector('.badge');
+        if (badge) badge.outerHTML = statusBadge('dismissed');
+        btn.remove();
+        showToast('Feedback dismissed', { tone: 'muted' });
+        window.dispatchEvent(new CustomEvent('badges:refresh'));
       });
     });
   }

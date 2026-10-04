@@ -1,3 +1,4 @@
+import { confirmDialog } from './dialog.js';
 /**
  * Command palette — the DOM half (session S8 of docs/plans/jarvis-fleet-plan.md).
  *
@@ -9,6 +10,7 @@
  */
 import {
   RECENTS_KEY,
+  actionResultToast,
   buildItems,
   isEditableTarget,
   isPaletteHotkey,
@@ -107,10 +109,13 @@ async function run(item) {
   }
   if (item.api) {
     if (!deps.api) return;
+    if (item.confirm && !(await confirmDialog(item.confirm))) return;
     try {
-      const res = await deps.api(item.api.path, { method: item.api.method || 'POST' });
-      if (res?.error) showToast(res.error, { tone: 'danger' });
-      else showToast(item.label, { tone: 'ok' });
+      const opts = { method: item.api.method || 'POST' };
+      if (item.api.body !== undefined) opts.body = item.api.body;
+      const res = await deps.api(item.api.path, opts);
+      const { text, tone } = actionResultToast(item, res);
+      showToast(text, { tone });
     } catch (err) {
       showToast(err?.message || 'Action failed', { tone: 'danger' });
     }

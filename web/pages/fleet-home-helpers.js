@@ -112,7 +112,7 @@ export function fleetCard(agent, p, nowMs = Date.now(), { avatarSrc = (u) => u }
   const needs = [];
   if (asks > 0) {
     needs.push(
-      `<a class="fleet-need" href="#/needs" title="Open the Needs You queue">${asks} ask${asks === 1 ? '' : 's'}</a>`
+      `<a class="fleet-need" href="#/needs?bot=${encodeURIComponent(id)}" title="Open this agent's items in Needs You">${asks} ask${asks === 1 ? '' : 's'}</a>`
     );
   }
   if (review > 0) {
@@ -168,7 +168,6 @@ export function fleetGrid(agents = [], presence = {}, nowMs = Date.now(), opts =
     .join('')}</div>`;
 }
 
-
 // ── Filters, quick actions, error state (UX overhaul phase 5) ────────────────
 
 export const FLEET_FILTER_KEY = 'aibot.fleet.filter';
@@ -214,7 +213,10 @@ export function readFleetFilter(storage) {
 
 export function writeFleetFilter(storage, filter) {
   try {
-    storage?.setItem?.(FLEET_FILTER_KEY, FLEET_FILTERS.some((f) => f.id === filter) ? filter : 'all');
+    storage?.setItem?.(
+      FLEET_FILTER_KEY,
+      FLEET_FILTERS.some((f) => f.id === filter) ? filter : 'all'
+    );
   } catch {
     /* private mode */
   }
@@ -256,7 +258,8 @@ export function fleetErrorState(message = '') {
     icon: '⚠',
     title: 'Could not load the fleet',
     hint: message || 'The server did not answer.',
-    action: '<button type="button" class="btn btn-primary" data-action="fleet-retry">Retry</button>',
+    action:
+      '<button type="button" class="btn btn-primary" data-action="fleet-retry">Retry</button>',
   });
 }
 

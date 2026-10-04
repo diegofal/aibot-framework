@@ -1,3 +1,4 @@
+import { rememberTenant, restoreTenant } from './baas-helpers.js';
 import { api, escapeHtml, getAuthContext, resolveTenantId } from './shared.js';
 
 function formatDate(d) {
@@ -59,16 +60,18 @@ function renderBreakdownTable(data, keyLabel, valueLabel) {
 }
 
 /**
- * #/baas/analytics — Analytics dashboard
+ * #/settings/baas/analytics — Analytics dashboard
  */
 export async function renderBaasAnalytics(el) {
   el.innerHTML =
     '<div class="page-title">Analytics</div><div id="an-tenant-picker"></div><p class="text-dim">Loading...</p>';
 
+  restoreTenant(); // admin's tenant pick survives reloads and is shared by every BaaS page
   const tenantId = await resolveTenantId(el.querySelector('#an-tenant-picker'), () =>
     renderBaasAnalytics(el)
   );
   if (!tenantId) return;
+  rememberTenant(tenantId);
 
   let startDate = formatDate(monthStart());
   let endDate = formatDate(today());

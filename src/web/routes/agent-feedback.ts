@@ -251,7 +251,8 @@ export function agentFeedbackRoutes(deps: {
       offset,
     });
 
-    return c.json({ entries });
+    const botName = deps.config.bots.find((b) => b.id === botId)?.name ?? botId;
+    return c.json({ entries, botName });
   });
 
   // Submit new feedback

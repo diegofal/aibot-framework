@@ -56,9 +56,9 @@ export const AREAS = [
     href: '#/automations',
     tabs: [
       { id: 'cron', label: 'Cron', href: '#/automations/cron' },
+      { id: 'loop', label: 'Agent loop', href: '#/automations/loop' },
       { id: 'skills', label: 'Skills', href: '#/automations/skills' },
       { id: 'tools', label: 'Tools', href: '#/automations/tools', admin: true },
-      { id: 'tool-runner', label: 'Tool Runner', href: '#/automations/tool-runner', admin: true },
     ],
   },
   {
@@ -72,8 +72,6 @@ export const AREAS = [
       { id: 'hygiene', label: 'Hygiene', href: '#/insights/stats/hygiene' },
       { id: 'karma', label: 'Karma', href: '#/insights/karma' },
       { id: 'activity', label: 'Activity', href: '#/insights/activity' },
-      { id: 'loop', label: 'Agent loop', href: '#/insights/loop' },
-      { id: 'feedback', label: 'Feedback', href: '#/insights/feedback', badge: 'agentFeedback' },
     ],
   },
   {
@@ -114,6 +112,12 @@ const one = (m) => [m[1]];
 const two = (m) => [m[1], m[2]];
 const oneDecoded = (m) => [dec(m[1])];
 const none = () => [];
+/** `[bot]` from the hash's query string (`#/needs?bot=<id>`), null when absent. */
+const botQuery = (m) => {
+  const input = String(m.input ?? '');
+  const q = input.includes('?') ? input.slice(input.indexOf('?') + 1) : '';
+  return [new URLSearchParams(q).get('bot') || null];
+};
 
 /** Canonical routes. Order matters: more specific patterns first. */
 export const ROUTES = [
@@ -142,7 +146,7 @@ export const ROUTES = [
     args: one,
   },
   { pattern: /^#\/needs\/feedback$/, handler: 'feedback', area: 'needs', args: none },
-  { pattern: /^#\/needs$/, handler: 'needsYou', area: 'needs', args: none },
+  { pattern: /^#\/needs(?:\?|$)/, handler: 'needsYou', area: 'needs', args: botQuery },
 
   {
     pattern: /^#\/work\/productions\/([^/?]+)(?:\?|$)/,
@@ -206,12 +210,7 @@ export const ROUTES = [
     args: oneDecoded,
   },
   { pattern: /^#\/automations\/skills$/, handler: 'skills', area: 'automations', args: none },
-  {
-    pattern: /^#\/automations\/tool-runner$/,
-    handler: 'toolRunner',
-    area: 'automations',
-    args: none,
-  },
+  { pattern: /^#\/automations\/loop$/, handler: 'loop', area: 'automations', args: none },
   {
     pattern: /^#\/automations\/tools\/([^/]+)$/,
     handler: 'toolDetail',
@@ -244,14 +243,6 @@ export const ROUTES = [
   { pattern: /^#\/insights\/karma\/([^/]+)$/, handler: 'botKarma', area: 'insights', args: one },
   { pattern: /^#\/insights\/karma$/, handler: 'karma', area: 'insights', args: none },
   { pattern: /^#\/insights\/activity(?:\?|$)/, handler: 'activity', area: 'insights', args: none },
-  { pattern: /^#\/insights\/loop$/, handler: 'loop', area: 'insights', args: none },
-  {
-    pattern: /^#\/insights\/feedback\/([^/]+)$/,
-    handler: 'botFeedback',
-    area: 'insights',
-    args: one,
-  },
-  { pattern: /^#\/insights\/feedback$/, handler: 'feedback', area: 'insights', args: none },
   { pattern: /^#\/insights$/, handler: 'stats', area: 'insights', args: none },
 
   {
@@ -309,14 +300,17 @@ export const REDIRECTS = [
   { from: /^#\/sessions(?=[/?]|$)/, to: '#/work/sessions' },
   { from: /^#\/cron(?=[/?]|$)/, to: '#/automations/cron' },
   { from: /^#\/skills(?=[/?]|$)/, to: '#/automations/skills' },
-  { from: /^#\/tool-runner(?=[/?]|$)/, to: '#/automations/tool-runner' },
+  { from: /^#\/tool-runner(?=[/?]|$)/, to: '#/automations/tools' },
+  { from: /^#\/automations\/tool-runner(?=[/?]|$)/, to: '#/automations/tools' },
   { from: /^#\/tools(?=[/?]|$)/, to: '#/automations/tools' },
   { from: /^#\/stats(?=[/?]|$)/, to: '#/insights/stats' },
   { from: /^#\/karma(?=[/?]|$)/, to: '#/insights/karma' },
-  { from: /^#\/feedback(?=[/?]|$)/, to: '#/insights/feedback' },
+  { from: /^#\/feedback(?=[/?]|$)/, to: '#/needs/feedback' },
+  { from: /^#\/insights\/feedback(?=[/?]|$)/, to: '#/needs/feedback' },
   { from: /^#\/logs(?=[/?]|$)/, to: '#/insights/activity?tab=logs' },
   { from: /^#\/activity(?=[/?]|$)/, to: '#/insights/activity' },
-  { from: /^#\/dashboard(?=[/?]|$)/, to: '#/insights/loop' },
+  { from: /^#\/dashboard(?=[/?]|$)/, to: '#/automations/loop' },
+  { from: /^#\/insights\/loop(?=[/?]|$)/, to: '#/automations/loop' },
   { from: /^#\/integrations(?=[/?]|$)/, to: '#/settings/integrations' },
   { from: /^#\/baas(?=[/?]|$)/, to: '#/settings/baas' },
 ];
@@ -403,6 +397,39 @@ export function needsBadgeCount(badges) {
   return (
     (Number(b.askHuman) || 0) + (Number(b.askPermission) || 0) + (Number(b.agentProposals) || 0)
   );
+}
+
+/**
+ * Badge counts from `GET /api/needs-you/count` (`{ count, byKind }`) in the
+ * keys the tab strip reads, so one request feeds both the sidebar and the
+ * tabs. null when the response is missing or malformed (the caller then
+ * falls back to `/api/dashboard/badges`).
+ */
+export function badgesFromNeedsCount(res) {
+  if (!res || typeof res !== 'object' || res.error) return null;
+  const count = Number(res.count);
+  if (res.count === undefined || res.count === null || !Number.isFinite(count)) return null;
+  const k = res.byKind ?? {};
+  const n = (v) => Number(v) || 0;
+  return {
+    needs: count,
+    askHuman: n(k.ask),
+    askPermission: n(k.permission),
+    agentProposals: n(k.proposal),
+    agentFeedback: n(k.feedback),
+  };
+}
+
+/** The view for a hash no route matches: what was asked for, a way home, the palette. */
+export function notFoundMarkup(hash) {
+  return `<div class="not-found">
+  <div class="page-title">Page not found</div>
+  <p class="text-dim">Nothing lives at <code>${esc(String(hash ?? ''))}</code>.</p>
+  <div class="not-found-actions">
+    <a class="btn btn-primary" href="#/">Go to Home</a>
+    <button type="button" class="btn" data-palette-open>Search pages <kbd>Ctrl</kbd><kbd>K</kbd></button>
+  </div>
+</div>`;
 }
 
 function badgeSpan(id, count) {

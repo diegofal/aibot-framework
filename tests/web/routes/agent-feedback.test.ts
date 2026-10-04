@@ -159,6 +159,11 @@ describe('agent-feedback routes', () => {
       const data = await res.json();
       expect(data.entries).toEqual([]);
     });
+
+    test('carries the bot display name so the page never shows a raw id', async () => {
+      const data = await (await req('/bot1')).json();
+      expect(data.botName).toBe('TestBot');
+    });
   });
 
   describe('POST /:botId', () => {

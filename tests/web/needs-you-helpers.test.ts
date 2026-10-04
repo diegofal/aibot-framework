@@ -163,7 +163,7 @@ describe('reduceKey', () => {
     expect(reduceKey(base, 'ArrowDown').state.selectedId).toBe('production:b1:f1');
     expect(reduceKey(base, 'k').state.selectedId).toBe('permission:p1');
     expect(reduceKey(base, 'ArrowUp').state.selectedId).toBe('permission:p1');
-    const r = reduceKey(base, 'x');
+    const r = reduceKey(base, 'z');
     expect(r.effect).toEqual({ type: 'none' });
     expect(r.state).toBe(base);
   });

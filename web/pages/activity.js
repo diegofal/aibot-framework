@@ -651,6 +651,10 @@ export async function renderActivity(el) {
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   activeTab =
     params.get('tab') === 'logs' ? 'logs' : params.get('tab') === 'llm' ? 'llm' : 'events';
+  // `?bot=<id>` (palette "Logs" jump) pre-applies the agent filter on Events and Logs.
+  const presetBot = params.get('bot') || '';
+  evActiveBot = presetBot;
+  logActiveAgent = presetBot;
 
   // Fetch agents for filter dropdowns
   let agents = [];
@@ -796,6 +800,11 @@ export async function renderActivity(el) {
     }
     updateCount();
   });
+
+  if (presetBot) {
+    document.getElementById('activity-bot-filter').value = presetBot;
+    document.getElementById('log-agent-filter').value = presetBot;
+  }
 
   // ── Events tab filters ──
   document.getElementById('activity-bot-filter').addEventListener('change', (e) => {

@@ -62,7 +62,11 @@ import { integrationsRoutes } from './routes/integrations';
 import { karmaRoutes } from './routes/karma';
 import { mcpRoutes } from './routes/mcp';
 import { metricsRoutes } from './routes/metrics';
-import { needsYouRoutes, needsYouSourcesFromBotManager } from './routes/needs-you';
+import {
+  needsYouActionsFromBotManager,
+  needsYouRoutes,
+  needsYouSourcesFromBotManager,
+} from './routes/needs-you';
 import { onboardingRoutes } from './routes/onboarding';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
@@ -296,13 +300,14 @@ export function startWebServer(deps: WebServerDeps): void {
   app.route('/api/dashboard', dashboardRoutes({ config, botManager: deps.botManager, logger }));
   // Needs You queue (docs/plans/jarvis-fleet-plan.md, S5): asks, permissions,
   // proposals, unreviewed productions and feedback replies as one sorted list.
-  // Read-only; actions stay on the routes above and below.
+  // Reads plus bulk/act/clear-stale (same store calls as the per-item routes).
   app.route(
     '/api/needs-you',
     needsYouRoutes({
       config,
       logger,
       sources: needsYouSourcesFromBotManager(deps.botManager),
+      actions: needsYouActionsFromBotManager(deps.botManager),
     })
   );
   app.route(

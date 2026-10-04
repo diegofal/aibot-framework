@@ -354,7 +354,7 @@ Three modes: **visible** (public multi-turn with @mentions), **internal** (behin
 
 ### Web Dashboard & API
 
-Hono-based server with SPA frontend and WebSocket log streaming. Seven navigation areas with sub-pages as tabs: **Home** (fleet grid: one live card per agent with posture, now-line, karma, last output and what needs you, plus a condensed "Recent" ticker under the grid: one line per agent per burst of tool runs, five lines with a "more" toggle), **Agents** (fleet list; a three-step **New Agent** wizard at `#/agents/new` — name and purpose with five **presets** (assistant, researcher, job-seeker, coder, social; `GET /api/agents/presets`, also accepted as `preset` by `POST /api/agents`), personality sliders mapped onto the trait registers, channels with inline token validation — that writes the soul and lands in a first chat with no Telegram token; per-agent **Home** with live presence, chat, timeline, goals, traits and karma, an uploadable face and a play button that speaks the now-line in the agent's ElevenLabs voice; Config with CRUD, soul generation and a voice picker), **Needs You** (the Queue: every pending ask, permission, proposal, unreviewed output and feedback reply in one keyboard-driven list; Inbox, Permissions, Proposals and Feedback as history tabs), **Work** (Outputs — every file the agents produced, newest first, with Approve/Reject inline and status/agent filters; Productions file explorer, Conversations, Sessions), **Automations** (Cron — opens with a natural-language box: type "check job boards every 3 hours and message me", pick an agent, and `POST /api/cron/parse` turns it into a previewed, editable cron proposal that one click creates through the normal cron API, with a built-in parser standing in when the agent's LLM is down; Skills, Tools, Tool Runner), **Insights** (Stats, Behaviour, Infra, Hygiene, Karma, Activity, Agent loop, Feedback), **Settings** (Settings, Integrations, BaaS). Old hash routes redirect to their new place (`web/nav-routes.js`). 25+ REST API endpoints. Light/dark theme with a sidebar toggle, a responsive shell (off-canvas drawer under 900px), and a no-build component layer in `web/ui/` (badge, card, empty state, skeleton, KPI, tabs, avatar, sparkline, radar, toast, sheet, compact data table, row overflow menu). A command palette (`Ctrl+K` / `Cmd+K` anywhere, or the ⌘K button in the sidebar) fuzzy-searches agents, pages and actions (start / stop / run now / config per agent, new agent, Needs You, theme) with arrow keys and Enter.
+Hono-based server with SPA frontend and WebSocket log streaming. Seven navigation areas with sub-pages as tabs: **Home** (fleet grid: one live card per agent with posture, now-line, karma, last output and what needs you, plus a condensed "Recent" ticker under the grid: one line per agent per burst of tool runs, five lines with a "more" toggle), **Agents** (fleet list; a three-step **New Agent** wizard at `#/agents/new` — name and purpose with five **presets** (assistant, researcher, job-seeker, coder, social; `GET /api/agents/presets`, also accepted as `preset` by `POST /api/agents`), personality sliders mapped onto the trait registers, channels with inline token validation — that writes the soul and lands in a first chat with no Telegram token; per-agent **Home** with live presence, chat, timeline, goals, traits and karma, an uploadable face and a play button that speaks the now-line in the agent's ElevenLabs voice; Config with CRUD, soul generation and a voice picker), **Needs You** (the Queue: every pending ask, permission, proposal, unreviewed output and feedback reply in one keyboard-driven list; with filter chips, age groups, multi-select, bulk dismiss/archive/approve and "Clear stale…" behind an Undo toast; Inbox, Permissions, Proposals and Feedback as history tabs), **Work** (Outputs — every file the agents produced, newest first, with Approve/Reject inline and status/agent filters; Productions file explorer, Conversations, Sessions), **Automations** (Cron — opens with a natural-language box: type "check job boards every 3 hours and message me", pick an agent, and `POST /api/cron/parse` turns it into a previewed, editable cron proposal that one click creates through the normal cron API, with a built-in parser standing in when the agent's LLM is down; Skills, Agent loop, Tools — every tool with a Run action, the former Tool Runner), **Insights** (Stats, Behaviour, Infra, Hygiene, Karma, Activity), **Settings** (Settings, Integrations, BaaS). Old hash routes redirect to their new place (`web/nav-routes.js`). 25+ REST API endpoints. Light/dark theme with a sidebar toggle, a responsive shell (off-canvas drawer under 900px), and a no-build component layer in `web/ui/` (badge, card, empty state, skeleton, KPI, tabs, avatar, sparkline, radar, toast with Undo, confirm/prompt dialogs, sheet, compact data table, row overflow menu). Keyboard shortcuts on every page (`g` + letter jumps to an area, `/` filter, `n` new, `?` help), a real 404 page, and an unsaved-changes guard that also covers the back button. A command palette (`Ctrl+K` / `Cmd+K` anywhere, or the ⌘K button in the sidebar) fuzzy-searches agents, pages and actions (start / stop / run now / config per agent, new agent, Needs You, theme) with arrow keys and Enter.
 
 ### Multi-Tenant BaaS
 
@@ -492,9 +492,12 @@ Agents           — Compact fleet table (one Stop/Start button + a row menu per
                    dispatches with 👍/👎), Config (CRUD, soul generation, start/stop, tools
                    config, export/import, change face), Edit (ElevenLabs voice picker with preview,
                    Curiosity: preset, six limit dials, exploration share, dispatch settings)
-Needs You        — Queue (asks, permissions, proposals, unreviewed outputs and feedback replies in one
-                   list; j/k a d r o ? keyboard triage, quick-reply chips), plus Inbox, Permissions,
-                   Proposals, Feedback as history tabs; sidebar badge = /api/needs-you/count
+Needs You        — Queue (asks, permissions, proposals, unreviewed outputs, feedback replies and pending
+                   dynamic tools in one list; j/k a d r o ? keyboard triage, quick-reply chips; kind +
+                   agent chips, Today / This week / Older groups, multi-select x / Shift+j/k / *, bulk
+                   Dismiss / Archive / Approve and "Clear stale…" behind a 5 s Undo), plus Inbox,
+                   Permissions, Proposals, Feedback as history tabs (Feedback lives only here);
+                   sidebar badge = /api/needs-you/count; #/needs?bot=<id> pre-filters an agent
 Work             — Outputs (what the agents produced, newest first, Approve/Reject inline, status +
                    agent filters), Dispatches (fleet inbox of curiosity dispatches, All / Sent / Held /
                    Proposals, 👍 / 👎 / more like this), Productions (file explorer, evaluation, discussion threads),
@@ -502,15 +505,19 @@ Work             — Outputs (what the agents produced, newest first, Approve/Re
 Automations      — Cron ("Tell an agent what to do and when" natural-language box with a previewed,
                    editable proposal; compact job list with schedules in words, agent filter, search,
                    run + row menu), Skills (built-in + external, SKILL.md
-                   viewer), Tools (dynamic tool approval queue), Tool Runner (run a tool with a form)
+                   viewer), Agent loop (schedules, run-now, safe stop, last results), Tools (every
+                   tool — built-in, MCP, dynamic — with Run in a sheet and the dynamic-tool approval queue)
 Insights         — Stats (fleet table, bot detail), Behaviour, Infra, Hygiene (preview/apply, history),
-                   Karma (scores, trends, manual adjustment), Activity (events, system logs, LLM queries),
-                   Agent loop (schedules, run-now, safe stop, last results), Feedback (operator feedback)
+                   Karma (scores, trends, manual adjustment), Activity (events, system logs, LLM queries)
 Settings         — Settings (session, collaboration, skill folders, MCP servers, memory search, backup),
                    Integrations (Ollama diagnostic chat), BaaS tabs when multi-tenant is on
-Old bookmarks (#/inbox, #/stats/bot/x, #/karma, #/productions/x, #/dispatches, #/logs, #/baas/*, …) redirect.
+Old bookmarks (#/inbox, #/stats/bot/x, #/karma, #/productions/x, #/dispatches, #/logs, #/baas/*,
+#/tool-runner, #/insights/loop, #/insights/feedback, …) redirect; an unknown hash shows "Page not found".
 Ctrl+K / Cmd+K  — command palette on every page: agents (→ Home), pages, actions (start / stop / run
-                   now / config per agent, new agent, Needs You, theme); ↑↓ Enter Esc.
+                   now / config per agent, new agent, Needs You, theme, clear stale needs, new cron job,
+                   run agent loop, re-run failed crons, agent stats / karma / logs); ↑↓ Enter Esc.
+Shortcuts        — g then h/a/n/w/u/i/s jumps to an area, / focuses the page filter, n creates, ? shows
+                   the global + page keys. Unsaved edits (Settings, agent edit) ask before you leave.
 ```
 
 ## Development

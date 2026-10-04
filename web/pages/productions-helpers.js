@@ -145,13 +145,14 @@ export function prodRequest(action, { botId, entryId, path, rating, reason } = {
 /** Bulk bar for the tree's multi-selection; empty when nothing is selected. */
 export function productionsBulkBar({ count = 0, tracked = 0 } = {}) {
   if (!count) return '';
-  const dis = tracked > 0 ? '' : ' disabled title="None of the selected items is tracked in the changelog"';
+  const dis =
+    tracked > 0 ? '' : ' disabled title="None of the selected items is tracked in the changelog"';
   return `<div class="prod-bulk-bar" role="toolbar" aria-label="Bulk actions">
     <span class="prod-bulk-count">${Number(count)} selected</span>
     <button type="button" class="btn btn-sm" data-prod-bulk="approve"${dis}>Approve ${Number(tracked)}</button>
     <button type="button" class="btn btn-sm" data-prod-bulk="reject"${dis}>Reject ${Number(tracked)}</button>
     <button type="button" class="btn btn-sm" data-prod-bulk="archive"${dis}>Archive ${Number(tracked)}</button>
     <button type="button" class="btn btn-sm btn-danger" data-prod-bulk="delete">Delete ${Number(count)}</button>
-    <button type="button" class="btn btn-sm" data-prod-bulk="clear" title="Clear selection (Esc)">${esc('Clear')}</button>
+    <button type="button" class="btn btn-sm" data-prod-bulk="clear" title="Clear selection">${esc('Clear')}</button>
   </div>`;
 }

@@ -13,6 +13,7 @@ import {
   jobRow,
   lastRunCell,
   payloadCell,
+  rerunSummary,
   sortJobs,
 } from '../../web/pages/cron-list-helpers.js';
 
@@ -216,7 +217,8 @@ describe('UX overhaul: sorting, selection, bulk and error states', () => {
     expect(cronBulkBar(0)).toBe('');
     const html = cronBulkBar(3);
     expect(html).toContain('3 selected');
-    for (const a of ['pause', 'resume', 'run', 'delete']) expect(html).toContain(`data-bulk="${a}"`);
+    for (const a of ['pause', 'resume', 'run', 'delete'])
+      expect(html).toContain(`data-bulk="${a}"`);
   });
   it('bulkTargets keeps only the jobs an action would change', () => {
     const ids = new Set(['j1', 'j2', 'j3']);
@@ -234,5 +236,27 @@ describe('UX overhaul: sorting, selection, bulk and error states', () => {
     const html = cronErrorState('bad <thing>');
     expect(html).toContain('bad &lt;thing&gt;');
     expect(html).toContain('data-action="retry"');
+  });
+});
+
+describe('rerunSummary', () => {
+  it('counts the jobs that ran out of the attempted ones', () => {
+    expect(rerunSummary({ attempted: 3, results: [{ ran: true }, { ran: false }, { ran: true }] })).toEqual({
+      text: 'Re-ran 2/3',
+      tone: 'ok',
+    });
+  });
+
+  it('is danger when nothing ran, or on an error response', () => {
+    expect(rerunSummary({ attempted: 1, results: [{ ran: false }] })).toEqual({
+      text: 'Re-ran 0/1',
+      tone: 'danger',
+    });
+    expect(rerunSummary({ error: 'nope' })).toEqual({ text: 'Re-run failed: nope', tone: 'danger' });
+    expect(rerunSummary(null)).toEqual({ text: 'Re-run failed: no response', tone: 'danger' });
+  });
+
+  it('copes with a missing results array', () => {
+    expect(rerunSummary({ attempted: 0 })).toEqual({ text: 'Re-ran 0/0', tone: 'danger' });
   });
 });

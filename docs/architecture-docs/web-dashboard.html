@@ -559,13 +559,31 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/needs-you</code></td>
-              <td>Everything waiting on a human as one sorted list: <code>{ generatedAt, count, byKind, items[] }</code>. Item: <code>{ id, kind: ask|permission|proposal|production|feedback, botId, botName, title, body, options, createdAt, urgency: high|normal|low, actions[], href, meta }</code>. <code>actions[]</code> entries are <code>{ id, label, method, path, body?, input?: { field, required, placeholder }, tone, hotkey?: a|d }</code> and point at the existing routes (this endpoint is read-only). Sorted by urgency then newest first; tenant-scoped; a failing source or malformed row is skipped, never a 500. Pending = inbox conversation <code>pending</code> (ask), pending request (permission), <code>status: pending</code> (proposal), active file with no <code>evaluation.status</code> (production), pending feedback whose thread ends with the bot (feedback)</td>
+              <td>Everything waiting on a human as one sorted list: <code>{ generatedAt, count, byKind, items[] }</code>. Item: <code>{ id, kind: ask|permission|proposal|production|feedback|tool, botId, botName, title, body, options, createdAt, urgency: high|normal|low, actions[], href, meta }</code>. <code>actions[]</code> entries are <code>{ id, label, method, path, body?, input?: { field, required, placeholder }, tone, hotkey?: a|d, confirm? }</code> and point at the existing routes; action ids include <code>archive</code> (neutral output archive, no karma) and <code>delete</code>, and <code>confirm</code> makes the page ask first. <code>meta</code> carries <code>requestId|proposalId|productionId|feedbackId|toolId</code>. Sorted by urgency then newest first; tenant-scoped; a failing source or malformed row is skipped, never a 500. Pending = inbox conversation <code>pending</code> (ask), pending request (permission), <code>status: pending</code> (proposal), active file with no <code>evaluation.status</code> (production), pending feedback whose thread ends with the bot (feedback), pending dynamic tool (tool &mdash; admin / single-tenant only)</td>
               <td><code>needs-you.ts</code></td>
             </tr>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/needs-you/count</code></td>
               <td><code>{ count, byKind }</code> &mdash; the sidebar "Needs You" badge</td>
+              <td><code>needs-you.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/needs-you/bulk</code></td>
+              <td><span class="badge badge-yellow">2026-10-03</span> UX overhaul. Body <code>{ ids: string[1..500], action, note? }</code> &rarr; <code>200 { results: [{ id, ok, error? }] }</code>; <code>400</code> on a bad body. <code>action</code> &isin; <code>dismiss | archive | approve | reject | deny | neutral</code>. Supported per kind: ask <code>[dismiss]</code>, permission <code>[deny]</code>, proposal <code>[reject]</code>, production <code>[approve, reject, archive]</code>, feedback <code>[dismiss]</code>, tool <code>[approve, reject]</code>; an unsupported pair fails only that item. <code>neutral</code> = ask dismiss, permission deny, proposal reject, production archive (no karma), feedback dismiss, tool reject. Tenant-scoped like the GET: the viewer's queue is rebuilt and ids outside it answer <code>ok:false, error: "Not found"</code>. Each action reuses the per-item call (<code>BotManager.dismissAskHuman</code> or the conversation marked <code>dismissed</code> &mdash; never deleted; <code>denyPermission</code>; proposal <code>updateStatus('rejected')</code>; <code>dismissAgentFeedback</code>; <code>ProductionsService.evaluate</code> / <code>archiveFile</code>; <code>DynamicToolRegistry.approve/reject</code>), wired by <code>needsYouActionsFromBotManager</code></td>
+              <td><code>needs-you.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/needs-you/act</code></td>
+              <td>One item through the same path as bulk: <code>{ id, action, note? }</code> &rarr; <code>{ ok: true }</code> | <code>400/404/409 { ok: false, error }</code></td>
+              <td><code>needs-you.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/needs-you/clear-stale</code></td>
+              <td><code>{ olderThanHours: number &ge; 1 (required), kinds?, botId?, ids?: string[] (max 500) }</code> &rarr; <code>{ cleared, byKind, results }</code>. Items strictly older than the cutoff (same collection as the GET) get the neutral action; with <code>ids</code> only those items are considered (the dashboard sends exactly the rows the operator confirmed). Tools have no neutral action: <code>kinds</code> including <code>tool</code> is a 400. Never approves; <code>cleared</code> / <code>byKind</code> count successes only</td>
               <td><code>needs-you.ts</code></td>
             </tr>
           </tbody>
@@ -879,7 +897,7 @@
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/productions/:botId/:id/archive</code></td>
-              <td>Archive a production file to <code>archived/</code>. Body: <code>{ reason?: string }</code></td>
+              <td>Archive a production file to <code>archived/</code>. Body: <code>{ reason?: string }</code>, optional &mdash; an empty body is accepted</td>
               <td><code>productions.ts</code></td>
             </tr>
             <tr>
@@ -1008,7 +1026,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agent-feedback/:botId</code></td>
-              <td>List feedback history for a bot (filter: <code>?status=&amp;limit=100&amp;offset=0</code>)</td>
+              <td>List feedback history for a bot (filter: <code>?status=&amp;limit=100&amp;offset=0</code>) &rarr; <code>{ entries, botName }</code></td>
               <td><code>agent-feedback.ts</code></td>
             </tr>
             <tr>
@@ -1610,7 +1628,17 @@ compaction                            // Context compaction
         <code>tabs(items, activeId)</code>, <code>avatar({ seed, name, src, size, status })</code> (deterministic
         gradient disc with initials and a presence dot), <code>sparkline(values)</code>, <code>radar(axes)</code>,
         <code>dataTable({ columns, rows })</code> (compact table in a <code>.table-scroll</code> wrapper) and <code>rowMenu(items)</code> / <code>initMenus()</code> (a native <code>&lt;details&gt;</code> overflow menu whose items keep the page's <code>data-action</code> delegation working) — both session S3.5; <code>toastMarkup</code> / <code>showToast</code>, <code>sheetMarkup</code> / <code>openSheet</code> /
-        <code>closeSheet</code>. Text arguments are escaped; <code>body</code>, <code>actions</code> and
+        <code>closeSheet</code>.
+        <span class="badge badge-yellow">2026-10-03</span> UX overhaul phase 0 (<code>tests/web/ui-feedback.test.ts</code>):
+        <code>showToast(text, { tone, action: { label, onClick } })</code> renders a button inside the toast
+        and returns the element with <code>dismiss()</code>; <code>undoable(text, { commit, undo?, delayMs = 5000, tone })</code>
+        defers a commit behind an "Undo" toast and resolves <code>{ undone, result }</code> (pending undoables commit
+        on <code>beforeunload</code> / <code>hashchange</code> via <code>flushUndoables()</code>).
+        <code>web/ui/dialog.js</code> holds <code>confirmDialog</code> / <code>promptDialog</code> (async replacements for
+        <code>window.confirm</code> / <code>window.prompt</code>: Enter confirms, Escape or the backdrop cancels, a cancelled
+        prompt resolves <code>null</code>), <code>confirmInline(button)</code> (two-step inline confirm, <code>.ui-armed</code>)
+        and the pure <code>dialogMarkup</code>. No page calls <code>alert</code> / <code>confirm</code> / <code>prompt</code> any more.
+        Toast tones are <code>ok|warn|danger|info|muted|accent</code>; anything else falls back to muted. Text arguments are escaped; <code>body</code>, <code>actions</code> and
         <code>footer</code> are trusted HTML the caller composes. Class names follow <code>ui-&lt;component&gt;</code>.
       </p>
 
@@ -1634,6 +1662,16 @@ compaction                            // Context compaction
         open and cached 30 s. The module is deliberately not re-exported from
         <code>web/ui/index.js</code>: it imports <code>nav-routes.js</code>, which imports that barrel.
       </p>
+      <p>
+        <span class="badge badge-yellow">2026-10-03</span> Actions added by the UX overhaul: "Clear stale needs
+        (older than 72h)" (confirm dialog, then <code>POST /api/needs-you/clear-stale</code>, result toast), "New cron
+        job", "Run agent loop now" (same call as the loop page's Run Now), "Re-run failed crons" (same call and toast
+        text as the Cron page, via <code>rerunSummary()</code> in <code>cron-list-helpers.js</code>), and per agent
+        "&lt;name&gt; stats / karma / logs" (logs opens <code>#/insights/activity?bot=&lt;id&gt;</code>). Action items may
+        carry <code>api.body</code>, <code>confirm</code> (confirmDialog options) and <code>summary</code>
+        (<code>clear-stale</code> | <code>cron-rerun</code>), rendered by <code>actionResultToast(item, res)</code>;
+        <code>STALE_HOURS</code> = 72.
+      </p>
 
       <h3>Navigation: seven areas and redirects (session S3)</h3>
       <p>
@@ -1656,16 +1694,72 @@ compaction                            // Context compaction
       </p>
       <p>
         Canonical hashes: <code>#/</code> (Fleet Home), <code>#/agents[/:id[/config|/edit]]</code>,
-        <code>#/needs/{inbox[/:bot/:id]|permissions|proposals}</code>,
+        <code>#/needs[?bot=:id]</code>, <code>#/needs/{inbox[/:bot/:id]|permissions|proposals|feedback[/:bot]}</code>,
         <code>#/work/{dispatches|productions[/:bot]|conversations[/:bot[/:id]]|sessions[/:id]}</code>,
-        <code>#/automations/{cron[/new|/:id]|skills[/new|/:id[/edit]]|tools[/:name]|tool-runner}</code>,
-        <code>#/insights/{stats[/bot/:id|/behaviour|/infra|/hygiene]|karma[/:bot]|activity[?tab=]|loop|feedback[/:bot]}</code>,
+        <code>#/automations/{cron[/new|/:id]|loop|skills[/new|/:id[/edit]]|tools[/:name]}</code>,
+        <code>#/insights/{stats[/bot/:id|/behaviour|/infra|/hygiene]|karma[/:bot]|activity[?tab=&amp;bot=]}</code>,
         <code>#/settings[/integrations|/baas/{templates[/:id]|customizations|webhooks|analytics|tenants}]</code>.
         Legacy hashes (<code>#/inbox</code>, <code>#/stats/bot/x</code>, <code>#/karma</code>,
         <code>#/productions/x?path=&hellip;</code>, <code>#/dispatches</code>, <code>#/logs</code>, <code>#/baas/*</code>,
         <code>#/dashboard</code>, &hellip;) redirect; <code>tests/web/nav-routes.test.ts</code> walks fifty of
         them through redirect &rarr; route &rarr; handler and checks every handler name exists in
         <code>app.js</code>.
+      </p>
+      <p>
+        <span class="badge badge-yellow">2026-10-03</span> <strong>UX overhaul (phase 4).</strong> Automations tabs are
+        Cron, Agent loop, Skills, Tools (admin); Insights tabs are Stats, Behaviour, Infra, Hygiene, Karma, Activity.
+        Feedback lives only under Needs You (<code>#/insights/feedback&hellip;</code> and <code>#/feedback&hellip;</code> redirect
+        to <code>#/needs/feedback&hellip;</code>); Agent loop moved from Insights (<code>#/insights/loop</code> and
+        <code>#/dashboard</code> redirect to <code>#/automations/loop</code>); the Tool Runner tab is gone
+        (<code>#/tool-runner</code> / <code>#/automations/tool-runner</code> &rarr; <code>#/automations/tools</code>, where every
+        row has Run). Stats lost its inner Fleet/Behaviour/Infra/Hygiene strip (the area tabs provide it). The
+        <code>needsYou</code> route is <code>^#/needs(?:\?|$)</code> with args <code>[bot|null]</code>, so
+        <code>#/needs?bot=&lt;id&gt;</code> opens the queue with that agent filtered (Fleet Home's "N asks" uses it). An
+        unknown hash renders <code>notFoundMarkup(hash)</code> ("Page not found", a link to Home and a palette button)
+        instead of silently showing Home, and <code>nav-routes.test.ts</code> fails if any <code>#/&hellip;</code> literal in
+        <code>web/**/*.js</code> matches a legacy redirect. Badges come from one 10 s <code>/api/needs-you/count</code>
+        request mapped by <code>badgesFromNeedsCount(res)</code> onto the sidebar and every queue tab;
+        <code>/api/dashboard/badges</code> is only the fallback. The bot status shows once (sidebar foot;
+        <code>#topbar-status</code> was removed).
+      </p>
+      <p>
+        <strong>Page lifecycle and nav guards.</strong> Handlers in <code>app.js</code> are
+        <code>page(render, ...destroys)</code>. <code>navigate()</code> = <code>lifecycle.leave()</code> &rarr; auth gate &rarr;
+        redirect &rarr; <code>lifecycle.enter(handler.destroys, handler(...args))</code> or the 404.
+        <code>web/page-lifecycle.js</code> (<code>createPageLifecycle({ always, onError })</code> &rarr;
+        <code>enter(destroys, result)</code> / <code>leave()</code>) runs a page's destroy functions, or the cleanup its
+        render returned (sync or async), exactly once, plus shared hooks: live-presence watches, the open sheet, nav
+        guards and page shortcuts (Dispatches' <code>destroyDispatches</code> and the loop page's
+        <code>destroyDashboard</code> are wired this way). <code>web/nav-guard.js</code> (<code>registerNavGuard</code>,
+        <code>pendingNavGuard</code>, <code>checkNavGuards</code>, <code>clearNavGuards</code>, <code>navGuardCount</code>): a guard
+        returns falsy | a string | <code>{ title?, message, confirmLabel?, cancelLabel?, onDiscard? }</code>.
+        <code>onHashChange</code> runs the guards before <code>navigate()</code>: with a dirty guard the old hash is put back,
+        a confirm dialog asks, and the new hash is followed only on Discard. That covers the back button and typed hashes,
+        not just link clicks. Settings and the agent edit form register guards (plus <code>beforeunload</code>).
+      </p>
+
+      <h3>Keyboard shortcuts (UX overhaul phase 5)</h3>
+      <p>
+        <code>web/ui/shortcuts.js</code> (<code>initShortcuts</code>, <code>registerPageShortcuts</code>,
+        <code>clearPageShortcuts</code>, <code>openShortcutHelp</code>) over the pure <code>web/ui/shortcuts-helpers.js</code>
+        (<code>GO_KEYS</code>, <code>G_TIMEOUT_MS</code>, <code>GLOBAL_SHORTCUTS</code>, <code>PAGE_SHORTCUTS</code> by handler name,
+        <code>pageShortcutsFor</code>, <code>shouldIgnoreKey</code>, <code>resolveShortcut</code>, <code>goTarget</code>,
+        <code>helpSheetMarkup</code>; <code>tests/web/shortcuts-helpers.test.ts</code>). Global keys:
+        <kbd>g</kbd> then <kbd>h</kbd>/<kbd>a</kbd>/<kbd>n</kbd>/<kbd>w</kbd>/<kbd>u</kbd>/<kbd>i</kbd>/<kbd>s</kbd> jumps to
+        Home / Agents / Needs You / Work / Automations / Insights / Settings (a "g then &hellip;" pill shows while armed,
+        1.5 s); <kbd>/</kbd> focuses the page's <code>[data-page-filter]</code>; <kbd>n</kbd> clicks its
+        <code>[data-page-new]</code>; <kbd>?</kbd> opens a help sheet with the global keys plus the current page's keys.
+        Keys are ignored while typing, with Ctrl/Cmd/Alt held, while a dialog, sheet or the palette is open, or when a
+        page already handled the key (<code>e.defaultPrevented</code>). Listeners sit on <code>window</code> in the bubble
+        phase, so page handlers on <code>document</code> win; the capture phase is used only while <kbd>g</kbd> is armed.
+        Page keys: Needs You (<kbd>j</kbd>/<kbd>k</kbd>, <kbd>a</kbd>, <kbd>d</kbd>, <kbd>r</kbd>, <kbd>x</kbd>,
+        <kbd>Shift+j/k</kbd>, <kbd>*</kbd>, <kbd>Esc</kbd>, its own <kbd>?</kbd>), Work &rarr; Outputs
+        (<kbd>j</kbd>/<kbd>k</kbd>, <kbd>a</kbd> approve, <kbd>x</kbd> reject, <kbd>space</kbd> select, <kbd>Enter</kbd>/<kbd>o</kbd> open,
+        <kbd>Esc</kbd>), Dispatches (<kbd>j</kbd>/<kbd>k</kbd>, <kbd>+</kbd>/<kbd>=</kbd> thumbs up, <kbd>-</kbd> thumbs down), Agent Home
+        (<kbd>r</kbd> Run now, <kbd>e</kbd> Edit, <kbd>c</kbd> chat), Agent edit and Settings (<kbd>Ctrl/&#8984;+S</kbd> save).
+        Page-local handlers live on <code>document</code> behind an <code>AbortController</code>, call
+        <code>preventDefault()</code> on consumed keys and skip keys while a <code>.ui-dialog</code> is open. The help sheet
+        reads the static <code>PAGE_SHORTCUTS</code> map; no page calls <code>registerPageShortcuts</code> yet.
       </p>
 
       <div class="card-grid cols-2">
@@ -1679,7 +1773,8 @@ compaction                            // Context compaction
              <code>live-presence.js</code> keeps one socket, refetches the map 1.5 s after an event and every
              30 s, and cards are updated in place in a fixed order (executing first, then blocked &rarr; active
              &rarr; standby &rarr; idle &rarr; unknown &rarr; dormant, then name). Pure helpers in
-             <code>fleet-home-helpers.js</code>. "Loop controls" links to Insights &rarr; Agent loop.</p>
+             <code>fleet-home-helpers.js</code>. "Loop controls" links to Automations &rarr; Agent loop.</p>
+          <p><strong>UX overhaul.</strong> Hover/focus quick actions Start / Stop / Run now on each card; filter chips All / Running / Blocked / Needs you (persisted, <code>aibot.fleet.filter</code>); "N asks" opens <code>#/needs?bot=&lt;id&gt;</code>; a failed <code>/api/agents</code> shows "Could not load the fleet" + Retry instead of "No agents yet"; header "+ New agent" (<code>data-page-new</code>).</p>
           <p><strong>Recent (S3.5).</strong> Under the grid, a condensed ticker: the raw stream
              (seeded from <code>GET /api/activity?limit=30</code>, then prepended from
              <code>/ws/activity</code>, <code>TICKER_LIMIT = 30</code>) goes through
@@ -1696,10 +1791,14 @@ compaction                            // Context compaction
         </div>
 
         <div class="card">
-          <h3>Agent loop (Insights &rarr; Agent loop)</h3>
-          <p>The former Dashboard page (<code>web/pages/dashboard.js</code>) at <code>#/insights/loop</code>
-             (legacy <code>#/dashboard</code>): agent-loop enabled/running state, bot schedules with a
-             run-scope checkbox per bot, Run Now, Stop All Safe, and the expandable last-results table.</p>
+          <h3>Agent loop (Automations &rarr; Agent loop)</h3>
+          <p>The former Dashboard page (<code>web/pages/dashboard.js</code>) at <code>#/automations/loop</code>
+             (legacy <code>#/dashboard</code> and <code>#/insights/loop</code>): agent-loop enabled/running state, bot schedules with a
+             run-scope checkbox per bot, Run Now, Stop All Safe, and the expandable last-results table. Rows carry
+             <code>data-bot-id</code> and auto-refresh writes <code>td[data-col="activity"]</code> (it used to write the wrong
+             cell, so "Executing" never updated); auto-refresh also starts on Run Now; "N selected" next to All / None;
+             error state with Retry. Pure helpers in <code>dashboard-helpers.js</code> (<code>activityCell</code>,
+             <code>selectionSummary</code>, <code>loopStateError</code>); <code>destroyDashboard()</code> stops the timer.</p>
         </div>
 
         <div class="card">
@@ -1730,6 +1829,17 @@ compaction                            // Context compaction
              bookkeeping, request builder and markup are pure functions in
              <code>web/pages/needs-you-helpers.js</code> (<code>tests/web/needs-you-helpers.test.ts</code>).
              Inbox, Permissions, Proposals and Feedback remain as tabs for history views.</p>
+          <p><span class="badge badge-yellow">2026-10-03</span> <strong>Bulk and clear-stale (UX overhaul phase 1).</strong>
+             Kind and agent filter chips (the agent can be pre-selected with <code>#/needs?bot=&lt;id&gt;</code>,
+             <code>renderNeedsYou(el, { bot })</code>); Today / This week / Older groups with a "Clear N" per group;
+             multi-select with row checkboxes, <kbd>x</kbd>, <kbd>Shift+j/k</kbd>, <kbd>*</kbd> (all visible) and
+             <kbd>Esc</kbd>; a bulk bar (Dismiss N &middot; Archive N &middot; Approve N &middot; Clear selection) and a
+             "Clear stale&hellip;" head button, over <code>POST /api/needs-you/bulk</code> and <code>/clear-stale</code>.
+             Every bulk action hides the rows at once and commits after a 5 s <code>undoable</code> toast; per-item
+             failures come back with counts. <kbd>d</kbd> never deletes: on an inbox question with no live ask_human
+             question it closes the conversation (<code>POST /api/needs-you/act</code>, <code>inboxStatus: 'dismissed'</code>);
+             "Delete conversation" is a separate action behind a confirm dialog. Pending dynamic tools show up as the
+             <code>tool</code> kind (approve / reject); outputs get a neutral Archive.</p>
         </div>
 
         <div class="card">
@@ -1862,6 +1972,17 @@ compaction                            // Context compaction
             Bot management: create, edit, start, stop, reset, clone, and delete agents.
              Per-agent configuration overrides for model, conversation parameters, and
              agent loop settings. Soul file generation and application.</p>
+          <p><span class="badge badge-yellow">2026-10-03</span> <strong>UX overhaul.</strong> List: search (name / id / model, <code>data-page-filter</code>), status
+             chips All / Running / Stopped / Disabled / Errors with counts, sortable Agent / Status / Karma / Activity
+             headers (persisted in <code>aibot.agents.list</code>), and a bulk bar (Start / Stop / Enable / Disable / Export /
+             Delete) that runs one agent after another with a progress toast and a summary toast; single-row changes
+             patch the table in memory. Config: token behind Show / Copy, Delete and Export. Edit: Save checks the PATCH
+             result, Save / Cancel / back return to where the form was opened from (<code>editReturnHash</code>), sticky
+             section jump-nav, <kbd>Ctrl/&#8984;+S</kbd>, unsaved marker and a nav guard. Agent Home: Edit button and
+             <kbd>r</kbd> / <kbd>e</kbd> / <kbd>c</kbd>. Wizard: draft in sessionStorage <code>aibot.wizard.draft</code> (channel
+             secrets never stored), confirm on Cancel, completed steps jump back, "Start from an existing agent"
+             (backend, model, skills, disabled tools, loop cadence, preset &mdash; never name, id, purpose or credentials).
+             Bulk operations loop over the existing per-agent endpoints; no server route changed.</p>
         </div>
 
         <div class="card">
@@ -1889,7 +2010,8 @@ compaction                            // Context compaction
           <h3>Sessions</h3>
           <p>Conversation history browser. Lists all active sessions with metadata (bot,
              chat, message count, timestamps). Click through to view full transcripts
-             with pagination.</p>
+             with pagination. The transcript opens on the newest 200 messages and "Load earlier messages" pages
+             backwards with <code>offset</code>; an error object from <code>GET /api/sessions</code> shows an error state.</p>
         </div>
 
         <div class="card">
@@ -1926,18 +2048,17 @@ compaction                            // Context compaction
         </div>
 
         <div class="card">
-          <h3>Tools</h3>
-          <p>Dynamic tool inventory. Lists bot-created tools with their source code,
-             parameters, and approval status. Approve, reject, edit metadata, or
-             delete tools from the dashboard.</p>
-        </div>
-
-        <div class="card">
-          <h3>Tool Runner</h3>
-          <p>Direct tool execution page. Lists ALL tools (built-in + dynamic) in a searchable
-             sidebar grouped by source. Select a tool to view its description and auto-generated
-             parameter form (string, number, boolean, enum, object/array). Execute directly
-             without LLM mediation and view results with success/failure badge and duration.</p>
+          <h3>Tools (merged with Tool Runner)</h3>
+          <p><code>#/automations/tools</code> (admin), <code>web/pages/tools.js</code>, helpers in <code>tools-helpers.js</code>
+             (<code>mergeTools</code>, <code>filterTools</code>, <code>groupTools</code>, <code>pendingIds</code>, <code>toolsTable</code>,
+             <code>toolsBulkBar</code>, <code>paramFormHtml</code>, <code>collectArgs</code>). One list of every tool from
+             <code>/api/tools/all</code> + <code>/api/tools</code> &mdash; built-in, one group per MCP server, dynamic &mdash; with
+             search (<code>data-page-filter</code>) and a source filter (all / built-in / MCP / dynamic / pending approval).
+             Every row has <strong>Run</strong>, which opens the runner form in a sheet (<code>mountToolRunForm(container, tool)</code>
+             from <code>tool-runner.js</code>: auto-generated parameter form, direct execution without LLM mediation,
+             success/failure badge and duration). Dynamic tools keep approve / reject / edit / delete; bulk approve/reject
+             applies to the selected pending tools ("Select pending"). Cancelling the rejection note aborts the reject.
+             The standalone Tool Runner page and its tab are gone (<code>#/automations/tool-runner</code> redirects here).</p>
         </div>
 
         <div class="card">
@@ -1952,6 +2073,13 @@ compaction                            // Context compaction
              (All / To review / Approved / Rejected, with counts) and an agent select filter the list;
              it opens on "To review" when anything is waiting. <code>entryStatus()</code> treats
              <code>archive</code> / <code>delete</code> entries as archived.</p>
+          <p><span class="badge badge-yellow">2026-10-03</span> <strong>UX overhaul.</strong> The advertised keys are real: <kbd>j</kbd>/<kbd>k</kbd> (or arrows),
+             <kbd>a</kbd> approve, <kbd>x</kbd> reject, <kbd>space</kbd> select, <kbd>Enter</kbd>/<kbd>o</kbd> open, <kbd>Esc</kbd>.
+             Row checkboxes and a sticky bulk bar (Approve N / Reject N / Archive N) plus "Approve all N shown" (confirm
+             dialog). Every verdict is applied optimistically behind an Undo toast and committed by sequential per-item
+             <code>evaluate</code> / <code>archive</code> calls; failures roll back with a summary toast. Helpers in
+             <code>work-helpers.js</code> (<code>WORK_KEYS</code>, <code>keyAction</code>, <code>runSequential</code>,
+             <code>bulkSummary</code>, <code>workBulkBar</code>, &hellip;).</p>
         </div>
 
         <div class="card">
@@ -1969,7 +2097,9 @@ compaction                            // Context compaction
              <code>aibot.dispatches.filter</code>). 👍 / 👎 / "more like this" post to
              <code>/api/curiosity/:botId/dispatches/:id/signal</code>; the signal teaches the agent's taste
              model and earns (or costs) it dispatch frequency. Wiring is
-             <code>wireCuriositySignals()</code> in <code>curiosity.js</code>, shared with Agent Home.</p>
+             <code>wireCuriositySignals()</code> in <code>curiosity.js</code>, shared with Agent Home.
+             Keys: <kbd>j</kbd>/<kbd>k</kbd> focus, <kbd>+</kbd> (or <kbd>=</kbd>) / <kbd>-</kbd> thumbs up / down; "Load more" raises
+             the fetch limit up to the server cap of 200 (<code>nextDispatchLimit</code>).</p>
         </div>
 
         <div class="card">
@@ -1996,6 +2126,12 @@ compaction                            // Context compaction
              <code>tests/web/pages/file-actions.test.ts</code>; DOM helpers exercised manually.
              No backend changes &mdash; Bearer auth prevents plain anchor downloads, so the
              actions work entirely from the content string already in memory.</p>
+          <p><span class="badge badge-yellow">2026-10-03</span> <strong>UX overhaul.</strong> Accepts <code>?path=</code> as an alias of <code>?file=</code>. Approve and
+             Reject save in one click, stars save once a verdict exists, the optional note goes to the Discussion thread.
+             A visible bulk bar for the Ctrl/Shift multi-selection (Approve / Reject / Archive / Delete / Clear); Archive
+             and single-file delete sit behind an Undo toast, folder or multi-item deletes behind a danger confirm
+             dialog. The two file viewers became one <code>mountFileViewer</code>; filter, range selection, request
+             builders and the bulk bar live in <code>productions-helpers.js</code>.</p>
         </div>
 
         <div class="card">
@@ -2007,12 +2143,15 @@ compaction                            // Context compaction
              <code>SystemPromptBuilder.build()</code> for full system prompts (soul, memory,
              core memory, RAG, humanizer, karma, tool blocks) and
              <code>prefetchMemoryContext()</code> for automatic RAG context injection.
-             Multi-turn message history sent as proper <code>ChatMessage[]</code> array.</p>
+             Multi-turn message history sent as proper <code>ChatMessage[]</code> array.
+             <span class="badge badge-yellow">2026-10-03</span> The per-agent list shows the agent's name, type (Inbox / Chat / Productions) and status
+             (Pending / Closed) filters, a title search, a Status column and "Load more" (pages of 100); deletes go
+             through a confirm dialog that states the count.</p>
         </div>
 
         <div class="card">
-          <h3>Feedback</h3>
-          <p>Agent feedback management. Submit, view, or auto-generate harsh quality
+          <h3>Feedback (Needs You &rarr; Feedback)</h3>
+          <p><code>#/needs/feedback[/:bot]</code> only (the Insights copy was removed). Agent feedback management. Submit, view, or auto-generate harsh quality
              audits via Claude CLI that analyze soul coherence, production quality,
              goal progress, and behavioral patterns. Feedback entries can be applied
              or dismissed.</p>
@@ -2073,7 +2212,11 @@ compaction                            // Context compaction
           <p>Configuration editor for session, collaboration, and memory search settings. Edits are
              persisted directly to <code>config.json</code>. Covers session reset
              policies, group activation, LLM relevance checks, memory search (MMR diversity re-ranking, Auto-RAG), and collaboration
-             parameters (max rounds, cooldown, timeouts).</p>
+             parameters (max rounds, cooldown, timeouts).
+             One sticky save bar replaces the five Save buttons: it appears only when something is dirty, names the
+             dirty sections, PATCHes only those and reports errors per section; Discard is in the bar, <kbd>Ctrl/&#8984;+S</kbd>
+             saves, section jump links sit at the top, and a nav guard covers leaving with unsaved edits (helpers in
+             <code>settings-helpers.js</code>: <code>SAVE_SECTIONS</code>, <code>dirtySections</code>, <code>saveBarMarkup</code>, &hellip;).</p>
         </div>
 
         <div class="card">

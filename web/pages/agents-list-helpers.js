@@ -282,7 +282,7 @@ function timeOf(v) {
 export function sortAgents(agents, { sort = 'name', dir = 'asc' } = {}, maps = {}) {
   const { karmaMap = {}, llmStatsMap = {} } = maps;
   const sign = dir === 'desc' ? -1 : 1;
-  const valueOf = (a) => {
+  const keyOf = (a) => {
     if (sort === 'status') return STATUS_RANK[agentStatus(a)];
     if (sort === 'karma') {
       const raw = karmaMap[a?.id]?.current;
@@ -296,8 +296,8 @@ export function sortAgents(agents, { sort = 'name', dir = 'asc' } = {}, maps = {
     if (sort === 'name' || !SORT_KEYS.includes(sort)) {
       return nameKey(x).localeCompare(nameKey(y)) * sign;
     }
-    const vx = valueOf(x);
-    const vy = valueOf(y);
+    const vx = keyOf(x);
+    const vy = keyOf(y);
     if (vx == null && vy != null) return 1;
     if (vy == null && vx != null) return -1;
     if (vx != null && vy != null && vx !== vy) return (vx < vy ? -1 : 1) * sign;

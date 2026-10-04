@@ -216,7 +216,15 @@ function attachRetryListeners(container, results) {
   });
 }
 
+/** Stops the page's auto-refresh timer; app.js calls it when the page is left. */
+let dashboardCleanup = null;
+export function destroyDashboard() {
+  dashboardCleanup?.();
+  dashboardCleanup = null;
+}
+
 export async function renderDashboard(el) {
+  destroyDashboard();
   el.innerHTML = '<div class="page-title">Agent loop</div><p class="text-dim">Loading...</p>';
 
   const [loopState, statusData, inboxData] = await Promise.all([
@@ -402,12 +410,12 @@ export async function renderDashboard(el) {
     const boxes = loopBoxes();
     label.textContent = selectionSummary(boxes.filter((b) => b.checked).length, boxes.length);
   };
-  loopBoxes().forEach((inp) => {
+  for (const inp of loopBoxes()) {
     inp.addEventListener('change', () => {
       inp.parentElement.classList.toggle('checked', inp.checked);
       updateSelection();
     });
-  });
+  }
 
   // Select all / Clear buttons for the bot scope checkboxes
   function setLoopBotCheckboxes(checked) {
@@ -478,8 +486,8 @@ export async function renderDashboard(el) {
   }
   if (loopState.running || loopState.draining) startAutoRefresh();
 
-  // Cleanup on navigation (el gets replaced, timer becomes orphan)
-  el._dashboardCleanup = () => {
+  // Cleanup on navigation / re-render (el gets replaced, timer becomes orphan)
+  dashboardCleanup = () => {
     if (refreshTimer) {
       clearInterval(refreshTimer);
       refreshTimer = null;

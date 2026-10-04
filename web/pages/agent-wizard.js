@@ -13,21 +13,27 @@
  * All state, validation and markup live in agent-wizard-helpers.js (pure);
  * this file only wires the DOM.
  */
-import { showToast } from '../ui/index.js';
+import { confirmDialog, showToast } from '../ui/index.js';
 import {
   CUSTOM_PRESET,
   FOCUS_CHAT_KEY,
   GREETING_TEXT,
   STEPS,
+  WIZARD_DRAFT_KEY,
   applyField,
   applyPresetToState,
   buildCreatePayload,
   canCreate,
+  draftFromState,
+  fromAgentPicker,
+  hasWizardInput,
   initialState,
   localTokenClass,
   personalityBlurb,
   presetStrip,
   progressMarkup,
+  restoreDraft,
+  stateFromAgent,
   stepChannels,
   stepIndicator,
   stepPersonality,
@@ -46,8 +52,55 @@ let checkTimer = null;
 let busy = false;
 /** Errors shown for the current step; only populated after a failed Next/Create. */
 let shownErrors = {};
+/** GET /api/agents for "Start from an existing agent": null while loading. */
+let existingAgents = null;
+let draftTimer = null;
+
+function session() {
+  try {
+    return typeof sessionStorage !== 'undefined' ? sessionStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Debounced draft write; an empty wizard clears the draft. */
+function saveDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    draftTimer = null;
+    if (!state || busy) return;
+    try {
+      if (hasWizardInput(state)) session()?.setItem(WIZARD_DRAFT_KEY, draftFromState(state));
+      else session()?.removeItem(WIZARD_DRAFT_KEY);
+    } catch {
+      /* quota / private mode */
+    }
+  }, 300);
+}
+
+function clearDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = null;
+  try {
+    session()?.removeItem(WIZARD_DRAFT_KEY);
+  } catch {
+    /* private mode */
+  }
+}
 
 export function destroyAgentWizard() {
+  // Flush a pending draft write before the state goes away.
+  if (draftTimer && state && !busy && hasWizardInput(state)) {
+    try {
+      session()?.setItem(WIZARD_DRAFT_KEY, draftFromState(state));
+    } catch {
+      /* private mode */
+    }
+  }
+  clearTimeout(draftTimer);
+  draftTimer = null;
+  existingAgents = null;
   clearTimeout(checkTimer);
   checkTimer = null;
   state = null;
@@ -68,7 +121,8 @@ function render() {
   const step = state.step;
   const pane =
     step === 0
-      ? stepWho(state, shownErrors, { presets })
+      ? fromAgentPicker(existingAgents, state.fromAgent || '') +
+        stepWho(state, shownErrors, { presets })
       : step === 1
         ? stepPersonality(state, shownErrors)
         : stepChannels(state, shownErrors, { defaults: defaults || {} });
@@ -84,6 +138,7 @@ function render() {
       </form>
     </div>`;
   wire();
+  saveDraft();
   const first = root.querySelector(
     '.wizard-pane input:not([type=checkbox]), .wizard-pane textarea'
   );
@@ -150,6 +205,7 @@ function wire() {
         if (idInput) idInput.value = state.id;
       }
       if (field === 'channels.telegram.token') scheduleTelegramCheck();
+      saveDraft();
       if (Object.keys(shownErrors).length > 0) {
         shownErrors = validateStep(state, state.step).errors;
         syncErrors();
@@ -166,6 +222,34 @@ function wire() {
     render();
   });
   root.querySelector('[data-action="next"]')?.addEventListener('click', next);
+  root.querySelector('[data-action="cancel"]')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (hasWizardInput(state)) {
+      const ok = await confirmDialog({
+        title: 'Discard this agent?',
+        message: 'What you filled in so far will be lost.',
+        confirmLabel: 'Discard',
+        cancelLabel: 'Keep editing',
+      });
+      if (!ok) return;
+    }
+    clearDraft();
+    state = null;
+    location.hash = '#/agents';
+  });
+  // Completed step indicators jump back (no validation needed going back).
+  root.querySelector('.wizard-steps')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-step-jump]');
+    if (!b || busy) return;
+    const target = Number(b.dataset.stepJump);
+    if (!Number.isFinite(target) || target >= state.step) return;
+    shownErrors = {};
+    state = { ...state, step: target };
+    render();
+  });
+  root.querySelector('[data-from-agent]')?.addEventListener('change', (e) => {
+    startFromAgent(e.target.value);
+  });
   root.querySelector('[data-action="create"]')?.addEventListener('click', create);
   root.querySelector('[data-check="telegram"]')?.addEventListener('click', () => {
     clearTimeout(checkTimer);
@@ -280,6 +364,7 @@ async function create() {
     }
   }
 
+  clearDraft();
   showToast(`${payload.name} is ready`, { tone: 'ok' });
   try {
     sessionStorage.setItem(FOCUS_CHAT_KEY, id);
@@ -304,18 +389,71 @@ async function sendGreeting(id, name) {
   });
 }
 
+/** Prefill backend, model, skills, tools and loop settings from an existing agent. */
+async function startFromAgent(id) {
+  if (!id) {
+    state = { ...state, fromAgent: '' };
+    saveDraft();
+    return;
+  }
+  const agent = await api(`/api/agents/${encodeURIComponent(id)}`);
+  if (!state) return;
+  if (!agent || agent.error) {
+    showToast(`Could not load ${id}: ${agent?.error || 'request failed'}`, { tone: 'danger' });
+    return;
+  }
+  state = stateFromAgent(agent, state);
+  shownErrors = {};
+  render();
+  showToast(`Copied settings from ${agent.name || id} — see Advanced on the last step`, {
+    tone: 'ok',
+  });
+}
+
+/** Swap in the existing-agent picker once the list arrives (step 1 only). */
+function paintAgentPicker() {
+  if (!root || !state || state.step !== 0 || root.querySelector('[data-from-agent]')) return;
+  const html = fromAgentPicker(existingAgents, state.fromAgent || '');
+  if (!html) return;
+  const pane = root.querySelector('.wizard-pane[data-step="0"]');
+  pane?.insertAdjacentHTML('beforebegin', html);
+  root.querySelector('[data-from-agent]')?.addEventListener('change', (e) => {
+    startFromAgent(e.target.value);
+  });
+}
+
 export async function renderAgentWizard(el) {
   destroyAgentWizard();
   root = el;
-  state = initialState();
+  const draft = restoreDraft(session()?.getItem(WIZARD_DRAFT_KEY) ?? null);
+  state = draft ?? initialState();
   render();
-  const [d, p] = await Promise.all([
+  if (draft) {
+    showToast('Draft restored', {
+      tone: 'info',
+      duration: 8000,
+      action: {
+        label: 'Discard',
+        onClick: () => {
+          if (!root) return;
+          clearDraft();
+          state = initialState();
+          shownErrors = {};
+          render();
+        },
+      },
+    });
+  }
+  const [d, p, list] = await Promise.all([
     api('/api/agents/defaults').catch(() => null),
     api('/api/agents/presets').catch(() => null),
+    api('/api/agents').catch(() => null),
   ]);
   if (!root) return; // navigated away while loading
   defaults = d?.error ? null : d;
   // The defaults only feed the Advanced block on step 3; no re-render needed now.
   presets = Array.isArray(p) ? p : [];
   paintPresets();
+  existingAgents = Array.isArray(list) ? list : [];
+  paintAgentPicker();
 }

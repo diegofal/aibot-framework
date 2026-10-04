@@ -123,6 +123,18 @@ describe('closeStaleInboxConversations', () => {
     expect(statusOf('bot2', b.id)).toBe('closed');
   });
 
+  test('marks a stale orphan answered (not closed) when the thread carries a human reply', () => {
+    const conv = pendingConversation('bot1', 'Answered in chat?', 'q-gone');
+    conversations.addMessage('bot1', conv.id, 'human', 'Yes, go ahead');
+    clock += 100 * HOUR;
+
+    const closed = closeStaleInboxConversations(deps(), makeLogger());
+
+    expect(closed).toEqual([]);
+    expect(statusOf('bot1', conv.id)).toBe('answered');
+    expect(notes.some(([, n]) => n.includes('without answer'))).toBe(false);
+  });
+
   test('is a no-op without a conversations service', () => {
     const d = { ...deps(), conversationsService: undefined };
     expect(closeStaleInboxConversations(d, makeLogger())).toEqual([]);

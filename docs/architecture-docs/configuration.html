@@ -411,7 +411,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>autoCloseHours</code></td>
               <td>number</td>
               <td><code>72</code></td>
-              <td>Positive. Pending asks older than this are auto-closed (inbox status <code>closed</code>, daily-memory note) by <code>sweepStaleAskHumanQuestions()</code>, which runs on every <code>ask_human</code> call for the calling bot</td>
+              <td>Positive. Pending asks older than this are auto-closed (inbox status <code>closed</code>, daily-memory note) by <code>sweepStaleAskHumanQuestions()</code>, which runs on every <code>ask_human</code> call for the calling bot (and hourly across the fleet); the sweep also closes pending inbox conversations past the cutoff that have no live store question (<code>closeStaleInboxConversations</code>)</td>
             </tr>
           </tbody>
         </table>

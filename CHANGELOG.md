@@ -2,12 +2,73 @@
 
 ## Unreleased
 
+### Changed (2026-10-03) — Dashboard UX overhaul: a clearable Needs You, one feedback language, a tidier map, keyboard everywhere
+- **Why.** The Needs You queue had 51 items (29 asks, 22 outputs, many days old) and the only way to clear it was pressing `d` 51 times. A read-only review of every dashboard screen followed. It found real bugs, about 80 `alert`/`confirm`/`prompt` calls, duplicated tabs and keys that were advertised but did nothing. Plan: `docs/plans/ux-overhaul-plan.md`.
+- **Needs You bulk & clear-stale** (`web/pages/needs-you.js`, `needs-you-helpers.js`):
+  - Kind and agent filter chips. Today / This week / Older groups, each with a "Clear N".
+  - Multi-select: `x`, `Shift+j/k`, `*`, `Esc` and row checkboxes. A bulk bar offers Dismiss N · Archive N · Approve N · Clear selection, and a "Clear stale…" button sits in the header.
+  - Every bulk action hides the rows at once and commits after a 5 s Undo toast. Per-item failures come back with counts.
+  - `d` on an inbox question with no live ask_human question now closes it (`inboxStatus: 'dismissed'`) instead of deleting the conversation. Deleting is a separate "Delete conversation" action behind a confirm dialog.
+  - Pending dynamic tools appear as a new `tool` kind (approve / reject), admin / single-tenant only, counted in `byKind.tool` and the nav badge. Outputs get a neutral **Archive** (no evaluation, no karma).
+  - `#/needs?bot=<id>` opens the queue with that agent filtered. Fleet Home's "N asks" uses it.
+- **New endpoints** (`src/web/routes/needs-you.ts`, tenant-scoped like the GET; ids outside the viewer's queue → `ok:false, error: "Not found"`):
+  - `POST /api/needs-you/bulk { ids[1..500], action, note? }` → `{ results: [{ id, ok, error? }] }`. `action` ∈ `dismiss | archive | approve | reject | deny | neutral`. An unsupported kind/action pair fails only that item. `neutral` = ask dismiss, permission deny, proposal reject, output archive, feedback dismiss, tool reject. Every action reuses the per-item store call, so karma applies to output approve/reject as before.
+  - `POST /api/needs-you/act { id, action, note? }`: one item through the same path.
+  - `POST /api/needs-you/clear-stale { olderThanHours >= 1, kinds?, botId? }` → `{ cleared, byKind, results }`. Applies the neutral action to items strictly older than the cutoff. The default kinds are everything except `tool`, and it never approves.
+  - `GET /api/agent-feedback/:botId` also returns `botName`. `POST /api/productions/:botId/:id/archive` accepts an empty body.
+- **ask_human sweep:** the hourly sweep (`sweepStaleAskHumanQuestions` → new `closeStaleInboxConversations`) now also closes **pending inbox conversations** older than `askHuman.autoCloseHours` that have no live store question. Before, those were only reconciled at boot and could sit in Needs You until the next restart. It writes the same daily-memory note as a store auto-close.
+- **Bug fixes:**
+  - A Needs You output link used `?path=`, but Productions reads `?file=` (Productions now accepts both).
+  - Agent edit Save ignored the PATCH result and navigated anyway. Agent delete ignored API errors. Clone and Init Custom Soul failed silently.
+  - Cancelling the Tools rejection note still rejected (list, detail page and agent proposals).
+  - Agent loop auto-refresh wrote into the wrong cell, so "Executing" never updated.
+  - Inbox and the Conversations chat page called `showToast` without importing it. Inbox re-render could paint over the chat after navigating mid-load.
+  - Cron (`jobs.filter`) and Sessions crashed when their API returned an error object. Skills' create form read the form element's own `id`/`name`, so Generate/Manual threw. The webhook enable toggle sent each PUT twice.
+  - Permissions' 15 s refresh wiped a half-typed note. An Inbox draft reply now survives re-renders.
+  - Sessions over 200 messages showed only the oldest 200. The transcript now opens on the newest 200 with "Load earlier messages".
+- **Consistent feedback / dialogs** (`web/ui/toast.js`, new `web/ui/dialog.js`): `showToast` takes an `action` button, and `undoable()` defers a commit behind an Undo toast (flushed on `beforeunload` / `hashchange`). `confirmDialog` / `promptDialog` / `confirmInline` replace every `alert`/`confirm`/`prompt` in the dashboard. Deletes are undoable or confirmed, and API failures toast instead of passing silently. Lists that failed to load show an error state with Retry.
+- **Navigation changes & redirects** (`web/nav-routes.js`, `web/app.js`):
+  - Feedback lives only under Needs You. `#/insights/feedback…` and `#/feedback…` redirect to `#/needs/feedback…`.
+  - Agent loop moves to Automations (`#/automations/loop`). `#/insights/loop` and `#/dashboard` redirect.
+  - The Tool Runner tab is gone. `#/tool-runner` and `#/automations/tool-runner` redirect to `#/automations/tools`, where every row has Run.
+  - The inner Stats tab strip is gone, since the Insights tabs already provide it.
+  - Unknown hashes show a real "Page not found" page. Remaining legacy in-page hrefs are canonical, and a test fails on any new one.
+  - Unsaved-changes guard for the back button and typed hashes (`web/nav-guard.js`, used by Settings and the agent edit form). Uniform page cleanup (`web/page-lifecycle.js`).
+  - The topbar status shows once. Badges come from one 10 s `/api/needs-you/count` request.
+- **Global shortcuts** (`web/ui/shortcuts.js`, `shortcuts-helpers.js`): `g` then h/a/n/w/u/i/s jumps to an area, `/` focuses the page filter (`[data-page-filter]`), `n` clicks the page's create button (`[data-page-new]`), and `?` opens a help sheet with the global keys plus the current page's keys. New palette actions: Clear stale needs (72 h), New cron job, Run agent loop now, Re-run failed crons, and per agent stats / karma / logs.
+- **Per-area improvements:**
+  - **Agents list:** search, status chips with counts, sortable columns (persisted). A bulk bar runs Start / Stop / Enable / Disable / Export / Delete with progress and summary toasts. Rows patch in place instead of reloading the page.
+  - **Fleet Home:** hover Start / Stop / Run now on each card, filter chips, a real error state with Retry, "+ New agent".
+  - **Agent Home:** Edit button; `r` Run now, `e` Edit, `c` chat.
+  - **Agent edit:** sticky section jump-nav, Ctrl/Cmd+S, dirty marker and guard. Save, Cancel and back return to where the form was opened from.
+  - **Agent Config:** token behind Show / Copy, plus Delete and Export.
+  - **Wizard:** draft kept in sessionStorage (secrets never stored), confirm on Cancel, "Start from an existing agent".
+  - **Work › Outputs:** the advertised keys work (`j`/`k`, `a` approve, `x` reject, `space`, `Enter`/`o`, `Esc`). A bulk bar offers Approve / Reject / Archive N and "Approve all N shown", all behind Undo.
+  - **Productions:** one-click Approve / Reject, a visible bulk bar, Archive / Delete behind Undo, and one shared file viewer (2082 → ~1450 lines).
+  - **Conversations:** agent name, type and status filters, search, "Load more".
+  - **Dispatches:** `j`/`k`, `+`/`-` give 👍/👎, and "Load more" goes up to the 200 server cap.
+  - **Cron:** bulk Pause / Resume / Run / Delete, sort, row-level patches that keep the scroll position.
+  - **Tools:** merged with Tool Runner into one list (built-in, MCP per server, dynamic) with a source filter, Run in a sheet, and bulk approve/reject of pending tools.
+  - **Settings:** one sticky save bar that PATCHes only the dirty sections, plus jump links and Ctrl/Cmd+S.
+  - **Skills:** filters, inline validation.
+  - **Karma:** agent names, filter, sort.
+  - **Activity:** `?tab=` / `?bot=` in the URL.
+  - **Hygiene:** "Load more" in the history list.
+  - **BaaS:** the tenant pick persists, and every alert/confirm is gone.
+- **Deploy:** the `src/` changes (Needs You write routes wired in `server.ts`, the sweep, feedback `botName`, archive body) need `docker compose up -d --build`. `web/` is served through the read-only mount.
+- **Tests:** `tests/web/ui-feedback`, `needs-you-bulk-helpers`, `routes/needs-you-bulk`, `routes/productions-archive`, `agents-list-ux`, `fleet-home-ux`, `agent-form-ux`, `agent-wizard-draft`, `dashboard-helpers`, `tools-helpers`, `settings-savebar`, `work-bulk-helpers`, `productions-helpers`, `conversations-helpers`, `sessions-helpers`, `nav-guard`, `page-lifecycle`, `shortcuts-helpers`, and extended `nav-routes` (IA moves, 404, legacy-href scan), `palette-helpers` and `cron-list-helpers`.
+- **Review fixes (same day).** A read-only review of the finished work found four bugs in Needs You, fixed test-first:
+  - **Fixed**: answering an orphan ask from Needs You (pending inbox thread with no live AskHumanStore question, or no question id) now marks the conversation `answered` in `POST /api/conversations/:botId/:id/messages`. Before, the row came back after the 1.5 s refresh and the 72 h sweep later closed it as "auto-closed without answer", writing that to daily memory.
+  - **Fixed**: `closeStaleInboxConversations` (hourly ask_human sweep) marks a stale orphan whose thread already has a human message `answered` instead of closing it (same rule as `reconcileAskHumanInbox`).
+  - **Fixed**: `POST /api/needs-you/clear-stale` accepts optional `ids: string[]` (max 500). When given, only those ids are considered, still filtered by age, kinds and neutral action. The dashboard now sends exactly the confirmed rows, minus rows hidden by other pending Undo actions. Before, the server recomputed the set about 5 s later and could sweep extra items.
+  - **Changed**: tools have no neutral action anymore (`NEEDS_YOU_NEUTRAL_ACTION.tool = null`). `neutral` on a tool fails per item ("reject them explicitly"), and `clear-stale` with a `kinds` list that includes `tool` returns 400. Bulk Dismiss and group "Clear N" skip tool items, and their counts match what is sent (a group holding only tools shows no Clear button). New helpers in `web/pages/needs-you-helpers.js`: `NEUTRAL_KINDS`, `neutralIds`, `staleClearIds`, `bulkPlan().neutralIds`.
+  - **Fixed**: rows no longer reappear briefly after a successful bulk action. `createLoadGate()` (needs-you-helpers) drops GET responses from loads that started before the latest commit, or that a newer load has superseded.
+
 ### Process (2026-10-03) — Working agreements and project records (Zero, stages rules + memory)
 - **Why.** The rules lived only in `CLAUDE.md`, mixed with architecture notes, and hand-run operations against the live container left no trace outside chat history.
 - **Rules** moved verbatim in substance from `CLAUDE.md` into `docs/working-agreements.md`; `CLAUDE.md` now links there and keeps only repo-specific truth (commands, gotchas, the architecture tables). Kept deliberately light: team-only rules (branch/worktree per ticket, tracker labels, per-ticket production gate) are declined with reasons in `.claude/zero.config.json`.
 - **Records** added beside `CHANGELOG.md`: daily work log (`docs/work-log/YYYY-MM-DD.md`), infra runbook (`docs/runbook.md`, seeded with today's Sonnet 5.5 config-volume change), and technical-debt register (`docs/technical-debt.md`). Zero's log reminder now prompts for a runbook entry after `docker compose up/restart/stop/down`, `scripts/docker/backup.ts` and `docker cp`/config-editing `docker exec`, and for a work-log entry after `git push`.
 - **Deny list** (`.claude/settings.json`, local — `.claude/` is gitignored): Zero's core rules plus the commands that would delete the live Docker volumes (`docker compose down -v`, `docker volume rm/prune`, `docker system prune --volumes`, `backup.ts restore --force`).
-
 
 ### Changed (2026-10-03) — Claude CLI 2.1.289, Sonnet 5.5 as the fleet default, Opus 5.5 / Fable 5.1 selectable
 - **Why.** The running image had Claude CLI 2.1.270 (committed pin: 2.1.237). It answered `claude-opus-5-5` with `400 … version 2.1.280 or newer is required`, and its `sonnet` alias still resolved to Sonnet 5, so no setting could put the fleet on 5.5.

@@ -1,7 +1,15 @@
+import { confirmDialog, showToast } from '../ui/index.js';
+import { restoreTenant } from './baas-helpers.js';
 import { api, closeModal, escapeHtml, getAuthContext, showModal, timeAgo } from './shared.js';
 
+/** Toast + focus for a modal field that failed validation. */
+function invalid(inputId, message) {
+  showToast(message, { tone: 'warn' });
+  document.getElementById(inputId)?.focus();
+}
+
 /**
- * #/baas/templates — Template list
+ * #/settings/baas/templates — Template list
  */
 export async function renderBaasTemplates(el) {
   const { role } = getAuthContext();
@@ -43,7 +51,7 @@ export async function renderBaasTemplates(el) {
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
     tr.innerHTML = `
-      <td><a href="#/baas/templates/${encodeURIComponent(t.id)}">${escapeHtml(t.name)}</a></td>
+      <td><a href="#/settings/baas/templates/${encodeURIComponent(t.id)}">${escapeHtml(t.name)}</a></td>
       <td class="text-dim">${escapeHtml(t.description || '—')}</td>
       <td>${t.version || 1}</td>
       <td class="text-dim">${t.createdAt ? timeAgo(t.createdAt) : '—'}</td>
@@ -54,7 +62,7 @@ export async function renderBaasTemplates(el) {
       </td>`;
     tr.addEventListener('click', (e) => {
       if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
-      location.hash = `#/baas/templates/${encodeURIComponent(t.id)}`;
+      location.hash = `#/settings/baas/templates/${encodeURIComponent(t.id)}`;
     });
     tbody.appendChild(tr);
   }
@@ -71,8 +79,15 @@ export async function renderBaasTemplates(el) {
     } else if (action === 'instantiate') {
       showInstantiateModal(el, id);
     } else if (action === 'delete') {
-      if (!confirm(`Delete template "${btn.dataset.name}"? This cannot be undone.`)) return;
-      await api(`/api/baas/templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const ok = await confirmDialog({
+        title: 'Delete template?',
+        message: `Delete template "${btn.dataset.name}"? This cannot be undone.`,
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return;
+      const res = await api(`/api/baas/templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res?.error) return showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
+      showToast(`Deleted template "${btn.dataset.name}"`, { tone: 'ok' });
       renderBaasTemplates(el);
     }
   });
@@ -96,7 +111,7 @@ function showCreateModal(el) {
   document.getElementById('tpl-cancel').addEventListener('click', closeModal);
   document.getElementById('tpl-save').addEventListener('click', async () => {
     const name = document.getElementById('tpl-name').value.trim();
-    if (!name) return alert('Name is required');
+    if (!name) return invalid('tpl-name', 'Name is required.');
 
     const config = {
       conversation: { systemPrompt: document.getElementById('tpl-prompt').value },
@@ -109,11 +124,13 @@ function showCreateModal(el) {
       temperature: Number.parseFloat(document.getElementById('tpl-temp').value) || 0.7,
     };
 
-    await api('/api/baas/templates', {
+    const res = await api('/api/baas/templates', {
       method: 'POST',
       body: { name, description: document.getElementById('tpl-desc').value.trim(), config },
     });
+    if (res?.error) return showToast(`Create failed: ${res.error}`, { tone: 'danger' });
     closeModal();
+    showToast(`Template "${name}" created`, { tone: 'ok' });
     renderBaasTemplates(el);
   });
 }
@@ -137,7 +154,7 @@ function showEditModal(el, tpl) {
   document.getElementById('tpl-cancel').addEventListener('click', closeModal);
   document.getElementById('tpl-save').addEventListener('click', async () => {
     const name = document.getElementById('tpl-name').value.trim();
-    if (!name) return alert('Name is required');
+    if (!name) return invalid('tpl-name', 'Name is required.');
 
     const config = {
       conversation: { systemPrompt: document.getElementById('tpl-prompt').value },
@@ -150,18 +167,21 @@ function showEditModal(el, tpl) {
       temperature: Number.parseFloat(document.getElementById('tpl-temp').value) || 0.7,
     };
 
-    await api(`/api/baas/templates/${encodeURIComponent(tpl.id)}`, {
+    const res = await api(`/api/baas/templates/${encodeURIComponent(tpl.id)}`, {
       method: 'PUT',
       body: { name, description: document.getElementById('tpl-desc').value.trim(), config },
     });
+    if (res?.error) return showToast(`Save failed: ${res.error}`, { tone: 'danger' });
     closeModal();
+    showToast('Template saved', { tone: 'ok' });
     renderBaasTemplates(el);
   });
 }
 
 function showInstantiateModal(el, templateId) {
-  const ctx = import('./shared.js').then ? null : null; // avoid top-level await
-  const tenantId = sessionStorage.getItem('auth_tenant_id') || '';
+  // Tenant users are pinned to their own tenant; admins default to the tenant
+  // picked on the other BaaS pages.
+  const tenantId = sessionStorage.getItem('auth_tenant_id') || restoreTenant() || '';
 
   showModal(`
     <div class="modal-title">Instantiate Template</div>
@@ -179,13 +199,14 @@ function showInstantiateModal(el, templateId) {
   document.getElementById('inst-save').addEventListener('click', async () => {
     const botId = document.getElementById('inst-bot').value.trim();
     const token = document.getElementById('inst-token').value.trim();
-    if (!botId || !token) return alert('Bot ID and Token are required');
+    if (!botId) return invalid('inst-bot', 'Bot ID is required.');
+    if (!token) return invalid('inst-token', 'Token is required.');
 
     let overrides = {};
     try {
       overrides = JSON.parse(document.getElementById('inst-overrides').value || '{}');
     } catch {
-      return alert('Invalid JSON in overrides');
+      return invalid('inst-overrides', 'Overrides must be valid JSON.');
     }
 
     const res = await api(`/api/baas/templates/${encodeURIComponent(templateId)}/instantiate`, {
@@ -199,24 +220,24 @@ function showInstantiateModal(el, templateId) {
     });
 
     if (res.error) {
-      alert(`Error: ${res.error}`);
+      showToast(`Instantiate failed: ${res.error}`, { tone: 'danger', duration: 6000 });
     } else {
       closeModal();
-      alert('Bot created successfully!');
+      showToast(`Bot "${botId}" created`, { tone: 'ok' });
       renderBaasTemplates(el);
     }
   });
 }
 
 /**
- * #/baas/templates/:id — Template detail
+ * #/settings/baas/templates/:id — Template detail
  */
 export async function renderBaasTemplateDetail(el, id) {
   el.innerHTML = '<p class="text-dim">Loading...</p>';
 
   const tpl = await api(`/api/baas/templates/${encodeURIComponent(id)}`);
   if (tpl.error) {
-    el.innerHTML = `<div class="detail-header"><a href="#/baas/templates" class="back">&larr;</a><span>Template not found</span></div><p class="text-dim">${escapeHtml(tpl.error)}</p>`;
+    el.innerHTML = `<div class="detail-header"><a href="#/settings/baas/templates" class="back">&larr;</a><span>Template not found</span></div><p class="text-dim">${escapeHtml(tpl.error)}</p>`;
     return;
   }
 
@@ -224,7 +245,7 @@ export async function renderBaasTemplateDetail(el, id) {
 
   el.innerHTML = `
     <div class="detail-header">
-      <a href="#/baas/templates" class="back">&larr;</a>
+      <a href="#/settings/baas/templates" class="back">&larr;</a>
       <span class="page-title" style="margin-bottom:0">${escapeHtml(tpl.name)}</span>
     </div>
     <div class="detail-card">
@@ -259,8 +280,15 @@ export async function renderBaasTemplateDetail(el, id) {
     .getElementById('tpl-detail-inst')
     .addEventListener('click', () => showInstantiateModal(el, tpl.id));
   document.getElementById('tpl-detail-del').addEventListener('click', async () => {
-    if (!confirm(`Delete template "${tpl.name}"?`)) return;
-    await api(`/api/baas/templates/${encodeURIComponent(tpl.id)}`, { method: 'DELETE' });
-    location.hash = '#/baas/templates';
+    const ok = await confirmDialog({
+      title: 'Delete template?',
+      message: `Delete template "${tpl.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    const res = await api(`/api/baas/templates/${encodeURIComponent(tpl.id)}`, { method: 'DELETE' });
+    if (res?.error) return showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
+    showToast(`Deleted template "${tpl.name}"`, { tone: 'ok' });
+    location.hash = '#/settings/baas/templates';
   });
 }

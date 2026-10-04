@@ -36,9 +36,9 @@ describe('snapshotForm', () => {
     const a = snapshotForm(fields);
     expect(snapshotForm(fields.map((f) => ({ ...f })))).toBe(a);
     expect(snapshotForm([{ ...fields[0], value: 'Bea' }, ...fields.slice(1)])).not.toBe(a);
-    expect(snapshotForm([fields[0], { ...fields[1], checked: false }, ...fields.slice(2)])).not.toBe(
-      a
-    );
+    expect(
+      snapshotForm([fields[0], { ...fields[1], checked: false }, ...fields.slice(2)])
+    ).not.toBe(a);
   });
   it('ignores unnamed fields', () => {
     expect(snapshotForm([{ name: '', value: 'x' }])).toBe(snapshotForm([]));
