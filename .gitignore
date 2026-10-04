@@ -47,9 +47,10 @@ config/soul/
 # Notes
 improvements.md
 
-# Productions (runtime-generated, but track src/productions/)
+# Productions (runtime-generated, but track src/productions/ and its tests)
 productions/
 !src/productions/
+!tests/productions/
 .vercel
 
 # diagram-design plugin local profile
