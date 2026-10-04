@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import {
   collectArgs,
+  dynamicIds,
   filterTools,
   groupTools,
   mergeTools,
   paramFormHtml,
   pendingIds,
+  toolTargets,
   toolsBulkBar,
   toolsTable,
 } from '../../web/pages/tools-helpers.js';
@@ -95,12 +97,33 @@ describe('toolsTable / toolsBulkBar', () => {
   it('shows an empty state when nothing matches', () => {
     expect(toolsTable([], { filtered: true })).toContain('No tools match');
   });
-  it('toolsBulkBar is empty without a selection', () => {
-    expect(toolsBulkBar(0)).toBe('');
-    const html = toolsBulkBar(2);
-    expect(html).toContain('2 selected');
-    expect(html).toContain('data-bulk="approve"');
-    expect(html).toContain('data-bulk="reject"');
+  it('every dynamic tool is selectable, built-in and MCP tools are not', () => {
+    const html = toolsTable(groupTools(merged), { selected: new Set() });
+    expect(html).toContain('data-select="d1"');
+    expect(html).toContain('data-select="d2"');
+    expect(html.match(/data-select=/g)).toHaveLength(2);
+    expect(dynamicIds(merged)).toEqual(['d1', 'd2']);
+  });
+  it('toolTargets: approve skips approved, reject skips rejected, delete takes all', () => {
+    const sel = new Set(['d1', 'd2', 'gone']);
+    expect(toolTargets(merged, sel, 'approve')).toEqual(['d1']);
+    expect(toolTargets(merged, sel, 'reject')).toEqual(['d1', 'd2']);
+    expect(toolTargets(merged, sel, 'delete')).toEqual(['d1', 'd2']);
+  });
+  it('toolsBulkBar: shared toolbar with Approve / Reject / Delete', () => {
+    const html = toolsBulkBar({
+      visibleIds: ['d1', 'd2'],
+      selected: new Set(['d1']),
+      approve: 1,
+      reject: 1,
+      remove: 1,
+    });
+    expect(html).toContain('1 of 2 selected');
+    expect(html).toContain('Approve 1');
+    expect(html).toContain('Reject 1');
+    expect(html).toContain('Delete 1');
+    expect(toolsBulkBar({ visibleIds: ['d1'] })).toContain('Select all');
+    expect(toolsBulkBar({ visibleIds: [] })).toBe('');
   });
 });
 

@@ -67,6 +67,10 @@ function recorder(over: Partial<NeedsYouActionHandlers> = {}) {
       calls.push(['rejectTool', id]);
       return true;
     },
+    deleteTool: (id) => {
+      calls.push(['deleteTool', id]);
+      return true;
+    },
     ...over,
   };
   return { calls, handlers };
@@ -373,6 +377,19 @@ describe('POST /api/needs-you/bulk', () => {
       ['archiveProduction', 'b1', 'f1'],
       ['dismissAsk', 'q-store'],
     ]);
+  });
+
+  it('delete removes tools and is refused for every other kind', async () => {
+    const { calls, handlers } = recorder();
+    const res = await post(makeApp(handlers), '/api/needs-you/bulk', {
+      ids: ['tool:t-pending', 'production:b1:f1'],
+      action: 'delete',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.results[0]).toEqual({ id: 'tool:t-pending', ok: true });
+    expect(res.body.results[1].ok).toBe(false);
+    expect(res.body.results[1].error).toContain('not supported');
+    expect(calls).toEqual([['deleteTool', 't-pending']]);
   });
 
   it('tools have no neutral action: neutral never rejects code', async () => {

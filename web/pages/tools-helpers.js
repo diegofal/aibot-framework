@@ -5,6 +5,7 @@
  * `tool-runner.js` keep fetching and event wiring.
  */
 import { badge, emptyState, esc } from '../ui/index.js';
+import { bulkToolbar } from '../ui/select-all.js';
 
 const STATUS_TONE = { pending: 'warn', approved: 'ok', rejected: 'danger' };
 
@@ -75,6 +76,25 @@ export function pendingIds(tools) {
     .map((t) => String(t.id));
 }
 
+/** Ids of the dynamic tools in `tools`: the selectable rows. */
+export function dynamicIds(tools) {
+  return (tools ?? []).filter((t) => t.source === 'dynamic' && t.id).map((t) => String(t.id));
+}
+
+/** Selected dynamic tools an action applies to (approve skips approved, reject skips rejected). */
+export function toolTargets(tools, selected, action) {
+  return (tools ?? [])
+    .filter((t) => t.source === 'dynamic' && t.id && selected.has(String(t.id)))
+    .filter((t) =>
+      action === 'approve'
+        ? t.status !== 'approved'
+        : action === 'reject'
+          ? t.status !== 'rejected'
+          : true
+    )
+    .map((t) => String(t.id));
+}
+
 function truncate(str, max) {
   const s = String(str ?? '');
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
@@ -83,11 +103,12 @@ function truncate(str, max) {
 function toolRow(t, selected) {
   const isDyn = t.source === 'dynamic';
   const pending = isDyn && t.status === 'pending' && t.id;
-  const select = pending
-    ? `<input type="checkbox" class="tools-select" data-select="${esc(t.id)}"${
-        selected.has(String(t.id)) ? ' checked' : ''
-      } aria-label="Select ${esc(t.name)}">`
-    : '';
+  const select =
+    isDyn && t.id
+      ? `<input type="checkbox" class="tools-select" data-select="${esc(t.id)}"${
+          selected.has(String(t.id)) ? ' checked' : ''
+        } aria-label="Select ${esc(t.name)}">`
+      : '';
   const name =
     isDyn && t.id
       ? `<a href="#/automations/tools/${encodeURIComponent(t.id)}">${esc(t.name)}</a>`
@@ -139,16 +160,31 @@ export function toolsTable(groups, { selected = new Set(), filtered = false } = 
   return `<div class="table-scroll"><table class="ui-table tools-table"><tbody id="tools-tbody">${body}</tbody></table></div>`;
 }
 
-/** Bulk bar for the selected pending dynamic tools; '' when nothing is selected. */
-export function toolsBulkBar(count) {
-  const n = Number(count) || 0;
-  if (n <= 0) return '';
-  return `<div class="ops-bulk-bar" role="toolbar" aria-label="Bulk actions">
-    <span class="ops-bulk-count">${n} selected</span>
-    <button class="btn btn-sm btn-primary" data-bulk="approve">Approve</button>
-    <button class="btn btn-sm btn-danger" data-bulk="reject">Reject</button>
-    <button class="btn btn-sm" data-bulk="clear">Clear</button>
-  </div>`;
+/** The selection toolbar (web/ui/select-all.js) over the shown dynamic tools. */
+export function toolsBulkBar({
+  visibleIds = [],
+  selected = new Set(),
+  approve = 0,
+  reject = 0,
+  remove = 0,
+} = {}) {
+  return bulkToolbar({
+    id: 'tools-select',
+    visibleIds,
+    selected,
+    noun: 'dynamic tool',
+    actions: [
+      { id: 'approve', label: 'Approve', count: approve, tone: 'primary' },
+      { id: 'reject', label: 'Reject', count: reject },
+      {
+        id: 'delete',
+        label: 'Delete',
+        count: remove,
+        tone: 'danger',
+        title: 'Delete the selected tools (code removed, unloaded from every agent)',
+      },
+    ],
+  });
 }
 
 /** Form fields for a JSON-schema `parameters` object (no inline styles). */

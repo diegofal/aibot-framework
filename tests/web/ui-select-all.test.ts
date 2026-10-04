@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { selectAllBox, selectAllState, toggleAll } from '../../web/ui/select-all.js';
+import { bulkToolbar, selectAllState, toggleAll } from '../../web/ui/select-all.js';
 
 describe('selectAllState', () => {
   it('is none when nothing visible is selected', () => {
@@ -26,23 +26,48 @@ describe('toggleAll', () => {
   });
 });
 
-describe('selectAllBox', () => {
-  it('renders an unchecked labelled box with the visible count', () => {
-    const html = selectAllBox({ id: 'x-all', state: 'none', count: 12 });
+describe('bulkToolbar', () => {
+  const actions = [
+    { id: 'approve', label: 'Approve', count: 2, tone: 'primary' },
+    { id: 'reject', label: 'Reject', count: 0 },
+    { id: 'delete', label: 'Delete', count: 1, tone: 'danger' },
+  ];
+
+  it('idle: an unchecked box, "Select all · N items" and the idle markup, no actions', () => {
+    const html = bulkToolbar({ id: 'x', visibleIds: ['a', 'b'], actions, idle: '<i>idle</i>' });
     expect(html).toContain('id="x-all"');
-    expect(html).toContain('Select all 12');
-    expect(html).not.toContain(' checked');
     expect(html).toContain('data-state="none"');
+    expect(html).toContain('Select all');
+    expect(html).toContain('2 items');
+    expect(html).toContain('<i>idle</i>');
+    expect(html).not.toContain('data-bulk=');
+    expect(html).not.toContain('has-selection');
   });
-  it('reads "Unselect all" and is checked when everything is selected', () => {
-    const html = selectAllBox({ id: 'x-all', state: 'all', count: 3 });
+
+  it('with a selection: count, the actions that apply (count > 0) and Clear', () => {
+    const html = bulkToolbar({ id: 'x', visibleIds: ['a', 'b'], selected: ['a'], actions });
+    expect(html).toContain('data-state="some"');
+    expect(html).toContain('1 of 2 selected');
+    expect(html).toContain('has-selection');
+    expect(html).toContain('data-bulk="approve"');
+    expect(html).toContain('Approve 2');
+    expect(html).toContain('btn-danger" data-bulk="delete"');
+    expect(html).not.toContain('data-bulk="reject"');
+    expect(html).toContain('data-bulk="clear"');
+  });
+
+  it('everything selected: checked, "All N selected", ignores selected ids not shown', () => {
+    const html = bulkToolbar({
+      id: 'x',
+      visibleIds: new Set(['a']),
+      selected: new Set(['a', 'z']),
+      noun: 'tool',
+    });
     expect(html).toContain(' checked');
-    expect(html).toContain('Unselect all');
+    expect(html).toContain('All 1 selected');
   });
-  it('marks the partial state for the indeterminate sync', () => {
-    expect(selectAllBox({ id: 'x-all', state: 'some', count: 3 })).toContain('data-state="some"');
-  });
-  it('renders nothing when there is nothing to select', () => {
-    expect(selectAllBox({ id: 'x-all', state: 'none', count: 0 })).toBe('');
+
+  it('renders nothing for an empty list', () => {
+    expect(bulkToolbar({ id: 'x', visibleIds: [] })).toBe('');
   });
 });

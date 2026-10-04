@@ -217,22 +217,26 @@ describe('prodRequest', () => {
 });
 
 describe('productionsBulkBar', () => {
-  it('is empty with no selection', () => {
-    expect(productionsBulkBar({ count: 0, tracked: 0 })).toBe('');
-    expect(productionsBulkBar({ count: 1, tracked: 1 })).toContain('1 selected');
+  const ids = ['b/a.md', 'b/b.md', 'b/c.md'];
+  it('idle: select-all over the shown files, no actions', () => {
+    const html = productionsBulkBar({ visibleIds: ids });
+    expect(html).toContain('id="prod-select-all"');
+    expect(html).toContain('3 files');
+    expect(html).not.toContain('data-bulk="delete"');
+    expect(productionsBulkBar({ visibleIds: [] })).toBe('');
   });
   it('lists every bulk action with counts', () => {
-    const html = productionsBulkBar({ count: 3, tracked: 2 });
-    expect(html).toContain('3 selected');
+    const html = productionsBulkBar({ visibleIds: ids, selected: new Set(ids), tracked: 2 });
+    expect(html).toContain('All 3 selected');
     for (const a of ['approve', 'reject', 'archive', 'delete', 'clear']) {
-      expect(html).toContain(`data-prod-bulk="${a}"`);
+      expect(html).toContain(`data-bulk="${a}"`);
     }
     expect(html).toContain('Approve 2');
     expect(html).toContain('Delete 3');
   });
-  it('disables tracked-only actions when nothing selected is tracked', () => {
-    const html = productionsBulkBar({ count: 2, tracked: 0 });
-    expect(html).toMatch(/data-prod-bulk="approve"[^>]*disabled/);
-    expect(html).not.toMatch(/data-prod-bulk="delete"[^>]*disabled/);
+  it('hides tracked-only actions when nothing selected is tracked', () => {
+    const html = productionsBulkBar({ visibleIds: ids, selected: new Set(['b/a.md']), tracked: 0 });
+    expect(html).not.toContain('data-bulk="approve"');
+    expect(html).toContain('Delete 1');
   });
 });

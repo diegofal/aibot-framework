@@ -194,7 +194,8 @@ export function toolsRoutes(deps: {
   // Delete a tool
   app.delete('/:id', (c) => {
     const id = c.req.param('id');
-    const deleted = deps.store.delete(id);
+    // Through the registry: an approved tool is also unloaded from the running bots.
+    const deleted = deps.registry.delete(id);
     if (!deleted) return c.json({ error: 'Tool not found' }, 404);
     return c.json({ ok: true });
   });

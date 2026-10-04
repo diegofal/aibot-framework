@@ -12,7 +12,7 @@
  * clears the selection. The file tree stays under the Productions tab.
  */
 import { confirmDialog, showToast, skeleton, undoable } from '../ui/index.js';
-import { selectAllBox, selectAllState, syncSelectAll, toggleAll } from '../ui/select-all.js';
+import { syncSelectAll, toggleAll } from '../ui/select-all.js';
 import { registerPageShortcuts } from '../ui/shortcuts.js';
 import { authedAvatarSrc } from './agent-face.js';
 import { prodRequest } from './productions-helpers.js';
@@ -34,9 +34,9 @@ import {
   runSequential,
   sortEntries,
   toggleKey,
-  workBulkBar,
   workFilters,
   workSummary,
+  workToolbar,
 } from './work-helpers.js';
 
 const ENTRIES_LIMIT = 200;
@@ -110,13 +110,9 @@ export async function renderWork(el) {
         </div>
       </div>
       ${workFilters({ ...workFilter, agents, counts })}
-      <div class="work-select-row">${selectAllBox({
-        id: 'work-select-all',
-        state: selectAllState(visible.map(entryKey), selected),
-        count: visible.length,
-      })}</div>
-      <div id="work-bulk-wrap">${workBulkBar({
-        selected: selected.size,
+      <div class="work-toolbar">${workToolbar({
+        visibleKeys: visible.map(entryKey),
+        selected,
         approvable: bulkTargets(visible, selected, 'approve').length,
         archivable: bulkTargets(visible, selected, 'archive').length,
         filteredUnreviewed: bulkTargets(visible, null, 'approve').length,

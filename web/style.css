@@ -5753,7 +5753,6 @@ body.ui-palette-open {
 .work-item.is-selected.is-focused {
   background: var(--accent-bg);
 }
-.work-bulk-bar,
 .prod-bulk-bar {
   display: flex;
   flex-wrap: wrap;
@@ -5765,19 +5764,12 @@ body.ui-palette-open {
   border-radius: var(--r-md);
   background: var(--elevated);
 }
-.work-bulk-bar:not(.work-bulk-bar-idle),
 .prod-bulk-bar {
   position: sticky;
   top: 0;
   z-index: 5;
   border-color: var(--accent);
 }
-.work-bulk-bar-idle {
-  justify-content: space-between;
-  background: transparent;
-  border-style: dashed;
-}
-.work-bulk-count,
 .prod-bulk-count {
   font-weight: 600;
   margin-right: 4px;
@@ -6399,7 +6391,7 @@ select[aria-invalid="true"] {
   min-width: 0;
 }
 /* One bar on top of the list: select-all + count, bulk actions in place. */
-.needs-toolbar {
+.bulk-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -6411,11 +6403,11 @@ select[aria-invalid="true"] {
   background: var(--bg-card);
   transition: border-color var(--fast), background var(--fast);
 }
-.needs-toolbar.has-selection {
+.bulk-toolbar.has-selection {
   border-color: var(--accent);
   background: var(--accent-bg);
 }
-.needs-toolbar-select {
+.bulk-toolbar-select {
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -6425,34 +6417,37 @@ select[aria-invalid="true"] {
   cursor: pointer;
   user-select: none;
 }
-.needs-toolbar-select input {
+.bulk-toolbar-select input {
   width: 15px;
   height: 15px;
   margin: 0;
   cursor: pointer;
   accent-color: var(--accent);
 }
-.needs-toolbar-select:hover .needs-toolbar-hint {
+.bulk-toolbar-select:hover .bulk-toolbar-hint {
   color: var(--text);
 }
-.needs-toolbar-hint {
+.bulk-toolbar-hint {
   color: var(--text-dim);
   transition: color var(--fast);
 }
-.needs-toolbar-hint + .text-dim::before {
+.bulk-toolbar-hint + .bulk-toolbar-total::before {
   content: '·';
   margin-right: 10px;
 }
-.needs-toolbar-count {
+.bulk-toolbar-total {
+  color: var(--text-dim);
+}
+.bulk-toolbar-count {
   color: var(--text);
   font-weight: 600;
 }
-.needs-toolbar-actions {
+.bulk-toolbar-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
-.needs-toolbar-actions:empty {
+.bulk-toolbar-actions:empty {
   display: none;
 }
 .needs-group {
@@ -6623,27 +6618,11 @@ select[aria-invalid="true"] {
   background: var(--border-strong);
 }
 
-/* ── Shared "select all" box (web/ui/select-all.js): Needs You, Work, Skills ── */
-.select-all {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 4px;
-  color: var(--text-dim);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-  cursor: pointer;
-  user-select: none;
+/* Work: the toolbar box lines up with the row checkboxes (.work-item padding 14px). */
+.work-toolbar .bulk-toolbar {
+  margin-bottom: 12px;
+  padding-left: 14px;
 }
-.select-all:hover {
-  color: var(--text);
-}
-.select-all input {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  cursor: pointer;
-}
-.work-select-row {
-  margin: 0 0 6px;
+.work-toolbar .work-keys-hint {
+  margin-right: 8px;
 }

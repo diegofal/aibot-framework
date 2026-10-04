@@ -12,7 +12,7 @@
  *     href, meta }
  */
 import { avatar, badge, emptyState, esc } from '../ui/index.js';
-import { selectAllState, toggleAll } from '../ui/select-all.js';
+import { bulkToolbar, toggleAll } from '../ui/select-all.js';
 import { ago } from './agent-home-helpers.js';
 
 export const KIND_LABEL = {
@@ -68,6 +68,8 @@ const DAY_MS = 86_400_000;
 
 /** Kinds the server can bulk-approve (mirror of NEEDS_YOU_SUPPORTED_ACTIONS). */
 export const APPROVABLE_KINDS = new Set(['production', 'tool']);
+/** Kinds the server can bulk-reject (mirror of NEEDS_YOU_SUPPORTED_ACTIONS). */
+export const REJECTABLE_KINDS = new Set(['production', 'tool', 'proposal']);
 
 /**
  * Kinds with a neutral (no-karma) action — what Dismiss, group Clear and
@@ -328,7 +330,10 @@ export function kindCounts(state) {
 
 // ─── bulk ───
 
-/** What the bulk bar can do with `ids`: `{ ids, count, neutralIds, productionIds, canApprove }`. */
+/**
+ * What the bulk actions would touch in `ids`:
+ * `{ ids, count, neutralIds, productionIds, approveIds, rejectIds, toolIds }`.
+ */
 export function bulkPlan(items, ids) {
   const byId = new Map((Array.isArray(items) ? items : []).map((i) => [i.id, i]));
   const picked = (ids ?? []).map((id) => byId.get(id)).filter(Boolean);
@@ -337,7 +342,9 @@ export function bulkPlan(items, ids) {
     count: picked.length,
     neutralIds: neutralIds(picked),
     productionIds: picked.filter((i) => i.kind === 'production').map((i) => i.id),
-    canApprove: picked.length > 0 && picked.every((i) => APPROVABLE_KINDS.has(i.kind)),
+    approveIds: picked.filter((i) => APPROVABLE_KINDS.has(i.kind)).map((i) => i.id),
+    rejectIds: picked.filter((i) => REJECTABLE_KINDS.has(i.kind)).map((i) => i.id),
+    toolIds: picked.filter((i) => i.kind === 'tool').map((i) => i.id),
   };
 }
 
@@ -564,50 +571,50 @@ export function filterBar(state) {
 </div>`;
 }
 
-/** Bulk action buttons for the selection set; '' when nothing is selected. */
-export function bulkBar(plan) {
-  if (!plan || plan.count === 0) return '';
-  const n = plan.count;
-  const archive =
-    plan.productionIds.length > 0
-      ? `<button type="button" class="btn btn-sm" data-bulk="archive" title="Archive the selected outputs without a review (no karma)">Archive ${plan.productionIds.length}</button>`
-      : '';
-  const approve = plan.canApprove
-    ? `<button type="button" class="btn btn-sm btn-primary" data-bulk="approve">Approve ${n}</button>`
-    : '';
-  const nNeutral = (plan.neutralIds ?? []).length;
-  const dismiss =
-    nNeutral > 0
-      ? `<button type="button" class="btn btn-sm" data-bulk="neutral" title="Questions dismissed, permissions denied, proposals rejected, outputs archived — nothing approved; tools are skipped (reject them explicitly)">Dismiss ${nNeutral}</button>`
-      : '';
-  return `${dismiss}${archive}${approve}<button type="button" class="btn btn-sm needs-bulk-clear" data-bulk="clear" title="Clear selection (Esc)">Clear</button>`;
+/**
+ * The toolbar's bulk actions in a fixed order (approve, reject, the softer
+ * ones, delete last). Each count is exactly what the button sends; 0 hides it.
+ */
+export function bulkActions(plan) {
+  return [
+    { id: 'approve', label: 'Approve', count: plan.approveIds.length, tone: 'primary' },
+    {
+      id: 'reject',
+      label: 'Reject',
+      count: plan.rejectIds.length,
+      title: 'Reject the selected outputs, tools and proposals',
+    },
+    {
+      id: 'neutral',
+      label: 'Dismiss',
+      count: plan.neutralIds.length,
+      title:
+        'Questions dismissed, permissions denied, proposals rejected, outputs archived — nothing approved; tools are skipped (reject them explicitly)',
+    },
+    {
+      id: 'archive',
+      label: 'Archive',
+      count: plan.productionIds.length,
+      title: 'Archive the selected outputs without a review (no karma)',
+    },
+    {
+      id: 'delete',
+      label: 'Delete',
+      count: plan.toolIds.length,
+      tone: 'danger',
+      title: 'Delete the selected tools (their code is removed)',
+    },
+  ];
 }
 
-/**
- * The bar on top of the list: a tri-state select-all box and the count,
- * with the bulk actions in place once something is selected. '' when the
- * list is empty.
- */
+/** The selection toolbar on top of the list (web/ui/select-all.js). */
 export function listToolbar(state) {
-  const ids = visibleItems(state).map((i) => i.id);
-  if (ids.length === 0) return '';
-  const boxState = selectAllState(ids, state.checked);
-  const plan = bulkPlan(state.items, state.checked);
-  const total = ids.length;
-  const label =
-    plan.count === 0
-      ? `<span class="needs-toolbar-hint">Select all</span><span class="text-dim">${total} item${
-          total === 1 ? '' : 's'
-        }</span>`
-      : `<span class="needs-toolbar-count">${
-          boxState === 'all' ? `All ${total}` : `${plan.count} of ${total}`
-        } selected</span>`;
-  return `<div class="needs-toolbar${plan.count > 0 ? ' has-selection' : ''}" role="toolbar" aria-label="Selection">
-  <label class="needs-toolbar-select" title="${boxState === 'all' ? 'Unselect all' : 'Select all'} (*)"><input type="checkbox" id="needs-select-all" data-state="${boxState}" aria-label="${
-    boxState === 'all' ? 'Unselect all' : 'Select all visible items'
-  }"${boxState === 'all' ? ' checked' : ''}>${label}</label>
-  <div class="needs-toolbar-actions">${bulkBar(plan)}</div>
-</div>`;
+  return bulkToolbar({
+    id: 'needs-select',
+    visibleIds: visibleItems(state).map((i) => i.id),
+    selected: state.checked,
+    actions: bulkActions(bulkPlan(state.items, state.checked)),
+  });
 }
 
 export function chipBar(options, chipIndex) {

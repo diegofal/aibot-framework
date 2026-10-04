@@ -15,7 +15,7 @@ import {
   pruneSelection,
   runSequential,
   toggleKey,
-  workBulkBar,
+  workToolbar,
 } from '../../web/pages/work-helpers.js';
 
 const NOW = 1_700_000_000_000;
@@ -97,6 +97,13 @@ describe('moveIndex', () => {
 });
 
 describe('selection helpers', () => {
+  it('entryKey survives an HTML attribute round trip (no NUL, which parsers replace)', () => {
+    const key = entryKey({ ...unreviewed, botId: 'b:1', id: 'x/y' });
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting their absence
+    expect(key).not.toMatch(/[\u0000-\u001f]/);
+    expect(entryKey({ botId: 'a', id: 'b/c' })).not.toBe(entryKey({ botId: 'a/b', id: 'c' }));
+  });
+
   it('entryKey is unique per bot + id', () => {
     expect(entryKey(unreviewed)).not.toBe(entryKey({ ...unreviewed, botId: 'b2' }));
   });
@@ -178,29 +185,37 @@ describe('bulkSummary', () => {
   });
 });
 
-describe('workBulkBar', () => {
-  it('renders nothing with no selection and nothing filtered to review', () => {
-    expect(workBulkBar({ selected: 0, filteredUnreviewed: 0 })).toBe('');
-  });
-  it('offers "approve all filtered" when nothing is selected', () => {
-    const html = workBulkBar({ selected: 0, filteredUnreviewed: 7 });
+describe('workToolbar', () => {
+  const keys = ['k1', 'k2', 'k3'];
+  it('idle: select-all box, key hint, and "approve all shown" when something is unreviewed', () => {
+    const html = workToolbar({ visibleKeys: keys, filteredUnreviewed: 7 });
+    expect(html).toContain('id="work-select-all"');
+    expect(html).toContain('3 outputs');
     expect(html).toContain('data-bulk="approve-filtered"');
     expect(html).toContain('Approve all 7');
     expect(html).not.toContain('data-bulk="archive"');
   });
   it('shows counts per action for a selection', () => {
-    const html = workBulkBar({ selected: 3, approvable: 2, archivable: 3, filteredUnreviewed: 5 });
-    expect(html).toContain('3 selected');
-    expect(html).toContain('data-bulk="approve"');
+    const html = workToolbar({
+      visibleKeys: keys,
+      selected: new Set(['k1', 'k2']),
+      approvable: 2,
+      archivable: 2,
+    });
+    expect(html).toContain('2 of 3 selected');
     expect(html).toContain('Approve 2');
     expect(html).toContain('Reject 2');
-    expect(html).toContain('Archive 3');
+    expect(html).toContain('Archive 2');
     expect(html).toContain('data-bulk="clear"');
   });
-  it('disables approve/reject when no selected entry is reviewable', () => {
-    const html = workBulkBar({ selected: 1, approvable: 0, archivable: 1 });
-    expect(html).toMatch(/data-bulk="approve"[^>]*disabled/);
-    expect(html).toMatch(/data-bulk="reject"[^>]*disabled/);
+  it('hides approve/reject when no selected entry is reviewable', () => {
+    const html = workToolbar({ visibleKeys: keys, selected: new Set(['k1']), archivable: 1 });
+    expect(html).not.toContain('data-bulk="approve"');
+    expect(html).not.toContain('data-bulk="reject"');
+    expect(html).toContain('Archive 1');
+  });
+  it('renders nothing for an empty list', () => {
+    expect(workToolbar({ visibleKeys: [] })).toBe('');
   });
 });
 

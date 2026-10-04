@@ -65,6 +65,16 @@ export class DynamicToolRegistry {
   }
 
   /**
+   * Delete a tool: unload it from the runtime and remove it from disk.
+   */
+  delete(id: string): boolean {
+    this.removeTool(id);
+    const deleted = this.store.delete(id);
+    if (deleted) this.logger.info({ toolId: id }, 'Dynamic tool deleted');
+    return deleted;
+  }
+
+  /**
    * Get dynamic tools available to a specific bot (filters by scope).
    */
   getToolsForBot(botId: string): Tool[] {

@@ -5,6 +5,7 @@
  * `skills.js` keeps fetching and event wiring.
  */
 import { esc } from '../ui/index.js';
+import { bulkToolbar } from '../ui/select-all.js';
 
 const SLUG = /^[a-z0-9][a-z0-9_-]*$/;
 
@@ -65,16 +66,41 @@ export function toggleTargets(skills, selected, enabled) {
     .map((s) => s.id);
 }
 
-/** The selection toolbar; '' with nothing selected. */
-export function skillsBulkBar({ selected = 0, enable = 0, disable = 0 } = {}) {
-  if (!(selected > 0)) return '';
-  const dis = (n) => (n > 0 ? '' : ' disabled');
-  return `<div class="work-bulk-bar" role="toolbar" aria-label="Bulk actions">
-    <span class="work-bulk-count">${Number(selected)} selected</span>
-    <button type="button" class="btn btn-sm" data-bulk="enable"${dis(enable)}>Enable ${Number(enable)}</button>
-    <button type="button" class="btn btn-sm" data-bulk="disable"${dis(disable)}>Disable ${Number(disable)}</button>
-    <button type="button" class="btn btn-sm" data-bulk="clear">Clear selection</button>
-  </div>`;
+/** External skills in the selection: the ones "Delete N" removes. */
+export function deleteTargets(skills, selected) {
+  return (Array.isArray(skills) ? skills : [])
+    .filter((s) => s.type === 'external' && selected.has(s.id))
+    .map((s) => s.id);
+}
+
+/**
+ * The selection toolbar (web/ui/select-all.js) over the shown skills:
+ * Enable / Disable for built-ins, Delete for external skills.
+ */
+export function skillsBulkBar({
+  visibleIds = [],
+  selected = new Set(),
+  enable = 0,
+  disable = 0,
+  remove = 0,
+} = {}) {
+  return bulkToolbar({
+    id: 'skills-select',
+    visibleIds,
+    selected,
+    noun: 'skill',
+    actions: [
+      { id: 'enable', label: 'Enable', count: enable, tone: 'primary' },
+      { id: 'disable', label: 'Disable', count: disable },
+      {
+        id: 'delete',
+        label: 'Delete',
+        count: remove,
+        tone: 'danger',
+        title: 'Delete the selected external skills (removed from disk)',
+      },
+    ],
+  });
 }
 
 /** A copy of the list with built-in `enabled` taken from the toggle response. */

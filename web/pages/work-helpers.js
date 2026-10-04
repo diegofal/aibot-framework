@@ -7,6 +7,7 @@
  * (`work.js`) fetches, filters and posts the evaluations.
  */
 import { avatar, badge, cx, emptyState, esc } from '../ui/index.js';
+import { bulkToolbar } from '../ui/select-all.js';
 import { ago } from './agent-home-helpers.js';
 
 export const WORK_STATUSES = [
@@ -247,9 +248,14 @@ export function moveIndex(index, delta, length) {
   return Math.max(0, Math.min(length - 1, index + delta));
 }
 
-/** Selection key: entry ids are only unique per bot. */
+/**
+ * Selection key: entry ids are only unique per bot. It is rendered into
+ * `data-key`, so no control characters: an HTML parser turns NUL into U+FFFD
+ * and the clicked row's key would never match its entry.
+ */
 export function entryKey(entry) {
-  return `${String(entry?.botId ?? '')}\u0000${String(entry?.id ?? '')}`;
+  const part = (v) => encodeURIComponent(String(v ?? ''));
+  return `${part(entry?.botId)}/${part(entry?.id)}`;
 }
 
 export function toggleKey(set, key) {
@@ -310,34 +316,41 @@ export function bulkSummary(verb, { ok = [], failed = [] } = {}) {
 }
 
 /**
- * Bulk bar over the list. With a selection: per-action counts. Without one
- * but with unreviewed entries in the current filter: "Approve all N shown".
+ * The selection toolbar (web/ui/select-all.js) for the shown outputs:
+ * Approve / Reject (unreviewed only) and Archive for a selection; with
+ * nothing selected, the key hint and "Approve all N shown".
  */
-export function workBulkBar({
-  selected = 0,
+export function workToolbar({
+  visibleKeys = [],
+  selected = new Set(),
   approvable = 0,
   archivable = 0,
   filteredUnreviewed = 0,
 } = {}) {
-  if (selected > 0) {
-    const dis = (n) => (n > 0 ? '' : ' disabled');
-    return `<div class="work-bulk-bar" role="toolbar" aria-label="Bulk actions">
-      <span class="work-bulk-count">${Number(selected)} selected</span>
-      <button type="button" class="btn btn-sm work-approve" data-bulk="approve"${dis(approvable)}>Approve ${Number(approvable)}</button>
-      <button type="button" class="btn btn-sm work-reject" data-bulk="reject"${dis(approvable)}>Reject ${Number(approvable)}</button>
-      <button type="button" class="btn btn-sm" data-bulk="archive"${dis(archivable)}>Archive ${Number(archivable)}</button>
-      <button type="button" class="btn btn-sm" data-bulk="clear">Clear selection</button>
-    </div>`;
-  }
-  if (filteredUnreviewed > 0) {
-    return `<div class="work-bulk-bar work-bulk-bar-idle">
-      <span class="text-dim text-sm work-keys-hint">j/k move · a approve · x reject · space select · Enter open</span>
-      <button type="button" class="btn btn-sm" data-bulk="approve-filtered">Approve all ${Number(
-        filteredUnreviewed
-      )} shown</button>
-    </div>`;
-  }
-  return '';
+  const idle = `<span class="text-dim text-sm work-keys-hint">j/k move · a approve · x reject · space select · Enter open</span>${
+    filteredUnreviewed > 0
+      ? `<button type="button" class="btn btn-sm" data-bulk="approve-filtered">Approve all ${Number(
+          filteredUnreviewed
+        )} shown</button>`
+      : ''
+  }`;
+  return bulkToolbar({
+    id: 'work-select',
+    visibleIds: visibleKeys,
+    selected,
+    noun: 'output',
+    idle,
+    actions: [
+      { id: 'approve', label: 'Approve', count: approvable, tone: 'primary' },
+      { id: 'reject', label: 'Reject', count: approvable, tone: 'danger' },
+      {
+        id: 'archive',
+        label: 'Archive',
+        count: archivable,
+        title: 'Archive without a review (no karma)',
+      },
+    ],
+  });
 }
 
 export const DISPATCH_PAGE = 100;

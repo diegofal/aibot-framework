@@ -10,6 +10,7 @@
  * The hash accepts `?file=` and the legacy `?path=` alias.
  */
 import { confirmDialog, showToast, undoable } from '../ui/index.js';
+import { syncSelectAll, toggleAll } from '../ui/select-all.js';
 import {
   closeFullscreenViewer,
   copyTextToClipboard,
@@ -173,24 +174,38 @@ async function runProdBulk(action, items, { reload }) {
 }
 
 /** Bulk bar wiring shared by both views. Returns the `update()` to call after each tree render. */
-function wireBulkBar(wrap, { getSelectedItems, clearSelection, reload }) {
+function wireBulkBar(wrap, { getSelectedItems, getVisibleItems, selection, rerender, reload }) {
   if (!wrap) return () => {};
+  const visibleKeys = () =>
+    getVisibleItems()
+      .filter((v) => v.type === 'file')
+      .map((v) => selKey(v.botId, v.path));
   wrap.addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-prod-bulk]');
+    const btn = e.target.closest('button[data-bulk]');
     if (!btn) return;
-    const action = btn.dataset.prodBulk;
+    const action = btn.dataset.bulk;
     if (action === 'clear') {
-      clearSelection();
+      selection.clear();
+      rerender();
       return;
     }
     runProdBulk(action, getSelectedItems(), { reload });
   });
+  wrap.addEventListener('change', (e) => {
+    if (e.target.id !== 'prod-select-all') return;
+    const next = toggleAll(visibleKeys(), selection);
+    selection.clear();
+    for (const k of next) selection.add(k);
+    rerender();
+  });
   return () => {
     const items = getSelectedItems();
     wrap.innerHTML = productionsBulkBar({
-      count: items.length,
+      visibleIds: visibleKeys(),
+      selected: selection,
       tracked: bulkPlan(items, 'approve').targets.length,
     });
+    syncSelectAll(wrap);
   };
 }
 
@@ -725,10 +740,9 @@ export async function renderProductions(el) {
 
   const updateBulkBar = wireBulkBar(document.getElementById('prod-bulk-wrap'), {
     getSelectedItems,
-    clearSelection: () => {
-      multiSelection.clear();
-      rerenderTree();
-    },
+    getVisibleItems,
+    selection: multiSelection,
+    rerender: () => rerenderTree(),
     reload: reloadTree,
   });
 
@@ -1031,10 +1045,9 @@ export async function renderBotProductions(el, botId) {
 
   const updateBulkBar = wireBulkBar(document.getElementById('prod-bulk-wrap'), {
     getSelectedItems,
-    clearSelection: () => {
-      multiSelection.clear();
-      rerenderTree();
-    },
+    getVisibleItems,
+    selection: multiSelection,
+    rerender: () => rerenderTree(),
     reload: reloadTree,
   });
 

@@ -4,7 +4,7 @@ import {
   NEUTRAL_KINDS,
   SHORTCUTS,
   ageGroupOf,
-  bulkBar,
+  bulkActions,
   bulkPlan,
   checkAllVisible,
   clearChecked,
@@ -209,6 +209,8 @@ describe('selection set', () => {
     expect(some).toContain('1 of 5 selected');
     expect(some).toContain('has-selection');
     expect(some).toContain('data-bulk="approve"');
+    expect(some).toContain('data-bulk="reject"');
+    expect(some).toContain('data-bulk="delete"');
 
     const all = listToolbar(toggleAllVisible(s0));
     expect(all).toContain('data-state="all"');
@@ -226,29 +228,44 @@ describe('selection set', () => {
 
 describe('bulk', () => {
   it('bulkPlan counts what each button would touch', () => {
-    const plan = bulkPlan(items, ['production:b1:f1', 'tool:t1']);
-    expect(plan).toMatchObject({ count: 2, productionIds: ['production:b1:f1'], canApprove: true });
-    const mixed = bulkPlan(items, ['production:b1:f1', 'ask:old']);
-    expect(mixed.canApprove).toBe(false);
+    const plan = bulkPlan(items, ['production:b1:f1', 'tool:t1', 'ask:old']);
+    expect(plan).toMatchObject({
+      count: 3,
+      productionIds: ['production:b1:f1'],
+      approveIds: ['production:b1:f1', 'tool:t1'],
+      rejectIds: ['production:b1:f1', 'tool:t1'],
+      toolIds: ['tool:t1'],
+    });
+    expect(bulkPlan(items, ['permission:p1']).approveIds).toEqual([]);
     expect(bulkPlan(items, []).count).toBe(0);
     // Ids not in the list are ignored.
     expect(bulkPlan(items, ['nope']).count).toBe(0);
   });
 
-  it('bulkBar shows Dismiss for non-tools, Archive with productions, Approve only when all can', () => {
-    const bar = bulkBar(bulkPlan(items, ['production:b1:f1', 'tool:t1']));
-    expect(bar).toContain('data-bulk="neutral"');
-    expect(bar).toContain('Dismiss 1');
-    expect(bar).toContain('data-bulk="archive"');
-    expect(bar).toContain('Archive 1');
-    expect(bar).toContain('data-bulk="approve"');
-    expect(bar).toContain('Approve 2');
-    expect(bar).toContain('data-bulk="clear"');
-    expect(bar).not.toContain('needs-toolbar-count'); // the count lives in listToolbar
-    const noApprove = bulkBar(bulkPlan(items, ['ask:old', 'permission:p1']));
-    expect(noApprove).not.toContain('data-bulk="approve"');
-    expect(noApprove).not.toContain('data-bulk="archive"');
-    expect(bulkBar(bulkPlan(items, []))).toBe('');
+  it('bulkActions: approve / reject / dismiss / archive / delete, each counting what it sends', () => {
+    const byId = (plan: ReturnType<typeof bulkPlan>) =>
+      Object.fromEntries(bulkActions(plan).map((a) => [a.id, a.count]));
+    expect(byId(bulkPlan(items, ['production:b1:f1', 'tool:t1']))).toEqual({
+      approve: 2,
+      reject: 2,
+      neutral: 1,
+      archive: 1,
+      delete: 1,
+    });
+    // Only tools: no Dismiss / Archive (tools have no neutral action).
+    expect(byId(bulkPlan(items, ['tool:t1']))).toMatchObject({
+      approve: 1,
+      reject: 1,
+      neutral: 0,
+      delete: 1,
+    });
+    // Asks and permissions are never approved, rejected or deleted in bulk.
+    expect(byId(bulkPlan(items, ['ask:old', 'permission:p1']))).toMatchObject({
+      approve: 0,
+      reject: 0,
+      neutral: 2,
+      delete: 0,
+    });
   });
 
   it('tools have no neutral action: neutralIds and bulkPlan.neutralIds skip them', () => {
@@ -261,15 +278,6 @@ describe('bulk', () => {
     ]);
     const plan = bulkPlan(items, ['production:b1:f1', 'tool:t1']);
     expect(plan.neutralIds).toEqual(['production:b1:f1']);
-  });
-
-  it('bulkBar Dismiss count matches what is sent (tools excluded) and hides with only tools', () => {
-    const bar = bulkBar(bulkPlan(items, ['permission:p1', 'tool:t1']));
-    expect(bar).toContain('Dismiss 1');
-    expect(bar).not.toContain('Dismiss 2');
-    const onlyTools = bulkBar(bulkPlan(items, ['tool:t1']));
-    expect(onlyTools).not.toContain('data-bulk="neutral"');
-    expect(onlyTools).toContain('Approve 1');
   });
 
   it('staleClearIds picks old non-tool items, scoped by agent, skipping hidden ids', () => {

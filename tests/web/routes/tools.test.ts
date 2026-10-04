@@ -134,7 +134,11 @@ function makeApp(opts: { withBotManager?: boolean; storePath?: string } = {}) {
     '/api/tools',
     toolsRoutes({
       store,
-      registry: mockDynamicRegistry,
+      // delete goes through the registry, which removes from the store.
+      registry: {
+        ...mockDynamicRegistry,
+        delete: (id: string) => store.delete(id),
+      } as unknown as DynamicToolRegistry,
       botManager,
       logger: noopLogger,
     })

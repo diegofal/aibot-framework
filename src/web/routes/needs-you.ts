@@ -167,16 +167,26 @@ export interface NeedsYouActionHandlers {
   archiveProduction?(botId: string, id: string, reason: string): boolean;
   approveTool?(id: string): boolean;
   rejectTool?(id: string, note?: string): boolean;
+  /** Unload the tool and remove it from disk. */
+  deleteTool?(id: string): boolean;
 }
 
 /** What `/bulk` and `/act` accept. `neutral` = the no-karma negative action of each kind. */
-export type NeedsYouBulkAction = 'dismiss' | 'archive' | 'approve' | 'reject' | 'deny' | 'neutral';
+export type NeedsYouBulkAction =
+  | 'dismiss'
+  | 'archive'
+  | 'approve'
+  | 'reject'
+  | 'deny'
+  | 'delete'
+  | 'neutral';
 export const NEEDS_YOU_BULK_ACTIONS: readonly NeedsYouBulkAction[] = [
   'dismiss',
   'archive',
   'approve',
   'reject',
   'deny',
+  'delete',
   'neutral',
 ];
 
@@ -187,7 +197,7 @@ export const NEEDS_YOU_SUPPORTED_ACTIONS: Record<NeedsYouKind, readonly NeedsYou
   proposal: ['reject'],
   production: ['approve', 'reject', 'archive'],
   feedback: ['dismiss'],
-  tool: ['approve', 'reject'],
+  tool: ['approve', 'reject', 'delete'],
 };
 
 type ConcreteAction = Exclude<NeedsYouBulkAction, 'neutral'>;
@@ -973,6 +983,9 @@ export function applyNeedsYouAction(
         if (action === 'approve') {
           if (!h.approveTool) return fail(UNAVAILABLE);
           ok = h.approveTool(id);
+        } else if (action === 'delete') {
+          if (!h.deleteTool) return fail(UNAVAILABLE);
+          ok = h.deleteTool(id);
         } else {
           if (!h.rejectTool) return fail(UNAVAILABLE);
           ok = h.rejectTool(id, note);
@@ -1242,7 +1255,11 @@ export interface NeedsYouActionsBotManager {
     | null
     | undefined;
   getDynamicToolRegistry?():
-    | { approve(id: string): unknown; reject(id: string, note?: string): unknown }
+    | {
+        approve(id: string): unknown;
+        reject(id: string, note?: string): unknown;
+        delete(id: string): unknown;
+      }
     | null
     | undefined;
   findSoulLoader?(botId: string): unknown;
@@ -1291,6 +1308,7 @@ export function needsYouActionsFromBotManager(
     },
     approveTool: (id) => !!bm.getDynamicToolRegistry?.()?.approve(id),
     rejectTool: (id, note) => !!bm.getDynamicToolRegistry?.()?.reject(id, note),
+    deleteTool: (id) => !!bm.getDynamicToolRegistry?.()?.delete(id),
   };
 }
 

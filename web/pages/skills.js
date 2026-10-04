@@ -1,8 +1,9 @@
 import { confirmDialog, emptyState, showToast } from '../ui/index.js';
-import { selectAllBox, selectAllState, syncSelectAll, toggleAll } from '../ui/select-all.js';
+import { syncSelectAll, toggleAll } from '../ui/select-all.js';
 import { api, closeModal, escapeHtml, showModal } from './shared.js';
 import {
   applyToggleResult,
+  deleteTargets,
   filterSkills,
   skillsBulkBar,
   skillsToolbar,
@@ -66,10 +67,44 @@ export async function renderSkills(el) {
 
   function drawBulk() {
     bulk.innerHTML = skillsBulkBar({
-      selected: selected.size,
+      visibleIds: selectableIds(),
+      selected,
       enable: toggleTargets(skills, selected, true).length,
       disable: toggleTargets(skills, selected, false).length,
+      remove: deleteTargets(skills, selected).length,
     });
+    syncSelectAll(bulk);
+  }
+
+  async function removeSkills(ids) {
+    if (ids.length === 0) return;
+    const n = ids.length;
+    const ok = await confirmDialog({
+      title: `Delete ${n} skill${n === 1 ? '' : 's'}?`,
+      message: 'The skill directories are removed from disk. This cannot be undone.',
+      confirmLabel: `Delete ${n}`,
+    });
+    if (!ok) return;
+    const failed = [];
+    for (const id of ids) {
+      const res = await api(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(
+        (err) => ({ error: err?.message })
+      );
+      if (!res || res.error) failed.push(id);
+      else {
+        const idx = skills.findIndex((sk) => sk.id === id);
+        if (idx >= 0) skills.splice(idx, 1);
+        selected.delete(id);
+      }
+    }
+    draw();
+    const done = n - failed.length;
+    showToast(
+      failed.length > 0
+        ? `Deleted ${done} · ${failed.length} failed`
+        : `Deleted ${done} skill${done === 1 ? '' : 's'}`,
+      { tone: failed.length > 0 ? 'warn' : 'ok' }
+    );
   }
 
   async function toggle(ids, enabled, btn) {
@@ -108,10 +143,7 @@ export async function renderSkills(el) {
         : `<button class="btn btn-sm" data-action="toggle" data-id="${escapeHtml(skill.id)}" data-enable="${skill.enabled ? 'false' : 'true'}">${skill.enabled ? 'Disable' : 'Enable'}</button>`;
     const muted =
       skill.type === 'builtin' && skill.enabled === false ? ' class="skills-row-off"' : '';
-    const pick =
-      skill.type === 'builtin'
-        ? `<input type="checkbox" data-select="${escapeHtml(skill.id)}" aria-label="Select ${escapeHtml(skill.name)}"${selected.has(skill.id) ? ' checked' : ''}>`
-        : '';
+    const pick = `<input type="checkbox" data-select="${escapeHtml(skill.id)}" aria-label="Select ${escapeHtml(skill.name)}"${selected.has(skill.id) ? ' checked' : ''}>`;
     return `<tr${muted} data-id="${escapeHtml(skill.id)}">
       <td>${pick}</td>
       <td><a href="#/automations/skills/${encodeURIComponent(skill.id)}">${escapeHtml(skill.name)}</a></td>
@@ -123,23 +155,8 @@ export async function renderSkills(el) {
     </tr>`;
   }
 
-  /** Built-in ids under the current filter: the only selectable rows. */
-  const selectableIds = () =>
-    filterSkills(skills, skillsFilter)
-      .filter((sk) => sk.type === 'builtin')
-      .map((sk) => sk.id);
-
-  function drawSelectAll() {
-    const cell = document.getElementById('skills-select-cell');
-    if (!cell) return;
-    const ids = selectableIds();
-    cell.innerHTML = selectAllBox({
-      id: 'skills-select-all',
-      state: selectAllState(ids, selected),
-      count: ids.length,
-    });
-    syncSelectAll(cell);
-  }
+  /** Ids of the skills under the current filter (what "Select all" picks). */
+  const selectableIds = () => filterSkills(skills, skillsFilter).map((sk) => sk.id);
 
   function draw() {
     drawBulk();
@@ -166,10 +183,9 @@ export async function renderSkills(el) {
       return;
     }
     wrap.innerHTML = `<table>
-      <thead><tr><th id="skills-select-cell" aria-label="Select"></th><th>Name</th><th>Type</th><th>Version</th><th>Commands / Tools</th><th>Warnings</th><th>Actions</th></tr></thead>
+      <thead><tr><th aria-label="Select"></th><th>Name</th><th>Type</th><th>Version</th><th>Commands / Tools</th><th>Warnings</th><th>Actions</th></tr></thead>
       <tbody id="skills-tbody">${visible.map(rowHtml).join('')}</tbody>
     </table>`;
-    drawSelectAll();
   }
   draw();
 
@@ -187,19 +203,18 @@ export async function renderSkills(el) {
   });
 
   wrap.addEventListener('change', (e) => {
-    if (e.target.id === 'skills-select-all') {
-      const next = toggleAll(selectableIds(), selected);
-      selected.clear();
-      for (const id of next) selected.add(id);
-      draw();
-      return;
-    }
     const box = e.target.closest('input[data-select]');
     if (!box) return;
     if (box.checked) selected.add(box.dataset.select);
     else selected.delete(box.dataset.select);
     drawBulk();
-    drawSelectAll();
+  });
+  bulk.addEventListener('change', (e) => {
+    if (e.target.id !== 'skills-select-all') return;
+    const next = toggleAll(selectableIds(), selected);
+    selected.clear();
+    for (const id of next) selected.add(id);
+    draw();
   });
   bulk.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-bulk]');
@@ -207,6 +222,10 @@ export async function renderSkills(el) {
     if (btn.dataset.bulk === 'clear') {
       selected.clear();
       draw();
+      return;
+    }
+    if (btn.dataset.bulk === 'delete') {
+      removeSkills(deleteTargets(skills, selected));
       return;
     }
     const enabled = btn.dataset.bulk === 'enable';

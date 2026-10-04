@@ -1,12 +1,15 @@
 import { confirmDialog, openSheet, promptDialog, showToast } from '../ui/index.js';
+import { syncSelectAll, toggleAll } from '../ui/select-all.js';
 import { api, escapeHtml } from './shared.js';
 import { mountToolRunForm } from './tool-runner.js';
 import {
   TOOL_SOURCES,
+  dynamicIds,
   filterTools,
   groupTools,
   mergeTools,
   pendingIds,
+  toolTargets,
   toolsBulkBar,
   toolsTable,
 } from './tools-helpers.js';
@@ -91,15 +94,25 @@ export async function renderTools(el) {
   const bulkSlot = document.getElementById('tools-bulk-slot');
   const pendingSlot = document.getElementById('tools-pending-slot');
 
+  const drawBulk = () => {
+    bulkSlot.innerHTML = toolsBulkBar({
+      visibleIds: dynamicIds(filterTools(tools, toolsFilter)),
+      selected,
+      approve: toolTargets(tools, selected, 'approve').length,
+      reject: toolTargets(tools, selected, 'reject').length,
+      remove: toolTargets(tools, selected, 'delete').length,
+    });
+    syncSelectAll(bulkSlot);
+  };
   const draw = () => {
     const visible = filterTools(tools, toolsFilter);
-    const visiblePending = new Set(pendingIds(visible));
-    for (const id of [...selected]) if (!visiblePending.has(id)) selected.delete(id);
+    const visibleIds = new Set(dynamicIds(visible));
+    for (const id of [...selected]) if (!visibleIds.has(id)) selected.delete(id);
     wrap.innerHTML = toolsTable(groupTools(visible), {
       selected,
       filtered: visible.length !== tools.length,
     });
-    bulkSlot.innerHTML = toolsBulkBar(selected.size);
+    drawBulk();
     const pending = pendingIds(tools);
     pendingSlot.innerHTML = pending.length
       ? `<button class="btn btn-sm" id="tools-select-pending">Select pending (${pending.length})</button>`
@@ -134,7 +147,14 @@ export async function renderTools(el) {
     if (!box) return;
     if (box.checked) selected.add(box.dataset.select);
     else selected.delete(box.dataset.select);
-    bulkSlot.innerHTML = toolsBulkBar(selected.size);
+    drawBulk();
+  });
+  bulkSlot.addEventListener('change', (e) => {
+    if (e.target.id !== 'tools-select-all') return;
+    const next = toggleAll(dynamicIds(filterTools(tools, toolsFilter)), selected);
+    selected.clear();
+    for (const id of next) selected.add(id);
+    draw();
   });
 
   wrap.addEventListener('click', async (e) => {
@@ -191,33 +211,46 @@ export async function renderTools(el) {
       draw();
       return;
     }
-    const ids = [...selected];
+    if (!['approve', 'reject', 'delete'].includes(action)) return;
+    const ids = toolTargets(tools, selected, action);
     if (ids.length === 0) return;
+    const n = ids.length;
+    const plural = `tool${n === 1 ? '' : 's'}`;
     let note = '';
     if (action === 'reject') {
       note = await promptDialog({
-        title: `Reject ${ids.length} tool${ids.length === 1 ? '' : 's'}?`,
+        title: `Reject ${n} ${plural}?`,
         message: 'Optional note, sent with every rejection.',
         placeholder: 'Rejection note (optional)',
         confirmLabel: 'Reject',
       });
       if (note === null) return;
     }
+    if (action === 'delete') {
+      const ok = await confirmDialog({
+        title: `Delete ${n} ${plural}?`,
+        message:
+          'Their code is removed from disk and unloaded from every agent. This cannot be undone.',
+        confirmLabel: `Delete ${n}`,
+      });
+      if (!ok) return;
+    }
     for (const b of bulkSlot.querySelectorAll('button')) b.disabled = true;
     const results = await Promise.all(
       ids.map((id) =>
-        api(`/api/tools/${encodeURIComponent(id)}/${action}`, {
-          method: 'POST',
-          ...(action === 'reject' ? { body: { note: note.trim() || undefined } } : {}),
-        }).catch((err) => ({ error: err?.message || 'error' }))
+        (action === 'delete'
+          ? api(`/api/tools/${encodeURIComponent(id)}`, { method: 'DELETE' })
+          : api(`/api/tools/${encodeURIComponent(id)}/${action}`, {
+              method: 'POST',
+              ...(action === 'reject' ? { body: { note: note.trim() || undefined } } : {}),
+            })
+        ).catch((err) => ({ error: err?.message || 'error' }))
       )
     );
     const failed = results.filter((r) => !r || r.error).length;
-    const verb = action === 'approve' ? 'Approved' : 'Rejected';
+    const verb = { approve: 'Approved', reject: 'Rejected', delete: 'Deleted' }[action];
     showToast(
-      failed
-        ? `${verb} ${ids.length - failed} of ${ids.length} — ${failed} failed`
-        : `${verb} ${ids.length} tool${ids.length === 1 ? '' : 's'}`,
+      failed ? `${verb} ${n - failed} of ${n} — ${failed} failed` : `${verb} ${n} ${plural}`,
       { tone: failed ? 'danger' : 'ok' }
     );
     selected.clear();

@@ -5,6 +5,7 @@
  * can cover them. Request builders return `{ url, method, body }` for `api()`.
  */
 import { esc } from '../ui/index.js';
+import { bulkToolbar } from '../ui/select-all.js';
 
 const enc = encodeURIComponent;
 
@@ -142,17 +143,25 @@ export function prodRequest(action, { botId, entryId, path, rating, reason } = {
   return null;
 }
 
-/** Bulk bar for the tree's multi-selection; empty when nothing is selected. */
-export function productionsBulkBar({ count = 0, tracked = 0 } = {}) {
-  if (!count) return '';
-  const dis =
-    tracked > 0 ? '' : ' disabled title="None of the selected items is tracked in the changelog"';
-  return `<div class="prod-bulk-bar" role="toolbar" aria-label="Bulk actions">
-    <span class="prod-bulk-count">${Number(count)} selected</span>
-    <button type="button" class="btn btn-sm" data-prod-bulk="approve"${dis}>Approve ${Number(tracked)}</button>
-    <button type="button" class="btn btn-sm" data-prod-bulk="reject"${dis}>Reject ${Number(tracked)}</button>
-    <button type="button" class="btn btn-sm" data-prod-bulk="archive"${dis}>Archive ${Number(tracked)}</button>
-    <button type="button" class="btn btn-sm btn-danger" data-prod-bulk="delete">Delete ${Number(count)}</button>
-    <button type="button" class="btn btn-sm" data-prod-bulk="clear" title="Clear selection">${esc('Clear')}</button>
-  </div>`;
+/**
+ * The selection toolbar (web/ui/select-all.js) over the shown files.
+ * Approve / Reject / Archive count the selected files tracked in the
+ * changelog; Delete takes every selected file.
+ */
+export function productionsBulkBar({ visibleIds = [], selected = new Set(), tracked = 0 } = {}) {
+  const shown = new Set(visibleIds);
+  const count = [...selected].filter((k) => shown.has(k)).length;
+  const untracked = 'Only files tracked in the changelog';
+  return bulkToolbar({
+    id: 'prod-select',
+    visibleIds,
+    selected,
+    noun: 'file',
+    actions: [
+      { id: 'approve', label: 'Approve', count: tracked, tone: 'primary', title: untracked },
+      { id: 'reject', label: 'Reject', count: tracked, title: untracked },
+      { id: 'archive', label: 'Archive', count: tracked, title: untracked },
+      { id: 'delete', label: 'Delete', count, tone: 'danger' },
+    ],
+  });
 }

@@ -329,10 +329,25 @@ function onBulkClick(kind) {
     return;
   }
   if (plan.count === 0) return;
-  // Tools have no neutral action: Dismiss sends (and counts) only the rest.
-  if (kind === 'neutral') bulk(plan.neutralIds, 'neutral', 'Dismissed');
+  // Each button sends exactly the ids its count showed (tools have no neutral action).
+  if (kind === 'approve') bulk(plan.approveIds, 'approve', 'Approved');
+  else if (kind === 'reject') bulk(plan.rejectIds, 'reject', 'Rejected');
+  else if (kind === 'neutral') bulk(plan.neutralIds, 'neutral', 'Dismissed');
   else if (kind === 'archive') bulk(plan.productionIds, 'archive', 'Archived');
-  else if (kind === 'approve' && plan.canApprove) bulk(plan.ids, 'approve', 'Approved');
+  else if (kind === 'delete') confirmDelete(plan.toolIds);
+}
+
+async function confirmDelete(ids) {
+  if (ids.length === 0) return;
+  const n = ids.length;
+  const ok = await confirmDialog({
+    title: `Delete ${n} tool${n === 1 ? '' : 's'}`,
+    message:
+      'Their code is removed from disk and unloaded from every agent. This cannot be undone.',
+    confirmLabel: `Delete ${n}`,
+    tone: 'danger',
+  });
+  if (ok) bulk(ids, 'delete', 'Deleted');
 }
 
 function clearGroup(groupId) {

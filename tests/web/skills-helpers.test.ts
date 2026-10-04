@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   applyToggleResult,
+  deleteTargets,
   filterSkills,
   skillsBulkBar,
   skillsToolbar,
@@ -23,14 +24,25 @@ describe('skills bulk toggle helpers', () => {
     expect(toggleTargets(list, sel, false)).toEqual(['a']);
   });
 
-  it('skillsBulkBar shows the counts and disables an action with nothing to do', () => {
-    const html = skillsBulkBar({ selected: 3, enable: 2, disable: 0 });
-    expect(html).toContain('3 selected');
-    expect(html).toContain('data-bulk="enable"');
+  it('skillsBulkBar: shared toolbar with Enable / Disable / Delete counts', () => {
+    const html = skillsBulkBar({
+      visibleIds: ['a', 'b', 'c', 'x'],
+      selected: new Set(['a', 'b', 'x']),
+      enable: 2,
+      disable: 0,
+      remove: 1,
+    });
+    expect(html).toContain('3 of 4 selected');
     expect(html).toContain('Enable 2');
-    expect(html).toMatch(/data-bulk="disable"[^>]*disabled/);
+    expect(html).not.toContain('data-bulk="disable"');
+    expect(html).toContain('Delete 1');
     expect(html).toContain('data-bulk="clear"');
-    expect(skillsBulkBar({ selected: 0 })).toBe('');
+    expect(skillsBulkBar({ visibleIds: ['a'] })).toContain('Select all');
+    expect(skillsBulkBar({ visibleIds: [] })).toBe('');
+  });
+
+  it('deleteTargets picks only selected external skills', () => {
+    expect(deleteTargets(list, new Set(['a', 'x', 'nope']))).toEqual(['x']);
   });
 
   it('applyToggleResult sets built-in `enabled` from the server list and leaves externals alone', () => {
