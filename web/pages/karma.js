@@ -1,4 +1,9 @@
+import { confirmDialog, emptyState, showToast } from '../ui/index.js';
+import { agentNames, filterKarma, karmaToolbar, sortKarma } from './karma-helpers.js';
 import { api, escapeHtml, timeAgo } from './shared.js';
+
+// Sort + filter of the karma list; survives re-renders.
+const karmaView = { query: '', trend: '', sortBy: 'score-desc' };
 
 function trendBadge(trend) {
   if (trend === 'rising') return '<span class="badge badge-ok">&#8593; rising</span>';
@@ -83,13 +88,20 @@ function scoreBar(score) {
 export async function renderKarma(el) {
   el.innerHTML = '<div class="page-title">Karma</div><p class="text-dim">Loading...</p>';
 
-  const scores = await api('/api/karma');
+  const [scores, agentsRes] = await Promise.all([api('/api/karma'), api('/api/agents')]);
+  const names = agentNames(agentsRes);
 
   if (scores.error) {
     el.innerHTML = `
       <div class="page-title">Karma</div>
-      <p class="text-dim">${escapeHtml(scores.error)}</p>
+      ${emptyState({
+        icon: '!',
+        title: 'Could not load karma',
+        hint: scores.error,
+        action: '<button class="btn btn-sm" id="karma-retry">Retry</button>',
+      })}
     `;
+    document.getElementById('karma-retry')?.addEventListener('click', () => renderKarma(el));
     return;
   }
 
@@ -102,44 +114,81 @@ export async function renderKarma(el) {
   }
 
   el.innerHTML = `
-    <div class="page-title">Karma</div>
-    <table>
-      <thead><tr><th>Bot</th><th>Score</th><th>Trend</th><th>Recent Events</th></tr></thead>
-      <tbody id="karma-tbody"></tbody>
-    </table>
+    <div class="page-title">Karma <span class="count" id="karma-count">${scores.length}</span></div>
+    ${karmaToolbar(karmaView)}
+    <div id="karma-table-wrap"></div>
   `;
 
-  const tbody = document.getElementById('karma-tbody');
-  for (const bot of scores) {
-    const tr = document.createElement('tr');
-    tr.style.cursor = 'pointer';
-    tr.innerHTML = `
-      <td><a href="#/karma/${encodeURIComponent(bot.botId)}">${escapeHtml(bot.botId)}</a></td>
-      <td>${scoreBar(bot.current)}</td>
-      <td>${trendBadge(bot.trend)}</td>
-      <td class="text-dim">${bot.recentEvents?.length || 0}</td>
-    `;
-    tr.addEventListener('click', (e) => {
-      if (e.target.tagName === 'A') return;
-      location.hash = `#/karma/${encodeURIComponent(bot.botId)}`;
-    });
-    tbody.appendChild(tr);
+  const wrap = document.getElementById('karma-table-wrap');
+  const href = (botId) => `#/insights/karma/${encodeURIComponent(botId)}`;
+
+  function draw() {
+    const visible = sortKarma(filterKarma(scores, { ...karmaView, names }), karmaView.sortBy, names);
+    const countEl = document.getElementById('karma-count');
+    if (countEl)
+      countEl.textContent =
+        visible.length === scores.length ? String(scores.length) : `${visible.length}/${scores.length}`;
+    if (visible.length === 0) {
+      wrap.innerHTML = emptyState({
+        icon: '⌕',
+        title: 'No agents match',
+        hint: 'Clear the filter to see every agent.',
+      });
+      return;
+    }
+    wrap.innerHTML = `<table>
+      <thead><tr><th>Agent</th><th>Score</th><th>Trend</th><th>Recent Events</th></tr></thead>
+      <tbody id="karma-tbody">${visible
+        .map((bot) => {
+          const name = names[bot.botId] ?? bot.botId;
+          const idHint =
+            name !== bot.botId ? ` <span class="text-dim text-sm">${escapeHtml(bot.botId)}</span>` : '';
+          return `<tr class="karma-row" data-bot-id="${escapeHtml(bot.botId)}">
+            <td><a href="${href(bot.botId)}">${escapeHtml(name)}</a>${idHint}</td>
+            <td>${scoreBar(bot.current)}</td>
+            <td>${trendBadge(bot.trend)}</td>
+            <td class="text-dim">${bot.recentEvents?.length || 0}</td>
+          </tr>`;
+        })
+        .join('')}</tbody>
+    </table>`;
   }
+  draw();
+
+  document.getElementById('karma-filter-query')?.addEventListener('input', (e) => {
+    karmaView.query = e.target.value;
+    draw();
+  });
+  document.getElementById('karma-filter-trend')?.addEventListener('change', (e) => {
+    karmaView.trend = e.target.value;
+    draw();
+  });
+  document.getElementById('karma-sort')?.addEventListener('change', (e) => {
+    karmaView.sortBy = e.target.value;
+    draw();
+  });
+  wrap.addEventListener('click', (e) => {
+    if (e.target.closest('a')) return;
+    const row = e.target.closest('tr.karma-row');
+    if (row) location.hash = href(row.dataset.botId);
+  });
 }
 
 export async function renderBotKarma(el, botId) {
   el.innerHTML = '<div class="page-title">Karma</div><p class="text-dim">Loading...</p>';
 
-  const [scoreData, historyData] = await Promise.all([
+  const [scoreData, historyData, agentsRes] = await Promise.all([
     api(`/api/karma/${encodeURIComponent(botId)}`),
     api(`/api/karma/${encodeURIComponent(botId)}/history?limit=50`),
+    api('/api/agents'),
   ]);
+  const botName = agentNames(agentsRes)[botId] ?? botId;
 
   if (scoreData.error) {
     el.innerHTML = `
       <div class="page-title">Karma</div>
       <p class="text-dim">${escapeHtml(scoreData.error)}</p>
-      <a href="#/karma" class="btn btn-sm">&larr; Back</a>
+      <a href="#/insights/karma" class="btn btn-sm">&larr; Back</a>
     `;
     return;
   }
@@ -149,9 +198,9 @@ export async function renderBotKarma(el, botId) {
 
   el.innerHTML = `
     <div class="flex-between mb-16">
-      <div class="page-title">${escapeHtml(botId)} Karma</div>
+      <div class="page-title">${escapeHtml(botName)} Karma</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <a href="#/karma" class="btn btn-sm">&larr; Back</a>
+        <a href="#/insights/karma" class="btn btn-sm">&larr; Back</a>
         <button class="btn btn-sm" id="karma-reset-btn" style="color:var(--red);border-color:var(--red)">Reset Karma</button>
       </div>
     </div>
@@ -231,19 +280,27 @@ export async function renderBotKarma(el, botId) {
   document.getElementById('karma-adjust-btn').addEventListener('click', async () => {
     const delta = Number(document.getElementById('karma-delta').value);
     const reason = document.getElementById('karma-reason').value.trim();
-    if (!reason) return;
+    if (!reason) {
+      showToast('Give a reason for the adjustment.', { tone: 'warn' });
+      document.getElementById('karma-reason').focus();
+      return;
+    }
 
     const btn = document.getElementById('karma-adjust-btn');
     btn.disabled = true;
     btn.textContent = 'Applying...';
 
-    await api(`/api/karma/${encodeURIComponent(botId)}/adjust`, {
+    const res = await api(`/api/karma/${encodeURIComponent(botId)}/adjust`, {
       method: 'POST',
       body: { delta, reason },
     });
 
     btn.disabled = false;
     btn.textContent = 'Apply';
+    if (res?.error) {
+      showToast(`Adjustment failed: ${res.error}`, { tone: 'danger' });
+      return;
+    }
 
     // Reload the page to reflect new score
     renderBotKarma(el, botId);
@@ -251,17 +308,26 @@ export async function renderBotKarma(el, botId) {
 
   // Reset karma handler
   document.getElementById('karma-reset-btn').addEventListener('click', async () => {
-    if (!confirm(`Reset all karma events for "${botId}"? Score will return to initial value.`))
-      return;
+    const ok = await confirmDialog({
+      title: 'Reset karma?',
+      message: `Reset all karma events for "${botName}"? The score returns to its initial value. This cannot be undone.`,
+      confirmLabel: 'Reset',
+    });
+    if (!ok) return;
 
     const btn = document.getElementById('karma-reset-btn');
     btn.disabled = true;
     btn.textContent = 'Resetting...';
 
-    await api(`/api/karma/${encodeURIComponent(botId)}/events`, { method: 'DELETE' });
+    const res = await api(`/api/karma/${encodeURIComponent(botId)}/events`, { method: 'DELETE' });
 
     btn.disabled = false;
     btn.textContent = 'Reset Karma';
+    if (res?.error) {
+      showToast(`Reset failed: ${res.error}`, { tone: 'danger' });
+      return;
+    }
+    showToast(`Karma reset for ${botName}`, { tone: 'ok' });
 
     renderBotKarma(el, botId);
   });

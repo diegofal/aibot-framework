@@ -49,7 +49,18 @@ export interface ToolCall {
 export interface ToolResult {
   success: boolean;
   content: string;
+  /**
+   * Why a failed call failed, when the tool can tell.
+   * - `error`     — the tool itself broke or was misused (default when absent).
+   * - `blocked`   — a third party refused the request (bot challenge, 403, 429).
+   *                 Not the bot's fault: the executor does not charge karma for it.
+   * - `not-found` — the target does not exist (404/410). Usually a guessed path,
+   *                 so it still counts as a tool error.
+   */
+  failureKind?: ToolFailureKind;
 }
+
+export type ToolFailureKind = 'error' | 'blocked' | 'not-found';
 
 /**
  * A complete tool: its schema definition + execution logic

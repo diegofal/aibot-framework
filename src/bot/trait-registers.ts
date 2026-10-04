@@ -206,6 +206,27 @@ export class TraitRegisters {
   }
 
   /**
+   * Write a bot's first trait set (the create-an-agent wizard's sliders).
+   * Unlike `adjust`, this is unbounded: the file is replaced and the seed
+   * becomes the drift baseline (a single `adaptive` snapshot, which is what
+   * `getDrift` treats as "where this bot started"). Pins still win.
+   */
+  seed(botId: string, traits: Partial<TraitSet>): TraitSet {
+    const result = this.applyPins(botId, this.validateTraits(traits));
+    const filePath = this.getFilePath(botId);
+    const dir = join(this.soulBaseDir, botId);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const file: TraitFile = {
+      current: result,
+      history: [{ timestamp: Date.now(), source: 'adaptive', traits: { ...result } }],
+    };
+    writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8');
+    this.cache.set(botId, result);
+    this.logger.info({ botId, result: summarizeTraits(result) }, 'TraitRegisters: traits seeded');
+    return { ...result };
+  }
+
+  /**
    * Apply bounded trait adjustments from a given source.
    * Deltas for locked traits are dropped (logged once per call at debug);
    * pinned traits are restored afterwards. Returns the new trait set.

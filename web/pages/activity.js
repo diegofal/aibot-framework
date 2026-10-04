@@ -1,4 +1,5 @@
 import { api, escapeHtml } from './shared.js';
+import { activityTabHash } from './activity-helpers.js';
 
 /* ── Constants ─────────────────────────────────────────────── */
 
@@ -574,6 +575,19 @@ function llmRenderDatePills(dates) {
 function switchTab(tab) {
   activeTab = tab;
 
+  // Keep the sub-tab in the URL so reload / share / back land on it.
+  // replaceState does not fire hashchange, so the page is not re-rendered.
+  const nextHash = activityTabHash(location.hash, tab);
+  if (location.hash !== nextHash) {
+    try {
+      history.replaceState(history.state, '', nextHash);
+    } catch {
+      /* non-browser */
+    }
+  }
+  const hint = document.getElementById('activity-older-hint');
+  if (hint) hint.style.display = tab === 'llm' ? 'none' : '';
+
   // Update tab buttons
   document.querySelectorAll('.activity-tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -671,6 +685,7 @@ export async function renderActivity(el) {
       <button class="activity-tab${activeTab === 'logs' ? ' active' : ''}" data-tab="logs">System Logs</button>
       <button class="activity-tab${activeTab === 'llm' ? ' active' : ''}" data-tab="llm">LLM Queries</button>
     </div>
+    <p class="text-dim text-sm activity-older-hint" id="activity-older-hint"${activeTab === 'llm' ? ' style="display:none"' : ''}>Newest entries arrive at the bottom. Scroll to the top of the list to load older ones.</p>
     <div id="ev-panel" style="display:${activeTab === 'events' ? '' : 'none'}">
       <div class="activity-toolbar">
         <select class="activity-filter" id="activity-bot-filter">

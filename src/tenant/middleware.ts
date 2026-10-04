@@ -10,13 +10,41 @@ export interface TenantContext {
   plan: string;
 }
 
+export interface TenantAuthOptions {
+  /**
+   * When true for a request that carries no Authorization header, the token
+   * is read from `?token=` instead. Reserved for resources a browser loads
+   * without headers (`<img src>`); see `allowsQueryToken`.
+   */
+  allowQueryToken?: (c: Context) => boolean;
+}
+
+const AVATAR_IMAGE_PATH = /^\/api\/agents\/[^/]+\/avatar$/;
+
+/**
+ * The one API path that may authenticate with `?token=`: the avatar image,
+ * GET only. `<img>` cannot send a Bearer header, and `/ws/activity` already
+ * accepts the session token this way.
+ */
+export function allowsQueryToken(method: string, path: string): boolean {
+  return method.toUpperCase() === 'GET' && AVATAR_IMAGE_PATH.test(path);
+}
+
 export function createTenantAuthMiddleware(
   tenantManager: TenantManager,
   logger: Logger,
-  sessionStore?: SessionStore
+  sessionStore?: SessionStore,
+  options: TenantAuthOptions = {}
 ) {
   return async (c: Context, next: Next) => {
     const authHeader = c.req.header('Authorization');
+
+    if (!authHeader && options.allowQueryToken?.(c)) {
+      const queryToken = c.req.query('token');
+      if (queryToken) {
+        return authenticate(c, next, queryToken);
+      }
+    }
 
     if (!authHeader) {
       return c.json({ error: 'Missing Authorization header' }, 401);
@@ -28,6 +56,10 @@ export function createTenantAuthMiddleware(
       return c.json({ error: 'Invalid Authorization format. Expected: Bearer <token>' }, 401);
     }
 
+    return authenticate(c, next, token);
+  };
+
+  async function authenticate(c: Context, next: Next, token: string) {
     // Session token auth (dashboard login)
     if (token.startsWith('sess_') && sessionStore) {
       const session = sessionStore.getSession(token);
@@ -69,7 +101,7 @@ export function createTenantAuthMiddleware(
     });
 
     await next();
-  };
+  }
 }
 
 export function createUsageMiddleware(tenantManager: TenantManager, logger: Logger) {

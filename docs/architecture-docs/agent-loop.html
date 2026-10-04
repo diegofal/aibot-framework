@@ -143,6 +143,11 @@
               <td>~95</td>
               <td><code>buildActiveUsersSummary()</code>: scans session metadata for recently active users, returns compact markdown table for planner injection. Configurable via <code>agentLoop.userAwareness</code> (enabled, activeWindowHours, maxUsers).</td>
             </tr>
+            <tr>
+              <td><code>curiosity/</code></td>
+              <td>~3,360</td>
+              <td>Curiosity DNA package (knowledge map, frontier, navigator, directives, dispatch, taste). The loop only calls <code>beginCuriosityCycle</code> / <code>finishCuriosityCycle</code> from <code>curiosity/runner.ts</code>; neither can fail a cycle. See <a href="#curiosity">Curiosity DNA</a> and the per-file table in <a href="bot-core.html#curiosity">Bot Core Modules</a>.</td>
+            </tr>
           </tbody>
         </table>
 
@@ -241,6 +246,15 @@
             <path d="M 120,497 L 40,497 L 40,32 L 310,32" fill="none" class="arrow" stroke="#34d399" stroke-dasharray="6,4" marker-end="url(#arrowhead-green)"/>
           </svg>
         </div>
+        <p>
+          <span class="badge badge-yellow">2026-10-03</span> With the <a href="#curiosity">Curiosity DNA</a>
+          (on by default), two steps wrap the diagram: <strong>curiosity begin</strong> runs after Load Context
+          and before the Strategist (directives, decay, navigator when due, explore/exploit decision, the DNA
+          block for strategist and planner), and <strong>curiosity finish</strong> runs after the
+          Executor (knowledge extraction, cycle log, at most one dispatch; on an idle cycle it only advances the
+          explore counter). Exploration does not force a strategist pass: the strategist keeps its own cadence,
+          and when it does not run the planner focus becomes <code>EXPLORATION: &lt;frontier question&gt;</code>.
+        </p>
 
         <!-- ============================================================ -->
         <!-- 3. Operating Modes -->
@@ -283,6 +297,150 @@
             <h4>Tracking</h4>
             <p>Tracks <code>continuousCycleCount</code> and <code>sessionStartAt</code> per bot schedule. Uses a separate continuous planner prompt that includes the last cycle summary for context continuity.</p>
           </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- 3b. Curiosity DNA -->
+        <!-- ============================================================ -->
+        <h2 id="curiosity">Curiosity DNA</h2>
+        <p>
+          <span class="badge badge-yellow">2026-10-03</span> Every bot carries six genes &mdash; curious,
+          compounding, self-directed, captivating, honest, bold &mdash; made mechanical by a knowledge map, a
+          frontier of candidate directions, a navigator above the strategist and the <em>dispatch</em> the
+          operator receives. It is on by default (<code>resolveCuriosity</code> &rarr; preset
+          <code>explorer</code>) and turned off with <code>agentLoop.curiosity.enabled: false</code> (global or
+          per bot). Plan: <code>docs/plans/curiosity-navigator-plan.md</code>; config:
+          <a href="configuration.html#curiosity">agentLoop.curiosity</a>; modules:
+          <a href="bot-core.html#curiosity">src/bot/curiosity/</a>.
+        </p>
+        <p>
+          Why: a live soul (ai-perfectionist) spent 10 of 18 productions on its own harness and tooling,
+          followed a 15-day-old operator message as its only route, and closed goals that were bookkeeping
+          about itself. The strategist only saw 7 days of raw logs, novelty was checked by action <em>type</em>
+          and never by <em>topic</em>, and a low <code>alignment_confidence</code> re-rolled the strategist at
+          temperature 0.
+        </p>
+
+        <div class="module-section">
+          <h3>Where It Runs in the Cycle</h3>
+          <div class="file-path">src/bot/curiosity/runner.ts &middot; src/bot/agent-loop.ts</div>
+          <div class="responsibility">The agent loop only calls the runner. Both steps run on the planner backend (<code>resolvePlannerBackend</code> / <code>selectPlannerClient</code>), are time-boxed, and return <code>null</code> / <code>{ extracted: false }</code> instead of throwing &mdash; no curiosity step can fail a cycle.</div>
+          <table>
+            <thead>
+              <tr><th>Step</th><th>When</th><th>What it does</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>beginCuriosityCycle</code></td><td>After the engagement-gate inputs, <strong>before the strategist</strong>; bounded by <code>timeouts.strategistMs</code>. Runs under the per-bot lock (<code>CuriosityService.runExclusive</code>) and is cancellable: on timeout the agent loop sets a flag (<code>isCancelled</code>) and nothing is written afterwards</td><td>(1) answered ask_human questions and pending dashboard feedback become directives, then <code>decayDirectives</code>; (2) sent dispatches with no signal after 48 h lengthen the cadence (<code>applyIgnored</code>); (3) the navigator runs when due, and state is re-read after the LLM await; (4) <code>decideCycleMode</code> picks explore or exploit and <code>selectFrontierItem</code> picks the target, marked <code>exploring</code>; (5) builds <code>curiosityBlock</code> = DNA section + current direction + directives (&le; 1,500 chars, each clipped to 300) + knowledge (up to 2,500 chars, shrunk to fit) + frontier (6 items) + taste, hard-capped at 6,000 chars (<code>CURIOSITY_BLOCK_MAX_CHARS</code>). Publishes an <code>agent:phase</code> event <code>curiosity:explore</code> / <code>curiosity:exploit</code> with <code>reason</code>, <code>frontier</code>, <code>navigatorRan</code>. If the navigator ran, <code>GOALS.md</code> is re-read before the strategist.</td></tr>
+              <tr><td>Strategist</td><td>Its own cadence (<code>shouldRunStrategist(...)</code>); exploration does <strong>not</strong> force a pass</td><td>Receives <code>curiosityBlock</code>; called with <code>{ skipAlignmentRetry: exploring }</code> when it happens to run on an explore cycle. When it does not run, an exploration cycle's focus is <code>EXPLORATION: &lt;frontier question&gt;</code>.</td></tr>
+              <tr><td>Planner</td><td>Periodic and continuous</td><td>Receives <code>curiosityBlock</code> (PURPOSE ALIGNMENT instead of SOUL ALIGNMENT, see below).</td></tr>
+              <tr><td><code>finishCuriosityCycle</code></td><td>After every executor run (idle included), capped at 120 s (<code>CURIOSITY_FINISH_TIMEOUT_MS</code>), under the same per-bot lock</td><td>Idle cycle, or an extraction that fails &rArr; only <code>noteCycle</code> (advances <code>cyclesSinceExplore</code>, so the explore decision never freezes). Otherwise <code>runExtractor</code> (temperature 0.3, retry 0) &rarr; <code>mergeExtraction</code> into the freshly re-read knowledge map (paths written by <code>file_write</code>/<code>file_edit</code> are added as outputs; interests only kept with <code>identity: open</code>) &rarr; frontier item marked <code>explored</code> &rarr; <code>serveDirectives</code> &rarr; <code>recordCycle</code> (topic, mode, surprised) &rarr; at most one dispatch.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="module-section">
+          <h3>Explore or Exploit</h3>
+          <div class="file-path">src/bot/curiosity/cycle.ts</div>
+          <div class="responsibility"><code>decideCycleMode(nav, cfg, { operatorSilent })</code> &mdash; first matching rule wins. <code>operatorSilent</code> is true when the engagement window has no feedback signal at all.</div>
+          <table>
+            <thead>
+              <tr><th>Reason</th><th>Mode</th><th>Rule</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>disabled</code></td><td>exploit</td><td>Curiosity off.</td></tr>
+              <tr><td><code>concentration</code></td><td>explore</td><td>The cycle log covers at least 75% of <code>topicWindow</code> and one topic holds more than <code>maxTopicShare</code> of it &mdash; a topical rut (replaces the action-type-only rut check). Only once <code>cyclesSinceExplore &ge; 1</code>.</td></tr>
+              <tr><td><code>no-surprise</code></td><td>explore</td><td><code>noSurpriseStreak</code> cycles in a row whose extraction reported nothing surprising. Only once <code>cyclesSinceExplore &ge; 1</code>; an explore cycle resets the streak.</td></tr>
+              <tr><td><code>budget</code></td><td>explore</td><td>The explore budget is due: every <code>round(1 / exploreRatio)</code> cycles since the last exploration.</td></tr>
+              <tr><td><code>operator-silent</code></td><td>explore</td><td>The operator is silent and half the budget period has passed &mdash; silence means "go find something", not "idle".</td></tr>
+              <tr><td><code>default</code></td><td>exploit</td><td>Otherwise.</td></tr>
+            </tbody>
+          </table>
+          <p>
+            <strong>Frontier selection</strong> (<code>selectFrontierItem</code>): <code>open</code> and <code>exploring</code> items (in-progress ones stay selectable so nothing is stranded) the
+            limit dials allow (<code>evaluateFrontierItem</code>: distance &ge; 2 crosses <code>topic</code>, no
+            <code>bridge</code> crosses <code>purpose</code>; <code>closed</code> blocks, <code>ask</code> needs an
+            operator 👍, a 👎 always blocks). Ranked by <code>surpriseScore</code> + 0.2 for operator approval + 0.1 when already <code>exploring</code> (rendered as "in progress")
+            &minus; 0.2 when born from the dominant topic + 0.1 &times; net taste for its topic (clamped &plusmn;3).
+            Items gated only by <code>ask</code> dials become up to three <em>proposals</em>.
+            The <code>curiosity</code> trait scales <code>exploreRatio</code> by 0.6&times;&ndash;1.4&times;
+            (0.5 = unchanged), capped at 0.6.
+          </p>
+        </div>
+
+        <div class="module-section">
+          <h3>Navigator</h3>
+          <div class="file-path">src/bot/curiosity/navigator.ts</div>
+          <div class="responsibility">A new layer above the strategist: navigator (days) &rarr; strategist (hours) &rarr; executor (steps). Runs when <code>lastNavigatorAt</code> is older than <code>navigatorEvery</code> (default <code>1d</code>), or on the first curious cycle. Every attempt stamps <code>lastNavigatorAttemptAt</code> first; after a failed attempt it backs off min(<code>navigatorEvery</code>, 2 h) (<code>NAVIGATOR_RETRY_MS</code>).</div>
+          <p>
+            Input: identity, soul, motivations, goals, the rendered knowledge map, frontier, directives, taste,
+            the last 8 dispatches, the cycle log, topic concentration, the previous direction and the dials.
+            It writes a retrospective (what I did, learned, what surprised me, what landed, where next) and a
+            <strong>direction</strong> with up to 3 bets tagged <code>explore</code> / <code>exploit</code>, adds
+            (up to 6) and drops frontier items, marks directives served, proposes interests according to the
+            <code>identity</code> dial (<code>open</code> records them, <code>ask</code> turns them into a proposal
+            dispatch) and emits goal operations applied through <code>applyGoalOperations</code> &mdash; it may close
+            self-referential bookkeeping goals. Temperature 0.7, retry at 0.3 on a parse failure.
+          </p>
+        </div>
+
+        <div class="module-section">
+          <h3>Directives, Dispatches and Taste</h3>
+          <div class="file-path">src/bot/curiosity/directives.ts &middot; dispatch.ts &middot; taste.ts &middot; loop-wiring.ts</div>
+          <table>
+            <thead>
+              <tr><th>Piece</th><th>Behaviour</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Directive decay</td><td>Sources are operator surfaces only: answered ask_human (<code>Q: … A: …</code>), dashboard agent feedback, messages from the operator's private Telegram chat (<code>config.operator.telegramChatId</code>; <code>ConversationPipeline.handleConversation</code> calls <code>ctx.recordOperatorMessage</code>) and messages the operator types in a dashboard conversation thread (<code>POST /api/conversations/:botId/:id/messages</code> &rarr; <code>BotManager.recordOperatorMessage</code>). <code>CuriosityService.recordOperatorMessage</code> ignores messages under 15 chars and bots with curiosity off. Public users (REST, widget, WhatsApp, Discord) never steer &mdash; there is no <code>human_inbound</code> listener (the event still carries an optional <code>text</code>, unused here). In prompts each directive is clipped to 300 chars and the block stays &le; 2,500 chars. A directive steers until <code>directiveHalfLifeOutputs</code> outputs answered it or <code>directiveHalfLifeDays</code> passed, then it is <em>served</em> (context, not route). A near-identical instruction re-anchors it. Cap 20.</td></tr>
+              <tr><td>Dispatch format</td><td>Hook (one non-obvious claim) &rarr; why it matters to you &rarr; evidence &rarr; what to do &rarr; optional question, prefixed with the bot's emoji and name, hard-capped at <code>dispatch.maxChars</code>. Kinds: <code>insight</code>, <code>proposal</code> (crossing an <code>ask</code> dial, or an identity interest &mdash; approving it adds the <code>interest</code> to the knowledge map), <code>digest</code> (held items, after <code>maxIntervalHours</code> of quiet, at most once per <code>maxIntervalHours</code>). At most one per cycle, chained insight &rarr; interest proposal &rarr; frontier proposal &rarr; digest; each falls through to the next.</td></tr>
+              <tr><td>Editor gate</td><td>Separate LLM pass (temperature 0.2, retry 0): <code>score = 0.5·insight + 0.3·novelty + 0.2·backed</code>; <code>backed &lt; 0.5</code> &rArr; drop. <code>findHypeWords</code> (es/en) docks 0.1 per hit. <code>decideDispatch</code>: insights need <code>verdict: send</code> and <code>score &ge; minEditorScore</code>; proposals and digests need 0.5. With the cadence closed an insight is held <strong>without</strong> an editor call (heuristic score 0.5 &minus; 0.1 per hype word); proposals and digests only run with the cadence open.</td></tr>
+              <tr><td>Cadence + taste</td><td>👍 / "more" shrink the interval &times;0.75, 👎 grows it &times;1.25, a sent dispatch with no signal after 48 h grows it &times;1.5, clamped to <code>[minIntervalHours, maxIntervalHours]</code>. Repeat clicks of the same signal don't compound; inbox-only dispatches are never counted as ignored. Topic and kind counts and liked/disliked hooks go into the prompts and the frontier ranking.</td></tr>
+              <tr><td>Delivery</td><td><code>createOperatorDispatchDeliverer</code>: the bot's own Telegram instance &rarr; any live fleet instance &rarr; <code>operator.telegramChatId</code>. Returns <code>'telegram' | 'inbox' | false</code>; the dispatch records <code>deliveredVia</code>. Without a Telegram route the dashboard feed (<code>#/work/dispatches</code>) is the inbox; tenant bots (multi-tenant) never ping the instance operator's Telegram &mdash; inbox only. <code>createFleetDispatchLimiter</code> enforces a fleet-wide rolling-24 h cap the same size as <code>operator.proactiveDailyCap</code>, with its own in-memory counter (not shared with <code>send_proactive_message</code>, reset on restart); over the cap or on a failed send the dispatch is <code>held</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="module-section">
+          <h3>Prompt Changes</h3>
+          <div class="file-path">src/bot/agent-loop-prompts.ts &middot; src/bot/agent-strategist.ts &middot; src/bot/curiosity/dna.ts</div>
+          <div class="responsibility">Every change is conditional on <code>curiosityBlock</code>: with curiosity off, the prompts are byte-for-byte what they were.</div>
+          <table>
+            <thead>
+              <tr><th>Where</th><th>Without curiosity</th><th>With curiosity</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Planner &mdash; <code>buildAlignmentSection</code></td><td>SOUL ALIGNMENT: off-brand tasks banned, "if unsure, choose inaction", exploration only within stated purpose</td><td>PURPOSE ALIGNMENT: serve the purpose or the operator's interest within the dials; curiosity is on-brand, busywork about your own logs is not; "when unsure, choose the action that would teach you the most"</td></tr>
+              <tr><td>Strategist &mdash; <code>buildEngagementCheck</code></td><td>5+ outputs without feedback &rArr; ASSESSMENT or OUTREACH</td><td>ASSESSMENT, OUTREACH <strong>or EXPLORATION</strong>; operator silence is a reason to explore, not idle</td></tr>
+              <tr><td>Strategist rule 6</td><td>Soul Alignment</td><td>Purpose Alignment (purpose or operator interest within the open dials)</td></tr>
+              <tr><td>Strategist retry</td><td>Low <code>alignment_confidence</code> (&lt; 0.6) re-rolls at temperature 0</td><td>Skipped on exploration cycles (<code>skipAlignmentRetry</code>)</td></tr>
+              <tr><td>Engagement-gate note</td><td>Soft/hard warning</td><td>Appends "Exploration is still allowed &hellip; The gate blocks artifacts, not curiosity."</td></tr>
+              <tr><td>DNA block (<code>buildDnaSection</code>)</td><td>&mdash;</td><td>Six genes, each dial with its level and meaning (<code>DIAL_MEANINGS</code>), the floor (<code>FLOOR_RULES</code>), and on explore cycles an "⚡ EXPLORATION CYCLE" section with the reason, the frontier target and the topic to avoid</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="module-section">
+          <h3>State in the Soul Dir</h3>
+          <div class="file-path">src/bot/curiosity/store.ts &middot; CURIOSITY_FILES</div>
+          <div class="responsibility"><code>CuriosityStore(soulDir)</code>: atomic JSON writes (tmp + rename), append-only JSONL for dispatches; reads never throw (missing or corrupt file &rArr; empty state). The files live in the soul dir, so they travel with the bot export.</div>
+          <table>
+            <thead>
+              <tr><th>File</th><th>Contents</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>KNOWLEDGE.json</code></td><td><code>KnowledgeMap</code>: topics (depth 0&ndash;3, findings with evidence + confidence, surprises, open questions, outputs), frontier items, interests. Caps: 40 topics, 20 findings / 10 surprises / 8 questions per topic, 30 frontier items</td></tr>
+              <tr><td><code>NAVIGATOR.json</code></td><td><code>NavigatorState</code>: <code>lastNavigatorAt</code>, <code>lastNavigatorAttemptAt</code>, current direction (+ operator signal), directives, cycle log (last 30), <code>cyclesSinceExplore</code>, <code>noSurpriseStreak</code></td></tr>
+              <tr><td><code>TASTE.json</code></td><td><code>TasteProfile</code>: per-topic and per-kind up/down/more counts, liked/disliked hooks (15 each), cadence (<code>intervalHours</code>, <code>lastSentAt</code>)</td></tr>
+              <tr><td><code>DISPATCHES.jsonl</code></td><td>One <code>Dispatch</code> per line: kind, topic, hook/whyCare/evidence/action, rendered body, editor score + notes, status (<code>sent</code>/<code>held</code>/<code>dropped</code>), <code>deliveredVia</code>, operator signal, crossing dials, frontier id. Trimmed to the newest 500 (<code>DISPATCH_KEEP</code>)</td></tr>
+            </tbody>
+          </table>
+          <p>
+            <strong>Cost:</strong> one extractor call per non-idle cycle, one editor call when there is a dispatch
+            candidate and the cadence is open, and one navigator call per bot per
+            <code>navigatorEvery</code> &mdash; all on the planner backend. Each call is logged to the LLM query
+            log with caller <code>curiosity:navigator</code>, <code>curiosity:extractor</code> or
+            <code>curiosity:editor</code>. Tenant usage metering does not count them yet.
+          </p>
         </div>
 
         <!-- ============================================================ -->
@@ -377,6 +535,15 @@
             <code>parseLLMJson&lt;T&gt;</code> utility from <code>llm-json-parser.ts</code>.
             If both attempts fail to produce parseable JSON, the strategist
             result is <code>null</code> and the cycle continues without strategic guidance.
+          </p>
+          <p>
+            A parsed result with <code>alignment_confidence &lt; 0.6</code> is also retried at temperature 0
+            &mdash; <strong>except on exploration cycles</strong>: <code>runStrategist</code> /
+            <code>runStrategistWithRetry</code> accept <code>{ skipAlignmentRetry }</code>, and the agent loop
+            passes <code>true</code> when the <a href="#curiosity">curiosity</a> decision is <code>explore</code> (the strategist still runs only on its own cadence; exploration does not force a pass),
+            because a temperature-0 re-roll swaps the divergent idea for the most predictable one. The
+            strategist also receives the <code>curiosityBlock</code> (DNA, direction, directives, knowledge map,
+            frontier, taste) as part of its soul context.
           </p>
         </div>
 
@@ -560,7 +727,10 @@ plannerBackend: 'inherit' | 'ollama' | 'claude-cli'   // default 'inherit'</code
             Tool errors are debited per failing call by <code>ToolExecutor</code> through
             <code>KarmaService.recordOutcome(botId, 'toolError', …)</code> (execution and validation phases,
             <code>rewards.toolError</code> = <code>-1</code> by default, deduped per tool + message by the
-            automated-negative cooldown). A non-repeated cycle is worth <code>rewards.novelAction</code>
+            automated-negative cooldown). A tool that reports <code>failureKind: 'blocked'</code> &mdash; a third
+            party refused the request (bot challenge, 403, 429; today only <code>web_fetch</code> sets it) &mdash; is
+            emitted, audited and fed to the loop detector like any failure but is <strong>not</strong> charged;
+            <code>not-found</code> (a guessed URL) and plain errors are. A non-repeated cycle is worth <code>rewards.novelAction</code>
             (<code>0</code> by default &mdash; activity is not impact); a repeated plan still costs <code>-2</code>.
             See <a href="#karma-traits">Karma Outcomes &amp; Trait Policy</a>.
           </p>
@@ -831,7 +1001,7 @@ plannerBackend: 'inherit' | 'ollama' | 'claude-cli'   // default 'inherit'</code
             <code>ConversationPipeline.handleChannelMessage()</code> emits
             <code>human_inbound</code> (<code>HUMAN_INBOUND_HOOK</code>, declared in
             <code>agent-loop-utils.ts</code>) with
-            <code>{ botId, channelKind, chatId, userId?, timestamp }</code>.
+            <code>{ botId, channelKind, chatId, userId?, timestamp, text? }</code> (<code>text</code> is optional and unused by curiosity &mdash; public messages never become directives).
             <code>AgentScheduler</code> subscribes on <code>start()</code> and unsubscribes on
             <code>stop()</code>, turning each event into a <code>human_message</code> feedback event and a
             <code>humanReply</code> karma credit. The exported predicate
@@ -940,7 +1110,9 @@ interface PendingQuestionInfo {
               <tr><td>3. Answer</td><td>Human answers via web (<code>answerById()</code>) or Telegram reply (<code>handleReply()</code>). Promise resolves.</td></tr>
               <tr><td>4. Consume</td><td>Next agent loop cycle calls <code>consumeAnswersForBot()</code> before the strategist runs, so the answers count as engagement feedback for that cycle. Answered questions are injected into the planner context as top priority.</td></tr>
               <tr><td>5. Timeout</td><td>Unanswered questions auto-reject after <code>timeoutMs</code>. Timer cleared on answer or dismiss.</td></tr>
-              <tr><td>6. Auto-close</td><td><code>sweepStaleAskHumanQuestions()</code> (run on every <code>ask_human</code> call for the calling bot) calls <code>AskHumanStore.closeStale()</code> on asks older than <code>askHuman.autoCloseHours</code> (72 h): the promise rejects with an auto-close reason, the inbox conversation is marked <code>closed</code>, and a <code>[ask_human] Question auto-closed after 72h without answer: …</code> line is appended to the bot's daily memory so it knows the question went unanswered.</td></tr>
+              <tr><td>6. Auto-close</td><td><code>sweepStaleAskHumanQuestions()</code> (run on every <code>ask_human</code> call for the calling bot, and hourly across the fleet from <code>BotManager</code>) calls <code>AskHumanStore.closeStale()</code> on asks older than <code>askHuman.autoCloseHours</code> (72 h): the promise rejects with an auto-close reason, the inbox conversation is marked <code>closed</code>, and a <code>[ask_human] Question auto-closed after 72h without answer: …</code> line is appended to the bot's daily memory so it knows the question went unanswered.</td></tr>
+              <tr><td>7. Durable answer</td><td>Every answer also lands in the bot's daily memory (<code>onAnswer</code> &rarr; <code>buildAskHumanAnswerNote()</code>), so the strategist (seven days of daily logs) sees it and it survives a cycle that fails after <code>consumeAnswersForBot()</code>.</td></tr>
+              <tr><td>8. Restart</td><td>Pending questions persist in <code>ask-human/pending.json</code>. At boot <code>reconcileAskHumanInbox()</code> re-attaches inbox conversations still <code>pending</code> that the store does not hold: with a human reply already in the thread &rarr; marked <code>answered</code>; otherwise restored with the conversation's <code>createdAt</code>, so the sweep can close them and the dashboard can answer them.</td></tr>
             </tbody>
           </table>
 
@@ -1070,7 +1242,7 @@ interface ResolvedPermission {
               <tr><td><code>askAnswered</code></td><td><code>2</code></td><td><code>engagement</code></td><td><code>AgentScheduler.recordFeedbackEvent('ask_human')</code> when an answered ask_human question is consumed</td></tr>
               <tr><td><code>humanReply</code></td><td><code>3</code></td><td><code>engagement</code></td><td><code>AgentScheduler.recordFeedbackEvent('human_message')</code>, driven by the <code>human_inbound</code> event from <code>ConversationPipeline.handleChannelMessage()</code> (REST, WebSocket, WhatsApp, Discord); <strong>at most once per bot per <code>karma.humanReplyCooldownHours</code> (6 h; 0 disables)</strong>. Telegram does not reach this path today &mdash; see <a href="#engagement-gate">Engagement Gate</a></td></tr>
               <tr><td><code>collaborateCompleted</code></td><td><code>0</code></td><td><code>agent-loop</code></td><td><code>CollaborationManager.initiateCollaboration()</code> when a session reaches its end, crediting the <em>initiating</em> bot with <code>{ targetBotId, sessionId, turns }</code>. Source and step timeouts throw earlier, so a stalled collaboration earns nothing. The <code>0</code> default means nothing is written until an operator raises it</td></tr>
-              <tr><td><code>toolError</code></td><td><code>-1</code></td><td><code>tool</code></td><td><code>ToolExecutor</code> on execution / validation failures</td></tr>
+              <tr><td><code>toolError</code></td><td><code>-1</code></td><td><code>tool</code></td><td><code>ToolExecutor</code> on execution / validation failures, except those the tool marks <code>failureKind: 'blocked'</code> (site refused us)</td></tr>
             </tbody>
           </table>
           <p>

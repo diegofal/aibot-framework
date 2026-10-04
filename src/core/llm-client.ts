@@ -489,6 +489,20 @@ export function orderCandidatesByBackend(
  * - 'claude-cli' + `crossBackendFallback: true` → LLMClientWithFallback(claude, ollama)
  * - default → OllamaLLMClient(ollama)
  */
+/**
+ * Which Claude model a bot's claude-cli client should ask for: the bot's own
+ * `model` when its backend is claude-cli (a per-agent override chosen in the
+ * dashboard), otherwise the fleet-wide `claudeCli.model`. Returns undefined
+ * when neither is set, which makes the CLI use its own default.
+ */
+export function resolveClaudeModel(
+  bot: { llmBackend?: string; model?: string | null },
+  globalModel: string | undefined
+): string | undefined {
+  if (bot.llmBackend === 'claude-cli' && bot.model) return bot.model;
+  return globalModel || undefined;
+}
+
 export function createLLMClient(
   opts: CreateLLMClientOptions,
   ollamaClient: OllamaClient,
