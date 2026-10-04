@@ -109,11 +109,12 @@ cambiado el branch de la carpeta.
 git worktree add ../aibot-<slug> -b <tipo>/<slug> main   # tipo: feat, fix, docs, chore
 cd ../aibot-<slug> && bun install
 # ... trabajo, gate local, commit ...
-git fetch . <tipo>/<slug>:main        # fast-forward de main sin tocar ninguna carpeta
+git -C D:/aibot-framework merge --ff-only <tipo>/<slug>   # main está checked out ahí: sólo fast-forward
 git merge-base --is-ancestor <tipo>/<slug> main && git worktree remove ../aibot-<slug> && git branch -D <tipo>/<slug>
 ```
 
-Si `main` avanzó y el fast-forward falla, rebasear el branch sobre `main` dentro del worktree y
+Si `main` no está checked out en ninguna carpeta, el equivalente es `git fetch . <tipo>/<slug>:main`
+(git rechaza ese fetch sobre un branch checked out). Si `main` avanzó y el fast-forward falla, rebasear el branch sobre `main` dentro del worktree y
 repetir. `git branch -d` no sirve acá: compara contra el branch de la carpeta actual, no contra `main`; por eso el `merge-base` antes del `-D`. Antes de borrar un worktree, confirmar que no queda nada: sin cambios sin commitear ni
 commits sin mergear.
 
