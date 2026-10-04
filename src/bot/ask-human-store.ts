@@ -46,6 +46,8 @@ export interface HandleReplyResult {
 /**
  * Manages pending "ask_human" questions.
  * Sends a Telegram message, waits for a reply, and resolves the promise.
+ * Answered (`answered.json`) and pending (`pending.json`) questions are both
+ * persisted under `dataDir`, so a restart loses neither.
  */
 export class AskHumanStore {
   private pending = new Map<string, PendingQuestion>();
@@ -56,6 +58,7 @@ export class AskHumanStore {
 
   private onTimeout?: (questionId: string, botId: string, conversationId?: string) => void;
   private onDismiss?: (questionId: string, botId: string, conversationId?: string) => void;
+  private onAnswer?: (answered: AnsweredQuestion) => void;
 
   constructor(
     private logger: Logger,
@@ -63,29 +66,133 @@ export class AskHumanStore {
     callbacks?: {
       onTimeout?: (questionId: string, botId: string, conversationId?: string) => void;
       onDismiss?: (questionId: string, botId: string, conversationId?: string) => void;
+      /**
+       * Fires once per answer (web or Telegram), after it is queued for the
+       * next agent-loop cycle. Errors are logged and swallowed.
+       */
+      onAnswer?: (answered: AnsweredQuestion) => void;
     }
   ) {
     this.onTimeout = callbacks?.onTimeout;
     this.onDismiss = callbacks?.onDismiss;
+    this.onAnswer = callbacks?.onAnswer;
     if (dataDir) this.loadFromDisk();
   }
 
-  /** Load answered questions from disk on startup. Pending entries are NOT persisted. */
+  /**
+   * Load answered and pending questions from disk on startup.
+   *
+   * Pending questions are persisted too: they used to live only in memory, so
+   * a restart orphaned every open inbox ask — the 72 h sweep could not see
+   * them and an operator answer could no longer reach the planner.
+   */
   loadFromDisk(): void {
     if (!this.dataDir) return;
     const filePath = join(this.dataDir, 'answered.json');
-    if (!existsSync(filePath)) return;
-
-    try {
-      const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
-      if (raw.answered && typeof raw.answered === 'object') {
-        for (const [id, entry] of Object.entries(raw.answered)) {
-          this.answered.set(id, entry as AnsweredQuestion);
+    if (existsSync(filePath)) {
+      try {
+        const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
+        if (raw.answered && typeof raw.answered === 'object') {
+          for (const [id, entry] of Object.entries(raw.answered)) {
+            this.answered.set(id, entry as AnsweredQuestion);
+          }
         }
+        this.logger.debug({ count: this.answered.size }, 'AskHuman: loaded from disk');
+      } catch (err) {
+        this.logger.warn({ err }, 'AskHuman: failed to load from disk');
       }
-      this.logger.debug({ count: this.answered.size }, 'AskHuman: loaded from disk');
+    }
+
+    const pendingPath = join(this.dataDir, 'pending.json');
+    if (!existsSync(pendingPath)) return;
+    try {
+      const raw = JSON.parse(readFileSync(pendingPath, 'utf-8'));
+      const entries: unknown[] = Array.isArray(raw?.pending) ? raw.pending : [];
+      for (const item of entries) {
+        const e = item as Partial<PendingQuestionInfo> & { messageId?: number | null };
+        if (typeof e.id !== 'string' || typeof e.botId !== 'string') continue;
+        if (typeof e.question !== 'string' || typeof e.createdAt !== 'number') continue;
+        this.insertRestored(
+          {
+            id: e.id,
+            botId: e.botId,
+            chatId: typeof e.chatId === 'number' ? e.chatId : 0,
+            question: e.question,
+            ...(e.conversationId ? { conversationId: e.conversationId } : {}),
+            ...(Array.isArray(e.options) && e.options.length > 0 ? { options: e.options } : {}),
+            createdAt: e.createdAt,
+          },
+          typeof e.messageId === 'number' ? e.messageId : null
+        );
+      }
+      this.logger.debug({ count: this.pending.size }, 'AskHuman: pending questions restored');
     } catch (err) {
-      this.logger.warn({ err }, 'AskHuman: failed to load from disk');
+      this.logger.warn({ err }, 'AskHuman: failed to load pending questions from disk');
+    }
+  }
+
+  /** Persist the pending set (without promise callbacks) to disk. */
+  private persistPending(): void {
+    if (!this.dataDir) return;
+    try {
+      mkdirSync(this.dataDir, { recursive: true });
+      const pending = [...this.pending.values()].map((e) => ({
+        ...this.toInfo(e),
+        messageId: e.messageId,
+      }));
+      writeFileSync(
+        join(this.dataDir, 'pending.json'),
+        JSON.stringify({ pending }, null, 2),
+        'utf-8'
+      );
+    } catch (err) {
+      this.logger.warn({ err }, 'AskHuman: failed to persist pending questions');
+    }
+  }
+
+  /**
+   * Insert a question recovered from disk or from the inbox. Nobody awaits
+   * its promise any more, so the rejection on close/dismiss is swallowed.
+   */
+  private insertRestored(info: PendingQuestionInfo, messageId: number | null): boolean {
+    if (this.pending.has(info.id)) return false;
+    const { promise, resolve, reject } = this.createDeferredPromise<string>();
+    promise.catch(() => {});
+    this.pending.set(info.id, { ...info, messageId, resolve, reject });
+    const compositeKey = `${info.botId}:${info.chatId}`;
+    if (!this.byChatId.has(compositeKey)) this.byChatId.set(compositeKey, new Set());
+    this.byChatId.get(compositeKey)?.add(info.id);
+    return true;
+  }
+
+  /**
+   * Re-register a pending question the store lost (an inbox conversation still
+   * marked `pending` from before pending questions were persisted). Returns
+   * false when the id is already pending.
+   */
+  restorePending(info: PendingQuestionInfo): boolean {
+    const inserted = this.insertRestored(info, null);
+    if (inserted) this.persistPending();
+    return inserted;
+  }
+
+  /** Queue the answer for the next agent-loop cycle, resolve the waiter, fire onAnswer. */
+  private recordAnswer(entry: PendingQuestion, answer: string): void {
+    const answered: AnsweredQuestion = {
+      id: entry.id,
+      botId: entry.botId,
+      question: entry.question,
+      answer,
+      answeredAt: Date.now(),
+      conversationId: entry.conversationId,
+    };
+    this.answered.set(entry.id, answered);
+    this.persistAnswered();
+    entry.resolve(answer);
+    try {
+      this.onAnswer?.(answered);
+    } catch (err) {
+      this.logger.warn({ err, questionId: entry.id }, 'AskHuman: onAnswer callback failed');
     }
   }
 
@@ -136,6 +243,7 @@ export class AskHumanStore {
       this.byChatId.set(compositeKey, new Set());
     }
     this.byChatId.get(compositeKey)?.add(id);
+    this.persistPending();
 
     this.logger.debug({ id, botId, chatId }, 'AskHuman: question registered');
 
@@ -150,6 +258,7 @@ export class AskHumanStore {
     const entry = this.pending.get(questionId);
     if (entry) {
       entry.messageId = messageId;
+      this.persistPending();
     }
   }
 
@@ -204,6 +313,7 @@ export class AskHumanStore {
     const entry = this.pending.get(questionId);
     if (entry) {
       entry.conversationId = conversationId;
+      this.persistPending();
     }
   }
 
@@ -228,16 +338,7 @@ export class AskHumanStore {
         const entry = this.pending.get(qId);
         if (entry && entry.messageId === replyToMessageId) {
           this.logger.info({ questionId: qId, chatId }, 'AskHuman: reply matched by message ID');
-          this.answered.set(qId, {
-            id: qId,
-            botId: entry.botId,
-            question: entry.question,
-            answer: text,
-            answeredAt: Date.now(),
-            conversationId: entry.conversationId,
-          });
-          this.persistAnswered();
-          entry.resolve(text);
+          this.recordAnswer(entry, text);
           const conversationId = entry.conversationId;
           const botId = entry.botId;
           this.cleanup(qId);
@@ -252,16 +353,7 @@ export class AskHumanStore {
       const entry = this.pending.get(qId);
       if (entry) {
         this.logger.info({ questionId: qId, chatId }, 'AskHuman: reply matched (single pending)');
-        this.answered.set(qId, {
-          id: qId,
-          botId: entry.botId,
-          question: entry.question,
-          answer: text,
-          answeredAt: Date.now(),
-          conversationId: entry.conversationId,
-        });
-        this.persistAnswered();
-        entry.resolve(text);
+        this.recordAnswer(entry, text);
         const conversationId = entry.conversationId;
         const botId = entry.botId;
         this.cleanup(qId);
@@ -294,6 +386,7 @@ export class AskHumanStore {
         this.byChatId.delete(compositeKey);
       }
     }
+    this.persistPending();
   }
 
   private createDeferredPromise<T>(): {
@@ -326,16 +419,7 @@ export class AskHumanStore {
     const entry = this.pending.get(id);
     if (!entry) return { ok: false };
     this.logger.info({ questionId: id }, 'AskHuman: answered via web');
-    this.answered.set(id, {
-      id,
-      botId: entry.botId,
-      question: entry.question,
-      answer,
-      answeredAt: Date.now(),
-      conversationId: entry.conversationId,
-    });
-    this.persistAnswered();
-    entry.resolve(answer);
+    this.recordAnswer(entry, answer);
     const conversationId = entry.conversationId;
     const botId = entry.botId;
     this.cleanup(id);
@@ -405,8 +489,10 @@ export class AskHumanStore {
     }
     this.logger.info({ botId }, 'AskHuman: cleared all entries for bot');
     this.persistAnswered();
+    this.persistPending();
   }
 
+  /** Shutdown: rejects in-memory waiters but leaves pending.json on disk for the next boot. */
   dispose(): void {
     for (const entry of this.pending.values()) {
       entry.reject(new Error('AskHumanStore disposed'));
