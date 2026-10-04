@@ -34,7 +34,10 @@ export function fitComposer(textarea) {
   const { minPx = COMPOSER_MIN_PX, maxPx } = optionsOf.get(textarea) ?? {};
   const top = Number.isFinite(maxPx) ? maxPx : viewportMaxPx();
   textarea.style.height = 'auto';
-  textarea.style.height = `${composerHeight(textarea.scrollHeight, { minPx, maxPx: top })}px`;
+  // scrollHeight is content + padding; the box is border-box, so add the border.
+  const border = Math.max(0, (textarea.offsetHeight ?? 0) - (textarea.clientHeight ?? 0)) || 0;
+  const h = composerHeight(textarea.scrollHeight + border, { minPx, maxPx: top });
+  textarea.style.height = `${h}px`;
   textarea.style.overflowY = 'auto';
 }
 

@@ -116,3 +116,19 @@ describe('fitComposer', () => {
     expect(() => fitComposer(null)).not.toThrow();
   });
 });
+
+describe('fitComposer — border-box', () => {
+  // Prepass round 2: scrollHeight excludes the border, so a border-box textarea
+  // sized to scrollHeight came out 2px short and scrolled before the cap.
+  it('adds the border (offsetHeight − clientHeight) to the content height', () => {
+    const ta = { ...fakeTextarea(150), offsetHeight: 102, clientHeight: 100 };
+    fitComposer(ta as never);
+    expect(ta.style.height).toBe('152px');
+  });
+
+  it('the cap still applies to the bordered height', () => {
+    const ta = { ...fakeTextarea(1000), offsetHeight: 102, clientHeight: 100 };
+    attachAutoGrow(ta as never, { maxPx: 400 });
+    expect(ta.style.height).toBe('400px');
+  });
+});
