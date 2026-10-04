@@ -3,9 +3,9 @@ import { type BotConfig, resolveAgentConfig } from '../config';
 import { ClaudeCliLLMClient, type LLMClient, type TokenUsage } from '../core/llm-client';
 import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
-import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import {
   type AdaptiveParams,
   computeAdaptiveAdjustments,
@@ -58,8 +58,10 @@ import {
   shouldRunStrategist,
 } from './agent-strategist';
 import {
+  createCuriosityCallRecorder,
   createFleetDispatchLimiter,
   createOperatorDispatchDeliverer,
+  createTenantCallMeter,
 } from './curiosity/loop-wiring';
 import {
   type CuriosityCycle,
@@ -424,20 +426,19 @@ export class AgentLoop {
           !!this.ctx.config.bots.find((b) => b.id === id)?.tenantId,
         logger: botLogger,
       }),
-      onLLMCall: (call) =>
-        this.ctx.llmQueryLog?.append({
-          timestamp: new Date().toISOString(),
+      onLLMCall: createCuriosityCallRecorder({
+        botId,
+        model: llm.model,
+        backend: llm.backend,
+        appendQueryLog: (entry) => this.ctx.llmQueryLog?.append(entry),
+        meter: createTenantCallMeter({
           botId,
-          caller: call.caller,
-          model: call.usage?.model ?? llm.model,
-          backend: llm.backend,
-          promptTokens: call.usage?.promptTokens,
-          completionTokens: call.usage?.completionTokens,
-          totalTokens: call.usage?.totalTokens,
-          durationMs: call.durationMs,
-          success: call.success,
-          error: call.error,
+          getTenantId: () => this.ctx.config.bots.find((b) => b.id === botId)?.tenantId,
+          isMultiTenant: () => !!this.ctx.tenantFacade?.isMultiTenant(),
+          recordUsage: (tenantId, id, type, quantity, metadata) =>
+            this.ctx.tenantFacade?.recordUsage(tenantId, id, type, quantity, metadata),
         }),
+      }),
       applyGoalOperations: (ops) => applyGoalOperations(botId, ops, botLogger, soulLoader),
       fleetAllows: (id) => limiter.allows(id),
       onDelivered: (id) => limiter.record(id),

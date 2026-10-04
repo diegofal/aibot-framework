@@ -59,6 +59,7 @@ import {
   renderStats,
   renderStatsBehaviour,
   renderStatsBot,
+  renderStatsCuriosity,
   renderStatsHygiene,
   renderStatsInfra,
 } from './pages/stats.js';
@@ -208,6 +209,7 @@ const handlers = {
   stats: page(() => renderStats(content)),
   statsBot: page((id) => renderStatsBot(content, id)),
   statsBehaviour: page(() => renderStatsBehaviour(content)),
+  statsCuriosity: page(() => renderStatsCuriosity(content)),
   statsInfra: page(() => renderStatsInfra(content)),
   statsHygiene: page(() => renderStatsHygiene(content)),
   karma: page(() => renderKarma(content)),

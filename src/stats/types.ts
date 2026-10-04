@@ -264,3 +264,97 @@ export interface InfraResponse {
   boots: string[];
   logBytes: number;
 }
+
+// ── Curiosity (GET /api/stats/curiosity) ──
+
+/** How a sent dispatch landed: 👍, "more", 👎, no signal after 48 h on Telegram, or still open. */
+export type DispatchLanding = 'up' | 'more' | 'down' | 'ignored' | 'pending';
+
+export interface CuriosityDiversityPoint {
+  at: string;
+  topic: string;
+  mode: 'explore' | 'exploit';
+  surprised: boolean;
+  /** Distinct topics in the trailing `topicWindow` cycles ending here. */
+  distinctTopics: number;
+  /** Share of the most frequent topic in that trailing window (0–1). */
+  dominantShare: number;
+}
+
+export interface CuriosityDailyMix {
+  date: string;
+  cycles: number;
+  explore: number;
+  exploit: number;
+  surprised: number;
+  distinctTopics: number;
+}
+
+export interface DispatchLandingStats {
+  sent: number;
+  up: number;
+  more: number;
+  down: number;
+  ignored: number;
+  pending: number;
+  /** (up + more) / resolved, where resolved = up + more + down + ignored; null with nothing resolved. */
+  landingRate: number | null;
+  held: number;
+  dropped: number;
+  /** Median editor score over every dispatch in the window, any status. */
+  medianEditorScore: number | null;
+}
+
+export interface CuriosityBotStats {
+  botId: string;
+  name: string;
+  curiosityEnabled: boolean;
+  topicWindow: number;
+  knowledge: {
+    topics: number;
+    findings: number;
+    surprises: number;
+    openQuestions: number;
+    interests: number;
+    frontier: Record<string, number>;
+    topTopics: Array<{ name: string; depth: number; cycles: number }>;
+    updatedAt: string | null;
+  };
+  cycles: {
+    total: number;
+    explore: number;
+    exploit: number;
+    surprised: number;
+    exploreShare: number | null;
+    distinctTopics: number;
+    dominantTopic: string | null;
+    dominantShare: number | null;
+    /** Oldest cycle still in the capped cycle log (history before it is gone). */
+    historyStart: string | null;
+  };
+  diversity: CuriosityDiversityPoint[];
+  daily: CuriosityDailyMix[];
+  direction: {
+    at: string;
+    summary: string;
+    bets: Array<{ title: string; kind: 'explore' | 'exploit' }>;
+  } | null;
+  lastNavigatorAt: string | null;
+  cadenceHours: number | null;
+  dispatches: DispatchLandingStats;
+}
+
+export interface CuriosityStatsResponse {
+  generatedAt: string;
+  window: StatsWindow;
+  /** Cycle log entries kept per bot (`CYCLE_LOG_CAP`). */
+  cycleLogCap: number;
+  ignoredAfterHours: number;
+  bots: CuriosityBotStats[];
+  fleet: {
+    cycles: number;
+    explore: number;
+    exploit: number;
+    dispatches: DispatchLandingStats;
+  };
+}

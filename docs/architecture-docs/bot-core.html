@@ -1323,8 +1323,9 @@
           <code>navigator.ts</code> / <code>dispatch.ts</code> (LLM calls on the planner backend),
           <code>runner.ts</code> (orchestration) and <code>service.ts</code> (facade). Every curiosity LLM call is
           logged to the LLM query log (<code>llm-query-log.ts</code>) with caller <code>curiosity:navigator</code>,
-          <code>curiosity:extractor</code> or <code>curiosity:editor</code>; tenant usage metering does not count
-          them yet.
+          <code>curiosity:extractor</code> or <code>curiosity:editor</code>, and metered as one <code>llm_request</code>
+          against the bot&rsquo;s tenant in multi-tenant mode (<code>createCuriosityCallRecorder</code> +
+          <code>createTenantCallMeter</code>, <code>curiosity/loop-wiring.ts</code>).
         </p>
         <table>
           <thead><tr><th>File</th><th>Responsibility</th></tr></thead>

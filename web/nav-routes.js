@@ -68,6 +68,7 @@ export const AREAS = [
     tabs: [
       { id: 'stats', label: 'Stats', href: '#/insights/stats' },
       { id: 'behaviour', label: 'Behaviour', href: '#/insights/stats/behaviour' },
+      { id: 'curiosity', label: 'Curiosity', href: '#/insights/stats/curiosity' },
       { id: 'infra', label: 'Infra', href: '#/insights/stats/infra' },
       { id: 'hygiene', label: 'Hygiene', href: '#/insights/stats/hygiene' },
       { id: 'karma', label: 'Karma', href: '#/insights/karma' },
@@ -229,6 +230,12 @@ export const ROUTES = [
   {
     pattern: /^#\/insights\/stats\/behaviour$/,
     handler: 'statsBehaviour',
+    area: 'insights',
+    args: none,
+  },
+  {
+    pattern: /^#\/insights\/stats\/curiosity$/,
+    handler: 'statsCuriosity',
     area: 'insights',
     args: none,
   },

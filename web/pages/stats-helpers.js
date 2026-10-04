@@ -330,3 +330,43 @@ export function goalsBoard(goalsDetail, goals) {
   return `${flags ? `<div class="stats-flags">${flags}</div>` : ''}
   <div class="stats-goal-groups">${order.map(group).join('')}</div>`;
 }
+
+// ── Curiosity (GET /api/stats/curiosity) ──
+
+const LANDING_ORDER = [
+  ['up', '👍'],
+  ['more', 'more'],
+  ['down', '👎'],
+  ['ignored', 'ignored'],
+  ['pending', 'open'],
+];
+
+/** Stacked-bar segments for `DispatchLandingStats`: non-zero outcomes as a % of sent. */
+export function landingSegments(d) {
+  if (!d || !isNum(d.sent) || d.sent <= 0) return [];
+  return LANDING_ORDER.filter(([key]) => isNum(d[key]) && d[key] > 0).map(([key, label]) => ({
+    key,
+    label,
+    count: d[key],
+    pct: Math.round((d[key] / d.sent) * 100),
+  }));
+}
+
+/** The two sparkline series of a bot's diversity timeline. */
+export function diversitySeries(points) {
+  const list = Array.isArray(points) ? points : [];
+  return {
+    distinct: list.map((p) => (isNum(p?.distinctTopics) ? p.distinctTopics : 0)),
+    share: list.map((p) => (isNum(p?.dominantShare) ? p.dominantShare : 0)),
+  };
+}
+
+/** One strip cell per cycle: explore/exploit colour, a mark when it surprised the bot. */
+export function cycleStrip(points) {
+  return (Array.isArray(points) ? points : []).map((p) => ({
+    cls: `cur-cell cur-${p.mode === 'explore' ? 'explore' : 'exploit'}${p.surprised ? ' cur-surprised' : ''}`,
+    title: escapeHtmlPure(
+      `${p.at ? p.at.slice(0, 16).replace('T', ' ') : '?'} · ${p.mode}${p.surprised ? ' · surprised' : ''} · ${p.topic ?? ''}`
+    ),
+  }));
+}

@@ -124,3 +124,19 @@ describe('statsRoutes — bot detail, behaviour, infra', () => {
     expect(body.karma.score).toBe(61);
   });
 });
+
+describe('statsRoutes — curiosity', () => {
+  it('GET /curiosity returns every scoped bot with the requested window', async () => {
+    const res = await makeApp().request('/api/stats/curiosity?window=24h');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.window).toBe('24h');
+    expect(body.bots.map((b: { botId: string }) => b.botId)).toEqual(['b1', 'b2', 'b3']);
+    expect(body.fleet.dispatches.sent).toBe(0);
+  });
+
+  it('a tenant only sees its own bots', async () => {
+    const body = await (await makeApp('t2').request('/api/stats/curiosity')).json();
+    expect(body.bots.map((b: { botId: string }) => b.botId)).toEqual(['b3']);
+  });
+});

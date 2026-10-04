@@ -12,6 +12,8 @@ import {
   barHeights,
   channelStateClass,
   compareBy,
+  cycleStrip,
+  diversitySeries,
   driftVectorData,
   failRateClass,
   formatBytes,
@@ -21,6 +23,7 @@ import {
   formatTokens,
   goalsBoard,
   isStaleContact,
+  landingSegments,
   normalizeWindow,
   postureClass,
   relativeTime,
@@ -732,6 +735,135 @@ export async function renderStatsBehaviour(el) {
       ${section('Fleet drift vector', driftVector(data.fleetDriftVector), ' <span class="count">signed mean drift per trait</span>')}
       ${section('Trait variance', varianceSparks(data.traitVariance), ' <span class="count">spread across bots over time</span>')}
     </div>`;
+}
+
+/* ========================= Curiosity ========================= */
+
+function landingBar(d) {
+  const segs = landingSegments(d);
+  if (segs.length === 0) return '<span class="text-dim">—</span>';
+  return `<span class="cur-landing" title="${escapeHtml(segs.map((s) => `${s.label} ${s.count}`).join(' · '))}">${segs
+    .map((s) => `<span class="cur-seg cur-seg-${s.key}" style="width:${s.pct}%"></span>`)
+    .join('')}</span>`;
+}
+
+function curiosityRow(b) {
+  const c = b.cycles;
+  const d = b.dispatches;
+  const dominant = c.dominantTopic
+    ? `<span class="mono">${escapeHtml(c.dominantTopic)}</span> <span class="text-dim">${formatPct(c.dominantShare)}</span>`
+    : '<span class="text-dim">—</span>';
+  return `<tr>
+    <td><a href="#/agents/${encodeURIComponent(b.botId)}">${escapeHtml(b.name || b.botId)}</a>${
+      b.curiosityEnabled ? '' : ` ${pill('off', 'badge-disabled')}`
+    }</td>
+    <td class="num">${formatNumber(b.knowledge.topics)}</td>
+    <td class="num">${formatNumber(c.total)}</td>
+    <td class="num">${formatNumber(c.explore)} / ${formatNumber(c.exploit)}</td>
+    <td class="num">${formatNumber(c.distinctTopics)}</td>
+    <td>${dominant}</td>
+    <td class="num">${formatNumber(d.sent)}</td>
+    <td>${landingBar(d)}</td>
+    <td class="num">${d.landingRate == null ? '—' : formatPct(d.landingRate)}</td>
+    <td class="num">${formatNumber(d.held)} / ${formatNumber(d.dropped)}</td>
+    <td class="num">${d.medianEditorScore == null ? '—' : d.medianEditorScore}</td>
+    <td class="num">${b.cadenceHours == null ? '—' : `${b.cadenceHours} h`}</td>
+  </tr>`;
+}
+
+function curiosityTable(bots) {
+  return `<div class="stats-table-wrap"><table class="stats-table"><thead><tr>
+    <th>Bot</th><th class="num">Topics</th><th class="num">Cycles</th><th class="num">Explore / exploit</th>
+    <th class="num">Distinct topics</th><th>Dominant topic</th><th class="num">Sent</th><th>Landing</th>
+    <th class="num">Landed</th><th class="num">Held / dropped</th><th class="num">Median score</th><th class="num">Cadence</th>
+  </tr></thead><tbody>${bots.map(curiosityRow).join('')}</tbody></table></div>`;
+}
+
+function diversitySpark(label, series, fmt) {
+  const W = 160;
+  const H = 28;
+  if (series.length < 2) return '';
+  const last = series[series.length - 1];
+  return `<div class="stats-spark">
+    <span class="stats-spark-name">${escapeHtml(label)}</span>
+    <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="none"><polyline fill="none" stroke="var(--accent)" stroke-width="1.5" points="${sparklinePoints(series, W, H)}"/></svg>
+    <span class="num stats-spark-val">${fmt(last)}</span>
+  </div>`;
+}
+
+function curiosityCard(b) {
+  const strip = cycleStrip(b.diversity);
+  const series = diversitySeries(b.diversity);
+  const topics = b.knowledge.topTopics
+    .map(
+      (t) =>
+        `<li><span class="mono">${escapeHtml(t.name)}</span> <span class="text-dim">depth ${t.depth} · ${formatNumber(t.cycles)} cycles</span></li>`
+    )
+    .join('');
+  const dir = b.direction
+    ? `<p class="text-sm">${escapeHtml(b.direction.summary)}</p>
+       <ul class="text-sm">${b.direction.bets
+         .map(
+           (x) =>
+             `<li>${pill(x.kind, x.kind === 'explore' ? 'badge-ok' : 'badge-disabled')} ${escapeHtml(x.title)}</li>`
+         )
+         .join('')}</ul>
+       <div class="text-dim text-sm">set ${relativeTime(b.direction.at)}</div>`
+    : '<p class="text-dim text-sm">No direction yet.</p>';
+  const frontier = Object.values(b.knowledge.frontier).reduce((n, v) => n + v, 0);
+  const body = `
+    ${
+      strip.length
+        ? `<div class="cur-strip">${strip.map((s) => `<span class="${s.cls}" title="${s.title}"></span>`).join('')}</div>
+           <div class="text-dim text-sm">${formatNumber(strip.length)} cycles · trailing window ${b.topicWindow}</div>`
+        : '<p class="text-dim text-sm">No cycles in this window.</p>'
+    }
+    <div class="stats-sparks">
+      ${diversitySpark('distinct topics', series.distinct, (v) => v)}
+      ${diversitySpark('dominant share', series.share, (v) => formatPct(v))}
+    </div>
+    <div class="stats-section-title">Direction</div>${dir}
+    ${topics ? `<div class="stats-section-title">Top topics</div><ul class="text-sm">${topics}</ul>` : ''}`;
+  return section(
+    escapeHtml(b.name || b.botId),
+    body,
+    ` <span class="count">${formatNumber(b.knowledge.topics)} topics · frontier ${formatNumber(frontier)}</span>`
+  );
+}
+
+export async function renderStatsCuriosity(el) {
+  const body = shell(el, 'curiosity', {
+    withWindow: true,
+    onWindowChange: () => renderStatsCuriosity(el),
+  });
+  const data = await api(`/api/stats/curiosity${windowQuery(getWindow())}`);
+  if (!data || data.error) return errorState(body, data, 'Curiosity stats');
+
+  const f = data.fleet;
+  const fd = f.dispatches;
+  const exploreShare = answerRate(f.explore, f.cycles);
+  const kpis = [
+    kpi('Cycles', formatNumber(f.cycles), {
+      sub: `${formatNumber(f.explore)} explore · ${formatNumber(f.exploit)} exploit`,
+    }),
+    kpi('Explore share', exploreShare == null ? '—' : formatPct(exploreShare)),
+    kpi('Dispatches sent', formatNumber(fd.sent), {
+      sub: `${formatNumber(fd.held)} held · ${formatNumber(fd.dropped)} dropped`,
+    }),
+    kpi('Landed', fd.landingRate == null ? '—' : formatPct(fd.landingRate), {
+      sub: `${formatNumber(fd.up + fd.more)} 👍/more · ${formatNumber(fd.down)} 👎 · ${formatNumber(fd.ignored)} ignored`,
+    }),
+  ].join('');
+
+  const active = data.bots.filter((b) => b.cycles.total > 0 || b.knowledge.topics > 0);
+  body.innerHTML = `
+    <div class="stats-kpis">${kpis}</div>
+    ${section(
+      'Per bot',
+      curiosityTable(data.bots),
+      ` <span class="count">landed = 👍 or more over resolved · ignored = no signal ${data.ignoredAfterHours} h after a Telegram send · history keeps the last ${data.cycleLogCap} cycles per bot</span>`
+    )}
+    <div class="stats-grid-2">${active.map(curiosityCard).join('') || '<p class="text-dim">No curiosity activity in this window.</p>'}</div>`;
 }
 
 /* ========================= Infra ========================= */
