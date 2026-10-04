@@ -4,6 +4,8 @@
  */
 import type { Logger } from '../../logger';
 import { ProactiveThrottle } from '../../tools/send-proactive-message';
+import type { LlmQueryEntry } from '../llm-query-log';
+import type { CuriosityLLMCall } from './runner';
 
 interface TelegramLike {
   api: { sendMessage: (chatId: number, text: string) => Promise<unknown> };
@@ -53,5 +55,71 @@ export function createFleetDispatchLimiter(
   return {
     allows: (botId) => throttle.check(botId).allowed,
     record: (botId) => throttle.record(botId),
+  };
+}
+
+/**
+ * Every curiosity LLM call (navigator, extractor, editor) goes to the query
+ * log and, for a tenant bot in multi-tenant mode, to tenant metering as one
+ * `llm_request`. Failed attempts count too: the backend was still called.
+ * A failing sink is swallowed, since curiosity must never fail a cycle.
+ */
+export function createCuriosityCallRecorder(deps: {
+  botId: string;
+  model: string;
+  backend: string;
+  appendQueryLog?: (entry: LlmQueryEntry) => void;
+  /** Set only when the call should count against a tenant's quota. */
+  meter?: (quantity: number, metadata: Record<string, unknown>) => void;
+  now?: () => Date;
+}): (call: CuriosityLLMCall) => void {
+  const now = deps.now ?? (() => new Date());
+  return (call) => {
+    try {
+      deps.appendQueryLog?.({
+        timestamp: now().toISOString(),
+        botId: deps.botId,
+        caller: call.caller,
+        model: call.usage?.model ?? deps.model,
+        backend: deps.backend,
+        promptTokens: call.usage?.promptTokens,
+        completionTokens: call.usage?.completionTokens,
+        totalTokens: call.usage?.totalTokens,
+        durationMs: call.durationMs,
+        success: call.success,
+        error: call.error,
+      });
+    } catch {
+      /* the query log is best-effort */
+    }
+    try {
+      deps.meter?.(1, { caller: call.caller });
+    } catch {
+      /* metering is best-effort */
+    }
+  };
+}
+
+/**
+ * Tenant metering for curiosity calls: one `llm_request` per call against
+ * the bot's tenant, only in multi-tenant mode. Tenant and mode are read at
+ * call time (the navigator lands in the background, maybe after an edit).
+ */
+export function createTenantCallMeter(deps: {
+  botId: string;
+  getTenantId: () => string | undefined;
+  isMultiTenant: () => boolean;
+  recordUsage: (
+    tenantId: string,
+    botId: string,
+    type: 'llm_request',
+    quantity: number,
+    metadata: Record<string, unknown>
+  ) => void;
+}): (quantity: number, metadata: Record<string, unknown>) => void {
+  return (quantity, metadata) => {
+    const tenantId = deps.getTenantId();
+    if (!tenantId || !deps.isMultiTenant()) return;
+    deps.recordUsage(tenantId, deps.botId, 'llm_request', quantity, metadata);
   };
 }

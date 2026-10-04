@@ -152,11 +152,12 @@
         <code class="method-badge">GET</code> <code>/api/stats/fleet?window=24h|7d|30d</code><br>
         <code class="method-badge">GET</code> <code>/api/stats/bots/:botId?window=</code><br>
         <code class="method-badge">GET</code> <code>/api/stats/behaviour?window=</code><br>
+        <code class="method-badge">GET</code> <code>/api/stats/curiosity?window=</code><br>
         <code class="method-badge">GET</code> <code>/api/stats/infra</code>
         <p>
           Read-only aggregations over the on-disk telemetry (<code>src/stats/</code>): per-bot posture, LLM and
           tool counts, outputs and reviews, ask engagement, goals, karma, trait drift, soul health; cross-bot
-          behaviour views; backend / cron / Telegram / log health. Tenant-scoped, cached 60&nbsp;s, never
+          behaviour views; curiosity (topic diversity, explore/exploit mix, dispatch landing); backend / cron / Telegram / log health. Tenant-scoped, cached 60&nbsp;s, never
           throws on missing data. Response types are frozen in <code>src/stats/types.ts</code>. Full field
           list on the <a href="web-dashboard.html">Web Dashboard</a> page.
         </p>

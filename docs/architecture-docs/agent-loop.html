@@ -439,7 +439,7 @@
             candidate and the cadence is open, and one navigator call per bot per
             <code>navigatorEvery</code> &mdash; all on the planner backend. Each call is logged to the LLM query
             log with caller <code>curiosity:navigator</code>, <code>curiosity:extractor</code> or
-            <code>curiosity:editor</code>. Tenant usage metering does not count them yet.
+            <code>curiosity:editor</code>, and counts as one <code>llm_request</code> in tenant usage metering for a tenant bot in multi-tenant mode (failed attempts included; <code>createCuriosityCallRecorder</code> / <code>createTenantCallMeter</code> in <code>curiosity/loop-wiring.ts</code>).
           </p>
         </div>
 

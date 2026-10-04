@@ -45,6 +45,8 @@ const LEGACY: Array<[string, string, string]> = [
   ['#/stats', '#/insights/stats', 'stats'],
   ['#/stats/bot/job%20seeker', '#/insights/stats/bot/job%20seeker', 'statsBot'],
   ['#/stats/behaviour', '#/insights/stats/behaviour', 'statsBehaviour'],
+  ['#/stats/curiosity', '#/insights/stats/curiosity', 'statsCuriosity'],
+  ['#/insights/stats/curiosity', '#/insights/stats/curiosity', 'statsCuriosity'],
   ['#/stats/infra', '#/insights/stats/infra', 'statsInfra'],
   ['#/stats/hygiene', '#/insights/stats/hygiene', 'statsHygiene'],
   ['#/sessions', '#/work/sessions', 'sessions'],
@@ -202,6 +204,7 @@ describe('areas and visibility', () => {
     expect(insights?.tabs.map((t) => t.id)).toEqual([
       'stats',
       'behaviour',
+      'curiosity',
       'infra',
       'hygiene',
       'karma',
@@ -251,6 +254,7 @@ describe('areas and visibility', () => {
     expect(activeTab(insights, '#/insights/stats')?.id).toBe('stats');
     expect(activeTab(insights, '#/insights/stats/bot/b1')?.id).toBe('stats');
     expect(activeTab(insights, '#/insights/stats/behaviour')?.id).toBe('behaviour');
+    expect(activeTab(insights, '#/insights/stats/curiosity')?.id).toBe('curiosity');
     expect(activeTab(insights, '#/insights/activity?tab=logs')?.id).toBe('activity');
     expect(
       activeTab(
