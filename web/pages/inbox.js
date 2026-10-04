@@ -1,3 +1,4 @@
+import { fitComposer } from '../ui/composer.js';
 import { confirmDialog, showToast } from '../ui/index.js';
 import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
@@ -388,6 +389,7 @@ export async function renderInboxChat(el, botId, conversationId) {
     const input = container.querySelector('.thread-input');
     if (input && draft && !input.value) {
       input.value = draft;
+      fitComposer(input);
       if (hadFocus) input.focus();
     }
   }
