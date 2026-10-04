@@ -52,7 +52,7 @@
           <div class="label">Lines of Code</div>
         </div>
         <div class="stat">
-          <div class="number">8</div>
+          <div class="number">9</div>
           <div class="label">Groups</div>
         </div>
         <div class="stat">
@@ -173,7 +173,15 @@
           <code>isHumanInboundMessage(msg, { isPeerAgent })</code> gates it: peer agents (looked up in
           <code>AgentRegistry</code>), <code>channelKind: 'mcp'</code>, <code>synthetic: true</code>,
           <code>cron-</code>-prefixed message ids and blank text all emit nothing. The event rides the raw
-          <code>EventEmitter</code>, not the typed <code>HookEvents</code> map.
+          <code>EventEmitter</code>, not the typed <code>HookEvents</code> map. It carries an optional
+          <code>text</code> that curiosity does <strong>not</strong> use: public users (REST, widget, WhatsApp,
+          Discord) never steer a bot.
+        </p>
+        <p>
+          <span class="badge badge-yellow">2026-10-03</span> <code>handleConversation()</code> (Telegram) calls
+          <code>ctx.recordOperatorMessage(botId, text)</code> when the message comes from the operator's
+          private chat (<code>config.operator.telegramChatId</code>, never a group), so the operator's own
+          Telegram messages become <a href="#curiosity">curiosity directives</a>.
         </p>
         <p>
           <span class="badge badge-yellow">2026-08-24</span> The first <code>channel.showTyping()</code>
@@ -921,6 +929,8 @@
             <tr><td>runOne</td><td>botId: string</td><td>Executes a single bot cycle immediately</td></tr>
             <tr><td>getState</td><td>(none)</td><td>Returns AgentLoopState with schedule info for all bots</td></tr>
             <tr><td>setKarmaService</td><td>karmaService: KarmaService</td><td>Injects the karma service for tracking novel vs repetitive actions</td></tr>
+            <tr><td>setCuriosityService</td><td>service: CuriosityService</td><td>Injects the <a href="#curiosity">curiosity DNA</a> service; without it no curiosity step runs</td></tr>
+            <tr><td>getCuriosityTrait</td><td>botId: string</td><td>The bot's <code>curiosity</code> trait (0.1&ndash;0.9) from <code>TraitRegisters</code>, or <code>undefined</code>; scales <code>exploreRatio</code></td></tr>
           </tbody>
         </table>
         <h4>Execution Phases</h4>
@@ -928,9 +938,11 @@
           <thead><tr><th>Phase</th><th>Description</th></tr></thead>
           <tbody>
             <tr><td>-1. Feedback</td><td>Processes pending human feedback via Claude CLI with soul-modifying tools</td></tr>
-            <tr><td>0. Strategist</td><td>Periodic strategic review: goal operations, focus directive, reflection</td></tr>
+            <tr><td>Curiosity begin</td><td><code>beginCuriosityCycle</code> (bounded by <code>strategistMs</code>, cancellable on timeout, under the per-bot curiosity lock): directives + decay, navigator when due, explore/exploit decision, frontier target, the <code>curiosityBlock</code> (&le; 6,000 chars) for strategist and planner</td></tr>
+            <tr><td>0. Strategist</td><td>Periodic strategic review: goal operations, focus directive, reflection. Runs on its own cadence (exploration does not force it); on an exploration cycle it skips the temperature-0 alignment re-roll (<code>skipAlignmentRetry</code>). When it does not run on an exploration cycle the focus becomes <code>EXPLORATION: &lt;frontier question&gt;</code></td></tr>
             <tr><td>1. Planner</td><td>LLM decides what to do: reasoning, plan steps (0-5), priority (high/medium/low/none)</td></tr>
             <tr><td>2. Executor</td><td>Full agentic LLM call with tools to carry out the plan</td></tr>
+            <tr><td>Curiosity finish</td><td><code>finishCuriosityCycle</code> after every cycle (capped at 120 s): knowledge extraction, cycle log, at most one dispatch to the operator; an idle cycle or a failed extraction only advances the explore counter (<code>noteCycle</code>)</td></tr>
           </tbody>
         </table>
         <h4>Dependencies</h4>
@@ -978,6 +990,10 @@
           applies goal operations (add/complete/update/remove), and computes cycles until next run.
           <code>runStrategist()</code> accepts an optional <code>{ client, model }</code> so the agent loop
           can run it on the resolved planner backend instead of the bot's wrapped client.
+          <code>runStrategist()</code> / <code>runStrategistWithRetry()</code> also take
+          <code>{ skipAlignmentRetry }</code>: on curiosity exploration cycles a low
+          <code>alignment_confidence</code> no longer triggers the temperature-0 re-roll. The soul context
+          carries an optional <code>curiosityBlock</code>.
         </p>
         <h4>Exported Functions</h4>
         <ul class="inline-list">
@@ -1100,7 +1116,11 @@
           Prompt templates for the autonomous agent loop. Contains builders for five prompt types:
           periodic planner, continuous planner, executor, strategist, and feedback processor.
           Includes anti-pattern lists, novelty imperatives, karma blocks, and answered/pending
-          question injection.
+          question injection. Planner, continuous planner and strategist inputs accept an optional
+          <code>curiosityBlock</code>; when present, <code>buildAlignmentSection()</code> swaps the
+          "SOUL ALIGNMENT / if unsure, choose inaction" rule for PURPOSE ALIGNMENT,
+          <code>buildEngagementCheck()</code> lets the strategist assign EXPLORATION, and strategist rule 6
+          becomes Purpose Alignment. Without the block the prompts are unchanged.
         </p>
         <h4>Exported Types / Functions</h4>
         <ul class="inline-list">
@@ -1196,6 +1216,7 @@
           <li><code>AnsweredQuestion</code> (interface)</li>
           <li><code>AskHumanStore</code> (class)</li>
         </ul>
+        <p>Persistence: <code>&lt;data&gt;/ask-human/answered.json</code> (answers waiting for the next cycle) and <code>pending.json</code> (open questions with chat/message/conversation ids). Pending questions survive a restart; constructor callback <code>onAnswer</code> fires on every web or Telegram answer (BotManager writes an <code>[ask_human] Operator answered "&hellip;": &hellip;</code> line to the bot's daily memory).</p>
         <h4>Key Methods</h4>
         <table class="methods-table">
           <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
@@ -1207,6 +1228,7 @@
             <tr><td>answerById</td><td>id: string, answer: string</td><td>Answers a question from the web dashboard</td></tr>
             <tr><td>dismissById</td><td>id: string</td><td>Dismisses a question (rejects the promise with error)</td></tr>
             <tr><td>closeStale</td><td>maxAgeMs, now?, botId?</td><td>Rejects and removes every pending question older than <code>maxAgeMs</code> (optionally one bot) with an auto-close reason; returns the closed infos. Fires neither <code>onDismiss</code> nor <code>onTimeout</code> &mdash; the caller (<code>sweepStaleAskHumanQuestions</code>) owns the inbox status and the memory note</td></tr>
+            <tr><td>restorePending</td><td>info: PendingQuestionInfo</td><td>Re-registers a question the store lost (orphaned inbox conversation); false when already pending. Used by <code>reconcileAskHumanInbox()</code> at boot</td></tr>
             <tr><td>setCreatedAt</td><td>questionId, createdAt</td><td>Overrides the creation time (tests and restore paths)</td></tr>
             <tr><td>consumeAnswersForBot</td><td>botId: string</td><td>Returns and deletes all answered questions for a bot (consumed by agent loop)</td></tr>
             <tr><td>getPendingForBot</td><td>botId: string</td><td>Returns pending questions for a bot with remaining time</td></tr>
@@ -1276,6 +1298,58 @@
       </div>
 
       <!-- ================================================================ -->
+      <!-- CURIOSITY DNA -->
+      <!-- ================================================================ -->
+      <div class="category-header" id="curiosity">
+        <h2>Curiosity DNA</h2>
+        <span class="count">14 modules</span>
+      </div>
+
+      <p>The DNA of every bot (plan: <code>docs/plans/curiosity-navigator-plan.md</code>; cycle walkthrough in
+        <a href="agent-loop.html#curiosity">Agent Loop &sect; Curiosity DNA</a>; config in
+        <a href="configuration.html#curiosity">CuriosityConfigSchema</a>). Six genes (curious, compounding,
+        self-directed, captivating, honest, bold), six limit dials per bot and a floor no dial unlocks. On by
+        default; <code>bots[].agentLoop.curiosity.enabled: false</code> turns it off. State lives in the bot's
+        soul dir and travels with the export: <code>KNOWLEDGE.json</code>, <code>NAVIGATOR.json</code>,
+        <code>TASTE.json</code>, <code>DISPATCHES.jsonl</code>. The agent loop only calls the runner; no curiosity
+        step can fail a cycle.</p>
+
+      <div class="module-section" id="curiosity-package">
+        <h3>src/bot/curiosity/</h3>
+        <div class="file-path">src/bot/curiosity/*.ts &middot; ~3,360 lines</div>
+        <p class="responsibility">
+          Knowledge map, frontier, navigator, directive decay, dispatch editor and taste model. Pure functions
+          everywhere except <code>store.ts</code> (filesystem), <code>extractor.ts</code> /
+          <code>navigator.ts</code> / <code>dispatch.ts</code> (LLM calls on the planner backend),
+          <code>runner.ts</code> (orchestration) and <code>service.ts</code> (facade). Every curiosity LLM call is
+          logged to the LLM query log (<code>llm-query-log.ts</code>) with caller <code>curiosity:navigator</code>,
+          <code>curiosity:extractor</code> or <code>curiosity:editor</code>; tenant usage metering does not count
+          them yet.
+        </p>
+        <table>
+          <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td><code>types.ts</code></td><td>Shared types: <code>LimitDials</code> (<code>topic</code>, <code>purpose</code>, <code>instructions</code>, <code>method</code>, <code>capability</code>, <code>identity</code> &times; <code>closed | ask | open</code>), <code>ResolvedCuriosity</code>, <code>KnowledgeMap</code> / <code>KnowledgeTopic</code> / <code>FrontierItem</code>, <code>NavigatorState</code> / <code>Directive</code> / <code>Direction</code> / <code>CycleTopicEntry</code>, <code>Dispatch</code> / <code>TasteProfile</code></td></tr>
+            <tr><td><code>config.ts</code></td><td><code>CURIOSITY_PRESETS</code> (<code>focused</code> / <code>explorer</code> / <code>wild</code>), <code>CURIOSITY_DEFAULTS</code>, <code>resolveCuriosity(global, bot, curiosityTrait)</code> (defaults &rarr; preset &rarr; global dials &rarr; bot dials; the trait scales <code>exploreRatio</code> 0.6&times;&ndash;1.4&times;, cap 0.6), <code>evaluateFrontierItem</code> (distance &ge; 2 crosses <code>topic</code>, no bridge crosses <code>purpose</code>; <code>closed</code> blocks, <code>ask</code> needs an operator 👍)</td></tr>
+            <tr><td><code>knowledge-map.ts</code></td><td>Compounding gene: <code>mergeExtraction</code> (dedupe at <code>textSimilarity &ge; 0.8</code>, depth from finding count), <code>pruneKnowledgeMap</code> (<code>KNOWLEDGE_CAPS</code>), <code>markFrontier</code>, <code>setFrontierSignal</code>, <code>renderKnowledgeForPrompt</code></td></tr>
+            <tr><td><code>store.ts</code></td><td><code>CuriosityStore(soulDir)</code>: atomic JSON (tmp + rename), JSONL dispatches trimmed to the newest 500 (<code>DISPATCH_KEEP</code>); reads never throw</td></tr>
+            <tr><td><code>cycle.ts</code></td><td><code>computeTopicConcentration</code>, <code>decideCycleMode</code> (concentration &gt; <code>maxTopicShare</code> and no-surprise streak, both only when <code>cyclesSinceExplore &ge; 1</code>; budget every 1/ratio cycles, half budget when the operator is silent), <code>recordCycle</code> (an explore cycle resets <code>noSurpriseStreak</code>), <code>noteCycle</code> (idle / failed-extraction cycles still advance the explore counter), <code>selectFrontierItem</code> (<code>open</code> and <code>exploring</code> items, the latter +0.1; + <code>ask</code> proposals), <code>renderFrontierForPrompt</code> (in-progress items tagged "in progress")</td></tr>
+            <tr><td><code>directives.ts</code></td><td>Operator instructions with decay: active until <code>directiveHalfLifeOutputs</code> outputs or <code>directiveHalfLifeDays</code>, then served (context); a repeated instruction re-anchors. <code>renderDirectivesForPrompt</code> clips each directive to 300 chars and the block to 2,500 (1,500 inside the curiosity block)</td></tr>
+            <tr><td><code>taste.ts</code></td><td>Taste from 👍 / 👎 / more: <code>applySignal</code> (cadence &times;0.75 / &times;1.25), <code>applyIgnored</code> (sent dispatch with no signal in 48 h &rArr; &times;1.5), <code>likedTopicScores</code>, <code>renderTasteForPrompt</code></td></tr>
+            <tr><td><code>dna.ts</code></td><td><code>buildDnaSection(limits, exploration?)</code>: genes, dials with their per-level meaning (<code>DIAL_MEANINGS</code>), the floor (<code>FLOOR_RULES</code>) and the EXPLORATION CYCLE mandate</td></tr>
+            <tr><td><code>extractor.ts</code></td><td>Post-cycle LLM: topic, findings with evidence, surprises, open questions, frontier, served directives, dispatch candidate</td></tr>
+            <tr><td><code>navigator.ts</code></td><td>Layer above the strategist (every <code>navigatorEvery</code>, default 1 d; after a failed attempt, stamped in <code>lastNavigatorAttemptAt</code>, it backs off min(<code>navigatorEvery</code>, 2 h) &mdash; <code>NAVIGATOR_RETRY_MS</code>): retrospective &rarr; direction with 2&ndash;3 explore/exploit bets, frontier add/drop, served directives, interests per the <code>identity</code> dial, goal ops. Temperature 0.7 &rarr; 0.3</td></tr>
+            <tr><td><code>dispatch.ts</code></td><td>What the operator receives: format (hook &rarr; why it matters &rarr; evidence &rarr; what to do), hard LLM editor (<code>0.5&middot;insight + 0.3&middot;novelty + 0.2&middot;backed</code>; backed &lt; 0.5 &rArr; drop), <code>findHypeWords</code> (es/en) penalty, <code>decideDispatch</code>, digest, dial-crossing proposals</td></tr>
+            <tr><td><code>runner.ts</code></td><td><code>beginCuriosityCycle</code> (directives, decay, cadence, navigator when due, explore/exploit, DNA block for strategist + planner, capped at <code>CURIOSITY_BLOCK_MAX_CHARS</code> = 6,000) and <code>finishCuriosityCycle</code> (extractor &rarr; map &rarr; cycle &rarr; at most one dispatch, chained insight &rarr; interest proposal &rarr; frontier proposal &rarr; digest; digest at most once per <code>maxIntervalHours</code>; with the cadence closed an insight is held with a heuristic score and no editor call). Both run under <code>CuriosityService.runExclusive</code> and re-read state after every LLM await; begin is cancellable (<code>isCancelled</code>: nothing is written after the agent loop gives up). Never throws</td></tr>
+            <tr><td><code>loop-wiring.ts</code></td><td><code>createOperatorDispatchDeliverer</code> &rarr; <code>DispatchDelivery = 'telegram' | 'inbox' | false</code> (own Telegram instance &rarr; any fleet instance &rarr; <code>operator.telegramChatId</code>; without a Telegram route the dashboard inbox is the channel; tenant bots (<code>isTenantBot</code>) are always inbox-only; recorded as <code>deliveredVia</code>), <code>createFleetDispatchLimiter</code> (rolling-24 h cap the same size as <code>operator.proactiveDailyCap</code>, its own in-memory <code>ProactiveThrottle</code> &mdash; not shared with <code>send_proactive_message</code>, reset on restart)</td></tr>
+            <tr><td><code>service.ts</code></td><td><code>CuriosityService</code> (<code>BotManager.getCuriosityService()</code>): <code>snapshot</code>, <code>signalDispatch</code> (teaches taste; repeat clicks of the same signal don't compound; on proposals approves/drops the frontier item, and approving an identity proposal adds its <code>interest</code> to the knowledge map), <code>signalFrontier</code>, <code>signalDirection</code>, <code>recordDirective</code>, <code>recordOperatorMessage</code> (operator Telegram chat or dashboard thread; ignores &lt; 15 chars and bots with curiosity off), <code>runExclusive(botId, fn)</code> (per-bot lock). Resolves the soul dir from the live loader or with the <code>startBot</code> resolution</td></tr>
+          </tbody>
+        </table>
+        <h4>Dependencies</h4>
+        <p><code>../agent-strategist</code>, <code>../agent-loop-utils</code>, <code>../llm-json-parser</code>, <code>../../core/llm-client</code>, <code>../../config</code>, <code>../../logger</code>, <code>../../hygiene/text-utils</code>, <code>../../tools/send-proactive-message</code> (<code>ProactiveThrottle</code>); consumed by <code>agent-loop.ts</code>, <code>bot-manager.ts</code> and <code>src/web/routes/curiosity.ts</code></p>
+      </div>
+
+      <!-- ================================================================ -->
       <!-- FACADE -->
       <!-- ================================================================ -->
       <div class="category-header">
@@ -1341,6 +1415,8 @@
             <tr><td>submitAgentFeedback</td><td>botId, content</td><td>Submits operator feedback and wakes agent loop</td></tr>
             <tr><td>getProductionsService</td><td>(none)</td><td>Returns ProductionsService for web API</td></tr>
             <tr><td>getKarmaService</td><td>(none)</td><td>Returns KarmaService for web API</td></tr>
+            <tr><td>getCuriosityService</td><td>(none)</td><td>Returns the <a href="#curiosity">CuriosityService</a> (knowledge map, navigator, dispatches, taste) for <code>/api/curiosity</code>. Built in the constructor with a soul-dir resolver (live loader, else the <code>startBot</code> resolution) and the global/per-bot <code>agentLoop.curiosity</code> + curiosity trait. Wires <code>ctx.recordOperatorMessage</code> for the Telegram pipeline; there is no <code>human_inbound</code> listener</td></tr>
+            <tr><td>recordOperatorMessage</td><td>botId, text</td><td>Records a message the operator typed (dashboard conversation thread: <code>POST /api/conversations/:botId/:id/messages</code>) as a curiosity directive; returns <code>false</code> for &lt; 15 chars or curiosity off</td></tr>
             <tr><td>sendVisibleMessage</td><td>chatId, sourceBotId, targetBotId, message</td><td>Delegates to CollaborationManager</td></tr>
             <tr><td>initiateCollaboration</td><td>sourceBotId, targetBotId, topic, maxTurns?</td><td>Delegates to CollaborationManager</td></tr>
             <tr><td>handleCronInstruction</td><td>botId, chatId, instruction</td><td>Runs a cron <em>instruction</em> job as a synthetic inbound message through the conversation pipeline. No longer requires the bot's own grammy instance &mdash; see below</td></tr>
@@ -1646,7 +1722,8 @@ tenants/...            tenant tree minus per-bot soul directories (carried by ag
         <p>
           <code>src/bot/llm-query-log.ts</code> &mdash; Persists LLM query entries to daily JSONL
           files for full traceability. Each entry records timestamp, botId, caller
-          (conversation/planner/strategist/executor/memory_flush/compaction/topic_guard),
+          (conversation/planner/strategist/executor/memory_flush/compaction/topic_guard, plus
+          <code>curiosity:navigator</code> / <code>curiosity:extractor</code> / <code>curiosity:editor</code>),
           model, backend, temperature, token counts, duration, attempts, success/error.
           API: <code>append()</code>, <code>getEntries()</code>, <code>getAvailableDates()</code>,
           <code>clearForBot()</code>. Exposed via <code>GET /api/agents/:id/llm-log</code>.

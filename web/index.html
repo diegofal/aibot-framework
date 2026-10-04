@@ -4,42 +4,47 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AIBot Framework</title>
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0b0d12">
+  <script>
+    // Theme bootstrap: stamp the stored choice before CSS paints so a reload
+    // never flashes the wrong theme. Same key as web/ui/theme.js (THEME_KEY).
+    (function () {
+      try {
+        var t = localStorage.getItem('aibot.theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
   <div id="layout">
+    <header id="topbar">
+      <button type="button" id="nav-toggle" class="icon-btn" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">☰</button>
+      <div class="logo">AIBot</div>
+      <div class="nav-status" id="topbar-status">--</div>
+    </header>
+    <div id="drawer-backdrop"></div>
     <nav id="sidebar">
       <div class="logo">AIBot</div>
-      <a href="#/" class="nav-link active" data-page="">Dashboard</a>
-      <a href="#/activity" class="nav-link" data-page="activity">Activity</a>
-      <a href="#/inbox" class="nav-link" data-page="inbox">Inbox <span id="inbox-badge" class="inbox-badge" style="display:none"></span></a>
-      <a href="#/permissions" class="nav-link" data-page="permissions">Permissions <span id="permissions-badge" class="inbox-badge" style="display:none"></span></a>
-      <a href="#/agents" class="nav-link" data-page="agents">Agents</a>
-      <a href="#/stats" class="nav-link" data-page="stats">Stats &amp; Behaviour</a>
-      <a href="#/sessions" class="nav-link" data-page="sessions">Sessions</a>
-      <a href="#/cron" class="nav-link" data-page="cron">Cron Jobs</a>
-      <a href="#/skills" class="nav-link" data-page="skills">Skills</a>
-      <a href="#/tools" class="nav-link nav-link-admin" data-page="tools">Tools</a>
-      <a href="#/tool-runner" class="nav-link nav-link-admin" data-page="tool-runner">Tool Runner</a>
-      <a href="#/productions" class="nav-link" data-page="productions">Productions</a>
-      <a href="#/conversations" class="nav-link" data-page="conversations">Conversations</a>
-      <a href="#/feedback" class="nav-link" data-page="feedback">Feedback <span id="feedback-badge" class="inbox-badge" style="display:none"></span></a>
-      <a href="#/karma" class="nav-link" data-page="karma">Karma</a>
-
-      <a href="#/agent-proposals" class="nav-link" data-page="agent-proposals">Agent Proposals <span id="agent-proposals-badge" class="inbox-badge" style="display:none"></span></a>
-      <a href="#/integrations" class="nav-link nav-link-admin" data-page="integrations">Integrations</a>
-      <div class="nav-separator nav-link-baas" style="display:none"></div>
-      <a href="#/baas/templates" class="nav-link nav-link-baas nav-link-baas-admin" data-page="baas/templates" style="display:none">Templates</a>
-      <a href="#/baas/customizations" class="nav-link nav-link-baas" data-page="baas/customizations" style="display:none">Customizations</a>
-      <a href="#/baas/webhooks" class="nav-link nav-link-baas" data-page="baas/webhooks" style="display:none">Webhooks</a>
-      <a href="#/baas/analytics" class="nav-link nav-link-baas" data-page="baas/analytics" style="display:none">Analytics</a>
-      <a href="#/baas/tenants" class="nav-link nav-link-baas nav-link-baas-admin" data-page="baas/tenants" style="display:none">Tenants</a>
-      <a href="#/settings" class="nav-link nav-link-admin" data-page="settings">Settings</a>
+      <!-- Seven areas, rendered by app.js from web/nav-routes.js (visibility rules included) -->
+      <div id="nav-areas" class="nav-areas"></div>
       <div class="nav-spacer"></div>
-      <div class="nav-status" id="nav-status">--</div>
+      <div class="nav-foot">
+        <button type="button" class="palette-hint" data-palette-open aria-label="Open the command palette (Ctrl+K)"><span>Search / jump</span><kbd>⌘K</kbd></button>
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch theme">☼ Light</button>
+        <div class="nav-status" id="nav-status">--</div>
+      </div>
     </nav>
-    <main id="content"></main>
+    <main id="content">
+      <div id="area-nav"></div>
+      <div id="page"></div>
+    </main>
   </div>
   <div id="modal-overlay" class="modal-overlay hidden">
     <div id="modal" class="modal"></div>

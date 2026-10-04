@@ -41,6 +41,8 @@ export interface SeenUser {
  */
 export interface BotContext {
   readonly config: Config;
+  /** Curiosity: record a message from the operator as a navigator directive (operator surfaces only). */
+  readonly recordOperatorMessage?: (botId: string, text: string) => void;
   readonly ollamaClient: OllamaClient;
   readonly sessionManager: SessionManager;
   readonly skillRegistry: SkillRegistry;

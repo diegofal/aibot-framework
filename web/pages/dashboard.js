@@ -1,3 +1,5 @@
+import { confirmDialog, emptyState, showToast } from '../ui/index.js';
+import { activityCell, loopStateError, selectionSummary } from './dashboard-helpers.js';
 import { api, escapeHtml, timeAgo } from './shared.js';
 
 function formatDuration(ms) {
@@ -215,13 +217,26 @@ function attachRetryListeners(container, results) {
 }
 
 export async function renderDashboard(el) {
-  el.innerHTML = '<div class="page-title">Dashboard</div><p class="text-dim">Loading...</p>';
+  el.innerHTML = '<div class="page-title">Agent loop</div><p class="text-dim">Loading...</p>';
 
   const [loopState, statusData, inboxData] = await Promise.all([
     api('/api/agent-loop'),
     api('/api/status'),
     api('/api/ask-human/count'),
   ]);
+
+  const loadError = loopStateError(loopState);
+  if (loadError) {
+    el.innerHTML = `<div class="page-title">Agent loop</div>${emptyState({
+      icon: '!',
+      title: 'Could not load the agent loop',
+      hint: loadError,
+      action: '<button class="btn btn-sm" data-action="retry">Retry</button>',
+      class: 'ops-error-state',
+    })}`;
+    el.querySelector('[data-action="retry"]')?.addEventListener('click', () => renderDashboard(el));
+    return;
+  }
 
   const enabledBadge = loopState.enabled
     ? '<span class="badge badge-running">Enabled</span>'
@@ -246,12 +261,12 @@ export async function renderDashboard(el) {
     inboxCount > 0
       ? `<div class="inbox-pending-banner">
         <span>Pending Input (${inboxCount}) — Bots are waiting for your input.</span>
-        <a href="#/inbox" class="btn btn-sm">View Inbox</a>
+        <a href="#/needs/inbox" class="btn btn-sm">View Inbox</a>
       </div>`
       : '';
 
-    el.innerHTML = `
-      <div class="page-title">Dashboard</div>
+  el.innerHTML = `
+      <div class="page-title">Agent loop</div>
 
       ${inboxBanner}
 
@@ -279,7 +294,7 @@ export async function renderDashboard(el) {
             ? `
         <div class="text-dim text-sm mb-16" style="font-weight:500">Bot Schedules <span style="font-weight:400">— tick the bots to run on the next click of Run Now; leave all blank to run every running bot.</span></div>
         <table id="loop-bot-table" class="results-table" style="margin-bottom:16px">
-          <thead><tr><th><span class="text-dim text-sm" style="font-weight:500">Run</span><br><a href="#" id="loop-select-all" style="text-decoration:none">All</a> / <a href="#" id="loop-select-none" style="text-decoration:none">None</a></th><th>Bot</th><th>Mode</th><th>Activity</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Retries</th><th>Strategist</th></tr></thead>
+          <thead><tr><th><span class="text-dim text-sm" style="font-weight:500">Run</span><br><a href="#" id="loop-select-all" style="text-decoration:none">All</a> / <a href="#" id="loop-select-none" style="text-decoration:none">None</a><div class="loop-selection text-dim" id="loop-selection" aria-live="polite">${escapeHtml(selectionSummary(0, loopState.botSchedules.length))}</div></th><th>Bot</th><th>Mode</th><th>Activity</th><th>Next Run</th><th>Last Run</th><th>Next Check-In</th><th>Last Status</th><th>Retries</th><th>Strategist</th></tr></thead>
           <tbody>
             ${loopState.botSchedules
               .map((s) => {
@@ -296,15 +311,12 @@ export async function renderDashboard(el) {
                   : s.nextRunAt
                     ? timeAgo(s.nextRunAt, true)
                     : '--';
-                const activityCell = s.isExecutingLoop
-                  ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing</span>'
-                  : '<span class="text-dim">Idle</span>';
                 return `
-              <tr>
+              <tr data-bot-id="${escapeHtml(s.botId)}">
                 <td class="checkbox-group" style="padding:6px 12px"><label style="padding:2px 8px;font-size:12px"><input type="checkbox" value="${escapeHtml(s.botId)}"></label></td>
                 <td>${escapeHtml(s.botName)}</td>
                 <td>${modeBadge(s.mode || 'periodic')}</td>
-                <td>${activityCell}</td>
+                <td data-col="activity">${activityCell(s.isExecutingLoop)}</td>
                 <td class="text-dim">${nextRunCell}</td>
                 <td class="text-dim">${s.lastRunAt ? timeAgo(s.lastRunAt) : 'Never'}</td>
                 <td class="text-dim">${s.nextCheckIn ? escapeHtml(s.nextCheckIn) : '--'}</td>
@@ -350,11 +362,15 @@ export async function renderDashboard(el) {
   runBtn.addEventListener('click', async () => {
     runBtn.disabled = true;
     runBtn.textContent = 'Running...';
+    // Keep the Activity column live while this run executes.
+    startAutoRefresh();
     const resultsDiv = document.getElementById('loop-results');
 
     // Gather selected bot ids from the checkbox group. Empty selection means
     // "run every running periodic bot" (server default).
-    const selected = [...document.querySelectorAll('#loop-bot-table input[type="checkbox"]:checked')].map((b) => b.value);
+    const selected = [
+      ...document.querySelectorAll('#loop-bot-table input[type="checkbox"]:checked'),
+    ].map((b) => b.value);
     const body = selected.length > 0 ? { botIds: selected } : undefined;
     const scopeText = selected.length > 0 ? `${selected.length} bot(s)` : 'all bots';
     resultsDiv.innerHTML = `<p class="text-dim text-sm">Executing agent loop for ${escapeHtml(scopeText)}...</p>`;
@@ -379,9 +395,17 @@ export async function renderDashboard(el) {
   // Toggle checkbox styling — the CSS hides the real input and styles the
   // label, so the `.checked` class on the parent label must be kept in sync
   // with the input state for the selection to be visible to the user.
-  document.querySelectorAll('#loop-bot-table input[type="checkbox"]').forEach((inp) => {
+  const loopBoxes = () => [...document.querySelectorAll('#loop-bot-table input[type="checkbox"]')];
+  const updateSelection = () => {
+    const label = document.getElementById('loop-selection');
+    if (!label) return;
+    const boxes = loopBoxes();
+    label.textContent = selectionSummary(boxes.filter((b) => b.checked).length, boxes.length);
+  };
+  loopBoxes().forEach((inp) => {
     inp.addEventListener('change', () => {
       inp.parentElement.classList.toggle('checked', inp.checked);
+      updateSelection();
     });
   });
 
@@ -391,6 +415,7 @@ export async function renderDashboard(el) {
       b.checked = checked;
       b.parentElement.classList.toggle('checked', checked);
     });
+    updateSelection();
   }
   document.getElementById('loop-select-all')?.addEventListener('click', (e) => {
     e.preventDefault();
@@ -405,14 +430,19 @@ export async function renderDashboard(el) {
   const stopSafeBtn = document.getElementById('btn-stop-safe');
   if (stopSafeBtn) {
     stopSafeBtn.addEventListener('click', async () => {
-      if (!confirm('Gracefully stop all bots? Running cycles will finish before stopping.')) return;
+      const ok = await confirmDialog({
+        title: 'Gracefully stop all bots?',
+        message: 'Running cycles finish before the bots stop.',
+        confirmLabel: 'Stop all safely',
+      });
+      if (!ok) return;
       stopSafeBtn.disabled = true;
       stopSafeBtn.textContent = 'Draining...';
       try {
         const res = await api('/api/agent-loop/stop-safe', { method: 'POST' });
-        if (res.error) alert(`Graceful stop failed: ${res.error}`);
+        if (res.error) showToast(`Graceful stop failed: ${res.error}`, { tone: 'danger' });
       } catch (err) {
-        alert(`Graceful stop failed: ${err.message}`);
+        showToast(`Graceful stop failed: ${err.message}`, { tone: 'danger' });
       }
       renderDashboard(el);
     });
@@ -431,20 +461,14 @@ export async function renderDashboard(el) {
           renderDashboard(el);
           return;
         }
-        // Update schedules table in-place
-        const tbody = el.querySelector('.results-table:first-of-type tbody');
-        if (tbody && fresh.botSchedules) {
+        // Update the Activity cell in place, matched by bot id (the first cell
+        // is the selection checkbox, so positional matching wrote the wrong column).
+        const table = document.getElementById('loop-bot-table');
+        if (table && Array.isArray(fresh.botSchedules)) {
           for (const s of fresh.botSchedules) {
-            // Find matching row by bot name (first cell)
-            for (const row of tbody.querySelectorAll('tr')) {
-              const cells = row.querySelectorAll('td');
-              if (cells.length > 2 && cells[0].textContent === s.botName) {
-                cells[2].innerHTML = s.isExecutingLoop
-                  ? '<span style="display:inline-flex;align-items:center;gap:6px"><span class="processing-pulse"></span> Executing</span>'
-                  : '<span class="text-dim">Idle</span>';
-                break;
-              }
-            }
+            const row = table.querySelector(`tr[data-bot-id="${CSS.escape(String(s.botId))}"]`);
+            const cell = row?.querySelector('td[data-col="activity"]');
+            if (cell) cell.innerHTML = activityCell(s.isExecutingLoop);
           }
         }
       } catch (_) {

@@ -288,6 +288,8 @@ export interface HumanInboundEvent {
   chatId: string;
   userId?: string;
   timestamp: number;
+  /** Message text (clipped) — lets the curiosity navigator track operator instructions */
+  text?: string;
 }
 
 export type FeedbackSource = 'ask_human' | 'agent_feedback' | 'human_message';

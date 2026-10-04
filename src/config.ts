@@ -64,6 +64,60 @@ export const LoopDetectionConfigSchema = z
   })
   .default({});
 
+const DialLevelSchema = z.enum(['closed', 'ask', 'open']);
+
+/** Six limit dials — each optional so a preset fills whatever is not set. */
+const CuriosityLimitsSchema = z
+  .object({
+    topic: DialLevelSchema.optional(),
+    purpose: DialLevelSchema.optional(),
+    instructions: DialLevelSchema.optional(),
+    method: DialLevelSchema.optional(),
+    capability: DialLevelSchema.optional(),
+    identity: DialLevelSchema.optional(),
+  })
+  .optional();
+
+const CuriosityDispatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxChars: z.number().int().min(200).max(4000).optional(),
+    minEditorScore: z.number().min(0).max(1).optional(),
+    baseIntervalHours: z.number().min(1).max(24 * 30).optional(),
+    minIntervalHours: z.number().min(1).max(24 * 30).optional(),
+    maxIntervalHours: z
+      .number()
+      .min(1)
+      .max(24 * 30)
+      .optional(),
+  })
+  .optional();
+
+/**
+ * Curiosity DNA (docs/plans/curiosity-navigator-plan.md). Every field is
+ * optional at both levels; `resolveCuriosity` (src/bot/curiosity/config.ts)
+ * layers defaults → global → preset → per-bot → curiosity trait.
+ */
+export const CuriosityConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    preset: z.enum(['focused', 'explorer', 'wild']).optional(),
+    limits: CuriosityLimitsSchema,
+    exploreRatio: z.number().min(0).max(0.6).optional(),
+    maxTopicShare: z.number().min(0.2).max(1).optional(),
+    topicWindow: z.number().int().min(3).max(30).optional(),
+    directiveHalfLifeOutputs: z.number().int().min(1).max(50).optional(),
+    directiveHalfLifeDays: z.number().min(0.5).max(90).optional(),
+    navigatorEvery: z
+      .string()
+      .regex(/^\d+\s*(m|h|d)$/i)
+      .optional(),
+    noSurpriseStreak: z.number().int().min(1).max(20).optional(),
+    dispatch: CuriosityDispatchSchema,
+  })
+  .optional();
+export type CuriosityConfig = z.infer<typeof CuriosityConfigSchema>;
+
 export const GlobalAgentLoopConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -100,8 +154,16 @@ export const GlobalAgentLoopConfigSchema = z
       .object({
         enabled: z.boolean().default(true),
         threshold: z.number().int().min(1).max(50).default(3),
-        cooldownMs: z.number().int().positive().default(30 * 60_000),
-        weeklyQuotaCooldownMs: z.number().int().positive().default(6 * 3_600_000),
+        cooldownMs: z
+          .number()
+          .int()
+          .positive()
+          .default(30 * 60_000),
+        weeklyQuotaCooldownMs: z
+          .number()
+          .int()
+          .positive()
+          .default(6 * 3_600_000),
       })
       .default({}),
     /** Tool loop detection for agent-loop executor phase */
@@ -114,6 +176,8 @@ export const GlobalAgentLoopConfigSchema = z
         maxUsers: z.number().int().min(1).max(20).default(5),
       })
       .default({}),
+    /** Fleet-wide curiosity DNA defaults; per-bot `agentLoop.curiosity` wins */
+    curiosity: CuriosityConfigSchema,
   })
   .default({});
 
@@ -169,9 +233,16 @@ export const BotAgentLoopOverrideSchema = z
          * How far back the gate looks for outputs and feedback. Matches the
          * 7-day retention of `BotSchedule.feedbackEvents`.
          */
-        lookbackHours: z.number().int().min(1).max(24 * 30).default(168),
+        lookbackHours: z
+          .number()
+          .int()
+          .min(1)
+          .max(24 * 30)
+          .default(168),
       })
       .optional(),
+    /** Curiosity DNA for this bot: limit dials, explore budget, navigator, dispatch */
+    curiosity: CuriosityConfigSchema,
     /** Standing directives: ongoing behavioral instructions injected into strategist/planner/executor prompts */
     directives: z.array(z.string().max(500)).max(10).optional(),
     /** Preset directive bundles — predefined behavioral instruction sets */
@@ -343,6 +414,8 @@ export const BotConfigSchema = z.object({
   soulDir: z.string().optional(),
   workDir: z.string().optional(),
   description: z.string().optional(),
+  /** Provenance stamp: the agent preset (`src/bot/presets.ts`) this bot was created from, if any. */
+  preset: z.string().optional(),
   disabledTools: z.array(z.string()).optional(),
   disabledSkills: z.array(z.string()).default([]),
   /** Per-bot max tool call rounds for conversation pipeline (overrides global webTools.maxToolRounds) */

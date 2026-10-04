@@ -70,7 +70,6 @@ function makeBot(overrides: Partial<BotConfig> = {}): BotConfig {
   };
 }
 
-
 function makeConfig(bots: BotConfig[] = [makeBot()]): Config {
   return {
     bots,
@@ -219,6 +218,23 @@ describe('BotExportService', () => {
       expect(archive.paths().some((path) => path.includes('.versions'))).toBe(false);
     });
 
+    it('includes the uploaded avatar in soul/ (session S4)', async () => {
+      const bot = makeBot();
+      const config = makeConfig([bot]);
+      const soulDir = join(SOUL_DIR, 'test-bot');
+      mkdirSync(soulDir, { recursive: true });
+      writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Test Bot\n');
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7, 7]);
+      writeFileSync(join(soulDir, 'avatar.png'), png);
+
+      const service = new BotExportService(config, CONFIG_PATH, createMockLogger());
+      const archive = extract(await service.exportBot('test-bot'));
+      expect(archive.has('soul/avatar.png')).toBe(true);
+      expect(Buffer.from(archive.text('soul/avatar.png'), 'utf-8').length).toBeGreaterThan(0);
+      const { files } = unpackTarGz(await service.exportBot('test-bot'));
+      expect(files.get('soul/avatar.png')).toEqual(png);
+    });
+
     it('throws for non-existent bot', async () => {
       const config = makeConfig([]);
       const logger = createMockLogger();
@@ -362,6 +378,28 @@ describe('BotExportService', () => {
       expect(bots[0].name).toBe('Imported Bot');
       expect(bots[0].token).toBe('');
       expect(bots[0].enabled).toBe(false);
+    });
+
+    it('restores the avatar next to the soul files (session S4)', async () => {
+      const bot = makeBot({ id: 'faced-bot', name: 'Faced Bot' });
+      const config = makeConfig([bot]);
+      const soulDir = join(SOUL_DIR, 'faced-bot');
+      mkdirSync(soulDir, { recursive: true });
+      writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Faced Bot\n');
+      const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+      writeFileSync(join(soulDir, 'avatar.jpg'), jpg);
+      const buffer = await new BotExportService(config, CONFIG_PATH, createMockLogger()).exportBot(
+        'faced-bot'
+      );
+
+      removeTempDir(TEST_DIR);
+      mkdirSync(TEST_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2), 'utf-8');
+      writeFileSync(BOTS_PATH, JSON.stringify([], null, 2), 'utf-8');
+      const service = new BotExportService(makeConfig([]), CONFIG_PATH, createMockLogger());
+      const result = await service.importBot(buffer, { newBotId: 'faced-copy' });
+      expect(result.botId).toBe('faced-copy');
+      expect(readFileSync(join(SOUL_DIR, 'faced-copy', 'avatar.jpg'))).toEqual(jpg);
     });
 
     it('uses original botId/name when no overrides given', async () => {
@@ -660,7 +698,7 @@ describe('BotExportService', () => {
   });
 
   describe('Telegram sessions', () => {
-    it('includes this bot\'s sessions by default and excludes them when opted out', async () => {
+    it("includes this bot's sessions by default and excludes them when opted out", async () => {
       const bot = makeBot();
       const config = makeConfig([bot]);
       writeSoul('test-bot');
@@ -710,7 +748,7 @@ describe('BotExportService', () => {
       );
     });
 
-    it('merges imported sessions.json without clobbering another bot\'s keys', async () => {
+    it("merges imported sessions.json without clobbering another bot's keys", async () => {
       const source = makeBot({ id: 'source-bot' });
       writeSoul('source-bot');
       plantSessions('source-bot');
@@ -744,7 +782,7 @@ describe('BotExportService', () => {
       expect(active['imported-bot:-100:111']).toBeDefined();
     });
 
-    it('overwrite replaces this bot\'s sessions and leaves others intact', async () => {
+    it("overwrite replaces this bot's sessions and leaves others intact", async () => {
       const bot = makeBot({ id: 'overwrite-bot' });
       writeSoul('overwrite-bot');
       plantSessions('overwrite-bot');
@@ -787,11 +825,10 @@ describe('BotExportService', () => {
       );
 
       const existing = makeBot({ id: 'overwrite-bot', token: 'keep-token' });
-      await new BotExportService(
-        makeConfig([existing]),
-        CONFIG_PATH,
-        createMockLogger()
-      ).importBot(exportBuffer, { overwrite: true });
+      await new BotExportService(makeConfig([existing]), CONFIG_PATH, createMockLogger()).importBot(
+        exportBuffer,
+        { overwrite: true }
+      );
 
       const merged = JSON.parse(readFileSync(join(SESSION_DIR, 'sessions.json'), 'utf-8'));
       expect(merged['bot:overwrite-bot:private:111']).toBeDefined();
@@ -815,9 +852,9 @@ describe('BotExportService', () => {
           join(SESSION_DIR, 'transcripts', 'overwrite-bot', 'bot-overwrite-bot-private-999.jsonl')
         )
       ).toBe(false);
-      expect(existsSync(join(SESSION_DIR, 'transcripts', 'bot-overwrite-bot-group-888.jsonl'))).toBe(
-        false
-      );
+      expect(
+        existsSync(join(SESSION_DIR, 'transcripts', 'bot-overwrite-bot-group-888.jsonl'))
+      ).toBe(false);
     });
 
     it('rewrites session keys, active-conversation keys, and transcript filenames for newBotId', async () => {

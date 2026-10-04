@@ -453,6 +453,8 @@ export function conversationsRoutes(deps: {
     }
 
     if (!inboxResolved) {
+      // The dashboard is an operator surface: the message steers the bot's curiosity.
+      botManager.recordOperatorMessage?.(botId, body.message.trim());
       message = conversationsService.addMessage(
         botId,
         id,

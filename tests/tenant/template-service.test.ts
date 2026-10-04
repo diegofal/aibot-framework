@@ -177,3 +177,74 @@ describe('TemplateService', () => {
     expect((extracted as any).tenantId).toBeUndefined();
   });
 });
+
+/**
+ * Built-in templates (session S7): the agent presets are exposed to tenants as
+ * read-only templates with stable ids. They live only in memory — never in
+ * templates.json — and cannot be edited or deleted.
+ */
+describe('TemplateService built-in templates', () => {
+  let service: TemplateService;
+  const builtin = {
+    id: 'preset:researcher',
+    name: 'Scout',
+    description: 'Researcher',
+    config: { name: 'Scout', skills: ['reddit'], agentLoop: { every: '6h', mode: 'periodic' } },
+  };
+
+  beforeEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    service = new TemplateService(TEST_DIR, makeLogger());
+  });
+  afterEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test('registerBuiltin makes the template visible in get/list with a stable id and builtin flag', () => {
+    const t = service.registerBuiltin(builtin);
+    expect(t.id).toBe('preset:researcher');
+    expect(t.builtin).toBe(true);
+    expect(t.version).toBe(1);
+    expect(t.createdBy).toBe('__builtin__');
+    expect(service.get('preset:researcher')?.config.skills).toEqual(['reddit']);
+    expect(service.list().map((x) => x.id)).toEqual(['preset:researcher']);
+  });
+
+  test('built-ins come first in list() and are never written to templates.json', () => {
+    service.registerBuiltin(builtin);
+    service.create('Mine', 'desc', { name: 'Mine' }, 'admin');
+    const ids = service.list().map((x) => x.id);
+    expect(ids[0]).toBe('preset:researcher');
+    expect(ids).toHaveLength(2);
+    const onDisk = JSON.parse(
+      require('node:fs').readFileSync(join(TEST_DIR, 'templates.json'), 'utf-8')
+    );
+    expect(onDisk.templates.map((x: { id: string }) => x.id)).toEqual([ids[1]]);
+    // A fresh service from the same dir does not carry the built-in until re-registered.
+    const again = new TemplateService(TEST_DIR, makeLogger());
+    expect(again.get('preset:researcher')).toBeUndefined();
+  });
+
+  test('built-ins refuse update and delete', () => {
+    service.registerBuiltin(builtin);
+    expect(service.update('preset:researcher', { name: 'X' })).toBeUndefined();
+    expect(service.delete('preset:researcher')).toBe(false);
+    expect(service.get('preset:researcher')?.name).toBe('Scout');
+  });
+
+  test('registering the same id twice replaces it; a user template cannot shadow a built-in', () => {
+    service.registerBuiltin(builtin);
+    service.registerBuiltin({ ...builtin, name: 'Scout v2' });
+    expect(service.list()).toHaveLength(1);
+    expect(service.get('preset:researcher')?.name).toBe('Scout v2');
+  });
+
+  test('instantiate works from a built-in and tracks the instance', () => {
+    service.registerBuiltin(builtin);
+    const bot = service.instantiate('preset:researcher', 'tenant-a', 'scout-1', 'tok');
+    expect(bot?.id).toBe('scout-1');
+    expect(bot?.skills).toEqual(['reddit']);
+    expect(bot?.agentLoop).toEqual({ every: '6h', mode: 'periodic' });
+    expect(service.getInstance('scout-1')?.templateId).toBe('preset:researcher');
+  });
+});

@@ -265,7 +265,7 @@
           <!-- web_fetch -->
           <div class="tool-card">
             <h4 class="tool-name">web_fetch</h4>
-            <div class="tool-desc">Fetch and read the contents of a web page. Returns plain text extracted from HTML. Includes SSRF protection against private/local addresses and a TTL cache.</div>
+            <div class="tool-desc">Fetch and read the contents of a web page. Returns plain text extracted from HTML. Includes SSRF protection against private/local addresses and a TTL cache. <strong>Failure classification:</strong> a non-OK response is classified by <code>classifyHttpFailure</code> into <code>failureKind</code> <code>blocked</code> (<code>cf-mitigated</code> &rarr; Cloudflare bot challenge, <code>x-vercel-mitigated</code> &rarr; Vercel security checkpoint, bare <code>403</code> / <code>429</code>), <code>not-found</code> (<code>404</code> / <code>410</code>) or <code>error</code>; the text returned to the LLM names the wall and what to do instead ("use the search snippet or a different source", "never construct or guess a path"). A host that answered with a wall is skipped for <code>blockedHostTtlMs</code> (default 1 h) without a network call. <code>ToolExecutor</code> does not charge karma for <code>blocked</code> failures; guessed URLs (<code>not-found</code>) are still charged. The description tells the model to pass only URLs seen in <code>web_search</code> results or fetched content.</div>
             <div class="tool-params">
               <strong>Parameters</strong>
               <ul>

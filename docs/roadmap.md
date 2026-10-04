@@ -1,7 +1,7 @@
 # Roadmap
 
 Documento vivo para trackear features futuras, ideas y estado de proyectos en progreso.
-Última actualización: 2026-08-21.
+Última actualización: 2026-10-03.
 
 ---
 
@@ -228,6 +228,41 @@ Documento vivo para trackear features futuras, ideas y estado de proyectos en pr
 - `config.operator.notifyOnAsk` está en el schema pero ningún código lo consume todavía.
 - `BotManager.getAgentLoopCircuitState()` existe pero ninguna ruta lo expone; la pestaña Infra deriva el estado de los backends del log y del llm-query-log, no del circuito.
 - El sweep de `ask_human` (`sweepStaleAskHumanQuestions`) corre en cada llamada a la tool para el bot que llama; no hay un timer periódico que cierre asks de bots que dejaron de preguntar.
+
+---
+
+## Proyecto 10 — Jarvis fleet: UI viva, uso simple, mundo exterior, A2A v1.0
+
+**Estado: PLANIFICADO (2026-09-13) — sin ejecutar**
+
+Plan completo, sesión por sesión, en [`docs/plans/jarvis-fleet-plan.md`](plans/jarvis-fleet-plan.md). Veinte sesiones encadenadas (S0–S19) en cuatro fases: **Life** (Agent Home, presencia, cara y voz), **Simple** (cola "Needs You", wizard de creación, presets, automatizaciones en lenguaje natural, PWA + push), **Outside world** (A2A v1.0 servidor y cliente, directorio federado, canal email, webhooks entrantes, voz entrante, Moltbook endurecido) y **Power** (cliente Anthropic nativo, tareas durables, exec en sandbox, sub-agentes). Cada sesión tiene prompt de arranque, dependencias, pasos, tests, criterio de salida y bloque de handoff; la tabla de estado al final del plan es la fuente de verdad.
+
+Absorbe las ideas "A2A Discovery Gateway" y "A2A Streaming" de abajo (sesiones S10/S11) y el item 4 (subagentes) de `roadmap-inteligencia.md` (sesión S19).
+
+---
+
+## Proyecto 11 — Curiosity Navigator: el ADN curioso de cada bot
+
+**Estado: IMPLEMENTADO (2026-10-03, sin commit todavía) — pendiente deploy (`docker compose up -d --build`)**
+
+Plan y tabla de estado en [`docs/plans/curiosity-navigator-plan.md`](plans/curiosity-navigator-plan.md) (pasos C0–C8). Motivación: ai-perfectionist hizo 18 producciones, 10 sobre su propio harness/tooling, siguiendo como única ruta un mensaje del operador de 15 días; el strategist sólo veía 7 días de logs crudos, la novedad se medía por tipo de acción y nunca por tópico, y los prompts premiaban la inacción.
+
+### Lo que se implementó
+
+- **C0 — plumbing de `ask_human`**: las respuestas del operador sobreviven reinicios y llegan al bot (nota durable en la memoria diaria).
+- **ADN** (`src/bot/curiosity/`, encendido por defecto; `agentLoop.curiosity.enabled: false` lo apaga): seis genes (curious, compounding, self-directed, captivating, honest, bold), seis diales de límites por bot (`topic`, `purpose`, `instructions`, `method`, `capability`, `identity` × `closed|ask|open`), presets `focused` / `explorer` (default) / `wild` y un piso que ningún dial desbloquea. Schema `CuriosityConfigSchema` en `agentLoop.curiosity` global y por bot.
+- **Knowledge map** (`KNOWLEDGE.json`) llenado por un extractor post-ciclo; **frontier** de preguntas abiertas rankeadas por sorpresa esperada; **explore/exploit** por concentración de tópico, racha sin sorpresa o budget (`exploreRatio`, escalado por el trait `curiosity`, doble con el operador en silencio).
+- **Navigator** diario sobre el strategist (`NAVIGATOR.json`): retrospectiva, dirección con 2–3 bets, frontier, limpieza de goals; tras un intento fallido reintenta a los min(`navigatorEvery`, 2 h) (`NAVIGATOR_RETRY_MS`). Directivas del operador con decay (`directiveHalfLifeOutputs` / `directiveHalfLifeDays`), sólo desde superficies del operador: ask_human respondido, feedback del dashboard, el chat privado de Telegram del operador (`operator.telegramChatId`, vía `ConversationPipeline.handleConversation` → `recordOperatorMessage`) y los mensajes que el operador escribe en un hilo de conversación del dashboard (`POST /api/conversations/:botId/:id/messages`). Mensajes < 15 caracteres se ignoran; usuarios públicos (REST/widget/WhatsApp/Discord) nunca dirigen.
+- **Dispatches** (`DISPATCHES.jsonl`, `TASTE.json`): formato claim → por qué te importa → evidencia → qué hacer, editor LLM duro + detector de hype, cadencia ganada con 👍/👎 (clicks repetidos no se acumulan), cadena insight → propuesta de interés → propuesta de frontier → digest (digest a lo sumo una vez por `maxIntervalHours`; con la cadencia cerrada el insight se guarda `held` con score heurístico, sin llamar al editor), cap diario de flota del mismo tamaño que `operator.proactiveDailyCap` pero con contador propio en memoria (no compartido con `send_proactive_message`, se resetea al reiniciar), entrega por Telegram vía cualquier instancia viva o el inbox del dashboard (`deliveredVia`; los bots de tenant sólo al inbox; lo entregado sólo al inbox no cuenta como ignorado). `DISPATCHES.jsonl` conserva los 500 más nuevos.
+- **Prompts**: PURPOSE ALIGNMENT en lugar de "if unsure, choose inaction"; el engagement check acepta EXPLORATION. La exploración ya no fuerza un pase del strategist: si el strategist corre por su cadencia en un ciclo de exploración recibe el bloque ADN y `skipAlignmentRetry`; si no corre, el focus del planner pasa a `EXPLORATION: <pregunta del frontier>`. Bloque ADN ≤ 6000 chars, directivas ≤ 1500 dentro de él (2500 sueltas), cada una recortada a 300. Begin/finish del runner bajo lock por bot, re-leyendo estado tras cada await; el begin es cancelable por timeout. Las llamadas LLM de curiosidad se registran en el LLM query log (`curiosity:navigator` / `curiosity:extractor` / `curiosity:editor`).
+- **Dashboard**: `/api/curiosity` (snapshot por bot, feed de dispatches, señales), sección **Mind** en Agent Home, tab **Dispatches** en Work (`#/work/dispatches`), sección **Curiosity** en el form de edición (validada por `validateCuriosityPatch`).
+
+### Lo que falta
+
+- **Deploy** y observación en vivo: costo real (extractor por ciclo no-idle, editor por candidato con cadencia abierta, navigator diario, todo en el backend del planner) y calidad de los primeros dispatches.
+- **Stats de curiosidad** (plan C7, no implementado): diversidad de tópicos en el tiempo, mezcla explore/exploit y tasa de aterrizaje de dispatches en `/api/stats` / `#/insights/stats`.
+- **👍/👎 desde Telegram**: no hay forma de calificar un dispatch desde Telegram — sólo desde el dashboard.
+- **Metering de tenant**: las llamadas LLM de curiosidad (navigator, extractor, editor) quedan en el LLM query log pero el usage metering por tenant todavía no las cuenta.
 
 ---
 

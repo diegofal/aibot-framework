@@ -1,17 +1,77 @@
-import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import { AVAILABLE_PRESETS } from '../../bot/agent-loop-prompts';
 import { resolveDirectives } from '../../bot/agent-scheduler';
+import {
+  type Personality,
+  type TelegramTokenCheck,
+  WIZARD_SOUL_FILES,
+  createTelegramTokenCheck,
+  describePersonality,
+  initialGoalsMarkdown,
+  isChannelKind,
+  isPersonality,
+  personalityToTraits,
+  seedTraits,
+  traitsBaseDirFor,
+  validateChannelToken,
+  writeWizardSoul,
+} from '../../bot/agent-wizard';
 import { BotDisabledError } from '../../bot/auto-start';
+import {
+  applyPreset,
+  getPreset,
+  listPresets,
+  presetGoalsMarkdown,
+  presetSummary,
+} from '../../bot/presets';
 import { DEFAULT_PERMISSIONS } from '../../bot/tool-permissions';
-import { type BotConfig, type Config, persistBots, resolveAgentConfig } from '../../config';
+import type { TraitSet } from '../../bot/trait-registers';
+import { CLAUDE_CLI_MODEL_OPTIONS } from '../../claude-cli';
+import {
+  type BotConfig,
+  type Config,
+  CuriosityConfigSchema,
+  persistBots,
+  resolveAgentConfig,
+  resolveAgentConfigWithTenant,
+} from '../../config';
 import type { SkillRegistry } from '../../core/skill-registry';
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
-import { generateSoul } from '../../soul-generator';
+import { type GeneratedSoul, type SoulGenerationInput, generateSoul } from '../../soul-generator';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+
+/**
+ * Injection points for the create-an-agent wizard (session S6). Production
+ * uses the real soul generator and a live Telegram `getMe`; tests pass both.
+ */
+export interface AgentWizardDeps {
+  generateSoul?: typeof generateSoul;
+  telegramCheck?: TelegramTokenCheck;
+}
+
+/** Wizard fields accepted by `POST /api/agents` on top of the legacy BotConfig subset. */
+export interface CreateAgentWizardBody {
+  purpose?: string;
+  personality?: Partial<Personality>;
+  traits?: Partial<TraitSet>;
+  quirks?: string;
+  language?: string;
+  emoji?: string;
+  generation?: { llmBackend?: 'ollama' | 'claude-cli'; model?: string };
+  greet?: boolean;
+  /** Preset id (S7): its defaults are merged under everything else in the body. */
+  preset?: string;
+}
+
+/** An id becomes a directory name under data/ and productions/, so it must be one safe path segment. */
+export const BOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+export function isSafeBotId(id: unknown): id is string {
+  return typeof id === 'string' && BOT_ID_PATTERN.test(id) && id !== '.' && id !== '..';
+}
 
 export function agentsRoutes(deps: {
   config: Config;
@@ -19,8 +79,26 @@ export function agentsRoutes(deps: {
   skillRegistry: SkillRegistry;
   configPath: string;
   logger: Logger;
+  wizard?: AgentWizardDeps;
 }) {
   const app = new Hono();
+  const soulGenerator = deps.wizard?.generateSoul ?? generateSoul;
+  const telegramCheck = deps.wizard?.telegramCheck ?? createTelegramTokenCheck();
+
+  /** Same resolution BotManager.startBot uses, so the wizard writes where the bot will read. */
+  function soulDirFor(bot: BotConfig): string {
+    return bot.tenantId && deps.config.multiTenant?.enabled
+      ? resolveAgentConfigWithTenant(deps.config, undefined, bot, bot.tenantId).soulDir
+      : resolveAgentConfig(deps.config, bot).soulDir;
+  }
+
+  /** Ollama-backed generate function when the caller asks for it; undefined = Claude CLI. */
+  function generateFnFor(generation?: CreateAgentWizardBody['generation']) {
+    if (generation?.llmBackend !== 'ollama') return undefined;
+    const ollamaClient = deps.botManager.getOllamaClient();
+    const model = generation.model || deps.config.ollama.models.primary;
+    return async (prompt: string) => (await ollamaClient.generate(prompt, { model })).text;
+  }
 
   /** Find a bot by id, respecting tenant scope. Returns null if not found or not accessible. */
   function findBotScoped(c: import('hono').Context, id: string): BotConfig | null {
@@ -59,6 +137,10 @@ export function agentsRoutes(deps: {
         ...(deps.config.ollama.models.fallbacks || []),
         'claude-cli',
       ],
+      // Claude CLI: the fleet-wide default model and the list the dashboard offers
+      // for a per-agent override (same list as Settings → Claude CLI).
+      claudeCliModel: deps.config.claudeCli?.model ?? '',
+      claudeCliModels: CLAUDE_CLI_MODEL_OPTIONS,
       systemPrompt: deps.config.conversation.systemPrompt,
       temperature: deps.config.conversation.temperature,
       maxHistory: deps.config.conversation.maxHistory,
@@ -88,6 +170,10 @@ export function agentsRoutes(deps: {
     });
   });
 
+  // Preset catalogue for the wizard's step 1 (S7). Registered before `/:id`
+  // for the same reason as `/defaults`.
+  app.get('/presets', (c) => c.json(listPresets().map(presetSummary)));
+
   // Get single agent
   app.get('/:id', (c) => {
     const bot = findBotScoped(c, c.req.param('id'));
@@ -100,14 +186,76 @@ export function agentsRoutes(deps: {
     });
   });
 
-  // Create new agent
+  // Validate a channel credential for the wizard's step 3. Shape-only for
+  // missing/placeholder tokens; a shaped Telegram token gets a live getMe
+  // (injected, so tests never reach Telegram). Discord/WhatsApp: shape only.
+  app.post('/validate-token', async (c) => {
+    const body = await c.req
+      .json<{ kind?: unknown; token?: unknown }>()
+      .catch(() => ({}) as { kind?: unknown; token?: unknown });
+    if (!isChannelKind(body.kind)) {
+      return c.json({ error: "kind must be 'telegram', 'whatsapp' or 'discord'" }, 400);
+    }
+    const token = typeof body.token === 'string' ? body.token : '';
+    const result = await validateChannelToken(body.kind, token, telegramCheck);
+    deps.logger.info(
+      { kind: result.kind, state: result.state, live: result.live },
+      'Token validated'
+    );
+    return c.json(result);
+  });
+
+  // Create new agent.
+  //
+  // Two payloads share this route. The legacy one (`{ id, name, token?, ... }`)
+  // is unchanged: a disabled, soul-less bot and a flat BotConfig reply. The
+  // wizard payload adds `purpose` (+ `personality` sliders or explicit `traits`,
+  // `quirks`, `language`, `emoji`, `generation`); the soul is generated
+  // synchronously and written together with GOALS.md and TRAITS.json BEFORE
+  // the bot is registered, so a failed generation leaves nothing behind. The
+  // wizard reply is `{ agent, soul: { generated, files, soulDir } }`.
   app.post('/', async (c) => {
-    const body = await c.req.json<Partial<BotConfig>>();
+    const raw = await c.req.json<Partial<BotConfig> & CreateAgentWizardBody>();
+    // A preset fills only what the caller left undefined (applyPreset is pure),
+    // so `{ id, preset }` is a complete wizard creation and a fully-typed wizard
+    // body with `preset` comes out unchanged except for the missing pieces.
+    let body: Partial<BotConfig> & CreateAgentWizardBody = raw;
+    if (raw.preset !== undefined) {
+      const preset = getPreset(raw.preset);
+      if (!preset) {
+        return c.json(
+          { error: `Unknown preset '${String(raw.preset)}'; see GET /api/agents/presets` },
+          400
+        );
+      }
+      body = applyPreset(preset, raw) as Partial<BotConfig> & CreateAgentWizardBody;
+    }
     if (!body.id || !body.name) {
       return c.json({ error: 'id and name are required' }, 400);
     }
+    if (!isSafeBotId(body.id)) {
+      return c.json(
+        { error: 'id must be letters, digits, "-", "_" or "." and start with a letter or digit' },
+        400
+      );
+    }
     if (deps.config.bots.some((b) => b.id === body.id)) {
       return c.json({ error: 'Agent with this id already exists' }, 409);
+    }
+
+    const wizard = typeof body.purpose === 'string';
+    const purpose = wizard ? (body.purpose as string).trim() : '';
+    if (wizard && !purpose) {
+      return c.json({ error: 'purpose must be a non-empty sentence' }, 400);
+    }
+    if (wizard && body.personality !== undefined && !isPersonality(body.personality)) {
+      return c.json(
+        { error: 'personality must be { warmth, boldness, rigor, playfulness } numbers in 0..1' },
+        400
+      );
+    }
+    if (body.token !== undefined && body.token !== null && typeof body.token !== 'string') {
+      return c.json({ error: 'token must be a string or null' }, 400);
     }
 
     const tenantId = getTenantId(c);
@@ -124,6 +272,8 @@ export function agentsRoutes(deps: {
     const newBot: BotConfig = {
       id: body.id,
       name: body.name,
+      // `null` is the explicit "headless on purpose" value (BotConfigSchema
+      // normalises it to '' too); the wizard sends it when no channel is chosen.
       token: body.token ?? '',
       enabled: body.enabled ?? false,
       skills,
@@ -134,18 +284,140 @@ export function agentsRoutes(deps: {
       plan: body.plan ?? 'free',
       allowedUsers: body.allowedUsers,
       mentionPatterns: body.mentionPatterns,
-      model: body.model,
-      llmBackend: body.llmBackend,
+      model: body.model || undefined,
+      llmBackend: body.llmBackend || undefined,
       soulDir: body.soulDir,
       disabledTools: body.disabledTools,
       conversation: body.conversation,
+      ...(body.agentLoop ? { agentLoop: body.agentLoop } : {}),
+      ...(body.preset ? { preset: body.preset } : {}),
+      ...(body.whatsapp?.phoneNumberId && body.whatsapp.accessToken
+        ? { whatsapp: body.whatsapp }
+        : {}),
+      ...(body.discord?.token ? { discord: body.discord } : {}),
       ...(tenantId ? { tenantId } : {}),
     };
 
-    deps.config.bots.push(newBot);
-    persistBots(deps.configPath, deps.config.bots);
+    if (!wizard) {
+      deps.config.bots.push(newBot);
+      persistBots(deps.configPath, deps.config.bots);
+      return c.json({ ...newBot, token: maskToken(newBot.token) }, 201);
+    }
 
-    return c.json({ ...newBot, token: maskToken(newBot.token) }, 201);
+    // ── Wizard path ──
+    const soulDir = soulDirFor(newBot);
+    if (WIZARD_SOUL_FILES.some((f) => existsSync(join(soulDir, f)))) {
+      return c.json(
+        {
+          error: `A soul already exists at ${soulDir}; pick another id or remove it first`,
+          code: 'soul_exists',
+        },
+        409
+      );
+    }
+
+    const preset = body.preset ? getPreset(body.preset) : undefined;
+    const traits: Partial<TraitSet> =
+      body.traits && typeof body.traits === 'object'
+        ? body.traits
+        : personalityToTraits(body.personality ?? {});
+    const input: SoulGenerationInput = {
+      name: newBot.name,
+      role: purpose,
+      personalityDescription: describePersonality(body.personality ?? {}, body.quirks),
+      language: body.language,
+      emoji: body.emoji || undefined,
+    };
+
+    let soul: GeneratedSoul;
+    try {
+      soul = await soulGenerator(input, {
+        soulDir: deps.config.soul.dir,
+        claudeModel: deps.config.claudeCli?.model,
+        logger: deps.logger,
+        generate: generateFnFor(body.generation),
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Soul generation failed';
+      deps.logger.error({ botId: newBot.id, error: message }, 'Wizard: soul generation failed');
+      return c.json(
+        { error: `Soul generation failed: ${message}`, code: 'soul_generation_failed' },
+        502
+      );
+    }
+
+    // Everything below writes to disk; on any failure remove exactly what we
+    // created (never a directory that was already there) and register nothing.
+    const botDir = dirname(soulDir);
+    const traitsBase = traitsBaseDirFor(deps.config);
+    const traitsDir = join(traitsBase, newBot.id);
+    const existed = {
+      soulDir: existsSync(soulDir),
+      botDir: existsSync(botDir),
+      traitsDir: existsSync(traitsDir),
+    };
+    const rollback = () => {
+      const rm = (p: string) => {
+        try {
+          rmSync(p, { recursive: true, force: true });
+        } catch (err) {
+          deps.logger.warn({ err, path: p }, 'Wizard: rollback could not remove path');
+        }
+      };
+      if (!existed.soulDir) rm(soulDir);
+      if (!existed.traitsDir) rm(traitsDir);
+      if (!existed.botDir) rm(botDir);
+    };
+
+    let files: string[];
+    let writtenTraits: TraitSet;
+    try {
+      files = writeWizardSoul(
+        soulDir,
+        soul,
+        preset ? presetGoalsMarkdown(preset, purpose) : initialGoalsMarkdown(purpose)
+      );
+      writtenTraits = seedTraits(traitsBase, newBot.id, traits, deps.logger, newBot.traits);
+      files.push('TRAITS.json');
+      deps.config.bots.push(newBot);
+      try {
+        persistBots(deps.configPath, deps.config.bots);
+      } catch (err) {
+        deps.config.bots.splice(deps.config.bots.indexOf(newBot), 1);
+        throw err;
+      }
+    } catch (err: unknown) {
+      rollback();
+      const message = err instanceof Error ? err.message : 'Failed to write the soul';
+      deps.logger.error({ botId: newBot.id, error: message, soulDir }, 'Wizard: soul write failed');
+      return c.json(
+        { error: `Could not write the soul: ${message}`, code: 'soul_write_failed' },
+        500
+      );
+    }
+
+    deps.logger.info(
+      {
+        botId: newBot.id,
+        soulDir,
+        files,
+        traits: writtenTraits,
+        headless: newBot.token === '',
+        preset: preset?.id,
+      },
+      'Agent created via wizard'
+    );
+    return c.json(
+      {
+        agent: {
+          ...newBot,
+          token: maskToken(newBot.token),
+          running: deps.botManager.isRunning(newBot.id),
+        },
+        soul: { generated: true, files, soulDir, ...(preset ? { preset: preset.id } : {}) },
+      },
+      201
+    );
   });
 
   /**
@@ -183,6 +455,8 @@ export function agentsRoutes(deps: {
         return c.json({ error: "llmBackend must be 'ollama' or 'claude-cli'" }, 400);
       }
     }
+    const bulkCuriosityError = validateCuriosityPatch(patch);
+    if (bulkCuriosityError) return c.json({ error: bulkCuriosityError }, 400);
 
     const updated: string[] = [];
     const notFound: string[] = [];
@@ -219,6 +493,9 @@ export function agentsRoutes(deps: {
     if (!bot) return c.json({ error: 'Agent not found' }, 404);
 
     const body = await c.req.json<Partial<BotConfig>>();
+
+    const curiosityError = validateCuriosityPatch(body);
+    if (curiosityError) return c.json({ error: curiosityError }, 400);
 
     applyBotPatch(bot, body);
 
@@ -566,6 +843,23 @@ export function agentsRoutes(deps: {
  * fall back to the global default", which is why they test `in body` rather
  * than `!== undefined`.
  */
+/**
+ * `agentLoop.curiosity` is validated before it is merged: an out-of-range value
+ * would make bots.json fail schema validation on the next boot. `null` (clear
+ * the override) is always accepted. Returns an error message or null.
+ */
+export function validateCuriosityPatch(body: Partial<BotConfig>): string | null {
+  const al = body?.agentLoop as Record<string, unknown> | null | undefined;
+  if (!al || typeof al !== 'object' || !('curiosity' in al)) return null;
+  const cur = al.curiosity;
+  if (cur === null || cur === undefined) return null;
+  const parsed = CuriosityConfigSchema.safeParse(cur);
+  if (parsed.success) return null;
+  const issue = parsed.error.issues[0];
+  const where = issue?.path?.length ? `.${issue.path.join('.')}` : '';
+  return `Invalid agentLoop.curiosity${where}: ${issue?.message ?? 'invalid value'}`;
+}
+
 export function applyBotPatch(bot: BotConfig, body: Partial<BotConfig>): void {
   if (body.name !== undefined) bot.name = body.name;
   if (body.token !== undefined) bot.token = body.token;

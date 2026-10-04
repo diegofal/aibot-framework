@@ -196,6 +196,11 @@ export class ConversationPipeline {
       return;
     }
 
+    // The operator's own Telegram chat steers the bot's curiosity navigator.
+    if (!isGroup && chatId === this.ctx.config.operator?.telegramChatId) {
+      this.ctx.recordOperatorMessage?.(config.id, userText);
+    }
+
     const senderName = isGroup ? (ctx.from?.first_name ?? 'Unknown') : undefined;
     botLogger.info(
       {
@@ -811,6 +816,7 @@ export class ConversationPipeline {
       chatId: String(msg.chatId),
       userId: msg.sender.id,
       timestamp: Date.now(),
+      text: msg.text ? msg.text.slice(0, 1000) : undefined,
     };
     this.ctx.hooks.emit(HUMAN_INBOUND_HOOK, event);
   }

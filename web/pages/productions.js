@@ -1974,7 +1974,7 @@ async function showDetailModal(botId, entryId, onDelete) {
       if (onDelete) {
         onDelete();
       } else {
-        const contentEl = document.getElementById('content');
+        const contentEl = document.getElementById('page');
         renderBotProductions(contentEl, botId);
       }
     });

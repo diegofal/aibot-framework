@@ -126,7 +126,8 @@ export async function runStrategistWithRetry(
   input: { system: string; prompt: string },
   model: string,
   logger: Logger,
-  maxRetries = 1
+  maxRetries = 1,
+  options: { skipAlignmentRetry?: boolean } = {}
 ): Promise<StrategistResultWithUsage | null> {
   const temperatures = [0.4, 0];
 
@@ -141,7 +142,10 @@ export async function runStrategistWithRetry(
     const result = parseStrategistResult(raw, logger);
     if (result) {
       // Soul alignment gate: if confidence is below threshold, force retry
+      // Exploration cycles skip this gate: a temperature-0 re-roll would
+      // swap the divergent idea for the most predictable one.
       if (
+        !options.skipAlignmentRetry &&
         result.alignment_confidence !== undefined &&
         result.alignment_confidence < 0.6 &&
         attempt < maxRetries
@@ -201,6 +205,8 @@ export async function runStrategist(
     crystallizationContext?: string;
     goalPerformance?: string;
     peerInsights?: string;
+    /** Curiosity DNA block (src/bot/curiosity/runner.ts) */
+    curiosityBlock?: string;
   },
   /**
    * Client + model to run on. The agent loop passes the planner-backend
@@ -208,7 +214,9 @@ export async function runStrategist(
    * goes through the bot client's silent cross-backend fallback. Defaults to
    * the bot client for callers that predate the option.
    */
-  llm?: { client: LLMClient; model: string }
+  llm?: { client: LLMClient; model: string },
+  /** Exploration cycles: keep the first answer even when alignment is low. */
+  options: { skipAlignmentRetry?: boolean } = {}
 ): Promise<StrategistResultWithUsage | null> {
   const llmClient = llm?.client ?? ctx.getLLMClient(botId);
   const model = llm?.model ?? ctx.getActiveModel(botId);
@@ -233,9 +241,10 @@ export async function runStrategist(
     crystallizationContext: soulContext.crystallizationContext,
     goalPerformance: soulContext.goalPerformance,
     peerInsights: soulContext.peerInsights,
+    curiosityBlock: soulContext.curiosityBlock,
   });
 
-  const result = await runStrategistWithRetry(llmClient, input, model, botLogger);
+  const result = await runStrategistWithRetry(llmClient, input, model, botLogger, 1, options);
   if (!result) {
     botLogger.warn(
       { botId },

@@ -1,3 +1,4 @@
+import { HISTORY_PAGE, historyHasMore, nextHistoryLimit } from './hygiene-helpers.js';
 import { api, escapeHtml } from './shared.js';
 import {
   formatDuration,
@@ -241,7 +242,11 @@ function historyRow(run) {
   </tr>`;
 }
 
-export function renderHistoryTable(container, runs, { onSelect } = {}) {
+/**
+ * `onLoadMore` + `limit` add a "Load more" button under the table when the
+ * last fetch came back full (the API only pages by `limit`).
+ */
+export function renderHistoryTable(container, runs, { onSelect, onLoadMore, limit } = {}) {
   if (!container) return;
   const list = [...(Array.isArray(runs) ? runs : [])].sort(
     (a, b) => (Date.parse(b.startedAt) || 0) - (Date.parse(a.startedAt) || 0)
@@ -253,7 +258,16 @@ export function renderHistoryTable(container, runs, { onSelect } = {}) {
   container.innerHTML = `<table class="stats-table">
     <thead><tr><th>When</th><th>Routine</th><th>Bot</th><th>Mode</th><th class="num">Crit</th><th class="num">Warn</th><th class="num">Info</th><th class="num">Applied</th><th></th></tr></thead>
     <tbody>${list.map(historyRow).join('')}</tbody>
-  </table>`;
+  </table>${
+    onLoadMore && limit && historyHasMore(list.length, limit)
+      ? '<div class="hyg-load-more"><button class="btn btn-sm" data-hyg-load-more>Load more</button></div>'
+      : ''
+  }`;
+  container.querySelector('[data-hyg-load-more]')?.addEventListener('click', (e) => {
+    e.currentTarget.disabled = true;
+    e.currentTarget.textContent = 'Loading…';
+    onLoadMore();
+  });
   container.querySelectorAll('.hyg-history-row').forEach((tr) => {
     tr.addEventListener('click', () => {
       const run = list.find((r) => r.runId === tr.dataset.runId);
@@ -336,9 +350,15 @@ export async function renderHygienePanel(el) {
   const botSel = el.querySelector('#hyg-bot');
   const currentBot = () => botSel?.value || '';
 
+  let historyLimit = HISTORY_PAGE;
   const refreshHistory = async () => {
-    const runs = await loadHistory({ limit: 50 });
+    const runs = await loadHistory({ limit: historyLimit });
     renderHistoryTable(el.querySelector('#hyg-history'), runs, {
+      limit: historyLimit,
+      onLoadMore: () => {
+        historyLimit = nextHistoryLimit(historyLimit);
+        refreshHistory();
+      },
       onSelect: (run) => {
         const card = el.querySelector('#hyg-history-detail-card');
         card.style.display = '';

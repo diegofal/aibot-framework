@@ -18,7 +18,15 @@ export interface BotTemplate {
   createdAt: string;
   updatedAt: string;
   createdBy: string; // admin tenantId
+  /**
+   * Shipped with the image (the agent presets of src/bot/presets.ts):
+   * in-memory only, stable id, read-only. Absent on user templates.
+   */
+  builtin?: boolean;
 }
+
+/** What `registerBuiltin` takes: a stable id plus the user-visible parts. */
+export type BuiltinTemplateInput = Pick<BotTemplate, 'id' | 'name' | 'description' | 'config'>;
 
 /**
  * The subset of BotConfig that a template captures.
@@ -58,6 +66,8 @@ export interface TemplateInstance {
  */
 export class TemplateService {
   private templates = new Map<string, BotTemplate>();
+  /** Read-only templates registered at boot; never persisted. */
+  private builtins = new Map<string, BotTemplate>();
   private instances = new Map<string, TemplateInstance>(); // botId -> instance
   private templatesPath: string;
   private instancesPath: string;
@@ -136,12 +146,35 @@ export class TemplateService {
     return template;
   }
 
-  get(id: string): BotTemplate | undefined {
-    return this.templates.get(id);
+  /**
+   * Register a read-only, in-memory template with a stable id (the agent
+   * presets use `preset:<id>`). Re-registering the same id replaces it;
+   * `saveTemplates` never sees it, and `update` / `delete` refuse it.
+   */
+  registerBuiltin(input: BuiltinTemplateInput): BotTemplate {
+    const now = new Date().toISOString();
+    const template: BotTemplate = {
+      id: input.id,
+      name: input.name,
+      description: input.description,
+      config: input.config,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: '__builtin__',
+      builtin: true,
+    };
+    this.builtins.set(input.id, template);
+    return template;
   }
 
+  get(id: string): BotTemplate | undefined {
+    return this.builtins.get(id) ?? this.templates.get(id);
+  }
+
+  /** Built-ins first (catalogue order), then the user's templates. */
   list(): BotTemplate[] {
-    return Array.from(this.templates.values());
+    return [...this.builtins.values(), ...this.templates.values()];
   }
 
   update(
@@ -149,7 +182,7 @@ export class TemplateService {
     updates: Partial<Pick<BotTemplate, 'name' | 'description' | 'config'>>
   ): BotTemplate | undefined {
     const template = this.templates.get(id);
-    if (!template) return undefined;
+    if (!template) return undefined; // built-ins are read-only: not found here on purpose
 
     if (updates.config) template.version++;
     Object.assign(template, updates, { updatedAt: new Date().toISOString() });
@@ -178,7 +211,7 @@ export class TemplateService {
     token: string,
     overrides: Partial<TemplateConfig> = {}
   ): BotConfig | undefined {
-    const template = this.templates.get(templateId);
+    const template = this.get(templateId);
     if (!template) return undefined;
 
     const base = template.config;
@@ -243,7 +276,7 @@ export class TemplateService {
   hasUpdate(botId: string): boolean {
     const instance = this.instances.get(botId);
     if (!instance) return false;
-    const template = this.templates.get(instance.templateId);
+    const template = this.get(instance.templateId);
     if (!template) return false;
     return template.version > instance.templateVersion;
   }

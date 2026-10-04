@@ -563,6 +563,50 @@ describe('ToolExecutor Observability Hooks', () => {
       expect(events[0].source).toBe('tool');
     });
 
+    it('does not emit karma when the tool reports failureKind blocked (site refused us)', async () => {
+      const blockedTool = createTestTool('web_fetch', {
+        success: false,
+        failureKind: 'blocked',
+        content: 'Blocked by Cloudflare bot challenge.',
+      });
+      const ctx = createMockContext([blockedTool]);
+      const { service, events } = createMockKarmaService();
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        karmaService: service,
+      });
+
+      const errors: ToolErrorEvent[] = [];
+      executor.on('tool:error', (e) => errors.push(e));
+      const result = await executor.execute('web_fetch', { url: 'https://openai.com/' });
+
+      expect(result.success).toBe(false);
+      expect(result.failureKind).toBe('blocked');
+      expect(events).toHaveLength(0);
+      // Still observable as a failure for audit/loop detection.
+      expect(errors).toHaveLength(1);
+    });
+
+    it('still emits karma -1 when failureKind is not-found (guessed URL)', async () => {
+      const nfTool = createTestTool('web_fetch', {
+        success: false,
+        failureKind: 'not-found',
+        content: 'Page does not exist.',
+      });
+      const ctx = createMockContext([nfTool]);
+      const { service, events } = createMockKarmaService();
+      const executor = new ToolExecutor(ctx, {
+        botId: 'test-bot',
+        chatId: 123,
+        karmaService: service,
+      });
+
+      const result = await executor.execute('web_fetch', {});
+      expect(result.failureKind).toBe('not-found');
+      expect(events).toHaveLength(1);
+    });
+
     it('should emit karma -1 on tool thrown error', async () => {
       const throwTool = createThrowingTool('throw_tool', 'Kaboom!');
       const ctx = createMockContext([throwTool]);

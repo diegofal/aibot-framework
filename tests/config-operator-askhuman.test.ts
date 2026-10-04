@@ -47,6 +47,13 @@ describe('OperatorConfigSchema', () => {
     });
   });
 
+  test('notifyOnAsk stays off unless set explicitly (S5 keeps the default)', () => {
+    expect(OperatorConfigSchema.parse({}).notifyOnAsk).toBeUndefined();
+    expect(OperatorConfigSchema.parse({ telegramChatId: 1 }).notifyOnAsk).toBeUndefined();
+    expect(OperatorConfigSchema.parse({ notifyOnAsk: false }).notifyOnAsk).toBe(false);
+    expect(() => OperatorConfigSchema.parse({ notifyOnAsk: 'yes' })).toThrow();
+  });
+
   test('telegramChatId must be an integer', () => {
     expect(() => OperatorConfigSchema.parse({ telegramChatId: '796164002' })).toThrow();
     expect(() => OperatorConfigSchema.parse({ telegramChatId: 1.5 })).toThrow();

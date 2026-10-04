@@ -19,6 +19,7 @@ import {
   OPERATOR_ASK_PREVIEW_CHARS,
   buildOperatorAskNotification,
   createAskHumanTool,
+  createFleetOperatorNotifier,
   sweepStaleAskHumanQuestions,
 } from '../../src/tools/ask-human';
 import { conversationsRoutes } from '../../src/web/routes/conversations';
@@ -492,5 +493,144 @@ describe('operator notification (config.operator.notifyOnAsk)', () => {
     );
     expect(result.success).toBe(true);
     expect(store.getPendingCount()).toBe(1);
+  });
+});
+
+/**
+ * S5 (docs/plans/jarvis-fleet-plan.md): the notification used to go out only
+ * through the asking bot's own Telegram instance, which seven of eight bots do
+ * not have. The sender is now injected (`notifyOperator`) and BotManager wires
+ * a fleet-wide one: own instance, else any live instance.
+ */
+describe('operator notification: injected sender (S5)', () => {
+  type Sent = { chatId: number; botId: string; text: string };
+
+  test('a headless bot reaches the operator through the injected sender', async () => {
+    const sent: Sent[] = [];
+    const tool = createAskHumanTool(
+      makeDeps({
+        getBotInstance: () => undefined,
+        getBotName: () => 'Headless One',
+        getOperator: () => ({ telegramChatId: 999, notifyOnAsk: true }),
+        notifyOperator: async (msg) => {
+          sent.push(msg);
+        },
+      })
+    );
+    const result = await tool.execute(
+      { question: 'Ship it?', options: ['Yes', 'No'], _botId: 'bot1', _chatId: 0 },
+      makeLogger()
+    );
+    expect(result.success).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ chatId: 999, botId: 'bot1' });
+    expect(sent[0].text).toContain('Headless One');
+    expect(sent[0].text).toContain('Ship it?');
+    expect(sent[0].text).toContain('Yes | No');
+    expect(store.getPendingCount()).toBe(1);
+  });
+
+  test('the injected sender is not called when notifyOnAsk is off or the chat id is missing', async () => {
+    const cases: Array<OperatorConfig | undefined> = [
+      undefined,
+      { telegramChatId: 999 },
+      { notifyOnAsk: true },
+    ];
+    for (const [i, operator] of cases.entries()) {
+      const sent: Sent[] = [];
+      const tool = createAskHumanTool(
+        makeDeps({
+          getOperator: () => operator,
+          notifyOperator: async (msg) => {
+            sent.push(msg);
+          },
+        })
+      );
+      const result = await tool.execute(
+        { question: 'Anyone?', _botId: `hb-${i}`, _chatId: 0 },
+        makeLogger()
+      );
+      expect(result.success).toBe(true);
+      expect(sent).toEqual([]);
+    }
+  });
+
+  test('a throwing injected sender never fails the ask', async () => {
+    const warn = mock(() => {});
+    const logger = { ...makeLogger(), warn } as unknown as Logger;
+    const tool = createAskHumanTool(
+      makeDeps({
+        getOperator: () => ({ telegramChatId: 999, notifyOnAsk: true }),
+        notifyOperator: async () => {
+          throw new Error('no live telegram instance');
+        },
+      })
+    );
+    const result = await tool.execute({ question: 'Still queued?', _botId: 'bot1' }, logger);
+    expect(result.success).toBe(true);
+    expect(store.getPendingCount()).toBe(1);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  test('the injected sender wins over the bot instance and is deduped against the asking chat', async () => {
+    const viaInstance: Array<{ chatId: number }> = [];
+    const viaSender: Sent[] = [];
+    const bot = {
+      api: {
+        sendMessage: async (chatId: number) => {
+          viaInstance.push({ chatId });
+          return { message_id: 1 };
+        },
+      },
+    } as never;
+    const deps = makeDeps({
+      getBotInstance: () => bot,
+      getOperator: () => ({ telegramChatId: 4242, notifyOnAsk: true }),
+      notifyOperator: async (msg) => {
+        viaSender.push(msg);
+      },
+    });
+    const tool = createAskHumanTool(deps);
+    // Asked from the operator's own chat: the bot's reply-to message is the ping.
+    await tool.execute({ question: 'Same chat?', _botId: 'bot1', _chatId: 4242 }, makeLogger());
+    expect(viaInstance).toEqual([{ chatId: 4242 }]);
+    expect(viaSender).toEqual([]);
+    // Asked from the agent loop (no chat): only the injected sender fires.
+    await tool.execute({ question: 'Loop ask', _botId: 'bot2', _chatId: 0 }, makeLogger());
+    expect(viaInstance).toHaveLength(1);
+    expect(viaSender).toHaveLength(1);
+    expect(viaSender[0]).toMatchObject({ chatId: 4242, botId: 'bot2' });
+  });
+});
+
+describe('createFleetOperatorNotifier', () => {
+  function bot(name: string, log: string[]) {
+    return {
+      api: {
+        sendMessage: async (chatId: number, text: string, extra?: { parse_mode?: string }) => {
+          log.push(`${name}:${chatId}:${text}:${extra?.parse_mode ?? ''}`);
+          return { message_id: 1 };
+        },
+      },
+    } as never;
+  }
+
+  test('prefers the asking bot, falls back to any live instance, throws with none', async () => {
+    const log: string[] = [];
+    const own = bot('own', log);
+    const other = bot('other', log);
+    const notify = createFleetOperatorNotifier(
+      (botId) => (botId === 'b1' ? own : undefined),
+      () => other
+    );
+    await notify({ chatId: 7, botId: 'b1', text: 'hi' });
+    await notify({ chatId: 7, botId: 'headless', text: 'yo' });
+    expect(log).toEqual(['own:7:hi:Markdown', 'other:7:yo:Markdown']);
+
+    const none = createFleetOperatorNotifier(
+      () => undefined,
+      () => undefined
+    );
+    await expect(none({ chatId: 7, botId: 'x', text: 't' })).rejects.toThrow(/no live telegram/i);
   });
 });

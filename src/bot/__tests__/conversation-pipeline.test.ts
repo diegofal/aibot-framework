@@ -1502,4 +1502,34 @@ describe('ConversationPipeline', () => {
       expect(sentText).not.toContain('Failed to generate response');
     });
   });
+
+  describe('curiosity: operator messages steer', () => {
+    it('records a message from the operator Telegram chat as a directive', async () => {
+      const record = jest.fn();
+      (mockBotContext as any).recordOperatorMessage = record;
+      (mockBotContext as any).config.operator = { telegramChatId: 123456 };
+      await pipeline.handleConversation(
+        createMockContext(),
+        createMockBotConfig(),
+        'user:123',
+        'Go deep on retrieval next'
+      );
+      expect(record).toHaveBeenCalledWith(createMockBotConfig().id, 'Go deep on retrieval next');
+    });
+
+    it('ignores everyone else, and the operator inside a group', async () => {
+      const record = jest.fn();
+      (mockBotContext as any).recordOperatorMessage = record;
+      (mockBotContext as any).config.operator = { telegramChatId: 999 };
+      await pipeline.handleConversation(createMockContext(), createMockBotConfig(), 'user:1', 'hello there bot');
+      (mockBotContext as any).config.operator = { telegramChatId: 123456 };
+      await pipeline.handleConversation(
+        createMockContext({ chat: { id: 123456, type: 'supergroup', title: 'G' } } as any),
+        createMockBotConfig(),
+        'group:1',
+        'hello group members'
+      );
+      expect(record).not.toHaveBeenCalled();
+    });
+  });
 });

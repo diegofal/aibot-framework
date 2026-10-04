@@ -39,6 +39,46 @@ describe('trait-registers', () => {
     });
   });
 
+  // ── Seed (wizard) ──
+
+  describe('seed', () => {
+    it('writes the given traits as the single baseline snapshot', () => {
+      const traits: TraitSet = { ...createDefaultTraits(), sociability: 0.9, caution: 0.2 };
+      const written = registers.seed(BOT_ID, traits);
+      expect(written).toEqual(traits);
+      const file = JSON.parse(
+        require('node:fs').readFileSync(join(TEST_DIR, BOT_ID, 'TRAITS.json'), 'utf-8')
+      );
+      expect(file.current).toEqual(traits);
+      expect(file.history).toHaveLength(1);
+      expect(file.history[0].source).toBe('adaptive');
+      expect(registers.load(BOT_ID)).toEqual(traits);
+      expect(Object.values(registers.getDrift(BOT_ID).delta).every((d) => d === 0)).toBe(true);
+    });
+
+    it('clamps out-of-range values and fills missing traits with defaults', () => {
+      const written = registers.seed(BOT_ID, { curiosity: 5, caution: -1 } as Partial<TraitSet>);
+      expect(written.curiosity).toBe(0.9);
+      expect(written.caution).toBe(0.1);
+      expect(written.depth).toBe(0.5);
+    });
+
+    it('replaces an existing file and resets the history', () => {
+      registers.load(BOT_ID);
+      registers.adjust(BOT_ID, { curiosity: 0.1 }, 'reflection');
+      expect(registers.getHistory(BOT_ID).length).toBe(2);
+      registers.seed(BOT_ID, { ...createDefaultTraits(), curiosity: 0.3 });
+      expect(registers.getHistory(BOT_ID).length).toBe(1);
+      expect(registers.load(BOT_ID).curiosity).toBe(0.3);
+    });
+
+    it('applies pins on top of the seed', () => {
+      registers.setPolicy(BOT_ID, { pinned: { caution: 0.8 } });
+      const written = registers.seed(BOT_ID, { ...createDefaultTraits(), caution: 0.1 });
+      expect(written.caution).toBe(0.8);
+    });
+  });
+
   // ── Load/Save ──
 
   describe('load', () => {

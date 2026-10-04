@@ -127,11 +127,17 @@ services:
     volumes:
       # Holds the signed-in Ollama Cloud credentials and any pulled models.
       - ollama_data:/root/.ollama
-    # Deliberately NOT published to the host — only the aibot service needs it,
-    # and it reaches it over the compose network. Uncomment only for debugging,
-    # and keep the loopback bind:
-    # ports:
-    #   - "127.0.0.1:11434:11434"
+    # Published on loopback only. The aibot service reaches this over the compose
+    # network and needs no mapping, but host-side tooling does: Claude Code drives
+    # a model here through OLLAMA_HOST, which can only name a host address. Without
+    # this line the daemon is reachable from inside the compose network and nowhere
+    # else, and every host caller falls through to a native Ollama on the same port
+    # or to nothing at all.
+    #
+    # Keep the 127.0.0.1 bind. On 0.0.0.0 this is an unauthenticated model endpoint
+    # on every interface the host has.
+    ports:
+      - "127.0.0.1:11434:11434"
     logging:
       driver: json-file
       options:

@@ -15,7 +15,10 @@ export interface LlmQueryEntry {
     | 'memory_flush'
     | 'compaction'
     | 'overflow_retry'
-    | 'topic_guard';
+    | 'topic_guard'
+    | 'curiosity:navigator'
+    | 'curiosity:extractor'
+    | 'curiosity:editor';
   model: string;
   backend: string;
   temperature?: number;

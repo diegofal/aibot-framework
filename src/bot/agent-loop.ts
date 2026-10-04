@@ -3,6 +3,7 @@ import { type BotConfig, resolveAgentConfig } from '../config';
 import { ClaudeCliLLMClient, type LLMClient, type TokenUsage } from '../core/llm-client';
 import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
+import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import {
@@ -52,9 +53,20 @@ import {
 import { AgentScheduler, resolveDirectives } from './agent-scheduler';
 import {
   type StrategistResultWithUsage,
+  applyGoalOperations,
   runStrategist,
   shouldRunStrategist,
 } from './agent-strategist';
+import {
+  createFleetDispatchLimiter,
+  createOperatorDispatchDeliverer,
+} from './curiosity/loop-wiring';
+import {
+  type CuriosityCycle,
+  type RunnerDeps,
+  beginCuriosityCycle,
+  finishCuriosityCycle,
+} from './curiosity/runner';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
 import { ToolLoopDetector } from './tool-loop-detector';
@@ -130,6 +142,39 @@ interface ExecuteLoopDetail {
   tokenUsage?: AgentLoopResult['tokenUsage'];
   alignmentWarnings?: string[];
   loopDetection?: AgentLoopResult['loopDetection'];
+  /** Curiosity cycle to finish after the executor (knowledge extraction + dispatch) */
+  curiosity?: {
+    cycle: CuriosityCycle;
+    deps: RunnerDeps;
+    deliverable?: string;
+    identity: string;
+  };
+}
+
+/** Upper bound for the post-cycle curiosity step (extractor + editor + delivery). */
+const CURIOSITY_FINISH_TIMEOUT_MS = 120_000;
+
+/** Resolve `p`, or `fallback` after `ms` — the timer never outlives the race. */
+async function raceTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  fallback: T,
+  onTimeout?: () => void
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          onTimeout?.();
+          resolve(fallback);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function buildTokenUsageSummary(
@@ -228,6 +273,10 @@ export class AgentLoop {
   private skillCrystallizer: import('./skill-crystallizer').SkillCrystallizer | null = null;
   private knowledgeMesh: import('./knowledge-mesh').KnowledgeMesh | null = null;
   private goalGenealogy: import('./goal-genealogy').GoalGenealogy | null = null;
+  /** Curiosity DNA (knowledge map, navigator, dispatch) — see src/bot/curiosity/ */
+  private curiosity: import('./curiosity/service').CuriosityService | null = null;
+  /** Fleet-wide daily cap on dispatches, shared semantics with operator.proactiveDailyCap */
+  private dispatchLimiter: ReturnType<typeof createFleetDispatchLimiter> | null = null;
 
   constructor(
     private ctx: BotContext,
@@ -342,6 +391,67 @@ export class AgentLoop {
 
   setGoalGenealogy(genealogy: import('./goal-genealogy').GoalGenealogy): void {
     this.goalGenealogy = genealogy;
+  }
+
+  setCuriosityService(service: import('./curiosity/service').CuriosityService): void {
+    this.curiosity = service;
+  }
+
+  /** Runner deps for one bot's curiosity cycle: LLM = planner backend, delivery = operator. */
+  private buildCuriosityDeps(
+    botId: string,
+    botLogger: Logger,
+    soulLoader: ReturnType<BotContext['getSoulLoader']>,
+    llm: { client: LLMClient; model: string; backend: string }
+  ): RunnerDeps | null {
+    if (!this.curiosity) return null;
+    if (!this.dispatchLimiter) {
+      this.dispatchLimiter = createFleetDispatchLimiter(
+        () => resolveProactiveLimits(this.ctx.config.operator).dailyCap
+      );
+    }
+    const limiter = this.dispatchLimiter;
+    return {
+      service: this.curiosity,
+      llm: { client: llm.client, model: llm.model },
+      logger: botLogger,
+      deliver: createOperatorDispatchDeliverer({
+        getOperatorChatId: () => this.ctx.config.operator?.telegramChatId,
+        getBot: (id) => this.ctx.bots.get(id),
+        getAnyBot: () => this.ctx.bots.values().next().value,
+        isTenantBot: (id) =>
+          !!this.ctx.config.multiTenant?.enabled &&
+          !!this.ctx.config.bots.find((b) => b.id === id)?.tenantId,
+        logger: botLogger,
+      }),
+      onLLMCall: (call) =>
+        this.ctx.llmQueryLog?.append({
+          timestamp: new Date().toISOString(),
+          botId,
+          caller: call.caller,
+          model: call.usage?.model ?? llm.model,
+          backend: llm.backend,
+          promptTokens: call.usage?.promptTokens,
+          completionTokens: call.usage?.completionTokens,
+          totalTokens: call.usage?.totalTokens,
+          durationMs: call.durationMs,
+          success: call.success,
+          error: call.error,
+        }),
+      applyGoalOperations: (ops) => applyGoalOperations(botId, ops, botLogger, soulLoader),
+      fleetAllows: (id) => limiter.allows(id),
+      onDelivered: (id) => limiter.record(id),
+    };
+  }
+
+  /** The bot's `curiosity` trait (0.1–0.9), or undefined without trait registers. */
+  getCuriosityTrait(botId: string): number | undefined {
+    if (!this.traitRegisters) return undefined;
+    try {
+      return this.traitRegisters.load(botId).curiosity;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -909,6 +1019,27 @@ export class AgentLoop {
         await sendReport(this.ctx, botId, botOverride.reportChatId, detail.summary);
       }
 
+      // Curiosity DNA: turn the cycle into knowledge, maybe a dispatch to the operator
+      if (detail.curiosity) {
+        const { cycle, deps, deliverable, identity } = detail.curiosity;
+        await raceTimeout(
+          finishCuriosityCycle(deps, {
+            botId,
+            botName: botConfig.name,
+            emoji: /^emoji:\s*(.+)$/m.exec(identity)?.[1]?.trim(),
+            identity,
+            cycle,
+            deliverable,
+            plan: detail.plan,
+            summary: detail.summary,
+            toolCalls: detail.toolCalls,
+            idle: isIdle,
+          }),
+          CURIOSITY_FINISH_TIMEOUT_MS,
+          { extracted: false }
+        );
+      }
+
       // Record agent loop usage for tenant metering
       if (botConfig.tenantId && this.ctx.tenantFacade?.isMultiTenant() && !isIdle) {
         // Count LLM calls: planner + executor + optional strategist
@@ -1153,6 +1284,52 @@ export class AgentLoop {
       durableOutputCount ?? undefined
     );
 
+    // Curiosity DNA: navigator (when due), explore/exploit, the DNA block that
+    // strategist + planner read. Bounded by the strategist timeout; never fails the cycle.
+    const curiosityDeps = this.buildCuriosityDeps(botId, botLogger, soulLoader, {
+      client: plannerLLM.client,
+      model: plannerLLM.model,
+      backend: plannerLLM.backend,
+    });
+    let curiosityCycle: CuriosityCycle | null = null;
+    if (curiosityDeps) {
+      // Once the loop stops waiting, the begin step must not write anything else.
+      let curiosityGaveUp = false;
+      curiosityCycle = await raceTimeout(
+        beginCuriosityCycle(curiosityDeps, {
+          isCancelled: () => curiosityGaveUp,
+          botId,
+          identity,
+          soul,
+          motivations,
+          goals,
+          answered: answeredQuestions.map((q) => ({ question: q.question, answer: q.answer })),
+          feedback: pendingFeedback.map((f) => f.content),
+          operatorSilent: feedbackSignals.lastFeedbackAt === null && feedbackSignals.total === 0,
+        }),
+        strategistTimeoutMs,
+        null,
+        () => {
+          curiosityGaveUp = true;
+          botLogger.warn({ botId }, 'Curiosity: preparation timed out, cycle continues without');
+        }
+      );
+      if (curiosityCycle) {
+        this.ctx.activityStream?.publish({
+          type: 'agent:phase',
+          botId,
+          timestamp: Date.now(),
+          phase: `curiosity:${curiosityCycle.decision.mode}`,
+          data: {
+            reason: curiosityCycle.decision.reason,
+            frontier: curiosityCycle.frontierItem?.question,
+            navigatorStarted: curiosityCycle.navigatorStarted,
+          },
+        });
+      }
+    }
+    const exploring = curiosityCycle?.decision.mode === 'explore';
+
     // Phase 0: Strategist (conditional)
     if (checkTimeout && !checkTimeout('before_strategist')) {
       return {
@@ -1171,6 +1348,8 @@ export class AgentLoop {
     let plannerTokenUsage: TokenUsage | undefined;
 
     const schedule = this.scheduler.getSchedule(botId);
+    // Exploration never forces a strategist pass (that would reset its cadence and
+    // hijack lastFocus); when it runs anyway, it skips the temperature-0 re-roll.
     if (shouldRunStrategist(botId, botConfig, globalConfig.strategist, schedule)) {
       this.ctx.activityStream?.publish({
         type: 'agent:phase',
@@ -1245,8 +1424,10 @@ export class AgentLoop {
                 crystallizationContext: crystContext,
                 goalPerformance: goalPerfContext,
                 peerInsights: peerContext,
+                curiosityBlock: curiosityCycle?.curiosityBlock,
               },
-              { client: plannerLLM.client, model: plannerLLM.model }
+              { client: plannerLLM.client, model: plannerLLM.model },
+              { skipAlignmentRetry: exploring }
             ),
           'Strategist',
           strategistTimeoutMs
@@ -1349,6 +1530,10 @@ export class AgentLoop {
     // If strategist didn't run this cycle, use lastFocus from schedule
     if (!focus) {
       if (schedule?.lastFocus) focus = schedule.lastFocus;
+    }
+    // Exploration without a strategist pass: the frontier target is the focus
+    if (exploring && !strategistRan) {
+      focus = `EXPLORATION: ${curiosityCycle?.frontierItem?.question ?? 'find something you do not know yet that could surprise you, within your dials'}`;
     }
 
     // Answered questions were consumed above (before the strategist); pending ones are listed here
@@ -1457,6 +1642,10 @@ export class AgentLoop {
         } else {
           engagementGateNote = `## ⚠️ ENGAGEMENT GATE (SOFT)\n\n${engagement.outputCount} outputs produced with ${engagement.feedbackCount} feedback received.\nConsider prioritizing ASSESSMENT or OUTREACH over creating more content.\nProduction without feedback is waste — check if your outputs are being consumed.`;
         }
+        if (curiosityCycle) {
+          engagementGateNote +=
+            '\nExploration is still allowed: learning recorded to your knowledge map is not "more content". The gate blocks artifacts, not curiosity.';
+        }
       }
     }
 
@@ -1524,6 +1713,7 @@ export class AgentLoop {
         engagementGateNote,
         outcomeRecent,
         environmentContext: plannerEnvContext,
+        curiosityBlock: curiosityCycle?.curiosityBlock,
       });
 
       const plannerStartMs = Date.now();
@@ -1634,6 +1824,7 @@ export class AgentLoop {
         engagementGateNote,
         outcomeRecent,
         environmentContext: plannerEnvContext,
+        curiosityBlock: curiosityCycle?.curiosityBlock,
       });
 
       const plannerStartMs = Date.now();
@@ -1760,6 +1951,10 @@ export class AgentLoop {
           strategistRan,
           strategistReflection,
           focus,
+          curiosity:
+            curiosityCycle && curiosityDeps
+              ? { cycle: curiosityCycle, deps: curiosityDeps, deliverable: focus, identity }
+              : undefined,
         };
       }
     }
@@ -1786,6 +1981,10 @@ export class AgentLoop {
         strategistRan,
         strategistReflection,
         focus,
+        curiosity:
+          curiosityCycle && curiosityDeps
+            ? { cycle: curiosityCycle, deps: curiosityDeps, deliverable: focus, identity }
+            : undefined,
       };
     }
 
@@ -1805,6 +2004,10 @@ export class AgentLoop {
         strategistRan,
         strategistReflection,
         focus,
+        curiosity:
+          curiosityCycle && curiosityDeps
+            ? { cycle: curiosityCycle, deps: curiosityDeps, deliverable: focus, identity }
+            : undefined,
       };
     }
 
@@ -2102,6 +2305,10 @@ export class AgentLoop {
           : undefined,
       tokenUsage,
       alignmentWarnings,
+      curiosity:
+        curiosityCycle && curiosityDeps
+          ? { cycle: curiosityCycle, deps: curiosityDeps, deliverable: focus, identity }
+          : undefined,
     };
   }
 

@@ -241,7 +241,19 @@
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/agents</code></td>
-              <td>Create a new agent (requires <code>id</code> and <code>name</code>)</td>
+              <td>Create a new agent (requires <code>id</code> and <code>name</code>; the id must be a single safe path segment). <strong>Wizard payload (S6):</strong> add <code>purpose</code> (+ optional <code>personality { warmth, boldness, rigor, playfulness }</code> in 0..1 or explicit <code>traits</code>, <code>quirks</code>, <code>language</code>, <code>emoji</code>, <code>generation { llmBackend, model }</code>, <code>token: null</code> for headless, <code>whatsapp</code> / <code>discord</code> blocks) and the route runs the soul generator synchronously, writes IDENTITY / SOUL / MOTIVATIONS (+ <code>.baseline</code>), GOALS.md from the purpose and <code>TRAITS.json</code> from the sliders (<code>TraitRegisters.seed</code>) <em>before</em> registering the bot, answering <code>{ agent, soul: { generated, files, soulDir } }</code>. 502 <code>soul_generation_failed</code> / 500 <code>soul_write_failed</code> leave nothing behind; 409 <code>soul_exists</code> if the target soul dir already has files. The legacy payload is unchanged (flat reply, disabled bot, no soul)</td>
+              <td><code>agents.ts</code>, <code>src/bot/agent-wizard.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/presets</code></td>
+              <td>Preset catalogue for the wizard (S7): an array of <code>{ id, name, emoji, description, purpose, personality, quirks, skills, disabledTools, agentLoop { every, mode }, goals[] }</code> in catalogue order (<code>assistant</code>, <code>researcher</code>, <code>job-seeker</code>, <code>coder</code>, <code>social</code>). Data lives in <code>src/bot/presets/*.json</code> (baked into the image; <code>config/</code> is a volume) and is validated against <code>AgentPresetSchema</code> at boot. Registered before <code>/:id</code>, like <code>/defaults</code>. <strong><code>POST /api/agents</code> accepts <code>preset: '&lt;id&gt;'</code></strong>: <code>applyPreset</code> fills every field the body left <em>undefined</em> (name, purpose, personality per axis, quirks, emoji, skills, disabledTools, agentLoop per key) before the normal wizard path, so <code>{ id, preset }</code> alone is a complete creation and a fully-typed wizard body only gains what it lacked; GOALS.md gets the purpose goal plus the preset's goals (<code>source: preset:&lt;id&gt;</code>), the bot is stamped <code>preset</code>, the reply carries <code>soul.preset</code>; an unknown id is 400</td>
+              <td><code>agents.ts</code>, <code>src/bot/presets.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/agents/validate-token</code></td>
+              <td>Inline credential check for the wizard: <code>{ kind: telegram|whatsapp|discord, token }</code> → <code>{ kind, state, live, detail, username? }</code>. <code>state</code> is <code>missing</code> / <code>placeholder</code> from the shape alone (never touches the network), <code>ok</code> / <code>revoked</code> / <code>error</code> from a live Telegram <code>getMe</code> on a well-shaped token, <code>shaped</code> for Discord and WhatsApp (shape only). The checker is injected (<code>agentsRoutes({ wizard })</code>) so tests never reach Telegram</td>
               <td><code>agents.ts</code></td>
             </tr>
             <tr>
@@ -291,6 +303,54 @@
               <td><code>/api/agents/:id/soul-status</code></td>
               <td>Check soul file status: returns whether soul directory exists and which files (IDENTITY.md, SOUL.md, MOTIVATIONS.md) are present and non-empty</td>
               <td><code>agents.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id/avatar</code></td>
+              <td>The uploaded face (session S4): <code>image/png</code> or <code>image/jpeg</code> bytes from <code>avatar.png</code> / <code>avatar.jpg</code> in the bot's soul dir, <code>Cache-Control: no-cache</code> + ETag (304 on <code>If-None-Match</code>); 404 <code>{ error: "No avatar" }</code> without one. The only API path that accepts the session token as <code>?token=</code> (GET only; <code>allowsQueryToken()</code> in <code>tenant/middleware.ts</code>) because <code>&lt;img&gt;</code> cannot send a Bearer header</td>
+              <td><code>agent-face.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/agents/:id/avatar</code></td>
+              <td>Upload a face: raw body with <code>Content-Type: image/png|image/jpeg</code>, or <code>multipart/form-data</code> with a <code>file</code> field. 512 KB max (413), type sniffed from the bytes (415 for anything but PNG/JPEG, 400 when empty). Replaces the other variant so a bot has one face. Returns <code>{ ok, avatarUrl, contentType, size }</code> where <code>avatarUrl</code> is <code>/api/agents/:id/avatar?v=&lt;mtime&gt;</code>. Exported/imported with the soul dir by <code>BotExportService</code></td>
+              <td><code>agent-face.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-red">DELETE</span></td>
+              <td><code>/api/agents/:id/avatar</code></td>
+              <td>Remove the face: <code>{ ok: true, removed: boolean }</code></td>
+              <td><code>agent-face.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/agents/:id/speak</code></td>
+              <td><code>{ text }</code> → audio in the bot's voice: <code>generateSpeech</code> with <code>bots[].tts</code> merged over <code>media.tts</code> (<code>resolveTtsConfig</code>). Content type sniffed from the bytes then mapped from <code>outputFormat</code> (<code>audio/ogg</code> for the default <code>opus_48000_64</code>), <code>Cache-Control: no-store</code>, <code>X-TTS-Latency-Ms</code>, <code>X-TTS-Voice-Id</code>. 503 when <code>media.tts.apiKey</code> is unset, 400 for empty or &gt;2000-char text, 502 on an ElevenLabs error, 504 on timeout. Costs ElevenLabs credits; tests inject <code>speak</code></td>
+              <td><code>agent-face.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/tts/voices</code></td>
+              <td>ElevenLabs voice list for the Config form: <code>{ voices: [{ voice_id, name, labels, preview_url }], defaultVoiceId, cachedAt }</code>, cached in-process 10 min (<code>VOICES_CACHE_TTL_MS</code>; <code>?refresh=1</code> bypasses; failures never cached). 503 when unconfigured, 502 on an upstream error. The API key stays server-side</td>
+              <td><code>tts.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/presence</code></td>
+              <td>Fleet presence map (session S3): <code>{ generatedAt, agents: { [id]: { id, name, posture, nowLine, tone, enabled, running, isExecuting, phase, currentTool, karma, pendingAsks, unreviewed, lastRunAt, nextRunAt, lastOutputAt, channel } } }</code>, tenant-scoped, cached 3 s per tenant. Composed by <code>buildFleetPresence()</code> from <code>buildPresence()</code> + the cached 7d bot stats + the karma score; a bot whose aggregation throws gets safe defaults. Registered ahead of <code>agents.ts</code> so its <code>GET /:id</code> cannot shadow the literal path</td>
+              <td><code>agent-home.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id/home</code></td>
+              <td>Agent Home payload (cached 15 s): <code>identity</code>, <code>presence</code> (posture + first-person now-line), <code>goals</code> by bucket, <code>traits</code>, <code>karma</code> with a reconstructed history, a merged <code>timeline</code> (LLM calls, tools, productions, asks, cycles, karma) and <code>needsYou</code> counts. Tenant-scoped; never throws on missing data</td>
+              <td><code>agent-home.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id/presence</code></td>
+              <td>Uncached presence slice: posture, <code>nowLine</code> + <code>tone</code>, <code>isExecuting</code>, live <code>phase</code> / <code>currentTool</code> from the <code>PresenceTracker</code>, next/last run, pending asks. The agent page refetches it on every activity event for the bot</td>
+              <td><code>agent-home.ts</code></td>
             </tr>
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
@@ -482,6 +542,36 @@
         </table>
       </div>
 
+      <!-- --- Needs You (S5) --- -->
+      <h3>Needs You queue (session S5)</h3>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/needs-you</code></td>
+              <td>Everything waiting on a human as one sorted list: <code>{ generatedAt, count, byKind, items[] }</code>. Item: <code>{ id, kind: ask|permission|proposal|production|feedback, botId, botName, title, body, options, createdAt, urgency: high|normal|low, actions[], href, meta }</code>. <code>actions[]</code> entries are <code>{ id, label, method, path, body?, input?: { field, required, placeholder }, tone, hotkey?: a|d }</code> and point at the existing routes (this endpoint is read-only). Sorted by urgency then newest first; tenant-scoped; a failing source or malformed row is skipped, never a 500. Pending = inbox conversation <code>pending</code> (ask), pending request (permission), <code>status: pending</code> (proposal), active file with no <code>evaluation.status</code> (production), pending feedback whose thread ends with the bot (feedback)</td>
+              <td><code>needs-you.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/needs-you/count</code></td>
+              <td><code>{ count, byKind }</code> &mdash; the sidebar "Needs You" badge</td>
+              <td><code>needs-you.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <!-- --- Ask-Permission --- -->
       <h3>Ask-Permission</h3>
 
@@ -555,6 +645,24 @@
               <td><code>/api/cron</code></td>
               <td>Create a cron job (requires <code>name</code>, <code>schedule</code>, <code>payload</code>)</td>
               <td><code>cron.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/cron/parse</code></td>
+              <td>Session S8. <code>{ text, botId }</code> &rarr; a cron proposal, never a job:
+                <code>{ schedule (5-field cron), tz, scheduleHuman, nextRunAt, instruction, name, botId,
+                chatId: "operator" | number, operatorChatId, confidence: high|medium|low, explanation,
+                warnings[], source: "llm"|"fallback", llm: { backend, model } | null }</code>.
+                The bot's own LLM (planner selection: bare client pinned to the bot's backend,
+                <code>buildCronParseLlmResolver</code>, 60 s timeout) answers JSON parsed with
+                <code>llm-json-parser</code> and validated (<code>isCronExpr</code>: 5 fields croner can
+                schedule; a numeric <code>chatId</code> is kept only when the text quotes it). When the
+                bot is not running, the call fails / times out or the answer is unusable,
+                <code>deterministicParse</code> (<code>src/cron/nl-parse.ts</code>) proposes instead and
+                <code>warnings</code> says so. Timezone = <code>config.datetime.timezone</code>.
+                400 without text/botId or over 2000 chars, 404 for a bot outside the tenant. Mounted
+                before <code>cronRoutes</code> so "parse" is never read as an id.</td>
+              <td><code>cron-parse.ts</code></td>
             </tr>
             <tr>
               <td><span class="badge badge-medium">PATCH</span></td>
@@ -852,7 +960,7 @@
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/conversations/:botId/:id/messages</code></td>
-              <td>Send human message; triggers bot reply via unified conversation pipeline (fire-and-forget). Same SystemPromptBuilder + RAG + the agent's full tool set as Telegram. Body: <code>{ message: string }</code></td>
+              <td>Send human message; triggers bot reply via unified conversation pipeline (fire-and-forget). Same SystemPromptBuilder + RAG + the agent's full tool set as Telegram. Body: <code>{ message: string }</code>. The dashboard is an operator surface: unless the message answers a pending <code>ask_human</code>, it is also recorded as a <a href="agent-loop.html#curiosity">curiosity directive</a> via <code>BotManager.recordOperatorMessage</code> (&lt; 15 chars or curiosity off &rArr; ignored)</td>
               <td><code>conversations.ts</code></td>
             </tr>
             <tr>
@@ -1040,6 +1148,72 @@
           </tbody>
         </table>
       </div>
+
+      <!-- --- Curiosity --- -->
+      <h3 id="curiosity-api">Curiosity</h3>
+
+      <p style="color: var(--text-dim); font-size: 13px;">
+        Always mounted at <code>/api/curiosity</code> (own prefix, so no ordering constraint against
+        <code>agentsRoutes</code>). Reads and signals the curiosity DNA state through
+        <code>BotManager.getCuriosityService()</code> (<code>src/bot/curiosity/service.ts</code>), which
+        resolves the soul dir from the live loader or with the same resolution as <code>startBot</code>, so a
+        stopped bot can be read too. Tenant-scoped like <code>/api/agents/:id/home</code>: a bot outside the
+        caller's tenant is indistinguishable from an unknown one (404). The literal <code>/dispatches</code>
+        route is registered before <code>/:botId</code>. See
+        <a href="agent-loop.html#curiosity">Agent Loop &sect; Curiosity DNA</a>.
+      </p>
+
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Description</th>
+              <th>Route File</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/curiosity/dispatches?limit=50</code></td>
+              <td>Fleet dispatch inbox: every visible bot's dispatches merged newest first, each with <code>botName</code> and <code>avatarUrl</code>. <code>limit</code> defaults to 50, capped at 200 (<code>parseLimit</code>). A bot whose store fails to read is logged and skipped</td>
+              <td><code>curiosity.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/curiosity/:botId</code></td>
+              <td><code>CuriositySnapshot</code> + <code>botName</code> + <code>avatarUrl</code>: resolved <code>config</code> (dials, effective explore ratio, dispatch settings), <code>map</code> (<code>KNOWLEDGE.json</code>), <code>navigator</code> (<code>NAVIGATOR.json</code>: direction, directives, cycle log), <code>taste</code>, the last 20 <code>dispatches</code>, topic <code>concentration</code>, and <code>frontier[]</code> as <code>{ item, verdict }</code> (<code>evaluateFrontierItem</code>: <code>allowed</code>, <code>crosses</code>, <code>needsApproval</code>, <code>blockedBy</code>). 404 when the bot is unknown or has no curiosity state</td>
+              <td><code>curiosity.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/curiosity/:botId/dispatches/:id/signal</code></td>
+              <td>Body <code>{ signal: 'up' | 'down' | 'more' }</code>. Stored on the dispatch and taught to <code>TASTE.json</code> (cadence &times;0.75 for up/more, &times;1.25 for down); on a proposal, also approves (<code>up</code>/<code>more</code>) or drops (<code>down</code>) the frontier item it asks about; approving an identity proposal adds its <code>interest</code> to the knowledge map. Repeating the same signal does not compound taste or cadence. 400 on a bad signal, 404 on an unknown dispatch</td>
+              <td><code>curiosity.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/curiosity/:botId/frontier/:id/signal</code></td>
+              <td>Body <code>{ signal: 'up' | 'down' }</code>. <code>up</code> approves an <code>ask</code>-gated frontier item for exploration, <code>down</code> drops it</td>
+              <td><code>curiosity.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/curiosity/:botId/direction/signal</code></td>
+              <td>Body <code>{ signal: 'up' | 'down' }</code>. Operator verdict on the navigator's current direction; shown to the next navigator, strategist and planner ("operator rejected this direction &mdash; change course"). 404 when there is no direction yet</td>
+              <td><code>curiosity.ts</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color: var(--text-dim); font-size: 13px;">
+        <code>PATCH /api/agents/:id</code> and <code>PATCH /api/agents/bulk</code> validate
+        <code>agentLoop.curiosity</code> with <code>validateCuriosityPatch()</code>
+        (<code>CuriosityConfigSchema.safeParse</code>) before merging, returning 400
+        <code>Invalid agentLoop.curiosity.&lt;path&gt;: &hellip;</code>, so an out-of-range value cannot make
+        <code>bots.json</code> fail validation on the next boot. <code>null</code> clears the override.
+      </p>
 
       <!-- --- Hygiene --- -->
       <h3>Hygiene</h3>
@@ -1397,12 +1571,135 @@ compaction                            // Context compaction
         The dashboard includes the following pages:
       </p>
 
+      <h3>Design system &amp; shell (session S0 of the Jarvis fleet plan)</h3>
+      <p>
+        <code>web/style.css</code> opens with a token set on <code>:root</code>: surfaces
+        (<code>--bg</code>, <code>--surface</code>, <code>--elevated</code>, <code>--bg-hover</code>,
+        <code>--border</code>), text (<code>--text</code>, <code>--text-dim</code>, <code>--text-faint</code>),
+        semantic colours (<code>--accent</code>, <code>--ok</code>, <code>--warn</code>, <code>--danger</code>,
+        <code>--info</code>) with matching <code>*-bg</code> tints, radii (<code>--r-sm/md/lg/pill</code>),
+        spacing (<code>--s1</code>&ndash;<code>--s6</code>), a type scale (<code>--fs-xs</code>&ndash;<code>--fs-2xl</code>),
+        shadows and motion durations. Dark is the native theme; <strong>light</strong> is applied by
+        <code>&lt;html data-theme="light"&gt;</code> or, when nothing is stored, by the OS preference.
+        The legacy names pages still use (<code>--bg-card</code>, <code>--green</code>, <code>--red</code>,
+        <code>--orange</code>, <code>--celeste</code>) are aliases of the new tokens.
+      </p>
+      <p>
+        <strong>Theme toggle.</strong> <code>web/ui/theme.js</code> resolves stored choice &rarr; OS preference
+        &rarr; dark, stamps <code>data-theme</code> on the root element and persists the choice under the
+        <code>localStorage</code> key <code>aibot.theme</code>. <code>index.html</code> carries an inline bootstrap
+        that reads the same key before CSS paints, so a reload never flashes the wrong theme. The button at the
+        bottom of the sidebar carries <code>data-theme-toggle</code>; <code>initTheme()</code> in
+        <code>app.js</code> wires every such button.
+      </p>
+      <p>
+        <strong>Responsive shell.</strong> Above 900px the layout is the classic fixed sidebar plus scrolling
+        content; the content column is centred with gutters that grow past 1480px. Under 900px
+        <code>#layout</code> stacks, a sticky <code>#topbar</code> (menu button, logo, bot count) appears and the
+        sidebar becomes an off-canvas drawer: <code>app.js</code> toggles <code>.open</code> on
+        <code>#sidebar</code> and <code>.show</code> on <code>#drawer-backdrop</code>, and closes the drawer on
+        every navigation. <code>body.unauthed</code> (set while the login screen shows) hides the chrome.
+        Wide tables should be wrapped in <code>.table-scroll</code>.
+      </p>
+      <p>
+        <strong>Component layer.</strong> <code>web/ui/index.js</code> re-exports pure functions that return HTML
+        strings, so pages compose them and Bun tests (<code>tests/web/ui-components.test.ts</code>) cover them
+        without a DOM: <code>badge(text, tone)</code> and <code>toneFor(status)</code>, <code>card({ title,
+        subtitle, body, actions, footer, tone })</code>, <code>emptyState({ icon, title, hint, action })</code>,
+        <code>skeleton({ lines | block })</code>, <code>kpi({ label, value, delta, tone, hint })</code>,
+        <code>tabs(items, activeId)</code>, <code>avatar({ seed, name, src, size, status })</code> (deterministic
+        gradient disc with initials and a presence dot), <code>sparkline(values)</code>, <code>radar(axes)</code>,
+        <code>dataTable({ columns, rows })</code> (compact table in a <code>.table-scroll</code> wrapper) and <code>rowMenu(items)</code> / <code>initMenus()</code> (a native <code>&lt;details&gt;</code> overflow menu whose items keep the page's <code>data-action</code> delegation working) — both session S3.5; <code>toastMarkup</code> / <code>showToast</code>, <code>sheetMarkup</code> / <code>openSheet</code> /
+        <code>closeSheet</code>. Text arguments are escaped; <code>body</code>, <code>actions</code> and
+        <code>footer</code> are trusted HTML the caller composes. Class names follow <code>ui-&lt;component&gt;</code>.
+      </p>
+
+      <h3>Command palette (session S8)</h3>
+      <p>
+        <code>Ctrl+K</code> / <code>Cmd+K</code> on any page, or the <code>⌘K</code> button in the
+        sidebar footer, opens <code>web/ui/palette.js</code> (installed once by
+        <code>initPalette()</code> in <code>app.js</code>; the hotkey is ignored while typing in a
+        field unless the palette is already open). The pure half, <code>web/ui/palette-helpers.js</code>,
+        builds the items — <strong>agents</strong> (<code>buildAgentItems</code>: name / id &rarr;
+        <code>#/agents/:id</code>), <strong>pages</strong> (<code>buildPageItems(ctx)</code>: every
+        visible tab of every area in <code>web/nav-routes.js</code>, labelled "Area &rsaquo; Tab",
+        same admin / multi-tenant rules as the sidebar) and <strong>actions</strong>
+        (<code>buildActionItems</code>: start / stop / run now / open config per agent, new agent,
+        open Needs You, switch theme) — and ranks them: <code>matchScore</code> scores exact &gt; prefix
+        &gt; word start &gt; substring &gt; fuzzy subsequence, hints and keywords count a little less
+        than the label, ties keep the item's index (stable). An empty query lists the last six picks
+        (localStorage <code>aibot.palette.recents</code>) then the pages. Arrow keys move, Enter runs
+        (navigate, POST the action through the authed <code>api()</code> and toast, or toggle the
+        theme), Esc closes. Agents come from <code>GET /api/agents</code>, fetched lazily on first
+        open and cached 30 s. The module is deliberately not re-exported from
+        <code>web/ui/index.js</code>: it imports <code>nav-routes.js</code>, which imports that barrel.
+      </p>
+
+      <h3>Navigation: seven areas and redirects (session S3)</h3>
+      <p>
+        The sidebar lists seven areas &mdash; <strong>Home</strong>, <strong>Agents</strong>,
+        <strong>Needs You</strong>, <strong>Work</strong>, <strong>Automations</strong>,
+        <strong>Insights</strong>, <strong>Settings</strong> &mdash; and every area with sub-pages renders
+        them as a tab strip (<code>#area-nav</code>) above the page slot (<code>#page</code>, the element
+        pages render into). <code>web/nav-routes.js</code> is the single source: <code>AREAS</code> (areas and
+        their tabs, with <code>admin: true</code> for tabs hidden from tenant users and <code>baas: true</code>
+        for tabs shown only in multi-tenant mode), <code>ROUTES</code> (canonical hash pattern &rarr; handler
+        <em>name</em> + area + argument extractor) and <code>REDIRECTS</code> (legacy prefix &rarr; canonical
+        prefix, query string preserved). <code>app.js</code> maps handler names to page functions, resolves
+        the hash with <code>resolveHash()</code> (a legacy hash is rewritten with <code>location.replace()</code>
+        so the back button is unaffected), renders <code>sidebarLinks()</code> and <code>areaNav()</code>, then
+        dispatches <code>matchRoute()</code>. Since S5 the "Needs You" sidebar badge is
+        <code>GET /api/needs-you/count</code> (asks, permissions, proposals, unreviewed outputs, feedback
+        replies); the legacy fallback is the sum of pending asks,
+        permissions and proposals from <code>/api/dashboard/badges</code>; the Inbox / Permissions /
+        Proposals / Feedback tabs carry the per-queue counts.
+      </p>
+      <p>
+        Canonical hashes: <code>#/</code> (Fleet Home), <code>#/agents[/:id[/config|/edit]]</code>,
+        <code>#/needs/{inbox[/:bot/:id]|permissions|proposals}</code>,
+        <code>#/work/{dispatches|productions[/:bot]|conversations[/:bot[/:id]]|sessions[/:id]}</code>,
+        <code>#/automations/{cron[/new|/:id]|skills[/new|/:id[/edit]]|tools[/:name]|tool-runner}</code>,
+        <code>#/insights/{stats[/bot/:id|/behaviour|/infra|/hygiene]|karma[/:bot]|activity[?tab=]|loop|feedback[/:bot]}</code>,
+        <code>#/settings[/integrations|/baas/{templates[/:id]|customizations|webhooks|analytics|tenants}]</code>.
+        Legacy hashes (<code>#/inbox</code>, <code>#/stats/bot/x</code>, <code>#/karma</code>,
+        <code>#/productions/x?path=&hellip;</code>, <code>#/dispatches</code>, <code>#/logs</code>, <code>#/baas/*</code>,
+        <code>#/dashboard</code>, &hellip;) redirect; <code>tests/web/nav-routes.test.ts</code> walks fifty of
+        them through redirect &rarr; route &rarr; handler and checks every handler name exists in
+        <code>app.js</code>.
+      </p>
+
       <div class="card-grid cols-2">
 
         <div class="card">
-          <h3>Dashboard</h3>
-          <p>Overview statistics: uptime, running bots, active sessions, pending inbox items,
-             and cron job status at a glance.</p>
+          <h3>Fleet Home (session S3, condensed in S3.5)</h3>
+          <p>The first screen after login (<code>#/</code>, <code>web/pages/fleet-home.js</code>): one card per agent &mdash; avatar with posture dot, posture badge,
+             stopped/disabled badge, first-person now-line, karma, last output, channel, next run and
+             "N asks" / "N to review" pills linking into Needs You and Productions. Data:
+             <code>/api/agents</code> + <code>/api/agents/presence</code>; <code>watchFleet()</code> in
+             <code>live-presence.js</code> keeps one socket, refetches the map 1.5 s after an event and every
+             30 s, and cards are updated in place in a fixed order (executing first, then blocked &rarr; active
+             &rarr; standby &rarr; idle &rarr; unknown &rarr; dormant, then name). Pure helpers in
+             <code>fleet-home-helpers.js</code>. "Loop controls" links to Insights &rarr; Agent loop.</p>
+          <p><strong>Recent (S3.5).</strong> Under the grid, a condensed ticker: the raw stream
+             (seeded from <code>GET /api/activity?limit=30</code>, then prepended from
+             <code>/ws/activity</code>, <code>TICKER_LIMIT = 30</code>) goes through
+             <code>condenseEvents()</code>, which merges an agent's consecutive successful tool runs
+             (within 15 min, until another event of that agent) into one line &mdash; "Econ Student ran
+             file_read, read_production_log and manage_goals", "&hellip; and 3 more tools" &mdash; drops
+             LLM start/end, memory, compaction, idle and phase chatter (<code>NOISE_EVENTS</code>), keeps
+             failures, cycle results, karma, fallbacks and collaboration as their own line
+             (<code>describeEvent()</code>), and shows a tool that started but has not ended as "is
+             running". <code>condensedTickerBody()</code> renders <code>TICKER_SHOW = 5</code> lines with an
+             "N more" / "Show less" toggle. The header's "N waiting on you" is
+             <code>GET /api/needs-you/count</code> &mdash; the sidebar badge's number &mdash; with the
+             per-card sum as fallback.</p>
+        </div>
+
+        <div class="card">
+          <h3>Agent loop (Insights &rarr; Agent loop)</h3>
+          <p>The former Dashboard page (<code>web/pages/dashboard.js</code>) at <code>#/insights/loop</code>
+             (legacy <code>#/dashboard</code>): agent-loop enabled/running state, bot schedules with a
+             run-scope checkbox per bot, Run Now, Stop All Safe, and the expandable last-results table.</p>
         </div>
 
         <div class="card">
@@ -1415,6 +1712,24 @@ compaction                            // Context compaction
              with auto-scroll, pause/resume, and infinite scroll (scroll up to load older entries
              via <code>GET /api/activity</code>). System Logs tab also supports scroll-up pagination
              via <code>GET /api/logs</code> (5000-line DOM limit).</p>
+        </div>
+
+        <div class="card">
+          <h3>Needs You (session S5)</h3>
+          <p>The first tab of the Needs You area (<code>#/needs</code>, <code>web/pages/needs-you.js</code>):
+             one queue for pending asks, permissions, proposals, unreviewed productions and feedback
+             replies, from <code>GET /api/needs-you</code>. List on the left, detail on the right
+             (stacked under 900px). Keyboard: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>a</kbd> approve /
+             answer (submits the reply box or the quick-reply chip focused with <kbd>1</kbd>&ndash;<kbd>4</kbd>),
+             <kbd>d</kbd> deny / reject / dismiss, <kbd>r</kbd> focus the reply box,
+             <kbd>Ctrl/&#8984;+Enter</kbd> submit from inside it, <kbd>o</kbd> the agent's Home,
+             <kbd>Enter</kbd> open the item where it lives, <kbd>?</kbd> the shortcuts sheet. Each item
+             carries its <code>actions[]</code>, so the page sends exactly the request the owning route
+             expects and never learns the five APIs; after an action the item leaves the list, the
+             selection moves on, a toast confirms and the badge re-counts. The reducer, selection
+             bookkeeping, request builder and markup are pure functions in
+             <code>web/pages/needs-you-helpers.js</code> (<code>tests/web/needs-you-helpers.test.ts</code>).
+             Inbox, Permissions, Proposals and Feedback remain as tabs for history views.</p>
         </div>
 
         <div class="card">
@@ -1439,7 +1754,112 @@ compaction                            // Context compaction
 
         <div class="card">
           <h3>Agents</h3>
-          <p>Bot management: create, edit, start, stop, reset, clone, and delete agents.
+          <p><strong>List (S3.5).</strong> <code>web/pages/agents-list-helpers.js</code> renders the
+             fleet as a compact <code>dataTable</code>: select, Agent (avatar with a live dot, name, id),
+             Enabled, Status, Model, Loop, Karma (linked, coloured by <code>karmaTone</code>, trend
+             arrow), Activity ("ok / total calls &middot; tokens", a fallback chip only when there were
+             any) and one primary button &mdash; Stop, Start or Enable &amp; Start &mdash; beside a row
+             menu (Run loop now, Reflect, Open, Edit, Clone, Export, Turn productions on/off, Reset,
+             Delete). Menu entries carry the same <code>data-action</code> values the page always
+             handled, so the delegation and the bulk model/backend editor are unchanged.</p>
+          <p>
+            <strong>Model choice.</strong> The edit form's Model select mixes Ollama model names with
+            the literal <code>claude-cli</code>; picking <code>claude-cli</code> reveals a "Claude model"
+            select (<code>web/pages/agent-form-helpers.js</code>) whose "Global default" follows
+            Settings &rarr; Claude CLI and whose other entries pin <code>bots[].model</code> for this agent.
+            <code>GET /api/agents/defaults</code> supplies <code>claudeCliModel</code> and
+            <code>claudeCliModels</code> (the server's <code>CLAUDE_CLI_MODEL_OPTIONS</code>).
+            <strong>Face and voice (S4).</strong> Hovering the header avatar on Home or Config shows
+            a pencil ("Change face": PNG/JPEG ≤ 512 KB, uploaded as a raw body to
+            <code>POST /api/agents/:id/avatar</code>) and, once a face exists, an "×" to remove it;
+            the image is swapped in place and a toast confirms. Faces also show on the Fleet Home
+            cards. Uploaded faces load through <code>&lt;img&gt;</code>, so the pages append the
+            session token with <code>authedAvatarSrc()</code> (<code>web/pages/agent-face.js</code>).
+            When <code>media.tts</code> is configured (<code>identity.voiceEnabled</code>), a play
+            button sits next to the now-line: it posts the current line to
+            <code>/api/agents/:id/speak</code> and plays the reply in an <code>&lt;audio&gt;</code>
+            created on demand (busy → playing → idle; click again to stop; errors as toasts). The
+            edit form's Voice field is a select fed by the cached <code>GET /api/tts/voices</code>
+            with a "Custom voice id…" escape hatch and a credit-free Preview of ElevenLabs' sample;
+            pure helpers (<code>voiceOptions</code>, <code>resolveVoiceChoice</code>,
+            <code>validateAvatarFile</code>, <code>speakButton</code>, <code>faceControl</code>) live in
+            <code>web/pages/agent-face-helpers.js</code>.
+            <strong>Create-an-agent wizard (S6).</strong> "New Agent" opens <code>#/agents/new</code>
+            (<code>web/pages/agent-wizard.js</code>; state, validation, the slider → trait mapping and
+            all markup are pure functions in <code>agent-wizard-helpers.js</code>). Three screens:
+            <em>Who</em> (name, one purpose sentence, an id derived from the name and editable),
+            <em>Personality</em> (four sliders — warmth → sociability↑ / independence↓, boldness →
+            risk_tolerance↑ / caution↓, rigor → depth↑ / persistence↑, playfulness → creativity↑ /
+            curiosity↑; a live blurb; a quirks box) and <em>Channels</em> (web chat always on;
+            Telegram / WhatsApp / Discord with inline validation through
+            <code>POST /api/agents/validate-token</code> — a Telegram token is checked live, debounced,
+            and a rejected one blocks Create while an unreachable Telegram does not; an
+            <em>Advanced</em> block with the old form's fields: soul language, emoji, which backend
+            writes the soul, the agent's backend/model, start-now). Create posts once to
+            <code>POST /api/agents</code>, then <code>/start?enable=true</code>, then opens the first
+            <code>general</code> conversation with "Hi! Introduce yourself in two sentences.", and lands
+            on the agent's Home with the chat box focused (<code>sessionStorage</code> key
+            <code>aibot.wizard.focusChat</code>); the Home chat sees the in-flight reply
+            (<code>status: generating</code>) and polls for it. Expected time from "New" to the first
+            reply: 30–60 s, dominated by the one Claude call that writes the soul.
+            <strong>Presets (S7).</strong> Step 1 opens with a strip of cards above the name field —
+            <em>Custom</em> (default) plus the five presets from <code>GET /api/agents/presets</code>
+            (Jarvis the assistant, Scout the researcher, Hunter the job seeker, Forge the coder,
+            Echo the social agent). Picking one runs <code>applyPresetToState</code>
+            (<code>agent-wizard-helpers.js</code>): it prefills the purpose, the four sliders, the
+            quirks, the emoji and the Advanced block's new skills / disabled-tools / loop-cadence /
+            loop-mode fields, and suggests the name (deriving the id) — but only into fields the user
+            has not touched, so switching cards replaces the previous preset's values and never a
+            typed one; <em>Custom</em> puts them back to blank. The strip is painted into a slot when
+            the catalogue arrives so typing is not interrupted. The payload carries
+            <code>preset</code>, <code>skills</code>, <code>disabledTools</code> and
+            <code>agentLoop</code> only when set; the server applies the same preset again under the
+            body, so the wizard and a raw <code>POST /api/agents { id, preset }</code> produce the
+            same agent. In multi-tenant mode the presets also appear as read-only built-in templates
+            (<code>preset:&lt;id&gt;</code>) in <code>GET /api/baas/templates</code>.
+                        <strong>Agent Home (S2).</strong> <code>#/agents/:id</code> renders
+            <code>web/pages/agent-home.js</code>: presence header with Run now / Start / Stop / Config,
+            a tab strip (Home, Config, Stats, Productions, Conversations), a "Needs you" strip
+            (pending asks, permissions, unreviewed outputs), a chat panel backed by the newest
+            <code>general</code> dashboard conversation (created on first send; same status polling,
+            retry and approval flow as the Conversations page), the timeline grouped by hour, and
+            goals / traits radar / karma cards. All card bodies are pure helpers in
+            <code>agent-home-helpers.js</code>. The former detail page lives at
+            <code>#/agents/:id/config</code> with the same header and tabs.
+            <strong>Presence header (S1).</strong> The agent page opens with a live header from
+            <code>web/pages/agent-home-helpers.js</code>: avatar with a posture dot, the posture badge,
+            a first-person "now" line (<code>/api/agents/:id/presence</code>), backend / channel / next run,
+            and the Start/Stop/Run/Edit/Clone/Reset/Reflect actions. <code>web/pages/live-presence.js</code>
+            (<code>watchAgent(botId, { onPresence, onEvent })</code>) keeps one <code>/ws/activity</code>
+            socket per open page and refetches the presence slice (debounced 800 ms) on every
+            <code>agent:*</code>, <code>tool:*</code> or <code>llm:start</code> event for the bot, plus a
+            30 s poll; the Home page also refreshes its timeline 3 s after an event. <code>app.js</code>
+            calls <code>stopAllWatches()</code> on every navigation.
+            When the home endpoint is unavailable the legacy title header renders instead.
+            <strong>Mind (curiosity DNA, 2026-10-03).</strong> Between the chat/timeline row and the
+            goals/traits/karma row, Agent Home mounts a <em>Mind</em> section
+            (<code>mountMind()</code> in <code>web/pages/curiosity.js</code>, markup in
+            <code>curiosity-helpers.js</code>, data from <code>GET /api/curiosity/:id</code>). A DNA line shows
+            the preset, the six dials coloured by level (hover for the meaning), the explore target, the
+            explore/exploit mix over the cycle log, and the top topic's share (flagged when above
+            <code>maxTopicShare</code>); a bot with curiosity off shows "Curiosity off". Four cards:
+            <em>Direction</em> (summary, explore/exploit bets, collapsible retrospective, "Good direction" /
+            "Rethink"), <em>Knowledge</em> (up to 8 topics with a 0&ndash;3 depth bar, latest findings with
+            confidence, surprises, open questions, interests it grew into), <em>Frontier</em> (up to 8 items by
+            status and expected surprise, with distance, crossed dials, "needs approval" / "blocked" /
+            "free to explore" badges and Approve / Drop) and <em>Dispatches</em> (latest 5, link to
+            <code>#/work/dispatches</code>). Every button posts through <code>wireCuriositySignals()</code>
+            and confirms with a toast.
+            <strong>Curiosity in the edit form.</strong> A collapsible <em>Curiosity</em> block
+            (<code>curiosityFormSection()</code>): on / off / inherit, preset (inherit / focused / explorer /
+            wild), one select per dial ("From preset (level)" or an explicit level, with the dial's meaning
+            under it), an exploration-share slider (0&ndash;60 %, or "default" to inherit), dispatches on / off
+            / inherit and dispatch max chars. <code>readCuriosityForm()</code> keeps keys the form does not show
+            (<code>navigatorEvery</code>, <code>maxTopicShare</code>, <code>dispatch.minEditorScore</code>,
+            &hellip;) from the existing override, removes keys left on inherit, and sends <code>null</code>
+            when nothing is overridden. The config page shows a one-line <code>curiositySummary()</code>
+            ("global defaults", or e.g. "preset wild &middot; identity ask &middot; explore 30%").
+            Bot management: create, edit, start, stop, reset, clone, and delete agents.
              Per-agent configuration overrides for model, conversation parameters, and
              agent loop settings. Soul file generation and application.</p>
         </div>
@@ -1479,6 +1899,30 @@ compaction                            // Context compaction
              selective log entry deletion. A "Re-run failed (N)" button appears whenever
              any enabled job's last run errored, and bulk-retries all of them via
              <code>POST /api/cron/rerun-failed</code>.</p>
+          <p><strong>Natural-language box (S8).</strong> The tab (and the Automations landing,
+             which is the same page) opens with "Tell an agent what to do and when": one text
+             field, an agent picker (a running agent is preselected) and <em>Parse</em>.
+             <code>web/pages/automations.js</code> posts to <code>POST /api/cron/parse</code> and
+             renders the preview card from <code>web/pages/automations-helpers.js</code>
+             (<code>previewCard</code>): schedule in words and next run, the explanation, who read it
+             (the agent's backend and model, or the built-in parser), warnings, a confidence badge,
+             and editable Cron / Name / Instruction / Chat id fields — the cron field re-describes
+             itself as you type (<code>cronToHuman</code>, a client mirror of the server's).
+             <em>Create job</em> builds the same payload the New Job form sends
+             (<code>buildCreateRequest</code>: <code>{ name, enabled, schedule: { kind: 'cron', expr,
+             tz }, payload: { kind: 'instruction', text, chatId, botId } }</code>, the operator chat
+             resolved from <code>operatorChatId</code>) and posts it to the existing
+             <code>POST /api/cron</code>; the list reloads with the new job.</p>
+          <p><strong>Compact list (S3.5).</strong> <code>web/pages/cron-list-helpers.js</code>: schedules
+             in words (<code>humanSchedule</code> &mdash; "Every day at 03:30", "Every 3h", "Once at
+             &hellip;", expression and timezone on hover), the agent as a chip with the
+             <code>[botId]</code> suffix stripped from the job name, the payload kind as a badge, Next as
+             "in 9h" / "paused", Last run as badge + age + duration with a truncated error line, one Run
+             button and a row menu (Edit, Run logs, Open, Delete). An agent filter with counts (plus
+             "Fleet-wide" for jobs without a <code>payload.botId</code>) and a search box over name,
+             schedule words, payload and agent re-render the table in place
+             (<code>filterJobs</code>, <code>sortJobs</code>: fleet-wide first, then agent name, then job
+             name). Delegation sits on the wrapper so it survives re-renders.</p>
         </div>
 
         <div class="card">
@@ -1494,6 +1938,38 @@ compaction                            // Context compaction
              sidebar grouped by source. Select a tool to view its description and auto-generated
              parameter form (string, number, boolean, enum, object/array). Execute directly
              without LLM mediation and view results with success/failure badge and duration.</p>
+        </div>
+
+        <div class="card">
+          <h3>Work &rarr; Outputs (session S3.5)</h3>
+          <p>The Work landing (<code>#/work</code>, first tab of the area; <code>web/pages/work.js</code>,
+             helpers in <code>work-helpers.js</code>): the last 200 entries of
+             <code>GET /api/productions/all-entries</code> newest first &mdash; avatar, file name (a link
+             into the Productions explorer via <code>#/work/productions?bot=&amp;file=</code>), action
+             badge, agent, age, description &mdash; with <strong>Approve / Reject</strong> inline for
+             unreviewed entries (<code>POST /api/productions/:botId/:id/evaluate</code>, so karma and the
+             Needs You badge move as before) and the verdict plus star rating once reviewed. Status chips
+             (All / To review / Approved / Rejected, with counts) and an agent select filter the list;
+             it opens on "To review" when anything is waiting. <code>entryStatus()</code> treats
+             <code>archive</code> / <code>delete</code> entries as archived.</p>
+        </div>
+
+        <div class="card">
+          <h3>Work &rarr; Dispatches (curiosity DNA)</h3>
+          <p><span class="badge badge-yellow">2026-10-03</span> The fleet inbox of insights, second tab of
+             the Work area (<code>#/work/dispatches</code>, legacy <code>#/dispatches</code> redirects; no
+             sidebar entry of its own). <code>web/pages/dispatches.js</code> loads
+             <code>GET /api/curiosity/dispatches?limit=100</code>; markup and filters are pure helpers in
+             <code>curiosity-helpers.js</code>. Each card leads with the hook, then why it matters, the
+             evidence (collapsed), what to do and the optional question, with the agent's face and name,
+             kind (<code>insight</code> / <code>proposal</code> / <code>digest</code>), status when not sent
+             (<code>held</code> = kept for a digest by the editor gate, the closed cadence or the fleet cap), topic, age and the dials a proposal
+             crosses. Filter chips <em>All / Sent / Held / Proposals</em> with counts (dropped dispatches
+             never show; the choice persists in <code>sessionStorage</code> under
+             <code>aibot.dispatches.filter</code>). 👍 / 👎 / "more like this" post to
+             <code>/api/curiosity/:botId/dispatches/:id/signal</code>; the signal teaches the agent's taste
+             model and earns (or costs) it dispatch frequency. Wiring is
+             <code>wireCuriositySignals()</code> in <code>curiosity.js</code>, shared with Agent Home.</p>
         </div>
 
         <div class="card">
