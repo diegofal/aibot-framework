@@ -57,5 +57,49 @@ Done by subagents in waves, partitioned by file ownership:
 ## Status
 | Phase | State |
 |---|---|
-| 0 | in progress |
-| 1–5 | pending |
+| 0 | done 2026-10-03 (`web/ui/toast.js` action + `undoable`, `web/ui/dialog.js`) |
+| 1 | done 2026-10-03 (`POST /api/needs-you/bulk`, `/act`, `/clear-stale`; sweep covers pending inbox conversations; page bulk/groups/chips) |
+| 2 | done 2026-10-03 (all six bugs plus the ones found on the way, see CHANGELOG) |
+| 3 | done 2026-10-03 (no `alert`/`confirm`/`prompt` left; polling keeps in-progress input) |
+| 4 | done 2026-10-03 (Feedback / Agent loop / Tool Runner moves with redirects, Stats strip gone, canonical hrefs + legacy-href test, 404 page). "Queue is the review surface" is the intent, not a separate change: Productions keeps its own verdict actions |
+| 5 | done 2026-10-03 (global shortcuts, palette actions, Outputs keys, Agents list, Home cards, Agent Home/edit, Settings save bar, wizard) |
+| Docs (wave 3) | done 2026-10-03 (CHANGELOG, `docs/architecture-docs/`, README, roadmap) |
+
+Deploy: the wave 1 `src/` changes (Needs You write routes wired in `server.ts`, `closeStaleInboxConversations`,
+feedback `botName`, archive empty body) need `docker compose up -d --build`; until then the queue's bulk,
+clear-stale and orphan-ask dismiss calls 404 in the running container. `web/` is served from the read-only mount.
+
+## Follow-ups (not done)
+Collected from the wave notes; none is in the plan's scope.
+
+**Backend / API**
+- No skills enable/disable API (built-ins live in `config.skills.enabled`), so the Skills page has no bulk
+  enable/disable; a note on the page says so.
+- `GET /api/curiosity/dispatches` caps `limit` at 200 and has no `offset` / `before` cursor; Dispatches'
+  "Load more" stops at 200.
+- Outputs bulk runs sequential per-item `evaluate` / `archive` calls; a `POST /api/productions/bulk` would be
+  faster for large queues. Outputs' Archive still moves the file to `archived/` (could switch to the Needs You
+  neutral archive path if that ever diverges).
+- Hygiene history "Load more" re-asks with `limit + 50` (the API pages only by `limit`, store cap 500).
+
+**Needs You**
+- Bulk approve is offered only where it is safe and supported: asks, permissions and proposals have no bulk
+  approve (asks need an answer, permissions/proposals only support deny/reject in bulk). Not offered on purpose,
+  revisit if wanted.
+- `clear-stale` never touches `tool` items unless `kinds` asks for them.
+
+**Frontend**
+- No page calls `registerPageShortcuts` yet; the `?` help sheet reads the static `PAGE_SHORTCUTS` map
+  (needsYou, work, dispatches, agentHome, agentEdit, settings, agents). Page handlers stay local.
+- `.tool-runner-*` CSS (the old standalone page layout) is unused, and so is the `#topbar .nav-status` rule
+  after `#topbar-status` was removed.
+- Pre-existing Biome `noForEach` warnings remain in the agent edit form code in `agents.js`.
+- Not verified in a browser (the dashboard login blocks automation); verified with `bun test tests/web`,
+  smoke imports and `curl` of the served assets.
+
+**Housekeeping**
+- Leftover bundle-check output at `D:\tmp\ux-build-check` (deleting it was blocked by the permission system).
+- The wave 1 BaaS page edits were made on `main`'s working tree and re-applied onto this branch from a backup;
+  confirm `main` has no stray uncommitted copy before switching branches.
+- Flaky, unrelated: `tests/web/log-tail.test.ts` "detects rotation…" failed once in a full `tests/web` run and
+  passed on rerun.

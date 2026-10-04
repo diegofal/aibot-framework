@@ -8,7 +8,12 @@
  * this module imports nav-routes. Tests: tests/web/palette-helpers.test.ts.
  */
 import { AREAS, areaHref, visibleTabs } from '../nav-routes.js';
+import { rerunSummary } from '../pages/cron-list-helpers.js';
+import { summarizeBulk } from '../pages/needs-you-helpers.js';
 import { esc } from './escape.js';
+
+/** Age cutoff of the palette's "Clear stale needs" action. */
+export const STALE_HOURS = 72;
 
 export const PALETTE_LIMIT = 12;
 export const RECENTS_MAX = 6;
@@ -190,6 +195,30 @@ export function buildActionItems(agents, { theme = 'dark' } = {}) {
       hint: a.id,
       href: `#/agents/${id}/config`,
     });
+    out.push({
+      id: `action:stats:${a.id}`,
+      kind: 'action',
+      label: `${name} stats`,
+      hint: a.id,
+      keywords: ['stats', 'insights'],
+      href: `#/insights/stats/bot/${id}`,
+    });
+    out.push({
+      id: `action:karma:${a.id}`,
+      kind: 'action',
+      label: `${name} karma`,
+      hint: a.id,
+      keywords: ['karma', 'score'],
+      href: `#/insights/karma/${id}`,
+    });
+    out.push({
+      id: `action:logs:${a.id}`,
+      kind: 'action',
+      label: `${name} logs`,
+      hint: a.id,
+      keywords: ['logs', 'activity'],
+      href: `#/insights/activity?tab=logs&bot=${id}`,
+    });
   }
   out.push({
     id: 'action:new-agent',
@@ -206,6 +235,50 @@ export function buildActionItems(agents, { theme = 'dark' } = {}) {
     hint: 'Queue',
     keywords: ['inbox', 'asks', 'queue'],
     href: '#/needs',
+  });
+  out.push({
+    id: 'action:clear-stale',
+    kind: 'action',
+    label: `Clear stale needs (older than ${STALE_HOURS}h)`,
+    hint: 'Needs You',
+    keywords: ['clear', 'stale', 'dismiss', 'queue'],
+    api: {
+      path: '/api/needs-you/clear-stale',
+      method: 'POST',
+      body: { olderThanHours: STALE_HOURS },
+    },
+    confirm: {
+      title: `Clear everything older than ${STALE_HOURS} h?`,
+      message:
+        'Questions are dismissed, permissions denied, proposals rejected, outputs archived (no karma) and feedback replies closed. Nothing is approved; pending tools are left alone.',
+      confirmLabel: 'Clear stale',
+    },
+    summary: 'clear-stale',
+  });
+  out.push({
+    id: 'action:new-cron',
+    kind: 'action',
+    label: 'New cron job',
+    hint: 'Automations',
+    keywords: ['cron', 'schedule', 'create', 'job'],
+    href: '#/automations/cron/new',
+  });
+  out.push({
+    id: 'action:run-loop',
+    kind: 'action',
+    label: 'Run agent loop now',
+    hint: 'Automations',
+    keywords: ['loop', 'run', 'agents'],
+    api: { path: '/api/agent-loop/run', method: 'POST' },
+  });
+  out.push({
+    id: 'action:rerun-crons',
+    kind: 'action',
+    label: 'Re-run failed crons',
+    hint: 'Automations',
+    keywords: ['cron', 'retry', 'failed'],
+    api: { path: '/api/cron/rerun-failed', method: 'POST' },
+    summary: 'cron-rerun',
   });
   out.push({
     id: 'action:theme',
@@ -225,6 +298,19 @@ export function buildItems({ agents = [], ctx = {}, theme = 'dark' } = {}) {
     ...buildPageItems(ctx),
     ...buildActionItems(agents, { theme }),
   ].map((it, index) => ({ ...it, index }));
+}
+
+/** `{ text, tone }` for the toast after an `api` action resolved with `res`. */
+export function actionResultToast(item, res) {
+  if (item?.summary === 'cron-rerun') return rerunSummary(res);
+  if (res?.error) return { text: String(res.error), tone: 'danger' };
+  if (item?.summary === 'clear-stale') {
+    const list = Array.isArray(res?.results) ? res.results : [];
+    if (list.length === 0) return { text: `Nothing older than ${STALE_HOURS} h`, tone: 'muted' };
+    const sum = summarizeBulk(list, 'Cleared');
+    return { text: sum.text, tone: sum.failed > 0 ? 'warn' : 'ok' };
+  }
+  return { text: item?.label ?? 'Done', tone: 'ok' };
 }
 
 export function moveIndex(i, delta, n) {

@@ -15,6 +15,7 @@ import {
   cronTable,
   cronToolbar,
   filterJobs,
+  rerunSummary,
 } from './cron-list-helpers.js';
 import { api, closeModal, escapeHtml, showModal, timeAgo } from './shared.js';
 
@@ -297,11 +298,8 @@ export async function renderCron(el) {
     rerunFailedBtn.disabled = true;
     rerunFailedBtn.textContent = 'Re-running…';
     const res = await api('/api/cron/rerun-failed', { method: 'POST' });
-    if (res?.error) showToast(`Re-run failed: ${res.error}`, { tone: 'danger' });
-    else {
-      const succeeded = (res.results || []).filter((r) => r.ran).length;
-      showToast(`Re-ran ${succeeded}/${res.attempted}`, { tone: succeeded ? 'ok' : 'danger' });
-    }
+    const { text, tone } = rerunSummary(res);
+    showToast(text, { tone });
     await reloadAll();
   });
 }

@@ -37,7 +37,13 @@ export function filterConversations(list, { type = '', status = '', q = '' } = {
   return (Array.isArray(list) ? list : []).filter((c) => {
     if (type && c?.type !== type) return false;
     if (status && convStatus(c) !== status) return false;
-    if (needle && !String(c?.title ?? '').toLowerCase().includes(needle)) return false;
+    if (
+      needle &&
+      !String(c?.title ?? '')
+        .toLowerCase()
+        .includes(needle)
+    )
+      return false;
     return true;
   });
 }

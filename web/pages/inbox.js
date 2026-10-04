@@ -1,12 +1,16 @@
+import { confirmDialog, showToast } from '../ui/index.js';
 import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
 let refreshTimer = null;
+/** Bumped on destroy: a list render still in flight must not paint over the next page. */
+let generation = 0;
 
 const STATUS_LABELS = {
   pending: 'Pending',
   answered: 'Answered',
   dismissed: 'Dismissed',
   timed_out: 'Timed Out',
+  closed: 'Closed',
 };
 
 const STATUS_BADGE_CLASS = {
@@ -14,6 +18,7 @@ const STATUS_BADGE_CLASS = {
   answered: 'badge-inbox-answered',
   dismissed: 'badge-inbox-dismissed',
   timed_out: 'badge-inbox-timed-out',
+  closed: 'badge-inbox-timed-out',
 };
 
 function renderConversationRow(convo, botName) {
@@ -21,20 +26,44 @@ function renderConversationRow(convo, botName) {
   const badgeClass = STATUS_BADGE_CLASS[status] || '';
   const label = STATUS_LABELS[status] || status;
 
-  return `<tr style="cursor:pointer" data-href="#/inbox/${encodeURIComponent(convo.botId)}/${convo.id}">
+  return `<tr style="cursor:pointer" data-href="#/needs/inbox/${encodeURIComponent(convo.botId)}/${encodeURIComponent(convo.id)}">
     <td>${escapeHtml(botName)}</td>
-    <td><a href="#/inbox/${encodeURIComponent(convo.botId)}/${convo.id}">${escapeHtml(convo.title)}</a></td>
+    <td><a href="#/needs/inbox/${encodeURIComponent(convo.botId)}/${encodeURIComponent(convo.id)}">${escapeHtml(convo.title)}</a></td>
     <td><span class="badge ${badgeClass}">${label}</span></td>
     <td>${convo.messageCount}</td>
     <td class="text-dim">${timeAgo(convo.updatedAt)}</td>
+    <td>${
+      status === 'pending'
+        ? `<button type="button" class="btn btn-sm inbox-dismiss" data-bot="${escapeHtml(convo.botId)}" data-conv="${escapeHtml(convo.id)}" title="Close the question without answering (kept in history)">Dismiss</button>`
+        : ''
+    }</td>
   </tr>`;
 }
 
-async function render(el) {
+/**
+ * Close an inbox question without answering: live or orphaned, the Needs You
+ * write path dismisses it (conversation kept, status `dismissed`).
+ */
+export async function dismissInboxQuestion(conversationId) {
+  const res = await api('/api/needs-you/act', {
+    method: 'POST',
+    body: { id: `ask:${conversationId}`, action: 'dismiss' },
+  });
+  if (!res || res.error || res.ok === false) {
+    showToast(res?.error || 'Dismiss failed', { tone: 'danger' });
+    return false;
+  }
+  showToast('Question dismissed', { tone: 'muted' });
+  window.dispatchEvent(new CustomEvent('badges:refresh'));
+  return true;
+}
+
+async function render(el, gen = generation) {
   // Fetch inbox conversations across all bots
   const botsRes = await api('/api/conversations');
-  if (botsRes.error) {
-    el.innerHTML = `<div class="page-title">Inbox</div><p class="text-dim">Failed to load: ${escapeHtml(botsRes.error)}</p>`;
+  if (gen !== generation) return;
+  if (!Array.isArray(botsRes)) {
+    el.innerHTML = `<div class="page-title">Inbox</div><p class="text-dim">Failed to load: ${escapeHtml(botsRes?.error || 'unexpected response')}</p>`;
     return;
   }
 
@@ -52,6 +81,7 @@ async function render(el) {
     }
   });
   await Promise.all(fetches);
+  if (gen !== generation) return;
 
   // Split into pending and previous
   const pending = allConvos.filter((c) => c.inboxStatus === 'pending');
@@ -64,7 +94,7 @@ async function render(el) {
   const pendingHtml =
     pending.length > 0
       ? `<table>
-        <thead><tr><th>Bot</th><th>Question</th><th>Status</th><th>Messages</th><th>Time</th></tr></thead>
+        <thead><tr><th>Bot</th><th>Question</th><th>Status</th><th>Messages</th><th>Time</th><th></th></tr></thead>
         <tbody>${pending.map((c) => renderConversationRow(c, c._botName)).join('')}</tbody>
       </table>`
       : '<p class="text-dim text-sm">No pending questions</p>';
@@ -72,7 +102,7 @@ async function render(el) {
   const previousHtml =
     previous.length > 0
       ? `<table>
-        <thead><tr><th>Bot</th><th>Question</th><th>Status</th><th>Messages</th><th>Time</th></tr></thead>
+        <thead><tr><th>Bot</th><th>Question</th><th>Status</th><th>Messages</th><th>Time</th><th></th></tr></thead>
         <tbody>${previous.map((c) => renderConversationRow(c, c._botName)).join('')}</tbody>
       </table>`
       : '<p class="text-dim text-sm">No previous questions</p>';
@@ -90,18 +120,29 @@ async function render(el) {
   // Wire row clicks
   el.querySelectorAll('tr[data-href]').forEach((tr) => {
     tr.addEventListener('click', (e) => {
-      if (e.target.tagName === 'A') return;
+      if (e.target.tagName === 'A' || e.target.closest('button')) return;
       location.hash = tr.dataset.href;
+    });
+  });
+  el.querySelectorAll('.inbox-dismiss').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      btn.disabled = true;
+      if (await dismissInboxQuestion(btn.dataset.conv)) render(el);
+      else btn.disabled = false;
     });
   });
 }
 
 export async function renderInbox(el) {
-  await render(el);
-  refreshTimer = setInterval(() => render(el), 15_000);
+  const gen = ++generation;
+  await render(el, gen);
+  if (gen !== generation) return;
+  refreshTimer = setInterval(() => render(el, gen), 15_000);
 }
 
 export function destroyInbox() {
+  generation++;
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
@@ -109,7 +150,7 @@ export function destroyInbox() {
 }
 
 /**
- * #/inbox/:botId/:id — Inbox chat view
+ * #/needs/inbox/:botId/:id — Inbox chat view
  */
 export async function renderInboxChat(el, botId, conversationId) {
   el.innerHTML = '<div class="page-title">Inbox</div><p class="text-dim">Loading...</p>';
@@ -119,7 +160,7 @@ export async function renderInboxChat(el, botId, conversationId) {
     el.innerHTML = `
       <div class="page-title">Inbox</div>
       <p class="text-dim">${escapeHtml(data.error)}</p>
-      <a href="#/inbox" class="btn btn-sm">&larr; Back</a>`;
+      <a href="#/needs/inbox" class="btn btn-sm">&larr; Back</a>`;
     return;
   }
 
@@ -188,20 +229,38 @@ export async function renderInboxChat(el, botId, conversationId) {
         <div class="page-title">${escapeHtml(conversation.title)}</div>
         <div style="display:flex;gap:8px;align-items:center">
           <span class="badge ${badgeClass}">${label}</span>
+          ${status === 'pending' ? '<button class="btn btn-sm" id="inbox-dismiss-btn" title="Close the question without answering (kept in history)">Dismiss</button>' : ''}
           <button class="btn btn-danger btn-sm" id="inbox-delete-btn">Delete</button>
-          <a href="#/inbox" class="btn btn-sm">&larr; Back</a>
+          <a href="#/needs/inbox" class="btn btn-sm">&larr; Back</a>
         </div>
       </div>
       ${status === 'pending' ? '<div class="inbox-pending-banner"><span>This question is awaiting your response. Your first reply will be delivered to the bot.</span></div>' : ''}
       <div id="inbox-thread-container"></div>`;
 
     // Wire delete
+    document.getElementById('inbox-dismiss-btn')?.addEventListener('click', async () => {
+      if (await dismissInboxQuestion(conversationId)) {
+        conversation.inboxStatus = 'dismissed';
+        renderView();
+      }
+    });
     document.getElementById('inbox-delete-btn')?.addEventListener('click', async () => {
-      if (!confirm('Delete this conversation? This cannot be undone.')) return;
-      await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`, {
+      const ok = await confirmDialog({
+        title: 'Delete conversation',
+        message: 'Delete this conversation and its whole thread? This cannot be undone.',
+        confirmLabel: 'Delete',
+        tone: 'danger',
+      });
+      if (!ok) return;
+      const res = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`, {
         method: 'DELETE',
       });
-      location.hash = '#/inbox';
+      if (res?.error) {
+        showToast(res.error, { tone: 'danger' });
+        return;
+      }
+      showToast('Conversation deleted', { tone: 'muted' });
+      location.hash = '#/needs/inbox';
     });
 
     renderThreadUI();
@@ -240,6 +299,10 @@ export async function renderInboxChat(el, botId, conversationId) {
   function renderThreadUI() {
     const container = document.getElementById('inbox-thread-container');
     if (!container) return;
+    // Re-rendering the thread (poll finished, status changed) rebuilds the input;
+    // keep whatever the operator was typing.
+    const draft = container.querySelector('.thread-input')?.value ?? '';
+    const hadFocus = document.activeElement?.classList?.contains('thread-input');
 
     renderThread(container, {
       thread: threadMessages,
@@ -301,7 +364,7 @@ export async function renderInboxChat(el, botId, conversationId) {
           { method: 'POST', body: { action, messageId } }
         );
         if (res.error) {
-          showToast?.(res.error, 'error');
+          showToast(res.error, { tone: 'danger' });
         }
         if (res.status === 'approved') {
           generating = true;
@@ -319,6 +382,11 @@ export async function renderInboxChat(el, botId, conversationId) {
     });
 
     renderQuickReplies(container);
+    const input = container.querySelector('.thread-input');
+    if (input && draft && !input.value) {
+      input.value = draft;
+      if (hadFocus) input.focus();
+    }
   }
 
   renderView();

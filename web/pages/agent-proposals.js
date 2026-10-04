@@ -1,3 +1,4 @@
+import { confirmInline, promptDialog, showToast, undoable } from '../ui/index.js';
 import { api, escapeHtml, timeAgo } from './shared.js';
 
 const STATUS_BADGES = {
@@ -11,7 +12,7 @@ export async function renderAgentProposals(el) {
 
   const proposals = await api('/api/agent-proposals');
 
-  if (proposals.error) {
+  if (!Array.isArray(proposals)) {
     el.innerHTML = `
       <div class="page-title">Agent Proposals</div>
       <p class="text-dim">Agent proposals are not enabled. Set <code>agentProposals.enabled: true</code> in config.</p>
@@ -81,8 +82,8 @@ export async function renderAgentProposals(el) {
           <p class="mt-4">${escapeHtml(p.justification)}</p>
         </div>
         <div class="actions">
-          <button class="btn btn-primary" data-action="approve" data-id="${p.id}">Approve & Create Agent</button>
-          <button class="btn btn-danger" data-action="reject" data-id="${p.id}">Reject</button>
+          <button class="btn btn-primary" data-action="approve" data-id="${escapeHtml(p.id)}">Approve & Create Agent</button>
+          <button class="btn btn-danger" data-action="reject" data-id="${escapeHtml(p.id)}">Reject</button>
         </div>
       `;
       container.appendChild(card);
@@ -97,28 +98,56 @@ export async function renderAgentProposals(el) {
       if (action === 'approve') {
         btn.disabled = true;
         btn.textContent = 'Creating agent...';
-        const result = await api(`/api/agent-proposals/${id}/approve`, { method: 'POST' });
-        if (result.error) {
-          alert(`Approval failed: ${result.error}`);
+        const result = await api(`/api/agent-proposals/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+        // A created agent whose soul failed still answers with `proposal` + `error`.
+        if (!result || (result.error && !result.proposal)) {
+          showToast(`Approval failed: ${result?.error || 'unknown error'}`, { tone: 'danger' });
           btn.disabled = false;
           btn.textContent = 'Approve & Create Agent';
         } else {
-          const soulMsg = result.soulGenerated
-            ? 'Soul files generated successfully.'
-            : `Agent created with basic IDENTITY.md (soul generation failed: ${result.error || 'unknown'}).`;
-          alert(
-            `Agent "${result.agent?.name || 'unknown'}" created!\n\n${soulMsg}\n\nThe agent is disabled — start it from the Agents page when ready.`
-          );
+          const name = result.agent?.name || 'Agent';
+          if (result.soulGenerated) {
+            showToast(`${name} created (disabled) — start it from Agents when ready`, {
+              tone: 'ok',
+              duration: 6000,
+              action: {
+                label: 'Open',
+                onClick: () => {
+                  location.hash = `#/agents/${encodeURIComponent(result.agent?.id ?? '')}`;
+                },
+              },
+            });
+          } else {
+            showToast(
+              `${name} created with a basic IDENTITY.md — soul generation failed: ${result.error || 'unknown'}`,
+              { tone: 'warn', duration: 8000 }
+            );
+          }
+          window.dispatchEvent(new CustomEvent('badges:refresh'));
           renderAgentProposals(el);
         }
       } else if (action === 'reject') {
-        const note = prompt('Rejection note (optional):');
+        const note = await promptDialog({
+          title: 'Reject proposal',
+          message: 'Optional note for the proposing bot.',
+          placeholder: 'Rejection note (optional)',
+          confirmLabel: 'Reject',
+        });
+        if (note === null) return;
         btn.disabled = true;
         btn.textContent = 'Rejecting...';
-        await api(`/api/agent-proposals/${id}/reject`, {
+        const res = await api(`/api/agent-proposals/${encodeURIComponent(id)}/reject`, {
           method: 'POST',
-          body: { note: note || undefined },
+          body: { note: note.trim() || undefined },
         });
+        if (!res || res.error) {
+          showToast(`Reject failed: ${res?.error || 'unknown error'}`, { tone: 'danger' });
+          btn.disabled = false;
+          btn.textContent = 'Reject';
+          return;
+        }
+        showToast('Proposal rejected', { tone: 'muted' });
+        window.dispatchEvent(new CustomEvent('badges:refresh'));
         renderAgentProposals(el);
       }
     });
@@ -136,7 +165,7 @@ export async function renderAgentProposals(el) {
         <td class="text-dim">${escapeHtml(p.proposedBy)}</td>
         <td class="text-dim">${timeAgo(p.updatedAt)}</td>
         <td class="actions">
-          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${p.id}">Delete</button>
+          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${escapeHtml(p.id)}">Delete</button>
         </td>
       `;
       tbody.appendChild(tr);
@@ -146,10 +175,28 @@ export async function renderAgentProposals(el) {
       const btn = e.target.closest('button[data-action]');
       if (!btn) return;
       if (btn.dataset.action === 'delete') {
-        if (confirm('Delete this proposal record?')) {
-          await api(`/api/agent-proposals/${btn.dataset.id}`, { method: 'DELETE' });
-          renderAgentProposals(el);
-        }
+        if (!confirmInline(btn, { label: 'Click again to delete' })) return;
+        const row = btn.closest('tr');
+        const id = btn.dataset.id;
+        if (row) row.hidden = true;
+        undoable('Proposal record deleted', {
+          commit: () =>
+            api(`/api/agent-proposals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+          undo: () => {
+            if (row) row.hidden = false;
+          },
+        })
+          .then(({ undone, result }) => {
+            if (undone) return;
+            if (!result || result.error) {
+              if (row) row.hidden = false;
+              showToast(`Delete failed: ${result?.error || 'unknown error'}`, { tone: 'danger' });
+            }
+          })
+          .catch((err) => {
+            if (row) row.hidden = false;
+            showToast(`Delete failed: ${err?.message || err}`, { tone: 'danger' });
+          });
       }
     });
   }

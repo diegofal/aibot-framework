@@ -1,20 +1,40 @@
+import { confirmDialog, emptyState, showToast } from '../ui/index.js';
+import {
+  botDisplayName,
+  conversationFilters,
+  convStatus,
+  convTypeLabel,
+  deleteAllDialog,
+  filterConversations,
+} from './conversations-helpers.js';
 import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
+const convHref = (botId, id) =>
+  id
+    ? `#/work/conversations/${encodeURIComponent(botId)}/${encodeURIComponent(id)}`
+    : `#/work/conversations/${encodeURIComponent(botId)}`;
+
+/** Filters survive navigating into a thread and back. */
+const convFilter = { type: '', status: '', q: '' };
+const LIST_PAGE = 100;
+
 /**
- * #/conversations — List bots with conversation counts
+ * #/work/conversations — List bots with conversation counts
  */
 export async function renderConversations(el) {
   el.innerHTML = '<div class="page-title">Conversations</div><p class="text-dim">Loading...</p>';
 
   const data = await api('/api/conversations');
-  if (data.error) {
-    el.innerHTML = `
-      <div class="page-title">Conversations</div>
-      <p class="text-dim">${escapeHtml(data.error)}</p>`;
+  if (!Array.isArray(data)) {
+    el.innerHTML = `<div class="page-title">Conversations</div>${emptyState({
+      icon: '∅',
+      title: 'Could not load conversations',
+      hint: data?.error || 'The server did not answer.',
+    })}`;
     return;
   }
 
-  const total = data.reduce((s, b) => s + b.conversationCount, 0);
+  const total = data.reduce((s, b) => s + (Number(b.conversationCount) || 0), 0);
 
   el.innerHTML = `
     <div class="flex-between mb-16">
@@ -30,13 +50,21 @@ export async function renderConversations(el) {
         </table>`
     }`;
 
-  // Wire "Delete All" button
-  document.getElementById('conv-delete-all-btn')?.addEventListener('click', async () => {
-    if (!confirm(`Delete all ${total} conversations across all bots? This cannot be undone.`))
+  const deleteMany = async (url, count, botName) => {
+    if (!(await confirmDialog(deleteAllDialog(count, botName)))) return;
+    const res = await api(url, { method: 'DELETE' });
+    if (res?.error) {
+      showToast(`Could not delete: ${res.error}`, { tone: 'danger' });
       return;
-    await api('/api/conversations', { method: 'DELETE' });
+    }
+    const n = res?.deleted ?? count;
+    showToast(`Deleted ${n} conversation${n === 1 ? '' : 's'}`, { tone: 'ok' });
     renderConversations(el);
-  });
+  };
+
+  document
+    .getElementById('conv-delete-all-btn')
+    ?.addEventListener('click', () => deleteMany('/api/conversations', total, ''));
 
   if (data.length === 0) return;
 
@@ -45,95 +73,153 @@ export async function renderConversations(el) {
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
     tr.innerHTML = `
-      <td><a href="#/conversations/${encodeURIComponent(bot.botId)}">${escapeHtml(bot.name)}</a></td>
-      <td>${bot.conversationCount}</td>
-      <td><button class="btn btn-danger btn-sm conv-del-bot-btn" data-bot-id="${escapeHtml(bot.botId)}" data-bot-name="${escapeHtml(bot.name)}" data-count="${bot.conversationCount}">Delete</button></td>`;
+      <td><a href="${convHref(bot.botId)}">${escapeHtml(bot.name || bot.botId)}</a></td>
+      <td>${Number(bot.conversationCount) || 0}</td>
+      <td>${
+        bot.conversationCount > 0
+          ? `<button class="btn btn-danger btn-sm conv-del-bot-btn" data-bot-id="${escapeHtml(bot.botId)}" data-bot-name="${escapeHtml(bot.name || bot.botId)}" data-count="${Number(bot.conversationCount) || 0}">Delete</button>`
+          : ''
+      }</td>`;
     tr.addEventListener('click', (e) => {
-      if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
-      location.hash = `#/conversations/${encodeURIComponent(bot.botId)}`;
+      if (e.target.closest('a, button')) return;
+      location.hash = convHref(bot.botId);
     });
     tbody.appendChild(tr);
   }
 
-  // Wire per-bot delete buttons
-  for (const btn of document.querySelectorAll('.conv-del-bot-btn')) {
-    btn.addEventListener('click', async (e) => {
+  for (const btn of el.querySelectorAll('.conv-del-bot-btn')) {
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const botId = btn.dataset.botId;
-      const botName = btn.dataset.botName;
-      const count = btn.dataset.count;
-      if (!confirm(`Delete all ${count} conversations for ${botName}? This cannot be undone.`))
-        return;
-      await api(`/api/conversations/${encodeURIComponent(botId)}`, { method: 'DELETE' });
-      renderConversations(el);
+      const { botId, botName, count } = btn.dataset;
+      deleteMany(`/api/conversations/${encodeURIComponent(botId)}`, Number(count), botName);
     });
   }
 }
 
+function statusBadge(c) {
+  if (!convStatus(c)) return '';
+  const raw = String(c.inboxStatus || 'closed');
+  const cls = `badge-inbox-${raw.replace(/_/g, '-')}`;
+  return `<span class="badge ${cls}">${escapeHtml(raw.replace(/_/g, ' '))}</span>`;
+}
+
 /**
- * #/conversations/:botId — List conversations for a bot
+ * #/work/conversations/:botId — List conversations for a bot
  */
 export async function renderBotConversations(el, botId) {
   el.innerHTML = '<div class="page-title">Conversations</div><p class="text-dim">Loading...</p>';
 
-  const data = await api(`/api/conversations/${encodeURIComponent(botId)}`);
-  if (data.error) {
+  let limit = LIST_PAGE;
+  const [first, index] = await Promise.all([
+    api(`/api/conversations/${encodeURIComponent(botId)}?limit=${limit}`),
+    api('/api/conversations').catch(() => []),
+  ]);
+  let data = first;
+  if (!Array.isArray(data)) {
     el.innerHTML = `
       <div class="page-title">Conversations</div>
-      <p class="text-dim">${escapeHtml(data.error)}</p>
-      <a href="#/conversations" class="btn btn-sm">&larr; Back</a>`;
+      <p class="text-dim">${escapeHtml(data?.error || 'Could not load conversations')}</p>
+      <a href="#/work/conversations" class="btn btn-sm">&larr; Back</a>`;
     return;
   }
+  const botName = botDisplayName(index, botId);
 
   el.innerHTML = `
     <div class="flex-between mb-16">
-      <div class="page-title">${escapeHtml(botId)} Conversations <span class="count">${data.length}</span></div>
+      <div class="page-title">${escapeHtml(botName)} · Conversations <span class="count" id="conv-count"></span></div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary btn-sm" id="new-conv-btn">New Conversation</button>
-        <a href="#/conversations" class="btn btn-sm">&larr; Back</a>
+        <button class="btn btn-primary btn-sm" id="new-conv-btn" data-page-new>New Conversation</button>
+        <a href="#/work/conversations" class="btn btn-sm">&larr; Back</a>
       </div>
     </div>
-    ${
-      data.length === 0
-        ? '<p class="text-dim">No conversations yet. Click "New Conversation" to start one.</p>'
-        : `<table>
-          <thead><tr><th>Title</th><th>Type</th><th>Messages</th><th>Last Activity</th></tr></thead>
-          <tbody id="conv-list-tbody"></tbody>
-        </table>`
-    }`;
+    ${conversationFilters(convFilter)}
+    <div id="conv-list-wrap"></div>`;
 
-  // New Conversation button
+  const draw = () => {
+    const wrap = el.querySelector('#conv-list-wrap');
+    if (!wrap) return;
+    const shown = filterConversations(data, convFilter);
+    const countEl = el.querySelector('#conv-count');
+    if (countEl) {
+      countEl.textContent =
+        shown.length === data.length ? `${data.length}` : `${shown.length} / ${data.length}`;
+    }
+    const canLoadMore = data.length >= limit;
+    if (data.length === 0) {
+      wrap.innerHTML =
+        '<p class="text-dim">No conversations yet. Click "New Conversation" to start one.</p>';
+      return;
+    }
+    wrap.innerHTML = `${
+      shown.length === 0
+        ? emptyState({
+            icon: '⌕',
+            title: 'Nothing matches',
+            hint: 'Try another type, status or search.',
+          })
+        : `<table>
+          <thead><tr><th>Title</th><th>Type</th><th>Status</th><th>Messages</th><th>Last Activity</th></tr></thead>
+          <tbody>${shown
+            .map(
+              (c) => `<tr class="conv-row" data-id="${escapeHtml(c.id)}" style="cursor:pointer">
+            <td><a href="${convHref(botId, c.id)}">${escapeHtml(c.title)}</a></td>
+            <td><span class="badge ${c.type === 'productions' ? 'badge-running' : 'badge-stopped'}">${escapeHtml(convTypeLabel(c.type))}</span></td>
+            <td>${statusBadge(c)}</td>
+            <td>${Number(c.messageCount) || 0}</td>
+            <td class="text-dim">${timeAgo(c.updatedAt)}</td>
+          </tr>`
+            )
+            .join('')}</tbody>
+        </table>`
+    }${canLoadMore ? '<div class="conv-load-more"><button class="btn btn-sm" id="conv-load-more">Load more</button></div>' : ''}`;
+  };
+  draw();
+
+  el.querySelector('#conv-filter-q')?.addEventListener('input', (e) => {
+    convFilter.q = e.target.value;
+    draw();
+  });
+  el.querySelector('#conv-filter-type')?.addEventListener('change', (e) => {
+    convFilter.type = e.target.value;
+    draw();
+  });
+  el.querySelector('#conv-filter-status')?.addEventListener('change', (e) => {
+    convFilter.status = e.target.value;
+    draw();
+  });
+
+  el.querySelector('#conv-list-wrap')?.addEventListener('click', async (e) => {
+    if (e.target.closest('#conv-load-more')) {
+      limit += LIST_PAGE;
+      const more = await api(`/api/conversations/${encodeURIComponent(botId)}?limit=${limit}`);
+      if (!Array.isArray(more)) {
+        showToast(`Could not load more: ${more?.error || 'no answer'}`, { tone: 'danger' });
+        return;
+      }
+      data = more;
+      draw();
+      return;
+    }
+    const row = e.target.closest('tr.conv-row');
+    if (!row || e.target.closest('a')) return;
+    location.hash = convHref(botId, row.dataset.id);
+  });
+
   document.getElementById('new-conv-btn')?.addEventListener('click', async () => {
     const res = await api(`/api/conversations/${encodeURIComponent(botId)}`, {
       method: 'POST',
       body: { type: 'general' },
     });
-    if (res.id) {
-      location.hash = `#/conversations/${encodeURIComponent(botId)}/${res.id}`;
+    if (res?.id) {
+      location.hash = convHref(botId, res.id);
+    } else {
+      showToast(`Could not create: ${res?.error || 'no answer'}`, { tone: 'danger' });
     }
   });
-
-  if (data.length === 0) return;
-
-  const tbody = document.getElementById('conv-list-tbody');
-  for (const convo of data) {
-    const tr = document.createElement('tr');
-    tr.style.cursor = 'pointer';
-    tr.innerHTML = `
-      <td><a href="#/conversations/${encodeURIComponent(botId)}/${convo.id}">${escapeHtml(convo.title)}</a></td>
-      <td><span class="badge ${convo.type === 'productions' ? 'badge-running' : 'badge-stopped'}">${convo.type}</span></td>
-      <td>${convo.messageCount}</td>
-      <td class="text-dim">${timeAgo(convo.updatedAt)}</td>`;
-    tr.addEventListener('click', (e) => {
-      if (e.target.tagName === 'A') return;
-      location.hash = `#/conversations/${encodeURIComponent(botId)}/${convo.id}`;
-    });
-    tbody.appendChild(tr);
-  }
 }
 
 /**
- * #/conversations/:botId/:id — Full-page chat
+ * #/work/conversations/:botId/:id — Full-page chat
  */
 export async function renderConversationChat(el, botId, conversationId) {
   el.innerHTML = '<div class="page-title">Conversation</div><p class="text-dim">Loading...</p>';
@@ -143,7 +229,7 @@ export async function renderConversationChat(el, botId, conversationId) {
     el.innerHTML = `
       <div class="page-title">Conversation</div>
       <p class="text-dim">${escapeHtml(data.error)}</p>
-      <a href="#/conversations/${encodeURIComponent(botId)}" class="btn btn-sm">&larr; Back</a>`;
+      <a href="${convHref(botId)}" class="btn btn-sm">&larr; Back</a>`;
     return;
   }
 
@@ -209,18 +295,29 @@ export async function renderConversationChat(el, botId, conversationId) {
         <div style="display:flex;gap:8px;align-items:center">
           <span class="badge ${conversation.type === 'productions' ? 'badge-running' : 'badge-stopped'}">${conversation.type}</span>
           <button class="btn btn-danger btn-sm" id="conv-delete-btn">Delete</button>
-          <a href="#/conversations/${encodeURIComponent(botId)}" class="btn btn-sm">&larr; Back</a>
+          <a href="${convHref(botId)}" class="btn btn-sm">&larr; Back</a>
         </div>
       </div>
       <div id="conv-thread-container"></div>`;
 
     // Wire delete
     document.getElementById('conv-delete-btn')?.addEventListener('click', async () => {
-      if (!confirm('Delete this conversation? This cannot be undone.')) return;
-      await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`, {
+      const ok = await confirmDialog({
+        title: 'Delete conversation',
+        message: `Delete "${conversation.title}"? This cannot be undone.`,
+        confirmLabel: 'Delete',
+        tone: 'danger',
+      });
+      if (!ok) return;
+      const res = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`, {
         method: 'DELETE',
       });
-      location.hash = `#/conversations/${encodeURIComponent(botId)}`;
+      if (res?.error) {
+        showToast(`Could not delete: ${res.error}`, { tone: 'danger' });
+        return;
+      }
+      showToast('Conversation deleted', { tone: 'ok' });
+      location.hash = convHref(botId);
     });
 
     renderThreadUI();
@@ -250,7 +347,7 @@ export async function renderConversationChat(el, botId, conversationId) {
           { method: 'POST', body: { action, messageId } }
         );
         if (res.error) {
-          showToast?.(res.error, 'error');
+          showToast(res.error, { tone: 'danger' });
         }
         if (res.status === 'approved') {
           // Tool was executed — start polling for the follow-up bot reply

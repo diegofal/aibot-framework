@@ -1,3 +1,5 @@
+import { showToast } from '../ui/index.js';
+import { rememberTenant, restoreTenant } from './baas-helpers.js';
 import { api, escapeHtml, getAuthContext, resolveTenantId } from './shared.js';
 
 /**
@@ -55,16 +57,18 @@ function createListEditor(containerId, items, placeholder) {
 }
 
 /**
- * #/baas/customizations — Per-bot customization overlays
+ * #/settings/baas/customizations — Per-bot customization overlays
  */
 export async function renderBaasCustomizations(el) {
   el.innerHTML =
     '<div class="page-title">Customizations</div><div id="cust-tenant-picker"></div><p class="text-dim">Loading...</p>';
 
+  restoreTenant(); // admin's tenant pick survives reloads and is shared by every BaaS page
   const tenantId = await resolveTenantId(el.querySelector('#cust-tenant-picker'), () =>
     renderBaasCustomizations(el)
   );
   if (!tenantId) return;
+  rememberTenant(tenantId);
 
   const [data, botsData] = await Promise.all([
     api(`/api/baas/customizations/${encodeURIComponent(tenantId)}`),
@@ -247,8 +251,9 @@ function renderEditView(pageEl, tenantId, custom) {
     );
 
     if (res.error) {
-      alert(`Error: ${res.error}`);
+      showToast(`Save failed: ${res.error}`, { tone: 'danger', duration: 6000 });
     } else {
+      showToast('Customization saved', { tone: 'ok' });
       renderBaasCustomizations(pageEl);
     }
   });

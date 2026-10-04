@@ -363,7 +363,7 @@ describe('POST /api/needs-you/bulk', () => {
   it('neutral resolves to the no-karma negative action of each kind', async () => {
     const { calls, handlers } = recorder();
     const res = await post(makeApp(handlers), '/api/needs-you/bulk', {
-      ids: ['permission:p1', 'proposal:pr1', 'production:b1:f1', 'tool:t-pending', 'ask:q-store'],
+      ids: ['permission:p1', 'proposal:pr1', 'production:b1:f1', 'ask:q-store'],
       action: 'neutral',
     });
     expect(res.body.results.every((r: { ok: boolean }) => r.ok)).toBe(true);
@@ -371,9 +371,24 @@ describe('POST /api/needs-you/bulk', () => {
       ['denyPermission', 'p1'],
       ['rejectProposal', 'pr1'],
       ['archiveProduction', 'b1', 'f1'],
-      ['rejectTool', 't-pending'],
       ['dismissAsk', 'q-store'],
     ]);
+  });
+
+  it('tools have no neutral action: neutral never rejects code', async () => {
+    const { calls, handlers } = recorder();
+    const app = makeApp(handlers);
+    const res = await post(app, '/api/needs-you/bulk', {
+      ids: ['tool:t-pending', 'permission:p1'],
+      action: 'neutral',
+    });
+    expect(res.body.results[0].ok).toBe(false);
+    expect(res.body.results[0].error).toContain('tool');
+    expect(res.body.results[1].ok).toBe(true);
+    expect(calls).toEqual([['denyPermission', 'p1']]);
+    const act = await post(app, '/api/needs-you/act', { id: 'tool:t-pending', action: 'neutral' });
+    expect(act.status).toBe(400);
+    expect(calls.some((c) => c[0] === 'rejectTool')).toBe(false);
   });
 
   it('reports a handler that returns false or throws as a per-item failure', async () => {
@@ -395,7 +410,7 @@ describe('POST /api/needs-you/bulk', () => {
     const { calls, handlers } = recorder();
     const res = await post(makeApp(handlers, 't2'), '/api/needs-you/bulk', {
       ids: ['ask:c-orphan', 'ask:c-b2', 'tool:t-pending'],
-      action: 'neutral',
+      action: 'dismiss',
     });
     expect(res.body.results).toEqual([
       { id: 'ask:c-orphan', ok: false, error: 'Not found' },
@@ -475,15 +490,52 @@ describe('POST /api/needs-you/clear-stale', () => {
     const { calls, handlers } = recorder();
     const res = await post(makeApp(handlers), '/api/needs-you/clear-stale', {
       olderThanHours: 1,
-      kinds: ['ask', 'tool'],
+      kinds: ['ask', 'permission'],
       botId: 'b1',
     });
     // q-store is exactly 1 h old: "older than" is strict.
     expect(res.body.byKind.ask).toBe(2);
-    expect(res.body.byKind.tool).toBe(1);
+    expect(res.body.byKind.permission).toBe(1);
     expect(res.body.byKind.production).toBe(0);
-    expect(calls).toContainEqual(['rejectTool', 't-pending']);
     expect(calls.some((c) => c[1] === 'b2')).toBe(false);
+  });
+
+  it('rejects kinds without a neutral action (tools need an explicit reject)', async () => {
+    const { calls, handlers } = recorder();
+    const res = await post(makeApp(handlers), '/api/needs-you/clear-stale', {
+      olderThanHours: 1,
+      kinds: ['ask', 'tool'],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('tool');
+    expect(calls).toEqual([]);
+  });
+
+  it('with ids, only clears those ids (still filtered by age and kind)', async () => {
+    const { calls, handlers } = recorder();
+    const res = await post(makeApp(handlers), '/api/needs-you/clear-stale', {
+      olderThanHours: 72,
+      // q-store is young, tool is not a neutral kind, nope is unknown: all skipped.
+      ids: ['permission:p1', 'ask:c-orphan', 'ask:q-store', 'tool:t-pending', 'nope'],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.cleared).toBe(2);
+    expect(res.body.results.map((r: { id: string }) => r.id)).toEqual([
+      'permission:p1',
+      'ask:c-orphan',
+    ]);
+    expect(calls).toEqual([
+      ['denyPermission', 'p1'],
+      ['closeInboxConversation', 'b1', 'c-orphan'],
+    ]);
+  });
+
+  it('400s ids that is not a string array', async () => {
+    const app = makeApp(recorder().handlers);
+    const res = await post(app, '/api/needs-you/clear-stale', { olderThanHours: 72, ids: 'x' });
+    expect(res.status).toBe(400);
+    const res2 = await post(app, '/api/needs-you/clear-stale', { olderThanHours: 72, ids: [1] });
+    expect(res2.status).toBe(400);
   });
 
   it('counts only successful items as cleared', async () => {
@@ -495,5 +547,70 @@ describe('POST /api/needs-you/clear-stale', () => {
     expect(res.body.cleared).toBe(0);
     expect(res.body.byKind.permission).toBe(0);
     expect(res.body.results[0].ok).toBe(false);
+  });
+});
+
+describe('needsYouActionsFromBotManager', () => {
+  it('routes every handler to the BotManager call the single routes use', async () => {
+    const { needsYouActionsFromBotManager } = await import('../../../src/web/routes/needs-you');
+    const calls: Call[] = [];
+    const rec = <T>(entry: Call, ret: T): T => {
+      calls.push(entry);
+      return ret;
+    };
+    const bm = {
+      dismissAskHuman: (id: string) => rec(['dismissAskHuman', id], true),
+      denyPermission: (id: string, note?: string) => rec(['deny', id, note], true),
+      dismissAgentFeedback: (b: string, id: string) => rec(['dismissFb', b, id], true),
+      getConversationsService: () => ({
+        markInboxStatus: (b: string, c: string, s: string) => rec(['mark', b, c, s], {}),
+      }),
+      getAgentProposalStore: () => ({
+        get: (id: string) => ({ id, status: id === 'done' ? 'approved' : 'pending' }) as never,
+        updateStatus: (id: string, s: string, note?: string) => rec(['proposal', id, s, note], {}),
+      }),
+      getProductionsService: () => ({
+        getEntry: (b: string, id: string) =>
+          id === 'gone' ? null : ({ path: `${id}.md` } as never),
+        archiveFile: (b: string, p: string, r: string) => rec(['archive', b, p, r], true),
+        evaluate: (
+          b: string,
+          id: string,
+          body: { status: string },
+          soul: unknown,
+          karma: unknown
+        ) => rec(['evaluate', b, id, body.status, soul, karma], {}),
+      }),
+      getDynamicToolRegistry: () => ({
+        approve: (id: string) => rec(['approveTool', id], {}),
+        reject: (id: string, note?: string) => rec(['rejectTool', id, note], null),
+      }),
+      findSoulLoader: () => 'SOUL',
+      getKarmaService: () => 'KARMA',
+      getActivityStream: () => 'ACT',
+    };
+    const h = needsYouActionsFromBotManager(bm);
+    expect(h.dismissAsk?.('q1')).toBe(true);
+    expect(h.closeInboxConversation?.('b1', 'c1')).toBe(true);
+    expect(h.denyPermission?.('p1', 'n')).toBe(true);
+    expect(h.rejectProposal?.('pr1', 'n')).toBe(true);
+    expect(h.rejectProposal?.('done')).toBe(false);
+    expect(h.dismissFeedback?.('b1', 'fb1')).toBe(true);
+    expect(h.evaluateProduction?.('b1', 'f1', 'approved')).toBe(true);
+    expect(h.archiveProduction?.('b1', 'f1', 'why')).toBe(true);
+    expect(h.archiveProduction?.('b1', 'gone', 'why')).toBe(false);
+    expect(h.approveTool?.('t1')).toBe(true);
+    expect(h.rejectTool?.('t1')).toBe(false);
+    expect(calls).toEqual([
+      ['dismissAskHuman', 'q1'],
+      ['mark', 'b1', 'c1', 'dismissed'],
+      ['deny', 'p1', 'n'],
+      ['proposal', 'pr1', 'rejected', 'n'],
+      ['dismissFb', 'b1', 'fb1'],
+      ['evaluate', 'b1', 'f1', 'approved', 'SOUL', 'KARMA'],
+      ['archive', 'b1', 'f1.md', 'why'],
+      ['approveTool', 't1'],
+      ['rejectTool', 't1', undefined],
+    ]);
   });
 });

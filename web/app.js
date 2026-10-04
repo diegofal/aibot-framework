@@ -1,4 +1,14 @@
-import { AREAS, areaNav, matchRoute, resolveHash, sidebarLinks } from './nav-routes.js';
+import { checkNavGuards, clearNavGuards } from './nav-guard.js';
+import {
+  AREAS,
+  areaNav,
+  badgesFromNeedsCount,
+  matchRoute,
+  notFoundMarkup,
+  resolveHash,
+  sidebarLinks,
+} from './nav-routes.js';
+import { createPageLifecycle } from './page-lifecycle.js';
 import { destroyActivity, renderActivity } from './pages/activity.js';
 import { destroyAgentHome, renderAgentHome } from './pages/agent-home.js';
 import { renderAgentProposals } from './pages/agent-proposals.js';
@@ -20,8 +30,8 @@ import {
   renderConversations,
 } from './pages/conversations.js';
 import { renderCron, renderCronCreate, renderCronDetail } from './pages/cron.js';
-import { renderDashboard } from './pages/dashboard.js';
-import { renderDispatches } from './pages/dispatches.js';
+import { destroyDashboard, renderDashboard } from './pages/dashboard.js';
+import { destroyDispatches, renderDispatches } from './pages/dispatches.js';
 import { renderBotFeedback, renderFeedback } from './pages/feedback.js';
 import { destroyFleetHome, renderFleetHome } from './pages/fleet-home.js';
 import { destroyInbox, renderInbox, renderInboxChat } from './pages/inbox.js';
@@ -52,10 +62,12 @@ import {
   renderStatsHygiene,
   renderStatsInfra,
 } from './pages/stats.js';
-import { renderToolRunner } from './pages/tool-runner.js';
-import { destroyWork, renderWork } from './pages/work.js';
 import { renderToolDetail, renderTools } from './pages/tools.js';
-import { initPalette } from './ui/palette.js';
+import { destroyWork, renderWork } from './pages/work.js';
+import { confirmDialog } from './ui/dialog.js';
+import { initPalette, openPalette } from './ui/palette.js';
+import { closeSheet } from './ui/sheet.js';
+import { clearPageShortcuts, initShortcuts } from './ui/shortcuts.js';
 import { initTheme } from './ui/theme.js';
 
 // #content holds the area tab strip (#area-nav) and the page slot (#page);
@@ -93,6 +105,31 @@ initPalette({
   },
   canOpen: () => !document.body.classList.contains('unauthed'),
 });
+
+// Global keys (UX overhaul wave 2): g+letter jumps, / filter, n new, ? help.
+// See web/ui/shortcuts.js.
+let currentHandler = null;
+initShortcuts({
+  ctx: () => navCtx(),
+  navigate: (href) => {
+    location.hash = href;
+  },
+  currentHandler: () => currentHandler,
+  canUse: () => !document.body.classList.contains('unauthed'),
+});
+
+// Per-page cleanup: each handler below declares its page's destroy functions
+// (and may return a cleanup, or a promise of one). Leaving a page runs them
+// once, plus the hooks every page shares. See web/page-lifecycle.js.
+const lifecycle = createPageLifecycle({
+  always: [stopAllWatches, closeSheet, clearNavGuards, clearPageShortcuts],
+  onError: (err) => console.error('page cleanup failed', err),
+});
+
+/** A route handler: `render(...args)` plus the destroy functions of the page it draws. */
+function page(render, ...destroys) {
+  return Object.assign((...args) => render(...args), { destroys });
+}
 
 function authedFetch(url) {
   const token = getAuthToken();
@@ -134,60 +171,59 @@ function updateAuthUI() {
 }
 
 /**
- * Handler name (see ROUTES in nav-routes.js) -> page function. The route
- * table is data so tests/web/nav-routes.test.ts can prove every legacy hash
- * still lands on a handler that exists here.
+ * Handler name (see ROUTES in nav-routes.js) -> page function + its destroys.
+ * The route table is data so tests/web/nav-routes.test.ts can prove every
+ * legacy hash still lands on a handler that exists here.
  */
 const handlers = {
-  fleetHome: () => renderFleetHome(content),
-  agents: () => renderAgents(content),
-  agentWizard: () => renderAgentWizard(content),
-  agentHome: (id) => renderAgentHome(content, id),
-  agentDetail: (id) => renderAgentDetail(content, id),
-  agentEdit: (id) => renderAgentEdit(content, id),
-  needsYou: () => renderNeedsYou(content),
-  inbox: () => renderInbox(content),
-  inboxChat: (botId, id) => renderInboxChat(content, botId, id),
-  permissions: () => renderPermissions(content),
-  agentProposals: () => renderAgentProposals(content),
-  work: () => renderWork(content),
-  dispatches: () => renderDispatches(content),
-  productions: () => renderProductions(content),
-  botProductions: (botId) => renderBotProductions(content, botId),
-  conversations: () => renderConversations(content),
-  botConversations: (botId) => renderBotConversations(content, botId),
-  conversationChat: (botId, id) => renderConversationChat(content, botId, id),
-  sessions: () => renderSessions(content),
-  sessionTranscript: (id) => renderSessionTranscript(content, id),
-  cron: () => renderCron(content),
-  cronCreate: () => renderCronCreate(content),
-  cronDetail: (id) => renderCronDetail(content, id),
-  skills: () => renderSkills(content),
-  skillCreate: () => renderSkillCreate(content),
-  skillDetail: (id) => renderSkillDetail(content, id),
-  skillEdit: (id) => renderSkillEdit(content, id),
-  tools: () => renderTools(content),
-  toolDetail: (name) => renderToolDetail(content, name),
-  toolRunner: () => renderToolRunner(content),
-  stats: () => renderStats(content),
-  statsBot: (id) => renderStatsBot(content, id),
-  statsBehaviour: () => renderStatsBehaviour(content),
-  statsInfra: () => renderStatsInfra(content),
-  statsHygiene: () => renderStatsHygiene(content),
-  karma: () => renderKarma(content),
-  botKarma: (id) => renderBotKarma(content, id),
-  activity: () => renderActivity(content),
-  loop: () => renderDashboard(content),
-  feedback: () => renderFeedback(content),
-  botFeedback: (id) => renderBotFeedback(content, id),
-  settings: () => renderSettings(content),
-  integrations: () => renderIntegrations(content),
-  baasTemplates: () => renderBaasTemplates(content),
-  baasTemplateDetail: (id) => renderBaasTemplateDetail(content, id),
-  baasWebhooks: () => renderBaasWebhooks(content),
-  baasCustomizations: () => renderBaasCustomizations(content),
-  baasAnalytics: () => renderBaasAnalytics(content),
-  baasTenants: () => renderBaasTenants(content),
+  fleetHome: page(() => renderFleetHome(content), destroyFleetHome),
+  agents: page(() => renderAgents(content), destroyAgentDetail),
+  agentWizard: page(() => renderAgentWizard(content), destroyAgentWizard),
+  agentHome: page((id) => renderAgentHome(content, id), destroyAgentHome),
+  agentDetail: page((id) => renderAgentDetail(content, id), destroyAgentDetail),
+  agentEdit: page((id) => renderAgentEdit(content, id), destroyAgentDetail),
+  needsYou: page((bot) => renderNeedsYou(content, { bot }), destroyNeedsYou),
+  inbox: page(() => renderInbox(content), destroyInbox),
+  inboxChat: page((botId, id) => renderInboxChat(content, botId, id), destroyInbox),
+  permissions: page(() => renderPermissions(content), destroyPermissions),
+  agentProposals: page(() => renderAgentProposals(content)),
+  work: page(() => renderWork(content), destroyWork),
+  dispatches: page(() => renderDispatches(content), destroyDispatches),
+  productions: page(() => renderProductions(content), destroyProductions),
+  botProductions: page((botId) => renderBotProductions(content, botId), destroyProductions),
+  conversations: page(() => renderConversations(content)),
+  botConversations: page((botId) => renderBotConversations(content, botId)),
+  conversationChat: page((botId, id) => renderConversationChat(content, botId, id)),
+  sessions: page(() => renderSessions(content)),
+  sessionTranscript: page((id) => renderSessionTranscript(content, id)),
+  cron: page(() => renderCron(content)),
+  cronCreate: page(() => renderCronCreate(content)),
+  cronDetail: page((id) => renderCronDetail(content, id)),
+  skills: page(() => renderSkills(content)),
+  skillCreate: page(() => renderSkillCreate(content)),
+  skillDetail: page((id) => renderSkillDetail(content, id)),
+  skillEdit: page((id) => renderSkillEdit(content, id)),
+  tools: page(() => renderTools(content)),
+  toolDetail: page((name) => renderToolDetail(content, name)),
+  stats: page(() => renderStats(content)),
+  statsBot: page((id) => renderStatsBot(content, id)),
+  statsBehaviour: page(() => renderStatsBehaviour(content)),
+  statsInfra: page(() => renderStatsInfra(content)),
+  statsHygiene: page(() => renderStatsHygiene(content)),
+  karma: page(() => renderKarma(content)),
+  botKarma: page((id) => renderBotKarma(content, id)),
+  activity: page(() => renderActivity(content), destroyActivity),
+  loop: page(() => renderDashboard(content), destroyDashboard),
+  feedback: page(() => renderFeedback(content)),
+  botFeedback: page((id) => renderBotFeedback(content, id)),
+  settings: page(() => renderSettings(content)),
+  integrations: page(() => renderIntegrations(content)),
+  baasTemplates: page(() => renderBaasTemplates(content)),
+  baasTemplateDetail: page((id) => renderBaasTemplateDetail(content, id)),
+  baasWebhooks: page(() => renderBaasWebhooks(content)),
+  baasCustomizations: page(() => renderBaasCustomizations(content)),
+  baasAnalytics: page(() => renderBaasAnalytics(content)),
+  baasTenants: page(() => renderBaasTenants(content)),
 };
 
 function navCtx() {
@@ -203,19 +239,8 @@ function renderChrome(hash) {
 
 function navigate() {
   setDrawer(false);
-  destroyFleetHome();
-  destroyAgentHome();
-  destroyAgentWizard();
-  destroyAgentDetail();
-  stopAllWatches();
-  destroyNeedsYou();
-  destroyInbox();
-  destroyPermissions();
-  destroyActivity();
-  destroyProductions();
-  destroyWork();
-  content._dashboardCleanup?.();
-  content._dashboardCleanup = null;
+  lifecycle.leave();
+  currentHandler = null;
 
   // Auth gate: require login in multi-tenant mode
   if (multiTenantEnabled && !getAuthToken()) {
@@ -242,8 +267,8 @@ function navigate() {
   document.body.classList.remove('unauthed');
   updateAuthUI();
 
-  // Legacy hashes (#/karma, #/stats/bot/x, #/inbox/...) redirect to their
-  // canonical place; replace() keeps the back button sane. hashchange re-enters.
+  // Legacy hashes (see REDIRECTS in nav-routes.js) redirect to their canonical
+  // place; replace() keeps the back button sane. hashchange re-enters.
   const raw = location.hash || '#/';
   const hash = resolveHash(raw);
   if (hash !== raw) {
@@ -255,15 +280,48 @@ function navigate() {
 
   const hit = matchRoute(hash);
   if (hit) {
-    handlers[hit.route.handler](...hit.args);
+    const handler = handlers[hit.route.handler];
+    currentHandler = hit.route.handler;
+    lifecycle.enter(handler.destroys, handler(...hit.args));
     return;
   }
 
-  // Default fallback
-  renderFleetHome(content);
+  // No route: a real 404 instead of silently showing Home.
+  content.innerHTML = notFoundMarkup(hash);
+  for (const el of content.querySelectorAll('[data-palette-open]')) {
+    el.addEventListener('click', () => openPalette());
+  }
 }
 
-window.addEventListener('hashchange', navigate);
+// Navigation guard (wave 2): a page with unsaved edits registers a guard
+// (web/nav-guard.js). Any hashchange (link, back button, typed hash) puts the
+// old hash back while the confirm dialog is open and follows the new one only
+// if the operator discards.
+let lastUrl = location.href;
+let bypassGuards = false;
+async function onHashChange(e) {
+  const fromUrl = e?.oldURL || lastUrl;
+  const to = location.hash;
+  if (!bypassGuards) {
+    let asked = false;
+    const ok = await checkNavGuards(to, (prompt) => {
+      asked = true;
+      history.replaceState(null, '', fromUrl);
+      return confirmDialog(prompt);
+    });
+    if (!ok) return;
+    if (asked) {
+      // replaceState put the old hash back; following `to` fires hashchange again.
+      bypassGuards = true;
+      location.hash = to;
+      return;
+    }
+  }
+  bypassGuards = false;
+  lastUrl = location.href;
+  navigate();
+}
+window.addEventListener('hashchange', onHashChange);
 
 // Load auth status (public endpoint)
 async function loadAuthStatus() {
@@ -277,36 +335,31 @@ async function loadAuthStatus() {
   }
 }
 
-// Load status (public endpoint, no auth needed)
+// Load status (public endpoint, no auth needed). One place shows it: the
+// sidebar foot (inside the drawer on narrow screens).
 async function loadStatus() {
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
-    const label = `${data.bots.running}/${data.bots.configured} bots`;
-    document.getElementById('nav-status').textContent = label;
-    const top = document.getElementById('topbar-status');
-    if (top) top.textContent = label;
+    document.getElementById('nav-status').textContent =
+      `${data.bots.running}/${data.bots.configured} bots`;
   } catch {
     /* ignore */
   }
 }
 
-// Badge polling. /api/dashboard/badges feeds the per-queue tab counts; the
-// sidebar's single "Needs You" count comes from /api/needs-you/count (S5), which
-// also counts unreviewed outputs and feedback replies. The two requests run in
-// parallel; either failing leaves the other's numbers in place.
+// Badge polling. One request: /api/needs-you/count (`{ count, byKind }`) feeds
+// the sidebar's "Needs You" count and every queue tab (badgesFromNeedsCount).
+// /api/dashboard/badges is only the fallback when that request fails.
+const getJson = (url) =>
+  authedFetch(url)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
 async function loadBadges() {
-  const [legacy, needs] = await Promise.all([
-    authedFetch('/api/dashboard/badges')
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null),
-    authedFetch('/api/needs-you/count')
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null),
-  ]);
-  if (!legacy && !needs) return;
-  const data = { ...badgeCounts, ...(legacy ?? {}) };
-  if (needs && Number.isFinite(Number(needs.count))) data.needs = Number(needs.count);
+  let fresh = badgesFromNeedsCount(await getJson('/api/needs-you/count'));
+  if (!fresh) fresh = await getJson('/api/dashboard/badges');
+  if (!fresh) return;
+  const data = { ...badgeCounts, ...fresh };
   const changed = JSON.stringify(data) !== JSON.stringify(badgeCounts);
   badgeCounts = data;
   if (changed && !document.body.classList.contains('unauthed')) {

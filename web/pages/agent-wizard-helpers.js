@@ -736,7 +736,9 @@ export function hasWizardInput(state) {
   if (!state) return false;
   if (String(state.name ?? '').trim() || String(state.purpose ?? '').trim()) return true;
   if (String(state.quirks ?? '').trim() || state.preset || state.fromAgent) return true;
-  if (PERSONALITY_AXES.some((a) => (state.personality?.[a.id] ?? 0.5) !== DEFAULT_PERSONALITY[a.id]))
+  if (
+    PERSONALITY_AXES.some((a) => (state.personality?.[a.id] ?? 0.5) !== DEFAULT_PERSONALITY[a.id])
+  )
     return true;
   return CHANNEL_KINDS.some((k) => state.channels?.[k]?.enabled);
 }

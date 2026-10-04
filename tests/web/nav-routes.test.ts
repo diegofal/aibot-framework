@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import {
   AREAS,
   REDIRECTS,
@@ -9,8 +10,10 @@ import {
   areaFor,
   areaHref,
   areaNav,
+  badgesFromNeedsCount,
   matchRoute,
   needsBadgeCount,
+  notFoundMarkup,
   resolveHash,
   resolveRedirect,
   sidebarLinks,
@@ -27,6 +30,7 @@ const LEGACY: Array<[string, string, string]> = [
   // [old hash, expected canonical hash, expected handler]
   ['#/', '#/', 'fleetHome'],
   ['#/needs', '#/needs', 'needsYou'],
+  ['#/needs?bot=b1', '#/needs?bot=b1', 'needsYou'],
   ['#/needs/feedback', '#/needs/feedback', 'feedback'],
   ['#/needs/feedback/b1', '#/needs/feedback/b1', 'botFeedback'],
   ['#/inbox', '#/needs/inbox', 'inbox'],
@@ -55,15 +59,18 @@ const LEGACY: Array<[string, string, string]> = [
   ['#/productions?tab=x', '#/work/productions?tab=x', 'productions'],
   ['#/productions/b1', '#/work/productions/b1', 'botProductions'],
   ['#/productions/b1?path=a.md', '#/work/productions/b1?path=a.md', 'botProductions'],
-  ['#/feedback', '#/insights/feedback', 'feedback'],
-  ['#/feedback/b1', '#/insights/feedback/b1', 'botFeedback'],
+  ['#/feedback', '#/needs/feedback', 'feedback'],
+  ['#/feedback/b1', '#/needs/feedback/b1', 'botFeedback'],
+  ['#/insights/feedback', '#/needs/feedback', 'feedback'],
+  ['#/insights/feedback/b1', '#/needs/feedback/b1', 'botFeedback'],
   ['#/karma', '#/insights/karma', 'karma'],
   ['#/karma/b1', '#/insights/karma/b1', 'botKarma'],
   ['#/skills', '#/automations/skills', 'skills'],
   ['#/skills/new', '#/automations/skills/new', 'skillCreate'],
   ['#/skills/my%20skill', '#/automations/skills/my%20skill', 'skillDetail'],
   ['#/skills/my%20skill/edit', '#/automations/skills/my%20skill/edit', 'skillEdit'],
-  ['#/tool-runner', '#/automations/tool-runner', 'toolRunner'],
+  ['#/tool-runner', '#/automations/tools', 'tools'],
+  ['#/automations/tool-runner', '#/automations/tools', 'tools'],
   ['#/tools', '#/automations/tools', 'tools'],
   ['#/tools/web_search', '#/automations/tools/web_search', 'toolDetail'],
   ['#/activity', '#/insights/activity', 'activity'],
@@ -77,7 +84,9 @@ const LEGACY: Array<[string, string, string]> = [
   ['#/baas/customizations', '#/settings/baas/customizations', 'baasCustomizations'],
   ['#/baas/analytics', '#/settings/baas/analytics', 'baasAnalytics'],
   ['#/baas/tenants', '#/settings/baas/tenants', 'baasTenants'],
-  ['#/dashboard', '#/insights/loop', 'loop'],
+  ['#/dashboard', '#/automations/loop', 'loop'],
+  ['#/insights/loop', '#/automations/loop', 'loop'],
+  ['#/automations/loop', '#/automations/loop', 'loop'],
 ];
 
 describe('resolveRedirect / resolveHash', () => {
@@ -132,6 +141,9 @@ describe('matchRoute args', () => {
     expect(matchRoute('#/work/productions/b1?path=x')?.args).toEqual(['b1']);
     expect(matchRoute('#/automations/skills/my%20skill/edit')?.args).toEqual(['my skill']);
     expect(matchRoute('#/')?.args).toEqual([]);
+    expect(matchRoute('#/needs')?.args).toEqual([null]);
+    expect(matchRoute('#/needs?bot=job%20seeker')?.args).toEqual(['job seeker']);
+    expect(matchRoute('#/needs?x=1')?.args).toEqual([null]);
   });
 
   it('every route handler name exists in app.js', () => {
@@ -175,7 +187,8 @@ describe('areas and visibility', () => {
     expect(areaFor('#/agents/b1/config')).toBe('agents');
     expect(areaFor('#/needs/permissions')).toBe('needs');
     expect(areaFor('#/work/sessions/x')).toBe('work');
-    expect(areaFor('#/automations/tool-runner')).toBe('automations');
+    expect(areaFor('#/automations/loop')).toBe('automations');
+    expect(areaFor('#/needs?bot=b1')).toBe('needs');
     expect(areaFor('#/insights/activity?tab=logs')).toBe('insights');
     expect(areaFor('#/settings/baas/tenants')).toBe('settings');
     expect(areaFor('#/nope')).toBeNull();
@@ -185,11 +198,20 @@ describe('areas and visibility', () => {
     const auto = AREAS.find((a) => a.id === 'automations');
     expect(visibleTabs(auto, ADMIN).map((t) => t.id)).toEqual([
       'cron',
+      'loop',
       'skills',
       'tools',
-      'tool-runner',
     ]);
-    expect(visibleTabs(auto, TENANT).map((t) => t.id)).toEqual(['cron', 'skills']);
+    expect(visibleTabs(auto, TENANT).map((t) => t.id)).toEqual(['cron', 'loop', 'skills']);
+    const insights = AREAS.find((a) => a.id === 'insights');
+    expect(insights?.tabs.map((t) => t.id)).toEqual([
+      'stats',
+      'behaviour',
+      'infra',
+      'hygiene',
+      'karma',
+      'activity',
+    ]);
 
     const settings = AREAS.find((a) => a.id === 'settings');
     expect(visibleTabs(settings, SINGLE).map((t) => t.id)).toEqual(['settings', 'integrations']);
@@ -235,10 +257,13 @@ describe('areas and visibility', () => {
     expect(activeTab(insights, '#/insights/stats/bot/b1')?.id).toBe('stats');
     expect(activeTab(insights, '#/insights/stats/behaviour')?.id).toBe('behaviour');
     expect(activeTab(insights, '#/insights/activity?tab=logs')?.id).toBe('activity');
-    expect(activeTab(insights, '#/insights/loop')?.id).toBe('loop');
+    expect(activeTab(AREAS.find((a) => a.id === 'automations'), '#/automations/loop')?.id).toBe(
+      'loop'
+    );
     expect(activeTab(insights, '#/insights')?.id).toBe('stats');
     const needs = AREAS.find((a) => a.id === 'needs');
     expect(activeTab(needs, '#/needs')?.id).toBe('queue');
+    expect(activeTab(needs, '#/needs?bot=b1')?.id).toBe('queue');
     expect(activeTab(needs, '#/needs/feedback/b1')?.id).toBe('feedback');
     expect(activeTab(needs, '#/needs/inbox/b1/c1')?.id).toBe('inbox');
     expect(activeTab(AREAS[0], '#/')).toBeNull();
@@ -291,6 +316,7 @@ describe('sidebarLinks / areaNav', () => {
     const html = areaNav('#/automations/cron', TENANT, {});
     expect(html).toContain('>Cron<');
     expect(html).not.toContain('Tool Runner');
+    expect(html).toContain('>Agent loop<');
   });
 });
 
@@ -309,5 +335,87 @@ describe('Dispatches inbox (curiosity C7)', () => {
     expect(resolveHash('#/dispatches')).toBe('#/work/dispatches');
     const work = AREAS.find((a) => a.id === 'work');
     expect(work?.tabs.map((t) => t.id)).toContain('dispatches');
+  });
+});
+
+describe('UX overhaul wave 2: IA moves', () => {
+  it('Insights has no Feedback tab and no Agent loop; Automations has no Tool Runner', () => {
+    const all = AREAS.flatMap((a) => a.tabs.map((t) => t.href));
+    expect(all).not.toContain('#/insights/feedback');
+    expect(all).not.toContain('#/insights/loop');
+    expect(all).not.toContain('#/automations/tool-runner');
+    expect(all).toContain('#/automations/loop');
+    expect(ROUTES.some((r) => r.handler === 'toolRunner')).toBe(false);
+  });
+
+  it('keeps query strings across the moved redirects', () => {
+    expect(resolveHash('#/insights/feedback/b1?x=1')).toBe('#/needs/feedback/b1?x=1');
+    expect(resolveHash('#/dashboard?x=1')).toBe('#/automations/loop?x=1');
+  });
+});
+
+describe('notFoundMarkup', () => {
+  it('names the hash (escaped), links Home and hints the palette', () => {
+    const html = notFoundMarkup('#/nope/<b>');
+    expect(html).toContain('Page not found');
+    expect(html).toContain('#/nope/&lt;b&gt;');
+    expect(html).not.toContain('<b>');
+    expect(html).toContain('href="#/"');
+    expect(html).toContain('data-palette-open');
+    expect(html).toContain('Ctrl');
+  });
+});
+
+describe('badgesFromNeedsCount', () => {
+  it('maps /api/needs-you/count onto the badge keys the tabs use', () => {
+    expect(
+      badgesFromNeedsCount({
+        count: 9,
+        byKind: { ask: 2, permission: 1, proposal: 3, production: 1, feedback: 2, tool: 0 },
+      })
+    ).toEqual({ needs: 9, askHuman: 2, askPermission: 1, agentProposals: 3, agentFeedback: 2 });
+  });
+
+  it('returns null for a missing or malformed response', () => {
+    expect(badgesFromNeedsCount(null)).toBeNull();
+    expect(badgesFromNeedsCount({ error: 'x' })).toBeNull();
+    expect(badgesFromNeedsCount({ count: 'x' })).toBeNull();
+  });
+
+  it('treats a missing byKind as zeros', () => {
+    expect(badgesFromNeedsCount({ count: 0 })).toEqual({
+      needs: 0,
+      askHuman: 0,
+      askPermission: 0,
+      agentProposals: 0,
+      agentFeedback: 0,
+    });
+  });
+});
+
+describe('no in-page links to legacy hashes', () => {
+  const webDir = join(import.meta.dir, '../../web');
+  function jsFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) out.push(...jsFiles(p));
+      else if (name.endsWith('.js')) out.push(p);
+    }
+    return out;
+  }
+
+  it('every `#/...` literal in web/**/*.js is canonical (nav-routes.js excepted)', () => {
+    const offenders: string[] = [];
+    for (const file of jsFiles(webDir)) {
+      const rel = relative(webDir, file).split('\\').join('/');
+      if (rel === 'nav-routes.js') continue;
+      const src = readFileSync(file, 'utf-8');
+      for (const m of src.matchAll(/#\/[A-Za-z0-9_\-/%?=&.]*/g)) {
+        const hash = m[0];
+        if (REDIRECTS.some((r) => r.from.test(hash))) offenders.push(`${rel}: ${hash}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

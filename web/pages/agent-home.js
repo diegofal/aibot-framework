@@ -7,11 +7,12 @@
  * traits and karma. Data comes from `/api/agents/:id/home`; live updates
  * ride the shared `watchAgent()` link.
  */
-import { card, emptyState, skeleton } from '../ui/index.js';
+import { card, emptyState, showToast, skeleton } from '../ui/index.js';
 import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.js';
 import {
   applyPresence,
   goalsColumns,
+  homeKeyAction,
   homeTabs,
   karmaBody,
   needsYouStrip,
@@ -32,8 +33,11 @@ let watch = null;
 let chat = null;
 let refreshTimer = null;
 let speaker = null;
+let keyHandler = null;
 
 export function destroyAgentHome() {
+  if (keyHandler) document.removeEventListener('keydown', keyHandler);
+  keyHandler = null;
   watch?.stop();
   watch = null;
   chat?.destroy();
@@ -49,13 +53,14 @@ function homeUrl(id) {
 }
 
 function actionsFor(identity, id) {
-  const cfg = `<a class="btn" href="#/agents/${encodeURIComponent(id)}/config">Config</a>`;
+  const enc = encodeURIComponent(id);
+  const rest = `<a class="btn" href="#/agents/${enc}/edit" id="home-edit" title="Edit this agent (e)">Edit</a><a class="btn" href="#/agents/${enc}/config">Config</a>`;
   if (identity.running) {
-    return `<button class="btn btn-primary" id="home-run" title="Run one agent-loop cycle now">Run now</button>
-      <button class="btn btn-danger" id="home-toggle">Stop</button>${cfg}`;
+    return `<button class="btn btn-primary" id="home-run" title="Run one agent-loop cycle now (r)">Run now</button>
+      <button class="btn btn-danger" id="home-toggle">Stop</button>${rest}`;
   }
   const label = identity.enabled ? 'Start' : 'Enable &amp; Start';
-  return `<button class="btn btn-primary" id="home-toggle">${label}</button>${cfg}`;
+  return `<button class="btn btn-primary" id="home-toggle">${label}</button>${rest}`;
 }
 
 function wireActions(el, id, identity) {
@@ -67,7 +72,15 @@ function wireActions(el, id, identity) {
     const res = identity.running
       ? await api(`/api/agents/${encodeURIComponent(id)}/stop`, { method: 'POST' })
       : await api(startPath, { method: 'POST' });
-    if (res?.error) alert(res.error);
+    const verb = identity.running ? 'stop' : 'start';
+    if (!res || res.error) {
+      showToast(`Could not ${verb} ${identity.name}: ${res?.error || 'request failed'}`, {
+        tone: 'danger',
+        duration: 8000,
+      });
+    } else {
+      showToast(`${identity.name} ${verb === 'stop' ? 'stopped' : 'started'}`, { tone: 'ok' });
+    }
     renderAgentHome(el, id);
   });
   el.querySelector('#home-run')?.addEventListener('click', async (e) => {
@@ -76,7 +89,14 @@ function wireActions(el, id, identity) {
     btn.textContent = 'Running…';
     try {
       const res = await api(`/api/agent-loop/run/${encodeURIComponent(id)}`, { method: 'POST' });
-      if (res?.error) alert(res.error);
+      if (!res || res.error) {
+        showToast(`Run failed: ${res?.error || 'request failed'}`, {
+          tone: 'danger',
+          duration: 8000,
+        });
+      } else {
+        showToast(`${identity.name} finished a cycle`, { tone: 'ok' });
+      }
     } finally {
       btn.textContent = 'Run now';
       btn.disabled = false;
@@ -264,6 +284,35 @@ function mountChat(container, botId, name) {
   };
 }
 
+/** `r` Run now, `e` Edit, `c` focus the chat box (never while typing). */
+function wireKeys(el, id, identity) {
+  keyHandler = (e) => {
+    if (!el.isConnected) return;
+    if (document.getElementById('ui-dialog-root')) return;
+    const action = homeKeyAction(e);
+    if (!action) return;
+    if (action === 'run') {
+      const btn = el.querySelector('#home-run');
+      if (!btn) {
+        if (!identity.running) showToast(`${identity.name} is not running`, { tone: 'muted' });
+        return;
+      }
+      e.preventDefault();
+      if (!btn.disabled) btn.click();
+    } else if (action === 'edit') {
+      e.preventDefault();
+      location.hash = `#/agents/${encodeURIComponent(id)}/edit`;
+    } else if (action === 'chat') {
+      const input = el.querySelector('#home-chat .thread-input');
+      if (!input) return;
+      e.preventDefault();
+      input.focus();
+      input.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    }
+  };
+  document.addEventListener('keydown', keyHandler);
+}
+
 function scheduleHomeRefresh(el, id) {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
@@ -325,6 +374,7 @@ export async function renderAgentHome(el, id) {
     </div>`;
 
   wireActions(el, id, identity);
+  wireKeys(el, id, identity);
   wireFaceControl(el, id, {
     onChanged: (avatarUrl) => {
       identity.avatarUrl = avatarUrl;

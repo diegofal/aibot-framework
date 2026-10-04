@@ -174,7 +174,8 @@ export function sweepStaleAskHumanQuestions(
  * an ask that never got a question id). Startup reconcile restores most of
  * them, but anything that slips past it — or goes orphan between restarts —
  * used to stay in Needs You until the next boot. Writes the same memory note
- * as a store auto-close. Never throws.
+ * as a store auto-close. A thread that already carries a human message is
+ * marked `answered` instead (same rule as reconcile). Never throws.
  */
 export function closeStaleInboxConversations(
   deps: AskHumanDeps,
@@ -205,6 +206,12 @@ export function closeStaleInboxConversations(
         if (conv.askHumanQuestionId && live.has(conv.askHumanQuestionId)) continue;
         const created = Date.parse(conv.createdAt);
         if (!Number.isFinite(created) || now - created <= hours * HOUR_MS) continue;
+        // Same rule as reconcileAskHumanInbox: a thread carrying a human
+        // message was answered in chat — never close it "without answer".
+        if (conversations.getMessages(id, conv.id).some((m) => m.role === 'human')) {
+          conversations.markInboxStatus(id, conv.id, 'answered');
+          continue;
+        }
         const updated = conversations.markInboxStatus(id, conv.id, 'closed');
         if (!updated) continue;
         closed.push(updated);

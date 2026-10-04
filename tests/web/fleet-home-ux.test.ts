@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import {
   FLEET_FILTER_KEY,
+  filterFleet,
   fleetCard,
   fleetErrorState,
   fleetFilterChips,
   fleetFilterCounts,
   fleetGrid,
   fleetQuickActions,
-  filterFleet,
   readFleetFilter,
   writeFleetFilter,
 } from '../../web/pages/fleet-home-helpers.js';
@@ -98,7 +98,7 @@ describe('fleetCard', () => {
   it('carries quick actions and sends asks to the Needs You queue', () => {
     const html = fleetCard(agents[0], presence.a, NOW);
     expect(html).toContain('fleet-quick');
-    expect(html).toContain('href="#/needs"');
+    expect(html).toContain('href="#/needs?bot=a"');
     expect(html).not.toContain('#/needs/inbox');
   });
 });

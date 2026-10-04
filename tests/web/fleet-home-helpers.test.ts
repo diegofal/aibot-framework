@@ -136,7 +136,7 @@ describe('fleetCard', () => {
     expect(html).toContain('I&#39;m working: running web_search.');
     expect(html).toContain('Karma 62');
     expect(html).toContain('Output 3h ago');
-    expect(html).toContain('href="#/needs"');
+    expect(html).toContain('href="#/needs?bot=b1"');
     expect(html).toContain('2 asks');
     expect(html).toContain('1 to review');
     expect(html).toContain('href="#/work/productions/b1"');

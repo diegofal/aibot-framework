@@ -1,4 +1,15 @@
-import { api, escapeHtml, timeAgo } from './shared.js';
+import { confirmDialog, openSheet, promptDialog, showToast } from '../ui/index.js';
+import { api, escapeHtml } from './shared.js';
+import { mountToolRunForm } from './tool-runner.js';
+import {
+  TOOL_SOURCES,
+  filterTools,
+  groupTools,
+  mergeTools,
+  pendingIds,
+  toolsBulkBar,
+  toolsTable,
+} from './tools-helpers.js';
 
 const STATUS_BADGES = {
   pending: '<span class="badge badge-pending">Pending</span>',
@@ -6,95 +17,224 @@ const STATUS_BADGES = {
   rejected: '<span class="badge badge-stopped">Rejected</span>',
 };
 
+// Search + source filter of the merged list; survives re-renders.
+const toolsFilter = { query: '', source: '' };
+
+/** Reject with an optional note. Resolves false when the dialog is cancelled. */
+async function rejectTool(id) {
+  const note = await promptDialog({
+    title: 'Reject this tool?',
+    message: 'Optional note for the bot that created it.',
+    placeholder: 'Rejection note (optional)',
+    confirmLabel: 'Reject',
+  });
+  if (note === null) return false;
+  const res = await api(`/api/tools/${encodeURIComponent(id)}/reject`, {
+    method: 'POST',
+    body: { note: note.trim() || undefined },
+  });
+  if (res?.error) {
+    showToast(`Reject failed: ${res.error}`, { tone: 'danger' });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Merged Tools page (UX overhaul phase 4): every tool — built-in, MCP and
+ * dynamic — with a Run action per row (opens the runner form in a sheet),
+ * plus approve / reject / delete for dynamic tools and bulk approve/reject of
+ * the pending ones.
+ */
 export async function renderTools(el) {
-  el.innerHTML = '<div class="page-title">Dynamic Tools</div><p class="text-dim">Loading...</p>';
+  el.innerHTML = '<div class="page-title">Tools</div><p class="text-dim">Loading...</p>';
 
-  const tools = await api('/api/tools');
+  const [allRes, dynRes] = await Promise.all([api('/api/tools/all'), api('/api/tools')]);
 
-  if (tools.error) {
+  if (!Array.isArray(allRes)) {
     el.innerHTML = `
-      <div class="page-title">Dynamic Tools</div>
-      <p class="text-dim">Dynamic tools are not enabled. Set <code>dynamicTools.enabled: true</code> in config.</p>
+      <div class="page-title">Tools</div>
+      <p class="text-dim">${
+        allRes?.error && !/not found/i.test(allRes.error)
+          ? escapeHtml(allRes.error)
+          : 'The tools API is not available. Set <code>dynamicTools.enabled: true</code> in config.'
+      }</p>
+      <button class="btn btn-sm" data-action="retry">Retry</button>
     `;
+    el.querySelector('[data-action="retry"]')?.addEventListener('click', () => renderTools(el));
     return;
   }
 
+  let tools = mergeTools(allRes, dynRes);
+  const selected = new Set();
+
   el.innerHTML = `
     <div class="flex-between mb-16">
-      <div class="page-title">Dynamic Tools <span class="count">${tools.length}</span></div>
+      <div class="page-title">Tools <span class="count" id="tools-count">${tools.length}</span></div>
     </div>
-    ${
-      tools.length === 0
-        ? '<p class="text-dim">No dynamic tools created yet. Bots can create tools using the <code>create_tool</code> tool during conversations or agent loop runs.</p>'
-        : `<table>
-          <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Created By</th><th>Created</th><th>Actions</th></tr></thead>
-          <tbody id="tools-tbody"></tbody>
-        </table>`
-    }
+    <p class="text-dim text-sm mb-16">Every tool the agents can call. <strong>Run</strong> executes one directly, without an LLM. Bots create dynamic tools with <code>create_tool</code>; those need approval before they load.</p>
+    <div class="ops-toolbar">
+      <input type="search" id="tools-filter-query" class="ops-filter-query" placeholder="Filter tools…" data-page-filter aria-label="Filter tools" value="${escapeHtml(toolsFilter.query)}">
+      <select id="tools-filter-source" class="ops-filter" aria-label="Filter by source">
+        ${TOOL_SOURCES.map(
+          (s) =>
+            `<option value="${s.id}"${s.id === toolsFilter.source ? ' selected' : ''}>${escapeHtml(s.label)}</option>`
+        ).join('')}
+      </select>
+      <span id="tools-pending-slot"></span>
+    </div>
+    <div id="tools-bulk-slot"></div>
+    <div id="tools-table-wrap"></div>
   `;
 
-  if (tools.length === 0) return;
+  const wrap = document.getElementById('tools-table-wrap');
+  const bulkSlot = document.getElementById('tools-bulk-slot');
+  const pendingSlot = document.getElementById('tools-pending-slot');
 
-  const tbody = document.getElementById('tools-tbody');
-  for (const tool of tools) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><a href="#/tools/${encodeURIComponent(tool.id)}">${escapeHtml(tool.name)}</a></td>
-      <td class="text-dim">${escapeHtml(tool.type)}</td>
-      <td>${STATUS_BADGES[tool.status] || tool.status}</td>
-      <td class="text-dim">${escapeHtml(tool.createdBy)}</td>
-      <td class="text-dim">${timeAgo(tool.createdAt)}</td>
-      <td class="actions">
-        ${
-          tool.status === 'pending'
-            ? `
-          <button class="btn btn-sm btn-primary" data-action="approve" data-id="${tool.id}">Approve</button>
-          <button class="btn btn-sm btn-danger" data-action="reject" data-id="${tool.id}">Reject</button>
-        `
-            : ''
-        }
-        <button class="btn btn-sm btn-danger" data-action="delete" data-id="${tool.id}">Delete</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  }
+  const draw = () => {
+    const visible = filterTools(tools, toolsFilter);
+    const visiblePending = new Set(pendingIds(visible));
+    for (const id of [...selected]) if (!visiblePending.has(id)) selected.delete(id);
+    wrap.innerHTML = toolsTable(groupTools(visible), {
+      selected,
+      filtered: visible.length !== tools.length,
+    });
+    bulkSlot.innerHTML = toolsBulkBar(selected.size);
+    const pending = pendingIds(tools);
+    pendingSlot.innerHTML = pending.length
+      ? `<button class="btn btn-sm" id="tools-select-pending">Select pending (${pending.length})</button>`
+      : '';
+    document.getElementById('tools-count').textContent = String(tools.length);
+  };
+  const reload = async () => {
+    const [a, d] = await Promise.all([api('/api/tools/all'), api('/api/tools')]);
+    if (Array.isArray(a)) tools = mergeTools(a, d);
+    if (wrap.isConnected) draw();
+  };
+  draw();
 
-  tbody.addEventListener('click', async (e) => {
+  document.getElementById('tools-filter-query').addEventListener('input', (e) => {
+    toolsFilter.query = e.target.value;
+    draw();
+  });
+  document.getElementById('tools-filter-source').addEventListener('change', (e) => {
+    toolsFilter.source = e.target.value;
+    draw();
+  });
+  pendingSlot.addEventListener('click', (e) => {
+    if (!e.target.closest('#tools-select-pending')) return;
+    toolsFilter.source = 'pending';
+    document.getElementById('tools-filter-source').value = 'pending';
+    for (const id of pendingIds(tools)) selected.add(id);
+    draw();
+  });
+
+  wrap.addEventListener('change', (e) => {
+    const box = e.target.closest('input[data-select]');
+    if (!box) return;
+    if (box.checked) selected.add(box.dataset.select);
+    else selected.delete(box.dataset.select);
+    bulkSlot.innerHTML = toolsBulkBar(selected.size);
+  });
+
+  wrap.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
-    const action = btn.dataset.action;
-    const id = btn.dataset.id;
+    const { action, id } = btn.dataset;
 
+    if (action === 'run') {
+      const tool = tools.find((t) => t.name === btn.dataset.name);
+      if (!tool) return;
+      const body = openSheet({ title: `Run ${tool.name}`, wide: true });
+      if (body) {
+        mountToolRunForm(body, tool);
+        body.querySelector('[data-param]')?.focus();
+      }
+      return;
+    }
     if (action === 'approve') {
       btn.disabled = true;
       btn.textContent = 'Approving...';
-      await api(`/api/tools/${id}/approve`, { method: 'POST' });
-      renderTools(el);
-    } else if (action === 'reject') {
-      const note = prompt('Rejection note (optional):');
-      btn.disabled = true;
-      btn.textContent = 'Rejecting...';
-      await api(`/api/tools/${id}/reject`, { method: 'POST', body: { note: note || undefined } });
-      renderTools(el);
-    } else if (action === 'delete') {
-      if (confirm(`Delete tool "${id}"? This cannot be undone.`)) {
-        await api(`/api/tools/${id}`, { method: 'DELETE' });
-        renderTools(el);
-      }
+      const res = await api(`/api/tools/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+      if (res?.error) showToast(`Approve failed: ${res.error}`, { tone: 'danger' });
+      else showToast('Tool approved', { tone: 'ok' });
+      await reload();
+      return;
     }
+    if (action === 'reject') {
+      if (await rejectTool(id)) {
+        showToast('Tool rejected', { tone: 'ok' });
+        await reload();
+      }
+      return;
+    }
+    if (action === 'delete') {
+      const ok = await confirmDialog({
+        title: `Delete tool "${btn.dataset.name || id}"?`,
+        message: 'Its source and metadata are removed. This cannot be undone.',
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return;
+      const res = await api(`/api/tools/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res?.error) showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
+      else showToast('Tool deleted', { tone: 'ok' });
+      await reload();
+    }
+  });
+
+  bulkSlot.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-bulk]');
+    if (!btn) return;
+    const action = btn.dataset.bulk;
+    if (action === 'clear') {
+      selected.clear();
+      draw();
+      return;
+    }
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    let note = '';
+    if (action === 'reject') {
+      note = await promptDialog({
+        title: `Reject ${ids.length} tool${ids.length === 1 ? '' : 's'}?`,
+        message: 'Optional note, sent with every rejection.',
+        placeholder: 'Rejection note (optional)',
+        confirmLabel: 'Reject',
+      });
+      if (note === null) return;
+    }
+    for (const b of bulkSlot.querySelectorAll('button')) b.disabled = true;
+    const results = await Promise.all(
+      ids.map((id) =>
+        api(`/api/tools/${encodeURIComponent(id)}/${action}`, {
+          method: 'POST',
+          ...(action === 'reject' ? { body: { note: note.trim() || undefined } } : {}),
+        }).catch((err) => ({ error: err?.message || 'error' }))
+      )
+    );
+    const failed = results.filter((r) => !r || r.error).length;
+    const verb = action === 'approve' ? 'Approved' : 'Rejected';
+    showToast(
+      failed
+        ? `${verb} ${ids.length - failed} of ${ids.length} — ${failed} failed`
+        : `${verb} ${ids.length} tool${ids.length === 1 ? '' : 's'}`,
+      { tone: failed ? 'danger' : 'ok' }
+    );
+    selected.clear();
+    await reload();
   });
 }
 
 export async function renderToolDetail(el, toolId) {
   el.innerHTML = '<div class="page-title">Tool Detail</div><p class="text-dim">Loading...</p>';
 
-  const data = await api(`/api/tools/${toolId}`);
+  const data = await api(`/api/tools/${encodeURIComponent(toolId)}`);
 
-  if (data.error) {
+  if (!data || data.error) {
     el.innerHTML = `
       <div class="page-title">Tool Not Found</div>
-      <p class="text-dim">${escapeHtml(data.error)}</p>
-      <a href="#/tools" class="btn btn-sm">&larr; Back to Tools</a>
+      <p class="text-dim">${escapeHtml(data?.error || 'Unexpected response')}</p>
+      <a href="#/automations/tools" class="btn btn-sm">&larr; Back to Tools</a>
     `;
     return;
   }
@@ -125,7 +265,7 @@ export async function renderToolDetail(el, toolId) {
   el.innerHTML = `
     <div class="flex-between mb-16">
       <div class="page-title">${escapeHtml(meta.name)}</div>
-      <a href="#/tools" class="btn btn-sm">&larr; Back</a>
+      <a href="#/automations/tools" class="btn btn-sm">&larr; Back</a>
     </div>
 
     <div class="detail-grid">
@@ -183,22 +323,28 @@ export async function renderToolDetail(el, toolId) {
     if (action === 'approve') {
       btn.disabled = true;
       btn.textContent = 'Approving...';
-      await api(`/api/tools/${meta.id}/approve`, { method: 'POST' });
+      const res = await api(`/api/tools/${encodeURIComponent(meta.id)}/approve`, {
+        method: 'POST',
+      });
+      if (res?.error) showToast(`Approve failed: ${res.error}`, { tone: 'danger' });
       renderToolDetail(el, toolId);
     } else if (action === 'reject') {
-      const note = prompt('Rejection note (optional):');
-      btn.disabled = true;
-      btn.textContent = 'Rejecting...';
-      await api(`/api/tools/${meta.id}/reject`, {
-        method: 'POST',
-        body: { note: note || undefined },
-      });
-      renderToolDetail(el, toolId);
+      // Cancelling the note dialog aborts the rejection.
+      if (await rejectTool(meta.id)) renderToolDetail(el, toolId);
     } else if (action === 'delete') {
-      if (confirm('Delete this tool? This cannot be undone.')) {
-        await api(`/api/tools/${meta.id}`, { method: 'DELETE' });
-        location.hash = '#/tools';
+      const ok = await confirmDialog({
+        title: 'Delete this tool?',
+        message: 'Its source and metadata are removed. This cannot be undone.',
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return;
+      const res = await api(`/api/tools/${encodeURIComponent(meta.id)}`, { method: 'DELETE' });
+      if (res?.error) {
+        showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
+        return;
       }
+      showToast('Tool deleted', { tone: 'ok' });
+      location.hash = '#/automations/tools';
     }
   });
 }

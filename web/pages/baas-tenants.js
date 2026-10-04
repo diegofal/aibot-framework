@@ -1,4 +1,11 @@
+import { confirmDialog, showToast } from '../ui/index.js';
 import { api, closeModal, escapeHtml, getAuthContext, showModal, timeAgo } from './shared.js';
+
+const fail = (msg) => showToast(msg, { tone: 'danger', duration: 6000 });
+const invalid = (inputId, msg) => {
+  showToast(msg, { tone: 'warn' });
+  document.getElementById(inputId)?.focus();
+};
 
 const VALID_PLANS = ['free', 'starter', 'pro', 'enterprise'];
 const PLAN_RATE_LIMITS = { free: 30, starter: 60, pro: 200, enterprise: 500 };
@@ -15,7 +22,7 @@ function planBadge(plan) {
 }
 
 /**
- * #/baas/tenants — Admin tenant management
+ * #/settings/baas/tenants — Admin tenant management
  */
 export async function renderBaasTenants(el) {
   const { role } = getAuthContext();
@@ -76,8 +83,15 @@ export async function renderBaasTenants(el) {
     } else if (action === 'rate-limit') {
       showRateLimitModal(el, id, btn.dataset.plan, btn.dataset.override);
     } else if (action === 'delete') {
-      if (!confirm(`Delete tenant "${btn.dataset.name}"? This cannot be undone.`)) return;
-      await api(`/api/admin/tenants/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const ok = await confirmDialog({
+        title: 'Delete tenant?',
+        message: `Delete tenant "${btn.dataset.name}"? This cannot be undone.`,
+        confirmLabel: 'Delete',
+      });
+      if (!ok) return;
+      const res = await api(`/api/admin/tenants/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res?.error) return fail(`Delete failed: ${res.error}`);
+      showToast(`Deleted tenant "${btn.dataset.name}"`, { tone: 'ok' });
       renderBaasTenants(el);
     }
   });
@@ -146,7 +160,7 @@ function showPlanModal(el, tenantId, currentPlan) {
       method: 'PATCH',
       body: { plan },
     });
-    if (res.error) return alert(res.error);
+    if (res.error) return fail(res.error);
     closeModal();
     renderBaasTenants(el);
   });
@@ -204,7 +218,7 @@ function showRateLimitModal(el, tenantId, plan, currentOverride) {
       method: 'PATCH',
       body: { maxRequestsPerMinute: null },
     });
-    if (res.error) return alert(res.error);
+    if (res.error) return fail(res.error);
     closeModal();
     renderBaasTenants(el);
   });
@@ -218,7 +232,7 @@ function showRateLimitModal(el, tenantId, plan, currentOverride) {
         method: 'PATCH',
         body: { maxRequestsPerMinute: null },
       });
-      if (res.error) return alert(res.error);
+      if (res.error) return fail(res.error);
       closeModal();
       renderBaasTenants(el);
       return;
@@ -227,9 +241,10 @@ function showRateLimitModal(el, tenantId, plan, currentOverride) {
     let val;
     if (choice === 'custom') {
       const raw = document.getElementById('rl-custom-value').value.trim();
-      if (!raw) return alert('Enter a custom value.');
+      if (!raw) return invalid('rl-custom-value', 'Enter a custom value.');
       val = Number.parseInt(raw, 10);
-      if (Number.isNaN(val) || val <= 0) return alert('Must be a positive integer.');
+      if (Number.isNaN(val) || val <= 0)
+        return invalid('rl-custom-value', 'Must be a positive integer.');
     } else {
       val = Number.parseInt(choice, 10);
     }
@@ -238,7 +253,7 @@ function showRateLimitModal(el, tenantId, plan, currentOverride) {
       method: 'PATCH',
       body: { maxRequestsPerMinute: val },
     });
-    if (res.error) return alert(res.error);
+    if (res.error) return fail(res.error);
     closeModal();
     renderBaasTenants(el);
   });

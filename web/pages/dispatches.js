@@ -6,6 +6,8 @@
  * agent's taste model and earn (or cost) it dispatch frequency.
  *
  * Data: `GET /api/curiosity/dispatches?limit=…`. Markup: curiosity-helpers.js.
+ * Keys: j/k move the focus, + (or =) / - give the focused dispatch 👍 / 👎.
+ * "Load more" raises the limit up to the server cap (200; the API has no offset).
  */
 import { emptyState, skeleton, tabs } from '../ui/index.js';
 import { authedAvatarSrc } from './agent-face.js';
@@ -17,8 +19,21 @@ import {
 } from './curiosity-helpers.js';
 import { wireCuriositySignals } from './curiosity.js';
 import { api } from './shared.js';
+import {
+  DISPATCH_KEYS,
+  DISPATCH_PAGE,
+  keyAction,
+  moveIndex,
+  nextDispatchLimit,
+} from './work-helpers.js';
 
-const LIMIT = 100;
+/** Keydown listener lives on document: abort it when the page is left. */
+let listeners = null;
+
+export function destroyDispatches() {
+  listeners?.abort();
+  listeners = null;
+}
 const FILTER_KEY = 'aibot.dispatches.filter';
 
 const EMPTY_HINT = {
@@ -38,8 +53,21 @@ function storedFilter() {
 }
 
 export async function renderDispatches(el) {
+  destroyDispatches();
+  listeners = new AbortController();
+  const { signal } = listeners;
   let filter = storedFilter();
   let items = [];
+  let limit = DISPATCH_PAGE;
+  let moreLimit = null;
+  let focus = -1;
+
+  const cards = () => [...el.querySelectorAll('#dispatch-feed .curio-dispatch')];
+  const paintFocus = (scroll = false) => {
+    const list = cards();
+    list.forEach((c, i) => c.classList.toggle('is-focused', i === focus));
+    if (scroll) list[focus]?.scrollIntoView?.({ block: 'nearest' });
+  };
 
   const draw = () => {
     const counts = dispatchCounts(items);
@@ -54,10 +82,17 @@ export async function renderDispatches(el) {
       emptyTitle: filter === 'all' ? 'No dispatches yet' : `No ${filter} dispatches`,
       emptyHint: EMPTY_HINT[filter],
     });
+    const moreBtn = el.querySelector('#dispatch-more');
+    if (moreBtn) {
+      moreBtn.hidden = !moreLimit;
+      moreBtn.textContent = `Load more (up to ${moreLimit ?? limit})`;
+    }
+    focus = Math.min(focus, cards().length - 1);
+    paintFocus();
   };
 
   const load = async () => {
-    const res = await api(`/api/curiosity/dispatches?limit=${LIMIT}`).catch((err) => ({
+    const res = await api(`/api/curiosity/dispatches?limit=${limit}`).catch((err) => ({
       error: err?.message,
     }));
     if (!el.isConnected) return;
@@ -70,6 +105,7 @@ export async function renderDispatches(el) {
       return;
     }
     items = Array.isArray(res.dispatches) ? res.dispatches : [];
+    moreLimit = nextDispatchLimit(limit, items.length);
     draw();
   };
 
@@ -84,6 +120,8 @@ export async function renderDispatches(el) {
       </div>
       <div id="dispatch-filters"></div>
       <div id="dispatch-feed">${skeleton({ block: true, height: 180 })}</div>
+      <div class="dispatch-more-wrap"><button class="btn btn-sm" id="dispatch-more" hidden>Load more</button></div>
+      <div class="text-dim text-sm dispatch-keys-hint">j/k move · + 👍 · - 👎</div>
     </div>`;
 
   el.querySelector('#dispatch-filters').addEventListener('click', (e) => {
@@ -98,6 +136,45 @@ export async function renderDispatches(el) {
     draw();
   });
   el.querySelector('#dispatch-refresh').addEventListener('click', load);
+  el.querySelector('#dispatch-more').addEventListener('click', () => {
+    if (!moreLimit) return;
+    limit = moreLimit;
+    load();
+  });
+  el.querySelector('#dispatch-feed').addEventListener('click', (e) => {
+    const card = e.target.closest('.curio-dispatch');
+    if (!card) return;
+    focus = cards().indexOf(card);
+    paintFocus();
+  });
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      // The page root outlives this page: once the feed is gone, unhook.
+      if (!el.querySelector('#dispatch-feed')) {
+        destroyDispatches();
+        return;
+      }
+      if (document.getElementById('ui-dialog-root')) return;
+      const action = keyAction(e, DISPATCH_KEYS);
+      if (!action) return;
+      const list = cards();
+      if (action === 'next' || action === 'prev') {
+        if (!list.length) return;
+        e.preventDefault();
+        focus = moveIndex(focus, action === 'next' ? 1 : -1, list.length);
+        paintFocus(true);
+        return;
+      }
+      const card = list[focus];
+      if (!card) return;
+      const btn = card.querySelector(`button.curio-signal[data-signal="${action}"]`);
+      if (!btn || btn.disabled) return;
+      e.preventDefault();
+      btn.click();
+    },
+    { signal }
+  );
   wireCuriositySignals(el.querySelector('#dispatch-feed'), {
     onSignal: (kind, res) => {
       if (kind !== 'dispatch' || !res?.dispatch) return;

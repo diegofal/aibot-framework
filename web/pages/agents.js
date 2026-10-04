@@ -1,13 +1,29 @@
-import { initMenus } from '../ui/index.js';
+import { registerNavGuard } from '../nav-guard.js';
+import { confirmDialog, emptyState, initMenus, showToast } from '../ui/index.js';
 import { CUSTOM_VOICE, resolveVoiceChoice, voiceOptions } from './agent-face-helpers.js';
 import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.js';
 import {
   claudeModelSelect,
+  editReturnHash,
+  editSectionNav,
   effectiveModelLabel,
+  isSaveShortcut,
   showClaudeModelSelect,
+  snapshotForm,
+  tokenCell,
 } from './agent-form-helpers.js';
 import { applyPresence, homeTabs, presenceHeader } from './agent-home-helpers.js';
-import { agentsTable } from './agents-list-helpers.js';
+import {
+  agentsTable,
+  bulkPlan,
+  bulkSummary,
+  filterAgents,
+  listFilterBar,
+  readListPrefs,
+  sortAgents,
+  statusCounts,
+  writeListPrefs,
+} from './agents-list-helpers.js';
 import {
   DIAL_MEANINGS,
   LIMIT_DIALS,
@@ -27,7 +43,79 @@ let presenceWatch = null;
 
 let detailSpeaker = null;
 
+// Previous hash, so the edit form's Save / Cancel return where the user came
+// from. Capture phase: runs before app.js's router listener sees the change.
+let prevHash = '';
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener(
+    'hashchange',
+    (e) => {
+      try {
+        prevHash = new URL(e.oldURL).hash;
+      } catch {
+        prevHash = '';
+      }
+    },
+    true
+  );
+}
+
+// Dirty guard of the open edit form (hashchange / beforeunload / Ctrl+S).
+let editGuard = null;
+
+function teardownEditGuard() {
+  editGuard?.teardown();
+  editGuard = null;
+}
+
+/**
+ * While `isDirty()`, navigation away asks first: the app-wide nav guard
+ * (web/nav-guard.js) puts the old hash back and follows the new one only
+ * after the operator confirms.
+ */
+function installEditGuard(form, { isDirty, onSave }) {
+  teardownEditGuard();
+  let bypass = false;
+  const offNavGuard = registerNavGuard(() => {
+    if (!form.isConnected || bypass || !isDirty()) return null;
+    return {
+      title: 'Discard unsaved changes?',
+      message: 'This agent has edits that were not saved.',
+      confirmLabel: 'Discard',
+      cancelLabel: 'Keep editing',
+    };
+  });
+  const onUnload = (e) => {
+    if (form.isConnected && !bypass && isDirty()) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  };
+  const onKey = (e) => {
+    if (!form.isConnected) return teardownEditGuard();
+    if (isSaveShortcut(e)) {
+      e.preventDefault();
+      onSave();
+    }
+  };
+  window.addEventListener('beforeunload', onUnload);
+  document.addEventListener('keydown', onKey);
+  editGuard = {
+    /** Leave without asking (after a successful save). */
+    release() {
+      bypass = true;
+    },
+    teardown() {
+      offNavGuard();
+      window.removeEventListener('beforeunload', onUnload);
+      document.removeEventListener('keydown', onKey);
+    },
+  };
+  return editGuard;
+}
+
 export function destroyAgentDetail() {
+  teardownEditGuard();
   presenceWatch?.stop();
   presenceWatch = null;
   detailSpeaker?.stop();
@@ -187,17 +275,142 @@ function renderAgentLoopResult(r) {
   return sections.join('');
 }
 
+/** Show a loop / reflection result in the legacy modal (read-only content, not a confirmation). */
+function showResultModal(title, bodyHtml) {
+  showModal(`
+    <div class="modal-title">${escapeHtml(title)}</div>
+    <div style="max-height:60vh;overflow-y:auto">${bodyHtml}</div>
+    <div class="modal-actions">
+      <button class="btn" id="result-modal-close">Close</button>
+    </div>
+  `);
+  document.getElementById('modal').style.maxWidth = '700px';
+  document.getElementById('result-modal-close').addEventListener('click', () => {
+    document.getElementById('modal').style.maxWidth = '';
+    closeModal();
+  });
+}
+
+/** POST /api/agent-loop/run/:id and show the cycle result; failures toast. */
+async function runLoopNow(id) {
+  const res = await api(`/api/agent-loop/run/${encodeURIComponent(id)}`, { method: 'POST' });
+  if (!res || res.error) {
+    showToast(`Run failed: ${res?.error || 'request failed'}`, { tone: 'danger', duration: 8000 });
+    return false;
+  }
+  showResultModal('Agent Loop Result', renderAgentLoopResult(res.result));
+  return true;
+}
+
+async function reflectNow(id) {
+  const res = await api(`/api/agents/${encodeURIComponent(id)}/skills/reflection/reflect`, {
+    method: 'POST',
+  });
+  if (!res || res.error) {
+    showToast(`Reflect failed: ${res?.error || 'request failed'}`, {
+      tone: 'danger',
+      duration: 8000,
+    });
+    return;
+  }
+  showResultModal(
+    'Reflection Result',
+    `<div style="white-space:pre-wrap;font-size:13px;line-height:1.5">${escapeHtml(res.result || '')}</div>
+     <div style="margin-top:8px;font-size:12px;color:var(--text-dim)">Completed in ${((res.durationMs || 0) / 1000).toFixed(1)}s</div>`
+  );
+}
+
+const RESET_MESSAGE =
+  'This fully resets the agent to its original state: all conversations, memory, goals and learned facts are cleared, and soul files are restored to their generated baseline. This cannot be undone.';
+
+/** confirmDialog + POST reset. Resolves true when the agent was reset. */
+async function confirmAndReset(id, name) {
+  const ok = await confirmDialog({
+    title: `Reset ${name || id}?`,
+    message: RESET_MESSAGE,
+    confirmLabel: 'Reset agent',
+  });
+  if (!ok) return false;
+  const res = await api(`/api/agents/${encodeURIComponent(id)}/reset`, { method: 'POST' });
+  if (!res || res.error) {
+    showToast(`Reset failed: ${res?.error || 'request failed'}`, {
+      tone: 'danger',
+      duration: 8000,
+    });
+    return false;
+  }
+  showToast(`${name || id} was reset`, { tone: 'ok' });
+  return true;
+}
+
+/** DELETE one agent. `{ ok, error }`; never throws. */
+async function deleteAgent(id) {
+  const res = await api(`/api/agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res || res.error) return { ok: false, error: res?.error || 'request failed' };
+  return { ok: true };
+}
+
+/** confirmDialog + DELETE. Resolves true when the agent is gone. */
+async function confirmAndDelete(id, name) {
+  const ok = await confirmDialog({
+    title: `Delete ${name || id}?`,
+    message: `The agent "${id}" is removed from the fleet. Its soul files stay on disk, but this cannot be undone from the dashboard.`,
+    confirmLabel: 'Delete agent',
+  });
+  if (!ok) return false;
+  const r = await deleteAgent(id);
+  if (!r.ok) {
+    showToast(`Could not delete ${name || id}: ${r.error}`, { tone: 'danger', duration: 8000 });
+    return false;
+  }
+  showToast(`Deleted ${name || id}`, { tone: 'ok' });
+  return true;
+}
+
+/** Start (optionally enabling) or stop one agent. `{ ok, error }`. */
+async function setRunning(id, action) {
+  const path =
+    action === 'stop'
+      ? `/api/agents/${encodeURIComponent(id)}/stop`
+      : `/api/agents/${encodeURIComponent(id)}/start${action === 'enable-start' ? '?enable=true' : ''}`;
+  const res = await api(path, { method: 'POST' });
+  if (!res || res.error) return { ok: false, error: res?.error || 'request failed' };
+  return { ok: true };
+}
+
+const BULK_VERBS = {
+  start: { verb: 'Started', progress: 'Starting' },
+  stop: { verb: 'Stopped', progress: 'Stopping' },
+  enable: { verb: 'Enabled', progress: 'Enabling' },
+  disable: { verb: 'Disabled', progress: 'Disabling' },
+  export: { verb: 'Exported', progress: 'Exporting' },
+  delete: { verb: 'Deleted', progress: 'Deleting' },
+};
+
+// Per-render state of the agents list (search / chips / sort / selection).
+let listState = null;
+
 export async function renderAgents(el) {
   el.innerHTML = '<div class="page-title">Agents</div><p class="text-dim">Loading...</p>';
 
-  const [agents, skills, karmaScores, loopState, defaults, llmStatsRes] = await Promise.all([
+  const [agents, karmaScores, loopState, defaults, llmStatsRes] = await Promise.all([
     api('/api/agents'),
-    api('/api/skills'),
     api('/api/karma'),
     api('/api/agent-loop'),
     api('/api/agents/defaults'),
     api('/api/agent-loop/llm-stats'),
   ]);
+
+  if (!Array.isArray(agents)) {
+    el.innerHTML = `<div class="page-title">Agents</div>${emptyState({
+      icon: '⚠',
+      title: 'Could not load agents',
+      hint: agents?.error || 'The server did not answer.',
+      action: '<button type="button" class="btn btn-primary" id="agents-retry">Retry</button>',
+    })}`;
+    el.querySelector('#agents-retry')?.addEventListener('click', () => renderAgents(el));
+    return;
+  }
 
   // Build karma lookup by botId (graceful if karma is disabled)
   const karmaMap = {};
@@ -213,163 +426,246 @@ export async function renderAgents(el) {
 
   // Build executing lookup from loop state
   const executingMap = {};
-  if (loopState.botSchedules) {
+  if (loopState?.botSchedules) {
     for (const s of loopState.botSchedules) executingMap[s.botId] = s.isExecutingLoop;
   }
 
+  const defs = defaults && !defaults.error ? defaults : {};
+  const storage = typeof localStorage !== 'undefined' ? localStorage : null;
+  listState = {
+    el,
+    agents,
+    prefs: readListPrefs(storage),
+    selected: new Set(),
+    maps: { karmaMap, llmStatsMap, executingMap },
+  };
+  const st = listState;
+
   // Same option list the per-row selector uses, so a bulk edit and a single edit
   // mean exactly the same thing. 'claude-cli' is included by /api/agents/defaults.
-  const bulkModelOptions = (defaults.availableModels || [])
+  const bulkModelOptions = (defs.availableModels || [])
     .map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`)
     .join('');
 
   el.innerHTML = `
     <div class="flex-between mb-16 agents-head">
-      <div class="page-title">Agents <span class="count">${agents.length}</span></div>
+      <div class="page-title">Agents <span class="count" id="agents-count">${agents.length}</span></div>
       <div class="agents-head-actions">
         <button class="btn" id="btn-start-all">Start All</button>
         <button class="btn" id="btn-import-agent">Import Agent</button>
-        <button class="btn btn-primary" id="btn-new-agent">+ New Agent</button>
+        <button class="btn btn-primary" id="btn-new-agent" data-page-new>+ New Agent</button>
       </div>
     </div>
+    <div id="agents-filter-slot"></div>
     <div id="bulk-bar" class="bulk-bar mb-16" style="display:none">
       <span id="bulk-count"></span>
-      <select id="bulk-model" style="font-size:12px;padding:2px 4px;max-width:220px">
-        <option value="">Global (${escapeHtml(defaults.model)})</option>
-        ${bulkModelOptions}
-      </select>
-      <button class="btn btn-sm btn-primary" id="bulk-apply">Apply to selected</button>
+      <span class="bulk-group">
+        <button class="btn btn-sm" data-bulk="start">Start</button>
+        <button class="btn btn-sm" data-bulk="stop">Stop</button>
+        <button class="btn btn-sm" data-bulk="enable">Enable</button>
+        <button class="btn btn-sm" data-bulk="disable">Disable</button>
+        <button class="btn btn-sm" data-bulk="export">Export</button>
+        <button class="btn btn-sm btn-danger" data-bulk="delete">Delete</button>
+      </span>
+      <span class="bulk-group">
+        <select id="bulk-model" style="font-size:12px;padding:2px 4px;max-width:220px" aria-label="Model for selected agents">
+          <option value="">Global (${escapeHtml(defs.model ?? '')})</option>
+          ${bulkModelOptions}
+        </select>
+        <button class="btn btn-sm btn-primary" id="bulk-apply">Set model</button>
+      </span>
       <button class="btn btn-sm" id="bulk-clear">Clear selection</button>
       <span id="bulk-status" class="text-dim"></span>
     </div>
-    ${agentsTable(agents, {
-      defaults,
-      karmaMap,
-      llmStatsMap,
-      executingMap,
-      avatarSrc: authedAvatarSrc,
-    })}
+    <div id="agents-table-wrap"></div>
   `;
 
-  // One primary button per row; everything else lives in the row menu
-  // (session S3.5). The menu's buttons carry the same data-action attributes
-  // the delegation below has always handled. With no agents there is no
-  // table: a detached tbody keeps the wiring below harmless.
   closeAgentMenus?.();
   closeAgentMenus = initMenus(el);
 
-  const tbody = document.getElementById('agents-tbody') ?? document.createElement('tbody');
+  const wrap = el.querySelector('#agents-table-wrap');
+  const filterSlot = el.querySelector('#agents-filter-slot');
+  const bulkBar = el.querySelector('#bulk-bar');
+  const bulkCount = el.querySelector('#bulk-count');
+  const bulkStatus = el.querySelector('#bulk-status');
 
-  // Event delegation
-  tbody.addEventListener('click', async (e) => {
+  const visibleAgents = () =>
+    sortAgents(filterAgents(st.agents, st.prefs, st.maps), st.prefs, st.maps);
+
+  function savePrefs() {
+    writeListPrefs(storage, st.prefs);
+  }
+
+  function paintFilters() {
+    filterSlot.innerHTML = listFilterBar(st.prefs, statusCounts(st.agents, st.maps));
+  }
+
+  /** Repaint the chip counts without rebuilding the search input (keeps focus/caret). */
+  function refreshChipCounts() {
+    const counts = statusCounts(st.agents, st.maps);
+    for (const chip of filterSlot.querySelectorAll('[data-status-filter]')) {
+      const n = chip.querySelector('.agents-chip-n');
+      if (n) n.textContent = String(counts[chip.dataset.statusFilter] ?? 0);
+      const on = chip.dataset.statusFilter === st.prefs.status;
+      chip.classList.toggle('agents-chip-active', on);
+      chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    const count = el.querySelector('#agents-count');
+    if (count) count.textContent = String(st.agents.length);
+  }
+
+  function paintTable() {
+    const filtered = Boolean(st.prefs.query.trim()) || st.prefs.status !== 'all';
+    const rows = visibleAgents();
+    wrap.innerHTML = agentsTable(rows, {
+      defaults: defs,
+      ...st.maps,
+      avatarSrc: authedAvatarSrc,
+      sort: st.prefs,
+      filtered: filtered && st.agents.length > 0,
+    });
+    // Selection survives repaints; hidden rows drop out of it.
+    const shown = new Set(rows.map((a) => a.id));
+    for (const id of [...st.selected]) if (!shown.has(id)) st.selected.delete(id);
+    for (const cb of wrap.querySelectorAll('.bulk-select'))
+      cb.checked = st.selected.has(cb.dataset.id);
+    refreshBulkBar();
+  }
+
+  function refreshBulkBar() {
+    const n = st.selected.size;
+    bulkBar.style.display = n > 0 ? 'flex' : 'none';
+    bulkCount.textContent = `${n} selected`;
+    const boxes = wrap.querySelectorAll('.bulk-select');
+    const selectAll = wrap.querySelector('#bulk-select-all');
+    if (!selectAll) return;
+    selectAll.checked = n > 0 && n === boxes.length;
+    selectAll.indeterminate = n > 0 && n < boxes.length;
+  }
+
+  /** Re-read one agent after a change and repaint the table from memory (no page reload). */
+  async function refreshAgent(id) {
+    const fresh = await api(`/api/agents/${encodeURIComponent(id)}`);
+    if (fresh && !fresh.error) {
+      const i = st.agents.findIndex((a) => a.id === id);
+      if (i !== -1) st.agents[i] = { ...st.agents[i], ...fresh };
+    }
+    if (listState !== st) return;
+    refreshChipCounts();
+    paintTable();
+  }
+
+  function agentName(id) {
+    return st.agents.find((a) => a.id === id)?.name || id;
+  }
+
+  paintFilters();
+  paintTable();
+
+  // --- Search, chips, sorting ------------------------------------------------
+  filterSlot.addEventListener('input', (e) => {
+    if (!e.target.matches('[data-page-filter]')) return;
+    st.prefs = { ...st.prefs, query: e.target.value };
+    savePrefs();
+    paintTable();
+  });
+  filterSlot.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && e.target.matches('[data-page-filter]') && e.target.value) {
+      e.preventDefault();
+      e.target.value = '';
+      st.prefs = { ...st.prefs, query: '' };
+      savePrefs();
+      paintTable();
+    }
+  });
+  filterSlot.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-status-filter]');
+    if (!chip) return;
+    st.prefs = { ...st.prefs, status: chip.dataset.statusFilter };
+    savePrefs();
+    refreshChipCounts();
+    paintTable();
+  });
+
+  // --- Row actions (delegated on the wrapper so repaints keep working) -------
+  wrap.addEventListener('click', async (e) => {
+    const sortBtn = e.target.closest('[data-sort-btn]');
+    if (sortBtn) {
+      const key = sortBtn.dataset.sortBtn;
+      const dir =
+        st.prefs.sort === key
+          ? st.prefs.dir === 'asc'
+            ? 'desc'
+            : 'asc'
+          : key === 'name'
+            ? 'asc'
+            : 'desc';
+      st.prefs = { ...st.prefs, sort: key, dir };
+      savePrefs();
+      paintTable();
+      return;
+    }
+    if (e.target.closest('[data-action="clear-filters"]')) {
+      st.prefs = { ...st.prefs, query: '', status: 'all' };
+      savePrefs();
+      paintFilters();
+      paintTable();
+      return;
+    }
     const btn = e.target.closest('button[data-action]');
-    if (!btn) return;
+    if (!btn || !btn.dataset.id) return;
     const action = btn.dataset.action;
     const id = btn.dataset.id;
+    const name = agentName(id);
 
-    if (action === 'start' || action === 'enable-start') {
+    if (action === 'start' || action === 'enable-start' || action === 'stop') {
       btn.disabled = true;
-      btn.textContent = 'Starting...';
+      btn.textContent = action === 'stop' ? 'Stopping...' : 'Starting...';
       // ?enable=true is what makes the button honest: a disabled agent is
       // refused by the server, so this path enables it (persisted) first.
-      const query = action === 'enable-start' ? '?enable=true' : '';
-      const res = await api(`/api/agents/${id}/start${query}`, { method: 'POST' });
-      if (res.error) alert(`Failed to start: ${res.error}`);
-      renderAgents(el);
-    } else if (action === 'stop') {
-      btn.disabled = true;
-      btn.textContent = 'Stopping...';
-      const res = await api(`/api/agents/${id}/stop`, { method: 'POST' });
-      if (res.error) alert(`Failed to stop: ${res.error}`);
-      renderAgents(el);
+      const r = await setRunning(id, action);
+      if (r.ok) showToast(`${name} ${action === 'stop' ? 'stopped' : 'started'}`, { tone: 'ok' });
+      else
+        showToast(`Could not ${action === 'stop' ? 'stop' : 'start'} ${name}: ${r.error}`, {
+          tone: 'danger',
+          duration: 8000,
+        });
+      await refreshAgent(id);
     } else if (action === 'run-loop') {
       btn.disabled = true;
-      btn.textContent = 'Running...';
-      try {
-        const res = await api(`/api/agent-loop/run/${encodeURIComponent(id)}`, { method: 'POST' });
-        if (res.error) {
-          alert(`Agent loop error: ${res.error}`);
-        } else {
-          showModal(`
-            <div class="modal-title">Agent Loop Result</div>
-            <div style="max-height:60vh;overflow-y:auto">${renderAgentLoopResult(res.result)}</div>
-            <div class="modal-actions">
-              <button class="btn" id="loop-result-close">Close</button>
-            </div>
-          `);
-          document.getElementById('modal').style.maxWidth = '700px';
-          document.getElementById('loop-result-close').addEventListener('click', () => {
-            document.getElementById('modal').style.maxWidth = '';
-            closeModal();
-          });
-        }
-      } catch (err) {
-        alert(`Agent loop failed: ${err.message}`);
-      }
+      await runLoopNow(id);
       btn.disabled = false;
-      btn.textContent = 'Run Loop';
     } else if (action === 'reflect') {
       btn.disabled = true;
-      btn.textContent = 'Reflecting...';
-      try {
-        const res = await api(`/api/agents/${encodeURIComponent(id)}/skills/reflection/reflect`, {
-          method: 'POST',
-        });
-        if (res.error) {
-          alert(`Reflect error: ${res.error}`);
-        } else {
-          const escaped = (res.result || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          showModal(`
-            <div class="modal-title">Reflection Result</div>
-            <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5">${escaped}</div>
-            <div style="margin-top:8px;font-size:12px;color:var(--text-dim)">Completed in ${(res.durationMs / 1000).toFixed(1)}s</div>
-            <div class="modal-actions">
-              <button class="btn" id="reflect-result-close">Close</button>
-            </div>
-          `);
-          document.getElementById('modal').style.maxWidth = '700px';
-          document.getElementById('reflect-result-close').addEventListener('click', () => {
-            document.getElementById('modal').style.maxWidth = '';
-            closeModal();
-          });
-        }
-      } catch (err) {
-        alert(`Reflect failed: ${err.message}`);
-      }
+      await reflectNow(id);
       btn.disabled = false;
-      btn.textContent = 'Reflect';
     } else if (action === 'edit') {
-      location.hash = `#/agents/${id}/edit`;
+      location.hash = `#/agents/${encodeURIComponent(id)}/edit`;
     } else if (action === 'clone') {
       showCloneModal(id, el);
     } else if (action === 'reset') {
-      if (
-        confirm(
-          `Reset agent "${id}"? This will fully reset the agent to its original state: all conversations, memory, goals, and learned facts will be cleared, and soul files will be restored to their generated baseline. This cannot be undone.`
-        )
-      ) {
-        btn.disabled = true;
-        btn.textContent = 'Resetting...';
-        const res = await api(`/api/agents/${id}/reset`, { method: 'POST' });
-        if (res.error) alert(`Reset failed: ${res.error}`);
-        renderAgents(el);
-      }
+      if (await confirmAndReset(id, name)) await refreshAgent(id);
     } else if (action === 'export') {
       showExportModal(id);
     } else if (action === 'toggle-loop') {
-      const agent = agents.find((a) => a.id === id);
+      const agent = st.agents.find((a) => a.id === id);
       // Cycle: Auto → On → Off → Auto
       const current = agent?.agentLoop?.enabled;
       const next = current == null ? true : current === true ? false : undefined;
       const patch = { agentLoop: { ...agent?.agentLoop, enabled: next ?? null } };
       btn.disabled = true;
-      const res = await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
+      const res = await api(`/api/agents/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: patch,
+      });
       btn.disabled = false;
-      if (res.error) {
-        alert(`Failed to update: ${res.error}`);
+      if (!res || res.error) {
+        showToast(`Could not update the loop: ${res?.error || 'request failed'}`, {
+          tone: 'danger',
+          duration: 8000,
+        });
         return;
       }
-      // Update in-place
       if (agent) {
         if (!agent.agentLoop) agent.agentLoop = {};
         agent.agentLoop.enabled = next;
@@ -378,49 +674,86 @@ export async function renderAgents(el) {
       btn.title = next == null ? 'Inherit global' : next ? 'On' : 'Off';
       btn.innerHTML =
         next === false ? 'Off' : next === true ? 'On' : '<span class="text-dim">Auto</span>';
+      showToast(
+        `${name}: agent loop ${next == null ? 'follows the global setting' : next ? 'on' : 'off'}`,
+        {
+          tone: 'ok',
+        }
+      );
     } else if (action === 'toggle-productions') {
-      const agent = agents.find((a) => a.id === id);
-      const current = agent?.productions?.enabled !== false;
-      const next = !current;
+      const agent = st.agents.find((a) => a.id === id);
+      const next = !(agent?.productions?.enabled !== false);
       const patch = { productions: { ...agent?.productions, enabled: next } };
       btn.disabled = true;
-      const res = await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
+      const res = await api(`/api/agents/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: patch,
+      });
       btn.disabled = false;
-      if (res.error) {
-        alert(`Failed to update: ${res.error}`);
+      if (!res || res.error) {
+        showToast(`Could not update productions: ${res?.error || 'request failed'}`, {
+          tone: 'danger',
+          duration: 8000,
+        });
         return;
       }
-      // Update in-place
       if (agent) {
         if (!agent.productions) agent.productions = {};
         agent.productions.enabled = next;
       }
-      btn.className = `btn btn-sm${!next ? ' btn-danger' : ''}`;
-      btn.textContent = next ? 'On' : 'Off';
+      showToast(`${name}: productions ${next ? 'on' : 'off'}`, { tone: 'ok' });
+      paintTable();
     } else if (action === 'delete') {
-      if (confirm(`Delete agent "${id}"? This cannot be undone.`)) {
-        await api(`/api/agents/${id}`, { method: 'DELETE' });
-        renderAgents(el);
+      if (await confirmAndDelete(id, name)) {
+        st.agents = st.agents.filter((a) => a.id !== id);
+        st.selected.delete(id);
+        refreshChipCounts();
+        paintTable();
       }
     }
   });
 
-  // Toggle enabled switch
-  tbody.addEventListener('change', async (e) => {
+  // Enabled switch, model select, selection checkboxes
+  wrap.addEventListener('change', async (e) => {
+    if (e.target.id === 'bulk-select-all') {
+      for (const cb of wrap.querySelectorAll('.bulk-select')) {
+        cb.checked = e.target.checked;
+        if (cb.checked) st.selected.add(cb.dataset.id);
+        else st.selected.delete(cb.dataset.id);
+      }
+      refreshBulkBar();
+      return;
+    }
+    if (e.target.classList.contains('bulk-select')) {
+      if (e.target.checked) st.selected.add(e.target.dataset.id);
+      else st.selected.delete(e.target.dataset.id);
+      refreshBulkBar();
+      return;
+    }
+
     const toggle = e.target.closest('[data-action="toggle-enabled"]');
     if (toggle) {
       const id = toggle.dataset.id;
       const enabled = toggle.checked;
       toggle.disabled = true;
-      const res = await api(`/api/agents/${id}`, { method: 'PATCH', body: { enabled } });
+      const res = await api(`/api/agents/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: { enabled },
+      });
       toggle.disabled = false;
-      if (res.error) {
-        alert(`Failed to update: ${res.error}`);
+      if (!res || res.error) {
+        showToast(`Could not update ${agentName(id)}: ${res?.error || 'request failed'}`, {
+          tone: 'danger',
+          duration: 8000,
+        });
         toggle.checked = !enabled;
-      } else {
-        const agent = agents.find((a) => a.id === id);
-        if (agent) agent.enabled = enabled;
+        return;
       }
+      const agent = st.agents.find((a) => a.id === id);
+      if (agent) agent.enabled = enabled;
+      showToast(`${agentName(id)} ${enabled ? 'enabled' : 'disabled'}`, { tone: 'ok' });
+      refreshChipCounts();
+      paintTable();
       return;
     }
 
@@ -428,124 +761,192 @@ export async function renderAgents(el) {
     if (!select) return;
     const agentId = select.dataset.agentId;
     const selectedModel = select.value.trim();
-
-    const patch = {};
-    if (selectedModel === 'claude-cli') {
-      patch.model = null;
-      patch.llmBackend = 'claude-cli';
-    } else {
-      patch.model = selectedModel || null;
-      patch.llmBackend = null;
-    }
+    const patch =
+      selectedModel === 'claude-cli'
+        ? { model: null, llmBackend: 'claude-cli' }
+        : { model: selectedModel || null, llmBackend: null };
 
     select.disabled = true;
-    const res = await api(`/api/agents/${agentId}`, { method: 'PATCH', body: patch });
+    const res = await api(`/api/agents/${encodeURIComponent(agentId)}`, {
+      method: 'PATCH',
+      body: patch,
+    });
     select.disabled = false;
-    if (res.error) {
-      alert(`Failed to update model: ${res.error}`);
-      renderAgents(el);
+    if (!res || res.error) {
+      showToast(`Could not change the model: ${res?.error || 'request failed'}`, {
+        tone: 'danger',
+        duration: 8000,
+      });
+      await refreshAgent(agentId);
+      return;
     }
+    const agent = st.agents.find((a) => a.id === agentId);
+    if (agent) Object.assign(agent, patch);
+    showToast(`${agentName(agentId)} now uses ${selectedModel || 'the global model'}`, {
+      tone: 'ok',
+    });
   });
 
-  // --- Bulk model / backend edit -------------------------------------------
+  // --- Bulk actions ---------------------------------------------------------
+  el.querySelector('#bulk-clear').addEventListener('click', () => {
+    st.selected.clear();
+    for (const cb of wrap.querySelectorAll('.bulk-select')) cb.checked = false;
+    refreshBulkBar();
+  });
+
+  /** One sequential bulk run with a live progress toast and a summary toast. */
+  async function runBulk(action) {
+    const ids = [...st.selected];
+    const { apply, skip } = bulkPlan(action, st.agents, ids);
+    const words = BULK_VERBS[action];
+    if (action === 'delete') {
+      if (apply.length === 0) return;
+      const names = apply.map(agentName);
+      const ok = await confirmDialog({
+        title: `Delete ${apply.length} agent${apply.length === 1 ? '' : 's'}?`,
+        message: `${names.join(', ')}. This cannot be undone from the dashboard.`,
+        confirmLabel: `Delete ${apply.length}`,
+      });
+      if (!ok) return;
+    }
+    if (apply.length === 0) {
+      const s = bulkSummary(words.verb, [], skip.length);
+      showToast(s.text, { tone: s.tone });
+      return;
+    }
+    for (const b of bulkBar.querySelectorAll('button')) b.disabled = true;
+    const progress = showToast(`${words.progress} 0 / ${apply.length}…`, { duration: 0 });
+    const progressText = (t) => {
+      if (progress) progress.textContent = t;
+    };
+    const results = [];
+    for (const [i, id] of apply.entries()) {
+      progressText(`${words.progress} ${agentName(id)} (${i + 1} / ${apply.length})…`);
+      let r;
+      if (action === 'start') {
+        const agent = st.agents.find((a) => a.id === id);
+        r = await setRunning(id, agent?.enabled === false ? 'enable-start' : 'start');
+      } else if (action === 'stop') r = await setRunning(id, 'stop');
+      else if (action === 'enable' || action === 'disable') {
+        const res = await api(`/api/agents/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          body: { enabled: action === 'enable' },
+        });
+        r = !res || res.error ? { ok: false, error: res?.error || 'request failed' } : { ok: true };
+      } else if (action === 'export') r = await downloadExport(id, new URLSearchParams());
+      else if (action === 'delete') r = await deleteAgent(id);
+      results.push({ id, ...r });
+    }
+    progress?.dismiss?.();
+    for (const b of bulkBar.querySelectorAll('button')) b.disabled = false;
+    const s = bulkSummary(words.verb, results, skip.length);
+    showToast(s.text, { tone: s.tone, duration: s.tone === 'ok' ? 4000 : 10000 });
+    if (action === 'export') return;
+    if (action === 'delete') {
+      const gone = new Set(results.filter((r) => r.ok).map((r) => r.id));
+      st.agents = st.agents.filter((a) => !gone.has(a.id));
+      for (const id of gone) st.selected.delete(id);
+      refreshChipCounts();
+      paintTable();
+      return;
+    }
+    // Re-read the whole list once (one request) instead of one per agent.
+    const fresh = await api('/api/agents');
+    if (listState !== st) return;
+    if (Array.isArray(fresh)) st.agents = fresh;
+    refreshChipCounts();
+    paintTable();
+  }
+
+  bulkBar.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-bulk]');
+    if (b) runBulk(b.dataset.bulk);
+  });
+
   // The per-row selector conflates backend and model ('claude-cli' is offered as
   // if it were a model), so the same mapping is used here: picking claude-cli
   // switches the backend and clears the per-agent model override.
-  const bulkBar = document.getElementById('bulk-bar');
-  const bulkCount = document.getElementById('bulk-count');
-  const bulkStatus = document.getElementById('bulk-status');
-  const selectAll = document.getElementById('bulk-select-all');
-
-  function selectedIds() {
-    return [...document.querySelectorAll('.bulk-select:checked')].map((cb) => cb.dataset.id);
-  }
-
-  function refreshBulkBar() {
-    const n = selectedIds().length;
-    bulkBar.style.display = n > 0 ? 'flex' : 'none';
-    bulkCount.textContent = `${n} selected`;
-    bulkStatus.textContent = '';
-    const boxes = document.querySelectorAll('.bulk-select');
-    if (!selectAll) return;
-    selectAll.checked = n > 0 && n === boxes.length;
-    selectAll.indeterminate = n > 0 && n < boxes.length;
-  }
-
-  tbody.addEventListener('change', (e) => {
-    if (e.target.classList.contains('bulk-select')) refreshBulkBar();
-  });
-
-  selectAll?.addEventListener('change', () => {
-    for (const cb of document.querySelectorAll('.bulk-select')) cb.checked = selectAll.checked;
-    refreshBulkBar();
-  });
-
-  document.getElementById('bulk-clear').addEventListener('click', () => {
-    for (const cb of document.querySelectorAll('.bulk-select')) cb.checked = false;
-    refreshBulkBar();
-  });
-
-  document.getElementById('bulk-apply').addEventListener('click', async (ev) => {
-    const ids = selectedIds();
+  el.querySelector('#bulk-apply').addEventListener('click', async (ev) => {
+    const ids = [...st.selected];
     if (ids.length === 0) return;
-
-    const value = document.getElementById('bulk-model').value.trim();
+    const value = el.querySelector('#bulk-model').value.trim();
     const patch =
       value === 'claude-cli'
         ? { model: null, llmBackend: 'claude-cli' }
         : { model: value || null, llmBackend: null };
-
     const label = value || 'the global default';
-    if (!confirm(`Set ${ids.length} agent(s) to ${label}?`)) return;
+    const ok = await confirmDialog({
+      title: `Change the model of ${ids.length} agent${ids.length === 1 ? '' : 's'}?`,
+      message: `${ids.map(agentName).join(', ')} will use ${label}.`,
+      confirmLabel: 'Set model',
+      tone: 'accent',
+    });
+    if (!ok) return;
 
     ev.target.disabled = true;
     bulkStatus.textContent = 'Applying...';
     const res = await api('/api/agents/bulk', { method: 'PATCH', body: { ids, patch } });
     ev.target.disabled = false;
-
-    if (res.error) {
-      bulkStatus.textContent = '';
-      alert(`Bulk update failed: ${res.error}`);
+    bulkStatus.textContent = '';
+    if (!res || res.error) {
+      showToast(`Bulk update failed: ${res?.error || 'request failed'}`, {
+        tone: 'danger',
+        duration: 8000,
+      });
       return;
     }
     // Unknown ids are reported rather than fatal, so surface them instead of
     // letting a partially-applied edit look like a clean success.
     if (res.notFound?.length) {
-      alert(`Updated ${res.updated.length}. Not found: ${res.notFound.join(', ')}`);
+      showToast(`Updated ${res.updated?.length ?? 0}. Not found: ${res.notFound.join(', ')}`, {
+        tone: 'warn',
+        duration: 10000,
+      });
+    } else {
+      showToast(`Set ${ids.length} agent${ids.length === 1 ? '' : 's'} to ${label}`, {
+        tone: 'ok',
+      });
     }
-    renderAgents(el);
+    for (const id of ids) {
+      const agent = st.agents.find((a) => a.id === id);
+      if (agent) Object.assign(agent, patch);
+    }
+    paintTable();
   });
 
-  refreshBulkBar();
-
-  document.getElementById('btn-start-all').addEventListener('click', async () => {
-    const stoppedAgents = agents.filter((a) => a.enabled && !a.running);
+  el.querySelector('#btn-start-all').addEventListener('click', async () => {
+    const stoppedAgents = st.agents.filter((a) => a.enabled && !a.running);
     if (stoppedAgents.length === 0) {
-      alert(
-        'All enabled agents are already running. Disabled agents are skipped — use "Enable & Start" on a row to bring one live.'
+      showToast(
+        'All enabled agents are already running. Disabled agents are skipped — use "Enable & Start" on a row.',
+        { tone: 'muted', duration: 6000 }
       );
       return;
     }
-
-    const btn = document.getElementById('btn-start-all');
+    const btn = el.querySelector('#btn-start-all');
     btn.disabled = true;
     btn.textContent = `Starting ${stoppedAgents.length}...`;
-
-    const errors = [];
+    const results = [];
     for (const agent of stoppedAgents) {
-      const res = await api(`/api/agents/${agent.id}/start`, { method: 'POST' });
-      if (res.error) errors.push(`${agent.name}: ${res.error}`);
+      const r = await setRunning(agent.id, 'start');
+      results.push({ id: agent.name || agent.id, ...r });
     }
-
-    if (errors.length) alert(`Some agents failed to start:\n${errors.join('\n')}`);
-    renderAgents(el);
+    btn.disabled = false;
+    btn.textContent = 'Start All';
+    const s = bulkSummary('Started', results);
+    showToast(s.text, { tone: s.tone, duration: s.tone === 'ok' ? 4000 : 10000 });
+    const fresh = await api('/api/agents');
+    if (listState !== st) return;
+    if (Array.isArray(fresh)) st.agents = fresh;
+    refreshChipCounts();
+    paintTable();
   });
 
-  document.getElementById('btn-new-agent').addEventListener('click', () => {
+  el.querySelector('#btn-new-agent').addEventListener('click', () => {
     showNewAgentModal();
   });
 
-  document.getElementById('btn-import-agent').addEventListener('click', () => {
+  el.querySelector('#btn-import-agent').addEventListener('click', () => {
     showImportModal(el);
   });
 }
@@ -658,18 +1059,17 @@ export async function renderAgentDetail(el, id) {
             ? `<button class="btn btn-primary" id="btn-toggle" title="This agent is disabled, so the server refuses a plain Start. This turns Enabled on (saved) and starts it now.">Enable &amp; Start</button>`
             : `<button class="btn btn-primary" id="btn-toggle">Start</button>`
       }
-      <a href="#/agents/${agent.id}/edit" class="btn">Edit</a>
+      ${agent.running ? `<button class="btn" id="btn-run-loop" title="Run one agent-loop cycle now">Run now</button>` : ''}
+      <a href="#/agents/${encodeURIComponent(agent.id)}/edit" class="btn">Edit</a>
       <button class="btn" id="btn-clone">Clone</button>
-      ${
-        agent.running
-          ? `<button class="btn" id="btn-run-loop">Run Agent Loop</button>`
-          : `<button class="btn btn-danger" id="btn-reset">Reset</button>`
-      }
+      <button class="btn" id="btn-export">Export</button>
       ${
         agent.running && agent.skills.includes('reflection')
           ? `<button class="btn" id="btn-reflect">Reflect</button>`
           : ''
       }
+      ${agent.running ? '' : `<button class="btn btn-danger" id="btn-reset">Reset</button>`}
+      <button class="btn btn-danger" id="btn-delete">Delete</button>
   `;
   const hasHome = Boolean(home && !home.error);
   const headerHtml = hasHome
@@ -690,7 +1090,7 @@ export async function renderAgentDetail(el, id) {
     <div class="detail-card">
       <table>
         <tr><td class="text-dim" style="width:140px">ID</td><td>${escapeHtml(agent.id)}</td></tr>
-        <tr><td class="text-dim">Token</td><td><code>${escapeHtml(agent.token)}</code></td></tr>
+        <tr><td class="text-dim">Token</td><td>${tokenCell(agent.token)}</td></tr>
         <tr><td class="text-dim">Enabled</td><td>${agent.enabled ? 'Yes <span class="text-dim">&mdash; starts automatically on boot</span>' : 'No <span class="text-dim">&mdash; never started, on boot or on request</span>'}</td></tr>
         <tr><td class="text-dim">Model</td><td>${modelDisplay}</td></tr>
         <tr><td class="text-dim">Soul Dir</td><td>${soulDirDisplay}</td></tr>
@@ -730,7 +1130,7 @@ export async function renderAgentDetail(el, id) {
           <span style="font-weight:600">Karma</span>
           ${karmaTrendBadge(karmaData.trend)}
         </div>
-        <a href="#/karma/${encodeURIComponent(id)}" class="btn btn-sm">View Details</a>
+        <a href="#/insights/karma/${encodeURIComponent(id)}" class="btn btn-sm">View Details</a>
       </div>
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
         <span style="font-size:32px;font-weight:700;color:${karmaScoreColor(karmaData.current)}">${karmaData.current}</span>
@@ -768,7 +1168,7 @@ export async function renderAgentDetail(el, id) {
     ${
       reflections.entries?.length || reflections.motivationsVersions?.length
         ? `
-    <div class="detail-card" style="margin-top:16px">
+    <div class="detail-card" id="reflection-card" style="margin-top:16px">
       <div class="flex-between mb-16">
         <span style="font-weight:600">Reflection Journal</span>
         <span class="text-dim text-sm">Last: ${reflections.lastReflection?.date || 'never'}</span>
@@ -831,187 +1231,131 @@ export async function renderAgentDetail(el, id) {
 
   startPresenceLive(el, id, home);
 
-  document.getElementById('btn-toggle').addEventListener('click', async (e) => {
+  el.querySelector('#btn-toggle')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
-    const startPath =
-      agent.enabled === false ? `/api/agents/${id}/start?enable=true` : `/api/agents/${id}/start`;
-    const res = agent.running
-      ? await api(`/api/agents/${id}/stop`, { method: 'POST' })
-      : await api(startPath, { method: 'POST' });
-    if (res.error) alert(res.error);
+    const action = agent.running ? 'stop' : agent.enabled === false ? 'enable-start' : 'start';
+    const r = await setRunning(id, action);
+    if (r.ok)
+      showToast(`${agent.name} ${action === 'stop' ? 'stopped' : 'started'}`, { tone: 'ok' });
+    else
+      showToast(`Could not ${action === 'stop' ? 'stop' : 'start'} ${agent.name}: ${r.error}`, {
+        tone: 'danger',
+        duration: 8000,
+      });
     renderAgentDetail(el, id);
   });
 
-  document.getElementById('btn-clone').addEventListener('click', () => {
+  el.querySelector('#btn-clone')?.addEventListener('click', () => {
     showCloneModal(id, el, () => renderAgentDetail(el, id));
   });
 
-  const resetBtn = document.getElementById('btn-reset');
-  if (resetBtn) {
-    resetBtn.addEventListener('click', async () => {
-      if (
-        !confirm(
-          `Reset agent "${id}"? This will fully reset the agent to its original state: all conversations, memory, goals, and learned facts will be cleared, and soul files will be restored to their generated baseline. This cannot be undone.`
-        )
-      )
-        return;
-      resetBtn.disabled = true;
-      resetBtn.textContent = 'Resetting...';
-      try {
-        const res = await api(`/api/agents/${id}/reset`, { method: 'POST' });
-        if (res.error) {
-          alert(`Reset failed: ${res.error}`);
-        } else {
-          alert('Agent reset successfully.');
-        }
-      } catch (err) {
-        alert(`Reset failed: ${err.message}`);
-      }
-      renderAgentDetail(el, id);
-    });
-  }
+  el.querySelector('#btn-export')?.addEventListener('click', () => showExportModal(id));
 
-  const runLoopBtn = document.getElementById('btn-run-loop');
+  el.querySelector('#btn-delete')?.addEventListener('click', async () => {
+    if (await confirmAndDelete(id, agent.name)) location.hash = '#/agents';
+  });
+
+  el.querySelector('#btn-reset')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    await confirmAndReset(id, agent.name);
+    renderAgentDetail(el, id);
+  });
+
+  // Masked token: Show toggles the server's preview, Copy puts it on the clipboard.
+  el.querySelector('[data-token-toggle]')?.addEventListener('click', (e) => {
+    const code = el.querySelector('[data-token-value]');
+    if (!code) return;
+    const shown = e.target.getAttribute('aria-pressed') === 'true';
+    code.textContent = shown ? '••••••••' : code.dataset.tokenValue;
+    e.target.setAttribute('aria-pressed', shown ? 'false' : 'true');
+    e.target.textContent = shown ? 'Show' : 'Hide';
+  });
+  el.querySelector('[data-token-copy]')?.addEventListener('click', async () => {
+    const value = el.querySelector('[data-token-value]')?.dataset.tokenValue ?? '';
+    try {
+      await navigator.clipboard.writeText(value);
+      showToast('Copied', { tone: 'ok', duration: 2000 });
+    } catch {
+      showToast('Clipboard unavailable', { tone: 'warn' });
+    }
+  });
+
+  const runLoopBtn = el.querySelector('#btn-run-loop');
   if (runLoopBtn) {
     runLoopBtn.addEventListener('click', async () => {
       runLoopBtn.disabled = true;
       runLoopBtn.textContent = 'Running...';
-      const resultDiv = document.getElementById('agent-loop-result');
+      const resultDiv = el.querySelector('#agent-loop-result');
       resultDiv.innerHTML = '<p class="text-dim text-sm mt-8">Executing agent loop...</p>';
-
-      try {
-        const res = await api(`/api/agent-loop/run/${encodeURIComponent(id)}`, { method: 'POST' });
-        if (res.error) {
-          resultDiv.innerHTML = `<div class="detail-card mt-8"><p style="color:var(--red)">${escapeHtml(res.error)}</p></div>`;
-        } else {
-          resultDiv.innerHTML = `<div class="detail-card mt-8">${renderAgentLoopResult(res.result)}</div>`;
-        }
-      } catch (err) {
-        resultDiv.innerHTML = `<div class="detail-card mt-8"><p style="color:var(--red)">Failed: ${escapeHtml(err.message)}</p></div>`;
+      const res = await api(`/api/agent-loop/run/${encodeURIComponent(id)}`, { method: 'POST' });
+      if (!res || res.error) {
+        resultDiv.innerHTML = '';
+        showToast(`Run failed: ${res?.error || 'request failed'}`, {
+          tone: 'danger',
+          duration: 8000,
+        });
+      } else {
+        resultDiv.innerHTML = `<div class="detail-card mt-8">${renderAgentLoopResult(res.result)}</div>`;
       }
-
       runLoopBtn.disabled = false;
-      runLoopBtn.textContent = 'Run Agent Loop';
+      runLoopBtn.textContent = 'Run now';
     });
   }
 
-  // Reflect button in detail view
-  const reflectBtn = document.getElementById('btn-reflect');
+  const reflectBtn = el.querySelector('#btn-reflect');
   if (reflectBtn) {
     reflectBtn.addEventListener('click', async () => {
       reflectBtn.disabled = true;
       reflectBtn.textContent = 'Reflecting...';
-      try {
-        const res = await api(`/api/agents/${encodeURIComponent(id)}/skills/reflection/reflect`, {
-          method: 'POST',
-        });
-        if (res.error) {
-          alert(`Reflect error: ${res.error}`);
-        } else {
-          const escaped = (res.result || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          showModal(`
-            <div class="modal-title">Reflection Result</div>
-            <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5">${escaped}</div>
-            <div style="margin-top:8px;font-size:12px;color:var(--text-dim)">Completed in ${(res.durationMs / 1000).toFixed(1)}s</div>
-            <div class="modal-actions">
-              <button class="btn" id="reflect-detail-close">Close</button>
-            </div>
-          `);
-          document.getElementById('modal').style.maxWidth = '700px';
-          document.getElementById('reflect-detail-close').addEventListener('click', () => {
-            document.getElementById('modal').style.maxWidth = '';
-            closeModal();
-          });
-        }
-      } catch (err) {
-        alert(`Reflect failed: ${err.message}`);
-      }
+      await reflectNow(id);
       reflectBtn.disabled = false;
       reflectBtn.textContent = 'Reflect';
     });
   }
 
-  // Reflection Journal — View Motivations buttons
-  for (const btn of document.querySelectorAll('[data-action="view-motivations"]')) {
-    btn.addEventListener('click', async () => {
-      const date = btn.dataset.date;
-      // Find matching version(s) for this date
-      const matching = (reflections.motivationsVersions || []).filter((v) => v.startsWith(date));
-      if (!matching.length) {
-        alert('No MOTIVATIONS backup found for this date.');
+  /** Open one MOTIVATIONS.md backup in the read-only modal. */
+  async function showMotivations(version, btn) {
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = 'Loading...';
+    const res = await api(
+      `/api/agents/${encodeURIComponent(id)}/reflections/motivations/${encodeURIComponent(version)}`
+    );
+    btn.disabled = false;
+    btn.textContent = origText;
+    if (!res || res.error) {
+      showToast(`Could not load MOTIVATIONS.md: ${res?.error || 'request failed'}`, {
+        tone: 'danger',
+      });
+      return;
+    }
+    showResultModal(
+      `MOTIVATIONS.md — ${version}`,
+      `<div style="white-space:pre-wrap;font-size:13px;line-height:1.5;font-family:monospace">${escapeHtml(res.content)}</div>`
+    );
+  }
+
+  // Reflection Journal buttons, delegated so "Show all" needs no re-wiring.
+  el.querySelector('#reflection-card')?.addEventListener('click', (e) => {
+    const byDate = e.target.closest('[data-action="view-motivations"]');
+    if (byDate) {
+      const date = byDate.dataset.date;
+      const version = (reflections.motivationsVersions || []).find((v) => v.startsWith(date));
+      if (!version) {
+        showToast('No MOTIVATIONS backup found for this date.', { tone: 'muted' });
         return;
       }
-      const version = matching[0]; // most recent for that date
-      btn.disabled = true;
-      btn.textContent = 'Loading...';
-      try {
-        const res = await api(
-          `/api/agents/${encodeURIComponent(id)}/reflections/motivations/${encodeURIComponent(version)}`
-        );
-        if (res.error) {
-          alert(`Error: ${res.error}`);
-        } else {
-          showModal(`
-            <div class="modal-title">MOTIVATIONS.md — ${escapeHtml(version)}</div>
-            <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5;font-family:monospace">${escapeHtml(res.content)}</div>
-            <div class="modal-actions">
-              <button class="btn" id="motivations-close">Close</button>
-            </div>
-          `);
-          document.getElementById('modal').style.maxWidth = '700px';
-          document.getElementById('motivations-close').addEventListener('click', () => {
-            document.getElementById('modal').style.maxWidth = '';
-            closeModal();
-          });
-        }
-      } catch (err) {
-        alert(`Failed to load: ${err.message}`);
-      }
-      btn.disabled = false;
-      btn.textContent = 'Motivations';
-    });
-  }
+      showMotivations(version, byDate);
+      return;
+    }
+    const byVersion = e.target.closest('[data-action="view-motivations-version"]');
+    if (byVersion) showMotivations(byVersion.dataset.version, byVersion);
+  });
 
-  // Reflection Journal — Direct version buttons
-  for (const btn of document.querySelectorAll('[data-action="view-motivations-version"]')) {
-    btn.addEventListener('click', async () => {
-      const version = btn.dataset.version;
-      btn.disabled = true;
-      const origText = btn.textContent;
-      btn.textContent = 'Loading...';
-      try {
-        const res = await api(
-          `/api/agents/${encodeURIComponent(id)}/reflections/motivations/${encodeURIComponent(version)}`
-        );
-        if (res.error) {
-          alert(`Error: ${res.error}`);
-        } else {
-          showModal(`
-            <div class="modal-title">MOTIVATIONS.md — ${escapeHtml(version)}</div>
-            <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5;font-family:monospace">${escapeHtml(res.content)}</div>
-            <div class="modal-actions">
-              <button class="btn" id="motivations-close">Close</button>
-            </div>
-          `);
-          document.getElementById('modal').style.maxWidth = '700px';
-          document.getElementById('motivations-close').addEventListener('click', () => {
-            document.getElementById('modal').style.maxWidth = '';
-            closeModal();
-          });
-        }
-      } catch (err) {
-        alert(`Failed to load: ${err.message}`);
-      }
-      btn.disabled = false;
-      btn.textContent = origText;
-    });
-  }
-
-  // Load more reflections
-  const loadMoreBtn = document.getElementById('btn-load-more-reflections');
+  const loadMoreBtn = el.querySelector('#btn-load-more-reflections');
   if (loadMoreBtn) {
     loadMoreBtn.addEventListener('click', () => {
-      const container = document.getElementById('reflection-entries');
+      const container = el.querySelector('#reflection-entries');
       container.innerHTML = reflections.entries
         .map(
           (e, i) => `
@@ -1027,44 +1371,6 @@ export async function renderAgentDetail(el, id) {
         )
         .join('');
       loadMoreBtn.remove();
-      // Re-wire motivations buttons for new entries
-      for (const btn of document.querySelectorAll('[data-action="view-motivations"]')) {
-        btn.addEventListener('click', async () => {
-          const date = btn.dataset.date;
-          const matching = (reflections.motivationsVersions || []).filter((v) =>
-            v.startsWith(date)
-          );
-          if (!matching.length) {
-            alert('No MOTIVATIONS backup found for this date.');
-            return;
-          }
-          btn.disabled = true;
-          btn.textContent = 'Loading...';
-          try {
-            const res = await api(
-              `/api/agents/${encodeURIComponent(id)}/reflections/motivations/${encodeURIComponent(matching[0])}`
-            );
-            if (res.error) {
-              alert(`Error: ${res.error}`);
-            } else {
-              showModal(`
-                <div class="modal-title">MOTIVATIONS.md — ${escapeHtml(matching[0])}</div>
-                <div style="max-height:60vh;overflow-y:auto;white-space:pre-wrap;font-size:13px;line-height:1.5;font-family:monospace">${escapeHtml(res.content)}</div>
-                <div class="modal-actions"><button class="btn" id="motivations-close">Close</button></div>
-              `);
-              document.getElementById('modal').style.maxWidth = '700px';
-              document.getElementById('motivations-close').addEventListener('click', () => {
-                document.getElementById('modal').style.maxWidth = '';
-                closeModal();
-              });
-            }
-          } catch (err) {
-            alert(`Failed to load: ${err.message}`);
-          }
-          btn.disabled = false;
-          btn.textContent = 'Motivations';
-        });
-      }
     });
   }
 }
@@ -1398,20 +1704,31 @@ export async function renderAgentEdit(el, id) {
     api(`/api/agents/${id}/soul-status`),
   ]);
 
-  if (agent.error) {
-    el.innerHTML = '<p>Agent not found.</p>';
+  teardownEditGuard();
+  if (!agent || agent.error) {
+    el.innerHTML = `<div class="page-title">Edit agent</div>${emptyState({
+      icon: '∅',
+      title: 'Agent not found',
+      hint: agent?.error || 'The server did not return this agent.',
+      action: '<a class="btn" href="#/agents">Back to agents</a>',
+    })}`;
     return;
   }
 
   const soulBanner = buildSoulStatusBanner(soulStatus);
+  // Where Save / Cancel go: the agent's Config, Home or the list, whichever opened the form.
+  const returnHash = editReturnHash(id, prevHash);
 
   el.innerHTML = `
     <div class="detail-header">
-      <a href="#/agents/${id}" class="back">&larr;</a>
+      <a href="${escapeHtml(returnHash)}" class="back" title="Back">&larr;</a>
       <div class="page-title">Edit ${escapeHtml(agent.name)}</div>
+      <span class="edit-dirty" id="edit-dirty" hidden>Unsaved changes · Ctrl+S to save</span>
     </div>
     ${soulBanner}
+    <div id="edit-jump-slot" class="edit-jump-slot"></div>
     <form id="edit-form" class="detail-card">
+      <div class="form-section-title" id="sec-general">General</div>
       <div class="form-group">
         <label>Name</label>
         <input type="text" name="name" value="${escapeHtml(agent.name)}">
@@ -1452,7 +1769,7 @@ export async function renderAgentEdit(el, id) {
       </div>
 
       <div class="form-separator"></div>
-      <div class="form-section-title">Agent Overrides <span class="text-dim text-sm">(empty = use global default)</span></div>
+      <div class="form-section-title" id="sec-overrides">Agent Overrides <span class="text-dim text-sm">(empty = use global default)</span></div>
 
       <div class="form-group">
         <label>Model</label>
@@ -1513,7 +1830,7 @@ export async function renderAgentEdit(el, id) {
       </div>
 
       <div class="form-separator"></div>
-      <div class="form-section-title">Agent Loop <span class="text-dim text-sm">(empty = use global default)</span></div>
+      <div class="form-section-title" id="sec-loop">Agent Loop <span class="text-dim text-sm">(empty = use global default)</span></div>
 
       <div class="form-group">
         <label>Agent Loop Enabled</label>
@@ -1730,7 +2047,7 @@ export async function renderAgentEdit(el, id) {
         defaults.ttsEnabled
           ? `
       <div class="form-separator"></div>
-      <div class="form-section-title">Voice (TTS) <span class="text-dim text-sm">(empty = use global default)</span></div>
+      <div class="form-section-title" id="sec-voice">Voice (TTS) <span class="text-dim text-sm">(empty = use global default)</span></div>
 
       <div class="form-group">
         <label>Voice</label>
@@ -1761,7 +2078,7 @@ export async function renderAgentEdit(el, id) {
         defaults.availableTools?.length
           ? `
       <div class="form-separator"></div>
-      <div class="form-section-title">Tools <span class="text-dim text-sm">(uncheck to disable)</span></div>
+      <div class="form-section-title" id="sec-tools">Tools <span class="text-dim text-sm">(uncheck to disable)</span></div>
 
       <div class="form-group">
         <div class="checkbox-group" id="tools-group">
@@ -1785,7 +2102,7 @@ export async function renderAgentEdit(el, id) {
         defaults.availableSkills?.length
           ? `
       <div class="form-separator"></div>
-      <div class="form-section-title">External Skills <span class="text-dim text-sm">(uncheck to disable all tools from a skill)</span></div>
+      <div class="form-section-title" id="sec-ext-skills">External Skills <span class="text-dim text-sm">(uncheck to disable all tools from a skill)</span></div>
 
       <div class="form-group">
         <div class="checkbox-group" id="ext-skills-group">
@@ -1809,7 +2126,7 @@ export async function renderAgentEdit(el, id) {
         defaults.defaultToolPermissions
           ? `
       <div class="form-separator"></div>
-      <div class="form-section-title">Tool Permissions</div>
+      <div class="form-section-title" id="sec-permissions">Tool Permissions</div>
 
       <div class="form-group">
         <label>Permission Matrix <span class="text-dim text-sm">(override defaults per tool)</span></label>
@@ -1836,10 +2153,10 @@ export async function renderAgentEdit(el, id) {
           : ''
       }
 
-      <div class="actions">
-        <button type="submit" class="btn btn-primary">Save</button>
+      <div class="actions edit-actions">
+        <button type="submit" class="btn btn-primary" id="btn-edit-save" title="Save (Ctrl+S)">Save</button>
         <button type="button" class="btn" id="btn-generate-soul">Generate Soul</button>
-        <a href="#/agents/${id}" class="btn">Cancel</a>
+        <button type="button" class="btn" id="btn-edit-cancel">Cancel</button>
       </div>
     </form>
   `;
@@ -1872,9 +2189,19 @@ export async function renderAgentEdit(el, id) {
     e.target.disabled = true;
     e.target.textContent = 'Initializing...';
     const result = await api(`/api/agents/${id}/init-soul`, { method: 'POST' });
+    if (!result || result.error) {
+      showToast(`Init soul failed: ${result?.error || 'request failed'}`, {
+        tone: 'danger',
+        duration: 8000,
+      });
+      e.target.disabled = false;
+      e.target.textContent = 'Init Custom Soul';
+      return;
+    }
     if (result.soulDir) {
       const soulDirInput = document.querySelector('input[name="soulDir"]');
       soulDirInput.value = result.soulDir;
+      soulDirInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
     e.target.textContent = 'Done';
     setTimeout(() => {
@@ -1955,6 +2282,7 @@ export async function renderAgentEdit(el, id) {
         note.textContent = `${data.voices.length} ElevenLabs voices. Press play on the agent's header to hear its now-line.`;
       }
       syncCustom();
+      rebaselineEdit();
     })();
     syncCustom();
   }
@@ -2207,10 +2535,76 @@ export async function renderAgentEdit(el, id) {
       }
     }
 
-    await api(`/api/agents/${id}`, { method: 'PATCH', body: patch });
-    location.hash = `#/agents/${id}`;
+    const saveBtn = form.querySelector('#btn-edit-save');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+    }
+    const res = await api(`/api/agents/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: patch,
+    });
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save';
+    }
+    if (!res || res.error) {
+      // Stay on the form: the edits are still here to fix and retry.
+      showToast(`Could not save: ${res?.error || 'request failed'}`, {
+        tone: 'danger',
+        duration: 10000,
+      });
+      return;
+    }
+    guard.release();
+    showToast(`Saved ${patch.name || agent.name}`, { tone: 'ok' });
+    location.hash = returnHash;
+  });
+
+  // --- Section jump-nav, dirty tracking, Ctrl+S, Cancel ----------------------
+  const jumpSlot = el.querySelector('#edit-jump-slot');
+  const sections = [...editForm.querySelectorAll('.form-section-title[id]')].map((t) => ({
+    id: t.id,
+    label: t.firstChild?.textContent?.trim() || t.textContent.trim(),
+  }));
+  if (jumpSlot) jumpSlot.innerHTML = editSectionNav(sections);
+  jumpSlot?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-jump]');
+    if (!b) return;
+    const target = editForm.querySelector(`#${CSS.escape(b.dataset.jump)}`);
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  const snap = () => snapshotForm([...editForm.elements]);
+  let baseline = snap();
+  let touched = false;
+  const dirtyNote = el.querySelector('#edit-dirty');
+  const isDirty = () => snap() !== baseline;
+  const syncDirty = () => {
+    touched = true;
+    if (dirtyNote) dirtyNote.hidden = !isDirty();
+  };
+  editForm.addEventListener('input', syncDirty);
+  editForm.addEventListener('change', syncDirty);
+  // The voice list loads asynchronously and swaps the select's options:
+  // re-baseline once it has, unless the operator already edited something.
+  rebaselineEdit = () => {
+    if (!touched) baseline = snap();
+  };
+
+  const guard = installEditGuard(editForm, {
+    isDirty,
+    onSave: () => editForm.requestSubmit(),
+  });
+
+  el.querySelector('#btn-edit-cancel')?.addEventListener('click', () => {
+    // The guard asks before discarding when there are edits.
+    location.hash = returnHash;
   });
 }
+
+/** Set by renderAgentEdit; called when async form content (voice list) settles. */
+let rebaselineEdit = () => {};
 
 /** Raw values of the Curiosity block, in the shape readCuriosityForm expects. */
 function readCuriosityValues(form) {
@@ -2279,8 +2673,19 @@ function showCloneModal(sourceId, el, onDone) {
     const name = document.getElementById('clone-name').value.trim();
     if (!id || !name) return;
 
-    await api(`/api/agents/${sourceId}/clone`, { method: 'POST', body: { id, name } });
+    const res = await api(`/api/agents/${encodeURIComponent(sourceId)}/clone`, {
+      method: 'POST',
+      body: { id, name },
+    });
+    if (!res || res.error) {
+      showToast(`Clone failed: ${res?.error || 'request failed'}`, {
+        tone: 'danger',
+        duration: 8000,
+      });
+      return;
+    }
     closeModal();
+    showToast(`Cloned into ${name}`, { tone: 'ok' });
     if (onDone) onDone();
     else renderAgents(el);
   });
@@ -2334,7 +2739,7 @@ async function showGenerateSoulModal(agentId, agentName, onComplete) {
     const selectedModel = document.getElementById('gen-model').value;
 
     if (!role || !personalityDescription) {
-      alert('Role and personality description are required.');
+      showToast('Role and personality description are required.', { tone: 'warn' });
       return;
     }
 
@@ -2360,7 +2765,7 @@ async function showGenerateSoulModal(agentId, agentName, onComplete) {
       });
 
       if (result.error) {
-        alert(`Generation failed: ${result.error}`);
+        showToast(`Generation failed: ${result.error}`, { tone: 'danger', duration: 8000 });
         btn.disabled = false;
         btn.textContent = 'Generate';
         return;
@@ -2374,7 +2779,7 @@ async function showGenerateSoulModal(agentId, agentName, onComplete) {
         { onComplete }
       );
     } catch (err) {
-      alert(`Generation failed: ${err.message || err}`);
+      showToast(`Generation failed: ${err.message || err}`, { tone: 'danger', duration: 8000 });
       btn.disabled = false;
       btn.textContent = 'Generate';
     }
@@ -2434,7 +2839,7 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
       });
 
       if (result.error) {
-        alert(`Regeneration failed: ${result.error}`);
+        showToast(`Regeneration failed: ${result.error}`, { tone: 'danger', duration: 8000 });
         btn.disabled = false;
         btn.textContent = 'Regenerate';
         return;
@@ -2442,7 +2847,7 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
 
       showSoulPreviewModal(agentId, agentName, result, inputData, options);
     } catch (err) {
-      alert(`Regeneration failed: ${err.message || err}`);
+      showToast(`Regeneration failed: ${err.message || err}`, { tone: 'danger', duration: 8000 });
       btn.disabled = false;
       btn.textContent = 'Regenerate';
     }
@@ -2460,7 +2865,7 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
       });
 
       if (result.error) {
-        alert(`Apply failed: ${result.error}`);
+        showToast(`Apply failed: ${result.error}`, { tone: 'danger', duration: 8000 });
         btn.disabled = false;
         btn.textContent = 'Apply';
         return;
@@ -2471,7 +2876,7 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
         onComplete();
       }
     } catch (err) {
-      alert(`Apply failed: ${err.message || err}`);
+      showToast(`Apply failed: ${err.message || err}`, { tone: 'danger', duration: 8000 });
       btn.disabled = false;
       btn.textContent = 'Apply';
     }
@@ -2485,6 +2890,33 @@ function showSoulPreviewModal(agentId, agentName, soulData, inputData, options =
  */
 function showNewAgentModal() {
   location.hash = '#/agents/new';
+}
+
+/** Download one agent's export archive. `{ ok, error }`; never throws. */
+async function downloadExport(botId, params) {
+  try {
+    const headers = {};
+    const token = getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/agents/${encodeURIComponent(botId)}/export?${params}`, {
+      headers,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Export failed' }));
+      return { ok: false, error: err.error || 'Export failed' };
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = match?.[1] || `${botId}-export.tar.gz`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
 }
 
 function showExportModal(botId) {
@@ -2522,42 +2954,17 @@ function showExportModal(botId) {
     if (!karma) params.set('karma', 'false');
     if (!sessions) params.set('sessions', 'false');
 
-    const url = `/api/agents/${encodeURIComponent(botId)}/export?${params}`;
     const btn = document.getElementById('export-confirm');
     btn.disabled = true;
     btn.textContent = 'Downloading...';
-
-    try {
-      const headers = {};
-      const token = getAuthToken();
-      if (token) headers.Authorization = `Bearer ${token}`;
-
-      const res = await fetch(url, { headers });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Export failed' }));
-        alert(err.error || 'Export failed');
-        btn.disabled = false;
-        btn.textContent = 'Download Export';
-        return;
-      }
-
-      const blob = await res.blob();
-      const disposition = res.headers.get('content-disposition') || '';
-      const match = disposition.match(/filename="?([^"]+)"?/);
-      const filename = match?.[1] || `${botId}-export.tar.gz`;
-
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    } catch (err) {
-      alert(`Export failed: ${err.message || err}`);
+    const r = await downloadExport(botId, params);
+    if (!r.ok) {
+      showToast(`Export failed: ${r.error}`, { tone: 'danger', duration: 8000 });
       btn.disabled = false;
       btn.textContent = 'Download Export';
       return;
     }
-
+    showToast(`Exported ${botId}`, { tone: 'ok' });
     closeModal();
   });
 }
@@ -2592,7 +2999,7 @@ function showImportModal(el) {
     const fileInput = document.getElementById('import-file');
     const file = fileInput.files?.[0];
     if (!file) {
-      alert('Please select a file');
+      showToast('Choose an archive file first', { tone: 'warn' });
       return;
     }
 
@@ -2625,21 +3032,24 @@ function showImportModal(el) {
 
       const result = await res.json();
       if (!res.ok) {
-        alert(`Import failed: ${result.error}`);
+        showToast(`Import failed: ${result.error}`, { tone: 'danger', duration: 8000 });
         btn.disabled = false;
         btn.textContent = 'Import';
         return;
       }
 
-      let msg = `Agent "${result.botName}" (${result.botId}) imported successfully.`;
+      let msg = `Imported ${result.botName} (${result.botId})`;
       if (result.warnings?.length) {
-        msg += `\n\nWarnings:\n- ${result.warnings.join('\n- ')}`;
+        msg += ` · warnings: ${result.warnings.join('; ')}`;
       }
-      alert(msg);
+      showToast(msg, {
+        tone: result.warnings?.length ? 'warn' : 'ok',
+        duration: result.warnings?.length ? 10000 : 4000,
+      });
       closeModal();
       renderAgents(el);
     } catch (err) {
-      alert(`Import failed: ${err.message || err}`);
+      showToast(`Import failed: ${err.message || err}`, { tone: 'danger', duration: 8000 });
       btn.disabled = false;
       btn.textContent = 'Import';
     }

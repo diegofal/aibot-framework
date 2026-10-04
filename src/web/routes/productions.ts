@@ -600,7 +600,7 @@ export function productionsRoutes(deps: {
     const botId = c.req.param('botId');
     if (!checkBotAccess(c, botId)) return c.json({ error: 'Bot not found' }, 404);
     const id = c.req.param('id');
-    const body = await c.req.json<{ reason?: string }>();
+    const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as { reason?: string });
 
     const entry = productionsService.getEntry(botId, id);
     if (!entry) {

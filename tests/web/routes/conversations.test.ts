@@ -562,6 +562,59 @@ describe('conversations routes', () => {
       expect(statusData.lastBotMessage.content).toBe('Thanks for the direction!');
     });
 
+    test('marks an orphan pending inbox conversation answered when answerAskHuman fails', async () => {
+      const deps = makeDeps();
+      (deps.botManager as any).answerAskHuman = mock(() => false);
+      mock.module('../../../src/claude-cli', () => ({
+        claudeGenerate: mock(() => Promise.resolve({ response: 'Bot reply' })),
+      }));
+      const convo = deps.conversationsService.createConversation('bot1', 'inbox', 'Orphan?', {
+        askHumanQuestionId: 'q-lost',
+        inboxStatus: 'pending',
+      });
+      const app = makeApp(deps);
+      const res = await app.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Here is my answer' }),
+        }
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.message.content).toBe('Here is my answer');
+      expect(deps.conversationsService.getConversation('bot1', convo.id)?.inboxStatus).toBe(
+        'answered'
+      );
+      await tick(200);
+    });
+
+    test('marks a pending inbox conversation with no question id answered on a human reply', async () => {
+      const deps = makeDeps();
+      (deps.botManager as any).answerAskHuman = mock(() => false);
+      mock.module('../../../src/claude-cli', () => ({
+        claudeGenerate: mock(() => Promise.resolve({ response: 'Bot reply' })),
+      }));
+      const convo = deps.conversationsService.createConversation('bot1', 'inbox', 'No id?', {
+        inboxStatus: 'pending',
+      });
+      const app = makeApp(deps);
+      const res = await app.request(
+        `http://localhost/api/conversations/bot1/${convo.id}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'Answer' }),
+        }
+      );
+      expect(res.status).toBe(200);
+      expect(deps.conversationsService.getConversation('bot1', convo.id)?.inboxStatus).toBe(
+        'answered'
+      );
+      await tick(200);
+    });
+
     test('falls through to normal chat for already-answered inbox conversation', async () => {
       const deps = makeDeps();
       (deps.botManager as any).answerAskHuman = mock(() => false);

@@ -370,7 +370,8 @@ export function bulkTargets(jobs, ids, action) {
 /** `{ list, error }` from an `api()` response that should have been an array. */
 export function apiList(res) {
   if (Array.isArray(res)) return { list: res, error: null };
-  const error = res && typeof res === 'object' && res.error ? String(res.error) : 'Unexpected response';
+  const error =
+    res && typeof res === 'object' && res.error ? String(res.error) : 'Unexpected response';
   return { list: [], error };
 }
 
@@ -383,4 +384,18 @@ export function cronErrorState(message, title = 'Could not load cron jobs') {
     action: '<button class="btn btn-sm" data-action="retry">Retry</button>',
     class: 'ops-error-state',
   });
+}
+
+/**
+ * Toast for `POST /api/cron/rerun-failed` (`{ attempted, results: [{ ran }] }`).
+ * Shared by the Cron page's "Re-run failed" button and the palette action.
+ */
+export function rerunSummary(res) {
+  if (!res || res.error) {
+    return { text: `Re-run failed: ${res?.error ?? 'no response'}`, tone: 'danger' };
+  }
+  const results = Array.isArray(res.results) ? res.results : [];
+  const succeeded = results.filter((r) => r?.ran).length;
+  const attempted = Number(res.attempted) || 0;
+  return { text: `Re-ran ${succeeded}/${attempted}`, tone: succeeded ? 'ok' : 'danger' };
 }

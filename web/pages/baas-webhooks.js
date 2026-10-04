@@ -1,3 +1,5 @@
+import { confirmDialog, showToast } from '../ui/index.js';
+import { rememberTenant, restoreTenant } from './baas-helpers.js';
 import {
   api,
   closeModal,
@@ -7,6 +9,12 @@ import {
   showModal,
   timeAgo,
 } from './shared.js';
+
+/** Toast + focus for a modal field that failed validation. */
+function invalid(inputId, message) {
+  showToast(message, { tone: 'warn' });
+  if (inputId) document.getElementById(inputId)?.focus();
+}
 
 const VALID_EVENTS = [
   'message.received',
@@ -25,16 +33,18 @@ function healthBadge(failCount) {
 }
 
 /**
- * #/baas/webhooks — Webhook management
+ * #/settings/baas/webhooks — Webhook management
  */
 export async function renderBaasWebhooks(el) {
   el.innerHTML =
     '<div class="page-title">Webhooks</div><div id="wh-tenant-picker"></div><p class="text-dim">Loading...</p>';
 
+  restoreTenant(); // admin's tenant pick survives reloads and is shared by every BaaS page
   const tenantId = await resolveTenantId(el.querySelector('#wh-tenant-picker'), () =>
     renderBaasWebhooks(el)
   );
   if (!tenantId) return;
+  rememberTenant(tenantId);
 
   const data = await api(`/api/baas/webhooks/${encodeURIComponent(tenantId)}`);
   if (data.error) {
@@ -92,20 +102,24 @@ export async function renderBaasWebhooks(el) {
     const action = btn.dataset.action;
     const id = btn.dataset.id;
 
-    if (action === 'toggle') {
-      const enabled = btn.checked;
-      await api(`/api/baas/webhooks/${encodeURIComponent(tenantId)}/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        body: { enabled },
-      });
-    } else if (action === 'edit') {
+    // The enable toggle is handled by the 'change' listener below; handling it
+    // here too sent every PUT twice.
+    if (action === 'edit') {
       const hook = hooks.find((h) => h.id === id);
       if (hook) showEditModal(el, tenantId, hook);
     } else if (action === 'delete') {
-      if (!confirm(`Delete webhook "${btn.dataset.url}"?`)) return;
-      await api(`/api/baas/webhooks/${encodeURIComponent(tenantId)}/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
+      const ok = await confirmDialog({
+        title: 'Delete webhook?',
+        message: `Delete webhook "${btn.dataset.url}"? Deliveries to it stop immediately.`,
+        confirmLabel: 'Delete',
       });
+      if (!ok) return;
+      const res = await api(
+        `/api/baas/webhooks/${encodeURIComponent(tenantId)}/${encodeURIComponent(id)}`,
+        { method: 'DELETE' }
+      );
+      if (res?.error) return showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
+      showToast('Webhook deleted', { tone: 'ok' });
       renderBaasWebhooks(el);
     }
   });
@@ -115,10 +129,14 @@ export async function renderBaasWebhooks(el) {
     if (e.target.dataset.action === 'toggle') {
       const id = e.target.dataset.id;
       const enabled = e.target.checked;
-      await api(`/api/baas/webhooks/${encodeURIComponent(tenantId)}/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        body: { enabled },
-      });
+      const res = await api(
+        `/api/baas/webhooks/${encodeURIComponent(tenantId)}/${encodeURIComponent(id)}`,
+        { method: 'PUT', body: { enabled } }
+      );
+      if (res?.error) {
+        e.target.checked = !enabled;
+        showToast(`Update failed: ${res.error}`, { tone: 'danger' });
+      }
     }
   });
 }
@@ -157,14 +175,16 @@ function showCreateModal(el, tenantId) {
   document.getElementById('wh-save').addEventListener('click', async () => {
     const url = document.getElementById('wh-url').value.trim();
     const events = getSelectedEvents();
-    if (!url) return alert('URL is required');
-    if (events.length === 0) return alert('Select at least one event');
+    if (!url) return invalid('wh-url', 'URL is required.');
+    if (events.length === 0) return invalid(null, 'Select at least one event.');
 
-    await api(`/api/baas/webhooks/${encodeURIComponent(tenantId)}`, {
+    const res = await api(`/api/baas/webhooks/${encodeURIComponent(tenantId)}`, {
       method: 'POST',
       body: { url, events },
     });
+    if (res?.error) return showToast(`Create failed: ${res.error}`, { tone: 'danger' });
     closeModal();
+    showToast('Webhook created', { tone: 'ok' });
     renderBaasWebhooks(el);
   });
 }
@@ -185,14 +205,16 @@ function showEditModal(el, tenantId, hook) {
   document.getElementById('wh-save').addEventListener('click', async () => {
     const url = document.getElementById('wh-url').value.trim();
     const events = getSelectedEvents();
-    if (!url) return alert('URL is required');
-    if (events.length === 0) return alert('Select at least one event');
+    if (!url) return invalid('wh-url', 'URL is required.');
+    if (events.length === 0) return invalid(null, 'Select at least one event.');
 
-    await api(`/api/baas/webhooks/${encodeURIComponent(tenantId)}/${encodeURIComponent(hook.id)}`, {
-      method: 'PUT',
-      body: { url, events },
-    });
+    const res = await api(
+      `/api/baas/webhooks/${encodeURIComponent(tenantId)}/${encodeURIComponent(hook.id)}`,
+      { method: 'PUT', body: { url, events } }
+    );
+    if (res?.error) return showToast(`Save failed: ${res.error}`, { tone: 'danger' });
     closeModal();
+    showToast('Webhook saved', { tone: 'ok' });
     renderBaasWebhooks(el);
   });
 }

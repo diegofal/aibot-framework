@@ -467,6 +467,13 @@ export function conversationsRoutes(deps: {
       if (!message) {
         return c.json({ error: 'Failed to add message' }, 500);
       }
+      // A pending inbox thread whose question the store no longer holds (an
+      // orphan, or one that never got a question id): the operator just
+      // answered it, so it must leave Needs You instead of being auto-closed
+      // later as "without answer".
+      if (conversation.type === 'inbox' && conversation.inboxStatus === 'pending') {
+        conversationsService.markInboxStatus(botId, id, 'answered');
+      }
     }
 
     // Clear any previous error state and fire-and-forget bot reply

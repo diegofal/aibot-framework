@@ -93,7 +93,8 @@ function toolRow(t, selected) {
       ? `<a href="#/automations/tools/${encodeURIComponent(t.id)}">${esc(t.name)}</a>`
       : esc(t.name);
   const status = isDyn && t.status ? ` ${badge(t.status, STATUS_TONE[t.status] ?? 'muted')}` : '';
-  const creator = isDyn && t.createdBy ? `<span class="text-dim"> by ${esc(t.createdBy)}</span>` : '';
+  const creator =
+    isDyn && t.createdBy ? `<span class="text-dim"> by ${esc(t.createdBy)}</span>` : '';
   const actions = [
     `<button class="btn btn-sm" data-action="run" data-name="${esc(t.name)}">Run</button>`,
   ];
@@ -120,7 +121,11 @@ export function toolsTable(groups, { selected = new Set(), filtered = false } = 
   const list = groups ?? [];
   if (list.length === 0) {
     return filtered
-      ? emptyState({ icon: '⌕', title: 'No tools match', hint: 'Clear the filter to see every tool.' })
+      ? emptyState({
+          icon: '⌕',
+          title: 'No tools match',
+          hint: 'Clear the filter to see every tool.',
+        })
       : emptyState({ icon: '⚙', title: 'No tools registered' });
   }
   const body = list

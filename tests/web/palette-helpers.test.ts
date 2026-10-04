@@ -9,6 +9,7 @@ import {
   KIND_LABEL,
   PALETTE_LIMIT,
   RECENTS_MAX,
+  actionResultToast,
   buildActionItems,
   buildAgentItems,
   buildItems,
@@ -242,5 +243,85 @@ describe('markup', () => {
     expect(html).toContain('role="dialog"');
     expect(html).toContain('data-palette-close');
     expect(html).toContain('Esc');
+  });
+});
+
+describe('wave 2 palette actions', () => {
+  const items = buildActionItems(AGENTS, { theme: 'dark' });
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+
+  it('Clear stale needs: POSTs 72 h behind a confirm, summarised from the results', () => {
+    expect(byId['action:clear-stale']).toMatchObject({
+      label: 'Clear stale needs (older than 72h)',
+      api: {
+        path: '/api/needs-you/clear-stale',
+        method: 'POST',
+        body: { olderThanHours: 72 },
+      },
+      summary: 'clear-stale',
+    });
+    expect(byId['action:clear-stale'].confirm.title).toContain('72');
+  });
+
+  it('New cron job goes to the create form', () => {
+    expect(byId['action:new-cron']).toMatchObject({ href: '#/automations/cron/new' });
+  });
+
+  it('Run agent loop now calls what the loop page Run Now calls', () => {
+    expect(byId['action:run-loop']).toMatchObject({
+      label: 'Run agent loop now',
+      api: { path: '/api/agent-loop/run', method: 'POST' },
+    });
+    expect(byId['action:run-loop'].api.body).toBeUndefined();
+  });
+
+  it('Re-run failed crons calls the cron page endpoint', () => {
+    expect(byId['action:rerun-crons']).toMatchObject({
+      api: { path: '/api/cron/rerun-failed', method: 'POST' },
+      summary: 'cron-rerun',
+    });
+  });
+
+  it('per-agent Stats / Karma / Logs jumps use canonical routes', () => {
+    expect(byId['action:stats:hunter']).toMatchObject({
+      label: 'Hunter stats',
+      href: '#/insights/stats/bot/hunter',
+    });
+    expect(byId['action:karma:hunter']).toMatchObject({ href: '#/insights/karma/hunter' });
+    expect(byId['action:logs:hunter']).toMatchObject({
+      label: 'Hunter logs',
+      href: '#/insights/activity?tab=logs&bot=hunter',
+    });
+  });
+
+  it('actionResultToast: errors, summaries and the plain label', () => {
+    expect(actionResultToast(byId['action:run-loop'], { error: 'busy' })).toEqual({
+      text: 'busy',
+      tone: 'danger',
+    });
+    expect(actionResultToast(byId['action:run-loop'], { results: [] })).toEqual({
+      text: 'Run agent loop now',
+      tone: 'ok',
+    });
+    expect(
+      actionResultToast(byId['action:clear-stale'], {
+        cleared: 2,
+        results: [
+          { id: 'a', ok: true },
+          { id: 'b', ok: true },
+          { id: 'c', ok: false },
+        ],
+      })
+    ).toEqual({ text: 'Cleared 2 · 1 failed', tone: 'warn' });
+    expect(actionResultToast(byId['action:clear-stale'], { cleared: 0, results: [] })).toEqual({
+      text: 'Nothing older than 72 h',
+      tone: 'muted',
+    });
+    expect(
+      actionResultToast(byId['action:rerun-crons'], {
+        attempted: 2,
+        results: [{ ran: true }, { ran: false }],
+      })
+    ).toEqual({ text: 'Re-ran 1/2', tone: 'ok' });
   });
 });

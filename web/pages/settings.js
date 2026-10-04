@@ -1,5 +1,23 @@
-import { ccliModelSelect } from './settings-helpers.js';
+import { registerNavGuard } from '../nav-guard.js';
+import { confirmDialog, promptDialog, showToast } from '../ui/index.js';
+import {
+  ccliModelSelect,
+  dirtySections,
+  jumpLinksMarkup,
+  saveBarMarkup,
+  saveSummary,
+} from './settings-helpers.js';
 import { api, getAuthContext, getAuthToken } from './shared.js';
+
+/**
+ * Unsaved edits kept across a navigation the nav guard never saw (the router
+ * re-rendering without a hashchange, e.g. logout / an auth prompt). Restored
+ * on the next visit; a confirmed "Discard" clears it.
+ * `{ fields: { key: value|bool }, sfPaths }`.
+ */
+let settingsDraft = null;
+/** Removes the document/window listeners of the previous render. */
+let detachSettingsGuards = null;
 
 export async function renderSettings(el) {
   const { role } = getAuthContext();
@@ -8,6 +26,7 @@ export async function renderSettings(el) {
     return;
   }
 
+  detachSettingsGuards?.();
   el.innerHTML = '<div class="page-title">Settings</div><p class="text-dim">Loading...</p>';
 
   const [
@@ -30,7 +49,10 @@ export async function renderSettings(el) {
     api('/api/settings/claude-cli'),
   ]);
   if (session.error || collab.error) {
-    el.innerHTML = '<div class="page-title">Settings</div><p>Failed to load settings.</p>';
+    el.innerHTML = `<div class="page-title">Settings</div><div class="detail-card"><p>Failed to load settings${
+      session.error ? `: ${session.error}`.replace(/[<>&"]/g, '') : ''
+    }.</p><button class="btn btn-sm" data-action="retry">Retry</button></div>`;
+    el.querySelector('[data-action="retry"]')?.addEventListener('click', () => renderSettings(el));
     return;
   }
 
@@ -47,8 +69,9 @@ export async function renderSettings(el) {
 
   el.innerHTML = `
     <div class="page-title">Settings</div>
+    ${jumpLinksMarkup()}
 
-    <div class="detail-card" id="skills-folders-card">
+    <div class="detail-card" id="settings-skill-folders">
       <div class="form-section-title">Skill Folders</div>
       <p class="text-dim text-sm mb-16">Directories containing external skill packages (skill.json + handlers). Changes take effect on restart.</p>
       <div id="sf-list"></div>
@@ -59,15 +82,11 @@ export async function renderSettings(el) {
         </div>
         <button type="button" class="btn btn-sm" id="sf-add-btn" style="margin-bottom:0">Add</button>
       </div>
-      <div class="actions" style="margin-top:12px">
-        <button type="button" class="btn btn-primary btn-sm" id="sf-save-btn">Save Folders</button>
-        <span class="text-dim text-sm" id="sf-save-status"></span>
-      </div>
     </div>
 
-    <div class="detail-card" id="mcp-servers-card">
+    <div class="detail-card" id="settings-mcp">
       <div class="form-section-title">MCP Servers</div>
-      <p class="text-dim text-sm mb-16">External MCP server connections. Bots can use tools from these servers.</p>
+      <p class="text-dim text-sm mb-16">External MCP server connections. Bots can use tools from these servers. Adding or removing a server applies immediately.</p>
       <div id="mcp-list"></div>
       <div class="form-separator" style="margin:12px 0"></div>
       <div class="form-row" style="align-items:flex-end;gap:8px">
@@ -103,7 +122,7 @@ export async function renderSettings(el) {
       </div>
     </div>
 
-    <div class="detail-card" id="claude-cli-card">
+    <div class="detail-card" id="settings-claude-cli">
       <div class="form-section-title">Claude CLI</div>
       <p class="text-dim text-sm mb-16">Model used by every claude-cli call fleet-wide: the agent loop (planner, strategist, executor) for every bot on the claude-cli backend, plus soul generation, quality review, memory consolidation and the improve tool. "CLI default" leaves it up to whatever's configured on the container.</p>
 
@@ -111,16 +130,11 @@ export async function renderSettings(el) {
         <label>Model</label>
         ${ccliModelSelect(claudeCli)}
       </div>
-
-      <div class="actions" style="margin-top:12px">
-        <button type="button" class="btn btn-primary btn-sm" id="ccli-save-btn">Save</button>
-        <span class="text-dim text-sm" id="ccli-save-status"></span>
-      </div>
     </div>
 
-    <div class="detail-card" id="health-check-card">
+    <div class="detail-card" id="settings-health-check">
       <div class="form-section-title">Soul Health Check / Quality Review</div>
-      <p class="text-dim text-sm mb-16">Configure the LLM backend used for soul quality review and memory consolidation on startup.</p>
+      <p class="text-dim text-sm mb-16">Configure the LLM backend used for soul quality review and memory consolidation on startup. Applies on the next bot start.</p>
 
       <div class="form-group">
         <label>Enabled</label>
@@ -150,16 +164,11 @@ export async function renderSettings(el) {
           </label>
         </div>
       </div>
-
-      <div class="actions" style="margin-top:12px">
-        <button type="button" class="btn btn-primary btn-sm" id="hc-save-btn">Save</button>
-        <span class="text-dim text-sm" id="hc-save-status"></span>
-      </div>
     </div>
 
     <form id="settings-form">
 
-      <div class="detail-card">
+      <div class="detail-card" id="settings-session">
         <div class="form-section-title">Group Activation</div>
 
         <div class="form-row">
@@ -256,7 +265,7 @@ export async function renderSettings(el) {
         </div>
       </div>
 
-      <div class="detail-card">
+      <div class="detail-card" id="settings-collaboration">
         <div class="form-section-title">Agent Collaboration</div>
 
         <div class="form-group">
@@ -316,7 +325,7 @@ export async function renderSettings(el) {
         </div>
       </div>
 
-      <div class="detail-card">
+      <div class="detail-card" id="settings-memory-search">
         <div class="form-section-title">Memory Search</div>
 
         <div class="form-group">
@@ -362,13 +371,9 @@ export async function renderSettings(el) {
         </div>
       </div>
 
-      <div class="actions">
-        <button type="submit" class="btn btn-primary" id="btn-save">Save</button>
-        <span class="text-dim text-sm" id="save-status"></span>
-      </div>
     </form>
 
-    <div class="detail-card" id="system-backup-card">
+    <div class="detail-card" id="settings-backup">
       <div class="form-section-title">System Backup &amp; Restore</div>
       <p class="text-dim text-sm mb-16">
         Export this whole instance as a portable <code>.tar.gz</code>: global settings, the agent
@@ -424,12 +429,16 @@ export async function renderSettings(el) {
       </div>
       <pre id="sysx-import-output" class="text-dim text-sm" style="white-space:pre-wrap;margin-top:12px"></pre>
     </div>
+
+    <div id="settings-savebar-slot" class="settings-savebar-slot"></div>
   `;
 
   setupSystemBackupCard();
 
   // --- Skill Folders UI logic ---
   const currentSfPaths = [...sfPaths];
+  // Declared up here: the skill-folder list calls it before the save bar is wired.
+  let refreshDirty = () => {};
 
   function renderSfList() {
     const listEl = document.getElementById('sf-list');
@@ -461,6 +470,7 @@ export async function renderSettings(el) {
       btn.addEventListener('click', () => {
         currentSfPaths.splice(Number.parseInt(btn.dataset.idx, 10), 1);
         renderSfList();
+        refreshDirty();
       });
     }
   }
@@ -474,32 +484,7 @@ export async function renderSettings(el) {
       currentSfPaths.push(val);
       input.value = '';
       renderSfList();
-    }
-  });
-
-  document.getElementById('sf-save-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('sf-save-btn');
-    const status = document.getElementById('sf-save-status');
-    btn.disabled = true;
-    btn.textContent = 'Saving...';
-
-    const res = await api('/api/settings/skills-folders', {
-      method: 'PATCH',
-      body: { paths: currentSfPaths },
-    });
-
-    btn.disabled = false;
-    btn.textContent = 'Save Folders';
-
-    if (res.error) {
-      status.textContent = 'Failed to save';
-      status.style.color = 'var(--red)';
-    } else {
-      status.textContent = 'Saved (restart to apply)';
-      status.style.color = 'var(--green)';
-      setTimeout(() => {
-        status.textContent = '';
-      }, 4000);
+      refreshDirty();
     }
   });
 
@@ -632,144 +617,221 @@ export async function renderSettings(el) {
     }
   });
 
-  // --- Claude CLI save ---
-  document.getElementById('ccli-save-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('ccli-save-btn');
-    const status = document.getElementById('ccli-save-status');
-    btn.disabled = true;
-    btn.textContent = 'Saving...';
+  // --- One sticky save bar for every section (UX overhaul phase 5) ---
+  // Skill folders, Claude CLI, Health check, Session, Collaboration and Memory
+  // search used to have five Save buttons. Now every edit marks its section
+  // dirty, one bar lists them, and Save PATCHes only the sections that
+  // changed, reporting errors per section. MCP add/remove and backup/restore
+  // keep their own immediate actions.
+  const form = document.getElementById('settings-form');
+  const slot = document.getElementById('settings-savebar-slot');
+  const editable = [
+    document.getElementById('settings-skill-folders'),
+    document.getElementById('settings-claude-cli'),
+    document.getElementById('settings-health-check'),
+    form,
+  ];
+  const int = (v) => Number.parseInt(v, 10);
+  const num = (v) => Number.parseFloat(v);
+  const ENDPOINTS = {
+    skillFolders: '/api/settings/skills-folders',
+    claudeCli: '/api/settings/claude-cli',
+    healthCheck: '/api/settings/health-check',
+    session: '/api/settings/session',
+    collaboration: '/api/settings/collaboration',
+    memorySearch: '/api/settings/memory-search',
+  };
 
-    const patch = {
-      model: document.getElementById('ccli-model').value.trim(),
+  /** Current PATCH body of every saveable section. */
+  function collect() {
+    const hcModel = document.getElementById('hc-model').value;
+    const hcClaude = hcModel === 'claude-cli';
+    return {
+      skillFolders: { paths: [...currentSfPaths] },
+      claudeCli: { model: document.getElementById('ccli-model').value.trim() },
+      healthCheck: {
+        enabled: document.getElementById('hc-enabled').checked,
+        llmBackend: hcClaude ? 'claude-cli' : 'ollama',
+        model: hcClaude ? '' : hcModel,
+        cooldownMs: int(document.getElementById('hc-cooldown').value) * 3600000,
+        consolidateMemory: document.getElementById('hc-consolidate').checked,
+      },
+      session: {
+        groupActivation: form.groupActivation.value,
+        replyWindow: int(form.replyWindow.value),
+        forumTopicIsolation: form.forumTopicIsolation.checked,
+        resetPolicy: {
+          daily: { enabled: form.dailyEnabled.checked, hour: int(form.dailyHour.value) },
+          idle: { enabled: form.idleEnabled.checked, minutes: int(form.idleMinutes.value) },
+        },
+        llmRelevanceCheck: {
+          enabled: form.rlcEnabled.checked,
+          temperature: num(form.rlcTemperature.value),
+          timeout: int(form.rlcTimeout.value),
+          contextMessages: int(form.rlcContextMessages.value),
+          broadcastCheck: form.rlcBroadcastCheck.checked,
+        },
+      },
+      collaboration: {
+        enabled: form.collabEnabled.checked,
+        maxRounds: int(form.collabMaxRounds.value),
+        cooldownMs: int(form.collabCooldownMs.value),
+        internalQueryTimeout: int(form.collabInternalQueryTimeout.value),
+        enableTargetTools: form.collabEnableTargetTools.checked,
+        maxConverseTurns: int(form.collabMaxConverseTurns.value),
+        sessionTtlMs: int(form.collabSessionTtlMs.value),
+        visibleMaxTurns: int(form.collabVisibleMaxTurns.value),
+      },
+      memorySearch: {
+        mmr: { enabled: form.mmrEnabled.checked, lambda: num(form.mmrLambda.value) },
+        autoRag: {
+          enabled: form.autoRagEnabled.checked,
+          maxResults: int(form.autoRagMaxResults.value),
+          minScore: num(form.autoRagMinScore.value),
+          maxContentChars: int(form.autoRagMaxContentChars.value),
+        },
+      },
     };
+  }
 
-    const res = await api('/api/settings/claude-cli', { method: 'PATCH', body: patch });
-
-    btn.disabled = false;
-    btn.textContent = 'Save';
-
-    if (res.error) {
-      status.textContent = 'Failed to save';
-      status.style.color = 'var(--red)';
-    } else {
-      status.textContent = 'Saved';
-      status.style.color = 'var(--green)';
-      setTimeout(() => {
-        status.textContent = '';
-      }, 4000);
-    }
+  const controls = () =>
+    editable
+      .flatMap((c) => [...c.querySelectorAll('input, select, textarea')])
+      .filter((c) => c.id || c.name);
+  const snapshot = () => ({
+    sfPaths: [...currentSfPaths],
+    fields: Object.fromEntries(
+      controls().map((c) => [c.id || c.name, c.type === 'checkbox' ? c.checked : c.value])
+    ),
   });
-
-  // --- Health Check save ---
-  document.getElementById('hc-save-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('hc-save-btn');
-    const status = document.getElementById('hc-save-status');
-    btn.disabled = true;
-    btn.textContent = 'Saving...';
-
-    const selectedModel = document.getElementById('hc-model').value;
-    const isClaudeCli = selectedModel === 'claude-cli';
-    const patch = {
-      enabled: document.getElementById('hc-enabled').checked,
-      llmBackend: isClaudeCli ? 'claude-cli' : 'ollama',
-      model: isClaudeCli ? '' : selectedModel,
-      cooldownMs: Number.parseInt(document.getElementById('hc-cooldown').value, 10) * 3600000,
-      consolidateMemory: document.getElementById('hc-consolidate').checked,
-    };
-
-    const res = await api('/api/settings/health-check', { method: 'PATCH', body: patch });
-
-    btn.disabled = false;
-    btn.textContent = 'Save';
-
-    if (res.error) {
-      status.textContent = 'Failed to save';
-      status.style.color = 'var(--red)';
-    } else {
-      status.textContent = 'Saved (applies on next bot start)';
-      status.style.color = 'var(--green)';
-      setTimeout(() => {
-        status.textContent = '';
-      }, 4000);
+  function restore(draft) {
+    currentSfPaths.splice(0, currentSfPaths.length, ...(draft.sfPaths ?? []));
+    renderSfList();
+    for (const c of controls()) {
+      const key = c.id || c.name;
+      if (!(key in (draft.fields ?? {}))) continue;
+      if (c.type === 'checkbox') c.checked = Boolean(draft.fields[key]);
+      else c.value = draft.fields[key];
     }
-  });
+  }
 
-  document.getElementById('settings-form').addEventListener('submit', async (e) => {
+  const baseline = collect();
+  let saving = false;
+  let errors = {};
+  let dirty = [];
+  const drawBar = () => {
+    slot.innerHTML = saveBarMarkup(dirty, { errors, saving });
+  };
+  refreshDirty = () => {
+    dirty = dirtySections(baseline, collect());
+    for (const id of Object.keys(errors)) if (!dirty.includes(id)) delete errors[id];
+    // Any navigation away keeps the edits as a draft for the next visit.
+    settingsDraft = dirty.length ? snapshot() : null;
+    drawBar();
+  };
+
+  if (settingsDraft) {
+    restore(settingsDraft);
+    showToast('Restored your unsaved settings changes', { tone: 'info' });
+  }
+  refreshDirty();
+
+  for (const c of editable) {
+    c.addEventListener('input', refreshDirty);
+    c.addEventListener('change', refreshDirty);
+  }
+
+  async function saveAll() {
+    if (saving) return;
+    const current = collect();
+    const ids = dirtySections(baseline, current);
+    if (ids.length === 0) return;
+    saving = true;
+    drawBar();
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        const res = await api(ENDPOINTS[id], { method: 'PATCH', body: current[id] });
+        return { id, error: res?.error ? String(res.error) : null };
+      })
+    );
+    saving = false;
+    errors = {};
+    for (const r of results) {
+      if (r.error) errors[r.id] = r.error;
+      else baseline[r.id] = current[r.id];
+    }
+    const { tone, text } = saveSummary(results);
+    showToast(text, { tone, duration: tone === 'ok' ? 3500 : 6000 });
+    if (slot.isConnected) refreshDirty();
+  }
+
+  function discard() {
+    settingsDraft = null;
+    dirty = [];
+    renderSettings(el);
+  }
+
+  form.addEventListener('submit', (e) => {
     e.preventDefault();
-    const form = e.target;
-    const btn = document.getElementById('btn-save');
-    const status = document.getElementById('save-status');
-
-    btn.disabled = true;
-    btn.textContent = 'Saving...';
-
-    const sessionPatch = {
-      groupActivation: form.groupActivation.value,
-      replyWindow: Number.parseInt(form.replyWindow.value, 10),
-      forumTopicIsolation: form.forumTopicIsolation.checked,
-      resetPolicy: {
-        daily: {
-          enabled: form.dailyEnabled.checked,
-          hour: Number.parseInt(form.dailyHour.value, 10),
-        },
-        idle: {
-          enabled: form.idleEnabled.checked,
-          minutes: Number.parseInt(form.idleMinutes.value, 10),
-        },
-      },
-      llmRelevanceCheck: {
-        enabled: form.rlcEnabled.checked,
-        temperature: Number.parseFloat(form.rlcTemperature.value),
-        timeout: Number.parseInt(form.rlcTimeout.value, 10),
-        contextMessages: Number.parseInt(form.rlcContextMessages.value, 10),
-        broadcastCheck: form.rlcBroadcastCheck.checked,
-      },
-    };
-
-    const collabPatch = {
-      enabled: form.collabEnabled.checked,
-      maxRounds: Number.parseInt(form.collabMaxRounds.value, 10),
-      cooldownMs: Number.parseInt(form.collabCooldownMs.value, 10),
-      internalQueryTimeout: Number.parseInt(form.collabInternalQueryTimeout.value, 10),
-      enableTargetTools: form.collabEnableTargetTools.checked,
-      maxConverseTurns: Number.parseInt(form.collabMaxConverseTurns.value, 10),
-      sessionTtlMs: Number.parseInt(form.collabSessionTtlMs.value, 10),
-      visibleMaxTurns: Number.parseInt(form.collabVisibleMaxTurns.value, 10),
-    };
-
-    const memSearchPatch = {
-      mmr: {
-        enabled: form.mmrEnabled.checked,
-        lambda: Number.parseFloat(form.mmrLambda.value),
-      },
-      autoRag: {
-        enabled: form.autoRagEnabled.checked,
-        maxResults: Number.parseInt(form.autoRagMaxResults.value, 10),
-        minScore: Number.parseFloat(form.autoRagMinScore.value),
-        maxContentChars: Number.parseInt(form.autoRagMaxContentChars.value, 10),
-      },
-    };
-
-    const [result, collabResult, memSearchResult] = await Promise.all([
-      api('/api/settings/session', { method: 'PATCH', body: sessionPatch }),
-      api('/api/settings/collaboration', { method: 'PATCH', body: collabPatch }),
-      api('/api/settings/memory-search', { method: 'PATCH', body: memSearchPatch }),
-    ]);
-
-    btn.disabled = false;
-    btn.textContent = 'Save';
-
-    if (result.error || collabResult.error || memSearchResult.error) {
-      status.textContent = 'Failed to save';
-      status.style.color = 'var(--red)';
-    } else {
-      status.textContent = 'Saved';
-      status.style.color = 'var(--green)';
-      setTimeout(() => {
-        status.textContent = '';
-      }, 3000);
-    }
+    saveAll();
   });
+  slot.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-savebar]');
+    if (!btn) return;
+    if (btn.dataset.savebar === 'save') saveAll();
+    else discard();
+  });
+  el.querySelector('.settings-jump')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-jump]');
+    if (!btn) return;
+    document
+      .getElementById(btn.dataset.jump)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  // --- Dirty guard ---
+  // Any hash navigation (link, back button, typed hash) asks first through the
+  // app-wide nav guard (web/nav-guard.js), before the router renders. A full
+  // reload / tab close gets the browser's own beforeunload prompt.
+  const onBeforeUnload = (e) => {
+    if (!slot.isConnected || dirty.length === 0) return;
+    e.preventDefault();
+    e.returnValue = '';
+  };
+  const offNavGuard = registerNavGuard(() => {
+    if (!slot.isConnected || dirty.length === 0) return null;
+    return {
+      title: 'Discard unsaved settings?',
+      message: `You have unsaved changes in ${dirty.length} section${dirty.length === 1 ? '' : 's'}.`,
+      confirmLabel: 'Discard',
+      cancelLabel: 'Keep editing',
+      onDiscard: () => {
+        settingsDraft = null;
+        dirty = [];
+      },
+    };
+  });
+  const onHashChange = () => {
+    if (!slot.isConnected) detach();
+  };
+  const onKey = (e) => {
+    if (!slot.isConnected) return detach();
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      saveAll();
+    }
+  };
+  function detach() {
+    window.removeEventListener('beforeunload', onBeforeUnload);
+    offNavGuard();
+    window.removeEventListener('hashchange', onHashChange);
+    document.removeEventListener('keydown', onKey);
+    if (detachSettingsGuards === detach) detachSettingsGuards = null;
+  }
+  detachSettingsGuards = detach;
+  window.addEventListener('beforeunload', onBeforeUnload);
+  window.addEventListener('hashchange', onHashChange);
+  document.addEventListener('keydown', onKey);
 }
 
 /**
@@ -793,7 +855,14 @@ function setupSystemBackupCard() {
   async function withAdminKeyRetry(send) {
     let res = await send();
     if (res.status === 401) {
-      adminKey = prompt('This server requires ADMIN_API_KEY for system export/import:');
+      adminKey = await promptDialog({
+        title: 'Admin key required',
+        message:
+          'This server requires ADMIN_API_KEY for system export/import. It is kept in memory for this page only.',
+        placeholder: 'ADMIN_API_KEY',
+        confirmLabel: 'Continue',
+        required: true,
+      });
       if (!adminKey) return res;
       res = await send();
     }
@@ -878,7 +947,12 @@ function setupSystemBackupCard() {
     }
     if (
       !dryRun &&
-      !confirm('Restore this bundle into the running instance? Stop all agents first.')
+      !(await confirmDialog({
+        title: 'Restore this bundle?',
+        message:
+          'It is written into the running instance. Stop all agents first. Restored agents land disabled with an empty token.',
+        confirmLabel: 'Restore',
+      }))
     ) {
       return;
     }

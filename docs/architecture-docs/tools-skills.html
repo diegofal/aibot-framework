@@ -567,7 +567,7 @@
           <!-- ask_human -->
           <div class="tool-card">
             <h4 class="tool-name">ask_human</h4>
-            <div class="tool-desc">Ask the human operator a question. Non-blocking: the question is queued to the web inbox and optionally sent as a Telegram notification. The answer will be injected into the bot's next agent loop cycle. Continue working on other tasks in the meantime. <strong>Protocol</strong> (<code>config.askHuman</code>): at most <code>maxChars</code> (600) characters, exactly one question, ideally 2&ndash;4 short <code>options</code> the operator can pick with a button; only one question may be pending per bot, and a question nobody answers within <code>autoCloseHours</code> (72 h) is auto-closed with a note in the bot's daily memory.</div>
+            <div class="tool-desc">Ask the human operator a question. Non-blocking: the question is queued to the web inbox and optionally sent as a Telegram notification. The answer will be injected into the bot's next agent loop cycle. Continue working on other tasks in the meantime. <strong>Protocol</strong> (<code>config.askHuman</code>): at most <code>maxChars</code> (600) characters, exactly one question, ideally 2&ndash;4 short <code>options</code> the operator can pick with a button; only one question may be pending per bot, and a question nobody answers within <code>autoCloseHours</code> (72 h) is auto-closed with a note in the bot's daily memory. The hourly sweep also closes pending inbox conversations past that age that have no live question (<code>closeStaleInboxConversations</code>).</div>
             <div class="tool-params">
               <strong>Parameters</strong>
               <ul>

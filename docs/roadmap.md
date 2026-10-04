@@ -266,6 +266,14 @@ Plan y tabla de estado en [`docs/plans/curiosity-navigator-plan.md`](plans/curio
 
 ---
 
+## Proyecto 12 — UX overhaul del dashboard
+
+**Estado: IMPLEMENTADO (2026-10-03, branch `feat/ux-overhaul`, sin commit todavía) — pendiente deploy (`docker compose up -d --build` por los cambios en `src/`)**
+
+Plan, tabla de estado y follow-ups en [`docs/plans/ux-overhaul-plan.md`](plans/ux-overhaul-plan.md) (fases 0–5): Needs You vaciable (bulk, clear-stale, Undo; `POST /api/needs-you/bulk|act|clear-stale`), bugs de la revisión, un solo lenguaje de feedback (toasts + diálogos en vez de `alert/confirm/prompt`), IA (Feedback sólo en Needs You, Agent loop en Automations, Tools + Tool Runner fusionados, 404 real) y atajos globales (`g`+letra, `/`, `n`, `?`).
+
+---
+
 ## Ideas futuras
 
 - **A2A Discovery Gateway** — Evolución del Agent Directory (Proyecto 8 Phase 3): el directorio rutea requests al mejor agente por capability match, con load balancing y auth centralizado

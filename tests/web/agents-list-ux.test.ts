@@ -105,9 +105,12 @@ describe('sortAgents', () => {
   });
   it('sorts by karma with missing scores last', () => {
     const karmaMap = { ada: { current: 40 }, bob: { current: 90 } };
-    expect(sortAgents(all, { sort: 'karma', dir: 'desc' }, { karmaMap }).map((x) => x.id)).toEqual(
-      ['bob', 'ada', 'cy', 'dee']
-    );
+    expect(sortAgents(all, { sort: 'karma', dir: 'desc' }, { karmaMap }).map((x) => x.id)).toEqual([
+      'bob',
+      'ada',
+      'cy',
+      'dee',
+    ]);
     expect(sortAgents(all, { sort: 'karma', dir: 'asc' }, { karmaMap }).map((x) => x.id)).toEqual([
       'ada',
       'bob',
@@ -135,7 +138,12 @@ describe('list prefs', () => {
   it('round-trips and drops invalid values', () => {
     const s = memStorage();
     writeListPrefs(s, { query: 'ad', status: 'running', sort: 'karma', dir: 'desc' });
-    expect(readListPrefs(s)).toEqual({ query: 'ad', status: 'running', sort: 'karma', dir: 'desc' });
+    expect(readListPrefs(s)).toEqual({
+      query: 'ad',
+      status: 'running',
+      sort: 'karma',
+      dir: 'desc',
+    });
     s.setItem(LIST_PREFS_KEY, JSON.stringify({ status: 'bogus', sort: 'nope', dir: 'up' }));
     expect(readListPrefs(s)).toEqual(DEFAULT_LIST_PREFS);
   });
@@ -172,7 +180,9 @@ describe('agentsTable sorting headers', () => {
     expect(html).toContain('data-sort="status"');
     expect(html).toContain('data-sort="karma"');
     expect(html).toContain('data-sort="activity"');
-    expect(html).toMatch(/aria-sort="descending"[^>]*data-sort="karma"|data-sort="karma"[^>]*aria-sort="descending"/);
+    expect(html).toMatch(
+      /aria-sort="descending"[^>]*data-sort="karma"|data-sort="karma"[^>]*aria-sort="descending"/
+    );
     expect(html).toContain('id="bulk-select-all"');
   });
   it('shows a no-match state when filters hide every agent', () => {
@@ -202,13 +212,25 @@ describe('bulkPlan', () => {
 
 describe('bulkSummary', () => {
   it('reports a clean run as ok', () => {
-    expect(bulkSummary('Started', [{ id: 'a', ok: true }, { id: 'b', ok: true }])).toEqual({
+    expect(
+      bulkSummary('Started', [
+        { id: 'a', ok: true },
+        { id: 'b', ok: true },
+      ])
+    ).toEqual({
       text: 'Started 2 agents',
       tone: 'ok',
     });
   });
   it('reports failures and skips', () => {
-    const s = bulkSummary('Stopped', [{ id: 'a', ok: true }, { id: 'b', ok: false, error: 'boom' }], 1);
+    const s = bulkSummary(
+      'Stopped',
+      [
+        { id: 'a', ok: true },
+        { id: 'b', ok: false, error: 'boom' },
+      ],
+      1
+    );
     expect(s.tone).toBe('warn');
     expect(s.text).toContain('Stopped 1 agent');
     expect(s.text).toContain('1 failed (b: boom)');
@@ -216,6 +238,9 @@ describe('bulkSummary', () => {
   });
   it('is danger when everything failed, muted when nothing applied', () => {
     expect(bulkSummary('Started', [{ id: 'a', ok: false, error: 'x' }]).tone).toBe('danger');
-    expect(bulkSummary('Started', [], 3)).toEqual({ text: 'Nothing to do · 3 skipped', tone: 'muted' });
+    expect(bulkSummary('Started', [], 3)).toEqual({
+      text: 'Nothing to do · 3 skipped',
+      tone: 'muted',
+    });
   });
 });

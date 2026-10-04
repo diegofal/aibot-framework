@@ -1,6 +1,9 @@
+import { showToast } from '../ui/index.js';
 import { api, escapeHtml } from './shared.js';
 
 let refreshTimer = null;
+/** Bumped on destroy: a render still in flight must not paint over the next page. */
+let generation = 0;
 const pollTimers = new Map();
 
 function formatRemaining(ms) {
@@ -142,7 +145,7 @@ function pollHistoryEntry(id, el) {
     if (entry.executionStatus === 'executed' || entry.executionStatus === 'failed') {
       clearInterval(timer);
       pollTimers.delete(id);
-      render(el);
+      render(el, { auto: true });
     }
   }, 5000);
   pollTimers.set(id, timer);
@@ -155,21 +158,44 @@ function clearPollTimers() {
   pollTimers.clear();
 }
 
-async function render(el) {
-  clearPollTimers();
+/** Notes typed into pending cards, by request id. */
+function readNotes(el) {
+  const notes = new Map();
+  for (const card of el.querySelectorAll('#permission-requests .inbox-card')) {
+    const value = card.querySelector('.inbox-answer-input')?.value ?? '';
+    if (value) notes.set(card.dataset.id, value);
+  }
+  return notes;
+}
+
+/** True while the operator is writing a note: an automatic refresh must wait. */
+export function isTypingNote(el) {
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
+  if (active?.classList?.contains('inbox-answer-input') && el.contains(active)) return true;
+  return readNotes(el).size > 0;
+}
+
+async function render(el, { auto = false, gen = generation } = {}) {
+  // The 15 s refresh used to wipe a half-typed note; skip it while one exists.
+  if (auto && isTypingNote(el)) return;
+  const notes = readNotes(el);
+  const focusedId = document.activeElement?.closest?.('.inbox-card')?.dataset.id ?? null;
 
   const [pendingData, historyData] = await Promise.all([
     api('/api/ask-permission'),
     api('/api/ask-permission/history?limit=20'),
   ]);
+  if (gen !== generation) return;
+  if (auto && isTypingNote(el)) return;
+  clearPollTimers();
 
-  if (pendingData.error) {
-    el.innerHTML = `<div class="page-title">Permissions</div><p class="text-dim">Failed to load: ${escapeHtml(pendingData.error)}</p>`;
+  if (!pendingData || pendingData.error || !Array.isArray(pendingData.requests)) {
+    el.innerHTML = `<div class="page-title">Permissions</div><p class="text-dim">Failed to load: ${escapeHtml(pendingData?.error || 'unexpected response')}</p>`;
     return;
   }
 
   const { requests } = pendingData;
-  const historyEntries = historyData.entries || [];
+  const historyEntries = historyData?.entries || [];
 
   const pendingHtml =
     requests.length > 0
@@ -192,6 +218,8 @@ async function render(el) {
   el.querySelectorAll('#permission-requests .inbox-card').forEach((card) => {
     const id = card.dataset.id;
     const input = card.querySelector('.inbox-answer-input');
+    if (input && notes.has(id)) input.value = notes.get(id);
+    if (input && focusedId === id) input.focus();
     const btnApprove = card.querySelector('.btn-approve');
     const btnDeny = card.querySelector('.btn-deny');
 
@@ -219,6 +247,7 @@ async function render(el) {
           card.querySelector('.timeout-bar')?.remove();
           pollHistoryEntry(id, el);
         } else {
+          showToast(res?.error || 'Approve failed', { tone: 'danger' });
           btnApprove.disabled = false;
           btnDeny.disabled = false;
           btnApprove.textContent = 'Approve';
@@ -248,6 +277,7 @@ async function render(el) {
           card.querySelector('.timeout-bar')?.remove();
           // No need to poll for denied — the decision is final
         } else {
+          showToast(res?.error || 'Deny failed', { tone: 'danger' });
           btnDeny.disabled = false;
           btnApprove.disabled = false;
           btnDeny.textContent = 'Deny';
@@ -271,6 +301,7 @@ async function render(el) {
       if (res.ok) {
         render(el);
       } else {
+        showToast(res?.error || 'Retry failed', { tone: 'danger' });
         btn.disabled = false;
         btn.textContent = 'Retry';
       }
@@ -286,11 +317,14 @@ async function render(el) {
 }
 
 export async function renderPermissions(el) {
-  await render(el);
-  refreshTimer = setInterval(() => render(el), 15_000);
+  const gen = ++generation;
+  await render(el, { gen });
+  if (gen !== generation) return;
+  refreshTimer = setInterval(() => render(el, { auto: true, gen }), 15_000);
 }
 
 export function destroyPermissions() {
+  generation++;
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
