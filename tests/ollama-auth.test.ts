@@ -120,55 +120,58 @@ async function drain(generator: AsyncGenerator<string, unknown>): Promise<void> 
  * fetch to the Ollama path without adding it here should be caught by the
  * "no unlisted call sites" test below.
  */
-const CALL_SITES: Array<{ name: string; path: string; run: (apiKey?: string) => Promise<unknown> }> =
-  [
-    {
-      name: 'OllamaClient.generate',
-      path: '/api/generate',
-      run: (k) => makeClient(k).generate('hello'),
-    },
-    {
-      name: 'OllamaClient.chat',
-      path: '/api/chat',
-      run: (k) => makeClient(k).chat([{ role: 'user', content: 'hello' }]),
-    },
-    {
-      name: 'OllamaClient.generateStream',
-      path: '/api/generate',
-      run: (k) => drain(makeClient(k).generateStream('hello')),
-    },
-    {
-      name: 'OllamaClient.chatStream',
-      path: '/api/chat',
-      run: (k) => drain(makeClient(k).chatStream([{ role: 'user', content: 'hello' }])),
-    },
-    {
-      name: 'OllamaClient.embed',
-      path: '/api/embed',
-      run: (k) => makeClient(k).embed('text', 'embed-model'),
-    },
-    { name: 'OllamaClient.ping', path: '/api/tags', run: (k) => makeClient(k).ping() },
-    { name: 'OllamaClient.listModels', path: '/api/tags', run: (k) => makeClient(k).listModels() },
-    {
-      name: 'NativeToolStrategy.chat',
-      path: '/api/chat',
-      run: (k) =>
-        new NativeToolStrategy(null as any, BASE_URL, noopLogger, 5_000, k).chat(
-          [{ role: 'user', content: 'hello' }],
-          { model: 'kimi-k2.6:cloud' }
-        ),
-    },
-    {
-      name: 'probeClient.checkDaemon',
-      path: '/api/tags',
-      run: (k) => createOllamaProbeClient(BASE_URL, k).checkDaemon(1_000),
-    },
-    {
-      name: 'probeClient.probeModel',
-      path: '/api/generate',
-      run: (k) => createOllamaProbeClient(BASE_URL, k).probeModel('kimi-k2.6:cloud', 1_000),
-    },
-  ];
+const CALL_SITES: Array<{
+  name: string;
+  path: string;
+  run: (apiKey?: string) => Promise<unknown>;
+}> = [
+  {
+    name: 'OllamaClient.generate',
+    path: '/api/generate',
+    run: (k) => makeClient(k).generate('hello'),
+  },
+  {
+    name: 'OllamaClient.chat',
+    path: '/api/chat',
+    run: (k) => makeClient(k).chat([{ role: 'user', content: 'hello' }]),
+  },
+  {
+    name: 'OllamaClient.generateStream',
+    path: '/api/generate',
+    run: (k) => drain(makeClient(k).generateStream('hello')),
+  },
+  {
+    name: 'OllamaClient.chatStream',
+    path: '/api/chat',
+    run: (k) => drain(makeClient(k).chatStream([{ role: 'user', content: 'hello' }])),
+  },
+  {
+    name: 'OllamaClient.embed',
+    path: '/api/embed',
+    run: (k) => makeClient(k).embed('text', 'embed-model'),
+  },
+  { name: 'OllamaClient.ping', path: '/api/tags', run: (k) => makeClient(k).ping() },
+  { name: 'OllamaClient.listModels', path: '/api/tags', run: (k) => makeClient(k).listModels() },
+  {
+    name: 'NativeToolStrategy.chat',
+    path: '/api/chat',
+    run: (k) =>
+      new NativeToolStrategy(null as any, BASE_URL, noopLogger, 5_000, k).chat(
+        [{ role: 'user', content: 'hello' }],
+        { model: 'kimi-k2.6:cloud' }
+      ),
+  },
+  {
+    name: 'probeClient.checkDaemon',
+    path: '/api/tags',
+    run: (k) => createOllamaProbeClient(BASE_URL, k).checkDaemon(1_000),
+  },
+  {
+    name: 'probeClient.probeModel',
+    path: '/api/generate',
+    run: (k) => createOllamaProbeClient(BASE_URL, k).probeModel('kimi-k2.6:cloud', 1_000),
+  },
+];
 
 beforeEach(() => {
   captured = [];
@@ -280,9 +283,8 @@ describe('Ollama API key never reaches the logs', () => {
 
     await expect(client.generate('hello')).rejects.toThrow();
 
-    const serialised = JSON.stringify(
-      logged,
-      (_key, value) => (value instanceof Error ? `${value.name}: ${value.message}` : value)
+    const serialised = JSON.stringify(logged, (_key, value) =>
+      value instanceof Error ? `${value.name}: ${value.message}` : value
     );
     expect(serialised).not.toContain(API_KEY);
   });

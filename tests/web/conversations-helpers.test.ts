@@ -3,9 +3,9 @@ import {
   CONV_STATUSES,
   CONV_TYPES,
   botDisplayName,
-  conversationFilters,
   convStatus,
   convTypeLabel,
+  conversationFilters,
   deleteAllDialog,
   filterConversations,
 } from '../../web/pages/conversations-helpers.js';

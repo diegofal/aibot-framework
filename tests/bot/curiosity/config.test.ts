@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test';
-import { BotAgentLoopOverrideSchema, GlobalAgentLoopConfigSchema } from '../../../src/config';
 import {
   CURIOSITY_DEFAULTS,
   CURIOSITY_PRESETS,
@@ -9,6 +8,7 @@ import {
   scaleExploreRatio,
 } from '../../../src/bot/curiosity/config';
 import type { FrontierItem } from '../../../src/bot/curiosity/types';
+import { BotAgentLoopOverrideSchema, GlobalAgentLoopConfigSchema } from '../../../src/config';
 
 const item = (over: Partial<FrontierItem> = {}): FrontierItem => ({
   id: 'f1',

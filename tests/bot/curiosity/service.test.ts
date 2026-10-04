@@ -62,9 +62,7 @@ describe('CuriosityService', () => {
           findings: [],
           surprises: [],
           openQuestions: [],
-          frontier: [
-            { question: 'q?', whyInteresting: 'w', distance: 1, surpriseScore: 0.5 },
-          ],
+          frontier: [{ question: 'q?', whyInteresting: 'w', distance: 1, surpriseScore: 0.5 }],
           servedDirectiveIds: [],
           noSurprise: true,
         },
@@ -98,7 +96,9 @@ describe('CuriosityService', () => {
         findings: [],
         surprises: [],
         openQuestions: [],
-        frontier: [{ question: 'side quest?', whyInteresting: 'w', distance: 3, surpriseScore: 0.9 }],
+        frontier: [
+          { question: 'side quest?', whyInteresting: 'w', distance: 3, surpriseScore: 0.9 },
+        ],
         servedDirectiveIds: [],
         noSurprise: false,
       },

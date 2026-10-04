@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed (2026-10-04) — CI runs again, and lint means the same thing on Windows and Linux
+- **Why.** `.github/workflows/ci.yml` pinned `oven-sh/setup-bun@4bc049a6…`, a SHA that never existed (v2.0.1 is `4bc047ad…`), so every CI run since 2026-08 died in setup. Locally, `bun run lint` reported ~770 errors, almost all because `core.autocrlf=true` checks files out CRLF and Biome flags the line endings.
+- **CI:** `setup-bun` repinned to v2.2.0 (`0c5077e5…`) in all three jobs.
+- **Line endings:** `.gitattributes` now has `* text=auto eol=lf` (the explicit `*.sh` / `Dockerfile` / `docker-entrypoint.sh` LF lines stay). The index was already all LF, so the renormalize changed nothing; checkouts made from now on are LF on Windows too. Existing checkouts keep their CRLF copies until those files are checked out again. Biome's `lineEnding` couldn't fix this: it takes a single fixed value, so either Windows or Linux would fail.
+- **Lint:** the 66 real errors (formatting in ~50 files, import order in 13) were fixed with `biome check --write --linter-enabled=false`, so no lint autofixes were applied. The 283 warnings (`noNonNullAssertion`, `noExplicitAny`, `noForEach`, …) are unchanged; they are `warn` in `biome.json` and do not fail CI.
+- **Tests that only failed on Linux** (found by running the suite in `oven/bun:1.3.11`):
+  - `assertWithinDir` (`src/productions/paths.ts`) now rejects Windows-absolute paths (`D:/x`, `D:\prod\…`) on every platform via `win32.isAbsolute`. On POSIX they read as a relative name like `D:` inside the productions dir, and the container runs Linux.
+  - `tests/date-utils.test.ts` checks `TZ` in a child process started with `TZ` set, as production does at boot. Changing `process.env.TZ` partway through the suite stopped taking effect on Linux once enough of it had run.
+
 ### Fixed (2026-10-04) — the LLM query log records which Claude model answered, not just "claude"
 - **Why.** `parseClaudeUsage` (`src/claude-cli.ts`) read a top-level `model` that the CLI's `--output-format json` result never has, so every claude-cli entry in `data/llm-query-log/` said `model: "claude"`. After moving the fleet to Sonnet 5.5, the log could not confirm which model actually answered.
 - **Fix.** The model now comes from `modelUsage`, which is keyed by model id. It also lists the CLI's own auxiliary Haiku calls, so the entry with the most tokens (cached prompt included) wins. A top-level `model` still takes precedence; `"claude"` stays as the fallback when `modelUsage` is missing. `parseClaudeUsage` is now exported and covered by `tests/claude-cli-usage-model.test.ts`.

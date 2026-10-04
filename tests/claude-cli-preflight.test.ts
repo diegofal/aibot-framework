@@ -1,5 +1,5 @@
-import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
 import { checkClaudeCli, formatPreflight } from '../src/bot/claude-cli-preflight';
 
 const realPlatform = process.platform;

@@ -26,7 +26,6 @@ import { MessageBuffer } from '../message-buffer';
 import type { OllamaClient } from '../ollama';
 import type { SessionManager } from '../session';
 import { SoulLoader } from '../soul';
-import { CuriosityService } from './curiosity/service';
 import {
   type AskHumanDeps,
   buildAskHumanAnswerNote,
@@ -35,6 +34,7 @@ import {
   sweepStaleAskHumanQuestions,
 } from '../tools/ask-human';
 import type { Tool, ToolDefinition } from '../tools/types';
+import { CuriosityService } from './curiosity/service';
 
 import { ConversationsService } from '../conversations/service';
 import { KarmaService } from '../karma/service';

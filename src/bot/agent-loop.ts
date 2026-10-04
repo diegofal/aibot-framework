@@ -3,9 +3,9 @@ import { type BotConfig, resolveAgentConfig } from '../config';
 import { ClaudeCliLLMClient, type LLMClient, type TokenUsage } from '../core/llm-client';
 import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
-import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import {
   type AdaptiveParams,
   computeAdaptiveAdjustments,

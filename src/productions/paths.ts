@@ -15,7 +15,7 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import type { Config } from '../config';
 
 /**
@@ -72,10 +72,12 @@ export const TREE_EXCLUDES = new Set([
  * the original plan moved it here from service.ts. Per the §4 C0.5
  * implementation, the absolute-path guard is `isAbsolute(relativePath)`
  * at the top of the function — `path.join` folds a leading slash before
- * `relative()` ever sees it, so the guard has to be on the input.
+ * `relative()` ever sees it, so the guard has to be on the input. Windows-absolute
+ * input (`D:/x`, `D:\prod`) is rejected on every platform via `win32.isAbsolute`:
+ * on POSIX it would otherwise read as a relative name like `D:` inside `dir`.
  */
 export function assertWithinDir(dir: string, relativePath: string): boolean {
-  if (isAbsolute(relativePath)) return false;
+  if (isAbsolute(relativePath) || win32.isAbsolute(relativePath)) return false;
   const full = resolve(join(dir, relativePath));
   const rel = relative(dir, full);
   if (rel === '') return true;

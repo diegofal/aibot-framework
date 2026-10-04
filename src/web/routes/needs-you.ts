@@ -1124,7 +1124,14 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
     }
     const cleared = results.filter((r) => r.ok).length;
     deps.logger.info(
-      { olderThanHours: hours, kinds, botId, ids: only?.size ?? null, matched: items.length, cleared },
+      {
+        olderThanHours: hours,
+        kinds,
+        botId,
+        ids: only?.size ?? null,
+        matched: items.length,
+        cleared,
+      },
       'needs-you: cleared stale items'
     );
     return c.json({ cleared, byKind, results });
@@ -1222,7 +1229,9 @@ export interface NeedsYouActionsBotManager {
  * `POST /api/agent-proposals/:id/reject`, `DELETE /api/agent-feedback/:botId/:id`,
  * `POST /api/productions/:botId/:id/evaluate|archive`, `POST /api/tools/:id/approve|reject`.
  */
-export function needsYouActionsFromBotManager(bm: NeedsYouActionsBotManager): NeedsYouActionHandlers {
+export function needsYouActionsFromBotManager(
+  bm: NeedsYouActionsBotManager
+): NeedsYouActionHandlers {
   return {
     dismissAsk: (questionId) => bm.dismissAskHuman(questionId),
     closeInboxConversation: (botId, conversationId) =>

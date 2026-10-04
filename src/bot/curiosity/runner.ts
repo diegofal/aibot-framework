@@ -49,12 +49,7 @@ import {
 } from './dispatch';
 import { buildDnaSection } from './dna';
 import { type ExtractedDispatch, runExtractor } from './extractor';
-import {
-  markFrontier,
-  mergeExtraction,
-  renderKnowledgeForPrompt,
-  topicId,
-} from './knowledge-map';
+import { markFrontier, mergeExtraction, renderKnowledgeForPrompt, topicId } from './knowledge-map';
 import type { DispatchDelivery } from './loop-wiring';
 import { applyNavigatorResult, runNavigator, shouldRunNavigator } from './navigator';
 import type { CuriosityService } from './service';
@@ -243,7 +238,15 @@ async function beginLocked(deps: RunnerDeps, args: BeginArgs): Promise<Curiosity
     proposals: selection.proposals,
     concentration,
     navigatorStarted,
-    curiosityBlock: buildCuriosityBlock(cfg, decision, frontierItem, concentration, nav, map, taste),
+    curiosityBlock: buildCuriosityBlock(
+      cfg,
+      decision,
+      frontierItem,
+      concentration,
+      nav,
+      map,
+      taste
+    ),
   };
 }
 
@@ -442,7 +445,14 @@ async function finishLocked(deps: RunnerDeps, args: FinishArgs): Promise<FinishR
   });
   store.saveNavigator(nav);
 
-  const dispatch = await maybeDispatch(deps, args, store, extracted.dispatch, extraction.topic, now);
+  const dispatch = await maybeDispatch(
+    deps,
+    args,
+    store,
+    extracted.dispatch,
+    extraction.topic,
+    now
+  );
   return { extracted: true, dispatch };
 }
 
@@ -463,10 +473,7 @@ async function maybeDispatch(
   const { cfg } = args.cycle;
   if (!cfg.dispatch.enabled) return undefined;
   const nowMs = Date.parse(now);
-  const cadenceOpen = isCadenceOpen(
-    store.loadTaste(cfg.dispatch.baseIntervalHours).cadence,
-    nowMs
-  );
+  const cadenceOpen = isCadenceOpen(store.loadTaste(cfg.dispatch.baseIntervalHours).cadence, nowMs);
   const recent = store.listDispatches(100);
 
   let candidate: DispatchCandidate | null = null;

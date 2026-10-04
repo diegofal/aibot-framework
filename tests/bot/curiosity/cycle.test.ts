@@ -9,11 +9,7 @@ import {
 } from '../../../src/bot/curiosity/cycle';
 import { emptyKnowledgeMap } from '../../../src/bot/curiosity/knowledge-map';
 import { emptyNavigatorState } from '../../../src/bot/curiosity/store';
-import type {
-  CycleTopicEntry,
-  FrontierItem,
-  KnowledgeMap,
-} from '../../../src/bot/curiosity/types';
+import type { CycleTopicEntry, FrontierItem, KnowledgeMap } from '../../../src/bot/curiosity/types';
 
 const entry = (topic: string, over: Partial<CycleTopicEntry> = {}): CycleTopicEntry => ({
   at: '2026-10-03T00:00:00Z',

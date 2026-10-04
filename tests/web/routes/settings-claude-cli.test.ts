@@ -25,7 +25,10 @@ const CONFIG_PATH = join(TEST_DIR, 'config.json');
 
 function makeApp(config: Config) {
   const app = new Hono();
-  app.route('/api/settings', settingsRoutes({ config, configPath: CONFIG_PATH, logger: noopLogger }));
+  app.route(
+    '/api/settings',
+    settingsRoutes({ config, configPath: CONFIG_PATH, logger: noopLogger })
+  );
   return app;
 }
 

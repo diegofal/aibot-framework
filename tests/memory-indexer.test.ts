@@ -45,12 +45,10 @@ describe('discoverFiles', () => {
       writeFileSync(join(soul, 'default', 'memory', '2026-08-11.md'), '# Log');
       writeFileSync(join(soul, 'notes.txt'), 'ignored');
 
-      const found = discoverFiles(soul).map((p) => p.replace(/\\/g, '/')).sort();
-      expect(found).toEqual([
-        'IDENTITY.md',
-        'default/MEMORY.md',
-        'default/memory/2026-08-11.md',
-      ]);
+      const found = discoverFiles(soul)
+        .map((p) => p.replace(/\\/g, '/'))
+        .sort();
+      expect(found).toEqual(['IDENTITY.md', 'default/MEMORY.md', 'default/memory/2026-08-11.md']);
     });
   });
 });

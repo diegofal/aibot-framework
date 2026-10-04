@@ -137,9 +137,9 @@ describe('instruction payload merge/build', () => {
     expect(() =>
       applyJobPatch(job, { payload: { kind: 'instruction', text: 'no chat id' } })
     ).toThrow(/chatId/);
-    expect(() =>
-      applyJobPatch(job, { payload: { kind: 'instruction', chatId: 1 } })
-    ).toThrow(/text/);
+    expect(() => applyJobPatch(job, { payload: { kind: 'instruction', chatId: 1 } })).toThrow(
+      /text/
+    );
     expect(() =>
       applyJobPatch(job, { payload: { kind: 'instruction', text: 'x', chatId: 1 } })
     ).toThrow(/botId/);

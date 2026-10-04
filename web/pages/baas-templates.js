@@ -286,7 +286,9 @@ export async function renderBaasTemplateDetail(el, id) {
       confirmLabel: 'Delete',
     });
     if (!ok) return;
-    const res = await api(`/api/baas/templates/${encodeURIComponent(tpl.id)}`, { method: 'DELETE' });
+    const res = await api(`/api/baas/templates/${encodeURIComponent(tpl.id)}`, {
+      method: 'DELETE',
+    });
     if (res?.error) return showToast(`Delete failed: ${res.error}`, { tone: 'danger' });
     showToast(`Deleted template "${tpl.name}"`, { tone: 'ok' });
     location.hash = '#/settings/baas/templates';

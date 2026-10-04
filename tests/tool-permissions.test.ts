@@ -59,14 +59,7 @@ describe('tool-permissions', () => {
     });
 
     it('dangerous tools require confirm in conversation by default', () => {
-      for (const tool of [
-        'exec',
-        'process',
-        'browser',
-        'file_write',
-        'file_edit',
-        'phone_call',
-      ]) {
+      for (const tool of ['exec', 'process', 'browser', 'file_write', 'file_edit', 'phone_call']) {
         expect(getPermissionLevel(tool, 'conversation')).toBe('confirm');
       }
     });

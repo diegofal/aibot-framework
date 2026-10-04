@@ -39,7 +39,14 @@ describe('planner prompts with the curiosity block', () => {
 });
 
 describe('strategist prompt with the curiosity block', () => {
-  const sbase = { identity: 'I', soul: 'S', motivations: 'M', goals: 'G', recentMemory: '', datetime: 'd' };
+  const sbase = {
+    identity: 'I',
+    soul: 'S',
+    motivations: 'M',
+    goals: 'G',
+    recentMemory: '',
+    datetime: 'd',
+  };
 
   it('injects the block and lets exploration satisfy the engagement check', () => {
     const { system } = buildStrategistPrompt({ ...sbase, curiosityBlock: BLOCK });

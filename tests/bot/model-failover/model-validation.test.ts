@@ -725,9 +725,9 @@ describe('createOllamaProbeClient against Ollama Cloud', () => {
     globalThis.fetch = (async () => {
       throw new Error('ECONNREFUSED');
     }) as typeof globalThis.fetch;
-    expect(
-      await createOllamaProbeClient('http://127.0.0.1:11434').checkDaemon(1_000)
-    ).toBe('unreachable');
+    expect(await createOllamaProbeClient('http://127.0.0.1:11434').checkDaemon(1_000)).toBe(
+      'unreachable'
+    );
   });
 
   test('a local daemon with no key is unaffected — 200 means ok', async () => {

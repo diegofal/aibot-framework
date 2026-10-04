@@ -174,11 +174,7 @@ export function selectFrontierItem(
 }
 
 /** Frontier block for navigator/strategist prompts. */
-export function renderFrontierForPrompt(
-  map: KnowledgeMap,
-  limits: LimitDials,
-  max = 10
-): string {
+export function renderFrontierForPrompt(map: KnowledgeMap, limits: LimitDials, max = 10): string {
   const open = map.frontier
     .filter((f) => SELECTABLE.has(f.status))
     .sort((a, b) => b.surpriseScore - a.surpriseScore)

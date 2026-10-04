@@ -154,9 +154,9 @@ describe('resolveContextWindow', () => {
           fallbacks: ['nobody-listed-this:cloud'],
         })
       ).toBe(256_000);
-      expect(
-        resolveContextWindow('ollama', roomy, { primary: 'nobody-listed-this:cloud' })
-      ).toBe(500_000);
+      expect(resolveContextWindow('ollama', roomy, { primary: 'nobody-listed-this:cloud' })).toBe(
+        500_000
+      );
     });
 
     test('modelContextWindows overrides feed the clamp', () => {

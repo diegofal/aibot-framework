@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   KIND_LABEL,
+  NEUTRAL_KINDS,
   SHORTCUTS,
   ageGroupOf,
   bulkBar,
@@ -16,7 +17,6 @@ import {
   kindCounts,
   listBody,
   moveSelection,
-  NEUTRAL_KINDS,
   neutralIds,
   reduceKey,
   setFilter,
@@ -240,9 +240,7 @@ describe('bulk', () => {
     const extra = [...items, mk('feedback:b1:x', 'feedback', 'b1', 80)];
     expect(staleClearIds(extra, { hours: 72, nowMs: NOW })).toEqual(['ask:old', 'feedback:b1:x']);
     expect(staleClearIds(extra, { hours: 72, nowMs: NOW, botId: 'b2' })).toEqual([]);
-    expect(staleClearIds(extra, { hours: 24, nowMs: NOW, botId: 'b2' })).toEqual([
-      'permission:p1',
-    ]);
+    expect(staleClearIds(extra, { hours: 24, nowMs: NOW, botId: 'b2' })).toEqual(['permission:p1']);
     expect(staleClearIds(extra, { hours: 72, nowMs: NOW, hidden: ['ask:old'] })).toEqual([
       'feedback:b1:x',
     ]);

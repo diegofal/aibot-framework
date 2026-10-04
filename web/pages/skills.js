@@ -64,7 +64,8 @@ export async function renderSkills(el) {
         ? `<a href="#/automations/skills/${encodeURIComponent(skill.id)}/edit" class="btn btn-sm">Edit</a>
          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${escapeHtml(skill.id)}">Delete</button>`
         : '';
-    const muted = skill.type === 'builtin' && skill.enabled === false ? ' class="skills-row-off"' : '';
+    const muted =
+      skill.type === 'builtin' && skill.enabled === false ? ' class="skills-row-off"' : '';
     return `<tr${muted} data-id="${escapeHtml(skill.id)}">
       <td><a href="#/automations/skills/${encodeURIComponent(skill.id)}">${escapeHtml(skill.name)}</a></td>
       <td>${typeBadge(skill.type)}${enabledBadge(skill)}${botNameBadge(skill)}</td>
@@ -80,12 +81,22 @@ export async function renderSkills(el) {
     const countEl = document.getElementById('skills-count');
     if (countEl)
       countEl.textContent =
-        visible.length === skills.length ? String(skills.length) : `${visible.length}/${skills.length}`;
+        visible.length === skills.length
+          ? String(skills.length)
+          : `${visible.length}/${skills.length}`;
     if (visible.length === 0) {
       wrap.innerHTML =
         skills.length === 0
-          ? emptyState({ icon: '◇', title: 'No skills yet', hint: 'Create one to give agents new tools.' })
-          : emptyState({ icon: '⌕', title: 'No skills match', hint: 'Clear the filter to see every skill.' });
+          ? emptyState({
+              icon: '◇',
+              title: 'No skills yet',
+              hint: 'Create one to give agents new tools.',
+            })
+          : emptyState({
+              icon: '⌕',
+              title: 'No skills match',
+              hint: 'Clear the filter to see every skill.',
+            });
       return;
     }
     wrap.innerHTML = `<table>

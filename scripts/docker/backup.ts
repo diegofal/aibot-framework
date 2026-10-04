@@ -78,9 +78,11 @@ function volumeExists(name: string): boolean {
 
 function composeRunning(): boolean {
   try {
-    return sh(['docker', 'ps', '--filter', `name=${PROJECT}-aibot-1`, '--format', '{{.Names}}'], {
-      quiet: true,
-    }).trim().length > 0;
+    return (
+      sh(['docker', 'ps', '--filter', `name=${PROJECT}-aibot-1`, '--format', '{{.Names}}'], {
+        quiet: true,
+      }).trim().length > 0
+    );
   } catch {
     return false;
   }
@@ -125,10 +127,18 @@ function backup(outRoot: string, opts: { stop: boolean }): void {
       // bind mount of a Windows path is needed.
       const proc = Bun.spawnSync(
         [
-          'docker', 'run', '--rm',
-          '-v', `${full}:/v:ro`,
+          'docker',
+          'run',
+          '--rm',
+          '-v',
+          `${full}:/v:ro`,
           HELPER_IMAGE,
-          'tar', 'czf', '-', '-C', '/v', ...vol.include,
+          'tar',
+          'czf',
+          '-',
+          '-C',
+          '/v',
+          ...vol.include,
         ],
         { stdout: 'pipe', stderr: 'pipe', maxBuffer: 1024 * 1024 * 1024 }
       );
@@ -190,7 +200,20 @@ function restore(src: string, opts: { prefix: string; force: boolean }): void {
     sh(['docker', 'volume', 'create', target], { quiet: true });
     // Feed the archive in over stdin — again, no Windows bind mount.
     const proc = Bun.spawnSync(
-      ['docker', 'run', '--rm', '-i', '-v', `${target}:/v`, HELPER_IMAGE, 'tar', 'xzf', '-', '-C', '/v'],
+      [
+        'docker',
+        'run',
+        '--rm',
+        '-i',
+        '-v',
+        `${target}:/v`,
+        HELPER_IMAGE,
+        'tar',
+        'xzf',
+        '-',
+        '-C',
+        '/v',
+      ],
       { stdin: readFileSync(archive), stdout: 'pipe', stderr: 'pipe' }
     );
     if (proc.exitCode !== 0) {
@@ -202,7 +225,11 @@ function restore(src: string, opts: { prefix: string; force: boolean }): void {
   console.log('\nRestore complete.');
   if (!intoLive) {
     console.log(`Inspect with:  docker run --rm -v ${opts.prefix}aibot_config:/v alpine ls -la /v`);
-    console.log(`Remove with:   docker volume rm ${Object.keys(manifest.volumes).map((v) => opts.prefix + v).join(' ')}`);
+    console.log(
+      `Remove with:   docker volume rm ${Object.keys(manifest.volumes)
+        .map((v) => opts.prefix + v)
+        .join(' ')}`
+    );
   }
 }
 
@@ -213,7 +240,9 @@ function list(outRoot: string): void {
     console.log(`No backups yet (${outRoot} does not exist).`);
     return;
   }
-  const dirs = readdirSync(outRoot).filter((d) => d.startsWith('aibot-backup-')).sort();
+  const dirs = readdirSync(outRoot)
+    .filter((d) => d.startsWith('aibot-backup-'))
+    .sort();
   if (dirs.length === 0) {
     console.log(`No backups in ${outRoot}.`);
     return;

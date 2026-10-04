@@ -22,10 +22,7 @@ describe('goalsBoard', () => {
   });
 
   it('renders a truncated notes preview from real notes text', () => {
-    const html = goalsBoard(
-      [{ text: 'X', status: 'active', notes: 'a'.repeat(300) }],
-      {}
-    );
+    const html = goalsBoard([{ text: 'X', status: 'active', notes: 'a'.repeat(300) }], {});
     expect(html).toContain('stats-goal-notes');
     expect(html).toContain(`${'a'.repeat(240)}…`);
     expect(html).not.toContain('a'.repeat(241));
@@ -57,7 +54,15 @@ describe('goalsBoard', () => {
 
   it('shows the priority chip and the completion date, and renders outcome text', () => {
     const html = goalsBoard(
-      [{ text: 'Ship it', status: 'completed', priority: 'high', completed: '2026-08-10', outcome: 'shipped' }],
+      [
+        {
+          text: 'Ship it',
+          status: 'completed',
+          priority: 'high',
+          completed: '2026-08-10',
+          outcome: 'shipped',
+        },
+      ],
       {}
     );
     expect(html).toContain('stats-chip">high');

@@ -1,5 +1,25 @@
 import { describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
 import { localDateStr, localTimeStr } from '../src/date-utils';
+
+const DATE_UTILS = join(import.meta.dir, '..', 'src', 'date-utils.ts');
+
+/**
+ * Runs the helper in a child process started with `TZ` in its environment —
+ * how production sets it (once, at boot, in src/index.ts). Switching
+ * `process.env.TZ` mid-suite is not reliable: on Linux, once enough of the
+ * suite has run in the same process, Bun stops picking the change up.
+ */
+function inTz(tz: string, fn: 'localDateStr' | 'localTimeStr', iso: string): string {
+  const script = `const m = await import(${JSON.stringify(DATE_UTILS)}); process.stdout.write(m.${fn}(new Date(${JSON.stringify(iso)})));`;
+  const proc = Bun.spawnSync([process.execPath, '-e', script], {
+    env: { ...process.env, TZ: tz },
+  });
+  if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+  return proc.stdout.toString();
+}
+
+const ART = 'America/Argentina/Buenos_Aires';
 
 describe('localDateStr', () => {
   test('returns YYYY-MM-DD format', () => {
@@ -14,31 +34,13 @@ describe('localDateStr', () => {
   });
 
   test('respects TZ (01:30 UTC → previous day in UTC-3)', () => {
-    const origTZ = process.env.TZ;
-    try {
-      process.env.TZ = 'America/Argentina/Buenos_Aires';
-
-      // 2026-02-22 01:30 UTC → 2026-02-21 22:30 ART (UTC-3)
-      const utcDate = new Date('2026-02-22T01:30:00Z');
-      const result = localDateStr(utcDate);
-      expect(result).toBe('2026-02-21');
-    } finally {
-      process.env.TZ = origTZ;
-    }
+    // 2026-02-22 01:30 UTC → 2026-02-21 22:30 ART (UTC-3)
+    expect(inTz(ART, 'localDateStr', '2026-02-22T01:30:00Z')).toBe('2026-02-21');
   });
 
   test('does not change when date is well within the day', () => {
-    const origTZ = process.env.TZ;
-    try {
-      process.env.TZ = 'America/Argentina/Buenos_Aires';
-
-      // 2026-02-22 15:00 UTC → 2026-02-22 12:00 ART
-      const utcDate = new Date('2026-02-22T15:00:00Z');
-      const result = localDateStr(utcDate);
-      expect(result).toBe('2026-02-22');
-    } finally {
-      process.env.TZ = origTZ;
-    }
+    // 2026-02-22 15:00 UTC → 2026-02-22 12:00 ART
+    expect(inTz(ART, 'localDateStr', '2026-02-22T15:00:00Z')).toBe('2026-02-22');
   });
 });
 
@@ -55,16 +57,7 @@ describe('localTimeStr', () => {
   });
 
   test('respects TZ', () => {
-    const origTZ = process.env.TZ;
-    try {
-      process.env.TZ = 'America/Argentina/Buenos_Aires';
-
-      // 2026-02-22 01:30 UTC → 22:30 ART
-      const utcDate = new Date('2026-02-22T01:30:00Z');
-      const result = localTimeStr(utcDate);
-      expect(result).toBe('22:30');
-    } finally {
-      process.env.TZ = origTZ;
-    }
+    // 2026-02-22 01:30 UTC → 22:30 ART
+    expect(inTz(ART, 'localTimeStr', '2026-02-22T01:30:00Z')).toBe('22:30');
   });
 });

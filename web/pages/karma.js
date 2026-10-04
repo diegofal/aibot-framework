@@ -123,11 +123,17 @@ export async function renderKarma(el) {
   const href = (botId) => `#/insights/karma/${encodeURIComponent(botId)}`;
 
   function draw() {
-    const visible = sortKarma(filterKarma(scores, { ...karmaView, names }), karmaView.sortBy, names);
+    const visible = sortKarma(
+      filterKarma(scores, { ...karmaView, names }),
+      karmaView.sortBy,
+      names
+    );
     const countEl = document.getElementById('karma-count');
     if (countEl)
       countEl.textContent =
-        visible.length === scores.length ? String(scores.length) : `${visible.length}/${scores.length}`;
+        visible.length === scores.length
+          ? String(scores.length)
+          : `${visible.length}/${scores.length}`;
     if (visible.length === 0) {
       wrap.innerHTML = emptyState({
         icon: '⌕',
@@ -142,7 +148,9 @@ export async function renderKarma(el) {
         .map((bot) => {
           const name = names[bot.botId] ?? bot.botId;
           const idHint =
-            name !== bot.botId ? ` <span class="text-dim text-sm">${escapeHtml(bot.botId)}</span>` : '';
+            name !== bot.botId
+              ? ` <span class="text-dim text-sm">${escapeHtml(bot.botId)}</span>`
+              : '';
           return `<tr class="karma-row" data-bot-id="${escapeHtml(bot.botId)}">
             <td><a href="${href(bot.botId)}">${escapeHtml(name)}</a>${idHint}</td>
             <td>${scoreBar(bot.current)}</td>

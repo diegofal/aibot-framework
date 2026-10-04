@@ -110,11 +110,19 @@ export function renderTasteForPrompt(taste: TasteProfile): string {
   if (liked.length > 0) lines.push(`Topics that land: ${liked.join(', ')}`);
   if (disliked.length > 0) lines.push(`Topics that fall flat: ${disliked.join(', ')}`);
   if (taste.likedHooks.length > 0) {
-    lines.push(`Hooks the operator liked:\n${taste.likedHooks.slice(-5).map((h) => `- ${h}`).join('\n')}`);
+    lines.push(
+      `Hooks the operator liked:\n${taste.likedHooks
+        .slice(-5)
+        .map((h) => `- ${h}`)
+        .join('\n')}`
+    );
   }
   if (taste.dislikedHooks.length > 0) {
     lines.push(
-      `Hooks that fell flat:\n${taste.dislikedHooks.slice(-5).map((h) => `- ${h}`).join('\n')}`
+      `Hooks that fell flat:\n${taste.dislikedHooks
+        .slice(-5)
+        .map((h) => `- ${h}`)
+        .join('\n')}`
     );
   }
   return lines.join('\n');

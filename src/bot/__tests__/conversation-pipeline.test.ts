@@ -1521,7 +1521,12 @@ describe('ConversationPipeline', () => {
       const record = jest.fn();
       (mockBotContext as any).recordOperatorMessage = record;
       (mockBotContext as any).config.operator = { telegramChatId: 999 };
-      await pipeline.handleConversation(createMockContext(), createMockBotConfig(), 'user:1', 'hello there bot');
+      await pipeline.handleConversation(
+        createMockContext(),
+        createMockBotConfig(),
+        'user:1',
+        'hello there bot'
+      );
       (mockBotContext as any).config.operator = { telegramChatId: 123456 };
       await pipeline.handleConversation(
         createMockContext({ chat: { id: 123456, type: 'supergroup', title: 'G' } } as any),

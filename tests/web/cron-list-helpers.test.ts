@@ -241,7 +241,9 @@ describe('UX overhaul: sorting, selection, bulk and error states', () => {
 
 describe('rerunSummary', () => {
   it('counts the jobs that ran out of the attempted ones', () => {
-    expect(rerunSummary({ attempted: 3, results: [{ ran: true }, { ran: false }, { ran: true }] })).toEqual({
+    expect(
+      rerunSummary({ attempted: 3, results: [{ ran: true }, { ran: false }, { ran: true }] })
+    ).toEqual({
       text: 'Re-ran 2/3',
       tone: 'ok',
     });
@@ -252,7 +254,10 @@ describe('rerunSummary', () => {
       text: 'Re-ran 0/1',
       tone: 'danger',
     });
-    expect(rerunSummary({ error: 'nope' })).toEqual({ text: 'Re-run failed: nope', tone: 'danger' });
+    expect(rerunSummary({ error: 'nope' })).toEqual({
+      text: 'Re-run failed: nope',
+      tone: 'danger',
+    });
     expect(rerunSummary(null)).toEqual({ text: 'Re-run failed: no response', tone: 'danger' });
   });
 

@@ -83,8 +83,16 @@ const CuriosityDispatchSchema = z
     enabled: z.boolean().optional(),
     maxChars: z.number().int().min(200).max(4000).optional(),
     minEditorScore: z.number().min(0).max(1).optional(),
-    baseIntervalHours: z.number().min(1).max(24 * 30).optional(),
-    minIntervalHours: z.number().min(1).max(24 * 30).optional(),
+    baseIntervalHours: z
+      .number()
+      .min(1)
+      .max(24 * 30)
+      .optional(),
+    minIntervalHours: z
+      .number()
+      .min(1)
+      .max(24 * 30)
+      .optional(),
     maxIntervalHours: z
       .number()
       .min(1)

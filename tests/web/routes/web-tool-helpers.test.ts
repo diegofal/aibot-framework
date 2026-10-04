@@ -52,7 +52,7 @@ describe('webGenerate', () => {
     mock.module('../../../src/claude-cli', () => ({ claudeGenerate: orig }));
   });
 
-  test('enableTools: true calls llmClient.chat with the agent\'s full tool set', async () => {
+  test("enableTools: true calls llmClient.chat with the agent's full tool set", async () => {
     const mockChat = mock(() => Promise.resolve({ text: 'tool-enabled response' }));
 
     const mockToolDefs = [

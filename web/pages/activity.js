@@ -1,5 +1,5 @@
-import { api, escapeHtml } from './shared.js';
 import { activityTabHash } from './activity-helpers.js';
+import { api, escapeHtml } from './shared.js';
 
 /* ── Constants ─────────────────────────────────────────────── */
 

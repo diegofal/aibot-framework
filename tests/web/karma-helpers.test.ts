@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import {
-  agentNames,
-  filterKarma,
-  karmaToolbar,
-  sortKarma,
-} from '../../web/pages/karma-helpers.js';
+import { agentNames, filterKarma, karmaToolbar, sortKarma } from '../../web/pages/karma-helpers.js';
 
 const scores = [
   { botId: 'b1', current: 40, trend: 'rising', recentEvents: [1, 2] },
@@ -26,9 +21,7 @@ describe('filterKarma', () => {
     expect(filterKarma(scores, { query: 'GONE', names }).map((s) => s.botId)).toEqual(['gone']);
   });
   it('filters by trend', () => {
-    expect(filterKarma(scores, { trend: 'falling', names }).map((s) => s.botId)).toEqual([
-      'gone',
-    ]);
+    expect(filterKarma(scores, { trend: 'falling', names }).map((s) => s.botId)).toEqual(['gone']);
   });
 });
 
@@ -40,11 +33,7 @@ describe('sortKarma', () => {
       'b1',
       'gone',
     ]);
-    expect(sortKarma(scores, 'score-asc', names).map((s) => s.botId)).toEqual([
-      'gone',
-      'b1',
-      'b2',
-    ]);
+    expect(sortKarma(scores, 'score-asc', names).map((s) => s.botId)).toEqual(['gone', 'b1', 'b2']);
     expect(sortKarma(scores, 'name', names).map((s) => s.botId)).toEqual(['b2', 'gone', 'b1']);
     expect(sortKarma(scores, 'events', names).map((s) => s.botId)).toEqual(['b1', 'gone', 'b2']);
     expect(scores).toEqual(copy);

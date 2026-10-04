@@ -391,7 +391,10 @@ export class BotExportService {
     const sessionDir = this.config.session?.dataDir ?? './data/sessions';
     const entries: TarEntry[] = [];
 
-    const sessions = sliceByPrefix(readJsonObject(join(sessionDir, 'sessions.json')), `bot:${botId}:`);
+    const sessions = sliceByPrefix(
+      readJsonObject(join(sessionDir, 'sessions.json')),
+      `bot:${botId}:`
+    );
     if (sessions) {
       entries.push({
         path: 'sessions/sessions.json',
@@ -539,11 +542,7 @@ export class BotExportService {
         ) {
           nextValue = {
             ...(nextValue as Record<string, unknown>),
-            key: rewritePrefixedKey(
-              (nextValue as { key: string }).key,
-              sourcePrefix,
-              targetPrefix
-            ),
+            key: rewritePrefixedKey((nextValue as { key: string }).key, sourcePrefix, targetPrefix),
           };
         }
         current[nextKey] = nextValue;

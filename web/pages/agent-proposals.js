@@ -98,7 +98,9 @@ export async function renderAgentProposals(el) {
       if (action === 'approve') {
         btn.disabled = true;
         btn.textContent = 'Creating agent...';
-        const result = await api(`/api/agent-proposals/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+        const result = await api(`/api/agent-proposals/${encodeURIComponent(id)}/approve`, {
+          method: 'POST',
+        });
         // A created agent whose soul failed still answers with `proposal` + `error`.
         if (!result || (result.error && !result.proposal)) {
           showToast(`Approval failed: ${result?.error || 'unknown error'}`, { tone: 'danger' });
@@ -180,8 +182,7 @@ export async function renderAgentProposals(el) {
         const id = btn.dataset.id;
         if (row) row.hidden = true;
         undoable('Proposal record deleted', {
-          commit: () =>
-            api(`/api/agent-proposals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+          commit: () => api(`/api/agent-proposals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
           undo: () => {
             if (row) row.hidden = false;
           },

@@ -321,10 +321,7 @@ export function goalsBoard(goalsDetail, goals) {
 
   const group = (s) => `<div class="stats-goal-group">
       <div class="stats-goal-group-title"><span class="badge ${statusCls(s)}">${escapeHtmlPure(s)}</span> <span class="count">${groups.get(s).length}</span></div>
-      ${groups
-        .get(s)
-        .map(card)
-        .join('')}
+      ${groups.get(s).map(card).join('')}
     </div>`;
 
   return `${flags ? `<div class="stats-flags">${flags}</div>` : ''}

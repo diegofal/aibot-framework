@@ -63,7 +63,12 @@ const config = JSON.parse(raw) as Record<string, any>;
 // supplies http://ollama:11434 inside the container.
 const baseUrl: unknown = config.ollama?.baseUrl;
 if (typeof baseUrl === 'string' && /(127\.0\.0\.1|localhost|0\.0\.0\.0)/.test(baseUrl)) {
-  note('ollama.baseUrl', baseUrl, '${OLLAMA_BASE_URL}', 'loopback is the container itself, not the sidecar');
+  note(
+    'ollama.baseUrl',
+    baseUrl,
+    '${OLLAMA_BASE_URL}',
+    'loopback is the container itself, not the sidecar'
+  );
   config.ollama.baseUrl = '${OLLAMA_BASE_URL}';
 }
 
@@ -88,7 +93,12 @@ if (Array.isArray(allowed)) {
 // exposure: compose publishes the port as 127.0.0.1:3000 on the host, so the
 // only route in is the host loopback.
 if (config.web?.enabled && config.web.host !== '0.0.0.0') {
-  note('web.host', config.web.host, '0.0.0.0', 'container-internal bind; compose publishes it on host loopback only');
+  note(
+    'web.host',
+    config.web.host,
+    '0.0.0.0',
+    'container-internal bind; compose publishes it on host loopback only'
+  );
   config.web.host = '0.0.0.0';
 }
 
@@ -112,7 +122,9 @@ for (const r of rewrites) {
 }
 
 const enabled = bots.filter((b) => b.enabled);
-console.log(`\nbots.json: ${bots.length} bots, ${enabled.length} with enabled=true (copied verbatim)`);
+console.log(
+  `\nbots.json: ${bots.length} bots, ${enabled.length} with enabled=true (copied verbatim)`
+);
 console.log(`  enabled: ${enabled.map((b) => b.id).join(', ') || '(none)'}`);
 console.log('  Whether these poll Telegram is decided by AIBOT_AUTOSTART_BOTS in .env.');
 
@@ -134,7 +146,14 @@ if (!APPLY) {
 
 // --- apply -----------------------------------------------------------------
 
-const probe = Bun.spawnSync(['docker', 'exec', CONTAINER, 'sh', '-c', `test -f ${CONTAINER_CONFIG_DIR}/config.json && echo yes || echo no`]);
+const probe = Bun.spawnSync([
+  'docker',
+  'exec',
+  CONTAINER,
+  'sh',
+  '-c',
+  `test -f ${CONTAINER_CONFIG_DIR}/config.json && echo yes || echo no`,
+]);
 if (probe.exitCode !== 0) {
   console.error(`\nCannot reach container "${CONTAINER}". Is the stack up?`);
   process.exit(1);
@@ -145,7 +164,8 @@ const volumeSeeded = probe.stdout.toString().trim() === 'yes';
 // would discard live operator state, so make the caller say so out loud.
 if (volumeSeeded && !FORCE) {
   const existing = run(['docker', 'exec', CONTAINER, 'cat', `${CONTAINER_CONFIG_DIR}/config.json`]);
-  const isPristineSeed = existing.trim() === readFileSync('config/config.example.json', 'utf-8').trim();
+  const isPristineSeed =
+    existing.trim() === readFileSync('config/config.example.json', 'utf-8').trim();
   if (!isPristineSeed) {
     console.error('\nRefusing to overwrite: the volume config differs from the shipped example,');
     console.error('so it may contain dashboard edits. Back it up, then re-run with --force.');
@@ -162,7 +182,17 @@ run(['docker', 'cp', stagedConfig, `${CONTAINER}:${CONTAINER_CONFIG_DIR}/config.
 run(['docker', 'cp', 'config/bots.json', `${CONTAINER}:${CONTAINER_CONFIG_DIR}/bots.json`]);
 
 // docker cp lands files as root; the app runs as uid 1000 and rewrites both.
-run(['docker', 'exec', '--user', 'root', CONTAINER, 'chown', 'bun:bun', `${CONTAINER_CONFIG_DIR}/config.json`, `${CONTAINER_CONFIG_DIR}/bots.json`]);
+run([
+  'docker',
+  'exec',
+  '--user',
+  'root',
+  CONTAINER,
+  'chown',
+  'bun:bun',
+  `${CONTAINER_CONFIG_DIR}/config.json`,
+  `${CONTAINER_CONFIG_DIR}/bots.json`,
+]);
 
 console.log('\nWrote config.json and bots.json into the volume.');
 console.log('Restart to load them:  docker compose --profile local-ollama restart aibot');

@@ -109,7 +109,13 @@ describe('#1 only the operator steers', () => {
 
 describe('#2 exploring items never get stranded', () => {
   it('exploring items stay selectable and get a small priority', () => {
-    const map = { ...emptyKnowledgeMap(), frontier: [fi('a', { surpriseScore: 0.55 }), fi('b', { status: 'exploring', surpriseScore: 0.5 })] };
+    const map = {
+      ...emptyKnowledgeMap(),
+      frontier: [
+        fi('a', { surpriseScore: 0.55 }),
+        fi('b', { status: 'exploring', surpriseScore: 0.5 }),
+      ],
+    };
     expect(selectFrontierItem(map, CURIOSITY_PRESETS.explorer).item?.id).toBe('b');
   });
 
@@ -139,7 +145,12 @@ describe('#3 explore decisions cannot freeze', () => {
       ...emptyNavigatorState(),
       cyclesSinceExplore: 0,
       noSurpriseStreak: 10,
-      cycleLog: Array.from({ length: 8 }, () => ({ at: NOW, topic: 't', mode: 'exploit' as const, surprised: false })),
+      cycleLog: Array.from({ length: 8 }, () => ({
+        at: NOW,
+        topic: 't',
+        mode: 'exploit' as const,
+        surprised: false,
+      })),
     };
     expect(decideCycleMode(nav, cfg).mode).toBe('exploit');
     expect(decideCycleMode({ ...nav, cyclesSinceExplore: 1 }, cfg).mode).toBe('explore');
@@ -171,7 +182,15 @@ describe('#7 navigator backs off after a failed attempt', () => {
       applyGoalOperations: () => {},
       now: () => NOW,
     };
-    const args = { botId: 'b', identity: 'I', soul: 'S', motivations: 'M', goals: 'G', answered: [], feedback: [] };
+    const args = {
+      botId: 'b',
+      identity: 'I',
+      soul: 'S',
+      motivations: 'M',
+      goals: 'G',
+      answered: [],
+      feedback: [],
+    };
     await beginCuriosityCycle(deps, args);
     await svc.waitForNavigator('b');
     const after1 = calls;
@@ -190,7 +209,10 @@ describe('#6 the navigator never blocks the cycle, and a slow one still lands', 
     });
     const nav = JSON.stringify({
       retrospective: 'r',
-      direction: { summary: 'new direction', bets: [{ title: 't', kind: 'explore', rationale: 'r' }] },
+      direction: {
+        summary: 'new direction',
+        bets: [{ title: 't', kind: 'explore', rationale: 'r' }],
+      },
       goal_operations: [{ action: 'add', goal: 'x' }],
     });
     const deps: RunnerDeps = {
@@ -251,7 +273,15 @@ describe('#6 the navigator never blocks the cycle, and a slow one still lands', 
       applyGoalOperations: () => {},
       now: () => NOW,
     };
-    const args = { botId: 'b', identity: 'I', soul: 'S', motivations: 'M', goals: 'G', answered: [], feedback: [] };
+    const args = {
+      botId: 'b',
+      identity: 'I',
+      soul: 'S',
+      motivations: 'M',
+      goals: 'G',
+      answered: [],
+      feedback: [],
+    };
     await beginCuriosityCycle(deps, args);
     const second = await beginCuriosityCycle(deps, args);
     expect(second?.navigatorStarted).toBe(false);
@@ -320,11 +350,34 @@ describe('#5 finish applies onto fresh state after the LLM await', () => {
       now: () => NOW,
     };
     const cycle = (await beginCuriosityCycle(deps, {
-      botId: 'b', identity: 'I', soul: 'S', motivations: 'M', goals: 'G', answered: [], feedback: [],
+      botId: 'b',
+      identity: 'I',
+      soul: 'S',
+      motivations: 'M',
+      goals: 'G',
+      answered: [],
+      feedback: [],
     }))!;
-    await finishCuriosityCycle(deps, { botId: 'b', botName: 'B', identity: 'I', cycle, plan: [], summary: '', toolCalls: [] });
+    await finishCuriosityCycle(deps, {
+      botId: 'b',
+      botName: 'B',
+      identity: 'I',
+      cycle,
+      plan: [],
+      summary: '',
+      toolCalls: [],
+    });
     expect(store.loadNavigator().cyclesSinceExplore).toBe(1);
-    await finishCuriosityCycle(deps, { botId: 'b', botName: 'B', identity: 'I', cycle, plan: [], summary: '', toolCalls: [], idle: true });
+    await finishCuriosityCycle(deps, {
+      botId: 'b',
+      botName: 'B',
+      identity: 'I',
+      cycle,
+      plan: [],
+      summary: '',
+      toolCalls: [],
+      idle: true,
+    });
     expect(store.loadNavigator().cyclesSinceExplore).toBe(2);
   });
 });
@@ -332,7 +385,9 @@ describe('#5 finish applies onto fresh state after the LLM await', () => {
 describe('#9 approving an identity proposal adopts the interest', () => {
   it('signal up on an interest proposal adds it to the map', () => {
     const store = svc.storeFor('b')!;
-    store.appendDispatch(dispatch({ id: 'p', kind: 'proposal', topic: 'identity', interest: 'information theory' }));
+    store.appendDispatch(
+      dispatch({ id: 'p', kind: 'proposal', topic: 'identity', interest: 'information theory' })
+    );
     svc.signalDispatch('b', 'p', 'up');
     expect(store.loadMap().interests).toEqual(['information theory']);
   });
@@ -351,7 +406,12 @@ describe('#11 dispatch edge cases', () => {
   });
 
   it('inbox-only dispatches are not counted as ignored', () => {
-    const r = applyIgnored(emptyTasteProfile(12), [dispatch({ deliveredVia: 'inbox' })], cfg.dispatch, NOW);
+    const r = applyIgnored(
+      emptyTasteProfile(12),
+      [dispatch({ deliveredVia: 'inbox' })],
+      cfg.dispatch,
+      NOW
+    );
     expect(r.counted).toEqual([]);
   });
 
@@ -380,7 +440,9 @@ describe('#12 dispatch log is bounded', () => {
   it('trims to the newest DISPATCH_KEEP entries', () => {
     const store = new CuriosityStore(join(ROOT, 'trim'));
     for (let i = 0; i < DISPATCH_KEEP + 120; i++) store.appendDispatch(dispatch({ id: `d${i}` }));
-    const lines = readFileSync(join(ROOT, 'trim', CURIOSITY_FILES.dispatches), 'utf-8').trim().split('\n');
+    const lines = readFileSync(join(ROOT, 'trim', CURIOSITY_FILES.dispatches), 'utf-8')
+      .trim()
+      .split('\n');
     expect(lines.length).toBeLessThanOrEqual(DISPATCH_KEEP + 100);
     expect(store.listDispatches(1)[0].id).toBe(`d${DISPATCH_KEEP + 119}`);
   });
@@ -403,7 +465,19 @@ describe('#5 per-bot exclusivity', () => {
 
 describe('mergeExtraction still works with the new frontier rules', () => {
   it('sanity', () => {
-    const m = mergeExtraction(emptyKnowledgeMap(), { topic: 'x', findings: [], surprises: [], openQuestions: [], frontier: [], servedDirectiveIds: [], noSurprise: true }, NOW);
+    const m = mergeExtraction(
+      emptyKnowledgeMap(),
+      {
+        topic: 'x',
+        findings: [],
+        surprises: [],
+        openQuestions: [],
+        frontier: [],
+        servedDirectiveIds: [],
+        noSurprise: true,
+      },
+      NOW
+    );
     expect(m.topics).toHaveLength(1);
   });
 });

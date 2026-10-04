@@ -61,7 +61,8 @@ const REASON_TEXT: Record<CycleModeReason, string> = {
   default: '',
   concentration: 'one topic has dominated your recent cycles — you are in a topical rut',
   'no-surprise': 'nothing has surprised you for several cycles — you have stopped learning here',
-  'operator-silent': 'the operator is quiet — silence means go find something worth their attention',
+  'operator-silent':
+    'the operator is quiet — silence means go find something worth their attention',
   budget: 'this is your scheduled exploration cycle',
 };
 

@@ -20,7 +20,13 @@ const navigatorJson = JSON.stringify({
     bets: [{ title: 'Rerankers', kind: 'explore', rationale: 'unknown territory' }],
   },
   frontier_add: [
-    { question: 'Are rerankers cheaper than bigger embeddings?', why_interesting: 'may flip default advice', bridge: 'operator picks models', distance: 1, surprise_score: 0.8 },
+    {
+      question: 'Are rerankers cheaper than bigger embeddings?',
+      why_interesting: 'may flip default advice',
+      bridge: 'operator picks models',
+      distance: 1,
+      surprise_score: 0.8,
+    },
   ],
   frontier_drop: [],
   served_directive_ids: [],
@@ -41,7 +47,14 @@ const extractorJson = (dispatch: unknown = null) =>
   });
 
 const editorJson = (over: Record<string, unknown> = {}) =>
-  JSON.stringify({ insight: 0.9, novelty: 0.9, backed: 0.9, verdict: 'send', notes: 'good', ...over });
+  JSON.stringify({
+    insight: 0.9,
+    novelty: 0.9,
+    backed: 0.9,
+    verdict: 'send',
+    notes: 'good',
+    ...over,
+  });
 
 /** Fake LLM that answers by recognising which prompt it got. */
 function fakeLLM(answers: { navigator?: string; extractor?: string; editor?: string }) {
@@ -175,7 +188,10 @@ describe('curiosity runner', () => {
       answered: [{ question: 'Which thread next?', answer: 'Go deep on retrieval' }],
       feedback: ['Shorter messages please, lead with the claim'],
     });
-    const texts = svc.storeFor('b')!.loadNavigator().directives.map((d) => d.text);
+    const texts = svc
+      .storeFor('b')!
+      .loadNavigator()
+      .directives.map((d) => d.text);
     expect(texts.some((t) => t.includes('Go deep on retrieval'))).toBe(true);
     expect(texts.some((t) => t.includes('Shorter messages'))).toBe(true);
   });
@@ -195,7 +211,13 @@ describe('curiosity runner', () => {
           surprises: [],
           openQuestions: [],
           frontier: [
-            { question: 'Why do rerankers win?', whyInteresting: 'w', bridge: 'b', distance: 1, surpriseScore: 0.9 },
+            {
+              question: 'Why do rerankers win?',
+              whyInteresting: 'w',
+              bridge: 'b',
+              distance: 1,
+              surpriseScore: 0.9,
+            },
           ],
           servedDirectiveIds: [],
           noSurprise: false,
@@ -289,7 +311,12 @@ describe('curiosity runner', () => {
 
   it('finish holds when delivery fails', async () => {
     const llm = fakeLLM({
-      extractor: extractorJson({ hook: 'Real insight here', why_care: 'w', evidence: 'e', action: 'a' }),
+      extractor: extractorJson({
+        hook: 'Real insight here',
+        why_care: 'w',
+        evidence: 'e',
+        action: 'a',
+      }),
       editor: editorJson(),
     });
     const cycle = await begun(llm);
@@ -303,7 +330,9 @@ describe('curiosity runner', () => {
   it('finish does nothing for idle cycles or a failed extraction', async () => {
     const llm = fakeLLM({});
     const cycle = await begun(llm);
-    expect((await finishCuriosityCycle(deps(llm), { ...finishArgs(cycle), idle: true })).extracted).toBe(false);
+    expect(
+      (await finishCuriosityCycle(deps(llm), { ...finishArgs(cycle), idle: true })).extracted
+    ).toBe(false);
     expect(llm.calls).toEqual([]);
     const r = await finishCuriosityCycle(deps(llm), finishArgs(cycle));
     expect(r.extracted).toBe(false);
@@ -312,7 +341,12 @@ describe('curiosity runner', () => {
 
   it('respects the fleet limiter', async () => {
     const llm = fakeLLM({
-      extractor: extractorJson({ hook: 'Real insight here', why_care: 'w', evidence: 'e', action: 'a' }),
+      extractor: extractorJson({
+        hook: 'Real insight here',
+        why_care: 'w',
+        evidence: 'e',
+        action: 'a',
+      }),
       editor: editorJson(),
     });
     const cycle = await begun(llm);

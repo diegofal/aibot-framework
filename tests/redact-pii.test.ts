@@ -13,15 +13,15 @@ describe('redactPii', () => {
   });
 
   it('should redact Telegram bot tokens', () => {
-    expect(
-      redactPii('token=8440919102:AAF-l6DIR-SZAvE1sroyvAlNRSRXDJ0g76M')
-    ).toBe('token=[REDACTED:telegram_token]');
+    expect(redactPii('token=8440919102:AAF-l6DIR-SZAvE1sroyvAlNRSRXDJ0g76M')).toBe(
+      'token=[REDACTED:telegram_token]'
+    );
   });
 
   it('should redact Bearer tokens', () => {
-    expect(
-      redactPii('Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234567890')
-    ).toBe('Authorization: [REDACTED:bearer]');
+    expect(redactPii('Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234567890')).toBe(
+      'Authorization: [REDACTED:bearer]'
+    );
   });
 
   it('should redact long hex keys', () => {
@@ -41,7 +41,9 @@ describe('redactPii', () => {
   });
 
   it('should handle multiple PII patterns in one string', () => {
-    const out = redactPii('from diego@example.com token 8440919102:AAF-l6DIR-SZAvE1sroyvAlNRSRXDJ0g76M');
+    const out = redactPii(
+      'from diego@example.com token 8440919102:AAF-l6DIR-SZAvE1sroyvAlNRSRXDJ0g76M'
+    );
     expect(out).toContain('[REDACTED:email]');
     expect(out).toContain('[REDACTED:telegram_token]');
     expect(out).not.toContain('diego@example.com');

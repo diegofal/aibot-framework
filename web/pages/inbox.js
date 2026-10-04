@@ -281,7 +281,10 @@ export async function renderInboxChat(el, botId, conversationId) {
     const bar = document.createElement('div');
     bar.className = 'inbox-quick-replies';
     bar.innerHTML = `<span class="inbox-quick-replies-label text-dim text-sm">Quick reply</span>${options
-      .map((o, i) => `<button class="btn btn-sm inbox-quick-reply" data-idx="${i}">${escapeHtml(o)}</button>`)
+      .map(
+        (o, i) =>
+          `<button class="btn btn-sm inbox-quick-reply" data-idx="${i}">${escapeHtml(o)}</button>`
+      )
       .join('')}`;
     inputArea.parentNode.insertBefore(bar, inputArea);
 

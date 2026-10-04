@@ -25,11 +25,7 @@ export function readLastLinesRotationAware(
 ): string[] {
   const text = readLogTail(basePath, maxBytes);
   if (!text) return [];
-  return text
-    .trimEnd()
-    .split('\n')
-    .filter(Boolean)
-    .slice(-maxLines);
+  return text.trimEnd().split('\n').filter(Boolean).slice(-maxLines);
 }
 
 /**

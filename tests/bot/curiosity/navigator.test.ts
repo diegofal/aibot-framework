@@ -234,9 +234,7 @@ ${body}`;
   });
 
   it('lets the bot skip the explore bet only when topic and purpose are both closed', () => {
-    const focused = buildNavigatorPrompt(
-      promptInput({ limits: CURIOSITY_PRESETS.focused })
-    ).prompt;
+    const focused = buildNavigatorPrompt(promptInput({ limits: CURIOSITY_PRESETS.focused })).prompt;
     expect(focused).toMatch(/inside your field/i);
     const exp = buildNavigatorPrompt(promptInput()).prompt;
     expect(exp).toMatch(/At least one bet MUST be "explore"/);
@@ -285,9 +283,18 @@ describe('parseNavigatorResult', () => {
   it('accepts snake_case keys', () => {
     const raw = JSON.stringify({
       retrospective: 'r',
-      direction: { summary: 's', bets: [{ title: 't', kind: 'exploit', rationale: 'x', frontier_id: 'f9' }] },
+      direction: {
+        summary: 's',
+        bets: [{ title: 't', kind: 'exploit', rationale: 'x', frontier_id: 'f9' }],
+      },
       frontier_add: [
-        { question: 'Q?', why_interesting: 'w', distance: 2, surprise_score: 0.9, from_topic: 'harness' },
+        {
+          question: 'Q?',
+          why_interesting: 'w',
+          distance: 2,
+          surprise_score: 0.9,
+          from_topic: 'harness',
+        },
       ],
       frontier_drop: ['f3'],
       served_directive_ids: ['x2'],
@@ -311,7 +318,9 @@ describe('parseNavigatorResult', () => {
 
   it('strips markdown fences and surrounding prose', () => {
     expect(parseNavigatorResult('```json\n' + validJson() + '\n```', logger)).not.toBeNull();
-    expect(parseNavigatorResult('Here you go:\n' + validJson() + '\nthanks', logger)).not.toBeNull();
+    expect(
+      parseNavigatorResult('Here you go:\n' + validJson() + '\nthanks', logger)
+    ).not.toBeNull();
   });
 
   it('returns null on non-JSON', () => {
@@ -320,7 +329,9 @@ describe('parseNavigatorResult', () => {
 
   it('returns null without retrospective, summary or a valid bet', () => {
     expect(parseNavigatorResult(validJson({ retrospective: '' }), logger)).toBeNull();
-    expect(parseNavigatorResult(validJson({ direction: { summary: '', bets: [] } }), logger)).toBeNull();
+    expect(
+      parseNavigatorResult(validJson({ direction: { summary: '', bets: [] } }), logger)
+    ).toBeNull();
     expect(
       parseNavigatorResult(validJson({ direction: { summary: 's', bets: [] } }), logger)
     ).toBeNull();
@@ -333,7 +344,11 @@ describe('parseNavigatorResult', () => {
   });
 
   it('caps bets at 3 and frontierAdd at 6', () => {
-    const bets = Array.from({ length: 5 }, (_, i) => ({ title: `b${i}`, kind: 'exploit', rationale: 'r' }));
+    const bets = Array.from({ length: 5 }, (_, i) => ({
+      title: `b${i}`,
+      kind: 'exploit',
+      rationale: 'r',
+    }));
     const adds = Array.from({ length: 9 }, (_, i) => ({
       question: `q${i}`,
       whyInteresting: 'w',
@@ -380,7 +395,11 @@ describe('parseNavigatorResult', () => {
         frontierDrop: ['f1', 4, ''],
         servedDirectiveIds: 'not-an-array',
         interests: [' grown ', {}],
-        goalOperations: [{ action: 'explode', goal: 'g' }, { action: 'add' }, { action: 'remove', goal: 'r' }],
+        goalOperations: [
+          { action: 'explode', goal: 'g' },
+          { action: 'add' },
+          { action: 'remove', goal: 'r' },
+        ],
       }),
       logger
     )!;
@@ -401,8 +420,22 @@ describe('applyNavigatorResult', () => {
     map: mapWith([fi('f1'), fi('f2'), fi('f3', { question: 'Unrelated other question here' })]),
     nav: navWith({
       directives: [
-        { id: 'x1', text: 'do evals', source: 'message', receivedAt: NOW, servedOutputs: 1, status: 'active' },
-        { id: 'x2', text: 'other', source: 'message', receivedAt: NOW, servedOutputs: 0, status: 'active' },
+        {
+          id: 'x1',
+          text: 'do evals',
+          source: 'message',
+          receivedAt: NOW,
+          servedOutputs: 1,
+          status: 'active',
+        },
+        {
+          id: 'x2',
+          text: 'other',
+          source: 'message',
+          receivedAt: NOW,
+          servedOutputs: 0,
+          status: 'active',
+        },
       ],
     }),
   });
@@ -526,9 +559,24 @@ describe('applyNavigatorResult', () => {
       nav,
       result: result({
         frontierAdd: [
-          { question: 'Question f1 about something specific', whyInteresting: 'w', distance: 1, surpriseScore: 0.5 },
-          { question: 'Brand new question on tokenizers', whyInteresting: 'w', distance: 1, surpriseScore: 0.5 },
-          { question: 'brand new question on tokenizers', whyInteresting: 'w', distance: 1, surpriseScore: 0.5 },
+          {
+            question: 'Question f1 about something specific',
+            whyInteresting: 'w',
+            distance: 1,
+            surpriseScore: 0.5,
+          },
+          {
+            question: 'Brand new question on tokenizers',
+            whyInteresting: 'w',
+            distance: 1,
+            surpriseScore: 0.5,
+          },
+          {
+            question: 'brand new question on tokenizers',
+            whyInteresting: 'w',
+            distance: 1,
+            surpriseScore: 0.5,
+          },
         ],
       }),
       limits: explorer,
@@ -539,7 +587,9 @@ describe('applyNavigatorResult', () => {
 
   it('identity open → interests are added to the map (deduped, capped at 12)', () => {
     const { nav } = base();
-    const map = mapWith([], { interests: Array.from({ length: 11 }, (_, i) => `interest number ${i}`) });
+    const map = mapWith([], {
+      interests: Array.from({ length: 11 }, (_, i) => `interest number ${i}`),
+    });
     const out = applyNavigatorResult({
       map,
       nav,
@@ -581,7 +631,9 @@ describe('applyNavigatorResult', () => {
 
   it('passes goal operations through', () => {
     const { map, nav } = base();
-    const ops = [{ action: 'complete' as const, goal: 'Track my own karma', outcome: 'self-referential' }];
+    const ops = [
+      { action: 'complete' as const, goal: 'Track my own karma', outcome: 'self-referential' },
+    ];
     const out = applyNavigatorResult({
       map,
       nav,
@@ -651,4 +703,3 @@ describe('runNavigator', () => {
     await expect(runNavigator(client, promptInput(), 'm', logger)).rejects.toThrow('boom');
   });
 });
-

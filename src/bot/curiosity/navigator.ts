@@ -46,7 +46,10 @@ export function shouldRunNavigator(
   if (!cfg.enabled) return false;
   // A failed attempt backs off (≤ 2 h) instead of costing two LLM calls every cycle.
   const attempt = nav.lastNavigatorAttemptAt ? Date.parse(nav.lastNavigatorAttemptAt) : Number.NaN;
-  if (!Number.isNaN(attempt) && nowMs - attempt < Math.min(cfg.navigatorEveryMs, NAVIGATOR_RETRY_MS)) {
+  if (
+    !Number.isNaN(attempt) &&
+    nowMs - attempt < Math.min(cfg.navigatorEveryMs, NAVIGATOR_RETRY_MS)
+  ) {
     return false;
   }
   if (!nav.lastNavigatorAt) return true;
@@ -350,10 +353,7 @@ export function parseNavigatorResult(
           NAVIGATOR_CAPS.frontierAdd
         ),
         frontierDrop: strList(pick(parsed, 'frontierDrop', 'frontier_drop'), 50),
-        servedDirectiveIds: strList(
-          pick(parsed, 'servedDirectiveIds', 'served_directive_ids'),
-          50
-        ),
+        servedDirectiveIds: strList(pick(parsed, 'servedDirectiveIds', 'served_directive_ids'), 50),
         interests: strList(parsed.interests),
         goalOperations: list(
           pick(parsed, 'goalOperations', 'goal_operations'),

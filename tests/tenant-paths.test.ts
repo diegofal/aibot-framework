@@ -1,5 +1,5 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'bun:test';
+import { join } from 'node:path';
 import { isPathWithinTenant, resolveTenantPaths } from '../src/tenant/tenant-paths';
 
 describe('resolveTenantPaths', () => {
@@ -26,7 +26,9 @@ describe('resolveTenantPaths', () => {
     });
     expect(result.tenantRoot).toBe(join('data', 'tenants', 'tenant-abc'));
     expect(result.soulDir).toBe(join('data', 'tenants', 'tenant-abc', 'bots', 'bot1', 'soul'));
-    expect(result.workDir).toBe(join('data', 'tenants', 'tenant-abc', 'bots', 'bot1', 'productions'));
+    expect(result.workDir).toBe(
+      join('data', 'tenants', 'tenant-abc', 'bots', 'bot1', 'productions')
+    );
   });
 
   it('handles absolute dataDir', () => {
@@ -39,7 +41,9 @@ describe('resolveTenantPaths', () => {
     });
     expect(result.tenantRoot).toBe(join('/var/data/tenants', 'tenant-xyz'));
     expect(result.soulDir).toBe(join('/var/data/tenants', 'tenant-xyz', 'bots', 'mybot', 'soul'));
-    expect(result.workDir).toBe(join('/var/data/tenants', 'tenant-xyz', 'bots', 'mybot', 'productions'));
+    expect(result.workDir).toBe(
+      join('/var/data/tenants', 'tenant-xyz', 'bots', 'mybot', 'productions')
+    );
   });
 
   it('handles different bot IDs', () => {

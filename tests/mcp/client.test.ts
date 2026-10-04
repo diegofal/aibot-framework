@@ -248,10 +248,7 @@ describe('McpClient', () => {
     });
 
     it('should not disable when errors differ', async () => {
-      const client = new McpClient(
-        makeConfig({ autoReconnect: false, name: 'flaky' }),
-        mockLogger
-      );
+      const client = new McpClient(makeConfig({ autoReconnect: false, name: 'flaky' }), mockLogger);
       (client as any).createTransport = () => {
         throw new Error('first error');
       };

@@ -167,9 +167,9 @@ describe('skills-are-tools', () => {
     // `improve` ships as src/skills/improve AND as a tool. Six bots legitimately
     // enable the skill; flagging them every run is noise, not a finding.
     const bots = [makeBot({ id: 'bot1', skills: ['improve', 'reflection'] })];
-    expect(dataCleanup.preview(fleetCtx(bots, { knownSkillIds: ['improve', 'reflection'] }))).toEqual(
-      []
-    );
+    expect(
+      dataCleanup.preview(fleetCtx(bots, { knownSkillIds: ['improve', 'reflection'] }))
+    ).toEqual([]);
   });
 
   test('still flags a tool name that is not a registered skill', () => {

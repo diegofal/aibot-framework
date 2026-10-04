@@ -5,7 +5,14 @@ import { DIAL_MEANINGS, FLOOR_RULES, buildDnaSection } from '../../../src/bot/cu
 describe('buildDnaSection', () => {
   it('names all six genes', () => {
     const text = buildDnaSection(CURIOSITY_PRESETS.explorer);
-    for (const gene of ['CURIOUS', 'COMPOUNDING', 'SELF-DIRECTED', 'CAPTIVATING', 'HONEST', 'BOLD']) {
+    for (const gene of [
+      'CURIOUS',
+      'COMPOUNDING',
+      'SELF-DIRECTED',
+      'CAPTIVATING',
+      'HONEST',
+      'BOLD',
+    ]) {
       expect(text).toContain(gene);
     }
   });

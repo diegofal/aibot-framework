@@ -501,9 +501,7 @@ export async function validateConfiguredModels(params: {
 
   if (models.length === 0) return emptyReport('no-models', true);
 
-  const daemon = await client
-    .checkDaemon(timeoutMs)
-    .catch((): DaemonProbeOutcome => 'unreachable');
+  const daemon = await client.checkDaemon(timeoutMs).catch((): DaemonProbeOutcome => 'unreachable');
 
   if (daemon === 'unreachable') return emptyReport('daemon-unreachable', false);
   // The endpoint is alive and said no. Probing models would produce N copies
@@ -526,9 +524,10 @@ export async function validateConfiguredModels(params: {
   return {
     // A reachable endpoint that refuses every credentialled call is not a
     // completed validation — nothing was actually verified.
-    status: unauthorized.length > 0 && unauthorized.length === results.length
-      ? 'unauthorized'
-      : 'completed',
+    status:
+      unauthorized.length > 0 && unauthorized.length === results.length
+        ? 'unauthorized'
+        : 'completed',
     daemonReachable: true,
     authOk: unauthorized.length === 0,
     results,
@@ -685,7 +684,7 @@ function logAuthFailure(
       'OLLAMA AUTHENTICATION FAILED — the local Ollama daemon refused the request (HTTP 401/403). ' +
         'For ":cloud" model tags this means the DAEMON is not signed in to Ollama Cloud: run ' +
         '`docker compose exec ollama ollama signin` (or `ollama signin` on the host) and approve the device. ' +
-        'ollama.apiKey does NOT help here — the daemon does not forward the app\'s bearer token to Ollama Cloud.'
+        "ollama.apiKey does NOT help here — the daemon does not forward the app's bearer token to Ollama Cloud."
     );
     return;
   }

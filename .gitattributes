@@ -1,3 +1,8 @@
+# Every text file is LF in the repo and in every checkout, Windows included, so
+# local `bun run lint` (Biome checks line endings) sees what CI on ubuntu sees.
+# Binary files are detected by `text=auto` and left alone.
+* text=auto eol=lf
+
 # Shell scripts must keep LF endings even when checked out on Windows —
 # a CRLF shebang makes the Docker entrypoint fail with "not found".
 *.sh text eol=lf

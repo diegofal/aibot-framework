@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
+import { createLoopDetector } from '../src/core/loop-detector';
 import {
   type ToolCallingStrategy,
   type ToolRunnerOptions,
   detectPhantomMemorySave,
   runToolLoop,
 } from '../src/core/tool-runner';
-import { createLoopDetector } from '../src/core/loop-detector';
 import type { ChatMessage, ChatOptions } from '../src/ollama';
 import type { ToolCall, ToolDefinition } from '../src/tools/types';
 

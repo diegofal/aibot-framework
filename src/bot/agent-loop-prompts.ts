@@ -298,9 +298,13 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildDirectivesSection(input.directives)}${input.curiosityBlock ? `
+}${buildDirectivesSection(input.directives)}${
+  input.curiosityBlock
+    ? `
 ${input.curiosityBlock}
-` : ''}
+`
+    : ''
+}
 ${
   input.singleDeliverable
     ? `
@@ -430,9 +434,13 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildDirectivesSection(input.directives)}${input.curiosityBlock ? `
+}${buildDirectivesSection(input.directives)}${
+  input.curiosityBlock
+    ? `
 ${input.curiosityBlock}
-` : ''}
+`
+    : ''
+}
 ${
   input.singleDeliverable
     ? `
@@ -772,9 +780,13 @@ ${input.motivations}
 
 ## Current Goals
 
-${input.goals || '(no goals set)'}${buildDirectivesSection(input.directives)}${input.curiosityBlock ? `
+${input.goals || '(no goals set)'}${buildDirectivesSection(input.directives)}${
+  input.curiosityBlock
+    ? `
 
-${input.curiosityBlock}` : ''}
+${input.curiosityBlock}`
+    : ''
+}
 
 ## Recent Activity (last 7 days)
 

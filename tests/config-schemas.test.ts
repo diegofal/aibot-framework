@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
+import { resolveCandidatesFromConfig } from '../src/bot/model-failover/model-fallback';
 import {
   BotAgentLoopOverrideSchema,
   BotConfigSchema,
@@ -12,7 +13,6 @@ import {
   TwitterConfigSchema,
   WebToolsConfigSchema,
 } from '../src/config';
-import { resolveCandidatesFromConfig } from '../src/bot/model-failover/model-fallback';
 
 describe('GlobalAgentLoopConfigSchema', () => {
   test('defaults claudeTimeout to 300_000', () => {

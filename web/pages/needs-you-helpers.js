@@ -78,14 +78,19 @@ export const NEUTRAL_KINDS = new Set(['ask', 'permission', 'proposal', 'producti
 
 /** Ids of `items` that have a neutral action, in order. */
 export function neutralIds(items) {
-  return (Array.isArray(items) ? items : []).filter((i) => NEUTRAL_KINDS.has(i?.kind)).map((i) => i.id);
+  return (Array.isArray(items) ? items : [])
+    .filter((i) => NEUTRAL_KINDS.has(i?.kind))
+    .map((i) => i.id);
 }
 
 /**
  * Exactly what "Clear stale" confirms and sends: neutral-kind items older than
  * `hours`, under the agent filter, minus rows hidden by a pending Undo.
  */
-export function staleClearIds(items, { hours, botId = null, nowMs = Date.now(), hidden = [] } = {}) {
+export function staleClearIds(
+  items,
+  { hours, botId = null, nowMs = Date.now(), hidden = [] } = {}
+) {
   const skip = new Set(hidden ?? []);
   const cutoff = nowMs - hours * 3_600_000;
   return (Array.isArray(items) ? items : [])
@@ -279,7 +284,10 @@ function addChecked(state, ids) {
 }
 
 export function checkAllVisible(state) {
-  return addChecked(state, visibleItems(state).map((i) => i.id));
+  return addChecked(
+    state,
+    visibleItems(state).map((i) => i.id)
+  );
 }
 
 export function clearChecked(state) {
@@ -288,7 +296,15 @@ export function clearChecked(state) {
 
 /** Counts for the filter chips: per kind under the agent filter, hidden rows excluded. */
 export function kindCounts(state) {
-  const counts = { all: 0, ask: 0, permission: 0, proposal: 0, production: 0, feedback: 0, tool: 0 };
+  const counts = {
+    all: 0,
+    ask: 0,
+    permission: 0,
+    proposal: 0,
+    production: 0,
+    feedback: 0,
+    tool: 0,
+  };
   const hidden = new Set(state?.hidden ?? []);
   for (const item of state?.items ?? []) {
     if (hidden.has(item.id)) continue;

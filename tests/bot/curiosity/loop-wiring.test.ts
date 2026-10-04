@@ -73,7 +73,10 @@ describe('createOperatorDispatchDeliverer', () => {
 describe('createFleetDispatchLimiter', () => {
   it('enforces the fleet daily cap across bots', () => {
     let t = 0;
-    const limiter = createFleetDispatchLimiter(() => 2, () => t);
+    const limiter = createFleetDispatchLimiter(
+      () => 2,
+      () => t
+    );
     expect(limiter.allows('a')).toBe(true);
     limiter.record('a');
     limiter.record('b');

@@ -196,12 +196,7 @@ describe('areas and visibility', () => {
 
   it('hides admin tabs from tenants and BaaS tabs outside multi-tenant', () => {
     const auto = AREAS.find((a) => a.id === 'automations');
-    expect(visibleTabs(auto, ADMIN).map((t) => t.id)).toEqual([
-      'cron',
-      'loop',
-      'skills',
-      'tools',
-    ]);
+    expect(visibleTabs(auto, ADMIN).map((t) => t.id)).toEqual(['cron', 'loop', 'skills', 'tools']);
     expect(visibleTabs(auto, TENANT).map((t) => t.id)).toEqual(['cron', 'loop', 'skills']);
     const insights = AREAS.find((a) => a.id === 'insights');
     expect(insights?.tabs.map((t) => t.id)).toEqual([
@@ -257,9 +252,12 @@ describe('areas and visibility', () => {
     expect(activeTab(insights, '#/insights/stats/bot/b1')?.id).toBe('stats');
     expect(activeTab(insights, '#/insights/stats/behaviour')?.id).toBe('behaviour');
     expect(activeTab(insights, '#/insights/activity?tab=logs')?.id).toBe('activity');
-    expect(activeTab(AREAS.find((a) => a.id === 'automations'), '#/automations/loop')?.id).toBe(
-      'loop'
-    );
+    expect(
+      activeTab(
+        AREAS.find((a) => a.id === 'automations'),
+        '#/automations/loop'
+      )?.id
+    ).toBe('loop');
     expect(activeTab(insights, '#/insights')?.id).toBe('stats');
     const needs = AREAS.find((a) => a.id === 'needs');
     expect(activeTab(needs, '#/needs')?.id).toBe('queue');

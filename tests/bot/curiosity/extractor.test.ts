@@ -25,12 +25,24 @@ const input = (over: Partial<ExtractorInput> = {}): ExtractorInput => ({
 
 const goodJson = JSON.stringify({
   topic: 'Retrieval reranking',
-  findings: [{ claim: 'Reranking lifts top-1 5%→18%', evidence: 'productions/22_rerank.ts', confidence: 'medium' }],
+  findings: [
+    {
+      claim: 'Reranking lifts top-1 5%→18%',
+      evidence: 'productions/22_rerank.ts',
+      confidence: 'medium',
+    },
+  ],
   surprises: ['bigger embeddings did less than a cheap reranker'],
   open_questions: ['Does it hold on code search?'],
   answered_questions: [],
   frontier: [
-    { question: 'Do rerankers reduce eval variance?', why_interesting: 'could flip rankings', bridge: 'evals are core', distance: 1, surprise_score: 0.7 },
+    {
+      question: 'Do rerankers reduce eval variance?',
+      why_interesting: 'could flip rankings',
+      bridge: 'evals are core',
+      distance: 1,
+      surprise_score: 0.7,
+    },
   ],
   served_directive_ids: ['ab12'],
   no_surprise: false,
@@ -116,7 +128,9 @@ describe('parseExtractorResult', () => {
       }),
       logger
     )!;
-    expect(r.extraction.findings).toEqual([{ claim: 'ok', evidence: undefined, confidence: 'low' }]);
+    expect(r.extraction.findings).toEqual([
+      { claim: 'ok', evidence: undefined, confidence: 'low' },
+    ]);
     expect(r.extraction.frontier).toHaveLength(1);
     expect(r.extraction.frontier[0].distance).toBe(1);
     expect(r.extraction.surprises).toEqual(['s']);
