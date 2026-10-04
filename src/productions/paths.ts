@@ -140,3 +140,17 @@ export function resolveFilePath(
   if (!assertWithinDir(dir, entry.path)) return null;
   return resolve(join(dir, entry.path));
 }
+
+/**
+ * Some bots log an output's path as absolute (`/app/productions/<bot>/x.md`)
+ * instead of dir-relative. Turn an absolute path inside `dir` into the
+ * dir-relative form (forward slashes) that `assertWithinDir` and
+ * `archiveFile` accept; anything else (relative, outside, the dir itself)
+ * is returned unchanged.
+ */
+export function normalizeEntryPath(dir: string, path: string): string {
+  if (!isAbsolute(path)) return path;
+  const rel = relative(resolve(dir), resolve(path));
+  if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return path;
+  return rel.split(sep).join('/');
+}

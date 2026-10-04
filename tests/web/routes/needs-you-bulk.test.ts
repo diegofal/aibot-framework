@@ -587,6 +587,7 @@ describe('needsYouActionsFromBotManager', () => {
         updateStatus: (id: string, s: string, note?: string) => rec(['proposal', id, s, note], {}),
       }),
       getProductionsService: () => ({
+        resolveDir: (b: string) => `/prod/${b}`,
         getEntry: (b: string, id: string) =>
           id === 'gone' ? null : ({ path: `${id}.md` } as never),
         archiveFile: (b: string, p: string, r: string) => rec(['archive', b, p, r], true),

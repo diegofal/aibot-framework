@@ -25,6 +25,7 @@ import {
   INDEX_EXCLUDES,
   isEnabled,
   isTrackOnly,
+  normalizeEntryPath,
   resolveDir,
   resolveFilePath,
   TREE_EXCLUDES,
@@ -332,5 +333,22 @@ describe('TREE_EXCLUDES', () => {
   test('does not exclude plain files or index.html (the tree shows archived files too)', () => {
     expect(TREE_EXCLUDES.has('report.md')).toBe(false);
     expect(TREE_EXCLUDES.has('index.html')).toBe(false);
+  });
+});
+
+describe('normalizeEntryPath', () => {
+  const dir = resolve('/data/prod/b1');
+  test('an absolute path inside the dir becomes dir-relative with forward slashes', () => {
+    expect(normalizeEntryPath(dir, join(dir, 'notes', 'a.md'))).toBe('notes/a.md');
+  });
+  test('a relative path is returned as is', () => {
+    expect(normalizeEntryPath(dir, 'a.md')).toBe('a.md');
+  });
+  test('an absolute path outside the dir is returned as is', () => {
+    const outside = resolve('/elsewhere/a.md');
+    expect(normalizeEntryPath(dir, outside)).toBe(outside);
+  });
+  test('the dir itself is returned as is (not an entry inside it)', () => {
+    expect(normalizeEntryPath(dir, dir)).toBe(dir);
   });
 });

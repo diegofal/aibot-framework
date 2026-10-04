@@ -46,6 +46,7 @@ import type { PermissionRequestInfo } from '../../bot/ask-permission-store';
 import type { Config } from '../../config';
 import type { Conversation } from '../../conversations/service';
 import type { Logger } from '../../logger';
+import { normalizeEntryPath } from '../../productions/paths';
 import type { ProductionEntry } from '../../productions/types';
 import { getTenantId, isAdminOrSingleTenant, scopeBots } from '../../tenant/tenant-scoping';
 import type { AgentProposal } from '../../tools/agent-proposal-store';
@@ -142,6 +143,8 @@ export interface NeedsYouSources {
    * The hygiene routine `productions-triage` reports and prunes them.
    */
   productionFileExists?: (botId: string, path: string) => boolean;
+  /** One form for an output's path (absolute inside the bot dir → dir-relative), so archive and create entries compare exactly. */
+  normalizeProductionPath?: (botId: string, path: string) => string;
   feedback?: { botIds(): string[]; list(botId: string): AgentFeedback[] };
   /** Dynamic tools (admin-only queue kind `tool`); only `status: 'pending'` are listed. */
   tools?: () => DynamicToolMeta[];
@@ -619,7 +622,15 @@ function timestampMs(entry: ProductionEntry): number {
  * wins, an `archive`/`delete` afterwards removes the path. What is left and
  * still lacks `evaluation.status` is what a human has not looked at.
  */
-export function pendingProductionFiles(entries: ProductionEntry[]): ProductionEntry[] {
+/**
+ * `normalize` maps every path to one form before comparing, so an output
+ * logged with an absolute path (`/app/productions/<bot>/x.md`) matches the
+ * dir-relative `archivedFrom` that archiving it writes. Exact match only.
+ */
+export function pendingProductionFiles(
+  entries: ProductionEntry[],
+  normalize: (path: string) => string = (p) => p
+): ProductionEntry[] {
   const valid = entries.filter(
     (e) => e && typeof e === 'object' && typeof e.path === 'string' && typeof e.id === 'string'
   );
@@ -629,13 +640,13 @@ export function pendingProductionFiles(entries: ProductionEntry[]): ProductionEn
     switch (e.action) {
       case 'create':
       case 'edit':
-        active.set(e.path, e);
+        active.set(normalize(e.path), e);
         break;
       case 'archive':
-        active.delete(typeof e.archivedFrom === 'string' ? e.archivedFrom : e.path);
+        active.delete(normalize(typeof e.archivedFrom === 'string' ? e.archivedFrom : e.path));
         break;
       case 'delete':
-        active.delete(e.path);
+        active.delete(normalize(e.path));
         break;
       default:
         break;
@@ -670,7 +681,14 @@ function buildProductions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
   }
   const items: NeedsYouItem[] = [];
   for (const [botId, entries] of byBot) {
-    const pending = pendingProductionFiles(entries).filter((e) =>
+    const normalize = (p: string): string => {
+      try {
+        return sources.normalizeProductionPath?.(botId, p) ?? p;
+      } catch {
+        return p;
+      }
+    };
+    const pending = pendingProductionFiles(entries, normalize).filter((e) =>
       productionFileStillThere(sources, botId, e)
     );
     items.push(
@@ -1242,6 +1260,7 @@ export interface NeedsYouActionsBotManager {
   getProductionsService?():
     | {
         getEntry(botId: string, id: string): ProductionEntry | null | undefined;
+        resolveDir(botId: string): string;
         archiveFile(botId: string, path: string, reason: string): boolean;
         evaluate(
           botId: string,
@@ -1304,7 +1323,8 @@ export function needsYouActionsFromBotManager(
       const productions = bm.getProductionsService?.();
       const entry = productions?.getEntry(botId, id);
       if (!productions || !entry) return false;
-      return productions.archiveFile(botId, entry.path, reason);
+      const path = normalizeEntryPath(productions.resolveDir(botId), entry.path);
+      return productions.archiveFile(botId, path, reason);
     },
     approveTool: (id) => !!bm.getDynamicToolRegistry?.()?.approve(id),
     rejectTool: (id, note) => !!bm.getDynamicToolRegistry?.()?.reject(id, note),
@@ -1325,8 +1345,14 @@ export function needsYouSourcesFromBotManager(bm: NeedsYouBotManager): NeedsYouS
     productions: productions
       ? () => productions.getAllEntries({ limit: PRODUCTIONS_SCAN_LIMIT }).entries
       : undefined,
+    normalizeProductionPath: productions
+      ? (botId, path) => normalizeEntryPath(productions.resolveDir(botId), path)
+      : undefined,
     productionFileExists: productions
-      ? (botId, path) => existsSync(join(productions.resolveDir(botId), path))
+      ? (botId, path) => {
+          const dir = productions.resolveDir(botId);
+          return existsSync(join(dir, normalizeEntryPath(dir, path)));
+        }
       : undefined,
     feedback: {
       botIds: () => bm.getAgentFeedbackBotIds(),

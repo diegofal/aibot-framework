@@ -7,8 +7,10 @@ import {
   type NeedsYouItem,
   type NeedsYouSources,
   buildNeedsYou,
+  needsYouActionsFromBotManager,
   needsYouRoutes,
   needsYouSourcesFromBotManager,
+  pendingProductionFiles,
   sortNeedsYou,
 } from '../../../src/web/routes/needs-you';
 import { createTempDir, removeTempDir } from '../../helpers/temp-dir';
@@ -686,5 +688,139 @@ describe('needsYouSourcesFromBotManager — productionFileExists', () => {
       getAgentFeedback: () => [],
     } as never);
     expect(src.productionFileExists).toBeUndefined();
+  });
+});
+
+describe('absolute changelog paths inside the bot dir', () => {
+  // 2026-10-04: some bots log `/app/productions/<bot>/x.md` instead of `x.md`.
+  // The file probe joined that onto the bot dir and hid real outputs, and
+  // Clear could never archive them (assertWithinDir refuses absolute paths).
+  it('productionFileExists finds a file logged with an absolute path', () => {
+    const dir = createTempDir('needs-you-abs');
+    try {
+      mkdirSync(join(dir, 'b1'), { recursive: true });
+      writeFileSync(join(dir, 'b1', 'here.md'), 'x');
+      const src = needsYouSourcesFromBotManager({
+        getAskHumanPending: () => [],
+        getPermissionsPending: () => [],
+        getAgentFeedbackBotIds: () => [],
+        getAgentFeedback: () => [],
+        getProductionsService: () => ({
+          getAllEntries: () => ({ entries: [] }),
+          resolveDir: (botId: string) => join(dir, botId),
+        }),
+      } as never);
+      expect(src.productionFileExists?.('b1', join(dir, 'b1', 'here.md'))).toBe(true);
+      expect(src.productionFileExists?.('b1', join(dir, 'b1', 'gone.md'))).toBe(false);
+    } finally {
+      removeTempDir(dir);
+    }
+  });
+
+  it('archiveProduction passes a dir-relative path for an absolute changelog path', () => {
+    const calls: string[] = [];
+    const actions = needsYouActionsFromBotManager({
+      getProductionsService: () => ({
+        resolveDir: () => '/data/prod/b1',
+        getEntry: () => ({ id: 'p1', path: '/data/prod/b1/notes/a.md' }),
+        archiveFile: (_b: string, p: string) => {
+          calls.push(p);
+          return true;
+        },
+      }),
+    } as never);
+    expect(actions.archiveProduction?.('b1', 'p1', 'r')).toBe(true);
+    expect(calls).toEqual(['notes/a.md']);
+  });
+
+  it('archiveProduction leaves a relative path untouched', () => {
+    const calls: string[] = [];
+    const actions = needsYouActionsFromBotManager({
+      getProductionsService: () => ({
+        resolveDir: () => '/data/prod/b1',
+        getEntry: () => ({ id: 'p1', path: 'a.md' }),
+        archiveFile: (_b: string, p: string) => {
+          calls.push(p);
+          return true;
+        },
+      }),
+    } as never);
+    actions.archiveProduction?.('b1', 'p1', 'r');
+    expect(calls).toEqual(['a.md']);
+  });
+});
+
+describe('pendingProductionFiles — archive of an absolute-path output', () => {
+  it('an archive entry with a dir-relative archivedFrom resolves the absolute-path create', () => {
+    const normalize = (p: string) => p.replace(/^\/app\/productions\/b1\//, '');
+    const pending = pendingProductionFiles(
+      [
+        production('f1', 'b1', '/app/productions/b1/notes/a.md', 3),
+        production('f2', 'b1', 'archived/a.md', 1, {
+          action: 'archive',
+          archivedFrom: 'notes/a.md',
+        }),
+      ] as never,
+      normalize
+    );
+    expect(pending).toEqual([]);
+  });
+
+  it('a relative archivedFrom does not resolve an unrelated absolute path that merely ends alike', () => {
+    const pending = pendingProductionFiles([
+      production('f1', 'b1', '/app/productions/b1/x-a.md', 3),
+      production('f2', 'b1', 'archived/a.md', 1, { action: 'archive', archivedFrom: 'a.md' }),
+    ] as never);
+    expect(pending.map((e) => e.id)).toEqual(['f1']);
+  });
+});
+
+describe('pendingProductionFiles — distinct files with the same name', () => {
+  // Prepass round 3: a suffix match let archiving `a.md` resolve `notes/a.md`.
+  it('archiving a.md does not resolve /app/productions/b1/notes/a.md', () => {
+    const normalize = (p: string) => p.replace(/^\/app\/productions\/b1\//, '');
+    const pending = pendingProductionFiles(
+      [
+        production('f1', 'b1', '/app/productions/b1/notes/a.md', 3),
+        production('f2', 'b1', 'a.md', 2),
+        production('f3', 'b1', 'archived/a.md', 1, { action: 'archive', archivedFrom: 'a.md' }),
+      ] as never,
+      normalize
+    );
+    expect(pending.map((e) => e.id)).toEqual(['f1']);
+  });
+});
+
+describe('needsYouSourcesFromBotManager — normalizeProductionPath', () => {
+  it('makes an absolute path inside the bot dir dir-relative', () => {
+    const src = needsYouSourcesFromBotManager({
+      getAskHumanPending: () => [],
+      getPermissionsPending: () => [],
+      getAgentFeedbackBotIds: () => [],
+      getAgentFeedback: () => [],
+      getProductionsService: () => ({
+        getAllEntries: () => ({ entries: [] }),
+        resolveDir: () => join('/data', 'prod', 'b1'),
+      }),
+    } as never);
+    expect(src.normalizeProductionPath?.('b1', join('/data', 'prod', 'b1', 'notes', 'a.md'))).toBe(
+      'notes/a.md'
+    );
+    expect(src.normalizeProductionPath?.('b1', 'a.md')).toBe('a.md');
+  });
+
+  it('buildNeedsYou uses it: an archived absolute-path output is no longer listed', async () => {
+    const src = sources({
+      productions: () => [
+        production('f1', 'b1', '/app/productions/b1/notes/a.md', 3),
+        production('f2', 'b1', 'archived/a.md', 1, {
+          action: 'archive',
+          archivedFrom: 'notes/a.md',
+        }),
+      ],
+      normalizeProductionPath: (_b, p) => p.replace(/^\/app\/productions\/b1\//, ''),
+    });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect(body.byKind.production).toBe(0);
   });
 });
