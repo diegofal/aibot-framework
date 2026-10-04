@@ -6432,7 +6432,7 @@ select[aria-invalid="true"] {
   transition: color var(--fast);
 }
 .bulk-toolbar-hint + .bulk-toolbar-total::before {
-  content: '·';
+  content: "·";
   margin-right: 10px;
 }
 .bulk-toolbar-total {
