@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Process (2026-10-03) — Working agreements and project records (Zero, stages rules + memory)
+- **Why.** The rules lived only in `CLAUDE.md`, mixed with architecture notes, and hand-run operations against the live container left no trace outside chat history.
+- **Rules** moved verbatim in substance from `CLAUDE.md` into `docs/working-agreements.md`; `CLAUDE.md` now links there and keeps only repo-specific truth (commands, gotchas, the architecture tables). Kept deliberately light: team-only rules (branch/worktree per ticket, tracker labels, per-ticket production gate) are declined with reasons in `.claude/zero.config.json`.
+- **Records** added beside `CHANGELOG.md`: daily work log (`docs/work-log/YYYY-MM-DD.md`), infra runbook (`docs/runbook.md`, seeded with today's Sonnet 5.5 config-volume change), and technical-debt register (`docs/technical-debt.md`). Zero's log reminder now prompts for a runbook entry after `docker compose up/restart/stop/down`, `scripts/docker/backup.ts` and `docker cp`/config-editing `docker exec`, and for a work-log entry after `git push`.
+- **Deny list** (`.claude/settings.json`, local — `.claude/` is gitignored): Zero's core rules plus the commands that would delete the live Docker volumes (`docker compose down -v`, `docker volume rm/prune`, `docker system prune --volumes`, `backup.ts restore --force`).
+
+
 ### Changed (2026-10-03) — Claude CLI 2.1.289, Sonnet 5.5 as the fleet default, Opus 5.5 / Fable 5.1 selectable
 - **Why.** The running image had Claude CLI 2.1.270 (committed pin: 2.1.237). It answered `claude-opus-5-5` with `400 … version 2.1.280 or newer is required`, and its `sonnet` alias still resolved to Sonnet 5, so no setting could put the fleet on 5.5.
 - **CLI bump** (`Dockerfile` `ARG CLAUDE_CLI_VERSION` 2.1.237 → 2.1.289, `docs/deployment-cloud.md`, `README.md`). Verified in the rebuilt container: `claude-sonnet-5-5`, `claude-opus-5-5` and `claude-fable-5-1` all answer, `sonnet` now resolves to `claude-sonnet-5-5`, and the login in `/app/data/claude` survived the rebuild.

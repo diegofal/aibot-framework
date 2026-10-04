@@ -11,27 +11,29 @@ NO buscar en internet la documentacion de OpenClaw - usar el codigo fuente local
 - Extensions: `/home/diego/openclaw/extensions/`
 - Docs: `/home/diego/openclaw/docs/`
 
-## Reglas de trabajo
-- NUNCA hacer git commit o git push a menos que el usuario lo pida explicitamente.
-- Al implementar features, solo escribir codigo. El commit/push es decision del usuario.
-- Antes de refactorizar, agregar features, o corregir bugs en el bot core: SIEMPRE leer la sección "Arquitectura del Bot" más abajo para entender qué módulo modificar y cómo se relacionan entre sí.
-- Cada cambio de código debe incluir o actualizar tests unitarios en `tests/`. Ejecutar `bun test` antes de considerar el trabajo terminado.
-- **Flujo TDD obligatorio** para todo código nuevo o refactor de código existente:
-  1. **Red**: escribir primero el test que describe el comportamiento deseado (o el contrato que se va a mantener durante un refactor). El test debe fallar de forma explícita antes de tocar la implementación.
-  2. **Green**: escribir el mínimo de código de producción para que el test pase. No agregar funcionalidad extra.
-  3. **Refactor**: limpiar el código de producción sin romper los tests. Re-correr `bun test`.
-  4. **Cobertura por función**: toda función/método público nuevo debe tener al menos un test dedicado. Para ramas con comportamiento divergente (errores, edge cases, valores límite), agregar un test por rama.
-  5. **Alineación con el plan**: antes de cada ciclo, confirmar que la función que se está implementando está en el plan acordado. Si surge trabajo fuera del plan, anotarlo como follow-up pero no implementarlo en el mismo ciclo.
-  6. **Puerta de salida**: un cambio no se considera terminado hasta que `bun test` corre limpio para los archivos tocados y los tests pre-existentes no se rompen.
+## Working agreements
+
+**Canónico: [docs/working-agreements.md](docs/working-agreements.md). Leerlo antes de empezar a trabajar.**
+
+Ahí viven el loop (entender, planear, TDD, verificar), el gate local, qué necesita aprobación
+explícita (commit/push incluidos), qué registros mantener al día (CHANGELOG, `docs/architecture-docs/`,
+README), los datos reales y el deploy. **No volver a copiar una regla en este archivo: enlazar.**
+Lo que sigue es lo que es verdad sólo de este repo.
+
+## Comandos
+- `bun test` — suite completa. `bun run lint` (Biome), `bun run typecheck` (tsc). CI corre los tres.
+- `bun run format` reescribe archivos: no es un check.
+- `docker compose up -d --build` — rebuild + restart del contenedor en vivo (reinicia la flota).
+- `bun scripts/docker/backup.ts backup` — backup de los volúmenes antes de tocar datos (`restore … --force` pisa los volúmenes vivos).
+
+## Gotchas
 - **Verificación de cambios en el frontend (`web/`)**: lo que corre en `127.0.0.1:3000` es el contenedor `aibot-framework-aibot-1`, y el `Dockerfile` hace `COPY web ./web` — los assets están horneados en la imagen. Editar `web/style.css` o `web/pages/*.js` en el host NO cambia nada en el contenedor por sí solo, y el fallo es silencioso: el navegador muestra la UI vieja y ningún log lo menciona. Antes de decir que un cambio de UI está listo, verificar que llegó:
   1. `docker-compose.override.yml` (versionado, se mergea solo) monta `./web` sobre `/app/web` en modo read-only, así que un refresh del navegador alcanza. Si el contenedor se levantó con `-f docker-compose.yml` solamente, el montaje no está.
   2. Cambios en `src/` siguen necesitando `docker compose up -d --build`.
   3. Comprobar el asset servido, no el archivo del repo: `curl -s http://127.0.0.1:3000/style.css | grep <lo-que-cambiaste>`.
-- Cualquier cambio relevante debe agregarse al archivo `CHANGELOG.md` en la raíz del proyecto.
-- Cualquier cambio que afecte la arquitectura, módulos, tools, skills, rutas web, config schemas, o memoria debe reflejarse en la documentación en `docs/architecture-docs/`. Actualizar la página HTML correspondiente para mantener la documentación sincronizada con el código.
-- Cambios que afecten la lista de skills, tools, sistemas core, páginas del dashboard, estructura del proyecto, o stack tecnológico deben reflejarse también en `README.md`.
-- Todo código generado por AI (incluyendo este asistente) DEBE producir tests que pasen. Ejecutar `bun test` y verificar que no se introducen nuevos fallos antes de considerar el trabajo terminado. Los tests pre-existentes que fallan por dependencias externas (Playwright, API keys) no cuentan como fallos nuevos.
-- Antes de proponer nuevos features o integraciones, consultar `docs/roadmap.md` para entender el estado actual de los proyectos planificados y evitar trabajo duplicado.
+- **El estado vivo está en los volúmenes Docker**, no en `data/` ni `config/bots.json` del host (están viejos).
+- **`Dockerfile` y `docker-entrypoint.sh` deben quedar con finales de línea LF**; editarlos con herramientas de Windows rompe el contenedor en silencio.
+- **El login del dashboard bloquea la automatización del navegador**: verificar con tests, `curl` o smoke-imports.
 
 ## Proyecto
 - Runtime: Bun
