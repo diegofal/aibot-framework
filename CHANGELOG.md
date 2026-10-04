@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed (2026-10-04) — Two timing-dependent tests
+- `tests/web/log-tail.test.ts` "detects rotation…": the rotated file's mtime came from the write, i.e. the kernel clock, which on Linux is coarse and can lag `Date.now()`. Whether it counted as newer than the bare file depended on timing (always wrong on Linux, sometimes wrong under load on Windows). Every mtime in the test is now explicit. `src/web/log-tail.ts` is unchanged.
+- `tests/hygiene/registry.test.ts` "keeps only the last 500 runs": each `HygieneHistory.append` re-reads the whole file, so 505 appends could time out under full-suite load. The trimming is now tested with a cap of 5. A second test pre-seeds 500 runs and appends one, which still proves the default cap is `HYGIENE_HISTORY_LIMIT`.
+
 ### Fixed (2026-10-04) — CI runs again, and lint means the same thing on Windows and Linux
 - **Why.** `.github/workflows/ci.yml` pinned `oven-sh/setup-bun@4bc049a6…`, a SHA that never existed (v2.0.1 is `4bc047ad…`), so every CI run since 2026-08 died in setup. Locally, `bun run lint` reported ~770 errors, almost all because `core.autocrlf=true` checks files out CRLF and Biome flags the line endings.
 - **CI:** `setup-bun` repinned to v2.2.0 (`0c5077e5…`) in all three jobs.

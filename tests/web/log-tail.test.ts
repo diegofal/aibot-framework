@@ -115,9 +115,13 @@ describe('pollLogTail', () => {
   });
 
   it('detects rotation to a new active file and resumes from its end, not its start', () => {
+    // Every mtime is set explicitly. A plain write stamps the file with the
+    // kernel's clock, which on Linux is coarse and can lag Date.now(), so which
+    // file was "newest" used to be decided by timing: always wrong on Linux,
+    // sometimes wrong under load elsewhere.
     const now = Date.now();
     writeFileSync(base, 'old content\n');
-    touch(base, 0, now);
+    touch(base, 60_000, now);
     const state: LogTailState = { path: null, offset: 0 };
     pollLogTail(base, state);
     expect(state.path).toBe(base);
@@ -134,6 +138,7 @@ describe('pollLogTail', () => {
     expect(state.path).toBe(rotated);
 
     writeFileSync(rotated, 'rotated-old-content\nnew line after rotation\n');
+    touch(rotated, 0, now + 2000);
     expect(pollLogTail(base, state)).toBe('new line after rotation\n');
   });
 

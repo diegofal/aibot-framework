@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HygieneHistory, HygieneRegistry } from '../../src/hygiene/registry';
-import type { HygieneRun } from '../../src/hygiene/types';
+import { HYGIENE_HISTORY_LIMIT, type HygieneRun } from '../../src/hygiene/types';
 import { createTempDir, removeTempDir } from '../helpers/temp-dir';
 import { NOW, makeBot, makeConfig, noopLogger, writeFile } from './helpers';
 
@@ -222,15 +222,32 @@ describe('HygieneHistory', () => {
     expect(history.list({ limit: 2 }).map((r) => r.runId)).toEqual(['r4', 'r3']);
   });
 
-  test('keeps only the last 500 runs on disk', () => {
-    const history = new HygieneHistory(join(root, 'data'), noopLogger);
-    for (let i = 0; i < 505; i++) history.append(fakeRun(i));
+  // Every append re-reads and re-parses the whole file, so 505 real appends
+  // took seconds and timed out under full-suite load. The trimming contract is
+  // exercised with a small cap; the default cap with a pre-seeded full file.
+  test('keeps only the last `limit` runs on disk', () => {
+    const history = new HygieneHistory(join(root, 'data'), noopLogger, 5);
+    for (let i = 0; i < 10; i++) history.append(fakeRun(i));
     const lines = readFileSync(join(root, 'data', 'hygiene', 'runs.jsonl'), 'utf-8')
       .trim()
       .split('\n');
-    expect(lines).toHaveLength(500);
-    expect(history.list({ limit: 1 })[0].runId).toBe('r504');
+    expect(lines).toHaveLength(5);
+    expect(history.list({ limit: 1 })[0].runId).toBe('r9');
     expect(history.list({ limit: 1000 }).at(-1)!.runId).toBe('r5');
+  });
+
+  test(`defaults the cap to HYGIENE_HISTORY_LIMIT (${HYGIENE_HISTORY_LIMIT})`, () => {
+    const file = join(root, 'data', 'hygiene', 'runs.jsonl');
+    const seeded = Array.from({ length: HYGIENE_HISTORY_LIMIT }, (_, i) =>
+      JSON.stringify(fakeRun(i))
+    );
+    writeFile(file, `${seeded.join('\n')}\n`);
+    const history = new HygieneHistory(join(root, 'data'), noopLogger);
+    history.append(fakeRun(HYGIENE_HISTORY_LIMIT));
+    const lines = readFileSync(file, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(HYGIENE_HISTORY_LIMIT);
+    expect(history.list({ limit: 1 })[0].runId).toBe(`r${HYGIENE_HISTORY_LIMIT}`);
+    expect(history.list({ limit: 1000 }).at(-1)!.runId).toBe('r1');
   });
 
   test('survives a corrupt line and a missing file', () => {
