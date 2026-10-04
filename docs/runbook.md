@@ -39,6 +39,24 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — Read-only curiosity live check inside the container
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` (volumes read, not written) |
+| **Who** | Diego (agent session) |
+| **Why** | Step 1 of the curiosity follow-up: per-bot knowledge map, cycle log, direction and dispatches |
+
+```bash
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/cur-summary.js aibot-framework-aibot-1:/tmp/cur-summary.js
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 bun /tmp/cur-summary.js
+# plus: docker exec … bun -e '…' reading DISPATCHES.jsonl bodies, and grep over /app/config/{config,bots}.json
+```
+
+**Outcome.** Summary printed; nothing in `/app/data` or `/app/config` changed. `/tmp/cur-summary.js` is left in the container's writable layer (not a volume); it goes away with the next rebuild.
+
+**Reversible?** Yes: nothing to revert (`docker exec aibot-framework-aibot-1 rm /tmp/cur-summary.js` removes the script).
+
 ### 2026-10-03 — Fleet model switched to Sonnet 5.5 in the live config volume
 
 | | |

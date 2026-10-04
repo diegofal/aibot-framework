@@ -1159,6 +1159,12 @@
             </tr>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/stats/curiosity?window=</code></td>
+              <td><code>CuriosityStatsResponse</code>: per bot <code>knowledge</code> (topics, findings, frontier by status, top topics), <code>cycles</code> in the window (explore / exploit, surprised, distinct topics, dominant topic + share, <code>historyStart</code>), <code>diversity[]</code> (per cycle: distinct topics and dominant share over the trailing <code>topicWindow</code>), <code>daily[]</code> mix, navigator <code>direction</code>, <code>cadenceHours</code> and <code>dispatches</code> landing (<code>up / more / down / ignored / pending</code>, held, dropped, median editor score, <code>landingRate</code> = (up + more) / resolved; <code>ignored</code> = no signal 48&nbsp;h after a Telegram send, never for inbox-only). Plus <code>fleet</code> totals, <code>cycleLogCap</code> (30) and <code>ignoredAfterHours</code>. UI: Insights &rarr; Curiosity (<code>#/insights/stats/curiosity</code>).</td>
+              <td><code>stats.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/stats/infra</code></td>
               <td><code>InfraResponse</code>: <code>backends[]</code> (last 429 / 401, last error, failed calls in 24&nbsp;h for <code>ollama</code> and <code>claude-cli</code>), <code>securityAudit[]</code>, <code>cron[]</code> (schedule, last status/error, consecutive errors), <code>telegram[]</code> (per-bot channel state + last error), <code>logNoise[]</code>, <code>boots[]</code>, <code>logBytes</code>.</td>
               <td><code>stats.ts</code></td>
@@ -1707,7 +1713,7 @@ compaction                            // Context compaction
       </p>
       <p>
         <span class="badge badge-yellow">2026-10-03</span> <strong>UX overhaul (phase 4).</strong> Automations tabs are
-        Cron, Agent loop, Skills, Tools (admin); Insights tabs are Stats, Behaviour, Infra, Hygiene, Karma, Activity.
+        Cron, Agent loop, Skills, Tools (admin); Insights tabs are Stats, Behaviour, Curiosity, Infra, Hygiene, Karma, Activity.
         Feedback lives only under Needs You (<code>#/insights/feedback&hellip;</code> and <code>#/feedback&hellip;</code> redirect
         to <code>#/needs/feedback&hellip;</code>); Agent loop moved from Insights (<code>#/insights/loop</code> and
         <code>#/dashboard</code> redirect to <code>#/automations/loop</code>); the Tool Runner tab is gone
@@ -1988,7 +1994,7 @@ compaction                            // Context compaction
         <div class="card">
           <h3>Stats &amp; Behaviour</h3>
           <p>Sidebar entry right after Agents (<code>web/pages/stats.js</code>, helpers in
-             <code>web/pages/stats-helpers.js</code>). Five views share one shell with tabs and a
+             <code>web/pages/stats-helpers.js</code>). Six views share one shell with tabs and a
              24h / 7d / 30d window selector persisted in <code>localStorage</code>:
              <code>#/stats</code> (Fleet &mdash; one row per bot with posture, channel state, backend,
              LLM/tool/output/engagement/goals/karma columns and sparklines, sortable),
@@ -1999,6 +2005,10 @@ compaction                            // Context compaction
              daily LLM/tool series, asks, top errors, plus a hygiene panel that previews/applies
              routines for that bot), <code>#/stats/behaviour</code> (production without feedback,
              ask economics, collaboration graph, mesh output, trait variance / drift vector),
+             <code>#/insights/stats/curiosity</code> (fleet KPIs, per-bot table with a stacked dispatch landing
+             bar, and a card per active bot with the explore/exploit cycle strip, diversity sparklines,
+             navigator direction and top topics; helpers <code>landingSegments</code>, <code>diversitySeries</code>,
+             <code>cycleStrip</code>),
              <code>#/stats/infra</code> (backends, security audit, cron, Telegram states, log noise,
              boots) and <code>#/stats/hygiene</code> (<code>web/pages/hygiene.js</code>: routine
              picker, bot picker, per-routine option checkboxes, preview/apply with a two-button

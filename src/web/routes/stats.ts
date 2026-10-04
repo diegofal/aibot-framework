@@ -5,6 +5,7 @@
  *   GET /api/stats/                          alias of /fleet
  *   GET /api/stats/bots/:botId?window=       per-bot detail
  *   GET /api/stats/behaviour?window=         cross-bot behavioural views
+ *   GET /api/stats/curiosity?window=         topic diversity, explore/exploit, dispatch landing
  *   GET /api/stats/infra                     backends, cron, telegram, logs
  *
  * Read-only, tenant-scoped (same rules as /api/karma), never throws on
@@ -15,6 +16,7 @@ import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import { buildBehaviour } from '../../stats/behaviour-aggregator';
 import { type StatsBotManager, createStatsContext } from '../../stats/context';
+import { buildCuriosityStats } from '../../stats/curiosity-aggregator';
 import { buildBotDetail, buildFleet } from '../../stats/fleet-aggregator';
 import { buildInfra } from '../../stats/infra-aggregator';
 import type { KarmaScoreSource } from '../../stats/readers/karma';
@@ -81,6 +83,20 @@ export function statsRoutes(deps: StatsRouteDeps) {
       return c.json(ctx.cache.get(key, ctx.cacheTtlMs, () => buildBehaviour(ctx, bots, window)));
     } catch (err) {
       deps.logger.warn({ err }, 'Stats: behaviour aggregation failed');
+      return c.json({ error: 'Stats aggregation failed' }, 500);
+    }
+  });
+
+  app.get('/curiosity', (c) => {
+    const window = parseWindow(c.req.query('window'));
+    const bots = scopeBots(deps.config.bots, getTenantId(c));
+    try {
+      const key = `curiosity:${window}:${scopeKey(bots.map((b) => b.id))}`;
+      return c.json(
+        ctx.cache.get(key, ctx.cacheTtlMs, () => buildCuriosityStats(ctx, bots, window))
+      );
+    } catch (err) {
+      deps.logger.warn({ err }, 'Stats: curiosity aggregation failed');
       return c.json({ error: 'Stats aggregation failed' }, 500);
     }
   });

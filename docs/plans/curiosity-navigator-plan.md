@@ -159,7 +159,7 @@ As built:
 - Agent edit form: a **Curiosity** section (on/off, preset, per-dial overrides, exploration share, dispatch on/off and max chars); `PATCH /api/agents/:id` and `/bulk` validate it with `validateCuriosityPatch`.
 - API: `GET /api/curiosity/:botId`, `GET /api/curiosity/dispatches`, `POST /api/curiosity/:botId/{dispatches/:id,frontier/:id,direction}/signal`.
 - Runner concurrency: begin and finish run under a per-bot lock (`CuriosityService.runExclusive`) and re-read state after every LLM await; begin is cancellable — on timeout the agent loop sets a flag and nothing is written afterwards.
-- Observability: curiosity LLM calls go to the LLM query log with callers `curiosity:navigator`, `curiosity:extractor`, `curiosity:editor`. Tenant usage metering does not count them yet (follow-up).
+- Observability: curiosity LLM calls go to the LLM query log with callers `curiosity:navigator`, `curiosity:extractor`, `curiosity:editor`. Each call also counts as one `llm_request` in tenant usage metering for a tenant bot in multi-tenant mode (`createCuriosityCallRecorder` / `createTenantCallMeter` in `loop-wiring.ts`, 2026-10-04).
 - Not built: Stats views for per-bot topic diversity over time, explore/exploit mix and dispatch landing rate (follow-up).
 
 ---
@@ -189,5 +189,5 @@ As built:
 | C4 | done | `navigator.ts` (every `navigatorEvery`, default 1 d) with direction/bets in `NAVIGATOR.json`, frontier add/drop, goal ops; explore budget in `cycle.ts`; `runner.ts` wired into `agent-loop.ts` |
 | C5 | done | `dispatch.ts`: format, editor gate + hype penalty, `maxChars`, cadence, proposals and digest; `loop-wiring.ts` delivery + fleet daily cap |
 | C6 | done | `taste.ts` → `TASTE.json` from 👍/👎/more and ignored dispatches; `CuriosityService.signalDispatch` |
-| C7 | done | `/api/curiosity` routes, Agent Home Mind section, Work → Dispatches tab, edit-form Curiosity section. Stats diversity views not built (follow-up) |
+| C7 | done | `/api/curiosity` routes, Agent Home Mind section, Work → Dispatches tab, edit-form Curiosity section. Stats views (2026-10-04): `GET /api/stats/curiosity` (`src/stats/curiosity-aggregator.ts`) and Insights → Curiosity — topic diversity over time, explore/exploit mix, dispatch landing per bot. History bounded by the 30-entry cycle log |
 | C8 | done | CHANGELOG, CLAUDE.md "Módulos Curiosity", `docs/architecture-docs/` (agent-loop, configuration, web-dashboard, bot-core), README, roadmap (Proyecto 11), this plan |
