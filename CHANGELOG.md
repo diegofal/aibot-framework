@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed (2026-10-04) — Needs You hid outputs logged with an absolute path, and Clear could not archive them
+- **Why.** Some bots log an output's path as absolute (`/app/productions/milei-rocca/2026-10-03-….md`). The orphan filter from the previous fix joined that onto the bot dir, found nothing, and hid two real unreviewed outputs. Clearing such an output had always failed: `assertWithinDir` refuses every absolute path, so `archiveFile` returned "file not found or path invalid".
+- **Fix.** `normalizeEntryPath(dir, path)` in `src/productions/paths.ts` turns an absolute path inside the bot's productions dir into the dir-relative form (unchanged otherwise). Needs You's `productionFileExists` and the `archiveProduction` action both use it, and `pendingProductionFiles(entries, normalize)` compares paths in one normalized form (new source `normalizeProductionPath`), so the dir-relative `archivedFrom` that archiving writes resolves the absolute-path entry it came from, and an archived output stops counting as pending. Exact match only: `a.md` never resolves `notes/a.md`.
+
 ### Added (2026-10-04) — One selection toolbar on every multi-select list; bulk reject and delete
 - **Why.** Needs You could only select everything with the undocumented `*` key; Skills, Tools and Productions had no select-all; a tools-only selection in Needs You offered only Approve; and on Work a row checkbox did nothing.
 - **Work checkbox bug.** `entryKey` joined bot and id with a NUL character. An HTML parser turns NUL in an attribute into U+FFFD, so the clicked row's `data-key` never matched its entry and the next redraw pruned it. Keys are now `encodeURIComponent(botId)/encodeURIComponent(id)`.

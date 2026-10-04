@@ -9,11 +9,11 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { join, relative } from 'node:path';
 import { appendEntry, readEntries } from '../../productions/changelog';
 import { analyzeCleanup } from '../../productions/cleanup';
 import { archiveFile } from '../../productions/files';
-import { INDEX_EXCLUDES, assertWithinDir } from '../../productions/paths';
+import { INDEX_EXCLUDES, assertWithinDir, normalizeEntryPath } from '../../productions/paths';
 import type { ProductionEntry } from '../../productions/types';
 import { assertWithinRoots, backupFile } from '../fs-safe';
 import { daysBetween } from '../text-utils';
@@ -27,18 +27,9 @@ const CHANGELOG = 'changelog.jsonl';
 /** Bookkeeping actions whose entry is *about* a path no longer being there. */
 const HISTORY_ACTIONS = new Set(['archive', 'delete']);
 
-/**
- * Some bots log the absolute path of a file inside their own productions dir
- * (`/app/productions/<bot>/x.md`). That is the same file as `x.md`: fold it to
- * the relative form so it is neither "outside the dir" nor a missing file.
- * Anything else is returned untouched.
- */
-export function normalizeEntryPath(dir: string, path: string): string {
-  if (!isAbsolute(path)) return path;
-  const rel = relative(resolve(dir), resolve(path));
-  if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return path;
-  return rel.split(sep).join('/');
-}
+// Absolute paths inside the bot's own dir fold to the relative form; shared
+// with Needs You, so it lives in productions/paths. Re-exported for callers.
+export { normalizeEntryPath };
 
 /** Latest non-archive entry per (normalized) path (entries are append-only). */
 function latestByPath(dir: string, entries: ProductionEntry[]): Map<string, ProductionEntry> {
