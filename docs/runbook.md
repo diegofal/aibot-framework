@@ -39,6 +39,22 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — Rebuilt the container for the curiosity Stats views (PR #2)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (agent session, approved in chat) |
+| **Why** | Deploy PR #2 (`50d6262`): `GET /api/stats/curiosity`, Insights → Curiosity tab, curiosity LLM calls in tenant metering |
+
+```bash
+docker compose up -d --build   # from D:/aibot-framework at 7b79694 (PR #2 merged into local main, which also carries 63b441b + d0d77f7, not yet pushed)
+```
+
+**Outcome.** Container recreated and healthy. `/api/stats/curiosity` answers 401 without auth (route mounted, same as `/behaviour`); served `pages/stats.js`, `nav-routes.js` and `style.css` carry the new code; `/app/src` has `curiosity-aggregator.ts` and `createTenantCallMeter`. The only boot errors are the two known revoked Telegram tokens (401). Also built in: `63b441b` (CI repin, LF everywhere, Linux-only test fixes).
+
+**Reversible?** Yes: check out the previous commit in the main folder and `docker compose up -d --build` again.
+
 ### 2026-10-04 — Rebuilt the container for the dashboard UX overhaul
 
 | | |
