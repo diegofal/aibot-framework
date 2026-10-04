@@ -7,9 +7,10 @@
   Mantener los marcadores zero:rule alrededor de cada regla: son invisibles al renderizar y le
   permiten a /zero saber qué reglas ya tiene este documento. El texto entre ellos se edita libre.
 
-  Deliberadamente liviano: un solo desarrollador, commits directos a main, sin tracker ni PRs.
-  Las reglas de equipo que Zero trae (branch/worktree por ticket, labels de entorno, gate de
-  producción por ticket, etc.) están declinadas con su motivo en .claude/zero.config.json.
+  Deliberadamente liviano: un solo desarrollador, sin tracker ni PRs; cada cambio en su propio
+  worktree, mergeado a main. Las reglas de equipo que Zero trae (branch por ticket, labels de
+  entorno, gate de producción por ticket, etc.) están declinadas con su motivo en
+  .claude/zero.config.json.
 -->
 
 Cómo se trabaja en este repo. Aplica igual a una persona que a un agente. Si `CLAUDE.md`
@@ -95,7 +96,34 @@ correr localmente, decir cuál y que queda sin probar.
 
 ---
 
-## 3. Verificar antes de afirmar, preguntar antes de actuar
+## 3. Un cambio, un worktree
+
+<!-- zero:rule branch.one-worktree since=0.4.0 section=3 -->
+**Cada cambio se hace en su propio worktree, nunca con `git checkout -b` / `git switch` en
+`D:\aibot-framework`.** Varias sesiones (personas o agentes) comparten esa carpeta: si una cambia de
+branch, el árbol de trabajo de las demás pasa a ser el de otro cambio, en silencio. Pasó el
+2026-10-03: un commit destinado a `main` cayó en `feat/ux-overhaul` porque otra sesión había
+cambiado el branch de la carpeta.
+
+```bash
+git worktree add ../aibot-<slug> -b <tipo>/<slug> main   # tipo: feat, fix, docs, chore
+cd ../aibot-<slug> && bun install
+# ... trabajo, gate local, commit ...
+git fetch . <tipo>/<slug>:main        # fast-forward de main sin tocar ninguna carpeta
+git worktree remove ../aibot-<slug> && git branch -d <tipo>/<slug>
+```
+
+Si `main` avanzó y el fast-forward falla, rebasear el branch sobre `main` dentro del worktree y
+repetir. Antes de borrar un worktree, confirmar que no queda nada: sin cambios sin commitear ni
+commits sin mergear.
+
+La carpeta principal se queda en el branch en que está; no se cambia de branch ahí. `git switch`,
+`git checkout -b/-B` están en el deny list.
+<!-- /zero:rule -->
+
+---
+
+## 4. Verificar antes de afirmar, preguntar antes de actuar
 
 <!-- zero:rule assert.verified since=0.1.0 section=4 -->
 **Reportar sólo lo que se comprobó.** "Los tests pasan" significa que se corrieron y se vieron
@@ -119,7 +147,7 @@ La línea para preguntar es la **reversibilidad**, no la dificultad:
 
 ---
 
-## 4. Mantener el registro al día, en el mismo cambio
+## 5. Mantener el registro al día, en el mismo cambio
 
 <!-- zero:rule records.same-change since=0.1.0 section=5 -->
 La documentación es parte del trabajo; **un doc desactualizado es un bug**.
@@ -146,7 +174,7 @@ Una deuda sin **trigger** no es deuda registrada, es un deseo. Nombrar la condic
 
 ---
 
-## 5. Datos reales
+## 6. Datos reales
 
 <!-- zero:rule data.production since=0.1.0 section=6 -->
 Los volúmenes Docker `aibot-framework_aibot_config`, `_aibot_data` y `_aibot_productions` son
@@ -162,7 +190,7 @@ para depurar, pero:
 
 ---
 
-## 6. Deploy
+## 7. Deploy
 
 <!-- zero:rule deploy.sequence since=0.1.0 section=7 -->
 Un solo entorno: el contenedor `aibot-framework-aibot-1` en esta máquina (`127.0.0.1:3000`).
@@ -176,7 +204,7 @@ Un solo entorno: el contenedor `aibot-framework-aibot-1` en esta máquina (`127.
 
 ---
 
-## 7. Toda afirmación de proceso se apoya en algo commiteado acá
+## 8. Toda afirmación de proceso se apoya en algo commiteado acá
 
 <!-- zero:rule provenance since=0.1.0 section=8 -->
 Una regla o práctica entra en estos documentos **sólo si este proyecto realmente la hace**. Si no

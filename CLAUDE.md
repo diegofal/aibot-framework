@@ -33,6 +33,7 @@ Lo que sigue es lo que es verdad sólo de este repo.
   3. Comprobar el asset servido, no el archivo del repo: `curl -s http://127.0.0.1:3000/style.css | grep <lo-que-cambiaste>`.
 - **El estado vivo está en los volúmenes Docker**, no en `data/` ni `config/bots.json` del host (están viejos).
 - **`Dockerfile` y `docker-entrypoint.sh` deben quedar con finales de línea LF**; editarlos con herramientas de Windows rompe el contenedor en silencio.
+- **Worktrees** (ver working agreements §3): cada worktree nuevo necesita su propio `bun install`. El contenedor sólo ve `D:aibot-framework` (build context y montaje de `web/`), así que un cambio hecho en un worktree no aparece en `127.0.0.1:3000` hasta mergearlo y tenerlo en la carpeta principal.
 - **El login del dashboard bloquea la automatización del navegador**: verificar con tests, `curl` o smoke-imports.
 
 ## Proyecto

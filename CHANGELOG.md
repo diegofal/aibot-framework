@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Process (2026-10-03) — One change, one worktree
+- **Why.** Several sessions share `D:aibot-framework`. One switched the folder to `feat/ux-overhaul` while another was committing, and a commit meant for `main` landed on that branch (it was cherry-picked to `main` as `295840e`).
+- **Rule** `branch.one-worktree` re-adopted in `docs/working-agreements.md` §3: every change in `git worktree add ../aibot-<slug> -b <type>/<slug> main`, merged with `git fetch . <branch>:main`, worktree removed after. `CLAUDE.md` gotcha: each worktree needs `bun install`, and the container only sees the main folder.
+- **Deny list** (local `.claude/settings.json`): `git switch`, `git checkout -b`, `git checkout -B`, so the shared folder can no longer change branch under another session.
+
 ### Process (2026-10-03) — Working agreements and project records (Zero, stages rules + memory)
 - **Why.** The rules lived only in `CLAUDE.md`, mixed with architecture notes, and hand-run operations against the live container left no trace outside chat history.
 - **Rules** moved verbatim in substance from `CLAUDE.md` into `docs/working-agreements.md`; `CLAUDE.md` now links there and keeps only repo-specific truth (commands, gotchas, the architecture tables). Kept deliberately light: team-only rules (branch/worktree per ticket, tracker labels, per-ticket production gate) are declined with reasons in `.claude/zero.config.json`.
