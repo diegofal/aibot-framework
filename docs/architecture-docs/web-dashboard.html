@@ -1200,8 +1200,8 @@
           <tbody>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
-              <td><code>/api/curiosity/dispatches?limit=50</code></td>
-              <td>Fleet dispatch inbox: every visible bot's dispatches merged newest first, each with <code>botName</code> and <code>avatarUrl</code>. <code>limit</code> defaults to 50, capped at 200 (<code>parseLimit</code>). A bot whose store fails to read is logged and skipped</td>
+              <td><code>/api/curiosity/dispatches?limit=50&amp;offset=0&amp;before=&lt;iso&gt;</code></td>
+              <td>Fleet dispatch inbox: every visible bot's dispatches merged newest first, each with <code>botName</code> and <code>avatarUrl</code>. <code>limit</code> defaults to 50, capped at 200 (<code>parseLimit</code>); <code>offset</code> skips after the merge (garbage reads as 0); <code>before</code> keeps only dispatches strictly older than that ISO time (unparsable: 400). Returns <code>{ dispatches, hasMore, nextBefore }</code>: pass <code>nextBefore</code> back as <code>before</code> to read past the cap (dispatches sharing that exact timestamp are skipped). A bot whose store fails to read is logged and skipped</td>
               <td><code>curiosity.ts</code></td>
             </tr>
             <tr>
@@ -2097,7 +2097,7 @@ compaction                            // Context compaction
           <p><span class="badge badge-yellow">2026-10-03</span> The fleet inbox of insights, second tab of
              the Work area (<code>#/work/dispatches</code>, legacy <code>#/dispatches</code> redirects; no
              sidebar entry of its own). <code>web/pages/dispatches.js</code> loads
-             <code>GET /api/curiosity/dispatches?limit=100</code>; markup and filters are pure helpers in
+             <code>GET /api/curiosity/dispatches?limit=100</code> and "Load 100 older" appends the next page with <code>&amp;before=&lt;nextBefore&gt;</code>; markup and filters are pure helpers in
              <code>curiosity-helpers.js</code>. Each card leads with the hook, then why it matters, the
              evidence (collapsed), what to do and the optional question, with the agent's face and name,
              kind (<code>insight</code> / <code>proposal</code> / <code>digest</code>), status when not sent

@@ -341,12 +341,17 @@ export function workBulkBar({
 }
 
 export const DISPATCH_PAGE = 100;
-/** `GET /api/curiosity/dispatches` caps `limit` at 200 and has no offset. */
-export const DISPATCH_MAX = 200;
 
-/** The limit for "Load more", or null when there is nothing more to ask for. */
-export function nextDispatchLimit(current, got) {
-  if (got < current) return null;
-  const next = Math.min(DISPATCH_MAX, current + DISPATCH_PAGE);
-  return next > current ? next : null;
+/**
+ * The `before` cursor for "Load more" from a `GET /api/curiosity/dispatches`
+ * answer, or null when there is nothing older to ask for.
+ */
+export function nextDispatchCursor(res) {
+  return res?.hasMore && res.nextBefore ? res.nextBefore : null;
+}
+
+/** Shown dispatches followed by an older page, minus any already shown (same bot and id). */
+export function mergeDispatchPage(shown, page) {
+  const seen = new Set(shown.map((d) => `${d.botId}\u0000${d.id}`));
+  return [...shown, ...page.filter((d) => !seen.has(`${d.botId}\u0000${d.id}`))];
 }

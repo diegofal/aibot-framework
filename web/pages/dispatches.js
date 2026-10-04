@@ -5,11 +5,11 @@
  * same 👍 / 👎 / "more like this" signals as Agent Home. Signals teach each
  * agent's taste model and earn (or cost) it dispatch frequency.
  *
- * Data: `GET /api/curiosity/dispatches?limit=…`. Markup: curiosity-helpers.js.
+ * Data: `GET /api/curiosity/dispatches?limit=…&before=…`. Markup: curiosity-helpers.js.
  * Keys: j/k move the focus, + (or =) / - give the focused dispatch 👍 / 👎.
- * "Load more" raises the limit up to the server cap (200; the API has no offset).
+ * "Load more" asks for the next older page with the `nextBefore` cursor and appends it.
  */
-import { emptyState, skeleton, tabs } from '../ui/index.js';
+import { emptyState, showToast, skeleton, tabs } from '../ui/index.js';
 import { authedAvatarSrc } from './agent-face.js';
 import {
   DISPATCH_FILTERS,
@@ -23,8 +23,9 @@ import {
   DISPATCH_KEYS,
   DISPATCH_PAGE,
   keyAction,
+  mergeDispatchPage,
   moveIndex,
-  nextDispatchLimit,
+  nextDispatchCursor,
 } from './work-helpers.js';
 
 /** Keydown listener lives on document: abort it when the page is left. */
@@ -58,8 +59,7 @@ export async function renderDispatches(el) {
   const { signal } = listeners;
   let filter = storedFilter();
   let items = [];
-  let limit = DISPATCH_PAGE;
-  let moreLimit = null;
+  let cursor = null;
   let focus = -1;
 
   const cards = () => [...el.querySelectorAll('#dispatch-feed .curio-dispatch')];
@@ -84,18 +84,26 @@ export async function renderDispatches(el) {
     });
     const moreBtn = el.querySelector('#dispatch-more');
     if (moreBtn) {
-      moreBtn.hidden = !moreLimit;
-      moreBtn.textContent = `Load more (up to ${moreLimit ?? limit})`;
+      moreBtn.hidden = !cursor;
+      moreBtn.textContent = `Load ${DISPATCH_PAGE} older`;
     }
     focus = Math.min(focus, cards().length - 1);
     paintFocus();
   };
 
-  const load = async () => {
-    const res = await api(`/api/curiosity/dispatches?limit=${limit}`).catch((err) => ({
+  /** `before` null = first page (Refresh); otherwise append the older page. */
+  const load = async (before = null) => {
+    const qs = `limit=${DISPATCH_PAGE}${before ? `&before=${encodeURIComponent(before)}` : ''}`;
+    const res = await api(`/api/curiosity/dispatches?${qs}`).catch((err) => ({
       error: err?.message,
     }));
     if (!el.isConnected) return;
+    if (before && (!res || res.error)) {
+      showToast(`Could not load older dispatches: ${res?.error || 'the server did not answer.'}`, {
+        tone: 'danger',
+      });
+      return;
+    }
     if (!res || res.error) {
       el.querySelector('#dispatch-feed').innerHTML = emptyState({
         icon: '∅',
@@ -104,8 +112,9 @@ export async function renderDispatches(el) {
       });
       return;
     }
-    items = Array.isArray(res.dispatches) ? res.dispatches : [];
-    moreLimit = nextDispatchLimit(limit, items.length);
+    const page = Array.isArray(res.dispatches) ? res.dispatches : [];
+    items = before ? mergeDispatchPage(items, page) : page;
+    cursor = nextDispatchCursor(res);
     draw();
   };
 
@@ -135,11 +144,9 @@ export async function renderDispatches(el) {
     }
     draw();
   });
-  el.querySelector('#dispatch-refresh').addEventListener('click', load);
+  el.querySelector('#dispatch-refresh').addEventListener('click', () => load());
   el.querySelector('#dispatch-more').addEventListener('click', () => {
-    if (!moreLimit) return;
-    limit = moreLimit;
-    load();
+    if (cursor) load(cursor);
   });
   el.querySelector('#dispatch-feed').addEventListener('click', (e) => {
     const card = e.target.closest('.curio-dispatch');

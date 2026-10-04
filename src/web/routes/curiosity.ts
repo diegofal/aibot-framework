@@ -1,7 +1,14 @@
 /**
  * Curiosity DNA API (docs/plans/curiosity-navigator-plan.md, step C7).
  *
- *   GET  /api/curiosity/dispatches?limit=50          fleet inbox, newest first
+ *   GET  /api/curiosity/dispatches?limit=50&offset=0&before=<iso>
+ *                                                    fleet inbox, newest first →
+ *                                                    { dispatches, hasMore, nextBefore }.
+ *                                                    `before` keeps only strictly older
+ *                                                    dispatches; pass the last page's
+ *                                                    `nextBefore` to read past the limit
+ *                                                    cap (dispatches sharing that exact
+ *                                                    timestamp are skipped)
  *   GET  /api/curiosity/:botId                       CuriositySnapshot (+ botName)
  *   POST /api/curiosity/:botId/dispatches/:id/signal { signal: up|down|more }
  *   POST /api/curiosity/:botId/frontier/:id/signal   { signal: up|down }
@@ -50,6 +57,12 @@ export function parseLimit(raw: string | undefined): number {
   return Math.min(n, MAX_DISPATCH_LIMIT);
 }
 
+/** A garbage or negative offset reads as 0, like a garbage limit reads as the default. */
+export function parseOffset(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 async function readSignal<T extends string>(c: Context, allowed: readonly T[]): Promise<T | null> {
   try {
     const body = (await c.req.json()) as { signal?: unknown };
@@ -81,26 +94,37 @@ export function curiosityRoutes(deps: CuriosityRouteDeps) {
 
   app.get('/dispatches', (c) => {
     const limit = parseLimit(c.req.query('limit'));
+    const offset = parseOffset(c.req.query('offset'));
+    const beforeRaw = c.req.query('before');
+    const beforeMs = beforeRaw === undefined ? null : Date.parse(beforeRaw);
+    if (beforeMs !== null && Number.isNaN(beforeMs)) {
+      return c.json({ error: '`before` must be an ISO timestamp' }, 400);
+    }
     const bots = scopeBots(deps.config.bots, getTenantId(c));
-    const all: Array<Dispatch & { botName: string; avatarUrl: string | null }> = [];
+    const all: Array<Dispatch & { botName: string }> = [];
     for (const bot of bots) {
       try {
-        const list = svc().storeFor(bot.id)?.listDispatches(limit) ?? [];
-        const face = list.length > 0 ? avatarFor(bot.id) : null;
-        for (const d of list) {
-          all.push({
-            ...d,
-            botId: d.botId || bot.id,
-            botName: bot.name ?? bot.id,
-            avatarUrl: face,
-          });
+        // Unbounded: the store reads the whole JSONL either way, and a bounded
+        // read would hide anything past the first `limit` behind the cursor.
+        for (const d of svc().storeFor(bot.id)?.listDispatches() ?? []) {
+          if (beforeMs !== null && !(Date.parse(d.createdAt) < beforeMs)) continue;
+          all.push({ ...d, botId: d.botId || bot.id, botName: bot.name ?? bot.id });
         }
       } catch (err) {
         deps.logger.warn({ err, botId: bot.id }, 'Curiosity dispatches read failed');
       }
     }
     all.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    return c.json({ dispatches: all.slice(0, limit) });
+    const faces = new Map<string, string | null>();
+    const page = all.slice(offset, offset + limit).map((d) => {
+      if (!faces.has(d.botId)) faces.set(d.botId, avatarFor(d.botId));
+      return { ...d, avatarUrl: faces.get(d.botId) ?? null };
+    });
+    return c.json({
+      dispatches: page,
+      hasMore: all.length > offset + limit,
+      nextBefore: page.at(-1)?.createdAt ?? null,
+    });
   });
 
   app.get('/:botId', (c) => {

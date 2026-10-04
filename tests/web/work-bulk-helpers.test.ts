@@ -9,8 +9,9 @@ import {
   entryKey,
   entryRow,
   keyAction,
+  mergeDispatchPage,
   moveIndex,
-  nextDispatchLimit,
+  nextDispatchCursor,
   pruneSelection,
   runSequential,
   toggleKey,
@@ -235,12 +236,28 @@ describe('entryRow selection + key hints', () => {
   });
 });
 
-describe('nextDispatchLimit', () => {
-  it('grows by a page up to the server cap', () => {
-    expect(nextDispatchLimit(100, 100)).toBe(200);
-    expect(nextDispatchLimit(200, 200)).toBeNull();
+describe('nextDispatchCursor', () => {
+  it('is the server cursor while the server says there is more', () => {
+    expect(nextDispatchCursor({ hasMore: true, nextBefore: '2026-10-01T00:00:00Z' })).toBe(
+      '2026-10-01T00:00:00Z'
+    );
   });
-  it('is null when the last fetch returned less than asked (nothing more)', () => {
-    expect(nextDispatchLimit(100, 40)).toBeNull();
+  it('is null when the server has nothing older, or answered without a cursor', () => {
+    expect(nextDispatchCursor({ hasMore: false, nextBefore: '2026-10-01T00:00:00Z' })).toBeNull();
+    expect(nextDispatchCursor({ hasMore: true, nextBefore: null })).toBeNull();
+    expect(nextDispatchCursor(null)).toBeNull();
+  });
+});
+
+describe('mergeDispatchPage', () => {
+  const d = (botId: string, id: string) => ({ botId, id });
+  it('appends the older page after what is already shown', () => {
+    const merged = mergeDispatchPage([d('b1', 'a')], [d('b2', 'b')]);
+    expect(merged.map((x) => x.id)).toEqual(['a', 'b']);
+  });
+  it('drops items already shown (same bot and id), keeping the shown copy', () => {
+    const shown = { ...d('b1', 'a'), status: 'sent' };
+    const merged = mergeDispatchPage([shown], [d('b1', 'a'), d('b2', 'a')]);
+    expect(merged).toEqual([shown, d('b2', 'a')]);
   });
 });

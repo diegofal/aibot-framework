@@ -160,6 +160,59 @@ describe('GET /api/curiosity/dispatches', () => {
     const body = await (await app.request('/api/curiosity/dispatches')).json();
     expect(body.dispatches.map((d: Dispatch) => d.botId)).toEqual(['b1', 'b2', 'b1']);
   });
+
+  it('reports hasMore and the cursor for the next, older page', async () => {
+    const { app } = makeApp();
+    const body = await (await app.request('/api/curiosity/dispatches?limit=2')).json();
+    expect(body.hasMore).toBe(true);
+    expect(body.nextBefore).toBe('2026-10-03T10:00:00Z');
+    const last = await (await app.request('/api/curiosity/dispatches?limit=4')).json();
+    expect(last.hasMore).toBe(false);
+    expect(last.nextBefore).toBe('2026-10-01T10:00:00Z');
+  });
+
+  it('pages past the limit with `before`: only strictly older dispatches', async () => {
+    const { app } = makeApp();
+    const body = await (
+      await app.request('/api/curiosity/dispatches?limit=2&before=2026-10-03T10:00:00Z')
+    ).json();
+    expect(body.dispatches.map((d: Dispatch) => d.id)).toEqual(['d2', 'd1']);
+    expect(body.hasMore).toBe(false);
+  });
+
+  it('reads past MAX_DISPATCH_LIMIT per bot: the cursor reaches dispatch 50 of 300', async () => {
+    const { app, dispatches } = makeApp();
+    const base = Date.parse('2026-01-01T00:00:00Z');
+    dispatches.b1 = Array.from({ length: 300 }, (_, i) =>
+      dispatch('b1', `old${i}`, new Date(base + i * 60_000).toISOString())
+    );
+    const cursor = new Date(base + 50 * 60_000).toISOString();
+    const body = await (
+      await app.request(`/api/curiosity/dispatches?limit=200&before=${cursor}`)
+    ).json();
+    expect(body.dispatches.map((d: Dispatch) => d.id)).toEqual(
+      Array.from({ length: 50 }, (_, i) => `old${49 - i}`)
+    );
+  });
+
+  it('skips `offset` dispatches after merging', async () => {
+    const { app } = makeApp();
+    const body = await (await app.request('/api/curiosity/dispatches?limit=2&offset=1')).json();
+    expect(body.dispatches.map((d: Dispatch) => d.id)).toEqual(['d3', 'd2']);
+    expect(body.hasMore).toBe(true);
+  });
+
+  it('treats a garbage offset as 0', async () => {
+    const { app } = makeApp();
+    const body = await (await app.request('/api/curiosity/dispatches?offset=-3')).json();
+    expect(body.dispatches).toHaveLength(4);
+  });
+
+  it('rejects an unparsable `before` with 400', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/curiosity/dispatches?before=yesterday');
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('GET /api/curiosity/:botId', () => {

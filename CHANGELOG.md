@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added (2026-10-04) — Dispatches page past 200
+- **Why.** `GET /api/curiosity/dispatches` capped `limit` at 200 with no cursor, so the Dispatches page's "Load more" stopped at 200 (a UX-overhaul follow-up).
+- **API** (`src/web/routes/curiosity.ts`): `offset` (skips after the fleet merge; garbage reads as 0) and `before=<iso>` (only dispatches strictly older; unparsable → 400). The response adds `hasMore` and `nextBefore` (the last item's `createdAt`); `dispatches` is unchanged. Each bot's store is now read in full rather than up to `limit`, which costs the same: `listDispatches` already read the whole JSONL. Faces are resolved only for the returned page. Known edge: dispatches sharing the exact cursor timestamp are skipped.
+- **Dispatches page:** "Load 100 older" appends the next page via `before=<nextBefore>` (`nextDispatchCursor`, `mergeDispatchPage` in `work-helpers.js`, replacing `nextDispatchLimit` / `DISPATCH_MAX`). A failed older-page load shows a toast and keeps what's on screen.
+
 ### Fixed (2026-10-04) — Two timing-dependent tests
 - `tests/web/log-tail.test.ts` "detects rotation…": the rotated file's mtime came from the write, i.e. the kernel clock, which on Linux is coarse and can lag `Date.now()`. Whether it counted as newer than the bare file depended on timing (always wrong on Linux, sometimes wrong under load on Windows). Every mtime in the test is now explicit. `src/web/log-tail.ts` is unchanged.
 - `tests/hygiene/registry.test.ts` "keeps only the last 500 runs": each `HygieneHistory.append` re-reads the whole file, so 505 appends could time out under full-suite load. The trimming is now tested with a cap of 5. A second test pre-seeds 500 runs and appends one, which still proves the default cap is `HYGIENE_HISTORY_LIMIT`.
