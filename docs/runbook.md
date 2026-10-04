@@ -39,6 +39,25 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — Rebuilt the container for PR #4 (absolute paths) and PR #5 (message boxes)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (agent session, approved in chat) |
+| **Why** | Deploy PR #4 (`789fefd`: Needs You handles outputs logged with an absolute path) and PR #5 (`223d2a1`: full-width message boxes that grow as you type) |
+
+```bash
+git merge --ff-only origin/main   # main folder, clean and only behind
+docker compose up -d --build      # at 223d2a1
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/orph3.ts aibot-framework-aibot-1:/tmp/orph3.ts
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 bun /tmp/orph3.ts   # read-only: pending outputs per bot with the new normalization
+```
+
+**Outcome.** Container healthy. Served `ui/composer.js`, `pages/shared.js` and `style.css` carry the change (`fitComposer`, `.thread-input-row`). Queue check over the live changelogs: milei-rocca's two absolute-path outputs resolve correctly (they had been approved at 19:01 UTC, so nothing is pending there); cryptik lists one output (`archived/44_terrapin…`, edited by the bot at 20:11 UTC after it was archived). Only errors at boot: the two known revoked Telegram tokens. `/tmp/orph3.ts` and `/tmp/dbg.ts` stay in the container's writable layer until the next rebuild.
+
+**Reversible?** Yes: check out the previous commit and rebuild.
+
 ### 2026-10-04 — Rebuilt the container for the Needs You orphan-output fix (PR #3)
 
 | | |
