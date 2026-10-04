@@ -1753,10 +1753,6 @@ body.unauthed #topbar {
     padding: 0;
     flex: 1;
   }
-  #topbar .nav-status {
-    border-top: none;
-    padding: 0;
-  }
   #sidebar {
     position: fixed;
     top: 0;
@@ -5992,47 +5988,6 @@ body.ui-palette-open {
   max-height: 400px;
   overflow-y: auto;
 }
-.tool-runner-layout {
-  display: flex;
-  gap: 20px;
-  min-height: 400px;
-}
-.tool-runner-side {
-  width: 280px;
-  min-width: 280px;
-  display: flex;
-  flex-direction: column;
-}
-.tool-runner-search {
-  margin-bottom: var(--s2);
-}
-.tool-runner-search input {
-  width: 100%;
-}
-.tool-runner-list {
-  flex: 1;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.tool-runner-main {
-  flex: 1;
-  min-width: 0;
-}
-.tool-runner-group {
-  padding: 6px 10px;
-  font-size: var(--fs-xs);
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  border-bottom: 1px solid var(--border);
-}
-.tool-runner-empty {
-  padding: var(--s4);
-  color: var(--text-dim);
-  text-align: center;
-}
 .tool-list-item.is-active {
   background: var(--bg-hover);
   border-left: 3px solid var(--accent);
@@ -6047,15 +6002,6 @@ body.ui-palette-open {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-@media (max-width: 760px) {
-  .tool-runner-layout {
-    flex-direction: column;
-  }
-  .tool-runner-side {
-    width: auto;
-    min-width: 0;
-  }
 }
 
 /* Agent loop: live activity + selection count */

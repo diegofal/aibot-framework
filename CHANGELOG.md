@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Removed (2026-10-04) — Dead dashboard CSS
+- `web/style.css`: the `.tool-runner-*` rules (layout of the old standalone Tool Runner page, plus their 760 px media query) and the mobile `#topbar .nav-status` rule (`#nav-status` lives in the sidebar's `.nav-foot`, never in `#topbar`). No markup or script references any of them. `.nav-status` itself and `.tool-run-output` are still used and stay. A UX-overhaul follow-up.
+
 ### Added (2026-10-04) — Enable and disable built-in skills from the Skills page
 - **Why.** Built-in skills could only be switched on in `config.skills.enabled` by hand, so the Skills page had no toggle or bulk action (a UX-overhaul follow-up).
 - **API** `POST /api/skills/toggle { ids: string[1..100], enabled: boolean }` (`src/web/routes/skills.ts`) → `{ enabled, results: [{ id, ok, error? }], restartRequired }`.
