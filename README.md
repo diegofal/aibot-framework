@@ -532,7 +532,7 @@ bun run format
 | Web server | [Hono](https://hono.dev) |
 | Database | SQLite (via bun:sqlite) |
 | LLM (local) | [Ollama](https://ollama.ai) |
-| LLM (cloud) | Claude CLI (shipped in the Docker image, pinned to 2.1.237) |
+| LLM (cloud) | Claude CLI (shipped in the Docker image, pinned to 2.1.289) |
 | TTS | [ElevenLabs](https://elevenlabs.io) |
 | STT | [Whisper](https://platform.openai.com/docs/guides/speech-to-text) (OpenAI) |
 | Validation | [Zod](https://zod.dev) |

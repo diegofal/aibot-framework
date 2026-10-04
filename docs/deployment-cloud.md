@@ -1012,7 +1012,7 @@ option today.
 | Component | Status in the default image | To enable |
 |---|---|---|
 | **Playwright / Chromium** (`browserTools`) | Not installed. The npm package is present; the ~400 MB browser binary is not. | Uncomment the marked block in the `Dockerfile`, rebuild, set `browserTools.enabled: true`. |
-| **`claude` CLI** (`llmBackend: "claude-cli"`) | **Installed and pinned** (Claude Code 2.1.237, `ARG CLAUDE_CLI_VERSION`). Needs a one-time login — see 11.1. | Nothing to enable. Without a login, soul quality review, memory consolidation and the improve tool stop working; with `claudeCli.enabled: false` the backend leaves the failover chain entirely. |
+| **`claude` CLI** (`llmBackend: "claude-cli"`) | **Installed and pinned** (Claude Code 2.1.289, `ARG CLAUDE_CLI_VERSION`). Needs a one-time login — see 11.1. | Nothing to enable. Without a login, soul quality review, memory consolidation and the improve tool stop working; with `claudeCli.enabled: false` the backend leaves the failover chain entirely. |
 | **RAG / semantic search** (`soul.search`) | Available; `bun:sqlite` is built into Bun. **Requires the Ollama sidecar** — Ollama Cloud hosts no embedding models. | Start the sidecar (`--profile local-ollama`), point `ollama.baseUrl` at it, set `soul.search.enabled: true`, and pull `nomic-embed-text`. Adds `data/memory.db` to the data volume. |
 | **Ollama daemon sidecar** | Behind the `local-ollama` compose profile; **not started by default**. | `docker compose --profile local-ollama up -d`. Needed only for embeddings or genuinely local models — see §1.1. |
 
@@ -1031,7 +1031,7 @@ Follow the printed URL, paste the code back, and you are done. Check it with:
 
 ```bash
 docker compose exec aibot claude auth status
-docker compose exec aibot claude --version          # 2.1.237
+docker compose exec aibot claude --version          # 2.1.289
 ```
 
 **Never run this with `-u root`.** The app runs as `bun` (uid 1000); credentials
@@ -1063,11 +1063,11 @@ is quietly absorbed and nothing says the backend is unusable. Hence the boot
 preflight, which logs
 
 ```
-Claude CLI v2.1.237 installed but not logged in — run "claude auth login" (config dir: /app/data/claude)
+Claude CLI v2.1.289 installed but not logged in — run "claude auth login" (config dir: /app/data/claude)
 ```
 
 as a **warning** whenever the claude-cli backend is in the failover chain without a
-usable login. A healthy boot logs `Claude CLI v2.1.237 ready (config dir: …)` at
+usable login. A healthy boot logs `Claude CLI v2.1.289 ready (config dir: …)` at
 info level. The container also prints a one-time `[entrypoint]` banner on any boot
 that finds no credentials.
 

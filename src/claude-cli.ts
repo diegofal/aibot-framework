@@ -242,10 +242,20 @@ export const SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
  */
 export const CLAUDE_CLI_MODEL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '', label: "CLI default (whatever's configured on the container)" },
-  { value: 'opus', label: 'Opus — most capable, slowest, most expensive' },
-  { value: 'sonnet', label: 'Sonnet — balanced (recommended default)' },
-  { value: 'haiku', label: 'Haiku — fastest, cheapest' },
-  { value: 'fable', label: 'Fable' },
+  // Rolling aliases: the CLI resolves each to the newest release of that tier.
+  { value: 'opus', label: 'Opus (latest) — most capable' },
+  { value: 'sonnet', label: 'Sonnet (latest) — balanced' },
+  { value: 'haiku', label: 'Haiku (latest) — fastest, cheapest' },
+  { value: 'fable', label: 'Fable (latest) — newest tier, above Opus' },
+  // Pinned ids: stay on one generation even when the alias moves. The 5.5 /
+  // Fable 5.1 ids need CLI >= 2.1.280 (older builds answer 400 "does not
+  // support this model") — see CLAUDE_CLI_VERSION in the Dockerfile.
+  { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5 (pinned) — recommended default' },
+  { value: 'claude-opus-5-5', label: 'Opus 5.5 (pinned)' },
+  { value: 'claude-fable-5-1', label: 'Fable 5.1 (pinned)' },
+  { value: 'claude-opus-5', label: 'Opus 5 (pinned)' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5 (pinned)' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (pinned)' },
 ];
 
 const DEFAULT_CLAUDE_PATH = 'claude';

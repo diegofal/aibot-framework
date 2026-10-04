@@ -49,7 +49,7 @@ RUN apt-get update \
 # Placed before the source COPYs so editing src/ does not re-download it, and
 # before CLAUDE_CONFIG_DIR is set so `claude install` cannot write into what
 # becomes a volume mount point at runtime.
-ARG CLAUDE_CLI_VERSION=2.1.237
+ARG CLAUDE_CLI_VERSION=2.1.289
 USER bun
 RUN curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_CLI_VERSION}"
 ENV PATH="/home/bun/.local/bin:${PATH}"
