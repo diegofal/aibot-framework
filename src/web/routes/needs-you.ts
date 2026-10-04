@@ -37,6 +37,8 @@
  * is logged and skipped, a row that fails to map is skipped: the queue must
  * render with whatever is left.
  */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { AgentFeedback } from '../../bot/agent-feedback-store';
 import type { PendingQuestionInfo } from '../../bot/ask-human-store';
@@ -134,6 +136,12 @@ export interface NeedsYouSources {
   permissions?: () => PermissionRequestInfo[];
   proposals?: () => AgentProposal[];
   productions?: () => ProductionEntry[];
+  /**
+   * Whether an output's file is still on disk. Outputs whose file is gone are
+   * not listed: there is nothing to review, and archiving them can only fail.
+   * The hygiene routine `productions-triage` reports and prunes them.
+   */
+  productionFileExists?: (botId: string, path: string) => boolean;
   feedback?: { botIds(): string[]; list(botId: string): AgentFeedback[] };
   /** Dynamic tools (admin-only queue kind `tool`); only `status: 'pending'` are listed. */
   tools?: () => DynamicToolMeta[];
@@ -626,6 +634,20 @@ export function pendingProductionFiles(entries: ProductionEntry[]): ProductionEn
   return [...active.values()].filter((e) => !e.evaluation?.status);
 }
 
+/** Track-only outputs live outside the productions dir; a failing probe keeps the item. */
+function productionFileStillThere(
+  sources: NeedsYouSources,
+  botId: string,
+  e: ProductionEntry
+): boolean {
+  if (!sources.productionFileExists || e.trackOnly) return true;
+  try {
+    return sources.productionFileExists(botId, e.path);
+  } catch {
+    return true;
+  }
+}
+
 function buildProductions(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[] {
   const rows = safeRead(ctx, 'productions', sources.productions);
   const byBot = new Map<string, ProductionEntry[]>();
@@ -638,7 +660,9 @@ function buildProductions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
   }
   const items: NeedsYouItem[] = [];
   for (const [botId, entries] of byBot) {
-    const pending = pendingProductionFiles(entries);
+    const pending = pendingProductionFiles(entries).filter((e) =>
+      productionFileStillThere(sources, botId, e)
+    );
     items.push(
       ...safeMap(ctx, 'productions', pending, (e) => {
         const b = encodeURIComponent(botId);
@@ -1163,7 +1187,10 @@ export interface NeedsYouBotManager {
   getAgentProposalStore?(): { list(): AgentProposal[] } | null | undefined;
   getConversationsService?(): NeedsYouConversations | null | undefined;
   getProductionsService?():
-    | { getAllEntries(opts?: { limit?: number }): { entries: ProductionEntry[] } }
+    | {
+        getAllEntries(opts?: { limit?: number }): { entries: ProductionEntry[] };
+        resolveDir(botId: string): string;
+      }
     | null
     | undefined;
   getDynamicToolStore?(): { list(): DynamicToolMeta[] } | null | undefined;
@@ -1270,6 +1297,9 @@ export function needsYouSourcesFromBotManager(bm: NeedsYouBotManager): NeedsYouS
     proposals: proposalStore ? () => proposalStore.list() : undefined,
     productions: productions
       ? () => productions.getAllEntries({ limit: PRODUCTIONS_SCAN_LIMIT }).entries
+      : undefined,
+    productionFileExists: productions
+      ? (botId, path) => existsSync(join(productions.resolveDir(botId), path))
       : undefined,
     feedback: {
       botIds: () => bm.getAgentFeedbackBotIds(),
