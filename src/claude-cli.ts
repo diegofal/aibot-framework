@@ -6,12 +6,41 @@ import type { Logger } from './logger';
 import type { ToolDefinition, ToolExecutor } from './tools/types';
 
 /** Extract TokenUsage from Claude CLI JSON output's usage field. */
-function parseClaudeUsage(parsed: Record<string, unknown>): TokenUsage | undefined {
+/**
+ * The model that did the work, from the result's `modelUsage` (keyed by model
+ * id; the CLI has no top-level `model`). The map also lists the CLI's own
+ * auxiliary Haiku calls, so the entry with the most tokens — cached prompt
+ * included — wins. Null when the map is absent or empty.
+ */
+function pickModelFromUsage(modelUsage: unknown): string | null {
+  if (!modelUsage || typeof modelUsage !== 'object' || Array.isArray(modelUsage)) return null;
+  let best: string | null = null;
+  let bestTokens = -1;
+  for (const [model, entry] of Object.entries(modelUsage as Record<string, unknown>)) {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    const n = (k: string) => (typeof e[k] === 'number' ? (e[k] as number) : 0);
+    const total =
+      n('inputTokens') +
+      n('outputTokens') +
+      n('cacheReadInputTokens') +
+      n('cacheCreationInputTokens');
+    if (total > bestTokens) {
+      best = model;
+      bestTokens = total;
+    }
+  }
+  return best;
+}
+
+export function parseClaudeUsage(parsed: Record<string, unknown>): TokenUsage | undefined {
   const usage = parsed.usage as { input_tokens?: number; output_tokens?: number } | undefined;
   if (!usage || (usage.input_tokens == null && usage.output_tokens == null)) return undefined;
   const promptTokens = usage.input_tokens ?? 0;
   const completionTokens = usage.output_tokens ?? 0;
-  const model = (typeof parsed.model === 'string' ? parsed.model : null) ?? 'claude';
+  const model =
+    (typeof parsed.model === 'string' ? parsed.model : null) ??
+    pickModelFromUsage(parsed.modelUsage) ??
+    'claude';
   return { model, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
 }
 

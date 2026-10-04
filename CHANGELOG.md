@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed (2026-10-04) — the LLM query log records which Claude model answered, not just "claude"
+- **Why.** `parseClaudeUsage` (`src/claude-cli.ts`) read a top-level `model` that the CLI's `--output-format json` result never has, so every claude-cli entry in `data/llm-query-log/` said `model: "claude"`. After moving the fleet to Sonnet 5.5, the log could not confirm which model actually answered.
+- **Fix.** The model now comes from `modelUsage`, which is keyed by model id. It also lists the CLI's own auxiliary Haiku calls, so the entry with the most tokens (cached prompt included) wins. A top-level `model` still takes precedence; `"claude"` stays as the fallback when `modelUsage` is missing. `parseClaudeUsage` is now exported and covered by `tests/claude-cli-usage-model.test.ts`.
+
 ### Process (2026-10-04) — The GitHub account goes on the command
 - **Why.** The active `gh` account is machine-wide; another session switched it twice mid-flow and a sign-off and a push failed as the account that cannot see the repo.
 - **Rule** `ask.credentials-per-command` (Zero 0.94.117) in `docs/working-agreements.md` §4: every GitHub write carries `GH_TOKEN=$(gh auth token --user diegofal)`. §3's fast-forward now uses `git -C D:/aibot-framework merge --ff-only` (the `fetch . b:main` form is refused while `main` is checked out).
