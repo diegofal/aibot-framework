@@ -39,6 +39,26 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — job-seeker and myfirstmillion repurposed; five agent loops paused
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1`: soul dirs of job-seeker and myfirstmillion, and `/app/config/bots.json` |
+| **Who** | Diego (agent session, approved in chat) |
+| **Why** | Fleet review: no bot had a consumer for its output. The operator kept two with a concrete deliverable and paused the autonomous loops of the rest |
+
+```bash
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/repurpose.ts aibot-framework-aibot-1:/tmp/repurpose.ts
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun /tmp/repurpose.ts
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/pause.ts aibot-framework-aibot-1:/tmp/pause.ts
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun /tmp/pause.ts   # bots[].agentLoop.enabled=false for cryptik, econ-student, milei-rocca, selfimprove, default
+docker compose restart aibot
+```
+
+**Outcome.** job-seeker: 4 new goals (Monday AI engineer / FDE role shortlist open from Argentina, applications.md tracker, monthly market signal, one calibration question), 4 old goals retired and kept; motivations rewritten; identity audience is Diego. myfirstmillion: 4 new goals (side-income idea with evidence every other Monday, ideas.md ledger, demand-source watchlist, one calibration question), 9 old goals retired and kept; motivations rewritten; identity audience is Diego. Navigator directions cleared on both. After the restart all 8 bots are running (chat works) and only job-seeker, myfirstmillion and ai-perfectionist are in the agent-loop schedule.
+
+**Reversible?** Yes: soul backups in `soul/.versions/*.2026-10-04T20-45-46-786Z.bak`; `bots.json` backup at `/app/config/bots.json.bak-pause-2026-10-04T20-46-13-804Z` (copy back and restart, or set `agentLoop.enabled` back to true per bot).
+
 ### 2026-10-04 — AI Perfectionist repurposed as Diego's AI engineer / FDE research mentor (soul files in the live volume)
 
 | | |
