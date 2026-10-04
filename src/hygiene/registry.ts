@@ -35,6 +35,16 @@ import {
 
 export const ALL_ROUTINE_ID = 'all';
 
+/**
+ * Options a cleanup turns on: every fix that is opt-in on a plain apply.
+ * Both are reversible — pruned changelog lines are backed up under
+ * `.versions/`, archived productions move to `archived/`.
+ */
+export const CLEANUP_OPTIONS: Readonly<Record<string, unknown>> = Object.freeze({
+  pruneOrphans: true,
+  archiveStale: true,
+});
+
 export interface HygieneRegistryDeps {
   config: Config;
   logger: Logger;
@@ -54,6 +64,8 @@ export interface HygieneRunRequest {
   botIds?: string[];
   /** `all` only: include fleet routines (default true). */
   includeFleet?: boolean;
+  /** Apply with `CLEANUP_OPTIONS` on (explicit `options` still win). Implies apply. */
+  cleanup?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,8 +226,9 @@ export class HygieneRegistry {
 
   async run(req: HygieneRunRequest): Promise<HygieneRun> {
     const startedAt = this.now().toISOString();
-    const apply = req.apply === true;
-    const options = req.options ?? {};
+    const cleanup = req.cleanup === true;
+    const apply = cleanup || req.apply === true;
+    const options = cleanup ? { ...CLEANUP_OPTIONS, ...req.options } : (req.options ?? {});
     const base = (botId: string | null): HygieneRun => ({
       runId: randomUUID(),
       routine: req.routine,
@@ -227,6 +240,8 @@ export class HygieneRegistry {
       applied: [],
       skipped: [],
       backups: [],
+      ...(apply ? { remaining: [] } : {}),
+      ...(cleanup ? { cleanup: true } : {}),
     });
 
     if (req.routine === ALL_ROUTINE_ID) {
@@ -262,6 +277,7 @@ export class HygieneRegistry {
         run.applied = result.applied;
         run.skipped = result.skipped;
         run.backups = result.backups;
+        run.remaining = routine.preview(this.buildContext(bot, options));
       }
     } catch (err) {
       run.error = err instanceof Error ? err.message : String(err);
@@ -290,13 +306,19 @@ export class HygieneRegistry {
         ? []
         : [...this.routines.values()].filter((r) => r.scope === 'fleet');
 
+    const tag = (prefix: string, botId: string | undefined, findings: HygieneFinding[]) =>
+      findings.map((f) => ({ ...f, id: `${prefix}:${f.id}`, botId }));
+
     const merge = (
       prefix: string,
       botId: string | undefined,
       findings: HygieneFinding[],
-      result: HygieneApplyResult | null
+      result: HygieneApplyResult | null,
+      remaining: HygieneFinding[] | null
     ) => {
-      for (const f of findings) run.findings.push({ ...f, id: `${prefix}:${f.id}`, botId });
+      run.findings.push(...tag(prefix, botId, findings));
+      // `remaining` is pre-seeded to [] on apply runs (see `base`).
+      if (remaining) run.remaining?.push(...tag(prefix, botId, remaining));
       if (!result) return;
       run.applied.push(
         ...result.applied.map((a) => ({ ...a, findingId: `${prefix}:${a.findingId}` }))
@@ -313,14 +335,16 @@ export class HygieneRegistry {
         const ctx = this.buildContext(bot, options);
         const findings = routine.preview(ctx);
         const result = apply ? routine.apply(ctx, findings) : null;
-        merge(prefix, bot?.id, findings, result);
+        // Re-preview on a fresh context so `remaining` reflects the disk after the fixes.
+        const remaining = apply ? routine.preview(this.buildContext(bot, options)) : null;
+        merge(prefix, bot?.id, findings, result, remaining);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.registryDeps.logger.error(
           { err, routine: routine.id, botId: bot?.id },
           'Hygiene routine failed'
         );
-        run.findings.push({
+        const failure: HygieneFinding = {
           id: `${prefix}:${routine.id}:error`,
           kind: 'routine-error',
           severity: 'critical',
@@ -329,7 +353,9 @@ export class HygieneRegistry {
           message: `${routine.id} failed: ${message}`,
           fixable: false,
           botId: bot?.id,
-        });
+        };
+        run.findings.push(failure);
+        run.remaining?.push(failure);
       }
     };
 

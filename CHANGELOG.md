@@ -13,6 +13,26 @@
 - `PAGE_SHORTCUTS` is removed. `pageShortcutsFor(registered)` now only returns the registration. The `currentHandler` dep of `initShortcuts`, and its plumbing in `app.js`, existed only for that lookup and are removed too. `shortcuts-helpers.js` no longer imports a page module.
 - `tests/web/page-shortcuts.test.ts`: each list, and a source check that each render registers it before its first `await`.
 
+### Fixed (2026-10-04) — Hygiene: Apply actually cleans, and one button cleans everything
+- **Why.** Everything → Apply reported "applied" but changed nothing, and a refresh showed the same list. Of the 139 findings in the last live fleet apply, all 139 were skipped as "report only":
+  - The 11 orphan changelog entries are fixable only with `options.pruneOrphans`, which the page never sent.
+  - 123 were money "PII" hits, never redacted by design.
+  - 2 were absolute changelog paths to files that do exist.
+  - On top of that, the result view rendered the *pre-apply* findings.
+- **One-shot cleanup.** `POST /api/hygiene/cleanup` runs `all` over the caller's bots (fleet routines admin-only, like `all`) with apply and `CLEANUP_OPTIONS` (`pruneOrphans`, `archiveStale`) on. Both are reversible: the changelog is backed up to `.versions/`, productions move to `archived/`. `HygieneRunRequest.cleanup` does the same from code.
+- **`HygieneRun.remaining`** (apply runs): a fresh preview taken after the fixes, so a result shows what is still open. `HygieneRun.cleanup` marks cleanup runs.
+- **Less noise.**
+  - `memory-hygiene` no longer reports `money` unless it is in `redactKinds`. This deliberately changes the earlier test, which expected a non-fixable info finding.
+  - `productions-triage` folds an absolute changelog path inside the productions dir to its relative form (`normalizeEntryPath`), so it is neither "outside the dir" nor an orphan, and prune matches it.
+  - A `YYYY-MM-DD-` filename prefix counts as numbered.
+- **Hygiene page.**
+  - A "Clean up everything" card (two-step confirm) replaces "Run all (preview)". Everything → Preview still previews.
+  - Everything → Apply calls the cleanup.
+  - Apply results show a headline ("Cleaned up N items · M still need you"), the fixes grouped by agent, then "Still open (needs you)". Not-changed findings and backups are collapsed.
+  - History counts the open findings of apply runs, not the pre-apply ones.
+  - Helpers `openFindings`, `cleanedByBot`, `cleanupHeadline` live in `hygiene-helpers.js`.
+- **Still shown after a cleanup** (needs a person or an LLM): `daily-logs-pending`, `duplicate-number`, `duplicate-title`, `stale-block`, `dead-trigger`, soul lint, and orphan entries pointing outside the productions dir.
+
 ### Removed (2026-10-04) — Dead dashboard CSS
 - `web/style.css`: the `.tool-runner-*` rules (layout of the old standalone Tool Runner page, plus their 760 px media query) and the mobile `#topbar .nav-status` rule (`#nav-status` lives in the sidebar's `.nav-foot`, never in `#topbar`). No markup or script references any of them. `.nav-status` itself and `.tool-run-output` are still used and stay. A UX-overhaul follow-up.
 

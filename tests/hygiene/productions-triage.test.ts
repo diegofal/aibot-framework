@@ -290,3 +290,36 @@ describe('cleanup-candidate', () => {
     expect(c[0].fixable).toBe(false);
   });
 });
+
+describe('absolute changelog paths inside the productions dir', () => {
+  test('an absolute path to an existing file in the dir is not an orphan', () => {
+    writeFile(join(workDir, '01_here.md'), 'here');
+    changelog([entry({ path: join(workDir, '01_here.md') })]);
+    const findings = productionsTriage.preview(makeCtx(root, { workDir }));
+    expect(findings.filter((f) => f.kind === 'orphan-reference')).toEqual([]);
+  });
+
+  test('an absolute path to a missing file in the dir is a fixable orphan that prune removes', () => {
+    writeFile(join(workDir, '01_here.md'), 'here');
+    changelog([entry({ path: '01_here.md' }), entry({ path: join(workDir, '02_gone.md') })]);
+    const ctx = makeCtx(root, { workDir, options: { pruneOrphans: true } });
+    const orphans = productionsTriage.preview(ctx).filter((f) => f.kind === 'orphan-reference');
+    expect(orphans.map((f) => f.file)).toEqual(['02_gone.md']);
+    expect(orphans[0].fixable).toBe(true);
+
+    const result = productionsTriage.apply(ctx, orphans);
+    expect(result.applied).toHaveLength(1);
+    expect(readEntries(join(workDir, 'changelog.jsonl')).map((e) => e.path)).toEqual([
+      '01_here.md',
+    ]);
+    expect(productionsTriage.preview(ctx).filter((f) => f.kind === 'orphan-reference')).toEqual([]);
+  });
+});
+
+describe('date-prefixed productions', () => {
+  test('a YYYY-MM-DD- prefix counts as numbered', () => {
+    writeFile(join(workDir, '2026-10-03-replica.md'), 'r');
+    const findings = productionsTriage.preview(makeCtx(root, { workDir }));
+    expect(findings.filter((f) => f.kind === 'unnumbered')).toEqual([]);
+  });
+});

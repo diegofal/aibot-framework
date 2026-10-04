@@ -3,6 +3,7 @@
  *
  *   GET  /routines                → HygieneRoutineInfo[]
  *   POST /run                     → HygieneRun   body: { routine, botId?, apply?, options? }
+ *   POST /cleanup                 → HygieneRun   `all`, applied, every opt-in fix on
  *   GET  /history?botId=&limit=   → HygieneRun[] (newest first)
  *
  * Bot-scoped routines are tenant-scoped like /api/karma; fleet routines and
@@ -54,6 +55,31 @@ export function hygieneRoutes(deps: HygieneRoutesDeps) {
 
   app.get('/routines', (c) => c.json(registry.listRoutines()));
 
+  /** `all` over the caller's bots; the fleet half only for admin / single-tenant. */
+  const runAll = (
+    tenantId: string | undefined,
+    req: { apply?: boolean; cleanup?: boolean; options?: Record<string, unknown> }
+  ) =>
+    registry.run({
+      routine: ALL_ROUTINE_ID,
+      ...req,
+      botIds: scopeBots(config.bots, tenantId).map((b) => b.id),
+      includeFleet: isAdminOrSingleTenant(tenantId),
+    });
+
+  app.post('/cleanup', async (c) => {
+    const run = await runAll(getTenantId(c), { cleanup: true });
+    logger.info(
+      {
+        applied: run.applied.length,
+        remaining: run.remaining?.length ?? 0,
+        backups: run.backups.length,
+      },
+      'Hygiene cleanup'
+    );
+    return c.json(run);
+  });
+
   app.post('/run', async (c) => {
     let body: RunBody;
     try {
@@ -73,14 +99,7 @@ export function hygieneRoutes(deps: HygieneRoutesDeps) {
     const tenantId = getTenantId(c);
 
     if (routineId === ALL_ROUTINE_ID) {
-      const bots = scopeBots(config.bots, tenantId);
-      const run = await registry.run({
-        routine: ALL_ROUTINE_ID,
-        apply,
-        options,
-        botIds: bots.map((b) => b.id),
-        includeFleet: isAdminOrSingleTenant(tenantId),
-      });
+      const run = await runAll(tenantId, { apply, options });
       logger.info({ routine: routineId, apply, findings: run.findings.length }, 'Hygiene run');
       return c.json(run);
     }

@@ -85,14 +85,14 @@ describe('memory-hygiene metadata', () => {
 });
 
 describe('pii kinds: severity and redactKinds', () => {
-  test('money is report-only (info, not fixable) by default', () => {
+  // Deliberate change: money used to be reported as a non-fixable info finding.
+  // Amounts are the content of the business/economics bots, so every run
+  // re-listed the same hundred-odd hits that no apply would ever clear.
+  test('money is not reported unless opted into redactKinds', () => {
     writeFile(join(soulDir, 'MEMORY.md'), '- budget USD 8,800 and mail bob@example.com\n');
     const findings = memoryHygiene.preview(makeCtx(root, { soulDir }));
-    const money = findings.find((f) => f.data?.piiKind === 'money')!;
+    expect(findings.find((f) => f.data?.piiKind === 'money')).toBeUndefined();
     const email = findings.find((f) => f.data?.piiKind === 'email')!;
-    expect(money.severity).toBe('info');
-    expect(money.fixable).toBe(false);
-    expect(money.fix).toBeUndefined();
     expect(email.severity).toBe('critical');
     expect(email.fixable).toBe(true);
   });

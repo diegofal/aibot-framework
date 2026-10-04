@@ -1,4 +1,11 @@
-import { HISTORY_PAGE, historyHasMore, nextHistoryLimit } from './hygiene-helpers.js';
+import {
+  HISTORY_PAGE,
+  cleanedByBot,
+  cleanupHeadline,
+  historyHasMore,
+  nextHistoryLimit,
+  openFindings,
+} from './hygiene-helpers.js';
 import { api, escapeHtml } from './shared.js';
 import {
   formatDuration,
@@ -54,6 +61,11 @@ export function runHygiene({ routine, botId, apply = false, options }) {
   return api('/api/hygiene/run', { method: 'POST', body });
 }
 
+/** One-shot cleanup: `all`, applied, every opt-in fix on. */
+export function runCleanup() {
+  return api('/api/hygiene/cleanup', { method: 'POST' });
+}
+
 export function countBySeverity(findings) {
   const counts = { critical: 0, warn: 0, info: 0 };
   for (const f of findings || []) {
@@ -97,15 +109,18 @@ export function renderHygieneRun(container, run, { onApply, title } = {}) {
     return;
   }
 
-  const findings = run.findings || [];
+  // For an apply run this is the post-apply preview (what is *still* open),
+  // never the pre-apply findings, which made an apply look like it did nothing.
+  const findings = openFindings(run);
   const counts = countBySeverity(findings);
   const fixable = findings.filter((f) => f.fixable);
   const groups = groupFindings(findings);
+  const applyRun = !run.dryRun;
   const duration =
     run.startedAt && run.finishedAt ? Date.parse(run.finishedAt) - Date.parse(run.startedAt) : null;
   const modeBadge = run.dryRun
     ? '<span class="badge badge-disabled">preview</span>'
-    : '<span class="badge badge-ok">applied</span>';
+    : `<span class="badge badge-ok">${run.cleanup ? 'cleanup' : 'applied'}</span>`;
 
   const sevBadges = ['critical', 'warn', 'info']
     .filter((s) => counts[s] > 0)
@@ -114,7 +129,7 @@ export function renderHygieneRun(container, run, { onApply, title } = {}) {
 
   const groupsHtml =
     groups.length === 0
-      ? '<p class="text-dim text-sm">No findings. Clean.</p>'
+      ? `<p class="text-dim text-sm">${applyRun ? 'Nothing left open.' : 'No findings. Clean.'}</p>`
       : groups
           .map(
             (g) => `<div class="hyg-sev-group">
@@ -134,27 +149,43 @@ export function renderHygieneRun(container, run, { onApply, title } = {}) {
   const applied = run.applied || [];
   const skipped = run.skipped || [];
   const backups = run.backups || [];
-  const appliedHtml = applied.length
-    ? `<div class="hyg-sub"><div class="stats-section-title">Applied <span class="count">${applied.length}</span></div>
-      ${applied
-        .map(
-          (a) =>
-            `<div class="hyg-applied"><span class="hyg-finding-loc">${escapeHtml(a.findingId || '')}</span> <span>${escapeHtml(a.action || '')}</span> <span class="text-dim">${escapeHtml(String(a.result ?? ''))}</span></div>`
-        )
-        .join('')}</div>`
+  const cleaned = cleanedByBot(run);
+  const appliedHtml = applyRun
+    ? `<div class="hyg-sub"><div class="stats-section-title">Cleaned up <span class="count">${applied.length}</span></div>
+      ${
+        cleaned.length === 0
+          ? '<p class="text-dim text-sm">Nothing needed fixing.</p>'
+          : cleaned
+              .map(
+                (g) => `<div class="hyg-kind">
+          <div class="hyg-kind-title">${escapeHtml(g.botId)} <span class="count">${g.items.length}</span></div>
+          ${g.items
+            .map(
+              (i) =>
+                `<div class="hyg-applied"><span class="hyg-fix-action">${escapeHtml(i.action || '')}</span>${
+                  i.file ? ` <span class="hyg-finding-loc">${escapeHtml(i.file)}</span>` : ''
+                } <span class="text-dim">${escapeHtml(String(i.result ?? ''))}</span></div>`
+            )
+            .join('')}
+        </div>`
+              )
+              .join('')
+      }</div>`
     : '';
+  // Collapsed: on a fleet run this is every report-only finding, and it used
+  // to push the actual result off screen.
   const skippedHtml = skipped.length
-    ? `<div class="hyg-sub"><div class="stats-section-title">Skipped <span class="count">${skipped.length}</span></div>
+    ? `<details class="hyg-sub"><summary class="stats-section-title">Not changed <span class="count">${skipped.length}</span></summary>
       ${skipped
         .map(
           (s) =>
             `<div class="hyg-applied"><span class="hyg-finding-loc">${escapeHtml(s.findingId || '')}</span> <span class="text-dim">${escapeHtml(s.reason || '')}</span></div>`
         )
-        .join('')}</div>`
+        .join('')}</details>`
     : '';
   const backupsHtml = backups.length
-    ? `<div class="hyg-sub"><div class="stats-section-title">Backups <span class="count">${backups.length}</span></div>
-      ${backups.map((b) => `<div class="hyg-finding-loc">${escapeHtml(typeof b === 'string' ? b : JSON.stringify(b))}</div>`).join('')}</div>`
+    ? `<details class="hyg-sub"><summary class="stats-section-title">Backups <span class="count">${backups.length}</span></summary>
+      ${backups.map((b) => `<div class="hyg-finding-loc">${escapeHtml(typeof b === 'string' ? b : JSON.stringify(b))}</div>`).join('')}</details>`
     : '';
 
   const canApply = Boolean(onApply && run.dryRun && fixable.length > 0);
@@ -169,9 +200,12 @@ export function renderHygieneRun(container, run, { onApply, title } = {}) {
       ${run.error ? `<span class="badge badge-error" title="${escapeHtml(run.error)}">error</span>` : ''}
       ${canApply ? `<span class="hyg-apply-slot"><button class="btn btn-sm btn-primary hyg-apply-btn">Apply ${fixable.length} fix${fixable.length === 1 ? '' : 'es'}</button></span>` : ''}
     </div>
+    ${applyRun ? `<div class="hyg-headline">${escapeHtml(cleanupHeadline(run))}</div>` : ''}
     ${run.error ? `<div class="hyg-error text-sm">${escapeHtml(run.error)}</div>` : ''}
+    ${appliedHtml}
+    ${applyRun && groups.length ? '<div class="stats-section-title">Still open (needs you)</div>' : ''}
     <div class="hyg-groups">${groupsHtml}</div>
-    ${appliedHtml}${skippedHtml}${backupsHtml}
+    ${skippedHtml}${backupsHtml}
   </div>`;
 
   if (canApply) {
@@ -224,8 +258,9 @@ export async function runAndRender(target, { routine, botId, options, title }) {
 }
 
 function historyRow(run) {
-  const counts = countBySeverity(run.findings);
-  const worst = (run.findings || []).reduce(
+  const open = openFindings(run);
+  const counts = countBySeverity(open);
+  const worst = open.reduce(
     (acc, f) => (severityRank(f.severity) < severityRank(acc) ? f.severity : acc),
     'none'
   );
@@ -233,7 +268,7 @@ function historyRow(run) {
     <td class="text-dim">${relativeTime(run.startedAt)}</td>
     <td>${escapeHtml(run.routine || '')}</td>
     <td>${run.botId ? escapeHtml(run.botId) : '<span class="text-dim">fleet</span>'}</td>
-    <td>${run.dryRun ? '<span class="badge badge-disabled">preview</span>' : '<span class="badge badge-ok">applied</span>'}</td>
+    <td>${run.dryRun ? '<span class="badge badge-disabled">preview</span>' : `<span class="badge badge-ok">${run.cleanup ? 'cleanup' : 'applied'}</span>`}</td>
     <td class="num ${counts.critical ? 'stats-bad' : 'text-dim'}">${counts.critical}</td>
     <td class="num ${counts.warn ? 'stats-warn' : 'text-dim'}">${counts.warn}</td>
     <td class="num text-dim">${counts.info}</td>
@@ -334,10 +369,18 @@ export async function renderHygienePanel(el) {
     <div class="stats-toolbar">
       <label class="text-dim text-sm" for="hyg-bot">Bot for bot-scoped routines</label>
       <select id="hyg-bot" class="stats-select">${botOptions || '<option value="">(no agents)</option>'}</select>
-      <span class="hyg-run-all-slot"><button class="btn btn-sm" id="hyg-run-all">Run all (preview)</button></span>
+    </div>
+    <div class="detail-card hyg-cleanup-card">
+      <div class="hyg-routine-head">
+        <div>
+          <div class="hyg-routine-name">Clean up everything</div>
+          <div class="text-dim text-sm">Runs every routine for every agent and applies every safe fix: prunes changelog entries for missing files, archives stale unreviewed productions, redacts PII, moves orphaned data to the trash. Rewritten files are backed up; nothing is deleted. Shows what it cleaned and what still needs you.</div>
+        </div>
+        <div class="hyg-actions"><span class="hyg-cleanup-slot"></span></div>
+      </div>
+      <div id="hyg-cleanup-result"></div>
     </div>
     <div class="hyg-routines">${routineCards}</div>
-    <div id="hyg-run-all-results"></div>
     <div class="detail-card">
       <div class="stats-section-title">History</div>
       <div id="hyg-history"></div>
@@ -404,7 +447,12 @@ export async function renderHygienePanel(el) {
         target.innerHTML =
           '<div class="hyg-result"><p class="text-dim text-sm">Applying...</p></div>';
         slot.innerHTML = '<span class="text-dim text-sm">Applying...</span>';
-        const run = await runHygiene({ routine, botId, apply: true, options: optionsFor(routine) });
+        // Everything's Apply is the cleanup: a fleet apply without the opt-in
+        // fixes skipped every orphan and looked like it had done nothing.
+        const run =
+          routine === 'all'
+            ? await runCleanup()
+            : await runHygiene({ routine, botId, apply: true, options: optionsFor(routine) });
         renderHygieneRun(target, run);
         rewireApply(slot);
         refreshHistory();
@@ -412,31 +460,24 @@ export async function renderHygienePanel(el) {
     });
   }
 
-  el.querySelector('#hyg-run-all')?.addEventListener('click', async () => {
-    const btn = el.querySelector('#hyg-run-all');
-    const out = el.querySelector('#hyg-run-all-results');
-    btn.disabled = true;
-    btn.textContent = 'Running...';
-    out.innerHTML = '';
-    const jobs = [];
-    for (const r of routines) {
-      if (r.scope === 'fleet') jobs.push({ routine: r.id, title: r.name || r.id });
-      else
-        for (const a of agents)
-          jobs.push({ routine: r.id, botId: a.id, title: `${r.name || r.id} · ${a.name || a.id}` });
-    }
-    if (jobs.length === 0) {
-      out.innerHTML = '<p class="text-dim text-sm">Nothing to run.</p>';
-    }
-    for (const job of jobs) {
-      const slot = document.createElement('div');
-      out.appendChild(slot);
-      await runAndRender(slot, job);
-    }
-    btn.disabled = false;
-    btn.textContent = 'Run all (preview)';
-    refreshHistory();
-  });
+  // One button for the whole fleet. Replaces the old "Run all (preview)",
+  // which fired one preview per routine per agent; Everything → Preview covers that.
+  const cleanupSlot = el.querySelector('.hyg-cleanup-slot');
+  const wireCleanup = () =>
+    wireTwoStep(cleanupSlot, {
+      label: 'Clean up everything',
+      confirmLabel: 'Confirm cleanup',
+      onConfirm: async () => {
+        const out = el.querySelector('#hyg-cleanup-result');
+        cleanupSlot.innerHTML = '<span class="text-dim text-sm">Cleaning up...</span>';
+        out.innerHTML = '<p class="text-dim text-sm">Cleaning up every agent...</p>';
+        const run = await runCleanup();
+        renderHygieneRun(out, run, { title: 'Clean up everything' });
+        wireCleanup();
+        refreshHistory();
+      },
+    });
+  wireCleanup();
 
   refreshHistory();
 }

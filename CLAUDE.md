@@ -168,14 +168,14 @@ Sección "Stats & Behaviour" del dashboard. Sólo lectura sobre la telemetría q
 
 ### Módulos Hygiene (`src/hygiene/`)
 
-Rutinas de mantenimiento deterministas (sin LLM) con `preview` (sin escrituras) y `apply`. **Apply nunca borra**: respalda cada archivo de soul en `<dir>/.versions/<archivo>.<ISO>.bak` y mueve lo que limpia a `<data>/_trash/<stamp>/…` con `manifest.json`. Rutas en `src/web/routes/hygiene.ts`, montadas en `/api/hygiene` (`GET /routines`, `POST /run { routine, botId?, apply?, options? }`, `GET /history?botId=&limit=`); rutinas de bot tenant-scoped, rutinas de flota sólo admin. UI en `#/stats/hygiene` y en el panel de cada bot en `#/stats/bot/:botId`.
+Rutinas de mantenimiento deterministas (sin LLM) con `preview` (sin escrituras) y `apply`. **Apply nunca borra**: respalda cada archivo de soul en `<dir>/.versions/<archivo>.<ISO>.bak` y mueve lo que limpia a `<data>/_trash/<stamp>/…` con `manifest.json`. Rutas en `src/web/routes/hygiene.ts`, montadas en `/api/hygiene` (`GET /routines`, `POST /run { routine, botId?, apply?, options? }`, `POST /cleanup` = `all` aplicado con `CLEANUP_OPTIONS` (`pruneOrphans`, `archiveStale`) para todos los bots del caller, `GET /history?botId=&limit=`). Todo run con apply trae `remaining`: un preview fresco tomado después de los fixes, que es lo que la UI muestra como abierto (los `findings` son el estado previo); rutinas de bot tenant-scoped, rutinas de flota sólo admin. UI en `#/stats/hygiene` y en el panel de cada bot en `#/stats/bot/:botId`.
 
 | Archivo | Responsabilidad |
 |---|---|
 | `types.ts` | `HygieneRoutine` (`preview`/`apply`), `HygieneFinding` (`kind`, `severity`, `fixable`, `fix`), `HygieneRun`, `HygieneContext` (`soulDir`, `workDir`, `allowedRoots`, `deps`), `HYGIENE_HISTORY_LIMIT = 500` |
 | `fs-safe.ts` | **Único módulo que muta el filesystem**: `backupFile` (convención `.versions` de `src/soul.ts`, sin poda), `TrashBatch` (mueve a `_trash/<stamp>/`, rename o copy+rm cross-device, `manifest.json`), `isWithinRoot` / `assertWithinRoots` |
 | `text-utils.ts` | `jaccard`, `textSimilarity`, `extractDates`, `daysBetween`, `localDate`, `titleTokens` |
-| `registry.ts` | `HygieneRegistry` (lookup, `buildContext` con la misma resolución de paths que `BotManager.startBot`, `run`, rutina virtual `all`), `HygieneHistory` → `<data>/hygiene/runs.jsonl` (últimos 500) |
+| `registry.ts` | `CLEANUP_OPTIONS`, `HygieneRegistry` (lookup, `buildContext` con la misma resolución de paths que `BotManager.startBot`, `run`, rutina virtual `all`), `HygieneHistory` → `<data>/hygiene/runs.jsonl` (últimos 500) |
 | `routines/goal-lint.ts` | GOALS.md vía el parser de `tools/goals.ts`: `archived-in-active` (→ Completed), `oversized-notes` (→ trim a 600 chars, texto completo al daily log), `duplicate-title`, `stale-block`, `dead-trigger` |
 | `routines/soul-structure.ts` | Envuelve `lintSoulDirectory` + `soul-equals-motivations`, `missing-memory-md` (→ crea), `missing-traits`, `stale-current-focus`, `last-review-failed`. Sólo reporta salvo la creación de MEMORY.md |
 | `routines/memory-hygiene.ts` | MEMORY.md y `memory/*.md` (archive intacto): `pii` (→ `[redacted:<kind>]`: email, phone, chat-id, money, custody), `stale-constraint` (→ marca `[stale as of …]` sólo si el tool-audit muestra la tool funcionando en 7 días), `daily-logs-pending` |

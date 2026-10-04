@@ -9,7 +9,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { appendEntry, readEntries } from '../../productions/changelog';
 import { analyzeCleanup } from '../../productions/cleanup';
 import { archiveFile } from '../../productions/files';
@@ -21,25 +21,41 @@ import type { HygieneApplyResult, HygieneContext, HygieneFinding, HygieneRoutine
 
 const DEFAULT_STALE_DAYS = 7;
 const NUMBER_PREFIX_RE = /^(\d{2})_/;
+/** `2026-10-03-slug.md`: dated productions are ordered, just not numbered. */
+const DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}[-_]/;
 const CHANGELOG = 'changelog.jsonl';
 /** Bookkeeping actions whose entry is *about* a path no longer being there. */
 const HISTORY_ACTIONS = new Set(['archive', 'delete']);
 
-/** Latest non-archive entry per path (entries are append-only). */
-function latestByPath(entries: ProductionEntry[]): Map<string, ProductionEntry> {
+/**
+ * Some bots log the absolute path of a file inside their own productions dir
+ * (`/app/productions/<bot>/x.md`). That is the same file as `x.md`: fold it to
+ * the relative form so it is neither "outside the dir" nor a missing file.
+ * Anything else is returned untouched.
+ */
+export function normalizeEntryPath(dir: string, path: string): string {
+  if (!isAbsolute(path)) return path;
+  const rel = relative(resolve(dir), resolve(path));
+  if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return path;
+  return rel.split(sep).join('/');
+}
+
+/** Latest non-archive entry per (normalized) path (entries are append-only). */
+function latestByPath(dir: string, entries: ProductionEntry[]): Map<string, ProductionEntry> {
   const map = new Map<string, ProductionEntry>();
   for (const e of entries) {
     // `infra`/note entries carry no path; they are bookkeeping, not files.
     if (typeof e.path !== 'string' || !e.path) continue;
     if (e.action === 'archive') {
-      if (e.archivedFrom) map.delete(e.archivedFrom);
+      if (e.archivedFrom) map.delete(normalizeEntryPath(dir, e.archivedFrom));
       continue;
     }
+    const path = normalizeEntryPath(dir, e.path);
     if (e.action === 'delete') {
-      map.delete(e.path);
+      map.delete(path);
       continue;
     }
-    map.set(e.path, e);
+    map.set(path, e);
   }
   return map;
 }
@@ -81,12 +97,13 @@ function isPrunableLine(line: string, targets: Set<string>, dir: string): Produc
     return null;
   }
   if (typeof entry?.path !== 'string' || !entry.path) return null;
-  if (!targets.has(entry.path)) return null;
+  const path = normalizeEntryPath(dir, entry.path);
+  if (!targets.has(path)) return null;
   if (entry.trackOnly) return null;
   if (HISTORY_ACTIONS.has(entry.action)) return null;
-  if (!assertWithinDir(dir, entry.path)) return null;
-  if (existsSync(join(dir, entry.path))) return null;
-  return entry;
+  if (!assertWithinDir(dir, path)) return null;
+  if (existsSync(join(dir, path))) return null;
+  return { ...entry, path };
 }
 
 /**
@@ -161,7 +178,7 @@ export const productionsTriage: HygieneRoutine = {
     const staleDays =
       Number(ctx.options.staleDays) > 0 ? Number(ctx.options.staleDays) : DEFAULT_STALE_DAYS;
     const entries = readEntries(join(dir, CHANGELOG));
-    const latest = latestByPath(entries);
+    const latest = latestByPath(dir, entries);
 
     for (const [path, e] of latest) {
       if (e.trackOnly) continue;
@@ -214,6 +231,7 @@ export const productionsTriage: HygieneRoutine = {
     const files = rootFiles(dir);
     const byNumber = new Map<string, string[]>();
     for (const name of files) {
+      if (DATE_PREFIX_RE.test(name)) continue;
       const m = name.match(NUMBER_PREFIX_RE);
       if (m) {
         const list = byNumber.get(m[1]) ?? [];

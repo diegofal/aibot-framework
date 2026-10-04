@@ -41,7 +41,8 @@ export const DEFAULT_CUSTODY_KEYWORDS = [
 ];
 
 /**
- * PII kinds that `apply` redacts by default. `money` is report-only: for the
+ * PII kinds that `apply` redacts by default. `money` is not reported unless
+ * opted in: for the
  * business/economics bots amounts are the content, not a leak. Pass
  * `options.redactKinds` to change the set (e.g. add 'money', or drop 'custody'
  * to leave family context to the operator's judgement).
@@ -202,6 +203,9 @@ export const memoryHygiene: HygieneRoutine = {
       const lines = content.split('\n');
 
       detectPii(content, { keywords }).forEach((hit, i) => {
+        // Amounts are content, not leaks: listing them on every run buried the
+        // real hits under findings no apply would ever clear.
+        if (hit.kind === 'money' && !redactKinds.has('money')) return;
         const fixable = redactKinds.has(hit.kind);
         findings.push({
           id: `memory-hygiene:pii:${file.rel}:${hit.line}:${i}`,

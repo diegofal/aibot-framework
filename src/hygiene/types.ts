@@ -51,7 +51,15 @@ export interface HygieneRun {
   dryRun: boolean;
   startedAt: string;
   finishedAt: string;
+  /** What the preview found — for an apply run, the state *before* the fixes. */
   findings: HygieneFinding[];
+  /**
+   * Apply runs only: a fresh preview taken after the fixes, i.e. what is still
+   * open. Absent on previews (there `findings` already is the current state).
+   */
+  remaining?: HygieneFinding[];
+  /** True when the run was a one-shot cleanup (apply with every opt-in fix on). */
+  cleanup?: boolean;
   applied: HygieneApplied[];
   skipped: HygieneSkipped[];
   backups: string[];

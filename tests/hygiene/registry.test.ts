@@ -178,6 +178,68 @@ describe('HygieneRegistry.run', () => {
     expect(existsSync(join(root, 'data', 'karma', 'ghost'))).toBe(false);
   });
 
+  test('apply records what is left afterwards in `remaining`', async () => {
+    writeFile(
+      join(root, 'data', 'tenants', '__admin__', 'bots', 'bot1', 'soul', 'GOALS.md'),
+      '## Active Goals\n- [ ] X\n  - status: archived\n  - priority: low\n'
+    );
+    const registry = makeRegistry();
+    const preview = await registry.run({ routine: 'goal-lint', botId: 'bot1' });
+    expect(preview.remaining).toBeUndefined();
+    expect(preview.findings.some((f) => f.kind === 'archived-in-active')).toBe(true);
+
+    const run = await registry.run({ routine: 'goal-lint', botId: 'bot1', apply: true });
+    expect(run.applied).toHaveLength(1);
+    expect(run.remaining?.some((f) => f.kind === 'archived-in-active')).toBe(false);
+  });
+
+  test('cleanup applies every opt-in fix fleet-wide and a second cleanup finds nothing to do', async () => {
+    const workDir = join(root, 'productions', 'bot1');
+    writeFile(join(workDir, '01_here.md'), 'here');
+    writeFile(
+      join(workDir, 'changelog.jsonl'),
+      `${[
+        {
+          id: 'a',
+          timestamp: NOW.toISOString(),
+          botId: 'bot1',
+          tool: 'file_write',
+          path: '01_here.md',
+          action: 'create',
+          description: 'x',
+          size: 1,
+        },
+        {
+          id: 'b',
+          timestamp: NOW.toISOString(),
+          botId: 'bot1',
+          tool: 'file_write',
+          path: '02_gone.md',
+          action: 'create',
+          description: 'x',
+          size: 1,
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n')}\n`
+    );
+    writeFile(join(root, 'data', 'karma', 'ghost', 'events.jsonl'), '{}');
+    const registry = makeRegistry();
+
+    const first = await registry.run({ routine: 'all', cleanup: true });
+    expect(first.dryRun).toBe(false);
+    expect(first.cleanup).toBe(true);
+    const actions = first.applied.map((a) => a.action);
+    expect(actions).toContain('prune-changelog');
+    expect(actions).toContain('trash');
+    expect(first.remaining?.some((f) => f.kind === 'orphan-reference')).toBe(false);
+    expect(first.remaining?.some((f) => f.kind === 'orphan-karma-dir')).toBe(false);
+
+    const second = await registry.run({ routine: 'all', cleanup: true });
+    expect(second.applied).toEqual([]);
+    expect(second.findings.filter((f) => f.fixable)).toEqual([]);
+  });
+
   test('passes deps through to routines', async () => {
     const soulDir = join(root, 'data', 'tenants', '__admin__', 'bots', 'bot1', 'soul');
     writeFile(

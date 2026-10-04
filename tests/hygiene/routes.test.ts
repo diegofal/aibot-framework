@@ -181,6 +181,38 @@ describe('POST /api/hygiene/run', () => {
   });
 });
 
+describe('POST /api/hygiene/cleanup', () => {
+  function cleanup(app: Hono) {
+    return app.request('/api/hygiene/cleanup', { method: 'POST' });
+  }
+
+  test('applies every fix fleet-wide, reports what is left, and a rerun has nothing to clean', async () => {
+    writeFile(join(root, 'data', 'karma', 'ghost', 'events.jsonl'), '{}');
+    const app = makeApp();
+    const run = await (await cleanup(app)).json();
+    expect(run.routine).toBe('all');
+    expect(run.dryRun).toBe(false);
+    expect(run.cleanup).toBe(true);
+    expect(run.applied.some((a: any) => a.action === 'trash')).toBe(true);
+    expect(Array.isArray(run.remaining)).toBe(true);
+    expect(run.remaining.some((f: any) => f.kind === 'orphan-karma-dir')).toBe(false);
+    expect(existsSync(join(root, 'data', 'karma', 'ghost'))).toBe(false);
+
+    const again = await (await cleanup(app)).json();
+    expect(again.applied).toEqual([]);
+
+    const hist = await (await app.request('/api/hygiene/history')).json();
+    expect(hist[0].runId).toBe(again.runId);
+  });
+
+  test('a tenant cleans only its own bots and never the fleet', async () => {
+    writeFile(join(root, 'data', 'karma', 'ghost', 'events.jsonl'), '{}');
+    const run = await (await cleanup(makeApp({ tenantId: 'tenant-A' }))).json();
+    expect(run.findings.some((f: any) => f.botId === 'bot2')).toBe(false);
+    expect(existsSync(join(root, 'data', 'karma', 'ghost'))).toBe(true);
+  });
+});
+
 describe('GET /api/hygiene/history', () => {
   test('tenants only see runs for their bots; admin sees fleet runs too', async () => {
     const admin = makeApp();

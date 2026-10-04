@@ -2744,6 +2744,17 @@ body.unauthed #topbar {
 .hyg-sub {
   margin-top: 10px;
 }
+details.hyg-sub > summary {
+  cursor: pointer;
+}
+.hyg-headline {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 8px 0 4px;
+}
+.hyg-cleanup-card {
+  margin-bottom: 12px;
+}
 .hyg-applied {
   display: flex;
   gap: 8px;
