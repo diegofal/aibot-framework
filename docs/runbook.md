@@ -39,6 +39,22 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — Rebuilt the container for the dashboard UX overhaul
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Claude (asked by Diego) |
+| **Why** | The UX overhaul (`f96dc98`, merged in `5dc2fad`) changed `src/`: Needs You bulk / act / clear-stale routes, the ask_human sweep for orphan inbox questions, feedback `botName`, productions archive body. The image predated them |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Image built and container recreated at 01:28; `healthy` after ~30 s. All enabled agents auto-started. Checked inside the container: `closeStaleInboxConversations` and the `clear-stale` route are present. Bots whose Telegram token Telegram rejects (401, `channelState: "revoked"`) started headless, as the existing fallback does; the UX work did not touch it.
+
+**Reversible?** Yes: check out the previous commit and rebuild (no volume or config change).
+
 ### 2026-10-03 — Fleet model switched to Sonnet 5.5 in the live config volume
 
 | | |
@@ -55,3 +71,19 @@ _Nothing pending._
 **Outcome.** All eight bots run on Sonnet 5.5 (none had a per-bot model override).
 
 **Reversible?** Yes: restore `config/config.json.bak-sonnet55-20261003` in the config volume and restart the container.
+
+### 2026-10-04 — Rebuilt the container for the query-log model fix
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Deploy `af2a064`: the LLM query log records the Claude model that answered instead of `"claude"` |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Image built and container recreated around 01:47 local; `healthy`. All enabled agents auto-started. Checked in `/app/data/llm-query-log/`: every entry after the rebuild shows `model: "claude-sonnet-5-5"` for all eight bots (planner, executor, curiosity steps); entries before it still say `"claude"`.
+
+**Reversible?** Yes: check out the previous commit and rebuild (no volume or config change).
