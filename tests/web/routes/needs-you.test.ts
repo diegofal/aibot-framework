@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'bun:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import {
   NEEDS_YOU_KINDS,
@@ -6,8 +8,10 @@ import {
   type NeedsYouSources,
   buildNeedsYou,
   needsYouRoutes,
+  needsYouSourcesFromBotManager,
   sortNeedsYou,
 } from '../../../src/web/routes/needs-you';
+import { createTempDir, removeTempDir } from '../../helpers/temp-dir';
 
 const noopLogger = {
   info: () => {},
@@ -604,5 +608,83 @@ describe('pure helpers', () => {
         NOW
       )
     ).toEqual([]);
+  });
+});
+
+describe('productions — orphan outputs (file gone from disk)', () => {
+  // 2026-10-04: changelog entries whose file had vanished stayed in the queue,
+  // and every "Clear" on them failed with "Not found or already resolved"
+  // because there was nothing left to archive.
+  it('drops an unreviewed output whose file no longer exists', async () => {
+    const src = sources({
+      productions: () => [
+        production('f1', 'b1', 'gone.md', 3),
+        production('f2', 'b1', 'here.md', 2),
+      ],
+      productionFileExists: (_botId, path) => path === 'here.md',
+    });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect((body.items as NeedsYouItem[]).map((i) => i.id)).toEqual(['production:b1:f2']);
+    expect(body.byKind.production).toBe(1);
+  });
+
+  it('keeps track-only outputs, whose files never live in the productions dir', async () => {
+    const src = sources({
+      productions: () => [production('f1', 'b1', '/elsewhere/x.md', 3, { trackOnly: true })],
+      productionFileExists: () => false,
+    });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect((body.items as NeedsYouItem[]).map((i) => i.id)).toEqual(['production:b1:f1']);
+  });
+
+  it('a throwing existence probe keeps the item (the queue never hides on a read error)', async () => {
+    const src = sources({
+      productions: () => [production('f1', 'b1', 'a.md', 3)],
+      productionFileExists: () => {
+        throw new Error('EACCES');
+      },
+    });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect((body.items as NeedsYouItem[]).map((i) => i.id)).toEqual(['production:b1:f1']);
+  });
+
+  it('without a probe every output is listed, as before', async () => {
+    const src = sources({ productions: () => [production('f1', 'b1', 'gone.md', 3)] });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect(body.byKind.production).toBe(1);
+  });
+});
+
+describe('needsYouSourcesFromBotManager — productionFileExists', () => {
+  it('checks the file under the productions service dir for the bot', () => {
+    const dir = createTempDir('needs-you-orphans');
+    try {
+      mkdirSync(join(dir, 'b1'), { recursive: true });
+      writeFileSync(join(dir, 'b1', 'here.md'), 'x');
+      const src = needsYouSourcesFromBotManager({
+        getAskHumanPending: () => [],
+        getPermissionsPending: () => [],
+        getAgentFeedbackBotIds: () => [],
+        getAgentFeedback: () => [],
+        getProductionsService: () => ({
+          getAllEntries: () => ({ entries: [] }),
+          resolveDir: (botId: string) => join(dir, botId),
+        }),
+      } as never);
+      expect(src.productionFileExists?.('b1', 'here.md')).toBe(true);
+      expect(src.productionFileExists?.('b1', 'gone.md')).toBe(false);
+    } finally {
+      removeTempDir(dir);
+    }
+  });
+
+  it('no productions service → no probe', () => {
+    const src = needsYouSourcesFromBotManager({
+      getAskHumanPending: () => [],
+      getPermissionsPending: () => [],
+      getAgentFeedbackBotIds: () => [],
+      getAgentFeedback: () => [],
+    } as never);
+    expect(src.productionFileExists).toBeUndefined();
   });
 });

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed (2026-10-04) — Needs You "Clear" failed on outputs whose file is gone
+- **Why.** "Clear N" on a Needs You group answered `Cleared 0 · N failed — Not found or already resolved`. Every failing item was an unreviewed output whose changelog entry outlived its file (16 in the live fleet: milei-rocca 10, ai-perfectionist 3, cryptik 2, job-seeker 1). The neutral action archives the file, and `archiveFile` can only fail when there is nothing to move.
+- **Fix.** `NeedsYouSources.productionFileExists(botId, path)` (wired to `existsSync` under `ProductionsService.resolveDir`) and `buildProductions` drops outputs whose file is gone: there is nothing to review. Track-only outputs are kept (their files never live in the productions dir), and a probe that throws keeps the item. Orphans stay visible to the hygiene routine `productions-triage` (`orphan-reference`), which prunes them from the changelog with a backup when run with `pruneOrphans`.
+
 ### Changed (2026-10-04) — Pages register their own `?` keys
 - **Why.** The `?` help sheet read a static `PAGE_SHORTCUTS` map in `web/ui/shortcuts-helpers.js`, keyed by route handler name, far from the code that binds the keys. No page called `registerPageShortcuts` (a UX-overhaul follow-up).
 - Each page now calls `registerPageShortcuts(list)` at the top of its render, before its first `await`. The router's `clearPageShortcuts` runs on leave, so a slow-loading page can't register after you've navigated away and label the next page.

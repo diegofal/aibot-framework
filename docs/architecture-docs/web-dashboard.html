@@ -1828,7 +1828,7 @@ compaction                            // Context compaction
         <div class="card">
           <h3>Needs You (session S5)</h3>
           <p>The first tab of the Needs You area (<code>#/needs</code>, <code>web/pages/needs-you.js</code>):
-             one queue for pending asks, permissions, proposals, unreviewed productions and feedback
+             one queue for pending asks, permissions, proposals, unreviewed productions (only those whose file is still on disk; orphans are left to the <code>productions-triage</code> hygiene routine) and feedback
              replies, from <code>GET /api/needs-you</code>. List on the left, detail on the right
              (stacked under 900px). Keyboard: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>a</kbd> approve /
              answer (submits the reply box or the quick-reply chip focused with <kbd>1</kbd>&ndash;<kbd>4</kbd>),
