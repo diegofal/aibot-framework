@@ -73,33 +73,36 @@ clear-stale and orphan-ask dismiss calls 404 in the running container. `web/` is
 Collected from the wave notes; none is in the plan's scope.
 
 **Backend / API**
-- No skills enable/disable API (built-ins live in `config.skills.enabled`), so the Skills page has no bulk
-  enable/disable; a note on the page says so.
-- `GET /api/curiosity/dispatches` caps `limit` at 200 and has no `offset` / `before` cursor; Dispatches'
-  "Load more" stops at 200.
 - Outputs bulk runs sequential per-item `evaluate` / `archive` calls; a `POST /api/productions/bulk` would be
   faster for large queues. Outputs' Archive still moves the file to `archived/` (could switch to the Needs You
   neutral archive path if that ever diverges).
 - Hygiene history "Load more" re-asks with `limit + 50` (the API pages only by `limit`, store cap 500).
+- `GET /api/curiosity/dispatches?before=` skips dispatches that share the exact cursor timestamp. A compound
+  `(createdAt, id)` cursor would close that gap if it ever matters.
+- `POST /api/skills/toggle` only rewrites config: built-in skill changes take effect after a restart. A live
+  load would also have to re-wire Telegram command handlers and per-bot skill cron jobs.
 
 **Needs You**
 - Bulk approve is offered only where it is safe and supported: asks, permissions and proposals have no bulk
   approve (asks need an answer, permissions/proposals only support deny/reject in bulk). Not offered on purpose,
   revisit if wanted.
-- `clear-stale` never touches `tool` items unless `kinds` asks for them.
 
 **Frontend**
-- No page calls `registerPageShortcuts` yet; the `?` help sheet reads the static `PAGE_SHORTCUTS` map
-  (needsYou, work, dispatches, agentHome, agentEdit, settings, agents). Page handlers stay local.
-- `.tool-runner-*` CSS (the old standalone page layout) is unused, and so is the `#topbar .nav-status` rule
-  after `#topbar-status` was removed.
+- `.tool-list-item.is-active`, `.tool-list-name` and `.tool-list-desc` in `web/style.css` are unused as well
+  (same old Tool Runner layout); left in place because only `.tool-runner-*` was in scope.
 - Pre-existing Biome `noForEach` warnings remain in the agent edit form code in `agents.js`.
 - Not verified in a browser (the dashboard login blocks automation); verified with `bun test tests/web`,
   smoke imports and `curl` of the served assets.
 
-**Housekeeping**
-- Leftover bundle-check output at `D:\tmp\ux-build-check` (deleting it was blocked by the permission system).
-- The wave 1 BaaS page edits were made on `main`'s working tree and re-applied onto this branch from a backup;
-  confirm `main` has no stray uncommitted copy before switching branches.
-- Flaky, unrelated: `tests/web/log-tail.test.ts` "detects rotation…" failed once in a full `tests/web` run and
-  passed on rerun.
+**Code health**
+- `bun run lint` passes with 283 warnings (183 `noNonNullAssertion`, 38 `noExplicitAny`, 38 `noForEach`, …).
+  They are `warn` in `biome.json` and do not fail CI; clearing them is its own change.
+
+**Resolved 2026-10-04**
+- Dispatches page past 200: `offset` / `before` on `GET /api/curiosity/dispatches` (`feat/dispatch-paging`).
+- Skills bulk enable/disable: `POST /api/skills/toggle` and the Skills page bar (`feat/skills-toggle`).
+- Dead `.tool-runner-*` and `#topbar .nav-status` CSS removed (`chore/dead-css`).
+- Pages call `registerPageShortcuts`; the static `PAGE_SHORTCUTS` map is gone (`refactor/page-shortcuts`).
+- The `log-tail` "detects rotation…" flake and the Hygiene "last 500 runs" timeout (`fix/flaky-tests`).
+- Dropped as stale: "`clear-stale` never touches `tool` items" (tools have no neutral action, and `kinds`
+  including `tool` is a 400), and both Housekeeping notes (`D:\tmp\ux-build-check` is gone; the branch merged).
