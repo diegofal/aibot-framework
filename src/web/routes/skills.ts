@@ -7,6 +7,10 @@ import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
 import type { SkillRegistry } from '../../core/skill-registry';
 import type { Logger } from '../../logger';
 import { generateSkill } from '../../skill-generator';
+import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
+
+/** Upper bound on ids per `POST /api/skills/toggle`. */
+export const MAX_TOGGLE_IDS = 100;
 
 export interface SkillsRouteDeps {
   skillRegistry: SkillRegistry;
@@ -93,6 +97,62 @@ export function skillsRoutes(deps: SkillsRouteDeps) {
       }));
 
     return c.json([...builtIn, ...external]);
+  });
+
+  // POST /toggle — { ids, enabled } bulk enable/disable of built-in skills.
+  // Rewrites config.skills.enabled (memory + config.json), so admin-only. Command
+  // handlers and per-bot skill jobs are wired at bot start / boot, so a change
+  // only takes effect after a restart; the response says so.
+  app.post('/toggle', async (c) => {
+    if (!isAdminOrSingleTenant(getTenantId(c))) {
+      return c.json({ error: 'Admin access required' }, 403);
+    }
+    const body = (await c.req.json().catch(() => null)) as {
+      ids?: unknown;
+      enabled?: unknown;
+    } | null;
+    const ids = body?.ids;
+    if (
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > MAX_TOGGLE_IDS ||
+      !ids.every((id) => typeof id === 'string' && id.length > 0) ||
+      typeof body?.enabled !== 'boolean'
+    ) {
+      return c.json(
+        { error: `Body must be { ids: string[1..${MAX_TOGGLE_IDS}], enabled: boolean }` },
+        400
+      );
+    }
+    const enable = body.enabled;
+    const known = new Set((await deps.skillRegistry.listAvailable()).map((s) => s.id));
+    const current = deps.config.skills.enabled;
+    const next = [...current];
+    const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+    for (const id of ids as string[]) {
+      if (!known.has(id)) {
+        results.push({ id, ok: false, error: 'Unknown built-in skill' });
+        continue;
+      }
+      const at = next.indexOf(id);
+      if (enable && at === -1) next.push(id);
+      if (!enable && at !== -1) next.splice(at, 1);
+      results.push({ id, ok: true });
+    }
+    const changed = next.length !== current.length || next.some((id, i) => id !== current[i]);
+    if (changed) {
+      try {
+        const raw = JSON.parse(readFileSync(deps.configPath, 'utf-8'));
+        raw.skills = { ...(raw.skills ?? {}), enabled: next };
+        writeFileSync(deps.configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+      } catch (err) {
+        deps.logger.error({ err, configPath: deps.configPath }, 'Failed to persist skills.enabled');
+        return c.json({ error: 'Could not write config.json; nothing changed' }, 500);
+      }
+      deps.config.skills.enabled = next;
+      deps.logger.info({ ids, enabled: enable }, 'Built-in skills toggled');
+    }
+    return c.json({ enabled: next, results, restartRequired: changed });
   });
 
   // GET /:id — Detail for a single skill

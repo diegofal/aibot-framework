@@ -1,6 +1,14 @@
 import { confirmDialog, emptyState, showToast } from '../ui/index.js';
 import { api, closeModal, escapeHtml, showModal } from './shared.js';
-import { filterSkills, skillsToolbar, validateSkillCreate } from './skills-helpers.js';
+import {
+  applyToggleResult,
+  filterSkills,
+  skillsBulkBar,
+  skillsToolbar,
+  toggleSummary,
+  toggleTargets,
+  validateSkillCreate,
+} from './skills-helpers.js';
 
 // Search + type/status filter of the skills list; survives re-renders.
 const skillsFilter = { query: '', type: '', status: '' };
@@ -27,7 +35,7 @@ function botNameBadge(skill) {
 export async function renderSkills(el) {
   el.innerHTML = '<div class="page-title">Skills</div><p class="text-dim">Loading...</p>';
 
-  const skills = await api('/api/skills');
+  let skills = await api('/api/skills');
   if (!Array.isArray(skills)) {
     el.innerHTML = `<div class="page-title">Skills</div>${emptyState({
       icon: '!',
@@ -45,11 +53,44 @@ export async function renderSkills(el) {
       <a href="#/automations/skills/new" class="btn btn-primary" data-page-new>+ Create Skill</a>
     </div>
     ${skillsToolbar(skillsFilter)}
-    <p class="text-dim text-sm skills-note">Built-in skills are switched on and off in <code>config.skills.enabled</code>; there is no per-skill toggle here yet.</p>
+    <p class="text-dim text-sm skills-note">Enabling or disabling a built-in skill updates <code>config.skills.enabled</code>; it takes effect after a restart. External skills are always live.</p>
+    <div id="skills-bulk"></div>
     <div id="skills-table-wrap"></div>
   `;
 
   const wrap = document.getElementById('skills-table-wrap');
+  const bulk = document.getElementById('skills-bulk');
+  // Selected built-in ids; survives filtering, cleared after a toggle.
+  const selected = new Set();
+
+  function drawBulk() {
+    bulk.innerHTML = skillsBulkBar({
+      selected: selected.size,
+      enable: toggleTargets(skills, selected, true).length,
+      disable: toggleTargets(skills, selected, false).length,
+    });
+  }
+
+  async function toggle(ids, enabled, btn) {
+    if (ids.length === 0) return;
+    if (btn) btn.disabled = true;
+    const res = await api('/api/skills/toggle', {
+      method: 'POST',
+      body: { ids, enabled },
+    }).catch((err) => ({ error: err?.message }));
+    if (!res || res.error) {
+      showToast(`Could not update skills: ${res?.error || 'the server did not answer.'}`, {
+        tone: 'danger',
+      });
+      if (btn) btn.disabled = false;
+      return;
+    }
+    skills = applyToggleResult(skills, res);
+    selected.clear();
+    draw();
+    const { text, tone } = toggleSummary(res, enabled);
+    showToast(text, { tone, duration: 6000 });
+  }
 
   function rowHtml(skill) {
     const countLabel =
@@ -63,10 +104,15 @@ export async function renderSkills(el) {
       skill.type === 'external'
         ? `<a href="#/automations/skills/${encodeURIComponent(skill.id)}/edit" class="btn btn-sm">Edit</a>
          <button class="btn btn-sm btn-danger" data-action="delete" data-id="${escapeHtml(skill.id)}">Delete</button>`
-        : '';
+        : `<button class="btn btn-sm" data-action="toggle" data-id="${escapeHtml(skill.id)}" data-enable="${skill.enabled ? 'false' : 'true'}">${skill.enabled ? 'Disable' : 'Enable'}</button>`;
     const muted =
       skill.type === 'builtin' && skill.enabled === false ? ' class="skills-row-off"' : '';
+    const pick =
+      skill.type === 'builtin'
+        ? `<input type="checkbox" data-select="${escapeHtml(skill.id)}" aria-label="Select ${escapeHtml(skill.name)}"${selected.has(skill.id) ? ' checked' : ''}>`
+        : '';
     return `<tr${muted} data-id="${escapeHtml(skill.id)}">
+      <td>${pick}</td>
       <td><a href="#/automations/skills/${encodeURIComponent(skill.id)}">${escapeHtml(skill.name)}</a></td>
       <td>${typeBadge(skill.type)}${enabledBadge(skill)}${botNameBadge(skill)}</td>
       <td class="text-dim">${escapeHtml(skill.version || '--')}</td>
@@ -77,6 +123,7 @@ export async function renderSkills(el) {
   }
 
   function draw() {
+    drawBulk();
     const visible = filterSkills(skills, skillsFilter);
     const countEl = document.getElementById('skills-count');
     if (countEl)
@@ -100,7 +147,7 @@ export async function renderSkills(el) {
       return;
     }
     wrap.innerHTML = `<table>
-      <thead><tr><th>Name</th><th>Type</th><th>Version</th><th>Commands / Tools</th><th>Warnings</th><th>Actions</th></tr></thead>
+      <thead><tr><th aria-label="Select"></th><th>Name</th><th>Type</th><th>Version</th><th>Commands / Tools</th><th>Warnings</th><th>Actions</th></tr></thead>
       <tbody id="skills-tbody">${visible.map(rowHtml).join('')}</tbody>
     </table>`;
   }
@@ -119,7 +166,31 @@ export async function renderSkills(el) {
     draw();
   });
 
+  wrap.addEventListener('change', (e) => {
+    const box = e.target.closest('input[data-select]');
+    if (!box) return;
+    if (box.checked) selected.add(box.dataset.select);
+    else selected.delete(box.dataset.select);
+    drawBulk();
+  });
+  bulk.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-bulk]');
+    if (!btn) return;
+    if (btn.dataset.bulk === 'clear') {
+      selected.clear();
+      draw();
+      return;
+    }
+    const enabled = btn.dataset.bulk === 'enable';
+    toggle(toggleTargets(skills, selected, enabled), enabled, btn);
+  });
+
   wrap.addEventListener('click', async (e) => {
+    const toggleBtn = e.target.closest('button[data-action="toggle"]');
+    if (toggleBtn) {
+      toggle([toggleBtn.dataset.id], toggleBtn.dataset.enable === 'true', toggleBtn);
+      return;
+    }
     const btn = e.target.closest('button[data-action="delete"]');
     if (!btn) return;
     const id = btn.dataset.id;

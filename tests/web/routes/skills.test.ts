@@ -585,3 +585,124 @@ describe('skills routes', () => {
     });
   });
 });
+
+describe('POST /api/skills/toggle', () => {
+  const builtins = [
+    { id: 'reminders', name: 'Reminders' },
+    { id: 'calendar', name: 'Calendar' },
+    { id: 'reddit', name: 'Reddit' },
+  ];
+  const configPath = join(TEST_DIR, 'config.json');
+
+  function setup(enabled: string[], opts: { tenantId?: string; configPath?: string } = {}) {
+    const config = makeConfig({
+      skills: { enabled: [...enabled], config: {} },
+    } as unknown as Partial<Config>);
+    const app = new Hono();
+    if (opts.tenantId) {
+      app.use('*', async (c, next) => {
+        c.set('tenant' as never, { tenantId: opts.tenantId } as never);
+        return next();
+      });
+    }
+    app.route(
+      '/api/skills',
+      skillsRoutes({
+        skillRegistry: makeSkillRegistry(builtins, enabled) as any,
+        config,
+        configPath: opts.configPath ?? configPath,
+        botManager: makeBotManager() as any,
+        logger: noopLogger,
+      })
+    );
+    return { app, config };
+  }
+
+  const post = (app: Hono, body: unknown) =>
+    app.request('/api/skills/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  const onDisk = () => JSON.parse(readFileSync(configPath, 'utf-8'));
+
+  beforeEach(() => {
+    mkdirSync(TEST_DIR, { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({ ollama: { model: 'm' }, skills: { enabled: ['reminders'], config: {} } })
+    );
+  });
+  afterEach(() => rmSync(TEST_DIR, { recursive: true, force: true }));
+
+  test('enables several skills at once, in memory and in config.json', async () => {
+    const { app, config } = setup(['reminders']);
+    const res = await post(app, { ids: ['calendar', 'reddit'], enabled: true });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.enabled).toEqual(['reminders', 'calendar', 'reddit']);
+    expect(body.results).toEqual([
+      { id: 'calendar', ok: true },
+      { id: 'reddit', ok: true },
+    ]);
+    expect(body.restartRequired).toBe(true);
+    expect(config.skills.enabled).toEqual(['reminders', 'calendar', 'reddit']);
+    expect(onDisk().skills.enabled).toEqual(['reminders', 'calendar', 'reddit']);
+    expect(onDisk().ollama).toEqual({ model: 'm' });
+  });
+
+  test('disables skills', async () => {
+    const { app, config } = setup(['reminders', 'calendar']);
+    const body = await (await post(app, { ids: ['reminders'], enabled: false })).json();
+    expect(body.enabled).toEqual(['calendar']);
+    expect(config.skills.enabled).toEqual(['calendar']);
+    expect(onDisk().skills.enabled).toEqual(['calendar']);
+  });
+
+  test('is idempotent: enabling an enabled skill adds no duplicate and reports no restart', async () => {
+    const { app, config } = setup(['reminders']);
+    const body = await (await post(app, { ids: ['reminders'], enabled: true })).json();
+    expect(body.results).toEqual([{ id: 'reminders', ok: true }]);
+    expect(body.restartRequired).toBe(false);
+    expect(config.skills.enabled).toEqual(['reminders']);
+  });
+
+  test('fails only the unknown ids and applies the rest', async () => {
+    const { app, config } = setup([]);
+    const body = await (await post(app, { ids: ['calendar', 'nope'], enabled: true })).json();
+    expect(body.results).toEqual([
+      { id: 'calendar', ok: true },
+      { id: 'nope', ok: false, error: 'Unknown built-in skill' },
+    ]);
+    expect(config.skills.enabled).toEqual(['calendar']);
+  });
+
+  test('rejects a malformed body with 400', async () => {
+    const { app } = setup([]);
+    expect((await post(app, { ids: [], enabled: true })).status).toBe(400);
+    expect((await post(app, { ids: 'calendar', enabled: true })).status).toBe(400);
+    expect((await post(app, { ids: ['calendar'] })).status).toBe(400);
+    expect((await post(app, { ids: [1], enabled: true })).status).toBe(400);
+    expect(
+      (await post(app, { ids: Array.from({ length: 101 }, (_, i) => `s${i}`), enabled: true }))
+        .status
+    ).toBe(400);
+  });
+
+  test('is admin-only in multi-tenant mode', async () => {
+    const { app, config } = setup([], { tenantId: 't1' });
+    const res = await post(app, { ids: ['calendar'], enabled: true });
+    expect(res.status).toBe(403);
+    expect(config.skills.enabled).toEqual([]);
+  });
+
+  test('leaves memory untouched when config.json cannot be written', async () => {
+    const { app, config } = setup(['reminders'], {
+      configPath: join(TEST_DIR, 'missing-dir', 'config.json'),
+    });
+    const res = await post(app, { ids: ['calendar'], enabled: true });
+    expect(res.status).toBe(500);
+    expect(config.skills.enabled).toEqual(['reminders']);
+  });
+});

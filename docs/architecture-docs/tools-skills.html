@@ -1528,6 +1528,7 @@ external-skill-loader         → ToolRegistry (transparent to consumers)</code>
             <tr><td><code>GET</code></td><td><code>/api/skills/:id</code></td><td>Detail for a single skill</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/skills/:id/source</code></td><td>Handler source code (external only)</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/skills</code></td><td>Create new external skill on disk</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/skills/toggle</code></td><td>Bulk enable/disable built-in skills: <code>{ ids: string[1..100], enabled }</code> → <code>{ enabled, results: [{ id, ok, error? }], restartRequired }</code>. Admin / single-tenant only (403 otherwise). Writes <code>skills.enabled</code> to <code>config.json</code> first, then memory (a failed write is a 500 and changes nothing). Unknown ids fail individually. Command handlers and per-bot skill jobs are wired at bot start / boot, so the change takes effect after a restart</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/skills/generate</code></td><td>AI-generate skill (preview only)</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/skills/generate/apply</code></td><td>Write generated files to disk</td></tr>
             <tr><td><code>PUT</code></td><td><code>/api/skills/:id</code></td><td>Update external skill files</td></tr>

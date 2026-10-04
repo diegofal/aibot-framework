@@ -1,9 +1,65 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  applyToggleResult,
   filterSkills,
+  skillsBulkBar,
   skillsToolbar,
+  toggleSummary,
+  toggleTargets,
   validateSkillCreate,
 } from '../../web/pages/skills-helpers.js';
+
+describe('skills bulk toggle helpers', () => {
+  const list = [
+    { id: 'a', type: 'builtin', enabled: true },
+    { id: 'b', type: 'builtin', enabled: false },
+    { id: 'c', type: 'builtin', enabled: false },
+    { id: 'x', type: 'external' },
+  ];
+
+  it('toggleTargets keeps only selected built-ins that would actually change', () => {
+    const sel = new Set(['a', 'b', 'c', 'x', 'gone']);
+    expect(toggleTargets(list, sel, true)).toEqual(['b', 'c']);
+    expect(toggleTargets(list, sel, false)).toEqual(['a']);
+  });
+
+  it('skillsBulkBar shows the counts and disables an action with nothing to do', () => {
+    const html = skillsBulkBar({ selected: 3, enable: 2, disable: 0 });
+    expect(html).toContain('3 selected');
+    expect(html).toContain('data-bulk="enable"');
+    expect(html).toContain('Enable 2');
+    expect(html).toMatch(/data-bulk="disable"[^>]*disabled/);
+    expect(html).toContain('data-bulk="clear"');
+    expect(skillsBulkBar({ selected: 0 })).toBe('');
+  });
+
+  it('applyToggleResult sets built-in `enabled` from the server list and leaves externals alone', () => {
+    const next = applyToggleResult(list, { enabled: ['b'] });
+    expect(next.map((s) => s.enabled)).toEqual([false, true, false, undefined]);
+    expect(list[1].enabled).toBe(false);
+  });
+
+  it('toggleSummary counts successes, names failures and flags the restart', () => {
+    const res = {
+      results: [
+        { id: 'b', ok: true },
+        { id: 'c', ok: true },
+        { id: 'zz', ok: false, error: 'Unknown built-in skill' },
+      ],
+      restartRequired: true,
+    };
+    expect(toggleSummary(res, true)).toEqual({
+      text: 'Enabled 2 skills · 1 failed (zz: Unknown built-in skill). Takes effect after a restart.',
+      tone: 'warn',
+    });
+    expect(
+      toggleSummary({ results: [{ id: 'a', ok: true }], restartRequired: true }, false)
+    ).toEqual({ text: 'Disabled 1 skill. Takes effect after a restart.', tone: 'ok' });
+    expect(
+      toggleSummary({ results: [{ id: 'a', ok: true }], restartRequired: false }, true).text
+    ).toBe('Enabled 1 skill.');
+  });
+});
 
 const skills = [
   { id: 'reflection', name: 'Reflection', type: 'builtin', enabled: true, description: 'nightly' },

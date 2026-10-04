@@ -56,6 +56,49 @@ export function skillsToolbar({ query = '', type = '', status = '' } = {}) {
 }
 
 /**
+ * Ids `POST /api/skills/toggle` should get for "Enable N" / "Disable N": the
+ * selected built-ins whose state would change. Externals are always live.
+ */
+export function toggleTargets(skills, selected, enabled) {
+  return (Array.isArray(skills) ? skills : [])
+    .filter((s) => s.type === 'builtin' && selected.has(s.id) && isEnabled(s) !== enabled)
+    .map((s) => s.id);
+}
+
+/** The selection toolbar; '' with nothing selected. */
+export function skillsBulkBar({ selected = 0, enable = 0, disable = 0 } = {}) {
+  if (!(selected > 0)) return '';
+  const dis = (n) => (n > 0 ? '' : ' disabled');
+  return `<div class="work-bulk-bar" role="toolbar" aria-label="Bulk actions">
+    <span class="work-bulk-count">${Number(selected)} selected</span>
+    <button type="button" class="btn btn-sm" data-bulk="enable"${dis(enable)}>Enable ${Number(enable)}</button>
+    <button type="button" class="btn btn-sm" data-bulk="disable"${dis(disable)}>Disable ${Number(disable)}</button>
+    <button type="button" class="btn btn-sm" data-bulk="clear">Clear selection</button>
+  </div>`;
+}
+
+/** A copy of the list with built-in `enabled` taken from the toggle response. */
+export function applyToggleResult(skills, res) {
+  const on = new Set(Array.isArray(res?.enabled) ? res.enabled : []);
+  return skills.map((s) => (s.type === 'builtin' ? { ...s, enabled: on.has(s.id) } : s));
+}
+
+/** Toast text + tone for a toggle response. */
+export function toggleSummary(res, enabled) {
+  const results = Array.isArray(res?.results) ? res.results : [];
+  const ok = results.filter((r) => r.ok).length;
+  const failed = results.filter((r) => !r.ok);
+  const parts = [`${enabled ? 'Enabled' : 'Disabled'} ${ok} skill${ok === 1 ? '' : 's'}`];
+  if (failed.length > 0) {
+    parts.push(
+      `${failed.length} failed (${failed.map((r) => `${r.id}: ${r.error || 'error'}`).join(', ')})`
+    );
+  }
+  const restart = res?.restartRequired ? ' Takes effect after a restart.' : '';
+  return { text: `${parts.join(' · ')}.${restart}`, tone: failed.length > 0 ? 'warn' : 'ok' };
+}
+
+/**
  * Field -> message for the create form. `mode: 'ai'` needs every field (the
  * generator works from the purpose); `'manual'` only id + name.
  */

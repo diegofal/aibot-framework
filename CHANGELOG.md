@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added (2026-10-04) — Enable and disable built-in skills from the Skills page
+- **Why.** Built-in skills could only be switched on in `config.skills.enabled` by hand, so the Skills page had no toggle or bulk action (a UX-overhaul follow-up).
+- **API** `POST /api/skills/toggle { ids: string[1..100], enabled: boolean }` (`src/web/routes/skills.ts`) → `{ enabled, results: [{ id, ok, error? }], restartRequired }`.
+  - Admin / single-tenant only, since it rewrites global config.
+  - Unknown ids fail individually (`Unknown built-in skill`). The rest are applied, without duplicates.
+  - Writes `config.json` (raw JSON, other keys untouched) before touching memory: a failed write is a 500 and changes nothing.
+  - `restartRequired` is true only when the list changed. It doesn't load or unload skills live: Telegram command handlers and per-bot skill cron jobs are wired at bot start and boot, so a live load would only half-apply.
+- **Skills page:** built-in rows get a checkbox and an Enable/Disable button. With rows selected, a bar offers Enable N · Disable N · Clear selection (counts only the rows that would change). The toast reports successes, failures and "Takes effect after a restart." Helpers `toggleTargets`, `skillsBulkBar`, `applyToggleResult`, `toggleSummary` live in `skills-helpers.js`.
+
 ### Added (2026-10-04) — Dispatches page past 200
 - **Why.** `GET /api/curiosity/dispatches` capped `limit` at 200 with no cursor, so the Dispatches page's "Load more" stopped at 200 (a UX-overhaul follow-up).
 - **API** (`src/web/routes/curiosity.ts`): `offset` (skips after the fleet merge; garbage reads as 0) and `before=<iso>` (only dispatches strictly older; unparsable → 400). The response adds `hasMore` and `nextBefore` (the last item's `createdAt`); `dispatches` is unchanged. Each bot's store is now read in full rather than up to `limit`, which costs the same: `listDispatches` already read the whole JSONL. Faces are resolved only for the returned page. Known edge: dispatches sharing the exact cursor timestamp are skipped.
