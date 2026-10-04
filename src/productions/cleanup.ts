@@ -76,6 +76,7 @@ export function analyzeCleanup(ctx: AnalyzeCleanupContext): CleanupCandidate[] {
     relativePath: string;
     absPath: string;
     size: number;
+    mtimeMs: number;
   }
 
   const files: CleanupFile[] = [];
@@ -102,14 +103,25 @@ export function analyzeCleanup(ctx: AnalyzeCleanupContext): CleanupCandidate[] {
       } else {
         if (!trackedPaths.has(relPath)) continue;
         if (now - stat.mtimeMs < GRACE_PERIOD_MS) continue;
-        files.push({ relativePath: relPath, absPath: fullPath, size: stat.size });
+        files.push({
+          relativePath: relPath,
+          absPath: fullPath,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        });
       }
     }
   };
   walk(dir, '');
+  // Oldest first (ties by path), so a duplicate always points at the oldest
+  // copy. readdirSync order is filesystem-dependent (alphabetical on NTFS,
+  // hash order on ext4), which made "the original" vary by machine.
+  files.sort(
+    (a, b) => a.mtimeMs - b.mtimeMs || (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0)
+  );
 
   const candidates: CleanupCandidate[] = [];
-  const hashMap = new Map<string, string>(); // hash → first relativePath
+  const hashMap = new Map<string, string>(); // hash → oldest relativePath
 
   for (const f of files) {
     if (approvedPaths.has(f.relativePath)) continue;

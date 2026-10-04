@@ -11,12 +11,13 @@
  * configured. These tests assert the behaviour from the conversation entry
  * point, independently of which layer implements it.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { ContextCompactor } from '../src/bot/context-compaction';
 import { ConversationPipeline } from '../src/bot/conversation-pipeline';
 import { createLLMClient } from '../src/core/llm-client';
 
-const realClaudeCli = await import('../src/claude-cli');
+// A copy, not the namespace: mock.module rewrites the namespace in place.
+const realClaudeCli = { ...(await import('../src/claude-cli')) };
 
 /** Claude CLI behaviour for the current test (set per test). */
 let claudeBehaviour: () => Promise<{ response: string; usage?: unknown }> = () =>
@@ -157,6 +158,13 @@ beforeEach(() => {
 });
 afterEach(() => {
   mock.restore();
+});
+// mock.restore() does not undo mock.module, and Bun keeps module mocks for the
+// rest of the process: without this, every later test file got the stubbed
+// claudeGenerateWithTools (tests/claude-cli-tools.test.ts failed on CI, where
+// it happens to run after this file).
+afterAll(() => {
+  mock.module('../src/claude-cli', () => realClaudeCli);
 });
 
 describe('claude-cli bot conversations stay on claude-cli', () => {

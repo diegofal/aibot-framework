@@ -97,6 +97,9 @@ Collected from the wave notes; none is in the plan's scope.
 **Code health**
 - `bun run lint` passes with 283 warnings (183 `noNonNullAssertion`, 38 `noExplicitAny`, 38 `noForEach`, …).
   They are `warn` in `biome.json` and do not fail CI; clearing them is its own change.
+- `tests/web/routes/{agent-feedback,conversations,productions,web-tool-helpers}.test.ts` also `mock.module`
+  `src/claude-cli` (only `claudeGenerate`) and never restore the real module in `afterAll`. Not failing today,
+  but the same leak as the one fixed in `conversation-backend-pinning.test.ts` if file order changes.
 
 **Resolved 2026-10-04**
 - Dispatches page past 200: `offset` / `before` on `GET /api/curiosity/dispatches` (`feat/dispatch-paging`).
