@@ -387,3 +387,10 @@ export function homeKeyAction(e) {
   if (isTypingTarget(e.target)) return null;
   return HOME_KEYS[String(e.key ?? '')] ?? null;
 }
+
+/** Keys Agent Home binds, for the `?` help sheet (registerPageShortcuts). */
+export const AGENT_HOME_SHORTCUTS = [
+  ['r', 'Run now'],
+  ['e', 'Edit'],
+  ['c', 'Focus the chat'],
+];

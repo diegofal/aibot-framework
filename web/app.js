@@ -109,13 +109,11 @@ initPalette({
 
 // Global keys (UX overhaul wave 2): g+letter jumps, / filter, n new, ? help.
 // See web/ui/shortcuts.js.
-let currentHandler = null;
 initShortcuts({
   ctx: () => navCtx(),
   navigate: (href) => {
     location.hash = href;
   },
-  currentHandler: () => currentHandler,
   canUse: () => !document.body.classList.contains('unauthed'),
 });
 
@@ -242,7 +240,6 @@ function renderChrome(hash) {
 function navigate() {
   setDrawer(false);
   lifecycle.leave();
-  currentHandler = null;
 
   // Auth gate: require login in multi-tenant mode
   if (multiTenantEnabled && !getAuthToken()) {
@@ -283,7 +280,6 @@ function navigate() {
   const hit = matchRoute(hash);
   if (hit) {
     const handler = handlers[hit.route.handler];
-    currentHandler = hit.route.handler;
     lifecycle.enter(handler.destroys, handler(...hit.args));
     return;
   }

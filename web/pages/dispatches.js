@@ -10,6 +10,7 @@
  * "Load more" asks for the next older page with the `nextBefore` cursor and appends it.
  */
 import { emptyState, showToast, skeleton, tabs } from '../ui/index.js';
+import { registerPageShortcuts } from '../ui/shortcuts.js';
 import { authedAvatarSrc } from './agent-face.js';
 import {
   DISPATCH_FILTERS,
@@ -22,6 +23,7 @@ import { api } from './shared.js';
 import {
   DISPATCH_KEYS,
   DISPATCH_PAGE,
+  DISPATCH_SHORTCUTS,
   keyAction,
   mergeDispatchPage,
   moveIndex,
@@ -54,6 +56,7 @@ function storedFilter() {
 }
 
 export async function renderDispatches(el) {
+  registerPageShortcuts(DISPATCH_SHORTCUTS);
   destroyDispatches();
   listeners = new AbortController();
   const { signal } = listeners;

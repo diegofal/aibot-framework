@@ -1748,7 +1748,7 @@ compaction                            // Context compaction
       <p>
         <code>web/ui/shortcuts.js</code> (<code>initShortcuts</code>, <code>registerPageShortcuts</code>,
         <code>clearPageShortcuts</code>, <code>openShortcutHelp</code>) over the pure <code>web/ui/shortcuts-helpers.js</code>
-        (<code>GO_KEYS</code>, <code>G_TIMEOUT_MS</code>, <code>GLOBAL_SHORTCUTS</code>, <code>PAGE_SHORTCUTS</code> by handler name,
+        (<code>GO_KEYS</code>, <code>G_TIMEOUT_MS</code>, <code>GLOBAL_SHORTCUTS</code>,
         <code>pageShortcutsFor</code>, <code>shouldIgnoreKey</code>, <code>resolveShortcut</code>, <code>goTarget</code>,
         <code>helpSheetMarkup</code>; <code>tests/web/shortcuts-helpers.test.ts</code>). Global keys:
         <kbd>g</kbd> then <kbd>h</kbd>/<kbd>a</kbd>/<kbd>n</kbd>/<kbd>w</kbd>/<kbd>u</kbd>/<kbd>i</kbd>/<kbd>s</kbd> jumps to
@@ -1765,7 +1765,13 @@ compaction                            // Context compaction
         (<kbd>r</kbd> Run now, <kbd>e</kbd> Edit, <kbd>c</kbd> chat), Agent edit and Settings (<kbd>Ctrl/&#8984;+S</kbd> save).
         Page-local handlers live on <code>document</code> behind an <code>AbortController</code>, call
         <code>preventDefault()</code> on consumed keys and skip keys while a <code>.ui-dialog</code> is open. The help sheet
-        reads the static <code>PAGE_SHORTCUTS</code> map; no page calls <code>registerPageShortcuts</code> yet.
+        shows what the current page registered: each page calls <code>registerPageShortcuts(list)</code> before its
+        first <code>await</code> (the router's <code>clearPageShortcuts</code> runs on leave, so a slow page can't label
+        the next one), with its list next to its key handling: <code>SHORTCUTS</code> (needs-you-helpers),
+        <code>WORK_SHORTCUTS</code> / <code>DISPATCH_SHORTCUTS</code> (work-helpers), <code>AGENT_HOME_SHORTCUTS</code>,
+        <code>AGENT_EDIT_SHORTCUTS</code> (agent-form-helpers), <code>SETTINGS_SHORTCUTS</code>,
+        <code>AGENTS_SHORTCUTS</code> (agents-list-helpers). <code>tests/web/page-shortcuts.test.ts</code> checks each
+        list and that each render registers it before its first <code>await</code>.
       </p>
 
       <div class="card-grid cols-2">

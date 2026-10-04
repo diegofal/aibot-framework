@@ -3,11 +3,9 @@ import {
   GLOBAL_SHORTCUTS,
   GO_KEYS,
   G_TIMEOUT_MS,
-  PAGE_SHORTCUTS,
   goTarget,
   helpSheetMarkup,
   initialShortcutState,
-  pageShortcutsFor,
   resolveShortcut,
   shouldIgnoreKey,
 } from '../../web/ui/shortcuts-helpers.js';
@@ -119,22 +117,8 @@ describe('goTarget', () => {
   });
 });
 
-describe('page shortcuts and the help sheet', () => {
-  it('collects the keys each page documented', () => {
-    expect(pageShortcutsFor('needsYou').map((r) => r[0])).toContain('x');
-    expect(pageShortcutsFor('work').map((r) => r[0])).toContain('a');
-    expect(pageShortcutsFor('dispatches').map((r) => r[0])).toContain('+ / =');
-    expect(pageShortcutsFor('agentHome').map((r) => r[0])).toEqual(['r', 'e', 'c']);
-    expect(pageShortcutsFor('agentEdit').map((r) => r[0])).toContain('Ctrl/⌘ + S');
-    expect(pageShortcutsFor('settings').map((r) => r[0])).toContain('Ctrl/⌘ + S');
-    expect(pageShortcutsFor('nope')).toEqual([]);
-    expect(Object.keys(PAGE_SHORTCUTS).length).toBeGreaterThan(4);
-  });
-
-  it('registered keys win over the defaults', () => {
-    expect(pageShortcutsFor('work', [['z', 'Zap']])).toEqual([['z', 'Zap']]);
-  });
-
+// Per-page lists and pageShortcutsFor: tests/web/page-shortcuts.test.ts.
+describe('the help sheet', () => {
   it('renders global keys and the page keys, escaped', () => {
     const html = helpSheetMarkup(GLOBAL_SHORTCUTS, [['<x>', 'Do <b>']]);
     expect(html).toContain('Global');

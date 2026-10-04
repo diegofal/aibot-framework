@@ -8,8 +8,10 @@
  * ride the shared `watchAgent()` link.
  */
 import { card, emptyState, showToast, skeleton } from '../ui/index.js';
+import { registerPageShortcuts } from '../ui/shortcuts.js';
 import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.js';
 import {
+  AGENT_HOME_SHORTCUTS,
   applyPresence,
   goalsColumns,
   homeKeyAction,
@@ -326,6 +328,7 @@ function scheduleHomeRefresh(el, id) {
 }
 
 export async function renderAgentHome(el, id) {
+  registerPageShortcuts(AGENT_HOME_SHORTCUTS);
   destroyAgentHome();
   el.innerHTML = `<div style="max-width:720px">${skeleton({ lines: 2 })}<div style="height:16px"></div>${skeleton({ block: true, height: 220 })}</div>`;
 

@@ -12,7 +12,6 @@
  * Tests: tests/web/shortcuts-helpers.test.ts.
  */
 import { AREAS, areaHref, visibleAreas } from '../nav-routes.js';
-import { SHORTCUTS as NEEDS_SHORTCUTS } from '../pages/needs-you-helpers.js';
 import { esc } from './escape.js';
 
 export const G_TIMEOUT_MS = 1500;
@@ -42,40 +41,12 @@ export const GLOBAL_SHORTCUTS = [
 ];
 
 /**
- * Keys each page binds itself (documented by the wave-1 notes), by route
- * handler name. A page can override its list at runtime through
- * `registerPageShortcuts` in shortcuts.js.
+ * The current page's keys for the help sheet: whatever it passed to
+ * `registerPageShortcuts` (shortcuts.js) on render, or none. Each page keeps
+ * its list next to its own key handling, e.g. `WORK_SHORTCUTS` in work-helpers.js.
  */
-export const PAGE_SHORTCUTS = {
-  needsYou: NEEDS_SHORTCUTS,
-  work: [
-    ['j / ↓', 'Next output'],
-    ['k / ↑', 'Previous output'],
-    ['a', 'Approve'],
-    ['x', 'Reject'],
-    ['Space', 'Select / unselect'],
-    ['Enter / o', 'Open the file'],
-    ['Esc', 'Clear the selection'],
-  ],
-  dispatches: [
-    ['j / ↓', 'Next dispatch'],
-    ['k / ↑', 'Previous dispatch'],
-    ['+ / =', 'Thumbs up'],
-    ['-', 'Thumbs down'],
-  ],
-  agentHome: [
-    ['r', 'Run now'],
-    ['e', 'Edit'],
-    ['c', 'Focus the chat'],
-  ],
-  agentEdit: [['Ctrl/⌘ + S', 'Save']],
-  settings: [['Ctrl/⌘ + S', 'Save the changed sections']],
-  agents: [['Esc', 'Clear the search (while in it)']],
-};
-
-export function pageShortcutsFor(handler, registered = null) {
-  if (Array.isArray(registered) && registered.length > 0) return registered;
-  return PAGE_SHORTCUTS[handler] ?? [];
+export function pageShortcutsFor(registered = null) {
+  return Array.isArray(registered) ? registered : [];
 }
 
 export function initialShortcutState() {

@@ -355,3 +355,22 @@ export function mergeDispatchPage(shown, page) {
   const seen = new Set(shown.map((d) => `${d.botId}\u0000${d.id}`));
   return [...shown, ...page.filter((d) => !seen.has(`${d.botId}\u0000${d.id}`))];
 }
+
+/** Keys Outputs binds, for the `?` help sheet (registerPageShortcuts). */
+export const WORK_SHORTCUTS = [
+  ['j / ↓', 'Next output'],
+  ['k / ↑', 'Previous output'],
+  ['a', 'Approve'],
+  ['x', 'Reject'],
+  ['Space', 'Select / unselect'],
+  ['Enter / o', 'Open the file'],
+  ['Esc', 'Clear the selection'],
+];
+
+/** Keys Dispatches binds, for the `?` help sheet (registerPageShortcuts). */
+export const DISPATCH_SHORTCUTS = [
+  ['j / ↓', 'Next dispatch'],
+  ['k / ↑', 'Previous dispatch'],
+  ['+ / =', 'Thumbs up'],
+  ['-', 'Thumbs down'],
+];

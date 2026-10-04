@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed (2026-10-04) — Pages register their own `?` keys
+- **Why.** The `?` help sheet read a static `PAGE_SHORTCUTS` map in `web/ui/shortcuts-helpers.js`, keyed by route handler name, far from the code that binds the keys. No page called `registerPageShortcuts` (a UX-overhaul follow-up).
+- Each page now calls `registerPageShortcuts(list)` at the top of its render, before its first `await`. The router's `clearPageShortcuts` runs on leave, so a slow-loading page can't register after you've navigated away and label the next page.
+  - The lists sit next to each page's key handling: `SHORTCUTS` (needs-you-helpers), `WORK_SHORTCUTS` / `DISPATCH_SHORTCUTS` (work-helpers), `AGENT_HOME_SHORTCUTS`, `AGENT_EDIT_SHORTCUTS` (agent-form-helpers), `SETTINGS_SHORTCUTS`, `AGENTS_SHORTCUTS` (agents-list-helpers). The rows are unchanged.
+- `PAGE_SHORTCUTS` is removed. `pageShortcutsFor(registered)` now only returns the registration. The `currentHandler` dep of `initShortcuts`, and its plumbing in `app.js`, existed only for that lookup and are removed too. `shortcuts-helpers.js` no longer imports a page module.
+- `tests/web/page-shortcuts.test.ts`: each list, and a source check that each render registers it before its first `await`.
+
 ### Removed (2026-10-04) — Dead dashboard CSS
 - `web/style.css`: the `.tool-runner-*` rules (layout of the old standalone Tool Runner page, plus their 760 px media query) and the mobile `#topbar .nav-status` rule (`#nav-status` lives in the sidebar's `.nav-foot`, never in `#topbar`). No markup or script references any of them. `.nav-status` itself and `.tool-run-output` are still used and stay. A UX-overhaul follow-up.
 

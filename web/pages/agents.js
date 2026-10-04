@@ -1,8 +1,10 @@
 import { registerNavGuard } from '../nav-guard.js';
 import { confirmDialog, emptyState, initMenus, showToast } from '../ui/index.js';
+import { registerPageShortcuts } from '../ui/shortcuts.js';
 import { CUSTOM_VOICE, resolveVoiceChoice, voiceOptions } from './agent-face-helpers.js';
 import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.js';
 import {
+  AGENT_EDIT_SHORTCUTS,
   claudeModelSelect,
   editReturnHash,
   editSectionNav,
@@ -14,6 +16,7 @@ import {
 } from './agent-form-helpers.js';
 import { applyPresence, homeTabs, presenceHeader } from './agent-home-helpers.js';
 import {
+  AGENTS_SHORTCUTS,
   agentsTable,
   bulkPlan,
   bulkSummary,
@@ -391,6 +394,7 @@ const BULK_VERBS = {
 let listState = null;
 
 export async function renderAgents(el) {
+  registerPageShortcuts(AGENTS_SHORTCUTS);
   el.innerHTML = '<div class="page-title">Agents</div><p class="text-dim">Loading...</p>';
 
   const [agents, karmaScores, loopState, defaults, llmStatsRes] = await Promise.all([
@@ -1697,6 +1701,7 @@ function buildSoulStatusBanner(soulStatus) {
 }
 
 export async function renderAgentEdit(el, id) {
+  registerPageShortcuts(AGENT_EDIT_SHORTCUTS);
   const [agent, skills, defaults, soulStatus] = await Promise.all([
     api(`/api/agents/${id}`),
     api('/api/skills'),

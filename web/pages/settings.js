@@ -1,6 +1,8 @@
 import { registerNavGuard } from '../nav-guard.js';
 import { confirmDialog, promptDialog, showToast } from '../ui/index.js';
+import { registerPageShortcuts } from '../ui/shortcuts.js';
 import {
+  SETTINGS_SHORTCUTS,
   ccliModelSelect,
   dirtySections,
   jumpLinksMarkup,
@@ -20,6 +22,7 @@ let settingsDraft = null;
 let detachSettingsGuards = null;
 
 export async function renderSettings(el) {
+  registerPageShortcuts(SETTINGS_SHORTCUTS);
   const { role } = getAuthContext();
   if (role === 'tenant') {
     el.innerHTML = '<p class="text-dim">Access denied.</p>';

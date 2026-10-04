@@ -30,8 +30,6 @@ let deps = {
   navigate: (href) => {
     if (typeof location !== 'undefined') location.hash = href;
   },
-  /** () => string|null — the route handler name of the current page. */
-  currentHandler: () => null,
   /** () => boolean — false on the login screen. */
   canUse: () => true,
 };
@@ -97,7 +95,7 @@ function pageElement(selector) {
 export function openShortcutHelp() {
   openSheet({
     title: 'Keyboard shortcuts',
-    body: helpSheetMarkup(GLOBAL_SHORTCUTS, pageShortcutsFor(deps.currentHandler(), registered)),
+    body: helpSheetMarkup(GLOBAL_SHORTCUTS, pageShortcutsFor(registered)),
   });
 }
 

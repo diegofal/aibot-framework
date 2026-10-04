@@ -137,3 +137,6 @@ export function tokenCell(token) {
     t
   )}">••••••••</code><button type="button" class="btn btn-sm" data-token-toggle aria-pressed="false">Show</button><button type="button" class="btn btn-sm" data-token-copy title="Copy what the server shows (a masked preview or the env reference)">Copy</button></span>`;
 }
+
+/** Keys the agent edit form binds, for the `?` help sheet (registerPageShortcuts). */
+export const AGENT_EDIT_SHORTCUTS = [['Ctrl/⌘ + S', 'Save']];

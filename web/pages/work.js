@@ -12,11 +12,13 @@
  * clears the selection. The file tree stays under the Productions tab.
  */
 import { confirmDialog, showToast, skeleton, undoable } from '../ui/index.js';
+import { registerPageShortcuts } from '../ui/shortcuts.js';
 import { authedAvatarSrc } from './agent-face.js';
 import { prodRequest } from './productions-helpers.js';
 import { api } from './shared.js';
 import {
   WORK_KEYS,
+  WORK_SHORTCUTS,
   bulkSummary,
   bulkTargets,
   entriesList,
@@ -57,6 +59,7 @@ function applyLocal(entry, action) {
 }
 
 export async function renderWork(el) {
+  registerPageShortcuts(WORK_SHORTCUTS);
   destroyWork();
   listeners = new AbortController();
   const { signal } = listeners;

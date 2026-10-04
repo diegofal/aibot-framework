@@ -24,7 +24,9 @@ import {
   showToast,
   undoable,
 } from '../ui/index.js';
+import { registerPageShortcuts } from '../ui/shortcuts.js';
 import {
+  SHORTCUTS,
   ageGroupOf,
   buildRequest,
   bulkBar,
@@ -459,6 +461,7 @@ function onKey(e) {
  * the agent filter.
  */
 export async function renderNeedsYou(el, { bot = null } = {}) {
+  registerPageShortcuts(SHORTCUTS);
   destroyNeedsYou();
   root = el;
   el.innerHTML = '<div class="page-title">Needs You</div><p class="text-dim">Loading…</p>';

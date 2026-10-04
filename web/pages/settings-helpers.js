@@ -149,3 +149,6 @@ export function jumpLinksMarkup(sections = JUMP_SECTIONS) {
     )
     .join('')}</nav>`;
 }
+
+/** Keys Settings binds, for the `?` help sheet (registerPageShortcuts). */
+export const SETTINGS_SHORTCUTS = [['Ctrl/⌘ + S', 'Save the changed sections']];

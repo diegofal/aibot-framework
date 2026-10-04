@@ -463,3 +463,6 @@ export function bulkSummary(verb, results = [], skipped = 0) {
     results.length === 0 ? 'muted' : failed.length === 0 ? 'ok' : ok === 0 ? 'danger' : 'warn';
   return { text: parts.join(' · '), tone };
 }
+
+/** Keys the agents list binds, for the `?` help sheet (registerPageShortcuts). */
+export const AGENTS_SHORTCUTS = [['Esc', 'Clear the search (while in it)']];
