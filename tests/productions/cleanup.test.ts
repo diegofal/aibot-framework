@@ -116,6 +116,33 @@ describe('analyzeCleanup', () => {
     expect(result[0].reason).toContain('duplicate of first.md');
   });
 
+  // The original used to be whichever file readdirSync returned first:
+  // alphabetical on NTFS, hash order on ext4 (the CI runner). It is now the
+  // oldest copy, ties broken by path, whatever order the filesystem lists them in.
+  test('keeps the oldest copy and flags the newer one, regardless of name order', () => {
+    const dir = join(TEMP_DIR, 'bot1');
+    mkdirSync(dir, { recursive: true });
+    const content = 'duplicate content that is more than 50 bytes long — padded so size > 50';
+    writeFileSync(join(dir, 'a-copy.md'), content, 'utf-8');
+    writeFileSync(join(dir, 'b-original.md'), content, 'utf-8');
+    writeChangelog(dir, [
+      entry({ id: '1', path: 'b-original.md' }),
+      entry({ id: '2', path: 'a-copy.md' }),
+    ]);
+
+    const now = Date.now() + 600_000;
+    const { utimesSync } = require('node:fs');
+    const older = (now - 300_000) / 1000;
+    const newer = (now - 120_000) / 1000;
+    utimesSync(join(dir, 'b-original.md'), older, older);
+    utimesSync(join(dir, 'a-copy.md'), newer, newer);
+
+    const result = analyzeCleanup({ dir, now, coherenceCheck: noCoherenceCheck });
+    expect(result).toHaveLength(1);
+    expect(result[0].path).toBe('a-copy.md');
+    expect(result[0].reason).toContain('duplicate of b-original.md');
+  });
+
   test('flags incoherent .md files via the coherenceCheck callback', () => {
     const dir = join(TEMP_DIR, 'bot1');
     mkdirSync(dir, { recursive: true });

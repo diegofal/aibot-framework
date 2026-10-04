@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (2026-10-04) — The two tests that failed only on the GitHub runner
+- **Why.** The first CI run on the repinned `setup-bun` (run 37220683150) got lint and typecheck green but failed 2 of 6225 tests that pass on Windows and in `oven/bun:1.3.11`. Both depended on ordering that differs on the runner.
+- **Duplicate detection** (`src/productions/cleanup.ts`, also used by Hygiene's productions triage): `analyzeCleanup` treated whichever file `readdirSync` returned first as the original, and that's alphabetical on NTFS but hash order on ext4. Files are now sorted oldest first (ties by path) before hashing, so a duplicate always points at the oldest copy. New test: an older `b-original.md` is kept over a newer `a-copy.md`.
+- **Module mock leak** (`tests/conversation-backend-pinning.test.ts`): it replaced `src/claude-cli` with a stub whose `claudeGenerateWithTools` always resolves, and never put it back. `mock.restore()` does not undo `mock.module`, and Bun keeps module mocks for the rest of the process. On the runner, `tests/claude-cli-tools.test.ts` ran after it and got the stub. The file now snapshots the real module (a copy, since the namespace is rewritten in place) and restores it in `afterAll`. Reproduced locally by running a probe file after it: red before, green after.
+
 ### Fixed (2026-10-04) — Needs You "Clear" failed on outputs whose file is gone
 - **Why.** "Clear N" on a Needs You group answered `Cleared 0 · N failed — Not found or already resolved`. Every failing item was an unreviewed output whose changelog entry outlived its file (16 in the live fleet: milei-rocca 10, ai-perfectionist 3, cryptik 2, job-seeker 1). The neutral action archives the file, and `archiveFile` can only fail when there is nothing to move.
 - **Fix.** `NeedsYouSources.productionFileExists(botId, path)` (wired to `existsSync` under `ProductionsService.resolveDir`) and `buildProductions` drops outputs whose file is gone: there is nothing to review. Track-only outputs are kept (their files never live in the productions dir), and a probe that throws keeps the item. Orphans stay visible to the hygiene routine `productions-triage` (`orphan-reference`), which prunes them from the changelog with a backup when run with `pruneOrphans`.
