@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed (2026-10-04) — Message boxes are full width and grow as you type
+- **Why.** The chat box on Agent Home rendered about 300px wide and two lines tall. `.thread-input-area` was a flex row, so the row holding the textarea shrank to its content. Every other place the operator writes free text was fixed at 2–5 rows.
+- **Shared thread composer** (`renderThread` in `web/pages/shared.js`: Agent Home, Conversations, Inbox, Productions chat): the preview strips stack above a full-width `.thread-input-row`, and the textarea starts at 88px (about four lines), grows with the text up to 40% of the viewport, scrolls after that, and shrinks back after sending.
+- **Same auto-grow** on the Needs You reply, the Feedback box and the productions review note (64px minimum there): `attachAutoGrow` / `composerHeight` in the new `web/ui/composer.js`.
+
 ### Added (2026-10-04) — One selection toolbar on every multi-select list; bulk reject and delete
 - **Why.** Needs You could only select everything with the undocumented `*` key; Skills, Tools and Productions had no select-all; a tools-only selection in Needs You offered only Approve; and on Work a row checkbox did nothing.
 - **Work checkbox bug.** `entryKey` joined bot and id with a NUL character. An HTML parser turns NUL in an attribute into U+FFFD, so the clicked row's `data-key` never matched its entry and the next redraw pruned it. Keys are now `encodeURIComponent(botId)/encodeURIComponent(id)`.

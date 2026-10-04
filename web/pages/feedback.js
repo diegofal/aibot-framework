@@ -1,3 +1,4 @@
+import { attachAutoGrow } from '../ui/composer.js';
 import { showToast } from '../ui/index.js';
 import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
@@ -116,6 +117,8 @@ export async function renderBotFeedback(el, botId) {
         }
       </div>
     `;
+
+    attachAutoGrow(document.getElementById('feedback-input'));
 
     // Submit handler
     document.getElementById('feedback-submit').addEventListener('click', async () => {

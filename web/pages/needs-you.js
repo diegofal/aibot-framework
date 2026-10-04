@@ -1,3 +1,4 @@
+import { attachAutoGrow } from '../ui/composer.js';
 /**
  * Needs You — the one queue for everything the fleet is waiting on
  * (session S5 of docs/plans/jarvis-fleet-plan.md; clearable in Phase 1 of
@@ -139,6 +140,7 @@ function redrawDetail() {
   if (!item) return;
   const box = replyBox();
   if (box && draft) box.value = draft;
+  attachAutoGrow(box);
 
   for (const btn of detail.querySelectorAll('.needs-action')) {
     btn.addEventListener('click', () => {

@@ -1,3 +1,4 @@
+import { attachAutoGrow } from '../ui/composer.js';
 /**
  * Work → Productions: the file explorer (all-bots view and per-bot view).
  *
@@ -618,6 +619,7 @@ async function mountFileViewer(panel, { botId, node, botLabel = '', onTreeChange
     attachFileActions(panel, { path: node.path, name: node.name, content });
 
     if (!entry) return;
+    attachAutoGrow(panel.querySelector('#viewer-note'), { minPx: 64 });
 
     for (const star of panel.querySelectorAll('.star-interactive .star')) {
       star.style.cursor = 'pointer';
