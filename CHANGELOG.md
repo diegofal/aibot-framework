@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed (2026-10-04) — Message boxes are full width and grow as you type
+- **Why.** The chat box on Agent Home rendered about 300px wide and two lines tall. `.thread-input-area` was a flex row, so the row holding the textarea shrank to its content. Every other place the operator writes free text was fixed at 2–5 rows.
+- **Shared thread composer** (`renderThread` in `web/pages/shared.js`: Agent Home, Conversations, Inbox, Productions chat): the preview strips stack above a full-width `.thread-input-row`, and the textarea starts at 88px (about four lines), grows with the text up to 40% of the viewport, scrolls after that, and shrinks back after sending.
+- **Same auto-grow** on the Needs You reply, the Feedback box and the productions review note (64px minimum there): `attachAutoGrow` / `composerHeight` / `fitComposer` in the new `web/ui/composer.js`. Text set from code (Feedback "Generate", a restored Inbox draft, a cleared reply) is re-fitted with `fitComposer`, and overflow is never hidden, so a box whose size went stale scrolls instead of clipping.
+
 ### Fixed (2026-10-04) — Needs You hid outputs logged with an absolute path, and Clear could not archive them
 - **Why.** Some bots log an output's path as absolute (`/app/productions/milei-rocca/2026-10-03-….md`). The orphan filter from the previous fix joined that onto the bot dir, found nothing, and hid two real unreviewed outputs. Clearing such an output had always failed: `assertWithinDir` refuses every absolute path, so `archiveFile` returned "file not found or path invalid".
 - **Fix.** `normalizeEntryPath(dir, path)` in `src/productions/paths.ts` turns an absolute path inside the bot's productions dir into the dir-relative form (unchanged otherwise). Needs You's `productionFileExists` and the `archiveProduction` action both use it, and `pendingProductionFiles(entries, normalize)` compares paths in one normalized form (new source `normalizeProductionPath`), so the dir-relative `archivedFrom` that archiving writes resolves the absolute-path entry it came from, and an archived output stops counting as pending. Exact match only: `a.md` never resolves `notes/a.md`.

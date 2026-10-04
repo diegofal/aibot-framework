@@ -1354,21 +1354,33 @@ textarea {
 }
 .thread-input-area {
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   margin-top: 8px;
+}
+/* Attach · textarea · Send: the row takes the full card width (it shrank to
+   its content inside the old flex row and left a ~300px box). */
+.thread-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  width: 100%;
 }
 .thread-input {
   flex: 1;
-  padding: 8px 12px;
+  min-width: 0;
+  padding: 10px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
   font-size: 14px;
+  line-height: 1.5;
   font-family: inherit;
   resize: vertical;
-  min-height: 40px;
+  min-height: 88px;
+  max-height: 40vh;
 }
 .thread-input:focus {
   outline: none;

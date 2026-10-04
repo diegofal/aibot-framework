@@ -1,3 +1,5 @@
+import { attachAutoGrow } from '../ui/composer.js';
+
 const overlay = document.getElementById('modal-overlay');
 const modal = document.getElementById('modal');
 
@@ -267,15 +269,16 @@ export function renderThread(container, opts) {
     <div class="thread-input-area">
       <div class="thread-img-preview" style="display:flex;gap:4px;flex-wrap:wrap;padding:0 0 4px"></div>
       <div class="thread-doc-preview" style="display:flex;gap:4px;flex-wrap:wrap;padding:0 0 4px"></div>
-      <div style="display:flex;gap:8px;align-items:flex-end">
+      <div class="thread-input-row">
         <button class="btn btn-sm thread-attach-btn" title="Attach file" style="padding:4px 8px;font-size:16px"${generating || error ? ' disabled' : ''}>&#128206;</button>
         <input type="file" class="thread-file-input" accept="image/*,.pdf,.txt,.md,.csv,.json,.html,.htm" multiple style="display:none">
-        <textarea class="thread-input" rows="2" placeholder="Type a message..."></textarea>
+        <textarea class="thread-input" rows="3" placeholder="Type a message..."></textarea>
         <button class="btn btn-primary btn-sm thread-send-btn"${generating || error ? ' disabled' : ''}>Send</button>
       </div>
     </div>`;
 
   container.innerHTML = html;
+  attachAutoGrow(container.querySelector('.thread-input'));
 
   // Scroll to bottom of thread messages
   const messagesEl = container.querySelector('.thread-messages');
@@ -430,6 +433,7 @@ export function renderThread(container, opts) {
     }));
     if ((!text && images.length === 0 && docs.length === 0) || generating) return;
     textarea.value = '';
+    textarea.dispatchEvent(new Event('input')); // shrink back after sending
     threadPendingImages.length = 0;
     threadPendingDocs.length = 0;
     renderImgPreviews();

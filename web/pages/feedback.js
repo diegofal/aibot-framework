@@ -1,3 +1,4 @@
+import { attachAutoGrow, fitComposer } from '../ui/composer.js';
 import { showToast } from '../ui/index.js';
 import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
@@ -117,6 +118,8 @@ export async function renderBotFeedback(el, botId) {
       </div>
     `;
 
+    attachAutoGrow(document.getElementById('feedback-input'));
+
     // Submit handler
     document.getElementById('feedback-submit').addEventListener('click', async () => {
       const input = document.getElementById('feedback-input');
@@ -139,6 +142,7 @@ export async function renderBotFeedback(el, botId) {
         return;
       }
       input.value = '';
+      fitComposer(input);
       showToast('Feedback sent', { tone: 'ok' });
       load();
     });
@@ -153,6 +157,7 @@ export async function renderBotFeedback(el, botId) {
       generateBtn.disabled = true;
       generateBtn.textContent = 'Analyzing...';
       input.value = 'Analyzing bot performance, this may take a minute...';
+      fitComposer(input);
       input.disabled = true;
 
       try {
@@ -169,6 +174,7 @@ export async function renderBotFeedback(el, botId) {
       }
 
       input.disabled = false;
+      fitComposer(input);
       submitBtn.disabled = false;
       generateBtn.disabled = false;
       generateBtn.textContent = 'Generate Feedback';
