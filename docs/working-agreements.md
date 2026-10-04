@@ -146,6 +146,15 @@ La línea para preguntar es la **reversibilidad**, no la dificultad:
   nunca se reintenta con otra variante del comando.
 <!-- /zero:rule -->
 
+<!-- zero:rule ask.credentials-per-command since=0.94.117 section=4 -->
+**La cuenta va en el comando, no en la máquina.** Esta máquina tiene dos cuentas de GitHub
+(`diegofal` y `agilityio-dfalciola`) y la cuenta activa de `gh` es una sola para todas las sesiones:
+otra sesión puede cambiarla entre un dry run y la escritura. Pasó dos veces el 2026-10-04 (un
+sign-off y un push fallaron como la cuenta que no ve el repo). Todo comando que escribe en GitHub
+lleva su cuenta: `GH_TOKEN=$(gh auth token --user diegofal) gh ...`, y el mismo prefijo en
+`git push`. `gh auth switch` es para una persona en una terminal, no para una sesión.
+<!-- /zero:rule -->
+
 ---
 
 ## 5. Mantener el registro al día, en el mismo cambio

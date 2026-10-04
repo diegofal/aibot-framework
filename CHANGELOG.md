@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Process (2026-10-04) — The GitHub account goes on the command
+- **Why.** The active `gh` account is machine-wide; another session switched it twice mid-flow and a sign-off and a push failed as the account that cannot see the repo.
+- **Rule** `ask.credentials-per-command` (Zero 0.94.117) in `docs/working-agreements.md` §4: every GitHub write carries `GH_TOKEN=$(gh auth token --user diegofal)`. §3's fast-forward now uses `git -C D:/aibot-framework merge --ff-only` (the `fetch . b:main` form is refused while `main` is checked out).
+
 ### Process (2026-10-03) — One change, one worktree
 - **Why.** Several sessions share `D:aibot-framework`. One switched the folder to `feat/ux-overhaul` while another was committing, and a commit meant for `main` landed on that branch (it was cherry-picked to `main` as `295840e`).
 - **Rule** `branch.one-worktree` re-adopted in `docs/working-agreements.md` §3: every change in `git worktree add ../aibot-<slug> -b <type>/<slug> main`, merged with `git fetch . <branch>:main`, worktree removed after. `CLAUDE.md` gotcha: each worktree needs `bun install`, and the container only sees the main folder.
