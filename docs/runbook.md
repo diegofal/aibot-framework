@@ -171,3 +171,20 @@ docker compose up -d --build
 **Outcome.** Image built and container recreated around 13:55 local; `healthy`. Verified in the container: `src/web/routes/hygiene.ts` has the `/cleanup` route, `/pages/hygiene.js` serves the "Clean up everything" card, and the route answers 401 without a session (behind auth, not 404). The boot log's only errors are the existing Telegram `getMe` 401s from revoked tokens. The cleanup itself was not run from here; the operator runs it from the page.
 
 **Reversible?** Yes: check out the previous commit and rebuild (no volume or config change from the deploy itself; running the cleanup writes to volumes, with backups and `_trash`).
+
+### 2026-10-04 — Rebuilt the container for the selection toolbar and bulk delete
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Deploy `feat(web): one selection toolbar on every list; bulk reject and delete`: Needs You bulk `delete` for tools (`DynamicToolRegistry.delete`) and `DELETE /api/tools/:id` unloading the tool from the running bots. The front end was already live through the `web/` mount |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-04T18-57-14`. Image built and container recreated around 14:58 local; `healthy`. Verified in the container: `src/web/routes/needs-you.ts` has `deleteTool`, and `POST /api/needs-you/bulk` answers 401 without a session (behind auth). The boot log's only errors are the existing Telegram `getMe` 401s from revoked tokens. Bulk delete itself not exercised from here (login).
+
+**Reversible?** Yes: check out the previous commit and rebuild (no volume or config change).
