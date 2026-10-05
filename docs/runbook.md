@@ -39,6 +39,25 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-05 — Rebuilt for PR #6 (reflection keeps the purpose) and re-enabled weekly reflection on the active bots
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1`; `/app/data/cron/jobs.json` edited with the app stopped |
+| **Who** | Diego (agent session, approved in chat) |
+| **Why** | Deploy PR #6 (`65e2566`) and turn reflection back on, weekly, for ai-perfectionist, job-seeker, myfirstmillion |
+
+```bash
+git merge --ff-only origin/main
+docker compose stop aibot
+MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps -v "D:/tmp:/hosttmp" --entrypoint bun aibot /hosttmp/reflection-on.ts
+docker compose up -d --build
+```
+
+**Outcome.** Container healthy; image has `src/skills/reflection/motivations.ts` and `productionsDir` wiring. Reflection jobs for the three active bots enabled with `30 3 * * 0` (America/Argentina/Buenos_Aires), next 2026-10-11T06:30Z; the paused bots' reflection stays off. Enabled jobs after boot: 3 weekly reflections, ai-perfectionist's daily intel gatherer, the three Monday deliverables. Only boot errors: the two known revoked Telegram tokens.
+
+**Reversible?** Yes: `/app/data/cron/jobs.json.bak-reflection-weekly-2026-10-05T03-24-26-681Z` (restore with the app stopped); code via revert of `65e2566`.
+
 ### 2026-10-04 — Loop cadence to 24h, Monday deliverable crons, and nightly reflection / paused-bot crons disabled
 
 | | |
