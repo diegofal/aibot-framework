@@ -9,6 +9,7 @@ import { parseGoals, serializeGoals } from '../../tools/goals';
 import type { Tool, ToolResult } from '../../tools/types';
 import { createWebFetchTool } from '../../tools/web-fetch';
 import { createWebSearchTool } from '../../tools/web-search';
+import { protectCoreDrives, readOperatorFeedback } from './motivations';
 import {
   buildAnalysisPrompt,
   buildCompactionPrompt,
@@ -56,7 +57,8 @@ interface ImprovementResult {
 // Max chars for context sent to LLM
 const MAX_MEMORY_CHARS = 3000;
 const MAX_SOUL_CHARS = 1500;
-const MAX_MOTIVATIONS_CHARS = 1000;
+// The whole file: the old 1000-char cap had reflection rewrite motivations it never read.
+const MAX_MOTIVATIONS_CHARS = 6000;
 const MAX_DISCOVERY_CHARS = 2000;
 const MAX_PRODUCTIONS_CHARS = 1500;
 const MAX_KARMA_CHARS = 500;
@@ -70,7 +72,7 @@ const skill: Skill = {
   id: 'reflection',
   name: 'Self-Reflection',
   version: '1.0.0',
-  description: 'Nightly self-reflection and evolving motivations system',
+  description: 'Weekly self-reflection: evolves methods around an operator-owned purpose',
 
   async onLoad(ctx: SkillContext) {
     const config = ctx.config as ReflectionConfig;
@@ -102,10 +104,10 @@ const skill: Skill = {
   jobs: [
     {
       id: 'nightly-reflection',
-      schedule: '30 3 * * *',
+      schedule: '30 3 * * 0',
       async handler(ctx: SkillContext) {
         const config = ctx.config as ReflectionConfig;
-        ctx.logger.info('Running nightly reflection');
+        ctx.logger.info('Running weekly reflection');
 
         const result = await runReflection(ctx, 'cron');
 
@@ -183,6 +185,10 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
 
   const karma = ctx.botState?.karmaBlock?.slice(0, MAX_KARMA_CHARS) || undefined;
   const recentActions = ctx.botState?.recentActionsDigest?.slice(0, MAX_ACTIONS_CHARS) || undefined;
+  const operatorFeedback = readOperatorFeedback({
+    workDir: ctx.productionsDir ?? ctx.workDir,
+    soulDir,
+  });
 
   // Step 2 — Analyze ("The Mirror")
   ctx.logger.info('Reflection: running analysis (The Mirror)');
@@ -195,6 +201,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     productions,
     karma,
     recentActions,
+    operatorFeedback,
   });
 
   const analysisResult = await ctx.llm.generate(analysisInput.prompt, {
@@ -254,6 +261,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
     productions,
     karma,
     recentActions,
+    operatorFeedback,
   });
 
   const improvementResult = await ctx.llm.generate(improvementInput.prompt, {
@@ -277,10 +285,10 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
   // Step 4 — Apply changes
   ctx.logger.info('Reflection: applying changes');
 
-  // Always update MOTIVATIONS.md
+  // Always update MOTIVATIONS.md, but the purpose (Core Drives) stays the operator's
   const motivationsPath = join(soulDir, 'MOTIVATIONS.md');
   backupSoulFile(motivationsPath, ctx.logger);
-  writeFileSync(motivationsPath, improvement.motivations, 'utf-8');
+  writeFileSync(motivationsPath, protectCoreDrives(motivations, improvement.motivations), 'utf-8');
   ctx.logger.info('MOTIVATIONS.md updated');
 
   // Conditionally update SOUL.md (with safety guards)

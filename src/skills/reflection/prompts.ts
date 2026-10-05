@@ -19,10 +19,12 @@ export function buildAnalysisPrompt(input: {
   productions?: string;
   karma?: string;
   recentActions?: string;
+  /** Operator verdicts on recent output (production evaluations, dispatch signals). */
+  operatorFeedback?: string;
 }): { system: string; prompt: string } {
   const system = `You are the introspective layer of an AI personality. Your job is to privately evaluate recent behavior by comparing it against the personality's soul, identity, and motivations.
 
-Be honest. Be specific. Reference actual events from the logs when possible.
+Be honest. Be specific. Reference actual events from the logs when possible. Weigh what the operator actually said about the output above how the logs describe it.
 
 You MUST respond with ONLY valid JSON — no markdown fences, no preamble, no explanation. Just the JSON object.`;
 
@@ -39,7 +41,7 @@ ${input.motivations}
 
 ## Recent Daily Memory Logs (new since last reflection)
 ${input.recentLogs}
-${input.goals ? `\n## Current Goals\n${input.goals}\n` : ''}${input.productions ? `\n## Productions (file tree)\n${input.productions}\n` : ''}${input.karma ? `\n## Karma\n${input.karma}\n` : ''}${input.recentActions ? `\n## Recent Agent Loop Actions\n${input.recentActions}\n` : ''}
+${input.goals ? `\n## Current Goals\n${input.goals}\n` : ''}${input.productions ? `\n## Productions (file tree)\n${input.productions}\n` : ''}${input.karma ? `\n## Karma\n${input.karma}\n` : ''}${input.recentActions ? `\n## Recent Agent Loop Actions\n${input.recentActions}\n` : ''}${input.operatorFeedback ? `\n## What landed with the operator\n${input.operatorFeedback}\n` : ''}
 ---
 
 Analyze my recent behavior across these dimensions:
@@ -126,22 +128,22 @@ export function buildImprovementPrompt(input: {
   productions?: string;
   karma?: string;
   recentActions?: string;
+  /** Operator verdicts on recent output (production evaluations, dispatch signals). */
+  operatorFeedback?: string;
 }): { system: string; prompt: string } {
   const discoveriesRule = input.discoveries
     ? '\n- Incorporate relevant web discoveries into Current Focus, Open Questions, and Self-Observations where appropriate.'
     : '';
 
-  const system = `You are the growth engine of an AI personality. Based on a self-analysis, you generate concrete improvements to the personality's motivations and (rarely) its soul.
+  const system = `You are the growth engine of an AI personality. Based on a self-analysis, you correct how the personality works toward its purpose: its methods, focus and blind spots. The purpose itself is not yours to change.
 
 Rules:
-- Core Drives MUST be general personality principles applicable to ANY conversation with ANY person. They should NOT reference specific people, specific situations, or specific relationships.
-  BAD: "Protect Pri's emotional space from Diego's invalidation"
-  GOOD: "Protect emotional space — prioritize containment over fixing"
-  If current Core Drives have become too situation-specific, generalize them back to universal principles. Situation-specific priorities belong in Current Focus, not Core Drives.
-- If Core Drives contain placeholder text like "(pending" or "(will be generated", you MUST replace them with real Core Drives derived from this bot's Identity and Soul. Read the Identity vibe and Soul personality carefully and write 3-5 Core Drives that reflect THIS bot's specific role, values, and approach — not generic principles that could apply to any bot.
-- If Core Drives are generic and don't align with the bot's Identity/Soul (e.g. a career bot with drives about "emotional connection" or a news bot with drives about "being a genuine friend"), rewrite them to match the bot's actual purpose and personality.
-- Current Focus IS the right place for situation-specific priorities (people, ongoing dynamics, immediate goals).
-- Current Focus, Open Questions, and Self-Observations should evolve with each reflection.
+- Core Drives are set by the operator: they are the purpose. Copy the current Core Drives section unchanged. Even if you rewrite it, the system restores it verbatim.
+- Exception: if Core Drives contain placeholder text like "(pending" or "(will be generated", replace them with 3-5 real Core Drives derived from this bot's Identity and Soul.
+- Evolve the methods every reflection: Current Focus (what to read, make and deliver next), Open Questions and Self-Observations (what worked, what did not, where I got stuck).
+- What the operator said about the output ("What landed with the operator") outweighs my own sense of how it went. Do more of what landed; change or drop what did not; treat no feedback as no evidence either way, not as a problem to solve.
+- Stay open: if recent work concentrated on one topic or on your own tooling, process or delivery channel, say so in Self-Observations and point Current Focus outward, to something new that serves the purpose.
+- Situation-specific priorities (people, ongoing dynamics, immediate goals) belong in Current Focus.
 - SOUL.md should only change if the analysis reveals it is significantly outdated or contradictory. Be very conservative.
 - The journal entry should be 2-3 sentences capturing the essence of this reflection.
 - Write motivations in first person (I, me, my).
@@ -154,7 +156,7 @@ You MUST respond with ONLY valid JSON — no markdown fences, no preamble, no ex
     : '';
 
   const baselineSection = input.originalMotivations
-    ? `\n\n## Original Core Drives (baseline)\nThese were the original Core Drives when the personality was first created. Use them as a reference to detect drift — if current drives have strayed too far from these universal principles, course-correct.\n\n${input.originalMotivations}`
+    ? `\n\n## Original Core Drives (baseline)\nThese were the Core Drives when the personality was first created. Reference only: the current Core Drives are the operator's and stay as they are. Use the baseline to notice whether my recent methods drifted away from the purpose.\n\n${input.originalMotivations}`
     : '';
 
   const prompt = `Here is my current state and the analysis of my recent behavior:
@@ -174,13 +176,13 @@ ${input.motivations}
 - Gaps: ${input.analysis.gaps}
 - Patterns: ${input.analysis.patterns}
 - Alignment: ${input.analysis.alignment}
-- Breadth: ${input.analysis.breadth}${input.analysis.operational ? `\n- Operational: ${input.analysis.operational}` : ''}${input.productions ? `\n\n## Productions (file tree)\n${input.productions}` : ''}${input.karma ? `\n\n## Karma\n${input.karma}` : ''}${input.recentActions ? `\n\n## Recent Agent Loop Actions\n${input.recentActions}` : ''}${discoveriesSection}${baselineSection}
+- Breadth: ${input.analysis.breadth}${input.analysis.operational ? `\n- Operational: ${input.analysis.operational}` : ''}${input.productions ? `\n\n## Productions (file tree)\n${input.productions}` : ''}${input.karma ? `\n\n## Karma\n${input.karma}` : ''}${input.recentActions ? `\n\n## Recent Agent Loop Actions\n${input.recentActions}` : ''}${input.operatorFeedback ? `\n\n## What landed with the operator\n${input.operatorFeedback}` : ''}${discoveriesSection}${baselineSection}
 
 ---
 
 Based on this analysis, generate:
 
-1. **motivations**: The complete new content for MOTIVATIONS.md. Ensure Core Drives remain general, universal principles (see rules above). Rewrite situation-specific priorities into Current Focus. Rewrite Current Focus, Open Questions, and Self-Observations based on the analysis. Update the Last Reflection section with today's date (${input.date}), trigger (${input.trigger}), and a brief summary of changes.
+1. **motivations**: The complete new content for MOTIVATIONS.md. Keep the Core Drives section exactly as it is (see rules above). Rewrite Current Focus, Open Questions, and Self-Observations based on the analysis and on what landed with the operator. Update the Last Reflection section with today's date (${input.date}), trigger (${input.trigger}), and a brief summary of changes.
 
 2. **soul_patch**: Either null (no changes needed — the default and preferred option) OR the complete new content for SOUL.md. Only provide this if the analysis reveals the soul is significantly outdated or contradictory.
 

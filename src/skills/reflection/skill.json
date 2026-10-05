@@ -2,7 +2,7 @@
   "id": "reflection",
   "name": "Self-Reflection",
   "version": "1.0.0",
-  "description": "Nightly self-reflection and evolving motivations system",
+  "description": "Weekly self-reflection: evolves methods around an operator-owned purpose",
   "author": "Diego Falciola",
   "main": "./index.ts",
   "config": {
@@ -27,7 +27,7 @@
         },
         "cronSchedule": {
           "type": "string",
-          "description": "Cron expression for nightly reflection"
+          "description": "Cron expression for the reflection run (default weekly, Sunday 03:30)"
         }
       }
     }

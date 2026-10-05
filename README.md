@@ -131,7 +131,7 @@ src/
 │   ├── calendar.ts         #   Google Calendar integration
 │   └── ...                 #   15+ more tools
 ├── skills/                 # 15 bundled skills (plugin system)
-│   ├── reflection/         #   Nightly 4-phase personality evolution
+│   ├── reflection/         #   Weekly reflection: evolves methods, keeps the operator-owned Core Drives
 │   ├── intel-gatherer/     #   News & intelligence collection
 │   ├── improve/            #   Self-improvement via Claude Code CLI
 │   ├── calibrate/          #   Personality calibration
@@ -467,7 +467,7 @@ Copy `config/config.example.json` to `config/config.json` and run `bun run setup
 
 | Skill | Description |
 |-------|-------------|
-| `reflection` | Nightly 4-phase cycle: analysis, web exploration, personality evolution |
+| `reflection` | Weekly cycle: analysis (with the operator's feedback on recent output), web exploration, evolution of methods; Core Drives stay the operator's |
 | `intel-gatherer` | Multi-source intelligence collection and trend analysis |
 | `improve` | Self-improvement via Claude Code CLI with restricted permissions |
 | `calibrate` | Personality and behavior calibration |

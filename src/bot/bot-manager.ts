@@ -1727,6 +1727,7 @@ export class BotManager {
       soulDir: resolved.soulDir,
       botId,
       workDir: resolved.workDir,
+      productionsDir: this.productionsService?.resolveDir(botId),
       botState,
     };
 

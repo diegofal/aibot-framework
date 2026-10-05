@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed (2026-10-04) — Reflection evolves the methods, never the purpose; weekly by default
+- **Why.** The nightly reflection rewrote every bot's whole MOTIVATIONS.md from a 1000-character view of it plus self-focused daily logs. Over weeks it turned purposes like "help Diego" into "fix my own pipeline", and it would have overwritten the operator's repurposing of three bots the same night.
+- **Purpose is the operator's.** `protectCoreDrives(current, proposed)` (new `src/skills/reflection/motivations.ts`) restores the `## Core Drives` section verbatim after every run, or puts it back at the top if the proposal dropped it. A placeholder section on a new bot can still be filled in. IDENTITY.md was already never written by reflection; SOUL.md keeps its existing conservative, size-guarded edits.
+- **Methods evolve.** The improvement prompt now copies Core Drives and rewrites Current Focus, Open Questions and Self-Observations; it says to point outward when recent work circled one topic or the bot's own tooling, and to treat no feedback as no evidence.
+- **Learns from outcomes.** `readOperatorFeedback()` adds "What landed with the operator" to both prompts: production evaluations (status, rating, feedback) and dispatch 👍/👎/more from the last 14 days, newest first, capped at 1500 chars. Evaluations are read from the new `SkillContext.productionsDir` (`ProductionsService.resolveDir`: `productions.dir` > `workDir`), set for cron skill jobs (`src/index.ts`) and skill commands (`BotManager`).
+- **Reads the whole file**: `MAX_MOTIVATIONS_CHARS` 1000 → 6000.
+- **Weekly**: the `nightly-reflection` job's default schedule is `30 3 * * 0` (Sunday 03:30). Existing cron jobs keep their stored schedule.
+
 ### Changed (2026-10-04) — Message boxes are full width and grow as you type
 - **Why.** The chat box on Agent Home rendered about 300px wide and two lines tall. `.thread-input-area` was a flex row, so the row holding the textarea shrank to its content. Every other place the operator writes free text was fixed at 2–5 rows.
 - **Shared thread composer** (`renderThread` in `web/pages/shared.js`: Agent Home, Conversations, Inbox, Productions chat): the preview strips stack above a full-width `.thread-input-row`, and the textarea starts at 88px (about four lines), grows with the text up to 40% of the viewport, scrolls after that, and shrinks back after sending.
