@@ -86,6 +86,11 @@ export interface SkillContext {
   tools?: { execute: ToolExecuteFn };
   /** Bot's working directory (productions, files, etc.) */
   workDir?: string;
+  /**
+   * Where the bot's productions changelog (with evaluations) lives:
+   * `ProductionsService.resolveDir` (productions.dir > workDir > default).
+   */
+  productionsDir?: string;
   /** Pre-rendered operational state for skills that need it */
   botState?: {
     karmaBlock?: string;

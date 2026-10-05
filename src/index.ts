@@ -207,6 +207,7 @@ async function main() {
               soulDir: resolved.soulDir,
               botId: payload.botId,
               workDir: resolved.workDir,
+              productionsDir: botManager.getProductionsService()?.resolveDir(payload.botId),
               botState,
             };
           }

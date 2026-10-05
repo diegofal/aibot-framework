@@ -243,3 +243,45 @@ describe('reflection pipeline', () => {
     expect(skill.jobs?.find((j) => j.id === 'nightly-reflection')?.schedule).toBe('30 3 * * 0');
   });
 });
+
+describe('reflection pipeline — productions dir', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = createTempDir('reflection-proddir');
+  });
+  afterEach(() => removeTempDir(dir));
+
+  // Review round 1: a bot with productions.dir set writes evaluations there,
+  // not in workDir; reflection must read the resolved productions dir.
+  test('reads operator feedback from ctx.productionsDir when it differs from workDir', async () => {
+    const soul = join(dir, 'soul');
+    const work = join(dir, 'work');
+    const prod = join(dir, 'prod');
+    for (const d of [join(soul, 'memory'), work, prod]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(soul, 'MOTIVATIONS.md'), CURRENT);
+    writeFileSync(
+      join(soul, 'memory', `${new Date().toISOString().slice(0, 10)}.md`),
+      '- did things\n'
+    );
+    writeFileSync(
+      join(prod, 'changelog.jsonl'),
+      `${JSON.stringify({ path: 'brief.md', evaluation: { status: 'approved', feedback: 'MARKER-FROM-PRODUCTIONS-DIR', evaluatedAt: new Date().toISOString() } })}\n`
+    );
+    const prompts: string[] = [];
+    const ctx = {
+      config: {},
+      soulDir: soul,
+      workDir: work,
+      productionsDir: prod,
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      llm: {
+        generate: async (prompt: string) => {
+          prompts.push(prompt);
+          return { text: '{}' };
+        },
+      },
+    } as never;
+    await skill.commands?.reflect.handler([], ctx);
+    expect(prompts[0]).toContain('MARKER-FROM-PRODUCTIONS-DIR');
+  });
+});

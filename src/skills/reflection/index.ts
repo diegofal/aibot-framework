@@ -185,7 +185,10 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
 
   const karma = ctx.botState?.karmaBlock?.slice(0, MAX_KARMA_CHARS) || undefined;
   const recentActions = ctx.botState?.recentActionsDigest?.slice(0, MAX_ACTIONS_CHARS) || undefined;
-  const operatorFeedback = readOperatorFeedback({ workDir: ctx.workDir, soulDir });
+  const operatorFeedback = readOperatorFeedback({
+    workDir: ctx.productionsDir ?? ctx.workDir,
+    soulDir,
+  });
 
   // Step 2 — Analyze ("The Mirror")
   ctx.logger.info('Reflection: running analysis (The Mirror)');
