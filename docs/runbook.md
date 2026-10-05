@@ -39,6 +39,28 @@ _Nothing pending._
 
 ## Executed
 
+### 2026-10-04 — Loop cadence to 24h, Monday deliverable crons, and nightly reflection / paused-bot crons disabled
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1`: `/app/config/bots.json`, `/app/data/cron/jobs.json` (edited with the app stopped, from a one-off container on the same volumes) |
+| **Who** | Diego (agent session, approved in chat) |
+| **Why** | Loops ran every 6h/12h for weekly deliverables; delivery depended on the planner noticing it was Monday; nightly reflection rewrote MOTIVATIONS.md on every bot (paused ones included) from a 1000-char view, the likely engine of the drift |
+
+```bash
+docker compose stop aibot
+MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps -v "D:/tmp:/hosttmp" --entrypoint bun aibot /hosttmp/cadence.ts
+docker compose start aibot
+# later, after ai-perfectionist's cycle completed:
+docker compose stop aibot
+MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps -v "D:/tmp:/hosttmp" --entrypoint bun aibot /hosttmp/crons-off.ts
+docker compose start aibot
+```
+
+**Outcome.** `agentLoop.every: 24h` for ai-perfectionist, job-seeker, myfirstmillion. New cron jobs (America/Argentina/Buenos_Aires, chat 796164002): "Weekly AI Engineer / FDE Brief [ai-perfectionist]" `0 9 * * 1`, "Weekly roles shortlist [job-seeker]" `0 9 * * 1`, "Side-income idea, every other Monday [myfirstmillion]" every 14 d anchored 2026-10-05T12:00Z. Disabled: nightly reflection on all 8 bots (active ones for ~2 weeks), intel gatherer on default and econ-student, job-seeker's "weekly dormancy heartbeat" (it ordered no research). Still enabled: ai-perfectionist's daily intel gatherer plus the three new jobs. Verified after boot: 4 of 17 jobs enabled, nothing re-registered; loops on 24h.
+
+**Reversible?** Yes: `/app/config/bots.json.bak-cadence-2026-10-05T01-38-50-003Z`, `/app/data/cron/jobs.json.bak-cadence-2026-10-05T01-38-50-003Z` and `/app/data/cron/jobs.json.bak-crons-off-2026-10-05T01-46-53-176Z` (restore with the app stopped).
+
 ### 2026-10-04 — job-seeker and myfirstmillion repurposed; five agent loops paused
 
 | | |
