@@ -380,3 +380,20 @@ MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 sh -c 'cd /tmp/vprobe && 
 **Outcome.** CLI 2.1.289 read a generated red PNG sent raw as stream-json ("Red"). The patched `claudeGenerate` read a blue PNG ("Blue.") and parsed usage. Two haiku calls, files left only in the container's `/tmp` (gone on next recreate). No bot state, volume or config touched.
 
 **Reversible?** Nothing to reverse.
+
+### 2026-10-06 — Rebuilt so Claude CLI bots see images
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Deploy `d11297e`: `ClaudeCliLLMClient` sends images as image blocks via stream-json instead of a "no vision" note |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T23-25-36`. Container recreated, `healthy`; image `/app/src/claude-cli.ts` has `buildClaudePromptInput` / `extractStreamJsonResult`, `/app/src/core/llm-client.ts` has `MAX_CLI_IMAGES`. 9 bots started. Only boot errors: the two known revoked Telegram tokens (cryptik, job-seeker → headless). A real Telegram photo not yet sent.
+
+**Reversible?** Yes: check out `52ecb5a` and rebuild.
