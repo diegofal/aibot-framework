@@ -133,6 +133,17 @@ describe('diffGoals', () => {
   });
 });
 
+describe('diffGoals renames', () => {
+  test('a goal whose title changed under the same id is one title event', () => {
+    const base = { status: 'pending', priority: 'medium' };
+    const ops = diffGoals(
+      { active: [{ ...base, text: 'Old', id: 'a' }], completed: [] },
+      { active: [{ ...base, text: 'New', id: 'a' }], completed: [] }
+    );
+    expect(ops).toEqual([{ goalId: 'a', title: 'New', op: 'title', from: 'Old', to: 'New' }]);
+  });
+});
+
 describe('writeGoalsFile', () => {
   test('first write assigns ids, stamps updated, logs adds with actor and cycle', () => {
     const backups: string[] = [];

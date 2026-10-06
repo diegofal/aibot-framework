@@ -73,7 +73,7 @@ function header(goal, nowMs) {
     .map(([k, v]) => `<div class="gd-date"><dt>${k}</dt><dd>${when(v, nowMs)}</dd></div>`)
     .join('');
   return `<div class="gd-head">
-    <h2 class="gd-title" id="gd-title">${esc(goal.text)}</h2>
+    <h2 class="gd-title gd-editable" id="gd-title" data-edit="title" tabindex="0" title="Click to edit">${esc(goal.text)}</h2>
     <div class="gd-chips">${badge(label, tone, { dot: true })}${pri}${originChip}</div>
     <dl class="gd-dates">${dates}</dl>
   </div>`;
@@ -182,16 +182,16 @@ function cycleBlock(c, botId, nowMs, open) {
 /** Whole drawer body for one goal. */
 export function goalDetailBody(detail, botId, nowMs = Date.now()) {
   const g = detail.goal;
-  const notes = [g.notes, g.outcome ? `Outcome: ${g.outcome}` : '']
-    .filter(Boolean)
-    .map((n) => `<p>${esc(n)}</p>`)
-    .join('');
+  const notes = g.notes
+    ? `<div class="gd-notes gd-editable" data-edit="notes" tabindex="0" title="Click to edit"><p>${esc(g.notes)}</p></div>`
+    : '<div class="gd-notes gd-editable gd-notes-empty" data-edit="notes" tabindex="0">Add notes…</div>';
+  const outcome = g.outcome ? `<div class="gd-notes"><p>Outcome: ${esc(g.outcome)}</p></div>` : '';
   const cycles = detail.cycles.length
     ? detail.cycles.map((c, i) => cycleBlock(c, botId, nowMs, i === 0)).join('')
     : `<div class="gd-empty">No work linked to this goal in the last ${esc(String(detail.days))} days.</div>`;
-  return `<div class="gd" aria-labelledby="gd-title">
+  return `<div class="gd" aria-labelledby="gd-title" data-goal-id="${esc(g.id ?? '')}" data-goal="${esc(g.text)}">
     ${header(g, nowMs)}
-    ${notes ? section('Notes', `<div class="gd-notes">${notes}</div>`) : ''}
+    ${section('Notes', `<div data-edit-slot="notes">${notes}</div>${outcome}`)}
     ${totals(detail.totals)}
     ${section('Status history', timeline(detail.timeline, nowMs))}
     ${section(
@@ -208,4 +208,29 @@ export function goalDetailLoading() {
 
 export function goalDetailError(message) {
   return `<div class="gd"><div class="gd-empty">Could not load this goal: ${esc(message)}</div></div>`;
+}
+
+const EDIT_MAX = { title: 200, notes: 600 };
+
+/** Inline editor for the drawer's title or notes. */
+export function goalEditor(field, value) {
+  const rows = field === 'title' ? 2 : 5;
+  const hint =
+    field === 'title' ? 'Enter to save · Esc to cancel' : 'Ctrl+Enter to save · Esc to cancel';
+  return `<div class="gd-editor" data-editor="${field}">
+    <textarea class="gd-edit-input" rows="${rows}" maxlength="${EDIT_MAX[field] ?? 600}" aria-label="Edit ${field}">${esc(value ?? '')}</textarea>
+    <div class="gd-edit-actions">
+      <span class="gd-dim">${hint}</span>
+      <button class="btn btn-sm" type="button" data-edit-cancel>Cancel</button>
+      <button class="btn btn-sm btn-primary" type="button" data-edit-save>Save</button>
+    </div>
+  </div>`;
+}
+
+/** PATCH body for a drawer edit (by id, else by title), or null when a title would be empty. */
+export function goalEditPayload({ id, title }, field, value) {
+  const v = String(value ?? '').trim();
+  if (field === 'title' && !v) return null;
+  const key = id ? { id } : { goal: title };
+  return { ...key, [field]: v };
 }

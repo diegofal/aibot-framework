@@ -220,6 +220,30 @@ export function startGoal(content: string | null, goalId: string): string | null
   return setGoalStatus(content, goal.text, 'in_progress');
 }
 
+/** Fields the operator can edit on a goal. Empty `notes` clears them. */
+export interface GoalEdits {
+  text?: string;
+  notes?: string;
+  priority?: string;
+}
+
+/**
+ * Edit the goal with this id (or exact title), active or completed.
+ * Returns the new GOALS.md, or null when no goal matches.
+ */
+export function editGoal(content: string | null, ref: string, edits: GoalEdits): string | null {
+  const { active, completed } = parseGoals(content);
+  const key = ref.trim().toLowerCase();
+  const goal =
+    [...active, ...completed].find((g) => g.id === ref) ??
+    [...active, ...completed].find((g) => g.text.trim().toLowerCase() === key);
+  if (!goal) return null;
+  if (edits.text !== undefined) goal.text = edits.text;
+  if (edits.notes !== undefined) goal.notes = edits.notes || undefined;
+  if (edits.priority !== undefined) goal.priority = edits.priority;
+  return serializeGoals(active, completed);
+}
+
 /**
  * Move the goal titled exactly `title` (trimmed, case-insensitive) to `status`.
  * `done` moves it to Completed with today's date; any other status on a completed

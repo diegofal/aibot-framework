@@ -37,7 +37,15 @@ import { buildGoalDetail } from '../../stats/goal-detail-aggregator';
 import { resolveBotPaths } from '../../stats/paths';
 import type { PresenceTracker } from '../../stats/presence-tracker';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
-import { BOARD_STATUSES, type BoardStatus, appendGoal, setGoalStatus } from '../../tools/goals';
+import {
+  BOARD_STATUSES,
+  type BoardStatus,
+  appendGoal,
+  editGoal,
+  parseGoals,
+  resolveGoalRef,
+  setGoalStatus,
+} from '../../tools/goals';
 
 export const GOAL_TITLE_MAX = 200;
 export const GOAL_NOTES_MAX = 600;
@@ -58,6 +66,35 @@ export function parseGoalInput(body: unknown): GoalInput | string {
   if (!(GOAL_PRIORITIES as readonly string[]).includes(priority))
     return `priority must be one of ${GOAL_PRIORITIES.join(', ')}`;
   return { title, notes: rawNotes || undefined, priority };
+}
+
+/** Validate a drawer edit; a string is the 400 message. */
+export function parseGoalEdits(
+  body: unknown
+): { text?: string; notes?: string; priority?: string } | string {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const out: { text?: string; notes?: string; priority?: string } = {};
+  if (b.title !== undefined) {
+    const title = typeof b.title === 'string' ? b.title.trim() : '';
+    if (!title) return 'title cannot be empty';
+    if (/[\r\n]/.test(title)) return 'title must be a single line';
+    if (title.length > GOAL_TITLE_MAX) return `title is longer than ${GOAL_TITLE_MAX} characters`;
+    out.text = title;
+  }
+  if (b.notes !== undefined) {
+    const notes = typeof b.notes === 'string' ? b.notes.replace(/\s*[\r\n]+\s*/g, ' ').trim() : '';
+    if (notes.length > GOAL_NOTES_MAX) return `notes are longer than ${GOAL_NOTES_MAX} characters`;
+    out.notes = notes;
+  }
+  if (b.priority !== undefined) {
+    const priority = String(b.priority);
+    if (!(GOAL_PRIORITIES as readonly string[]).includes(priority))
+      return `priority must be one of ${GOAL_PRIORITIES.join(', ')}`;
+    out.priority = priority;
+  }
+  if (Object.keys(out).length === 0)
+    return 'nothing to change: send status, title, notes or priority';
+  return out;
 }
 
 export interface AgentHomeRouteDeps {
@@ -185,32 +222,78 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     return c.json({ goal }, 201);
   });
 
+  /**
+   * PATCH /:id/goals — `{ goal | id, status }` moves a goal on the board;
+   * `{ goal | id, title?, notes?, priority? }` edits it (drawer). Both by the operator.
+   */
   app.patch('/:id/goals', async (c) => {
     const bot = findBot(c);
     if (!bot) return c.json({ error: 'Bot not found' }, 404);
     const b = ((await c.req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
-    const title = typeof b.goal === 'string' ? b.goal.trim() : '';
-    const status = String(b.status ?? '') as BoardStatus;
-    if (!title) return c.json({ error: 'goal is required' }, 400);
-    if (!BOARD_STATUSES.includes(status))
-      return c.json({ error: `status must be one of ${BOARD_STATUSES.join(', ')}` }, 400);
+    const ref =
+      typeof b.id === 'string' && b.id.trim()
+        ? b.id.trim()
+        : typeof b.goal === 'string'
+          ? b.goal.trim()
+          : '';
+    if (!ref) return c.json({ error: 'goal or id is required' }, 400);
 
     const goalsPath = join(resolveBotPaths(deps.config, bot).soulDir, 'GOALS.md');
-    const current = existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null;
-    const next = setGoalStatus(current, title, status);
-    if (next === null) return c.json({ error: 'Goal not found' }, 404);
-    try {
-      writeGoalsFile(goalsPath, next, {
+    const write = (content: string) =>
+      writeGoalsFile(goalsPath, content, {
         actor: 'operator',
         backup: (p) => backupSoulFile(p, deps.logger),
       });
+    const read = () => (existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null);
+
+    let next: string | null;
+    let summary: Record<string, unknown>;
+    if (b.status !== undefined) {
+      const status = String(b.status) as BoardStatus;
+      if (!BOARD_STATUSES.includes(status))
+        return c.json({ error: `status must be one of ${BOARD_STATUSES.join(', ')}` }, 400);
+      const current = read();
+      const target = resolveGoalRef(ref, [
+        ...parseGoals(current).active,
+        ...parseGoals(current).completed,
+      ]);
+      next = setGoalStatus(current, target?.text ?? ref, status);
+      summary = { goal: target?.text ?? ref, status };
+    } else {
+      const edits = parseGoalEdits(b);
+      if (typeof edits === 'string') return c.json({ error: edits }, 400);
+      // A goal without an id gets one first (no event), so a rename stays one `title` event.
+      const before = read();
+      const all = [...parseGoals(before).active, ...parseGoals(before).completed];
+      const target = all.find((g) => g.id === ref) ?? resolveGoalRef(ref, all);
+      if (!target) return c.json({ error: 'Goal not found' }, 404);
+      let current = before;
+      let key = target.id ?? target.text;
+      if (!target.id && before !== null) {
+        try {
+          current = write(before);
+        } catch (err) {
+          deps.logger.warn({ err, botId: bot.id }, 'Assigning goal ids failed');
+          return c.json({ error: 'Could not write GOALS.md' }, 500);
+        }
+        const fresh = [...parseGoals(current).active, ...parseGoals(current).completed].find(
+          (g) => g.text === target.text
+        );
+        key = fresh?.id ?? target.text;
+      }
+      next = editGoal(current, key, edits);
+      summary = { goal: edits.text ?? target.text, ...edits };
+    }
+    if (next === null) return c.json({ error: 'Goal not found' }, 404);
+    try {
+      write(next);
     } catch (err) {
-      deps.logger.warn({ err, botId: bot.id }, 'Moving goal failed');
+      deps.logger.warn({ err, botId: bot.id }, 'Updating goal failed');
       return c.json({ error: 'Could not write GOALS.md' }, 500);
     }
     ctx.cache.invalidate();
-    deps.logger.info({ botId: bot.id, goal: title, status }, 'Operator moved goal');
-    return c.json({ goal: title, status });
+    deps.logger.info({ botId: bot.id, ...summary }, 'Operator updated goal');
+    return c.json(summary);
   });
   return app;
 }

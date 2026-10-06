@@ -25,6 +25,7 @@ export const GOAL_EVENTS_FILE = 'goal-events.jsonl';
 
 export type GoalEventOp =
   | 'add'
+  | 'title'
   | 'status'
   | 'notes'
   | 'priority'
@@ -106,6 +107,7 @@ export function diffGoals(prev: GoalsState, next: GoalsState): GoalChange[] {
       );
       return;
     }
+    if (norm(old.goal.text) !== norm(g.text)) out.push(change(g, 'title', old.goal.text, g.text));
     if (!old.done && done) out.push(change(g, 'complete', old.goal.status, 'completed'));
     else if (old.done && !done) out.push(change(g, 'reopen', 'completed', g.status));
     else if (!done && norm(old.goal.status) !== norm(g.status))

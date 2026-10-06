@@ -31,6 +31,8 @@ import {
   goalDetailError,
   goalDetailLoading,
   goalDetailUrl,
+  goalEditPayload,
+  goalEditor,
 } from './goal-detail-helpers.js';
 import { watchAgent } from './live-presence.js';
 import { api, renderThread } from './shared.js';
@@ -85,18 +87,95 @@ async function redrawBoard(el, id) {
   if (home && !home.error && board) board.innerHTML = goalsColumns(home.goals);
 }
 
-/** Right-hand drawer with everything about one goal. */
-async function openGoalDetail(botId, goalId, title) {
+/** Right-hand drawer with everything about one goal; title and notes edit in place. */
+async function openGoalDetail(botId, goalId, title, onChange) {
   const body = openSheet({ title: 'Goal', body: goalDetailLoading(), wide: true });
   if (!body) return;
-  const detail = await api(goalDetailUrl(botId, { id: goalId, title })).catch((err) => ({
-    error: err?.message || 'Request failed',
-  }));
-  if (!body.isConnected) return;
-  body.innerHTML =
-    !detail || detail.error
-      ? goalDetailError(detail?.error || 'no response')
-      : goalDetailBody(detail, botId);
+  const load = async (key) => {
+    const detail = await api(goalDetailUrl(botId, key)).catch((err) => ({
+      error: err?.message || 'Request failed',
+    }));
+    if (!body.isConnected) return;
+    body.innerHTML =
+      !detail || detail.error
+        ? goalDetailError(detail?.error || 'no response')
+        : goalDetailBody(detail, botId);
+  };
+  await load({ id: goalId, title });
+  wireGoalEditing(body, botId, load, onChange);
+}
+
+function wireGoalEditing(body, botId, load, onChange) {
+  const startEdit = (target) => {
+    if (body.querySelector('.gd-editor')) return;
+    const field = target.dataset.edit;
+    const root = body.querySelector('.gd');
+    if (!root || !field) return;
+    const value =
+      field === 'title'
+        ? root.dataset.goal
+        : target.classList.contains('gd-notes-empty')
+          ? ''
+          : target.textContent.trim();
+    const holder = document.createElement('div');
+    holder.innerHTML = goalEditor(field, value);
+    const editor = holder.firstElementChild;
+    target.replaceWith(editor);
+    const input = editor.querySelector('textarea');
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    const goal = { id: root.dataset.goalId, title: root.dataset.goal };
+    const reload = () => load({ id: goal.id, title: goal.title });
+    const save = async () => {
+      const payload = goalEditPayload(goal, field, input.value);
+      if (!payload) {
+        showToast('A goal needs a title', { tone: 'danger' });
+        return;
+      }
+      editor.querySelectorAll('button').forEach((btn) => {
+        btn.disabled = true;
+      });
+      const res = await api(`/api/agents/${encodeURIComponent(botId)}/goals`, {
+        method: 'PATCH',
+        body: payload,
+      }).catch((err) => ({ error: err?.message || 'Request failed' }));
+      if (res?.error) {
+        showToast(res.error, { tone: 'danger' });
+        editor.querySelectorAll('button').forEach((btn) => {
+          btn.disabled = false;
+        });
+        return;
+      }
+      if (field === 'title') goal.title = payload.title;
+      await reload();
+      onChange?.();
+    };
+    editor.addEventListener('click', (e) => {
+      if (e.target.closest('[data-edit-save]')) save();
+      else if (e.target.closest('[data-edit-cancel]')) reload();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        reload();
+      } else if (e.key === 'Enter' && (field === 'title' ? !e.shiftKey : e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        save();
+      }
+    });
+  };
+  body.addEventListener('click', (e) => {
+    const target = e.target.closest('[data-edit]');
+    if (target && !e.target.closest('a')) startEdit(target);
+  });
+  body.addEventListener('keydown', (e) => {
+    const target = e.target.closest?.('[data-edit]');
+    if (target && e.key === 'Enter' && e.target === target) {
+      e.preventDefault();
+      startEdit(target);
+    }
+  });
 }
 
 /** Goals board: add (submit) and move (change) by delegation, so redraws keep working. */
@@ -128,7 +207,8 @@ function wireGoalBoard(el, id) {
   const openFrom = (target) => {
     if (target.closest('.home-goal-move')) return;
     const goalCard = target.closest('.home-goal-card');
-    if (goalCard) openGoalDetail(id, goalCard.dataset.goalId, goalCard.dataset.goal);
+    if (goalCard)
+      openGoalDetail(id, goalCard.dataset.goalId, goalCard.dataset.goal, () => redrawBoard(el, id));
   };
   board.addEventListener('click', (e) => openFrom(e.target));
   board.addEventListener('keydown', (e) => {

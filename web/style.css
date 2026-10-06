@@ -7144,3 +7144,64 @@ a.gd-row-name:hover {
 .gd-neg {
   color: var(--danger);
 }
+
+/* Goal drawer: click-to-edit title and notes */
+.gd-editable {
+  border-radius: var(--r-sm);
+  cursor: text;
+  transition: background-color 0.12s ease, box-shadow 0.12s ease;
+}
+.gd-editable:hover,
+.gd-editable:focus-visible {
+  outline: none;
+  background-color: var(--bg-hover);
+  box-shadow: 0 0 0 4px var(--bg-hover);
+}
+.gd-notes-empty {
+  padding: 6px 8px;
+  color: var(--text-dim);
+  font-style: italic;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+}
+.gd-notes-empty:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.gd-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gd-edit-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  box-shadow: 0 0 0 2px var(--accent-bg);
+  resize: vertical;
+  field-sizing: content;
+  min-height: 2.6em;
+}
+.gd-editor[data-editor="title"] .gd-edit-input {
+  font-size: 1.15em;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.gd-edit-input:focus {
+  outline: none;
+}
+.gd-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: var(--fs-sm, 12px);
+}
+.gd-edit-actions .gd-dim {
+  margin-right: auto;
+}

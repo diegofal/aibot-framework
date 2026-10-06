@@ -467,3 +467,47 @@ describe('operator goal writes are logged as goal events', () => {
     expect(goal?.started).toBeTruthy();
   });
 });
+
+describe('PATCH /api/agents/:id/goals edits title and notes', () => {
+  const patch = (app: Hono, body: unknown) =>
+    app.request('/api/agents/b1/goals', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const goals = () => parseGoals(readFileSync(join(fx.soulDir('b1'), 'GOALS.md'), 'utf-8'));
+  const events = () => {
+    const p = join(fx.soulDir('b1'), 'goal-events.jsonl');
+    return existsSync(p)
+      ? readFileSync(p, 'utf-8')
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+      : [];
+  };
+
+  it('renames a legacy goal (no id yet) as one title event and keeps its id afterwards', async () => {
+    const app = makeApp();
+    const res = await patch(app, { goal: 'Research topic', title: 'Research the topic deeply' });
+    expect(res.status).toBe(200);
+    const g = goals().active.find((x) => x.text === 'Research the topic deeply');
+    expect(g?.id).toMatch(/^g-[0-9a-f]{8}$/);
+    expect(goals().active.some((x) => x.text === 'Research topic')).toBe(false);
+    const ops = events().map((e) => [e.op, e.actor, e.from, e.to]);
+    expect(ops).toEqual([['title', 'operator', 'Research topic', 'Research the topic deeply']]);
+    const res2 = await patch(app, { id: g?.id, notes: 'line one\nline two' });
+    expect(res2.status).toBe(200);
+    expect(goals().active.find((x) => x.id === g?.id)?.notes).toBe('line one line two');
+    expect(events().at(-1)).toMatchObject({ op: 'notes', actor: 'operator' });
+  });
+
+  it('rejects bad edits', async () => {
+    const app = makeApp();
+    expect((await patch(app, { goal: 'Research topic', title: '  ' })).status).toBe(400);
+    expect((await patch(app, { goal: 'Research topic', title: 'a\nb' })).status).toBe(400);
+    expect((await patch(app, { goal: 'Research topic', title: 'x'.repeat(201) })).status).toBe(400);
+    expect((await patch(app, { goal: 'Research topic', notes: 'n'.repeat(601) })).status).toBe(400);
+    expect((await patch(app, { goal: 'Research topic' })).status).toBe(400);
+    expect((await patch(app, { id: 'g-nope', title: 'x' })).status).toBe(404);
+  });
+});

@@ -3,6 +3,8 @@ import {
   goalDetailBody,
   goalDetailError,
   goalDetailUrl,
+  goalEditPayload,
+  goalEditor,
 } from '../../web/pages/goal-detail-helpers.js';
 
 const NOW = Date.parse('2026-10-06T16:00:00.000Z');
@@ -229,5 +231,49 @@ describe('goalDetailBody', () => {
 describe('goalDetailError', () => {
   it('escapes the message', () => {
     expect(goalDetailError('<b>nope</b>')).toContain('&lt;b&gt;nope');
+  });
+});
+
+describe('editing a goal from the drawer', () => {
+  it('title and notes are click-to-edit, and the drawer knows which goal it shows', () => {
+    const html = goalDetailBody(detail(), 'ai-perfectionist', NOW);
+    expect(html).toContain('data-edit="title"');
+    expect(html).toContain('data-edit="notes"');
+    expect(html).toContain('data-goal-id="g-lab00001"');
+    expect(html).toContain('data-goal="Monthly &lt;lab&gt;"');
+  });
+
+  it('a goal without notes offers to add them', () => {
+    const d = detail();
+    d.goal.notes = null;
+    const html = goalDetailBody(d, 'ai-perfectionist', NOW);
+    expect(html).toContain('data-edit="notes"');
+    expect(html).toContain('Add notes');
+  });
+
+  it('the editor is a textarea holding the current value with Save and Cancel', () => {
+    const html = goalEditor('title', 'Say "hi" <now>');
+    expect(html).toContain('<textarea');
+    expect(html).toContain('Say &quot;hi&quot; &lt;now&gt;');
+    expect(html).toContain('maxlength="200"');
+    expect(html).toContain('data-edit-save');
+    expect(html).toContain('data-edit-cancel');
+    expect(goalEditor('notes', '')).toContain('maxlength="600"');
+  });
+
+  it('builds the PATCH body by id, falling back to the title', () => {
+    expect(goalEditPayload({ id: 'g-1', title: 'T' }, 'title', '  New  ')).toEqual({
+      id: 'g-1',
+      title: 'New',
+    });
+    expect(goalEditPayload({ id: '', title: 'T' }, 'notes', 'n')).toEqual({
+      goal: 'T',
+      notes: 'n',
+    });
+    expect(goalEditPayload({ id: 'g-1', title: 'T' }, 'title', '   ')).toBeNull();
+    expect(goalEditPayload({ id: 'g-1', title: 'T' }, 'notes', '')).toEqual({
+      id: 'g-1',
+      notes: '',
+    });
   });
 });

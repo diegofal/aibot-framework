@@ -3,6 +3,7 @@ import {
   type GoalEntry,
   appendGoal,
   createGoalsTool,
+  editGoal,
   findGoalIndex,
   goalBucket,
   isOperatorGoal,
@@ -637,5 +638,42 @@ describe('appendGoal / setGoalStatus keep goal ids and times', () => {
     expect(back.updated).toBe(t2.toISOString());
     const done = parseGoals(setGoalStatus(again, 'Work', 'done', () => t2) as string).completed[0];
     expect(done.id).toBe('g-00000002');
+  });
+});
+
+describe('editGoal (operator edits from the drawer)', () => {
+  const md = `## Active Goals
+- [ ] Write brief
+  - status: pending
+  - priority: high
+  - notes: old notes
+  - id: g-aaaaaaaa
+
+## Completed
+- [x] Old thing
+  - completed: 2026-10-01
+  - id: g-cccccccc
+`;
+  test('renames and re-notes by id, keeping everything else', () => {
+    const out = editGoal(md, 'g-aaaaaaaa', { text: 'Write the Monday brief', notes: 'new notes' });
+    const g = parseGoals(out as string).active[0];
+    expect(g.text).toBe('Write the Monday brief');
+    expect(g.notes).toBe('new notes');
+    expect(g.id).toBe('g-aaaaaaaa');
+    expect(g.priority).toBe('high');
+  });
+  test('finds by exact title too, edits completed goals, and empty notes clear them', () => {
+    expect(
+      parseGoals(editGoal(md, 'Write brief', { notes: '' }) as string).active[0].notes
+    ).toBeUndefined();
+    expect(
+      parseGoals(editGoal(md, 'g-cccccccc', { text: 'Older thing' }) as string).completed[0].text
+    ).toBe('Older thing');
+    expect(
+      parseGoals(editGoal(md, 'g-aaaaaaaa', { priority: 'low' }) as string).active[0].priority
+    ).toBe('low');
+  });
+  test('null for an unknown goal', () => {
+    expect(editGoal(md, 'g-nope', { text: 'x' })).toBeNull();
   });
 });

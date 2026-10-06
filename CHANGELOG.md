@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (2026-10-06) — Edit a goal's title and notes from its drawer
+- **Drawer.** The goal title and notes are click-to-edit (`data-edit`; `goalEditor`, `goalEditPayload` in `web/pages/goal-detail-helpers.js`): Enter saves the title, Ctrl+Enter the notes, Esc cancels without closing the drawer. A goal without notes shows "Add notes…". Saving reloads the drawer and redraws the board.
+- **API.** `PATCH /api/agents/:id/goals` takes `{ goal | id, title?, notes?, priority? }` besides `{ goal | id, status }` (`parseGoalEdits` validates like the add form; `editGoal` in `src/tools/goals.ts`). A goal without an id gets one first (written without events), so a rename is one event.
+- **History.** `diffGoals` emits a `title` op (from → to) when a goal's text changes under the same id; `GoalEventOp` gains `title`.
+- Tests: `editGoal` (`tests/goals-tool.test.ts`), rename diff (`tests/bot/goal-events.test.ts`), route edits incl. a legacy goal rename (`tests/web/routes/agent-home.test.ts`), drawer helpers (`tests/web/goal-detail-helpers.test.ts`).
+
 ### Changed (2026-10-06) — Drag cards between goal columns; the board follows the agent; readable menus
 - **Drag and drop.** Goal cards are `draggable`; dropping on another column PATCHes `/api/agents/:id/goals` with that column's status (same path as the card menu). The target column highlights while dragging.
 - **The board follows the agent.** After a completed (non-idle) cycle whose goal is known (planner/strategist `serves_goal` or an in-cycle `manage_goals`), a To do goal moves to In progress (`startGoal` in `src/tools/goals.ts`, `AgentLoop.startCycleGoal`, written by `SoulLoader.writeGoals` as actor `agent` with the `cycleId`, so it shows in the goal's history). Done and Blocked stay the agent's call through `manage_goals`.
