@@ -325,3 +325,20 @@ docker compose up -d --build
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T16-11-02`. Container recreated, `healthy`; the image has `src/bot/goal-events.ts`, `src/bot/agent-cycle-log.ts`, `src/stats/goal-detail-aggregator.ts`. `GET /goals/detail` and `PATCH /goals` answer 401 without a session (behind auth). Boot errors: only the existing Telegram `getMe` 401. `buildGoalDetail` run in the container on ai-perfectionist's "Monthly hands-on lab": in_progress, 1 inferred cycle (manage_goals named the goal), 6 LLM calls, 8 tool calls, 10.6k tokens, 2 files. Exact cycles start with the next agent-loop cycle.
 
 **Reversible?** Yes: check out `263cb76` and rebuild. New files (`goal-events.jsonl`, `agent-cycles/`) are additive; GOALS.md gains `id`/`started`/`updated` lines that the old parser ignores.
+
+### 2026-10-06 — Rebuilt for goal drag-and-drop and cycles starting their goal
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Deploy `17cd762`: draggable goal cards, a completed cycle moves its To do goal to In progress (`AgentLoop.startCycleGoal`), readable option lists |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T16-21-52`. Container recreated, `healthy`; image has `startCycleGoal`; served `style.css` has `drag-over` and `agent-home.js` has the `dragstart` handler. Boot errors: only the existing Telegram `getMe` 401. Drag and the auto-start not yet seen live.
+
+**Reversible?** Yes: check out `c578c73` and rebuild.
