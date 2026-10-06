@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { KarmaEvent } from '../../../src/karma/types';
 import { FLEET_PRESENCE_TTL_MS, mergeTimeline } from '../../../src/stats/agent-home-aggregator';
 import { PresenceTracker } from '../../../src/stats/presence-tracker';
+import { parseGoals } from '../../../src/tools/goals';
 import { agentHomeRoutes } from '../../../src/web/routes/agent-home';
 import { removeTempDir } from '../../helpers/temp-dir';
 import { type StatsFixture, createStatsFixture } from '../../stats/fixture';
@@ -314,5 +317,77 @@ describe('mergeTimeline', () => {
       { ts: '2026-01-02T00:00:00.000Z', kind: 'ask' as const, title: 'b', detail: null, ok: null },
     ];
     expect(mergeTimeline(items, 2).map((i) => i.title)).toEqual(['c', 'b']);
+  });
+});
+
+describe('POST /api/agents/:id/goals', () => {
+  const post = (app: Hono, id: string, body: unknown) =>
+    app.request(`/api/agents/${id}/goals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const goalsOf = (id: string) =>
+    parseGoals(readFileSync(join(fx.soulDir(id), 'GOALS.md'), 'utf-8'));
+
+  it('appends an operator goal to the Active section and keeps the others', async () => {
+    const res = await post(makeApp(), 'b1', {
+      title: '  Find three remote FDE roles  ',
+      notes: 'EU timezone',
+      priority: 'high',
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { goal: { text: string; source: string } };
+    expect(body.goal.text).toBe('Find three remote FDE roles');
+    const { active, completed } = goalsOf('b1');
+    expect(active.map((g) => g.text)).toEqual([
+      '**Weekly digest**',
+      'Research topic',
+      'Find three remote FDE roles',
+    ]);
+    const added = active[2];
+    expect(added.source).toBe('operator');
+    expect(added.priority).toBe('high');
+    expect(added.notes).toBe('EU timezone');
+    expect(added.status).toBe('pending');
+    expect(added.created).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(completed.map((g) => g.text)).toEqual(['Setup']);
+  });
+
+  it('defaults priority to medium and rejects unknown priorities', async () => {
+    expect((await post(makeApp(), 'b1', { title: 'A' })).status).toBe(201);
+    expect(goalsOf('b1').active.at(-1)?.priority).toBe('medium');
+    expect((await post(makeApp(), 'b1', { title: 'B', priority: 'urgent!!' })).status).toBe(400);
+  });
+
+  it('rejects empty, multi-line and oversized input', async () => {
+    const app = makeApp();
+    expect((await post(app, 'b1', { title: '   ' })).status).toBe(400);
+    expect((await post(app, 'b1', {})).status).toBe(400);
+    expect((await post(app, 'b1', { title: 'a\nb' })).status).toBe(400);
+    expect((await post(app, 'b1', { title: 'x'.repeat(201) })).status).toBe(400);
+    expect((await post(app, 'b1', { title: 'ok', notes: 'n'.repeat(601) })).status).toBe(400);
+    expect(goalsOf('b1').active).toHaveLength(2);
+  });
+
+  it('flattens newlines in notes so GOALS.md stays parseable', async () => {
+    await post(makeApp(), 'b1', { title: 'Notes goal', notes: 'line one\nline two' });
+    expect(goalsOf('b1').active.at(-1)?.notes).toBe('line one line two');
+  });
+
+  it('404s for unknown bots and bots outside the tenant', async () => {
+    expect((await post(makeApp(), 'nope', { title: 'x' })).status).toBe(404);
+    expect((await post(makeApp({ tenantId: 't1' }), 'b3', { title: 'x' })).status).toBe(404);
+  });
+
+  it('shows the new goal on the next home read (cache dropped)', async () => {
+    const app = makeApp();
+    await app.request('/api/agents/b1/home');
+    await post(app, 'b1', { title: 'Fresh goal' });
+    const home = (await (await app.request('/api/agents/b1/home')).json()) as {
+      goals: { active: Array<{ text: string; source: string | null }> };
+    };
+    const fresh = home.goals.active.find((g) => g.text === 'Fresh goal');
+    expect(fresh?.source).toBe('operator');
   });
 });

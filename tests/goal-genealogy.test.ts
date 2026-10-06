@@ -33,9 +33,24 @@ describe('goal-genealogy', () => {
       expect(result.originContext).toBe('rss:new_article');
     });
 
-    it('defaults to operator for unknown sources', () => {
+    // A missing source used to default to 'operator', which labelled every
+    // goal the agent added for itself as the operator's.
+    it('defaults to unknown when there is no source', () => {
       const result = genealogy.enrichSource(undefined);
-      expect(result.origin).toBe('operator');
+      expect(result.origin).toBe('unknown');
+    });
+
+    it('defaults to unknown for unrecognised sources', () => {
+      expect(genealogy.enrichSource('something-else').origin).toBe('unknown');
+    });
+
+    it('parses agent and operator sources', () => {
+      expect(genealogy.enrichSource('agent').origin).toBe('agent');
+      expect(genealogy.enrichSource('operator:2026-10-06').origin).toBe('operator');
+    });
+
+    it('treats preset goals as operator-chosen', () => {
+      expect(genealogy.enrichSource('preset:job-seeker').origin).toBe('operator');
     });
 
     it('parses environment source', () => {
@@ -189,10 +204,10 @@ describe('goal-genealogy', () => {
       expect(stats).toHaveLength(0);
     });
 
-    it('defaults to operator for goals without origin', () => {
+    it('defaults to unknown for goals without origin', () => {
       const goals: EnrichedGoalEntry[] = [{ text: 'A', status: 'completed', priority: 'high' }];
       const stats = genealogy.getOriginStats(goals);
-      expect(stats[0].origin).toBe('operator');
+      expect(stats[0].origin).toBe('unknown');
     });
   });
 

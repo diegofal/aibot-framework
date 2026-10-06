@@ -3578,6 +3578,26 @@ body.ui-sheet-open {
   font-size: var(--fs-sm);
   margin-top: 2px;
 }
+.home-goal-you {
+  display: inline-block;
+  padding: 0 6px;
+  margin-right: 4px;
+  border-radius: 999px;
+  font-size: var(--fs-xs, 11px);
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+.home-goal-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.home-goal-form input[name="title"] {
+  flex: 1;
+  min-width: 0;
+}
 
 /* Karma */
 .home-karma-top {

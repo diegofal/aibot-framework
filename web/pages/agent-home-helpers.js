@@ -225,7 +225,30 @@ function goalRow(g) {
   const note = g.notes
     ? `<div class="home-goal-notes text-dim">${esc(String(g.notes).slice(0, 160))}${String(g.notes).length > 160 ? '…' : ''}</div>`
     : '';
-  return `<div class="home-goal"><div class="home-goal-title">${esc(g.text || '(untitled)')} ${pr}</div>${note}</div>`;
+  const you = /^operator\b/i.test(String(g.source ?? ''))
+    ? '<span class="home-goal-you" title="You added this goal">you</span> '
+    : '';
+  return `<div class="home-goal"><div class="home-goal-title">${you}${esc(g.text || '(untitled)')} ${pr}</div>${note}</div>`;
+}
+
+/** Add-a-goal form under the board; agent-home.js wires the submit. */
+export function goalAddForm() {
+  return `<form id="home-goal-form" class="home-goal-form">
+    <input class="input" name="title" maxlength="200" placeholder="Give this agent a goal…" autocomplete="off" required>
+    <select class="input" name="priority" aria-label="Priority">
+      <option value="low">low</option>
+      <option value="medium" selected>medium</option>
+      <option value="high">high</option>
+    </select>
+    <button class="btn btn-sm btn-primary" type="submit">Add goal</button>
+  </form>`;
+}
+
+/** POST body for /api/agents/:id/goals, or null when there is no title. */
+export function goalFormPayload(title, priority) {
+  const t = String(title ?? '').trim();
+  if (!t) return null;
+  return { title: t, priority: priority || 'medium' };
 }
 
 /** Three goal columns: active, blocked, recently completed. */
@@ -237,7 +260,7 @@ export function goalsColumns(goals) {
     return emptyState({
       icon: '◎',
       title: 'No goals yet',
-      hint: 'Goals live in GOALS.md. Give the agent one and the planner will pick it up on the next cycle.',
+      hint: 'Add one below: the agent works on goals you set before its own, and asks you if one is unclear.',
     });
   }
   const col = (title, tone, list, empty) => `<div class="home-goal-col">

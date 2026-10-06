@@ -13,6 +13,8 @@ import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.
 import {
   AGENT_HOME_SHORTCUTS,
   applyPresence,
+  goalAddForm,
+  goalFormPayload,
   goalsColumns,
   homeKeyAction,
   homeTabs,
@@ -63,6 +65,36 @@ function actionsFor(identity, id) {
   }
   const label = identity.enabled ? 'Start' : 'Enable &amp; Start';
   return `<button class="btn btn-primary" id="home-toggle">${label}</button>${rest}`;
+}
+
+/** Add-goal form: POST, then redraw the board from a fresh home read. */
+function wireGoalForm(el, id) {
+  const form = el.querySelector('#home-goal-form');
+  if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = goalFormPayload(form.elements.title?.value, form.elements.priority?.value);
+    if (!payload) return;
+    const btn = form.querySelector('button[type="submit"]');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await api(`/api/agents/${encodeURIComponent(id)}/goals`, {
+        method: 'POST',
+        body: payload,
+      });
+      if (res?.error) {
+        showToast(res.error, { tone: 'danger' });
+        return;
+      }
+      form.reset();
+      showToast('Goal added — the agent picks it up next cycle', { tone: 'ok' });
+      const home = await api(homeUrl(id)).catch(() => null);
+      const board = el.querySelector('#home-goals');
+      if (home && !home.error && board) board.innerHTML = goalsColumns(home.goals);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
 }
 
 function wireActions(el, id, identity) {
@@ -324,6 +356,8 @@ function scheduleHomeRefresh(el, id) {
     if (tl) tl.innerHTML = timelineBody(home.timeline);
     const needs = el.querySelector('#home-needs');
     if (needs) needs.innerHTML = needsYouStrip(home.needsYou, id);
+    const goals = el.querySelector('#home-goals');
+    if (goals) goals.innerHTML = goalsColumns(home.goals);
   }, HOME_REFRESH_DEBOUNCE_MS);
 }
 
@@ -367,7 +401,10 @@ export async function renderAgentHome(el, id) {
     </div>
     <div id="home-mind" class="home-mind"></div>
     <div class="home-grid-3" style="margin-top:16px">
-      ${card({ title: 'Goals', body: goalsColumns(home.goals) })}
+      ${card({
+        title: 'Goals',
+        body: `<div id="home-goals">${goalsColumns(home.goals)}</div>${goalAddForm()}`,
+      })}
       ${card({ title: 'Traits', body: traitsBody(home.traits) })}
       ${card({
         title: 'Karma',
@@ -377,6 +414,7 @@ export async function renderAgentHome(el, id) {
     </div>`;
 
   wireActions(el, id, identity);
+  wireGoalForm(el, id);
   wireKeys(el, id, identity);
   wireFaceControl(el, id, {
     onChanged: (avatarUrl) => {

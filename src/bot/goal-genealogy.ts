@@ -13,6 +13,8 @@ import type { OutcomeLedger } from './outcome-ledger';
 
 export type GoalOrigin =
   | 'operator'
+  | 'agent'
+  | 'unknown'
   | 'strategist'
   | 'reflection'
   | 'environment'
@@ -55,7 +57,7 @@ export class GoalGenealogy {
     sourceStr: string | undefined,
     triggerContext?: string
   ): { origin: GoalOrigin; originContext?: string } {
-    if (!sourceStr) return { origin: 'operator' };
+    if (!sourceStr) return { origin: 'unknown' };
 
     const origin = parseOriginFromSource(sourceStr);
     const context = triggerContext || extractContextFromSource(sourceStr);
@@ -137,7 +139,7 @@ export class GoalGenealogy {
     const byOrigin = new Map<GoalOrigin, { total: number; completed: number; scores: number[] }>();
 
     for (const goal of goals) {
-      const origin = goal.origin ?? 'operator';
+      const origin = goal.origin ?? 'unknown';
       let stats = byOrigin.get(origin);
       if (!stats) {
         stats = { total: 0, completed: 0, scores: [] };
@@ -199,9 +201,16 @@ function parseOriginFromSource(source: string): GoalOrigin {
   if (lower.startsWith('environment') || lower.startsWith('sensor')) return 'environment';
   if (lower.startsWith('mesh') || lower.startsWith('peer')) return 'mesh';
   if (lower.startsWith('crystallizer')) return 'crystallizer';
-  if (lower.startsWith('operator') || lower.startsWith('human') || lower.startsWith('user'))
+  if (lower.startsWith('agent')) return 'agent';
+  // Presets are picked by the operator when the agent is created.
+  if (
+    lower.startsWith('operator') ||
+    lower.startsWith('human') ||
+    lower.startsWith('user') ||
+    lower.startsWith('preset')
+  )
     return 'operator';
-  return 'operator';
+  return 'unknown';
 }
 
 function extractContextFromSource(source: string): string | null {

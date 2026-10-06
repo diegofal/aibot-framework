@@ -6,6 +6,7 @@ import {
   buildDirectivesSection,
   buildExecutorPrompt,
   buildFeedbackProcessorPrompt,
+  buildOperatorGoalsSection,
   buildPlannerPrompt,
   buildStrategistPrompt,
 } from '../../src/bot/agent-loop-prompts';
@@ -237,5 +238,66 @@ describe('buildExecutorPrompt productionsEnabled', () => {
     expect(result).toContain('## Tool Usage Rules');
     // Should NOT include "write/edit files" in the output line
     expect(result).not.toContain('save findings to memory, update goals, write/edit files');
+  });
+});
+
+describe('buildOperatorGoalsSection', () => {
+  const goals = `## Active Goals
+- [ ] Find three remote FDE roles
+  - status: pending
+  - priority: high
+  - source: operator
+- [ ] Self-set research thread
+  - status: in_progress
+  - priority: medium
+  - source: agent
+- [ ] Done operator goal is not active
+  - status: blocked
+  - priority: low
+  - source: operator:2026-10-06
+
+## Completed
+- [x] Old operator goal
+  - completed: 2026-10-01
+`;
+
+  test('returns empty string when there are no operator goals', () => {
+    expect(buildOperatorGoalsSection(undefined)).toBe('');
+    expect(buildOperatorGoalsSection('')).toBe('');
+    expect(
+      buildOperatorGoalsSection(
+        '## Active Goals\n- [ ] Mine\n  - status: pending\n  - source: agent\n'
+      )
+    ).toBe('');
+  });
+
+  test('lists only active operator goals with the priority instruction', () => {
+    const result = buildOperatorGoalsSection(goals);
+    expect(result).toContain('## Set by your operator');
+    expect(result).toContain('- Find three remote FDE roles');
+    expect(result).toContain('- Done operator goal is not active');
+    expect(result).not.toContain('Self-set research thread');
+    expect(result).not.toContain('Old operator goal');
+    expect(result).toContain('ask_human');
+    expect(result.toLowerCase()).toContain('before your own goals');
+  });
+
+  test('appears in planner, continuous planner, executor and strategist prompts', () => {
+    const base = {
+      identity: 'TestBot',
+      soul: 'A bot',
+      motivations: 'Be helpful',
+      goals,
+      recentMemory: 'Did stuff',
+      datetime: '2026-03-08T12:00:00Z',
+      availableTools: ['web_search'],
+      hasCreateTool: false,
+    };
+    expect(buildPlannerPrompt(base).system).toContain('## Set by your operator');
+    expect(buildContinuousPlannerPrompt(base).system).toContain('## Set by your operator');
+    expect(buildExecutorPrompt({ ...base, plan: ['Step 1'], workDir: '/tmp/test' })).toContain(
+      '## Set by your operator'
+    );
+    expect(buildStrategistPrompt(base).system).toContain('## Set by your operator');
   });
 });

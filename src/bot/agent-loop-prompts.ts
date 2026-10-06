@@ -3,6 +3,7 @@
  * Planner: lightweight LLM call to decide whether and what to do.
  * Executor: full agentic call with tool access to carry out the plan.
  */
+import { isOperatorGoal, parseGoals } from '../tools/goals';
 
 export interface PlannerPromptInput {
   /** Curiosity DNA block (src/bot/curiosity/dna.ts + knowledge/frontier/direction) — replaces the inaction-biased alignment rule */
@@ -270,6 +271,20 @@ feedback, do NOT assign more content artifacts. Assign ASSESSMENT, OUTREACH, or 
 Operator silence is a reason to explore and find something worth their attention, not to idle.`;
 }
 
+/**
+ * Active goals the operator set (source `operator…`), restated with the rule
+ * that they come first. Empty when there are none.
+ */
+export function buildOperatorGoalsSection(goals?: string): string {
+  if (!goals) return '';
+  const mine = parseGoals(goals).active.filter(isOperatorGoal);
+  if (!mine.length) return '';
+  const list = mine
+    .map((g) => `- ${g.text}${g.status && g.status !== 'pending' ? ` (${g.status})` : ''}`)
+    .join('\n');
+  return `\n## Set by your operator\n\nYour operator added these goals themselves. Work on them before your own goals. If one is ambiguous or you need a decision to move it forward, use ask_human about that goal instead of guessing. When you make progress or finish one, update it with manage_goals and tell the operator what changed.\n\n${list}\n`;
+}
+
 export function buildDirectivesSection(directives?: string[]): string {
   if (!directives?.length) return '';
   return `\n## Operator Directives\n\nYour operator has assigned these standing directives. These are ongoing behavioral instructions (not one-time goals). Factor them into your planning when relevant:\n\n${directives.map((d) => `- ${d}`).join('\n')}\n`;
@@ -298,7 +313,7 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildDirectivesSection(input.directives)}${
+}${buildOperatorGoalsSection(input.goals)}${buildDirectivesSection(input.directives)}${
   input.curiosityBlock
     ? `
 ${input.curiosityBlock}
@@ -434,7 +449,7 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildDirectivesSection(input.directives)}${
+}${buildOperatorGoalsSection(input.goals)}${buildDirectivesSection(input.directives)}${
   input.curiosityBlock
     ? `
 ${input.curiosityBlock}
@@ -592,7 +607,7 @@ ${
   input.goals
     ? `## Goals\n\n${input.goals}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildDirectivesSection(input.directives)}
+}${buildOperatorGoalsSection(input.goals)}${buildDirectivesSection(input.directives)}
 
 Current date/time: ${input.datetime}
 
@@ -780,7 +795,7 @@ ${input.motivations}
 
 ## Current Goals
 
-${input.goals || '(no goals set)'}${buildDirectivesSection(input.directives)}${
+${input.goals || '(no goals set)'}${buildOperatorGoalsSection(input.goals)}${buildDirectivesSection(input.directives)}${
   input.curiosityBlock
     ? `
 

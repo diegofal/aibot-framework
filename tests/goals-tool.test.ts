@@ -1,8 +1,10 @@
 import { describe, expect, mock, test } from 'bun:test';
 import {
   type GoalEntry,
+  appendGoal,
   createGoalsTool,
   findGoalIndex,
+  isOperatorGoal,
   parseGoals,
   resolveGoalParam,
   serializeGoals,
@@ -469,5 +471,76 @@ describe('findGoalIndex — HTML entities', () => {
       { text: 'Compare <A> vs "B" and Bob\'s list', status: 'pending', priority: 'low' },
     ] as any;
     expect(findGoalIndex(goals, 'compare &lt;a&gt; vs &quot;b&quot; and bob&#39;s list')).toBe(0);
+  });
+});
+
+describe('operator goals', () => {
+  test('created date round-trips through parse/serialize', () => {
+    const serialized = serializeGoals(
+      [{ text: 'Dated', status: 'pending', priority: 'high', created: '2026-10-06' }],
+      []
+    );
+    expect(serialized).toContain('  - created: 2026-10-06');
+    expect(parseGoals(serialized).active[0].created).toBe('2026-10-06');
+  });
+
+  test('appendGoal adds to the Active section and keeps everything else', () => {
+    const before = `## Active Goals
+- [ ] Existing
+  - status: in_progress
+  - priority: medium
+  - source: agent
+
+## Completed
+- [x] Shipped
+  - completed: 2026-10-01
+`;
+    const after = appendGoal(before, {
+      text: 'Operator ask',
+      status: 'pending',
+      priority: 'high',
+      source: 'operator',
+      created: '2026-10-06',
+    });
+    const parsed = parseGoals(after);
+    expect(parsed.active.map((g) => g.text)).toEqual(['Existing', 'Operator ask']);
+    expect(parsed.active[1].source).toBe('operator');
+    expect(parsed.active[1].created).toBe('2026-10-06');
+    expect(parsed.completed.map((g) => g.text)).toEqual(['Shipped']);
+  });
+
+  test('appendGoal works on a missing GOALS.md', () => {
+    const parsed = parseGoals(
+      appendGoal(null, { text: 'First', status: 'pending', priority: 'medium' })
+    );
+    expect(parsed.active.map((g) => g.text)).toEqual(['First']);
+  });
+
+  test('isOperatorGoal recognises operator sources only', () => {
+    expect(
+      isOperatorGoal({ text: 'a', status: 'pending', priority: 'm', source: 'operator' })
+    ).toBe(true);
+    expect(
+      isOperatorGoal({ text: 'a', status: 'pending', priority: 'm', source: 'operator:2026-10-06' })
+    ).toBe(true);
+    expect(isOperatorGoal({ text: 'a', status: 'pending', priority: 'm', source: 'agent' })).toBe(
+      false
+    );
+    expect(isOperatorGoal({ text: 'a', status: 'pending', priority: 'm' })).toBe(false);
+  });
+
+  test("manage_goals add marks the goal as the agent's own", async () => {
+    const loader = mockSoulLoader(
+      '## Active Goals\n(no active goals)\n\n## Completed\n(none yet)\n'
+    );
+    const tool = createGoalsTool(() => loader as any);
+    const result = await tool.execute(
+      { action: 'add', goal: 'Self goal', _botId: 'b' },
+      mockLogger
+    );
+    expect(result.success).toBe(true);
+    const goal = parseGoals(loader.readGoals()).active[0];
+    expect(goal.source).toBe('agent');
+    expect(goal.created).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });

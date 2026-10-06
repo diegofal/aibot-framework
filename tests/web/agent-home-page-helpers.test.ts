@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
   ago,
+  goalAddForm,
+  goalFormPayload,
   goalsColumns,
   groupTimelineByHour,
   homeTabs,
@@ -86,6 +88,40 @@ describe('goalsColumns', () => {
     expect(html).toContain(`${'n'.repeat(160)}…`);
     expect(html).toContain('Nothing blocked');
     expect(html).toContain('Done thing');
+  });
+});
+
+describe('operator goals on the board', () => {
+  it('marks goals the operator set with a "you" badge', () => {
+    const html = goalsColumns({
+      active: [
+        { text: 'Mine', source: 'operator' },
+        { text: 'Its own', source: 'agent' },
+      ],
+      blocked: [],
+      completedRecently: [],
+    });
+    expect(html.match(/home-goal-you/g)).toHaveLength(1);
+    expect(html.indexOf('home-goal-you')).toBeLessThan(html.indexOf('Its own'));
+  });
+
+  it('empty state tells the operator to add a goal here', () => {
+    expect(goalsColumns(undefined)).toContain('Add one below');
+  });
+
+  it('renders the add form with a title input and priority select', () => {
+    const html = goalAddForm();
+    expect(html).toContain('id="home-goal-form"');
+    expect(html).toContain('name="title"');
+    expect(html).toContain('maxlength="200"');
+    expect(html).toContain('<option value="medium" selected>');
+  });
+
+  it('builds the POST body from the form values, or null when empty', () => {
+    expect(goalFormPayload('  Ship it ', 'high')).toEqual({ title: 'Ship it', priority: 'high' });
+    expect(goalFormPayload('Ship it', '')).toEqual({ title: 'Ship it', priority: 'medium' });
+    expect(goalFormPayload('   ', 'high')).toBeNull();
+    expect(goalFormPayload(undefined, undefined)).toBeNull();
   });
 });
 

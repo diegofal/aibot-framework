@@ -129,6 +129,20 @@ export interface GoalEntry {
   completed?: string;
   outcome?: string;
   source?: string;
+  /** Local date the goal was added (YYYY-MM-DD). */
+  created?: string;
+}
+
+/** True when the operator set this goal from the dashboard (not the agent, not a preset). */
+export function isOperatorGoal(goal: GoalEntry): boolean {
+  return /^operator\b/i.test(goal.source ?? '');
+}
+
+/** Append one goal to the Active section of a GOALS.md, keeping the rest. */
+export function appendGoal(content: string | null, goal: GoalEntry): string {
+  const { active, completed } = parseGoals(content);
+  active.push(goal);
+  return serializeGoals(active, completed);
 }
 
 /**
@@ -333,6 +347,7 @@ export function parseGoals(content: string | null): {
       else if (key === 'completed') currentGoal.completed = value;
       else if (key === 'outcome') currentGoal.outcome = value;
       else if (key === 'source') currentGoal.source = value;
+      else if (key === 'created') currentGoal.created = value;
     }
   }
 
@@ -352,6 +367,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       lines.push(`  - priority: ${g.priority}`);
       if (g.notes) lines.push(`  - notes: ${g.notes}`);
       if (g.source) lines.push(`  - source: ${g.source}`);
+      if (g.created) lines.push(`  - created: ${g.created}`);
     }
   }
 
@@ -398,6 +414,8 @@ function addGoal(
     status: 'pending',
     priority,
     notes,
+    source: 'agent',
+    created: localDateStr(),
   });
 
   soulLoader.writeGoals(serializeGoals(active, completed));
