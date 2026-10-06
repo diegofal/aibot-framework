@@ -291,6 +291,41 @@ describe('exec tool', () => {
     });
   });
 
+  describe('failure kinds', () => {
+    test('a command that ran and exited non-zero is tagged exit-nonzero', async () => {
+      const tool = createExecTool();
+      const result = await tool.execute({ command: 'exit 3' }, logger);
+      expect(result.success).toBe(false);
+      expect(result.failureKind).toBe('exit-nonzero');
+      expect(result.content).toContain('Exit code: 3');
+    });
+
+    test('exit 0 carries no failure kind', async () => {
+      const tool = createExecTool();
+      const result = await tool.execute({ command: 'echo ok' }, logger);
+      expect(result.failureKind).toBeUndefined();
+    });
+
+    test('a timeout kill says so, is a real error, and points at background mode when available', async () => {
+      const tool = createExecTool({
+        timeout: 500,
+        processToolConfig: { maxSessions: 10, finishedTtlMs: 60000, maxOutputChars: 10000 },
+      });
+      const result = await tool.execute({ command: 'sleep 30' }, logger);
+      expect(result.success).toBe(false);
+      expect(result.failureKind).toBeUndefined();
+      expect(result.content).toContain('Killed after 0.5s timeout');
+      expect(result.content).toContain('background=true');
+    });
+
+    test('the timeout message does not offer background mode when it is not configured', async () => {
+      const tool = createExecTool({ timeout: 500 });
+      const result = await tool.execute({ command: 'sleep 30' }, logger);
+      expect(result.content).toContain('Killed after 0.5s timeout');
+      expect(result.content).not.toContain('background=true');
+    });
+  });
+
   describe('background mode', () => {
     test('without processToolConfig, runs in foreground', async () => {
       const tool = createExecTool();

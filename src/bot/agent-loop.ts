@@ -70,6 +70,7 @@ import {
   finishCuriosityCycle,
 } from './curiosity/runner';
 import type { SystemPromptBuilder } from './system-prompt-builder';
+import { toolEndToAuditEntry } from './tool-audit-log';
 import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
 import { ToolLoopDetector } from './tool-loop-detector';
 import type { PermissionMode } from './tool-permissions';
@@ -2073,17 +2074,7 @@ export class AgentLoop {
     if (this.ctx.toolAuditLog) {
       const auditLog = this.ctx.toolAuditLog;
       executor.on('tool:end', (event) => {
-        auditLog.append({
-          timestamp: new Date(event.timestamp).toISOString(),
-          botId: event.botId,
-          chatId: event.chatId,
-          toolName: event.toolName,
-          args: event.args,
-          success: event.success,
-          result: event.result.slice(0, 500),
-          durationMs: event.durationMs,
-          retryAttempts: event.retryAttempts,
-        });
+        auditLog.append(toolEndToAuditEntry(event));
       });
     }
 
@@ -2479,17 +2470,7 @@ export class AgentLoop {
         if (this.ctx.toolAuditLog) {
           const auditLog = this.ctx.toolAuditLog;
           executor.on('tool:end', (event) => {
-            auditLog.append({
-              timestamp: new Date(event.timestamp).toISOString(),
-              botId: event.botId,
-              chatId: event.chatId,
-              toolName: event.toolName,
-              args: event.args,
-              success: event.success,
-              result: event.result.slice(0, 500),
-              durationMs: event.durationMs,
-              retryAttempts: event.retryAttempts,
-            });
+            auditLog.append(toolEndToAuditEntry(event));
           });
         }
 

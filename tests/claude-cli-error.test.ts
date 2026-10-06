@@ -138,3 +138,18 @@ describe('createClaudeCliError', () => {
     expect(err.resultText).toBe('something broke');
   });
 });
+
+describe('createClaudeCliError — timeouts', () => {
+  test('a kill by our own timer says so and is flagged timedOut', () => {
+    const err = createClaudeCliError(143, 'exit code 143', '', { timedOutAfterMs: 300_000 });
+    expect(err.timedOut).toBe(true);
+    expect(err.message).toContain('Claude CLI timed out after 300000ms');
+    expect(err.exitCode).toBe(143);
+  });
+
+  test('a 143 exit we did not cause is not called a timeout', () => {
+    const err = createClaudeCliError(143, 'exit code 143', '');
+    expect(err.timedOut).toBe(false);
+    expect(err.message).toBe('Claude CLI exited with code 143: exit code 143');
+  });
+});

@@ -256,6 +256,28 @@ export function answerRate(answered, sent) {
   return (isNum(answered) ? answered : 0) / sent;
 }
 
+/**
+ * Subtitle of the "Tool calls" KPI. Failures carry their rate (one decimal: at
+ * fleet scale a whole-percent rate hides real movement); calls a site refused
+ * and commands that exited non-zero are named apart, since neither is breakage.
+ * Returns HTML: the failure part is wrapped in `stats-bad`.
+ */
+export function toolCallsSub(totals) {
+  const t = totals || {};
+  const calls = isNum(t.toolCalls) ? t.toolCalls : 0;
+  const failed = isNum(t.toolFailed) ? t.toolFailed : 0;
+  const parts = [
+    failed > 0
+      ? `<span class="stats-bad">${formatNumber(failed)} failed (${((failed / calls) * 100).toFixed(1)}%)</span>`
+      : 'no failures',
+  ];
+  if (isNum(t.toolBlocked) && t.toolBlocked > 0)
+    parts.push(`${formatNumber(t.toolBlocked)} blocked by sites`);
+  if (isNum(t.toolExitNonzero) && t.toolExitNonzero > 0)
+    parts.push(`${formatNumber(t.toolExitNonzero)} non-zero exits`);
+  return parts.join(' · ');
+}
+
 /** DOM-free HTML escape — mirrors shared.js's div-based one without needing `document`. */
 function escapeHtmlPure(str) {
   if (str == null) return '';

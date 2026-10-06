@@ -151,6 +151,7 @@ describe('send_proactive_message throttling', () => {
     );
 
     expect(second.success).toBe(false);
+    expect(second.failureKind).toBe('policy');
     expect(second.content).toContain('Proactive send throttled');
     expect(second.content).toContain('milei-rocca may send again at');
     expect(sent).toHaveLength(1);

@@ -23,6 +23,7 @@ import {
   severityRank,
   sortFindings,
   sparklinePoints,
+  toolCallsSub,
   traitDeltas,
   windowQuery,
 } from '../../web/pages/stats-helpers.js';
@@ -345,5 +346,30 @@ describe('routine options', () => {
     expect(optionsFromChecked('memory-hygiene', ['redactCustody'])).toEqual({
       redactKinds: ['email', 'phone', 'chat-id', 'custody'],
     });
+  });
+});
+
+describe('toolCallsSub', () => {
+  it('shows failures with their rate and the site refusals apart', () => {
+    const sub = toolCallsSub({
+      toolCalls: 1799,
+      toolFailed: 51,
+      toolBlocked: 20,
+      toolExitNonzero: 9,
+    });
+    expect(sub).toContain('51 failed (2.8%)');
+    expect(sub).toContain('20 blocked by sites');
+    expect(sub).toContain('9 non-zero exits');
+  });
+
+  it('says no failures when nothing failed, still naming refusals', () => {
+    expect(toolCallsSub({ toolCalls: 10, toolFailed: 0, toolBlocked: 0 })).toBe('no failures');
+    expect(toolCallsSub({ toolCalls: 10, toolFailed: 0, toolBlocked: 2 })).toBe(
+      'no failures · 2 blocked by sites'
+    );
+  });
+
+  it('tolerates totals from an older server without the new fields', () => {
+    expect(toolCallsSub({ toolCalls: 100, toolFailed: 4 })).toContain('4 failed (4.0%)');
   });
 });

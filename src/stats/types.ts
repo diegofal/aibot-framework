@@ -46,6 +46,14 @@ export interface ToolStats {
   failRate: number;
   top: Array<{ name: string; count: number; failed: number }>;
   loopBreaks: number;
+  /** Failed calls a third party refused (bot wall, 403, 429). Not in `failed`. */
+  blocked: number;
+  /** Commands that ran to completion and exited non-zero. Not in `failed`. */
+  exitNonzero: number;
+  /** Failures on a target that does not exist (404/410). Included in `failed`. */
+  notFound: number;
+  /** Failures our own guardrails refused (SSRF guard, throttle). Included in `failed`. */
+  policy: number;
 }
 
 export interface OutputStats {
@@ -149,6 +157,10 @@ export interface FleetTotals {
   llmFailed: number;
   toolCalls: number;
   toolFailed: number;
+  /** Sum of `ToolStats.blocked`: calls refused by third parties, not in `toolFailed`. */
+  toolBlocked: number;
+  /** Sum of `ToolStats.exitNonzero`: non-zero command exits, not in `toolFailed`. */
+  toolExitNonzero: number;
   promptTokens: number;
   completionTokens: number;
   filesActive: number;

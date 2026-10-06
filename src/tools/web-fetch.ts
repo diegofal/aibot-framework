@@ -194,6 +194,7 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
       if (isBlockedHost(parsed.hostname)) {
         return {
           success: false,
+          failureKind: 'policy',
           content: 'Blocked: cannot fetch private/local addresses',
         };
       }

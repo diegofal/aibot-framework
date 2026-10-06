@@ -52,6 +52,8 @@ export interface ToolEndEvent {
   botId: string;
   chatId: number;
   timestamp: number;
+  /** Why a failed call failed, when the tool said so (see `ToolFailureKind`). */
+  failureKind?: ToolFailureKind;
 }
 
 /**
@@ -332,7 +334,9 @@ export class ToolExecutor extends EventEmitter {
     // config.karma.rewards.toolError (-1 default), deduped per tool+message.
     // A `blocked` failure is a third party refusing us (bot wall, 403, 429):
     // not the bot's doing, so it is logged and emitted but never charged.
-    const chargeable = failureKind !== 'blocked';
+    // `exit-nonzero` is a command that ran and returned a status the bot may
+    // have wanted (grep with no match): not charged either.
+    const chargeable = failureKind !== 'blocked' && failureKind !== 'exit-nonzero';
     if (
       chargeable &&
       this.options.karmaService &&
@@ -366,6 +370,7 @@ export class ToolExecutor extends EventEmitter {
       botId,
       chatId,
       timestamp: Date.now(),
+      ...(failureKind ? { failureKind } : {}),
     });
     return result;
   }
@@ -706,6 +711,11 @@ export class ToolExecutor extends EventEmitter {
                       name === 'file_write' && !args.append
                         ? ps.renumberFile(botId, logPath)
                         : logPath;
+                    // The rename happens after the tool returned: without this
+                    // note the bot reads or runs the name it wrote, which is gone.
+                    if (finalPath !== logPath) {
+                      validatedResult.content = `${validatedResult.content}\n\n[Saved as ${finalPath} — use this path from now on]`;
+                    }
 
                     // Inject frontmatter for new .md files (non-append file_write)
                     if (name === 'file_write' && !args.append && finalPath.endsWith('.md')) {

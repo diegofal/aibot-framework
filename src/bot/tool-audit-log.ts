@@ -1,6 +1,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger';
+import type { ToolFailureKind } from '../tools/types';
+import type { ToolEndEvent } from './tool-executor';
 
 export interface ToolAuditEntry {
   timestamp: string;
@@ -12,6 +14,27 @@ export interface ToolAuditEntry {
   result: string;
   durationMs: number;
   retryAttempts: number;
+  /** Why the call failed, when the tool said so. Absent on old entries and on plain failures. */
+  failureKind?: ToolFailureKind;
+}
+
+/** Max characters of a tool result kept in the audit log. */
+const AUDIT_RESULT_MAX_CHARS = 500;
+
+/** Map a `tool:end` event to the audit entry persisted for it. */
+export function toolEndToAuditEntry(event: ToolEndEvent): ToolAuditEntry {
+  return {
+    timestamp: new Date(event.timestamp).toISOString(),
+    botId: event.botId,
+    chatId: event.chatId,
+    toolName: event.toolName,
+    args: event.args,
+    success: event.success,
+    result: event.result.slice(0, AUDIT_RESULT_MAX_CHARS),
+    durationMs: event.durationMs,
+    retryAttempts: event.retryAttempts,
+    ...(event.failureKind ? { failureKind: event.failureKind } : {}),
+  };
 }
 
 /**

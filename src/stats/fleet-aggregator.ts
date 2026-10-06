@@ -242,6 +242,8 @@ export function sumTotals(bots: FleetBotStats[]): FleetTotals {
     llmFailed: 0,
     toolCalls: 0,
     toolFailed: 0,
+    toolBlocked: 0,
+    toolExitNonzero: 0,
     promptTokens: 0,
     completionTokens: 0,
     filesActive: 0,
@@ -254,6 +256,8 @@ export function sumTotals(bots: FleetBotStats[]): FleetTotals {
     t.llmFailed += b.llm.failed;
     t.toolCalls += b.tools.calls;
     t.toolFailed += b.tools.failed;
+    t.toolBlocked += b.tools.blocked ?? 0;
+    t.toolExitNonzero += b.tools.exitNonzero ?? 0;
     t.promptTokens += b.llm.promptTokens;
     t.completionTokens += b.llm.completionTokens;
     t.filesActive += b.output.filesActive;

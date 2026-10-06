@@ -6,6 +6,9 @@ type ToolLogger = {
   error: (msg: Record<string, unknown>) => void;
 };
 
+/** Mirrors the limit `CoreMemoryManager.set` enforces. */
+const CORE_MEMORY_VALUE_MAX = 2000;
+
 export function createCoreMemoryTools(coreMemory: CoreMemoryManager): Tool[] {
   return [
     createCoreMemoryAppendTool(coreMemory),
@@ -43,6 +46,7 @@ function createCoreMemoryAppendTool(coreMemory: CoreMemoryManager): Tool {
             value: {
               type: 'string',
               description: 'The actual content to remember (max 2000 chars)',
+              maxLength: CORE_MEMORY_VALUE_MAX,
             },
             importance: {
               type: 'number',
@@ -67,6 +71,14 @@ function createCoreMemoryAppendTool(coreMemory: CoreMemoryManager): Tool {
       const userId = typeof args._userId === 'string' ? args._userId : undefined;
       if (!botId) {
         return { success: false, content: 'Internal error: missing _botId context' };
+      }
+      if (value.length > CORE_MEMORY_VALUE_MAX) {
+        return {
+          success: false,
+          content:
+            `Failed to save memory: value is ${value.length} characters, the limit is ${CORE_MEMORY_VALUE_MAX}. ` +
+            'Do not retry the same value: split it into several keys, or write the long version to a file and save a short pointer here.',
+        };
       }
 
       try {

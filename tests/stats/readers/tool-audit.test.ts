@@ -60,6 +60,10 @@ describe('aggregateTools', () => {
       failRate: 0,
       top: [],
       loopBreaks: 0,
+      blocked: 0,
+      exitNonzero: 0,
+      notFound: 0,
+      policy: 0,
     });
   });
   it('ranks tools by call count with failures and passes loopBreaks through', () => {
@@ -118,5 +122,43 @@ describe('toolsDaily / engagementFromTools', () => {
       { from: 'b1', to: 'b2', calls: 2, failed: 1 },
       { from: 'b1', to: 'b3', calls: 1, failed: 0 },
     ]);
+  });
+});
+
+describe('aggregateTools failure kinds', () => {
+  const entries = [
+    entry({ success: true }),
+    entry({ toolName: 'web_fetch', success: false }), // old entry, no kind
+    entry({ toolName: 'web_fetch', success: false, failureKind: 'error' }),
+    entry({ toolName: 'web_fetch', success: false, failureKind: 'not-found' }),
+    entry({ toolName: 'web_fetch', success: false, failureKind: 'policy' }),
+    entry({ toolName: 'web_fetch', success: false, failureKind: 'blocked' }),
+    entry({ toolName: 'web_fetch', success: false, failureKind: 'blocked' }),
+    entry({ toolName: 'exec', success: false, failureKind: 'exit-nonzero' }),
+  ];
+
+  it('excludes site refusals and non-zero exits from failed and counts them apart', () => {
+    const s = aggregateTools(entries as any, 0);
+    expect(s.calls).toBe(8);
+    expect(s.failed).toBe(4);
+    expect(s.failRate).toBeCloseTo(4 / 8);
+    expect(s.blocked).toBe(2);
+    expect(s.exitNonzero).toBe(1);
+    expect(s.notFound).toBe(1);
+    expect(s.policy).toBe(1);
+  });
+
+  it('per-tool failed uses the same rule', () => {
+    const s = aggregateTools(entries as any, 0);
+    const wf = s.top.find((t) => t.name === 'web_fetch');
+    expect(wf?.failed).toBe(4);
+    expect(s.top.find((t) => t.name === 'exec')?.failed).toBe(0);
+  });
+
+  it('toolsDaily counts failed with the same rule', () => {
+    const days = toolsDaily(entries as any);
+    expect(days).toHaveLength(1);
+    expect(days[0].failed).toBe(4);
+    expect(days[0].calls).toBe(8);
   });
 });

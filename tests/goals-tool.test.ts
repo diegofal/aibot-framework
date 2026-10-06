@@ -449,3 +449,25 @@ describe('GoalEntry source field', () => {
     expect(parsed.active[1].source).toBeUndefined();
   });
 });
+
+describe('findGoalIndex — HTML entities', () => {
+  test('matches a title with a literal & when the search came HTML-escaped', () => {
+    const goals = [
+      {
+        // The live job-seeker goal (2026-10-02): long enough that the fuzzy
+        // steps miss when the search carries `&amp;`.
+        text: 'Write and deliver artifact 07: outreach & referral mechanics — how to get sourced by recruiters, warm intros, referral asks, and follow-up cadence with dated checkpoints',
+        status: 'in_progress',
+        priority: 'high',
+      },
+    ] as any;
+    expect(findGoalIndex(goals, 'artifact 07: outreach &amp; referral mechanics')).toBe(0);
+  });
+
+  test('decodes &lt; &gt; &quot; &#39;', () => {
+    const goals = [
+      { text: 'Compare <A> vs "B" and Bob\'s list', status: 'pending', priority: 'low' },
+    ] as any;
+    expect(findGoalIndex(goals, 'compare &lt;a&gt; vs &quot;b&quot; and bob&#39;s list')).toBe(0);
+  });
+});

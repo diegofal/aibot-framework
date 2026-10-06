@@ -196,7 +196,7 @@ export function createSendProactiveMessageTool(deps: SendProactiveMessageDeps): 
       const gate = throttle.check(botId || 'unknown');
       if (!gate.allowed) {
         logger.warn({ botId, chatId }, 'send_proactive_message: throttled');
-        return { success: false, content: gate.reason };
+        return { success: false, failureKind: 'policy', content: gate.reason };
       }
 
       const operatorTarget = resolveOperatorTarget(chatId, deps.getOperator?.());

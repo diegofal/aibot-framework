@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type ToolAuditEntry, ToolAuditLog } from '../../src/bot/tool-audit-log';
+import {
+  type ToolAuditEntry,
+  ToolAuditLog,
+  toolEndToAuditEntry,
+} from '../../src/bot/tool-audit-log';
 
 function makeLogger() {
   return {
@@ -98,5 +102,31 @@ describe('ToolAuditLog', () => {
 
     expect(log.getEntries('bot1', '2026-02-24')).toHaveLength(1);
     expect(log.getEntries('bot1', '2026-02-25')).toHaveLength(1);
+  });
+});
+
+describe('toolEndToAuditEntry', () => {
+  const base = {
+    toolName: 'web_fetch',
+    args: { url: 'https://x' },
+    success: false,
+    result: 'r'.repeat(900),
+    durationMs: 10,
+    retryAttempts: 0,
+    botId: 'bot1',
+    chatId: 7,
+    timestamp: Date.parse('2026-10-06T12:00:00.000Z'),
+  };
+
+  test('maps the event, truncates the result to 500 chars and keeps failureKind', () => {
+    const entry = toolEndToAuditEntry({ ...base, failureKind: 'blocked' });
+    expect(entry.timestamp).toBe('2026-10-06T12:00:00.000Z');
+    expect(entry.result).toHaveLength(500);
+    expect(entry.failureKind).toBe('blocked');
+  });
+
+  test('omits failureKind when the event has none', () => {
+    const entry = toolEndToAuditEntry(base);
+    expect('failureKind' in entry).toBe(false);
   });
 });

@@ -221,7 +221,9 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
         });
 
         // Enforce timeout
+        let timedOut = false;
         const timer = setTimeout(() => {
+          timedOut = true;
           killProcessTree(proc);
         }, timeout);
 
@@ -243,11 +245,26 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
           output = `${output.slice(0, maxOutput)}\n... (truncated, ${output.length} total chars)`;
         }
 
+        if (timedOut) {
+          const hint = config.processToolConfig
+            ? ' Use background=true for long-running commands.'
+            : '';
+          logger.info({ command, timeout }, 'exec: command killed by timeout');
+          return {
+            success: false,
+            content: `Killed after ${timeout / 1000}s timeout.${hint}\nExit code: ${exitCode}\n\n${output}`,
+          };
+        }
+
         const content = `Exit code: ${exitCode}\n\n${output}`;
 
         logger.info({ command, exitCode, outputLength: output.length }, 'exec: command completed');
 
-        return { success: exitCode === 0, content };
+        // A command that ran to completion and exited non-zero is not breakage:
+        // the exit code is data (grep with no match). Tag it so stats and karma
+        // can tell it apart from a command that could not run.
+        if (exitCode !== 0) return { success: false, failureKind: 'exit-nonzero', content };
+        return { success: true, content };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logger.error({ error: message, command }, 'exec: command failed');

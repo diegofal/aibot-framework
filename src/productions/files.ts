@@ -189,11 +189,22 @@ export function getNextNumber(ctx: FileContext, relativeDir: string): string {
 }
 
 /**
+ * Files that keep the name the bot gave them. A leading `_` or `.` is the
+ * scratch-file convention (probes, measurements). Shell scripts are run by
+ * path: renaming one right after it is written breaks the `exec` that follows.
+ * Deliberately narrow — every other file, `.txt` and code included, can be a
+ * deliverable and keeps its number.
+ */
+export function isUnnumbered(fileName: string): boolean {
+  return fileName.startsWith('_') || fileName.startsWith('.') || fileName.endsWith('.sh');
+}
+
+/**
  * Rename a file on disk to prepend the next auto-number.
  *
- * Returns the new relative path. Skips if already numbered or if file
- * is in INDEX_EXCLUDES. Returns the input path unchanged on missing
- * source or rename error.
+ * Returns the new relative path. Skips if already numbered, if the file
+ * is in INDEX_EXCLUDES, or if it is not a deliverable (see `isUnnumbered`).
+ * Returns the input path unchanged on missing source or rename error.
  */
 export function renumberFile(ctx: FileContext, relativePath: string): string {
   // Defense-in-depth: reject traversal/absolute paths (review-4 R1).
@@ -203,6 +214,7 @@ export function renumberFile(ctx: FileContext, relativePath: string): string {
 
   if (INDEX_EXCLUDES.has(fileName)) return relativePath;
   if (/^\d{2}_/.test(fileName)) return relativePath;
+  if (isUnnumbered(fileName)) return relativePath;
 
   const relDir = dirname(relativePath) === '.' ? '' : dirname(relativePath);
   const nextNum = getNextNumber(ctx, relDir);

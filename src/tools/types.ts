@@ -56,11 +56,16 @@ export interface ToolResult {
    *                 Not the bot's fault: the executor does not charge karma for it.
    * - `not-found` — the target does not exist (404/410). Usually a guessed path,
    *                 so it still counts as a tool error.
+   * - `policy`    — our own guardrail refused it (SSRF guard, proactive throttle).
+   *                 The bot asked for something the rules forbid: karma is charged,
+   *                 but stats report it apart from breakage.
+   * - `exit-nonzero` — a command ran to completion and exited non-zero. The exit
+   *                 code is data (grep with no match), not breakage: no karma.
    */
   failureKind?: ToolFailureKind;
 }
 
-export type ToolFailureKind = 'error' | 'blocked' | 'not-found';
+export type ToolFailureKind = 'error' | 'blocked' | 'not-found' | 'policy' | 'exit-nonzero';
 
 /**
  * A complete tool: its schema definition + execution logic

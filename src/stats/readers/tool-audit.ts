@@ -19,16 +19,38 @@ export function readToolEntries(
   return readDailyEntries<ToolAuditEntry>(baseDir, botId, sinceMs, nowMs);
 }
 
+/**
+ * Whether an audited call counts as a tool failure. Two kinds of failed call
+ * do not: a third party refusing the request (`blocked`: bot wall, 403, 429)
+ * and a command that ran to completion with a non-zero exit (`exit-nonzero`).
+ * Both are reported apart. Entries written before `failureKind` existed count
+ * as failures, as they always did.
+ */
+export function isToolFailure(e: Pick<ToolAuditEntry, 'success' | 'failureKind'>): boolean {
+  if (e.success !== false) return false;
+  return e.failureKind !== 'blocked' && e.failureKind !== 'exit-nonzero';
+}
+
 export function aggregateTools(entries: ToolAuditEntry[], loopBreaks: number): ToolStats {
   const perTool = new Map<string, { count: number; failed: number }>();
   let failed = 0;
+  let blocked = 0;
+  let exitNonzero = 0;
+  let notFound = 0;
+  let policy = 0;
   for (const e of entries) {
-    const ok = e.success !== false;
-    if (!ok) failed++;
+    const isFailure = isToolFailure(e);
+    if (isFailure) failed++;
+    if (e.success === false) {
+      if (e.failureKind === 'blocked') blocked++;
+      else if (e.failureKind === 'exit-nonzero') exitNonzero++;
+      else if (e.failureKind === 'not-found') notFound++;
+      else if (e.failureKind === 'policy') policy++;
+    }
     const name = e.toolName || 'unknown';
     const t = perTool.get(name) ?? { count: 0, failed: 0 };
     t.count++;
-    if (!ok) t.failed++;
+    if (isFailure) t.failed++;
     perTool.set(name, t);
   }
   const top = [...perTool.entries()]
@@ -41,6 +63,10 @@ export function aggregateTools(entries: ToolAuditEntry[], loopBreaks: number): T
     failRate: ratio(failed, entries.length),
     top,
     loopBreaks,
+    blocked,
+    exitNonzero,
+    notFound,
+    policy,
   };
 }
 
@@ -52,7 +78,7 @@ export function toolsDaily(
     () => ({ calls: 0, failed: 0 }),
     (acc, e) => {
       acc.calls++;
-      if (e.success === false) acc.failed++;
+      if (isToolFailure(e)) acc.failed++;
     }
   );
 }

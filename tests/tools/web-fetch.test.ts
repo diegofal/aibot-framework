@@ -68,6 +68,11 @@ describe('web_fetch tool', () => {
       expect(result.content).toContain('private/local');
     });
 
+    test('tags the SSRF refusal as a policy failure', async () => {
+      const result = await tool.execute({ url: 'http://127.0.0.1:3000/' }, logger);
+      expect(result.failureKind).toBe('policy');
+    });
+
     test('blocks 127.0.0.1', async () => {
       const result = await tool.execute({ url: 'http://127.0.0.1:8080/' }, logger);
       expect(result.success).toBe(false);

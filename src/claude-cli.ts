@@ -83,11 +83,19 @@ export class ClaudeCliError extends Error {
   readonly terminalReason?: string;
   readonly resultText?: string;
   readonly resetsAt?: Date;
+  /** True when our own timer killed the process (not a crash that happened to exit 143). */
+  readonly timedOut: boolean;
 
-  constructor(message: string, exitCode: number, fields: ClaudeCliResultFields = {}) {
+  constructor(
+    message: string,
+    exitCode: number,
+    fields: ClaudeCliResultFields = {},
+    timedOut = false
+  ) {
     super(message);
     this.name = 'ClaudeCliError';
     this.exitCode = exitCode;
+    this.timedOut = timedOut;
     this.apiErrorStatus = fields.apiErrorStatus;
     this.isError = fields.isError;
     this.terminalReason = fields.terminalReason;
@@ -244,11 +252,21 @@ export function createClaudeCliError(
   exitCode: number,
   detail: string,
   rawStdout: string,
-  opts: { now?: Date } = {}
+  opts: { now?: Date; timedOutAfterMs?: number } = {}
 ): ClaudeCliError {
   const fromStdout = parseClaudeResultFields(rawStdout, opts.now);
   const fields =
     Object.keys(fromStdout).length > 0 ? fromStdout : parseClaudeResultFields(detail, opts.now);
+  // A kill by our own timer exits 143 with no output. Say "timed out" so the
+  // retry engine reads it as TRANSIENT instead of UNKNOWN.
+  if (opts.timedOutAfterMs != null) {
+    return new ClaudeCliError(
+      `Claude CLI timed out after ${opts.timedOutAfterMs}ms (exit ${exitCode}): ${detail}`,
+      exitCode,
+      fields,
+      true
+    );
+  }
   return new ClaudeCliError(`Claude CLI exited with code ${exitCode}: ${detail}`, exitCode, fields);
 }
 
@@ -352,7 +370,9 @@ export async function claudeGenerate(
     env,
   });
 
+  let killedByTimer = false;
   const timer = setTimeout(() => {
+    killedByTimer = true;
     try {
       proc.kill();
     } catch {}
@@ -370,7 +390,7 @@ export async function claudeGenerate(
 
     if (exitCode !== 0) {
       const durationMs = Date.now() - startTime;
-      const isTimeout = exitCode === 143 || exitCode === 137; // SIGTERM or SIGKILL
+      const isTimeout = killedByTimer && (exitCode === 143 || exitCode === 137); // SIGTERM or SIGKILL
       const detail = stderr.trim() || stdout.trim() || `exit code ${exitCode}`;
 
       opts.logger.warn(
@@ -384,7 +404,9 @@ export async function claudeGenerate(
         'Claude CLI failed'
       );
 
-      throw createClaudeCliError(exitCode, detail, stdout);
+      throw createClaudeCliError(exitCode, detail, stdout, {
+        timedOutAfterMs: isTimeout ? timeout : undefined,
+      });
     }
 
     let output: string;
@@ -572,7 +594,9 @@ export async function claudeGenerateWithTools(
       env,
     });
 
+    let killedByTimer = false;
     const timer = setTimeout(() => {
+      killedByTimer = true;
       try {
         proc.kill();
       } catch {}
@@ -589,7 +613,7 @@ export async function claudeGenerateWithTools(
 
     if (exitCode !== 0) {
       const durationMs = Date.now() - startTime;
-      const isTimeout = exitCode === 143 || exitCode === 137;
+      const isTimeout = killedByTimer && (exitCode === 143 || exitCode === 137);
       const detail = stderr.trim() || stdout.trim() || `exit code ${exitCode}`;
 
       opts.logger.warn(
@@ -602,7 +626,9 @@ export async function claudeGenerateWithTools(
         'Claude CLI (MCP tools) failed'
       );
 
-      throw createClaudeCliError(exitCode, detail, stdout);
+      throw createClaudeCliError(exitCode, detail, stdout, {
+        timedOutAfterMs: isTimeout ? timeout : undefined,
+      });
     }
 
     // Parse JSON output — Claude CLI --output-format json wraps result

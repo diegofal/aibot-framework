@@ -659,3 +659,60 @@ describe('classifyError — failover classifier wiring', () => {
     expect(classified.failoverReason).toBeUndefined();
   });
 });
+
+describe('executor timeouts', () => {
+  const timeoutError = Object.assign(new Error('Claude CLI timed out after 300000ms (exit 143)'), {
+    timedOut: true,
+    exitCode: 143,
+  });
+
+  test('classifyError reads the timedOut flag as TRANSIENT timeout', () => {
+    const c = classifyError(timeoutError);
+    expect(c.type).toBe('TRANSIENT');
+    expect(c.code).toBe('timeout');
+    expect(c.failoverReason).toBe('timeout');
+  });
+
+  test('a timed-out cycle is retried at most once (each retry re-runs side effects)', async () => {
+    const executeFn = vi
+      .fn()
+      .mockResolvedValue(
+        makeErrorResult('Claude CLI timed out after 300000ms', { originalError: timeoutError })
+      );
+    const schedule = { retryCount: 0, lastErrorMessage: null as string | null };
+    const result = await executeSingleBotWithRetry(
+      'bot1',
+      makeBotConfig(),
+      { ...defaultRetryConfig, maxRetries: 3 },
+      noopLogger,
+      {
+        executeFn,
+        getSchedule: () => schedule,
+        sleepFn: vi.fn().mockResolvedValue(undefined),
+        isEnabled: () => true,
+        isBotRunning: () => true,
+      }
+    );
+    expect(executeFn).toHaveBeenCalledTimes(2);
+    expect(result.status).toBe('error');
+    expect(schedule.lastErrorMessage).toContain('timed out');
+  });
+
+  test('other transient errors still use the full retry ladder', async () => {
+    const executeFn = vi.fn().mockResolvedValue(makeErrorResult('ECONNRESET'));
+    await executeSingleBotWithRetry(
+      'bot1',
+      makeBotConfig(),
+      { ...defaultRetryConfig, maxRetries: 3 },
+      noopLogger,
+      {
+        executeFn,
+        getSchedule: () => undefined,
+        sleepFn: vi.fn().mockResolvedValue(undefined),
+        isEnabled: () => true,
+        isBotRunning: () => true,
+      }
+    );
+    expect(executeFn).toHaveBeenCalledTimes(4);
+  });
+});

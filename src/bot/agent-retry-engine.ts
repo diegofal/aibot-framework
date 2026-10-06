@@ -88,6 +88,8 @@ function stripJsonKeys(message: string): string {
 interface StructuredErrorSignals {
   apiErrorStatus?: number;
   resetsAt?: Date;
+  /** `ClaudeCliError.timedOut`: our own timer killed the CLI. */
+  timedOut?: boolean;
 }
 
 function readStructuredSignals(error: unknown): StructuredErrorSignals {
@@ -97,6 +99,7 @@ function readStructuredSignals(error: unknown): StructuredErrorSignals {
 
   const status = e.apiErrorStatus;
   if (typeof status === 'number' && Number.isFinite(status)) signals.apiErrorStatus = status;
+  if (e.timedOut === true) signals.timedOut = true;
 
   const resets = e.resetsAt;
   if (resets instanceof Date && !Number.isNaN(resets.getTime())) signals.resetsAt = resets;
@@ -157,6 +160,12 @@ function classifyErrorCore(error: unknown, signals: StructuredErrorSignals): Cla
       return { type: 'TRANSIENT', code: String(status), message, failoverReason: 'timeout' };
     }
     // Anything else: fall through to the heuristics below.
+  }
+
+  // 0b. Our own timer killed the CLI: a timeout, whatever the message says.
+  if (signals.timedOut) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { type: 'TRANSIENT', code: 'timeout', message, failoverReason: 'timeout' };
   }
 
   // 1. Try structured classification for non-string values that carry
@@ -469,6 +478,13 @@ export interface RetryEngineOpts {
 }
 
 /**
+ * Retries allowed for a cycle that failed on a backend timeout. A timed-out
+ * executor already ran part of its plan: every retry re-runs those tool calls
+ * (writes, sends), and a run that hit the timeout once usually hits it again.
+ */
+export const MAX_TIMEOUT_RETRIES = 1;
+
+/**
  * Retry wrapper around a single-bot execution.
  * Handles transient error classification, exponential backoff, and schedule tracking.
  */
@@ -483,6 +499,7 @@ export async function executeSingleBotWithRetry(
   const schedule = getSchedule(botId);
 
   let lastResult: AgentLoopResult | undefined;
+  let timeoutRetries = 0;
 
   for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
     if (!isEnabled() || !isBotRunning(botId)) {
@@ -540,6 +557,22 @@ export async function executeSingleBotWithRetry(
         schedule.lastErrorMessage = lastResult.summary;
       }
       return lastResult;
+    }
+
+    if (classified.code === 'timeout' && attempt < retryConfig.maxRetries) {
+      if (timeoutRetries >= MAX_TIMEOUT_RETRIES) {
+        botLogger.warn(
+          { botId, attempt: attempt + 1, error: lastResult.summary },
+          'Agent loop: backend timed out again, not retrying this cycle'
+        );
+        if (schedule) {
+          schedule.retryCount = attempt;
+          schedule.lastErrorMessage = lastResult.summary;
+        }
+        lastResult.retryAttempt = attempt;
+        return lastResult;
+      }
+      timeoutRetries++;
     }
 
     if (attempt < retryConfig.maxRetries) {

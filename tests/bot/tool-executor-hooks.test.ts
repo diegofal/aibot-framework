@@ -711,3 +711,123 @@ describe('ToolExecutor Observability Hooks', () => {
     });
   });
 });
+
+describe('ToolExecutor tool:end failureKind', () => {
+  it('carries the tool failureKind on the tool:end event', async () => {
+    const tool = createTestTool('web_fetch', {
+      success: false,
+      failureKind: 'blocked',
+      content: 'Blocked by Cloudflare bot challenge.',
+    });
+    const executor = new ToolExecutor(createMockContext([tool]), { botId: 'test-bot', chatId: 1 });
+    const ends: ToolEndEvent[] = [];
+    executor.on('tool:end', (e) => ends.push(e));
+    await executor.execute('web_fetch', {});
+    expect(ends).toHaveLength(1);
+    expect(ends[0].failureKind).toBe('blocked');
+  });
+
+  it('omits failureKind on tool:end for a plain failure and for success', async () => {
+    const fail = createTestTool('fail_tool', { success: false, content: 'nope' });
+    const ok = createTestTool('ok_tool', { success: true, content: 'fine' });
+    const executor = new ToolExecutor(createMockContext([fail, ok]), {
+      botId: 'test-bot',
+      chatId: 1,
+    });
+    const ends: ToolEndEvent[] = [];
+    executor.on('tool:end', (e) => ends.push(e));
+    await executor.execute('fail_tool', {});
+    await executor.execute('ok_tool', {});
+    expect(ends.map((e) => e.failureKind)).toEqual([undefined, undefined]);
+  });
+
+  it('does not charge karma for exit-nonzero (process ran, exit code is data)', async () => {
+    const tool = createTestTool('exec', {
+      success: false,
+      failureKind: 'exit-nonzero',
+      content: 'Exit code: 1',
+    });
+    const events: Array<{ kind: string }> = [];
+    const karmaService = {
+      recordOutcome: (_b: string, kind: string) => events.push({ kind }),
+      addEvent: () => {},
+    } as any;
+    const executor = new ToolExecutor(createMockContext([tool]), {
+      botId: 'test-bot',
+      chatId: 1,
+      karmaService,
+    });
+    const result = await executor.execute('exec', {});
+    expect(result.failureKind).toBe('exit-nonzero');
+    expect(events).toHaveLength(0);
+  });
+
+  it('still charges karma for policy refusals (bot asked for something forbidden)', async () => {
+    const tool = createTestTool('web_fetch', {
+      success: false,
+      failureKind: 'policy',
+      content: 'Blocked: cannot fetch private/local addresses',
+    });
+    const events: Array<{ kind: string }> = [];
+    const karmaService = {
+      recordOutcome: (_b: string, kind: string) => events.push({ kind }),
+      addEvent: () => {},
+    } as any;
+    const executor = new ToolExecutor(createMockContext([tool]), {
+      botId: 'test-bot',
+      chatId: 1,
+      karmaService,
+    });
+    await executor.execute('web_fetch', {});
+    expect(events).toHaveLength(1);
+  });
+});
+
+describe('ToolExecutor production renumbering', () => {
+  function ctxWithProductions(renamedTo: (p: string) => string) {
+    const writeTool = createTestTool('file_write', {
+      success: true,
+      content: 'File written: plan.md',
+    });
+    const ctx = createMockContext([writeTool]);
+    (ctx as any).productionsService = {
+      isEnabled: () => true,
+      isTrackOnly: () => false,
+      renumberFile: (_botId: string, p: string) => renamedTo(p),
+      resolveDir: () => '/nonexistent-productions-dir',
+      logProduction: () => {},
+    };
+    return ctx;
+  }
+
+  const args = {
+    path: 'plan.md',
+    content: '# Plan\n\nA real paragraph with enough substance to pass the quality gate easily.',
+  };
+
+  it('tells the bot the final path when the file was renumbered', async () => {
+    const executor = new ToolExecutor(
+      ctxWithProductions(() => '42_plan.md'),
+      {
+        botId: 'test-bot',
+        chatId: 1,
+      }
+    );
+    const result = await executor.execute('file_write', args);
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('Saved as 42_plan.md');
+    expect(result.content).toContain('use this path');
+  });
+
+  it('adds nothing when the path did not change', async () => {
+    const executor = new ToolExecutor(
+      ctxWithProductions((p) => p),
+      {
+        botId: 'test-bot',
+        chatId: 1,
+      }
+    );
+    const result = await executor.execute('file_write', args);
+    expect(result.content).toBe('File written: plan.md');
+  });
+});

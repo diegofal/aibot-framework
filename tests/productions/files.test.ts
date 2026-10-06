@@ -318,6 +318,24 @@ describe('getNextNumber', () => {
 // ---------------------------------------------------------------------------
 
 describe('renumberFile', () => {
+  test('leaves scratch files (leading _ or .) where the bot wrote them', () => {
+    const dir = join(TEMP_DIR, 'bot1');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '_body_measure.txt'), 'c', 'utf-8');
+    writeFileSync(join(dir, '.probe'), 'c', 'utf-8');
+    expect(renumberFile({ dir }, '_body_measure.txt')).toBe('_body_measure.txt');
+    expect(renumberFile({ dir }, '.probe')).toBe('.probe');
+    expect(existsSync(join(dir, '_body_measure.txt'))).toBe(true);
+  });
+
+  test('leaves shell scripts in place so the bot can run them by the name it wrote', () => {
+    const dir = join(TEMP_DIR, 'bot1');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'preflight.sh'), 'echo ok', 'utf-8');
+    expect(renumberFile({ dir }, 'preflight.sh')).toBe('preflight.sh');
+    expect(existsSync(join(dir, 'preflight.sh'))).toBe(true);
+  });
+
   test('renames unnumbered file with next number', () => {
     const dir = join(TEMP_DIR, 'bot1');
     mkdirSync(dir, { recursive: true });

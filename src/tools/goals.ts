@@ -43,8 +43,19 @@ const FILLER_WORDS = new Set(['goal', 'task', 'objective', 'item', 'todo']);
  * 4. Word-based fallback (all words ≥3 chars in search appear in goal)
  * 5. Jaccard word similarity (best match above threshold)
  */
-export function findGoalIndex(goals: GoalEntry[], search: string): number {
-  if (!search || goals.length === 0) return -1;
+/** Undo HTML escaping some models apply to tool arguments (`&amp;` for `&`). */
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+export function findGoalIndex(goals: GoalEntry[], rawSearch: string): number {
+  if (!rawSearch || goals.length === 0) return -1;
+  const search = decodeHtmlEntities(rawSearch);
 
   // 1. Numeric ID → 1-based index
   if (/^\d+$/.test(search)) {

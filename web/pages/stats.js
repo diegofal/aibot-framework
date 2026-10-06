@@ -28,6 +28,7 @@ import {
   postureClass,
   relativeTime,
   sparklinePoints,
+  toolCallsSub,
   traitDeltas,
   windowQuery,
 } from './stats-helpers.js';
@@ -229,9 +230,7 @@ export async function renderStats(el) {
       state: failRateClass(llmFail) === 'ok' ? null : failRateClass(llmFail),
     }),
     kpi('Tool calls', formatNumber(t.toolCalls), {
-      sub: t.toolFailed
-        ? `<span class="stats-bad">${formatNumber(t.toolFailed)} failed (${formatPct(toolFail)})</span>`
-        : 'no failures',
+      sub: toolCallsSub(t),
       state: failRateClass(toolFail) === 'ok' ? null : failRateClass(toolFail),
     }),
     kpi('Unreviewed files', formatNumber(t.unreviewed), {

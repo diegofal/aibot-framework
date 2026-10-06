@@ -281,6 +281,8 @@ describe('buildFleet', () => {
       llmFailed: 1,
       toolCalls: 6,
       toolFailed: 1,
+      toolBlocked: 0,
+      toolExitNonzero: 0,
       promptTokens: 300,
       completionTokens: 30,
       filesActive: 1,
