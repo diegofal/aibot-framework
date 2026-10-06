@@ -288,3 +288,23 @@ docker compose up -d --build
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-04T18-57-14`. Image built and container recreated around 14:58 local; `healthy`. Verified in the container: `src/web/routes/needs-you.ts` has `deleteTool`, and `POST /api/needs-you/bulk` answers 401 without a session (behind auth). The boot log's only errors are the existing Telegram `getMe` 401s from revoked tokens. Bulk delete itself not exercised from here (login).
 
 **Reversible?** Yes: check out the previous commit and rebuild (no volume or config change).
+
+### 2026-10-06 — Backup, rebuild for queue/tool-failure/operator-goal fixes, changelog repair
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` and its `aibot_productions` volume |
+| **Who** | Diego (via Claude) |
+| **Why** | Deploy `80131ae`, `6c8611b`, `39103aa` (one definition of unreviewed + daily auto-archive; tool failure kinds and CLI timeouts; operator goals on Agent Home). Repair the three `changelog.jsonl` files that "Clear stale" archived on 2026-10-04 (myfirstmillion, econ-student, selfimprove) |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+docker cp D:/tmp/repair-changelogs.ts aibot-framework-aibot-1:/tmp/repair-changelogs.ts
+docker exec -w /app aibot-framework-aibot-1 bun /tmp/repair-changelogs.ts          # dry run on /tmp copies
+docker exec -w /app aibot-framework-aibot-1 bun /tmp/repair-changelogs.ts --apply
+```
+
+**Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T13-56-43`. Container recreated, `healthy`; the image has `isUntrackedProductionPath`, `src/hygiene/auto-archive.ts` and the "Set by your operator" prompt section. Boot errors: only the existing Telegram `getMe` 401. Live unreviewed (via `readProductionOutput` in the container) = 4 never reviewed + 2 edited since review, matching Needs You's 6 (was 33). Repair merged `archived/changelog.jsonl` back into the active changelog, dropping rows whose path is the changelog itself and the archive row of it: myfirstmillion 5 + 42 → 13 rows, econ-student 7 + 2 → 6, selfimprove 1 + 3 → 0 (its whole archived history was self-writes). Dry run showed no change to unreviewed/approved counts. Old files kept as `archived/changelog.jsonl.pre-repair-2026-10-06.bak`.
+
+**Reversible?** Yes: restore the backup (`restore … --force`) or rename the `.bak` files back; check out `d05d1f9` and rebuild for the code.
