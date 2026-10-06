@@ -29,7 +29,7 @@ export interface HygieneRoutesDeps {
   toolSucceededRecently?: HygieneRegistryDeps['toolSucceededRecently'];
   channelStateOf?: HygieneRegistryDeps['channelStateOf'];
   lastHealthCheckOf?: HygieneRegistryDeps['lastHealthCheckOf'];
-  /** Inject a prebuilt registry (tests). */
+  /** A prebuilt registry: server.ts shares its own with the daily auto-archive; tests inject one. */
   registry?: HygieneRegistry;
 }
 

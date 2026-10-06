@@ -268,6 +268,7 @@ describe('GET /api/needs-you', () => {
     expect(count).toEqual({
       count: 5,
       byKind: { ask: 1, permission: 1, proposal: 1, production: 1, feedback: 1, tool: 0 },
+      editedSinceReview: 0,
     });
   });
 });
@@ -822,5 +823,54 @@ describe('needsYouSourcesFromBotManager — normalizeProductionPath', () => {
     });
     const body = await (await makeApp(src).request('/api/needs-you')).json();
     expect(body.byKind.production).toBe(0);
+  });
+});
+
+describe('GET /api/needs-you — productions edited since review', () => {
+  const reviewed = (id: string, path: string, ageH: number, status: string, size = 1324) =>
+    production(id, 'b1', path, ageH, {
+      size,
+      evaluation: { status, evaluatedAt: iso(NOW - (ageH - 1) * H) },
+    });
+
+  it('flags the file with its earlier verdict and keeps it out of count / byKind', async () => {
+    const src = sources({
+      productions: () => [
+        reviewed('r1', '01_applications.md', 30, 'rejected'),
+        production('r2', 'b1', '01_applications.md', 20, { action: 'edit', size: 43 }),
+        production('r3', 'b1', '01_applications.md', 19, { action: 'edit', size: 77 }),
+        production('n1', 'b1', '02_brief.md', 10),
+      ],
+    });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    const byId = new Map(body.items.map((i: NeedsYouItem) => [i.id, i]));
+    const edited = byId.get('production:b1:r3') as NeedsYouItem;
+    expect(edited.meta).toMatchObject({
+      editedSinceReview: true,
+      priorStatus: 'rejected',
+      priorReviewedAt: iso(NOW - 29 * H),
+      priorSize: 1324,
+      size: 77,
+    });
+    expect((byId.get('production:b1:n1') as NeedsYouItem).meta.editedSinceReview).toBe(false);
+    expect(body.count).toBe(1);
+    expect(body.byKind.production).toBe(1);
+    expect(body.editedSinceReview).toBe(1);
+
+    const count = await (await makeApp(src).request('/api/needs-you/count')).json();
+    expect(count.count).toBe(1);
+    expect(count.byKind.production).toBe(1);
+    expect(count.editedSinceReview).toBe(1);
+  });
+
+  it('never lists bookkeeping or archived paths', async () => {
+    const src = sources({
+      productions: () => [
+        production('c1', 'b1', 'changelog.jsonl', 3),
+        production('c2', 'b1', 'archived/22_proxy.ts', 2, { action: 'edit' }),
+      ],
+    });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect(body.items).toEqual([]);
   });
 });

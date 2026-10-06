@@ -53,7 +53,10 @@ export interface OutputStats {
   filesArchived: number;
   approved: number;
   rejected: number;
+  /** Files waiting on a first review (same definition as Needs You). */
   unreviewed: number;
+  /** Files reviewed before that the bot edited since; not in `unreviewed`. */
+  editedSinceReview: number;
   outcomesProduced: number;
   outcomesStale: number;
   lastFileAt: string | null;

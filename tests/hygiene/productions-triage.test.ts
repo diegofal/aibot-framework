@@ -5,7 +5,7 @@ import { productionsTriage } from '../../src/hygiene/routines/productions-triage
 import { readEntries } from '../../src/productions/changelog';
 import type { ProductionEntry } from '../../src/productions/types';
 import { createTempDir, removeTempDir } from '../helpers/temp-dir';
-import { isoDaysAgo, makeCtx, writeFile } from './helpers';
+import { isoDaysAgo, makeCtx, makeDeps, writeFile } from './helpers';
 
 let root: string;
 let workDir: string;
@@ -110,6 +110,109 @@ describe('unreviewed-stale', () => {
     const archived = entries.find((e) => e.action === 'archive');
     expect(archived).toMatchObject({ botId: 'bot1', archivedFrom: '01_old.md' });
     expect(archived!.archiveReason).toContain('productions-triage');
+  });
+});
+
+describe('unreviewed-stale — the staleness clock and prior verdicts', () => {
+  const body = 'content content content content content content content';
+
+  test('later bot edits do not reset the clock: age runs from the first unreviewed row', () => {
+    writeFile(join(workDir, '01_tweaked.md'), body);
+    changelog([
+      entry({ path: '01_tweaked.md', timestamp: isoDaysAgo(10) }),
+      entry({ path: '01_tweaked.md', action: 'edit', timestamp: isoDaysAgo(1) }),
+    ]);
+    const stale = productionsTriage
+      .preview(makeCtx(root, { workDir }))
+      .filter((f) => f.kind === 'unreviewed-stale');
+    expect(stale.map((f) => f.file)).toEqual(['01_tweaked.md']);
+    expect(stale[0].data?.ageDays).toBe(10);
+  });
+
+  test('a file you approved is never auto-archived, even after old unreviewed edits', () => {
+    writeFile(join(workDir, '01_kept.md'), body);
+    changelog([
+      entry({
+        path: '01_kept.md',
+        timestamp: isoDaysAgo(30),
+        evaluation: { status: 'approved', evaluatedAt: isoDaysAgo(29) },
+      }),
+      entry({ path: '01_kept.md', action: 'edit', timestamp: isoDaysAgo(20) }),
+    ]);
+    expect(
+      productionsTriage
+        .preview(makeCtx(root, { workDir }))
+        .filter((f) => f.kind === 'unreviewed-stale')
+    ).toEqual([]);
+  });
+
+  test('a rejected file the bot edited and nobody looked at again is a candidate', () => {
+    writeFile(join(workDir, '01_rej.md'), body);
+    changelog([
+      entry({
+        path: '01_rej.md',
+        timestamp: isoDaysAgo(30),
+        evaluation: { status: 'rejected', evaluatedAt: isoDaysAgo(29) },
+      }),
+      entry({ path: '01_rej.md', action: 'edit', timestamp: isoDaysAgo(9) }),
+    ]);
+    const stale = productionsTriage
+      .preview(makeCtx(root, { workDir }))
+      .filter((f) => f.kind === 'unreviewed-stale');
+    expect(stale.map((f) => f.file)).toEqual(['01_rej.md']);
+    expect(stale[0].data?.ageDays).toBe(9);
+  });
+
+  test('bookkeeping and archived paths are never findings', () => {
+    writeFile(join(workDir, 'archived', '22_proxy.ts'), body);
+    changelog([
+      entry({ path: 'changelog.jsonl', timestamp: isoDaysAgo(10) }),
+      entry({ path: 'archived/22_proxy.ts', action: 'edit', timestamp: isoDaysAgo(10) }),
+      entry({ path: 'summary.json', timestamp: isoDaysAgo(10) }),
+    ]);
+    const kinds = productionsTriage
+      .preview(makeCtx(root, { workDir }))
+      .filter((f) => f.kind === 'unreviewed-stale' || f.kind === 'orphan-reference');
+    expect(kinds).toEqual([]);
+  });
+
+  test('apply archives through deps.archiveProduction when provided (index rebuild)', () => {
+    writeFile(join(workDir, '01_old.md'), body);
+    changelog([entry({ path: '01_old.md', timestamp: isoDaysAgo(10) })]);
+    const calls: string[][] = [];
+    const ctx = makeCtx(root, {
+      workDir,
+      options: { archiveStale: true },
+      deps: makeDeps({
+        archiveProduction: (botId, path, reason) => {
+          calls.push([botId, path, reason]);
+          return true;
+        },
+      }),
+    });
+    const result = productionsTriage.apply(ctx, productionsTriage.preview(ctx));
+    expect(result.applied).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('bot1');
+    expect(calls[0][1]).toBe('01_old.md');
+    expect(calls[0][2]).toContain('productions-triage');
+    // The service did the move; the routine wrote nothing itself.
+    expect(readEntries(join(workDir, 'changelog.jsonl')).some((e) => e.action === 'archive')).toBe(
+      false
+    );
+  });
+
+  test('a refused archive via deps is reported as skipped', () => {
+    writeFile(join(workDir, '01_old.md'), body);
+    changelog([entry({ path: '01_old.md', timestamp: isoDaysAgo(10) })]);
+    const ctx = makeCtx(root, {
+      workDir,
+      options: { archiveStale: true },
+      deps: makeDeps({ archiveProduction: () => false }),
+    });
+    const result = productionsTriage.apply(ctx, productionsTriage.preview(ctx));
+    expect(result.applied).toHaveLength(0);
+    expect(result.skipped[0].reason).toMatch(/archive failed/);
   });
 });
 

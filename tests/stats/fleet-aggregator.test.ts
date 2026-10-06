@@ -56,6 +56,7 @@ describe('buildBotStats — busy bot (b1)', () => {
       approved: 1,
       rejected: 0,
       unreviewed: 1,
+      editedSinceReview: 0,
       outcomesProduced: 2,
       outcomesStale: 1,
       lastFileAt: iso(fx.now - DAY),

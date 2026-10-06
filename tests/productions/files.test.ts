@@ -445,3 +445,42 @@ describe('countFilesInDir', () => {
     expect(countFilesInDir(dir)).toBe(1);
   });
 });
+
+describe('archiveFile — guards', () => {
+  test('refuses reserved bookkeeping files', () => {
+    const dir = join(TEMP_DIR, 'bot1');
+    mkdirSync(dir, { recursive: true });
+    for (const name of ['changelog.jsonl', 'summary.json', 'INDEX.md', 'index.html']) {
+      writeFileSync(join(dir, name), 'x', 'utf-8');
+      const result = archiveFile({ dir }, name, 'clear');
+      expect(result.ok).toBe(false);
+      expect(existsSync(join(dir, name))).toBe(true);
+    }
+  });
+
+  test('refuses a path already under archived/', () => {
+    const dir = join(TEMP_DIR, 'bot1');
+    mkdirSync(join(dir, 'archived'), { recursive: true });
+    writeFileSync(join(dir, 'archived', 'x.md'), 'x', 'utf-8');
+    const result = archiveFile({ dir }, 'archived/x.md', 'again');
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(dir, 'archived', 'x.md'))).toBe(true);
+  });
+
+  test('never overwrites an archived file with the same name — suffixes instead', () => {
+    const dir = join(TEMP_DIR, 'bot1');
+    mkdirSync(join(dir, 'archived'), { recursive: true });
+    mkdirSync(join(dir, 'sub'), { recursive: true });
+    writeFileSync(join(dir, 'archived', 'report.md'), 'older', 'utf-8');
+    writeFileSync(join(dir, 'sub', 'report.md'), 'newer', 'utf-8');
+
+    const result = archiveFile({ dir }, 'sub/report.md', 'superseded');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.entry.path).toBe('archived/report-2.md');
+    expect(result.entry.archivedFrom).toBe('sub/report.md');
+    expect(readFileSync(join(dir, 'archived', 'report.md'), 'utf-8')).toBe('older');
+    expect(readFileSync(join(dir, 'archived', 'report-2.md'), 'utf-8')).toBe('newer');
+  });
+});

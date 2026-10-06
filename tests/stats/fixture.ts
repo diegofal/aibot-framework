@@ -368,5 +368,8 @@ export function createStatsFixture(): StatsFixture {
     },
   ]);
 
+  // The unreviewed output exists on disk (stats count files, like Needs You).
+  writeFileSync(join(dir, 'productions', 'b1', 'digest.md'), '# digest');
+
   return { dir, now, config, bots: { b1, b2, b3 }, soulDir };
 }

@@ -53,6 +53,7 @@ export interface HygieneRegistryDeps {
   toolSucceededRecently?: HygieneDeps['toolSucceededRecently'];
   channelStateOf?: HygieneDeps['channelStateOf'];
   lastHealthCheckOf?: HygieneDeps['lastHealthCheckOf'];
+  archiveProduction?: HygieneDeps['archiveProduction'];
 }
 
 export interface HygieneRunRequest {
@@ -142,6 +143,9 @@ export class HygieneRegistry {
       toolSucceededRecently: registryDeps.toolSucceededRecently ?? (() => false),
       channelStateOf: registryDeps.channelStateOf ?? (() => undefined),
       lastHealthCheckOf: registryDeps.lastHealthCheckOf ?? (() => undefined),
+      ...(registryDeps.archiveProduction
+        ? { archiveProduction: registryDeps.archiveProduction }
+        : {}),
     };
     this.history = new HygieneHistory(this.dataDir, registryDeps.logger);
     for (const r of [goalLint, soulStructure, memoryHygiene, productionsTriage, dataCleanup]) {

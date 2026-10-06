@@ -176,6 +176,7 @@ describe('readProductionOutput', () => {
       approved: 0,
       rejected: 0,
       unreviewed: 0,
+      editedSinceReview: 0,
       lastFileAt: null,
     });
   });
@@ -244,7 +245,44 @@ describe('readProductionOutput', () => {
     expect(s.filesArchived).toBe(1); // b.md
     expect(s.approved).toBe(1);
     expect(s.rejected).toBe(1);
-    expect(s.unreviewed).toBe(2); // b.md create + c.md create (content entries only)
+    // Files, not rows: b.md was archived and c.md deleted, so nothing is waiting.
+    // (Was 2 — rows of archived/deleted files inflated the KPI to 33 vs 6 in Needs You.)
+    expect(s.unreviewed).toBe(0);
     expect(s.lastFileAt).toBe('2026-08-05T00:00:00.000Z');
+  });
+
+  it('unreviewed counts active files on disk whose latest row has no verdict, edited-since-review apart', () => {
+    const work = join(dir, 'work');
+    mkdirSync(work, { recursive: true });
+    for (const f of ['new.md', 'edited.md', 'ok.md']) writeFileSync(join(work, f), 'x');
+    const row = (id: string, path: string, day: number, extra: Record<string, unknown> = {}) => ({
+      id,
+      timestamp: `2026-08-0${day}T00:00:00.000Z`,
+      botId: 'b1',
+      tool: 'file_write',
+      path,
+      action: 'create',
+      size: 10,
+      ...extra,
+    });
+    jsonl(join(work, 'changelog.jsonl'), [
+      row('1', 'new.md', 1),
+      row('2', 'new.md', 2, { action: 'edit' }), // two rows, one file
+      row('3', 'edited.md', 1, {
+        evaluation: { status: 'approved', evaluatedAt: '2026-08-01T01:00:00.000Z' },
+      }),
+      row('4', 'edited.md', 3, { action: 'edit' }),
+      row('5', 'ok.md', 1, {
+        evaluation: { status: 'rejected', evaluatedAt: '2026-08-01T01:00:00.000Z' },
+      }),
+      row('6', 'gone.md', 1), // not on disk
+      row('7', '/elsewhere/t.md', 1, { trackOnly: true }), // track-only: lives outside the dir
+      row('8', 'changelog.jsonl', 2), // bookkeeping, never an output
+      row('9', 'archived/old.md', 2, { action: 'edit' }),
+    ]);
+    const s = readProductionOutput(work);
+    expect(s.unreviewed).toBe(2); // new.md + track-only t.md
+    expect(s.editedSinceReview).toBe(1); // edited.md
+    expect(s.filesActive).toBe(5); // new, edited, ok, gone, t — no bookkeeping / archived paths
   });
 });

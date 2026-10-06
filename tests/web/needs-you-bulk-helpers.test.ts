@@ -120,6 +120,7 @@ describe('filter + visibility', () => {
       production: 1,
       feedback: 0,
       tool: 0,
+      edited: 0,
     });
   });
 

@@ -19,6 +19,7 @@
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isUntrackedProductionPath } from './paths';
 import type { ProductionEntry } from './types';
 
 /**
@@ -182,6 +183,105 @@ export function getStatsFromEntries(entries: ProductionEntry[]): {
         ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
         : null,
   };
+}
+
+/** The last approve/reject on a file before the edits that are now pending. */
+export interface PriorVerdict {
+  status: 'approved' | 'rejected';
+  /** `evaluation.evaluatedAt`, or the reviewed row's timestamp when missing. */
+  at: string;
+  entryId: string;
+  /** Size of the reviewed row, null when unknown. */
+  size: number | null;
+}
+
+/** A file waiting on a human: its latest content row has no verdict. */
+export interface PendingFile {
+  /** The latest content row — the one review actions target. */
+  entry: ProductionEntry;
+  /** The normalized path the file is tracked under. */
+  key: string;
+  /** Set when the file was reviewed before and the bot edited it since. */
+  priorVerdict: PriorVerdict | null;
+  /** Timestamp of the first content row after the last verdict (staleness clock). */
+  pendingSince: string;
+}
+
+function entryMs(entry: ProductionEntry): number {
+  const ms = Date.parse(typeof entry.timestamp === 'string' ? entry.timestamp : '');
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function verdictOf(entry: ProductionEntry): PriorVerdict | null {
+  const status = entry.evaluation?.status;
+  if (status !== 'approved' && status !== 'rejected') return null;
+  const at = entry.evaluation?.evaluatedAt;
+  return {
+    status,
+    at: typeof at === 'string' && at ? at : entry.timestamp,
+    entryId: entry.id,
+    size: typeof entry.size === 'number' ? entry.size : null,
+  };
+}
+
+/**
+ * The one definition of "unreviewed": replay the changelog in time order and
+ * return every active file whose latest content row has no verdict.
+ *
+ * - `create`/`edit` make the path active; `archive` (keyed on `archivedFrom`)
+ *   and `delete` drop it, so a later re-create starts with no history.
+ * - Bookkeeping files and `archived/**` are never outputs
+ *   (`isUntrackedProductionPath`).
+ * - A status-less `evaluation` (the coherence-check bot comment) is not a verdict.
+ * - `normalize` maps every path to one form first, so an output logged with an
+ *   absolute path matches the dir-relative `archivedFrom` archiving writes.
+ *
+ * Existence on disk is the caller's concern (this stays pure). Consumers:
+ * Needs You, the Stats reader (Stats / Agent Home / Fleet Home), productions-triage.
+ */
+export function pendingFiles(
+  entries: ProductionEntry[],
+  normalize: (path: string) => string = (p) => p
+): PendingFile[] {
+  const valid = entries.filter(
+    (e) => e && typeof e === 'object' && typeof e.path === 'string' && typeof e.id === 'string'
+  );
+  const sorted = [...valid].sort((a, b) => entryMs(a) - entryMs(b));
+  const state = new Map<
+    string,
+    { latest: ProductionEntry; verdict: PriorVerdict | null; since: string | null }
+  >();
+  for (const e of sorted) {
+    switch (e.action) {
+      case 'create':
+      case 'edit': {
+        const key = normalize(e.path);
+        if (isUntrackedProductionPath(key)) break;
+        const prev = state.get(key);
+        const verdict = verdictOf(e);
+        state.set(key, {
+          latest: e,
+          verdict: verdict ?? prev?.verdict ?? null,
+          since: verdict ? null : (prev?.since ?? e.timestamp),
+        });
+        break;
+      }
+      case 'archive':
+        state.delete(normalize(typeof e.archivedFrom === 'string' ? e.archivedFrom : e.path));
+        break;
+      case 'delete':
+        state.delete(normalize(e.path));
+        break;
+      default:
+        break;
+    }
+  }
+  const out: PendingFile[] = [];
+  for (const [key, s] of state) {
+    if (s.latest.evaluation?.status) continue;
+    out.push({ entry: s.latest, key, priorVerdict: s.verdict, pendingSince: s.since ?? s.latest.timestamp });
+  }
+  return out;
 }
 
 /**

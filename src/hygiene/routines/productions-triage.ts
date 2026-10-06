@@ -10,10 +10,15 @@
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { appendEntry, readEntries } from '../../productions/changelog';
+import { appendEntry, pendingFiles, readEntries } from '../../productions/changelog';
 import { analyzeCleanup } from '../../productions/cleanup';
 import { archiveFile } from '../../productions/files';
-import { INDEX_EXCLUDES, assertWithinDir, normalizeEntryPath } from '../../productions/paths';
+import {
+  INDEX_EXCLUDES,
+  assertWithinDir,
+  isUntrackedProductionPath,
+  normalizeEntryPath,
+} from '../../productions/paths';
 import type { ProductionEntry } from '../../productions/types';
 import { assertWithinRoots, backupFile } from '../fs-safe';
 import { daysBetween } from '../text-utils';
@@ -42,6 +47,8 @@ function latestByPath(dir: string, entries: ProductionEntry[]): Map<string, Prod
       continue;
     }
     const path = normalizeEntryPath(dir, e.path);
+    // Bookkeeping files and archived/** are not outputs (see isUntrackedProductionPath).
+    if (isUntrackedProductionPath(path)) continue;
     if (e.action === 'delete') {
       map.delete(path);
       continue;
@@ -153,6 +160,21 @@ function pruneOrphanEntries(
   }
 }
 
+/** Through ProductionsService when wired (rebuilds the index), else move + changelog entry. */
+function archiveOne(
+  ctx: HygieneContext,
+  dir: string,
+  botId: string,
+  file: string,
+  reason: string
+): boolean {
+  if (ctx.deps.archiveProduction) return ctx.deps.archiveProduction(botId, file, reason);
+  const archived = archiveFile({ dir }, file, reason);
+  if (!archived.ok) return false;
+  appendEntry(join(dir, CHANGELOG), { ...archived.entry, botId });
+  return true;
+}
+
 export const productionsTriage: HygieneRoutine = {
   id: 'productions-triage',
   name: 'Productions triage',
@@ -170,6 +192,12 @@ export const productionsTriage: HygieneRoutine = {
       Number(ctx.options.staleDays) > 0 ? Number(ctx.options.staleDays) : DEFAULT_STALE_DAYS;
     const entries = readEntries(join(dir, CHANGELOG));
     const latest = latestByPath(dir, entries);
+    // Staleness: the clock starts at the first unreviewed row after the last
+    // verdict (later bot edits do not reset it). A file you approved is never
+    // auto-archived; a rejected one the bot edited and nobody re-read is.
+    const pendingByPath = new Map(
+      pendingFiles(entries, (p) => normalizeEntryPath(dir, p)).map((p) => [p.key, p])
+    );
 
     for (const [path, e] of latest) {
       if (e.trackOnly) continue;
@@ -200,8 +228,10 @@ export const productionsTriage: HygieneRoutine = {
         });
         continue;
       }
-      const age = daysBetween(new Date(e.timestamp), ctx.now);
-      if (!e.evaluation?.status && age > staleDays) {
+      const pending = pendingByPath.get(path);
+      if (!pending || pending.priorVerdict?.status === 'approved') continue;
+      const age = daysBetween(new Date(pending.pendingSince), ctx.now);
+      if (age > staleDays) {
         findings.push({
           id: `productions-triage:unreviewed-stale:${path}`,
           kind: 'unreviewed-stale',
@@ -305,19 +335,14 @@ export const productionsTriage: HygieneRoutine = {
         continue;
       }
       assertWithinRoots(join(dir, f.file), ctx.allowedRoots);
-      const archived = archiveFile(
-        { dir },
-        f.file,
-        `productions-triage: unreviewed for ${f.data?.ageDays ?? '?'} days`
-      );
-      if (!archived.ok) {
+      const reason = `productions-triage: unreviewed for ${f.data?.ageDays ?? '?'} days`;
+      if (!archiveOne(ctx, dir, ctx.botId, f.file, reason)) {
         result.skipped.push({
           findingId: f.id,
           reason: 'archive failed (missing file or invalid path)',
         });
         continue;
       }
-      appendEntry(join(dir, CHANGELOG), { ...archived.entry, botId: ctx.botId });
       result.applied.push({ findingId: f.id, action: 'archive', result: `${f.file} → archived/` });
     }
 

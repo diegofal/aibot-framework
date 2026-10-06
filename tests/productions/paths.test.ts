@@ -25,6 +25,7 @@ import {
   INDEX_EXCLUDES,
   isEnabled,
   isTrackOnly,
+  isUntrackedProductionPath,
   normalizeEntryPath,
   resolveDir,
   resolveFilePath,
@@ -350,5 +351,38 @@ describe('normalizeEntryPath', () => {
   });
   test('the dir itself is returned as is (not an entry inside it)', () => {
     expect(normalizeEntryPath(dir, dir)).toBe(dir);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isUntrackedProductionPath — bookkeeping and archived paths are never outputs
+// ---------------------------------------------------------------------------
+
+describe('isUntrackedProductionPath', () => {
+  test('reserved bookkeeping files are untracked, at the root or nested', () => {
+    for (const p of ['changelog.jsonl', 'summary.json', 'INDEX.md', 'index.html', 'sub/INDEX.md']) {
+      expect(isUntrackedProductionPath(p)).toBe(true);
+    }
+  });
+
+  test('anything under archived/ is untracked', () => {
+    expect(isUntrackedProductionPath('archived/22_paraphrase_proxy.ts')).toBe(true);
+    expect(isUntrackedProductionPath('archived')).toBe(true);
+  });
+
+  test('absolute paths are judged by their basename only', () => {
+    expect(isUntrackedProductionPath('/app/productions/bot/changelog.jsonl')).toBe(true);
+    expect(isUntrackedProductionPath('/home/x/archived/notes.md')).toBe(false);
+  });
+
+  test('ordinary outputs are tracked', () => {
+    for (const p of ['01_ideas.md', 'reports/02_brief.md', 'my-archived-notes.md', 'notes/archived.md']) {
+      expect(isUntrackedProductionPath(p)).toBe(false);
+    }
+  });
+
+  test('Windows separators are understood', () => {
+    expect(isUntrackedProductionPath('archived\\x.md')).toBe(true);
+    expect(isUntrackedProductionPath('sub\\changelog.jsonl')).toBe(true);
   });
 });

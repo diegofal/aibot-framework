@@ -908,10 +908,22 @@ const SessionConfigSchema = z.object({
   llmRelevanceCheck: LlmRelevanceCheckSchema,
 });
 
-const ProductionsConfigSchema = z
+export const ProductionsConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
     baseDir: z.string().default('./productions'),
+    /**
+     * Daily productions-triage apply with archiveStale (src/hygiene/auto-archive.ts):
+     * outputs nobody reviewed for `staleDays` move to archived/ (never deleted);
+     * files you approved are never candidates.
+     */
+    autoArchive: z
+      .object({
+        enabled: z.boolean().default(true),
+        staleDays: z.number().positive().default(7),
+        intervalHours: z.number().positive().default(24),
+      })
+      .default({}),
   })
   .default({});
 

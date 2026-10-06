@@ -34,10 +34,12 @@ import {
   bulkPlan,
   clearChecked,
   createLoadGate,
+  decisionCount,
   detailPanel,
   filterBar,
   hideItems,
   initialState,
+  isEditedSinceReview,
   listBody,
   listToolbar,
   neutralIds,
@@ -100,7 +102,7 @@ function focusReply() {
 
 function redrawHead() {
   const count = root?.querySelector('#needs-count');
-  if (count) count.textContent = String(visibleItems({ ...state, filter: {} }).length);
+  if (count) count.textContent = String(decisionCount(visibleItems({ ...state, filter: {} })));
   const summary = root?.querySelector('#needs-summary');
   if (summary) summary.textContent = queueSummary(byKind);
 }
@@ -262,7 +264,10 @@ async function runAction(action, text) {
     fitComposer(box);
   }
   state = removeItem(state, item.id);
-  byKind = { ...byKind, [item.kind]: Math.max(0, (Number(byKind[item.kind]) || 0) - 1) };
+  // Edited-since-review outputs were never in `byKind` (see needs-you.ts countByKind).
+  if (!isEditedSinceReview(item)) {
+    byKind = { ...byKind, [item.kind]: Math.max(0, (Number(byKind[item.kind]) || 0) - 1) };
+  }
   redrawAll();
   refreshBadges();
   setTimeout(refresh, SETTLE_MS);
@@ -504,7 +509,7 @@ export async function renderNeedsYou(el, { bot = null } = {}) {
   el.innerHTML = `
     <div class="needs-head">
       <div>
-        <div class="page-title">Needs You <span class="count" id="needs-count">${state.items.length}</span></div>
+        <div class="page-title">Needs You <span class="count" id="needs-count">${decisionCount(state.items)}</span></div>
         <div class="text-dim needs-summary" id="needs-summary">${escapeHtml(queueSummary(byKind))}</div>
       </div>
       <div class="needs-head-actions">

@@ -4152,6 +4152,10 @@ body.ui-sheet-open {
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
+.needs-edited-note {
+  margin: 0 0 10px;
+  font-size: var(--fs-sm);
+}
 .needs-detail-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

@@ -89,6 +89,12 @@ export interface HygieneDeps {
   channelStateOf: (botId: string) => string | undefined;
   /** Last soul health-check result for the bot. Undefined = never ran / unknown. */
   lastHealthCheckOf: (botId: string) => HealthCheckInfo | undefined;
+  /**
+   * Archive a production through ProductionsService (move + changelog entry +
+   * index rebuild). Absent → productions-triage moves the file itself and
+   * appends the changelog entry, leaving index.html for the next rebuild.
+   */
+  archiveProduction?: (botId: string, relativePath: string, reason: string) => boolean;
 }
 
 export interface HygieneContext {

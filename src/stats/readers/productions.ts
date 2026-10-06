@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { getStatsFromEntries, readEntries } from '../../productions/changelog';
+import { getStatsFromEntries, pendingFiles, readEntries } from '../../productions/changelog';
+import { isUntrackedProductionPath, normalizeEntryPath } from '../../productions/paths';
 import type { ProductionEntry } from '../../productions/types';
 import { toMs } from '../util';
 
@@ -8,7 +10,10 @@ export interface ProductionOutput {
   filesArchived: number;
   approved: number;
   rejected: number;
+  /** Files waiting on a first review — same definition as Needs You (`pendingFiles`). */
   unreviewed: number;
+  /** Files approved/rejected before that the bot edited since; not counted in `unreviewed`. */
+  editedSinceReview: number;
   lastFileAt: string | null;
 }
 
@@ -18,6 +23,7 @@ const EMPTY: ProductionOutput = {
   approved: 0,
   rejected: 0,
   unreviewed: 0,
+  editedSinceReview: 0,
   lastFileAt: null,
 };
 
@@ -25,9 +31,11 @@ const EMPTY: ProductionOutput = {
  * Replay `changelog.jsonl` to learn which production files are still live,
  * which were archived, and how the content entries were reviewed.
  *
- * Review counts (approved / rejected / unreviewed) are computed over the
- * content entries only (`create` / `edit`) — archive and delete records
- * never carry an evaluation and would inflate `unreviewed`.
+ * `approved` / `rejected` count content rows (`create` / `edit`) with that
+ * verdict. `unreviewed` / `editedSinceReview` count *files*, via `pendingFiles`
+ * plus the on-disk check Needs You does, so the Stats KPI, Agent Home and Fleet
+ * Home say the same number as the queue. Bookkeeping files and `archived/**`
+ * are never outputs.
  */
 export function readProductionOutput(workDir: string): ProductionOutput {
   let entries: ProductionEntry[];
@@ -48,6 +56,7 @@ export function readProductionOutput(workDir: string): ProductionOutput {
     switch (e.action) {
       case 'create':
       case 'edit': {
+        if (isUntrackedProductionPath(normalizeEntryPath(workDir, e.path))) break;
         active.add(e.path);
         content.push(e);
         const t = toMs(e.timestamp);
@@ -69,12 +78,20 @@ export function readProductionOutput(workDir: string): ProductionOutput {
   }
 
   const review = getStatsFromEntries(content);
+  let unreviewed = 0;
+  let editedSinceReview = 0;
+  for (const p of pendingFiles(entries, (path) => normalizeEntryPath(workDir, path))) {
+    if (!p.entry.trackOnly && !existsSync(join(workDir, p.key))) continue;
+    if (p.priorVerdict) editedSinceReview++;
+    else unreviewed++;
+  }
   return {
     filesActive: active.size,
     filesArchived: archived.size,
     approved: review.approved,
     rejected: review.rejected,
-    unreviewed: review.unreviewed,
+    unreviewed,
+    editedSinceReview,
     lastFileAt: lastFileMs === null ? null : new Date(lastFileMs).toISOString(),
   };
 }

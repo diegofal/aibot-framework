@@ -144,13 +144,33 @@ export function ageGroupOf(createdAt, nowMs = Date.now()) {
   return 'older';
 }
 
-/** `[{ id, label, items }]` in Today → This week → Older order; server order inside a group. */
+/** Where outputs the bot edited after your verdict are listed: last, apart from new work. */
+export const EDITED_GROUP = { id: 'edited', label: 'Edited since your review' };
+
+/** An output you already approved/rejected that the bot changed since (server flag). */
+export function isEditedSinceReview(item) {
+  return item?.kind === 'production' && item?.meta?.editedSinceReview === true;
+}
+
+/** What needs a decision: every item except outputs edited since their review. */
+export function decisionCount(items) {
+  return (Array.isArray(items) ? items : []).filter((i) => !isEditedSinceReview(i)).length;
+}
+
+/**
+ * `[{ id, label, items }]` in Today → This week → Older order, then
+ * "Edited since your review"; server order inside a group.
+ */
 export function groupItems(items, nowMs = Date.now()) {
   const list = Array.isArray(items) ? items : [];
-  return AGE_GROUPS.map((g) => ({
-    ...g,
-    items: list.filter((i) => ageGroupOf(i.createdAt, nowMs) === g.id),
-  })).filter((g) => g.items.length > 0);
+  const work = list.filter((i) => !isEditedSinceReview(i));
+  return [
+    ...AGE_GROUPS.map((g) => ({
+      ...g,
+      items: work.filter((i) => ageGroupOf(i.createdAt, nowMs) === g.id),
+    })),
+    { ...EDITED_GROUP, items: list.filter(isEditedSinceReview) },
+  ].filter((g) => g.items.length > 0);
 }
 
 // ─── state ───
@@ -317,11 +337,16 @@ export function kindCounts(state) {
     production: 0,
     feedback: 0,
     tool: 0,
+    edited: 0,
   };
   const hidden = new Set(state?.hidden ?? []);
   for (const item of state?.items ?? []) {
     if (hidden.has(item.id)) continue;
     if (state.filter?.botId && item.botId !== state.filter.botId) continue;
+    if (isEditedSinceReview(item)) {
+      counts.edited += 1;
+      continue;
+    }
     counts.all += 1;
     if (item.kind in counts) counts[item.kind] += 1;
   }
@@ -476,6 +501,29 @@ function kindBadge(kind) {
   return badge(KIND_LABEL[kind] ?? kind, KIND_TONE[kind] ?? 'muted', { class: 'needs-kind' });
 }
 
+const VERDICT_WORD = { approved: 'approved', rejected: 'rejected' };
+
+function editedBadge(item) {
+  if (!isEditedSinceReview(item)) return '';
+  const was = VERDICT_WORD[item.meta.priorStatus] ?? 'reviewed';
+  return badge(`edited · was ${was}`, 'muted', { class: 'needs-edited' });
+}
+
+/** "You rejected this 1d ago. The bot edited it since (1324 → 77 bytes)." */
+function editedNote(item, nowMs) {
+  if (!isEditedSinceReview(item)) return '';
+  const m = item.meta;
+  const verb = VERDICT_WORD[m.priorStatus] ?? 'reviewed';
+  const when = m.priorReviewedAt ? ` ${ago(m.priorReviewedAt, nowMs)}` : '';
+  const sizes =
+    typeof m.priorSize === 'number' && typeof m.size === 'number'
+      ? ` (${m.priorSize} → ${m.size} bytes)`
+      : '';
+  return `<div class="needs-edited-note text-dim">You ${esc(verb)} this${esc(when)}. The bot edited it since${esc(
+    sizes
+  )}.</div>`;
+}
+
 function urgencyBadge(urgency) {
   if (urgency !== 'high') return '';
   return badge('urgent', 'danger', { dot: true, class: 'needs-urgency' });
@@ -495,7 +543,7 @@ export function listRow(item, selected, nowMs = Date.now(), checked = false) {
     <span class="needs-row-main">
       <span class="needs-row-top"><span class="needs-row-bot">${esc(item.botName)}</span>${kindBadge(
         item.kind
-      )}${urgencyBadge(item.urgency)}</span>
+      )}${editedBadge(item)}${urgencyBadge(item.urgency)}</span>
       <span class="needs-row-title">${esc(item.title)}</span>
     </span>
     <span class="needs-row-time text-dim">${esc(ago(item.createdAt, nowMs))}</span>
@@ -671,6 +719,7 @@ export function detailPanel(item, state = {}, nowMs = Date.now()) {
       <a class="btn btn-sm needs-detail-open" href="${esc(item.href)}">Open <kbd>↵</kbd></a>
     </div>
     <h2 class="needs-detail-title">${esc(item.title)}</h2>
+    ${editedNote(item, nowMs)}
     <div class="needs-detail-body">${esc(item.body)}</div>
     ${fileChips(item.meta)}
     ${chips}

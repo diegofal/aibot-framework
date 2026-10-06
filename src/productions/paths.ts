@@ -154,3 +154,32 @@ export function normalizeEntryPath(dir: string, path: string): string {
   if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return path;
   return rel.split(sep).join('/');
 }
+
+/**
+ * Bookkeeping files the productions machinery writes itself. A bot that
+ * edits one of these (it has happened: `file_write changelog.jsonl`) has
+ * not produced an output, and archiving one wipes the bot's history.
+ */
+export const RESERVED_PRODUCTION_FILES = new Set([
+  'changelog.jsonl',
+  'summary.json',
+  'INDEX.md',
+  'index.html',
+]);
+
+/** The folder `archiveFile` moves outputs into. */
+export const ARCHIVED_DIR = 'archived';
+
+/**
+ * Is this path bookkeeping or already archived — never an output to review,
+ * track or archive? Expects the dir-relative form (see `normalizeEntryPath`);
+ * an absolute path (a track-only output outside the dir) is judged by its
+ * basename only. Pure.
+ */
+export function isUntrackedProductionPath(path: string): boolean {
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  if (parts.length === 0) return false;
+  if (RESERVED_PRODUCTION_FILES.has(parts[parts.length - 1])) return true;
+  if (isAbsolute(path) || win32.isAbsolute(path)) return false;
+  return parts[0] === ARCHIVED_DIR;
+}

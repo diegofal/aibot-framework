@@ -13,6 +13,8 @@ import type { Config } from '../config';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import { safeCompare } from '../crypto-utils';
+import { startAutoArchive } from '../hygiene/auto-archive';
+import { HygieneRegistry } from '../hygiene/registry';
 import type { Logger } from '../logger';
 import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
@@ -398,23 +400,30 @@ export function startWebServer(deps: WebServerDeps): void {
   // data-cleanup). Preview is side-effect free; apply backs up every soul file it
   // touches and moves (never deletes) anything it cleans up.
   const statsDirs = resolveStatsDirs(config);
+  const hygieneRegistry = new HygieneRegistry({
+    config,
+    logger,
+    // memory-hygiene flags "tool X unavailable" notes as stale only when the
+    // tool-audit shows the tool actually succeeding in the last 7 days.
+    toolSucceededRecently: (botId, toolName) => {
+      const now = Date.now();
+      return readToolEntries(statsDirs.toolAudit, botId, now - 7 * 86_400_000, now).some(
+        (e) => e.toolName === toolName && e.success
+      );
+    },
+    channelStateOf: (botId) => deps.botManager.getChannelState(botId)?.state,
+    // productions-triage archives through the service so index.html is rebuilt.
+    archiveProduction: productionsService
+      ? (botId, path, reason) => productionsService.archiveFile(botId, path, reason)
+      : undefined,
+  });
   app.route(
     '/api/hygiene',
-    hygieneRoutes({
-      config,
-      logger,
-      botManager: deps.botManager,
-      // memory-hygiene flags "tool X unavailable" notes as stale only when the
-      // tool-audit shows the tool actually succeeding in the last 7 days.
-      toolSucceededRecently: (botId, toolName) => {
-        const now = Date.now();
-        return readToolEntries(statsDirs.toolAudit, botId, now - 7 * 86_400_000, now).some(
-          (e) => e.toolName === toolName && e.success
-        );
-      },
-      channelStateOf: (botId) => deps.botManager.getChannelState(botId)?.state,
-    })
+    hygieneRoutes({ config, logger, botManager: deps.botManager, registry: hygieneRegistry })
   );
+  // Daily: outputs nobody reviewed for productions.autoArchive.staleDays move to
+  // archived/ (never deleted; approved files never). Off with autoArchive.enabled=false.
+  if (productionsService) startAutoArchive({ registry: hygieneRegistry, config, logger });
 
   // Conversations routes (use shared ConversationsService from BotManager)
   const conversationsService = deps.botManager.getConversationsService();

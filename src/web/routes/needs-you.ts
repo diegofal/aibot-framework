@@ -46,6 +46,7 @@ import type { PermissionRequestInfo } from '../../bot/ask-permission-store';
 import type { Config } from '../../config';
 import type { Conversation } from '../../conversations/service';
 import type { Logger } from '../../logger';
+import { pendingFiles } from '../../productions/changelog';
 import { normalizeEntryPath } from '../../productions/paths';
 import type { ProductionEntry } from '../../productions/types';
 import { getTenantId, isAdminOrSingleTenant, scopeBots } from '../../tenant/tenant-scoping';
@@ -110,14 +111,18 @@ export interface NeedsYouItem {
 
 export interface NeedsYouResponse {
   generatedAt: string;
+  /** Items that need a decision; outputs edited since their review are not counted. */
   count: number;
   byKind: Record<NeedsYouKind, number>;
+  /** Outputs already approved/rejected that the bot edited since (listed in `items`). */
+  editedSinceReview: number;
   items: NeedsYouItem[];
 }
 
 export interface NeedsYouCountResponse {
   count: number;
   byKind: Record<NeedsYouKind, number>;
+  editedSinceReview: number;
 }
 
 /** The slice of `ConversationsService` the ask source reads. */
@@ -612,47 +617,20 @@ function buildProposals(ctx: BuildContext, sources: NeedsYouSources): NeedsYouIt
 
 // ─── productions ───
 
-function timestampMs(entry: ProductionEntry): number {
-  const ms = Date.parse(str(entry.timestamp));
-  return Number.isFinite(ms) ? ms : 0;
-}
-
 /**
- * Replay a bot's changelog in time order: the latest `create`/`edit` per path
- * wins, an `archive`/`delete` afterwards removes the path. What is left and
- * still lacks `evaluation.status` is what a human has not looked at.
- */
-/**
- * `normalize` maps every path to one form before comparing, so an output
- * logged with an absolute path (`/app/productions/<bot>/x.md`) matches the
- * dir-relative `archivedFrom` that archiving it writes. Exact match only.
+ * Entries of the files still waiting on a human — `pendingFiles` in
+ * src/productions/changelog.ts is the definition; kept for existing callers.
  */
 export function pendingProductionFiles(
   entries: ProductionEntry[],
   normalize: (path: string) => string = (p) => p
 ): ProductionEntry[] {
-  const valid = entries.filter(
-    (e) => e && typeof e === 'object' && typeof e.path === 'string' && typeof e.id === 'string'
-  );
-  const sorted = [...valid].sort((a, b) => timestampMs(a) - timestampMs(b));
-  const active = new Map<string, ProductionEntry>();
-  for (const e of sorted) {
-    switch (e.action) {
-      case 'create':
-      case 'edit':
-        active.set(normalize(e.path), e);
-        break;
-      case 'archive':
-        active.delete(normalize(typeof e.archivedFrom === 'string' ? e.archivedFrom : e.path));
-        break;
-      case 'delete':
-        active.delete(normalize(e.path));
-        break;
-      default:
-        break;
-    }
-  }
-  return [...active.values()].filter((e) => !e.evaluation?.status);
+  return pendingFiles(entries, normalize).map((p) => p.entry);
+}
+
+/** An output the human already judged that the bot edited since. Not counted. */
+function isEditedSinceReview(item: NeedsYouItem): boolean {
+  return item.kind === 'production' && item.meta.editedSinceReview === true;
 }
 
 /** Track-only outputs live outside the productions dir; a failing probe keeps the item. */
@@ -688,11 +666,11 @@ function buildProductions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
         return p;
       }
     };
-    const pending = pendingProductionFiles(entries, normalize).filter((e) =>
-      productionFileStillThere(sources, botId, e)
+    const pending = pendingFiles(entries, normalize).filter((p) =>
+      productionFileStillThere(sources, botId, p.entry)
     );
     items.push(
-      ...safeMap(ctx, 'productions', pending, (e) => {
+      ...safeMap(ctx, 'productions', pending, ({ entry: e, priorVerdict: prior }) => {
         const b = encodeURIComponent(botId);
         const id = encodeURIComponent(e.id);
         const description = str(e.description);
@@ -747,6 +725,11 @@ function buildProductions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
             tool: str(e.tool) || null,
             size: typeof e.size === 'number' ? e.size : null,
             action: str(e.action) || null,
+            // Reviewed before, edited by the bot since: listed apart, not counted.
+            editedSinceReview: prior !== null,
+            priorStatus: prior?.status ?? null,
+            priorReviewedAt: prior?.at ?? null,
+            priorSize: prior?.size ?? null,
           },
         };
       })
@@ -1019,10 +1002,16 @@ export function applyNeedsYouAction(
   }
 }
 
+/** Per-kind counts of what needs a decision (outputs edited since review excluded). */
 export function countByKind(items: NeedsYouItem[]): Record<NeedsYouKind, number> {
   const byKind = emptyByKind();
-  for (const item of items) byKind[item.kind] += 1;
+  for (const item of items) if (!isEditedSinceReview(item)) byKind[item.kind] += 1;
   return byKind;
+}
+
+function countSummary(items: NeedsYouItem[]): NeedsYouCountResponse {
+  const edited = items.filter(isEditedSinceReview).length;
+  return { count: items.length - edited, byKind: countByKind(items), editedSinceReview: edited };
 }
 
 export function needsYouRoutes(deps: NeedsYouRouteDeps) {
@@ -1196,8 +1185,7 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
     const items = build(c);
     const body: NeedsYouResponse = {
       generatedAt: new Date(now()).toISOString(),
-      count: items.length,
-      byKind: countByKind(items),
+      ...countSummary(items),
       items,
     };
     return c.json(body);
@@ -1205,7 +1193,7 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
 
   app.get('/count', (c) => {
     const items = build(c);
-    const body: NeedsYouCountResponse = { count: items.length, byKind: countByKind(items) };
+    const body: NeedsYouCountResponse = countSummary(items);
     return c.json(body);
   });
 

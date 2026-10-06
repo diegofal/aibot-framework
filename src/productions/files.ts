@@ -19,15 +19,26 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { assertWithinDir, INDEX_EXCLUDES } from './paths';
+import { ARCHIVED_DIR, assertWithinDir, INDEX_EXCLUDES, isUntrackedProductionPath } from './paths';
 import type { ProductionEntry } from './types';
 
 /** Narrow context for files.ts functions. */
 export interface FileContext {
   /** The resolved production directory (absolute path). */
   dir: string;
+}
+
+/** `name`, or `stem-2.ext`, `stem-3.ext`… — the first one not taken in `dir`. */
+function freeArchiveName(dir: string, name: string): string {
+  if (!existsSync(join(dir, name))) return name;
+  const ext = extname(name);
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  for (let n = 2; ; n++) {
+    const candidate = `${stem}-${n}${ext}`;
+    if (!existsSync(join(dir, candidate))) return candidate;
+  }
 }
 
 /**
@@ -39,9 +50,15 @@ export interface FileContext {
  *   - appendEntry(dir, entry)
  *   - rebuildIndexPure(botId, dir, soulDir)
  *
+ * Bookkeeping files (`changelog.jsonl`, `summary.json`, `INDEX.md`,
+ * `index.html`) and anything already under `archived/` are refused: archiving
+ * the changelog wiped three bots' history on 2026-10-04. A name already taken
+ * in `archived/` gets a `-2`, `-3`… suffix; nothing is overwritten.
+ *
  * Returns:
  *   - { ok: true, entry } on success
- *   - { ok: false } on missing file, path traversal, or rename error
+ *   - { ok: false } on missing file, path traversal, reserved/archived path,
+ *     or rename error
  */
 export function archiveFile(
   ctx: FileContext,
@@ -51,6 +68,9 @@ export function archiveFile(
   if (!assertWithinDir(ctx.dir, relativePath)) {
     return { ok: false };
   }
+  if (isUntrackedProductionPath(relativePath)) {
+    return { ok: false, error: 'bookkeeping or already archived' };
+  }
 
   const srcPath = join(ctx.dir, relativePath);
   if (!existsSync(srcPath)) {
@@ -58,12 +78,12 @@ export function archiveFile(
   }
 
   // Create archived/ if needed
-  const archivedDir = join(ctx.dir, 'archived');
+  const archivedDir = join(ctx.dir, ARCHIVED_DIR);
   if (!existsSync(archivedDir)) {
     mkdirSync(archivedDir, { recursive: true });
   }
 
-  const fileName = basename(relativePath);
+  const fileName = freeArchiveName(archivedDir, basename(relativePath));
   const destPath = join(archivedDir, fileName);
 
   try {

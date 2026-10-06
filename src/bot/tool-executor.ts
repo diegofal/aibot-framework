@@ -4,6 +4,7 @@ import { basename, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
+import { isUntrackedProductionPath, normalizeEntryPath } from '../productions/paths';
 import { ProductionsService } from '../productions/service';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
 import type { Tool, ToolDefinition, ToolFailureKind, ToolResult } from '../tools/types';
@@ -649,12 +650,13 @@ export class ToolExecutor extends EventEmitter {
               const logPath =
                 originalPathForProductions ?? (effectiveArgs.path as string | undefined);
 
+              // Bookkeeping files and archived/** are never outputs (a logged
+              // changelog.jsonl once got archived from Needs You).
               if (
                 logPath &&
-                !logPath.endsWith('/INDEX.md') &&
-                logPath !== 'INDEX.md' &&
-                !logPath.endsWith('/index.html') &&
-                logPath !== 'index.html'
+                !isUntrackedProductionPath(
+                  normalizeEntryPath(ps.resolveDir(botId), logPath.replace(/^\.\//, ''))
+                )
               ) {
                 // file_write uses `content`, file_edit uses `new_text`
                 const content =

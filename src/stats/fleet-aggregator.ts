@@ -199,6 +199,7 @@ export function buildBotStats(
       approved: production.approved,
       rejected: production.rejected,
       unreviewed: production.unreviewed,
+      editedSinceReview: production.editedSinceReview,
       outcomesProduced: outcomes.produced,
       outcomesStale: outcomes.stale,
       lastFileAt: production.lastFileAt,
