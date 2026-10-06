@@ -5,9 +5,10 @@
  *   GET /api/agents/:id/home       everything the agent's home page needs (cached 15 s)
  *   GET /api/agents/:id/presence   posture + first-person "now" line (never cached)
  *   POST /api/agents/:id/goals     operator adds a goal to GOALS.md (`source: operator`)
+ *   PATCH /api/agents/:id/goals    operator moves a goal on the board ({ goal, status })
  *
  * Reads are tenant-scoped like /api/stats and never throw on missing data. The
- * one write appends to the Active section through the goals tool's
+ * writes go to the Active section through the goals tool's
  * parser/serializer, backs the file up first, and drops the cache.
  * Mounted BEFORE the CRUD agents routes in server.ts: their `GET /:id` would
  * otherwise answer `/presence` with "Agent not found". `/:id/home` and
@@ -33,7 +34,7 @@ import { type StatsBotManager, createStatsContext } from '../../stats/context';
 import { resolveBotPaths } from '../../stats/paths';
 import type { PresenceTracker } from '../../stats/presence-tracker';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
-import { appendGoal } from '../../tools/goals';
+import { BOARD_STATUSES, type BoardStatus, appendGoal, setGoalStatus } from '../../tools/goals';
 
 export const GOAL_TITLE_MAX = 200;
 export const GOAL_NOTES_MAX = 600;
@@ -158,5 +159,30 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     return c.json({ goal }, 201);
   });
 
+  app.patch('/:id/goals', async (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const b = ((await c.req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+    const title = typeof b.goal === 'string' ? b.goal.trim() : '';
+    const status = String(b.status ?? '') as BoardStatus;
+    if (!title) return c.json({ error: 'goal is required' }, 400);
+    if (!BOARD_STATUSES.includes(status))
+      return c.json({ error: `status must be one of ${BOARD_STATUSES.join(', ')}` }, 400);
+
+    const goalsPath = join(resolveBotPaths(deps.config, bot).soulDir, 'GOALS.md');
+    const current = existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null;
+    const next = setGoalStatus(current, title, status);
+    if (next === null) return c.json({ error: 'Goal not found' }, 404);
+    try {
+      backupSoulFile(goalsPath, deps.logger);
+      writeFileSync(goalsPath, next, 'utf-8');
+    } catch (err) {
+      deps.logger.warn({ err, botId: bot.id }, 'Moving goal failed');
+      return c.json({ error: 'Could not write GOALS.md' }, 500);
+    }
+    ctx.cache.invalidate();
+    deps.logger.info({ botId: bot.id, goal: title, status }, 'Operator moved goal');
+    return c.json({ goal: title, status });
+  });
   return app;
 }

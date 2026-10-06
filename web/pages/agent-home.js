@@ -13,8 +13,8 @@ import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.
 import {
   AGENT_HOME_SHORTCUTS,
   applyPresence,
-  goalAddForm,
   goalFormPayload,
+  goalMovePayload,
   goalsColumns,
   homeKeyAction,
   homeTabs,
@@ -67,33 +67,59 @@ function actionsFor(identity, id) {
   return `<button class="btn btn-primary" id="home-toggle">${label}</button>${rest}`;
 }
 
-/** Add-goal form: POST, then redraw the board from a fresh home read. */
-function wireGoalForm(el, id) {
-  const form = el.querySelector('#home-goal-form');
-  if (!form) return;
-  form.addEventListener('submit', async (e) => {
+/** True while the operator is typing in the board's add form (a redraw would wipe it). */
+function boardBusy(board) {
+  const input = board?.querySelector('#home-goal-form [name="title"]');
+  return Boolean(input && (input.value.trim() || document.activeElement === input));
+}
+
+async function redrawBoard(el, id) {
+  const home = await api(homeUrl(id)).catch(() => null);
+  const board = el.querySelector('#home-goals');
+  if (home && !home.error && board) board.innerHTML = goalsColumns(home.goals);
+}
+
+/** Goals board: add (submit) and move (change) by delegation, so redraws keep working. */
+function wireGoalBoard(el, id) {
+  const board = el.querySelector('#home-goals');
+  if (!board) return;
+  const url = `/api/agents/${encodeURIComponent(id)}/goals`;
+  board.addEventListener('submit', async (e) => {
+    const form = e.target.closest('#home-goal-form');
+    if (!form) return;
     e.preventDefault();
     const payload = goalFormPayload(form.elements.title?.value, form.elements.priority?.value);
     if (!payload) return;
     const btn = form.querySelector('button[type="submit"]');
     if (btn) btn.disabled = true;
     try {
-      const res = await api(`/api/agents/${encodeURIComponent(id)}/goals`, {
-        method: 'POST',
-        body: payload,
-      });
+      const res = await api(url, { method: 'POST', body: payload });
       if (res?.error) {
         showToast(res.error, { tone: 'danger' });
         return;
       }
       form.reset();
       showToast('Goal added — the agent picks it up next cycle', { tone: 'ok' });
-      const home = await api(homeUrl(id)).catch(() => null);
-      const board = el.querySelector('#home-goals');
-      if (home && !home.error && board) board.innerHTML = goalsColumns(home.goals);
+      await redrawBoard(el, id);
     } finally {
       if (btn) btn.disabled = false;
     }
+  });
+  board.addEventListener('click', (e) => {
+    const text = e.target.closest('.home-goal-text');
+    if (text) text.closest('.home-goal-card')?.classList.toggle('expanded');
+  });
+  board.addEventListener('change', async (e) => {
+    const select = e.target.closest('.home-goal-move');
+    if (!select) return;
+    const payload = goalMovePayload(select.dataset.goal, select.value);
+    if (!payload) return;
+    select.disabled = true;
+    const res = await api(url, { method: 'PATCH', body: payload }).catch((err) => ({
+      error: err?.message || 'Request failed',
+    }));
+    if (res?.error) showToast(res.error, { tone: 'danger' });
+    await redrawBoard(el, id);
   });
 }
 
@@ -357,7 +383,7 @@ function scheduleHomeRefresh(el, id) {
     const needs = el.querySelector('#home-needs');
     if (needs) needs.innerHTML = needsYouStrip(home.needsYou, id);
     const goals = el.querySelector('#home-goals');
-    if (goals) goals.innerHTML = goalsColumns(home.goals);
+    if (goals && !boardBusy(goals)) goals.innerHTML = goalsColumns(home.goals);
   }, HOME_REFRESH_DEBOUNCE_MS);
 }
 
@@ -400,11 +426,14 @@ export async function renderAgentHome(el, id) {
       })}
     </div>
     <div id="home-mind" class="home-mind"></div>
-    <div class="home-grid-3" style="margin-top:16px">
+    <div class="home-goals-row">
       ${card({
         title: 'Goals',
-        body: `<div id="home-goals">${goalsColumns(home.goals)}</div>${goalAddForm()}`,
+        subtitle: 'Add goals in To do; move a card with its menu. The agent works on yours first.',
+        body: `<div id="home-goals">${goalsColumns(home.goals)}</div>`,
       })}
+    </div>
+    <div class="home-grid" style="margin-top:16px">
       ${card({ title: 'Traits', body: traitsBody(home.traits) })}
       ${card({
         title: 'Karma',
@@ -414,7 +443,7 @@ export async function renderAgentHome(el, id) {
     </div>`;
 
   wireActions(el, id, identity);
-  wireGoalForm(el, id);
+  wireGoalBoard(el, id);
   wireKeys(el, id, identity);
   wireFaceControl(el, id, {
     onChanged: (avatarUrl) => {

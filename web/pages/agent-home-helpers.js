@@ -220,27 +220,62 @@ export function timelineBody(items, nowMs = Date.now()) {
     .join('');
 }
 
-function goalRow(g) {
-  const pr = g.priority ? `<span class="stats-chip">${esc(String(g.priority))}</span>` : '';
-  const note = g.notes
-    ? `<div class="home-goal-notes text-dim">${esc(String(g.notes).slice(0, 160))}${String(g.notes).length > 160 ? '…' : ''}</div>`
-    : '';
-  const you = /^operator\b/i.test(String(g.source ?? ''))
-    ? '<span class="home-goal-you" title="You added this goal">you</span> '
-    : '';
-  return `<div class="home-goal"><div class="home-goal-title">${you}${esc(g.text || '(untitled)')} ${pr}</div>${note}</div>`;
+const GOAL_MOVES = [
+  ['pending', 'To do'],
+  ['in_progress', 'In progress'],
+  ['blocked', 'Blocked'],
+  ['done', 'Done'],
+];
+
+function moveValue(status) {
+  const s = String(status ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (s === 'completed' || s === 'done') return 'done';
+  if (s === 'blocked') return 'blocked';
+  if (['in_progress', 'active', 'doing', 'started', 'ongoing'].includes(s)) return 'in_progress';
+  return 'pending';
 }
 
-/** Add-a-goal form under the board; agent-home.js wires the submit. */
+function goalCard(g, columnStatus) {
+  const text = String(g.text || '(untitled)');
+  const you = /^operator\b/i.test(String(g.source ?? ''))
+    ? '<span class="home-goal-you" title="You set this goal">you</span>'
+    : '';
+  // medium is the default: a chip on every card is noise.
+  const pr =
+    g.priority && String(g.priority) !== 'medium'
+      ? `<span class="home-goal-pri pri-${esc(String(g.priority))}">${esc(String(g.priority))}</span>`
+      : '';
+  const notes = g.notes
+    ? `<div class="home-goal-notes">${esc(String(g.notes).slice(0, 160))}${String(g.notes).length > 160 ? '…' : ''}</div>`
+    : '';
+  const current = columnStatus ?? moveValue(g.status);
+  const options = GOAL_MOVES.map(
+    ([v, label]) => `<option value="${v}"${v === current ? ' selected' : ''}>${label}</option>`
+  ).join('');
+  return `<div class="home-goal-card">
+    <div class="home-goal-text" title="${esc(text)}">${esc(text)}</div>
+    ${notes}
+    <div class="home-goal-foot">${you}${pr}
+      <select class="home-goal-move" data-goal="${esc(text)}" aria-label="Move goal">${options}</select>
+    </div>
+  </div>`;
+}
+
+/** Add-a-goal form at the top of the To do column; agent-home.js wires it by delegation. */
 export function goalAddForm() {
   return `<form id="home-goal-form" class="home-goal-form">
-    <input class="input" name="title" maxlength="200" placeholder="Give this agent a goal…" autocomplete="off" required>
-    <select class="input" name="priority" aria-label="Priority">
-      <option value="low">low</option>
-      <option value="medium" selected>medium</option>
-      <option value="high">high</option>
-    </select>
-    <button class="btn btn-sm btn-primary" type="submit">Add goal</button>
+    <input class="home-goal-input" name="title" maxlength="200" placeholder="Add a goal…" autocomplete="off" required>
+    <div class="home-goal-form-row">
+      <select class="home-goal-pri-select" name="priority" aria-label="Priority">
+        <option value="low">low</option>
+        <option value="medium" selected>medium</option>
+        <option value="high">high</option>
+      </select>
+      <button class="btn btn-sm btn-primary" type="submit">Add</button>
+    </div>
   </form>`;
 }
 
@@ -251,26 +286,49 @@ export function goalFormPayload(title, priority) {
   return { title: t, priority: priority || 'medium' };
 }
 
-/** Three goal columns: active, blocked, recently completed. */
+/** PATCH body for moving a goal on the board, or null when it cannot be sent. */
+export function goalMovePayload(goal, status) {
+  const g = String(goal ?? '').trim();
+  if (!g || !GOAL_MOVES.some(([v]) => v === status)) return null;
+  return { goal: g, status };
+}
+
+/** Goals board: To do / In progress / Blocked / Done, with the add form in To do. */
 export function goalsColumns(goals) {
   const active = goals?.active ?? [];
+  const todo = goals?.todo ?? active.filter((g) => moveValue(g.status) === 'pending');
+  const doing = goals?.inProgress ?? active.filter((g) => moveValue(g.status) === 'in_progress');
   const blocked = goals?.blocked ?? [];
   const done = goals?.completedRecently ?? [];
-  if (active.length + blocked.length + done.length === 0) {
-    return emptyState({
-      icon: '◎',
-      title: 'No goals yet',
-      hint: 'Add one below: the agent works on goals you set before its own, and asks you if one is unclear.',
-    });
-  }
-  const col = (title, tone, list, empty) => `<div class="home-goal-col">
-    <div class="home-goal-col-title">${badge(title, tone)} <span class="text-dim">${list.length}</span></div>
-    ${list.length ? list.map(goalRow).join('') : `<div class="text-dim text-sm">${esc(empty)}</div>`}
+  const total = todo.length + doing.length + blocked.length + done.length;
+  const col = (
+    status,
+    title,
+    list,
+    empty,
+    extra = ''
+  ) => `<div class="home-board-col" data-status="${status}"${list.length ? '' : ' data-empty'}>
+    <div class="home-board-head"><span class="home-board-dot dot-${status}"></span>${title}<span class="home-board-count">${list.length}</span></div>
+    ${extra}
+    <div class="home-board-cards">${
+      list.length
+        ? list.map((g) => goalCard(g, status)).join('')
+        : `<div class="home-board-empty">${esc(empty)}</div>`
+    }</div>
   </div>`;
-  return `<div class="home-goal-cols">
-    ${col('active', 'ok', active, 'Nothing active')}
-    ${col('blocked', 'danger', blocked, 'Nothing blocked')}
-    ${col('done', 'muted', done, 'Nothing finished recently')}
+  const intro =
+    total === 0
+      ? emptyState({
+          icon: '◎',
+          title: 'No goals yet',
+          hint: 'Add one in To do: the agent works on goals you set before its own, and asks you if one is unclear.',
+        })
+      : '';
+  return `${intro}<div class="home-board">
+    ${col('pending', 'To do', todo, 'Nothing queued', goalAddForm())}
+    ${col('in_progress', 'In progress', doing, 'Nothing in progress')}
+    ${col('blocked', 'Blocked', blocked, 'Nothing blocked')}
+    ${col('done', 'Done', done, 'Nothing finished recently')}
   </div>`;
 }
 

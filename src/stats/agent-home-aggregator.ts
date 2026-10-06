@@ -15,6 +15,7 @@ import { avatarUrl, findAvatar } from '../bot/agent-avatar';
 import type { BotConfig } from '../config';
 import type { KarmaEvent } from '../karma/types';
 import { readEntries } from '../productions/changelog';
+import { goalBucket } from '../tools/goals';
 import { type StatsContext, liveSchedule } from './context';
 import { getBotStats } from './fleet-aggregator';
 import { type NowTone, describeNow } from './now-line';
@@ -128,7 +129,15 @@ export interface AgentHomeResponse {
   generatedAt: string;
   identity: AgentIdentity;
   presence: AgentPresence;
-  goals: { active: GoalDetail[]; blocked: GoalDetail[]; completedRecently: GoalDetail[] };
+  goals: {
+    /** Active goals that are not blocked (to do + in progress). */
+    active: GoalDetail[];
+    blocked: GoalDetail[];
+    /** Board columns: active goals split by status (`goalBucket`). */
+    todo: GoalDetail[];
+    inProgress: GoalDetail[];
+    completedRecently: GoalDetail[];
+  };
   traits: TraitStats;
   karma: {
     score: number | null;
@@ -424,6 +433,10 @@ export function buildAgentHome(
     goals: {
       active: goals.filter((g) => g.section === 'active' && g.status !== 'blocked'),
       blocked: goals.filter((g) => g.section === 'active' && g.status === 'blocked'),
+      todo: goals.filter((g) => g.section === 'active' && goalBucket(g.status) === 'todo'),
+      inProgress: goals.filter(
+        (g) => g.section === 'active' && goalBucket(g.status) === 'inProgress'
+      ),
       completedRecently: completed,
     },
     traits: readTraits(paths.soulDir).stats,

@@ -145,6 +145,58 @@ export function appendGoal(content: string | null, goal: GoalEntry): string {
   return serializeGoals(active, completed);
 }
 
+/** Statuses the dashboard board can move a goal to. */
+export const BOARD_STATUSES = ['pending', 'in_progress', 'blocked', 'done'] as const;
+export type BoardStatus = (typeof BOARD_STATUSES)[number];
+
+/** Board column of an active goal's status. */
+export function goalBucket(status: string | undefined): 'todo' | 'inProgress' | 'blocked' {
+  const s = String(status ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (s === 'blocked') return 'blocked';
+  if (['in_progress', 'active', 'doing', 'started', 'ongoing'].includes(s)) return 'inProgress';
+  return 'todo';
+}
+
+/**
+ * Move the goal titled exactly `title` (trimmed, case-insensitive) to `status`.
+ * `done` moves it to Completed with today's date; any other status on a completed
+ * goal reopens it. Returns the new GOALS.md, or null when no goal has that title.
+ */
+export function setGoalStatus(
+  content: string | null,
+  title: string,
+  status: BoardStatus
+): string | null {
+  const { active, completed } = parseGoals(content);
+  const key = title.trim().toLowerCase();
+  const same = (g: GoalEntry) => g.text.trim().toLowerCase() === key;
+  const ai = active.findIndex(same);
+  const ci = ai === -1 ? completed.findIndex(same) : -1;
+  if (ai === -1 && ci === -1) return null;
+
+  if (ai !== -1) {
+    if (status === 'done') {
+      const [goal] = active.splice(ai, 1);
+      goal.status = 'completed';
+      goal.completed = localDateStr();
+      completed.push(goal);
+    } else {
+      active[ai].status = status;
+    }
+  } else if (status !== 'done') {
+    const [goal] = completed.splice(ci, 1);
+    goal.status = status;
+    goal.priority = goal.priority || 'medium';
+    goal.completed = undefined;
+    goal.outcome = undefined;
+    active.push(goal);
+  }
+  return serializeGoals(active, completed);
+}
+
 /**
  * Tool that lets the LLM manage structured goals in GOALS.md
  */

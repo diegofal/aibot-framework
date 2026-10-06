@@ -3,6 +3,7 @@ import {
   ago,
   goalAddForm,
   goalFormPayload,
+  goalMovePayload,
   goalsColumns,
   groupTimelineByHour,
   homeTabs,
@@ -69,25 +70,58 @@ describe('timelineRow / timelineBody', () => {
   });
 });
 
-describe('goalsColumns', () => {
+describe('goalsColumns (board)', () => {
   it('shows an empty state without goals', () => {
     expect(goalsColumns({ active: [], blocked: [], completedRecently: [] })).toContain(
       'No goals yet'
     );
     expect(goalsColumns(undefined)).toContain('No goals yet');
   });
-  it('renders three columns with counts, priorities and clipped notes', () => {
+  it('renders four columns: to do, in progress, blocked, done', () => {
     const html = goalsColumns({
-      active: [{ text: 'Ship <it>', priority: 'high', notes: 'n'.repeat(200) }],
+      todo: [{ text: 'Ship <it>', priority: 'high', notes: 'n'.repeat(200) }],
+      inProgress: [{ text: 'Doing', status: 'in_progress' }],
       blocked: [],
       completedRecently: [{ text: 'Done thing' }],
     });
-    expect(html.match(/home-goal-col"/g)).toHaveLength(3);
-    expect(html).toContain('Ship &lt;it&gt;');
-    expect(html).toContain('stats-chip">high<');
+    expect(html.match(/class="home-board-col"/g)).toHaveLength(4);
+    for (const t of ['To do', 'In progress', 'Blocked', 'Done']) expect(html).toContain(t);
+    expect(html.indexOf('Ship &lt;it&gt;')).toBeLessThan(html.indexOf('Doing'));
+    expect(html).toContain('pri-high">high<');
     expect(html).toContain(`${'n'.repeat(160)}…`);
-    expect(html).toContain('Nothing blocked');
     expect(html).toContain('Done thing');
+  });
+  it('falls back to splitting active by status when todo/inProgress are missing', () => {
+    const html = goalsColumns({
+      active: [
+        { text: 'A', status: 'pending' },
+        { text: 'B', status: 'in_progress' },
+      ],
+      blocked: [],
+      completedRecently: [],
+    });
+    const cols = html.split('class="home-board-col"').slice(1);
+    expect(cols[0]).toContain('>A<');
+    expect(cols[1]).toContain('>B<');
+  });
+  it('gives each card a move control with its current column selected', () => {
+    const html = goalsColumns({
+      todo: [],
+      inProgress: [{ text: 'Say "hi"', status: 'in_progress' }],
+      blocked: [],
+      completedRecently: [],
+    });
+    expect(html).toContain('data-goal="Say &quot;hi&quot;"');
+    expect(html).toMatch(/<option value="in_progress" selected>/);
+    expect(html).toContain('<option value="done">');
+  });
+});
+
+describe('goalMovePayload', () => {
+  it('builds the PATCH body, or null for an unknown status', () => {
+    expect(goalMovePayload('Ship', 'done')).toEqual({ goal: 'Ship', status: 'done' });
+    expect(goalMovePayload('Ship', 'paused')).toBeNull();
+    expect(goalMovePayload('', 'done')).toBeNull();
   });
 });
 
@@ -106,7 +140,7 @@ describe('operator goals on the board', () => {
   });
 
   it('empty state tells the operator to add a goal here', () => {
-    expect(goalsColumns(undefined)).toContain('Add one below');
+    expect(goalsColumns(undefined)).toContain('Add one in To do');
   });
 
   it('renders the add form with a title input and priority select', () => {
@@ -219,5 +253,31 @@ describe('karmaBody', () => {
     expect(html).toContain('ui-badge-muted">tool<');
     expect(html).toContain('&lt;bad&gt;');
     expect(html).toContain('5m ago');
+  });
+});
+
+describe('goals board polish', () => {
+  it('shows a priority chip only for non-default priorities', () => {
+    const html = goalsColumns({
+      todo: [
+        { text: 'Hi', priority: 'high' },
+        { text: 'Mid', priority: 'medium' },
+      ],
+      inProgress: [],
+      blocked: [],
+      completedRecently: [],
+    });
+    expect(html).toContain('pri-high');
+    expect(html).not.toContain('pri-medium');
+  });
+  it('marks empty columns so their count can be dimmed', () => {
+    const html = goalsColumns({
+      todo: [{ text: 'A' }],
+      inProgress: [],
+      blocked: [],
+      completedRecently: [],
+    });
+    expect(html).toContain('data-status="pending">');
+    expect(html).toContain('data-status="blocked" data-empty');
   });
 });

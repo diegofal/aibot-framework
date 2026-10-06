@@ -391,3 +391,46 @@ describe('POST /api/agents/:id/goals', () => {
     expect(fresh?.source).toBe('operator');
   });
 });
+
+describe('PATCH /api/agents/:id/goals (move on the board)', () => {
+  const patch = (app: Hono, id: string, body: unknown) =>
+    app.request(`/api/agents/${id}/goals`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const goalsOf = (id: string) =>
+    parseGoals(readFileSync(join(fx.soulDir(id), 'GOALS.md'), 'utf-8'));
+
+  it('moves a goal to another column', async () => {
+    const res = await patch(makeApp(), 'b1', { goal: 'Research topic', status: 'in_progress' });
+    expect(res.status).toBe(200);
+    expect(goalsOf('b1').active.find((g) => g.text === 'Research topic')?.status).toBe(
+      'in_progress'
+    );
+  });
+
+  it('done completes the goal; a status other than done reopens it', async () => {
+    const app = makeApp();
+    expect((await patch(app, 'b1', { goal: 'Research topic', status: 'done' })).status).toBe(200);
+    expect(goalsOf('b1').completed.map((g) => g.text)).toContain('Research topic');
+    expect((await patch(app, 'b1', { goal: 'Setup', status: 'pending' })).status).toBe(200);
+    expect(goalsOf('b1').active.map((g) => g.text)).toContain('Setup');
+  });
+
+  it('rejects bad input and unknown goals', async () => {
+    const app = makeApp();
+    expect((await patch(app, 'b1', { goal: 'Research topic', status: 'paused' })).status).toBe(400);
+    expect((await patch(app, 'b1', { status: 'done' })).status).toBe(400);
+    expect((await patch(app, 'b1', { goal: 'Nope', status: 'done' })).status).toBe(404);
+    expect((await patch(app, 'nope', { goal: 'x', status: 'done' })).status).toBe(404);
+  });
+
+  it('home splits active goals into todo and in progress', async () => {
+    const home = (await (await makeApp().request('/api/agents/b1/home')).json()) as {
+      goals: { todo: Array<{ text: string }>; inProgress: Array<{ text: string }> };
+    };
+    expect(home.goals.todo.map((g) => g.text)).toEqual(['Research topic']);
+    expect(home.goals.inProgress.map((g) => g.text)).toEqual(['**Weekly digest**']);
+  });
+});

@@ -4,10 +4,12 @@ import {
   appendGoal,
   createGoalsTool,
   findGoalIndex,
+  goalBucket,
   isOperatorGoal,
   parseGoals,
   resolveGoalParam,
   serializeGoals,
+  setGoalStatus,
 } from '../src/tools/goals';
 
 const mockLogger = {
@@ -542,5 +544,65 @@ describe('operator goals', () => {
     const goal = parseGoals(loader.readGoals()).active[0];
     expect(goal.source).toBe('agent');
     expect(goal.created).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('setGoalStatus (board moves)', () => {
+  const md = `## Active Goals
+- [ ] Write brief
+  - status: pending
+  - priority: high
+  - source: operator
+- [ ] Map skills
+  - status: in_progress
+  - priority: medium
+
+## Completed
+- [x] Old thing
+  - completed: 2026-10-01
+  - outcome: shipped
+`;
+
+  test('moves an active goal between todo, in progress and blocked', () => {
+    const out = setGoalStatus(md, 'Write brief', 'in_progress');
+    expect(out).not.toBeNull();
+    const g = parseGoals(out as string).active.find((x) => x.text === 'Write brief');
+    expect(g?.status).toBe('in_progress');
+    expect(g?.source).toBe('operator');
+    const blocked = parseGoals(setGoalStatus(md, 'Map skills', 'blocked') as string);
+    expect(blocked.active.find((x) => x.text === 'Map skills')?.status).toBe('blocked');
+  });
+
+  test('done moves the goal to Completed with a date', () => {
+    const { active, completed } = parseGoals(setGoalStatus(md, 'Write brief', 'done') as string);
+    expect(active.map((g) => g.text)).toEqual(['Map skills']);
+    const done = completed.find((g) => g.text === 'Write brief');
+    expect(done?.completed).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  test('reopening a completed goal puts it back in Active without the completion fields', () => {
+    const { active, completed } = parseGoals(setGoalStatus(md, 'Old thing', 'pending') as string);
+    expect(completed).toHaveLength(0);
+    const g = active.find((x) => x.text === 'Old thing');
+    expect(g?.status).toBe('pending');
+    expect(g?.completed).toBeUndefined();
+    expect(g?.outcome).toBeUndefined();
+  });
+
+  test('matches the exact title only, and returns null when nothing matches', () => {
+    expect(setGoalStatus(md, 'Write', 'done')).toBeNull();
+    expect(setGoalStatus(md, 'Nope', 'done')).toBeNull();
+    expect(setGoalStatus(null, 'Write brief', 'done')).toBeNull();
+  });
+});
+
+describe('goalBucket', () => {
+  test('maps statuses to board columns', () => {
+    expect(goalBucket('pending')).toBe('todo');
+    expect(goalBucket(undefined)).toBe('todo');
+    expect(goalBucket('in_progress')).toBe('inProgress');
+    expect(goalBucket('In-Progress')).toBe('inProgress');
+    expect(goalBucket('active')).toBe('inProgress');
+    expect(goalBucket('blocked')).toBe('blocked');
   });
 });
