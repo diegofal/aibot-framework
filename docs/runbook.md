@@ -397,3 +397,23 @@ docker compose up -d --build
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T23-25-36`. Container recreated, `healthy`; image `/app/src/claude-cli.ts` has `buildClaudePromptInput` / `extractStreamJsonResult`, `/app/src/core/llm-client.ts` has `MAX_CLI_IMAGES`. 9 bots started. Only boot errors: the two known revoked Telegram tokens (cryptik, job-seeker → headless). A real Telegram photo not yet sent.
 
 **Reversible?** Yes: check out `52ecb5a` and rebuild.
+
+### 2026-10-06 — Memory audit of the fleet (read-only) and backup before a memory repair
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` (data and productions volumes, read-only) |
+| **Who** | Diego (via Claude) |
+| **Why** | Finny (`default`) did not know Pri and the kids and repeated stale claims; audit before repairing memory |
+
+```bash
+docker cp aibot-framework-aibot-1:/app/data/tenants/__admin__/bots/default/soul D:/tmp/aibot-default-soul
+docker cp D:/tmp/custody-pairs.ts aibot-framework-aibot-1:/tmp/custody-pairs.ts   # + custody-ctx.ts; read-only line pairing
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 bun /tmp/custody-pairs.ts
+# plus read-only greps/bun -e over hygiene/runs.jsonl, tool-audit, memory.db (readonly), sessions, logs
+bun scripts/docker/backup.ts backup
+```
+
+**Outcome.** Backup `D:\aibot-backups\aibot-backup-2026-10-06T23-47-24` (container restarted by the backup). Findings: the 2026-10-04 16:05 hygiene run redacted `custody` lines in default (`legacy.md` kids list + 3 MEMORY.md lines), milei-rocca (its rule `REGLA_CUSTODIA_TEXTO`) and ai-perfectionist ("write-capable children"); originals in each `.versions/*.2026-10-04T16-05-*.bak`. `/app/productions/default` has been empty (0-byte changelog) since 2026-10-04 ~00:27Z, cryptik lost 30–43 in the same window; no tool call did it, not in any backup (oldest is 2026-10-04T18-57). No bot memory written: the repair was blocked by the permission guard and waits for the operator.
+
+**Reversible?** Nothing changed besides the backup.
