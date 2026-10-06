@@ -634,3 +634,34 @@ describe('createFleetOperatorNotifier', () => {
     await expect(none({ chatId: 7, botId: 'x', text: 't' })).rejects.toThrow(/no live telegram/i);
   });
 });
+
+describe('cycle and goal attribution', () => {
+  test('a question asked inside a cycle records its cycleId and goalId on the inbox thread and the pending question', async () => {
+    const tool = createAskHumanTool(makeDeps());
+    const result = await tool.execute(
+      {
+        question: 'Which API first?',
+        _botId: 'bot1',
+        _chatId: 0,
+        _cycleId: 'cyc-7',
+        _goalId: 'g-bbbbbbbb',
+      },
+      makeLogger()
+    );
+    expect(result.success).toBe(true);
+    const [conv] = conversations.listConversations('bot1');
+    expect(conv).toMatchObject({ cycleId: 'cyc-7', goalId: 'g-bbbbbbbb' });
+    expect(store.getPendingForBot('bot1')[0]).toMatchObject({
+      cycleId: 'cyc-7',
+      goalId: 'g-bbbbbbbb',
+    });
+  });
+
+  test('outside a cycle nothing is added', async () => {
+    const tool = createAskHumanTool(makeDeps());
+    await tool.execute({ question: 'Hello?', _botId: 'bot1', _chatId: 0 }, makeLogger());
+    const [conv] = conversations.listConversations('bot1');
+    expect(conv).not.toHaveProperty('cycleId');
+    expect(store.getPendingForBot('bot1')[0]).not.toHaveProperty('cycleId');
+  });
+});

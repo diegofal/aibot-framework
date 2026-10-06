@@ -49,4 +49,8 @@ export interface ProductionEntry {
   archiveReason?: string; // Why it was archived
   evaluation?: ProductionEvaluation;
   coherenceCheck?: CoherenceCheck;
+  /** Agent-loop cycle that wrote this output (absent on old entries and outside a cycle). */
+  cycleId?: string;
+  /** Goal that cycle served, when known. */
+  goalId?: string;
 }

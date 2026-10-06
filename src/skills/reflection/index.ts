@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scanFileTree } from '../../bot/agent-loop-utils';
+import { writeGoalsFile } from '../../bot/goal-events';
 import type { Skill, SkillContext } from '../../core/types';
 import { localDateStr, localTimeStr } from '../../date-utils';
 import type { ChatMessage } from '../../ollama';
@@ -345,7 +346,11 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
 
       if (goalsAdded > 0) {
         const goalsPath = join(soulDir, 'GOALS.md');
-        writeFileSync(goalsPath, serializeGoals(active, completed), 'utf-8');
+        writeGoalsFile(goalsPath, serializeGoals(active, completed), {
+          actor: 'reflection',
+          backup: (p) => backupSoulFile(p, ctx.logger),
+          onError: (err) => ctx.logger.warn({ err }, 'Reflection: goal events append failed'),
+        });
         ctx.logger.info({ goalsAdded }, 'Reflection: appended suggested goals');
       }
     } catch (err) {

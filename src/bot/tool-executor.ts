@@ -54,6 +54,10 @@ export interface ToolEndEvent {
   timestamp: number;
   /** Why a failed call failed, when the tool said so (see `ToolFailureKind`). */
   failureKind?: ToolFailureKind;
+  /** Agent-loop cycle this call ran in (absent outside a cycle). */
+  cycleId?: string;
+  /** Goal the cycle served, when known at call time. */
+  goalId?: string;
 }
 
 /**
@@ -128,6 +132,12 @@ export interface ToolExecutorOptions {
   inlineApprovalStore?: InlineApprovalStore;
   /** Session key for inline approval store keying */
   sessionKey?: string;
+  /**
+   * Agent-loop cycle attribution, read at each call (the loop may resolve the
+   * goal mid-cycle). Stamped on `tool:end`, productions and karma metadata;
+   * the tool sees `_cycleId`.
+   */
+  attribution?: { cycleId: string; goalId: string | null };
 }
 
 /**
@@ -308,6 +318,13 @@ export class ToolExecutor extends EventEmitter {
    * Build a failure result, emit error + end events, and log the execution.
    * @param emitError - The error string to emit in the tool:error event (may differ from content).
    */
+  /** `{ cycleId, goalId }` of the current agent-loop cycle, or `{}` outside one. */
+  private attributionFields(): { cycleId?: string; goalId?: string } {
+    const a = this.options.attribution;
+    if (!a) return {};
+    return { cycleId: a.cycleId, ...(a.goalId ? { goalId: a.goalId } : {}) };
+  }
+
   private buildFailResult(
     name: string,
     args: Record<string, unknown>,
@@ -343,10 +360,12 @@ export class ToolExecutor extends EventEmitter {
       (phase === 'execution' || phase === 'validation')
     ) {
       const truncatedError = (emitError ?? errorMsg).slice(0, 120);
+      const attribution = this.attributionFields();
       this.options.karmaService.recordOutcome(
         botId,
         'toolError',
-        `Tool error: ${name} — ${truncatedError}`
+        `Tool error: ${name} — ${truncatedError}`,
+        attribution.cycleId ? attribution : undefined
       );
     }
 
@@ -370,6 +389,7 @@ export class ToolExecutor extends EventEmitter {
       botId,
       chatId,
       timestamp: Date.now(),
+      ...this.attributionFields(),
       ...(failureKind ? { failureKind } : {}),
     });
     return result;
@@ -491,6 +511,7 @@ export class ToolExecutor extends EventEmitter {
             botId,
             chatId,
             timestamp: Date.now(),
+            ...this.attributionFields(),
           });
           return {
             toolName: name,
@@ -562,6 +583,8 @@ export class ToolExecutor extends EventEmitter {
         _botId: botId,
         ...(this.options.userId ? { _userId: this.options.userId } : {}),
         ...(this.options.tenantRoot ? { _tenantRoot: this.options.tenantRoot } : {}),
+        ...(this.options.attribution ? { _cycleId: this.options.attribution.cycleId } : {}),
+        ...(this.options.attribution?.goalId ? { _goalId: this.options.attribution.goalId } : {}),
       };
 
       // Per-bot workDir: resolve file paths and exec cwd
@@ -688,6 +711,7 @@ export class ToolExecutor extends EventEmitter {
                     description,
                     size: 0,
                     trackOnly: ps.isTrackOnly(botId),
+                    ...this.attributionFields(),
                   });
                 } else {
                   const quality = ProductionsService.assessContentQuality(content);
@@ -746,6 +770,7 @@ export class ToolExecutor extends EventEmitter {
                       description,
                       size: content.length,
                       trackOnly: ps.isTrackOnly(botId),
+                      ...this.attributionFields(),
                     });
                   }
                 }
@@ -810,6 +835,7 @@ export class ToolExecutor extends EventEmitter {
             botId,
             chatId,
             timestamp: Date.now(),
+            ...this.attributionFields(),
           });
           return result;
         }

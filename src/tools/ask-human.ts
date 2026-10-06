@@ -478,12 +478,17 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
       }
 
       // Register the question in the store (always works — visible in web inbox)
+      const attribution = {
+        ...(args._cycleId ? { cycleId: String(args._cycleId) } : {}),
+        ...(args._goalId ? { goalId: String(args._goalId) } : {}),
+      };
       const { id, promise } = deps.store.ask(
         botId,
         chatId,
         question,
         options,
-        (deps.now ?? Date.now)()
+        (deps.now ?? Date.now)(),
+        attribution
       );
       promise.catch((err) => {
         logger.info(
@@ -522,6 +527,7 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
               askHumanQuestionId: id,
               inboxStatus: 'pending',
               askOptions: options,
+              ...attribution,
             }
           );
           deps.conversationsService.addMessage(

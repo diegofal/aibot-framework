@@ -27,6 +27,20 @@ describe('outcome-ledger', () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
+  // ── Cycle / goal attribution ──
+
+  it('records the cycle and goal a production came from, when given', () => {
+    ledger.record(BOT_ID, 'Write lab', ['file_write'], 'CONTENT', {
+      cycleId: 'cyc-1',
+      goalId: 'g-bbbbbbbb',
+    });
+    ledger.record(BOT_ID, 'Write brief', ['file_write'], 'CONTENT');
+    const [a, b] = ledger.getAllEntries(BOT_ID);
+    expect(a).toMatchObject({ cycleId: 'cyc-1', goalId: 'g-bbbbbbbb' });
+    expect(b).not.toHaveProperty('cycleId');
+    expect(b).not.toHaveProperty('goalId');
+  });
+
   // ── Recording ──
 
   describe('record', () => {

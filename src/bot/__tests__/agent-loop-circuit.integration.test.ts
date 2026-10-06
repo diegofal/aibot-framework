@@ -282,12 +282,16 @@ describe('AgentLoop — backend circuit breaker', () => {
       botConfig: { id: 'bot1', llmBackend: 'ollama' },
       llmClient: ollama,
       dataDir,
-      agentLoop: { circuitBreaker: { threshold: 1, cooldownMs: 1, weeklyQuotaCooldownMs: 1 } },
+      // A 1 ms cooldown made `open` race the clock: any work after the
+      // circuit opened (the cycle log write) let it expire before the check.
+      agentLoop: {
+        circuitBreaker: { threshold: 1, cooldownMs: 200, weeklyQuotaCooldownMs: 200 },
+      },
     });
     await h.loop.runOne('bot1');
     expect(h.loop.getCircuitState().ollama.open).toBe(true);
 
-    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 250));
     fail = false;
     const probe = await h.loop.runOne('bot1'); // half-open probe
     expect(probe.status).toBe('completed');

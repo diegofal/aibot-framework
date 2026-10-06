@@ -107,6 +107,9 @@ export function parsePlannerResult(
         plan: parsed.plan.map(String),
         priority,
         toolCategories,
+        ...(typeof parsed.serves_goal === 'string' && parsed.serves_goal.trim()
+          ? { serves_goal: parsed.serves_goal.trim() }
+          : {}),
       };
     },
     label: 'planner',

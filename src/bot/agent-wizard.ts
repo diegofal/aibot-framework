@@ -25,6 +25,7 @@ import type { Config } from '../config';
 import type { Logger } from '../logger';
 import type { GeneratedSoul } from '../soul-generator';
 import { type GoalEntry, serializeGoals } from '../tools/goals';
+import { writeGoalsFile } from './goal-events';
 import { classifyTelegramToken } from './telegram-errors';
 import {
   type TraitName,
@@ -209,7 +210,7 @@ export function writeWizardSoul(
     writeFileSync(join(soulDir, name), content, 'utf-8');
     writeFileSync(join(soulDir, '.baseline', name), content, 'utf-8');
   }
-  writeFileSync(join(soulDir, 'GOALS.md'), goalsMarkdown, 'utf-8');
+  writeGoalsFile(join(soulDir, 'GOALS.md'), goalsMarkdown, { actor: 'wizard' });
   return [...WIZARD_SOUL_FILES];
 }
 

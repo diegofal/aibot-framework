@@ -27,6 +27,10 @@ export interface OutcomeEntry {
   consumedBy?: string;
   validatedAt?: number;
   score?: number;
+  /** Agent-loop cycle that produced it (absent on old entries). */
+  cycleId?: string;
+  /** Goal that cycle served, when known. */
+  goalId?: string;
 }
 
 export interface OutcomeStats {
@@ -74,7 +78,8 @@ export class OutcomeLedger {
     botId: string,
     description: string,
     toolCalls: string[],
-    actionType: ActionType
+    actionType: ActionType,
+    attribution: { cycleId?: string; goalId?: string | null } = {}
   ): string | null {
     // Dedup: prevent same description within 5 minutes
     const dedupKey = description.toLowerCase().slice(0, 80);
@@ -98,6 +103,8 @@ export class OutcomeLedger {
       description: description.slice(0, 200),
       toolCalls,
       status: 'produced',
+      ...(attribution.cycleId ? { cycleId: attribution.cycleId } : {}),
+      ...(attribution.goalId ? { goalId: attribution.goalId } : {}),
     };
 
     const filePath = this.getFilePath(botId);

@@ -15,6 +15,10 @@ export interface PendingQuestion {
   resolve: (answer: string) => void;
   reject: (reason: Error) => void;
   createdAt: number;
+  /** Agent-loop cycle the question was asked in (absent outside a cycle). */
+  cycleId?: string;
+  /** Goal that cycle served, when known. */
+  goalId?: string;
 }
 
 export interface PendingQuestionInfo {
@@ -25,6 +29,10 @@ export interface PendingQuestionInfo {
   conversationId?: string;
   options?: string[];
   createdAt: number;
+  /** Agent-loop cycle the question was asked in (absent outside a cycle). */
+  cycleId?: string;
+  /** Goal that cycle served, when known. */
+  goalId?: string;
 }
 
 export interface AnsweredQuestion {
@@ -219,7 +227,8 @@ export class AskHumanStore {
     chatId: number,
     question: string,
     options?: string[],
-    createdAt: number = Date.now()
+    createdAt: number = Date.now(),
+    attribution: { cycleId?: string; goalId?: string } = {}
   ): { id: string; promise: Promise<string> } {
     const id = randomUUID();
 
@@ -235,6 +244,8 @@ export class AskHumanStore {
       resolve,
       reject,
       createdAt,
+      ...(attribution.cycleId ? { cycleId: attribution.cycleId } : {}),
+      ...(attribution.goalId ? { goalId: attribution.goalId } : {}),
     };
 
     this.pending.set(id, entry);
@@ -303,6 +314,8 @@ export class AskHumanStore {
       conversationId: entry.conversationId,
       ...(entry.options ? { options: entry.options } : {}),
       createdAt: entry.createdAt,
+      ...(entry.cycleId ? { cycleId: entry.cycleId } : {}),
+      ...(entry.goalId ? { goalId: entry.goalId } : {}),
     };
   }
 

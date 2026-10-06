@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { SoulLoader } from '../soul';
@@ -131,6 +132,29 @@ export interface GoalEntry {
   source?: string;
   /** Local date the goal was added (YYYY-MM-DD). */
   created?: string;
+  /** Stable id (`g-` + 8 hex), assigned on write by `ensureGoalIds`. */
+  id?: string;
+  /** ISO time the goal first went in_progress. */
+  started?: string;
+  /** ISO time of the last change to the goal. */
+  updated?: string;
+}
+
+/** A fresh goal id: `g-` + 8 lowercase hex. */
+export function newGoalId(): string {
+  return `g-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+}
+
+/** Give every goal without an id a fresh one (mutates). Returns how many were assigned. */
+export function ensureGoalIds(active: GoalEntry[], completed: GoalEntry[]): number {
+  let assigned = 0;
+  for (const g of [...active, ...completed]) {
+    if (!g.id) {
+      g.id = newGoalId();
+      assigned++;
+    }
+  }
+  return assigned;
 }
 
 /** True when the operator set this goal from the dashboard (not the agent, not a preset). */
@@ -141,8 +165,34 @@ export function isOperatorGoal(goal: GoalEntry): boolean {
 /** Append one goal to the Active section of a GOALS.md, keeping the rest. */
 export function appendGoal(content: string | null, goal: GoalEntry): string {
   const { active, completed } = parseGoals(content);
-  active.push(goal);
+  active.push({ ...goal, id: goal.id ?? newGoalId() });
   return serializeGoals(active, completed);
+}
+
+/**
+ * The goal a `serves_goal` reference names: exact id, then exact title
+ * (trimmed, case-insensitive), then the fuzzy match `manage_goals` uses.
+ */
+export function resolveGoalRef(ref: string | undefined, goals: GoalEntry[]): GoalEntry | null {
+  const r = String(ref ?? '').trim();
+  if (!r) return null;
+  const byId = goals.find((g) => g.id === r);
+  if (byId) return byId;
+  const lower = r.toLowerCase();
+  const byTitle = goals.find((g) => g.text.trim().toLowerCase() === lower);
+  if (byTitle) return byTitle;
+  const idx = findGoalIndex(goals, r);
+  return idx === -1 ? null : goals[idx];
+}
+
+/** The goal a `manage_goals` call names (add/update/complete), or null. */
+export function goalFromManageGoalsArgs(
+  args: Record<string, unknown>,
+  goals: GoalEntry[]
+): GoalEntry | null {
+  const action = String(args.action ?? '');
+  if (!['add', 'update', 'complete'].includes(action)) return null;
+  return resolveGoalRef(resolveGoalParam(args), goals);
 }
 
 /** Statuses the dashboard board can move a goal to. */
@@ -168,9 +218,11 @@ export function goalBucket(status: string | undefined): 'todo' | 'inProgress' | 
 export function setGoalStatus(
   content: string | null,
   title: string,
-  status: BoardStatus
+  status: BoardStatus,
+  now: () => Date = () => new Date()
 ): string | null {
   const { active, completed } = parseGoals(content);
+  const stamp = now().toISOString();
   const key = title.trim().toLowerCase();
   const same = (g: GoalEntry) => g.text.trim().toLowerCase() === key;
   const ai = active.findIndex(same);
@@ -182,9 +234,12 @@ export function setGoalStatus(
       const [goal] = active.splice(ai, 1);
       goal.status = 'completed';
       goal.completed = localDateStr();
+      goal.updated = stamp;
       completed.push(goal);
     } else {
       active[ai].status = status;
+      active[ai].updated = stamp;
+      if (status === 'in_progress' && !active[ai].started) active[ai].started = stamp;
     }
   } else if (status !== 'done') {
     const [goal] = completed.splice(ci, 1);
@@ -192,9 +247,22 @@ export function setGoalStatus(
     goal.priority = goal.priority || 'medium';
     goal.completed = undefined;
     goal.outcome = undefined;
+    goal.updated = stamp;
+    if (status === 'in_progress' && !goal.started) goal.started = stamp;
     active.push(goal);
   }
   return serializeGoals(active, completed);
+}
+
+/** The loader, with its GOALS.md writes attributed to `opts` (actor, cycle). */
+function writingAs(loader: SoulLoader, opts: { actor: 'agent'; cycleId?: string }): SoulLoader {
+  return new Proxy(loader, {
+    get(target, prop) {
+      if (prop === 'writeGoals') return (content: string) => target.writeGoals(content, opts);
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 /**
@@ -267,7 +335,8 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
       const scope = args.scope ? String(args.scope) : undefined;
 
       try {
-        const soulLoader = getSoulLoader(botId);
+        const cycleId = args._cycleId ? String(args._cycleId) : undefined;
+        const soulLoader = writingAs(getSoulLoader(botId), { actor: 'agent', cycleId });
 
         switch (action) {
           case 'list': {
@@ -400,6 +469,9 @@ export function parseGoals(content: string | null): {
       else if (key === 'outcome') currentGoal.outcome = value;
       else if (key === 'source') currentGoal.source = value;
       else if (key === 'created') currentGoal.created = value;
+      else if (key === 'id') currentGoal.id = value;
+      else if (key === 'started') currentGoal.started = value;
+      else if (key === 'updated') currentGoal.updated = value;
     }
   }
 
@@ -420,6 +492,9 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       if (g.notes) lines.push(`  - notes: ${g.notes}`);
       if (g.source) lines.push(`  - source: ${g.source}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
+      if (g.id) lines.push(`  - id: ${g.id}`);
+      if (g.started) lines.push(`  - started: ${g.started}`);
+      if (g.updated) lines.push(`  - updated: ${g.updated}`);
     }
   }
 
@@ -435,6 +510,13 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       lines.push(`- [x] ${g.text}`);
       if (g.completed) lines.push(`  - completed: ${g.completed}`);
       if (g.outcome) lines.push(`  - outcome: ${g.outcome}`);
+      if (g.priority && g.priority !== 'medium') lines.push(`  - priority: ${g.priority}`);
+      if (g.notes) lines.push(`  - notes: ${g.notes}`);
+      if (g.source) lines.push(`  - source: ${g.source}`);
+      if (g.created) lines.push(`  - created: ${g.created}`);
+      if (g.id) lines.push(`  - id: ${g.id}`);
+      if (g.started) lines.push(`  - started: ${g.started}`);
+      if (g.updated) lines.push(`  - updated: ${g.updated}`);
     }
   }
 

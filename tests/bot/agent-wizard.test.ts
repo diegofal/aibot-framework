@@ -22,6 +22,7 @@ import {
   validateChannelToken,
   writeWizardSoul,
 } from '../../src/bot/agent-wizard';
+import { readGoalEvents } from '../../src/bot/goal-events';
 import { TraitRegisters, createDefaultTraits } from '../../src/bot/trait-registers';
 import type { Config } from '../../src/config';
 import { parseGoals } from '../../src/tools/goals';
@@ -271,5 +272,27 @@ describe('createTelegramTokenCheck', () => {
     const r = await flaky(SHAPED);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).not.toContain(SHAPED);
+  });
+});
+
+describe('writeWizardSoul goal events', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = createTempDir('agent-wizard-events');
+  });
+  afterEach(() => removeTempDir(dir));
+
+  it('logs the initial goals as added by the wizard, with ids', () => {
+    const soulDir = join(dir, 'soul');
+    writeWizardSoul(
+      soulDir,
+      { identity: 'a', soul: 'b', motivations: 'c' },
+      initialGoalsMarkdown('Help Diego ship')
+    );
+    const evs = readGoalEvents(soulDir);
+    expect(evs.length).toBeGreaterThan(0);
+    expect(evs.every((e) => e.op === 'add' && e.actor === 'wizard' && /^g-/.test(e.goalId))).toBe(
+      true
+    );
   });
 });

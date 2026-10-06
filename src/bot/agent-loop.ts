@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { type BotConfig, resolveAgentConfig } from '../config';
 import { ClaudeCliLLMClient, type LLMClient, type TokenUsage } from '../core/llm-client';
@@ -5,6 +6,7 @@ import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import { parseGoals } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import {
   type AdaptiveParams,
@@ -12,6 +14,7 @@ import {
   computeAdaptiveMetrics,
   createDefaultAdaptiveParams,
 } from './adaptive-planning';
+import { AgentCycleLog, type CycleGoalSource, resolveCycleGoal } from './agent-cycle-log';
 import type { AgentFeedback } from './agent-feedback-store';
 import {
   buildContinuousPlannerPrompt,
@@ -69,6 +72,7 @@ import {
   beginCuriosityCycle,
   finishCuriosityCycle,
 } from './curiosity/runner';
+import type { LlmQueryEntry } from './llm-query-log';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { toolEndToAuditEntry } from './tool-audit-log';
 import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
@@ -86,6 +90,16 @@ export interface ToolCallRecord {
   args: Record<string, unknown>;
   success: boolean;
   result: string;
+}
+
+/** The id of the running cycle and the goal it serves (see `executeSingleBot`). */
+interface CycleAttribution {
+  cycleId: string;
+  goalId: string | null;
+  goalTitle: string | null;
+  goalSource: CycleGoalSource | null;
+  plannerRef?: string;
+  strategistRef?: string;
 }
 
 export interface AgentLoopResult {
@@ -280,6 +294,14 @@ export class AgentLoop {
   private curiosity: import('./curiosity/service').CuriosityService | null = null;
   /** Fleet-wide daily cap on dispatches, shared semantics with operator.proactiveDailyCap */
   private dispatchLimiter: ReturnType<typeof createFleetDispatchLimiter> | null = null;
+  /**
+   * The running cycle per bot: its id and the goal it serves (resolved as the
+   * strategist/planner answer). Executors hold the same object, so a goal
+   * resolved mid-cycle applies to later tool calls.
+   */
+  private cycleAttribution = new Map<string, CycleAttribution>();
+  /** `<paths.data>/agent-cycles` — one row per cycle. */
+  private cycleLog: AgentCycleLog;
 
   constructor(
     private ctx: BotContext,
@@ -294,6 +316,43 @@ export class AgentLoop {
     this.circuitBreaker = new BackendCircuitBreaker(
       ctx.config.agentLoop.circuitBreaker ?? DEFAULT_CIRCUIT_BREAKER_CONFIG
     );
+    this.cycleLog = new AgentCycleLog(join(ctx.config.paths.data, 'agent-cycles'), ctx.logger);
+  }
+
+  /** `{ cycleId, goalId }` of the running cycle of a bot, for event metadata. */
+  private cycleMetadata(botId: string): Record<string, unknown> | undefined {
+    const a = this.cycleAttribution.get(botId);
+    if (!a) return undefined;
+    return { cycleId: a.cycleId, ...(a.goalId ? { goalId: a.goalId } : {}) };
+  }
+
+  /** Query-log append stamped with the running cycle and goal of the bot. */
+  private appendQueryLog(entry: LlmQueryEntry): void {
+    const a = this.cycleAttribution.get(entry.botId);
+    this.ctx.llmQueryLog?.append(
+      a ? { ...entry, cycleId: a.cycleId, ...(a.goalId ? { goalId: a.goalId } : {}) } : entry
+    );
+  }
+
+  /** Re-resolve the goal of the running cycle from the refs gathered so far. */
+  private resolveRunningGoal(
+    botId: string,
+    goalsContent: string | null | undefined,
+    refs: { planner?: string; strategist?: string }
+  ): void {
+    const a = this.cycleAttribution.get(botId);
+    if (!a) return;
+    if (refs.planner !== undefined) a.plannerRef = refs.planner;
+    if (refs.strategist !== undefined) a.strategistRef = refs.strategist;
+    try {
+      const goal = resolveCycleGoal(
+        { planner: a.plannerRef, strategist: a.strategistRef },
+        parseGoals(goalsContent ?? null).active
+      );
+      if (goal.goalId) Object.assign(a, goal);
+    } catch {
+      // attribution is best-effort; never fail a cycle over it
+    }
   }
 
   /** Per-backend circuit breaker state — read by the dashboard. */
@@ -431,7 +490,7 @@ export class AgentLoop {
         botId,
         model: llm.model,
         backend: llm.backend,
-        appendQueryLog: (entry) => this.ctx.llmQueryLog?.append(entry),
+        appendQueryLog: (entry) => this.appendQueryLog(entry),
         meter: createTenantCallMeter({
           botId,
           getTenantId: () => this.ctx.config.bots.find((b) => b.id === botId)?.tenantId,
@@ -440,7 +499,11 @@ export class AgentLoop {
             this.ctx.tenantFacade?.recordUsage(tenantId, id, type, quantity, metadata),
         }),
       }),
-      applyGoalOperations: (ops) => applyGoalOperations(botId, ops, botLogger, soulLoader),
+      applyGoalOperations: (ops) =>
+        applyGoalOperations(botId, ops, botLogger, soulLoader, {
+          actor: 'curiosity',
+          cycleId: this.cycleAttribution.get(botId)?.cycleId,
+        }),
       fleetAllows: (id) => limiter.allows(id),
       onDelivered: (id) => limiter.record(id),
     };
@@ -777,7 +840,79 @@ export class AgentLoop {
     });
   }
 
+  /**
+   * One cycle with attribution: a fresh `cycleId` for everything the cycle
+   * logs, and one row in the agent-cycle log when it ends (any status).
+   */
   private async executeSingleBot(
+    botId: string,
+    botConfig: BotConfig,
+    options?: { suppressSideEffects?: boolean }
+  ): Promise<AgentLoopResult> {
+    const attribution: CycleAttribution = {
+      cycleId: randomUUID(),
+      goalId: null,
+      goalTitle: null,
+      goalSource: null,
+    };
+    this.cycleAttribution.set(botId, attribution);
+    const startedAt = new Date();
+    let result: AgentLoopResult | undefined;
+    try {
+      result = await this.executeSingleBotCycle(botId, botConfig, options);
+      return result;
+    } finally {
+      this.cycleAttribution.delete(botId);
+      this.recordCycle(botId, attribution, startedAt, result);
+    }
+  }
+
+  private recordCycle(
+    botId: string,
+    attribution: CycleAttribution,
+    startedAt: Date,
+    result: AgentLoopResult | undefined
+  ): void {
+    try {
+      const toolCalls = result?.toolCalls ?? [];
+      let goal = {
+        goalId: attribution.goalId,
+        goalTitle: attribution.goalTitle,
+        goalSource: attribution.goalSource,
+      };
+      if (!goal.goalId && toolCalls.length > 0) {
+        const goals = this.ctx.soulLoaders.get(botId)?.readGoals?.() ?? null;
+        const found = resolveCycleGoal({ toolCalls }, parseGoals(goals).active);
+        if (found.goalId) goal = found;
+      }
+      const plan = result?.plan ?? null;
+      const endedAt = new Date();
+      const status = !result
+        ? 'error'
+        : result.status === 'completed' && result.isIdle
+          ? 'idle'
+          : result.status;
+      this.cycleLog.append({
+        cycleId: attribution.cycleId,
+        botId,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+        durationMs: endedAt.getTime() - startedAt.getTime(),
+        status,
+        focus: result?.focus ?? null,
+        planSummary: plan && plan.length > 0 ? plan.join('; ').slice(0, 200) : null,
+        plan,
+        priority: result?.priority ?? null,
+        toolCalls: toolCalls.length,
+        tools: toolCalls.map((t) => t.name),
+        ...goal,
+      });
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId }, 'Agent cycle log: failed to record cycle');
+    }
+  }
+
+  private async executeSingleBotCycle(
     botId: string,
     botConfig: BotConfig,
     options?: { suppressSideEffects?: boolean }
@@ -944,7 +1079,7 @@ export class AgentLoop {
         const isRepetitive = isRepetitiveAction(schedule.recentActions, planSummary);
         if (isRepetitive) {
           const reason = `Repeated action: ${planSummary.slice(0, 80)}`;
-          this.karmaService.addEvent(botId, -2, reason, 'agent-loop');
+          this.karmaService.addEvent(botId, -2, reason, 'agent-loop', this.cycleMetadata(botId));
           this.ctx.activityStream?.publish({
             type: 'karma:change',
             botId,
@@ -956,7 +1091,12 @@ export class AgentLoop {
           // (0 by default — a completed cycle is not impact). The hook stays
           // wired so an operator can turn the credit back on.
           const reason = `Novel action: ${planSummary.slice(0, 80)}`;
-          const event = this.karmaService.recordOutcome(botId, 'novelAction', reason);
+          const event = this.karmaService.recordOutcome(
+            botId,
+            'novelAction',
+            reason,
+            this.cycleMetadata(botId)
+          );
           if (event) {
             this.ctx.activityStream?.publish({
               type: 'karma:change',
@@ -974,7 +1114,11 @@ export class AgentLoop {
         const actionType = classifyAction(planSummary);
         if (actionType === 'CONTENT' || actionType === 'OUTREACH') {
           const toolNames = detail.toolCalls.map((t) => t.name);
-          this.outcomeLedger.record(botId, planSummary, toolNames, actionType);
+          const a = this.cycleAttribution.get(botId);
+          this.outcomeLedger.record(botId, planSummary, toolNames, actionType, {
+            cycleId: a?.cycleId,
+            goalId: a?.goalId,
+          });
         }
         // Sweep stale entries at start of each cycle
         this.outcomeLedger.sweepStale(botId);
@@ -1429,7 +1573,10 @@ export class AgentLoop {
                 curiosityBlock: curiosityCycle?.curiosityBlock,
               },
               { client: plannerLLM.client, model: plannerLLM.model },
-              { skipAlignmentRetry: exploring }
+              {
+                skipAlignmentRetry: exploring,
+                cycleId: this.cycleAttribution.get(botId)?.cycleId,
+              }
             ),
           'Strategist',
           strategistTimeoutMs
@@ -1448,7 +1595,7 @@ export class AgentLoop {
             tokensOut: strategistResult?.usage?.completionTokens,
           },
         });
-        this.ctx.llmQueryLog?.append({
+        this.appendQueryLog({
           timestamp: new Date().toISOString(),
           botId,
           caller: 'strategist',
@@ -1472,7 +1619,7 @@ export class AgentLoop {
             error: err instanceof Error ? err.message : String(err),
           },
         });
-        this.ctx.llmQueryLog?.append({
+        this.appendQueryLog({
           timestamp: new Date().toISOString(),
           botId,
           caller: 'strategist',
@@ -1490,6 +1637,7 @@ export class AgentLoop {
         strategistReflection = strategistResult.reflection;
         focus = strategistResult.focus;
         goals = soulLoader.readGoals?.() || '';
+        this.resolveRunningGoal(botId, goals, { strategist: strategistResult.serves_goal });
 
         // Apply trait adjustments proposed by strategist
         if (this.traitRegisters && strategistResult.trait_adjustments) {
@@ -1747,7 +1895,7 @@ export class AgentLoop {
             tokensOut: continuousResult.usage?.completionTokens,
           },
         });
-        this.ctx.llmQueryLog?.append({
+        this.appendQueryLog({
           timestamp: new Date().toISOString(),
           botId,
           caller: 'planner',
@@ -1771,7 +1919,7 @@ export class AgentLoop {
             error: err instanceof Error ? err.message : String(err),
           },
         });
-        this.ctx.llmQueryLog?.append({
+        this.appendQueryLog({
           timestamp: new Date().toISOString(),
           botId,
           caller: 'planner',
@@ -1790,6 +1938,7 @@ export class AgentLoop {
       priority = continuousResult.priority;
       selectedToolCategories = continuousResult.toolCategories;
       plannerTokenUsage = continuousResult.usage;
+      this.resolveRunningGoal(botId, goals, { planner: continuousResult.serves_goal });
     } else {
       const plannerInput = buildPlannerPrompt({
         identity,
@@ -1857,7 +2006,7 @@ export class AgentLoop {
             tokensOut: plannerResult.usage?.completionTokens,
           },
         });
-        this.ctx.llmQueryLog?.append({
+        this.appendQueryLog({
           timestamp: new Date().toISOString(),
           botId,
           caller: 'planner',
@@ -1881,7 +2030,7 @@ export class AgentLoop {
             error: err instanceof Error ? err.message : String(err),
           },
         });
-        this.ctx.llmQueryLog?.append({
+        this.appendQueryLog({
           timestamp: new Date().toISOString(),
           botId,
           caller: 'planner',
@@ -1900,6 +2049,7 @@ export class AgentLoop {
       priority = plannerResult.priority;
       selectedToolCategories = plannerResult.toolCategories;
       plannerTokenUsage = plannerResult.usage;
+      this.resolveRunningGoal(botId, goals, { planner: plannerResult.serves_goal });
     }
 
     this.ctx.activityStream?.publish({
@@ -2058,6 +2208,7 @@ export class AgentLoop {
       karmaService: this.karmaService ?? undefined,
       loopDetector,
       tenantRoot,
+      attribution: this.cycleAttribution.get(botId),
     });
 
     // Track loop detection events during cycle
@@ -2153,7 +2304,7 @@ export class AgentLoop {
           tokensOut: executorUsage?.completionTokens,
         },
       });
-      this.ctx.llmQueryLog?.append({
+      this.appendQueryLog({
         timestamp: new Date().toISOString(),
         botId,
         caller: 'executor',
@@ -2195,7 +2346,7 @@ export class AgentLoop {
           error: err instanceof Error ? err.message : String(err),
         },
       });
-      this.ctx.llmQueryLog?.append({
+      this.appendQueryLog({
         timestamp: new Date().toISOString(),
         botId,
         caller: 'executor',
@@ -2465,6 +2616,7 @@ export class AgentLoop {
           disabledTools: allDisabled,
           enableLogging: true,
           loopDetector: feedbackLoopDetector,
+          attribution: this.cycleAttribution.get(botId),
         });
 
         if (this.ctx.toolAuditLog) {

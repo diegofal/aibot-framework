@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { type GoalActor, writeGoalsFile } from './bot/goal-events';
 import type { SoulConfig } from './config';
 import { localDateStr, localTimeStr } from './date-utils';
 import type { Logger } from './logger';
@@ -446,12 +447,16 @@ export class SoulLoader {
   /**
    * Write GOALS.md content
    */
-  writeGoals(content: string): void {
+  writeGoals(content: string, opts: { actor?: GoalActor; cycleId?: string } = {}): void {
     const goalsPath = join(this.dir, 'GOALS.md');
-    if (this.versioningEnabled) {
-      backupSoulFile(goalsPath, this.logger, this.maxVersions);
-    }
-    writeFileSync(goalsPath, content, 'utf-8');
+    writeGoalsFile(goalsPath, content, {
+      actor: opts.actor ?? 'agent',
+      cycleId: opts.cycleId,
+      backup: this.versioningEnabled
+        ? (p) => backupSoulFile(p, this.logger, this.maxVersions)
+        : undefined,
+      onError: (err) => this.logger.warn({ err }, 'Goal events: failed to append'),
+    });
     this.logger.info('Goals updated');
   }
 

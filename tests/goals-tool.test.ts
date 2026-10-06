@@ -606,3 +606,36 @@ describe('goalBucket', () => {
     expect(goalBucket('blocked')).toBe('blocked');
   });
 });
+
+describe('appendGoal / setGoalStatus keep goal ids and times', () => {
+  test('appendGoal assigns an id to the new goal and keeps existing ids', () => {
+    const md = appendGoal('## Active Goals\n- [ ] Old\n  - id: g-00000001\n', {
+      text: 'New',
+      status: 'pending',
+      priority: 'medium',
+    });
+    const { active } = parseGoals(md);
+    expect(active[0].id).toBe('g-00000001');
+    expect(active[1].id).toMatch(/^g-[0-9a-f]{8}$/);
+  });
+
+  test('setGoalStatus keeps the id, stamps updated, and started only the first time', () => {
+    const md = '## Active Goals\n- [ ] Work\n  - status: pending\n  - id: g-00000002\n';
+    const t1 = new Date('2026-10-06T10:00:00.000Z');
+    const started = parseGoals(setGoalStatus(md, 'Work', 'in_progress', () => t1) as string)
+      .active[0];
+    expect(started).toMatchObject({
+      id: 'g-00000002',
+      started: t1.toISOString(),
+      updated: t1.toISOString(),
+    });
+    const t2 = new Date('2026-10-07T10:00:00.000Z');
+    const again = serializeGoals([{ ...started, status: 'blocked' }], []);
+    const back = parseGoals(setGoalStatus(again, 'Work', 'in_progress', () => t2) as string)
+      .active[0];
+    expect(back.started).toBe(t1.toISOString());
+    expect(back.updated).toBe(t2.toISOString());
+    const done = parseGoals(setGoalStatus(again, 'Work', 'done', () => t2) as string).completed[0];
+    expect(done.id).toBe('g-00000002');
+  });
+});

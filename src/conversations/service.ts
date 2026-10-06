@@ -28,6 +28,10 @@ export interface Conversation {
   inboxStatus?: InboxStatus;
   /** Quick-reply choices for an ask_human question (2-4 short strings). */
   askOptions?: string[];
+  /** ask_human threads: the agent-loop cycle that asked (absent on old threads). */
+  cycleId?: string;
+  /** ask_human threads: the goal that cycle served, when known. */
+  goalId?: string;
 }
 
 export class ConversationsService {
@@ -121,7 +125,13 @@ export class ConversationsService {
     botId: string,
     type: ConversationType = 'general',
     title?: string,
-    meta?: { askHumanQuestionId?: string; inboxStatus?: InboxStatus; askOptions?: string[] }
+    meta?: {
+      askHumanQuestionId?: string;
+      inboxStatus?: InboxStatus;
+      askOptions?: string[];
+      cycleId?: string;
+      goalId?: string;
+    }
   ): Conversation {
     this.ensureBotDir(botId);
     const now = new Date().toISOString();
@@ -142,6 +152,8 @@ export class ConversationsService {
       ...(meta?.askHumanQuestionId ? { askHumanQuestionId: meta.askHumanQuestionId } : {}),
       ...(meta?.inboxStatus ? { inboxStatus: meta.inboxStatus } : {}),
       ...(meta?.askOptions && meta.askOptions.length > 0 ? { askOptions: meta.askOptions } : {}),
+      ...(meta?.cycleId ? { cycleId: meta.cycleId } : {}),
+      ...(meta?.goalId ? { goalId: meta.goalId } : {}),
     };
     appendFileSync(this.conversationsPath(botId), `${JSON.stringify(convo)}\n`, 'utf-8');
     return convo;

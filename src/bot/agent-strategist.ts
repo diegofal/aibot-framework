@@ -30,6 +30,8 @@ export interface StrategistResult {
   next_strategy_in?: string;
   /** Trait adjustments proposed by strategist (max ±0.05 per trait) */
   trait_adjustments?: Record<string, number>;
+  /** Title or id of the active goal the deliverable serves (record only). */
+  serves_goal?: string;
 }
 
 /**
@@ -65,6 +67,9 @@ export function parseStrategistResult(
         reflection: String(parsed.reflection),
         next_strategy_in: parsed.next_strategy_in ? String(parsed.next_strategy_in) : undefined,
         trait_adjustments: traitAdj,
+        ...(typeof parsed.serves_goal === 'string' && parsed.serves_goal.trim()
+          ? { serves_goal: parsed.serves_goal.trim() }
+          : {}),
       };
     },
     label: 'strategist',
@@ -216,7 +221,7 @@ export async function runStrategist(
    */
   llm?: { client: LLMClient; model: string },
   /** Exploration cycles: keep the first answer even when alignment is low. */
-  options: { skipAlignmentRetry?: boolean } = {}
+  options: { skipAlignmentRetry?: boolean; cycleId?: string } = {}
 ): Promise<StrategistResultWithUsage | null> {
   const llmClient = llm?.client ?? ctx.getLLMClient(botId);
   const model = llm?.model ?? ctx.getActiveModel(botId);
@@ -254,7 +259,9 @@ export async function runStrategist(
   }
 
   if (result.goal_operations?.length > 0) {
-    applyGoalOperations(botId, result.goal_operations, botLogger, soulContext.soulLoader);
+    applyGoalOperations(botId, result.goal_operations, botLogger, soulContext.soulLoader, {
+      cycleId: options.cycleId,
+    });
   }
 
   const deliverable = result.single_deliverable || result.focus;
@@ -276,7 +283,8 @@ export function applyGoalOperations(
   botId: string,
   operations: GoalOperation[],
   logger: Logger,
-  soulLoader: ReturnType<BotContext['getSoulLoader']>
+  soulLoader: ReturnType<BotContext['getSoulLoader']>,
+  writeOpts: { actor?: 'strategist' | 'curiosity'; cycleId?: string } = {}
 ): void {
   logger.info(
     { botId, operationCount: operations.length, types: operations.map((o) => o.action) },
@@ -346,6 +354,9 @@ export function applyGoalOperations(
     }
   }
 
-  soulLoader.writeGoals(serializeGoals(active, completed));
+  soulLoader.writeGoals(serializeGoals(active, completed), {
+    actor: writeOpts.actor ?? 'strategist',
+    cycleId: writeOpts.cycleId,
+  });
   logger.debug({ botId, goalCount: active.length + completed.length }, 'Goals written back');
 }

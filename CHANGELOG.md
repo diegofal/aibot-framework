@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added (2026-10-06) — Exact per-goal attribution: goal ids, a goal-event log, cycle ids and a cycle log
+- **Why.** Nothing recorded which goal a cycle, LLM call, tool call or output served: goals had no id, cycles had no id, the planner never named a goal, and completing a goal dropped its source, notes and dates. A per-goal detail view could only guess by time windows and keywords.
+- **Goal ids and times.** `GoalEntry` gains `id` (`g-` + 8 hex), `started` (first time in_progress) and `updated`; completed goals keep `id`, `source`, `created`, `started`, `priority` and `notes`. `parseGoals` stays pure; `ensureGoalIds` assigns. `appendGoal` / `setGoalStatus` keep ids and stamp the times.
+- **Goal-event log.** `writeGoalsFile` (`src/bot/goal-events.ts`) is the single GOALS.md writer: it carries ids over, assigns missing ones, stamps times, backs up, writes and appends one row per change to `<soulDir>/goal-events.jsonl` with the actor (`agent`, `strategist`, `curiosity`, `reflection`, `lint`, `wizard`, `operator`) and the cycle. SoulLoader, `manage_goals`, strategist and curiosity goal operations, reflection (which used to write without a backup), goal-lint and the wizard/presets go through it.
+- **Cycle ids.** Each agent-loop cycle gets a `cycleId`; LLM query log, tool audit, productions changelog, outcome ledger, ask_human questions (pending + inbox thread) and karma events produced in the cycle carry `cycleId` and, once known, `goalId`.
+- **Goal per cycle (record only).** The planner and strategist may answer `serves_goal`; it resolves to an id (exact id → exact title → fuzzy), with a `manage_goals` call in the cycle as fallback. A missing goal never retries or rejects a plan.
+- **Cycle log.** One row per cycle (any status) in `<paths.data>/agent-cycles/<botId>/YYYY-MM-DD.jsonl`.
+- **Test fix.** `agent-loop-circuit.integration.test.ts` "a successful planner call closes the circuit" used a 1 ms cooldown, so `open` raced the clock (it had flaked on main); now 200 ms / 250 ms wait, same assertions.
+- Tests: `tests/bot/goal-events.test.ts`, `tests/bot/goal-writers.test.ts`, `tests/bot/serves-goal.test.ts`, `tests/bot/tool-executor-attribution.test.ts`, `tests/agent-loop-cycle-attribution.test.ts`, plus cases in goals-tool, goal-lint, agent-wizard, outcome-ledger and ask-human-protocol tests.
+
 ### Changed (2026-10-06) — Goals board: To do / In progress / Blocked / Done, movable cards, usable add form
 - **Why.** The Agent Home goals card grouped goals as active / blocked / done inside a third of the page, so the columns stacked into one long list, and the add form's priority select (full-width `.input`) squeezed the title box to a sliver. The operator asked for a To do / In progress / Done board they can add to.
 - **Board.** Full-width row with four columns (`goalsColumns` in `web/pages/agent-home-helpers.js`): To do (`pending`), In progress (`in_progress`, also `active`/`doing`), Blocked, Done (recently completed). Compact cards (title clamped to 4 lines, notes to 2), "you" badge, priority chip, and a per-card move menu. The add form sits at the top of To do with its own classes. Add and move are wired by delegation on `#home-goals`; the periodic refresh skips the board while the add box has focus or text.

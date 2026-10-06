@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { readGoalEvents } from '../../src/bot/goal-events';
 import { goalLint } from '../../src/hygiene/routines/goal-lint';
 import { parseGoals } from '../../src/tools/goals';
 import { createTempDir, removeTempDir } from '../helpers/temp-dir';
@@ -229,5 +230,20 @@ describe('apply safety', () => {
     expect(result.applied).toHaveLength(0);
     expect(result.skipped[0].reason).toMatch(/changed/);
     expect(readdirSync(soulDir)).not.toContain('.versions');
+  });
+});
+
+describe('goal-lint writes through the goal-event log', () => {
+  test('a goal it moves to Completed is logged as complete by lint', () => {
+    goals(`## Active Goals
+- [ ] Old thing
+  - status: archived
+  - priority: low
+`);
+    const ctx = makeCtx(root, { soulDir });
+    goalLint.apply(ctx, goalLint.preview(ctx));
+    expect(readGoalEvents(soulDir).map((e) => [e.title, e.op, e.actor])).toEqual([
+      ['Old thing', 'complete', 'lint'],
+    ]);
   });
 });

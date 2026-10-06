@@ -98,6 +98,8 @@ export interface PlannerResult {
   priority: 'high' | 'medium' | 'low' | 'none';
   /** Tool categories the executor needs — used for tool pre-selection to reduce token usage */
   toolCategories?: string[];
+  /** Title or id of the active goal the plan serves (record only). */
+  serves_goal?: string;
 }
 /** @deprecated Use PlannerResult instead */
 export type ContinuousPlannerResult = PlannerResult;
@@ -411,6 +413,7 @@ JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
 - plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none")
 - priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
+- serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)
 
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.
 Each step should produce a concrete result: a file written, a goal updated, a memory saved, a test run.
@@ -557,6 +560,7 @@ JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
 - plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none")
 - priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
+- serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)
 
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.
 Each step should produce a concrete result: a file written, a goal updated, a memory saved, a test run.`;
@@ -899,6 +903,7 @@ JSON Schema:
   - notes: string (optional context)
   - outcome: string (for complete: what was achieved) — optional
 - single_deliverable: string (ONE specific, bounded, achievable task — 5-15 minutes max)
+- serves_goal: string, the exact title (or id) of the active goal the deliverable serves (optional)
 - alignment_confidence: number (0.0-1.0, how well the deliverable serves the agent's identity/soul — below 0.6 triggers re-derivation)
 - focus: string (deprecated, use single_deliverable)
 - reflection: string (brief analysis of the agent's current state and trajectory)

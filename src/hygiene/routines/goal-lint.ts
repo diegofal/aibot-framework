@@ -7,6 +7,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeGoalsFile } from '../../bot/goal-events';
 import { type GoalEntry, parseGoals, serializeGoals } from '../../tools/goals';
 import { assertWithinRoots, backupFile } from '../fs-safe';
 import {
@@ -226,7 +227,11 @@ export const goalLint: HygieneRoutine = {
 
     const backup = backupFile(path, ctx.logger, ctx.now);
     if (backup) result.backups.push(backup);
-    writeFileSync(path, serializeGoals(nextActive, nextCompleted), 'utf-8');
+    // Backed up above; the goal-event log records what lint changed.
+    writeGoalsFile(path, serializeGoals(nextActive, nextCompleted), {
+      actor: 'lint',
+      onError: (err) => ctx.logger.warn({ err }, 'goal-lint: goal events append failed'),
+    });
 
     if (memoryAppends.length > 0) {
       const memoryDir = join(ctx.soulDir, 'memory');

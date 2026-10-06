@@ -16,6 +16,10 @@ export interface ToolAuditEntry {
   retryAttempts: number;
   /** Why the call failed, when the tool said so. Absent on old entries and on plain failures. */
   failureKind?: ToolFailureKind;
+  /** Agent-loop cycle the call ran in. Absent on old entries and outside a cycle. */
+  cycleId?: string;
+  /** Goal the cycle served, when known. */
+  goalId?: string;
 }
 
 /** Max characters of a tool result kept in the audit log. */
@@ -34,6 +38,8 @@ export function toolEndToAuditEntry(event: ToolEndEvent): ToolAuditEntry {
     durationMs: event.durationMs,
     retryAttempts: event.retryAttempts,
     ...(event.failureKind ? { failureKind: event.failureKind } : {}),
+    ...(event.cycleId ? { cycleId: event.cycleId } : {}),
+    ...(event.goalId ? { goalId: event.goalId } : {}),
   };
 }
 

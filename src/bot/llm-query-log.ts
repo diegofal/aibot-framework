@@ -31,6 +31,10 @@ export interface LlmQueryEntry {
   attempts?: number;
   success: boolean;
   error?: string;
+  /** Agent-loop cycle the call belongs to (absent outside a cycle and on old entries). */
+  cycleId?: string;
+  /** Goal that cycle served, when known at call time. */
+  goalId?: string;
 }
 
 /**
