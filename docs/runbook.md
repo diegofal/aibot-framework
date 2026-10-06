@@ -342,3 +342,20 @@ docker compose up -d --build
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T16-21-52`. Container recreated, `healthy`; image has `startCycleGoal`; served `style.css` has `drag-over` and `agent-home.js` has the `dragstart` handler. Boot errors: only the existing Telegram `getMe` 401. Drag and the auto-start not yet seen live.
 
 **Reversible?** Yes: check out `c578c73` and rebuild.
+
+### 2026-10-06 — Rebuilt for editing goals from the drawer
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Deploy `e9aed64`: click-to-edit goal title/notes in the drawer, `PATCH /api/agents/:id/goals` edits, `title` goal events |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T17-05-23`. Container recreated, `healthy`; image has `parseGoalEdits`; served `goal-detail-helpers.js` has `goalEditor`. No boot errors besides the existing Telegram `getMe` 401. Editing not yet exercised in the logged-in dashboard.
+
+**Reversible?** Yes: check out `aee5ce1` and rebuild.
