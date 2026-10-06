@@ -308,3 +308,20 @@ docker exec -w /app aibot-framework-aibot-1 bun /tmp/repair-changelogs.ts --appl
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T13-56-43`. Container recreated, `healthy`; the image has `isUntrackedProductionPath`, `src/hygiene/auto-archive.ts` and the "Set by your operator" prompt section. Boot errors: only the existing Telegram `getMe` 401. Live unreviewed (via `readProductionOutput` in the container) = 4 never reviewed + 2 edited since review, matching Needs You's 6 (was 33). Repair merged `archived/changelog.jsonl` back into the active changelog, dropping rows whose path is the changelog itself and the archive row of it: myfirstmillion 5 + 42 → 13 rows, econ-student 7 + 2 → 6, selfimprove 1 + 3 → 0 (its whole archived history was self-writes). Dry run showed no change to unreviewed/approved counts. Old files kept as `archived/changelog.jsonl.pre-repair-2026-10-06.bak`.
 
 **Reversible?** Yes: restore the backup (`restore … --force`) or rename the `.bak` files back; check out `d05d1f9` and rebuild for the code.
+
+### 2026-10-06 — Rebuilt for the goals board, exact goal attribution and the goal sidebar
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Deploy `e086c00` (goals board, `PATCH /api/agents/:id/goals`), `83547f1` (goal ids, `goal-events.jsonl`, cycle ids, `serves_goal`, `agent-cycles/`), `97f4fde` (goal detail sidebar, `GET /api/agents/:id/goals/detail`) |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T16-11-02`. Container recreated, `healthy`; the image has `src/bot/goal-events.ts`, `src/bot/agent-cycle-log.ts`, `src/stats/goal-detail-aggregator.ts`. `GET /goals/detail` and `PATCH /goals` answer 401 without a session (behind auth). Boot errors: only the existing Telegram `getMe` 401. `buildGoalDetail` run in the container on ai-perfectionist's "Monthly hands-on lab": in_progress, 1 inferred cycle (manage_goals named the goal), 6 LLM calls, 8 tool calls, 10.6k tokens, 2 files. Exact cycles start with the next agent-loop cycle.
+
+**Reversible?** Yes: check out `263cb76` and rebuild. New files (`goal-events.jsonl`, `agent-cycles/`) are additive; GOALS.md gains `id`/`started`/`updated` lines that the old parser ignores.
