@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (2026-10-06) — Claude CLI bots see images again
+- **Why.** A photo sent to a `claude-cli` bot reached the LLM client and was replaced by the note "Claude CLI does not support inline vision; images are available via Ollama vision models"; the bot answered that it could not see it. Images only ever reached a vision model through the silent Claude→Ollama fallback, which is opt-in since the Ollama-quota fix.
+- **Fix.** `ClaudeCliLLMClient.chat()` collects the images on the conversation (the most recent 8, `MAX_CLI_IMAGES`) and `claudeGenerate` / `claudeGenerateWithTools` send them as image blocks: with images the prompt goes on stdin as one stream-json user message (`--input-format stream-json --output-format stream-json --verbose`, `buildClaudePromptInput`), media type from the magic bytes (`sniffImageMediaType`), and the `result` event is parsed like the json output (`extractStreamJsonResult`, errors included). Text-only prompts are unchanged (`-p <prompt>`). The non-tool path now labels tool messages `Tool Result:` like the tool path.
+- Tests: `tests/claude-cli-images.test.ts`. Checked against the container's CLI (2.1.289): a generated blue PNG through `claudeGenerate` came back "Blue."
+
 ### Fixed (2026-10-06) — Agent Home leaves no empty holes
 - **Why.** Agent Home sat in the 1480px centred column, and its two-up rows were top-aligned: the short card of each pair (chat next to Timeline, Direction next to Knowledge, Dispatches next to the unbounded Frontier) left a hole as tall as the difference.
 - **Layout.** Agent Home uses the full width (`.page-wide` marker; `#content:has(.page-wide)`). Chat and Timeline stretch to one height and the chat thread fills its card (`.home-grid-stretch`). The Mind section is two independent columns (`.home-columns` / `.home-col`: Direction over Frontier, Knowledge over Dispatches, `mindSection` in `web/pages/curiosity-helpers.js`). Frontier and Knowledge scroll inside a `min(720px, 75vh)` box (`.home-scroll`).

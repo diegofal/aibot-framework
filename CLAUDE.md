@@ -130,6 +130,8 @@ Integración en `agent-loop.ts`: `beginCuriosityCycle` corre antes del strategis
 
 Con `failover.enabled`, `orderCandidatesByBackend(candidates, backend)` pone primero el backend propio del bot y `resolveOllamaModels(ollamaClient, opts)` toma los modelos configurados del cliente (antes el primario era `ollamaClient.toString()`, o sea `[object Object]`). `LLMClient.getBackendClient(backend)` es parte de la interfaz y lo implementan los dos clientes concretos y los dos wrappers. `TokenUsage.backend` existe como campo opcional pero **hoy ningún productor lo setea** (`ollamaUsage()` / `parseClaudeUsage()` no lo escriben), así que el query log cae al `?? llmBackend`.
 
+Imágenes con `claude-cli`: `ClaudeCliLLMClient` las manda como bloques de imagen (últimas 8); con imágenes el prompt va por stdin en `--input-format stream-json` y se lee el evento `result` (`buildClaudePromptInput` / `extractStreamJsonResult` en `src/claude-cli.ts`). Antes se reemplazaban por una nota de "sin visión".
+
 Los errores del Claude CLI llegan como `ClaudeCliError` (`src/claude-cli.ts`) con `exitCode`, `apiErrorStatus`, `isError`, `terminalReason`, `resultText` y `resetsAt`; `parseResetsAt()` convierte el hint `resets 12:20pm (zona)` en un instante absoluto.
 
 ### Módulos System (`src/system/`)

@@ -50,6 +50,76 @@ export interface ClaudeGenerateOptions {
   timeout?: number;
   maxLength?: number;
   systemPrompt?: string;
+  /**
+   * Base64 images sent to the model as image blocks. When present the prompt
+   * goes on stdin as stream-json instead of as the `-p` argument.
+   */
+  images?: string[];
+}
+
+/** Media type from the image's magic bytes; Telegram photos are JPEG, so that is the fallback. */
+export function sniffImageMediaType(base64: string): string {
+  const head = Buffer.from(base64.slice(0, 24), 'base64');
+  if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) {
+    return 'image/png';
+  }
+  if (head.subarray(0, 3).toString('latin1') === 'GIF') return 'image/gif';
+  if (
+    head.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    head.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return 'image/jpeg';
+}
+
+/** One stream-json user message: the image blocks, then the prompt text. */
+export function buildStreamJsonUserMessage(prompt: string, images: string[]): string {
+  const content = [
+    ...images.map((data) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: sniffImageMediaType(data), data },
+    })),
+    { type: 'text', text: prompt },
+  ];
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`;
+}
+
+/**
+ * The CLI args that carry the prompt, plus stdin when it goes there. Text-only
+ * prompts stay on `-p <prompt>` with json output; a prompt with images goes on
+ * stdin as stream-json (the only way the CLI takes image blocks), which needs
+ * stream-json output and `--verbose`.
+ */
+export function buildClaudePromptInput(
+  prompt: string,
+  images?: string[]
+): { args: string[]; stdin?: string } {
+  if (!images || images.length === 0) {
+    return { args: ['-p', prompt, '--output-format', 'json'] };
+  }
+  return {
+    args: ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'],
+    stdin: buildStreamJsonUserMessage(prompt, images),
+  };
+}
+
+/**
+ * The `type: "result"` event out of stream-json stdout. It has the same shape
+ * as `--output-format json`, so the usual parsing applies to it. Stdout comes
+ * back unchanged when there is no such event.
+ */
+export function extractStreamJsonResult(stdout: string): string {
+  const lines = stdout.trim().split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{')) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && parsed.type === 'result') return line;
+    } catch {}
+  }
+  return stdout;
 }
 
 /** Structured fields lifted out of the CLI's `--output-format json` result object. */
@@ -348,14 +418,8 @@ export async function claudeGenerate(
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const args = [
-    resolveClaudeBin(claudePath),
-    '-p',
-    prompt,
-    '--output-format',
-    'json',
-    SKIP_PERMISSIONS_FLAG,
-  ];
+  const input = buildClaudePromptInput(prompt, opts.images);
+  const args = [resolveClaudeBin(claudePath), ...input.args, SKIP_PERMISSIONS_FLAG];
   if (opts.model) {
     args.push('--model', opts.model);
   }
@@ -368,6 +432,7 @@ export async function claudeGenerate(
     stdout: 'pipe',
     stderr: 'pipe',
     env,
+    ...(input.stdin !== undefined && { stdin: new TextEncoder().encode(input.stdin) }),
   });
 
   let killedByTimer = false;
@@ -381,10 +446,11 @@ export async function claudeGenerate(
   const startTime = Date.now();
 
   try {
-    const [stdout, stderr] = await Promise.all([
+    const [rawStdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
+    const stdout = input.stdin === undefined ? rawStdout : extractStreamJsonResult(rawStdout);
     const exitCode = await proc.exited;
     clearTimeout(timer);
 
@@ -560,12 +626,10 @@ export async function claudeGenerateWithTools(
     // Claude CLI names MCP tools as "mcp__<server>__<tool>".
     const allowedTools = mcpDefs.map((t) => `mcp__aibot-tools__${t.name}`);
 
+    const input = buildClaudePromptInput(prompt, opts.images);
     const args = [
       claudePath,
-      '-p',
-      prompt,
-      '--output-format',
-      'json',
+      ...input.args,
       '--mcp-config',
       mcpConfigPath,
       '--no-session-persistence',
@@ -592,6 +656,7 @@ export async function claudeGenerateWithTools(
       stdout: 'pipe',
       stderr: 'pipe',
       env,
+      ...(input.stdin !== undefined && { stdin: new TextEncoder().encode(input.stdin) }),
     });
 
     let killedByTimer = false;
@@ -604,10 +669,11 @@ export async function claudeGenerateWithTools(
 
     const startTime = Date.now();
 
-    const [stdout, stderr] = await Promise.all([
+    const [rawStdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
+    const stdout = input.stdin === undefined ? rawStdout : extractStreamJsonResult(rawStdout);
     const exitCode = await proc.exited;
     clearTimeout(timer);
 

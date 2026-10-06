@@ -359,3 +359,24 @@ docker compose up -d --build
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-06T17-05-23`. Container recreated, `healthy`; image has `parseGoalEdits`; served `goal-detail-helpers.js` has `goalEditor`. No boot errors besides the existing Telegram `getMe` 401. Editing not yet exercised in the logged-in dashboard.
 
 **Reversible?** Yes: check out `aee5ce1` and rebuild.
+
+### 2026-10-06 — Probed Claude CLI vision inside the container (read-only)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Check that the container's Claude CLI accepts image blocks via `--input-format stream-json` before wiring images through `ClaudeCliLLMClient` |
+
+```bash
+docker cp D:/tmp/vision-probe.ts aibot-framework-aibot-1:/tmp/vision-probe.ts
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 sh -c 'cd /tmp && bun /tmp/vision-probe.ts'
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 mkdir -p /tmp/vprobe
+docker cp D:/tmp/vision-probe2.ts aibot-framework-aibot-1:/tmp/vprobe/probe.ts
+docker cp src/claude-cli.ts aibot-framework-aibot-1:/tmp/vprobe/claude-cli.ts
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 sh -c 'cd /tmp/vprobe && bun probe.ts'
+```
+
+**Outcome.** CLI 2.1.289 read a generated red PNG sent raw as stream-json ("Red"). The patched `claudeGenerate` read a blue PNG ("Blue.") and parsed usage. Two haiku calls, files left only in the container's `/tmp` (gone on next recreate). No bot state, volume or config touched.
+
+**Reversible?** Nothing to reverse.

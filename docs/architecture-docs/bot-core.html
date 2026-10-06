@@ -217,9 +217,11 @@
           The WebSocket adapter (<code>src/channel/websocket.ts</code>) accepts an optional
           <code>images</code> parameter in <code>wsToInbound()</code> with a server-side guard
           of max 4 images / 10 MB total. For the Claude CLI backend,
-          <code>ClaudeCliLLMClient.chat()</code> includes graceful degradation: when images are
-          present it appends a marker text noting the count, since Claude CLI does not support
-          inline vision.
+          <code>ClaudeCliLLMClient.chat()</code> passes the images to the model as image blocks
+          (the most recent 8): with images the prompt goes on stdin as
+          <code>--input-format stream-json</code> (<code>buildClaudePromptInput</code> in
+          <code>src/claude-cli.ts</code>) and the <code>result</code> event is read back
+          (<code>extractStreamJsonResult</code>); text-only prompts keep <code>-p &lt;prompt&gt;</code>.
         </p>
         <p>
           File attachments are supported via an optional <code>documents?: DocumentRef[]</code>

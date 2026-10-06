@@ -14,6 +14,9 @@ import { claudeGenerate, claudeGenerateWithTools } from '../claude-cli';
 import type { Logger } from '../logger';
 import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
 
+/** Cap on images per Claude CLI call: each one is base64 on stdin and costs input tokens. */
+const MAX_CLI_IMAGES = 8;
+
 export interface TokenUsage {
   model: string;
   promptTokens: number;
@@ -110,50 +113,70 @@ export class ClaudeCliLLMClient implements LLMClient {
   }
 
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
+    return this.generateWithImages(prompt, opts?.system, []);
+  }
+
+  private async generateWithImages(
+    prompt: string,
+    system: string | undefined,
+    images: string[]
+  ): Promise<LLMResponse> {
     const result = await claudeGenerate(prompt, {
       claudePath: this.claudePath,
       model: this.model,
       timeout: this.timeout,
       logger: this.logger,
-      systemPrompt: opts?.system,
+      systemPrompt: system,
+      images,
     });
     return { text: result.response, usage: result.usage };
   }
 
-  /** Format a message's content including image markers for Claude CLI (no native vision). */
-  private formatMessageContent(msg: ChatMessage): string {
-    let text = msg.content;
-    if (msg.images && msg.images.length > 0) {
-      text += `\n[${msg.images.length} image(s) attached — Claude CLI does not support inline vision; images are available via Ollama vision models]`;
+  /**
+   * Flatten the conversation into one prompt for the CLI. Images ride along as
+   * image blocks (the most recent `MAX_CLI_IMAGES`); the text only notes where
+   * they were attached.
+   */
+  private buildPrompt(messages: ChatMessage[]): {
+    prompt: string;
+    system?: string;
+    images: string[];
+  } {
+    const parts: string[] = [];
+    const images: string[] = [];
+    let system: string | undefined;
+
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        system = msg.content;
+      } else if (msg.role === 'tool') {
+        parts.push(`Tool Result: ${msg.content}`);
+      } else {
+        const label = msg.role === 'user' ? 'User' : 'Assistant';
+        let text = msg.content;
+        if (msg.images && msg.images.length > 0) {
+          images.push(...msg.images);
+          text += `\n[${msg.images.length} image(s) attached]`;
+        }
+        parts.push(`${label}: ${text}`);
+      }
     }
-    return text;
+
+    return { prompt: parts.join('\n\n'), system, images: images.slice(-MAX_CLI_IMAGES) };
   }
 
   async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<LLMResponse> {
     const hasTools = opts?.tools && opts.tools.length > 0 && opts.toolExecutor;
+    const { prompt, system, images } = this.buildPrompt(messages);
 
     if (hasTools) {
-      // Build a single prompt from the conversation for Claude CLI
-      const parts: string[] = [];
-      let system: string | undefined;
-
-      for (const msg of messages) {
-        if (msg.role === 'system') {
-          system = msg.content;
-        } else if (msg.role === 'tool') {
-          parts.push(`Tool Result: ${msg.content}`);
-        } else {
-          const label = msg.role === 'user' ? 'User' : 'Assistant';
-          parts.push(`${label}: ${this.formatMessageContent(msg)}`);
-        }
-      }
-
-      const result = await claudeGenerateWithTools(parts.join('\n\n'), {
+      const result = await claudeGenerateWithTools(prompt, {
         claudePath: this.claudePath,
         model: this.model,
         timeout: this.timeout,
         logger: this.logger,
         systemPrompt: system,
+        images,
         tools: opts.tools ?? [],
         toolExecutor:
           opts.toolExecutor ??
@@ -165,20 +188,7 @@ export class ClaudeCliLLMClient implements LLMClient {
     }
 
     // Simple path: no tools, single generate call
-    const parts: string[] = [];
-    let system: string | undefined;
-
-    for (const msg of messages) {
-      if (msg.role === 'system') {
-        system = msg.content;
-      } else {
-        const label =
-          msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Assistant' : 'Tool';
-        parts.push(`${label}: ${this.formatMessageContent(msg)}`);
-      }
-    }
-
-    return this.generate(parts.join('\n\n'), { system });
+    return this.generateWithImages(prompt, system, images);
   }
 }
 
