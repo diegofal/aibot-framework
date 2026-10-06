@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (2026-10-06) — Agent Home leaves no empty holes
+- **Why.** Agent Home sat in the 1480px centred column, and its two-up rows were top-aligned: the short card of each pair (chat next to Timeline, Direction next to Knowledge, Dispatches next to the unbounded Frontier) left a hole as tall as the difference.
+- **Layout.** Agent Home uses the full width (`.page-wide` marker; `#content:has(.page-wide)`). Chat and Timeline stretch to one height and the chat thread fills its card (`.home-grid-stretch`). The Mind section is two independent columns (`.home-columns` / `.home-col`: Direction over Frontier, Knowledge over Dispatches, `mindSection` in `web/pages/curiosity-helpers.js`). Frontier and Knowledge scroll inside a `min(720px, 75vh)` box (`.home-scroll`).
+- Tests: `mindSection` column order (`tests/web/curiosity-helpers.test.ts`).
+
 ### Added (2026-10-06) — Edit a goal's title and notes from its drawer
 - **Drawer.** The goal title and notes are click-to-edit (`data-edit`; `goalEditor`, `goalEditPayload` in `web/pages/goal-detail-helpers.js`): Enter saves the title, Ctrl+Enter the notes, Esc cancels without closing the drawer. A goal without notes shows "Add notes…". Saving reloads the drawer and redraws the board.
 - **API.** `PATCH /api/agents/:id/goals` takes `{ goal | id, title?, notes?, priority? }` besides `{ goal | id, status }` (`parseGoalEdits` validates like the add form; `editGoal` in `src/tools/goals.ts`). A goal without an id gets one first (written without events), so a rename is one event.

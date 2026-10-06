@@ -3459,6 +3459,62 @@ body.ui-sheet-open {
   }
 }
 
+/* Pages that want the whole width (Agent Home) drop the 1480px centred column. */
+#content:has(.page-wide) {
+  padding-inline: 32px;
+}
+/* Chat and Timeline share a row: same height, the chat thread fills its card. */
+.home-grid-stretch {
+  align-items: stretch;
+}
+.home-grid-stretch > .ui-card {
+  display: flex;
+  flex-direction: column;
+}
+.home-grid-stretch > .ui-card > .ui-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.home-grid-stretch .home-chat,
+.home-grid-stretch #home-chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.home-grid-stretch .home-chat .thread-messages {
+  flex: 1;
+  max-height: none;
+}
+/* Mind: two independent columns, so a tall card never leaves a hole beside a short one. */
+.home-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.home-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.home-col > .ui-card {
+  margin-bottom: 0;
+}
+.home-scroll {
+  max-height: min(720px, 75vh);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+@media (max-width: 900px) {
+  .home-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Needs-you strip */
 .home-needs {
   display: flex;

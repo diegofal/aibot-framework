@@ -459,30 +459,32 @@ export function mindSection(snapshot, { nowMs = Date.now() } = {}) {
   const dispatches = filterDispatches(snapshot?.dispatches).slice(0, 5);
   return `<div class="curio-mind">
     <div class="curio-mind-head"><div class="ui-card-title">Mind</div>${dnaLine(snapshot)}</div>
-    <div class="home-grid">
-      ${card({
-        title: 'Direction',
-        subtitle: 'Where it is going and why',
-        body: directionPanel(snapshot?.navigator?.direction ?? null, botId, nowMs),
-      })}
-      ${card({
-        title: 'Knowledge',
-        subtitle: 'What it has learned',
-        body: knowledgePanel(snapshot?.map, nowMs),
-      })}
-    </div>
-    <div class="home-grid" style="margin-top:16px">
-      ${card({
-        title: 'Frontier',
-        subtitle: 'What it does not know yet, by expected surprise',
-        body: frontierPanel(snapshot?.frontier, botId),
-      })}
-      ${card({
-        title: 'Dispatches',
-        subtitle: 'What it brought back to you',
-        body: dispatchList(dispatches, { nowMs }),
-        actions: '<a class="btn btn-sm" href="#/work/dispatches">All dispatches</a>',
-      })}
+    <div class="home-columns">
+      <div class="home-col">
+        ${card({
+          title: 'Direction',
+          subtitle: 'Where it is going and why',
+          body: directionPanel(snapshot?.navigator?.direction ?? null, botId, nowMs),
+        })}
+        ${card({
+          title: 'Frontier',
+          subtitle: 'What it does not know yet, by expected surprise',
+          body: `<div class="home-scroll">${frontierPanel(snapshot?.frontier, botId)}</div>`,
+        })}
+      </div>
+      <div class="home-col">
+        ${card({
+          title: 'Knowledge',
+          subtitle: 'What it has learned',
+          body: `<div class="home-scroll">${knowledgePanel(snapshot?.map, nowMs)}</div>`,
+        })}
+        ${card({
+          title: 'Dispatches',
+          subtitle: 'What it brought back to you',
+          body: dispatchList(dispatches, { nowMs }),
+          actions: '<a class="btn btn-sm" href="#/work/dispatches">All dispatches</a>',
+        })}
+      </div>
     </div>
   </div>`;
 }

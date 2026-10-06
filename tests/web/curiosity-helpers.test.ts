@@ -366,6 +366,15 @@ describe('mindSection', () => {
     for (const t of ['Direction', 'Knowledge', 'Frontier', 'Dispatches']) expect(html).toContain(t);
     expect(html).toContain('curio-dna');
   });
+
+  it('stacks the panels in two independent columns so a tall card leaves no hole beside it', () => {
+    const html = mindSection(snapshot(), { nowMs: NOW });
+    const cols = html.split('class="home-col"').slice(1);
+    expect(cols).toHaveLength(2);
+    expect(cols[0].indexOf('Direction')).toBeLessThan(cols[0].indexOf('Frontier'));
+    expect(cols[1].indexOf('Knowledge')).toBeLessThan(cols[1].indexOf('Dispatches'));
+    expect(cols[0]).not.toContain('Knowledge');
+  });
 });
 
 describe('config form', () => {

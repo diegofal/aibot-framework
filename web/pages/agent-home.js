@@ -561,7 +561,7 @@ export async function renderAgentHome(el, id) {
   }
   const identity = home.identity;
 
-  el.innerHTML = `
+  el.innerHTML = `<div class="page-wide"></div>
     ${presenceHeader(home, {
       actions: actionsFor(identity, id),
       avatarSrc: authedAvatarSrc,
@@ -570,7 +570,7 @@ export async function renderAgentHome(el, id) {
     })}
     ${homeTabs(id, 'home')}
     <div id="home-needs">${needsYouStrip(home.needsYou, id)}</div>
-    <div class="home-grid">
+    <div class="home-grid home-grid-stretch">
       ${card({
         title: `Talk to ${identity.name}`,
         subtitle: 'A direct conversation; the full thread lives under Conversations',
