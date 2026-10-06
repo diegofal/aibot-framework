@@ -281,3 +281,18 @@ describe('goals board polish', () => {
     expect(html).toContain('data-status="blocked" data-empty');
   });
 });
+
+describe('goal cards open the detail drawer', () => {
+  it('carry the goal title and id, and are keyboard-focusable', () => {
+    const html = goalsColumns({
+      todo: [{ text: 'Ship "it"', id: 'g-1' }, { text: 'No id yet' }],
+      inProgress: [],
+      blocked: [],
+      completedRecently: [],
+    });
+    expect(html).toContain(
+      'class="home-goal-card" role="button" tabindex="0" data-goal="Ship &quot;it&quot;" data-goal-id="g-1"'
+    );
+    expect(html).toContain('data-goal="No id yet" data-goal-id=""');
+  });
+});

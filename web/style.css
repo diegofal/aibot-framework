@@ -3638,9 +3638,17 @@ body.ui-sheet-open {
   background: var(--elevated);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color var(--fast, 120ms) ease, background var(--fast, 120ms) ease;
 }
 .home-goal-card:hover {
   border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+.home-goal-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
 }
 .home-board-col[data-status="done"] .home-goal-text {
   color: var(--text-dim);
@@ -3654,12 +3662,6 @@ body.ui-sheet-open {
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
-  cursor: pointer;
-}
-.home-goal-card.expanded .home-goal-text,
-.home-goal-card.expanded .home-goal-notes {
-  -webkit-line-clamp: unset;
-  display: block;
 }
 .home-goal-notes {
   margin-top: 4px;
@@ -6831,4 +6833,297 @@ select[aria-invalid="true"] {
 }
 .work-toolbar .work-keys-hint {
   margin-right: 8px;
+}
+
+/* Goal detail drawer (Agent Home → goal card) */
+.gd {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  font-size: var(--fs-md, 13px);
+}
+.gd-dim {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.gd-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gd-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.gd-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.gd-chip {
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs, 11px);
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: var(--muted-bg);
+}
+.gd-chip-you {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+.gd-review-approved {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+.gd-review-rejected {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.gd-review-pending {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+.gd-dates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+.gd-date dt {
+  font-size: var(--fs-xs, 11px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+.gd-date dd {
+  margin: 2px 0 0;
+}
+.gd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gd-label {
+  font-size: var(--fs-sm, 12px);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.gd-notes p {
+  margin: 0 0 6px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.gd-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--border);
+}
+.gd-stat {
+  padding: 10px 12px;
+  background: var(--elevated);
+}
+.gd-stat-v {
+  font-size: 18px;
+  font-weight: 600;
+}
+.gd-stat-k {
+  font-size: var(--fs-xs, 11px);
+  color: var(--text-dim);
+}
+.gd-tl {
+  position: relative;
+  margin: 0;
+  padding: 0 0 0 18px;
+  list-style: none;
+}
+.gd-tl::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 4px;
+  width: 1px;
+  background: var(--border-strong);
+}
+.gd-tl-item {
+  position: relative;
+  padding: 0 0 12px;
+}
+.gd-tl-item::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: -18px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--surface);
+}
+.gd-tl-item.inferred::before {
+  background: var(--surface);
+  border: 1px dashed var(--text-dim);
+  box-sizing: border-box;
+}
+.gd-tl-op {
+  font-weight: 500;
+}
+.gd-tl-change {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm, 12px);
+  color: var(--text-dim);
+}
+.gd-tl-when {
+  font-size: var(--fs-sm, 12px);
+  color: var(--text-dim);
+}
+.gd-tl-note {
+  margin-top: 2px;
+  font-size: var(--fs-sm, 12px);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.gd-track {
+  font-size: var(--fs-sm, 12px);
+  color: var(--text-dim);
+}
+.gd-empty {
+  padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  text-align: center;
+}
+.gd-cycle {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--elevated);
+}
+.gd-cycle.gd-attr-weak {
+  border-style: dashed;
+}
+.gd-cycle > summary {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    "attr when counts"
+    "sum sum sum";
+  align-items: center;
+  gap: 4px 8px;
+  padding: 10px 12px;
+  list-style: none;
+  cursor: pointer;
+}
+.gd-cycle > summary::-webkit-details-marker {
+  display: none;
+}
+.gd-cycle > summary:hover {
+  background: var(--bg-hover);
+}
+.gd-cycle[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.gd-attr {
+  grid-area: attr;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs, 11px);
+  line-height: 1.6;
+}
+.gd-attr.gd-attr-exact {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+.gd-attr.gd-attr-inferred {
+  color: var(--info);
+  background: var(--info-bg);
+}
+.gd-attr.gd-attr-weak {
+  color: var(--text-dim);
+  background: var(--muted-bg);
+}
+.gd-cycle-when {
+  grid-area: when;
+  font-size: var(--fs-sm, 12px);
+}
+.gd-cycle-counts {
+  grid-area: counts;
+  font-size: var(--fs-xs, 11px);
+  color: var(--text-dim);
+}
+.gd-cycle-sum {
+  grid-area: sum;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.gd-cycle-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 12px 12px;
+}
+.gd-sub-title {
+  margin-bottom: 4px;
+  font-size: var(--fs-xs, 11px);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.gd-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm, 12px);
+}
+.gd-row:first-of-type {
+  border-top: none;
+}
+.gd-row-name {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+a.gd-row-name {
+  color: var(--accent);
+  text-decoration: none;
+}
+a.gd-row-name:hover {
+  text-decoration: underline;
+}
+.gd-row-meta {
+  margin-left: auto;
+  color: var(--text-dim);
+}
+.gd-clip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-row.bad .gd-row-name {
+  color: var(--danger);
+}
+.gd-row-err {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+.gd-pos {
+  color: var(--ok);
+}
+.gd-neg {
+  color: var(--danger);
 }

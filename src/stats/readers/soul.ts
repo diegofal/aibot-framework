@@ -8,6 +8,7 @@ import { createDefaultTraits } from '../../bot/trait-registers';
 import { type GoalEntry, parseGoals } from '../../tools/goals';
 import type { GoalDetail, GoalsStats, SoulStats, TraitSnapshot, TraitStats } from '../types';
 import { readJsonSafe, readJsonlSafe, readTextSafe, statSizeSafe, toIso, toMs } from '../util';
+import { type GoalExtras, goalTitleKey, readGoalExtras } from './goal-events';
 
 export const CORE_SOUL_FILES = [
   'SOUL.md',
@@ -31,8 +32,9 @@ function normaliseGoalText(text: string): string {
     .trim();
 }
 
-function toDetail(g: GoalEntry, section: 'active' | 'completed'): GoalDetail {
+function toDetail(g: GoalEntry, section: 'active' | 'completed', extras?: GoalExtras): GoalDetail {
   return {
+    id: extras?.id ?? null,
     text: g.text,
     status: g.status,
     priority: g.priority,
@@ -47,6 +49,7 @@ function toDetail(g: GoalEntry, section: 'active' | 'completed'): GoalDetail {
 
 export function readGoals(soulDir: string): { stats: GoalsStats; detail: GoalDetail[] } {
   const { active, completed } = parseGoals(readTextSafe(join(soulDir, 'GOALS.md')));
+  const extras = readGoalExtras(soulDir);
 
   const byStatus: Record<string, number> = {};
   const seen = new Set<string>();
@@ -79,8 +82,8 @@ export function readGoals(soulDir: string): { stats: GoalsStats; detail: GoalDet
       lastCompletedAt,
     },
     detail: [
-      ...active.map((g) => toDetail(g, 'active')),
-      ...completed.map((g) => toDetail(g, 'completed')),
+      ...active.map((g) => toDetail(g, 'active', extras.get(goalTitleKey(g.text)))),
+      ...completed.map((g) => toDetail(g, 'completed', extras.get(goalTitleKey(g.text)))),
     ],
   };
 }

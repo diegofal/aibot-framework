@@ -65,6 +65,7 @@ describe('readGoals', () => {
     expect(g.stats.lastCompletedAt).toBe('2026-08-10');
     expect(g.detail).toHaveLength(6);
     expect(g.detail[0]).toEqual({
+      id: null,
       text: '**Write weekly digest**',
       status: 'in_progress',
       priority: 'high',

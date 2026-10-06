@@ -18,6 +18,8 @@ export interface StatsDirs {
   llmStats: string;
   toolAudit: string;
   outcomeLedger: string;
+  /** Per-cycle records (`<botId>/YYYY-MM-DD.jsonl`), written by the agent loop. */
+  agentCycles: string;
   karma: string;
   scheduler: string;
   conversations: string;
@@ -38,6 +40,7 @@ export function resolveStatsDirs(config: Config): StatsDirs {
     llmStats: join(dataDir, 'llm-stats'),
     toolAudit: join(dataDir, 'tool-audit'),
     outcomeLedger: join(dataDir, 'outcome-ledger'),
+    agentCycles: join(dataDir, 'agent-cycles'),
     karma: config.karma?.baseDir ?? join(dataDir, 'karma'),
     scheduler: join(dataDir, 'agent-scheduler'),
     conversations: config.conversations?.baseDir ?? join(dataDir, 'conversations'),

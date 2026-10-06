@@ -7,7 +7,7 @@
  * traits and karma. Data comes from `/api/agents/:id/home`; live updates
  * ride the shared `watchAgent()` link.
  */
-import { card, emptyState, showToast, skeleton } from '../ui/index.js';
+import { card, emptyState, openSheet, showToast, skeleton } from '../ui/index.js';
 import { registerPageShortcuts } from '../ui/shortcuts.js';
 import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.js';
 import {
@@ -26,6 +26,12 @@ import {
 } from './agent-home-helpers.js';
 import { FOCUS_CHAT_KEY } from './agent-wizard-helpers.js';
 import { mountMind } from './curiosity.js';
+import {
+  goalDetailBody,
+  goalDetailError,
+  goalDetailLoading,
+  goalDetailUrl,
+} from './goal-detail-helpers.js';
 import { watchAgent } from './live-presence.js';
 import { api, renderThread } from './shared.js';
 
@@ -79,6 +85,20 @@ async function redrawBoard(el, id) {
   if (home && !home.error && board) board.innerHTML = goalsColumns(home.goals);
 }
 
+/** Right-hand drawer with everything about one goal. */
+async function openGoalDetail(botId, goalId, title) {
+  const body = openSheet({ title: 'Goal', body: goalDetailLoading(), wide: true });
+  if (!body) return;
+  const detail = await api(goalDetailUrl(botId, { id: goalId, title })).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (!body.isConnected) return;
+  body.innerHTML =
+    !detail || detail.error
+      ? goalDetailError(detail?.error || 'no response')
+      : goalDetailBody(detail, botId);
+}
+
 /** Goals board: add (submit) and move (change) by delegation, so redraws keep working. */
 function wireGoalBoard(el, id) {
   const board = el.querySelector('#home-goals');
@@ -105,9 +125,17 @@ function wireGoalBoard(el, id) {
       if (btn) btn.disabled = false;
     }
   });
-  board.addEventListener('click', (e) => {
-    const text = e.target.closest('.home-goal-text');
-    if (text) text.closest('.home-goal-card')?.classList.toggle('expanded');
+  const openFrom = (target) => {
+    if (target.closest('.home-goal-move')) return;
+    const goalCard = target.closest('.home-goal-card');
+    if (goalCard) openGoalDetail(id, goalCard.dataset.goalId, goalCard.dataset.goal);
+  };
+  board.addEventListener('click', (e) => openFrom(e.target));
+  board.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('home-goal-card')) {
+      e.preventDefault();
+      openFrom(e.target);
+    }
   });
   board.addEventListener('change', async (e) => {
     const select = e.target.closest('.home-goal-move');
@@ -429,7 +457,8 @@ export async function renderAgentHome(el, id) {
     <div class="home-goals-row">
       ${card({
         title: 'Goals',
-        subtitle: 'Add goals in To do; move a card with its menu. The agent works on yours first.',
+        subtitle:
+          'Add goals in To do; click a card for its history, move it with its menu. The agent works on yours first.',
         body: `<div id="home-goals">${goalsColumns(home.goals)}</div>`,
       })}
     </div>

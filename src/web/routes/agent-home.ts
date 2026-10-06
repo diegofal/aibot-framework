@@ -6,6 +6,7 @@
  *   GET /api/agents/:id/presence   posture + first-person "now" line (never cached)
  *   POST /api/agents/:id/goals     operator adds a goal to GOALS.md (`source: operator`)
  *   PATCH /api/agents/:id/goals    operator moves a goal on the board ({ goal, status })
+ *   GET /api/agents/:id/goals/detail?id=&title=&days=   one goal's history (cached 15 s)
  *
  * Reads are tenant-scoped like /api/stats and never throw on missing data. The
  * writes go to the Active section through the goals tool's
@@ -14,9 +15,10 @@
  * otherwise answer `/presence` with "Agent not found". `/:id/home` and
  * `/:id/presence` do not collide with `/:id`.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
+import { writeGoalsFile } from '../../bot/goal-events';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
@@ -31,6 +33,7 @@ import {
   buildPresence,
 } from '../../stats/agent-home-aggregator';
 import { type StatsBotManager, createStatsContext } from '../../stats/context';
+import { buildGoalDetail } from '../../stats/goal-detail-aggregator';
 import { resolveBotPaths } from '../../stats/paths';
 import type { PresenceTracker } from '../../stats/presence-tracker';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
@@ -129,6 +132,27 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     }
   });
 
+  app.get('/:id/goals/detail', (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const id = c.req.query('id')?.trim() || null;
+    const title = c.req.query('title')?.trim() || null;
+    if (!id && !title) return c.json({ error: 'id or title is required' }, 400);
+    const days = Number(c.req.query('days')) || undefined;
+    try {
+      const body = ctx.cache.get(
+        `goal:${bot.id}:${id ?? ''}:${title ?? ''}:${days ?? ''}`,
+        ttl,
+        () => buildGoalDetail(ctx, bot, { id, title, days })
+      );
+      if (!body) return c.json({ error: 'Goal not found' }, 404);
+      return c.json(body);
+    } catch (err) {
+      deps.logger.warn({ err, botId: bot.id }, 'Goal detail aggregation failed');
+      return c.json({ error: 'Goal detail aggregation failed' }, 500);
+    }
+  });
+
   app.post('/:id/goals', async (c) => {
     const bot = findBot(c);
     if (!bot) return c.json({ error: 'Bot not found' }, 404);
@@ -148,8 +172,10 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     };
     try {
       const current = existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null;
-      backupSoulFile(goalsPath, deps.logger);
-      writeFileSync(goalsPath, appendGoal(current, goal), 'utf-8');
+      writeGoalsFile(goalsPath, appendGoal(current, goal), {
+        actor: 'operator',
+        backup: (p) => backupSoulFile(p, deps.logger),
+      });
     } catch (err) {
       deps.logger.warn({ err, botId: bot.id }, 'Adding operator goal failed');
       return c.json({ error: 'Could not write GOALS.md' }, 500);
@@ -174,8 +200,10 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     const next = setGoalStatus(current, title, status);
     if (next === null) return c.json({ error: 'Goal not found' }, 404);
     try {
-      backupSoulFile(goalsPath, deps.logger);
-      writeFileSync(goalsPath, next, 'utf-8');
+      writeGoalsFile(goalsPath, next, {
+        actor: 'operator',
+        backup: (p) => backupSoulFile(p, deps.logger),
+      });
     } catch (err) {
       deps.logger.warn({ err, botId: bot.id }, 'Moving goal failed');
       return c.json({ error: 'Could not write GOALS.md' }, 500);

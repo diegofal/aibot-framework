@@ -177,6 +177,8 @@ export interface FleetResponse {
 }
 
 export interface GoalDetail {
+  /** Stable goal id (`id:` line in GOALS.md), null on goals written before ids existed. */
+  id: string | null;
   text: string;
   status: string;
   priority: string;
@@ -371,5 +373,137 @@ export interface CuriosityStatsResponse {
     explore: number;
     exploit: number;
     dispatches: DispatchLandingStats;
+  };
+}
+
+// ── Goal detail (Agent Home → goal sidebar) ──
+
+/** How a cycle was tied to a goal: recorded ids, a strong signal, or shared words. */
+export type GoalAttribution = 'exact' | 'inferred' | 'weak';
+export type GoalOrigin =
+  | 'operator'
+  | 'agent'
+  | 'strategist'
+  | 'reflection'
+  | 'curiosity'
+  | 'preset'
+  | 'unknown';
+
+export interface GoalDetailHeader {
+  id: string | null;
+  text: string;
+  status: string;
+  section: 'active' | 'completed';
+  bucket: 'todo' | 'inProgress' | 'blocked' | 'done';
+  priority: string;
+  notes: string | null;
+  outcome: string | null;
+  source: string | null;
+  origin: GoalOrigin;
+  originDate: string | null;
+  created: string | null;
+  started: string | null;
+  updated: string | null;
+  completed: string | null;
+}
+
+export interface GoalTimelineEvent {
+  ts: string;
+  op: string;
+  from: string | null;
+  to: string | null;
+  actor: string | null;
+  note: string | null;
+  /** True when reconstructed (from a manage_goals call), not read from the goal-event log. */
+  inferred: boolean;
+  source: 'goal-events' | 'tool-audit';
+}
+
+export interface GoalCycleLlmCall {
+  ts: string;
+  caller: string;
+  backend: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  durationMs: number;
+  ok: boolean;
+  error: string | null;
+}
+
+export interface GoalCycleToolCall {
+  ts: string;
+  name: string;
+  ok: boolean;
+  failureKind: string | null;
+  args: string;
+  result: string;
+}
+
+export interface GoalCycleProduction {
+  ts: string;
+  path: string;
+  action: string;
+  size: number;
+  description: string;
+  /** This row's verdict; `pending` when it is the file's latest unreviewed content row; null when superseded or not content. */
+  review: 'approved' | 'rejected' | 'pending' | null;
+}
+
+export interface GoalCycleAsk {
+  id: string;
+  title: string;
+  createdAt: string;
+  status: string | null;
+}
+
+export interface GoalCycleKarma {
+  ts: string;
+  delta: number;
+  reason: string;
+  kind: string | null;
+}
+
+export interface GoalCycle {
+  cycleId: string | null;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  status: string | null;
+  focus: string | null;
+  planSummary: string | null;
+  attribution: GoalAttribution;
+  reason: string;
+  llmCalls: GoalCycleLlmCall[];
+  toolCalls: GoalCycleToolCall[];
+  productions: GoalCycleProduction[];
+  asks: GoalCycleAsk[];
+  karma: GoalCycleKarma[];
+}
+
+export interface GoalDetailResponse {
+  botId: string;
+  generatedAt: string;
+  /** Lookback in days (1–30). */
+  days: number;
+  goal: GoalDetailHeader;
+  timeline: GoalTimelineEvent[];
+  /** Newest first, at most `GOAL_DETAIL_MAX_CYCLES`. */
+  cycles: GoalCycle[];
+  totals: {
+    cycles: number;
+    exactCycles: number;
+    inferredCycles: number;
+    llmCalls: number;
+    tokens: number;
+    toolCalls: number;
+    toolFailures: number;
+    files: number;
+    asks: number;
+  };
+  tracking: {
+    /** Whether any exact (id-linked) data exists for this goal. */
+    exact: boolean;
+    note: string;
   };
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { KarmaEvent } from '../../../src/karma/types';
@@ -432,5 +432,38 @@ describe('PATCH /api/agents/:id/goals (move on the board)', () => {
     };
     expect(home.goals.todo.map((g) => g.text)).toEqual(['Research topic']);
     expect(home.goals.inProgress.map((g) => g.text)).toEqual(['**Weekly digest**']);
+  });
+});
+
+describe('operator goal writes are logged as goal events', () => {
+  const events = (id: string) => {
+    const p = join(fx.soulDir(id), 'goal-events.jsonl');
+    return existsSync(p)
+      ? readFileSync(p, 'utf-8')
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+      : [];
+  };
+  const send = (app: Hono, method: string, body: unknown) =>
+    app.request('/api/agents/b1/goals', {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('POST appends an add event and PATCH a status event, both by the operator', async () => {
+    const app = makeApp();
+    await send(app, 'POST', { title: 'Logged goal' });
+    await send(app, 'PATCH', { goal: 'Logged goal', status: 'in_progress' });
+    const mine = events('b1').filter((e) => e.title === 'Logged goal');
+    expect(mine.map((e) => e.op)).toEqual(['add', 'status']);
+    expect(mine.every((e) => e.actor === 'operator')).toBe(true);
+    expect(mine[1].to).toBe('in_progress');
+    const goal = parseGoals(readFileSync(join(fx.soulDir('b1'), 'GOALS.md'), 'utf-8')).active.find(
+      (g) => g.text === 'Logged goal'
+    );
+    expect(goal?.id).toMatch(/^g-[0-9a-f]{8}$/);
+    expect(goal?.started).toBeTruthy();
   });
 });
