@@ -6,7 +6,7 @@ import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
-import { parseGoals } from '../tools/goals';
+import { parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import {
   type AdaptiveParams,
@@ -907,8 +907,27 @@ export class AgentLoop {
         tools: toolCalls.map((t) => t.name),
         ...goal,
       });
+      if (status === 'completed' && goal.goalId) {
+        this.startCycleGoal(botId, goal.goalId, attribution.cycleId);
+      }
     } catch (err) {
       this.ctx.logger.warn({ err, botId }, 'Agent cycle log: failed to record cycle');
+    }
+  }
+
+  /**
+   * A cycle that did work on a To do goal moves it to In progress (the board
+   * follows the agent). Done/blocked stay the agent's call via manage_goals.
+   */
+  private startCycleGoal(botId: string, goalId: string, cycleId: string): void {
+    try {
+      const loader = this.ctx.soulLoaders.get(botId);
+      if (!loader?.readGoals || !loader.writeGoals) return;
+      const next = startGoal(loader.readGoals() ?? null, goalId);
+      if (next === null) return;
+      loader.writeGoals(next, { actor: 'agent', cycleId });
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId, goalId }, 'Could not start the cycle goal');
     }
   }
 

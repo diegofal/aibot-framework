@@ -3727,6 +3727,23 @@ body.ui-sheet-open {
   color: var(--text);
   border-color: var(--border-strong);
 }
+/* Native option lists: theme colours, or they inherit the dim select text on a white list. */
+.home-goal-move option,
+.home-goal-pri-select option {
+  background-color: var(--elevated);
+  color: var(--text);
+}
+.home-goal-card[draggable="true"] {
+  cursor: grab;
+}
+.home-goal-card.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+.home-board-col.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
 .home-goal-form {
   display: flex;
   flex-direction: column;

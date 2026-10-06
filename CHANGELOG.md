@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed (2026-10-06) — Drag cards between goal columns; the board follows the agent; readable menus
+- **Drag and drop.** Goal cards are `draggable`; dropping on another column PATCHes `/api/agents/:id/goals` with that column's status (same path as the card menu). The target column highlights while dragging.
+- **The board follows the agent.** After a completed (non-idle) cycle whose goal is known (planner/strategist `serves_goal` or an in-cycle `manage_goals`), a To do goal moves to In progress (`startGoal` in `src/tools/goals.ts`, `AgentLoop.startCycleGoal`, written by `SoulLoader.writeGoals` as actor `agent` with the `cycleId`, so it shows in the goal's history). Done and Blocked stay the agent's call through `manage_goals`.
+- **Readable menus.** The move and priority option lists use theme colours (`option` background/text); they were dim grey on the OS white list.
+- Tests: `tests/agent-loop-cycle-attribution.test.ts` (start on a completed cycle, not when already started, not on idle; `startGoal`), `tests/web/agent-home-page-helpers.test.ts` (draggable cards, column statuses).
+
 ### Added (2026-10-06) — Exact per-goal attribution: goal ids, a goal-event log, cycle ids and a cycle log
 - **Why.** Nothing recorded which goal a cycle, LLM call, tool call or output served: goals had no id, cycles had no id, the planner never named a goal, and completing a goal dropped its source, notes and dates. A per-goal detail view could only guess by time windows and keywords.
 - **Goal ids and times.** `GoalEntry` gains `id` (`g-` + 8 hex), `started` (first time in_progress) and `updated`; completed goals keep `id`, `source`, `created`, `started`, `priority` and `notes`. `parseGoals` stays pure; `ensureGoalIds` assigns. `appendGoal` / `setGoalStatus` keep ids and stamp the times.

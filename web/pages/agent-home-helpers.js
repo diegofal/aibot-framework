@@ -255,7 +255,7 @@ function goalCard(g, columnStatus) {
   const options = GOAL_MOVES.map(
     ([v, label]) => `<option value="${v}"${v === current ? ' selected' : ''}>${label}</option>`
   ).join('');
-  return `<div class="home-goal-card" role="button" tabindex="0" data-goal="${esc(text)}" data-goal-id="${esc(g.id ?? '')}" aria-label="Open goal details">
+  return `<div class="home-goal-card" role="button" tabindex="0" data-goal="${esc(text)}" data-goal-id="${esc(g.id ?? '')}" aria-label="Open goal details" draggable="true">
     <div class="home-goal-text">${esc(text)}</div>
     ${notes}
     <div class="home-goal-foot">${you}${pr}

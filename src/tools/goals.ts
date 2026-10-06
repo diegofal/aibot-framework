@@ -211,6 +211,16 @@ export function goalBucket(status: string | undefined): 'todo' | 'inProgress' | 
 }
 
 /**
+ * Start the active goal with this id: a To do goal moves to `in_progress`.
+ * Returns the new GOALS.md, or null when the goal is missing or not To do.
+ */
+export function startGoal(content: string | null, goalId: string): string | null {
+  const goal = parseGoals(content).active.find((g) => g.id === goalId);
+  if (!goal || goalBucket(goal.status) !== 'todo') return null;
+  return setGoalStatus(content, goal.text, 'in_progress');
+}
+
+/**
  * Move the goal titled exactly `title` (trimmed, case-insensitive) to `status`.
  * `done` moves it to Completed with today's date; any other status on a completed
  * goal reopens it. Returns the new GOALS.md, or null when no goal has that title.

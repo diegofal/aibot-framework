@@ -296,3 +296,17 @@ describe('goal cards open the detail drawer', () => {
     expect(html).toContain('data-goal="No id yet" data-goal-id=""');
   });
 });
+
+describe('goals board drag and drop', () => {
+  it('cards are draggable and columns carry the status a drop moves to', () => {
+    const html = goalsColumns({
+      todo: [{ text: 'Drag me' }],
+      inProgress: [],
+      blocked: [],
+      completedRecently: [],
+    });
+    expect(html).toContain('draggable="true"');
+    for (const s of ['pending', 'in_progress', 'blocked', 'done'])
+      expect(html).toContain(`data-status="${s}"`);
+  });
+});

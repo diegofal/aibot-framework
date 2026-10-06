@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { resolveCycleGoal } from '../src/bot/agent-cycle-log';
 import { AgentLoop } from '../src/bot/agent-loop';
 import { GlobalAgentLoopConfigSchema } from '../src/config';
-import type { GoalEntry } from '../src/tools/goals';
+import { type GoalEntry, startGoal } from '../src/tools/goals';
 
 function mockLogger(): any {
   const l: any = {
@@ -38,16 +38,21 @@ const GOALS = `## Active Goals
   - id: g-bbbbbbbb
 `;
 
-function makeLoop(plan: string, mode: 'periodic' | 'continuous' = 'periodic') {
+function makeLoop(
+  plan: string,
+  mode: 'periodic' | 'continuous' = 'periodic',
+  goals: string = GOALS
+) {
+  const goalWrites: Array<{ content: string; opts: any }> = [];
   const soulLoader = {
     readIdentity: () => 'id',
     readSoul: () => 'soul',
     readMotivations: () => 'mot',
-    readGoals: () => GOALS,
+    readGoals: () => goals,
     readRecentDailyLogs: () => '',
     readDailyLogsSince: () => '',
     appendDailyMemory: () => {},
-    writeGoals: () => {},
+    writeGoals: (content: string, opts: any) => goalWrites.push({ content, opts }),
   };
   const llm: any = {
     backend: 'ollama',
@@ -96,7 +101,7 @@ function makeLoop(plan: string, mode: 'periodic' | 'continuous' = 'periodic') {
     { getDefinitionsForBot: () => [], getDefinitionsByCategories: () => [] } as any
   );
   (loop as any).scheduler.syncSchedules();
-  return { loop, queries };
+  return { loop, queries, goalWrites };
 }
 
 function cycleRows(): any[] {
@@ -179,6 +184,58 @@ describe('agent-loop cycle attribution', () => {
     const { loop } = makeLoop(JSON.stringify({ reasoning: 'wait', plan: [], priority: 'none' }));
     await loop.runOne('bot1');
     expect(cycleRows()[0]).toMatchObject({ status: 'idle', plan: [], toolCalls: 0 });
+  });
+});
+
+describe('the goal a cycle worked on moves to In progress', () => {
+  const PENDING = GOALS.replace('status: in_progress', 'status: pending');
+  const plan = JSON.stringify({
+    reasoning: 'lab',
+    plan: ['Draft the October lab'],
+    priority: 'medium',
+    serves_goal: 'Monthly hands-on lab',
+  });
+
+  test('a To do goal served by a completed cycle is started, by the agent, with the cycleId', async () => {
+    const { loop, goalWrites } = makeLoop(plan, 'periodic', PENDING);
+    await loop.runOne('bot1');
+    expect(goalWrites).toHaveLength(1);
+    expect(goalWrites[0].content).toContain('status: in_progress');
+    expect(goalWrites[0].opts.actor).toBe('agent');
+    expect(goalWrites[0].opts.cycleId).toBe(cycleRows()[0].cycleId);
+  });
+
+  test('a goal already in progress is left alone', async () => {
+    const { loop, goalWrites } = makeLoop(plan);
+    await loop.runOne('bot1');
+    expect(goalWrites).toHaveLength(0);
+  });
+
+  test('an idle cycle never moves a goal', async () => {
+    const { loop, goalWrites } = makeLoop(
+      JSON.stringify({
+        reasoning: 'wait',
+        plan: [],
+        priority: 'none',
+        serves_goal: 'Monthly hands-on lab',
+      }),
+      'periodic',
+      PENDING
+    );
+    await loop.runOne('bot1');
+    expect(goalWrites).toHaveLength(0);
+  });
+});
+
+describe('startGoal', () => {
+  test('moves a To do goal to in_progress by id; null when missing or already started', () => {
+    const pending = GOALS.replace('status: in_progress', 'status: pending');
+    expect(startGoal(pending, 'g-bbbbbbbb')).toContain('status: in_progress');
+    expect(startGoal(GOALS, 'g-bbbbbbbb')).toBeNull();
+    expect(startGoal(pending, 'g-nope')).toBeNull();
+    expect(
+      startGoal(pending.replace('status: pending', 'status: blocked'), 'g-bbbbbbbb')
+    ).toBeNull();
   });
 });
 

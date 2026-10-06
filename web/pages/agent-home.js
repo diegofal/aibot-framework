@@ -137,17 +137,66 @@ function wireGoalBoard(el, id) {
       openFrom(e.target);
     }
   });
-  board.addEventListener('change', async (e) => {
-    const select = e.target.closest('.home-goal-move');
-    if (!select) return;
-    const payload = goalMovePayload(select.dataset.goal, select.value);
+  const move = async (goal, status) => {
+    const payload = goalMovePayload(goal, status);
     if (!payload) return;
-    select.disabled = true;
     const res = await api(url, { method: 'PATCH', body: payload }).catch((err) => ({
       error: err?.message || 'Request failed',
     }));
     if (res?.error) showToast(res.error, { tone: 'danger' });
     await redrawBoard(el, id);
+  };
+  board.addEventListener('change', async (e) => {
+    const select = e.target.closest('.home-goal-move');
+    if (!select) return;
+    select.disabled = true;
+    await move(select.dataset.goal, select.value);
+  });
+
+  // Drag a card onto another column to move it there.
+  let dragged = null;
+  const clearOver = () =>
+    board
+      .querySelectorAll('.home-board-col.drag-over')
+      .forEach((c) => c.classList.remove('drag-over'));
+  board.addEventListener('dragstart', (e) => {
+    const goalCard = e.target.closest?.('.home-goal-card');
+    if (!goalCard) return;
+    dragged = {
+      goal: goalCard.dataset.goal,
+      from: goalCard.closest('.home-board-col')?.dataset.status,
+    };
+    goalCard.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', goalCard.dataset.goal || '');
+  });
+  board.addEventListener('dragend', (e) => {
+    e.target.closest?.('.home-goal-card')?.classList.remove('dragging');
+    clearOver();
+    dragged = null;
+  });
+  board.addEventListener('dragover', (e) => {
+    const col = e.target.closest('.home-board-col');
+    if (!col || !dragged) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (!col.classList.contains('drag-over')) {
+      clearOver();
+      col.classList.add('drag-over');
+    }
+  });
+  board.addEventListener('dragleave', (e) => {
+    const col = e.target.closest('.home-board-col');
+    if (col && !col.contains(e.relatedTarget)) col.classList.remove('drag-over');
+  });
+  board.addEventListener('drop', async (e) => {
+    const col = e.target.closest('.home-board-col');
+    if (!col || !dragged) return;
+    e.preventDefault();
+    clearOver();
+    const { goal, from } = dragged;
+    dragged = null;
+    if (col.dataset.status && col.dataset.status !== from) await move(goal, col.dataset.status);
   });
 }
 
