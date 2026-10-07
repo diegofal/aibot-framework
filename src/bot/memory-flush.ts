@@ -158,6 +158,13 @@ export class MemoryFlusher {
       });
 
       const facts = this.parseScoredFacts(response);
+      if (facts.length === 0) {
+        // Say so: a flush that stored nothing used to leave no trace at all.
+        this.ctx.logger.info(
+          { botId, messageCount: history.length },
+          'Memory flush extracted no facts'
+        );
+      }
 
       // Store in Core Memory
       const coreMemory = this.ctx.memoryManager?.getCoreMemory();

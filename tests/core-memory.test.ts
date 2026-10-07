@@ -222,6 +222,14 @@ describe('CoreMemoryManager', () => {
       expect(output).toContain('**Identity**');
       expect(output).toContain('**Relationships**');
     });
+
+    test('each fact carries the date it was last recorded, so old facts read as old', async () => {
+      await manager.set('general', 'telegram', 'Telegram is down', 9, BOT);
+      db.exec("UPDATE core_memory SET updated_at = '2026-08-31 10:00:00' WHERE key = 'telegram'");
+
+      const output = manager.renderForSystemPrompt(800, BOT);
+      expect(output).toContain('- telegram: Telegram is down (as of 2026-08-31)');
+    });
   });
 
   describe('valid categories', () => {

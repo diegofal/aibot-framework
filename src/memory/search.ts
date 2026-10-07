@@ -5,6 +5,7 @@ import type { EmbeddingService } from './embeddings';
 import { applyMMRToMemoryResults } from './mmr';
 import { deserializeEmbedding } from './schema';
 import type { MemorySearchResult } from './types';
+import { type MemoryViewer, isPathVisibleTo, memoryScope } from './viewer';
 
 // Extended result with importance weighting
 export interface WeightedMemoryResult extends MemorySearchResult {
@@ -30,6 +31,8 @@ interface SearchOpts {
   minScore?: number;
   botId: string;
   userId?: string;
+  /** Who is looking (see memory/viewer.ts); undefined keeps the userId-only behaviour. */
+  viewer?: MemoryViewer;
 }
 
 /**
@@ -72,6 +75,7 @@ interface FtsRow {
   rowid: number;
   rank: number;
   last_indexed_at: string;
+  file_path?: string;
 }
 
 const STOP_WORDS = new Set([
@@ -154,6 +158,9 @@ export async function hybridSearch(
   // --- Vector search ---
   const botId = opts.botId;
   const userPathPattern = opts.userId ? `${botId}/memory/users/${opts.userId}/%` : null;
+  const viewer = opts.viewer;
+  const visible = (path: string | undefined) =>
+    viewer === undefined || !path || isPathVisibleTo(path, botId, viewer);
   try {
     const queryEmbedding = await embeddingService.getEmbedding(
       `query:${query}`, // prefix to distinguish from chunk hashes
@@ -175,6 +182,7 @@ export async function hybridSearch(
 
     for (const chunk of allChunks) {
       if (!chunk.embedding) continue;
+      if (!visible(chunk.file_path)) continue;
       const chunkEmb = deserializeEmbedding(chunk.embedding);
       const sim = cosineSimilarity(queryEmbedding, chunkEmb);
       if (sim > 0) {
@@ -203,13 +211,13 @@ export async function hybridSearch(
     if (ftsQuery) {
       // Join FTS results with chunks→files to filter by bot path prefix
       const ftsSql = userPathPattern
-        ? `SELECT fts.rowid, fts.rank, f.last_indexed_at FROM chunks_fts fts
+        ? `SELECT fts.rowid, fts.rank, f.last_indexed_at, f.path AS file_path FROM chunks_fts fts
            JOIN chunks c ON c.id = fts.rowid
            JOIN files f ON f.id = c.file_id
            WHERE chunks_fts MATCH ?
              AND (f.path LIKE ? OR f.path LIKE ? OR f.path LIKE ?)
            ORDER BY fts.rank LIMIT 50`
-        : `SELECT fts.rowid, fts.rank, f.last_indexed_at FROM chunks_fts fts
+        : `SELECT fts.rowid, fts.rank, f.last_indexed_at, f.path AS file_path FROM chunks_fts fts
            JOIN chunks c ON c.id = fts.rowid
            JOIN files f ON f.id = c.file_id
            WHERE chunks_fts MATCH ?
@@ -221,6 +229,7 @@ export async function hybridSearch(
       const ftsResults = db.prepare<FtsRow, string[]>(ftsSql).all(...ftsParams);
 
       for (const row of ftsResults) {
+        if (!visible(row.file_path)) continue;
         // BM25 rank is negative (lower = better), convert to 0-1 score
         const score = 1 / (1 + Math.abs(row.rank));
         keywordScores.set(row.rowid, score);
@@ -236,7 +245,7 @@ export async function hybridSearch(
   // --- Core Memory search (importance-weighted) ---
   const coreMemoryResults: WeightedMemoryResult[] = [];
   try {
-    const coreResults = searchCoreMemory(db, query, botId, opts.userId);
+    const coreResults = searchCoreMemory(db, query, botId, memoryScope(viewer, opts.userId));
     for (const result of coreResults) {
       coreMemoryResults.push(result);
     }
@@ -340,7 +349,7 @@ function searchCoreMemory(
   db: Database,
   query: string,
   botId: string,
-  userId?: string
+  userId?: string | null
 ): WeightedMemoryResult[] {
   // Check if core_memory table exists
   const tableCheck = db
@@ -362,7 +371,13 @@ function searchCoreMemory(
   // Search in both key and value
   const conditions = tokens.map(() => '(LOWER(key) LIKE ? OR LOWER(value) LIKE ?)').join(' OR ');
   // When userId is provided, include both user-specific and shared entries
-  const userFilter = userId ? ' AND (user_id = ? OR user_id IS NULL)' : '';
+  // null: shared entries only
+  const userFilter =
+    userId === null
+      ? ' AND user_id IS NULL'
+      : userId
+        ? ' AND (user_id = ? OR user_id IS NULL)'
+        : '';
   const params: (string | null)[] = [
     botId,
     ...tokens.flatMap((t) => [`%${t}%`, `%${t}%`]),

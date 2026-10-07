@@ -25,29 +25,20 @@ export interface PiiHit {
   end: number;
 }
 
-// Word-bounded family keywords only. Earlier versions also listed age markers
-// like "(7)" — unescaped they became regex groups matching any digit, which
-// flagged half of every bot's memory as custody talk.
-export const DEFAULT_CUSTODY_KEYWORDS = [
-  'custodia',
-  'custody',
-  'hijos',
-  'hija',
-  'hijo',
-  'kids',
-  'children',
-  'niños',
-  'niñas',
-];
+// Custody words only. Plain family words (hijos, hija, kids, children…) used
+// to be here: on 2026-10-04 they blanked a bot's list of the operator's kids,
+// another bot's "write-capable children" and, via `_CUSTODIA_`, a rule name.
+// Who a person's family is IS the memory, not a leak.
+export const DEFAULT_CUSTODY_KEYWORDS = ['custodia', 'custody', 'tenencia'];
 
 /**
  * PII kinds that `apply` redacts by default. `money` is not reported unless
- * opted in: for the
- * business/economics bots amounts are the content, not a leak. Pass
- * `options.redactKinds` to change the set (e.g. add 'money', or drop 'custody'
- * to leave family context to the operator's judgement).
+ * opted in: for the business/economics bots amounts are the content, not a
+ * leak. `custody` is reported but only redacted when the operator opts in
+ * (`options.redactKinds`, the "Also redact family/custody lines" box): a
+ * custody line is redacted whole, so it is never a silent default.
  */
-export const DEFAULT_REDACT_KINDS: PiiKind[] = ['email', 'phone', 'chat-id', 'custody'];
+export const DEFAULT_REDACT_KINDS: PiiKind[] = ['email', 'phone', 'chat-id'];
 
 const EMAIL_RE = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g;
 const PHONE_RE = /\+\d[\d\s-]{7,14}\d\b/g;
@@ -73,8 +64,11 @@ function escapeRegExp(s: string): string {
 function keywordMatcher(keywords: string[]): RegExp | null {
   if (keywords.length === 0) return null;
   const parts = keywords.map((k) =>
-    // Letter-bounded, and not a hyphenated compound ("Self-custody" is crypto talk).
-    /^[\p{L}]+$/u.test(k) ? `(?<![\\p{L}-])${escapeRegExp(k)}(?![\\p{L}-])` : escapeRegExp(k)
+    // Letter-bounded, not a hyphenated compound ("Self-custody" is crypto talk)
+    // and not part of an identifier (`REGLA_CUSTODIA_TEXTO`).
+    /^[\p{L}]+$/u.test(k)
+      ? `(?<![\\p{L}\\p{N}_-])${escapeRegExp(k)}(?![\\p{L}\\p{N}_-])`
+      : escapeRegExp(k)
   );
   return new RegExp(parts.join('|'), 'iu');
 }

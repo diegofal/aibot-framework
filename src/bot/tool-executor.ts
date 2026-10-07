@@ -4,6 +4,7 @@ import { basename, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
+import { MEMORY_VIEWER_ARG, type MemoryViewer } from '../memory/viewer';
 import { isUntrackedProductionPath, normalizeEntryPath } from '../productions/paths';
 import { ProductionsService } from '../productions/service';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
@@ -110,6 +111,8 @@ export interface ToolExecutorOptions {
   chatId: number;
   /** User ID for _userId injection (per-user isolation) */
   userId?: string;
+  /** Whose private memory the memory tools may read/write (memory/viewer.ts); null = shared only */
+  memoryViewer?: MemoryViewer;
   /** Optional override of disabled tools (defaults to config lookup) */
   disabledTools?: Set<string>;
   /** Enable execution logging (for AgentLoop toolCallLog) */
@@ -582,6 +585,9 @@ export class ToolExecutor extends EventEmitter {
         _chatId: chatId,
         _botId: botId,
         ...(this.options.userId ? { _userId: this.options.userId } : {}),
+        ...(this.options.memoryViewer !== undefined
+          ? { [MEMORY_VIEWER_ARG]: this.options.memoryViewer }
+          : {}),
         ...(this.options.tenantRoot ? { _tenantRoot: this.options.tenantRoot } : {}),
         ...(this.options.attribution ? { _cycleId: this.options.attribution.cycleId } : {}),
         ...(this.options.attribution?.goalId ? { _goalId: this.options.attribution.goalId } : {}),

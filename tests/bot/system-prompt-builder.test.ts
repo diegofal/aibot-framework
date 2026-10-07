@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { SystemPromptBuilder } from '../../src/bot/system-prompt-builder';
 import type { ToolRegistry } from '../../src/bot/tool-registry';
 import type { BotContext } from '../../src/bot/types';
+import { localDateStr } from '../../src/date-utils';
 import type { ToolDefinition } from '../../src/tools/types';
 
 function makeDef(name: string): ToolDefinition {
@@ -259,6 +260,55 @@ describe('SystemPromptBuilder', () => {
 
       expect(prompt).toContain('bot-y (BotY)');
       expect(prompt).toContain('bot-z (BotZ)');
+    });
+  });
+
+  describe('time and whose memory', () => {
+    test("states today's date, so dated memories read as past", () => {
+      const builder = new SystemPromptBuilder(createMockCtx(), createMockToolRegistry([]));
+      const prompt = builder.build({
+        mode: 'conversation',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+      });
+      expect(prompt).toContain(`Today is ${localDateStr()}`);
+    });
+
+    test('renders core memory for the viewer (person, or null = shared only)', () => {
+      const scopes: unknown[] = [];
+      const ctx = createMockCtx();
+      (ctx as any).memoryManager = {
+        getCoreMemory: () => ({
+          renderForSystemPrompt: (_max: number, _bot: string, scope: unknown) => {
+            scopes.push(scope);
+            return '';
+          },
+        }),
+      };
+      const builder = new SystemPromptBuilder(ctx, createMockToolRegistry([]));
+      builder.build({
+        mode: 'conversation',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+        memoryViewer: '42',
+      });
+      builder.build({
+        mode: 'autonomous',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+        memoryViewer: null,
+      });
+      builder.build({
+        mode: 'conversation',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+        userId: 'u1',
+      });
+      expect(scopes).toEqual(['42', null, 'u1']);
     });
   });
 });

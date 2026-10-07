@@ -12,6 +12,7 @@ import { initializeMemoryDb } from './schema';
 import { hybridSearch } from './search';
 import { indexAllSessions } from './session-indexer';
 import type { MemorySearchResult } from './types';
+import type { MemoryViewer } from './viewer';
 
 export class MemoryManager {
   private db: Database | null = null;
@@ -76,7 +77,8 @@ export class MemoryManager {
     maxResults: number | undefined,
     minScore: number | undefined,
     botId: string,
-    userId?: string
+    userId?: string,
+    viewer?: MemoryViewer
   ): Promise<MemorySearchResult[]> {
     if (!this.db || !this.embeddingService) {
       throw new Error('MemoryManager not initialized');
@@ -86,6 +88,7 @@ export class MemoryManager {
       minScore,
       botId,
       userId,
+      viewer,
     });
   }
 

@@ -1,5 +1,6 @@
 import type { Logger } from '../logger';
 import type { MemoryManager } from '../memory/manager';
+import { memoryViewerFromArgs } from '../memory/viewer';
 import type { Tool, ToolResult } from './types';
 
 export function createMemorySearchTool(memoryManager: MemoryManager): Tool {
@@ -44,10 +45,18 @@ export function createMemorySearchTool(memoryManager: MemoryManager): Tool {
       try {
         const botId = typeof args._botId === 'string' ? args._botId : undefined;
         const userId = typeof args._userId === 'string' ? args._userId : undefined;
+        const viewer = memoryViewerFromArgs(args);
         if (!botId) {
           return { success: false, content: 'Internal error: missing _botId context' };
         }
-        const results = await memoryManager.search(query, maxResults, minScore, botId, userId);
+        const results = await memoryManager.search(
+          query,
+          maxResults,
+          minScore,
+          botId,
+          userId,
+          viewer
+        );
 
         if (results.length === 0) {
           return { success: true, content: 'No relevant memories found.' };

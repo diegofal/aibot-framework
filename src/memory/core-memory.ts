@@ -129,7 +129,9 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
 
     for (const item of items.slice(0, 5)) {
       // max 5 items per category
-      const line = `- ${item.key}: ${item.value}\n`;
+      // The date it was last recorded: without it a months-old status reads as today's.
+      const asOf = item.updatedAt ? ` (as of ${String(item.updatedAt).slice(0, 10)})` : '';
+      const line = `- ${item.key}: ${item.value}${asOf}\n`;
       if (content.length + line.length > maxChars) {
         break;
       }

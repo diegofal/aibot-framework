@@ -122,6 +122,7 @@ export class CollaborationManager {
     // Build system prompt via unified builder (collaboration mode)
     const systemPrompt = this.systemPromptBuilder.build({
       mode: 'collaboration',
+      memoryViewer: null,
       botId: respondingBotId,
       botConfig: respondingConfig,
       isGroup: true,
@@ -157,6 +158,7 @@ export class CollaborationManager {
     // Create executor with collaboration filter
     const executor = hasTools
       ? new ToolExecutor(this.ctx, {
+          memoryViewer: null,
           botId: respondingBotId,
           chatId,
           tools: collabTools,
@@ -428,6 +430,7 @@ export class CollaborationManager {
     // Create executor with collaboration filter
     const executor = hasTools
       ? new ToolExecutor(this.ctx, {
+          memoryViewer: null,
           botId: targetBotId,
           chatId: 0,
           tools: collabTools.tools,

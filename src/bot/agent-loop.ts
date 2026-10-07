@@ -2184,6 +2184,7 @@ export class AgentLoop {
 
     const executorSystem = this.systemPromptBuilder.build({
       mode: 'autonomous',
+      memoryViewer: null,
       botId,
       botConfig,
       isGroup: false,
@@ -2220,6 +2221,7 @@ export class AgentLoop {
         : undefined;
 
     const executor = new ToolExecutor(this.ctx, {
+      memoryViewer: null,
       botId,
       chatId: botOverride?.reportChatId ?? 0,
       disabledTools: allDisabled,
@@ -2630,6 +2632,7 @@ export class AgentLoop {
           globalCircuitBreakerThreshold: 8,
         });
         const executor = new ToolExecutor(this.ctx, {
+          memoryViewer: null,
           botId,
           chatId: botOverride?.reportChatId ?? 0,
           disabledTools: allDisabled,

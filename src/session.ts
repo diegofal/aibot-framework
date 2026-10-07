@@ -29,6 +29,20 @@ interface SessionMeta {
   messageCount: number;
   compactionCount: number;
   lastFlushCompactionIndex?: number;
+  /** Messages appended since the last memory flush (reset by `markMemoryFlushed`). */
+  messagesSinceFlush?: number;
+}
+
+/**
+ * Messages a memory flush has not seen yet. Metadata written before the
+ * counter existed falls back to the whole session: those sessions had been
+ * flushed once per compaction and then never again.
+ */
+export function unflushedMessageCount(
+  meta: Pick<SessionMeta, 'messageCount' | 'messagesSinceFlush'> | undefined
+): number {
+  if (!meta) return 0;
+  return meta.messagesSinceFlush ?? meta.messageCount ?? 0;
 }
 
 interface SessionKey {
@@ -291,6 +305,7 @@ export class SessionManager {
       messageCount: (existing?.messageCount ?? 0) + messages.length,
       compactionCount: existing?.compactionCount ?? 0,
       lastFlushCompactionIndex: existing?.lastFlushCompactionIndex,
+      messagesSinceFlush: unflushedMessageCount(existing) + messages.length,
     };
     this.metadata.set(serializedKey, meta);
     this.dirty = true;
@@ -325,6 +340,7 @@ export class SessionManager {
       messageCount: allMessages.length,
       compactionCount: (existing?.compactionCount ?? 0) + 1,
       lastFlushCompactionIndex: existing?.lastFlushCompactionIndex,
+      messagesSinceFlush: existing?.messagesSinceFlush,
     };
     this.metadata.set(serializedKey, meta);
     this.dirty = true;
@@ -586,14 +602,15 @@ export class SessionManager {
   }
 
   /**
-   * Mark that a memory flush has been performed for this session,
-   * recording the current compactionCount so we don't flush again
-   * until the next compaction.
+   * Mark that a memory flush has been performed for this session: the
+   * since-flush counter restarts, so the next flush happens after another
+   * `messageThreshold` messages (not only after the next compaction).
    */
   markMemoryFlushed(serializedKey: string): void {
     const meta = this.metadata.get(serializedKey);
     if (meta) {
       meta.lastFlushCompactionIndex = meta.compactionCount;
+      meta.messagesSinceFlush = 0;
       this.dirty = true;
     }
   }

@@ -1,7 +1,9 @@
 import type { BotConfig } from '../config';
 import { resolveAgentConfig } from '../config';
+import { localDateStr } from '../date-utils';
 import { HUMANIZER_PROMPT } from '../humanizer-prompt';
 import type { KarmaService } from '../karma/service';
+import { type MemoryViewer, memoryScope } from '../memory/viewer';
 import type { CustomizationService } from '../tenant/customization';
 import { type PermissionMode, buildSensitiveActionProtocol } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
@@ -17,6 +19,8 @@ export interface SystemPromptOptions {
   ragContext?: string | null;
   /** User ID for per-user core memory isolation */
   userId?: string;
+  /** Whose private core memory the prompt may show (memory/viewer.ts); null = shared only */
+  memoryViewer?: MemoryViewer;
   /** Permission mode for Sensitive Action Protocol injection */
   permissionMode?: PermissionMode;
 }
@@ -48,6 +52,11 @@ export class SystemPromptBuilder {
     const defs = this.toolRegistry.getDefinitionsForBot(botId, options.permissionMode);
 
     let prompt = soulLoader.composeSystemPrompt(options.userId) ?? resolved.systemPrompt;
+
+    // Without today's date every dated memory below reads as current.
+    const now = new Date();
+    const weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+    prompt += `\n\nToday is ${localDateStr(now)} (${weekday}). Anything dated earlier in your memory happened then, not now.`;
 
     // Tenant customization overlay (identity, knowledge, goals, rules)
     if (this.customizationService) {
@@ -101,7 +110,11 @@ export class SystemPromptBuilder {
     // When userId is provided, includes both user-specific and shared entries
     const coreMemory = this.ctx.memoryManager?.getCoreMemory();
     if (coreMemory) {
-      const coreMemoryBlock = coreMemory.renderForSystemPrompt(800, botId, options.userId);
+      const coreMemoryBlock = coreMemory.renderForSystemPrompt(
+        800,
+        botId,
+        memoryScope(options.memoryViewer, options.userId)
+      );
       if (coreMemoryBlock) {
         prompt += coreMemoryBlock;
       }

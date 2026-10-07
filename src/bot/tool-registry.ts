@@ -19,6 +19,7 @@ import { type PermissionMode, getBlockedTools } from './tool-permissions';
 import type { BotContext } from './types';
 
 import { createOutboundChannel } from '../channel/outbound';
+import type { MemoryViewer } from '../memory/viewer';
 import { AgentProposalStore } from '../tools/agent-proposal-store';
 import { createArchiveFileTool } from '../tools/archive-file';
 import { type AskHumanDeps, createAskHumanTool } from '../tools/ask-human';
@@ -862,12 +863,14 @@ export class ToolRegistry {
     tenantRoot?: string,
     permissionMode?: PermissionMode,
     inlineApprovalStore?: InlineApprovalStore,
-    sessionKey?: string
+    sessionKey?: string,
+    memoryViewer?: MemoryViewer
   ): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
     const executor = new ToolExecutor(this.ctx, {
       botId,
       chatId,
       userId,
+      memoryViewer,
       tenantRoot,
       tools: this.getToolsForBot(botId),
       karmaService: this.karmaService,

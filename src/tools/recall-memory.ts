@@ -1,4 +1,5 @@
 import type { CoreMemoryEntry, CoreMemoryManager } from '../memory/core-memory';
+import { memoryScope, memoryViewerFromArgs } from '../memory/viewer';
 import type { Tool, ToolResult } from './types';
 
 type ToolLogger = {
@@ -72,7 +73,10 @@ export function createRecallMemoryTool(coreMemory: CoreMemoryManager): Tool {
         // Build search query: combine topic + context if provided
         const searchQuery = context ? `${topic} ${context}` : topic;
         const botId = typeof args._botId === 'string' ? args._botId : undefined;
-        const userId = typeof args._userId === 'string' ? args._userId : undefined;
+        const userId = memoryScope(
+          memoryViewerFromArgs(args),
+          typeof args._userId === 'string' ? args._userId : undefined
+        );
         if (!botId) {
           return { success: false, content: 'Internal error: missing _botId context' };
         }

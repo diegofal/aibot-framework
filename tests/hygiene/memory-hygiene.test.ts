@@ -57,7 +57,17 @@ describe('detectPii', () => {
   test('family keywords are word-bounded (no hit inside "Archivo" or "Self-custody")', () => {
     expect(detectPii('Archivo 07_everyday reescrito')).toEqual([]);
     expect(detectPii('Self-custody relocates risk, it does not eliminate it')).toEqual([]);
-    expect(detectPii('habló de sus hijos').map((h) => h.kind)).toEqual(['custody']);
+    expect(detectPii('habló de la custodia').map((h) => h.kind)).toEqual(['custody']);
+  });
+
+  test('plain family words are not custody talk (relationship facts are the memory)', () => {
+    expect(detectPii('- Emma: 9 años, hija de Diego; Guille, hijo de Pri')).toEqual([]);
+    expect(detectPii('Diego has two daughters; the kids and children sleep over')).toEqual([]);
+    expect(detectPii('write-capable children each in its own git worktree')).toEqual([]);
+  });
+
+  test('custody inside an identifier is not custody talk', () => {
+    expect(detectPii('1. **`REGLA_CUSTODIA_TEXTO` (09-25)**: save the text')).toEqual([]);
   });
 
   test('accepts a custom keyword list', () => {
@@ -98,7 +108,7 @@ describe('pii kinds: severity and redactKinds', () => {
   });
 
   test('options.redactKinds narrows what apply may touch', () => {
-    writeFile(join(soulDir, 'MEMORY.md'), '- hijos: Ana (5)\n- mail bob@example.com\n');
+    writeFile(join(soulDir, 'MEMORY.md'), '- custodia: Ana (5)\n- mail bob@example.com\n');
     const ctx = makeCtx(root, { soulDir, options: { redactKinds: ['email'] } });
     const findings = memoryHygiene.preview(ctx);
     const custody = findings.find((f) => f.data?.piiKind === 'custody')!;
@@ -106,7 +116,7 @@ describe('pii kinds: severity and redactKinds', () => {
     const result = memoryHygiene.apply(ctx, findings);
     expect(result.applied).toHaveLength(1);
     expect(readFileSync(join(soulDir, 'MEMORY.md'), 'utf-8')).toBe(
-      '- hijos: Ana (5)\n- mail [redacted:email]\n'
+      '- custodia: Ana (5)\n- mail [redacted:email]\n'
     );
   });
 
@@ -158,12 +168,26 @@ describe('pii findings + apply', () => {
     );
   });
 
-  test('custody lines are redacted wholesale but keep the bullet/timestamp prefix', () => {
+  test('custody lines are reported but not redacted by default', () => {
+    const text = '- Custodia: martes y miércoles con los chicos\n';
+    writeFile(join(soulDir, 'MEMORY.md'), text);
+    const ctx = makeCtx(root, { soulDir });
+    const findings = memoryHygiene.preview(ctx);
+    const custody = findings.find((f) => f.data?.piiKind === 'custody')!;
+    expect(custody.fixable).toBe(false);
+    expect(memoryHygiene.apply(ctx, findings).applied).toHaveLength(0);
+    expect(readFileSync(join(soulDir, 'MEMORY.md'), 'utf-8')).toBe(text);
+  });
+
+  test('opted-in custody lines are redacted wholesale but keep the bullet/timestamp prefix', () => {
     writeFile(
       join(soulDir, 'MEMORY.md'),
       '- [10:00] habló de la custodia de los hijos\n- ok line\n'
     );
-    const ctx = makeCtx(root, { soulDir });
+    const ctx = makeCtx(root, {
+      soulDir,
+      options: { redactKinds: ['email', 'phone', 'chat-id', 'custody'] },
+    });
     const findings = memoryHygiene.preview(ctx);
     memoryHygiene.apply(ctx, findings);
     expect(readFileSync(join(soulDir, 'MEMORY.md'), 'utf-8')).toBe(

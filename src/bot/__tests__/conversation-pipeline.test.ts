@@ -267,7 +267,7 @@ describe('ConversationPipeline', () => {
       expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalledWith(
         expiredHistory,
         'test-bot',
-        undefined // userId (no userIsolation configured)
+        '789' // the sender owns the facts, even without userIsolation
       );
       expect(mockSessionManager.clearSession).toHaveBeenCalledWith('user:123');
     });
@@ -377,7 +377,8 @@ describe('ConversationPipeline', () => {
         5, // maxResults
         0.5, // minScore
         'test-bot', // botId
-        undefined // userId (no userIsolation configured)
+        undefined, // userId (no userIsolation configured)
+        '789' // memory viewer: the sender, even without userIsolation
       );
       expect(mockSystemPromptBuilder.build).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -459,15 +460,15 @@ describe('ConversationPipeline', () => {
       expect(mockSessionManager.markMemoryFlushed).toHaveBeenCalledWith('user:123');
     });
 
-    it('should not flush if already flushed for current compaction', async () => {
+    it('should not flush until enough messages arrived since the last flush', async () => {
       // Enable proactive flush
       (mockBotContext.config.soul.memoryFlush as any).enabled = true;
       (mockBotContext.config.soul.memoryFlush as any).messageThreshold = 5;
 
       (mockSessionManager.getSessionMeta as jest.Mock).mockReturnValue({
         messageCount: 10,
-        lastFlushCompactionIndex: 1,
-        compactionCount: 1, // Same as lastFlushCompactionIndex
+        compactionCount: 1,
+        messagesSinceFlush: 4,
       });
 
       const ctx = createMockContext();
@@ -476,6 +477,33 @@ describe('ConversationPipeline', () => {
       await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
 
       expect(mockMemoryFlusher.flushWithScoring).not.toHaveBeenCalled();
+    });
+
+    it('flushes again within the same compaction once new messages piled up, sending only those', async () => {
+      (mockBotContext.config.soul.memoryFlush as any).enabled = true;
+      (mockBotContext.config.soul.memoryFlush as any).messageThreshold = 5;
+
+      (mockSessionManager.getSessionMeta as jest.Mock).mockReturnValue({
+        messageCount: 10,
+        compactionCount: 1,
+        lastFlushCompactionIndex: 1,
+        messagesSinceFlush: 6,
+      });
+      const history = Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `m${i}`,
+      }));
+      (mockSessionManager.getFullHistory as jest.Mock).mockReturnValue(history);
+
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
+
+      expect(mockMemoryFlusher.flushWithScoring).toHaveBeenCalled();
+      const sent = (mockMemoryFlusher.flushWithScoring as jest.Mock).mock.calls[0][0];
+      expect(sent).toEqual(history.slice(-6));
+      expect(mockSessionManager.markMemoryFlushed).toHaveBeenCalledWith('user:123');
     });
 
     it('should handle flush errors without failing the conversation', async () => {
@@ -498,6 +526,31 @@ describe('ConversationPipeline', () => {
 
       // Should not throw — flush rejection is caught via .catch() callback
       await pipeline.handleConversation(ctx, config, 'user:123', 'Hello');
+    });
+  });
+
+  describe('memory viewer (whose private memory this chat may see)', () => {
+    it('passes the sender as viewer to the prompt, the tools and the flush, without userIsolation', async () => {
+      (mockBotContext.config.soul.memoryFlush as any).enabled = true;
+      (mockBotContext.config.soul.memoryFlush as any).messageThreshold = 5;
+      (mockSessionManager.getSessionMeta as jest.Mock).mockReturnValue({
+        messageCount: 10,
+        compactionCount: 0,
+        messagesSinceFlush: 6,
+      });
+
+      await pipeline.handleConversation(
+        createMockContext(),
+        createMockBotConfig(),
+        'user:123',
+        'Hello'
+      );
+
+      const buildCall = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
+      expect(buildCall.memoryViewer).toBe('789');
+      expect(buildCall.userId).toBeUndefined();
+      const flushArgs = (mockMemoryFlusher.flushWithScoring as jest.Mock).mock.calls[0];
+      expect(flushArgs[2]).toBe('789');
     });
   });
 
@@ -786,7 +839,8 @@ describe('ConversationPipeline', () => {
         expect.any(Number),
         expect.any(Number),
         'test-bot',
-        undefined // userId
+        undefined, // userId
+        undefined // memory viewer (none given to the standalone call)
       );
     });
   });
@@ -1264,7 +1318,8 @@ describe('ConversationPipeline', () => {
         5,
         0.5,
         'test-bot',
-        '789' // userId auto-derived from tenantId
+        '789', // userId auto-derived from tenantId
+        '789' // memory viewer
       );
     });
 

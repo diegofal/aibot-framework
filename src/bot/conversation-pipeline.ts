@@ -8,6 +8,7 @@ import { resolveAgentConfig, resolveMaxToolRounds, resolveTtsConfig } from '../c
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import { unflushedMessageCount } from '../session';
 import { generateSpeech } from '../tts';
 import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from './agent-loop-utils';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
@@ -75,7 +76,8 @@ export class ConversationPipeline {
     isGroup: boolean,
     botLogger: Logger,
     botId: string,
-    userId?: string
+    userId?: string,
+    memoryViewer?: string
   ): Promise<string | null> {
     const ragConfig = this.ctx.config.soul.search?.autoRag;
     if (!ragConfig?.enabled || !this.ctx.searchEnabled || !this.ctx.memoryManager) {
@@ -97,7 +99,8 @@ export class ConversationPipeline {
         ragConfig.maxResults,
         ragConfig.minScore,
         botId,
-        userId
+        userId,
+        memoryViewer
       );
 
       if (results.length === 0) {
@@ -223,9 +226,18 @@ export class ConversationPipeline {
     const rawUserId = ctx.from?.id;
     const isolationActive = userIsolation?.enabled || !!config.tenantId;
     const userId = isolationActive && rawUserId ? String(rawUserId) : undefined;
+    // Whose private memory this chat may see — the sender, with or without isolation.
+    const memoryViewer = rawUserId ? String(rawUserId) : undefined;
 
     // Start RAG pre-fetch early for parallelism
-    const ragPromise = this.prefetchMemoryContext(userText, isGroup, botLogger, config.id, userId);
+    const ragPromise = this.prefetchMemoryContext(
+      userText,
+      isGroup,
+      botLogger,
+      config.id,
+      userId,
+      memoryViewer
+    );
 
     try {
       // Memory flush on session expiry
@@ -234,7 +246,11 @@ export class ConversationPipeline {
         if (this.ctx.config.soul.enabled) {
           const expiredHistory = this.ctx.sessionManager.getFullHistory(serializedKey);
           if (expiredHistory.length > 0) {
-            await this.memoryFlusher.flushSessionToMemory(expiredHistory, config.id, userId);
+            await this.memoryFlusher.flushSessionToMemory(
+              expiredHistory,
+              config.id,
+              memoryViewer ?? userId
+            );
           }
         }
         this.ctx.sessionManager.clearSession(serializedKey);
@@ -243,22 +259,25 @@ export class ConversationPipeline {
       // Proactive memory flush (fire-and-forget)
       const flushConfig = this.ctx.config.soul.memoryFlush;
       if (sessionConfig.enabled && flushConfig?.enabled) {
-        const meta = this.ctx.sessionManager.getSessionMeta(serializedKey);
-        if (
-          meta &&
-          meta.messageCount >= flushConfig.messageThreshold &&
-          meta.lastFlushCompactionIndex !== (meta.compactionCount ?? 0)
-        ) {
+        const unflushed = unflushedMessageCount(
+          this.ctx.sessionManager.getSessionMeta(serializedKey)
+        );
+        if (unflushed >= flushConfig.messageThreshold) {
           botLogger.info(
-            { key: serializedKey, msgs: meta.messageCount },
+            { key: serializedKey, msgs: unflushed },
             'Proactive memory flush with scoring'
           );
-          const recentHistory = this.ctx.sessionManager.getFullHistory(serializedKey);
+          // Only what the last flush has not seen; older turns were already extracted.
+          const recentHistory = this.ctx.sessionManager
+            .getFullHistory(serializedKey)
+            .slice(-unflushed);
           this.ctx.sessionManager.markMemoryFlushed(serializedKey);
           // Use flushWithScoring for importance-weighted Core Memory storage
-          this.memoryFlusher.flushWithScoring(recentHistory, config.id, userId).catch((err) => {
-            botLogger.warn({ err }, 'Proactive memory flush failed');
-          });
+          this.memoryFlusher
+            .flushWithScoring(recentHistory, config.id, memoryViewer ?? userId)
+            .catch((err) => {
+              botLogger.warn({ err }, 'Proactive memory flush failed');
+            });
         }
       }
 
@@ -326,6 +345,7 @@ export class ConversationPipeline {
         isGroup,
         ragContext,
         userId,
+        memoryViewer,
         permissionMode,
       });
 
@@ -437,7 +457,10 @@ export class ConversationPipeline {
                     config.id,
                     userId,
                     tenantRoot,
-                    permissionMode
+                    permissionMode,
+                    undefined,
+                    undefined,
+                    memoryViewer
                   )
                 : undefined,
               maxToolRounds,
@@ -501,7 +524,10 @@ export class ConversationPipeline {
                       config.id,
                       userId,
                       tenantRoot,
-                      permissionMode
+                      permissionMode,
+                      undefined,
+                      undefined,
+                      memoryViewer
                     )
                   : undefined,
                 maxToolRounds,
@@ -882,9 +908,17 @@ export class ConversationPipeline {
     const userIsolation = config.userIsolation;
     const isolationActive = userIsolation?.enabled || !!config.tenantId;
     const userId = isolationActive && msg.sender.id ? msg.sender.id : undefined;
+    const memoryViewer = msg.sender.id || undefined;
 
     // Start RAG pre-fetch early
-    const ragPromise = this.prefetchMemoryContext(msg.text, isGroup, botLogger, config.id, userId);
+    const ragPromise = this.prefetchMemoryContext(
+      msg.text,
+      isGroup,
+      botLogger,
+      config.id,
+      userId,
+      memoryViewer
+    );
 
     try {
       // Memory flush on session expiry
@@ -893,7 +927,11 @@ export class ConversationPipeline {
         if (this.ctx.config.soul.enabled) {
           const expiredHistory = this.ctx.sessionManager.getFullHistory(sessionKey);
           if (expiredHistory.length > 0) {
-            await this.memoryFlusher.flushSessionToMemory(expiredHistory, config.id, userId);
+            await this.memoryFlusher.flushSessionToMemory(
+              expiredHistory,
+              config.id,
+              memoryViewer ?? userId
+            );
           }
         }
         this.ctx.sessionManager.clearSession(sessionKey);
@@ -902,18 +940,18 @@ export class ConversationPipeline {
       // Proactive memory flush
       const flushConfig = this.ctx.config.soul.memoryFlush;
       if (sessionConfig.enabled && flushConfig?.enabled) {
-        const meta = this.ctx.sessionManager.getSessionMeta(sessionKey);
-        if (
-          meta &&
-          meta.messageCount >= flushConfig.messageThreshold &&
-          meta.lastFlushCompactionIndex !== (meta.compactionCount ?? 0)
-        ) {
-          botLogger.info({ key: sessionKey, msgs: meta.messageCount }, 'Proactive memory flush');
-          const recentHistory = this.ctx.sessionManager.getFullHistory(sessionKey);
+        const unflushed = unflushedMessageCount(this.ctx.sessionManager.getSessionMeta(sessionKey));
+        if (unflushed >= flushConfig.messageThreshold) {
+          botLogger.info({ key: sessionKey, msgs: unflushed }, 'Proactive memory flush');
+          const recentHistory = this.ctx.sessionManager
+            .getFullHistory(sessionKey)
+            .slice(-unflushed);
           this.ctx.sessionManager.markMemoryFlushed(sessionKey);
-          this.memoryFlusher.flushWithScoring(recentHistory, config.id, userId).catch((err) => {
-            botLogger.warn({ err }, 'Proactive memory flush failed');
-          });
+          this.memoryFlusher
+            .flushWithScoring(recentHistory, config.id, memoryViewer ?? userId)
+            .catch((err) => {
+              botLogger.warn({ err }, 'Proactive memory flush failed');
+            });
         }
       }
 
@@ -981,6 +1019,7 @@ export class ConversationPipeline {
         isGroup,
         ragContext,
         userId,
+        memoryViewer,
         permissionMode,
       });
 
@@ -1193,7 +1232,10 @@ export class ConversationPipeline {
                       config.id,
                       userId,
                       tenantRoot,
-                      permissionMode
+                      permissionMode,
+                      undefined,
+                      undefined,
+                      memoryViewer
                     )
                   : undefined,
                 maxToolRounds,
@@ -1241,7 +1283,10 @@ export class ConversationPipeline {
                         config.id,
                         userId,
                         tenantRoot,
-                        permissionMode
+                        permissionMode,
+                        undefined,
+                        undefined,
+                        memoryViewer
                       )
                     : undefined,
                   maxToolRounds,
