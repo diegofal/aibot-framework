@@ -417,3 +417,36 @@ bun scripts/docker/backup.ts backup
 **Outcome.** Backup `D:\aibot-backups\aibot-backup-2026-10-06T23-47-24` (container restarted by the backup). Findings: the 2026-10-04 16:05 hygiene run redacted `custody` lines in default (`legacy.md` kids list + 3 MEMORY.md lines), milei-rocca (its rule `REGLA_CUSTODIA_TEXTO`) and ai-perfectionist ("write-capable children"); originals in each `.versions/*.2026-10-04T16-05-*.bak`. `/app/productions/default` has been empty (0-byte changelog) since 2026-10-04 ~00:27Z, cryptik lost 30–43 in the same window; no tool call did it, not in any backup (oldest is 2026-10-04T18-57). No bot memory written: the repair was blocked by the permission guard and waits for the operator.
 
 **Reversible?** Nothing changed besides the backup.
+
+### 2026-10-06 — Deployed the memory fixes and repaired bot memory
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1`, data volume (soul files of default, milei-rocca, ai-perfectionist; `memory.db`) |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Deploy `b1565d7` (custody redaction opt-in, flush every N messages, dates, memory viewer) and undo/correct the memory damage found in the audit |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+docker cp D:/tmp/memory-repair.ts aibot-framework-aibot-1:/tmp/memory-repair.ts
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun /tmp/memory-repair.ts              # dry run
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun /tmp/memory-repair.ts --apply      # files + goal; DB step failed (readonly:false misuse), nothing written to the DB
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun /tmp/memory-repair.ts --core-only --apply
+docker cp D:/tmp/verify-memory.ts aibot-framework-aibot-1:/tmp/verify-memory.ts
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun /tmp/verify-memory.ts
+```
+
+**Outcome.** Backup `D:\aibot-backups\aibot-backup-2026-10-07T00-39-16`. Container `healthy`; the image has `src/memory/viewer.ts` and `unflushedMessageCount`.
+
+Repair:
+- Restored 11 custody-redacted lines from the 2026-10-04 `.bak` files: default `legacy.md` ×6 and `MEMORY.md` ×3, milei-rocca ×1, ai-perfectionist ×1.
+- Finny's MEMORY.md gained an operator-corrections block and a People section (days with the kids: Mar/Mié, confirmed by Diego). False lines about Telegram, replies and the productions inventory were fixed in place.
+- The note on the Diego goal was rewritten through `writeGoalsFile`, actor `operator`.
+- `core_memory` (default): deleted #272, #292, #324, #398 and #405 (wrong facts). Scoped 38 of Pri's "User…" facts to `user_id 1531050540`; none deleted.
+
+Each file's backup is `.versions/*.2026-10-07T00-40-59.bak`; the DB snapshot is `/app/data/memory.db.2026-10-07T00-41-08.bak`.
+
+Verified: 0 custody markers. Diego's core-memory block shows the family facts and none of Pri's private ones; Pri's block shows hers.
+
+**Reversible?** Yes. Copy the `.bak` files back, or restore `memory.db` from the snapshot (stop the container first). For the code: check out `e5f2d3a` and rebuild.
