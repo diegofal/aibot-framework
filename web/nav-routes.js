@@ -124,6 +124,7 @@ const botQuery = (m) => {
 export const ROUTES = [
   { pattern: /^#\/$/, handler: 'fleetHome', area: 'home', args: none },
   { pattern: /^#\/board$/, handler: 'fleetBoard', area: 'home', args: none },
+  { pattern: /^#\/board\/([^/]+)$/, handler: 'fleetBoard', area: 'home', args: one },
 
   // Literal `new` must precede the `:id` patterns (an agent cannot be named "new").
   { pattern: /^#\/agents\/new$/, handler: 'agentWizard', area: 'agents', args: none },

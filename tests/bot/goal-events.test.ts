@@ -162,6 +162,17 @@ describe('diffGoals subtasks', () => {
   });
 });
 
+describe('diffGoals headline', () => {
+  test('a changed headline is one headline event', () => {
+    const base = { status: 'pending', priority: 'medium', text: 'A long brief', id: 'a' };
+    const ops = diffGoals(
+      { active: [base], completed: [] },
+      { active: [{ ...base, headline: 'Short' }], completed: [] }
+    );
+    expect(ops).toEqual([{ goalId: 'a', title: 'A long brief', op: 'headline', to: 'Short' }]);
+  });
+});
+
 describe('diffGoals renames', () => {
   test('a goal whose title changed under the same id is one title event', () => {
     const base = { status: 'pending', priority: 'medium' };

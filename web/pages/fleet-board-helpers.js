@@ -2,57 +2,53 @@
  * Fleet Board — pure helpers (no DOM, no fetch), tested in
  * tests/web/fleet-board-helpers.test.ts.
  *
- * The whole fleet as one board: a swimlane per agent (what it is doing now,
- * its controls, what needs you) with its goals in four columns, and each goal
- * carrying its subtasks (`- task:` lines in GOALS.md). Every edit goes through
- * the goal routes of src/web/routes/agent-home.ts.
+ * Two levels plus a drawer, designed for reading first:
+ *   overview  one compact row per agent: who + state → focus → up next → needs you
+ *   board     one agent's goals in In progress / Up next / Blocked / Done
+ *   drawer    one goal: status, priority, subtasks, brief, notes, delete
+ * Cards show a short headline (`goal.headline`, else derived from the text by
+ * `goalHeadline`); the full text is the brief the agent reads, shown in the drawer.
  */
-import { avatar, badge, esc } from '../ui/index.js';
+import { avatar, esc } from '../ui/index.js';
 import { formatNext, postureTone } from './agent-home-helpers.js';
 import { fleetQuickActions } from './fleet-home-helpers.js';
 import { relativeTime } from './stats-helpers.js';
 
-/** Board columns, left to right; `status` is what a drop onto the column PATCHes. */
+/** Board columns, left to right; `status` is what a drop / the drawer PATCHes. */
 export const BOARD_COLUMNS = [
-  { id: 'todo', label: 'To do', status: 'pending' },
-  { id: 'inProgress', label: 'In progress', status: 'in_progress' },
-  { id: 'blocked', label: 'Blocked', status: 'blocked' },
-  { id: 'done', label: 'Done', status: 'done' },
+  { id: 'inProgress', label: 'In progress', status: 'in_progress', hint: 'what it works on' },
+  { id: 'todo', label: 'Up next', status: 'pending', hint: 'queued' },
+  { id: 'blocked', label: 'Blocked', status: 'blocked', hint: 'needs a decision' },
+  { id: 'done', label: 'Done', status: 'done', hint: 'latest' },
 ];
+export const DONE_SHOWN = 8;
+const HEADLINE_MAX = 72;
 
-/** Completed goals shown per lane (newest first). */
-export const DONE_SHOWN = 5;
-
-// ── Subtasks (pure; each returns a new array, or the same one when nothing changes) ──
+// ── Subtasks (pure; a new array, or the same one when nothing changes) ──
 
 function oneLine(text) {
   return String(text ?? '')
     .replace(/\s*[\r\n]+\s*/g, ' ')
     .trim();
 }
-
 export function toggleTask(tasks, i) {
   if (!Array.isArray(tasks) || !tasks[i]) return tasks;
   return tasks.map((t, n) => (n === i ? { ...t, done: !t.done } : t));
 }
-
 export function addTask(tasks, text) {
   const clean = oneLine(text);
   if (!clean) return tasks;
   return [...(tasks ?? []), { text: clean, done: false }];
 }
-
 export function renameTask(tasks, i, text) {
   const clean = oneLine(text);
   if (!clean || !Array.isArray(tasks) || !tasks[i]) return tasks;
   return tasks.map((t, n) => (n === i ? { ...t, text: clean } : t));
 }
-
 export function removeTask(tasks, i) {
   if (!Array.isArray(tasks) || !tasks[i]) return tasks;
   return tasks.filter((_, n) => n !== i);
 }
-
 /** Move task `i` by `dir` (-1 up, +1 down). */
 export function moveTask(tasks, i, dir) {
   const j = i + dir;
@@ -61,7 +57,6 @@ export function moveTask(tasks, i, dir) {
   [next[i], next[j]] = [next[j], next[i]];
   return next;
 }
-
 export function taskProgress(tasks) {
   const list = Array.isArray(tasks) ? tasks : [];
   const done = list.filter((t) => t.done).length;
@@ -72,29 +67,88 @@ export function taskProgress(tasks) {
   };
 }
 
-// ── Data shaping ──
+// ── Headline ──
 
-/** How the routes find a goal: its id, else its exact title (goals written before ids). */
+function cutAtWord(s, n) {
+  const c = s.slice(0, n);
+  const at = Math.max(c.lastIndexOf(' '), n - 12);
+  return `${c.slice(0, at).replace(/[,;:\s]+$/, '')}…`;
+}
+
+/**
+ * `{ head, tag }` for a card. A headline set on the board wins; otherwise the
+ * text up to its earliest clause break (`: `, ` — `, ` (`, `. `, `; `, `, `,
+ * each with a minimum length before it, never inside quotes), capped at a word.
+ * "Live up to my purpose: X" reads "Purpose: X"; a leading all-caps tag
+ * ("DORMIDO — …") becomes `tag`; an all-caps opening is sentence-cased.
+ */
+export function goalHeadline(goal) {
+  const set = String(goal?.headline ?? '').trim();
+  if (set) return { head: set, tag: null };
+  let t = String(goal?.text ?? '').trim();
+  let tag = null;
+  const tagged = t.match(/^([A-ZÁÉÍÓÚÑ]{4,})\s*[—–-]\s*(.*)$/);
+  if (tagged) {
+    tag = tagged[1].toLowerCase() === 'dormido' ? 'dormant' : tagged[1].toLowerCase();
+    t = tagged[2].replace(/^Gatillo:\s*/i, '');
+  }
+  const purpose = t.match(/^Live up to my purpose:\s*(.*)$/i);
+  if (purpose) t = `Purpose: ${purpose[1]}`;
+  const caps = t.match(/^([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{8,})(?=[,:—])/);
+  if (caps) t = caps[1].charAt(0) + caps[1].slice(1).toLowerCase() + t.slice(caps[1].length);
+  const MIN = { ': ': 8, ' — ': 8, ' (': 24, '. ': 16, '; ': 16, ', ': 28 };
+  const quotesOk = (s) => (s.match(/["“”]/g) || []).length % 2 === 0;
+  let best = -1;
+  for (const [sep, min] of Object.entries(MIN)) {
+    const i = t.indexOf(sep);
+    if (i >= min && i <= 78 && quotesOk(t.slice(0, i)) && (best < 0 || i < best)) best = i;
+  }
+  let head = best > 0 ? t.slice(0, best) : t;
+  if (head.length > HEADLINE_MAX) head = cutAtWord(head, HEADLINE_MAX);
+  return { head: head.charAt(0).toUpperCase() + head.slice(1), tag };
+}
+
+// ── State and data shaping ──
+
+/** `{ text, tone }`: "Working · web_fetch" / "Waiting on you · 1 question" / "Idle · next run in 3h". */
+export function stateLine(p, nowMs = Date.now()) {
+  if (p?.isExecuting) {
+    const what =
+      p.currentTool ||
+      String(p.phase ?? '')
+        .replace(/[:_-]+/g, ' ')
+        .trim();
+    return { text: what ? `Working · ${what}` : 'Working', tone: 'live' };
+  }
+  if (p && p.running === false)
+    return { text: p.enabled === false ? 'Disabled' : 'Stopped', tone: 'off' };
+  const asks = Number(p?.pendingAsks) || 0;
+  if (asks)
+    return { text: `Waiting on you · ${asks} question${asks === 1 ? '' : 's'}`, tone: 'wait' };
+  const next = formatNext(p?.nextRunAt, nowMs);
+  return { text: next ? `Idle · ${next}` : 'Idle', tone: 'idle' };
+}
+
+/** How the routes find a goal: its id, else its exact text (goals written before ids). */
 export function goalRef(goal) {
   return goal?.id ? { id: goal.id } : { goal: goal?.text ?? '' };
 }
-
 function refValue(goal) {
   return goal?.id || goal?.text || '';
 }
 
-/** Agent Home payload → the four columns. */
+/** Agent Home payload → the board columns. */
 export function boardColumns(home) {
   const g = home?.goals;
   return {
-    todo: g?.todo ?? [],
     inProgress: g?.inProgress ?? [],
+    todo: g?.todo ?? [],
     blocked: g?.blocked ?? [],
     done: (g?.completedRecently ?? []).slice(0, DONE_SHOWN),
   };
 }
 
-/** The newest agent-loop cycle in the home timeline: `{ ts, summary }` or null. */
+/** Newest agent-loop cycle in the home timeline: `{ ts, summary }` or null. */
 export function lastCycle(home) {
   const cycles = (home?.timeline ?? []).filter((i) => i?.kind === 'cycle');
   if (!cycles.length) return null;
@@ -102,148 +156,244 @@ export function lastCycle(home) {
   return { ts: newest.ts, summary: newest.detail ?? newest.title ?? '' };
 }
 
-function laneMatches(lane, filter) {
-  const p = lane?.presence ?? {};
-  if (filter === 'working') return Boolean(p.isExecuting);
-  if (filter === 'needs') return (Number(p.pendingAsks) || 0) + (Number(p.unreviewed) || 0) > 0;
-  return true;
+function openGoals(home) {
+  const c = boardColumns(home);
+  return [...c.inProgress, ...c.todo, ...c.blocked];
 }
 
-export function filterLanes(lanes = [], filter = 'all') {
-  return lanes.filter((l) => laneMatches(l, filter));
-}
-
-export function boardFilterCounts(lanes = []) {
+export function fleetPulse(lanes = []) {
   return {
-    all: lanes.length,
-    working: filterLanes(lanes, 'working').length,
-    needs: filterLanes(lanes, 'needs').length,
+    agents: lanes.length,
+    working: lanes.filter((l) => l.presence?.isExecuting).length,
+    waiting: lanes.reduce(
+      (s, l) => s + (Number(l.presence?.pendingAsks) || 0) + (Number(l.presence?.unreviewed) || 0),
+      0
+    ),
+    openGoals: lanes.reduce((s, l) => s + openGoals(l.home).length, 0),
   };
+}
+
+/** `filter`: all | live | needs; `query` matches the agent name or any goal text / headline. */
+export function filterLanes(lanes = [], filter = 'all', query = '') {
+  const q = String(query ?? '')
+    .trim()
+    .toLowerCase();
+  return lanes.filter((l) => {
+    const p = l.presence ?? {};
+    if (filter === 'live' && !p.isExecuting) return false;
+    if (filter === 'needs' && !((Number(p.pendingAsks) || 0) + (Number(p.unreviewed) || 0)))
+      return false;
+    if (!q) return true;
+    const name = String(l.agent?.name ?? l.agent?.id ?? '').toLowerCase();
+    return (
+      name.includes(q) ||
+      openGoals(l.home).some((g) => `${g.text} ${g.headline ?? ''}`.toLowerCase().includes(q))
+    );
+  });
 }
 
 // ── Markup ──
 
-const PRIORITY_TONE = { high: 'danger', medium: 'warn', low: 'muted' };
+const PRIORITIES = ['low', 'medium', 'high'];
 
-function taskRow(t, i) {
-  return `<li class="fb-task${t.done ? ' fb-task-done' : ''}" data-task="${i}">
-    <input type="checkbox" class="fb-task-check" data-action="toggle-task" aria-label="Done"${t.done ? ' checked' : ''}>
-    <span class="fb-task-text" data-action="edit-task" title="Double-click to edit">${esc(t.text)}</span>
-    <span class="fb-task-tools">
-      <button type="button" class="fb-icon" data-action="task-up" title="Move up" aria-label="Move up">↑</button>
-      <button type="button" class="fb-icon" data-action="task-down" title="Move down" aria-label="Move down">↓</button>
-      <button type="button" class="fb-icon" data-action="remove-task" title="Remove subtask" aria-label="Remove subtask">×</button>
-    </span>
-  </li>`;
+function face(agent, p, size, avatarSrc) {
+  const id = String(agent?.id ?? '');
+  const name = agent?.name ?? id;
+  const url = p?.avatarUrl ?? agent?.avatarUrl ?? null;
+  return avatar({
+    seed: id,
+    name,
+    src: url ? avatarSrc(url) : undefined,
+    size,
+    status: postureTone(p?.posture ?? 'unknown'),
+  });
 }
 
-/** One goal card: title, priority, owner, subtask checklist with progress, inline add. */
-export function goalCard(botId, goal, column) {
-  const done = column === 'done';
-  const tasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
-  const prog = taskProgress(tasks);
-  const pri = String(goal?.priority ?? 'medium');
-  const mine = /^operator/.test(String(goal?.source ?? ''));
-  const notes = goal?.notes ? String(goal.notes) : '';
-  const bar = prog.total
-    ? `<div class="fb-progress" title="${prog.done} of ${prog.total} subtasks done"><span style="width:${prog.pct}%"></span></div>
-       <span class="fb-progress-label">${prog.done}/${prog.total}</span>`
-    : '';
-  return `<article class="fb-card${done ? ' fb-card-done' : ''}" data-bot="${esc(botId)}" data-goal="${esc(refValue(goal))}"${done ? '' : ' draggable="true"'}>
-    <div class="fb-card-head">
-      <span class="fb-card-title" data-action="edit-title" title="Click to rename">${esc(goal?.text ?? '')}</span>
-      <button type="button" class="fb-icon fb-card-menu" data-action="toggle-detail" title="Notes, priority, delete" aria-label="Goal details">⋯</button>
-    </div>
-    <div class="fb-card-meta">
-      <button type="button" class="fb-chip-btn" data-action="cycle-priority" title="Change priority">${badge(pri, PRIORITY_TONE[pri] ?? 'muted')}</button>
-      ${mine ? badge('you', 'accent') : ''}
-      ${bar}
-    </div>
-    ${notes ? `<div class="fb-card-notes text-dim">${esc(notes.length > 140 ? `${notes.slice(0, 139)}…` : notes)}</div>` : ''}
-    ${tasks.length ? `<ul class="fb-tasks">${tasks.map(taskRow).join('')}</ul>` : ''}
-    ${
-      done
-        ? ''
-        : `<form class="fb-add-task" data-action="add-task"><input type="text" name="task" maxlength="200" placeholder="+ Add subtask" aria-label="Add subtask"></form>`
-    }
-    <div class="fb-detail" hidden>
-      <label class="fb-detail-label">Notes
-        <textarea name="notes" rows="3" maxlength="600">${esc(notes)}</textarea>
-      </label>
-      <div class="fb-detail-row">
-        <button type="button" class="btn btn-sm" data-action="save-notes">Save notes</button>
-        <a class="btn btn-sm" href="#/agents/${encodeURIComponent(botId)}" title="Open in Agent Home">History</a>
-        <button type="button" class="btn btn-sm btn-danger" data-action="delete-goal">Delete goal</button>
-      </div>
-    </div>
-  </article>`;
+function mini(tasks) {
+  const p = taskProgress(tasks);
+  if (!p.total) return '';
+  return `<span class="fb-mini" title="${p.done} of ${p.total} subtasks done"><s><em style="width:${p.pct}%"></em></s>${p.done}/${p.total}</span>`;
 }
 
-function column(botId, col, goals) {
-  const add =
-    col.id === 'todo'
-      ? `<form class="fb-add-goal" data-action="add-goal"><input type="text" name="title" maxlength="200" placeholder="+ Add goal" aria-label="Add goal"></form>`
+function sourceTag(goal) {
+  const src = String(goal?.source ?? '');
+  if (/^operator/.test(src)) return '<span class="fb-tag you">you</span>';
+  return src ? `<span class="fb-tag">${esc(src.split(':')[0])}</span>` : '';
+}
+
+function needsPills(id, p) {
+  const asks = Number(p?.pendingAsks) || 0;
+  const review = Number(p?.unreviewed) || 0;
+  const out = [];
+  if (asks)
+    out.push(
+      `<a class="fb-pill" href="#/needs?bot=${encodeURIComponent(id)}">${asks} ask${asks === 1 ? '' : 's'}</a>`
+    );
+  if (review)
+    out.push(
+      `<a class="fb-pill" href="#/work/productions/${encodeURIComponent(id)}">${review} to review</a>`
+    );
+  return out.join('');
+}
+
+/** One overview row (the whole row links to the agent's board). */
+export function overviewRow(
+  lane,
+  i,
+  { nowMs = Date.now(), selected = false, avatarSrc = (u) => u } = {}
+) {
+  const { agent, presence: p, home } = lane;
+  const id = String(agent?.id ?? '');
+  const state = stateLine(p, nowMs);
+  const cols = boardColumns(home);
+  const focusLine = (g) =>
+    `<div class="fb-fl"><span class="fb-pri ${esc(g.priority)}"></span><span class="fb-t">${esc(goalHeadline(g).head)}</span>${mini(g.tasks)}</div>`;
+  const focus = home
+    ? cols.inProgress.slice(0, 2).map(focusLine).join('') ||
+      '<span class="fb-dim">Nothing in progress</span>'
+    : '<span class="fb-dim">Goals not loaded</span>';
+  const moreFocus =
+    cols.inProgress.length > 2
+      ? `<span class="fb-more">+${cols.inProgress.length - 2} more</span>`
       : '';
-  return `<div class="fb-col" data-col="${col.id}" data-status="${col.status}" data-bot="${esc(botId)}">
-    <div class="fb-col-head">${esc(col.label)} <span class="fb-count">${goals.length}</span></div>
-    <div class="fb-col-body">${goals.map((g) => goalCard(botId, g, col.id)).join('')}</div>
-    ${add}
+  const blocked = cols.blocked.length
+    ? `<span class="fb-pill danger">${cols.blocked.length} blocked</span>`
+    : '';
+  const next = cols.todo[0]
+    ? `<span class="fb-t">${esc(goalHeadline(cols.todo[0]).head)}</span>${cols.todo.length > 1 ? `<span class="fb-more">+${cols.todo.length - 1} queued</span>` : ''}`
+    : blocked
+      ? ''
+      : '<span class="fb-dim">—</span>';
+  const needs = needsPills(id, p) || '<span class="fb-dim">nothing</span>';
+  return `<a class="fb-row${selected ? ' kb' : ''}" href="#/board/${encodeURIComponent(id)}" data-row="${esc(id)}" style="animation-delay:${Math.min(i, 12) * 30}ms">
+    <div class="fb-who">${face(agent, p, 38, avatarSrc)}<div class="fb-who-txt"><div class="fb-name">${esc(agent?.name ?? id)}</div><div class="fb-state ${state.tone}">${esc(state.text)}</div></div></div>
+    <div class="fb-focus">${focus}${moreFocus}</div>
+    <div class="fb-next">${blocked}${next}</div>
+    <div class="fb-needs">${needs}</div>
+    <div class="fb-go" aria-hidden="true">›</div>
+  </a>`;
+}
+
+/** One goal card: headline (≤ 2 lines), quiet meta, priority as a colored edge. */
+export function cardHtml(goal, selected) {
+  const { head, tag } = goalHeadline(goal);
+  const ref = esc(refValue(goal));
+  if (goal?.section === 'completed' || goal?.status === 'completed') {
+    return `<div class="fb-card done" data-goal="${ref}"><div class="fb-h"><span class="fb-check">✓</span>${esc(head)}</div></div>`;
+  }
+  const pri = PRIORITIES.includes(goal?.priority) ? goal.priority : 'medium';
+  return `<div class="fb-card ${pri}${selected ? ' sel' : ''}" data-goal="${ref}" draggable="true" tabindex="0">
+    <div class="fb-h">${esc(head)}</div>
+    <div class="fb-meta">${tag ? `<span class="fb-tag sleep">${esc(tag)}</span>` : ''}${sourceTag(goal)}${goal?.notes ? '<span class="fb-dim" title="Has notes">✎</span>' : ''}<span class="fb-sp"></span>${mini(goal?.tasks)}</div>
   </div>`;
 }
 
-/** The lane header: who, what it is doing right now, what it did last, what needs you, controls. */
-function laneHead(agent, p, home, nowMs, avatarSrc) {
+function column(col, goals, selectedRef) {
+  if (col.id === 'blocked' && goals.length === 0) {
+    return `<div class="fb-col slim" data-col="${col.id}" data-status="${col.status}" title="Blocked — drop a goal here"><div class="fb-slim-label">Blocked · 0</div></div>`;
+  }
+  const cards = goals.map((g) => cardHtml(g, refValue(g) === selectedRef)).join('');
+  return `<div class="fb-col" data-col="${col.id}" data-status="${col.status}">
+    <div class="fb-col-h"><h3>${esc(col.label)}</h3><span class="fb-n">${goals.length}</span><span class="fb-hint">${esc(col.hint)}</span></div>
+    <div class="fb-cards">${cards || '<div class="fb-dim fb-empty-col">Nothing here. Drag a goal in.</div>'}</div>
+    ${col.id === 'todo' ? '<input class="fb-add" data-addgoal maxlength="200" placeholder="+ New goal, then Enter" aria-label="New goal">' : ''}
+  </div>`;
+}
+
+/** One agent's board: agent switcher, header (state, last cycle, controls), columns. */
+export function agentBoardHtml(
+  lane,
+  lanes = [],
+  { nowMs = Date.now(), selectedRef = null, avatarSrc = (u) => u } = {}
+) {
+  const { agent, presence: p, home } = lane;
   const id = String(agent?.id ?? '');
-  const name = agent?.name ?? p?.name ?? id;
-  const tone = postureTone(p?.posture ?? 'unknown');
-  const faceUrl = p?.avatarUrl ?? agent?.avatarUrl ?? null;
-  const live = p?.isExecuting
-    ? `<div class="fb-live"><span class="fleet-live-dot"></span> ${esc(p.currentTool ? `running ${p.currentTool}` : 'working')}</div>`
-    : '';
+  const state = stateLine(p, nowMs);
   const cycle = lastCycle(home);
-  const last = cycle?.summary
-    ? `<div class="fb-last text-dim" title="${esc(cycle.summary)}">Last cycle ${esc(relativeTime(cycle.ts, nowMs))}: ${esc(cycle.summary)}</div>`
-    : '';
-  const asks = Number(p?.pendingAsks) || 0;
-  const review = Number(p?.unreviewed) || 0;
-  const needs = [];
-  if (asks)
-    needs.push(
-      `<a class="fleet-need" href="#/needs?bot=${encodeURIComponent(id)}">${asks} ask${asks === 1 ? '' : 's'}</a>`
-    );
-  if (review)
-    needs.push(
-      `<a class="fleet-need" href="#/work/productions/${encodeURIComponent(id)}">${review} to review</a>`
-    );
-  const next = p && !p.isExecuting ? formatNext(p.nextRunAt, nowMs) : '';
-  return `<header class="fb-lane-head">
-    <a class="fb-who" href="#/agents/${encodeURIComponent(id)}">
-      ${avatar({ seed: id, name, src: faceUrl ? avatarSrc(faceUrl) : undefined, size: 36, status: tone })}
-      <span class="fb-name">${esc(name)}</span>
-    </a>
-    <div class="fleet-now fleet-now-${esc(p?.tone ?? tone)}">${esc(p?.nowLine ?? 'Loading…')}</div>
-    ${live}${last}
-    ${next ? `<div class="fb-next text-dim">${esc(next)}</div>` : ''}
-    ${needs.length ? `<div class="fleet-needs">${needs.join('')}</div>` : ''}
-    ${fleetQuickActions(agent, p)}
-  </header>`;
-}
-
-/** One swimlane. `home` null = the goals could not be loaded (said, not shown as empty). */
-export function boardLane(agent, p, home, nowMs = Date.now(), { avatarSrc = (u) => u } = {}) {
-  const id = String(agent?.id ?? '');
+  const chips = lanes
+    .map(
+      (l) =>
+        `<a class="fb-chip${l.agent.id === id ? ' on' : ''}" href="#/board/${encodeURIComponent(l.agent.id)}">${face(l.agent, l.presence, 22, avatarSrc)}${esc(l.agent.name ?? l.agent.id)}</a>`
+    )
+    .join('');
   const cols = boardColumns(home);
-  const body = home
-    ? BOARD_COLUMNS.map((c) => column(id, c, cols[c.id])).join('')
-    : `<div class="fb-lane-error text-dim">Could not load goals for this agent. <button type="button" class="btn btn-sm" data-action="reload-lane">Retry</button></div>`;
-  return `<section class="fb-lane${p?.isExecuting ? ' fb-lane-live' : ''}" data-lane="${esc(id)}">
-    ${laneHead(agent, p, home, nowMs, avatarSrc)}
-    <div class="fb-cols">${body}</div>
-  </section>`;
+  const board = home
+    ? `<div class="fb-board${cols.blocked.length ? '' : ' no-blocked'}">${BOARD_COLUMNS.map((c) => column(c, cols[c.id], selectedRef)).join('')}</div>`
+    : '<div class="fb-error">Could not load goals for this agent. <button type="button" class="btn btn-sm" data-reload>Retry</button></div>';
+  return `<div class="fb-crumbs"><a href="#/board">← Fleet board</a></div>
+    <nav class="fb-switch" aria-label="Agents">${chips}</nav>
+    <header class="fb-agent">
+      ${face(agent, p, 48, avatarSrc)}
+      <div class="fb-agent-txt">
+        <div class="fb-agent-name">${esc(agent?.name ?? id)}</div>
+        <div class="fb-state ${state.tone}">${esc(state.text)}</div>
+        ${cycle?.summary ? `<div class="fb-last" title="${esc(cycle.summary)}">Last cycle ${esc(relativeTime(cycle.ts, nowMs))}: ${esc(cycle.summary)}</div>` : ''}
+      </div>
+      <div class="fb-agent-act">${needsPills(id, p)}<a class="btn btn-sm" href="#/agents/${encodeURIComponent(id)}">Agent home</a>${fleetQuickActions(agent, p)}</div>
+    </header>
+    ${board}
+    <div class="fb-foot-hint">Click a card to edit · drag cards between columns · <span class="fb-kbd">Esc</span> back</div>`;
 }
 
-export function boardFilterChips(active = 'all', counts = {}) {
-  const chip = (id, label) =>
-    `<button type="button" class="agents-chip${active === id ? ' agents-chip-active' : ''}" data-board-filter="${id}" aria-pressed="${active === id}">${esc(label)} <span class="agents-chip-n">${Number(counts[id]) || 0}</span></button>`;
-  return `<div class="fleet-chips" role="group" aria-label="Filter lanes">${chip('all', 'All')}${chip('working', 'Working now')}${chip('needs', 'Needs you')}</div>`;
+/** The goal drawer. Every control carries a data attribute the page delegates. */
+export function drawerHtml(agent, goal) {
+  const { head } = goalHeadline(goal);
+  const done = goal?.section === 'completed' || goal?.status === 'completed';
+  const status = done
+    ? 'done'
+    : goal?.status === 'blocked'
+      ? 'blocked'
+      : goal?.status === 'pending'
+        ? 'pending'
+        : 'in_progress';
+  const tasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
+  const p = taskProgress(tasks);
+  const notes = goal?.notes ? String(goal.notes) : '';
+  const brief = String(goal?.text ?? '');
+  const seg = (attr, items, on) =>
+    items
+      .map(
+        ([v, label]) =>
+          `<button type="button" data-${attr}="${v}" class="${v === on ? 'on' : ''}">${label}</button>`
+      )
+      .join('');
+  return `<div class="fb-d-head">
+      <div class="fb-d-who">${esc(agent?.name ?? agent?.id ?? '')} · ${sourceTag(goal) || '<span class="fb-tag">agent</span>'}<button type="button" class="fb-d-close" data-close aria-label="Close">×</button></div>
+      <textarea class="fb-d-title" id="fb-title" rows="2" maxlength="100" aria-label="Title">${esc(head)}</textarea>
+    </div>
+    <div class="fb-d-body">
+      <div class="fb-field"><div class="fb-lbl">Status</div>
+        <div class="fb-seg">${seg(
+          'st',
+          BOARD_COLUMNS.map((c) => [c.status, c.label]),
+          status
+        )}</div></div>
+      <div class="fb-field"><div class="fb-lbl">Priority</div>
+        <div class="fb-seg">${seg(
+          'pri',
+          PRIORITIES.map((x) => [
+            x,
+            `<span class="fb-pri ${x}"></span>${x[0].toUpperCase()}${x.slice(1)}`,
+          ]),
+          goal?.priority
+        )}</div></div>
+      <div class="fb-field"><div class="fb-lbl">Subtasks<span class="fb-sp"></span>${p.total ? `${p.done}/${p.total}` : ''}</div>
+        ${p.total ? `<div class="fb-prog"><em style="width:${p.pct}%"></em></div>` : ''}
+        <ul class="fb-tasks">${tasks
+          .map(
+            (t, i) => `<li class="fb-task${t.done ? ' done' : ''}" data-i="${i}">
+          <input type="checkbox"${t.done ? ' checked' : ''} aria-label="Done">
+          <span class="fb-tx" contenteditable="true" spellcheck="false">${esc(t.text)}</span>
+          <span class="fb-tt"><button type="button" class="fb-ic" data-tmove="-1" title="Move up">↑</button><button type="button" class="fb-ic" data-tmove="1" title="Move down">↓</button><button type="button" class="fb-ic" data-tdel title="Remove">×</button></span>
+        </li>`
+          )
+          .join('')}</ul>
+        ${done ? '' : '<input class="fb-add" id="fb-addtask" maxlength="200" placeholder="+ Add a subtask, then Enter" aria-label="Add subtask">'}</div>
+      <div class="fb-field"><div class="fb-lbl">Brief<span class="fb-sp"></span><span class="fb-lbl-note">what the agent reads</span><button type="button" class="fb-link" id="fb-editbrief">Edit</button></div>
+        <div class="fb-brief${brief.length > 180 ? ' clamp' : ''}" id="fb-brief">${esc(brief)}</div>
+        ${brief.length > 180 ? '<button type="button" class="fb-link" id="fb-morebrief">Show full brief</button>' : ''}</div>
+      <div class="fb-field"><div class="fb-lbl">Notes<span class="fb-sp"></span><button type="button" class="fb-link" id="fb-editnotes">${notes ? 'Edit' : 'Add'}</button></div>
+        <div id="fb-notes">${notes ? `<div class="fb-notes">${esc(notes)}</div>` : '<div class="fb-dim">No notes yet.</div>'}</div></div>
+    </div>
+    <div class="fb-d-foot"><button type="button" class="btn btn-sm btn-danger" id="fb-del">Delete goal</button><span class="fb-sp"></span><button type="button" class="btn btn-sm" data-close>Done</button></div>`;
 }

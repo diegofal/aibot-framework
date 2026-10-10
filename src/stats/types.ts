@@ -191,6 +191,8 @@ export interface GoalDetail {
   section: 'active' | 'completed';
   /** Subtasks in order (`- task:` lines); empty when there are none. */
   tasks: { text: string; done: boolean }[];
+  /** Short card title set on the board; null = the board derives one from `text`. */
+  headline: string | null;
 }
 
 export interface TraitSnapshot {

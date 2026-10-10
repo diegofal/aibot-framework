@@ -74,6 +74,9 @@ export function parseGoalInput(body: unknown): GoalInput | string {
 /** Validate a drawer edit; a string is the 400 message. */
 /** Subtask limits: enough for a real checklist, small enough to stay readable in a prompt. */
 export const GOAL_TASKS_MAX = 30;
+export const GOAL_HEADLINE_MAX = 100;
+/** The full goal text the agent reads; agents already write briefs of ~500 chars. */
+export const GOAL_BRIEF_MAX = 1000;
 export const GOAL_TASK_TEXT_MAX = 200;
 
 /** `tasks` from a request body → a clean list, or an error message. */
@@ -115,13 +118,27 @@ export function parseGoalEdits(body: unknown): GoalEdits | string {
       return `priority must be one of ${GOAL_PRIORITIES.join(', ')}`;
     out.priority = priority;
   }
+  if (b.headline !== undefined) {
+    const raw = typeof b.headline === 'string' ? b.headline.trim() : '';
+    if (/[\r\n]/.test(raw)) return 'headline must be a single line';
+    const headline = raw.replace(/\s+/g, ' ');
+    if (headline.length > GOAL_HEADLINE_MAX)
+      return `headline is longer than ${GOAL_HEADLINE_MAX} characters`;
+    out.headline = headline;
+  }
+  if (b.brief !== undefined) {
+    const brief = typeof b.brief === 'string' ? b.brief.replace(/\s*[\r\n]+\s*/g, ' ').trim() : '';
+    if (!brief) return 'brief cannot be empty';
+    if (brief.length > GOAL_BRIEF_MAX) return `brief is longer than ${GOAL_BRIEF_MAX} characters`;
+    out.text = brief;
+  }
   if (b.tasks !== undefined) {
     const tasks = parseGoalTasks(b.tasks);
     if (typeof tasks === 'string') return tasks;
     out.tasks = tasks;
   }
   if (Object.keys(out).length === 0)
-    return 'nothing to change: send status, title, notes, priority or tasks';
+    return 'nothing to change: send status, title, brief, headline, notes, priority or tasks';
   return out;
 }
 

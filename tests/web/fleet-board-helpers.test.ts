@@ -2,16 +2,20 @@ import { describe, expect, it } from 'bun:test';
 import {
   BOARD_COLUMNS,
   addTask,
+  agentBoardHtml,
   boardColumns,
-  boardFilterCounts,
-  boardLane,
+  cardHtml,
+  drawerHtml,
   filterLanes,
-  goalCard,
+  fleetPulse,
+  goalHeadline,
   goalRef,
   lastCycle,
   moveTask,
+  overviewRow,
   removeTask,
   renameTask,
+  stateLine,
   taskProgress,
   toggleTask,
 } from '../../web/pages/fleet-board-helpers.js';
@@ -19,160 +23,189 @@ import {
 const t = (text: string, done = false) => ({ text, done });
 const goal = (over: Record<string, unknown> = {}) => ({
   id: 'g-11111111',
-  text: 'Write the Monday brief',
+  text: 'Maintain a living FDE skills map (one production file, fde-skills-map.md): evals, retrieval/RAG, agents and tool use',
   status: 'in_progress',
   priority: 'high',
   notes: null,
-  source: 'operator',
+  source: 'operator:2026-10-04',
   section: 'active',
+  headline: null,
   tasks: [t('Pick sources', true), t('Draft 600 words')],
   ...over,
 });
+const home = (goals: Record<string, unknown>[] = [goal()]) => ({
+  goals: {
+    todo: goals.filter((g) => g.status === 'pending'),
+    inProgress: goals.filter((g) => g.status === 'in_progress'),
+    blocked: goals.filter((g) => g.status === 'blocked'),
+    active: [],
+    completedRecently: goals.filter((g) => g.section === 'completed'),
+  },
+  timeline: [{ ts: '2026-10-10T12:00:00Z', kind: 'cycle', title: 'C', detail: 'Draft it' }],
+});
+const NOW = Date.parse('2026-10-10T12:30:00Z');
 
 describe('subtask list operations (pure, never mutate)', () => {
   const list = [t('a'), t('b', true), t('c')];
-
-  it('toggle flips one task', () => {
-    const next = toggleTask(list, 0);
-    expect(next.map((x) => x.done)).toEqual([true, true, false]);
+  it('toggle, add, rename, remove, move', () => {
+    expect(toggleTask(list, 0).map((x) => x.done)).toEqual([true, true, false]);
     expect(list[0].done).toBe(false);
     expect(toggleTask(list, 9)).toBe(list);
-  });
-
-  it('add trims, ignores blanks and multi-line input becomes one line', () => {
-    expect(addTask(list, '  d  ').at(-1)).toEqual(t('d'));
-    expect(addTask(list, '   ')).toBe(list);
-    expect(addTask(list, 'x\ny').at(-1)).toEqual(t('x y'));
-  });
-
-  it('rename keeps done; blank rename removes nothing', () => {
+    expect(addTask(list, ' x\ny ').at(-1)).toEqual(t('x y'));
+    expect(addTask(list, '  ')).toBe(list);
     expect(renameTask(list, 1, ' B ')[1]).toEqual(t('B', true));
     expect(renameTask(list, 1, ' ')).toBe(list);
-  });
-
-  it('remove and move', () => {
     expect(removeTask(list, 1).map((x) => x.text)).toEqual(['a', 'c']);
     expect(moveTask(list, 2, -1).map((x) => x.text)).toEqual(['a', 'c', 'b']);
     expect(moveTask(list, 0, -1)).toBe(list);
   });
-
-  it('progress counts done over total', () => {
+  it('progress', () => {
     expect(taskProgress(list)).toEqual({ done: 1, total: 3, pct: 33 });
-    expect(taskProgress([])).toEqual({ done: 0, total: 0, pct: 0 });
     expect(taskProgress(undefined)).toEqual({ done: 0, total: 0, pct: 0 });
   });
 });
 
-describe('boardColumns / lastCycle', () => {
-  const home = {
-    goals: {
-      todo: [goal({ id: 'g-a', status: 'pending' })],
-      inProgress: [goal()],
-      blocked: [],
-      active: [],
-      completedRecently: Array.from({ length: 9 }, (_, i) =>
-        goal({ id: `g-d${i}`, section: 'completed', status: 'completed' })
-      ),
-    },
-    timeline: [
-      { ts: '2026-10-10T10:00:00Z', kind: 'cycle', title: 'Cycle 3', detail: 'older plan' },
-      { ts: '2026-10-10T11:00:00Z', kind: 'tool', title: 'web_fetch', detail: 'x' },
-      { ts: '2026-10-10T12:00:00Z', kind: 'cycle', title: 'Cycle 4', detail: 'Draft the brief' },
-    ],
-  };
-
-  it('splits into the four board columns, done capped at the latest five', () => {
-    const cols = boardColumns(home);
-    expect(Object.keys(cols)).toEqual(BOARD_COLUMNS.map((c) => c.id));
-    expect(cols.todo).toHaveLength(1);
-    expect(cols.inProgress).toHaveLength(1);
-    expect(cols.done).toHaveLength(5);
-    expect(boardColumns(null)).toEqual({ todo: [], inProgress: [], blocked: [], done: [] });
+describe('goalHeadline: a short card title from a long brief', () => {
+  const h = (text: string, headline: string | null = null) => goalHeadline({ text, headline });
+  it('a set headline wins', () => {
+    expect(h('anything long', 'Short')).toEqual({ head: 'Short', tag: null });
   });
-
-  it('lastCycle is the newest cycle row', () => {
-    expect(lastCycle(home)).toEqual({ ts: '2026-10-10T12:00:00Z', summary: 'Draft the brief' });
-    expect(lastCycle({ timeline: [] })).toBeNull();
+  it('cuts at the earliest clause break', () => {
+    expect(h(goal().text as string).head).toBe('Maintain a living FDE skills map');
+    expect(h('Weekly roles brief every Monday: 5 live AI engineer roles').head).toBe(
+      'Weekly roles brief every Monday'
+    );
+    expect(h('Relevar el perfil: restricciones, comensales').head).toBe('Relevar el perfil');
+  });
+  it('"Live up to my purpose:" becomes "Purpose: …" up to the first sentence', () => {
+    expect(h('Live up to my purpose: We want to become a dark factory. research more').head).toBe(
+      'Purpose: We want to become a dark factory'
+    );
+  });
+  it('a leading all-caps tag becomes a tag; an all-caps opening is sentence-cased', () => {
+    expect(h('DORMIDO — Gatillo: cuando Diego (o cualquier persona) me cuente algo')).toEqual({
+      head: 'Cuando Diego (o cualquier persona) me cuente algo',
+      tag: 'dormant',
+    });
+    expect(h('CONTROL ÚNICO DE CICLO, cuatro chequeos en el punto de acción: uno').head).toBe(
+      'Control único de ciclo, cuatro chequeos en el punto de acción'
+    );
+  });
+  it('never splits inside quotes and caps long text at a word with an ellipsis', () => {
+    expect(h('Entregar cada cambio al plan con "Chequeado contra: x" y una nota').head).toBe(
+      'Entregar cada cambio al plan con "Chequeado contra: x" y una nota'
+    );
+    const long = h(
+      'Every day, come up with a different potential idea that can make me a billionaire eventually'
+    ).head;
+    expect(long.length).toBeLessThanOrEqual(73);
+    expect(long.endsWith('…')).toBe(true);
   });
 });
 
-describe('goalCard', () => {
-  it('shows title, priority, operator badge, progress and every subtask with its index', () => {
-    const html = goalCard('b1', goal(), 'inProgress');
-    expect(html).toContain('Write the Monday brief');
-    expect(html).toContain('data-goal="g-11111111"');
-    expect(html).toContain('data-bot="b1"');
-    expect(html).toContain('draggable="true"');
-    expect(html).toContain('1/2');
-    expect(html).toContain('data-task="0"');
-    expect(html).toContain('data-task="1"');
-    expect(html).toContain('checked');
-    expect(html).toContain('you');
-    expect(html).toContain('data-action="add-task"');
+describe('stateLine: plain-language status', () => {
+  it('working, waiting, stopped, disabled, idle', () => {
+    expect(stateLine({ isExecuting: true, currentTool: 'web_fetch', running: true }, NOW)).toEqual({
+      text: 'Working · web_fetch',
+      tone: 'live',
+    });
+    expect(stateLine({ running: true, pendingAsks: 2 }, NOW)).toEqual({
+      text: 'Waiting on you · 2 questions',
+      tone: 'wait',
+    });
+    expect(stateLine({ running: false, enabled: true }, NOW).text).toBe('Stopped');
+    expect(stateLine({ running: false, enabled: false }, NOW).text).toBe('Disabled');
+    const idle = stateLine(
+      { running: true, nextRunAt: new Date(NOW + 3 * 3_600_000).toISOString() },
+      NOW
+    );
+    expect(idle.tone).toBe('idle');
+    expect(idle.text).toContain('Idle');
+    expect(idle.text).toContain('3h');
   });
+});
 
-  it('escapes user text and uses the title as ref when a goal has no id', () => {
-    const html = goalCard('b1', goal({ id: null, text: '<b>x</b>', tasks: [t('<i>')] }), 'todo');
-    expect(html).not.toContain('<b>x</b>');
-    expect(html).not.toContain('<i>');
-    expect(html).toContain('data-goal="&lt;b&gt;x&lt;/b&gt;"');
-    expect(goalRef(goal({ id: null, text: 'T' }))).toEqual({ goal: 'T' });
+describe('data shaping', () => {
+  it('columns in board order, done capped at 8', () => {
+    expect(BOARD_COLUMNS.map((c) => c.id)).toEqual(['inProgress', 'todo', 'blocked', 'done']);
+    const many = Array.from({ length: 12 }, (_, i) =>
+      goal({ id: `d${i}`, section: 'completed', status: 'completed' })
+    );
+    expect(boardColumns(home(many)).done).toHaveLength(8);
+    expect(boardColumns(null)).toEqual({ inProgress: [], todo: [], blocked: [], done: [] });
+  });
+  it('goalRef, lastCycle', () => {
     expect(goalRef(goal())).toEqual({ id: 'g-11111111' });
+    expect(goalRef(goal({ id: null, text: 'T' }))).toEqual({ goal: 'T' });
+    expect(lastCycle(home())).toEqual({ ts: '2026-10-10T12:00:00Z', summary: 'Draft it' });
   });
-
-  it('done cards are not draggable and have no add-task box', () => {
-    const html = goalCard('b1', goal({ section: 'completed', status: 'completed' }), 'done');
-    expect(html).not.toContain('draggable="true"');
-    expect(html).not.toContain('data-action="add-task"');
+  it('pulse and filters', () => {
+    const lanes = [
+      { agent: { id: 'a', name: 'Alpha' }, presence: { isExecuting: true }, home: home() },
+      {
+        agent: { id: 'b', name: 'Beta' },
+        presence: { pendingAsks: 1, unreviewed: 2 },
+        home: home([]),
+      },
+    ];
+    expect(fleetPulse(lanes)).toEqual({ agents: 2, working: 1, waiting: 3, openGoals: 1 });
+    expect(filterLanes(lanes, 'live', '').map((l) => l.agent.id)).toEqual(['a']);
+    expect(filterLanes(lanes, 'needs', '').map((l) => l.agent.id)).toEqual(['b']);
+    expect(filterLanes(lanes, 'all', 'skills map').map((l) => l.agent.id)).toEqual(['a']);
+    expect(filterLanes(lanes, 'all', 'beta').map((l) => l.agent.id)).toEqual(['b']);
   });
 });
 
-describe('boardLane', () => {
-  const agent = { id: 'b1', name: 'Bot One', running: true, enabled: true };
-  const presence = {
-    nowLine: 'I am executing my plan.',
-    tone: 'active',
-    isExecuting: true,
-    running: true,
-    enabled: true,
-    currentTool: 'web_fetch',
-    pendingAsks: 1,
-    unreviewed: 2,
-    posture: 'active',
+describe('markup', () => {
+  const lane = {
+    agent: { id: 'b1', name: 'Bot One', running: true, enabled: true },
+    presence: { running: true, enabled: true, pendingAsks: 1, unreviewed: 2, posture: 'active' },
+    home: home([goal(), goal({ id: 'g-2', status: 'pending', text: 'Next thing to do: soon' })]),
   };
-  const home = {
-    goals: { todo: [], inProgress: [goal()], blocked: [], active: [], completedRecently: [] },
-    timeline: [{ ts: '2026-10-10T12:00:00Z', kind: 'cycle', title: 'C', detail: 'Draft it' }],
-  };
-
-  it('header says what the agent is doing and offers its controls; four columns follow', () => {
-    const html = boardLane(agent, presence, home, Date.parse('2026-10-10T12:30:00Z'));
+  it('overview row: who + state, focus headline with progress, up next, needs, link to the board', () => {
+    const html = overviewRow(lane, 0, { nowMs: NOW });
     expect(html).toContain('Bot One');
-    expect(html).toContain('I am executing my plan.');
-    expect(html).toContain('web_fetch');
-    expect(html).toContain('Draft it');
+    expect(html).toContain('Waiting on you · 1 question');
+    expect(html).toContain('Maintain a living FDE skills map');
+    expect(html).not.toContain('evals, retrieval');
+    expect(html).toContain('1/2');
+    expect(html).toContain('Next thing to do');
     expect(html).toContain('1 ask');
     expect(html).toContain('2 to review');
-    expect(html).toContain('data-quick="run"');
+    expect(html).toContain('href="#/board/b1"');
+  });
+  it('card: headline only, priority class, you tag, progress, escaped', () => {
+    const html = cardHtml(goal({ text: '<b>x</b>: y' }), false);
+    expect(html).toContain('fb-card high');
+    expect(html).toContain('data-goal="g-11111111"');
+    expect(html).toContain('draggable="true"');
+    expect(html).toContain('you');
+    expect(html).not.toContain('<b>x</b>');
+    const done = cardHtml(goal({ section: 'completed', status: 'completed' }), false);
+    expect(done).toContain('fb-card done');
+    expect(done).not.toContain('draggable');
+  });
+  it('agent board: four columns, an empty Blocked column is a slim rail, add-goal in Up next', () => {
+    const html = agentBoardHtml(lane, [lane], { nowMs: NOW });
     for (const c of BOARD_COLUMNS) expect(html).toContain(`data-col="${c.id}"`);
-    expect(html).toContain('data-action="add-goal"');
+    expect(html).toContain('fb-col slim');
+    expect(html).toContain('data-addgoal');
+    expect(html).toContain('Draft it');
+    expect(html).toContain('data-quick="run"');
   });
-
-  it('a lane whose goals did not load says so instead of looking empty', () => {
-    expect(boardLane(agent, presence, null)).toContain('Could not load goals');
+  it('a board whose goals failed to load says so', () => {
+    expect(agentBoardHtml({ ...lane, home: null }, [lane], { nowMs: NOW })).toContain(
+      'Could not load goals'
+    );
   });
-});
-
-describe('lane filters', () => {
-  const lanes = [
-    { agent: { id: 'a' }, presence: { isExecuting: true, pendingAsks: 0, unreviewed: 0 } },
-    { agent: { id: 'b' }, presence: { isExecuting: false, pendingAsks: 2, unreviewed: 0 } },
-    { agent: { id: 'c' }, presence: { isExecuting: false, pendingAsks: 0, unreviewed: 0 } },
-  ];
-  it('working / needs you / all', () => {
-    expect(filterLanes(lanes, 'working').map((l) => l.agent.id)).toEqual(['a']);
-    expect(filterLanes(lanes, 'needs').map((l) => l.agent.id)).toEqual(['b']);
-    expect(filterLanes(lanes, 'all')).toHaveLength(3);
-    expect(boardFilterCounts(lanes)).toEqual({ all: 3, working: 1, needs: 1 });
+  it('drawer: title, status and priority segments, subtasks, brief, notes, delete', () => {
+    const html = drawerHtml(lane.agent, goal({ notes: 'some notes' }));
+    expect(html).toContain('Maintain a living FDE skills map');
+    expect(html).toContain('data-st="in_progress"');
+    expect(html).toContain('data-pri="high"');
+    expect(html).toContain('data-i="1"');
+    expect(html).toContain('evals, retrieval');
+    expect(html).toContain('some notes');
+    expect(html).toContain('id="fb-del"');
   });
 });

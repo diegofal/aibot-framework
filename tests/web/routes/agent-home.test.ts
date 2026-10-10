@@ -569,3 +569,40 @@ describe('goal subtasks and delete (fleet board)', () => {
     expect((await send(app, 'DELETE', {})).status).toBe(400);
   });
 });
+
+describe('goal headline and brief edits (fleet board drawer)', () => {
+  const patch = (app: Hono, body: unknown) =>
+    app.request('/api/agents/b1/goals', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const goals = () => parseGoals(readFileSync(join(fx.soulDir('b1'), 'GOALS.md'), 'utf-8'));
+
+  it('headline sets the short title; brief rewrites the full text up to 1000 chars', async () => {
+    const app = makeApp();
+    expect((await patch(app, { goal: 'Research topic', headline: '  Research  ' })).status).toBe(
+      200
+    );
+    expect(goals().active.find((g) => g.text === 'Research topic')?.headline).toBe('Research');
+    const long = `Research the topic. ${'detail '.repeat(100)}`.trim();
+    expect((await patch(app, { goal: 'Research topic', brief: long })).status).toBe(200);
+    const g = goals().active.find((x) => x.headline === 'Research');
+    expect(g?.text).toBe(long);
+    const home = await (await app.request('/api/agents/b1/home')).json();
+    const all = [...home.goals.todo, ...home.goals.inProgress, ...home.goals.blocked];
+    expect(all.find((x: { headline: string | null }) => x.headline === 'Research')).toBeTruthy();
+  });
+
+  it('rejects bad headline and brief values', async () => {
+    const app = makeApp();
+    expect((await patch(app, { goal: 'Research topic', headline: 'x'.repeat(101) })).status).toBe(
+      400
+    );
+    expect((await patch(app, { goal: 'Research topic', headline: 'a\nb' })).status).toBe(400);
+    expect((await patch(app, { goal: 'Research topic', brief: '' })).status).toBe(400);
+    expect((await patch(app, { goal: 'Research topic', brief: 'x'.repeat(1001) })).status).toBe(
+      400
+    );
+  });
+});

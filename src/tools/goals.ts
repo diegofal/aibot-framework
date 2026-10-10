@@ -140,6 +140,8 @@ export interface GoalEntry {
   updated?: string;
   /** Subtasks, in order (`- task: [ ] …` lines). Absent when there are none. */
   tasks?: GoalTask[];
+  /** Short card title set on the board; `text` stays the full brief the agent reads. */
+  headline?: string;
 }
 
 /** One subtask of a goal. Stored as a metadata line, never as a `- [ ]` line (that would be a goal). */
@@ -151,7 +153,8 @@ export interface GoalTask {
 const TASK_LINE = /^\[([ xX])\]\s*(.+)$/;
 
 function taskLines(g: GoalEntry): string[] {
-  return (g.tasks ?? []).map((t) => `  - task: [${t.done ? 'x' : ' '}] ${t.text}`);
+  const head = g.headline ? [`  - headline: ${g.headline}`] : [];
+  return [...head, ...(g.tasks ?? []).map((t) => `  - task: [${t.done ? 'x' : ' '}] ${t.text}`)];
 }
 
 /** A fresh goal id: `g-` + 8 lowercase hex. */
@@ -241,6 +244,8 @@ export interface GoalEdits {
   priority?: string;
   /** Replaces the whole subtask list; `[]` clears it. */
   tasks?: GoalTask[];
+  /** Short card title; `''` clears it. */
+  headline?: string;
 }
 
 /**
@@ -258,6 +263,7 @@ export function editGoal(content: string | null, ref: string, edits: GoalEdits):
   if (edits.notes !== undefined) goal.notes = edits.notes || undefined;
   if (edits.priority !== undefined) goal.priority = edits.priority;
   if (edits.tasks !== undefined) goal.tasks = edits.tasks.length ? edits.tasks : undefined;
+  if (edits.headline !== undefined) goal.headline = edits.headline || undefined;
   return serializeGoals(active, completed);
 }
 
@@ -537,6 +543,7 @@ export function parseGoals(content: string | null): {
       else if (key === 'id') currentGoal.id = value;
       else if (key === 'started') currentGoal.started = value;
       else if (key === 'updated') currentGoal.updated = value;
+      else if (key === 'headline') currentGoal.headline = value;
       else if (key === 'task') {
         const m = value.match(TASK_LINE);
         if (m) {

@@ -45,6 +45,7 @@ function toDetail(g: GoalEntry, section: 'active' | 'completed', extras?: GoalEx
     source: g.source ?? null,
     section,
     tasks: g.tasks ?? [],
+    headline: g.headline ?? null,
   };
 }
 

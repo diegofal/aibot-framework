@@ -751,3 +751,27 @@ describe('removeGoal', () => {
     expect(removeGoal(md, 'g-nope')).toBeNull();
   });
 });
+
+describe('goal headline (short card title, separate from the brief)', () => {
+  const md = `## Active Goals
+- [ ] Maintain a living FDE skills map (one production file): evals, retrieval, agents
+  - status: in_progress
+  - priority: high
+  - headline: FDE skills map
+  - id: g-aaaaaaaa
+`;
+  test('parse and serialize keep the headline; the brief text is untouched', () => {
+    const { active, completed } = parseGoals(md);
+    expect(active[0].headline).toBe('FDE skills map');
+    expect(active[0].text).toContain('evals, retrieval');
+    expect(serializeGoals(active, completed)).toContain('  - headline: FDE skills map');
+  });
+  test('editGoal sets and clears it without changing the text', () => {
+    const set = parseGoals(editGoal(md, 'g-aaaaaaaa', { headline: 'Skills map' }) as string)
+      .active[0];
+    expect(set.headline).toBe('Skills map');
+    expect(set.text).toContain('Maintain a living FDE skills map');
+    const cleared = parseGoals(editGoal(md, 'g-aaaaaaaa', { headline: '' }) as string).active[0];
+    expect(cleared.headline).toBeUndefined();
+  });
+});

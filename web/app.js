@@ -177,7 +177,7 @@ function updateAuthUI() {
  */
 const handlers = {
   fleetHome: page(() => renderFleetHome(content), destroyFleetHome),
-  fleetBoard: page(() => renderFleetBoard(content), destroyFleetBoard),
+  fleetBoard: page((id) => renderFleetBoard(content, id), destroyFleetBoard),
   agents: page(() => renderAgents(content), destroyAgentDetail),
   agentWizard: page(() => renderAgentWizard(content), destroyAgentWizard),
   agentHome: page((id) => renderAgentHome(content, id), destroyAgentHome),
