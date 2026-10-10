@@ -515,3 +515,19 @@ docker compose up -d --build
 **Outcome.** Container `healthy`. Served: `/pages/fleet-board.js` (`renderFleetBoard`), `/nav-routes.js` (`fleetBoard`), `/style.css` (`fb-lane`). The image has `DELETE /:id/goals` and `TASK_LINE`; an unauthenticated `DELETE /api/agents/x/goals` answers 401 (route present). No error-level boot logs.
 
 **Reversible?** Yes. Check out `7addb27` and rebuild. GOALS.md files edited from the board keep `- task:` lines, which older code ignores.
+
+### 2026-10-10 — Deployed `e046e2b` (readable Fleet Board)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship the redesigned Fleet Board (overview rows, agent board, goal drawer) and the `headline` / `brief` goal edits |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container `healthy`. Served: `/pages/fleet-board-helpers.js` (`goalHeadline`), `/nav-routes.js` (`#/board/:id`), `/style.css` (`fb-row`). The image has `GOAL_HEADLINE_MAX` in the goal route. No error-level boot logs.
+
+**Reversible?** Yes. Check out `8aefe5b` and rebuild. GOALS.md files edited from the board keep `- headline:` lines, which older code ignores.
