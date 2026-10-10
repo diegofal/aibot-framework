@@ -309,3 +309,21 @@ describe('buildOperatorGoalsSection', () => {
     expect(buildStrategistPrompt(base).system).toContain('## Set by your operator');
   });
 });
+
+describe('buildOperatorGoalsSection with subtasks', () => {
+  test('lists each operator goal with its open and done subtasks', () => {
+    const md = `## Active Goals
+- [ ] Monday brief
+  - status: in_progress
+  - priority: high
+  - task: [x] Pick sources
+  - task: [ ] Draft 600 words
+  - source: operator
+`;
+    const out = buildOperatorGoalsSection(md);
+    expect(out).toContain('- Monday brief (in_progress)');
+    expect(out).toContain('  - [x] Pick sources');
+    expect(out).toContain('  - [ ] Draft 600 words');
+    expect(out).toContain('subtasks');
+  });
+});

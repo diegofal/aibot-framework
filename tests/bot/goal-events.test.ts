@@ -133,6 +133,35 @@ describe('diffGoals', () => {
   });
 });
 
+describe('diffGoals subtasks', () => {
+  test('a changed task list is one tasks event with done/total on each side', () => {
+    const base = { status: 'pending', priority: 'medium', text: 'A', id: 'a' };
+    const ops = diffGoals(
+      { active: [{ ...base, tasks: [{ text: 'x', done: false }] }], completed: [] },
+      {
+        active: [
+          {
+            ...base,
+            tasks: [
+              { text: 'x', done: true },
+              { text: 'y', done: false },
+            ],
+          },
+        ],
+        completed: [],
+      }
+    );
+    expect(ops).toEqual([{ goalId: 'a', title: 'A', op: 'tasks', from: '0/1', to: '1/2' }]);
+  });
+
+  test('no tasks before and after is no event', () => {
+    const base = { status: 'pending', priority: 'medium', text: 'A', id: 'a' };
+    expect(diffGoals({ active: [base], completed: [] }, { active: [base], completed: [] })).toEqual(
+      []
+    );
+  });
+});
+
 describe('diffGoals renames', () => {
   test('a goal whose title changed under the same id is one title event', () => {
     const base = { status: 'pending', priority: 'medium' };

@@ -246,6 +246,7 @@ export async function renderFleetHome(el) {
         <div class="fleet-sub text-dim" id="fleet-sub">${escapeHtml(summaryLine(agents, presence, needsYou))}</div>
       </div>
       <div class="fleet-head-actions">
+        <a class="btn btn-sm" href="#/board" title="Every agent's goals and subtasks on one board">Board</a>
         <a class="btn btn-sm" href="#/automations/loop">Loop controls</a>
         <a class="btn btn-sm" href="#/agents">Agents</a>
         <a class="btn btn-sm btn-primary" href="#/agents/new" data-page-new>+ New agent</a>

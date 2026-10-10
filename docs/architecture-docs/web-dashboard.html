@@ -343,7 +343,13 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents/:id/home</code></td>
-              <td>Agent Home payload (cached 15 s): <code>identity</code>, <code>presence</code> (posture + first-person now-line), <code>goals</code> by bucket, <code>traits</code>, <code>karma</code> with a reconstructed history, a merged <code>timeline</code> (LLM calls, tools, productions, asks, cycles, karma) and <code>needsYou</code> counts. Tenant-scoped; never throws on missing data</td>
+              <td>Agent Home payload (cached 15 s): <code>identity</code>, <code>presence</code> (posture + first-person now-line), <code>goals</code> by bucket, <code>traits</code>, <code>karma</code> with a reconstructed history, a merged <code>timeline</code> (LLM calls, tools, productions, asks, cycles, karma) and <code>needsYou</code> counts. Tenant-scoped; never throws on missing data. <span class="badge badge-yellow">2026-10-10</span> Each goal carries <code>tasks: [{ text, done }]</code></td>
+              <td><code>agent-home.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-red">DELETE</span></td>
+              <td><code>/api/agents/:id/goals</code></td>
+              <td><span class="badge badge-yellow">2026-10-10</span> <code>{ id | goal }</code> &rarr; <code>{ removed }</code>; 404 unknown goal, 400 without a ref. Removes an active or completed goal through <code>writeGoalsFile</code> (a <code>remove</code> event, actor <code>operator</code>, backup in <code>.versions/</code>). <code>PATCH</code> on the same path also takes <code>{ id | goal, tasks: [{ text, done }] }</code> (replaces the subtask list, max 30, each one line &le; 200 chars; <code>[]</code> clears it; a <code>tasks</code> event with <code>done/total</code> on each side)</td>
               <td><code>agent-home.ts</code></td>
             </tr>
             <tr>
@@ -1806,6 +1812,18 @@ compaction                            // Context compaction
              "N more" / "Show less" toggle. The header's "N waiting on you" is
              <code>GET /api/needs-you/count</code> &mdash; the sidebar badge's number &mdash; with the
              per-card sum as fallback.</p>
+          <p><strong>Fleet Board (<code>#/board</code>, 2026-10-10).</strong> The "Board" button on Fleet Home.
+             <code>web/pages/fleet-board.js</code> + pure <code>fleet-board-helpers.js</code>: one swimlane per agent
+             (order from <code>sortFleet</code>). The lane header shows the now-line, the running tool when executing,
+             the last cycle's plan summary (newest <code>cycle</code> row of the home timeline), next run, asks / to
+             review and the Run / Stop controls. Four columns follow (To do, In progress, Blocked, Done = latest 5
+             completed). Cards: click the title to rename, click the priority chip to cycle low &rarr; medium &rarr;
+             high, &ctdot; opens notes / History / Delete (click twice), drag to another column of the same lane. Subtasks:
+             tick, add (Enter), double-click to rename, &uarr;&darr; reorder, &times; remove; each change PATCHes the whole
+             list, painted optimistically. Data: <code>/api/agents</code>, <code>/api/agents/presence</code> (live via
+             <code>watchFleet</code>) and <code>/api/agents/:id/home</code> per agent, re-read every 60 s. After a write only
+             that lane is re-fetched; a lane being edited is never repainted under the cursor. Filters: All / Working
+             now / Needs you (saved in <code>localStorage</code>).</p>
         </div>
 
         <div class="card">

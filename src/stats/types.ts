@@ -189,6 +189,8 @@ export interface GoalDetail {
   outcome: string | null;
   source: string | null;
   section: 'active' | 'completed';
+  /** Subtasks in order (`- task:` lines); empty when there are none. */
+  tasks: { text: string; done: boolean }[];
 }
 
 export interface TraitSnapshot {

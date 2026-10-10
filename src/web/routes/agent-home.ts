@@ -40,9 +40,12 @@ import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-sco
 import {
   BOARD_STATUSES,
   type BoardStatus,
+  type GoalEdits,
+  type GoalTask,
   appendGoal,
   editGoal,
   parseGoals,
+  removeGoal,
   resolveGoalRef,
   setGoalStatus,
 } from '../../tools/goals';
@@ -69,11 +72,31 @@ export function parseGoalInput(body: unknown): GoalInput | string {
 }
 
 /** Validate a drawer edit; a string is the 400 message. */
-export function parseGoalEdits(
-  body: unknown
-): { text?: string; notes?: string; priority?: string } | string {
+/** Subtask limits: enough for a real checklist, small enough to stay readable in a prompt. */
+export const GOAL_TASKS_MAX = 30;
+export const GOAL_TASK_TEXT_MAX = 200;
+
+/** `tasks` from a request body → a clean list, or an error message. */
+export function parseGoalTasks(value: unknown): GoalTask[] | string {
+  if (!Array.isArray(value)) return 'tasks must be an array of { text, done }';
+  if (value.length > GOAL_TASKS_MAX) return `at most ${GOAL_TASKS_MAX} tasks per goal`;
+  const out: GoalTask[] = [];
+  for (const raw of value) {
+    const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const text = typeof t.text === 'string' ? t.text.trim() : '';
+    if (!text) return 'a task cannot be empty';
+    if (/[\r\n]/.test(text)) return 'a task must be a single line';
+    if (text.length > GOAL_TASK_TEXT_MAX)
+      return `a task is longer than ${GOAL_TASK_TEXT_MAX} characters`;
+    if (typeof t.done !== 'boolean') return 'task done must be true or false';
+    out.push({ text, done: t.done });
+  }
+  return out;
+}
+
+export function parseGoalEdits(body: unknown): GoalEdits | string {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-  const out: { text?: string; notes?: string; priority?: string } = {};
+  const out: GoalEdits = {};
   if (b.title !== undefined) {
     const title = typeof b.title === 'string' ? b.title.trim() : '';
     if (!title) return 'title cannot be empty';
@@ -92,8 +115,13 @@ export function parseGoalEdits(
       return `priority must be one of ${GOAL_PRIORITIES.join(', ')}`;
     out.priority = priority;
   }
+  if (b.tasks !== undefined) {
+    const tasks = parseGoalTasks(b.tasks);
+    if (typeof tasks === 'string') return tasks;
+    out.tasks = tasks;
+  }
   if (Object.keys(out).length === 0)
-    return 'nothing to change: send status, title, notes or priority';
+    return 'nothing to change: send status, title, notes, priority or tasks';
   return out;
 }
 
@@ -294,6 +322,36 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     ctx.cache.invalidate();
     deps.logger.info({ botId: bot.id, ...summary }, 'Operator updated goal');
     return c.json(summary);
+  });
+
+  /** DELETE /:id/goals — `{ id | goal }`: the operator removes a goal (logged as a `remove` event). */
+  app.delete('/:id/goals', async (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const b = ((await c.req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+    const ref =
+      typeof b.id === 'string' && b.id.trim()
+        ? b.id.trim()
+        : typeof b.goal === 'string'
+          ? b.goal.trim()
+          : '';
+    if (!ref) return c.json({ error: 'goal or id is required' }, 400);
+    const goalsPath = join(resolveBotPaths(deps.config, bot).soulDir, 'GOALS.md');
+    const current = existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null;
+    const next = removeGoal(current, ref);
+    if (next === null) return c.json({ error: 'Goal not found' }, 404);
+    try {
+      writeGoalsFile(goalsPath, next, {
+        actor: 'operator',
+        backup: (p) => backupSoulFile(p, deps.logger),
+      });
+    } catch (err) {
+      deps.logger.warn({ err, botId: bot.id }, 'Removing goal failed');
+      return c.json({ error: 'Could not write GOALS.md' }, 500);
+    }
+    ctx.cache.invalidate();
+    deps.logger.info({ botId: bot.id, goal: ref }, 'Operator removed goal');
+    return c.json({ removed: ref });
   });
   return app;
 }

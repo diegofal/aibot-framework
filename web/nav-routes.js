@@ -123,6 +123,7 @@ const botQuery = (m) => {
 /** Canonical routes. Order matters: more specific patterns first. */
 export const ROUTES = [
   { pattern: /^#\/$/, handler: 'fleetHome', area: 'home', args: none },
+  { pattern: /^#\/board$/, handler: 'fleetBoard', area: 'home', args: none },
 
   // Literal `new` must precede the `:id` patterns (an agent cannot be named "new").
   { pattern: /^#\/agents\/new$/, handler: 'agentWizard', area: 'agents', args: none },

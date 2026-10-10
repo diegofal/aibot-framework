@@ -29,6 +29,7 @@ const SINGLE = { multiTenant: false, role: undefined };
 const LEGACY: Array<[string, string, string]> = [
   // [old hash, expected canonical hash, expected handler]
   ['#/', '#/', 'fleetHome'],
+  ['#/board', '#/board', 'fleetBoard'],
   ['#/needs', '#/needs', 'needsYou'],
   ['#/needs?bot=b1', '#/needs?bot=b1', 'needsYou'],
   ['#/needs/feedback', '#/needs/feedback', 'feedback'],

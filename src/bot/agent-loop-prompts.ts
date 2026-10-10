@@ -282,9 +282,16 @@ export function buildOperatorGoalsSection(goals?: string): string {
   const mine = parseGoals(goals).active.filter(isOperatorGoal);
   if (!mine.length) return '';
   const list = mine
-    .map((g) => `- ${g.text}${g.status && g.status !== 'pending' ? ` (${g.status})` : ''}`)
+    .map((g) => {
+      const head = `- ${g.text}${g.status && g.status !== 'pending' ? ` (${g.status})` : ''}`;
+      const tasks = (g.tasks ?? []).map((t) => `  - [${t.done ? 'x' : ' '}] ${t.text}`);
+      return [head, ...tasks].join('\n');
+    })
     .join('\n');
-  return `\n## Set by your operator\n\nYour operator added these goals themselves. Work on them before your own goals. If one is ambiguous or you need a decision to move it forward, use ask_human about that goal instead of guessing. When you make progress or finish one, update it with manage_goals and tell the operator what changed.\n\n${list}\n`;
+  const taskRule = mine.some((g) => g.tasks?.length)
+    ? ' The [ ] lines under a goal are its subtasks, set by your operator: they are the plan for that goal, so work through them in order.'
+    : '';
+  return `\n## Set by your operator\n\nYour operator added these goals themselves. Work on them before your own goals. If one is ambiguous or you need a decision to move it forward, use ask_human about that goal instead of guessing. When you make progress or finish one, update it with manage_goals and tell the operator what changed.${taskRule}\n\n${list}\n`;
 }
 
 export function buildDirectivesSection(directives?: string[]): string {

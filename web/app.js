@@ -33,6 +33,7 @@ import { renderCron, renderCronCreate, renderCronDetail } from './pages/cron.js'
 import { destroyDashboard, renderDashboard } from './pages/dashboard.js';
 import { destroyDispatches, renderDispatches } from './pages/dispatches.js';
 import { renderBotFeedback, renderFeedback } from './pages/feedback.js';
+import { destroyFleetBoard, renderFleetBoard } from './pages/fleet-board.js';
 import { destroyFleetHome, renderFleetHome } from './pages/fleet-home.js';
 import { destroyInbox, renderInbox, renderInboxChat } from './pages/inbox.js';
 import { renderIntegrations } from './pages/integrations.js';
@@ -176,6 +177,7 @@ function updateAuthUI() {
  */
 const handlers = {
   fleetHome: page(() => renderFleetHome(content), destroyFleetHome),
+  fleetBoard: page(() => renderFleetBoard(content), destroyFleetBoard),
   agents: page(() => renderAgents(content), destroyAgentDetail),
   agentWizard: page(() => renderAgentWizard(content), destroyAgentWizard),
   agentHome: page((id) => renderAgentHome(content, id), destroyAgentHome),

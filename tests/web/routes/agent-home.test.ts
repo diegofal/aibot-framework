@@ -511,3 +511,61 @@ describe('PATCH /api/agents/:id/goals edits title and notes', () => {
     expect((await patch(app, { id: 'g-nope', title: 'x' })).status).toBe(404);
   });
 });
+
+describe('goal subtasks and delete (fleet board)', () => {
+  const send = (app: Hono, method: string, body: unknown) =>
+    app.request('/api/agents/b1/goals', {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const goals = () => parseGoals(readFileSync(join(fx.soulDir('b1'), 'GOALS.md'), 'utf-8'));
+
+  it('PATCH { tasks } replaces the subtask list and the home payload shows it', async () => {
+    const app = makeApp();
+    const res = await send(app, 'PATCH', {
+      goal: 'Research topic',
+      tasks: [
+        { text: '  Find 3 sources ', done: true },
+        { text: 'Write summary', done: false },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const g = goals().active.find((x) => x.text === 'Research topic');
+    expect(g?.tasks).toEqual([
+      { text: 'Find 3 sources', done: true },
+      { text: 'Write summary', done: false },
+    ]);
+    const home = await (await app.request('/api/agents/b1/home')).json();
+    const all = [...home.goals.todo, ...home.goals.inProgress, ...home.goals.blocked];
+    expect(all.find((x: { text: string }) => x.text === 'Research topic').tasks).toEqual(g?.tasks);
+  });
+
+  it('rejects bad task lists', async () => {
+    const app = makeApp();
+    const bad = [
+      'nope',
+      [{ text: '', done: false }],
+      [{ text: 'a\nb', done: false }],
+      [{ text: 'x'.repeat(201), done: false }],
+      [{ text: 'ok', done: 'yes' }],
+      Array.from({ length: 31 }, (_, i) => ({ text: `t${i}`, done: false })),
+    ];
+    for (const tasks of bad) {
+      expect((await send(app, 'PATCH', { goal: 'Research topic', tasks })).status).toBe(400);
+    }
+  });
+
+  it('DELETE removes a goal by id or title and logs a remove event; unknown is 404', async () => {
+    const app = makeApp();
+    await send(app, 'POST', { title: 'Throwaway' });
+    const id = goals().active.find((x) => x.text === 'Throwaway')?.id;
+    const res = await send(app, 'DELETE', { id });
+    expect(res.status).toBe(200);
+    expect(goals().active.some((x) => x.text === 'Throwaway')).toBe(false);
+    const log = readFileSync(join(fx.soulDir('b1'), 'goal-events.jsonl'), 'utf-8');
+    expect(log).toContain('"op":"remove"');
+    expect((await send(app, 'DELETE', { id: 'g-nope' })).status).toBe(404);
+    expect((await send(app, 'DELETE', {})).status).toBe(400);
+  });
+});

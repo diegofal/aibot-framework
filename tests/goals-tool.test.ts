@@ -8,6 +8,7 @@ import {
   goalBucket,
   isOperatorGoal,
   parseGoals,
+  removeGoal,
   resolveGoalParam,
   serializeGoals,
   setGoalStatus,
@@ -675,5 +676,78 @@ describe('editGoal (operator edits from the drawer)', () => {
   });
   test('null for an unknown goal', () => {
     expect(editGoal(md, 'g-nope', { text: 'x' })).toBeNull();
+  });
+});
+
+describe('goal subtasks (task: lines)', () => {
+  const md = `## Active Goals
+- [ ] Write brief
+  - status: in_progress
+  - priority: high
+  - task: [x] Pick three sources
+  - task: [ ] Draft 600 words
+  - id: g-aaaaaaaa
+
+## Completed
+(none yet)
+`;
+  test('parse reads task lines in order, done or not', () => {
+    expect(parseGoals(md).active[0].tasks).toEqual([
+      { text: 'Pick three sources', done: true },
+      { text: 'Draft 600 words', done: false },
+    ]);
+  });
+
+  test('a task line is never mistaken for a new goal, and serialize round-trips', () => {
+    const { active, completed } = parseGoals(md);
+    expect(active).toHaveLength(1);
+    const again = parseGoals(serializeGoals(active, completed));
+    expect(again.active[0].tasks).toEqual(active[0].tasks);
+    expect(serializeGoals(active, completed)).toContain('  - task: [ ] Draft 600 words');
+  });
+
+  test('goals without tasks serialize without task lines', () => {
+    const out = serializeGoals([{ text: 'Plain', status: 'pending', priority: 'medium' }], []);
+    expect(out).not.toContain('task:');
+  });
+
+  test('editGoal replaces the task list; an empty list clears it', () => {
+    const out = editGoal(md, 'g-aaaaaaaa', {
+      tasks: [
+        { text: 'Pick three sources', done: true },
+        { text: 'Draft 600 words', done: true },
+        { text: 'Send to Diego', done: false },
+      ],
+    }) as string;
+    expect(parseGoals(out).active[0].tasks?.map((t) => t.done)).toEqual([true, true, false]);
+    const cleared = editGoal(md, 'g-aaaaaaaa', { tasks: [] }) as string;
+    expect(parseGoals(cleared).active[0].tasks).toBeUndefined();
+  });
+});
+
+describe('removeGoal', () => {
+  const md = `## Active Goals
+- [ ] Keep
+  - status: pending
+  - priority: medium
+  - id: g-11111111
+- [ ] Drop
+  - status: pending
+  - priority: medium
+  - id: g-22222222
+
+## Completed
+- [x] Old
+  - completed: 2026-10-01
+  - id: g-33333333
+`;
+  test('removes an active or completed goal by id or exact title', () => {
+    const a = parseGoals(removeGoal(md, 'g-22222222') as string);
+    expect(a.active.map((g) => g.text)).toEqual(['Keep']);
+    const b = parseGoals(removeGoal(md, 'old') as string);
+    expect(b.completed).toHaveLength(0);
+  });
+  test('null for an unknown goal', () => {
+    expect(removeGoal(md, 'g-nope')).toBeNull();
   });
 });

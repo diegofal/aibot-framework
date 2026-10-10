@@ -27,6 +27,7 @@ Built with TypeScript and Bun. Agents have persistent personalities, goals, and 
 - **Streaming responses** — Token-by-token streaming for Ollama with progressive Telegram message editing and WebSocket chunk events
 - **A2A Protocol** — Agent-to-agent communication (v0.3.0) with JSON-RPC server, client, agent directory, and skill-to-tool adaptation
 - **Multi-channel** — Telegram, WhatsApp (Cloud API), REST, WebSocket widget, Discord (Gateway + REST)
+- **Fleet Board** — `#/board`: every agent on one screen as a swimlane (what it is doing now, last cycle, controls) with its goals in To do / In progress / Blocked / Done, each goal with a subtask checklist; add, rename, delete, drag and tick in place (subtasks are `- task:` lines in GOALS.md, so agents read them)
 - **Stats & Behaviour** — Read-only fleet/bot/behaviour/infra aggregations over the on-disk telemetry (LLM calls, tools, outputs, asks, goals, karma, traits, backends, cron, channel state) with a one-word posture per bot
 - **Hygiene routines** — Deterministic, LLM-free maintenance for souls, memory logs, productions and the data directory; preview is side-effect free, apply backs up and never deletes
 - **Agent-loop resilience** — Planner/strategist pinned to a backend (`agentLoop.plannerBackend`), a fleet-wide per-backend circuit breaker for 429/quota errors, and a hard engagement gate fed by real human feedback

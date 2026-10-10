@@ -138,6 +138,20 @@ export interface GoalEntry {
   started?: string;
   /** ISO time of the last change to the goal. */
   updated?: string;
+  /** Subtasks, in order (`- task: [ ] …` lines). Absent when there are none. */
+  tasks?: GoalTask[];
+}
+
+/** One subtask of a goal. Stored as a metadata line, never as a `- [ ]` line (that would be a goal). */
+export interface GoalTask {
+  text: string;
+  done: boolean;
+}
+
+const TASK_LINE = /^\[([ xX])\]\s*(.+)$/;
+
+function taskLines(g: GoalEntry): string[] {
+  return (g.tasks ?? []).map((t) => `  - task: [${t.done ? 'x' : ' '}] ${t.text}`);
 }
 
 /** A fresh goal id: `g-` + 8 lowercase hex. */
@@ -225,6 +239,8 @@ export interface GoalEdits {
   text?: string;
   notes?: string;
   priority?: string;
+  /** Replaces the whole subtask list; `[]` clears it. */
+  tasks?: GoalTask[];
 }
 
 /**
@@ -241,7 +257,22 @@ export function editGoal(content: string | null, ref: string, edits: GoalEdits):
   if (edits.text !== undefined) goal.text = edits.text;
   if (edits.notes !== undefined) goal.notes = edits.notes || undefined;
   if (edits.priority !== undefined) goal.priority = edits.priority;
+  if (edits.tasks !== undefined) goal.tasks = edits.tasks.length ? edits.tasks : undefined;
   return serializeGoals(active, completed);
+}
+
+/**
+ * Delete the goal with this id (or exact title, case-insensitive), active or
+ * completed. Returns the new GOALS.md, or null when no goal matches.
+ */
+export function removeGoal(content: string | null, ref: string): string | null {
+  const { active, completed } = parseGoals(content);
+  const key = ref.trim().toLowerCase();
+  const matches = (g: GoalEntry) => g.id === ref || g.text.trim().toLowerCase() === key;
+  const nextActive = active.filter((g) => !matches(g));
+  const nextCompleted = completed.filter((g) => !matches(g));
+  if (nextActive.length === active.length && nextCompleted.length === completed.length) return null;
+  return serializeGoals(nextActive, nextCompleted);
 }
 
 /**
@@ -506,6 +537,15 @@ export function parseGoals(content: string | null): {
       else if (key === 'id') currentGoal.id = value;
       else if (key === 'started') currentGoal.started = value;
       else if (key === 'updated') currentGoal.updated = value;
+      else if (key === 'task') {
+        const m = value.match(TASK_LINE);
+        if (m) {
+          currentGoal.tasks = [
+            ...(currentGoal.tasks ?? []),
+            { text: m[2].trim(), done: m[1] !== ' ' },
+          ];
+        }
+      }
     }
   }
 
@@ -524,6 +564,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       lines.push(`  - status: ${g.status}`);
       lines.push(`  - priority: ${g.priority}`);
       if (g.notes) lines.push(`  - notes: ${g.notes}`);
+      lines.push(...taskLines(g));
       if (g.source) lines.push(`  - source: ${g.source}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
       if (g.id) lines.push(`  - id: ${g.id}`);
@@ -546,6 +587,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       if (g.outcome) lines.push(`  - outcome: ${g.outcome}`);
       if (g.priority && g.priority !== 'medium') lines.push(`  - priority: ${g.priority}`);
       if (g.notes) lines.push(`  - notes: ${g.notes}`);
+      lines.push(...taskLines(g));
       if (g.source) lines.push(`  - source: ${g.source}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
       if (g.id) lines.push(`  - id: ${g.id}`);

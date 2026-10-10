@@ -29,9 +29,21 @@ export type GoalEventOp =
   | 'status'
   | 'notes'
   | 'priority'
+  | 'tasks'
   | 'complete'
   | 'reopen'
   | 'remove';
+
+/** Subtasks as one comparable string (order, text and state). */
+function taskKey(g: GoalEntry): string {
+  return (g.tasks ?? []).map((t) => `${t.done ? 1 : 0}${t.text.trim()}`).join('\n');
+}
+
+/** `done/total`, how a tasks event reads in the timeline. */
+function taskTally(g: GoalEntry): string {
+  const tasks = g.tasks ?? [];
+  return `${tasks.filter((t) => t.done).length}/${tasks.length}`;
+}
 
 export type GoalActor =
   | 'agent'
@@ -116,6 +128,8 @@ export function diffGoals(prev: GoalsState, next: GoalsState): GoalChange[] {
       out.push(change(g, 'notes', old.goal.notes, g.notes));
     if (!done && norm(old.goal.priority) !== norm(g.priority))
       out.push(change(g, 'priority', old.goal.priority, g.priority));
+    if (taskKey(old.goal) !== taskKey(g))
+      out.push(change(g, 'tasks', taskTally(old.goal), taskTally(g)));
   };
   for (const g of next.active) visit(g, false);
   for (const g of next.completed) visit(g, true);
