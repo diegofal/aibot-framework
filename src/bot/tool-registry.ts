@@ -1,4 +1,4 @@
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   type LoadedExternalSkill,
   discoverProductionSkillPaths,
@@ -218,6 +218,10 @@ export class ToolRegistry {
             maxContentLength: webToolsConfig.fetch.maxContentLength,
             timeout: webToolsConfig.fetch.timeout,
             cacheTtlMs: webToolsConfig.fetch.cacheTtlMs,
+            // Shared by the fleet: a site that walls one bot walls them all.
+            blockedHostsFile: config.paths?.data
+              ? join(config.paths.data, 'web-fetch', 'blocked-hosts.json')
+              : undefined,
           })
         );
         logger.info('Web fetch tool initialized');

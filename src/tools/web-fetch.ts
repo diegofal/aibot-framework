@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { Logger } from '../logger';
 import { TtlCache } from './cache';
 import type { Tool, ToolFailureKind, ToolResult } from './types';
@@ -7,15 +9,50 @@ export interface WebFetchConfig {
   maxContentLength?: number;
   timeout?: number;
   cacheTtlMs?: number;
-  /** How long a host that answered with a bot challenge / 403 / 429 is skipped. Default 1 h. */
+  /** How long a host that answered with a bot challenge / 403 / 429 is skipped. Default 7 days. */
   blockedHostTtlMs?: number;
+  /** JSON file the blocked hosts are kept in, so a block survives restarts. Absent → memory only. */
+  blockedHostsFile?: string;
   /** Injectable fetch (tests). Defaults to the global fetch. */
   fetchImpl?: typeof fetch;
   /** Injectable clock (tests). */
   now?: () => number;
 }
 
-export const DEFAULT_BLOCKED_HOST_TTL_MS = 60 * 60 * 1000;
+/** A week: most bots run once a day, so a 1 h memory let every cycle hit the same wall again. */
+export const DEFAULT_BLOCKED_HOST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+type BlockedHosts = Map<string, { blockedBy: string; until: number }>;
+
+/** Unexpired entries of a saved block list; a missing or unreadable file is an empty list. */
+function loadBlockedHosts(file: string | undefined, nowMs: number): BlockedHosts {
+  const out: BlockedHosts = new Map();
+  if (!file) return out;
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    for (const [host, v] of Object.entries(raw ?? {})) {
+      const e = v as { blockedBy?: unknown; until?: unknown };
+      if (typeof e?.blockedBy === 'string' && typeof e.until === 'number' && e.until > nowMs) {
+        out.set(host, { blockedBy: e.blockedBy, until: e.until });
+      }
+    }
+  } catch {
+    // Missing or corrupt: start empty; the next block rewrites the file.
+  }
+  return out;
+}
+
+/** Write the list atomically (tmp + rename). Best effort: a failed save only loses persistence. */
+function saveBlockedHosts(file: string, hosts: BlockedHosts): void {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(hosts), null, 2));
+    renameSync(tmp, file);
+  } catch {
+    // Read-only or full disk: the in-memory block still applies.
+  }
+}
 
 export interface FetchFailure {
   kind: ToolFailureKind;
@@ -129,10 +166,15 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
   const now = config.now ?? Date.now;
   const blockedHostTtlMs = config.blockedHostTtlMs ?? DEFAULT_BLOCKED_HOST_TTL_MS;
   /** hostname -> { blockedBy, until } for hosts that refused us recently */
-  const blockedHosts = new Map<string, { blockedBy: string; until: number }>();
+  const blockedHosts = loadBlockedHosts(config.blockedHostsFile, now());
 
   function rememberBlockedHost(hostname: string, blockedBy: string): void {
     blockedHosts.set(hostname, { blockedBy, until: now() + blockedHostTtlMs });
+    if (config.blockedHostsFile) {
+      const t = now();
+      for (const [h, e] of blockedHosts) if (e.until <= t) blockedHosts.delete(h);
+      saveBlockedHosts(config.blockedHostsFile, blockedHosts);
+    }
   }
 
   function recentBlock(hostname: string): { blockedBy: string } | undefined {

@@ -1796,7 +1796,13 @@ compaction                            // Context compaction
              LLM start/end, memory, compaction, idle and phase chatter (<code>NOISE_EVENTS</code>), keeps
              failures, cycle results, karma, fallbacks and collaboration as their own line
              (<code>describeEvent()</code>), and shows a tool that started but has not ended as "is
-             running". <code>condensedTickerBody()</code> renders <code>TICKER_SHOW = 5</code> lines with an
+             running". <span class="badge badge-yellow">2026-10-10</span> A failed call is one line
+             that names the cause and the site (<code>describeToolFailure()</code>, from the
+             <code>failureKind</code> and <code>target</code> a failed <code>tool:end</code> now carries):
+             "wiley.com blocks bots (Cloudflare bot challenge)" in amber, "&hellip; does not exist (404 Not Found)
+             &mdash; guessed URL", "datos.gob.ar/dataset &mdash; 500 Internal Server Error"; the
+             <code>tool:error</code> sent just before it (within <code>FAILURE_PAIR_MS</code>) is dropped.
+             <code>condensedTickerBody()</code> renders <code>TICKER_SHOW = 5</code> lines with an
              "N more" / "Show less" toggle. The header's "N waiting on you" is
              <code>GET /api/needs-you/count</code> &mdash; the sidebar badge's number &mdash; with the
              per-card sum as fallback.</p>

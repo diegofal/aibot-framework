@@ -129,3 +129,46 @@ describe('ToolExecutor activity stream auto-bridge', () => {
     expect(endEvent.data.result.length).toBeLessThanOrEqual(300);
   });
 });
+
+describe('failed tool:end carries why and where (the feed names the real cause)', () => {
+  async function failedEnd(result: ToolResult, args: Record<string, unknown>) {
+    const stream = new ActivityStream();
+    const events: any[] = [];
+    stream.on('activity', (e: any) => events.push(e));
+    const ctx = createMockCtx([createTestTool('web_fetch', result)], stream);
+    await new ToolExecutor(ctx, { botId: 'bot1', chatId: 0 }).execute('web_fetch', args);
+    return events.find((e) => e.type === 'tool:end');
+  }
+
+  it('adds failureKind and the site + path of a URL', async () => {
+    const end = await failedEnd(
+      {
+        success: false,
+        failureKind: 'blocked',
+        content: 'Blocked by Cloudflare bot challenge (403 Forbidden). x',
+      },
+      { url: 'https://onlinelibrary.wiley.com/doi/10.1002/abc?x=1' }
+    );
+    expect(end.data.success).toBe(false);
+    expect(end.data.failureKind).toBe('blocked');
+    expect(end.data.target).toBe('onlinelibrary.wiley.com/doi/10.1002/abc');
+  });
+
+  it('uses the file path when there is no URL, and nothing on success', async () => {
+    const end = await failedEnd({ success: false, content: 'nope' }, { path: 'notes/a.md' });
+    expect(end.data.target).toBe('notes/a.md');
+    expect(end.data.failureKind).toBeUndefined();
+    const ok = await failedEnd({ success: true, content: 'ok' }, { url: 'https://x.org/' });
+    expect(ok.data.target).toBeUndefined();
+  });
+});
+
+describe('toolTarget', () => {
+  it('shortens long targets and ignores non-strings', async () => {
+    const { toolTarget } = await import('../../src/bot/tool-executor');
+    expect(toolTarget({ url: `https://a.org/${'x'.repeat(200)}` })?.length).toBeLessThanOrEqual(80);
+    expect(toolTarget({ url: 'not a url' })).toBe('not a url');
+    expect(toolTarget({ path: 42 })).toBeUndefined();
+    expect(toolTarget({})).toBeUndefined();
+  });
+});

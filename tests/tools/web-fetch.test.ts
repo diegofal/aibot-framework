@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyHttpFailure, createWebFetchTool } from '../../src/tools/web-fetch';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  DEFAULT_BLOCKED_HOST_TTL_MS,
+  classifyHttpFailure,
+  createWebFetchTool,
+} from '../../src/tools/web-fetch';
 
 function createMockLogger() {
   return {
@@ -200,7 +207,7 @@ describe('classifyHttpFailure', () => {
 describe('web_fetch failure classification', () => {
   function toolWith(
     responses: Array<Response | Error>,
-    opts: { now?: () => number; blockedHostTtlMs?: number } = {}
+    opts: { now?: () => number; blockedHostTtlMs?: number; blockedHostsFile?: string } = {}
   ) {
     const calls: string[] = [];
     const fetchImpl = (async (input: string | URL | Request) => {
@@ -294,6 +301,52 @@ describe('web_fetch failure classification', () => {
       const r = await tool.execute({ url: 'https://example.com/c' }, logger);
       expect(r.success).toBe(true);
       expect(calls).toHaveLength(3);
+    });
+
+    test('a block lasts 7 days by default (most bots run once a day)', () => {
+      expect(DEFAULT_BLOCKED_HOST_TTL_MS).toBe(7 * 24 * 60 * 60 * 1000);
+    });
+
+    test('with blockedHostsFile, a block survives a new tool instance (restart)', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'webfetch-blocks-'));
+      try {
+        const file = join(dir, 'sub', 'blocked-hosts.json');
+        const first = toolWith([mockResponse(403, { 'cf-mitigated': 'challenge' })], {
+          blockedHostsFile: file,
+        });
+        await first.tool.execute({ url: 'https://onlinelibrary.wiley.com/doi/x' }, logger);
+        const saved = JSON.parse(readFileSync(file, 'utf8'));
+        expect(saved['onlinelibrary.wiley.com'].blockedBy).toBe('Cloudflare bot challenge');
+
+        const second = toolWith([], { blockedHostsFile: file });
+        const r = await second.tool.execute({ url: 'https://onlinelibrary.wiley.com/y' }, logger);
+        expect(r.failureKind).toBe('blocked');
+        expect(r.content).toContain('Cloudflare bot challenge');
+        expect(second.calls).toHaveLength(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test('expired or unreadable saved blocks are ignored', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'webfetch-blocks-'));
+      try {
+        const file = join(dir, 'blocked-hosts.json');
+        writeFileSync(file, JSON.stringify({ 'old.example': { blockedBy: 'x', until: 5 } }));
+        const a = toolWith([mockResponse(200, { 'content-type': 'text/plain' }, 'ok')], {
+          blockedHostsFile: file,
+          now: () => 10,
+        });
+        expect((await a.tool.execute({ url: 'https://old.example/' }, logger)).success).toBe(true);
+
+        writeFileSync(file, '{not json');
+        const b = toolWith([mockResponse(200, { 'content-type': 'text/plain' }, 'ok')], {
+          blockedHostsFile: file,
+        });
+        expect((await b.tool.execute({ url: 'https://old.example/' }, logger)).success).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     test('the block expires after blockedHostTtlMs', async () => {

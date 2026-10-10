@@ -14,6 +14,8 @@ export const TICKER_LIMIT = 30;
 export const TICKER_SHOW = 5;
 /** Two tool runs of the same agent further apart than this start a new line. */
 export const TICKER_GROUP_GAP_MS = 15 * 60_000;
+/** How close a tool:error and the failed tool:end of the same call are (same tick in practice). */
+export const FAILURE_PAIR_MS = 5_000;
 /** Event types that never earn a ticker line on their own. */
 export const NOISE_EVENTS = new Set([
   'llm:start',
@@ -275,6 +277,64 @@ function phaseWords(phase) {
     .trim();
 }
 
+/** The tool's own words, minus retry boilerplate, cut at the first sentence. */
+function failureReason(message) {
+  let text = String(message ?? '')
+    .replace(/^(Tool execution|Validation) failed after \d+ attempt\(s\): /, '')
+    .replace(/^Fetch failed: /, '')
+    .trim();
+  const stop = text.search(/\.(\s|$)/);
+  if (stop > 0) text = text.slice(0, stop);
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text;
+}
+
+/**
+ * One line for a failed tool call that says what actually went wrong and
+ * where, from `failureKind`, `target` (host + path or file) and the message
+ * the tool returned. A site refusing bots is amber: nothing the bot did.
+ */
+export function describeToolFailure(who, d) {
+  const tool = d.toolName ? String(d.toolName) : 'a tool';
+  const message = String(d.result ?? d.error ?? '');
+  const target = d.target ? String(d.target) : '';
+  const host = target.split('/')[0];
+  switch (d.failureKind) {
+    case 'blocked': {
+      const recent = message.match(/blocked web_fetch recently \((.+?)\)/);
+      const wall = recent ? null : message.match(/^Blocked by (.+?) \((\d{3}[^)]*)\)/);
+      let label = recent ? recent[1] : wall ? wall[1] : 'bot check';
+      if (!recent && wall && /^the site\b/.test(label)) label = wall[2];
+      const site = host || 'The site';
+      return {
+        text: `${who}: ${site} blocks bots (${label})${recent ? ' — skipped, blocked before' : ''}`,
+        tone: 'warn',
+      };
+    }
+    case 'not-found': {
+      const status = message.match(/\((\d{3}[^)]*)\)/)?.[1] ?? '404';
+      return {
+        text: `${who}: ${target || 'the page'} does not exist (${status}) — guessed URL`,
+        tone: 'danger',
+      };
+    }
+    case 'error':
+      if (target) return { text: `${who}: ${target} — ${failureReason(message)}`, tone: 'danger' };
+      break;
+    case 'exit-nonzero':
+      return {
+        text: `${who}: ${tool} exited with an error${target ? ` on ${target}` : ''}${message ? ` — ${failureReason(message)}` : ''}`,
+        tone: 'danger',
+      };
+    default:
+      break;
+  }
+  const reason = failureReason(message);
+  return {
+    text: `${who}: ${tool} failed${target ? ` on ${target}` : ''}${reason ? ` — ${reason}` : ''}`,
+    tone: 'danger',
+  };
+}
+
 /** `{ text, tone }` for one activity event; `names` maps bot id -> display name. */
 export function describeEvent(ev, names = {}) {
   if (!ev || typeof ev.type !== 'string') return { text: '', tone: 'muted' };
@@ -287,13 +347,10 @@ export function describeEvent(ev, names = {}) {
       return { text: `${who} is running ${tool}`, tone: 'info' };
     case 'tool:end':
       return d.success === false
-        ? { text: `${who}: ${tool} failed`, tone: 'danger' }
+        ? describeToolFailure(who, d)
         : { text: `${who} finished ${tool}`, tone: 'ok' };
     case 'tool:error':
-      return {
-        text: `${who}: ${tool} failed${d.error ? ` — ${String(d.error).slice(0, 80)}` : ''}`,
-        tone: 'danger',
-      };
+      return describeToolFailure(who, d);
     case 'llm:start':
       return { text: `${who} is thinking${caller}`, tone: 'info' };
     case 'llm:end':
@@ -404,8 +461,27 @@ export function condenseEvents(events, names = {}) {
 
   const closeGroup = (botId) => groups.delete(botId);
 
+  // A failed call emits tool:error and then a failed tool:end; the end carries
+  // the cause and target, so the error just before it would be a second line.
+  const supersededErrors = new Set();
+  oldestFirst.forEach((ev, i) => {
+    if (ev.type !== 'tool:end' || ev.data?.success !== false) return;
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = oldestFirst[j];
+      if (tsOf(ev) - tsOf(prev) > FAILURE_PAIR_MS) break;
+      if (
+        prev.type === 'tool:error' &&
+        prev.botId === ev.botId &&
+        prev.data?.toolName === ev.data?.toolName
+      ) {
+        supersededErrors.add(prev);
+        break;
+      }
+    }
+  });
+
   for (const ev of oldestFirst) {
-    if (NOISE_EVENTS.has(ev.type)) continue;
+    if (NOISE_EVENTS.has(ev.type) || supersededErrors.has(ev)) continue;
     const botId = String(ev.botId ?? '');
     const who = botName(ev, names);
     const d = ev.data ?? {};

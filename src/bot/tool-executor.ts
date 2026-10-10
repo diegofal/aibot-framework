@@ -65,6 +65,29 @@ export interface ToolEndEvent {
   goalId?: string;
 }
 
+const TARGET_MAX = 80;
+
+/**
+ * What a call touched, short enough for one feed line: a URL's host + path
+ * (no query), else a file `path`, else a `command`. Pure.
+ */
+export function toolTarget(args: Record<string, unknown> | undefined): string | undefined {
+  const pick = [args?.url, args?.path, args?.command].find(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0
+  );
+  if (!pick) return undefined;
+  let text = pick.trim();
+  if (pick === args?.url) {
+    try {
+      const u = new URL(text);
+      text = `${u.host}${u.pathname === '/' ? '' : u.pathname}`;
+    } catch {
+      // Not a URL: show it as given.
+    }
+  }
+  return text.length > TARGET_MAX ? `${text.slice(0, TARGET_MAX - 1)}…` : text;
+}
+
 /**
  * Event payload for tool:error hook.
  * Emitted when a tool execution throws an error or fails validation.
@@ -235,6 +258,14 @@ export class ToolExecutor extends EventEmitter {
           success: e.success,
           durationMs: e.durationMs,
           result: e.result.slice(0, 300),
+          // A failure names its cause and what it touched, so the feed can say
+          // "wiley.com blocked the bot" instead of "web_fetch failed".
+          ...(e.success
+            ? {}
+            : {
+                ...(e.failureKind ? { failureKind: e.failureKind } : {}),
+                ...(toolTarget(e.args) ? { target: toolTarget(e.args) } : {}),
+              }),
         },
       });
 

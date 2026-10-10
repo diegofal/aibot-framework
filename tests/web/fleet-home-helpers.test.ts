@@ -422,3 +422,155 @@ describe('condensed ticker (S3.5)', () => {
     );
   });
 });
+
+describe('tool failures name the real cause and the site', () => {
+  const end = (data, botId = 'b1') => ({
+    type: 'tool:end',
+    botId,
+    timestamp: NOW,
+    data: { toolName: 'web_fetch', success: false, ...data },
+  });
+
+  it('a bot wall is amber and names the site and the wall', () => {
+    expect(
+      describeEvent(
+        end({
+          failureKind: 'blocked',
+          target: 'onlinelibrary.wiley.com/doi/x',
+          result:
+            'Blocked by Cloudflare bot challenge (403 Forbidden). This site cannot be read by web_fetch; use the search snippet.',
+        }),
+        names
+      )
+    ).toEqual({
+      text: 'Bot One: onlinelibrary.wiley.com blocks bots (Cloudflare bot challenge)',
+      tone: 'warn',
+    });
+  });
+
+  it('a plain 403 names the status, and a remembered block says it was skipped', () => {
+    expect(
+      describeEvent(
+        end({
+          failureKind: 'blocked',
+          target: 'www.osc.ny.gov/report',
+          result: 'Blocked by the site (403 Forbidden) (403 Forbidden). This site cannot be read.',
+        }),
+        names
+      ).text
+    ).toBe('Bot One: www.osc.ny.gov blocks bots (403 Forbidden)');
+    expect(
+      describeEvent(
+        end({
+          failureKind: 'blocked',
+          target: 'devin.ai',
+          result: 'devin.ai blocked web_fetch recently (Vercel security checkpoint). Do not retry.',
+        }),
+        names
+      ).text
+    ).toBe('Bot One: devin.ai blocks bots (Vercel security checkpoint) — skipped, blocked before');
+  });
+
+  it('a 404 says the page does not exist and that the URL was guessed', () => {
+    expect(
+      describeEvent(
+        end({
+          failureKind: 'not-found',
+          target: 'api.ashbyhq.com/posting-api/job-board/happyrobot',
+          result:
+            'Page does not exist (404 Not Found). Only fetch URLs that appeared in web_search.',
+        }),
+        names
+      )
+    ).toEqual({
+      text: 'Bot One: api.ashbyhq.com/posting-api/job-board/happyrobot does not exist (404 Not Found) — guessed URL',
+      tone: 'danger',
+    });
+  });
+
+  it('a server or network error shows the site and the error itself', () => {
+    expect(
+      describeEvent(
+        end({
+          failureKind: 'error',
+          target: 'datos.gob.ar/dataset',
+          result: 'Fetch failed: 500 Internal Server Error',
+        }),
+        names
+      ).text
+    ).toBe('Bot One: datos.gob.ar/dataset — 500 Internal Server Error');
+    expect(
+      describeEvent(
+        end({
+          failureKind: 'error',
+          target: 'www.afsa.gov.au',
+          result: 'Fetch failed: The operation timed out.',
+        }),
+        names
+      ).text
+    ).toBe('Bot One: www.afsa.gov.au — The operation timed out');
+  });
+
+  it('other tools: the target and the error without the retry boilerplate', () => {
+    expect(
+      describeEvent(
+        end({
+          toolName: 'file_read',
+          target: 'notes/a.md',
+          result: 'Tool execution failed after 3 attempt(s): ENOENT: no such file. More text here.',
+        }),
+        names
+      )
+    ).toEqual({
+      text: 'Bot One: file_read failed on notes/a.md — ENOENT: no such file',
+      tone: 'danger',
+    });
+    expect(
+      describeEvent(
+        end({
+          toolName: 'exec',
+          failureKind: 'exit-nonzero',
+          target: 'bun test',
+          result: 'Command exited with code 1: 3 tests failed',
+        }),
+        names
+      ).text
+    ).toBe(
+      'Bot One: exec exited with an error on bun test — Command exited with code 1: 3 tests failed'
+    );
+  });
+
+  it('one failure is one line: the error event before a failed end is dropped', () => {
+    const events = [
+      {
+        type: 'tool:error',
+        botId: 'b1',
+        timestamp: NOW - 2000,
+        data: { toolName: 'web_fetch', error: 'Page does not exist (404 Not Found).' },
+      },
+      {
+        type: 'tool:end',
+        botId: 'b1',
+        timestamp: NOW - 1990,
+        data: {
+          toolName: 'web_fetch',
+          success: false,
+          failureKind: 'not-found',
+          target: 'x.org/a',
+          result: 'Page does not exist (404 Not Found).',
+        },
+      },
+      // A retry error with no failed end after it stays.
+      {
+        type: 'tool:error',
+        botId: 'b3',
+        timestamp: NOW - 1000,
+        data: { toolName: 'file_read', error: 'boom' },
+      },
+    ].reverse();
+    expect(condenseEvents(events, names).map((i) => i.text)).toEqual([
+      'Bot Three: file_read failed — boom',
+      'Bot One: x.org/a does not exist (404 Not Found) — guessed URL',
+    ]);
+  });
+});
