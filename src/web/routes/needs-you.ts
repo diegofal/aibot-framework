@@ -171,8 +171,14 @@ export interface NeedsYouActionHandlers {
   dismissFeedback?(botId: string, id: string): boolean;
   /** The productions evaluate path (karma + feedback-to-memory). */
   evaluateProduction?(botId: string, id: string, status: 'approved' | 'rejected'): boolean;
-  /** Neutral: archive the file, no evaluation, no karma. */
+  /** Neutral: archive the file, no evaluation. */
   archiveProduction?(botId: string, id: string, reason: string): boolean;
+  /**
+   * Productions just archived from here, unread, grouped per bot: tells the
+   * bot its output was not wanted (memory note + one `productionIgnored`
+   * karma event). Never a verdict, so the engagement gate stays closed.
+   */
+  productionsIgnored?(botId: string, productionIds: string[]): void;
   approveTool?(id: string): boolean;
   rejectTool?(id: string, note?: string): boolean;
   /** Unload the tool and remove it from disk. */
@@ -1061,6 +1067,34 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
     });
   }
 
+  /**
+   * Hand every production this request archived to `productionsIgnored`, one
+   * call per bot. Runs after the actions; a throw is logged, never surfaced.
+   */
+  function reportIgnored(
+    items: NeedsYouItem[],
+    results: NeedsYouBulkResult[],
+    action: NeedsYouBulkAction
+  ): void {
+    const h = deps.actions;
+    if (!h?.productionsIgnored || (action !== 'archive' && action !== 'neutral')) return;
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const perBot = new Map<string, string[]>();
+    for (const r of results) {
+      const item = r.ok ? byId.get(r.id) : undefined;
+      const productionId = item?.kind === 'production' ? metaStr(item, 'productionId') : null;
+      if (!item || !productionId) continue;
+      perBot.set(item.botId, [...(perBot.get(item.botId) ?? []), productionId]);
+    }
+    for (const [botId, ids] of perBot) {
+      try {
+        h.productionsIgnored(botId, ids);
+      } catch (err) {
+        deps.logger.warn({ err, botId }, 'needs-you: recording ignored productions failed');
+      }
+    }
+  }
+
   // POST /bulk { ids, action, note? } → { results: [{ id, ok, error? }] }
   app.post('/bulk', async (c) => {
     const body = await readBody(c);
@@ -1077,7 +1111,9 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
       return c.json({ error: `"action" must be one of ${NEEDS_YOU_BULK_ACTIONS.join(', ')}` }, 400);
     }
     const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
-    const results = runMany(build(c), [...new Set(ids as string[])], body.action, note);
+    const items = build(c);
+    const results = runMany(items, [...new Set(ids as string[])], body.action, note);
+    reportIgnored(items, results, body.action);
     deps.logger.info(
       {
         action: body.action,
@@ -1105,6 +1141,7 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
     const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
     const result = applyNeedsYouAction(deps.actions, item, body.action, note);
     if (!result.ok) return c.json({ ok: false, error: result.error }, 409);
+    reportIgnored([item], [result], body.action);
     return c.json({ ok: true });
   });
 
@@ -1160,6 +1197,7 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
       ? (body.ids as string[]).filter((id, n, all) => matchedIds.has(id) && all.indexOf(id) === n)
       : matched.map((i) => i.id);
     const results = runMany(matched, items, 'neutral', CLEARED_NOTE);
+    reportIgnored(matched, results, 'neutral');
     const byKind = emptyByKind();
     const kindOf = new Map(matched.map((i) => [i.id, i.kind]));
     for (const r of results) {
@@ -1250,6 +1288,13 @@ export interface NeedsYouActionsBotManager {
         getEntry(botId: string, id: string): ProductionEntry | null | undefined;
         resolveDir(botId: string): string;
         archiveFile(botId: string, path: string, reason: string): boolean;
+        recordIgnored?(
+          botId: string,
+          paths: string[],
+          soulLoader?: unknown,
+          karma?: unknown,
+          activity?: unknown
+        ): unknown;
         evaluate(
           botId: string,
           id: string,
@@ -1313,6 +1358,21 @@ export function needsYouActionsFromBotManager(
       if (!productions || !entry) return false;
       const path = normalizeEntryPath(productions.resolveDir(botId), entry.path);
       return productions.archiveFile(botId, path, reason);
+    },
+    productionsIgnored: (botId, ids) => {
+      const productions = bm.getProductionsService?.();
+      if (!productions?.recordIgnored) return;
+      const paths = ids
+        .map((id) => productions.getEntry(botId, id)?.path)
+        .filter((p): p is string => typeof p === 'string');
+      if (paths.length === 0) return;
+      productions.recordIgnored(
+        botId,
+        paths,
+        bm.findSoulLoader?.(botId),
+        bm.getKarmaService?.(),
+        bm.getActivityStream?.()
+      );
     },
     approveTool: (id) => !!bm.getDynamicToolRegistry?.()?.approve(id),
     rejectTool: (id, note) => !!bm.getDynamicToolRegistry?.()?.reject(id, note),

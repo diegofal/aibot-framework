@@ -665,6 +665,11 @@ DIRECTORY STRUCTURE (mandatory):
 - Name files descriptively: \`liftai_application_package.md\` not \`package1.md\`
 - The archived/ directory is the only valid subdirectory (managed by archive_file tool).
 
+SUPPORTING WORK:
+- Code you write to reach a finding (simulations, probes, data pulls) is a scratch file: start its name with \`_\` (e.g. \`_kappa_power_sim.ts\`). Scratch files are not sent for review.
+- Only the write-up your operator should read gets a normal name. Put the key numbers and how you got them in the write-up itself, so it stands alone.
+- Before starting another follow-up on a thread nobody has reviewed yet, add to the existing write-up instead of creating a new file.
+
 ARCHIVAL PROTOCOL:
 - When you create a new version of a file, archive the old one first using \`archive_file\`.
 - When content becomes stale (superseded by newer content), archive it.

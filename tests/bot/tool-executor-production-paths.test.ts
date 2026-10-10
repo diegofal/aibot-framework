@@ -70,6 +70,22 @@ describe('ToolExecutor — productions logging skips bookkeeping and archived pa
     expect(logged).toEqual([]);
   });
 
+  it('does not log scratch files (leading _ or .): supporting code is not a deliverable', async () => {
+    const ex = executor();
+    await ex.execute('file_write', {
+      path: '_kappa_power_sim.ts',
+      content: 'export const n = 150;',
+    });
+    await ex.execute('file_edit', { path: '.probe.json', old_text: 'a', new_text: '{"ok":true}' });
+    await ex.execute('file_write', { path: './_rerun.ts', content: 'export const x = 1;' });
+    expect(logged).toEqual([]);
+  });
+
+  it('still logs a shell script (an output the operator runs)', async () => {
+    await executor().execute('file_write', { path: '00_preflight.sh', content: 'echo PASS' });
+    expect(logged).toEqual(['00_preflight.sh']);
+  });
+
   it('still logs an ordinary output', async () => {
     await executor().execute('file_write', {
       path: '01_ideas.md',

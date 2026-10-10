@@ -214,6 +214,14 @@ describe('buildExecutorPrompt productionsEnabled', () => {
     expect(result).toContain('ARCHIVAL PROTOCOL');
   });
 
+  test('tells the executor supporting code is a scratch file and only the write-up is reviewed', () => {
+    const result = buildExecutorPrompt(baseExecutorInput);
+    expect(result).toContain('SUPPORTING WORK');
+    expect(result).toContain('_kappa_power_sim.ts');
+    const off = buildExecutorPrompt({ ...baseExecutorInput, productionsEnabled: false });
+    expect(off).not.toContain('SUPPORTING WORK');
+  });
+
   test('skips production sections when productionsEnabled is false', () => {
     const result = buildExecutorPrompt({ ...baseExecutorInput, productionsEnabled: false });
     expect(result).not.toContain('## Working Directory Contents');

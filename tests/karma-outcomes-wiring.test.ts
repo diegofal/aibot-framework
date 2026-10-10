@@ -63,6 +63,7 @@ describe('config: karma.rewards and bot.traits', () => {
       novelAction: 0,
       productionApproved: 3,
       productionRejected: -1,
+      productionIgnored: -1,
       askAnswered: 2,
       humanReply: 3,
       collaborateCompleted: 0,
@@ -270,6 +271,79 @@ describe('ProductionsService.evaluate → karma outcomes', () => {
     expect(updated?.evaluation?.status).toBe('approved');
     expect(karma.getAllEvents('bot1')).toHaveLength(0);
     expect(stream.publish).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProductionsService.recordIgnored → memory note + productionIgnored', () => {
+  function makeService(): ProductionsService {
+    const config: any = {
+      bots: [{ id: 'bot1', name: 'Bot One', token: '', enabled: true, skills: [] }],
+      productions: { enabled: true, baseDir: join(dataDir, 'productions') },
+    };
+    return new ProductionsService(config, mockLogger());
+  }
+  function soul() {
+    const notes: string[] = [];
+    return { notes, loader: { appendDailyMemory: (t: string) => notes.push(t) } as any };
+  }
+
+  test('one batch writes one memory note naming every file and one -1 karma event', () => {
+    const service = makeService();
+    const karma = makeKarma();
+    const stream = { publish: mock(() => {}) } as any;
+    const { notes, loader } = soul();
+
+    service.recordIgnored(
+      'bot1',
+      ['06_sim.ts', '06_finding.md', '07_brief.md'],
+      loader,
+      karma,
+      stream
+    );
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('archived unread');
+    for (const f of ['06_sim.ts', '06_finding.md', '07_brief.md']) expect(notes[0]).toContain(f);
+    const events = karma.getAllEvents('bot1');
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe('productionIgnored');
+    expect(events[0].delta).toBe(-1);
+    expect(events[0].source).toBe('production');
+    expect(events[0].metadata?.count).toBe(3);
+    expect(stream.publish).toHaveBeenCalledTimes(1);
+  });
+
+  test('a second batch the same day still writes the note but costs no more karma', () => {
+    const service = makeService();
+    const karma = makeKarma();
+    const { notes, loader } = soul();
+
+    service.recordIgnored('bot1', ['a.md'], loader, karma);
+    service.recordIgnored('bot1', ['b.md'], loader, karma);
+
+    expect(notes).toHaveLength(2);
+    expect(karma.getAllEvents('bot1')).toHaveLength(1);
+  });
+
+  test('long batches list the first files and count the rest', () => {
+    const service = makeService();
+    const { notes, loader } = soul();
+    const paths = Array.from({ length: 14 }, (_, i) => `f${i}.md`);
+
+    service.recordIgnored('bot1', paths, loader);
+
+    expect(notes[0]).toContain('f9.md');
+    expect(notes[0]).not.toContain('f10.md');
+    expect(notes[0]).toContain('4 more');
+  });
+
+  test('no paths, no writes', () => {
+    const service = makeService();
+    const karma = makeKarma();
+    const { notes, loader } = soul();
+    service.recordIgnored('bot1', [], loader, karma);
+    expect(notes).toHaveLength(0);
+    expect(karma.getAllEvents('bot1')).toHaveLength(0);
   });
 });
 

@@ -450,3 +450,20 @@ Each file's backup is `.versions/*.2026-10-07T00-40-59.bak`; the DB snapshot is 
 Verified: 0 custody markers. Diego's core-memory block shows the family facts and none of Pri's private ones; Pri's block shows hers.
 
 **Reversible?** Yes. Copy the `.bak` files back, or restore `memory.db` from the snapshot (stop the container first). For the code: check out `e5f2d3a` and rebuild.
+
+### 2026-10-10 — ai-perfectionist engagement gate soft → hard
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1`, config volume (`bots.json`) |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | ai-perfectionist wrote 12 unreviewed files 10-05 → 10-09 (daily judge-validation sims) because its gate was `soft` and only annotated the prompt |
+
+```bash
+bun scripts/docker/backup.ts backup
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 sh -c 'cd /app/config && bun -e "…set bots[ai-perfectionist].agentLoop.engagementGate.mode = \"hard\", JSON.stringify(…, null, 2)…"'
+```
+
+**Outcome.** Backup `D:\aibot-backups\aibot-backup-2026-10-10T10-31-37` (the script paused and restarted the container). `bots.json` keeps its 247 lines; only `"mode": "soft"` → `"hard"` changed. `bots.json` is not hot-reloaded: the change applies at the next container restart.
+
+**Reversible?** Yes. Set the field back to `"soft"`, or restore `aibot_config` from the backup.

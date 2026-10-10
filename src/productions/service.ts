@@ -54,6 +54,9 @@ import { CleanupScheduler, CleanupCandidate } from './cleanup';
 import { buildEntryMap, walkTree } from './tree';
 import type { CoherenceCheck, ProductionEntry, ProductionEvaluation, SummaryData, TreeNode } from './types';
 
+/** Files named in an "archived unread" memory note; the rest are counted. */
+const IGNORED_LIST_MAX = 10;
+
 export class ProductionsService {
   private baseDir: string;
   private cleanupScheduler = new CleanupScheduler();
@@ -171,6 +174,55 @@ export class ProductionsService {
     }
 
     return updated;
+  }
+
+  /**
+   * Outputs archived without anyone reading them (cleared from Needs You,
+   * or auto-archived as stale). Not a verdict — the engagement gate keeps
+   * counting them as unconsumed — but the bot is told, in the same daily
+   * memory evaluations write to, and debited one `productionIgnored` (the
+   * karma cooldown makes a batch cost once per bot a day).
+   */
+  recordIgnored(
+    botId: string,
+    paths: string[],
+    soulLoader?: SoulLoader,
+    karmaService?: KarmaService,
+    activityStream?: ActivityStream
+  ): void {
+    if (paths.length === 0) return;
+    this.logger.info({ botId, count: paths.length }, 'Productions archived unread');
+
+    if (soulLoader) {
+      const shown = paths.slice(0, IGNORED_LIST_MAX).map((p) => `- ${p}`);
+      if (paths.length > IGNORED_LIST_MAX) {
+        shown.push(`- …and ${paths.length - IGNORED_LIST_MAX} more`);
+      }
+      soulLoader.appendDailyMemory(
+        [
+          '## Productions archived unread',
+          'Nobody read these; they were archived from the review queue:',
+          ...shown,
+          'Treat this as "not wanted in this form". Do not write more files like these. Before the next output on the same thread, ask your operator whether it is wanted, or fold it into a file they already read.',
+        ].join('\n')
+      );
+    }
+
+    if (karmaService) {
+      const reason = `${paths.length} production(s) archived unread`;
+      const event = karmaService.recordOutcome(botId, 'productionIgnored', reason, {
+        count: paths.length,
+        paths: paths.slice(0, IGNORED_LIST_MAX),
+      });
+      if (event) {
+        activityStream?.publish({
+          type: 'karma:change',
+          botId,
+          timestamp: Date.now(),
+          data: { delta: event.delta, reason, source: 'production', kind: 'productionIgnored' },
+        });
+      }
+    }
   }
 
   setAiResponse(botId: string, id: string, response: string): ProductionEntry | null {

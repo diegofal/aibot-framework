@@ -632,3 +632,84 @@ describe('needsYouActionsFromBotManager', () => {
     ]);
   });
 });
+
+describe('productions archived from Needs You teach the bot', () => {
+  function withIgnored(over: Partial<NeedsYouActionHandlers> = {}) {
+    const rec = recorder(over);
+    const ignored: Array<[string, string[]]> = [];
+    rec.handlers.productionsIgnored = (botId, ids) => {
+      ignored.push([botId, ids]);
+    };
+    return { ...rec, ignored };
+  }
+
+  it('clear-stale reports the archived productions once per bot', async () => {
+    const { handlers, ignored } = withIgnored();
+    await post(makeApp(handlers), '/api/needs-you/clear-stale', { olderThanHours: 72 });
+    expect(ignored).toEqual([['b1', ['f1']]]);
+  });
+
+  it('bulk archive and neutral report; approve and reject do not', async () => {
+    const { handlers, ignored } = withIgnored();
+    const app = makeApp(handlers);
+    await post(app, '/api/needs-you/bulk', { ids: ['production:b1:f1'], action: 'approve' });
+    await post(app, '/api/needs-you/bulk', { ids: ['production:b1:f1'], action: 'reject' });
+    expect(ignored).toEqual([]);
+    await post(app, '/api/needs-you/bulk', {
+      ids: ['production:b1:f1', 'production:b1:f2', 'permission:p1'],
+      action: 'neutral',
+    });
+    expect(ignored).toEqual([['b1', ['f1', 'f2']]]);
+  });
+
+  it('a failed archive is not reported', async () => {
+    const { handlers, ignored } = withIgnored({ archiveProduction: () => false });
+    await post(makeApp(handlers), '/api/needs-you/bulk', {
+      ids: ['production:b1:f1'],
+      action: 'archive',
+    });
+    expect(ignored).toEqual([]);
+  });
+
+  it('/act archive on a production reports it', async () => {
+    const { handlers, ignored } = withIgnored();
+    const res = await post(makeApp(handlers), '/api/needs-you/act', {
+      id: 'production:b1:f2',
+      action: 'archive',
+    });
+    expect(res.body.ok).toBe(true);
+    expect(ignored).toEqual([['b1', ['f2']]]);
+  });
+
+  it('a throwing reporter never fails the action', async () => {
+    const { handlers } = withIgnored();
+    handlers.productionsIgnored = () => {
+      throw new Error('boom');
+    };
+    const res = await post(makeApp(handlers), '/api/needs-you/bulk', {
+      ids: ['production:b1:f1'],
+      action: 'archive',
+    });
+    expect(res.body.results).toEqual([{ id: 'production:b1:f1', ok: true }]);
+  });
+
+  it('needsYouActionsFromBotManager maps ids to paths and calls recordIgnored', async () => {
+    const { needsYouActionsFromBotManager } = await import('../../../src/web/routes/needs-you');
+    const calls: unknown[] = [];
+    const h = needsYouActionsFromBotManager({
+      getProductionsService: () => ({
+        resolveDir: (b: string) => `/prod/${b}`,
+        getEntry: (_b: string, id: string) =>
+          id === 'gone' ? null : ({ path: `${id}.md` } as never),
+        recordIgnored: (...args: unknown[]) => {
+          calls.push(args);
+        },
+      }),
+      findSoulLoader: () => 'SOUL',
+      getKarmaService: () => 'KARMA',
+      getActivityStream: () => 'ACT',
+    } as never);
+    h.productionsIgnored?.('b1', ['f1', 'gone', 'f2']);
+    expect(calls).toEqual([['b1', ['f1.md', 'f2.md'], 'SOUL', 'KARMA', 'ACT']]);
+  });
+});

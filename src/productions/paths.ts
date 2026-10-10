@@ -171,6 +171,17 @@ export const RESERVED_PRODUCTION_FILES = new Set([
 export const ARCHIVED_DIR = 'archived';
 
 /**
+ * Scratch file: a leading `_` or `.` on the file name (the convention
+ * `isUnnumbered` also honours). Supporting work — simulations, probes, data
+ * pulls — that the bot runs to reach a finding; the finding is the output.
+ * Never logged, so it never reaches Needs You or the engagement gate. Pure.
+ */
+export function isScratchProductionPath(path: string): boolean {
+  const name = path.split(/[\\/]+/).filter(Boolean).pop() ?? '';
+  return name.startsWith('_') || (name.startsWith('.') && name !== '.' && name !== '..');
+}
+
+/**
  * Is this path bookkeeping or already archived — never an output to review,
  * track or archive? Expects the dir-relative form (see `normalizeEntryPath`);
  * an absolute path (a track-only output outside the dir) is judged by its

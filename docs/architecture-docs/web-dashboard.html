@@ -583,7 +583,7 @@
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/needs-you/clear-stale</code></td>
-              <td><code>{ olderThanHours: number &ge; 1 (required), kinds?, botId?, ids?: string[] (max 500) }</code> &rarr; <code>{ cleared, byKind, results }</code>. Items strictly older than the cutoff (same collection as the GET) get the neutral action; with <code>ids</code> only those items are considered (the dashboard sends exactly the rows the operator confirmed). Tools have no neutral action: <code>kinds</code> including <code>tool</code> is a 400. Never approves; <code>cleared</code> / <code>byKind</code> count successes only</td>
+              <td><code>{ olderThanHours: number &ge; 1 (required), kinds?, botId?, ids?: string[] (max 500) }</code> &rarr; <code>{ cleared, byKind, results }</code>. Items strictly older than the cutoff (same collection as the GET) get the neutral action; with <code>ids</code> only those items are considered (the dashboard sends exactly the rows the operator confirmed). Tools have no neutral action: <code>kinds</code> including <code>tool</code> is a 400. Never approves; <code>cleared</code> / <code>byKind</code> count successes only. Productions archived here (and by <code>/bulk</code> or <code>/act</code> with <code>archive</code> / <code>neutral</code>) are reported per bot to <code>productionsIgnored</code> &rarr; <code>ProductionsService.recordIgnored</code>: a memory note plus one <code>productionIgnored</code> karma event <span class="badge badge-yellow">2026-10-10</span></td>
               <td><code>needs-you.ts</code></td>
             </tr>
           </tbody>
@@ -1096,7 +1096,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/karma/:botId</code></td>
-              <td>Get karma score for a specific bot. <code>breakdown { windowDays: 30, bySource, byKind }</code> holds the raw (undecayed) delta sums over the trailing window &mdash; sources <code>production | agent-loop | feedback | goal | manual | tool | engagement</code>, kinds <code>novelAction | productionApproved | productionRejected | askAnswered | humanReply | collaborateCompleted | toolError</code>. Events recorded through <code>recordOutcome()</code> carry <code>kind</code></td>
+              <td>Get karma score for a specific bot. <code>breakdown { windowDays: 30, bySource, byKind }</code> holds the raw (undecayed) delta sums over the trailing window &mdash; sources <code>production | agent-loop | feedback | goal | manual | tool | engagement</code>, kinds <code>novelAction | productionApproved | productionRejected | productionIgnored | askAnswered | humanReply | collaborateCompleted | toolError</code>. Events recorded through <code>recordOutcome()</code> carry <code>kind</code></td>
               <td><code>karma.ts</code></td>
             </tr>
             <tr>

@@ -18,6 +18,8 @@ export interface KarmaRewards {
   productionApproved: number;
   /** Operator rejected a production */
   productionRejected: number;
+  /** Operator archived productions unread (Needs You, auto-archive) — at most once per bot a day */
+  productionIgnored: number;
   /** A human answered an ask_human question */
   askAnswered: number;
   /** A human replied to the bot in a conversation (rate-limited per bot) */
@@ -34,6 +36,7 @@ export const DEFAULT_KARMA_REWARDS: KarmaRewards = {
   novelAction: 0,
   productionApproved: 3,
   productionRejected: -1,
+  productionIgnored: -1,
   askAnswered: 2,
   humanReply: 3,
   collaborateCompleted: 0,
@@ -45,6 +48,7 @@ export const KARMA_KIND_SOURCE: Record<KarmaOutcomeKind, KarmaSource> = {
   novelAction: 'agent-loop',
   productionApproved: 'production',
   productionRejected: 'production',
+  productionIgnored: 'production',
   askAnswered: 'engagement',
   humanReply: 'engagement',
   collaborateCompleted: 'agent-loop',

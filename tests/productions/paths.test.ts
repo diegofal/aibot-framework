@@ -24,6 +24,7 @@ import {
   assertWithinDir,
   INDEX_EXCLUDES,
   isEnabled,
+  isScratchProductionPath,
   isTrackOnly,
   isUntrackedProductionPath,
   normalizeEntryPath,
@@ -384,5 +385,19 @@ describe('isUntrackedProductionPath', () => {
   test('Windows separators are understood', () => {
     expect(isUntrackedProductionPath('archived\\x.md')).toBe(true);
     expect(isUntrackedProductionPath('sub\\changelog.jsonl')).toBe(true);
+  });
+});
+
+describe('isScratchProductionPath', () => {
+  test('a leading _ or . on the file name marks scratch, at any depth', () => {
+    for (const p of ['_sim.ts', '.probe.json', 'notes/_draft.md', './_x.ts', 'a\\_b.ts']) {
+      expect(isScratchProductionPath(p)).toBe(true);
+    }
+  });
+
+  test('numbered outputs, plain names and shell scripts are not scratch', () => {
+    for (const p of ['07_bias_power_sim.ts', 'brief.md', '00_preflight.sh', 'x_y.md', '']) {
+      expect(isScratchProductionPath(p)).toBe(false);
+    }
   });
 });

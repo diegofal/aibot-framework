@@ -465,6 +465,7 @@ describe('KarmaService.recordOutcome', () => {
       novelAction: 0,
       productionApproved: 3,
       productionRejected: -1,
+      productionIgnored: -1,
       askAnswered: 2,
       humanReply: 3,
       collaborateCompleted: 0,

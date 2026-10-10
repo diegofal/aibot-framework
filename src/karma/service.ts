@@ -28,6 +28,7 @@ export interface KarmaConfig {
 /** Trailing window the dashboard breakdown is computed over */
 const BREAKDOWN_WINDOW_DAYS = 30;
 const DEFAULT_HUMAN_REPLY_COOLDOWN_HOURS = 6;
+const PRODUCTION_IGNORED_COOLDOWN_MS = 24 * 3_600_000;
 
 export class KarmaService {
   private baseDir: string;
@@ -52,6 +53,8 @@ export class KarmaService {
     this.outcomeCooldownMs = {
       humanReply:
         (config.humanReplyCooldownHours ?? DEFAULT_HUMAN_REPLY_COOLDOWN_HOURS) * 3_600_000,
+      // A batch of 17 files cleared at once is one signal, not seventeen.
+      productionIgnored: PRODUCTION_IGNORED_COOLDOWN_MS,
     };
   }
 

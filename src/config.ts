@@ -943,6 +943,7 @@ const KarmaRewardsSchema = z
     novelAction: z.number().default(0),
     productionApproved: z.number().default(3),
     productionRejected: z.number().default(-1),
+    productionIgnored: z.number().default(-1),
     askAnswered: z.number().default(2),
     humanReply: z.number().default(3),
     collaborateCompleted: z.number().default(0),

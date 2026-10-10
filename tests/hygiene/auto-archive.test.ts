@@ -180,3 +180,62 @@ describe('startAutoArchive', () => {
     expect(t.cleared).toBeGreaterThan(0);
   });
 });
+
+describe('runAutoArchive → onArchived', () => {
+  function archivedRun(botId: string, files: string[]): HygieneRun {
+    const r = run(botId, 0);
+    r.findings = files.map((file) => ({
+      id: `productions-triage:unreviewed-stale:${file}`,
+      kind: 'unreviewed-stale',
+      severity: 'info',
+      file,
+      line: null,
+      message: 'm',
+      fixable: true,
+    })) as never;
+    r.applied = files.map((file) => ({
+      findingId: `productions-triage:unreviewed-stale:${file}`,
+      action: 'archive',
+      result: `${file} → archived/`,
+    }));
+    // A non-archive fix in the same run is not an ignored output.
+    r.applied.push({
+      findingId: 'productions-triage:orphan-reference:x',
+      action: 'prune-changelog',
+      result: 'x',
+    });
+    return r;
+  }
+
+  it('hands each bot its archived files, once, and skips bots with none', async () => {
+    const { registry } = fakeRegistry({ a: archivedRun('a', ['01_x.md', '02_y.ts']) });
+    const seen: Array<[string, string[]]> = [];
+    await runAutoArchive({
+      registry,
+      config: config(),
+      logger: quiet,
+      onArchived: (botId, files) => {
+        seen.push([botId, files]);
+      },
+    });
+    expect(seen).toEqual([['a', ['01_x.md', '02_y.ts']]]);
+  });
+
+  it('a throwing onArchived never stops the pass', async () => {
+    const { registry, calls } = fakeRegistry({
+      a: archivedRun('a', ['01_x.md']),
+      b: archivedRun('b', ['02_y.md']),
+    });
+    const summary = await runAutoArchive({
+      registry,
+      config: config(),
+      logger: quiet,
+      onArchived: () => {
+        throw new Error('nope');
+      },
+    });
+    expect(calls.map((c) => c.botId)).toEqual(['a', 'b']);
+    expect(summary.archived).toBe(2);
+    expect(summary.failed).toEqual([]);
+  });
+});

@@ -76,11 +76,15 @@ export function resolveAutoArchive(config: Config): AutoArchiveSettings {
   };
 }
 
+/** Called with the files a bot just had archived unread (none → not called). */
+export type OnArchived = (botId: string, files: string[]) => void;
+
 /** One pass over the fleet. Never throws. */
 export async function runAutoArchive(deps: {
   registry: AutoArchiveRegistry;
   config: Config;
   logger: Logger;
+  onArchived?: OnArchived;
 }): Promise<AutoArchiveSummary> {
   const { registry, config, logger } = deps;
   const { staleDays } = resolveAutoArchive(config);
@@ -96,7 +100,9 @@ export async function runAutoArchive(deps: {
         options: { archiveStale: true, staleDays },
       });
       if (run.error) summary.failed.push(bot.id);
-      summary.archived += run.applied.filter((a) => a.action === 'archive').length;
+      const archived = run.applied.filter((a) => a.action === 'archive');
+      summary.archived += archived.length;
+      reportArchived(deps, bot.id, run, archived);
     } catch (err) {
       summary.failed.push(bot.id);
       logger.warn({ err, botId: bot.id }, 'auto-archive: productions-triage failed');
@@ -104,6 +110,25 @@ export async function runAutoArchive(deps: {
   }
   logger.info(summary, 'auto-archive: stale productions archived');
   return summary;
+}
+
+function reportArchived(
+  deps: { onArchived?: OnArchived; logger: Logger },
+  botId: string,
+  run: HygieneRun,
+  archived: HygieneRun['applied']
+): void {
+  if (!deps.onArchived || archived.length === 0) return;
+  const fileOf = new Map(run.findings.map((f) => [f.id, f.file]));
+  const files = archived
+    .map((a) => fileOf.get(a.findingId))
+    .filter((f): f is string => typeof f === 'string' && f.length > 0);
+  if (files.length === 0) return;
+  try {
+    deps.onArchived(botId, files);
+  } catch (err) {
+    deps.logger.warn({ err, botId }, 'auto-archive: onArchived failed');
+  }
 }
 
 /**
@@ -115,6 +140,7 @@ export function startAutoArchive(deps: {
   registry: AutoArchiveRegistry;
   config: Config;
   logger: Logger;
+  onArchived?: OnArchived;
   timers?: AutoArchiveTimers;
   startDelayMs?: number;
 }): { stop: () => void } | null {

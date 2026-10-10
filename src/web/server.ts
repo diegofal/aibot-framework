@@ -423,7 +423,22 @@ export function startWebServer(deps: WebServerDeps): void {
   );
   // Daily: outputs nobody reviewed for productions.autoArchive.staleDays move to
   // archived/ (never deleted; approved files never). Off with autoArchive.enabled=false.
-  if (productionsService) startAutoArchive({ registry: hygieneRegistry, config, logger });
+  // Each bot is told which of its outputs went unread (memory note + karma).
+  if (productionsService) {
+    startAutoArchive({
+      registry: hygieneRegistry,
+      config,
+      logger,
+      onArchived: (botId, files) =>
+        productionsService.recordIgnored(
+          botId,
+          files,
+          deps.botManager.findSoulLoader(botId),
+          karmaService,
+          deps.botManager.getActivityStream()
+        ),
+    });
+  }
 
   // Conversations routes (use shared ConversationsService from BotManager)
   const conversationsService = deps.botManager.getConversationsService();

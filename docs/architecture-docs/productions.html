@@ -248,6 +248,8 @@ src/productions/
       <div class="signature">isEnabled(config, botId) → boolean</div>
       <div class="signature">resolveFilePath(dir, entry) → string | null</div>
       <div class="signature">assertWithinDir(dir, relativePath) → boolean</div>
+      <div class="signature">isScratchProductionPath(path) → boolean</div>
+      <p><span class="badge badge-yellow">2026-10-10</span> <code>isScratchProductionPath</code>: a file name starting with <code>_</code> or <code>.</code> is supporting work (simulations, probes). <code>ToolExecutor</code> never logs it, so it never reaches the changelog, Needs You, the engagement gate or triage. The executor prompt's SUPPORTING WORK rule tells bots to name helper code that way and put the numbers in the write-up. <code>ProductionsService.recordIgnored(botId, paths, soul?, karma?, activity?)</code> is called for outputs archived unread (Needs You archive / Clear stale, daily auto-archive): one "Productions archived unread" note in the bot's daily memory and one <code>productionIgnored</code> karma event. It is not a verdict, so the engagement gate still counts those outputs as unconsumed.</p>
       <p>Constants: <code>INDEX_EXCLUDES</code>, <code>TREE_EXCLUDES</code>.</p>
       <p>Called by every module that touches the filesystem (8 call sites total). The single
         <code>assertWithinDir</code> validator handles <code>..</code>, absolute paths, and Windows

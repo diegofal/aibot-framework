@@ -5,7 +5,11 @@ import { z } from 'zod';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { MEMORY_VIEWER_ARG, type MemoryViewer } from '../memory/viewer';
-import { isUntrackedProductionPath, normalizeEntryPath } from '../productions/paths';
+import {
+  isScratchProductionPath,
+  isUntrackedProductionPath,
+  normalizeEntryPath,
+} from '../productions/paths';
 import { ProductionsService } from '../productions/service';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
 import type { Tool, ToolDefinition, ToolFailureKind, ToolResult } from '../tools/types';
@@ -685,9 +689,11 @@ export class ToolExecutor extends EventEmitter {
                 originalPathForProductions ?? (effectiveArgs.path as string | undefined);
 
               // Bookkeeping files and archived/** are never outputs (a logged
-              // changelog.jsonl once got archived from Needs You).
+              // changelog.jsonl once got archived from Needs You); scratch
+              // files (`_sim.ts`) are supporting work, not something to review.
               if (
                 logPath &&
+                !isScratchProductionPath(logPath) &&
                 !isUntrackedProductionPath(
                   normalizeEntryPath(ps.resolveDir(botId), logPath.replace(/^\.\//, ''))
                 )
