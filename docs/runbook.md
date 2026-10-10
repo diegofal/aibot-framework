@@ -483,3 +483,19 @@ docker compose up -d --build
 **Outcome.** Container `healthy`. The image has `isScratchProductionPath` in `src/bot/tool-executor.ts`, `recordIgnored` wired in `src/web/server.ts`, and the SUPPORTING WORK rule in `src/bot/agent-loop-prompts.ts`. Boot logs show no errors except the known `default` Telegram `getMe` 401 (revoked token, already in older logs).
 
 **Reversible?** Yes. Check out `61fcb80` and rebuild; set the gate back to `soft` in `bots.json`.
+
+### 2026-10-10 — Deployed `9e15bda` (feed names the cause of tool failures; walled sites remembered 7 days)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship `9e15bda` |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container `healthy`. `http://127.0.0.1:3000/pages/fleet-home-helpers.js` serves `describeToolFailure`; the image has the 7-day `DEFAULT_BLOCKED_HOST_TTL_MS` and `toolTarget(e.args)` in the stream bridge. No error-level boot logs. `<data>/web-fetch/blocked-hosts.json` is created on the first blocked fetch.
+
+**Reversible?** Yes. Check out `bcf0481` and rebuild; deleting `blocked-hosts.json` clears the list.
