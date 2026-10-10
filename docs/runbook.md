@@ -499,3 +499,19 @@ docker compose up -d --build
 **Outcome.** Container `healthy`. `http://127.0.0.1:3000/pages/fleet-home-helpers.js` serves `describeToolFailure`; the image has the 7-day `DEFAULT_BLOCKED_HOST_TTL_MS` and `toolTarget(e.args)` in the stream bridge. No error-level boot logs. `<data>/web-fetch/blocked-hosts.json` is created on the first blocked fetch.
 
 **Reversible?** Yes. Check out `bcf0481` and rebuild; deleting `blocked-hosts.json` clears the list.
+
+### 2026-10-10 — Deployed `9c18403` (Fleet Board prototype)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship the Fleet Board (`#/board`) and its goal API (subtasks, DELETE) |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container `healthy`. Served: `/pages/fleet-board.js` (`renderFleetBoard`), `/nav-routes.js` (`fleetBoard`), `/style.css` (`fb-lane`). The image has `DELETE /:id/goals` and `TASK_LINE`; an unauthenticated `DELETE /api/agents/x/goals` answers 401 (route present). No error-level boot logs.
+
+**Reversible?** Yes. Check out `7addb27` and rebuild. GOALS.md files edited from the board keep `- task:` lines, which older code ignores.
