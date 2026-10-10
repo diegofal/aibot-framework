@@ -2,7 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import {
   BOARD_COLUMNS,
   addTask,
-  agentBoardHtml,
+  agentLine,
+  agentPanel,
   boardColumns,
   cardHtml,
   drawerHtml,
@@ -12,7 +13,7 @@ import {
   goalRef,
   lastCycle,
   moveTask,
-  overviewRow,
+  needsByBot,
   removeTask,
   renameTask,
   stateLine,
@@ -156,24 +157,76 @@ describe('data shaping', () => {
   });
 });
 
+/** A link inside a link is invalid HTML: the browser splits the outer one (the 10 Oct board bug). */
+function nestedAnchor(html: string): boolean {
+  let depth = 0;
+  for (const m of html.matchAll(/<(\/?)a[\s>]/g)) {
+    depth += m[1] ? -1 : 1;
+    if (depth > 1) return true;
+  }
+  return false;
+}
+
 describe('markup', () => {
   const lane = {
     agent: { id: 'b1', name: 'Bot One', running: true, enabled: true },
     presence: { running: true, enabled: true, pendingAsks: 1, unreviewed: 2, posture: 'active' },
     home: home([goal(), goal({ id: 'g-2', status: 'pending', text: 'Next thing to do: soon' })]),
   };
-  it('overview row: who + state, focus headline with progress, up next, needs, link to the board', () => {
-    const html = overviewRow(lane, 0, { nowMs: NOW });
+  const needs = [
+    { kind: 'ask', title: 'Which stack are you on?', href: '#/needs/inbox/b1/c1' },
+    { kind: 'production', title: '04_brief.md', href: '#/work/productions/b1?file=04_brief.md' },
+  ];
+
+  it('needsByBot groups Needs You items per agent', () => {
+    const g = needsByBot([
+      { botId: 'a', kind: 'ask', title: 'q' },
+      { botId: 'b', kind: 'production', title: 'f' },
+      { botId: 'a', kind: 'permission', title: 'p' },
+    ]);
+    expect(g.a.map((x: { title: string }) => x.title)).toEqual(['q', 'p']);
+    expect(needsByBot(null)).toEqual({});
+  });
+
+  it('collapsed line: one compact line, focus headline, counts, waiting count, no nested links', () => {
+    const html = agentLine(lane, needs, { nowMs: NOW, expanded: false });
     expect(html).toContain('Bot One');
     expect(html).toContain('Waiting on you · 1 question');
     expect(html).toContain('Maintain a living FDE skills map');
     expect(html).not.toContain('evals, retrieval');
-    expect(html).toContain('1/2');
-    expect(html).toContain('Next thing to do');
-    expect(html).toContain('1 ask');
-    expect(html).toContain('2 to review');
-    expect(html).toContain('href="#/board/b1"');
+    expect(html).toContain('2 goals');
+    // Subtasks summed over the open goals: 1/2 + 1/2.
+    expect(html).toContain('2/4');
+    expect(html).toContain('2 waiting');
+    expect(html).toContain('data-toggle="b1"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('fb-panel');
+    expect(nestedAnchor(html)).toBe(false);
   });
+
+  it('expanded line adds the panel: what it is doing, what it waits on (real titles), goals', () => {
+    const html = agentLine(lane, needs, { nowMs: NOW, expanded: true });
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('fb-panel');
+    expect(html).toContain('Draft it');
+    expect(html).toContain('Which stack are you on?');
+    expect(html).toContain('04_brief.md');
+    expect(html).toContain('href="#/needs/inbox/b1/c1"');
+    for (const c of BOARD_COLUMNS) expect(html).toContain(`data-col="${c.id}"`);
+    expect(html).toContain('data-addgoal');
+    expect(html).toContain('data-quick="run"');
+    expect(nestedAnchor(html)).toBe(false);
+  });
+
+  it('panel says when nothing waits on you, and when goals failed to load', () => {
+    const quiet = { ...lane, presence: { ...lane.presence, pendingAsks: 0, unreviewed: 0 } };
+    expect(agentPanel(quiet, [], { nowMs: NOW })).toContain('Nothing waiting on you');
+    expect(agentPanel(lane, [], { nowMs: NOW })).toContain('3 items in Needs you');
+    expect(agentPanel({ ...lane, home: null }, [], { nowMs: NOW })).toContain(
+      'Could not load goals'
+    );
+  });
+
   it('card: headline only, priority class, you tag, progress, escaped', () => {
     const html = cardHtml(goal({ text: '<b>x</b>: y' }), false);
     expect(html).toContain('fb-card high');
@@ -185,19 +238,7 @@ describe('markup', () => {
     expect(done).toContain('fb-card done');
     expect(done).not.toContain('draggable');
   });
-  it('agent board: four columns, an empty Blocked column is a slim rail, add-goal in Up next', () => {
-    const html = agentBoardHtml(lane, [lane], { nowMs: NOW });
-    for (const c of BOARD_COLUMNS) expect(html).toContain(`data-col="${c.id}"`);
-    expect(html).toContain('fb-col slim');
-    expect(html).toContain('data-addgoal');
-    expect(html).toContain('Draft it');
-    expect(html).toContain('data-quick="run"');
-  });
-  it('a board whose goals failed to load says so', () => {
-    expect(agentBoardHtml({ ...lane, home: null }, [lane], { nowMs: NOW })).toContain(
-      'Could not load goals'
-    );
-  });
+
   it('drawer: title, status and priority segments, subtasks, brief, notes, delete', () => {
     const html = drawerHtml(lane.agent, goal({ notes: 'some notes' }));
     expect(html).toContain('Maintain a living FDE skills map');

@@ -1813,16 +1813,16 @@ compaction                            // Context compaction
              <code>GET /api/needs-you/count</code> &mdash; the sidebar badge's number &mdash; with the
              per-card sum as fallback.</p>
           <p><strong>Fleet Board (<code>#/board</code>, <code>#/board/:id</code>, 2026-10-10).</strong> The "Board" button on Fleet Home.
-             <code>web/pages/fleet-board.js</code> + pure <code>fleet-board-helpers.js</code>. <em>Overview</em>: one compact row per agent
-             (<code>overviewRow</code>): avatar, name and a plain-language state (<code>stateLine</code>: Working &middot; tool / Waiting on you /
-             Idle &middot; next run / Stopped), up to two in-progress headlines with subtask progress, up next, needs you; fleet pulse,
-             search, filters All / Working / Needs you, <code>j</code>/<code>k</code>/Enter. <em>Agent board</em> (<code>agentBoardHtml</code>):
-             agent switcher, header (state, last cycle, controls), In progress / Up next / Blocked (slim rail when empty) / Done (one
-             muted line each). Cards show a headline (<code>goalHeadline</code>: <code>goal.headline</code>, else derived from the text) with
-             priority as a colored edge. <em>Drawer</em> (<code>drawerHtml</code>, appended to <code>body</code>): title (PATCH
-             <code>headline</code>), status and priority segments, subtasks, brief (PATCH <code>brief</code>), notes, delete. Data:
-             <code>/api/agents</code>, <code>/api/agents/presence</code> (live via <code>watchFleet</code>), <code>/api/agents/:id/home</code>
-             per agent, cached 30 s across overview &harr; board, re-read every 60 s; nothing repaints while a field is focused.</p>
+             <code>web/pages/fleet-board.js</code> + pure <code>fleet-board-helpers.js</code>. One list, one compact line per agent
+             (<code>agentLine</code>, a <code>div role="button"</code>, never a link: the expanded part holds links): status
+             (<code>stateLine</code>), focus headline (<code>goalHeadline</code>), goal and subtask counts, how many things wait on you.
+             Clicking a line (or Enter, <code>j</code>/<code>k</code> to move) expands it in place (<code>agentPanel</code>): doing now and
+             last cycle, the items waiting on you (titles from <code>GET /api/needs-you</code> grouped by <code>needsByBot</code>),
+             Run / Stop / Agent home, and the agent's goals in In progress / Up next / Blocked (slim rail when empty) / Done. Expanded
+             lines persist in <code>localStorage</code>; <code>#/board/:id</code> opens the list with that agent expanded. A card opens
+             the goal drawer (<code>drawerHtml</code>): title (PATCH <code>headline</code>), status, priority, subtasks, brief (PATCH
+             <code>brief</code>), notes, delete. Data cached 30 s, goals re-read every 60 s, presence live via <code>watchFleet</code>
+             (which also refreshes Needs You); nothing repaints while a field is focused.</p>
         </div>
 
         <div class="card">

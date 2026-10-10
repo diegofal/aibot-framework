@@ -1,28 +1,28 @@
 /**
- * Fleet Board — `#/board` (overview) and `#/board/:id` (one agent's board).
+ * Fleet Board — `#/board` (and `#/board/:id`, the same view with that agent open).
  *
- * Overview: one compact row per agent (who + plain-language state → focus →
- * up next → needs you), search, filters, j/k/Enter. Board: the agent's goals in
- * In progress / Up next / Blocked / Done; a card opens a drawer with status,
- * priority, title (headline), subtasks, brief, notes and delete. Markup lives in
+ * One screen: a compact line per agent (state, focus, goal and subtask counts,
+ * how much waits on you). Click a line to expand it in place: what the agent is
+ * doing, the actual items waiting on you (from Needs You), its controls, and
+ * its goals in four compact columns. A card opens the goal drawer (title,
+ * status, priority, subtasks, brief, notes, delete). Markup lives in
  * fleet-board-helpers.js (pure, tested).
  *
- * Data: `/api/agents`, `/api/agents/presence` (live via `watchFleet`) and
- * `/api/agents/:id/home` per agent, cached for a short while so moving between
- * the overview and boards is instant. Writes: POST / PATCH / DELETE
- * `/api/agents/:id/goals`; after a write only that agent's goals are re-read.
+ * Data: `/api/agents`, `/api/agents/presence` (live via `watchFleet`),
+ * `/api/needs-you`, and `/api/agents/:id/home` per agent; cached briefly.
+ * Writes: POST / PATCH / DELETE `/api/agents/:id/goals`.
  */
 import { confirmInline, showToast, skeleton } from '../ui/index.js';
 import { authedAvatarSrc } from './agent-face.js';
 import {
   addTask,
-  agentBoardHtml,
+  agentLine,
   drawerHtml,
   filterLanes,
   fleetPulse,
   goalRef,
   moveTask,
-  overviewRow,
+  needsByBot,
   removeTask,
   renameTask,
   toggleTask,
@@ -35,6 +35,7 @@ const OPTS = { avatarSrc: authedAvatarSrc };
 const CACHE_MS = 30_000;
 const REFRESH_MS = 60_000;
 const FILTER_KEY = 'fleetBoard.filter';
+const OPEN_KEY = 'fleetBoard.open';
 const QUICK_PATHS = {
   start: (id) => `/api/agents/${id}/start`,
   'enable-start': (id) => `/api/agents/${id}/start?enable=true`,
@@ -42,7 +43,6 @@ const QUICK_PATHS = {
   run: (id) => `/api/agent-loop/run/${id}`,
 };
 
-/** Survives page switches (overview ↔ board) so navigation does not refetch everything. */
 let cache = null;
 let state = null;
 let watch = null;
@@ -61,16 +61,34 @@ export function destroyFleetBoard() {
   state = null;
 }
 
+function readOpen() {
+  try {
+    const v = JSON.parse(localStorage.getItem(OPEN_KEY) || '[]');
+    return new Set(Array.isArray(v) ? v : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveOpen() {
+  localStorage.setItem(OPEN_KEY, JSON.stringify([...state.open]));
+}
+
 async function loadHome(id) {
   const res = await api(`/api/agents/${encodeURIComponent(id)}/home`).catch(() => null);
   return res && !res.error ? res : null;
 }
 
+async function loadNeeds() {
+  const res = await api('/api/needs-you').catch(() => null);
+  return Array.isArray(res?.items) ? needsByBot(res.items) : null;
+}
+
 async function loadAll() {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache;
-  const [agents, presence] = await Promise.all([
+  const [agents, presence, needs] = await Promise.all([
     api('/api/agents').catch((err) => ({ error: err?.message || 'Request failed' })),
     api('/api/agents/presence').catch(() => null),
+    loadNeeds(),
   ]);
   if (!Array.isArray(agents)) return { error: agents?.error || 'Request failed' };
   const homes = await Promise.all(agents.map((a) => loadHome(a.id)));
@@ -78,6 +96,7 @@ async function loadAll() {
     at: Date.now(),
     agents,
     presence: presence?.agents ?? {},
+    needs: needs ?? {},
     homes: Object.fromEntries(agents.map((a, i) => [a.id, homes[i]])),
   };
   return cache;
@@ -105,74 +124,53 @@ function findGoal(botId, ref) {
 
 // ── painting ──
 
-function paintOverview() {
-  const el = state.el.querySelector('#fb-rows');
+function lineHtml(lane, i) {
+  const id = lane.agent.id;
+  return agentLine(lane, cache.needs[id] ?? [], {
+    ...OPTS,
+    expanded: state.open.has(id),
+    selected: i === state.kb,
+    selectedRef: state.drawer?.botId === id ? state.drawer.ref : null,
+  });
+}
+
+function paintList() {
+  const el = state.el.querySelector('#fb-list');
   if (!el) return;
   const all = lanes();
   const shown = filterLanes(all, state.filter, state.query);
   if (state.kb >= shown.length) state.kb = Math.max(0, shown.length - 1);
   state.shown = shown.map((l) => l.agent.id);
   el.innerHTML = shown.length
-    ? shown.map((l, i) => overviewRow(l, i, { ...OPTS, selected: i === state.kb })).join('')
+    ? shown.map(lineHtml).join('')
     : '<div class="fb-dim fb-none">No agents match.</div>';
   const p = fleetPulse(all);
   const pulse = state.el.querySelector('#fb-pulse');
   if (pulse) {
-    pulse.innerHTML = `<div><b>${p.agents}</b><span>agents</span></div><div class="live"><b>${p.working}</b><span>working now</span></div><div class="hot"><b>${p.waiting}</b><span>waiting on you</span></div><div><b>${p.openGoals}</b><span>open goals</span></div>`;
+    pulse.innerHTML = `<span><b>${p.agents}</b> agents</span><span class="live"><b>${p.working}</b> working</span><span class="hot"><b>${p.waiting}</b> waiting on you</span><span><b>${p.openGoals}</b> open goals</span>`;
   }
   state.el.querySelectorAll('[data-filter]').forEach((b) => {
     b.classList.toggle('on', b.dataset.filter === state.filter);
   });
 }
 
-function renderOverviewShell() {
-  state.el.innerHTML = `<div class="fb-root">
-    <div class="fb-top">
-      <div>
-        <div class="page-title">Fleet board</div>
-        <div class="fb-pulse" id="fb-pulse"></div>
-      </div>
-      <div class="fb-tools">
-        <input class="fb-search" id="fb-q" placeholder="Search agents and goals…" value="${escapeHtml(state.query)}" aria-label="Search">
-        <div class="fb-seg">
-          <button type="button" data-filter="all">All</button>
-          <button type="button" data-filter="live">Working</button>
-          <button type="button" data-filter="needs">Needs you</button>
-        </div>
-        <a class="btn btn-sm" href="#/">Cards</a>
-        <a class="btn btn-sm btn-primary" href="#/agents/new">+ New agent</a>
-      </div>
-    </div>
-    <section class="fb-fleet" aria-label="Agents">
-      <div class="fb-fleet-head"><span>Agent</span><span>Focus</span><span>Up next</span><span>Needs you</span><span></span></div>
-      <div id="fb-rows"></div>
-    </section>
-    <div class="fb-foot-hint"><span class="fb-kbd">j</span> <span class="fb-kbd">k</span> move · <span class="fb-kbd">Enter</span> open · click a row to see its board</div>
-  </div>`;
-  paintOverview();
-}
-
-function paintBoard() {
-  const root = state.el.querySelector('.fb-root');
-  const lane = lanes().find((l) => l.agent.id === state.agentId);
-  if (!root) return;
-  if (!lane) {
-    root.innerHTML = `<div class="fb-crumbs"><a href="#/board">← Fleet board</a></div><div class="fb-error">No agent "${escapeHtml(state.agentId)}".</div>`;
-    return;
-  }
-  root.innerHTML = agentBoardHtml(lane, lanes(), { ...OPTS, selectedRef: state.goalRef });
+/** Repaint one agent's line in place (cheap; keeps scroll position). */
+function paintRow(id) {
+  const row = state.el.querySelector(`.fb-agent-row[data-row="${CSS.escape(id)}"]`);
+  const i = state.shown.indexOf(id);
+  const lane = lanes().find((l) => l.agent.id === id);
+  if (row && lane && i >= 0) row.outerHTML = lineHtml(lane, i);
 }
 
 function paintDrawer() {
   const drawer = document.querySelector('.fb-drawer');
   const scrim = document.querySelector('.fb-scrim');
-  const goal = state && findGoal(state.agentId, state.goalRef);
+  const goal = state?.drawer && findGoal(state.drawer.botId, state.drawer.ref);
   if (!drawer || !scrim) return;
-  const open = Boolean(goal);
-  drawer.classList.toggle('on', open);
-  scrim.classList.toggle('on', open);
-  if (!open) return;
-  const agent = cache.agents.find((a) => a.id === state.agentId);
+  drawer.classList.toggle('on', Boolean(goal));
+  scrim.classList.toggle('on', Boolean(goal));
+  if (!goal) return;
+  const agent = cache.agents.find((a) => a.id === state.drawer.botId);
   drawer.innerHTML = drawerHtml(agent, goal);
 }
 
@@ -185,11 +183,8 @@ function busy() {
 
 function repaint({ force = false } = {}) {
   if (!state || (!force && busy())) return;
-  if (state.view === 'overview') paintOverview();
-  else {
-    paintBoard();
-    paintDrawer();
-  }
+  paintList();
+  paintDrawer();
 }
 
 // ── writes ──
@@ -199,9 +194,8 @@ async function reloadAgent(id) {
   if (cache) cache.homes[id] = home;
 }
 
-async function goalWrite(method, body, okText) {
-  const id = state.agentId;
-  const res = await api(`/api/agents/${encodeURIComponent(id)}/goals`, { method, body }).catch(
+async function goalWrite(botId, method, body, okText) {
+  const res = await api(`/api/agents/${encodeURIComponent(botId)}/goals`, { method, body }).catch(
     (err) => ({ error: err?.message })
   );
   const ok = res && !res.error;
@@ -211,25 +205,38 @@ async function goalWrite(method, body, okText) {
       duration: 8000,
     });
   else if (okText) showToast(okText, { tone: 'ok' });
-  await reloadAgent(id);
+  await reloadAgent(botId);
   if (!state) return ok;
-  // A goal without an id gets one on its first write: follow it by id from now on.
-  const g = findGoal(id, state.goalRef) ?? (body.brief ? findGoal(id, body.brief) : null);
-  if (state.goalRef && g) state.goalRef = g.id || g.text;
-  if (method === 'DELETE') state.goalRef = null;
-  repaint({ force: true });
+  if (state.drawer?.botId === botId) {
+    if (method === 'DELETE') state.drawer = null;
+    else {
+      // A goal without an id gets one on its first write: follow it by id from now on.
+      const g =
+        findGoal(botId, state.drawer.ref) ?? (body.brief ? findGoal(botId, body.brief) : null);
+      if (g) state.drawer.ref = g.id || g.text;
+    }
+  }
+  paintRow(botId);
+  paintDrawer();
   return ok;
 }
 
 function currentGoal() {
-  return state && findGoal(state.agentId, state.goalRef);
+  return state?.drawer ? findGoal(state.drawer.botId, state.drawer.ref) : null;
 }
 
 function saveTasks(goal, tasks) {
   goal.tasks = tasks;
   paintDrawer();
-  paintBoard();
-  return goalWrite('PATCH', { ...goalRef(goal), tasks });
+  paintRow(state.drawer.botId);
+  return goalWrite(state.drawer.botId, 'PATCH', { ...goalRef(goal), tasks });
+}
+
+function toggleRow(id) {
+  if (state.open.has(id)) state.open.delete(id);
+  else state.open.add(id);
+  saveOpen();
+  paintRow(id);
 }
 
 async function onQuick(btn) {
@@ -250,15 +257,13 @@ async function onQuick(btn) {
   }
   showToast(
     `${name} ${action === 'run' ? 'finished a cycle' : action === 'stop' ? 'stopped' : 'started'}`,
-    {
-      tone: 'ok',
-    }
+    { tone: 'ok' }
   );
   if (action !== 'run' && cache.presence[id]) {
     cache.presence[id] = { ...cache.presence[id], running: action !== 'stop' };
   }
   await reloadAgent(id);
-  repaint({ force: true });
+  paintRow(id);
 }
 
 // ── events ──
@@ -277,37 +282,60 @@ async function onClick(e) {
     state.filter = f.dataset.filter;
     state.kb = 0;
     localStorage.setItem(FILTER_KEY, state.filter);
-    paintOverview();
+    paintList();
     return;
   }
-  if (t.closest('[data-reload]')) {
-    await reloadAgent(state.agentId);
-    repaint({ force: true });
+  if (t.closest('[data-expand-all]')) {
+    for (const id of state.shown) state.open.add(id);
+    saveOpen();
+    paintList();
+    return;
+  }
+  if (t.closest('[data-collapse-all]')) {
+    state.open.clear();
+    saveOpen();
+    paintList();
+    return;
+  }
+  const reload = t.closest('[data-reload]');
+  if (reload) {
+    await reloadAgent(reload.dataset.reload);
+    paintRow(reload.dataset.reload);
+    return;
+  }
+  const toggle = t.closest('[data-toggle]');
+  if (toggle) {
+    toggleRow(toggle.dataset.toggle);
     return;
   }
   const card = t.closest('.fb-card[data-goal]');
   if (card) {
-    state.goalRef = card.dataset.goal;
-    paintBoard();
-    paintDrawer();
+    const botId = card.closest('[data-row]')?.dataset.row;
+    if (botId) {
+      state.drawer = { botId, ref: card.dataset.goal };
+      paintRow(botId);
+      paintDrawer();
+    }
     return;
   }
   if (t.closest('[data-close]') || t.classList.contains('fb-scrim')) {
-    state.goalRef = null;
-    paintBoard();
+    const botId = state.drawer?.botId;
+    state.drawer = null;
+    if (botId) paintRow(botId);
     paintDrawer();
     return;
   }
   const goal = currentGoal();
   if (!goal || !t.closest('.fb-drawer')) return;
+  const botId = state.drawer.botId;
   const st = t.closest('[data-st]');
   if (st) {
-    await goalWrite('PATCH', { ...goalRef(goal), status: st.dataset.st });
+    await goalWrite(botId, 'PATCH', { ...goalRef(goal), status: st.dataset.st });
     return;
   }
   const pr = t.closest('[data-pri]');
   if (pr) {
-    await goalWrite('PATCH', { ...goalRef(goal), priority: pr.dataset.pri });
+    await goalWrite(botId, 'PATCH', { ...goalRef(goal), priority: pr.dataset.pri });
     return;
   }
   const li = t.closest('.fb-task');
@@ -328,7 +356,7 @@ async function onClick(e) {
     return;
   }
   if (t.id === 'fb-editbrief') {
-    const box = document.getElementById('fb-brief');
+    const box = document.getElementById('fb-brief')?.closest('.fb-brief');
     if (box) {
       box.outerHTML = `<textarea class="fb-edit" id="fb-briefed" maxlength="1000">${escapeHtml(goal.text)}</textarea><div class="fb-edit-row"><button type="button" class="btn btn-sm btn-primary" id="fb-savebrief">Save brief</button><button type="button" class="btn btn-sm" data-cancel>Cancel</button></div>`;
       document.getElementById('fb-morebrief')?.remove();
@@ -338,7 +366,7 @@ async function onClick(e) {
   }
   if (t.id === 'fb-savebrief') {
     const brief = document.getElementById('fb-briefed')?.value.trim();
-    if (brief) await goalWrite('PATCH', { ...goalRef(goal), brief }, 'Brief saved');
+    if (brief) await goalWrite(botId, 'PATCH', { ...goalRef(goal), brief }, 'Brief saved');
     return;
   }
   if (t.id === 'fb-editnotes') {
@@ -351,7 +379,7 @@ async function onClick(e) {
   }
   if (t.id === 'fb-savenotes') {
     const notes = document.getElementById('fb-notesed')?.value ?? '';
-    await goalWrite('PATCH', { ...goalRef(goal), notes }, 'Notes saved');
+    await goalWrite(botId, 'PATCH', { ...goalRef(goal), notes }, 'Notes saved');
     return;
   }
   if (t.closest('[data-cancel]')) {
@@ -359,7 +387,7 @@ async function onClick(e) {
     return;
   }
   if (t.id === 'fb-del' && confirmInline(t, { label: 'Click again to delete' })) {
-    await goalWrite('DELETE', goalRef(goal), 'Goal deleted');
+    await goalWrite(botId, 'DELETE', goalRef(goal), 'Goal deleted');
   }
 }
 
@@ -376,8 +404,14 @@ async function onFocusOut(e) {
   if (e.target.id === 'fb-title') {
     const v = e.target.value.replace(/\s+/g, ' ').trim();
     const shown = e.target.defaultValue.replace(/\s+/g, ' ').trim();
-    if (v && v !== shown)
-      await goalWrite('PATCH', { ...goalRef(goal), headline: v }, 'Title saved');
+    if (v && v !== shown) {
+      await goalWrite(
+        state.drawer.botId,
+        'PATCH',
+        { ...goalRef(goal), headline: v },
+        'Title saved'
+      );
+    }
     return;
   }
   if (e.target.classList?.contains('fb-tx')) {
@@ -393,7 +427,7 @@ function onInput(e) {
   if (e.target.id !== 'fb-q' || !state) return;
   state.query = e.target.value;
   state.kb = 0;
-  paintOverview();
+  paintList();
 }
 
 async function keydown(e) {
@@ -409,10 +443,13 @@ async function keydown(e) {
     return;
   }
   if (e.key === 'Enter' && t.matches?.('[data-addgoal]') && t.value.trim()) {
+    const botId = t.closest('[data-row]')?.dataset.row;
     const title = t.value.trim();
     t.value = '';
-    await goalWrite('POST', { title }, 'Goal added to Up next');
-    state?.el.querySelector('[data-addgoal]')?.focus();
+    if (botId) await goalWrite(botId, 'POST', { title }, 'Goal added to Up next');
+    state?.el
+      .querySelector(`.fb-agent-row[data-row="${CSS.escape(botId)}"] [data-addgoal]`)
+      ?.focus();
     return;
   }
   if (e.key === 'Enter' && (t.id === 'fb-title' || t.classList?.contains('fb-tx'))) {
@@ -420,26 +457,32 @@ async function keydown(e) {
     t.blur();
     return;
   }
+  if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('[data-toggle]')) {
+    e.preventDefault();
+    toggleRow(t.dataset.toggle);
+    return;
+  }
   if (e.key === 'Escape') {
     if (inField) {
       t.blur();
       return;
     }
-    if (state.goalRef) {
-      state.goalRef = null;
-      paintBoard();
+    if (state.drawer) {
+      const botId = state.drawer.botId;
+      state.drawer = null;
+      paintRow(botId);
       paintDrawer();
-    } else if (state.view === 'board') location.hash = '#/board';
+    }
     return;
   }
-  if (inField || state.view !== 'overview') return;
+  if (inField || state.drawer) return;
   if (e.key === 'j' || e.key === 'k') {
     const max = (state.shown?.length ?? 1) - 1;
     state.kb = Math.max(0, Math.min(max, state.kb + (e.key === 'j' ? 1 : -1)));
-    paintOverview();
-    state.el.querySelector('.fb-row.kb')?.scrollIntoView({ block: 'nearest' });
+    paintList();
+    state.el.querySelector('.fb-agent-row.kb')?.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'Enter' && state.shown?.[state.kb]) {
-    location.hash = `#/board/${encodeURIComponent(state.shown[state.kb])}`;
+    toggleRow(state.shown[state.kb]);
   }
 }
 
@@ -450,7 +493,11 @@ function wireDrag(root) {
   root.addEventListener('dragstart', (e) => {
     const card = e.target.closest?.('.fb-card[draggable="true"]');
     if (!card) return;
-    dragged = { ref: card.dataset.goal, from: card.closest('.fb-col')?.dataset.status };
+    dragged = {
+      botId: card.closest('[data-row]')?.dataset.row,
+      ref: card.dataset.goal,
+      from: card.closest('.fb-col')?.dataset.status,
+    };
     card.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', dragged.ref);
@@ -462,7 +509,8 @@ function wireDrag(root) {
   });
   root.addEventListener('dragover', (e) => {
     const col = e.target.closest('.fb-col');
-    if (!col || !dragged) return;
+    // Goals belong to one agent: only that agent's columns accept the card.
+    if (!col || !dragged || col.closest('[data-row]')?.dataset.row !== dragged.botId) return;
     e.preventDefault();
     if (!col.classList.contains('over')) {
       clear();
@@ -471,43 +519,69 @@ function wireDrag(root) {
   });
   root.addEventListener('drop', async (e) => {
     const col = e.target.closest('.fb-col');
-    if (!col || !dragged) return;
+    if (!col || !dragged || col.closest('[data-row]')?.dataset.row !== dragged.botId) return;
     e.preventDefault();
     clear();
-    const { ref, from } = dragged;
+    const { botId, ref, from } = dragged;
     dragged = null;
     if (col.dataset.status === from) return;
-    const goal = findGoal(state.agentId, ref);
-    if (goal) await goalWrite('PATCH', { ...goalRef(goal), status: col.dataset.status });
+    const goal = findGoal(botId, ref);
+    if (goal) await goalWrite(botId, 'PATCH', { ...goalRef(goal), status: col.dataset.status });
   });
 }
 
-export async function renderFleetBoard(el, agentId) {
+export async function renderFleetBoard(el, focusId) {
   destroyFleetBoard();
   if (!cache) el.innerHTML = `<div class="page-title">Fleet board</div>${skeleton({ lines: 6 })}`;
   const data = await loadAll();
   if (data.error) {
     el.innerHTML = `<div class="page-title">Fleet board</div>${fleetErrorState(data.error)}`;
     el.querySelector('[data-action="fleet-retry"]')?.addEventListener('click', () =>
-      renderFleetBoard(el, agentId)
+      renderFleetBoard(el, focusId)
     );
     return;
   }
   const saved = localStorage.getItem(FILTER_KEY);
   state = {
     el,
-    view: agentId ? 'board' : 'overview',
-    agentId: agentId ?? null,
-    goalRef: null,
+    open: readOpen(),
+    drawer: null,
     filter: ['all', 'live', 'needs'].includes(saved) ? saved : 'all',
     query: '',
     kb: 0,
     shown: [],
   };
-  if (state.view === 'overview') renderOverviewShell();
-  else {
-    el.innerHTML = '<div class="fb-root"></div>';
-    paintBoard();
+  if (focusId) {
+    state.open.add(focusId);
+    saveOpen();
+  }
+
+  el.innerHTML = `<div class="fb-root">
+    <div class="fb-top">
+      <div class="fb-title-row">
+        <div class="page-title">Fleet board</div>
+        <div class="fb-pulse" id="fb-pulse"></div>
+      </div>
+      <div class="fb-tools">
+        <input class="fb-search" id="fb-q" placeholder="Search agents and goals…" aria-label="Search">
+        <div class="fb-seg">
+          <button type="button" data-filter="all">All</button>
+          <button type="button" data-filter="live">Working</button>
+          <button type="button" data-filter="needs">Needs you</button>
+        </div>
+        <button type="button" class="btn btn-sm" data-expand-all>Expand all</button>
+        <button type="button" class="btn btn-sm" data-collapse-all>Collapse all</button>
+        <a class="btn btn-sm" href="#/">Cards</a>
+      </div>
+    </div>
+    <section class="fb-list" id="fb-list" aria-label="Agents"></section>
+    <div class="fb-foot-hint">Click a line to open it · <span class="fb-kbd">j</span> <span class="fb-kbd">k</span> move · <span class="fb-kbd">Enter</span> open / close · click a goal to edit it</div>
+  </div>`;
+  paintList();
+  if (focusId) {
+    state.el
+      .querySelector(`.fb-agent-row[data-row="${CSS.escape(focusId)}"]`)
+      ?.scrollIntoView({ block: 'start' });
   }
   // The drawer sits outside the page container so it can overlay everything.
   document.body.insertAdjacentHTML(
@@ -530,16 +604,17 @@ export async function renderFleetBoard(el, agentId) {
   document.addEventListener('keydown', onKey);
 
   watch = watchFleet({
-    onPresence: (body) => {
+    onPresence: async (body) => {
       if (!state || !body?.agents || !cache) return;
       cache.presence = body.agents;
+      const needs = await loadNeeds();
+      if (needs && cache) cache.needs = needs;
       repaint();
     },
   });
   timer = setInterval(async () => {
     if (!state || busy()) return;
-    const ids = state.view === 'board' ? [state.agentId] : cache.agents.map((a) => a.id);
-    for (const id of ids) await reloadAgent(id);
+    for (const id of cache.agents.map((a) => a.id)) await reloadAgent(id);
     repaint();
   }, REFRESH_MS);
 }

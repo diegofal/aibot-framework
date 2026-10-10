@@ -221,57 +221,109 @@ function sourceTag(goal) {
   return src ? `<span class="fb-tag">${esc(src.split(':')[0])}</span>` : '';
 }
 
-function needsPills(id, p) {
-  const asks = Number(p?.pendingAsks) || 0;
-  const review = Number(p?.unreviewed) || 0;
-  const out = [];
-  if (asks)
-    out.push(
-      `<a class="fb-pill" href="#/needs?bot=${encodeURIComponent(id)}">${asks} ask${asks === 1 ? '' : 's'}</a>`
-    );
-  if (review)
-    out.push(
-      `<a class="fb-pill" href="#/work/productions/${encodeURIComponent(id)}">${review} to review</a>`
-    );
-  return out.join('');
+/** Needs You items (`GET /api/needs-you` → `items`) grouped by agent id. */
+export function needsByBot(items) {
+  const out = {};
+  for (const it of Array.isArray(items) ? items : []) {
+    if (!it?.botId) continue;
+    (out[it.botId] ??= []).push(it);
+  }
+  return out;
 }
 
-/** One overview row (the whole row links to the agent's board). */
-export function overviewRow(
+const NEED_LABEL = {
+  ask: 'question',
+  production: 'to review',
+  permission: 'permission',
+  proposal: 'proposal',
+  feedback: 'feedback',
+  tool: 'tool',
+};
+
+/** How many things wait on you for this agent: Needs You items, else the presence counters. */
+function waitingCount(p, needs) {
+  if (Array.isArray(needs) && needs.length) return needs.length;
+  return (Number(p?.pendingAsks) || 0) + (Number(p?.unreviewed) || 0);
+}
+
+/**
+ * One agent as a compact line; `expanded` adds its panel underneath. The line
+ * is a div (role=button) on purpose: the panel holds links, and a link inside a
+ * link is invalid HTML that browsers split apart.
+ */
+export function agentLine(
   lane,
-  i,
-  { nowMs = Date.now(), selected = false, avatarSrc = (u) => u } = {}
+  needs = [],
+  {
+    nowMs = Date.now(),
+    expanded = false,
+    selected = false,
+    selectedRef = null,
+    avatarSrc = (u) => u,
+  } = {}
 ) {
   const { agent, presence: p, home } = lane;
   const id = String(agent?.id ?? '');
   const state = stateLine(p, nowMs);
   const cols = boardColumns(home);
-  const focusLine = (g) =>
-    `<div class="fb-fl"><span class="fb-pri ${esc(g.priority)}"></span><span class="fb-t">${esc(goalHeadline(g).head)}</span>${mini(g.tasks)}</div>`;
-  const focus = home
-    ? cols.inProgress.slice(0, 2).map(focusLine).join('') ||
-      '<span class="fb-dim">Nothing in progress</span>'
+  const open = [...cols.inProgress, ...cols.todo, ...cols.blocked];
+  const focus = cols.inProgress[0] ?? cols.todo[0] ?? null;
+  const tasks = open.flatMap((g) => (Array.isArray(g.tasks) ? g.tasks : []));
+  const waiting = waitingCount(p, needs);
+  const focusText = home
+    ? focus
+      ? `<span class="fb-pri ${esc(focus.priority)}"></span><span class="fb-t">${esc(goalHeadline(focus).head)}</span>${cols.inProgress.length > 1 ? `<span class="fb-more">+${cols.inProgress.length - 1}</span>` : ''}`
+      : '<span class="fb-dim">No open goals</span>'
     : '<span class="fb-dim">Goals not loaded</span>';
-  const moreFocus =
-    cols.inProgress.length > 2
-      ? `<span class="fb-more">+${cols.inProgress.length - 2} more</span>`
-      : '';
-  const blocked = cols.blocked.length
-    ? `<span class="fb-pill danger">${cols.blocked.length} blocked</span>`
-    : '';
-  const next = cols.todo[0]
-    ? `<span class="fb-t">${esc(goalHeadline(cols.todo[0]).head)}</span>${cols.todo.length > 1 ? `<span class="fb-more">+${cols.todo.length - 1} queued</span>` : ''}`
-    : blocked
-      ? ''
-      : '<span class="fb-dim">—</span>';
-  const needs = needsPills(id, p) || '<span class="fb-dim">nothing</span>';
-  return `<a class="fb-row${selected ? ' kb' : ''}" href="#/board/${encodeURIComponent(id)}" data-row="${esc(id)}" style="animation-delay:${Math.min(i, 12) * 30}ms">
-    <div class="fb-who">${face(agent, p, 38, avatarSrc)}<div class="fb-who-txt"><div class="fb-name">${esc(agent?.name ?? id)}</div><div class="fb-state ${state.tone}">${esc(state.text)}</div></div></div>
-    <div class="fb-focus">${focus}${moreFocus}</div>
-    <div class="fb-next">${blocked}${next}</div>
-    <div class="fb-needs">${needs}</div>
-    <div class="fb-go" aria-hidden="true">›</div>
-  </a>`;
+  return `<div class="fb-agent-row${expanded ? ' open' : ''}${selected ? ' kb' : ''}" data-row="${esc(id)}">
+    <div class="fb-line" role="button" tabindex="0" data-toggle="${esc(id)}" aria-expanded="${expanded}">
+      <span class="fb-chev" aria-hidden="true">›</span>
+      ${face(agent, p, 26, avatarSrc)}
+      <span class="fb-name">${esc(agent?.name ?? id)}</span>
+      <span class="fb-state ${state.tone}">${esc(state.text)}</span>
+      <span class="fb-focus">${focusText}</span>
+      <span class="fb-count">${open.length} goal${open.length === 1 ? '' : 's'}${tasks.length ? ` · ${mini(tasks)}` : ''}${cols.blocked.length ? ` · <span class="fb-bad">${cols.blocked.length} blocked</span>` : ''}</span>
+      <span class="fb-wait">${waiting ? `<span class="fb-pill">${waiting} waiting</span>` : ''}</span>
+    </div>
+    ${expanded ? agentPanel(lane, needs, { nowMs, selectedRef }) : ''}
+  </div>`;
+}
+
+/** The expanded part: what it is doing, what it waits on (the real items), controls, its goals. */
+export function agentPanel(lane, needs = [], { nowMs = Date.now(), selectedRef = null } = {}) {
+  const { agent, presence: p, home } = lane;
+  const id = String(agent?.id ?? '');
+  const state = stateLine(p, nowMs);
+  const cycle = lastCycle(home);
+  const items = Array.isArray(needs) ? needs : [];
+  const shown = items.slice(0, 5);
+  const fallback = waitingCount(p, []);
+  const waitList = shown.length
+    ? `<ul class="fb-needlist">${shown
+        .map(
+          (n) =>
+            `<li><span class="fb-needkind">${esc(NEED_LABEL[n.kind] ?? n.kind)}</span><a href="${esc(n.href || '#/needs')}">${esc(n.title || 'Open')}</a></li>`
+        )
+        .join(
+          ''
+        )}</ul>${items.length > shown.length ? `<a class="fb-link" href="#/needs?bot=${encodeURIComponent(id)}">+${items.length - shown.length} more in Needs you</a>` : ''}`
+    : fallback
+      ? `<a class="fb-link" href="#/needs?bot=${encodeURIComponent(id)}">${fallback} item${fallback === 1 ? '' : 's'} in Needs you</a>`
+      : '<div class="fb-dim">Nothing waiting on you. It can keep going.</div>';
+  const cols = boardColumns(home);
+  const board = home
+    ? `<div class="fb-board${cols.blocked.length ? '' : ' no-blocked'}" data-bot="${esc(id)}">${BOARD_COLUMNS.map((c) => column(c, cols[c.id], selectedRef)).join('')}</div>`
+    : `<div class="fb-error">Could not load goals for this agent. <button type="button" class="btn btn-sm" data-reload="${esc(id)}">Retry</button></div>`;
+  return `<div class="fb-panel">
+    <aside class="fb-side">
+      <div class="fb-side-block"><div class="fb-lbl">Doing now</div>
+        <div class="fb-state ${state.tone} fb-wrap">${esc(state.text)}</div>
+        ${cycle?.summary ? `<div class="fb-last">Last cycle ${esc(relativeTime(cycle.ts, nowMs))}: ${esc(cycle.summary)}</div>` : ''}</div>
+      <div class="fb-side-block"><div class="fb-lbl">Waiting on you</div>${waitList}</div>
+      <div class="fb-side-act">${fleetQuickActions(agent, p)}<a class="btn btn-sm" href="#/agents/${encodeURIComponent(id)}">Agent home</a></div>
+    </aside>
+    ${board}
+  </div>`;
 }
 
 /** One goal card: headline (≤ 2 lines), quiet meta, priority as a colored edge. */
@@ -298,41 +350,6 @@ function column(col, goals, selectedRef) {
     <div class="fb-cards">${cards || '<div class="fb-dim fb-empty-col">Nothing here. Drag a goal in.</div>'}</div>
     ${col.id === 'todo' ? '<input class="fb-add" data-addgoal maxlength="200" placeholder="+ New goal, then Enter" aria-label="New goal">' : ''}
   </div>`;
-}
-
-/** One agent's board: agent switcher, header (state, last cycle, controls), columns. */
-export function agentBoardHtml(
-  lane,
-  lanes = [],
-  { nowMs = Date.now(), selectedRef = null, avatarSrc = (u) => u } = {}
-) {
-  const { agent, presence: p, home } = lane;
-  const id = String(agent?.id ?? '');
-  const state = stateLine(p, nowMs);
-  const cycle = lastCycle(home);
-  const chips = lanes
-    .map(
-      (l) =>
-        `<a class="fb-chip${l.agent.id === id ? ' on' : ''}" href="#/board/${encodeURIComponent(l.agent.id)}">${face(l.agent, l.presence, 22, avatarSrc)}${esc(l.agent.name ?? l.agent.id)}</a>`
-    )
-    .join('');
-  const cols = boardColumns(home);
-  const board = home
-    ? `<div class="fb-board${cols.blocked.length ? '' : ' no-blocked'}">${BOARD_COLUMNS.map((c) => column(c, cols[c.id], selectedRef)).join('')}</div>`
-    : '<div class="fb-error">Could not load goals for this agent. <button type="button" class="btn btn-sm" data-reload>Retry</button></div>';
-  return `<div class="fb-crumbs"><a href="#/board">← Fleet board</a></div>
-    <nav class="fb-switch" aria-label="Agents">${chips}</nav>
-    <header class="fb-agent">
-      ${face(agent, p, 48, avatarSrc)}
-      <div class="fb-agent-txt">
-        <div class="fb-agent-name">${esc(agent?.name ?? id)}</div>
-        <div class="fb-state ${state.tone}">${esc(state.text)}</div>
-        ${cycle?.summary ? `<div class="fb-last" title="${esc(cycle.summary)}">Last cycle ${esc(relativeTime(cycle.ts, nowMs))}: ${esc(cycle.summary)}</div>` : ''}
-      </div>
-      <div class="fb-agent-act">${needsPills(id, p)}<a class="btn btn-sm" href="#/agents/${encodeURIComponent(id)}">Agent home</a>${fleetQuickActions(agent, p)}</div>
-    </header>
-    ${board}
-    <div class="fb-foot-hint">Click a card to edit · drag cards between columns · <span class="fb-kbd">Esc</span> back</div>`;
 }
 
 /** The goal drawer. Every control carries a data attribute the page delegates. */
@@ -390,7 +407,7 @@ export function drawerHtml(agent, goal) {
           .join('')}</ul>
         ${done ? '' : '<input class="fb-add" id="fb-addtask" maxlength="200" placeholder="+ Add a subtask, then Enter" aria-label="Add subtask">'}</div>
       <div class="fb-field"><div class="fb-lbl">Brief<span class="fb-sp"></span><span class="fb-lbl-note">what the agent reads</span><button type="button" class="fb-link" id="fb-editbrief">Edit</button></div>
-        <div class="fb-brief${brief.length > 180 ? ' clamp' : ''}" id="fb-brief">${esc(brief)}</div>
+        <div class="fb-brief"><div class="fb-brief-text${brief.length > 180 ? ' clamp' : ''}" id="fb-brief">${esc(brief)}</div></div>
         ${brief.length > 180 ? '<button type="button" class="fb-link" id="fb-morebrief">Show full brief</button>' : ''}</div>
       <div class="fb-field"><div class="fb-lbl">Notes<span class="fb-sp"></span><button type="button" class="fb-link" id="fb-editnotes">${notes ? 'Edit' : 'Add'}</button></div>
         <div id="fb-notes">${notes ? `<div class="fb-notes">${esc(notes)}</div>` : '<div class="fb-dim">No notes yet.</div>'}</div></div>

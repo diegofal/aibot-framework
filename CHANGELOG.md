@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (2026-10-10) — Fleet Board: one compact line per agent that expands in place
+- **Why.** The redesigned board broke in the browser: each row was a link holding the "ask" / "to review" links, and a link inside a link is invalid HTML, so browsers split every row in two (pills in empty rows of their own, orphaned arrows). It also wasn't the board the operator wanted: one screen, a small line per agent, click to see what it is doing and what it waits on.
+- **Now.** `#/board` is one list: a 46 px line per agent (status, focus headline, goal and subtask counts, how many things wait on you). Click a line (or Enter) to expand it in place: what it is doing and its last cycle, the actual items waiting on you (titles from `GET /api/needs-you`, linked), Run / Stop / Agent home, and its goals in compact In progress / Up next / Blocked / Done columns with the same goal drawer. Expanded lines are remembered; Expand all / Collapse all. `#/board/:id` opens the list with that agent expanded (no separate board page). The line is a `div` with `role="button"`, so no link ever sits inside another.
+- **Verified.** Rendered the real helpers with the agents' real goals and the real `style.css` in headless Edge: collapsed, expanded and drawer views. A test now fails on any nested link (`tests/web/fleet-board-helpers.test.ts`).
+
 ### Changed (2026-10-10) — Fleet Board redesigned for reading
 - **Why.** The first board was very hard to read. Goal "titles" are whole briefs (100–315 chars on average per agent, up to 490) printed bold in full; almost every goal is In progress, so four equal columns were mostly empty; one agent's lane filled the screen; Done showed strikethrough paragraphs; editing opened inside the card.
 - **Overview (`#/board`).** One compact row per agent: who + a plain-language state ("Working · web_fetch", "Waiting on you · 1 question", "Idle · next run in 3h", "Stopped"), focus (up to two in-progress headlines with subtask progress), up next, needs you. Fleet pulse (agents, working, waiting on you, open goals), search over agents and goals, filters All / Working / Needs you, `j` / `k` / Enter.
