@@ -467,3 +467,19 @@ MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 sh -c 'cd /app/config && 
 **Outcome.** Backup `D:\aibot-backups\aibot-backup-2026-10-10T10-31-37` (the script paused and restarted the container). `bots.json` keeps its 247 lines; only `"mode": "soft"` → `"hard"` changed. `bots.json` is not hot-reloaded: the change applies at the next container restart.
 
 **Reversible?** Yes. Set the field back to `"soft"`, or restore `aibot_config` from the backup.
+
+### 2026-10-10 — Deployed `ea64498` (unread output teaches the bot; scratch files out of Needs You)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship `ea64498` and activate ai-perfectionist's `hard` engagement gate (config edited earlier today) |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container `healthy`. The image has `isScratchProductionPath` in `src/bot/tool-executor.ts`, `recordIgnored` wired in `src/web/server.ts`, and the SUPPORTING WORK rule in `src/bot/agent-loop-prompts.ts`. Boot logs show no errors except the known `default` Telegram `getMe` 401 (revoked token, already in older logs).
+
+**Reversible?** Yes. Check out `61fcb80` and rebuild; set the gate back to `soft` in `bots.json`.
