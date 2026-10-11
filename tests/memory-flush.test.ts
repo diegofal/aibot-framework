@@ -209,3 +209,52 @@ describe('Importance scoring integration', () => {
     db.close();
   });
 });
+
+describe('MemoryFlusher.flushSessionToMemory dating', () => {
+  test('stores facts dated by when the conversation happened', async () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE core_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id TEXT NOT NULL DEFAULT 'default',
+        user_id TEXT,
+        category TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        importance INTEGER NOT NULL DEFAULT 5,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(bot_id, user_id, category, key)
+      );
+    `);
+    const prompts: string[] = [];
+    const ctx = createMockContext(db);
+    (ctx as unknown as { ollamaClient: unknown }).ollamaClient = {
+      chat: async (messages: ChatMessage[]) => {
+        prompts.push(messages[0].content);
+        return {
+          text: JSON.stringify([
+            { fact: 'Pri has two kids', importance: 7, category: 'relationships' },
+          ]),
+        };
+      },
+    };
+    const flusher = new MemoryFlusher(ctx);
+
+    await flusher.flushSessionToMemory(
+      [{ role: 'user', content: 'Pri tiene dos hijos' }],
+      'finny',
+      undefined,
+      {
+        observedAt: '2026-03-02T15:00:00.000Z',
+      }
+    );
+
+    const row = db.prepare('SELECT created_at FROM core_memory').get() as { created_at: string };
+    expect(row.created_at).toBe('2026-03-02 15:00:00');
+    // The extractor is told not to bake relative time into stored facts.
+    expect(prompts[0]).toContain('today');
+
+    db.close();
+  });
+});

@@ -98,3 +98,25 @@ describe('chat-history route logic', () => {
     expect(filtered[0].content).toBe('Normal message');
   });
 });
+
+describe('chat-history route', () => {
+  test('shows user messages as typed, without the stored timestamp header', async () => {
+    const { chatHistoryRoutes } = await import('../../../src/web/routes/chat-history');
+    const app = chatHistoryRoutes({
+      config: { bots: [{ id: 'finny' }], multiTenant: { enabled: false } } as any,
+      sessionManager: {
+        serializeKey: () => 'bot:finny:private:42',
+        getHistory: () => [
+          { role: 'user', content: '[Sun 2026-10-11 12:50 · +7d] Hola Finny' },
+          { role: 'assistant', content: '¡Hola!' },
+        ],
+      } as any,
+      logger: { error: () => {} } as any,
+    });
+
+    const res = await app.request('/finny/history?senderId=42');
+    const body = (await res.json()) as { messages: Array<{ content: string }> };
+
+    expect(body.messages.map((m) => m.content)).toEqual(['Hola Finny', '¡Hola!']);
+  });
+});

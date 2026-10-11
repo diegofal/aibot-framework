@@ -11,6 +11,19 @@ export interface CoreMemoryEntry {
   updatedAt: string;
 }
 
+export interface CoreMemorySetOptions {
+  /** ISO timestamp of when the fact was said (e.g. the flushed conversation's last message). */
+  observedAt?: string;
+}
+
+/** ISO timestamp → SQLite `datetime('now')` format (UTC); null when unparseable. */
+function toSqliteDatetime(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 export interface CoreMemoryManager {
   /** Get a single entry by category and key */
   get(
@@ -20,14 +33,18 @@ export interface CoreMemoryManager {
     userId?: string | null
   ): Promise<CoreMemoryEntry | null>;
 
-  /** Set (insert or update) an entry */
+  /**
+   * Set (insert or update) an entry. An unchanged value keeps its date; a new
+   * or changed one is dated `observedAt` (when it was said) or now.
+   */
   set(
     category: string,
     key: string,
     value: string,
     importance: number,
     botId: string,
-    userId?: string | null
+    userId?: string | null,
+    options?: CoreMemorySetOptions
   ): Promise<void>;
 
   /** Delete an entry */
@@ -163,7 +180,8 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
       value: string,
       importance,
       botId: string,
-      userId?: string | null
+      userId?: string | null,
+      options?: CoreMemorySetOptions
     ): Promise<void> {
       if (!VALID_CATEGORIES.has(category)) {
         logger.warn({ category, valid: [...VALID_CATEGORIES] }, 'Invalid core memory category');
@@ -184,18 +202,27 @@ export function createCoreMemoryManager(db: Database, logger: Logger): CoreMemor
       const existing = await this.get(category, key, botId, userId);
       const effectiveUserId = userId === undefined ? null : userId;
 
-      if (existing) {
+      // A re-extracted fact is not news: restamping it with today's date made
+      // months-old facts read as "you told me today".
+      const observedAt = toSqliteDatetime(options?.observedAt);
+
+      if (existing && existing.value === value) {
+        db.prepare('UPDATE core_memory SET importance = ? WHERE id = ?').run(
+          importance,
+          existing.id
+        );
+      } else if (existing) {
         db.prepare(
-          'UPDATE core_memory SET value = ?, importance = ?, updated_at = datetime("now") WHERE id = ?'
-        ).run(value, importance, existing.id);
+          'UPDATE core_memory SET value = ?, importance = ?, updated_at = COALESCE(?, datetime("now")) WHERE id = ?'
+        ).run(value, importance, observedAt, existing.id);
         logger.debug(
           { category, key, importance, botId, userId: effectiveUserId },
           'Core memory updated'
         );
       } else {
         db.prepare(
-          'INSERT INTO core_memory (bot_id, user_id, category, key, value, importance) VALUES (?, ?, ?, ?, ?, ?)'
-        ).run(botId, effectiveUserId, category, key, value, importance);
+          'INSERT INTO core_memory (bot_id, user_id, category, key, value, importance, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime("now")), COALESCE(?, datetime("now")))'
+        ).run(botId, effectiveUserId, category, key, value, importance, observedAt, observedAt);
         logger.debug(
           { category, key, importance, botId, userId: effectiveUserId },
           'Core memory created'

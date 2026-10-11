@@ -230,6 +230,45 @@ describe('CoreMemoryManager', () => {
       const output = manager.renderForSystemPrompt(800, BOT);
       expect(output).toContain('- telegram: Telegram is down (as of 2026-08-31)');
     });
+
+    test('re-storing an unchanged fact keeps its date (a re-extraction is not news)', async () => {
+      await manager.set('relationships', 'pri', 'Pri has two kids', 6, BOT);
+      db.exec("UPDATE core_memory SET updated_at = '2026-03-02 10:00:00' WHERE key = 'pri'");
+
+      await manager.set('relationships', 'pri', 'Pri has two kids', 8, BOT);
+
+      const entry = await manager.get('relationships', 'pri', BOT);
+      expect(entry?.updatedAt).toBe('2026-03-02 10:00:00');
+      expect(entry?.importance).toBe(8);
+    });
+
+    test('a changed value takes the date the conversation happened, when given', async () => {
+      await manager.set('relationships', 'pri', 'Pri has two kids', 6, BOT);
+
+      await manager.set('relationships', 'pri', 'Pri has two kids, 10 and 7', 6, BOT, undefined, {
+        observedAt: '2026-03-05T14:30:00.000Z',
+      });
+
+      const entry = await manager.get('relationships', 'pri', BOT);
+      expect(entry?.updatedAt).toBe('2026-03-05 14:30:00');
+    });
+
+    test('a new fact is dated by when it was said, not when it was stored', async () => {
+      await manager.set('general', 'notes', 'Die is writing notes', 5, BOT, undefined, {
+        observedAt: '2026-10-03T21:10:00.000Z',
+      });
+
+      const entry = await manager.get('general', 'notes', BOT);
+      expect(entry?.createdAt).toBe('2026-10-03 21:10:00');
+      expect(entry?.updatedAt).toBe('2026-10-03 21:10:00');
+    });
+
+    test('an unparseable observedAt falls back to now', async () => {
+      await manager.set('general', 'x', 'y', 5, BOT, undefined, { observedAt: 'nope' });
+
+      const entry = await manager.get('general', 'x', BOT);
+      expect(entry?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    });
   });
 
   describe('valid categories', () => {

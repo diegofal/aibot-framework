@@ -3,7 +3,7 @@ import { type BotConfig, resolveAgentConfig } from '../config';
 import type { ConversationsService } from '../conversations/service';
 import type { CallbackQueryData, Skill, SkillContext, TelegramClient } from '../core/types';
 import type { AskHumanStore } from './ask-human-store';
-import { handleHelp, handleStart, registerBuiltinCommands } from './builtin-commands';
+import { handleHelp, registerBuiltinCommands } from './builtin-commands';
 import { ConversationGate } from './conversation-gate';
 import type { ConversationPipeline } from './conversation-pipeline';
 import type { GroupActivation } from './group-activation';
@@ -14,6 +14,7 @@ import {
   trackUser,
 } from './media-handlers';
 import type { MemoryFlusher } from './memory-flush';
+import { buildSessionStartPrompt } from './session-continuity';
 import { sendLongMessage } from './telegram-utils';
 import type { ToolRegistry } from './tool-registry';
 import type { BotContext, SeenUser } from './types';
@@ -68,7 +69,6 @@ export class HandlerRegistrar {
     this.registerCallbackQueryHandler(bot, config);
 
     // Built-in commands
-    bot.command('start', async (ctx) => this.handleStartWrapper(ctx, config));
     bot.command('help', async (ctx) => this.handleHelpWrapper(ctx, config));
     this.registerBuiltInCommands(bot, config);
 
@@ -84,6 +84,8 @@ export class HandlerRegistrar {
     registerBuiltinCommands(bot, config, {
       ctx: this.ctx,
       memoryFlusher: this.memoryFlusher,
+      startConversation: (telegramCtx, command) =>
+        this.startConversation(telegramCtx, config, command),
     });
   }
 
@@ -287,8 +289,22 @@ export class HandlerRegistrar {
     return isAuthorizedMedia(this.ctx, userId, config);
   }
 
-  private handleStartWrapper(ctx: Context, config: BotConfig): Promise<void> {
-    return handleStart(ctx, config);
+  /**
+   * The bot opens a fresh conversation in its own voice: a pipeline turn whose
+   * prompt is the session-start note, persisted as the bare command.
+   */
+  private startConversation(ctx: Context, config: BotConfig, command: string): Promise<void> {
+    const sessionKey = this.ctx.sessionManager.deriveKey(config.id, ctx);
+    return this.conversationPipeline.handleConversation(
+      ctx,
+      config,
+      this.ctx.sessionManager.serializeKey(sessionKey),
+      buildSessionStartPrompt(command),
+      undefined,
+      command,
+      false,
+      { synthetic: true }
+    );
   }
 
   private handleHelpWrapper(ctx: Context, config: BotConfig): Promise<void> {

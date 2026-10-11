@@ -45,6 +45,34 @@ export function unflushedMessageCount(
   return meta.messagesSinceFlush ?? meta.messageCount ?? 0;
 }
 
+/** Why a conversation ended. */
+export type SessionEndReason = 'idle' | 'daily' | 'command';
+
+/**
+ * What is kept of a conversation after it ends: enough for the next one to
+ * know when they last talked and how it left off, as background.
+ */
+export interface EndedSession {
+  startedAt: string;
+  lastActivityAt: string;
+  endedAt: string;
+  reason: SessionEndReason;
+  messageCount: number;
+  /** Latest compaction summary, when the conversation had been compacted. */
+  summary?: string;
+  /** Last user/assistant exchanges, truncated. */
+  tail: Array<{ role: 'user' | 'assistant'; content: string }>;
+}
+
+const ENDED_TAIL_MESSAGES = 6;
+const ENDED_TAIL_CHARS = 400;
+const ENDED_SUMMARY_CHARS = 1200;
+const CONTEXT_SUMMARY_PREFIX = '[CONTEXT_SUMMARY]';
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 interface SessionKey {
   botId: string;
   chatType: 'private' | 'group' | 'supergroup' | 'channel';
@@ -63,6 +91,9 @@ export class SessionManager {
   private activeConvPath: string;
   private activeConvDirty = false;
   private activeConvTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Last ended conversation per session key (`ended-sessions.json`). */
+  private endedSessions: Map<string, EndedSession> = new Map();
+  private endedSessionsPath: string;
 
   constructor(
     private config: SessionConfig,
@@ -71,6 +102,7 @@ export class SessionManager {
     this.metadataPath = join(config.dataDir, 'sessions.json');
     this.transcriptsDir = join(config.dataDir, 'transcripts');
     this.activeConvPath = join(config.dataDir, 'active-conversations.json');
+    this.endedSessionsPath = join(config.dataDir, 'ended-sessions.json');
   }
 
   /**
@@ -97,6 +129,18 @@ export class SessionManager {
     } else {
       this.flush();
       this.logger.info('Created empty sessions.json');
+    }
+
+    if (existsSync(this.endedSessionsPath)) {
+      try {
+        const raw = JSON.parse(readFileSync(this.endedSessionsPath, 'utf-8')) as Record<
+          string,
+          EndedSession
+        >;
+        for (const [key, ended] of Object.entries(raw)) this.endedSessions.set(key, ended);
+      } catch (err) {
+        this.logger.warn({ err }, 'Failed to load ended-sessions.json, starting fresh');
+      }
     }
 
     // Load persisted active conversations
@@ -213,9 +257,14 @@ export class SessionManager {
    * The caller is responsible for flushing to memory and clearing.
    */
   isExpired(serializedKey: string): boolean {
+    return this.expiryReason(serializedKey) !== null;
+  }
+
+  /** Which reset policy ended this session, or null while it is still live. */
+  expiryReason(serializedKey: string): 'daily' | 'idle' | null {
     const meta = this.metadata.get(serializedKey);
-    if (!meta) return false;
-    return this.shouldReset(meta);
+    if (!meta) return null;
+    return this.resetReason(meta);
   }
 
   /**
@@ -364,9 +413,77 @@ export class SessionManager {
   }
 
   /**
-   * Check if a session should be reset based on configured policies
+   * End a conversation: record how it left off (see `getEndedSession`), clear
+   * the transcript, and hand back the full history so the caller can flush it
+   * to memory. Null when there was nothing to end.
    */
-  private shouldReset(meta: SessionMeta): boolean {
+  endSession(
+    serializedKey: string,
+    reason: SessionEndReason,
+    now: Date = new Date()
+  ): { ended: EndedSession; history: ChatMessage[] } | null {
+    const history = this.getFullHistory(serializedKey);
+    const meta = this.metadata.get(serializedKey);
+    if (history.length === 0) {
+      if (meta) this.clearSession(serializedKey);
+      return null;
+    }
+
+    let summary: string | undefined;
+    const conversational: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const msg of history) {
+      if (msg.role === 'system' && msg.content.startsWith(CONTEXT_SUMMARY_PREFIX)) {
+        summary = clip(
+          msg.content.slice(CONTEXT_SUMMARY_PREFIX.length).trim(),
+          ENDED_SUMMARY_CHARS
+        );
+      } else if (msg.role === 'user' || msg.role === 'assistant') {
+        conversational.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    const nowIso = now.toISOString();
+    const ended: EndedSession = {
+      startedAt: meta?.createdAt ?? nowIso,
+      lastActivityAt: meta?.lastActivityAt ?? nowIso,
+      endedAt: nowIso,
+      reason,
+      messageCount: meta?.messageCount ?? history.length,
+      ...(summary ? { summary } : {}),
+      tail: conversational
+        .slice(-ENDED_TAIL_MESSAGES)
+        .map((m) => ({ role: m.role, content: clip(m.content, ENDED_TAIL_CHARS) })),
+    };
+
+    this.endedSessions.set(serializedKey, ended);
+    this.flushEndedSessions();
+    this.clearSession(serializedKey);
+    this.flush();
+    return { ended, history };
+  }
+
+  /** How the previous conversation under this key ended, if one did. */
+  getEndedSession(serializedKey: string): EndedSession | undefined {
+    return this.endedSessions.get(serializedKey);
+  }
+
+  private flushEndedSessions(): void {
+    try {
+      mkdirSync(dirname(this.endedSessionsPath), { recursive: true });
+      writeFileSync(
+        this.endedSessionsPath,
+        JSON.stringify(Object.fromEntries(this.endedSessions), null, 2),
+        'utf-8'
+      );
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to write ended-sessions.json');
+    }
+  }
+
+  /**
+   * Which configured reset policy (if any) says this session is over
+   */
+  private resetReason(meta: SessionMeta): 'daily' | 'idle' | null {
     const lastActivity = new Date(meta.lastActivityAt);
     const now = new Date();
 
@@ -378,7 +495,7 @@ export class SessionManager {
 
       // If last activity was before today's reset hour, reset
       if (lastActivity < resetToday && now >= resetToday) {
-        return true;
+        return 'daily';
       }
 
       // If last activity was yesterday or earlier (even if before reset hour)
@@ -387,7 +504,7 @@ export class SessionManager {
       const todayStart = new Date(now);
       todayStart.setHours(0, 0, 0, 0);
       if (lastActivityDay < todayStart && now >= resetToday) {
-        return true;
+        return 'daily';
       }
     }
 
@@ -396,11 +513,11 @@ export class SessionManager {
     if (idle.enabled) {
       const idleMs = idle.minutes * 60_000;
       if (now.getTime() - lastActivity.getTime() > idleMs) {
-        return true;
+        return 'idle';
       }
     }
 
-    return false;
+    return null;
   }
 
   /**
@@ -648,6 +765,16 @@ export class SessionManager {
         count++;
       }
     }
+
+    // A reset bot keeps no record of how its conversations ended either
+    let endedRemoved = false;
+    for (const key of this.endedSessions.keys()) {
+      if (key.startsWith(prefix)) {
+        this.endedSessions.delete(key);
+        endedRemoved = true;
+      }
+    }
+    if (endedRemoved) this.flushEndedSessions();
 
     // Clear matching active conversations (keyed as "botId:chatId:userId")
     const convPrefix = `${botId}:`;

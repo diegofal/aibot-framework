@@ -71,6 +71,15 @@ describe('ConversationPipeline', () => {
   let mockLogger: Logger;
   let pipeline: ConversationPipeline;
   let mockHooks: HookEmitter;
+
+  /** The reset policy says the chat's conversation is over (idle). */
+  function expireSession(history: ChatMessage[]): void {
+    (mockSessionManager.expiryReason as jest.Mock).mockReturnValue('idle');
+    (mockSessionManager.endSession as jest.Mock).mockReturnValue({
+      ended: { lastActivityAt: '2026-10-03T21:10:00.000Z', tail: [] },
+      history,
+    });
+  }
   let peerAgentTelegramIds: Set<number>;
   let mockAgentRegistry: BotContext['agentRegistry'];
 
@@ -93,6 +102,9 @@ describe('ConversationPipeline', () => {
 
     mockSessionManager = {
       isExpired: jest.fn().mockReturnValue(false),
+      expiryReason: jest.fn().mockReturnValue(null),
+      endSession: jest.fn().mockReturnValue(null),
+      getEndedSession: jest.fn().mockReturnValue(undefined),
       getFullHistory: jest.fn().mockReturnValue([]),
       clearSession: jest.fn(),
       getHistory: jest.fn().mockReturnValue([]),
@@ -204,7 +216,10 @@ describe('ConversationPipeline', () => {
       expect(callArgs[0]).toHaveLength(2); // system + user message
       expect(callArgs[0][0].role).toBe('system');
       expect(callArgs[0][1].role).toBe('user');
-      expect(callArgs[0][1].content).toBe(userText);
+      // The message reaches the model stamped with when it was sent.
+      expect(callArgs[0][1].content).toMatch(
+        /^\[\w{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: · \+\d+[smhd])?\] Hello bot$/
+      );
 
       // Verify response was sent to user
       expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
@@ -222,7 +237,9 @@ describe('ConversationPipeline', () => {
 
       // Verify message was prefixed
       const callArgs = (mockLLMClient.chat as jest.Mock).mock.calls[0];
-      expect(callArgs[0][1].content).toBe('[Alice]: Hello everyone');
+      expect(callArgs[0][1].content).toMatch(
+        /^\[\w{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: · \+\d+[smhd])?\] \[Alice\]: Hello everyone$/
+      );
     });
 
     it('should handle empty LLM response with checkmark', async () => {
@@ -255,21 +272,20 @@ describe('ConversationPipeline', () => {
         { role: 'assistant', content: 'Old response' },
       ] as ChatMessage[];
 
-      (mockSessionManager.isExpired as jest.Mock).mockReturnValue(true);
-      (mockSessionManager.getFullHistory as jest.Mock).mockReturnValue(expiredHistory);
+      expireSession(expiredHistory);
 
       const ctx = createMockContext();
       const config = createMockBotConfig();
 
       await pipeline.handleConversation(ctx, config, 'user:123', 'New message');
 
-      expect(mockSessionManager.isExpired).toHaveBeenCalledWith('user:123');
+      expect(mockSessionManager.endSession).toHaveBeenCalledWith('user:123', 'idle');
       expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalledWith(
         expiredHistory,
         'test-bot',
-        '789' // the sender owns the facts, even without userIsolation
+        '789', // the sender owns the facts, even without userIsolation
+        { observedAt: '2026-10-03T21:10:00.000Z' } // dated when it was said, not today
       );
-      expect(mockSessionManager.clearSession).toHaveBeenCalledWith('user:123');
     });
 
     it('should not flush when session is not expired', async () => {
@@ -300,6 +316,70 @@ describe('ConversationPipeline', () => {
       expect(maxHistory).toBe(10);
     });
 
+    it('stores the user message with its timestamp and the gap since the previous one', async () => {
+      (mockSessionManager.getSessionMeta as jest.Mock).mockReturnValue({
+        messageCount: 5,
+        lastActivityAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+      });
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hola de nuevo');
+
+      const [, messages] = (mockSessionManager.appendMessages as jest.Mock).mock.calls[0];
+      expect(messages[0].content).toMatch(
+        /^\[\w{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} · \+3d\] Hola de nuevo$/
+      );
+    });
+
+    it('never shows the person a timestamp the model copied into its reply', async () => {
+      (mockLLMClient.chat as jest.Mock).mockResolvedValue({
+        text: '[Sun 2026-10-11 12:51] ¡Hola!',
+      });
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hola');
+
+      expect(ctx.reply).toHaveBeenCalledWith('¡Hola!');
+    });
+
+    it('gives the prompt how the previous conversation left off, early in a new one', async () => {
+      (mockSessionManager.getEndedSession as jest.Mock).mockReturnValue({
+        startedAt: '2026-10-03T20:00:00.000Z',
+        lastActivityAt: '2026-10-03T21:10:00.000Z',
+        endedAt: '2026-10-11T15:50:00.000Z',
+        reason: 'daily',
+        messageCount: 12,
+        tail: [{ role: 'assistant', content: 'Lo de las notas puede esperar.' }],
+      });
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hola');
+
+      const opts = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
+      expect(opts.previousSession).toContain('This is a new conversation');
+      expect(opts.previousSession).toContain('Lo de las notas puede esperar.');
+    });
+
+    it('drops the previous-conversation block once the new one is under way', async () => {
+      (mockSessionManager.getEndedSession as jest.Mock).mockReturnValue({
+        lastActivityAt: '2026-10-03T21:10:00.000Z',
+        tail: [],
+      });
+      (mockSessionManager.getHistory as jest.Mock).mockReturnValue(
+        Array.from({ length: 10 }, () => ({ role: 'user', content: 'x' }))
+      );
+      const ctx = createMockContext();
+      const config = createMockBotConfig();
+
+      await pipeline.handleConversation(ctx, config, 'user:123', 'Hola');
+
+      const opts = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
+      expect(opts.previousSession).toBeUndefined();
+    });
+
     it('should mark user active in groups', async () => {
       const ctx = createMockContext({
         chat: { id: 123456, type: 'supergroup', title: 'Test Group' },
@@ -313,20 +393,16 @@ describe('ConversationPipeline', () => {
     });
 
     it('should send specific error message when session expires mid-conversation', async () => {
-      // Simulate session expiring during processing by having isExpired return true
-      (mockSessionManager.isExpired as jest.Mock).mockReturnValue(true);
-      (mockSessionManager.getFullHistory as jest.Mock).mockReturnValue([
-        { role: 'user', content: 'Old message' },
-      ]);
+      expireSession([{ role: 'user', content: 'Old message' }]);
 
       const ctx = createMockContext();
       const config = createMockBotConfig();
 
       await pipeline.handleConversation(ctx, config, 'user:123', 'New message');
 
-      // Should flush old session
+      // Should flush and end the old session
       expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalled();
-      expect(mockSessionManager.clearSession).toHaveBeenCalledWith('user:123');
+      expect(mockSessionManager.endSession).toHaveBeenCalledWith('user:123', 'idle');
       // Should still complete successfully with new session
       expect(ctx.reply).toHaveBeenCalledWith('Mocked LLM response');
     });
@@ -1324,10 +1400,7 @@ describe('ConversationPipeline', () => {
     });
 
     it('should pass userId to memory flush for tenant bots on session expiry', async () => {
-      (mockSessionManager.isExpired as jest.Mock).mockReturnValue(true);
-      (mockSessionManager.getFullHistory as jest.Mock).mockReturnValue([
-        { role: 'user', content: 'Old message' },
-      ]);
+      expireSession([{ role: 'user', content: 'Old message' }]);
 
       const ctx = createMockContext();
       const config = createMockBotConfig({ tenantId: 'tenant-1' } as any);
@@ -1337,7 +1410,8 @@ describe('ConversationPipeline', () => {
       expect(mockMemoryFlusher.flushSessionToMemory).toHaveBeenCalledWith(
         expect.any(Array),
         'test-bot',
-        '789' // userId auto-derived from tenantId
+        '789', // userId auto-derived from tenantId
+        expect.any(Object)
       );
     });
   });
@@ -1590,6 +1664,28 @@ describe('ConversationPipeline', () => {
         'hello group members'
       );
       expect(record).not.toHaveBeenCalled();
+    });
+
+    it('a synthetic session-start turn is not a directive, nor a memory query', async () => {
+      const record = jest.fn();
+      (mockBotContext as any).recordOperatorMessage = record;
+      (mockBotContext as any).config.operator = { telegramChatId: 123456 };
+      (mockBotContext as any).config.soul.search.autoRag.enabled = true;
+      await pipeline.handleConversation(
+        createMockContext(),
+        createMockBotConfig(),
+        'user:123',
+        '[New conversation] Greet them briefly.',
+        undefined,
+        '/new',
+        false,
+        { synthetic: true }
+      );
+      expect(record).not.toHaveBeenCalled();
+      expect(mockMemoryManager.search).not.toHaveBeenCalled();
+      // It is stored as the command the person typed.
+      const [, messages] = (mockSessionManager.appendMessages as jest.Mock).mock.calls[0];
+      expect(messages[0].content).toMatch(/\] \/new$/);
     });
   });
 });

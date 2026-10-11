@@ -437,16 +437,19 @@
         <div class="file-path">src/bot/builtin-commands.ts &middot; 177 lines</div>
         <p class="responsibility">
           Built-in Telegram command handlers extracted from HandlerRegistrar to reduce SRP
-          violation. Registers <code>/clear</code>, <code>/model</code>, <code>/who</code>,
-          and <code>/memory</code> commands. Also provides standalone <code>handleStart</code>
-          and <code>handleHelp</code> functions.
+          violation. Registers <code>/start</code>, <code>/new</code>, <code>/reset</code>, <code>/clear</code>,
+          <code>/model</code>, <code>/who</code> and <code>/memory</code>. <code>/start</code>, <code>/new</code> and
+          <code>/reset</code> end the chat's conversation (<code>endConversation</code> in
+          <code>session-continuity.ts</code>) and call <code>deps.startConversation</code>, which the
+          HandlerRegistrar wires to a synthetic pipeline turn: the bot greets in its own voice. Also provides
+          the static <code>handleStart</code> welcome (unauthorized users, or the greeting failed) and <code>handleHelp</code>.
         </p>
         <h4>Exported Functions</h4>
         <table class="methods-table">
           <thead><tr><th>Function</th><th>Params</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td>registerBuiltinCommands</td><td>bot: Bot, config: BotConfig, deps: BuiltinCommandDeps</td><td>Registers /clear, /model, /who, /memory commands on the bot</td></tr>
-            <tr><td>handleStart</td><td>ctx: Context, config: BotConfig</td><td>Sends welcome message for /start command</td></tr>
+            <tr><td>registerBuiltinCommands</td><td>bot: Bot, config: BotConfig, deps: BuiltinCommandDeps</td><td>Registers /start, /new, /reset, /clear, /model, /who, /memory on the bot</td></tr>
+            <tr><td>handleStart</td><td>ctx: Context, config: BotConfig</td><td>Static welcome: /start from an unauthorized user, or when the greeting turn fails</td></tr>
             <tr><td>handleHelp</td><td>ctx: Context, config: BotConfig, skillRegistry</td><td>Renders help text with all available commands from skills and built-ins</td></tr>
           </tbody>
         </table>
@@ -458,7 +461,8 @@
         <table>
           <thead><tr><th>Command</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td><code>/clear</code></td><td>Flushes session to memory (with scoring), clears history for all bots. Supports <code>--no-flush</code> flag.</td></tr>
+            <tr><td><code>/start</code>, <code>/new</code>, <code>/reset</code></td><td>Ends the conversation (record of how it left off, unflushed part flushed to memory dated by its last message, transcript cleared) and the bot opens a fresh one with a short in-persona greeting.</td></tr>
+            <tr><td><code>/clear</code></td><td>Ends the conversation the same way, without a greeting. Supports <code>--no-flush</code> flag.</td></tr>
             <tr><td><code>/model</code></td><td>Shows or changes the active LLM model for a bot</td></tr>
             <tr><td><code>/who</code></td><td>Lists all users seen in the current chat with last-seen timestamps</td></tr>
             <tr><td><code>/memory</code></td><td>Dumps all memory via SoulLoader.dumpMemory()</td></tr>
@@ -636,7 +640,7 @@
           <tbody>
             <tr><td>flushToDaily <span class="badge badge-medium">deprecated</span></td><td>history: ChatMessage[], botId: string</td><td>Legacy: summarizes conversation to bullet points and appends to daily log</td></tr>
             <tr><td>flushWithScoring</td><td>history: ChatMessage[], botId: string</td><td>Extracts facts with importance/category, stores in Core Memory or daily log fallback</td></tr>
-            <tr><td>flushSessionToMemory</td><td>history: ChatMessage[], botId: string</td><td>Entry point: delegates to flushWithScoring. Called on session expiry and /clear.</td></tr>
+            <tr><td>flushSessionToMemory</td><td>history: ChatMessage[], botId: string</td><td>Entry point: delegates to flushWithScoring. Called by <code>endConversation</code> (reset policy, /start, /new, /reset, /clear) with <code>{ observedAt }</code> = the conversation's last message, so stored facts carry that date, not the flush's.</td></tr>
           </tbody>
         </table>
         <h4>Dependencies</h4>

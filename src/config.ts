@@ -883,14 +883,15 @@ const LlmRelevanceCheckSchema = z
   })
   .default({});
 
-const SessionConfigSchema = z.object({
+export const SessionConfigSchema = z.object({
   enabled: z.boolean().default(true),
   dataDir: z.string().default('./data/sessions'),
   resetPolicy: z
     .object({
+      // A chat that never ends turns every "hola" days later into a continuation.
       daily: z
         .object({
-          enabled: z.boolean().default(false),
+          enabled: z.boolean().default(true),
           hour: z.number().int().min(0).max(23).default(4),
         })
         .default({}),

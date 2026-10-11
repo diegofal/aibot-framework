@@ -20,6 +20,12 @@ import {
   formatLLMErrorForUser,
 } from './llm-resilience';
 import type { MemoryFlusher } from './memory-flush';
+import { formatEnvelope, stripEnvelope } from './message-envelope';
+import {
+  endConversation,
+  renderPreviousSession,
+  shouldShowPreviousSession,
+} from './session-continuity';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { sendLongMessage, streamToChannel } from './telegram-utils';
 import type { PermissionMode } from './tool-permissions';
@@ -182,7 +188,8 @@ export class ConversationPipeline {
     userText: string,
     images?: string[],
     sessionText?: string,
-    isVoice?: boolean
+    isVoice?: boolean,
+    turn: { synthetic?: boolean } = {}
   ): Promise<void> {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
@@ -200,7 +207,8 @@ export class ConversationPipeline {
     }
 
     // The operator's own Telegram chat steers the bot's curiosity navigator.
-    if (!isGroup && chatId === this.ctx.config.operator?.telegramChatId) {
+    // A synthetic turn (the /new greeting prompt) is not something they said.
+    if (!turn.synthetic && !isGroup && chatId === this.ctx.config.operator?.telegramChatId) {
       this.ctx.recordOperatorMessage?.(config.id, userText);
     }
 
@@ -230,30 +238,20 @@ export class ConversationPipeline {
     const memoryViewer = rawUserId ? String(rawUserId) : undefined;
 
     // Start RAG pre-fetch early for parallelism
-    const ragPromise = this.prefetchMemoryContext(
-      userText,
-      isGroup,
-      botLogger,
-      config.id,
-      userId,
-      memoryViewer
+    const ragPromise = turn.synthetic
+      ? Promise.resolve(null)
+      : this.prefetchMemoryContext(userText, isGroup, botLogger, config.id, userId, memoryViewer);
+
+    // Stamp the message before an expiry clears the session: the gap since the
+    // previous message is what tells the model this is not a live thread.
+    const envelope = formatEnvelope(
+      new Date(),
+      this.ctx.sessionManager.getSessionMeta(serializedKey)?.lastActivityAt
     );
 
     try {
-      // Memory flush on session expiry
-      if (sessionConfig.enabled && this.ctx.sessionManager.isExpired(serializedKey)) {
-        botLogger.info({ key: serializedKey }, 'Session expired, flushing to memory');
-        if (this.ctx.config.soul.enabled) {
-          const expiredHistory = this.ctx.sessionManager.getFullHistory(serializedKey);
-          if (expiredHistory.length > 0) {
-            await this.memoryFlusher.flushSessionToMemory(
-              expiredHistory,
-              config.id,
-              memoryViewer ?? userId
-            );
-          }
-        }
-        this.ctx.sessionManager.clearSession(serializedKey);
+      if (sessionConfig.enabled) {
+        await this.endExpiredSession(serializedKey, config.id, memoryViewer ?? userId, botLogger);
       }
 
       // Proactive memory flush (fire-and-forget)
@@ -285,6 +283,9 @@ export class ConversationPipeline {
       const history = sessionConfig.enabled
         ? this.ctx.sessionManager.getHistory(serializedKey, resolved.maxHistory)
         : [];
+      const previousSession = sessionConfig.enabled
+        ? this.previousSessionBlock(serializedKey, history.length)
+        : undefined;
 
       // Await RAG pre-fetch
       const ragContext = await ragPromise;
@@ -297,7 +298,7 @@ export class ConversationPipeline {
               | TopicGuardConfig
               | undefined)
           : rawTopicGuard) ?? rawTopicGuard;
-      if (topicGuardConfig?.enabled) {
+      if (topicGuardConfig?.enabled && !turn.synthetic) {
         const guardResult = await this.topicGuard.check(
           userText,
           config.id,
@@ -347,10 +348,11 @@ export class ConversationPipeline {
         userId,
         memoryViewer,
         permissionMode,
+        previousSession,
       });
 
       // In groups, prefix messages with sender name
-      const prefixedText = senderName ? `[${senderName}]: ${userText}` : userText;
+      const prefixedText = `${envelope} ${senderName ? `[${senderName}]: ${userText}` : userText}`;
 
       // Build messages
       const userMessage: ChatMessage = { role: 'user', content: prefixedText };
@@ -593,7 +595,7 @@ export class ConversationPipeline {
         }
 
         const llmResponse = llmResult.data;
-        const response = llmResponse?.text ?? '';
+        const response = stripEnvelope(llmResponse?.text ?? '');
         const tokenUsage = llmResponse?.usage;
 
         botLogger.info(
@@ -643,7 +645,7 @@ export class ConversationPipeline {
         // Persist messages to session
         if (sessionConfig.enabled) {
           const persistText = sessionText ?? userText;
-          const prefixedPersist = senderName ? `[${senderName}]: ${persistText}` : persistText;
+          const prefixedPersist = `${envelope} ${senderName ? `[${senderName}]: ${persistText}` : persistText}`;
           this.ctx.sessionManager.appendMessages(
             serializedKey,
             [
@@ -855,6 +857,34 @@ export class ConversationPipeline {
    * the same LLM call, session management, RAG, memory flush, and tool
    * execution pipeline.
    */
+  /** End the chat's conversation if a reset policy says it is over. */
+  private async endExpiredSession(
+    serializedKey: string,
+    botId: string,
+    memoryUserId: string | undefined,
+    botLogger: Logger
+  ): Promise<void> {
+    const reason = this.ctx.sessionManager.expiryReason(serializedKey);
+    if (!reason) return;
+    botLogger.info({ key: serializedKey, reason }, 'Session expired, starting a new conversation');
+    await endConversation(
+      {
+        sessionManager: this.ctx.sessionManager,
+        memoryFlusher: this.memoryFlusher,
+        soulEnabled: this.ctx.config.soul.enabled,
+        logger: botLogger,
+      },
+      { botId, serializedKey, reason, memoryUserId }
+    );
+  }
+
+  /** How the previous conversation left off, early in a new one. */
+  private previousSessionBlock(serializedKey: string, historyLength: number): string | undefined {
+    if (!shouldShowPreviousSession(historyLength)) return undefined;
+    const ended = this.ctx.sessionManager.getEndedSession(serializedKey);
+    return ended ? renderPreviousSession(ended) : undefined;
+  }
+
   async handleChannelMessage(
     msg: InboundMessage,
     channel: Channel,
@@ -920,21 +950,14 @@ export class ConversationPipeline {
       memoryViewer
     );
 
+    const envelope = formatEnvelope(
+      new Date(),
+      this.ctx.sessionManager.getSessionMeta(sessionKey)?.lastActivityAt
+    );
+
     try {
-      // Memory flush on session expiry
-      if (sessionConfig.enabled && this.ctx.sessionManager.isExpired(sessionKey)) {
-        botLogger.info({ key: sessionKey }, 'Session expired, flushing to memory');
-        if (this.ctx.config.soul.enabled) {
-          const expiredHistory = this.ctx.sessionManager.getFullHistory(sessionKey);
-          if (expiredHistory.length > 0) {
-            await this.memoryFlusher.flushSessionToMemory(
-              expiredHistory,
-              config.id,
-              memoryViewer ?? userId
-            );
-          }
-        }
-        this.ctx.sessionManager.clearSession(sessionKey);
+      if (sessionConfig.enabled) {
+        await this.endExpiredSession(sessionKey, config.id, memoryViewer ?? userId, botLogger);
       }
 
       // Proactive memory flush
@@ -959,6 +982,9 @@ export class ConversationPipeline {
       const history = sessionConfig.enabled
         ? this.ctx.sessionManager.getHistory(sessionKey, resolved.maxHistory)
         : [];
+      const previousSession = sessionConfig.enabled
+        ? this.previousSessionBlock(sessionKey, history.length)
+        : undefined;
 
       // Await RAG
       const ragContext = await ragPromise;
@@ -1021,10 +1047,11 @@ export class ConversationPipeline {
         userId,
         memoryViewer,
         permissionMode,
+        previousSession,
       });
 
       // In groups, prefix messages with sender name
-      const prefixedText = senderName ? `[${senderName}]: ${msg.text}` : msg.text;
+      const prefixedText = `${envelope} ${senderName ? `[${senderName}]: ${msg.text}` : msg.text}`;
 
       // Build messages
       const userMessage: ChatMessage = { role: 'user', content: prefixedText };
@@ -1192,7 +1219,7 @@ export class ConversationPipeline {
               }
               // iterResult.value is the LLMResponse return value
               const llmResponse = iterResult.value as import('../core/llm-client').LLMResponse;
-              response = llmResponse.text || collected;
+              response = stripEnvelope(llmResponse.text || collected);
               tokenUsage = llmResponse.usage;
             }
 
@@ -1336,7 +1363,7 @@ export class ConversationPipeline {
             throw new Error(`LLM call failed: ${error.message}`);
           }
 
-          response = llmResult.data?.text ?? '';
+          response = stripEnvelope(llmResult.data?.text ?? '');
           tokenUsage = llmResult.data?.usage;
           llmDurationMs = llmResult.totalDurationMs ?? Date.now() - llmCallStartMs;
           llmAttempts = llmResult.attempts;
@@ -1371,7 +1398,7 @@ export class ConversationPipeline {
         // Persist to session
         if (sessionConfig.enabled) {
           const persistText = msg.sessionText ?? msg.text;
-          const prefixedPersist = senderName ? `[${senderName}]: ${persistText}` : persistText;
+          const prefixedPersist = `${envelope} ${senderName ? `[${senderName}]: ${persistText}` : persistText}`;
           this.ctx.sessionManager.appendMessages(
             sessionKey,
             [

@@ -89,11 +89,13 @@ See [docs/deployment-cloud.md](docs/deployment-cloud.md) for the full VPS runboo
 
 ```
 src/
-├── bot/                    # Bot core (42 modules)
+├── bot/                    # Bot core (44 modules)
 │   ├── bot-manager.ts      #   Facade: constructor, start/stop, sendMessage
 │   ├── auto-start.ts       #   Boot-time start of enabled bots, `enabled` guard
 │   ├── telegram-errors.ts  #   Shared Telegram failure diagnosis (409/401)
 │   ├── conversation-pipeline.ts  #   Session expiry, RAG, LLM call, reply
+│   ├── session-continuity.ts     #   Ending a conversation, previous-conversation context, /new greeting
+│   ├── message-envelope.ts       #   [weekday date time · +gap] header on user messages
 │   ├── conversation-gate.ts      #   Auth, group, bot-to-bot gates
 │   ├── context-compaction.ts     #   LLM-based context summarization
 │   ├── collaboration.ts    #   Bot-to-bot collaboration modes

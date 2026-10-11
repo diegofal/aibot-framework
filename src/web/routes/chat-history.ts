@@ -3,6 +3,7 @@
  * GET /api/v1/chat/:botId/history?chatId=X&senderId=Y&limit=50
  */
 import { Hono } from 'hono';
+import { stripEnvelope } from '../../bot/message-envelope';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import type { SessionManager } from '../../session';
@@ -70,7 +71,8 @@ export function chatHistoryRoutes(deps: ChatHistoryRouteDeps) {
       return c.json({
         messages: filtered.map((msg) => ({
           role: msg.role === 'assistant' ? 'bot' : msg.role,
-          content: msg.content,
+          // Stored user messages carry a timestamp header for the model, not for people.
+          content: msg.role === 'user' ? stripEnvelope(msg.content) : msg.content,
         })),
         chatId,
         botId,

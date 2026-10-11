@@ -1,6 +1,7 @@
 import type { Bot, Context } from 'grammy';
 import type { BotConfig } from '../config';
 import type { MemoryFlusher } from './memory-flush';
+import { endConversation } from './session-continuity';
 import { sendLongMessage } from './telegram-utils';
 import type { BotContext, SeenUser } from './types';
 
@@ -12,6 +13,11 @@ import type { BotContext, SeenUser } from './types';
 export interface BuiltinCommandDeps {
   ctx: BotContext;
   memoryFlusher: MemoryFlusher;
+  /**
+   * Open a fresh conversation in the bot's own voice (a pipeline turn with the
+   * session-start prompt). Without it, /new and /reset confirm in plain text.
+   */
+  startConversation?: (telegramCtx: Context, command: string) => Promise<void>;
 }
 
 /**
@@ -33,6 +39,61 @@ export function registerBuiltinCommands(
 ): void {
   const { ctx, memoryFlusher } = deps;
 
+  /** End this chat's conversation: remember how it left off, flush it to memory, clear it. */
+  const endChatConversation = (telegramCtx: Context, flush = true) => {
+    const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
+    return endConversation(
+      {
+        sessionManager: ctx.sessionManager,
+        memoryFlusher,
+        soulEnabled: ctx.config.soul.enabled,
+        logger: ctx.logger,
+      },
+      {
+        botId: config.id,
+        serializedKey: ctx.sessionManager.serializeKey(sessionKey),
+        reason: 'command',
+        // The sender owns the facts, as in the conversation pipeline.
+        memoryUserId: telegramCtx.from?.id ? String(telegramCtx.from.id) : undefined,
+        flush,
+      }
+    );
+  };
+
+  // /new, /reset, /start: a fresh conversation, opened by the bot itself
+  const freshConversation = async (telegramCtx: Context, command: string) => {
+    await endChatConversation(telegramCtx);
+    if (!deps.startConversation) {
+      await telegramCtx.reply('✨ New conversation started.');
+      return;
+    }
+    await deps.startConversation(telegramCtx, command);
+  };
+
+  for (const name of ['new', 'reset']) {
+    bot.command(name, async (telegramCtx) => {
+      if (!isAuthorized(ctx, telegramCtx.from?.id, config)) {
+        await telegramCtx.reply('⛔ Unauthorized');
+        return;
+      }
+      await freshConversation(telegramCtx, `/${name}`);
+    });
+  }
+
+  // Telegram sends /start when someone opens the bot (again): that is a new conversation.
+  bot.command('start', async (telegramCtx) => {
+    if (!isAuthorized(ctx, telegramCtx.from?.id, config)) {
+      await handleStart(telegramCtx, config);
+      return;
+    }
+    try {
+      await freshConversation(telegramCtx, '/start');
+    } catch (err) {
+      ctx.logger.warn({ err, botId: config.id }, '/start greeting failed, sending static welcome');
+      await handleStart(telegramCtx, config);
+    }
+  });
+
   // /clear
   bot.command('clear', async (telegramCtx) => {
     if (!isAuthorized(ctx, telegramCtx.from?.id, config)) {
@@ -41,21 +102,7 @@ export function registerBuiltinCommands(
     }
 
     const noFlush = (telegramCtx.match || '').toString().trim().includes('--no-flush');
-
-    const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
-    const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
-
-    if (!noFlush && ctx.config.soul.enabled) {
-      const history = ctx.sessionManager.getFullHistory(serializedKey);
-      if (history.length > 0) {
-        const isolationActive = config.userIsolation?.enabled || !!config.tenantId;
-        const userId =
-          isolationActive && telegramCtx.from?.id ? String(telegramCtx.from.id) : undefined;
-        await memoryFlusher.flushSessionToMemory(history, config.id, userId);
-      }
-    }
-
-    ctx.sessionManager.clearSession(serializedKey);
+    await endChatConversation(telegramCtx, !noFlush);
 
     ctx.logger.info(
       { chatId: telegramCtx.chat.id, botId: config.id, noFlush },
@@ -158,7 +205,9 @@ export async function handleHelp(
   const lines: string[] = [
     `🤖 *${config.name} - Available Commands*\n`,
     '📋 *General*',
-    '/start - Start the bot',
+    '/start - Start a new conversation',
+    '/new - Start a new conversation (the current one is saved to memory)',
+    '/reset - Same as /new',
     '/help - Show this help message',
     '/clear - Clear conversation history (use --no-flush to skip memory save)',
     '/model - Show or change the active AI model',

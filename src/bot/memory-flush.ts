@@ -8,6 +8,11 @@ export interface ScoredFact {
   category: 'identity' | 'relationships' | 'preferences' | 'goals' | 'constraints' | 'general';
 }
 
+export interface FlushOptions {
+  /** ISO timestamp of when the conversation happened; facts are dated by it, not by the flush. */
+  observedAt?: string;
+}
+
 export class MemoryFlusher {
   constructor(private ctx: BotContext) {}
 
@@ -90,7 +95,8 @@ export class MemoryFlusher {
   async flushWithScoring(
     history: ChatMessage[],
     botId: string,
-    userId?: string
+    userId?: string,
+    options: FlushOptions = {}
   ): Promise<ScoredFact[]> {
     this.ctx.activityStream?.publish({
       type: 'memory:flush',
@@ -114,7 +120,9 @@ export class MemoryFlusher {
             '- importance: 1-10 (10 = critical identity/relationship info, 5 = useful context, 1 = trivial)\n' +
             '- category: identity | relationships | preferences | goals | constraints | general\n\n' +
             'Output as JSON array: [{"fact": "...", "importance": N, "category": "..."}, ...]\n' +
-            'Only include facts that would actually be useful in future conversations.',
+            'Only include facts that would actually be useful in future conversations.\n' +
+            'User messages may start with a [weekday date time] header: write absolute dates from it, ' +
+            'never relative words like "today", "yesterday" or "this week".',
         },
         { role: 'user', content: transcript },
       ];
@@ -171,7 +179,9 @@ export class MemoryFlusher {
       if (coreMemory && facts.length > 0) {
         for (const fact of facts) {
           const key = this.generateFactKey(fact);
-          await coreMemory.set(fact.category, key, fact.fact, fact.importance, botId, userId);
+          await coreMemory.set(fact.category, key, fact.fact, fact.importance, botId, userId, {
+            observedAt: options.observedAt,
+          });
         }
         this.ctx.logger.info(
           { count: facts.length },
@@ -290,8 +300,9 @@ export class MemoryFlusher {
   async flushSessionToMemory(
     history: ChatMessage[],
     botId: string,
-    userId?: string
+    userId?: string,
+    options: FlushOptions = {}
   ): Promise<void> {
-    await this.flushWithScoring(history, botId, userId);
+    await this.flushWithScoring(history, botId, userId, options);
   }
 }

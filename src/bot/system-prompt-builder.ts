@@ -5,6 +5,7 @@ import { HUMANIZER_PROMPT } from '../humanizer-prompt';
 import type { KarmaService } from '../karma/service';
 import { type MemoryViewer, memoryScope } from '../memory/viewer';
 import type { CustomizationService } from '../tenant/customization';
+import { ENVELOPE_PROMPT_NOTE } from './message-envelope';
 import { type PermissionMode, buildSensitiveActionProtocol } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
 import type { BotContext } from './types';
@@ -23,6 +24,8 @@ export interface SystemPromptOptions {
   memoryViewer?: MemoryViewer;
   /** Permission mode for Sensitive Action Protocol injection */
   permissionMode?: PermissionMode;
+  /** How the chat's previous conversation left off (session-continuity.ts), conversation mode only */
+  previousSession?: string;
 }
 
 export class SystemPromptBuilder {
@@ -57,6 +60,9 @@ export class SystemPromptBuilder {
     const now = new Date();
     const weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
     prompt += `\n\nToday is ${localDateStr(now)} (${weekday}). Anything dated earlier in your memory happened then, not now.`;
+    if (mode === 'conversation') {
+      prompt += ` ${ENVELOPE_PROMPT_NOTE}`;
+    }
 
     // Tenant customization overlay (identity, knowledge, goals, rules)
     if (this.customizationService) {
@@ -123,6 +129,10 @@ export class SystemPromptBuilder {
     // RAG context injection (near end for recency bias)
     if (mode === 'conversation' && ragContext) {
       prompt += `\n\n${ragContext}`;
+    }
+
+    if (mode === 'conversation' && options.previousSession) {
+      prompt += `\n\n${options.previousSession}`;
     }
 
     // Memory search reinforcement (always when memory tools exist)

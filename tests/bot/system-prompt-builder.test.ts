@@ -275,6 +275,29 @@ describe('SystemPromptBuilder', () => {
       expect(prompt).toContain(`Today is ${localDateStr()}`);
     });
 
+    test('explains the message timestamp header in conversations, not in the agent loop', () => {
+      const builder = new SystemPromptBuilder(createMockCtx(), createMockToolRegistry([]));
+      const base = { botId: 'testbot', botConfig, isGroup: false };
+      expect(builder.build({ ...base, mode: 'conversation' })).toContain(
+        'Never write this header yourself'
+      );
+      expect(builder.build({ ...base, mode: 'autonomous' })).not.toContain(
+        'Never write this header yourself'
+      );
+    });
+
+    test('adds the previous-conversation block when given', () => {
+      const builder = new SystemPromptBuilder(createMockCtx(), createMockToolRegistry([]));
+      const prompt = builder.build({
+        mode: 'conversation',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+        previousSession: '## Previous conversation — This is a new conversation.',
+      });
+      expect(prompt).toContain('## Previous conversation');
+    });
+
     test('renders core memory for the viewer (person, or null = shared only)', () => {
       const scopes: unknown[] = [];
       const ctx = createMockCtx();

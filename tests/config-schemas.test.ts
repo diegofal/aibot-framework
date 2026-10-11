@@ -10,6 +10,7 @@ import {
   GlobalAgentLoopConfigSchema,
   MMRConfigSchema,
   RedditConfigSchema,
+  SessionConfigSchema,
   TwitterConfigSchema,
   WebToolsConfigSchema,
 } from '../src/config';
@@ -373,5 +374,18 @@ describe('ClaudeCliConfigSchema', () => {
       claudeCli: parsed,
     });
     expect(candidates.some((c) => c.backend === 'claude-cli')).toBe(true);
+  });
+});
+
+describe('SessionConfigSchema resetPolicy defaults', () => {
+  test('a chat starts a new conversation each day (4 am) unless configured otherwise', () => {
+    const session = SessionConfigSchema.parse({});
+    expect(session.resetPolicy.daily).toEqual({ enabled: true, hour: 4 });
+    expect(session.resetPolicy.idle.enabled).toBe(false);
+  });
+
+  test('an explicit opt-out is kept', () => {
+    const session = SessionConfigSchema.parse({ resetPolicy: { daily: { enabled: false } } });
+    expect(session.resetPolicy.daily.enabled).toBe(false);
   });
 });

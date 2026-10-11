@@ -89,6 +89,8 @@ function makePipeline(llmClient: any, toolDefs: any[] = []) {
     },
     sessionManager: {
       isExpired: () => false,
+      expiryReason: () => null,
+      getEndedSession: () => undefined,
       getFullHistory: () => [],
       clearSession: () => {},
       getHistory: () => [],

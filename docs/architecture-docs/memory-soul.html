@@ -253,7 +253,8 @@
         <h3>Lifecycle Steps</h3>
         <ol>
           <li><strong>Conversation</strong> &mdash; User sends messages, bot replies. All messages stored as <code>ChatMessage[]</code> in session memory.</li>
-          <li><strong>Session Expiry</strong> &mdash; When session timeout elapses or user runs <code>/clear</code>, <code>MemoryFlusher.flushSessionToMemory()</code> is called.</li>
+          <li><strong>Session Expiry</strong> &mdash; When a reset policy fires (daily at 4 am by default) or the user runs <code>/start</code>, <code>/new</code>, <code>/reset</code> or <code>/clear</code>, <code>endConversation()</code> keeps a short record of how the conversation left off (<code>ended-sessions.json</code>, shown to the next conversation as background) and calls <code>MemoryFlusher.flushSessionToMemory()</code> on the part the proactive flush has not seen, with <code>observedAt</code> = its last message.</li>
+          <li><strong>Dates</strong> &mdash; Every stored user message starts with <code>[Sun 2026-10-11 12:50 · +7d]</code> (when it was sent, gap since the previous one). Core Memory keeps a fact's date when it is re-stored unchanged; new or changed facts are dated by <code>observedAt</code>.</li>
           <li><strong>LLM Scoring</strong> &mdash; The conversation transcript is sent to the LLM (Claude or Ollama) with a prompt to extract facts with importance scores (1-10) and categories.</li>
           <li><strong>Dual Storage</strong> &mdash; Facts are written to Core Memory (SQLite key-value) and/or daily memory log files (<code>memory/YYYY-MM-DD.md</code>).</li>
           <li><strong>Indexing</strong> &mdash; A file watcher (debounced) detects new/changed <code>.md</code> files, chunks them by heading boundaries and token targets, and generates embeddings.</li>
