@@ -531,3 +531,19 @@ docker compose up -d --build
 **Outcome.** Container `healthy`. Served: `/pages/fleet-board-helpers.js` (`goalHeadline`), `/nav-routes.js` (`#/board/:id`), `/style.css` (`fb-row`). The image has `GOAL_HEADLINE_MAX` in the goal route. No error-level boot logs.
 
 **Reversible?** Yes. Check out `8aefe5b` and rebuild. GOALS.md files edited from the board keep `- headline:` lines, which older code ignores.
+
+### 2026-10-11 — Deployed `10410d8` (conversations end, messages carry their time, old facts stay old)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Finny continued weeks-old conversations and called old facts "hoy": no chat ever ended, messages had no timestamps, core memory restamped re-extracted facts |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container recreated; dashboard answers 200. The image has `src/bot/session-continuity.ts`, `src/bot/message-envelope.ts`, and `/start` registered in `builtin-commands.ts`. AIBot (Finny) started on Telegram. Only boot error: the known revoked `job-seeker` Telegram token (headless). The live config does not set `session.resetPolicy`, so the new default (daily at 4 am) applies to every bot. Not yet exercised from Telegram.
+
+**Reversible?** Yes. Check out `f9bcab1` and rebuild. Stored user messages keep their `[weekday date time]` prefix, which older code shows as text; `ended-sessions.json` is ignored by older code.
