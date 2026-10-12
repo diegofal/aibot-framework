@@ -1,5 +1,6 @@
 import { activityTabHash } from './activity-helpers.js';
 import { api, escapeHtml } from './shared.js';
+import { dashboardSocketUrl, openReconnectingSocket } from './ws-reconnect.js';
 
 /* ── Constants ─────────────────────────────────────────────── */
 
@@ -226,40 +227,39 @@ function evRefilterAll() {
   if (activeTab === 'events') updateCount();
 }
 
+// Both sockets reconnect with backoff (2 s, doubling, capped at 30 s) after a close.
+const RECONNECT = { baseMs: 2000, maxMs: 30_000 };
+
 function evConnectWS() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = sessionStorage.getItem('auth_token');
-  const authParam = token ? `?token=${encodeURIComponent(token)}` : '';
-  evWs = new WebSocket(`${proto}//${location.host}/ws/activity${authParam}`);
+  evWs = openReconnectingSocket({
+    ...RECONNECT,
+    url: () =>
+      dashboardSocketUrl(location, '/ws/activity', {
+        token: sessionStorage.getItem('auth_token'),
+      }),
+    onMessage: evOnMessage,
+  });
+}
 
-  evWs.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      if (data.type === 'history') {
-        const events = data.events || [];
+function evOnMessage(e) {
+  try {
+    const data = JSON.parse(e.data);
+    if (data.type === 'history') {
+      const events = data.events || [];
+      evAppendEvents(events);
+      // Set initial offset based on what WS sent us
+      evOffset = events.length;
+    } else if (data.type === 'activity') {
+      const events = [data.event];
+      if (evPaused) {
+        evPauseBuffer.push(...events);
+      } else {
         evAppendEvents(events);
-        // Set initial offset based on what WS sent us
-        evOffset = events.length;
-      } else if (data.type === 'activity') {
-        const events = [data.event];
-        if (evPaused) {
-          evPauseBuffer.push(...events);
-        } else {
-          evAppendEvents(events);
-        }
       }
-    } catch {
-      /* ignore */
     }
-  };
-
-  evWs.onclose = () => {
-    if (evContainer) setTimeout(evConnectWS, 2000);
-  };
-
-  evWs.onerror = () => {
-    evWs.close();
-  };
+  } catch {
+    /* ignore */
+  }
 }
 
 /* ── Logs tab ──────────────────────────────────────────────── */
@@ -380,35 +380,29 @@ function logRefilterAll() {
 }
 
 function logConnectWS() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = sessionStorage.getItem('auth_token');
-  const authParam = token ? `?token=${encodeURIComponent(token)}` : '';
-  logWs = new WebSocket(`${proto}//${location.host}/ws/logs${authParam}`);
+  logWs = openReconnectingSocket({
+    ...RECONNECT,
+    url: () =>
+      dashboardSocketUrl(location, '/ws/logs', { token: sessionStorage.getItem('auth_token') }),
+    onMessage: logOnMessage,
+  });
+}
 
-  logWs.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      const lines = data.lines || [];
-      if (data.type === 'history') {
-        logAppendLines(lines);
-        logOffset = lines.length;
-      } else if (logPaused) {
-        logPauseBuffer.push(...lines);
-      } else {
-        logAppendLines(lines);
-      }
-    } catch {
-      /* ignore */
+function logOnMessage(e) {
+  try {
+    const data = JSON.parse(e.data);
+    const lines = data.lines || [];
+    if (data.type === 'history') {
+      logAppendLines(lines);
+      logOffset = lines.length;
+    } else if (logPaused) {
+      logPauseBuffer.push(...lines);
+    } else {
+      logAppendLines(lines);
     }
-  };
-
-  logWs.onclose = () => {
-    if (logContainer) setTimeout(logConnectWS, 2000);
-  };
-
-  logWs.onerror = () => {
-    logWs.close();
-  };
+  } catch {
+    /* ignore */
+  }
 }
 
 /* ── LLM Queries tab ──────────────────────────────────────── */
@@ -887,18 +881,10 @@ export async function renderActivity(el) {
 }
 
 export function destroyActivity() {
-  if (evWs) {
-    const ref = evWs;
-    evWs = null;
-    ref.onclose = null;
-    ref.close();
-  }
-  if (logWs) {
-    const ref = logWs;
-    logWs = null;
-    ref.onclose = null;
-    ref.close();
-  }
+  evWs?.close();
+  evWs = null;
+  logWs?.close();
+  logWs = null;
   evContainer = null;
   logContainer = null;
   llmContainer = null;

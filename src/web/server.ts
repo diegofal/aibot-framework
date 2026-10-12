@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
 import { A2AServer } from '../a2a/server';
 import type { BotManager } from '../bot';
+import type { ActivityEvent } from '../bot/activity-stream';
 import { avatarUrl, findAvatar } from '../bot/agent-avatar';
 import { describeToolCall } from '../bot/inline-approval';
 import { wsChannel, wsToInbound } from '../channel/websocket';
@@ -12,7 +13,6 @@ import type { WsChatData } from '../channel/websocket';
 import type { Config } from '../config';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
-import { safeCompare } from '../crypto-utils';
 import { startAutoArchive } from '../hygiene/auto-archive';
 import { HygieneRegistry } from '../hygiene/registry';
 import type { Logger } from '../logger';
@@ -88,6 +88,12 @@ import { ttsRoutes } from './routes/tts';
 import { webhookRoutes } from './routes/webhooks';
 import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
 import { dashboardNoCache } from './static-cache';
+import {
+  type ActivitySocket,
+  ActivitySocketHub,
+  type WsAuth,
+  planDashboardSocketUpgrade,
+} from './ws-tenant-filter';
 
 export type WebServerDeps = {
   config: Config;
@@ -736,13 +742,20 @@ export function startWebServer(deps: WebServerDeps): void {
   const logFile = config.logging?.file || './data/logs/aibot.log';
   type WsData = {
     type: string;
+    /** Dashboard sockets (activity, logs): who is on the other end, bound at upgrade. */
+    auth?: WsAuth;
+    /** `/ws/activity?botId=`: only this bot's events. */
+    botFilter?: string;
     botId?: string;
     chatId?: string;
     senderId?: string;
     senderName?: string;
   };
   const wsClients = new Set<ServerWebSocket<WsData>>();
-  const activityClients = new Set<ServerWebSocket<WsData>>();
+  const activityHub = new ActivitySocketHub<ServerWebSocket<WsData> & ActivitySocket>(
+    () => config.bots,
+    (err) => logger.debug({ err }, 'WebSocket activity broadcast send failed, removing client')
+  );
   const chatClients = new Set<ServerWebSocket<WsData>>();
   // pino-roll rotates by writing to numbered siblings (aibot.log.1, .2, …) and,
   // once the first rotation happens, stops touching the bare `logFile` path
@@ -761,20 +774,9 @@ export function startWebServer(deps: WebServerDeps): void {
     }
   }
 
-  function broadcastActivity(data: string) {
-    for (const ws of activityClients) {
-      try {
-        ws.send(data);
-      } catch (err) {
-        logger.debug({ err }, 'WebSocket activity broadcast send failed, removing client');
-        activityClients.delete(ws);
-      }
-    }
-  }
-
-  // Subscribe to activity stream for WebSocket broadcasting
-  activityStream.on('activity', (event: unknown) => {
-    broadcastActivity(JSON.stringify({ type: 'activity', event }));
+  // Subscribe to activity stream for WebSocket broadcasting (tenant-filtered per client)
+  activityStream.on('activity', (event: ActivityEvent) => {
+    activityHub.broadcast(event);
   });
 
   // Establish the tail baseline at the current end of whichever file is
@@ -812,23 +814,17 @@ export function startWebServer(deps: WebServerDeps): void {
     fetch(req, server) {
       const url = new URL(req.url);
       if (url.pathname === '/ws/logs' || url.pathname === '/ws/activity') {
-        // Authenticate WebSocket connections in multi-tenant mode
-        if (config.multiTenant?.enabled) {
-          const token = url.searchParams.get('token');
-          if (!token) return new Response('Unauthorized', { status: 401 });
-          // Accept session tokens
-          if (token.startsWith('sess_')) {
-            const session = sessionStore.getSession(token);
-            if (!session) return new Response('Unauthorized', { status: 401 });
-          } else {
-            const adminKey = process.env.ADMIN_API_KEY;
-            const isAdmin = safeCompare(token, adminKey);
-            const isTenant = tenantManager?.getTenantByApiKey(token);
-            if (!isAdmin && !isTenant) return new Response('Unauthorized', { status: 401 });
-          }
-        }
-        const wsType = url.pathname === '/ws/activity' ? 'activity' : 'logs';
-        const ok = server.upgrade(req, { data: { type: wsType } });
+        // Authenticate and bind the tenant to the socket (src/web/ws-tenant-filter.ts)
+        const plan = planDashboardSocketUpgrade(url, {
+          multiTenant: Boolean(config.multiTenant?.enabled),
+          adminKey: process.env.ADMIN_API_KEY,
+          getSession: (t) => sessionStore.getSession(t),
+          getTenant: (id) => tenantManager?.getTenant(id),
+          getTenantByApiKey: (k) => tenantManager?.getTenantByApiKey(k),
+          getBots: () => config.bots,
+        });
+        if (plan.kind === 'reject') return new Response(plan.body, { status: plan.status });
+        const ok = server.upgrade(req, { data: plan.data });
         if (ok) return undefined;
         return new Response('WebSocket upgrade failed', { status: 400 });
       }
@@ -905,14 +901,11 @@ export function startWebServer(deps: WebServerDeps): void {
           );
           ws.send(JSON.stringify({ type: 'connected', botId: ws.data.botId }));
         } else if (ws.data?.type === 'activity') {
-          activityClients.add(ws);
-          logger.debug(
-            { clientCount: activityClients.size },
-            'WebSocket activity client connected'
-          );
-          // Send recent activity events as history
-          const recent = activityStream.getRecent(50);
-          ws.send(JSON.stringify({ type: 'history', events: recent }));
+          const client = ws as ServerWebSocket<WsData> & ActivitySocket;
+          activityHub.add(client);
+          logger.debug({ clientCount: activityHub.size }, 'WebSocket activity client connected');
+          // Send recent activity events as history, filtered like live events
+          activityHub.sendHistory(client, activityStream.getRecent(50));
         } else {
           wsClients.add(ws);
           logger.debug({ clientCount: wsClients.size }, 'WebSocket logs client connected');
@@ -1122,11 +1115,8 @@ export function startWebServer(deps: WebServerDeps): void {
             'WebSocket chat client disconnected'
           );
         } else if (ws.data?.type === 'activity') {
-          activityClients.delete(ws);
-          logger.debug(
-            { clientCount: activityClients.size },
-            'WebSocket activity client disconnected'
-          );
+          activityHub.remove(ws as ServerWebSocket<WsData> & ActivitySocket);
+          logger.debug({ clientCount: activityHub.size }, 'WebSocket activity client disconnected');
         } else {
           wsClients.delete(ws);
           logger.debug({ clientCount: wsClients.size }, 'WebSocket logs client disconnected');

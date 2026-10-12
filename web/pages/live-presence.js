@@ -1,10 +1,13 @@
 /**
  * Live links to the activity stream.
  *
- * `watchAgent()` — one `/ws/activity` socket filtered to a bot plus a slow
+ * `watchAgent()` — one `/ws/activity?botId=` socket (the server sends only that
+ * bot's events) plus a slow
  * poll, feeding the presence header (and, on the Home page, the timeline).
  * `watchFleet()` — one socket for the whole fleet, feeding the Fleet Home
  * ticker and refetching the fleet presence map.
+ *
+ * The socket reconnects with backoff after a close (`ws-reconnect.js`).
  *
  * Pages call the watcher on render and the returned `stop()` on navigation;
  * `app.js` calls `stopAllWatches()` from `navigate()` so a page that forgets
@@ -12,6 +15,7 @@
  */
 import { isPresenceEvent } from './agent-home-helpers.js';
 import { api, getAuthToken } from './shared.js';
+import { dashboardSocketUrl, openReconnectingSocket } from './ws-reconnect.js';
 
 const active = new Set();
 
@@ -23,9 +27,10 @@ const active = new Set();
  * @param {(event: object) => void} [o.onEvent]
  * @param {number} o.debounceMs
  * @param {number} o.pollMs
+ * @param {string} [o.botId]   ask the server for this bot's events only
  */
 function openLink(o) {
-  let ws = null;
+  let link = null;
   let timer = null;
   let stopped = false;
 
@@ -40,21 +45,20 @@ function openLink(o) {
 
   const poll = setInterval(refresh, o.pollMs);
   try {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const token = getAuthToken();
-    const authParam = token ? `?token=${encodeURIComponent(token)}` : '';
-    ws = new WebSocket(`${proto}//${location.host}/ws/activity${authParam}`);
-    ws.onmessage = (e) => {
-      try {
-        const d = JSON.parse(e.data);
-        if (d.type !== 'activity' || !o.accept(d.event)) return;
-        o.onEvent?.(d.event);
-        schedule();
-      } catch {
-        /* ignore */
-      }
-    };
-    ws.onerror = () => ws?.close();
+    link = openReconnectingSocket({
+      url: () =>
+        dashboardSocketUrl(location, '/ws/activity', { token: getAuthToken(), botId: o.botId }),
+      onMessage: (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.type !== 'activity' || !o.accept(d.event)) return;
+          o.onEvent?.(d.event);
+          schedule();
+        } catch {
+          /* ignore */
+        }
+      },
+    });
   } catch {
     /* polling still runs */
   }
@@ -66,15 +70,8 @@ function openLink(o) {
       active.delete(handle);
       clearTimeout(timer);
       clearInterval(poll);
-      if (ws) {
-        try {
-          ws.onclose = null;
-          ws.close();
-        } catch {
-          /* ignore */
-        }
-        ws = null;
-      }
+      link?.close();
+      link = null;
     },
   };
   active.add(handle);
@@ -94,6 +91,7 @@ export function watchAgent(botId, opts = {}) {
   return openLink({
     debounceMs: opts.debounceMs ?? 800,
     pollMs: opts.pollMs ?? 30_000,
+    botId,
     accept: (ev) => isPresenceEvent(ev, botId),
     onEvent: opts.onEvent,
     refresh: async () => {
