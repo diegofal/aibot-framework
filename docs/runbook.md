@@ -684,3 +684,20 @@ docker compose up -d --build
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-12T13-29-58` (aibot_data 143.7 MB, productions, ollama identity; the script restarted the container). Before the rebuild, 0 of 24 live GOALS.md files had `- task:` lines, so the migration had nothing to move and no `TASKS.json` exists yet (one is created on the first task write). After the rebuild: `healthy` in ~35 s, dashboard 200, the image has `src/goals/{task-store,goals-view}.ts`, `src/core/cli-semaphore.ts`, `src/web/ws-tenant-filter.ts`, `src/bot/executor-turn.ts`; served `/pages/ws-reconnect.js` is the new one; `PATCH /api/agents/:id/tasks/:taskId` answers 401 without a session (route mounted behind auth). Agent cycles ran planner → tool pre-selection → executor on the new code. Boot errors seen: Telegram `getMe` 401 (revoked token, known), "Ollama daemon is unreachable" (known), a Telegram "can't parse entities" on an `ask_human` send (also in five older rotated logs), one `web_fetch` failure. Task moves from the boards not exercised from here (needs a dashboard session).
 
 **Reversible?** Code: check out `2b8fde5` and rebuild. Data: `TASKS.json` files written after this deploy are ignored by the older code (tasks would disappear from the boards until redeployed); restore from the backup above only if GOALS.md itself needs to go back.
+
+### 2026-10-12 19:21Z — Backup, then deployed `33ad720` (goal tasks phases 1–4: planner breakdown, task workers off, live view, upkeep)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship phases 1–4 of `docs/plans/goal-tasks-architecture-plan.md` after three review rounds. Workers stay off (no `workers` section in the live config) |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-12T19-21-44`. Before the rebuild: no `workers` key in `/app/config/config.json` (workers off), no `TASKS.json` yet. After: `healthy` in ~38 s, dashboard 200, the image has `src/workers/*` and `src/runtime-lifecycle.ts`, served `/pages/workers.js` is the new one, `/api/workers` answers 401 without a session. Cycles ran planner → executor on the new code with no new errors. One regression seen in the logs: myfirstmillion called `manage_goals` with a goal id (`g-5ba5ff60`, an active goal) and got "No active goal matching" — `findGoalIndex` matched text only and agents now see ids; fixed in `1809d60`, needs a rebuild.
+
+**Reversible?** Code: check out `09b2261` and rebuild. Data: `TASKS.json` / `workers/` files written after this deploy are ignored by older code.
