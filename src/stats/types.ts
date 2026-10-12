@@ -217,6 +217,23 @@ export interface FleetResponse {
   totals: FleetTotals;
 }
 
+/** One task of a goal as the boards read it (`status` and `done` kept for older UI code). */
+export interface GoalTaskView {
+  id: string;
+  text: string;
+  lane: 'todo' | 'in_progress' | 'blocked' | 'done';
+  /** Same as `lane`. */
+  status: 'todo' | 'in_progress' | 'blocked' | 'done';
+  /** `lane === 'done'`. */
+  done: boolean;
+  by: 'operator' | 'agent';
+  note: string | null;
+  /** The cycle that created the task. */
+  cycleId: string | null;
+  /** A live worker claim on the task. */
+  claim?: { runId: string };
+}
+
 export interface GoalDetail {
   /** Stable goal id (`id:` line in GOALS.md), null on goals written before ids existed. */
   id: string | null;
@@ -230,8 +247,8 @@ export interface GoalDetail {
   outcome: string | null;
   source: string | null;
   section: 'active' | 'completed';
-  /** Subtasks in order (`- task:` lines); empty when there are none. */
-  tasks: { text: string; done: boolean }[];
+  /** Tasks in order, from the task store (TASKS.json); empty when there are none. */
+  tasks: GoalTaskView[];
   /** Short card title set on the board; null = the board derives one from `text`. */
   headline: string | null;
   /** Id of the goal this one was made from (`- parent:`), null when none. */
@@ -471,8 +488,10 @@ export interface GoalTimelineEvent {
   cycleId: string | null;
   /** The reason its writer recorded with the change (strategist, navigator, lint, …). */
   reason: string | null;
-  /** Hygiene run that made the change (goal-lint). */
+  /** Hygiene run that made the change (goal-lint), or the worker run of a task op. */
   runId: string | null;
+  /** Task-store rows (`task-*` ops): the task's text at the time. */
+  task?: string | null;
   /** "Why this?" for the change (`goalEventToWhy`, `src/why/builders/goal-event.ts`). */
   why: Why;
 }

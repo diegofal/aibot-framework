@@ -18,8 +18,12 @@ export interface GoalEvent {
   cycleId?: string;
   /** Recorded by the writer with the change (strategist, navigator, lint, …). */
   reason?: string;
-  /** Hygiene run that made the change. */
+  /** Hygiene run that made the change, or the worker run of a task op. */
   runId?: string;
+  /** Task-store rows (`task-*` ops): the task id, its text at the time, the note given. */
+  taskId?: string;
+  task?: string;
+  note?: string;
 }
 
 export interface GoalExtras {

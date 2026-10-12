@@ -9,11 +9,12 @@ import {
   groupTimelineByHour,
   homeTabs,
   hourLabel,
+  isTaskConflict,
   karmaBody,
   karmaTone,
   needsYouStrip,
-  taskAddPayload,
-  taskMovePayload,
+  taskAddRequest,
+  taskMoveRequest,
   timelineBody,
   timelineRow,
   traitAxes,
@@ -261,31 +262,42 @@ describe('goal board rows (tasks open under the clicked card)', () => {
   });
 });
 
-describe('task payloads', () => {
-  it('taskMovePayload sends the whole list with one task in its new lane', () => {
-    expect(taskMovePayload(research, 't-4', 'in_progress')).toEqual({
-      id: 'g-1',
-      tasks: [
-        { id: 't-1', text: 'Map L0-L4', status: 'done' },
-        { id: 't-2', text: 'Find <3> companies', status: 'in_progress' },
-        { id: 't-3', text: 'Get approval', status: 'blocked' },
-        { id: 't-4', text: 'Send me a summary', status: 'in_progress' },
-      ],
+describe('isTaskConflict', () => {
+  it('is true for a 409 body (stale rev or a claimed task), false otherwise', () => {
+    expect(isTaskConflict({ error: 'x', reason: 'conflict', rev: 3 })).toBe(true);
+    expect(isTaskConflict({ error: 'x', reason: 'claimed', rev: 3 })).toBe(true);
+    expect(isTaskConflict({ error: 'x', reason: 'invalid', rev: 3 })).toBe(false);
+    expect(isTaskConflict({ rev: 3 })).toBe(false);
+    expect(isTaskConflict(null)).toBe(false);
+  });
+});
+
+describe('task op requests (task store endpoints)', () => {
+  it('taskMoveRequest PATCHes one task with its lane and the board rev', () => {
+    expect(taskMoveRequest('b 1', research, 't-4', 'in_progress', 7)).toEqual({
+      method: 'PATCH',
+      path: '/api/agents/b%201/tasks/t-4',
+      body: { lane: 'in_progress', expectedRev: 7 },
     });
-    expect(taskMovePayload(research, 't-4', 'todo')).toBeNull();
-    expect(taskMovePayload(research, 't-nope', 'done')).toBeNull();
-    expect(taskMovePayload(research, 't-1', 'later')).toBeNull();
+    expect(taskMoveRequest('b1', research, 't-4', 'todo', 7)).toBeNull();
+    expect(taskMoveRequest('b1', research, 't-nope', 'done', 7)).toBeNull();
+    expect(taskMoveRequest('b1', research, 't-1', 'later', 7)).toBeNull();
   });
 
-  it('taskAddPayload appends a one-line To do task, or null when empty', () => {
-    const p = taskAddPayload(research, '  Call\nthem ');
-    expect(p?.tasks.at(-1)).toEqual({ text: 'Call them', status: 'todo' });
-    expect(p?.tasks).toHaveLength(5);
-    expect(taskAddPayload(research, '   ')).toBeNull();
-    expect(taskAddPayload({ text: 'No tasks' }, 'First')).toEqual({
-      goal: 'No tasks',
-      tasks: [{ text: 'First', status: 'todo' }],
+  it('taskMoveRequest leaves expectedRev out when the board has none', () => {
+    expect(taskMoveRequest('b1', research, 't-4', 'done')?.body).toEqual({ lane: 'done' });
+  });
+
+  it('taskAddRequest POSTs one line to the goal (by id, else by title), or null when empty', () => {
+    expect(taskAddRequest('b1', research, '  Call\nthem ')).toEqual({
+      method: 'POST',
+      path: '/api/agents/b1/goals/g-1/tasks',
+      body: { text: 'Call them' },
     });
+    expect(taskAddRequest('b1', research, '   ')).toBeNull();
+    expect(taskAddRequest('b1', { text: 'No id goal' }, 'First')?.path).toBe(
+      '/api/agents/b1/goals/No%20id%20goal/tasks'
+    );
   });
 });
 

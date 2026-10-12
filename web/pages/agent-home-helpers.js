@@ -439,34 +439,48 @@ export function goalMovePayload(goal, status) {
   return { goal: g, status };
 }
 
-/** How a PATCH names a goal: its id when it has one, else its title. */
-function goalRef(goal) {
-  return goal?.id ? { id: goal.id } : { goal: String(goal?.text ?? '') };
+/** The URL segment naming a goal: its id when it has one, else its title. */
+function goalSegment(goal) {
+  return encodeURIComponent(goal?.id || String(goal?.text ?? ''));
 }
 
-function wireTasks(tasks) {
-  return tasks.map((t) => ({ ...(t.id ? { id: t.id } : {}), text: t.text, status: taskLane(t) }));
+/** One line of task text, or '' when empty. */
+function oneLine(text) {
+  return String(text ?? '')
+    .replace(/\s*[\r\n]+\s*/g, ' ')
+    .trim();
 }
 
-/** PATCH body moving task `taskId` to `lane`, or null when nothing would change. */
-export function taskMovePayload(goal, taskId, lane) {
+/**
+ * Request moving task `taskId` of `goal` to `lane` (one op on the task store),
+ * or null when nothing would change. `rev` is the board's task-store revision:
+ * a stale one gets a 409 and the board refetches.
+ */
+export function taskMoveRequest(botId, goal, taskId, lane, rev) {
   const tasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
   const task = tasks.find((t) => t.id === taskId);
   if (!task || !TASK_LANE_IDS.includes(lane) || taskLane(task) === lane) return null;
   return {
-    ...goalRef(goal),
-    tasks: wireTasks(tasks).map((t) => (t.id === taskId ? { ...t, status: lane } : t)),
+    method: 'PATCH',
+    path: `/api/agents/${encodeURIComponent(botId)}/tasks/${encodeURIComponent(taskId)}`,
+    body: Number.isInteger(rev) ? { lane, expectedRev: rev } : { lane },
   };
 }
 
-/** PATCH body adding one To do task (single line), or null when the text is empty. */
-export function taskAddPayload(goal, text) {
-  const clean = String(text ?? '')
-    .replace(/\s*[\r\n]+\s*/g, ' ')
-    .trim();
+/** A task op answered 409: the board was stale (rev) or a worker holds the task. */
+export function isTaskConflict(res) {
+  return Boolean(res?.error) && (res.reason === 'conflict' || res.reason === 'claimed');
+}
+
+/** Request adding one To do task (single line) to `goal`, or null when the text is empty. */
+export function taskAddRequest(botId, goal, text) {
+  const clean = oneLine(text);
   if (!clean) return null;
-  const tasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
-  return { ...goalRef(goal), tasks: [...wireTasks(tasks), { text: clean, status: 'todo' }] };
+  return {
+    method: 'POST',
+    path: `/api/agents/${encodeURIComponent(botId)}/goals/${goalSegment(goal)}/tasks`,
+    body: { text: clean },
+  };
 }
 
 /** The four goal columns of a home payload, in board order. */

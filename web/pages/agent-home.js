@@ -20,11 +20,12 @@ import {
   goalsColumns,
   homeKeyAction,
   homeTabs,
+  isTaskConflict,
   karmaBody,
   needsYouStrip,
   presenceHeader,
-  taskAddPayload,
-  taskMovePayload,
+  taskAddRequest,
+  taskMoveRequest,
   timelineBody,
   traitsBody,
 } from './agent-home-helpers.js';
@@ -239,6 +240,19 @@ function wireGoalBoard(el, id, goals) {
     await redrawBoard(el, id);
   };
   const move = (goal, status) => send(goalMovePayload(goal, status));
+  // Task ops go one at a time to the task store, with the board's rev: a stale
+  // board (or a task a worker holds) gets a 409, and we refetch and repaint.
+  const sendTask = async (req, okMessage) => {
+    if (!req) return;
+    const res = await api(req.path, { method: req.method, body: req.body }).catch((err) => ({
+      error: err?.message || 'Request failed',
+    }));
+    if (isTaskConflict(res))
+      showToast(`The board changed meanwhile, so it was reloaded. ${res.error}`, { tone: 'warn' });
+    else if (res?.error) showToast(res.error, { tone: 'danger' });
+    else if (okMessage) showToast(okMessage, { tone: 'ok' });
+    await redrawBoard(el, id);
+  };
   const openGoal = () => findBoardGoal(board._goals, board.dataset.selected)?.goal;
 
   // Click a goal: its tasks open under its row; click it again (or ✕) to close.
@@ -290,11 +304,11 @@ function wireGoalBoard(el, id, goals) {
     const form = e.target.closest('[data-task-form]');
     if (!form) return;
     e.preventDefault();
-    const payload = taskAddPayload(openGoal(), form.elements.text?.value);
-    if (!payload) return;
+    const req = taskAddRequest(id, openGoal(), form.elements.text?.value);
+    if (!req) return;
     form.querySelector('button[type="submit"]')?.setAttribute('disabled', '');
     delete board.dataset.adding;
-    await send(payload, 'Task added — the agent sees it next cycle');
+    await sendTask(req, 'Task added — the agent sees it next cycle');
   });
   board.addEventListener('change', async (e) => {
     const select = e.target.closest('.home-goal-status');
@@ -364,7 +378,8 @@ function wireGoalBoard(el, id, goals) {
     dragged = null;
     if (drop.kind === 'task') {
       const lane = zone.dataset.taskStatus;
-      if (lane && lane !== drop.from) await send(taskMovePayload(openGoal(), drop.task, lane));
+      if (lane && lane !== drop.from)
+        await sendTask(taskMoveRequest(id, openGoal(), drop.task, lane, board._goals?.tasksRev));
     } else if (zone.dataset.status && zone.dataset.status !== drop.from) {
       await move(drop.goal, zone.dataset.status);
     }

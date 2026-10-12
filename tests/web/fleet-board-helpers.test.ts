@@ -21,7 +21,12 @@ import {
   renameTask,
   spawnedHtml,
   stateLine,
+  taskAddRequest,
   taskProgress,
+  taskRemoveRequest,
+  taskRenameRequest,
+  taskReorderRequest,
+  taskToggleRequest,
   toggleTask,
 } from '../../web/pages/fleet-board-helpers.js';
 
@@ -428,5 +433,63 @@ describe('goal activity: is it really being worked on?', () => {
     expect(kids).toBeGreaterThan(notes);
     expect(activity).toBeGreaterThan(kids);
     expect(drawerHtml({ id: 'b1' }, goal())).not.toContain('Spawned from this goal');
+  });
+});
+
+describe('subtask op requests (one op per change, task store endpoints)', () => {
+  const tasks = [
+    { id: 't-1', text: 'a', done: false, status: 'in_progress' },
+    { id: 't-2', text: 'b', done: true, status: 'done' },
+    { id: 't-3', text: 'c', done: false, status: 'todo' },
+  ];
+  const g = { id: 'g-1', text: 'Goal', tasks };
+
+  it('checkbox: moves the task to done, or back to todo, with the rev', () => {
+    expect(taskToggleRequest('b1', tasks, 0, 4)).toEqual({
+      method: 'PATCH',
+      path: '/api/agents/b1/tasks/t-1',
+      body: { lane: 'done', expectedRev: 4 },
+    });
+    expect(taskToggleRequest('b1', tasks, 1, 4)?.body).toEqual({ lane: 'todo', expectedRev: 4 });
+    expect(taskToggleRequest('b1', tasks, 9, 4)).toBeNull();
+  });
+
+  it('add posts one line to the goal; empty is null', () => {
+    expect(taskAddRequest('b1', g, ' x\ny ')).toEqual({
+      method: 'POST',
+      path: '/api/agents/b1/goals/g-1/tasks',
+      body: { text: 'x y' },
+    });
+    expect(taskAddRequest('b1', g, '  ')).toBeNull();
+    expect(taskAddRequest('b1', { text: 'No id' }, 'z')?.path).toBe(
+      '/api/agents/b1/goals/No%20id/tasks'
+    );
+  });
+
+  it('rename patches the text; unchanged or empty is null', () => {
+    expect(taskRenameRequest('b1', tasks, 2, ' C ', 4)).toEqual({
+      method: 'PATCH',
+      path: '/api/agents/b1/tasks/t-3',
+      body: { text: 'C', expectedRev: 4 },
+    });
+    expect(taskRenameRequest('b1', tasks, 2, 'c', 4)).toBeNull();
+    expect(taskRenameRequest('b1', tasks, 2, '  ', 4)).toBeNull();
+  });
+
+  it('remove deletes by id', () => {
+    expect(taskRemoveRequest('b1', tasks, 1)).toEqual({
+      method: 'DELETE',
+      path: '/api/agents/b1/tasks/t-2',
+    });
+    expect(taskRemoveRequest('b1', tasks, 7)).toBeNull();
+  });
+
+  it('up/down sends the new order of the goal’s task ids', () => {
+    expect(taskReorderRequest('b1', g, 2, -1, 4)).toEqual({
+      method: 'POST',
+      path: '/api/agents/b1/goals/g-1/tasks/reorder',
+      body: { ids: ['t-1', 't-3', 't-2'], expectedRev: 4 },
+    });
+    expect(taskReorderRequest('b1', g, 0, -1, 4)).toBeNull();
   });
 });

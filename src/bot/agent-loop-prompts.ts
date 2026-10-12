@@ -3,14 +3,24 @@
  * Planner: lightweight LLM call to decide whether and what to do.
  * Executor: full agentic call with tool access to carry out the plan.
  */
-import { type TaskStatus, isOperatorGoal, parseGoals, taskStatus } from '../tools/goals';
+import { renderGoalsForPrompt } from '../goals/goals-view';
+import type { StoredTask } from '../goals/task-store';
+import { isOperatorGoal, parseGoals } from '../tools/goals';
 
-const TASK_MARKS: Record<TaskStatus, string> = {
-  todo: ' ',
-  in_progress: '~',
-  blocked: '!',
-  done: 'x',
-};
+/** The raw GOALS.md plus the store tasks a prompt input carries. */
+export interface GoalsSource {
+  goalsMd: string | null | undefined;
+  tasks: StoredTask[];
+}
+
+function goalsSource(input: { goals: string; tasks?: StoredTask[] }): GoalsSource {
+  return { goalsMd: input.goals, tasks: input.tasks ?? [] };
+}
+
+/** The goals view of a prompt input ('' when there are no goals). */
+function goalsText(input: { goals: string; tasks?: StoredTask[] }): string {
+  return renderGoalsForPrompt(goalsSource(input));
+}
 
 export interface PlannerPromptInput {
   /** Curiosity DNA block (src/bot/curiosity/dna.ts + knowledge/frontier/direction) — replaces the inaction-biased alignment rule */
@@ -19,6 +29,8 @@ export interface PlannerPromptInput {
   soul: string;
   motivations: string;
   goals: string;
+  /** Tasks from the task store, rendered under their goals (src/goals/goals-view.ts). */
+  tasks?: StoredTask[];
   recentMemory: string;
   datetime: string;
   availableTools: string[];
@@ -62,6 +74,8 @@ export interface ContinuousPlannerPromptInput {
   soul: string;
   motivations: string;
   goals: string;
+  /** Tasks from the task store, rendered under their goals (src/goals/goals-view.ts). */
+  tasks?: StoredTask[];
   recentMemory: string;
   datetime: string;
   availableTools: string[];
@@ -117,6 +131,8 @@ export interface ExecutorPromptInput {
   soul: string;
   motivations: string;
   goals: string;
+  /** Tasks from the task store, rendered under their goals (src/goals/goals-view.ts). */
+  tasks?: StoredTask[];
   datetime: string;
   hasCreateTool: boolean;
   workDir: string;
@@ -282,23 +298,29 @@ Operator silence is a reason to explore and find something worth their attention
 
 /**
  * Active goals the operator set (source `operator…`), restated with the rule
- * that they come first. Empty when there are none.
+ * that they come first, with how many tasks each has in the task store (the
+ * tasks themselves are listed in the goals view). Empty when there are none.
  */
-export function buildOperatorGoalsSection(goals?: string): string {
-  if (!goals) return '';
-  const mine = parseGoals(goals).active.filter(isOperatorGoal);
+export function buildOperatorGoalsSection(source?: GoalsSource): string {
+  if (!source?.goalsMd) return '';
+  const mine = parseGoals(source.goalsMd).active.filter(isOperatorGoal);
   if (!mine.length) return '';
+  let anyTasks = false;
   const list = mine
     .map((g) => {
-      const head = `- ${g.text}${g.status && g.status !== 'pending' ? ` (${g.status})` : ''}`;
-      const tasks = (g.tasks ?? []).map(
-        (t) => `  - [${TASK_MARKS[taskStatus(t)]}] ${t.text}${t.id ? ` (${t.id})` : ''}`
-      );
-      return [head, ...tasks].join('\n');
+      const tasks = source.tasks.filter((t) => g.id && t.goalId === g.id);
+      const open = tasks.filter((t) => t.lane !== 'done').length;
+      const done = tasks.length - open;
+      if (tasks.length) anyTasks = true;
+      const counts = tasks.length
+        ? ` — ${open} open task${open === 1 ? '' : 's'}${done ? `, ${done} done` : ''}`
+        : '';
+      const status = g.status && g.status !== 'pending' ? ` (${g.status})` : '';
+      return `- ${g.id ? `[${g.id}] ` : ''}${g.text}${status}${counts}`;
     })
     .join('\n');
-  const taskRule = mine.some((g) => g.tasks?.length)
-    ? ' The lines under a goal are its subtasks ([ ] to do, [~] in progress, [!] blocked, [x] done): they are the plan for that goal, so work through them in order. Move a task with manage_goals update_task (by its id) when you start, finish or get blocked on it; add the steps you plan to take with add_task.'
+  const taskRule = anyTasks
+    ? ' Their tasks (listed under each goal in your goals) are the plan for that goal: work through them in order. Move a task with manage_goals update_task (by its id) when you start, finish or get blocked on it, leave what you found with note_task, and add the steps you plan to take with add_task.'
     : '';
   return `\n## Set by your operator\n\nYour operator added these goals themselves. Work on them before your own goals. If one is ambiguous or you need a decision to move it forward, use ask_human about that goal instead of guessing. When you make progress or finish one, update it with manage_goals and tell the operator what changed.${taskRule}\n\n${list}\n`;
 }
@@ -328,10 +350,10 @@ ${input.soul}
 ${input.motivations}
 
 ${
-  input.goals
-    ? `## Goals\n\n${input.goals}`
+  goalsText(input)
+    ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(input.goals)}${buildDirectivesSection(input.directives)}${
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${
   input.curiosityBlock
     ? `
 ${input.curiosityBlock}
@@ -465,10 +487,10 @@ ${input.soul}
 ${input.motivations}
 
 ${
-  input.goals
-    ? `## Goals\n\n${input.goals}`
+  goalsText(input)
+    ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(input.goals)}${buildDirectivesSection(input.directives)}${
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${
   input.curiosityBlock
     ? `
 ${input.curiosityBlock}
@@ -624,10 +646,10 @@ ${input.soul}
 ${input.motivations}
 
 ${
-  input.goals
-    ? `## Goals\n\n${input.goals}`
+  goalsText(input)
+    ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(input.goals)}${buildDirectivesSection(input.directives)}
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}
 
 Current date/time: ${input.datetime}
 
@@ -704,6 +726,8 @@ export interface FeedbackProcessorPromptInput {
   soul: string;
   motivations: string;
   goals: string;
+  /** Tasks from the task store, rendered under their goals (src/goals/goals-view.ts). */
+  tasks?: StoredTask[];
   datetime: string;
   feedbackContent: string;
   availableTools: string[];
@@ -726,7 +750,7 @@ ${input.soul}
 
 ${input.motivations}
 
-${input.goals ? `## Goals\n\n${input.goals}` : '## Goals\n\n(No goals set yet.)'}
+${goalsText(input) ? `## Goals\n\n${goalsText(input)}` : '## Goals\n\n(No goals set yet.)'}
 
 Current date/time: ${input.datetime}
 
@@ -756,6 +780,8 @@ export interface StrategistPromptInput {
   soul: string;
   motivations: string;
   goals: string;
+  /** Tasks from the task store, rendered under their goals (src/goals/goals-view.ts). */
+  tasks?: StoredTask[];
   recentMemory: string;
   datetime: string;
   /** Operator-assigned standing directives — ongoing behavioral instructions */
@@ -826,7 +852,7 @@ ${input.motivations}
 
 ## Current Goals
 
-${input.goals || '(no goals set)'}${buildOperatorGoalsSection(input.goals)}${buildDirectivesSection(input.directives)}${
+${goalsText(input) || '(no goals set)'}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${
   input.curiosityBlock
     ? `
 

@@ -23,8 +23,10 @@ export interface GoalEventWhyInput {
     note?: string | null;
     /** Recorded with the change by whoever made it. */
     reason?: string | null;
-    /** Hygiene run that made the change. */
+    /** Hygiene run that made the change, or the worker run of a task op. */
     runId?: string | null;
+    /** Task-store rows (`task-*`): the task's text at the time. */
+    task?: string | null;
   };
   /** The cycle-log row of `event.cycleId`, when the log still has it. */
   cycle?: CycleRow;
@@ -44,6 +46,7 @@ const ACTORS: Record<string, WhyActor> = {
   lint: 'lint',
   operator: 'operator',
   wizard: 'operator',
+  system: 'system',
 };
 
 /** Who stated a recorded reason, by goal-event actor. */
@@ -90,16 +93,31 @@ const OP_TEXT: Record<string, string> = {
   title: 'Renamed',
   headline: 'Short title changed',
   tasks: 'Subtasks updated',
+  'task-add': 'Task added',
+  'task-edit': 'Task renamed',
+  'task-note': 'Task note',
+  'task-remove': 'Task removed',
+  'task-reorder': 'Tasks reordered',
+  'task-claim': 'Task picked up by a worker run',
+  'task-release': 'Task released by a worker run',
 };
+
+const isTaskOp = (op: string) => op.startsWith('task-');
 
 function whatOf(op: string, to: string | null): string {
   if (op === 'status') return to ? `Moved to ${status(to)}` : 'Status changed';
+  if (op === 'task-move') return to ? `Task moved to ${status(to)}` : 'Task moved';
   return OP_TEXT[op] ?? `Changed (${op})`;
 }
 
 function outcomeOf(op: string, from: string | null, to: string | null): string | undefined {
   if (!from && !to) return undefined;
-  const isStatus = op === 'status' || op === 'add' || op === 'complete' || op === 'reopen';
+  const isStatus =
+    op === 'status' ||
+    op === 'add' ||
+    op === 'complete' ||
+    op === 'reopen' ||
+    (isTaskOp(op) && op !== 'task-edit');
   const fmt = (s: string) => (isStatus ? status(s) : s);
   if (!from) return op === 'add' ? `Added as ${fmt(to as string)}` : `Now ${fmt(to as string)}`;
   if (!to) return `Was ${fmt(from)}`;
@@ -133,8 +151,9 @@ export function goalEventToWhy(input: GoalEventWhyInput): Why {
   const outcome = outcomeOf(e.op, e.from, e.to);
   if (outcome) why.outcome = outcome;
   const notes: Array<{ label: string; text: string }> = [];
+  if (e.task) notes.push({ label: 'Task', text: e.task });
   if (e.note) notes.push({ label: 'Notes', text: e.note });
-  if (e.runId) notes.push({ label: 'Hygiene run', text: e.runId });
+  if (e.runId) notes.push({ label: isTaskOp(e.op) ? 'Worker run' : 'Hygiene run', text: e.runId });
   if (notes.length > 0) why.notes = notes;
   if (missing.length > 0) why.missing = missing.join(' ');
   return why;

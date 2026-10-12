@@ -110,6 +110,7 @@ function timeline(events, nowMs, botId) {
       return `<li class="gd-tl-item${e.inferred ? ' inferred' : ''}"${e.inferred ? ' title="Reconstructed from a manage_goals call"' : ''}>
         <div class="gd-tl-op">${esc(e.op)}${change ? ` <span class="gd-tl-change">${change}</span>` : ''}${e.actor ? ` <span class="gd-dim">by ${esc(e.actor)}</span>` : ''}</div>
         <div class="gd-tl-when">${when(e.ts, nowMs)}</div>
+        ${e.task ? `<div class="gd-tl-note">Task: ${esc(e.task)}</div>` : ''}
         ${e.note ? `<div class="gd-tl-note">${esc(e.note)}</div>` : ''}
         ${whyPanel(e.why, { nowMs, botId })}
       </li>`;

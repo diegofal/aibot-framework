@@ -1,9 +1,11 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SoulLoader } from '../src/soul';
 import {
   createGoalsTool,
-  editGoal,
   ensureGoalIds,
-  mergeTasks,
   parseGoals,
   serializeGoals,
   taskStatus,
@@ -89,152 +91,146 @@ describe('task status, author and id', () => {
   });
 });
 
-describe('mergeTasks', () => {
-  const existing = parseGoals(md).active[0].tasks ?? [];
+describe('manage_goals task actions (task store)', () => {
+  let dir: string;
+  let soul: SoulLoader;
+  const tool = () => createGoalsTool(() => soul);
+  const run = (args: Record<string, unknown>) => tool().execute({ _botId: 'b', ...args }, logger);
+  const store = () => soul.getTaskStore();
 
-  test('known ids keep their author and cycle; status comes from the edit', () => {
-    const out = mergeTasks(
-      existing,
-      [{ text: 'Map L0-L4', done: false, status: 'blocked', id: 't-aaaaaa', by: 'operator' }],
-      'operator'
-    );
-    expect(out).toEqual([
-      {
-        text: 'Map L0-L4',
-        done: false,
-        status: 'blocked',
-        id: 't-aaaaaa',
-        by: 'agent',
-        cycleId: 'c-1',
-      },
-    ]);
-  });
-
-  test('new tasks are stamped with the author; done follows status', () => {
-    const out = mergeTasks(existing, [{ text: 'New one', done: true }], 'operator');
-    expect(out).toEqual([{ text: 'New one', done: true, status: 'done', by: 'operator' }]);
-  });
-});
-
-describe('editGoal nudges a To do goal when one of its tasks starts', () => {
-  test('a task in progress moves a pending goal to in_progress', () => {
-    const tasks = parseGoals(md).active[0].tasks ?? [];
-    const out = editGoal(md.replace('[~]', '[ ]').replace('[x]', '[ ]'), 'g-aaaaaaaa', {
-      tasks,
-    }) as string;
-    const g = parseGoals(out).active[0];
-    expect(g.status).toBe('in_progress');
-    expect(g.started).toBeTruthy();
-  });
-
-  test('only blocked or todo tasks leave the goal where it is', () => {
-    const tasks = [{ text: 'x', done: false, status: 'blocked' as const }];
-    const out = editGoal(md, 'g-aaaaaaaa', { tasks }) as string;
-    expect(parseGoals(out).active[0].status).toBe('pending');
-  });
-});
-
-describe('manage_goals add_task / update_task', () => {
-  test('add_task appends a task by the agent with its cycle', async () => {
-    const l = loader(md);
-    const tool = createGoalsTool(() => l as any);
-    const res = await tool.execute(
-      {
-        action: 'add_task',
-        goal: 'dark factories',
-        task: 'Compare what they automated first',
-        _botId: 'b',
-        _cycleId: 'c-9',
-      },
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'goal-task-tool-'));
+    writeFileSync(join(dir, 'GOALS.md'), md, 'utf-8');
+    soul = new SoulLoader(
+      { enabled: true, dir, versioning: { enabled: false, maxVersionsPerFile: 10 } } as any,
       logger
     );
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test('the legacy task lines are migrated on first use', async () => {
+    await run({ action: 'list' });
+    expect(readFileSync(join(dir, 'GOALS.md'), 'utf-8')).not.toContain('- task:');
+    expect(store().list()).toHaveLength(4);
+  });
+
+  test('add_task adds a task by the agent with its cycle', async () => {
+    const res = await run({
+      action: 'add_task',
+      goal: 'dark factories',
+      task: 'Compare what they automated first',
+      _cycleId: 'c-9',
+    });
     expect(res.success).toBe(true);
-    const t = parseGoals(l.content).active[0].tasks?.at(-1);
+    const t = store().list().at(-1);
     expect(t).toMatchObject({
+      goalId: 'g-aaaaaaaa',
       text: 'Compare what they automated first',
-      status: 'todo',
+      lane: 'todo',
       by: 'agent',
-      cycleId: 'c-9',
+      createdCycle: 'c-9',
     });
     expect(res.content).toContain(t?.id as string);
+    expect(readFileSync(join(dir, 'GOALS.md'), 'utf-8')).not.toContain('Compare what');
   });
 
-  test('add_task with status in_progress starts the goal', async () => {
-    const l = loader(md);
-    const tool = createGoalsTool(() => l as any);
-    await tool.execute(
-      {
-        action: 'add_task',
-        goal: 'dark factories',
-        task: 'Go',
-        status: 'in_progress',
-        _botId: 'b',
-      },
-      logger
-    );
-    expect(parseGoals(l.content).active[0].status).toBe('in_progress');
+  test('add_task of a near-duplicate returns the existing task', async () => {
+    const res = await run({ action: 'add_task', goal: 'dark factories', task: 'find 3 companies' });
+    expect(res.success).toBe(true);
+    expect(res.content).toContain('t-bbbbbb');
+    expect(res.content.toLowerCase()).toContain('already');
+    expect(store().list()).toHaveLength(4);
   });
 
-  test('update_task moves a task by id or by text', async () => {
-    const l = loader(md);
-    const tool = createGoalsTool(() => l as any);
-    const a = await tool.execute(
-      {
-        action: 'update_task',
-        goal: 'dark factories',
-        task: 't-bbbbbb',
-        status: 'done',
-        _botId: 'b',
-      },
-      logger
+  test('add_task with lane in_progress starts the goal and marks the agent as starter', async () => {
+    await run({ action: 'add_task', goal: 'dark factories', task: 'Go', lane: 'in_progress' });
+    expect(parseGoals(readFileSync(join(dir, 'GOALS.md'), 'utf-8')).active[0].status).toBe(
+      'in_progress'
     );
+    expect(store().list().at(-1)).toMatchObject({ lane: 'in_progress', startedBy: 'agent' });
+  });
+
+  test('update_task moves a task by id alone, or by text within a goal', async () => {
+    const a = await run({
+      action: 'update_task',
+      task: 't-bbbbbb',
+      status: 'done',
+      _cycleId: 'c-2',
+    });
     expect(a.success).toBe(true);
-    const b = await tool.execute(
-      {
-        action: 'update_task',
-        goal: 'dark factories',
-        task: 'summary',
-        status: 'blocked',
-        _botId: 'b',
-      },
-      logger
-    );
+    const b = await run({
+      action: 'update_task',
+      goal: 'dark factories',
+      task: 'summary',
+      lane: 'blocked',
+      note: 'waiting on the operator',
+    });
     expect(b.success).toBe(true);
-    const tasks = parseGoals(l.content).active[0].tasks ?? [];
-    expect(tasks.map((t) => t.status)).toEqual(['done', 'done', 'blocked', 'blocked']);
-    expect(tasks[1].done).toBe(true);
+    const byId = Object.fromEntries(
+      store()
+        .list()
+        .map((t) => [t.text, t])
+    );
+    expect(byId['Find 3 companies']).toMatchObject({ lane: 'done', cycles: ['c-2'] });
+    expect(byId['Send me a summary']).toMatchObject({
+      lane: 'blocked',
+      note: 'waiting on the operator',
+    });
+  });
+
+  test('update_task to in_progress records the agent as starter; pending means todo', async () => {
+    await run({ action: 'update_task', task: 't-cccccc', status: 'in_progress' });
+    expect(store().get('t-cccccc')).toMatchObject({ lane: 'in_progress', startedBy: 'agent' });
+    await run({ action: 'update_task', task: 't-cccccc', status: 'pending' });
+    expect(store().get('t-cccccc')?.lane).toBe('todo');
+  });
+
+  test('update_task by text without a goal works when the text is unique', async () => {
+    const res = await run({ action: 'update_task', task: 'approval', status: 'done' });
+    expect(res.success).toBe(true);
+    expect(store().get('t-cccccc')?.lane).toBe('done');
   });
 
   test('update_task reports an unknown task with the list', async () => {
-    const l = loader(md);
-    const tool = createGoalsTool(() => l as any);
-    const res = await tool.execute(
-      {
-        action: 'update_task',
-        goal: 'dark factories',
-        task: 'nope nope',
-        status: 'done',
-        _botId: 'b',
-      },
-      logger
-    );
+    const res = await run({
+      action: 'update_task',
+      goal: 'dark factories',
+      task: 'nope nope',
+      status: 'done',
+    });
     expect(res.success).toBe(false);
     expect(res.content).toContain('t-aaaaaa');
   });
 
-  test('a bad status is refused', async () => {
-    const l = loader(md);
-    const tool = createGoalsTool(() => l as any);
-    const res = await tool.execute(
-      {
-        action: 'update_task',
-        goal: 'dark factories',
-        task: 't-aaaaaa',
-        status: 'later',
-        _botId: 'b',
-      },
-      logger
-    );
+  test('a bad lane is refused', async () => {
+    const res = await run({ action: 'update_task', task: 't-aaaaaa', status: 'later' });
     expect(res.success).toBe(false);
+  });
+
+  test('note_task leaves a note without moving the task', async () => {
+    const res = await run({ action: 'note_task', task: 't-bbbbbb', note: 'two found so far' });
+    expect(res.success).toBe(true);
+    expect(store().get('t-bbbbbb')).toMatchObject({
+      lane: 'in_progress',
+      note: 'two found so far',
+    });
+    const missing = await run({ action: 'note_task', task: 't-bbbbbb' });
+    expect(missing.success).toBe(false);
+  });
+
+  test('a task claimed by a worker run is refused to the agent', async () => {
+    store().apply([{ op: 'claim', id: 't-cccccc', runId: 'r-1', ttlMs: 60_000 }], {
+      actor: 'system',
+    });
+    const res = await run({ action: 'update_task', task: 't-cccccc', status: 'done' });
+    expect(res.success).toBe(false);
+    expect(res.content).toContain('r-1');
+  });
+
+  test('list shows goals with their open tasks', async () => {
+    const res = await run({ action: 'list' });
+    expect(res.content).toContain('[g-aaaaaaaa] Research dark factories');
+    expect(res.content).toContain('[~] t-bbbbbb Find 3 companies');
+    expect(res.content).toContain('+1 done');
   });
 });

@@ -14,6 +14,8 @@ import { basename, dirname, join } from 'node:path';
 import { type GoalActor, writeGoalsFile } from './bot/goal-events';
 import type { SoulConfig } from './config';
 import { localDateStr, localTimeStr } from './date-utils';
+import { renderGoalsForPrompt } from './goals/goals-view';
+import { type StoredTask, TaskStore } from './goals/task-store';
 import type { Logger } from './logger';
 
 // Patterns to redact from memory facts before writing
@@ -190,7 +192,7 @@ export class SoulLoader {
    * Older daily logs and legacy.md are surfaced via memory_search.
    * Returns null if no soul files were loaded (caller should fall back).
    */
-  composeSystemPrompt(userId?: string): string | null {
+  composeSystemPrompt(userId?: string, opts: { goals?: boolean } = {}): string | null {
     if (!this.config.enabled) {
       return null;
     }
@@ -218,8 +220,9 @@ export class SoulLoader {
       sections.push(`## Your Inner Motivations\n\n${motivations}`);
     }
 
-    // 4. Goals
-    const goals = this.readFile('GOALS.md');
+    // 4. Goals (with their open tasks). The agent-loop executor carries them in
+    // its own prompt, so its system prompt asks for none.
+    const goals = opts.goals === false ? '' : this.readGoalsView();
     if (goals) {
       sections.push(`## Goals\n\n${goals}`);
     }
@@ -455,6 +458,32 @@ export class SoulLoader {
    */
   readGoals(): string | null {
     return this.readFile('GOALS.md');
+  }
+
+  /** The task store of this soul dir (TASKS.json); the first read migrates legacy task lines. */
+  getTaskStore(): TaskStore {
+    return new TaskStore(this.dir, {
+      backup: this.versioningEnabled
+        ? (p) => backupSoulFile(p, this.logger, this.maxVersions)
+        : undefined,
+      onError: (err) => this.logger.warn({ err }, 'Task store: warning'),
+    });
+  }
+
+  /** Tasks whose goal still exists. Never throws. */
+  readTasks(): StoredTask[] {
+    try {
+      return this.getTaskStore().listForGoals();
+    } catch (err) {
+      this.logger.warn({ err }, 'Task store: read failed');
+      return [];
+    }
+  }
+
+  /** Goals plus their open tasks, rendered for a prompt (src/goals/goals-view.ts). */
+  readGoalsView(maxChars?: number): string {
+    const tasks = this.readTasks();
+    return renderGoalsForPrompt({ goalsMd: this.readGoals(), tasks, maxChars });
   }
 
   /**

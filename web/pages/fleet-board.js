@@ -11,7 +11,8 @@
  * Data: `/api/agents`, `/api/agents/presence` (live via `watchFleet`),
  * `/api/needs-you`, and `/api/agents/:id/home` per agent; cached briefly. The
  * drawer's Activity section loads `/api/agents/:id/goals/detail` when it opens.
- * Writes: POST / PATCH / DELETE `/api/agents/:id/goals`.
+ * Writes: POST / PATCH / DELETE `/api/agents/:id/goals`; subtasks one op at a time
+ * (`/api/agents/:id/goals/:goalId/tasks[/reorder]`, `/api/agents/:id/tasks/:taskId`).
  */
 import { confirmInline, showToast, skeleton } from '../ui/index.js';
 import { authedAvatarSrc } from './agent-face.js';
@@ -26,6 +27,11 @@ import {
   needsByBot,
   removeTask,
   renameTask,
+  taskAddRequest,
+  taskRemoveRequest,
+  taskRenameRequest,
+  taskReorderRequest,
+  taskToggleRequest,
   toggleTask,
 } from './fleet-board-helpers.js';
 import { fleetErrorState, sortFleet } from './fleet-home-helpers.js';
@@ -266,11 +272,42 @@ function currentGoal() {
   return state?.drawer ? findGoal(state.drawer.botId, state.drawer.ref) : null;
 }
 
-function saveTasks(goal, tasks) {
+/** The agent's task-store revision, sent back as `expectedRev` with a task op. */
+function tasksRev(botId) {
+  return cache?.homes[botId]?.goals?.tasksRev;
+}
+
+/**
+ * One subtask op: paint `tasks` right away, send `req`, then reload the agent.
+ * A 409 (the board was stale, or a worker run holds the task) reloads too.
+ */
+async function saveTasks(goal, tasks, req) {
+  if (!req) return false;
+  const botId = state.drawer.botId;
   goal.tasks = tasks;
   paintDrawer();
-  paintRow(state.drawer.botId);
-  return goalWrite(state.drawer.botId, 'PATCH', { ...goalRef(goal), tasks });
+  paintRow(botId);
+  const res = await api(req.path, { method: req.method, body: req.body }).catch((err) => ({
+    error: err?.message,
+  }));
+  const ok = res && !res.error;
+  if (!ok) {
+    const stale = res?.reason === 'conflict' || res?.reason === 'claimed';
+    showToast(
+      stale
+        ? `The board changed meanwhile, so it was reloaded. ${res.error}`
+        : `Could not save: ${res?.error || 'request failed'}`,
+      { tone: stale ? 'warn' : 'danger', duration: 8000 }
+    );
+  }
+  await reloadAgent(botId);
+  if (!state) return ok;
+  // A goal without an id gets one on its first task write: follow it by id from now on.
+  const g = findGoal(botId, state.drawer.ref) ?? findGoal(botId, goal.text);
+  if (g && state.drawer?.botId === botId) state.drawer.ref = g.id || g.text;
+  paintRow(botId);
+  paintDrawer();
+  return ok;
 }
 
 function toggleRow(id) {
@@ -378,13 +415,16 @@ async function onClick(e) {
   const li = t.closest('.fb-task');
   const i = li ? Number(li.dataset.i) : -1;
   if (t.closest('[data-tdel]')) {
-    await saveTasks(goal, removeTask(goal.tasks ?? [], i));
+    const tasks = goal.tasks ?? [];
+    await saveTasks(goal, removeTask(tasks, i), taskRemoveRequest(botId, tasks, i));
     return;
   }
   const mv = t.closest('[data-tmove]');
   if (mv) {
-    const next = moveTask(goal.tasks ?? [], i, Number(mv.dataset.tmove));
-    if (next !== goal.tasks) await saveTasks(goal, next);
+    const dir = Number(mv.dataset.tmove);
+    const next = moveTask(goal.tasks ?? [], i, dir);
+    if (next !== goal.tasks)
+      await saveTasks(goal, next, taskReorderRequest(botId, goal, i, dir, tasksRev(botId)));
     return;
   }
   if (t.id === 'fb-morecyc') {
@@ -442,7 +482,10 @@ async function onChange(e) {
   const li = e.target.closest?.('.fb-task');
   const goal = currentGoal();
   if (!li || !goal || e.target.type !== 'checkbox') return;
-  await saveTasks(goal, toggleTask(goal.tasks ?? [], Number(li.dataset.i)));
+  const tasks = goal.tasks ?? [];
+  const i = Number(li.dataset.i);
+  const botId = state.drawer.botId;
+  await saveTasks(goal, toggleTask(tasks, i), taskToggleRequest(botId, tasks, i, tasksRev(botId)));
 }
 
 async function onFocusOut(e) {
@@ -465,8 +508,14 @@ async function onFocusOut(e) {
     const i = Number(e.target.closest('.fb-task')?.dataset.i);
     const v = e.target.textContent.trim();
     const tasks = goal.tasks ?? [];
-    if (!v) await saveTasks(goal, removeTask(tasks, i));
-    else if (v !== tasks[i]?.text) await saveTasks(goal, renameTask(tasks, i, v));
+    const botId = state.drawer.botId;
+    if (!v) await saveTasks(goal, removeTask(tasks, i), taskRemoveRequest(botId, tasks, i));
+    else if (v !== tasks[i]?.text)
+      await saveTasks(
+        goal,
+        renameTask(tasks, i, v),
+        taskRenameRequest(botId, tasks, i, v, tasksRev(botId))
+      );
   }
 }
 
@@ -485,7 +534,12 @@ async function keydown(e) {
     const goal = currentGoal();
     const text = t.value;
     t.value = '';
-    if (goal) await saveTasks(goal, addTask(goal.tasks ?? [], text));
+    if (goal)
+      await saveTasks(
+        goal,
+        addTask(goal.tasks ?? [], text),
+        taskAddRequest(state.drawer.botId, goal, text)
+      );
     document.getElementById('fb-addtask')?.focus();
     return;
   }
