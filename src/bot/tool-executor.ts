@@ -37,7 +37,20 @@ export interface ToolExecutionRecord {
  * Event payload for tool:start hook.
  * Emitted when a tool execution begins.
  */
-export interface ToolStartEvent {
+/**
+ * Who a tool event ran for, as stamped on `tool:start/end/error` (and bridged
+ * to the activity stream). A cycle call has `cycleId`; a worker call has
+ * `runId` / `taskId` / `dispatchCycleId` and never a `cycleId` (C17).
+ */
+export interface ToolEventAttribution {
+  cycleId?: string;
+  goalId?: string;
+  runId?: string;
+  taskId?: string;
+  dispatchCycleId?: string;
+}
+
+export interface ToolStartEvent extends ToolEventAttribution {
   toolName: string;
   args: Record<string, unknown>;
   botId: string;
@@ -49,7 +62,7 @@ export interface ToolStartEvent {
  * Event payload for tool:end hook.
  * Emitted when a tool execution completes (success or failure).
  */
-export interface ToolEndEvent {
+export interface ToolEndEvent extends ToolEventAttribution {
   toolName: string;
   args: Record<string, unknown>;
   success: boolean;
@@ -67,6 +80,17 @@ export interface ToolEndEvent {
   goalId?: string;
   /** Goal task the call worked on (the cycle's `serves_task`), when known. */
   taskId?: string;
+}
+
+/** The attribution ids of a tool event, for the activity-stream payload. */
+function eventIds(e: ToolEventAttribution): ToolEventAttribution {
+  return {
+    ...(e.cycleId ? { cycleId: e.cycleId } : {}),
+    ...(e.goalId ? { goalId: e.goalId } : {}),
+    ...(e.runId ? { runId: e.runId } : {}),
+    ...(e.taskId ? { taskId: e.taskId } : {}),
+    ...(e.dispatchCycleId ? { dispatchCycleId: e.dispatchCycleId } : {}),
+  };
 }
 
 const TARGET_MAX = 80;
@@ -96,7 +120,7 @@ export function toolTarget(args: Record<string, unknown> | undefined): string | 
  * Event payload for tool:error hook.
  * Emitted when a tool execution throws an error or fails validation.
  */
-export interface ToolErrorEvent {
+export interface ToolErrorEvent extends ToolEventAttribution {
   toolName: string;
   args: Record<string, unknown>;
   error: string;
@@ -290,7 +314,7 @@ export class ToolExecutor extends EventEmitter {
         type: 'tool:start',
         botId: e.botId,
         timestamp: e.timestamp,
-        data: { toolName: e.toolName, args: e.args },
+        data: { toolName: e.toolName, args: e.args, ...eventIds(e) },
       })
     );
     this.on('tool:end', (e) => {
@@ -303,6 +327,7 @@ export class ToolExecutor extends EventEmitter {
           success: e.success,
           durationMs: e.durationMs,
           result: e.result.slice(0, 300),
+          ...eventIds(e),
           // A failure names its cause and what it touched, so the feed can say
           // "wiley.com blocked the bot" instead of "web_fetch failed".
           ...(e.success
@@ -339,7 +364,12 @@ export class ToolExecutor extends EventEmitter {
         type: 'tool:error',
         botId: e.botId,
         timestamp: e.timestamp,
-        data: { toolName: e.toolName, error: e.error.slice(0, 300), phase: e.phase },
+        data: {
+          toolName: e.toolName,
+          error: e.error.slice(0, 300),
+          phase: e.phase,
+          ...eventIds(e),
+        },
       })
     );
     this.on('tool:loop-warning', (e) =>
@@ -409,6 +439,21 @@ export class ToolExecutor extends EventEmitter {
       ...(a.cycleId ? { cycleId: a.cycleId } : {}),
       ...(a.goalId ? { goalId: a.goalId } : {}),
       ...(a.taskId ? { taskId: a.taskId } : {}),
+    };
+  }
+
+  /**
+   * Ids stamped on tool events: the cycle's `{ cycleId, goalId }`, or a worker
+   * run's `{ runId, taskId, dispatchCycleId, goalId }` (never a `cycleId`).
+   */
+  private eventAttribution(): ToolEventAttribution {
+    const a = this.options.attribution;
+    if (!a) return {};
+    return {
+      ...this.attributionFields(),
+      ...(a.runId ? { runId: a.runId } : {}),
+      ...(a.taskId ? { taskId: a.taskId } : {}),
+      ...(a.dispatchCycleId ? { dispatchCycleId: a.dispatchCycleId } : {}),
     };
   }
 
@@ -498,6 +543,7 @@ export class ToolExecutor extends EventEmitter {
       botId,
       chatId,
       timestamp: Date.now(),
+      ...this.eventAttribution(),
     });
 
     // Karma per tool error (execution and validation phases) — delta from
@@ -542,7 +588,7 @@ export class ToolExecutor extends EventEmitter {
       botId,
       chatId,
       timestamp: Date.now(),
-      ...this.attributionFields(),
+      ...this.eventAttribution(),
       ...(failureKind ? { failureKind } : {}),
     });
     return result;
@@ -563,6 +609,7 @@ export class ToolExecutor extends EventEmitter {
       botId,
       chatId,
       timestamp: startMs,
+      ...this.eventAttribution(),
     });
 
     // Cancelled run (cycle timeout, Stop): refuse before anything else runs.
@@ -687,7 +734,7 @@ export class ToolExecutor extends EventEmitter {
             botId,
             chatId,
             timestamp: Date.now(),
-            ...this.attributionFields(),
+            ...this.eventAttribution(),
           });
           return {
             toolName: name,
@@ -1023,7 +1070,7 @@ export class ToolExecutor extends EventEmitter {
             botId,
             chatId,
             timestamp: Date.now(),
-            ...this.attributionFields(),
+            ...this.eventAttribution(),
           });
           return result;
         }
@@ -1057,6 +1104,7 @@ export class ToolExecutor extends EventEmitter {
           botId,
           chatId,
           timestamp: Date.now(),
+          ...this.eventAttribution(),
         });
         if (attempt < maxRetries) {
           this.logger.warn(
@@ -1110,6 +1158,7 @@ export class ToolExecutor extends EventEmitter {
             botId,
             chatId,
             timestamp: Date.now(),
+            ...this.eventAttribution(),
           });
           await this.delay(this.calculateBackoff(attempt));
           continue;

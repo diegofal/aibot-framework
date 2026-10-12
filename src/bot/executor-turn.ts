@@ -10,11 +10,12 @@
  * Never throws: the caller decides what an error means for its run.
  */
 import type { BotConfig } from '../config';
+import type { CliPriority } from '../core/cli-semaphore';
 import type { LLMClient, TokenUsage } from '../core/llm-client';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
-import type { Tool, ToolDefinition } from '../tools/types';
+import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import type { BackendCircuitBreaker } from './agent-retry-engine';
 import { askedQuestionId } from './ask-human-store';
 import type { LlmQueryEntry } from './llm-query-log';
@@ -82,10 +83,20 @@ export interface ExecutorTurnInput {
   onToolEnd?: (event: ToolEndEvent) => void;
   /** Called once the offered tools are known, right before the LLM call. */
   onStart?: (info: { toolCount: number }) => void;
+  /** Claude CLI queue priority (workers queue last). Default: the client's. */
+  priority?: CliPriority;
+  /**
+   * Wraps the tool callback handed to the LLM client: the one place every
+   * call passes on both backends (a worker's tool-call budget lives here,
+   * since `maxToolRounds` is ignored on claude-cli).
+   */
+  wrapToolCallback?: (callback: ToolCallback) => ToolCallback;
   /** Attach the turn's file writes to a pending ask_human inbox message. Default true. */
   autoAttachFiles?: boolean;
   logger: Logger;
 }
+
+export type ToolCallback = (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
 
 export type ExecutorTurnStopReason =
   | 'completed'
@@ -257,9 +268,12 @@ export async function runExecutorTurn(input: ExecutorTurnInput): Promise<Executo
         model: input.model,
         temperature: input.temperature,
         tools: toolDefinitions,
-        toolExecutor: executor.createCallback(),
+        toolExecutor: input.wrapToolCallback
+          ? input.wrapToolCallback(executor.createCallback())
+          : executor.createCallback(),
         maxToolRounds: input.maxToolRounds,
         signal: controller.signal,
+        ...(input.priority ? { priority: input.priority } : {}),
       }),
       guard,
     ]);

@@ -280,9 +280,6 @@ export const WORKER_DENIED_TOOLS: readonly string[] = [
   'send_message',
 ];
 
-/** Denied in phase 2a only; 2b routes them per run. */
-export const WORKER_DENIED_UNTIL_2B: readonly string[] = ['ask_human', 'ask_permission'];
-
 /** Tool names whose calls are `external` (non-idempotent) for resume. Others: `write` if they write, else `read`. */
 export const EXTERNAL_SIDE_EFFECT_TOOLS: readonly string[] = [
   'exec',

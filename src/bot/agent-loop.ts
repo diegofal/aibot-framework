@@ -807,8 +807,8 @@ export class AgentLoop {
   }
 
   /** Request an immediate agent loop run for a specific bot */
-  requestImmediateRun(botId: string): void {
-    this.scheduler.requestImmediateRun(botId);
+  requestImmediateRun(botId: string, opts?: { feedback?: boolean }): void {
+    this.scheduler.requestImmediateRun(botId, opts);
   }
 
   /** Gracefully stop: wait for executing cycles to finish, then stop */

@@ -18,7 +18,8 @@ export interface LlmQueryEntry {
     | 'topic_guard'
     | 'curiosity:navigator'
     | 'curiosity:extractor'
-    | 'curiosity:editor';
+    | 'curiosity:editor'
+    | 'worker';
   model: string;
   backend: string;
   temperature?: number;
@@ -35,6 +36,11 @@ export interface LlmQueryEntry {
   cycleId?: string;
   /** Goal that cycle served, when known at call time. */
   goalId?: string;
+  /** Task worker run (never together with `cycleId`). */
+  runId?: string;
+  taskId?: string;
+  /** Cycle that dispatched the run. */
+  dispatchCycleId?: string;
 }
 
 /**
