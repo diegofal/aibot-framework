@@ -547,3 +547,20 @@ docker compose up -d --build
 **Outcome.** Container recreated; dashboard answers 200. The image has `src/bot/session-continuity.ts`, `src/bot/message-envelope.ts`, and `/start` registered in `builtin-commands.ts`. AIBot (Finny) started on Telegram. Only boot error: the known revoked `job-seeker` Telegram token (headless). The live config does not set `session.resetPolicy`, so the new default (daily at 4 am) applies to every bot. Not yet exercised from Telegram.
 
 **Reversible?** Yes. Check out `f9bcab1` and rebuild. Stored user messages keep their `[weekday date time]` prefix, which older code shows as text; `ended-sessions.json` is ignored by older code.
+
+### 2026-10-12 00:33Z — Volume backup before the relay deploy
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Preflight for deploying `feat/relay` (`9c590a7`) |
+
+```bash
+MSYS_NO_PATHCONV=1 bun scripts/docker/backup.ts backup
+docker compose build
+```
+
+**Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-12T00-33-52`; the script restarted `aibot`. Image `aibot-framework:latest` built with the relay code. The recreate (`docker compose up -d`) and moving the shared web session `bot:default:private:0` out of `sessions/` were refused by the session's permission classifier and are left for Diego to run.
+
+**Reversible?** Yes: the backup restores with `bun scripts/docker/backup.ts restore … --force`.
