@@ -129,3 +129,14 @@ describe('classifyError — existing behaviour preserved', () => {
     expect(classifyError({ status: 401, message: 'nope' }).type).toBe('PERMANENT');
   });
 });
+
+describe('classifyError — aborts', () => {
+  test('an AbortError is never retried', async () => {
+    const { classifyError } = await import('../src/bot/agent-retry-engine');
+    const e = new Error('LLM call aborted: Agent loop timed out after 300000ms');
+    e.name = 'AbortError';
+    const c = classifyError(e);
+    expect(c.type).toBe('PERMANENT');
+    expect(c.code).toBe('aborted');
+  });
+});

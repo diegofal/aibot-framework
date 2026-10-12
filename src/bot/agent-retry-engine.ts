@@ -1,4 +1,5 @@
 import type { AgentLoopRetryConfig, BotConfig } from '../config';
+import { isAbortError } from '../core/abort';
 import type { Logger } from '../logger';
 import type { AgentLoopResult } from './agent-loop';
 import { type FailoverReason, classifyFailoverReason } from './model-failover/failover-error';
@@ -139,6 +140,13 @@ export function classifyError(error: unknown): ClassifiedError {
 }
 
 function classifyErrorCore(error: unknown, signals: StructuredErrorSignals): ClassifiedError {
+  // A cancelled run (Stop, cycle maxDurationMs, shutdown) is never retried:
+  // retrying would replay the very work the abort stopped.
+  if (isAbortError(error)) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { type: 'PERMANENT', code: 'aborted', message };
+  }
+
   // 0. Structured status from the backend itself (ClaudeCliError.apiErrorStatus)
   //    outranks every textual heuristic: the CLI told us exactly what happened.
   if (signals.apiErrorStatus != null) {
@@ -537,8 +545,10 @@ export async function executeSingleBotWithRetry(
 
     if (classified.type === 'PERMANENT') {
       botLogger.warn(
-        { botId, errorType: classified.type, error: lastResult.summary },
-        'Agent loop: permanent error (auth/permission/config), skipping retry'
+        { botId, errorType: classified.type, code: classified.code, error: lastResult.summary },
+        classified.code === 'aborted'
+          ? 'Agent loop: cycle was cancelled, not retrying'
+          : 'Agent loop: permanent error (auth/permission/config), skipping retry'
       );
       if (schedule) {
         schedule.retryCount = 0;

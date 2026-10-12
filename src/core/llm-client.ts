@@ -45,7 +45,9 @@ export interface LLMGenerateOptions {
   maxTokens?: number;
 }
 
-export interface LLMChatOptions extends ChatOptions {}
+export interface LLMChatOptions extends ChatOptions {
+  signal?: AbortSignal;
+}
 
 export interface LLMClient {
   readonly backend: 'ollama' | 'claude-cli';

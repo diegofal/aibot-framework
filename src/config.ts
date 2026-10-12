@@ -297,6 +297,14 @@ export const BotAgentLoopOverrideSchema = z
           .optional(),
       })
       .optional(),
+    /**
+     * Enforce `confirm` tool permissions in the agent loop without ever
+     * blocking: a confirm tool runs only with a recent approval of the same
+     * call, otherwise it files an ask-permission request and the cycle moves
+     * on. Off = confirm tools run unchecked (the long-standing behaviour).
+     * `blocked` is enforced regardless.
+     */
+    enforceToolPermissions: z.boolean().optional(),
   })
   .optional();
 

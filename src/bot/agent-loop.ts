@@ -78,6 +78,7 @@ import {
   beginCuriosityCycle,
   finishCuriosityCycle,
 } from './curiosity/runner';
+import { runExecutorTurn } from './executor-turn';
 import type { LlmQueryEntry } from './llm-query-log';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { toolEndToAuditEntry } from './tool-audit-log';
@@ -291,7 +292,7 @@ const ENGAGEMENT_GATE_LOOKBACK_HOURS = 7 * 24;
 export class AgentLoop {
   private scheduler: AgentScheduler;
   private karmaService: KarmaService | null = null;
-  /** Fleet-wide per-backend breaker for 429/quota errors on the planner/strategist path */
+  /** Fleet-wide per-backend breaker for 429/quota errors (planner, strategist, executor); same instance as ctx.circuitBreaker */
   private circuitBreaker: BackendCircuitBreaker;
   /** Last error written to each bot's daily memory, to avoid repeating it every cycle. */
   private lastMemoryError = new Map<string, { message: string; at: number }>();
@@ -315,6 +316,12 @@ export class AgentLoop {
    * resolved mid-cycle applies to later tool calls.
    */
   private cycleAttribution = new Map<string, CycleAttribution>();
+  /**
+   * The running cycle's cancellation per bot. Aborted when the cycle's
+   * `maxDurationMs` race fires, so a timed-out executor stops instead of
+   * running on in the background.
+   */
+  private cycleAborts = new Map<string, AbortController>();
   /** `<paths.data>/agent-cycles` — one row per cycle. */
   private cycleLog: AgentCycleLog;
 
@@ -328,9 +335,12 @@ export class AgentLoop {
       (botId, botConfig) => this.executeBotWithRetry(botId, botConfig),
       join(ctx.config.paths.data, 'agent-scheduler')
     );
-    this.circuitBreaker = new BackendCircuitBreaker(
+    // Shared through BotContext (BotManager owns it); created here only when
+    // the context has none, and published so other runtimes see the same one.
+    ctx.circuitBreaker ??= new BackendCircuitBreaker(
       ctx.config.agentLoop.circuitBreaker ?? DEFAULT_CIRCUIT_BREAKER_CONFIG
     );
+    this.circuitBreaker = ctx.circuitBreaker;
     this.cycleLog = new AgentCycleLog(join(ctx.config.paths.data, 'agent-cycles'), ctx.logger);
   }
 
@@ -895,6 +905,8 @@ export class AgentLoop {
       goalSource: null,
     };
     this.cycleAttribution.set(botId, attribution);
+    const abort = new AbortController();
+    this.cycleAborts.set(botId, abort);
     const startedAt = new Date();
     let result: AgentLoopResult | undefined;
     try {
@@ -902,6 +914,7 @@ export class AgentLoop {
       return result;
     } finally {
       this.cycleAttribution.delete(botId);
+      if (this.cycleAborts.get(botId) === abort) this.cycleAborts.delete(botId);
       this.recordCycle(botId, attribution, startedAt, result);
     }
   }
@@ -1079,15 +1092,21 @@ export class AgentLoop {
         return Math.max(0, globalConfig.maxDurationMs - elapsed);
       };
 
+      // The cycle's cancellation: when maxDurationMs runs out the race rejects
+      // AND the executor (and its tools) are told to stop, instead of running
+      // on in the background.
+      const cycleAbort = this.cycleAborts.get(botId);
+      let cycleTimer: ReturnType<typeof setTimeout> | undefined;
       const detail = await Promise.race([
         this.executeLoop(botId, botConfig, botLogger, checkSessionTimeout, remainingTimeMs),
         new Promise<ExecuteLoopDetail>((_, reject) => {
-          setTimeout(
-            () => reject(new Error(`Agent loop timed out after ${globalConfig.maxDurationMs}ms`)),
-            globalConfig.maxDurationMs
-          );
+          cycleTimer = setTimeout(() => {
+            const err = new Error(`Agent loop timed out after ${globalConfig.maxDurationMs}ms`);
+            cycleAbort?.abort(err);
+            reject(err);
+          }, globalConfig.maxDurationMs);
         }),
-      ]);
+      ]).finally(() => clearTimeout(cycleTimer));
 
       const durationMs = Date.now() - startMs;
       const isContinuous = this.scheduler.isContinuousBot(botId);
@@ -1356,6 +1375,9 @@ export class AgentLoop {
   ): Promise<ExecuteLoopDetail> {
     const globalConfig = this.ctx.config.agentLoop;
     const botOverride = botConfig.agentLoop;
+    // Read once: a cycle that timed out and runs on must keep its own (aborted)
+    // signal, not pick up the next cycle's.
+    const cycleSignal = this.cycleAborts.get(botId)?.signal;
 
     const soulLoader = this.ctx.soulLoaders.get(botId);
     if (!soulLoader) {
@@ -2254,14 +2276,6 @@ export class AgentLoop {
       };
     }
 
-    const executorSystem = this.systemPromptBuilder.build({
-      mode: 'autonomous',
-      memoryViewer: null,
-      botId,
-      botConfig,
-      isGroup: false,
-    });
-
     const agentConfig = resolveAgentConfig(this.ctx.config, botConfig);
     const productionsEnabled = botConfig.productions?.enabled !== false;
     const fileTree = productionsEnabled ? scanFileTree(agentConfig.workDir) : null;
@@ -2279,70 +2293,12 @@ export class AgentLoop {
       productionsEnabled,
     });
 
-    const messages: ChatMessage[] = [
-      { role: 'system', content: executorSystem },
-      { role: 'user', content: executorUserPrompt },
-    ];
-
-    const toolCallLog: ToolExecutionRecord[] = [];
     const loopDetector = this.createLoopDetector(globalConfig, botOverride);
     // Resolve tenantRoot for multi-tenant path sandboxing
     const tenantRoot =
       botConfig.tenantId && this.ctx.config.multiTenant?.enabled
         ? `${this.ctx.config.multiTenant.dataDir ?? './data/tenants'}/${botConfig.tenantId}`
         : undefined;
-
-    const executor = new ToolExecutor(this.ctx, {
-      memoryViewer: null,
-      botId,
-      chatId: botOverride?.reportChatId ?? 0,
-      disabledTools: allDisabled,
-      enableLogging: true,
-      karmaService: this.karmaService ?? undefined,
-      loopDetector,
-      tenantRoot,
-      attribution: this.cycleAttribution.get(botId),
-    });
-
-    // Track loop detection events during cycle
-    let loopWarnings = 0;
-    let loopBlocks = 0;
-    executor.on('tool:loop-warning', () => {
-      loopWarnings++;
-    });
-    executor.on('tool:loop-blocked', () => {
-      loopBlocks++;
-    });
-
-    // Subscribe to tool:end for audit log persistence
-    if (this.ctx.toolAuditLog) {
-      const auditLog = this.ctx.toolAuditLog;
-      executor.on('tool:end', (event) => {
-        auditLog.append(toolEndToAuditEntry(event));
-      });
-    }
-
-    // Tool events are auto-bridged to activity stream inside ToolExecutor constructor
-
-    // Tool pre-selection: narrow executor tools based on planner's category picks
-    let executorDefs = defs;
-    if (toolPreSelectionEnabled && selectedToolCategories && selectedToolCategories.length > 0) {
-      const categoryFiltered = this.toolRegistry.getDefinitionsByCategories(
-        selectedToolCategories as ToolCategory[],
-        botId
-      );
-      // Apply the same allDisabled filter on top of category filtering
-      executorDefs = categoryFiltered.filter((d) => !allDisabled.has(d.function.name));
-      botLogger.info(
-        {
-          botId,
-          selectedCategories: selectedToolCategories,
-          fullToolCount: defs.length,
-          filteredToolCount: executorDefs.length,
-        },
-        'Agent loop: tool pre-selection active'
-      );
-    }
 
     // Per-bot override → global config → default 30. Session timeout guard (80% of maxDurationMs)
     // and per-operation withTimeout already prevent runaway execution.
@@ -2351,120 +2307,80 @@ export class AgentLoop {
     const executorTemperature = traitParams?.executorTemperature ?? 0.7;
     const maxToolRoundsBase = botOverride?.maxToolRounds ?? globalConfig.maxToolRounds;
     const maxToolRounds = maxToolRoundsBase + (traitParams?.maxToolRoundsBonus ?? 0);
-    this.ctx.activityStream?.publish({
-      type: 'agent:phase',
-      botId,
-      timestamp: Date.now(),
-      phase: 'executor:start',
-      data: { planSteps: plan.length, toolCount: executorDefs.length },
-    });
-    botLogger.info({ botId, maxToolRounds }, 'Agent loop: starting executor phase');
+    // Same budget as withTimeout(…, executorTimeoutMs): the phase floor, or what
+    // is left of the cycle minus a 5 s margin, whichever is longer.
+    const executorBudgetMs = Math.max(
+      executorTimeoutMs,
+      (remainingTimeMs ? remainingTimeMs() : globalConfig.maxDurationMs) - 5000
+    );
 
-    let response: string;
-    let executorUsage: import('../core/llm-client').TokenUsage | undefined;
-    const executorStartMs = Date.now();
-    this.ctx.activityStream?.publish({
-      type: 'llm:start',
+    // Tool events are auto-bridged to activity stream inside ToolExecutor constructor
+    const turn = await runExecutorTurn({
+      ctx: this.ctx,
       botId,
-      timestamp: executorStartMs,
-      data: { caller: 'executor', backend: llmClient.backend, toolCount: executorDefs.length },
+      botConfig,
+      llmClient,
+      model,
+      prompt: { user: executorUserPrompt },
+      systemPromptBuilder: this.systemPromptBuilder,
+      tools: {
+        definitions: defs,
+        disabled: allDisabled,
+        // Tool pre-selection: narrow executor tools based on planner's category picks
+        ...(toolPreSelectionEnabled && selectedToolCategories && selectedToolCategories.length > 0
+          ? {
+              preSelect: {
+                categories: selectedToolCategories as ToolCategory[],
+                registry: this.toolRegistry,
+              },
+            }
+          : {}),
+      },
+      attribution: this.cycleAttribution.get(botId),
+      chatId: botOverride?.reportChatId ?? 0,
+      temperature: executorTemperature,
+      maxToolRounds,
+      timeoutMs: executorBudgetMs,
+      signal: cycleSignal,
+      tenantRoot,
+      loopDetector,
+      karmaService: this.karmaService ?? undefined,
+      enforceToolPermissions: botOverride?.enforceToolPermissions === true,
+      breaker: this.circuitBreaker,
+      queryLog: (entry) => this.appendQueryLog(entry),
+      logger: botLogger,
+      onStart: ({ toolCount }) => {
+        this.ctx.activityStream?.publish({
+          type: 'agent:phase',
+          botId,
+          timestamp: Date.now(),
+          phase: 'executor:start',
+          data: { planSteps: plan.length, toolCount },
+        });
+        botLogger.info({ botId, maxToolRounds }, 'Agent loop: starting executor phase');
+      },
     });
-    try {
-      const executorResult = await withTimeout(
-        () =>
-          llmClient.chat(messages, {
-            model,
-            temperature: executorTemperature,
-            tools: executorDefs,
-            toolExecutor: executor.createCallback(),
-            maxToolRounds,
-          }),
-        'Executor phase',
-        executorTimeoutMs
+    const executorDefs = turn.toolDefinitions;
+    const toolCallLog: ToolExecutionRecord[] = turn.toolCalls;
+    const response = turn.text;
+    const executorUsage = turn.usage;
+    const loopWarnings = turn.loop.warnings;
+    const loopBlocks = turn.loop.blocks;
+
+    // Report the execution outcome for consumed permissions
+    if (consumedPermissionIds.length > 0) {
+      const toolCallSummary = toolCallLog.map((t) => ({ name: t.name, success: t.success }));
+      const err = turn.error;
+      this.ctx.askPermissionStore.reportExecution(
+        consumedPermissionIds,
+        turn.ok
+          ? response || '(no response from executor)'
+          : `Executor failed: ${err instanceof Error ? err.message : String(err)}`,
+        toolCallSummary,
+        turn.ok
       );
-      response = executorResult.text;
-      executorUsage = executorResult.usage;
-      this.ctx.activityStream?.publish({
-        type: 'llm:end',
-        botId,
-        timestamp: Date.now(),
-        data: {
-          caller: 'executor',
-          backend: llmClient.backend,
-          durationMs: Date.now() - executorStartMs,
-          model: executorUsage?.model,
-          tokensIn: executorUsage?.promptTokens,
-          tokensOut: executorUsage?.completionTokens,
-        },
-      });
-      this.appendQueryLog({
-        timestamp: new Date().toISOString(),
-        botId,
-        caller: 'executor',
-        model: executorUsage?.model ?? model,
-        backend: llmClient.backend,
-        temperature: executorTemperature,
-        promptTokens: executorUsage?.promptTokens,
-        completionTokens: executorUsage?.completionTokens,
-        totalTokens: executorUsage?.totalTokens,
-        toolCount: executorDefs.length,
-        durationMs: Date.now() - executorStartMs,
-        success: true,
-      });
-
-      toolCallLog.push(...executor.getExecutionLog());
-
-      // Auto-attach files to ask_human inbox messages
-      this.autoAttachFiles(botId, executor, toolCallLog, botLogger);
-
-      // Report successful execution for consumed permissions
-      if (consumedPermissionIds.length > 0) {
-        const toolCallSummary = toolCallLog.map((t) => ({ name: t.name, success: t.success }));
-        this.ctx.askPermissionStore.reportExecution(
-          consumedPermissionIds,
-          response || '(no response from executor)',
-          toolCallSummary,
-          true
-        );
-      }
-    } catch (err) {
-      this.ctx.activityStream?.publish({
-        type: 'llm:error',
-        botId,
-        timestamp: Date.now(),
-        data: {
-          caller: 'executor',
-          backend: llmClient.backend,
-          durationMs: Date.now() - executorStartMs,
-          error: err instanceof Error ? err.message : String(err),
-        },
-      });
-      this.appendQueryLog({
-        timestamp: new Date().toISOString(),
-        botId,
-        caller: 'executor',
-        model,
-        backend: llmClient.backend,
-        temperature: executorTemperature,
-        toolCount: executorDefs.length,
-        durationMs: Date.now() - executorStartMs,
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      toolCallLog.push(...executor.getExecutionLog());
-
-      // Report failed execution for consumed permissions
-      if (consumedPermissionIds.length > 0) {
-        const toolCallSummary = toolCallLog.map((t) => ({ name: t.name, success: t.success }));
-        this.ctx.askPermissionStore.reportExecution(
-          consumedPermissionIds,
-          `Executor failed: ${err instanceof Error ? err.message : String(err)}`,
-          toolCallSummary,
-          false
-        );
-      }
-      throw err;
     }
+    if (!turn.ok) throw turn.error;
 
     const loopDetectionStats = loopDetector?.getStats();
     if (loopWarnings > 0 || loopBlocks > 0) {
@@ -2549,54 +2465,6 @@ export class AgentLoop {
   }
 
   /**
-   * After executor phase, if ask_human was called, retroactively attach
-   * file_write/file_edit outputs to the inbox conversation message.
-   */
-  private autoAttachFiles(
-    botId: string,
-    executor: ToolExecutor,
-    toolCallLog: ToolExecutionRecord[],
-    botLogger: Logger
-  ): void {
-    const askHumanCall = toolCallLog.find((t) => t.name === 'ask_human' && t.success);
-    if (!askHumanCall) return;
-
-    const fileOps = executor.getFileOperations();
-    if (fileOps.length === 0) return;
-
-    // Find the inbox conversation for this ask_human call
-    const conversationsService = this.ctx.conversationsService;
-    if (!conversationsService) return;
-
-    // The ask_human store tracks the question → conversation mapping
-    const pending = this.ctx.askHumanStore.getPendingForBot(botId);
-    if (pending.length === 0) return;
-
-    // Get the most recent pending question's conversation
-    const lastQuestion = pending[pending.length - 1];
-    const conversationId = lastQuestion.conversationId;
-    if (!conversationId) return;
-
-    // Get messages to find the bot message
-    const messages = conversationsService.getMessages(botId, conversationId);
-    const botMsg = messages.find((m) => m.role === 'bot');
-    if (!botMsg) return;
-
-    // Only attach files that aren't already on the message
-    const existingPaths = new Set((botMsg.files ?? []).map((f) => f.path));
-    const newFiles = fileOps.filter((f) => !existingPaths.has(f.path));
-    if (newFiles.length === 0) return;
-
-    const attached = conversationsService.attachFiles(botId, conversationId, botMsg.id, newFiles);
-    if (attached) {
-      botLogger.info(
-        { botId, conversationId, fileCount: newFiles.length },
-        'Agent loop: auto-attached files to ask_human inbox message'
-      );
-    }
-  }
-
-  /**
    * Create a ToolLoopDetector from merged global + per-bot config.
    * Optional overrides allow callers (e.g. feedback phase) to cap thresholds.
    */
@@ -2653,6 +2521,7 @@ export class AgentLoop {
     // The cycle handling this feedback, recorded on it for "Why this?" (plan row 18).
     const cycleId = this.cycleAttribution.get(botId)?.cycleId;
     const handledIn = cycleId ? { cycleId } : {};
+    const cycleSignal = this.cycleAborts.get(botId)?.signal;
     const globalConfig = this.ctx.config.agentLoop;
     const botOverride = botConfig.agentLoop;
 
@@ -2714,6 +2583,9 @@ export class AgentLoop {
           enableLogging: true,
           loopDetector: feedbackLoopDetector,
           attribution: this.cycleAttribution.get(botId),
+          permissionMode: feedbackPermissionMode,
+          enforceToolPermissions: botOverride?.enforceToolPermissions === true,
+          signal: cycleSignal,
         });
 
         if (this.ctx.toolAuditLog) {
@@ -2737,6 +2609,7 @@ export class AgentLoop {
             tools: defs,
             toolExecutor: executor.createCallback(),
             maxToolRounds: 5,
+            signal: cycleSignal,
           });
           response = feedbackResult.text;
           this.ctx.activityStream?.publish({

@@ -16,6 +16,8 @@ export type ExecutionStatus = 'decided' | 'consumed' | 'executed' | 'failed';
 export interface PermissionAttribution {
   cycleId?: string;
   goalId?: string;
+  /** Worker run that asked (future task workers carry runId, never cycleId). */
+  runId?: string;
 }
 
 export interface PermissionRequest {
@@ -31,6 +33,8 @@ export interface PermissionRequest {
   note?: string;
   cycleId?: string;
   goalId?: string;
+  /** Worker run that asked (future task workers carry runId, never cycleId). */
+  runId?: string;
 }
 
 export interface PermissionRequestInfo {
@@ -44,6 +48,8 @@ export interface PermissionRequestInfo {
   createdAt: number;
   cycleId?: string;
   goalId?: string;
+  /** Worker run that asked (future task workers carry runId, never cycleId). */
+  runId?: string;
 }
 
 export interface ResolvedPermission {
@@ -59,6 +65,8 @@ export interface ResolvedPermission {
   note?: string;
   cycleId?: string;
   goalId?: string;
+  /** Worker run that asked (future task workers carry runId, never cycleId). */
+  runId?: string;
 }
 
 export interface PermissionHistoryEntry extends ResolvedPermission {
@@ -594,5 +602,6 @@ function attributionOf(a: PermissionAttribution): PermissionAttribution {
   const out: PermissionAttribution = {};
   if (typeof a.cycleId === 'string' && a.cycleId) out.cycleId = a.cycleId;
   if (typeof a.goalId === 'string' && a.goalId) out.goalId = a.goalId;
+  if (typeof a.runId === 'string' && a.runId) out.runId = a.runId;
   return out;
 }

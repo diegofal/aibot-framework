@@ -802,16 +802,18 @@ export class ToolRegistry {
    * Get tool definitions filtered by selected categories for a specific bot.
    * Uncategorized tools (external/dynamic) always pass through.
    * Falls back to getDefinitionsForBot() when categories is empty/undefined.
+   * With a `permissionMode`, tools blocked for that mode are dropped too.
    */
   getDefinitionsByCategories(
     categories: ToolCategory[] | undefined,
-    botId: string
+    botId: string,
+    permissionMode?: PermissionMode
   ): ToolDefinition[] {
     if (!categories || categories.length === 0) {
-      return this.getDefinitionsForBot(botId);
+      return this.getDefinitionsForBot(botId, permissionMode);
     }
     const selectedCategories = new Set(categories);
-    const baseDefs = this.getDefinitionsForBot(botId);
+    const baseDefs = this.getDefinitionsForBot(botId, permissionMode);
     return baseDefs.filter((d) => {
       const name = d.function.name;
       if (ALWAYS_INCLUDED_TOOLS.has(name)) return true;

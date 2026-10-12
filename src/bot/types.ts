@@ -21,6 +21,7 @@ import type { SoulLoader } from '../soul';
 import type { Tool, ToolDefinition } from '../tools/types';
 import type { ActivityStream } from './activity-stream';
 import type { AgentFeedbackStore } from './agent-feedback-store';
+import type { BackendCircuitBreaker } from './agent-retry-engine';
 import type { AskHumanStore } from './ask-human-store';
 import type { AskPermissionStore } from './ask-permission-store';
 import type { InlineApprovalStore } from './inline-approval';
@@ -87,6 +88,13 @@ export interface BotContext {
   readonly relayService?: RelayService;
   readonly inlineApprovalStore?: InlineApprovalStore;
   readonly hooks?: import('./hooks').HookEmitter;
+  /**
+   * Fleet-wide per-backend breaker for 429/quota errors. Owned by BotManager
+   * (AgentLoop creates and publishes one when absent) so every runtime —
+   * planner, strategist, cycle executor, future task workers — consults and
+   * feeds the same circuit.
+   */
+  circuitBreaker?: BackendCircuitBreaker;
 
   // Helper methods
   getActiveModel(botId: string): string;
