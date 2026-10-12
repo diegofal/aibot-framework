@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed (2026-10-12) — One goal board everywhere, with tasks inline in each card
+- **Why.** The Agent Home goals board (a row grid where clicking a goal opened its tasks below) looked and behaved differently from the Fleet Board, and tasks were hidden until you clicked. The operator asked for the Fleet Board look everywhere and tasks visible without clicking.
+- **What.** `web/pages/goal-board.js` (`mountGoalBoard`) is the one board both pages mount; the renderers stay pure in `fleet-board-helpers.js`. Every open goal card lists its open tasks inline (in progress, blocked, to do; up to 5, then "+N more"), with a checkbox to mark one done, a pulsing badge when a worker holds it, and "+ task" to add one in place. Standing goals show a "standing" tag instead of a task list. Clicking a card opens the Fleet Board goal drawer, which now also has "Mark standing" / "Make it a project" and a History button. Agent Home keeps its "Active workers" strip and live refresh. The old row grid, its tasks panel and their CSS are gone.
+- **Not checked in a browser** (login blocks automation): helper tests only (`tests/web/goal-board-helpers.test.ts`); the old Agent Home board tests were removed with the code they covered.
+
 ### Changed (2026-10-12) — Goals get broken down for sure; standing goals get none
 - **Why.** After workers went live, no bot wrote a task: breaking a goal down was optional, and many goals are not projects at all ("read 2 sources per cycle", "every day research X"), where forced tasks would be filler.
 - **Rule.** When the goal the planner serves has an end state and no open tasks, it MUST answer with `new_tasks` (2–5 verifiable steps) in that cycle. A goal with no end state is marked standing instead (`standing_goal` in the planner answer → `- kind: standing` in GOALS.md, written as the agent with the cycle and a reason) and gets no tasks: the cycle does one round of it. Explore, idle and gated cycles still write nothing. The goals view says which goals are standing and which still need a breakdown. Dispatch guidance: hand multi-step tasks to workers, do single-step ones in the cycle.
