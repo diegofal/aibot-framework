@@ -161,7 +161,7 @@ export class ConversationPipeline {
       );
       this.ctx.activityStream?.publish({
         type: 'memory:rag',
-        botId: '',
+        botId,
         timestamp: Date.now(),
         data: {
           query: query.substring(0, 80),
