@@ -168,7 +168,7 @@ What we do differently, because of our runtime and their gaps:
 
 ## Phases
 
-0. **Foundations** — no change to how agents plan. Each item fixes or prevents a live bug:
+0. **Foundations** — **done 2026-10-12 (branch `feat/p0`)**; open from this phase: planner/strategist calls do not get the cycle signal yet; `runId` on `tool:end` and the audit comes with workers. No change to how agents plan. Each item fixes or prevents a live bug:
    - C1–C7: TaskStore, migration, op API, both boards, goals view;
    - C18: socket tenant filter;
    - C12: real cancellation, with fallback guards;
