@@ -701,3 +701,19 @@ docker compose up -d --build
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-12T19-21-44`. Before the rebuild: no `workers` key in `/app/config/config.json` (workers off), no `TASKS.json` yet. After: `healthy` in ~38 s, dashboard 200, the image has `src/workers/*` and `src/runtime-lifecycle.ts`, served `/pages/workers.js` is the new one, `/api/workers` answers 401 without a session. Cycles ran planner → executor on the new code with no new errors. One regression seen in the logs: myfirstmillion called `manage_goals` with a goal id (`g-5ba5ff60`, an active goal) and got "No active goal matching" — `findGoalIndex` matched text only and agents now see ids; fixed in `1809d60`, needs a rebuild.
 
 **Reversible?** Code: check out `09b2261` and rebuild. Data: `TASKS.json` / `workers/` files written after this deploy are ignored by older code.
+
+### 2026-10-12 19:31Z — Deployed `4aa9548` (manage_goals finds a goal by its id)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Fix the regression seen after the 19:21Z deploy: agents pass goal ids to `manage_goals` and got "No active goal matching" (charged as a tool error) |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** `healthy` in ~35 s, dashboard 200, the image's `src/tools/goals.ts` has the id match, no new errors in the boot logs. No backup: code-only change, taken 10 minutes after the 19:21Z backup.
+
+**Reversible?** Check out `1278939` and rebuild.
