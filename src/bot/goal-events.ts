@@ -34,7 +34,24 @@ export type GoalEventOp =
   | 'headline'
   | 'complete'
   | 'reopen'
-  | 'remove';
+  | 'remove'
+  | TaskEventOp;
+
+/** Ops of the task store (src/goals/task-store.ts), logged next to the goal changes. */
+export type TaskEventOp =
+  | 'task-add'
+  | 'task-move'
+  | 'task-edit'
+  | 'task-note'
+  | 'task-remove'
+  | 'task-reorder'
+  | 'task-claim'
+  | 'task-release';
+
+/** True for a task-store row (`task-*`), false for a change to the goal itself. */
+export function isTaskEventOp(op: string): op is TaskEventOp {
+  return op.startsWith('task-');
+}
 
 /** Subtasks as one comparable string (order, text and lane; ids are bookkeeping). */
 function taskKey(g: GoalEntry): string {
@@ -55,6 +72,8 @@ export type GoalActor =
   | 'reflection'
   | 'lint'
   | 'wizard'
+  /** Housekeeping with no decision behind it (the task-store migration). */
+  | 'system'
   | 'unknown';
 
 export interface GoalEvent {
@@ -68,8 +87,12 @@ export interface GoalEvent {
   cycleId?: string;
   /** Why the writer made the change, in its own words at the time (never written later). */
   reason?: string;
-  /** Hygiene run that made the change (goal-lint). */
+  /** Hygiene run that made the change (goal-lint), or the worker run of a task op. */
   runId?: string;
+  /** Task rows (`task-*`): the task, its text at the time, and the note given with the op. */
+  taskId?: string;
+  task?: string;
+  note?: string;
 }
 
 /** A change without its envelope (ts, actor, cycleId, reason). */
@@ -208,6 +231,24 @@ export function readGoalEvents(soulDir: string): GoalEvent[] {
     }
   }
   return out;
+}
+
+/** Append rows to a soul dir's goal-event log. Never throws; failures go to `onError`. */
+export function appendGoalEvents(
+  soulDir: string,
+  rows: GoalEvent[],
+  onError?: (err: unknown) => void
+): void {
+  if (rows.length === 0) return;
+  try {
+    appendFileSync(
+      join(soulDir, GOAL_EVENTS_FILE),
+      `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`,
+      'utf-8'
+    );
+  } catch (err) {
+    onError?.(err);
+  }
 }
 
 /**

@@ -206,7 +206,8 @@ export function buildGoalDetail(
       from: e.from ?? null,
       to: e.to ?? null,
       actor: e.actor ?? null,
-      note: null,
+      note: e.note ?? null,
+      ...(e.task ? { task: e.task } : {}),
       inferred: false,
       source: 'goal-events' as const,
       cycleId: e.cycleId ?? null,
@@ -401,7 +402,9 @@ export function buildGoalDetail(
 
   const started =
     gx.started ??
-    timeline.find((e) => e.to === 'in_progress' || e.to === 'in-progress')?.ts ??
+    timeline.find(
+      (e) => !e.op.startsWith('task-') && (e.to === 'in_progress' || e.to === 'in-progress')
+    )?.ts ??
     null;
   const header: GoalDetailHeader = {
     id: goalId,

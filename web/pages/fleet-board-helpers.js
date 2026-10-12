@@ -61,6 +61,55 @@ export function moveTask(tasks, i, dir) {
   [next[i], next[j]] = [next[j], next[i]];
   return next;
 }
+// ── Subtask op requests: one op per change to the task store, with the board's
+// rev where a stale view matters (a 409 makes the board reload). ──
+
+const agentPath = (botId) => `/api/agents/${encodeURIComponent(botId)}`;
+const taskPath = (botId, id) => `${agentPath(botId)}/tasks/${encodeURIComponent(id)}`;
+const goalTasksPath = (botId, goal) =>
+  `${agentPath(botId)}/goals/${encodeURIComponent(goal?.id || String(goal?.text ?? ''))}/tasks`;
+const withRev = (body, rev) => (Number.isInteger(rev) ? { ...body, expectedRev: rev } : body);
+
+/** Checkbox on task `i`: done ↔ todo. */
+export function taskToggleRequest(botId, tasks, i, rev) {
+  const t = Array.isArray(tasks) ? tasks[i] : null;
+  if (!t?.id) return null;
+  return {
+    method: 'PATCH',
+    path: taskPath(botId, t.id),
+    body: withRev({ lane: t.done ? 'todo' : 'done' }, rev),
+  };
+}
+/** A new To do task on `goal`. */
+export function taskAddRequest(botId, goal, text) {
+  const clean = oneLine(text);
+  if (!clean) return null;
+  return { method: 'POST', path: goalTasksPath(botId, goal), body: { text: clean } };
+}
+/** New text for task `i`; null when empty or unchanged. */
+export function taskRenameRequest(botId, tasks, i, text, rev) {
+  const t = Array.isArray(tasks) ? tasks[i] : null;
+  const clean = oneLine(text);
+  if (!t?.id || !clean || clean === t.text) return null;
+  return { method: 'PATCH', path: taskPath(botId, t.id), body: withRev({ text: clean }, rev) };
+}
+export function taskRemoveRequest(botId, tasks, i) {
+  const t = Array.isArray(tasks) ? tasks[i] : null;
+  if (!t?.id) return null;
+  return { method: 'DELETE', path: taskPath(botId, t.id) };
+}
+/** Task `i` of `goal` one place up (-1) or down (+1): the goal's new id order. */
+export function taskReorderRequest(botId, goal, i, dir, rev) {
+  const tasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
+  const next = moveTask(tasks, i, dir);
+  if (next === tasks || next.some((t) => !t.id)) return null;
+  return {
+    method: 'POST',
+    path: `${goalTasksPath(botId, goal)}/reorder`,
+    body: withRev({ ids: next.map((t) => t.id) }, rev),
+  };
+}
+
 export function taskProgress(tasks) {
   const list = Array.isArray(tasks) ? tasks : [];
   const done = list.filter((t) => t.done).length;

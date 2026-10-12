@@ -169,6 +169,8 @@ export interface AgentHomeResponse {
     loopIntervalMs: number;
     /** Goals made from each goal (`parent`), by parent id, active and completed. */
     spawned: Record<string, GoalDetail[]>;
+    /** Revision of the task store: send it back as `expectedRev` with a task op. */
+    tasksRev: number;
   };
   traits: TraitStats;
   /** Recent trait changes, newest first, each with its Why (`traitChangeToWhy`). */
@@ -475,7 +477,8 @@ export function buildAgentHome(
   const paths = resolveBotPaths(ctx.config, bot);
   const presence = buildPresence(ctx, bot, deps);
 
-  const goals = readGoals(paths.soulDir).detail;
+  const goalsRead = readGoals(paths.soulDir);
+  const goals = goalsRead.detail;
   const completed = goals
     .filter((g) => g.section === 'completed')
     .sort((a, b) => ((a.completed ?? '') < (b.completed ?? '') ? 1 : -1))
@@ -540,6 +543,7 @@ export function buildAgentHome(
       ),
       loopIntervalMs: loopIntervalMs(bot, ctx.config),
       spawned: spawnedByParent(goals),
+      tasksRev: goalsRead.tasksRev,
     },
     traits: readTraits(paths.soulDir).stats,
     traitChanges: safe(() => buildTraitChanges(ctx, bot.id, paths.soulDir), []),

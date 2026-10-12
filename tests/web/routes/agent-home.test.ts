@@ -646,7 +646,148 @@ describe('PATCH /api/agents/:id/goals edits title and notes', () => {
   });
 });
 
-describe('goal subtasks and delete (fleet board)', () => {
+describe('goal tasks: op endpoints (task store)', () => {
+  const call = (app: Hono, method: string, path: string, body?: unknown) =>
+    app.request(`/api/agents/b1${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const goals = () => parseGoals(readFileSync(join(fx.soulDir('b1'), 'GOALS.md'), 'utf-8'));
+  const goalRef = encodeURIComponent('Research topic');
+  const homeGoal = async (app: Hono) => {
+    const home = await (await app.request('/api/agents/b1/home')).json();
+    const all = [...home.goals.todo, ...home.goals.inProgress, ...home.goals.blocked];
+    return { home, goal: all.find((x: { text: string }) => x.text === 'Research topic') };
+  };
+
+  it('PATCH /goals { tasks } is retired with a message naming the new endpoints', async () => {
+    const res = await call(makeApp(), 'PATCH', '/goals', {
+      goal: 'Research topic',
+      tasks: [{ text: 'x', done: false }],
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain('/goals/:goalId/tasks');
+    expect(body.error).toContain('/tasks/:taskId');
+  });
+
+  it('POST adds a task (by title for a goal without id, then by id); the home payload shows it with rev', async () => {
+    const app = makeApp();
+    const res = await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: '  Find 3 sources ' });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.rev).toBe(1);
+    expect(body.task).toMatchObject({ text: 'Find 3 sources', lane: 'todo', by: 'operator' });
+    const id = goals().active.find((g) => g.text === 'Research topic')?.id as string;
+    expect(id).toMatch(/^g-/);
+    const second = await call(app, 'POST', `/goals/${id}/tasks`, {
+      text: 'Write summary',
+      lane: 'in_progress',
+    });
+    expect(second.status).toBe(201);
+    expect(goals().active.find((g) => g.id === id)?.status).toBe('in_progress');
+    expect(readFileSync(join(fx.soulDir('b1'), 'GOALS.md'), 'utf-8')).not.toContain('- task:');
+    const { home, goal } = await homeGoal(app);
+    expect(home.goals.tasksRev).toBe(2);
+    expect(goal.tasks).toMatchObject([
+      { text: 'Find 3 sources', lane: 'todo', status: 'todo', done: false, by: 'operator' },
+      { text: 'Write summary', lane: 'in_progress', status: 'in_progress', done: false },
+    ]);
+  });
+
+  it('PATCH moves, renames and notes a task; DELETE removes it; every response has rev', async () => {
+    const app = makeApp();
+    const added = await (
+      await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'Draft' })
+    ).json();
+    const tid = added.task.id;
+    const moved = await call(app, 'PATCH', `/tasks/${tid}`, { lane: 'done', expectedRev: 1 });
+    expect(moved.status).toBe(200);
+    expect(await moved.json()).toMatchObject({ rev: 2, task: { lane: 'done', done: true } });
+    const renamed = await (
+      await call(app, 'PATCH', `/tasks/${tid}`, { text: 'Draft v2', note: 'sent to Ana' })
+    ).json();
+    expect(renamed).toMatchObject({ rev: 3, task: { text: 'Draft v2', note: 'sent to Ana' } });
+    const del = await call(app, 'DELETE', `/tasks/${tid}`);
+    expect(del.status).toBe(200);
+    expect(await del.json()).toMatchObject({ removed: tid, rev: 4 });
+    const { goal } = await homeGoal(app);
+    expect(goal.tasks).toEqual([]);
+  });
+
+  it('a stale expectedRev is 409 with the current rev', async () => {
+    const app = makeApp();
+    const added = await (await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'A' })).json();
+    await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'Bravo charlie' });
+    const res = await call(app, 'PATCH', `/tasks/${added.task.id}`, {
+      lane: 'done',
+      expectedRev: 1,
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ rev: 2 });
+  });
+
+  it('reorder sets the order of a goal’s tasks', async () => {
+    const app = makeApp();
+    const a = (await (await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'Alpha' })).json())
+      .task.id;
+    const b = (await (await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'Bravo' })).json())
+      .task.id;
+    const res = await call(app, 'POST', `/goals/${goalRef}/tasks/reorder`, {
+      ids: [b, a],
+      expectedRev: 2,
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).rev).toBe(3);
+    const { goal } = await homeGoal(app);
+    expect(goal.tasks.map((t: { id: string }) => t.id)).toEqual([b, a]);
+    expect((await call(app, 'POST', `/goals/${goalRef}/tasks/reorder`, { ids: 'x' })).status).toBe(
+      400
+    );
+  });
+
+  it('an operator move of a claimed task releases the claim and reports it', async () => {
+    const app = makeApp();
+    const tid = (
+      await (await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'Work' })).json()
+    ).task.id;
+    const { TaskStore } = await import('../../../src/goals/task-store');
+    new TaskStore(fx.soulDir('b1')).apply(
+      [{ op: 'claim', id: tid, runId: 'r-1', ttlMs: 3_600_000 }],
+      { actor: 'system' }
+    );
+    const { goal } = await homeGoal(app);
+    expect(goal.tasks[0].claim).toEqual({ runId: 'r-1' });
+    const res = await call(app, 'PATCH', `/tasks/${tid}`, { lane: 'todo' });
+    expect(await res.json()).toMatchObject({ releasedClaim: { runId: 'r-1' } });
+  });
+
+  it('validation: 400 for bad input, 404 for unknown goal or task, 404 across tenants', async () => {
+    const app = makeApp();
+    expect((await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: '' })).status).toBe(400);
+    expect((await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'a\nb' })).status).toBe(400);
+    expect(
+      (await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'x'.repeat(201) })).status
+    ).toBe(400);
+    expect(
+      (await call(app, 'POST', `/goals/${goalRef}/tasks`, { text: 'ok', lane: 'later' })).status
+    ).toBe(400);
+    expect((await call(app, 'POST', '/goals/g-nope/tasks', { text: 'ok' })).status).toBe(404);
+    expect((await call(app, 'PATCH', '/tasks/t-000000', { lane: 'done' })).status).toBe(404);
+    expect((await call(app, 'PATCH', '/tasks/t-000000', {})).status).toBe(400);
+    expect((await call(app, 'DELETE', '/tasks/t-000000')).status).toBe(404);
+    const other = makeApp({ tenantId: 't1' });
+    const res = await other.request('/api/agents/b3/goals/x/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'x' }),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('goal delete (fleet board)', () => {
   const send = (app: Hono, method: string, body: unknown) =>
     app.request('/api/agents/b1/goals', {
       method,
@@ -654,84 +795,6 @@ describe('goal subtasks and delete (fleet board)', () => {
       body: JSON.stringify(body),
     });
   const goals = () => parseGoals(readFileSync(join(fx.soulDir('b1'), 'GOALS.md'), 'utf-8'));
-
-  it('PATCH { tasks } replaces the subtask list and the home payload shows it', async () => {
-    const app = makeApp();
-    const res = await send(app, 'PATCH', {
-      goal: 'Research topic',
-      tasks: [
-        { text: '  Find 3 sources ', done: true },
-        { text: 'Write summary', done: false },
-      ],
-    });
-    expect(res.status).toBe(200);
-    const g = goals().active.find((x) => x.text === 'Research topic');
-    expect(g?.tasks).toMatchObject([
-      { text: 'Find 3 sources', done: true, status: 'done', by: 'operator' },
-      { text: 'Write summary', done: false, status: 'todo', by: 'operator' },
-    ]);
-    const home = await (await app.request('/api/agents/b1/home')).json();
-    const all = [...home.goals.todo, ...home.goals.inProgress, ...home.goals.blocked];
-    expect(all.find((x: { text: string }) => x.text === 'Research topic').tasks).toEqual(g?.tasks);
-  });
-
-  it('PATCH { tasks } with status: lanes stick, agent tasks keep their author, a started task starts the goal', async () => {
-    const app = makeApp();
-    await send(app, 'PATCH', { goal: 'Research topic', tasks: [{ text: 'Mine', status: 'todo' }] });
-    const path = join(fx.soulDir('b1'), 'GOALS.md');
-    const seeded = readFileSync(path, 'utf-8').replace(
-      /( {2}- task: \[ \] Mine \{id: t-\w+, by: operator\})/,
-      '$1\n  - task: [ ] Theirs {id: t-agent1, by: agent, cycle: c-7}'
-    );
-    writeFileSync(path, seeded);
-    const mine = goals().active.find((x) => x.text === 'Research topic')?.tasks?.[0];
-    expect(mine?.by).toBe('operator');
-    const res = await send(app, 'PATCH', {
-      goal: 'Research topic',
-      tasks: [
-        { id: mine?.id, text: 'Mine', status: 'blocked' },
-        { id: 't-agent1', text: 'Theirs', status: 'in_progress', by: 'operator' },
-      ],
-    });
-    expect(res.status).toBe(200);
-    const g = goals().active.find((x) => x.text === 'Research topic');
-    expect(g?.tasks).toEqual([
-      { id: mine?.id, text: 'Mine', done: false, status: 'blocked', by: 'operator' },
-      {
-        id: 't-agent1',
-        text: 'Theirs',
-        done: false,
-        status: 'in_progress',
-        by: 'agent',
-        cycleId: 'c-7',
-      },
-    ]);
-    expect(g?.status).toBe('in_progress');
-  });
-
-  it('rejects a bad task status', async () => {
-    const app = makeApp();
-    const res = await send(app, 'PATCH', {
-      goal: 'Research topic',
-      tasks: [{ text: 'x', status: 'later' }],
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it('rejects bad task lists', async () => {
-    const app = makeApp();
-    const bad = [
-      'nope',
-      [{ text: '', done: false }],
-      [{ text: 'a\nb', done: false }],
-      [{ text: 'x'.repeat(201), done: false }],
-      [{ text: 'ok', done: 'yes' }],
-      Array.from({ length: 31 }, (_, i) => ({ text: `t${i}`, done: false })),
-    ];
-    for (const tasks of bad) {
-      expect((await send(app, 'PATCH', { goal: 'Research topic', tasks })).status).toBe(400);
-    }
-  });
 
   it('DELETE removes a goal by id or title and logs a remove event; unknown is 404', async () => {
     const app = makeApp();

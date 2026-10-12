@@ -273,6 +273,7 @@ export async function runStrategist(
     soul: soulContext.soul,
     motivations: soulContext.motivations,
     goals: soulContext.goals,
+    tasks: soulContext.soulLoader.readTasks?.(),
     recentMemory,
     datetime: soulContext.datetime,
     directives: soulContext.directives,

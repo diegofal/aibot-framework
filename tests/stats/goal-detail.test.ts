@@ -243,3 +243,28 @@ describe('buildGoalDetail', () => {
     expect(d?.cycles.every((c) => c.attribution !== 'exact')).toBe(true);
   });
 });
+
+describe('task-store rows in the goal timeline', () => {
+  it('a task move shows with its task text, and never counts as the goal starting', () => {
+    appendFileSync(
+      join(fx.soulDir, 'goal-events.jsonl'),
+      `${JSON.stringify({
+        ts: new Date(fx.now - 3_600_000).toISOString(),
+        goalId: 'g-brief001',
+        title: 'Weekly brief every Monday',
+        op: 'task-move',
+        taskId: 't-aaaaaa',
+        task: 'Pick sources',
+        from: 'todo',
+        to: 'in_progress',
+        note: 'three found',
+        actor: 'agent',
+      })}\n`
+    );
+    const d = buildGoalDetail(ctxOf(), fx.bot, { id: 'g-brief001', days: 14 });
+    const ev = d?.timeline.find((e) => e.op === 'task-move');
+    expect(ev).toMatchObject({ task: 'Pick sources', note: 'three found', to: 'in_progress' });
+    expect(ev?.why.what).toBe('Task moved to In progress');
+    expect(d?.goal.started).toBeNull();
+  });
+});

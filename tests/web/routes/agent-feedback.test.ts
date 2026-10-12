@@ -793,3 +793,26 @@ describe('agent-feedback routes', () => {
     expect((byContent.get('Not yet') as any).why.outcome).toBe('Not handled yet.');
   });
 });
+
+describe('goalsForFeedback', () => {
+  test('uses the goals view (goals + tasks, bounded) when the loader has one', async () => {
+    const { goalsForFeedback } = await import('../../../src/web/routes/agent-feedback');
+    const seen: Array<number | undefined> = [];
+    const loader = {
+      readGoals: () => 'raw',
+      readGoalsView: (max?: number) => {
+        seen.push(max);
+        return 'VIEW';
+      },
+    };
+    expect(goalsForFeedback(loader, 2000)).toBe('VIEW');
+    expect(seen).toEqual([2000]);
+  });
+
+  test('falls back to the raw file, cut, and to null when empty', async () => {
+    const { goalsForFeedback } = await import('../../../src/web/routes/agent-feedback');
+    expect(goalsForFeedback({ readGoals: () => 'x'.repeat(50) }, 10)).toContain('[truncated]');
+    expect(goalsForFeedback({ readGoals: () => null }, 10)).toBeNull();
+    expect(goalsForFeedback({ readGoals: () => 'raw', readGoalsView: () => '' }, 10)).toBeNull();
+  });
+});

@@ -711,17 +711,11 @@ describe('goal subtasks (task: lines)', () => {
     expect(out).not.toContain('task:');
   });
 
-  test('editGoal replaces the task list; an empty list clears it', () => {
-    const out = editGoal(md, 'g-aaaaaaaa', {
-      tasks: [
-        { text: 'Pick three sources', done: true, status: 'done' },
-        { text: 'Draft 600 words', done: true },
-        { text: 'Send to Diego', done: false },
-      ],
-    }) as string;
-    expect(parseGoals(out).active[0].tasks?.map((t) => t.done)).toEqual([true, true, false]);
-    const cleared = editGoal(md, 'g-aaaaaaaa', { tasks: [] }) as string;
-    expect(parseGoals(cleared).active[0].tasks).toBeUndefined();
+  // Tasks moved to the task store (src/goals/task-store.ts): editGoal no longer
+  // takes a task list, and an edit keeps legacy lines for the migration to lift.
+  test('editGoal keeps legacy task lines untouched', () => {
+    const out = editGoal(md, 'g-aaaaaaaa', { notes: 'new notes' }) as string;
+    expect(parseGoals(out).active[0].tasks).toEqual(parseGoals(md).active[0].tasks);
   });
 });
 

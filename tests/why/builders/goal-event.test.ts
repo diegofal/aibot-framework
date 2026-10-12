@@ -149,3 +149,50 @@ describe('goalEventToWhy: the stated reason (why-everywhere row 12)', () => {
     expect(why.missing).toContain('No reason was recorded');
   });
 });
+
+describe('goalEventToWhy: task-store rows', () => {
+  it('a task move reads as a task move with the lanes, the task and its note', () => {
+    const why = goalEventToWhy(
+      input({
+        op: 'task-move',
+        from: 'todo',
+        to: 'done',
+        task: 'Draft the intro',
+        note: 'sent to Ana',
+      })
+    );
+    expect(why.what).toBe('Task moved to Done');
+    expect(why.outcome).toBe('To do → Done');
+    expect(why.notes).toEqual([
+      { label: 'Task', text: 'Draft the intro' },
+      { label: 'Notes', text: 'sent to Ana' },
+    ]);
+    expect(WhySchema.safeParse(why).success).toBe(true);
+  });
+
+  it('every task op has words, and a worker run is a note', () => {
+    const ops = [
+      'task-add',
+      'task-edit',
+      'task-note',
+      'task-remove',
+      'task-reorder',
+      'task-claim',
+      'task-release',
+    ];
+    for (const op of ops) {
+      const why = goalEventToWhy(
+        input({ op, from: null, to: null, runId: 'r-1', actor: 'system' })
+      );
+      expect(why.what).not.toContain('Changed (');
+      expect(why.by).toBe('system');
+      expect(why.notes).toContainEqual({ label: 'Worker run', text: 'r-1' });
+      expect(WhySchema.safeParse(why).success).toBe(true);
+    }
+  });
+
+  it('a task rename shows old → new text', () => {
+    const why = goalEventToWhy(input({ op: 'task-edit', from: 'Draft', to: 'Draft v2' }));
+    expect(why.outcome).toBe('Draft → Draft v2');
+  });
+});

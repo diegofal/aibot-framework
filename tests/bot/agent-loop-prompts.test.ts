@@ -10,6 +10,7 @@ import {
   buildPlannerPrompt,
   buildStrategistPrompt,
 } from '../../src/bot/agent-loop-prompts';
+import type { StoredTask } from '../../src/goals/task-store';
 
 describe('buildFeedbackProcessorPrompt', () => {
   const baseInput = {
@@ -271,19 +272,20 @@ describe('buildOperatorGoalsSection', () => {
 
   test('returns empty string when there are no operator goals', () => {
     expect(buildOperatorGoalsSection(undefined)).toBe('');
-    expect(buildOperatorGoalsSection('')).toBe('');
+    expect(buildOperatorGoalsSection({ goalsMd: '', tasks: [] })).toBe('');
     expect(
-      buildOperatorGoalsSection(
-        '## Active Goals\n- [ ] Mine\n  - status: pending\n  - source: agent\n'
-      )
+      buildOperatorGoalsSection({
+        goalsMd: '## Active Goals\n- [ ] Mine\n  - status: pending\n  - source: agent\n',
+        tasks: [],
+      })
     ).toBe('');
   });
 
   test('lists only active operator goals with the priority instruction', () => {
-    const result = buildOperatorGoalsSection(goals);
+    const result = buildOperatorGoalsSection({ goalsMd: goals, tasks: [] });
     expect(result).toContain('## Set by your operator');
-    expect(result).toContain('- Find three remote FDE roles');
-    expect(result).toContain('- Done operator goal is not active');
+    expect(result).toContain('Find three remote FDE roles');
+    expect(result).toContain('Done operator goal is not active');
     expect(result).not.toContain('Self-set research thread');
     expect(result).not.toContain('Old operator goal');
     expect(result).toContain('ask_human');
@@ -310,21 +312,67 @@ describe('buildOperatorGoalsSection', () => {
   });
 });
 
-describe('buildOperatorGoalsSection with subtasks', () => {
-  test('lists each operator goal with its open and done subtasks', () => {
-    const md = `## Active Goals
+describe('buildOperatorGoalsSection with tasks from the store', () => {
+  const md = `## Active Goals
 - [ ] Monday brief
   - status: in_progress
   - priority: high
-  - task: [x] Pick sources
-  - task: [ ] Draft 600 words
   - source: operator
+  - id: g-aaaaaaaa
 `;
-    const out = buildOperatorGoalsSection(md);
-    expect(out).toContain('- Monday brief (in_progress)');
-    expect(out).toContain('  - [x] Pick sources');
-    expect(out).toContain('  - [ ] Draft 600 words');
-    expect(out).toContain('subtasks');
+  const task = (id: string, text: string, lane: StoredTask['lane']): StoredTask => ({
+    id,
+    goalId: 'g-aaaaaaaa',
+    text,
+    lane,
+    order: 0,
+    by: 'agent',
+    createdAt: '2026-10-12T00:00:00.000Z',
+    cycles: [],
+  });
+
+  test('names each operator goal by id with its task counts and the task rule', () => {
+    const out = buildOperatorGoalsSection({
+      goalsMd: md,
+      tasks: [task('t-aaaaaa', 'Pick sources', 'done'), task('t-bbbbbb', 'Draft', 'in_progress')],
+    });
+    expect(out).toContain('- [g-aaaaaaaa] Monday brief (in_progress) — 1 open task, 1 done');
+    expect(out).toContain('update_task');
+    expect(out).toContain('add_task');
+  });
+
+  test('legacy task lines in the markdown are not read', () => {
+    const out = buildOperatorGoalsSection({
+      goalsMd: md.replace('  - id:', '  - task: [ ] Old line {id: t-cccccc}\n  - id:'),
+      tasks: [],
+    });
+    expect(out).toContain('- [g-aaaaaaaa] Monday brief (in_progress)');
+    expect(out).not.toContain('open task');
+    expect(out).not.toContain('update_task');
+  });
+
+  test('prompts render the goals view with the store tasks', () => {
+    const base = {
+      identity: 'TestBot',
+      soul: 'A bot',
+      motivations: 'Be helpful',
+      goals: md,
+      tasks: [task('t-bbbbbb', 'Draft 600 words', 'in_progress')],
+      recentMemory: 'Did stuff',
+      datetime: '2026-03-08T12:00:00Z',
+      availableTools: ['web_search'],
+      hasCreateTool: false,
+    };
+    const line = '[~] t-bbbbbb Draft 600 words';
+    expect(buildPlannerPrompt(base).system).toContain(line);
+    expect(buildContinuousPlannerPrompt(base).system).toContain(line);
+    expect(buildExecutorPrompt({ ...base, plan: ['Step 1'], workDir: '/tmp/test' })).toContain(
+      line
+    );
+    expect(buildStrategistPrompt(base).system).toContain(line);
+    expect(
+      buildFeedbackProcessorPrompt({ ...base, feedbackContent: 'x', availableTools: [] }).system
+    ).toContain(line);
   });
 });
 
@@ -345,21 +393,5 @@ describe('strategist prompt asks for reasons (why-everywhere rows 12 and 13)', (
 
   test('one short reason per adjusted trait, in trait_reasons', () => {
     expect(system()).toMatch(/- trait_reasons: object/);
-  });
-});
-
-describe('buildOperatorGoalsSection task lanes', () => {
-  test('in-progress and blocked tasks keep their mark and the rule explains them', () => {
-    const md = `## Active Goals
-- [ ] Monday brief
-  - status: in_progress
-  - task: [~] Draft 600 words {id: t-aaaaaa, by: agent}
-  - task: [!] Get sign-off {id: t-bbbbbb}
-  - source: operator
-`;
-    const out = buildOperatorGoalsSection(md);
-    expect(out).toContain('  - [~] Draft 600 words (t-aaaaaa)');
-    expect(out).toContain('  - [!] Get sign-off (t-bbbbbb)');
-    expect(out).toContain('update_task');
   });
 });

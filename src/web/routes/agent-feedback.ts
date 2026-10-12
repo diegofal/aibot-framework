@@ -51,6 +51,20 @@ function truncate(text: string, maxLen: number): string {
   return `${text.slice(0, maxLen)}\n... [truncated]`;
 }
 
+/**
+ * The goals a feedback prompt carries: the goals view (goals + open tasks,
+ * bounded to `maxChars` by dropping detail, never ids) when the loader has
+ * it, else the raw GOALS.md cut at `maxChars`. Null when there are none.
+ */
+export function goalsForFeedback(
+  loader: { readGoals(): string | null; readGoalsView?(maxChars?: number): string },
+  maxChars: number
+): string | null {
+  if (loader.readGoalsView) return loader.readGoalsView(maxChars) || null;
+  const raw = loader.readGoals();
+  return raw ? truncate(raw, maxChars) : null;
+}
+
 interface GenerateFeedbackContext {
   identity: string | null;
   soul: string | null;
@@ -85,7 +99,7 @@ function buildGenerateFeedbackPrompt(ctx: GenerateFeedbackContext): string {
     sections.push(`## Motivations\n${truncate(ctx.motivations, 3000)}`);
   }
   if (ctx.goals) {
-    sections.push(`## Goals\n${truncate(ctx.goals, 2000)}`);
+    sections.push(`## Goals\n${ctx.goals}`);
   }
   if (ctx.recentMemory) {
     sections.push(`## Recent Memory (last 7 days)\n${truncate(ctx.recentMemory, 5000)}`);
@@ -192,7 +206,7 @@ export function agentFeedbackRoutes(deps: {
       const identity = soulLoader.readIdentity();
       const soul = soulLoader.readSoul();
       const motivations = soulLoader.readMotivations();
-      const goals = soulLoader.readGoals();
+      const goals = goalsForFeedback(soulLoader, 2000);
 
       // Recent memory (7 days)
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -325,7 +339,7 @@ export function agentFeedbackRoutes(deps: {
       try {
         const soulLoader = deps.botManager.getSoulLoader(botId);
         const identity = soulLoader.readIdentity();
-        const goals = soulLoader.readGoals();
+        const goals = goalsForFeedback(soulLoader, 1000);
 
         // Build thread from legacy fields + thread array
         const current = deps.botManager.getAgentFeedbackById(botId, id);
@@ -336,7 +350,7 @@ export function agentFeedbackRoutes(deps: {
         sections.push(`## Original Feedback\n${current?.content ?? entry.content}`);
 
         if (identity) sections.push(`## Bot Identity\n${truncate(identity, 500)}`);
-        if (goals) sections.push(`## Bot Goals\n${truncate(goals, 1000)}`);
+        if (goals) sections.push(`## Bot Goals\n${goals}`);
 
         // Legacy response as context
         if (current?.response) {

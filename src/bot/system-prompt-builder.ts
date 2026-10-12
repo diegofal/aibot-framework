@@ -63,7 +63,10 @@ export class SystemPromptBuilder {
     const soulLoader = this.ctx.getSoulLoader(botId);
     const defs = this.toolRegistry.getDefinitionsForBot(botId, options.permissionMode);
 
-    let prompt = soulLoader.composeSystemPrompt(options.userId) ?? resolved.systemPrompt;
+    // The agent-loop executor gets the goals view in its own prompt: only once.
+    let prompt =
+      soulLoader.composeSystemPrompt(options.userId, { goals: mode !== 'autonomous' }) ??
+      resolved.systemPrompt;
 
     // Without today's date every dated memory below reads as current.
     const now = new Date();

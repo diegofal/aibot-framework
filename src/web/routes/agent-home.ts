@@ -5,7 +5,13 @@
  *   GET /api/agents/:id/home       everything the agent's home page needs (cached 15 s)
  *   GET /api/agents/:id/presence   posture + first-person "now" line (never cached)
  *   POST /api/agents/:id/goals     operator adds a goal to GOALS.md (`source: operator`)
- *   PATCH /api/agents/:id/goals    operator moves a goal on the board ({ goal, status })
+ *   PATCH /api/agents/:id/goals    operator moves a goal on the board ({ goal, status }); `tasks` is retired (400)
+ *   POST /api/agents/:id/goals/:goalId/tasks           add a task ({ text, lane?, expectedRev? })
+ *   POST /api/agents/:id/goals/:goalId/tasks/reorder   order a goal's tasks ({ ids, expectedRev? })
+ *   PATCH /api/agents/:id/tasks/:taskId                move / rename / note ({ lane?, text?, note?, expectedRev? })
+ *   DELETE /api/agents/:id/tasks/:taskId               remove a task (`?rev=` or { expectedRev })
+ *     Task ops go through the task store (src/goals/task-store.ts); every response
+ *     carries `rev`, a stale `expectedRev` is 409 { error, rev }.
  *   GET /api/agents/:id/goals/detail?id=&title=&days=   one goal's history (cached 15 s)
  *   GET /api/agents/:id/cycles/:cycleId   one agent-loop cycle, the "Open cycle" sheet (cached 15 s)
  *   GET /api/agents/:id/memory-history?limit=   memory/soul edits (`soul-events.jsonl`), newest first, each with its why (not cached)
@@ -24,6 +30,7 @@ import { writeGoalsFile } from '../../bot/goal-events';
 import { type SoulEvent, readSoulEvents } from '../../bot/soul-events';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
+import { TASK_LANES, type TaskLane, type TaskOp, TaskStore } from '../../goals/task-store';
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
 import {
@@ -41,17 +48,14 @@ import { buildGoalDetail } from '../../stats/goal-detail-aggregator';
 import { resolveBotPaths } from '../../stats/paths';
 import type { PresenceTracker } from '../../stats/presence-tracker';
 import { readAgentCycles } from '../../stats/readers/agent-cycles';
+import { toTaskView } from '../../stats/readers/soul';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 import {
   BOARD_STATUSES,
   type BoardStatus,
   type GoalEdits,
-  type GoalTask,
-  TASK_STATUSES,
-  type TaskStatus,
   appendGoal,
   editGoal,
-  mergeTasks,
   parseGoals,
   removeGoal,
   resolveGoalRef,
@@ -94,44 +98,15 @@ export function parseGoalInput(body: unknown): GoalInput | string {
   return { title, notes: rawNotes || undefined, priority };
 }
 
-/** Validate a drawer edit; a string is the 400 message. */
-/** Subtask limits: enough for a real checklist, small enough to stay readable in a prompt. */
-export const GOAL_TASKS_MAX = 30;
 export const GOAL_HEADLINE_MAX = 100;
 /** The full goal text the agent reads; agents already write briefs of ~500 chars. */
 export const GOAL_BRIEF_MAX = 1000;
-export const GOAL_TASK_TEXT_MAX = 200;
 
-/** `tasks` from a request body → a clean list, or an error message. */
-export function parseGoalTasks(value: unknown): GoalTask[] | string {
-  if (!Array.isArray(value)) return 'tasks must be an array of { text, status | done, id? }';
-  if (value.length > GOAL_TASKS_MAX) return `at most ${GOAL_TASKS_MAX} tasks per goal`;
-  const out: GoalTask[] = [];
-  for (const raw of value) {
-    const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-    const text = typeof t.text === 'string' ? t.text.trim() : '';
-    if (!text) return 'a task cannot be empty';
-    if (/[\r\n]/.test(text)) return 'a task must be a single line';
-    if (text.length > GOAL_TASK_TEXT_MAX)
-      return `a task is longer than ${GOAL_TASK_TEXT_MAX} characters`;
-    // Who made a task is never taken from the body: the route stamps it (mergeTasks).
-    const task: GoalTask = { text, done: false };
-    if (t.status !== undefined) {
-      if (!(TASK_STATUSES as readonly unknown[]).includes(t.status))
-        return `task status must be one of ${TASK_STATUSES.join(', ')}`;
-      task.status = t.status as TaskStatus;
-      task.done = t.status === 'done';
-    } else if (typeof t.done === 'boolean') {
-      task.done = t.done;
-    } else {
-      return 'task done must be true or false';
-    }
-    if (typeof t.id === 'string' && /^t-[\w-]{1,32}$/.test(t.id)) task.id = t.id;
-    out.push(task);
-  }
-  return out;
-}
+/** `PATCH /goals { tasks }` is retired: tasks change one op at a time. */
+export const TASKS_RETIRED_MESSAGE =
+  'tasks are no longer sent as a list: use POST /api/agents/:id/goals/:goalId/tasks, PATCH or DELETE /api/agents/:id/tasks/:taskId, and POST /api/agents/:id/goals/:goalId/tasks/reorder';
 
+/** Validate a drawer edit; a string is the 400 message. */
 export function parseGoalEdits(body: unknown): GoalEdits | string {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   const out: GoalEdits = {};
@@ -167,13 +142,9 @@ export function parseGoalEdits(body: unknown): GoalEdits | string {
     if (brief.length > GOAL_BRIEF_MAX) return `brief is longer than ${GOAL_BRIEF_MAX} characters`;
     out.text = brief;
   }
-  if (b.tasks !== undefined) {
-    const tasks = parseGoalTasks(b.tasks);
-    if (typeof tasks === 'string') return tasks;
-    out.tasks = tasks;
-  }
+  if (b.tasks !== undefined) return TASKS_RETIRED_MESSAGE;
   if (Object.keys(out).length === 0)
-    return 'nothing to change: send status, title, brief, headline, notes, priority or tasks';
+    return 'nothing to change: send status, title, brief, headline, notes or priority';
   return out;
 }
 
@@ -377,6 +348,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
       });
     const read = () => (existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null);
 
+    if (b.tasks !== undefined) return c.json({ error: TASKS_RETIRED_MESSAGE }, 400);
     let next: string | null;
     let summary: Record<string, unknown>;
     if (b.status !== undefined) {
@@ -412,12 +384,6 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
         );
         key = fresh?.id ?? target.text;
       }
-      if (edits.tasks) {
-        const stored = [...parseGoals(current).active, ...parseGoals(current).completed].find(
-          (g) => g.id === key || g.text === key
-        );
-        edits.tasks = mergeTasks(stored?.tasks, edits.tasks, 'operator');
-      }
       next = editGoal(current, key, edits);
       summary = { goal: edits.text ?? target.text, ...edits };
     }
@@ -431,6 +397,195 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     ctx.cache.invalidate();
     deps.logger.info({ botId: bot.id, ...summary }, 'Operator updated goal');
     return c.json(summary);
+  });
+
+  // ── Task ops (the task store, TASKS.json). Every response carries the store `rev`. ──
+
+  const taskStoreFor = (soulDir: string) =>
+    new TaskStore(soulDir, {
+      backup: (p) => backupSoulFile(p, deps.logger),
+      onError: (err) => deps.logger.warn({ err }, 'Task store: warning'),
+    });
+
+  /** `{ status, body }` for a failed apply. */
+  const taskFailure = (r: { reason: string; message: string; rev: number }) => {
+    const status =
+      r.reason === 'conflict' || r.reason === 'claimed'
+        ? 409
+        : r.reason === 'not-found'
+          ? 404
+          : 400;
+    return {
+      status: status as 400 | 404 | 409,
+      body: { error: r.message, reason: r.reason, rev: r.rev },
+    };
+  };
+
+  /**
+   * The id of the goal `ref` names (an id, or a title for a goal written before
+   * ids). A goal without an id gets one first, as its own write (no events).
+   */
+  const goalIdFor = (soulDir: string, ref: string): string | null => {
+    const goalsPath = join(soulDir, 'GOALS.md');
+    if (!existsSync(goalsPath)) return null;
+    const read = () => readFileSync(goalsPath, 'utf-8');
+    const find = (content: string) => {
+      const { active, completed } = parseGoals(content);
+      const all = [...active, ...completed];
+      return all.find((g) => g.id === ref) ?? resolveGoalRef(ref, all);
+    };
+    const goal = find(read());
+    if (!goal) return null;
+    if (goal.id) return goal.id;
+    const written = writeGoalsFile(goalsPath, read(), {
+      actor: 'operator',
+      reason: OPERATOR_GOAL_REASON,
+      backup: (p) => backupSoulFile(p, deps.logger),
+    });
+    const fresh = [...parseGoals(written).active, ...parseGoals(written).completed].find(
+      (g) => g.text === goal.text
+    );
+    return fresh?.id ?? null;
+  };
+
+  const readBody = async (c: import('hono').Context) =>
+    ((await c.req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+
+  /** `expectedRev` from a body (number) or `?rev=`; undefined when absent, null when malformed. */
+  const expectedRevOf = (c: import('hono').Context, b: Record<string, unknown>) => {
+    const raw = b.expectedRev ?? c.req.query('rev');
+    if (raw === undefined || raw === '') return undefined;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 ? n : null;
+  };
+
+  app.post('/:id/goals/:goalId/tasks/reorder', async (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const b = await readBody(c);
+    const expectedRev = expectedRevOf(c, b);
+    if (expectedRev === null)
+      return c.json({ error: 'expectedRev must be a revision number' }, 400);
+    if (!Array.isArray(b.ids) || !b.ids.every((x) => typeof x === 'string'))
+      return c.json({ error: 'ids must be an array of task ids' }, 400);
+    const { soulDir } = resolveBotPaths(deps.config, bot);
+    const store = taskStoreFor(soulDir);
+    const goalId = goalIdFor(soulDir, c.req.param('goalId'));
+    if (!goalId) return c.json({ error: 'Goal not found', rev: store.read().rev }, 404);
+    const r = store.apply([{ op: 'reorder', goalId, ids: b.ids as string[] }], {
+      actor: 'operator',
+      expectedRev,
+    });
+    if (!r.ok) {
+      const f = taskFailure(r);
+      return c.json(f.body, f.status);
+    }
+    ctx.cache.invalidate();
+    return c.json({ rev: r.rev });
+  });
+
+  app.post('/:id/goals/:goalId/tasks', async (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const b = await readBody(c);
+    const expectedRev = expectedRevOf(c, b);
+    if (expectedRev === null)
+      return c.json({ error: 'expectedRev must be a revision number' }, 400);
+    if (typeof b.text !== 'string') return c.json({ error: 'text is required' }, 400);
+    if (/[\r\n]/.test(b.text)) return c.json({ error: 'a task must be a single line' }, 400);
+    const lane = b.lane === undefined ? undefined : String(b.lane);
+    if (lane !== undefined && !(TASK_LANES as readonly string[]).includes(lane))
+      return c.json({ error: `lane must be one of ${TASK_LANES.join(', ')}` }, 400);
+    const { soulDir } = resolveBotPaths(deps.config, bot);
+    const store = taskStoreFor(soulDir);
+    const goalId = goalIdFor(soulDir, c.req.param('goalId'));
+    if (!goalId) return c.json({ error: 'Goal not found', rev: store.read().rev }, 404);
+    const r = store.apply(
+      [{ op: 'add', goalId, text: b.text, ...(lane ? { lane: lane as TaskLane } : {}) }],
+      { actor: 'operator', expectedRev }
+    );
+    if (!r.ok) {
+      const f = taskFailure(r);
+      return c.json(f.body, f.status);
+    }
+    ctx.cache.invalidate();
+    const res = r.results[0];
+    const task = store.get(res.id);
+    deps.logger.info({ botId: bot.id, goalId, taskId: res.id }, 'Operator added a task');
+    return c.json(
+      {
+        task: task ? toTaskView(task) : null,
+        rev: r.rev,
+        ...(res.existing ? { existing: true } : {}),
+      },
+      res.existing ? 200 : 201
+    );
+  });
+
+  app.patch('/:id/tasks/:taskId', async (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const b = await readBody(c);
+    const expectedRev = expectedRevOf(c, b);
+    if (expectedRev === null)
+      return c.json({ error: 'expectedRev must be a revision number' }, 400);
+    const id = c.req.param('taskId');
+    const ops: TaskOp[] = [];
+    if (b.text !== undefined) {
+      if (typeof b.text !== 'string') return c.json({ error: 'text must be a string' }, 400);
+      if (/[\r\n]/.test(b.text)) return c.json({ error: 'a task must be a single line' }, 400);
+      ops.push({ op: 'edit', id, text: b.text });
+    }
+    if (b.note !== undefined) {
+      if (typeof b.note !== 'string') return c.json({ error: 'note must be a string' }, 400);
+      ops.push({ op: 'note', id, text: b.note });
+    }
+    if (b.lane !== undefined) {
+      const lane = String(b.lane);
+      if (!(TASK_LANES as readonly string[]).includes(lane))
+        return c.json({ error: `lane must be one of ${TASK_LANES.join(', ')}` }, 400);
+      ops.push({ op: 'move', id, lane: lane as TaskLane });
+    }
+    if (ops.length === 0)
+      return c.json({ error: 'nothing to change: send lane, text or note' }, 400);
+    const store = taskStoreFor(resolveBotPaths(deps.config, bot).soulDir);
+    const r = store.apply(ops, { actor: 'operator', expectedRev });
+    if (!r.ok) {
+      const f = taskFailure(r);
+      return c.json(f.body, f.status);
+    }
+    ctx.cache.invalidate();
+    const released = r.results.find((x) => x.releasedClaim)?.releasedClaim;
+    const task = store.get(id);
+    deps.logger.info(
+      { botId: bot.id, taskId: id, ops: ops.map((o) => o.op) },
+      'Operator changed a task'
+    );
+    return c.json({
+      task: task ? toTaskView(task) : null,
+      rev: r.rev,
+      ...(released ? { releasedClaim: released } : {}),
+    });
+  });
+
+  app.delete('/:id/tasks/:taskId', async (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const b = await readBody(c);
+    const expectedRev = expectedRevOf(c, b);
+    if (expectedRev === null)
+      return c.json({ error: 'expectedRev must be a revision number' }, 400);
+    const id = c.req.param('taskId');
+    const store = taskStoreFor(resolveBotPaths(deps.config, bot).soulDir);
+    const r = store.apply([{ op: 'remove', id }], { actor: 'operator', expectedRev });
+    if (!r.ok) {
+      const f = taskFailure(r);
+      return c.json(f.body, f.status);
+    }
+    ctx.cache.invalidate();
+    const released = r.results[0]?.releasedClaim;
+    deps.logger.info({ botId: bot.id, taskId: id }, 'Operator removed a task');
+    return c.json({ removed: id, rev: r.rev, ...(released ? { releasedClaim: released } : {}) });
   });
 
   /** DELETE /:id/goals — `{ id | goal }`: the operator removes a goal (logged as a `remove` event). */

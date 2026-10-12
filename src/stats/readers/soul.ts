@@ -5,9 +5,17 @@
 import { join } from 'node:path';
 import { getUnconsolidatedLogs } from '../../bot/soul-memory-consolidator';
 import { createDefaultTraits } from '../../bot/trait-registers';
+import { type StoredTask, liveClaim, readTasksSnapshot } from '../../goals/task-store';
 import { type GoalEntry, parseGoals } from '../../tools/goals';
 import type { TraitChangeRecord } from '../../why/builders/trait-change';
-import type { GoalDetail, GoalsStats, SoulStats, TraitSnapshot, TraitStats } from '../types';
+import type {
+  GoalDetail,
+  GoalTaskView,
+  GoalsStats,
+  SoulStats,
+  TraitSnapshot,
+  TraitStats,
+} from '../types';
 import { readJsonSafe, readJsonlSafe, readTextSafe, statSizeSafe, toIso, toMs } from '../util';
 import { type GoalExtras, goalTitleKey, readGoalExtras } from './goal-events';
 
@@ -33,9 +41,32 @@ function normaliseGoalText(text: string): string {
     .trim();
 }
 
-function toDetail(g: GoalEntry, section: 'active' | 'completed', extras?: GoalExtras): GoalDetail {
+/** A stored task as the boards read it. */
+export function toTaskView(t: StoredTask, nowMs: number = Date.now()): GoalTaskView {
+  const view: GoalTaskView = {
+    id: t.id,
+    text: t.text,
+    lane: t.lane,
+    status: t.lane,
+    done: t.lane === 'done',
+    by: t.by,
+    note: t.note ?? null,
+    cycleId: t.createdCycle ?? null,
+  };
+  const claim = liveClaim(t, nowMs);
+  if (claim) view.claim = { runId: claim.runId };
+  return view;
+}
+
+function toDetail(
+  g: GoalEntry,
+  section: 'active' | 'completed',
+  extras: GoalExtras | undefined,
+  tasksOf: (goalId: string | null) => GoalTaskView[]
+): GoalDetail {
+  const id = g.id ?? extras?.id ?? null;
   return {
-    id: extras?.id ?? null,
+    id,
     text: g.text,
     status: g.status,
     priority: g.priority,
@@ -45,15 +76,34 @@ function toDetail(g: GoalEntry, section: 'active' | 'completed', extras?: GoalEx
     outcome: g.outcome ?? null,
     source: g.source ?? null,
     section,
-    tasks: g.tasks ?? [],
+    tasks: tasksOf(id),
     headline: g.headline ?? null,
     parent: g.parent ?? null,
   };
 }
 
-export function readGoals(soulDir: string): { stats: GoalsStats; detail: GoalDetail[] } {
+export function readGoals(soulDir: string): {
+  stats: GoalsStats;
+  detail: GoalDetail[];
+  /** Revision of the task store (TASKS.json); 0 before the first write. */
+  tasksRev: number;
+} {
   const { active, completed } = parseGoals(readTextSafe(join(soulDir, 'GOALS.md')));
   const extras = readGoalExtras(soulDir);
+  let snapshot: { rev: number; tasks: StoredTask[] } = { rev: 0, tasks: [] };
+  try {
+    snapshot = readTasksSnapshot(soulDir);
+  } catch {
+    // a missing or unreadable store reads as no tasks
+  }
+  const nowMs = Date.now();
+  const tasksOf = (goalId: string | null) =>
+    goalId
+      ? snapshot.tasks
+          .filter((t) => t.goalId === goalId)
+          .sort((a, b) => a.order - b.order)
+          .map((t) => toTaskView(t, nowMs))
+      : [];
 
   const byStatus: Record<string, number> = {};
   const seen = new Set<string>();
@@ -86,9 +136,10 @@ export function readGoals(soulDir: string): { stats: GoalsStats; detail: GoalDet
       lastCompletedAt,
     },
     detail: [
-      ...active.map((g) => toDetail(g, 'active', extras.get(goalTitleKey(g.text)))),
-      ...completed.map((g) => toDetail(g, 'completed', extras.get(goalTitleKey(g.text)))),
+      ...active.map((g) => toDetail(g, 'active', extras.get(goalTitleKey(g.text)), tasksOf)),
+      ...completed.map((g) => toDetail(g, 'completed', extras.get(goalTitleKey(g.text)), tasksOf)),
     ],
+    tasksRev: snapshot.rev,
   };
 }
 
