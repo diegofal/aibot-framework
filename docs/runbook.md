@@ -635,3 +635,19 @@ docker compose up -d --build
 **Outcome.** Container recreated and `healthy` within ~25 s; dashboard 200. Served `/pages/agent-home-helpers.js` has `goalTasksPanel` and `/style.css` has `home-task-lane`; the image's `src/tools/goals.ts` has `add_task`. Boot logs show a Telegram `getMe` 401 (the revoked token seen in earlier deploys) and "Ollama daemon is unreachable"; neither comes from this change. Task moves through `PATCH /api/agents/:id/goals` not exercised from here (the API needs a dashboard session).
 
 **Reversible?** Yes for the code: check out `2533471` and rebuild. Tasks written since carry `[~]`/`[!]` marks and a `{id, by, cycle}` suffix; the older parser reads `[~]`/`[!]` lines as no task and keeps the suffix in the text, so roll back before many such tasks exist.
+
+### 2026-10-12 12:09Z — Deployed `255f938` (goal activity on the Fleet Board)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship the Fleet Board goal activity: "worked Xh ago · N cycles / 7d" pulse on In progress cards, the drawer's Activity section, and `- parent:` spawned goals |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container recreated and `healthy` within ~30 s. Served `/style.css` has `fb-gpulse`; served `/pages/fleet-board-helpers.js` has `activityHtml` / `goalPulse`; the image's `src/stats/agent-home-aggregator.ts` calls `buildGoalActivity`. Boot errors: the known Telegram `getMe` 401 (revoked token) and "Ollama daemon is unreachable", both in earlier deploys, neither from this change. Not exercised logged in (the dashboard needs a session). No data written: live goals carry no `parent` until reflection, the strategist or `manage_goals add` writes one.
+
+**Reversible?** Yes: check out `5efe173` and rebuild. `- parent:` lines written since are ignored by the older parser and dropped on its next GOALS.md write.
