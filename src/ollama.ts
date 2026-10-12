@@ -1,4 +1,5 @@
 import { DEFAULT_MAX_TOOL_ROUNDS, type OllamaConfig } from './config';
+import { isAbort, toAbortError, withTimeoutSignal } from './core/abort';
 import type { LLMResponse, TokenUsage } from './core/llm-client';
 import { createLoopDetector } from './core/loop-detector';
 import { NativeToolStrategy } from './core/native-tool-strategy';
@@ -31,6 +32,17 @@ export interface ChatOptions {
   loopContext?: { botId?: string; conversationId?: string; caller?: string };
   /** Observer hook fired once when the loop detector breaks. Forwarded into runToolLoop options. */
   onLoopBreak?: (info: import('./core/tool-runner').LoopBreakInfo) => void;
+  /**
+   * Cancels the call (plan C12): a Stop, step timeout or shutdown. On abort the
+   * call rejects with `LLMAbortedError` and never falls back to another model
+   * or backend (which would replay the tool loop).
+   */
+  signal?: AbortSignal;
+  /**
+   * Claude CLI queue priority (`claudeCli.maxConcurrent` semaphore):
+   * `interactive` (conversations) > `loop` (default) > `worker`. Ignored by Ollama.
+   */
+  priority?: import('./core/cli-semaphore').CliPriority;
   /** @internal Prevent recursive fallback loops */
   _skipFallbacks?: boolean;
 }
@@ -40,6 +52,17 @@ export interface GenerateOptions {
   system?: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Cancels the call (plan C12): a Stop, step timeout or shutdown. On abort the
+   * call rejects with `LLMAbortedError` and never falls back to another model
+   * or backend (which would replay the tool loop).
+   */
+  signal?: AbortSignal;
+  /**
+   * Claude CLI queue priority (`claudeCli.maxConcurrent` semaphore):
+   * `interactive` (conversations) > `loop` (default) > `worker`. Ignored by Ollama.
+   */
+  priority?: import('./core/cli-semaphore').CliPriority;
   /** @internal Prevent recursive fallback loops */
   _skipFallbacks?: boolean;
 }
@@ -98,7 +121,7 @@ export class OllamaClient {
       const response = await fetch(`${this.config.baseUrl}/api/generate`, {
         method: 'POST',
         headers: buildOllamaJsonHeaders(this.config.apiKey),
-        signal: AbortSignal.timeout(this.config.timeout),
+        signal: withTimeoutSignal(this.config.timeout, options.signal),
         body: JSON.stringify({
           model,
           prompt,
@@ -128,6 +151,11 @@ export class OllamaClient {
     } catch (error) {
       const elapsedMs = Date.now() - startMs;
 
+      // A Stop never falls back: another model would replay the tool loop (C12).
+      if (isAbort(error, options.signal)) {
+        throw toAbortError(error, options.signal);
+      }
+
       // If already in a fallback call, don't recurse into fallbacks again
       if (options._skipFallbacks) {
         throw error;
@@ -154,6 +182,10 @@ export class OllamaClient {
           this.config.timeout = savedTimeout;
           return result;
         } catch (fallbackError) {
+          if (isAbort(fallbackError, options.signal)) {
+            this.config.timeout = savedTimeout;
+            throw toAbortError(fallbackError, options.signal);
+          }
           this.logger.debug({ err: fallbackError, fallback }, 'Fallback model failed');
         }
       }
@@ -226,6 +258,11 @@ export class OllamaClient {
     } catch (error) {
       const elapsedMs = Date.now() - startMs;
 
+      // A Stop never falls back: another model would replay the tool loop (C12).
+      if (isAbort(error, options.signal)) {
+        throw toAbortError(error, options.signal);
+      }
+
       // If already in a fallback call, don't recurse into fallbacks again
       if (options._skipFallbacks) {
         throw error;
@@ -251,6 +288,10 @@ export class OllamaClient {
           this.config.timeout = savedTimeout;
           return result;
         } catch (fallbackError) {
+          if (isAbort(fallbackError, options.signal)) {
+            this.config.timeout = savedTimeout;
+            throw toAbortError(fallbackError, options.signal);
+          }
           this.logger.debug({ err: fallbackError, fallback }, 'Fallback model failed for chat');
         }
       }
@@ -276,7 +317,7 @@ export class OllamaClient {
     const response = await fetch(`${this.config.baseUrl}/api/generate`, {
       method: 'POST',
       headers: buildOllamaJsonHeaders(this.config.apiKey),
-      signal: AbortSignal.timeout(this.config.timeout),
+      signal: withTimeoutSignal(this.config.timeout, options.signal),
       body: JSON.stringify({
         model,
         prompt,
@@ -344,7 +385,7 @@ export class OllamaClient {
     const response = await fetch(`${this.config.baseUrl}/api/chat`, {
       method: 'POST',
       headers: buildOllamaJsonHeaders(this.config.apiKey),
-      signal: AbortSignal.timeout(this.config.timeout),
+      signal: withTimeoutSignal(this.config.timeout, options.signal),
       body: JSON.stringify({
         model,
         messages: messages.map((m) => ({

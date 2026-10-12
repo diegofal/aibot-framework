@@ -87,7 +87,8 @@ export class McpClientPool {
   async callTool(
     serverName: string,
     toolName: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    opts: { signal?: AbortSignal } = {}
   ): Promise<McpToolCallResult> {
     const client = this.clients.get(serverName);
     if (!client) {
@@ -107,7 +108,7 @@ export class McpClientPool {
         isError: true,
       };
     }
-    return client.callTool(toolName, args);
+    return client.callTool(toolName, args, opts);
   }
 
   /** Get status info for all registered servers */

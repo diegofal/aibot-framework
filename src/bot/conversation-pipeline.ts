@@ -489,6 +489,7 @@ export class ConversationPipeline {
             this.ctx.getLLMClient(config.id).chat(currentMessages, {
               model: activeModel,
               temperature: resolved.temperature,
+              priority: 'interactive',
               tools: hasTools ? botToolDefs : undefined,
               toolExecutor: hasTools
                 ? this.toolRegistry.createExecutor(
@@ -557,6 +558,7 @@ export class ConversationPipeline {
               this.ctx.getLLMClient(config.id).chat(currentMessages, {
                 model: activeModel,
                 temperature: resolved.temperature,
+                priority: 'interactive',
                 tools: hasTools ? botToolDefs : undefined,
                 toolExecutor: hasTools
                   ? this.toolRegistry.createExecutor(
@@ -1235,6 +1237,7 @@ export class ConversationPipeline {
             const stream = llmClient.chatStream?.(currentMessages, {
               model: activeModel,
               temperature: resolved.temperature,
+              priority: 'interactive',
             });
 
             if (!stream) {
@@ -1309,6 +1312,7 @@ export class ConversationPipeline {
               llmClient.chat(currentMessages, {
                 model: activeModel,
                 temperature: resolved.temperature,
+                priority: 'interactive',
                 tools: hasTools ? botToolDefs : undefined,
                 toolExecutor: hasTools
                   ? this.toolRegistry.createExecutor(
@@ -1361,6 +1365,7 @@ export class ConversationPipeline {
                 llmClient.chat(currentMessages, {
                   model: activeModel,
                   temperature: resolved.temperature,
+                  priority: 'interactive',
                   tools: hasTools ? botToolDefs : undefined,
                   toolExecutor: hasTools
                     ? this.toolRegistry.createExecutor(

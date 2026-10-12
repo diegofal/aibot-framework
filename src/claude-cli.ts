@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { abortErrorFrom, throwIfAborted } from './core/abort';
+import { type CliPriority, claudeCliSemaphore } from './core/cli-semaphore';
 import type { TokenUsage } from './core/llm-client';
 import type { Logger } from './logger';
 import type { ToolDefinition, ToolExecutor } from './tools/types';
@@ -55,6 +57,53 @@ export interface ClaudeGenerateOptions {
    * goes on stdin as stream-json instead of as the `-p` argument.
    */
   images?: string[];
+  /**
+   * Cancels the call (C12): kills the child and rejects with `LLMAbortedError`.
+   * Also cancels a wait for a semaphore slot.
+   */
+  signal?: AbortSignal;
+  /** Queue priority for the process-wide `claudeCli.maxConcurrent` limiter. Default `loop`. */
+  priority?: CliPriority;
+}
+
+/** Bound on waiting for a tool callback already in flight when a call is aborted. */
+export const ABORT_TOOL_SETTLE_MS = 5_000;
+
+/**
+ * Kill `proc` when `signal` aborts. `aborted` rejects with `LLMAbortedError`
+ * right after the kill, so the caller stops waiting on pipes a surviving
+ * grandchild could keep open. Without a signal `aborted` never settles.
+ */
+function watchAbort(
+  signal: AbortSignal | undefined,
+  proc: { kill: () => void }
+): { aborted: Promise<never>; dispose: () => void } {
+  if (!signal) return { aborted: new Promise<never>(() => {}), dispose: () => {} };
+  let onAbort: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      try {
+        proc.kill();
+      } catch {}
+      reject(abortErrorFrom(signal));
+    };
+  });
+  aborted.catch(() => {});
+  if (signal.aborted) onAbort();
+  else signal.addEventListener('abort', onAbort, { once: true });
+  return { aborted, dispose: () => signal.removeEventListener('abort', onAbort) };
+}
+
+/** Hold a `claudeCliSemaphore` slot (priority, abortable) for the length of `fn`. */
+async function withCliSlot<T>(opts: ClaudeGenerateOptions, fn: () => Promise<T>): Promise<T> {
+  throwIfAborted(opts.signal);
+  const release = await claudeCliSemaphore.acquire(opts.priority ?? 'loop', opts.signal);
+  try {
+    throwIfAborted(opts.signal);
+    return await fn();
+  } finally {
+    release();
+  }
 }
 
 /** Media type from the image's magic bytes; Telegram photos are JPEG, so that is the fallback. */
@@ -409,6 +458,13 @@ export async function claudeGenerate(
   prompt: string,
   opts: ClaudeGenerateOptions & { logger: Logger }
 ): Promise<{ response: string; usage?: TokenUsage }> {
+  return withCliSlot(opts, () => runClaudeGenerate(prompt, opts));
+}
+
+async function runClaudeGenerate(
+  prompt: string,
+  opts: ClaudeGenerateOptions & { logger: Logger }
+): Promise<{ response: string; usage?: TokenUsage }> {
   const claudePath = opts.claudePath || DEFAULT_CLAUDE_PATH;
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
   const maxLength = opts.maxLength ?? DEFAULT_MAX_LENGTH;
@@ -442,16 +498,19 @@ export async function claudeGenerate(
       proc.kill();
     } catch {}
   }, timeout);
+  const abortWatch = watchAbort(opts.signal, proc);
 
   const startTime = Date.now();
 
   try {
-    const [rawStdout, stderr] = await Promise.all([
+    const run = Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
+      proc.exited,
     ]);
+    run.catch(() => {});
+    const [rawStdout, stderr, exitCode] = await Promise.race([run, abortWatch.aborted]);
     const stdout = input.stdin === undefined ? rawStdout : extractStreamJsonResult(rawStdout);
-    const exitCode = await proc.exited;
     clearTimeout(timer);
 
     if (exitCode !== 0) {
@@ -508,6 +567,8 @@ export async function claudeGenerate(
   } catch (err) {
     clearTimeout(timer);
     throw err;
+  } finally {
+    abortWatch.dispose();
   }
 }
 
@@ -557,6 +618,13 @@ export async function claudeGenerateWithTools(
   prompt: string,
   opts: ClaudeGenerateWithToolsOptions & { logger: Logger }
 ): Promise<{ response: string; toolCalls: ClaudeToolCallRecord[]; usage?: TokenUsage }> {
+  return withCliSlot(opts, () => runClaudeGenerateWithTools(prompt, opts));
+}
+
+async function runClaudeGenerateWithTools(
+  prompt: string,
+  opts: ClaudeGenerateWithToolsOptions & { logger: Logger }
+): Promise<{ response: string; toolCalls: ClaudeToolCallRecord[]; usage?: TokenUsage }> {
   const claudePath = opts.claudePath || DEFAULT_CLAUDE_PATH;
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
   const maxLength = opts.maxLength ?? DEFAULT_MAX_LENGTH;
@@ -564,6 +632,10 @@ export async function claudeGenerateWithTools(
 
   // Create temp directory for MCP config files
   const tmpDir = await mkdtemp(join(tmpdir(), 'aibot-mcp-'));
+
+  // Tool callbacks in flight: an abort waits (bounded) for them before closing
+  // the server, so a running tool is not cut off by the server going away.
+  const inFlight = new Set<Promise<unknown>>();
 
   // Start callback server wrapping toolExecutor
   const callbackServer = Bun.serve({
@@ -573,9 +645,16 @@ export async function claudeGenerateWithTools(
       if (req.method !== 'POST' || new URL(req.url).pathname !== '/call') {
         return new Response('Not found', { status: 404 });
       }
+      if (opts.signal?.aborted) {
+        return Response.json({ success: false, content: 'Stopped: the run was cancelled.' });
+      }
       try {
         const body = (await req.json()) as { name: string; arguments: Record<string, unknown> };
-        const result = await opts.toolExecutor(body.name, body.arguments ?? {});
+        const pending = opts.toolExecutor(body.name, body.arguments ?? {});
+        inFlight.add(pending);
+        const forget = () => inFlight.delete(pending);
+        pending.then(forget, forget);
+        const result = await pending;
         toolCalls.push({
           name: body.name,
           args: body.arguments ?? {},
@@ -592,6 +671,7 @@ export async function claudeGenerateWithTools(
     },
   });
 
+  let abortWatch: ReturnType<typeof watchAbort> | undefined;
   try {
     const callbackPort = callbackServer.port;
 
@@ -666,15 +746,38 @@ export async function claudeGenerateWithTools(
         proc.kill();
       } catch {}
     }, timeout);
+    abortWatch = watchAbort(opts.signal, proc);
 
     const startTime = Date.now();
 
-    const [rawStdout, stderr] = await Promise.all([
+    const run = Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
+      proc.exited,
     ]);
+    run.catch(() => {});
+    let rawStdout: string;
+    let stderr: string;
+    let exitCode: number;
+    try {
+      [rawStdout, stderr, exitCode] = await Promise.race([run, abortWatch.aborted]);
+    } catch (err) {
+      clearTimeout(timer);
+      if (opts.signal?.aborted && inFlight.size > 0) {
+        // The child is dead. Let the tool callback already running settle
+        // (bounded) before the server closes under it.
+        let settleTimer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          Promise.allSettled([...inFlight]),
+          new Promise((r) => {
+            settleTimer = setTimeout(r, ABORT_TOOL_SETTLE_MS);
+          }),
+        ]);
+        clearTimeout(settleTimer);
+      }
+      throw err;
+    }
     const stdout = input.stdin === undefined ? rawStdout : extractStreamJsonResult(rawStdout);
-    const exitCode = await proc.exited;
     clearTimeout(timer);
 
     if (exitCode !== 0) {
@@ -732,6 +835,7 @@ export async function claudeGenerateWithTools(
 
     return { response, toolCalls, usage };
   } finally {
+    abortWatch?.dispose();
     callbackServer.stop(true);
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }

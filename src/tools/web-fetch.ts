@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { TOOL_ABORTED_MESSAGE, toolSignal, withTimeoutSignal } from '../core/abort';
 import type { Logger } from '../logger';
 import { TtlCache } from './cache';
 import type { Tool, ToolFailureKind, ToolResult } from './types';
@@ -260,6 +261,10 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
         };
       }
 
+      // C12: the caller's Stop aborts the request, combined with the timeout.
+      const callerSignal = toolSignal(args);
+      if (callerSignal?.aborted) return { success: false, content: TOOL_ABORTED_MESSAGE };
+
       try {
         logger.info({ url: rawUrl }, 'Executing web_fetch');
 
@@ -269,7 +274,7 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
             Accept: 'text/html, application/xhtml+xml, text/plain, */*',
           },
           redirect: 'follow',
-          signal: AbortSignal.timeout(timeout),
+          signal: withTimeoutSignal(timeout, callerSignal),
         });
 
         if (!response.ok) {
@@ -311,6 +316,7 @@ export function createWebFetchTool(config: WebFetchConfig = {}): Tool {
 
         return { success: true, content };
       } catch (error) {
+        if (callerSignal?.aborted) return { success: false, content: TOOL_ABORTED_MESSAGE };
         const message = error instanceof Error ? error.message : String(error);
         logger.error({ error: message, url: rawUrl }, 'web_fetch failed');
         return { success: false, failureKind: 'error', content: `Fetch failed: ${message}` };

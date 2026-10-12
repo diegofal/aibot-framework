@@ -7,6 +7,7 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { abortErrorFrom } from '../core/abort';
 import type { JsonRpcMessage, JsonRpcResponse } from './types';
 import { isJsonRpcResponse } from './types';
 
@@ -280,22 +281,35 @@ export class McpSseTransport extends EventEmitter implements McpTransport {
 export function waitForResponse(
   transport: McpTransport,
   requestId: string | number,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<JsonRpcResponse> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const cleanup = () => {
+      clearTimeout(timer);
       transport.removeListener('message', onMessage);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
       reject(new Error(`MCP response timeout after ${timeoutMs}ms for request ${requestId}`));
     }, timeoutMs);
 
     function onMessage(msg: JsonRpcMessage) {
       if (isJsonRpcResponse(msg) && msg.id === requestId) {
-        clearTimeout(timer);
-        transport.removeListener('message', onMessage);
+        cleanup();
         resolve(msg);
       }
     }
 
+    // C12: stop waiting as soon as the caller aborts.
+    function onAbort() {
+      cleanup();
+      reject(abortErrorFrom(signal));
+    }
+
     transport.on('message', onMessage);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

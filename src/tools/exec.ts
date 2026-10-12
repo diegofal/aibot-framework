@@ -1,3 +1,4 @@
+import { TOOL_ABORTED_MESSAGE, toolSignal } from '../core/abort';
 import type { Logger } from '../logger';
 import { type ProcessToolConfig, registerProcess } from './process';
 import type { Tool, ToolResult } from './types';
@@ -210,6 +211,10 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
         }
       }
 
+      // C12: the run was stopped before this command started.
+      const signal = toolSignal(args);
+      if (signal?.aborted) return { success: false, content: TOOL_ABORTED_MESSAGE };
+
       try {
         logger.info({ command, cwd, timeout }, 'exec: running command');
 
@@ -227,12 +232,21 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
           killProcessTree(proc);
         }, timeout);
 
+        // C12: a Stop kills the command (and its children) right away.
+        let aborted = false;
+        const onAbort = () => {
+          aborted = true;
+          killProcessTree(proc);
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+
         const [stdout, stderr] = await Promise.all([
           new Response(proc.stdout).text(),
           new Response(proc.stderr).text(),
         ]);
         const exitCode = await proc.exited;
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
 
         // Build output
         let output = '';
@@ -243,6 +257,14 @@ export function createExecTool(config: ExecToolConfig = {}): Tool {
         // Truncate if too long
         if (output.length > maxOutput) {
           output = `${output.slice(0, maxOutput)}\n... (truncated, ${output.length} total chars)`;
+        }
+
+        if (aborted) {
+          logger.info({ command }, 'exec: command killed by abort');
+          return {
+            success: false,
+            content: `${TOOL_ABORTED_MESSAGE}\nExit code: ${exitCode}\n\n${output}`,
+          };
         }
 
         if (timedOut) {

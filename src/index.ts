@@ -5,6 +5,7 @@ import { checkClaudeCli, formatPreflight } from './bot/claude-cli-preflight';
 import { ModelValidationError, runStartupModelValidation } from './bot/model-failover';
 import { resolveCandidatesFromConfig } from './bot/model-failover/model-fallback';
 import { loadConfig, resolveAgentConfig } from './config';
+import { configureClaudeCliConcurrency } from './core/cli-semaphore';
 import { createLLMClient } from './core/llm-client';
 import { describeEmbeddingBackendGap } from './core/ollama-http';
 import { SkillRegistry } from './core/skill-registry';
@@ -29,6 +30,7 @@ async function main() {
     process.env.TZ = config.datetime?.timezone || 'America/Argentina/Buenos_Aires';
 
     const logger = createLogger(config.logging);
+    configureClaudeCliConcurrency(config.claudeCli?.maxConcurrent);
 
     logger.info('Starting AIBot Framework v1.0.0');
     logger.info({ platform: process.platform, node: process.version }, 'System info');
