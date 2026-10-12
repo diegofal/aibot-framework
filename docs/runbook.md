@@ -619,3 +619,19 @@ docker compose up -d --build
 **Outcome.** Container recreated and healthy within a minute. Served `/pages/why-helpers.js` has `whyPanel`; the image has the 18 builders in `src/why/builders/`. New routes (`/api/agents/:id/cycles/:cycleId`, `/api/proactive`, `/api/agents/:id/memory-history`) answer 401 without a session, i.e. they are mounted behind auth; not exercised logged in. Startup logs: the only error is job-seeker's Telegram `getMe` 401 (revoked token), already present in older rotated logs; an "OLLAMA AUTHENTICATION FAILED" line in `aibot.log` is about 61 days old, not from this boot. New on-disk files appear as agents act: `<soul>/soul-events.jsonl`, `<soul>/DIRECTIONS.jsonl`, new optional fields in the cycle log, cron jobs, permissions, proposals, feedback and TRAITS.json.
 
 **Reversible?** Yes for the code: check out `60a10b8` and rebuild. Files and fields written since are additive and ignored by the older code.
+
+### 2026-10-12 12:37Z — Deployed `ebeb4af` (goal tasks with lanes)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship goal tasks: lanes, authors and ids in GOALS.md, `manage_goals add_task` / `update_task`, and the Agent Home board that opens a goal's tasks under its row |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container recreated and `healthy` within ~25 s; dashboard 200. Served `/pages/agent-home-helpers.js` has `goalTasksPanel` and `/style.css` has `home-task-lane`; the image's `src/tools/goals.ts` has `add_task`. Boot logs show a Telegram `getMe` 401 (the revoked token seen in earlier deploys) and "Ollama daemon is unreachable"; neither comes from this change. Task moves through `PATCH /api/agents/:id/goals` not exercised from here (the API needs a dashboard session).
+
+**Reversible?** Yes for the code: check out `2533471` and rebuild. Tasks written since carry `[~]`/`[!]` marks and a `{id, by, cycle}` suffix; the older parser reads `[~]`/`[!]` lines as no task and keeps the suffix in the text, so roll back before many such tasks exist.
