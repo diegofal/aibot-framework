@@ -665,3 +665,5 @@ bun scripts/docker/backup.ts backup
 ```
 
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-12T12-14-04`; the script restarted aibot. The link itself was **not** written: the one-off script threw in `backupSoulFile` (wrong arguments) before calling `writeGoalsFile`, and the follow-up check inside the container was blocked by the session's permission policy, so it is left for Diego. GOALS.md is unchanged as far as the script got.
+
+**Follow-up (12:2xZ).** Diego ran the corrected one-off script himself (`docker cp … link.ts` + `bun _link.ts` in `/app`, which backs GOALS.md up to `.versions/` and writes through `writeGoalsFile` as `operator`): output `linked g-1001d015 -> g-7cb6a370`. The digest goal now carries `- parent: g-7cb6a370`; the LLMs goal's drawer lists it under "Spawned from this goal".
