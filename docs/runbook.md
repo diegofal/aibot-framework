@@ -603,3 +603,19 @@ docker compose up -d --build
 **Outcome.** Container healthy, dashboard 200, AIBot (Finny) started. The image has the "Who you are talking with" section (`src/relay/prompt.ts`) and `force_reply` (`src/relay/service.ts`). Finny's live IDENTITY.md has `name: Finny`, which the relay header now uses. Not yet exercised from Telegram.
 
 **Reversible?** Yes: check out `c612e92` and rebuild.
+
+### 2026-10-12 03:38Z — Deployed `b10922d` ("Why this?" everywhere)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship the "Why this?" work (`docs/plans/why-everywhere-plan.md`, phases 0–3): every dashboard surface says where an item came from |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container recreated and healthy within a minute. Served `/pages/why-helpers.js` has `whyPanel`; the image has the 18 builders in `src/why/builders/`. New routes (`/api/agents/:id/cycles/:cycleId`, `/api/proactive`, `/api/agents/:id/memory-history`) answer 401 without a session, i.e. they are mounted behind auth; not exercised logged in. Startup logs: the only error is job-seeker's Telegram `getMe` 401 (revoked token), already present in older rotated logs; an "OLLAMA AUTHENTICATION FAILED" line in `aibot.log` is about 61 days old, not from this boot. New on-disk files appear as agents act: `<soul>/soul-events.jsonl`, `<soul>/DIRECTIONS.jsonl`, new optional fields in the cycle log, cron jobs, permissions, proposals, feedback and TRAITS.json.
+
+**Reversible?** Yes for the code: check out `60a10b8` and rebuild. Files and fields written since are additive and ignored by the older code.
