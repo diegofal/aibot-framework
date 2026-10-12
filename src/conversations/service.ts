@@ -32,6 +32,10 @@ export interface Conversation {
   cycleId?: string;
   /** ask_human threads: the goal that cycle served, when known. */
   goalId?: string;
+  /** ask_human threads: the worker run that asked (its answer goes to the run). */
+  runId?: string;
+  /** ask_human threads: the task that run works on. */
+  taskId?: string;
 }
 
 export class ConversationsService {
@@ -131,6 +135,8 @@ export class ConversationsService {
       askOptions?: string[];
       cycleId?: string;
       goalId?: string;
+      runId?: string;
+      taskId?: string;
     }
   ): Conversation {
     this.ensureBotDir(botId);
@@ -154,6 +160,8 @@ export class ConversationsService {
       ...(meta?.askOptions && meta.askOptions.length > 0 ? { askOptions: meta.askOptions } : {}),
       ...(meta?.cycleId ? { cycleId: meta.cycleId } : {}),
       ...(meta?.goalId ? { goalId: meta.goalId } : {}),
+      ...(meta?.runId ? { runId: meta.runId } : {}),
+      ...(meta?.taskId ? { taskId: meta.taskId } : {}),
     };
     appendFileSync(this.conversationsPath(botId), `${JSON.stringify(convo)}\n`, 'utf-8');
     return convo;

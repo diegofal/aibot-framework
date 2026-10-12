@@ -307,6 +307,9 @@ export function reconcileAskHumanInbox(deps: AskHumanDeps, logger: Logger): Reco
           conversationId: conv.id,
           ...(conv.askOptions && conv.askOptions.length > 0 ? { options: conv.askOptions } : {}),
           createdAt: Number.isFinite(createdAt) ? createdAt : (deps.now ?? Date.now)(),
+          // A worker run's question keeps routing to the run.
+          ...(conv.runId ? { runId: conv.runId } : {}),
+          ...(conv.taskId ? { taskId: conv.taskId } : {}),
         });
         if (restored) result.restored++;
       } catch (err) {
@@ -484,7 +487,10 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
       // A forgotten ask must not block this bot forever.
       sweepStaleAskHumanQuestions(deps, logger, botId);
 
-      const pending = deps.store.getPendingForBot(botId)[0];
+      // One pending question per asker: the cycle, or each worker run (plan C15).
+      const runId = typeof args._runId === 'string' && args._runId ? args._runId : undefined;
+      const taskId = typeof args._taskId === 'string' && args._taskId ? args._taskId : undefined;
+      const pending = deps.store.getPendingForBot(botId).find((q) => q.runId === runId);
       if (pending) {
         const ageHours = Math.floor(((deps.now ?? Date.now)() - pending.createdAt) / HOUR_MS);
         return {
@@ -501,6 +507,8 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
       const attribution = {
         ...(args._cycleId ? { cycleId: String(args._cycleId) } : {}),
         ...(args._goalId ? { goalId: String(args._goalId) } : {}),
+        ...(runId ? { runId } : {}),
+        ...(taskId ? { taskId } : {}),
       };
       const { id, promise } = deps.store.ask(
         botId,
@@ -614,10 +622,18 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
           ? `Tip: single-question asks get answered; yours has ${questionMarks}. Next time ask one thing per ask_human call. `
           : '';
 
+      // The id is what autoAttachFiles reads to attach this turn's files to
+      // this question (askedQuestionId), never "the last pending".
+      if (runId) {
+        return {
+          success: true,
+          content: `${tip}Question sent (id ${id}) — the run will pause until the operator answers.`,
+        };
+      }
       return {
         success: true,
         content: [
-          `${tip}Question has been queued to the human inbox.`,
+          `${tip}Question has been queued to the human inbox (id ${id}).`,
           'The answer will be available in your next cycle.',
           'Continue with other tasks in the meantime.',
         ].join(' '),

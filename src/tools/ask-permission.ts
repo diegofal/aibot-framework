@@ -73,8 +73,11 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
         };
       }
 
-      // Dedup: check pending requests
-      if (deps.store.hasPendingDuplicate(botId, action, resource)) {
+      // A worker run asks for itself (injected by ToolExecutor); its decision goes to the run.
+      const runId = typeof args._runId === 'string' && args._runId ? args._runId : undefined;
+
+      // Dedup: check pending requests (same asker only)
+      if (deps.store.hasPendingDuplicate(botId, action, resource, runId)) {
         return {
           success: true,
           content: `You already have a pending permission request for "${action}" on "${resource}". Wait for the human to decide before requesting again.`,
@@ -98,6 +101,7 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
       const { id, promise } = deps.store.request(botId, action, resource, description, urgency, {
         cycleId: typeof args._cycleId === 'string' ? args._cycleId : undefined,
         goalId: typeof args._goalId === 'string' ? args._goalId : undefined,
+        runId,
       });
       promise.catch((err) => {
         logger.info(
@@ -129,6 +133,12 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
         'ask_permission: request queued to dashboard (non-blocking)'
       );
 
+      if (runId) {
+        return {
+          success: true,
+          content: `Permission request sent (id ${id}, ${action} on ${resource}) — the run will pause until the operator decides. Do NOT proceed with this action until you receive approval.`,
+        };
+      }
       return {
         success: true,
         content: `Permission request queued (${action} on ${resource}). The decision will be available in your next cycle. Continue with other tasks in the meantime. Do NOT proceed with this action until you receive approval.`,

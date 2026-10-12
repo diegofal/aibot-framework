@@ -16,6 +16,7 @@ import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import type { Tool, ToolDefinition } from '../tools/types';
 import type { BackendCircuitBreaker } from './agent-retry-engine';
+import { askedQuestionId } from './ask-human-store';
 import type { LlmQueryEntry } from './llm-query-log';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { toolEndToAuditEntry } from './tool-audit-log';
@@ -369,8 +370,14 @@ export function autoAttachFiles(
   toolCallLog: ToolExecutionRecord[],
   logger: Logger
 ): void {
-  const askHumanCall = toolCallLog.find((t) => t.name === 'ask_human' && t.success);
-  if (!askHumanCall) return;
+  // The question this turn registered, by the id its tool result announces.
+  // Never "the last pending": a worker run (or the cycle) may have asked since.
+  let questionId: string | null = null;
+  for (const t of toolCallLog) {
+    if (t.name !== 'ask_human' || !t.success) continue;
+    questionId = askedQuestionId(t.result) ?? questionId;
+  }
+  if (!questionId) return;
 
   const fileOps = executor.getFileOperations();
   if (fileOps.length === 0) return;
@@ -378,12 +385,12 @@ export function autoAttachFiles(
   const conversationsService = ctx.conversationsService;
   if (!conversationsService) return;
 
-  // The ask_human store tracks the question → conversation mapping
-  const pending = ctx.askHumanStore.getPendingForBot(botId);
-  if (pending.length === 0) return;
-
-  const lastQuestion = pending[pending.length - 1];
-  const conversationId = lastQuestion.conversationId;
+  // The store maps question → conversation while pending; the thread itself
+  // carries the question id once it was answered.
+  const id = questionId;
+  const conversationId =
+    ctx.askHumanStore.getPendingForBot(botId).find((q) => q.id === id)?.conversationId ??
+    conversationsService.findByQuestionId(botId, id)?.id;
   if (!conversationId) return;
 
   const messages = conversationsService.getMessages(botId, conversationId);

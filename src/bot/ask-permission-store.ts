@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger';
+import type { RunAnswerRouter } from './ask-human-store';
 
 export type PermissionUrgency = 'low' | 'normal' | 'high';
 export type PermissionStatus = 'pending' | 'approved' | 'denied';
@@ -94,6 +95,8 @@ export class AskPermissionStore {
   /** History of decided/consumed/executed permissions (bounded, auto-pruned) */
   private history = new Map<string, PermissionHistoryEntry>();
 
+  private runRouter?: RunAnswerRouter;
+
   private static readonly HISTORY_MAX_ENTRIES = 100;
   private static readonly HISTORY_TTL_MS = 24 * 3_600_000;
 
@@ -181,7 +184,7 @@ export class AskPermissionStore {
     attribution: PermissionAttribution = {}
   ): { id: string; promise: Promise<'approved' | 'denied'> } {
     // Dedup check
-    const existing = this.findPendingDuplicate(botId, action, resource);
+    const existing = this.findPendingDuplicate(botId, action, resource, attribution.runId);
     if (existing) {
       this.logger.debug(
         { id: existing.request.id, botId },
@@ -255,8 +258,7 @@ export class AskPermissionStore {
       ...attributionOf(entry.request),
     };
 
-    this.resolved.set(id, resolved);
-    this.writeHistory(resolved, 'decided');
+    this.queueDecision(resolved);
     this.persistToDisk();
 
     entry.resolve('approved');
@@ -290,8 +292,7 @@ export class AskPermissionStore {
       ...attributionOf(entry.request),
     };
 
-    this.resolved.set(id, resolved);
-    this.writeHistory(resolved, 'decided');
+    this.queueDecision(resolved);
     this.persistToDisk();
 
     entry.resolve('denied');
@@ -299,14 +300,64 @@ export class AskPermissionStore {
     return true;
   }
 
+  /** Wire the worker pool (BotManager). Undefined unwires it. */
+  setRunRouter(router: RunAnswerRouter | undefined): void {
+    this.runRouter = router;
+  }
+
   /**
-   * Consume-on-read: returns and deletes all resolved decisions for a bot.
-   * Called by the agent loop to inject decisions into the planner prompt.
+   * A decision goes to its asker. A worker run's goes to the pool
+   * (`onAnswer`) and is recorded `consumed` — the cycle never sees it, so an
+   * approved action is not executed twice. The cycle's, and a run's the pool
+   * did not take, wait in `resolved` (the latter only for
+   * `consumeDecisionsForRun`). Caller persists.
+   */
+  private queueDecision(resolved: ResolvedPermission): void {
+    if (resolved.runId && this.routeToRun(resolved)) {
+      this.writeHistory(resolved, 'consumed');
+      const hist = this.history.get(resolved.id);
+      if (hist) hist.consumedAt = Date.now();
+      return;
+    }
+    this.resolved.set(resolved.id, resolved);
+    this.writeHistory(resolved, 'decided');
+  }
+
+  private routeToRun(resolved: ResolvedPermission): boolean {
+    if (!this.runRouter || !resolved.runId) return false;
+    try {
+      return this.runRouter(resolved.runId, {
+        kind: 'approval',
+        id: resolved.id,
+        decision: resolved.status,
+      });
+    } catch (err) {
+      this.logger.warn(
+        { err, runId: resolved.runId, id: resolved.id },
+        'AskPermission: run routing failed'
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Consume-on-read: returns and deletes the cycle's resolved decisions for a
+   * bot. Called by the agent loop to inject decisions into the planner prompt.
+   * A worker run's decisions are never returned here.
    */
   consumeDecisionsForBot(botId: string): ResolvedPermission[] {
+    return this.consumeWhere((entry) => entry.botId === botId && !entry.runId);
+  }
+
+  /** Decisions for a worker run that the pool could not take when they were made. */
+  consumeDecisionsForRun(runId: string): ResolvedPermission[] {
+    return this.consumeWhere((entry) => entry.runId === runId);
+  }
+
+  private consumeWhere(match: (entry: ResolvedPermission) => boolean): ResolvedPermission[] {
     const results: ResolvedPermission[] = [];
     for (const [id, entry] of this.resolved) {
-      if (entry.botId === botId) {
+      if (match(entry)) {
         results.push(entry);
         this.resolved.delete(id);
         const hist = this.history.get(id);
@@ -371,10 +422,11 @@ export class AskPermissionStore {
   }
 
   /**
-   * Check if a duplicate pending request exists for (botId, action, resource).
+   * Check if a duplicate pending request exists for (botId, action, resource)
+   * from the same asker (the cycle when `runId` is absent, else that run).
    */
-  hasPendingDuplicate(botId: string, action: string, resource: string): boolean {
-    return !!this.findPendingDuplicate(botId, action, resource);
+  hasPendingDuplicate(botId: string, action: string, resource: string, runId?: string): boolean {
+    return !!this.findPendingDuplicate(botId, action, resource, runId);
   }
 
   /**
@@ -470,14 +522,9 @@ export class AskPermissionStore {
       note: hist.note,
       ...attributionOf(hist),
     };
-    this.resolved.set(id, resolved);
-
-    // Reset history entry fields
-    hist.executionStatus = 'decided';
-    hist.consumedAt = undefined;
-    hist.executedAt = undefined;
-    hist.executionSummary = undefined;
-    hist.toolCalls = undefined;
+    // Back to its asker (the cycle's queue or the worker run); the history
+    // entry is rewritten fresh, without the old execution fields.
+    this.queueDecision(resolved);
 
     this.persistToDisk();
     this.logger.info({ id, botId: hist.botId }, 'AskPermission: requeued failed/consumed entry');
@@ -531,12 +578,15 @@ export class AskPermissionStore {
   private findPendingDuplicate(
     botId: string,
     action: string,
-    resource: string
+    resource: string,
+    runId?: string
   ): PendingEntry | undefined {
     const norm = AskPermissionStore.normalizeResource(resource);
     for (const entry of this.pending.values()) {
       if (
         entry.request.botId === botId &&
+        // Same asker only: a run and the cycle each wait for their own decision.
+        (entry.request.runId || undefined) === (runId || undefined) &&
         entry.request.action === action &&
         AskPermissionStore.normalizeResource(entry.request.resource) === norm
       ) {

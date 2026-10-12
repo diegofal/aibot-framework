@@ -2,6 +2,26 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger';
+import type { WorkerAnswer } from '../workers/types';
+
+/**
+ * Hands an answer, decision or dismissal to the worker run that asked
+ * (`WorkerPoolApi.onAnswer`, plan C15). Returns false when no pool took it
+ * (not wired, or it threw): the store then keeps an answer for the run to
+ * pull, never for the cycle.
+ */
+export type RunAnswerRouter = (runId: string, answer: WorkerAnswer) => boolean;
+
+const ASKED_ID_RE = /\(id ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/i;
+
+/**
+ * The question id an `ask_human` tool result announces (`… (id <uuid>) …`),
+ * or null when the call registered no question (refused: already pending,
+ * too long, …).
+ */
+export function askedQuestionId(result: string): string | null {
+  return ASKED_ID_RE.exec(result)?.[1] ?? null;
+}
 
 export interface PendingQuestion {
   id: string;
@@ -19,6 +39,10 @@ export interface PendingQuestion {
   cycleId?: string;
   /** Goal that cycle served, when known. */
   goalId?: string;
+  /** Worker run that asked (its answer goes to the run, not the cycle). */
+  runId?: string;
+  /** Task that run works on. */
+  taskId?: string;
 }
 
 export interface PendingQuestionInfo {
@@ -33,6 +57,18 @@ export interface PendingQuestionInfo {
   cycleId?: string;
   /** Goal that cycle served, when known. */
   goalId?: string;
+  /** Worker run that asked (its answer goes to the run, not the cycle). */
+  runId?: string;
+  /** Task that run works on. */
+  taskId?: string;
+}
+
+/** Attribution of a question: the cycle (and goal), or the worker run (and task). */
+export interface AskAttribution {
+  cycleId?: string;
+  goalId?: string;
+  runId?: string;
+  taskId?: string;
 }
 
 export interface AnsweredQuestion {
@@ -42,6 +78,8 @@ export interface AnsweredQuestion {
   answer: string;
   answeredAt: number;
   conversationId?: string;
+  /** Set when a worker run asked and the pool did not take the answer: it waits for the run. */
+  runId?: string;
 }
 
 export interface HandleReplyResult {
@@ -67,6 +105,7 @@ export class AskHumanStore {
   private onTimeout?: (questionId: string, botId: string, conversationId?: string) => void;
   private onDismiss?: (questionId: string, botId: string, conversationId?: string) => void;
   private onAnswer?: (answered: AnsweredQuestion) => void;
+  private runRouter?: RunAnswerRouter;
 
   constructor(
     private logger: Logger,
@@ -129,6 +168,7 @@ export class AskHumanStore {
             ...(e.conversationId ? { conversationId: e.conversationId } : {}),
             ...(Array.isArray(e.options) && e.options.length > 0 ? { options: e.options } : {}),
             createdAt: e.createdAt,
+            ...attributionOf(e),
           },
           typeof e.messageId === 'number' ? e.messageId : null
         );
@@ -184,7 +224,39 @@ export class AskHumanStore {
     return inserted;
   }
 
-  /** Queue the answer for the next agent-loop cycle, resolve the waiter, fire onAnswer. */
+  /** Wire the worker pool (BotManager). Undefined unwires it. */
+  setRunRouter(router: RunAnswerRouter | undefined): void {
+    this.runRouter = router;
+  }
+
+  /** Hand an answer or dismissal to the run; false when no pool took it. */
+  private routeToRun(runId: string, answer: WorkerAnswer): boolean {
+    if (!this.runRouter) return false;
+    try {
+      return this.runRouter(runId, answer);
+    } catch (err) {
+      this.logger.warn({ err, runId, questionId: answer.id }, 'AskHuman: run routing failed');
+      return false;
+    }
+  }
+
+  /** A run's question closed without an answer: the run ends blocked. */
+  private routeDismissed(entry: PendingQuestion): void {
+    if (!entry.runId) return;
+    if (!this.routeToRun(entry.runId, { kind: 'ask', id: entry.id, dismissed: true })) {
+      this.logger.warn(
+        { runId: entry.runId, questionId: entry.id },
+        'AskHuman: dismissal of a run question not delivered (no worker pool)'
+      );
+    }
+  }
+
+  /**
+   * The answer goes to its asker: a worker run gets it through the pool, the
+   * cycle through the answered queue (`consumeAnswersForBot`). A run answer
+   * the pool did not take is kept apart for `consumeAnswersForRun`, never for
+   * the cycle. Resolves the waiter, fires onAnswer.
+   */
   private recordAnswer(entry: PendingQuestion, answer: string): void {
     const answered: AnsweredQuestion = {
       id: entry.id,
@@ -194,8 +266,13 @@ export class AskHumanStore {
       answeredAt: Date.now(),
       conversationId: entry.conversationId,
     };
-    this.answered.set(entry.id, answered);
-    this.persistAnswered();
+    const toRun =
+      entry.runId !== undefined &&
+      this.routeToRun(entry.runId, { kind: 'ask', id: entry.id, answer });
+    if (!toRun) {
+      this.answered.set(entry.id, entry.runId ? { ...answered, runId: entry.runId } : answered);
+      this.persistAnswered();
+    }
     entry.resolve(answer);
     try {
       this.onAnswer?.(answered);
@@ -228,7 +305,7 @@ export class AskHumanStore {
     question: string,
     options?: string[],
     createdAt: number = Date.now(),
-    attribution: { cycleId?: string; goalId?: string } = {}
+    attribution: AskAttribution = {}
   ): { id: string; promise: Promise<string> } {
     const id = randomUUID();
 
@@ -244,8 +321,7 @@ export class AskHumanStore {
       resolve,
       reject,
       createdAt,
-      ...(attribution.cycleId ? { cycleId: attribution.cycleId } : {}),
-      ...(attribution.goalId ? { goalId: attribution.goalId } : {}),
+      ...attributionOf(attribution),
     };
 
     this.pending.set(id, entry);
@@ -295,6 +371,7 @@ export class AskHumanStore {
       closed.push(this.toInfo(entry));
       entry.reject(new Error(`Question auto-closed after ${hours}h without answer`));
       this.cleanup(entry.id);
+      this.routeDismissed(entry);
     }
     if (closed.length > 0) {
       this.logger.info(
@@ -314,8 +391,7 @@ export class AskHumanStore {
       conversationId: entry.conversationId,
       ...(entry.options ? { options: entry.options } : {}),
       createdAt: entry.createdAt,
-      ...(entry.cycleId ? { cycleId: entry.cycleId } : {}),
-      ...(entry.goalId ? { goalId: entry.goalId } : {}),
+      ...attributionOf(entry),
     };
   }
 
@@ -363,11 +439,13 @@ export class AskHumanStore {
       }
     }
 
-    // Fallback: exactly one pending question in this chat, and it was notified here.
-    // Entries restored from an older pending.json follow the same rule: a
-    // messageId means the notification landed in this chat, so they keep the old
-    // behaviour; without one they never capture plain messages.
-    if (questionIds.size === 1) {
+    // Fallback: exactly one pending question for the whole bot (cycle and every
+    // worker run), it is in this chat, and it was notified here. With several
+    // pending a plain message cannot say which one it answers: only a reply-to
+    // matches. Entries restored from an older pending.json follow the same rule:
+    // a messageId means the notification landed in this chat, so they keep the
+    // old behaviour; without one they never capture plain messages.
+    if (questionIds.size === 1 && this.pendingCountForBot(botId) === 1) {
       const qId = questionIds.values().next().value as string;
       const entry = this.pending.get(qId);
       if (entry && entry.messageId !== null) {
@@ -386,6 +464,12 @@ export class AskHumanStore {
   /**
    * Check if there are any pending questions for a chat.
    */
+  private pendingCountForBot(botId: string): number {
+    let n = 0;
+    for (const entry of this.pending.values()) if (entry.botId === botId) n++;
+    return n;
+  }
+
   hasPending(botId: string, chatId: number): boolean {
     const ids = this.byChatId.get(`${botId}:${chatId}`);
     return !!ids && ids.size > 0;
@@ -453,6 +537,7 @@ export class AskHumanStore {
     const botId = entry.botId;
     entry.reject(new Error('Question dismissed'));
     this.cleanup(id);
+    this.routeDismissed(entry);
     this.onDismiss?.(id, botId, conversationId);
     return { ok: true, conversationId, botId };
   }
@@ -464,11 +549,28 @@ export class AskHumanStore {
     return false;
   }
 
-  /** Returns and deletes all answered questions for a bot (consumed by next agent loop cycle). */
+  /**
+   * Returns and deletes the cycle's answered questions for a bot (consumed by
+   * the next agent loop cycle). Answers kept for a worker run are not the
+   * cycle's: see `consumeAnswersForRun`.
+   */
   consumeAnswersForBot(botId: string): AnsweredQuestion[] {
     const results: AnsweredQuestion[] = [];
     for (const [id, entry] of this.answered) {
-      if (entry.botId === botId) {
+      if (entry.botId === botId && !entry.runId) {
+        results.push(entry);
+        this.answered.delete(id);
+      }
+    }
+    if (results.length > 0) this.persistAnswered();
+    return results;
+  }
+
+  /** Answers for a worker run that the pool could not take when they arrived. */
+  consumeAnswersForRun(runId: string): AnsweredQuestion[] {
+    const results: AnsweredQuestion[] = [];
+    for (const [id, entry] of this.answered) {
+      if (entry.runId === runId) {
         results.push(entry);
         this.answered.delete(id);
       }
@@ -494,6 +596,7 @@ export class AskHumanStore {
       if (entry.botId === botId) {
         entry.reject(new Error('AskHumanStore cleared for bot reset'));
         this.pending.delete(id);
+        this.routeDismissed(entry);
         const compositeKey = `${entry.botId}:${entry.chatId}`;
         const chatIds = this.byChatId.get(compositeKey);
         if (chatIds) {
@@ -520,4 +623,14 @@ export class AskHumanStore {
     this.byChatId.clear();
     this.answered.clear();
   }
+}
+
+/** Only the ids that were recorded: a question outside a cycle or run carries none. */
+function attributionOf(a: AskAttribution): AskAttribution {
+  const out: AskAttribution = {};
+  if (typeof a.cycleId === 'string' && a.cycleId) out.cycleId = a.cycleId;
+  if (typeof a.goalId === 'string' && a.goalId) out.goalId = a.goalId;
+  if (typeof a.runId === 'string' && a.runId) out.runId = a.runId;
+  if (typeof a.taskId === 'string' && a.taskId) out.taskId = a.taskId;
+  return out;
 }

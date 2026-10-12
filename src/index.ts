@@ -12,9 +12,11 @@ import { SkillRegistry } from './core/skill-registry';
 import { CronService } from './cron';
 import { createLogger } from './logger';
 import { MemoryManager } from './memory/manager';
+import { resolveWorkerPool, shutdownRuntime, startRuntime } from './runtime-lifecycle';
 import { SessionManager } from './session';
 import { migrateSoulRootToPerBot } from './soul';
 import { startWebServer } from './web/server';
+import type { WorkerPoolApi } from './workers/types';
 
 async function main() {
   // Parse command line arguments
@@ -331,8 +333,16 @@ async function main() {
       logger.info('Multi-tenant manager initialized');
     }
 
-    // Start global agent loop timer (runs only for started bots)
-    botManager.startAgentLoop();
+    // The worker pool's getter lands with the pool wiring; read it defensively
+    // until then (no pool = the old behaviour).
+    const manager = botManager;
+    const getWorkerPool = () =>
+      resolveWorkerPool(manager as { getWorkerPool?: () => WorkerPoolApi | undefined });
+
+    // Start global agent loop timer (runs only for started bots). Interrupted
+    // worker runs re-bind their task claims first, so the first cycle cannot
+    // dispatch the same task twice (plan C16).
+    startRuntime({ getWorkerPool, startAgentLoop: () => manager.startAgentLoop(), logger });
 
     // Start web server if enabled
     if (config.web.enabled) {
@@ -355,7 +365,8 @@ async function main() {
     const shutdown = async () => {
       shuttingDown = true;
       logger.info('Shutting down...');
-      await botManager.stopAll();
+      // Worker runs are aborted and persisted `interrupted` (bounded to 20 s) before the bots stop.
+      await shutdownRuntime({ getWorkerPool, stopAll: () => manager.stopAll(), logger });
       cronService.stop();
       sessionManager.dispose();
       memoryManager?.dispose();

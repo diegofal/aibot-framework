@@ -54,7 +54,7 @@ import { ActivityStream } from './activity-stream';
 import { type AgentFeedback, AgentFeedbackStore } from './agent-feedback-store';
 import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
 import { BackendCircuitBreaker, DEFAULT_CIRCUIT_BREAKER_CONFIG } from './agent-retry-engine';
-import { AskHumanStore, type PendingQuestionInfo } from './ask-human-store';
+import { AskHumanStore, type PendingQuestionInfo, type RunAnswerRouter } from './ask-human-store';
 import {
   AskPermissionStore,
   type PermissionHistoryEntry,
@@ -205,6 +205,18 @@ export class BotManager {
 
     // Initialize ask-permission store
     this.askPermissionStore = new AskPermissionStore(logger, join(dataDir, 'ask-permission'));
+
+    // A worker run's answer, decision or dismissal goes to the pool, never to
+    // the cycle's consume queues (plan C15). Read at call time: the pool is
+    // wired into the context after the stores exist.
+    const routeToRun: RunAnswerRouter = (runId, answer) => {
+      const pool = this.botContext?.workerPool;
+      if (!pool) return false;
+      pool.onAnswer(runId, answer);
+      return true;
+    };
+    this.askHumanStore.setRunRouter(routeToRun);
+    this.askPermissionStore.setRunRouter(routeToRun);
 
     // Initialize agent feedback store
     this.agentFeedbackStore = new AgentFeedbackStore(logger);
