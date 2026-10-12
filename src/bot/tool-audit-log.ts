@@ -20,6 +20,11 @@ export interface ToolAuditEntry {
   cycleId?: string;
   /** Goal the cycle served, when known. */
   goalId?: string;
+  /** Task worker run the call belonged to (worker rows never carry `cycleId`). */
+  runId?: string;
+  taskId?: string;
+  /** Cycle that dispatched the run. */
+  dispatchCycleId?: string;
 }
 
 /** Max characters of a tool result kept in the audit log. */
@@ -40,6 +45,9 @@ export function toolEndToAuditEntry(event: ToolEndEvent): ToolAuditEntry {
     ...(event.failureKind ? { failureKind: event.failureKind } : {}),
     ...(event.cycleId ? { cycleId: event.cycleId } : {}),
     ...(event.goalId ? { goalId: event.goalId } : {}),
+    ...(event.runId ? { runId: event.runId } : {}),
+    ...(event.taskId ? { taskId: event.taskId } : {}),
+    ...(event.dispatchCycleId ? { dispatchCycleId: event.dispatchCycleId } : {}),
   };
 }
 

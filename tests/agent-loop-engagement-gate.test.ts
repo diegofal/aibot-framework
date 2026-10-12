@@ -451,6 +451,15 @@ describe('AgentScheduler feedback events and skippedReason', () => {
     scheduler.stop();
   });
 
+  test('a system wake (a worker run ended) is not feedback', () => {
+    const scheduler = new AgentScheduler(makeCtx(), mock());
+    scheduler.start();
+    scheduler.syncSchedules();
+    scheduler.requestImmediateRun('bot1', { feedback: false });
+    expect(scheduler.getSchedule('bot1')?.feedbackEvents).toEqual([]);
+    scheduler.stop();
+  });
+
   test('a human_inbound hook (REST/WS/WhatsApp/Discord) records exactly one feedback event', () => {
     const ctx = makeCtx();
     const scheduler = new AgentScheduler(ctx, mock());

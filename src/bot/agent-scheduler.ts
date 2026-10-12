@@ -244,13 +244,14 @@ export class AgentScheduler {
    * - If bot is busy (currently executing), queues a pending wake so the bot
    *   skips sleep after the current cycle finishes.
    */
-  requestImmediateRun(botId: string): void {
+  requestImmediateRun(botId: string, opts: { feedback?: boolean } = {}): void {
     if (!this.enabled) return;
     if (!this.ctx.runningBots.has(botId)) return;
 
     // An immediate run is requested on human inbound messages — that is a
     // feedback signal for the engagement gate, whether or not the bot is busy.
-    this.recordFeedbackEvent(botId, 'human_message');
+    // A system wake (a worker run ended) is not: `feedback: false`.
+    if (opts.feedback !== false) this.recordFeedbackEvent(botId, 'human_message');
 
     if (this.runningBotIds.has(botId)) {
       // Bot is currently executing — queue a pending wake

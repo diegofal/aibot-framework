@@ -50,6 +50,8 @@ import { TemplateService } from '../tenant/template-service';
 import type { BillingProvider } from '../tenant/types';
 import type { UsageEventType } from '../tenant/types';
 import { WebhookService } from '../tenant/webhook-service';
+import type { WorkerPool } from '../workers/pool';
+import { createFleetWorkerPool } from '../workers/wiring';
 import { ActivityStream } from './activity-stream';
 import { type AgentFeedback, AgentFeedbackStore } from './agent-feedback-store';
 import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
@@ -127,6 +129,8 @@ export class BotManager {
   private productionsService?: ProductionsService;
   private conversationsService: ConversationsService;
   private karmaService?: KarmaService;
+  /** Task workers (plan C10), only when `config.workers.enabled`. */
+  private workerPool?: WorkerPool;
   private toolAuditLog: ToolAuditLog;
   private llmQueryLog: LlmQueryLog;
   private tenantFacade: TenantFacade;
@@ -407,6 +411,18 @@ export class BotManager {
       this.systemPromptBuilder.setKarmaService(this.karmaService);
       this.toolRegistry.setKarmaService(this.karmaService);
       this.collaborationManager.setKarmaService(this.karmaService);
+    }
+
+    // Task workers: the pool is the only place runs start. A run that ends
+    // wakes its bot's cycle (a system wake, not human feedback).
+    if (config.workers?.enabled) {
+      this.workerPool = createFleetWorkerPool({
+        ctx,
+        toolRegistry: this.toolRegistry,
+        karmaService: this.karmaService,
+        wake: (botId) => this.requestImmediateAgentRun(botId, { feedback: false }),
+      });
+      ctx.workerPool = this.workerPool;
     }
 
     // Initialize evolution modules — gated by config.evolution.enabled
@@ -1062,6 +1078,13 @@ export class BotManager {
       this.webhookService.emit(botConfig.tenantId, 'bot.stopped', { botId }, botId).catch(() => {});
     }
 
+    // A stopped bot's workers stop too (their tasks go back to To do).
+    if (this.workerPool) {
+      for (const run of this.workerPool.list(botId, { endedLimit: 0 })) {
+        this.workerPool.stop(run.runId, 'operator');
+      }
+    }
+
     await this.cleanupBot(botId);
     this.restartAttempts.delete(botId);
     this.botLoggers.delete(botId);
@@ -1145,6 +1168,13 @@ export class BotManager {
   }
 
   async stopAll(): Promise<void> {
+    // Workers first: persist `interrupted` (claims kept) so boot can resume them.
+    if (this.workerPool) {
+      await this.workerPool.abortAll('shutdown').catch((err) => {
+        this.logger.error({ err }, 'Workers: abortAll failed');
+      });
+      this.workerPool.dispose();
+    }
     this.agentLoop.stop();
     this.messageBuffer.dispose();
     this.collaborationTracker.dispose();
@@ -1243,9 +1273,9 @@ export class BotManager {
   }
 
   /** Request an immediate agent loop run for a specific bot (e.g. after user message) */
-  requestImmediateAgentRun(botId: string): void {
+  requestImmediateAgentRun(botId: string, opts?: { feedback?: boolean }): void {
     if (this.config.agentLoop.enabled) {
-      this.agentLoop.requestImmediateRun(botId);
+      this.agentLoop.requestImmediateRun(botId, opts);
     }
   }
 
@@ -1414,6 +1444,11 @@ export class BotManager {
   }
 
   /** Curiosity DNA state for every bot (knowledge map, navigator, dispatches, taste). */
+  /** The task worker pool, when `config.workers.enabled`. */
+  getWorkerPool(): WorkerPool | undefined {
+    return this.workerPool;
+  }
+
   getCuriosityService(): CuriosityService {
     return this.curiosityService;
   }
