@@ -587,3 +587,19 @@ docker compose up -d
 **Outcome.** `bot:default:private:0` moved to `/app/data/_trash/2026-10-12T00-45-20-629Z-relay-shared-web-session/` (13 sessions left). The image has `src/relay/`. On boot, `startBot` seeded the operator: one `role: operator` contact with Telegram + the config email. After the merge, the operator's name, "operador", the old contact's name and its email all resolve to that contact. Container healthy, dashboard 200, no boot errors besides the known revoked `job-seeker` token. Backup of the directory file: `default.jsonl.bak-relay-merge`. Not yet exercised from Telegram.
 
 **Reversible?** Yes. Restore the backup from 00:33Z, or copy `default.jsonl.bak-relay-merge` back and move the session out of `_trash`. Code: check out `5697e01` and rebuild.
+
+### 2026-10-12 01:24Z — Deployed `60a10b8` (relay: who is speaking, force_reply)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Live: the operator answered a relayed question in free text and Finny answered him as if he were the person who asked |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Container healthy, dashboard 200, AIBot (Finny) started. The image has the "Who you are talking with" section (`src/relay/prompt.ts`) and `force_reply` (`src/relay/service.ts`). Finny's live IDENTITY.md has `name: Finny`, which the relay header now uses. Not yet exercised from Telegram.
+
+**Reversible?** Yes: check out `c612e92` and rebuild.
