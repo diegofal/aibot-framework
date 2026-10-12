@@ -3,7 +3,14 @@
  * Planner: lightweight LLM call to decide whether and what to do.
  * Executor: full agentic call with tool access to carry out the plan.
  */
-import { isOperatorGoal, parseGoals } from '../tools/goals';
+import { type TaskStatus, isOperatorGoal, parseGoals, taskStatus } from '../tools/goals';
+
+const TASK_MARKS: Record<TaskStatus, string> = {
+  todo: ' ',
+  in_progress: '~',
+  blocked: '!',
+  done: 'x',
+};
 
 export interface PlannerPromptInput {
   /** Curiosity DNA block (src/bot/curiosity/dna.ts + knowledge/frontier/direction) — replaces the inaction-biased alignment rule */
@@ -284,12 +291,14 @@ export function buildOperatorGoalsSection(goals?: string): string {
   const list = mine
     .map((g) => {
       const head = `- ${g.text}${g.status && g.status !== 'pending' ? ` (${g.status})` : ''}`;
-      const tasks = (g.tasks ?? []).map((t) => `  - [${t.done ? 'x' : ' '}] ${t.text}`);
+      const tasks = (g.tasks ?? []).map(
+        (t) => `  - [${TASK_MARKS[taskStatus(t)]}] ${t.text}${t.id ? ` (${t.id})` : ''}`
+      );
       return [head, ...tasks].join('\n');
     })
     .join('\n');
   const taskRule = mine.some((g) => g.tasks?.length)
-    ? ' The [ ] lines under a goal are its subtasks, set by your operator: they are the plan for that goal, so work through them in order.'
+    ? ' The lines under a goal are its subtasks ([ ] to do, [~] in progress, [!] blocked, [x] done): they are the plan for that goal, so work through them in order. Move a task with manage_goals update_task (by its id) when you start, finish or get blocked on it; add the steps you plan to take with add_task.'
     : '';
   return `\n## Set by your operator\n\nYour operator added these goals themselves. Work on them before your own goals. If one is ambiguous or you need a decision to move it forward, use ask_human about that goal instead of guessing. When you make progress or finish one, update it with manage_goals and tell the operator what changed.${taskRule}\n\n${list}\n`;
 }

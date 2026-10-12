@@ -347,3 +347,19 @@ describe('strategist prompt asks for reasons (why-everywhere rows 12 and 13)', (
     expect(system()).toMatch(/- trait_reasons: object/);
   });
 });
+
+describe('buildOperatorGoalsSection task lanes', () => {
+  test('in-progress and blocked tasks keep their mark and the rule explains them', () => {
+    const md = `## Active Goals
+- [ ] Monday brief
+  - status: in_progress
+  - task: [~] Draft 600 words {id: t-aaaaaa, by: agent}
+  - task: [!] Get sign-off {id: t-bbbbbb}
+  - source: operator
+`;
+    const out = buildOperatorGoalsSection(md);
+    expect(out).toContain('  - [~] Draft 600 words (t-aaaaaa)');
+    expect(out).toContain('  - [!] Get sign-off (t-bbbbbb)');
+    expect(out).toContain('update_task');
+  });
+});

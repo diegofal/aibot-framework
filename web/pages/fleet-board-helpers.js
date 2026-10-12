@@ -33,7 +33,9 @@ function oneLine(text) {
 }
 export function toggleTask(tasks, i) {
   if (!Array.isArray(tasks) || !tasks[i]) return tasks;
-  return tasks.map((t, n) => (n === i ? { ...t, done: !t.done } : t));
+  return tasks.map((t, n) =>
+    n === i ? { ...t, done: !t.done, status: t.done ? 'todo' : 'done' } : t
+  );
 }
 export function addTask(tasks, text) {
   const clean = oneLine(text);

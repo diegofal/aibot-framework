@@ -12,6 +12,8 @@ import {
   karmaBody,
   karmaTone,
   needsYouStrip,
+  taskAddPayload,
+  taskMovePayload,
   timelineBody,
   timelineRow,
   traitAxes,
@@ -116,20 +118,6 @@ describe('goalsColumns (board)', () => {
     );
     expect(goalsColumns(undefined)).toContain('No goals yet');
   });
-  it('renders four columns: to do, in progress, blocked, done', () => {
-    const html = goalsColumns({
-      todo: [{ text: 'Ship <it>', priority: 'high', notes: 'n'.repeat(200) }],
-      inProgress: [{ text: 'Doing', status: 'in_progress' }],
-      blocked: [],
-      completedRecently: [{ text: 'Done thing' }],
-    });
-    expect(html.match(/class="home-board-col"/g)).toHaveLength(4);
-    for (const t of ['To do', 'In progress', 'Blocked', 'Done']) expect(html).toContain(t);
-    expect(html.indexOf('Ship &lt;it&gt;')).toBeLessThan(html.indexOf('Doing'));
-    expect(html).toContain('pri-high">high<');
-    expect(html).toContain(`${'n'.repeat(160)}…`);
-    expect(html).toContain('Done thing');
-  });
   it('falls back to splitting active by status when todo/inProgress are missing', () => {
     const html = goalsColumns({
       active: [
@@ -139,20 +127,165 @@ describe('goalsColumns (board)', () => {
       blocked: [],
       completedRecently: [],
     });
-    const cols = html.split('class="home-board-col"').slice(1);
-    expect(cols[0]).toContain('>A<');
-    expect(cols[1]).toContain('>B<');
+    const cells = html.split('class="home-board-cell"').slice(1);
+    expect(cells[0]).toContain('>A<');
+    expect(cells[1]).toContain('>B<');
   });
-  it('gives each card a move control with its current column selected', () => {
-    const html = goalsColumns({
-      todo: [],
-      inProgress: [{ text: 'Say "hi"', status: 'in_progress' }],
-      blocked: [],
-      completedRecently: [],
+});
+
+const board = (over = {}) => ({
+  todo: [],
+  inProgress: [],
+  blocked: [],
+  completedRecently: [],
+  ...over,
+});
+const research = {
+  id: 'g-1',
+  text: 'Research dark factories',
+  priority: 'high',
+  status: 'in_progress',
+  source: 'agent',
+  tasks: [
+    { id: 't-1', text: 'Map L0-L4', done: true, status: 'done', by: 'agent', cycleId: 'c-1' },
+    { id: 't-2', text: 'Find <3> companies', done: false, status: 'in_progress', by: 'agent' },
+    { id: 't-3', text: 'Get approval', done: false, status: 'blocked' },
+    { id: 't-4', text: 'Send me a summary', done: false, status: 'todo', by: 'operator' },
+  ],
+};
+
+describe('goal board rows (tasks open under the clicked card)', () => {
+  it('lays cards out row by row: row r holds the r-th goal of every column', () => {
+    const html = goalsColumns(
+      board({ todo: [{ text: 'T1' }, { text: 'T2' }], inProgress: [{ text: 'P1' }] })
+    );
+    const order = ['T1', 'P1', 'T2'].map((t) => html.indexOf(`>${t}<`));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    // 4 heads + 2 rows × 4 cells + 4 foot cells
+    expect(html.match(/class="home-board-cell[ "]/g)).toHaveLength(16);
+  });
+
+  it('puts the add-goal form at the bottom of To do, after every card', () => {
+    const html = goalsColumns(board({ todo: [{ text: 'T1' }, { text: 'T2' }] }));
+    expect(html.indexOf('id="home-goal-form"')).toBeGreaterThan(html.indexOf('>T2<'));
+  });
+
+  it('cards show priority (medium too), who set the goal, and a task bar', () => {
+    const html = goalsColumns(
+      board({
+        todo: [{ text: 'Mid', priority: 'medium', source: 'operator' }],
+        inProgress: [research],
+      })
+    );
+    expect(html).toContain('pri-medium">medium<');
+    expect(html).toContain('home-goal-you');
+    expect(html).toContain('home-goal-agent');
+    expect(html).toContain('1/4 tasks done');
+    expect(html).toContain('1 blocked');
+    expect(html).toContain('No tasks yet');
+    expect(html.match(/class="home-task-seg /g)).toHaveLength(4);
+    expect(html).not.toContain('home-goal-move');
+  });
+
+  it('each goal gets a stable colour', () => {
+    const a = goalsColumns(board({ inProgress: [research] }));
+    const b = goalsColumns(board({ inProgress: [research], todo: [{ text: 'Other' }] }));
+    const color = (h) => h.match(/data-goal-id="g-1"[^>]*--goal-color:(#[0-9a-f]{6})/)?.[1];
+    expect(color(a)).toMatch(/^#[0-9a-f]{6}$/);
+    expect(color(a)).toBe(color(b));
+  });
+
+  it('no panel until a goal is selected', () => {
+    expect(goalsColumns(board({ inProgress: [research] }))).not.toContain('home-goal-panel');
+  });
+
+  it('the selected goal opens its tasks right after its own row, pointing at its column', () => {
+    const html = goalsColumns(
+      board({
+        todo: [{ text: 'T1' }, { text: 'T2' }],
+        inProgress: [{ text: 'P1' }, research],
+      }),
+      { selectedId: 'g-1', botId: 'b1' }
+    );
+    const panel = html.indexOf('class="home-goal-panel"');
+    expect(panel).toBeGreaterThan(html.indexOf('>T2<'));
+    expect(panel).toBeLessThan(html.indexOf('id="home-goal-form"'));
+    expect(html).toContain('--col:1');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toMatch(/home-goal-card is-selected/);
+  });
+
+  it('the panel has four task lanes with the tasks in them, escaped', () => {
+    const html = goalsColumns(board({ inProgress: [research] }), {
+      selectedId: 'g-1',
+      botId: 'b1',
     });
-    expect(html).toContain('data-goal="Say &quot;hi&quot;"');
+    for (const s of ['todo', 'in_progress', 'blocked', 'done'])
+      expect(html).toContain(`data-task-status="${s}"`);
+    expect(html).toContain('Find &lt;3&gt; companies');
+    expect(html).toContain('data-task-id="t-2"');
+    expect(html).toContain('data-add-task');
+    expect(html).toContain('data-goal-history');
+    expect(html).toContain('data-goal-close');
+  });
+
+  it('task cards say who made them and link the cycle that did', () => {
+    const html = goalsColumns(board({ inProgress: [research] }), {
+      selectedId: 'g-1',
+      botId: 'b1',
+    });
+    expect(html).toContain('data-open-cycle="c-1" data-bot-id="b1"');
+    const mine = html.slice(html.indexOf('data-task-id="t-4"'));
+    expect(mine.slice(0, 400)).toContain('home-goal-you');
+  });
+
+  it('offers to complete the goal when every task is done', () => {
+    const allDone = {
+      ...research,
+      tasks: research.tasks.map((t) => ({ ...t, done: true, status: 'done' })),
+    };
+    const html = goalsColumns(board({ inProgress: [allDone] }), { selectedId: 'g-1' });
+    expect(html).toContain('All tasks done');
+    expect(html).toContain('data-complete-goal');
+  });
+
+  it('the panel status control moves the goal and shows its column', () => {
+    const html = goalsColumns(board({ inProgress: [research] }), { selectedId: 'g-1' });
+    expect(html).toMatch(/class="home-goal-status[^"]*"[^>]*>/);
     expect(html).toMatch(/<option value="in_progress" selected>/);
-    expect(html).toContain('<option value="done">');
+  });
+
+  it('a selected goal that is gone shows no panel', () => {
+    const html = goalsColumns(board({ todo: [{ text: 'A', id: 'g-x' }] }), { selectedId: 'g-1' });
+    expect(html).not.toContain('home-goal-panel');
+  });
+});
+
+describe('task payloads', () => {
+  it('taskMovePayload sends the whole list with one task in its new lane', () => {
+    expect(taskMovePayload(research, 't-4', 'in_progress')).toEqual({
+      id: 'g-1',
+      tasks: [
+        { id: 't-1', text: 'Map L0-L4', status: 'done' },
+        { id: 't-2', text: 'Find <3> companies', status: 'in_progress' },
+        { id: 't-3', text: 'Get approval', status: 'blocked' },
+        { id: 't-4', text: 'Send me a summary', status: 'in_progress' },
+      ],
+    });
+    expect(taskMovePayload(research, 't-4', 'todo')).toBeNull();
+    expect(taskMovePayload(research, 't-nope', 'done')).toBeNull();
+    expect(taskMovePayload(research, 't-1', 'later')).toBeNull();
+  });
+
+  it('taskAddPayload appends a one-line To do task, or null when empty', () => {
+    const p = taskAddPayload(research, '  Call\nthem ');
+    expect(p?.tasks.at(-1)).toEqual({ text: 'Call them', status: 'todo' });
+    expect(p?.tasks).toHaveLength(5);
+    expect(taskAddPayload(research, '   ')).toBeNull();
+    expect(taskAddPayload({ text: 'No tasks' }, 'First')).toEqual({
+      goal: 'No tasks',
+      tasks: [{ text: 'First', status: 'todo' }],
+    });
   });
 });
 
@@ -292,47 +425,6 @@ describe('karmaBody', () => {
     expect(html).toContain('ui-badge-muted">tool<');
     expect(html).toContain('&lt;bad&gt;');
     expect(html).toContain('5m ago');
-  });
-});
-
-describe('goals board polish', () => {
-  it('shows a priority chip only for non-default priorities', () => {
-    const html = goalsColumns({
-      todo: [
-        { text: 'Hi', priority: 'high' },
-        { text: 'Mid', priority: 'medium' },
-      ],
-      inProgress: [],
-      blocked: [],
-      completedRecently: [],
-    });
-    expect(html).toContain('pri-high');
-    expect(html).not.toContain('pri-medium');
-  });
-  it('marks empty columns so their count can be dimmed', () => {
-    const html = goalsColumns({
-      todo: [{ text: 'A' }],
-      inProgress: [],
-      blocked: [],
-      completedRecently: [],
-    });
-    expect(html).toContain('data-status="pending">');
-    expect(html).toContain('data-status="blocked" data-empty');
-  });
-});
-
-describe('goal cards open the detail drawer', () => {
-  it('carry the goal title and id, and are keyboard-focusable', () => {
-    const html = goalsColumns({
-      todo: [{ text: 'Ship "it"', id: 'g-1' }, { text: 'No id yet' }],
-      inProgress: [],
-      blocked: [],
-      completedRecently: [],
-    });
-    expect(html).toContain(
-      'class="home-goal-card" role="button" tabindex="0" data-goal="Ship &quot;it&quot;" data-goal-id="g-1"'
-    );
-    expect(html).toContain('data-goal="No id yet" data-goal-id=""');
   });
 });
 

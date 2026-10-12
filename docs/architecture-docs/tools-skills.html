@@ -867,13 +867,14 @@
           <!-- manage_goals -->
           <div class="tool-card">
             <h4 class="tool-name">manage_goals</h4>
-            <div class="tool-desc">Manage structured goals in GOALS.md. Track tasks, projects, and objectives that persist in the soul directory and are visible during reflection and agent loop cycles. Supports listing, adding, updating status, and completing goals with outcomes. Goals carry an optional <code>source</code> tag (e.g. <code>reflection:2026-03-23</code>, <code>strategist:2026-03-23</code>) for provenance tracking.</div>
+            <div class="tool-desc">Manage structured goals in GOALS.md. Track tasks, projects, and objectives that persist in the soul directory and are visible during reflection and agent loop cycles. Supports listing, adding, updating status, and completing goals with outcomes, and (2026-10-12) the goal's tasks: <code>add_task</code> appends a step the agent plans to take (<code>by: agent</code> + the cycle), <code>update_task</code> moves one between <code>todo | in_progress | blocked | done</code> by its id (<code>t-</code> + 6 hex) or a substring of its text. A task that starts moves a To do goal to in progress. Tasks are the <code>- task: [ ]</code> lines under a goal (<code>[~]</code> in progress, <code>[!]</code> blocked, <code>[x]</code> done, then <code>{id, by, cycle}</code>); the operator moves the same tasks on the Agent Home board. Goals carry an optional <code>source</code> tag (e.g. <code>reflection:2026-03-23</code>, <code>strategist:2026-03-23</code>) for provenance tracking.</div>
             <div class="tool-params">
               <strong>Parameters</strong>
               <ul>
-                <li><code>action</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; list | add | update | complete</span></li>
+                <li><code>action</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; list | add | update | complete | add_task | update_task</span></li>
                 <li><code>goal</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Goal text (for add) or identifier substring (for update/complete)</span></li>
-                <li><code>status</code> <span class="param-type">string</span> <span class="param-desc">&mdash; pending | in_progress | blocked (for update)</span></li>
+                <li><code>status</code> <span class="param-type">string</span> <span class="param-desc">&mdash; pending | in_progress | blocked (for update); todo | in_progress | blocked | done (for add_task / update_task)</span></li>
+                <li><code>task</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Task text (add_task) or task id / text substring (update_task)</span></li>
                 <li><code>priority</code> <span class="param-type">string</span> <span class="param-desc">&mdash; high | medium | low</span></li>
                 <li><code>notes</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Additional notes or context</span></li>
                 <li><code>outcome</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Outcome summary (for complete)</span></li>

@@ -279,6 +279,15 @@ const GOAL_MOVES = [
   ['done', 'Done'],
 ];
 
+/** Task lanes, the same four as the goal columns. */
+const TASK_LANES = [
+  ['todo', 'To do'],
+  ['in_progress', 'In progress'],
+  ['blocked', 'Blocked'],
+  ['done', 'Done'],
+];
+const TASK_LANE_IDS = TASK_LANES.map(([v]) => v);
+
 function moveValue(status) {
   const s = String(status ?? '')
     .trim()
@@ -290,33 +299,118 @@ function moveValue(status) {
   return 'pending';
 }
 
-function goalCard(g, columnStatus) {
+/** A task's lane, falling back to its checkbox for tasks written before lanes. */
+function taskLane(t) {
+  return TASK_LANE_IDS.includes(t?.status) ? t.status : t?.done ? 'done' : 'todo';
+}
+
+/** One colour per goal, stable across redraws (hash of its id, or its text). */
+const GOAL_COLORS = ['#7c9cff', '#f0a35e', '#c084fc', '#34d399', '#f472b6', '#67e8f9', '#facc15'];
+function goalColor(g) {
+  const key = String(g?.id || g?.text || '');
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return GOAL_COLORS[h % GOAL_COLORS.length];
+}
+
+const YOU_BADGE = '<span class="home-goal-you" title="You set this">you</span>';
+const AGENT_BADGE = '<span class="home-goal-agent" title="The agent set this">✦ agent</span>';
+
+/** Who set a goal: you (dashboard), the agent (any of its own writers), or nobody shown. */
+function goalBadge(g) {
+  const source = String(g?.source ?? '');
+  if (/^operator\b/i.test(source)) return YOU_BADGE;
+  if (/^(agent|strategist|curiosity|reflection)\b/i.test(source)) return AGENT_BADGE;
+  return '';
+}
+
+function taskBadge(t) {
+  if (t?.by === 'agent') return AGENT_BADGE;
+  return YOU_BADGE;
+}
+
+function priorityChip(g) {
+  const p = String(g?.priority || 'medium');
+  return `<span class="home-goal-pri pri-${esc(p)}">${esc(p)}</span>`;
+}
+
+/** Segmented bar (done, in progress, blocked, to do) plus "d/t tasks done · n blocked". */
+function taskBar(tasks) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  if (!list.length) return '<div class="home-task-tally">No tasks yet</div>';
+  const order = ['done', 'in_progress', 'blocked', 'todo'];
+  const segs = [...list]
+    .sort((a, b) => order.indexOf(taskLane(a)) - order.indexOf(taskLane(b)))
+    .map((t) => `<span class="home-task-seg seg-${taskLane(t)}"></span>`)
+    .join('');
+  const done = list.filter((t) => taskLane(t) === 'done').length;
+  const blocked = list.filter((t) => taskLane(t) === 'blocked').length;
+  return `<div class="home-task-bar" aria-hidden="true">${segs}</div>
+    <div class="home-task-tally">${done}/${list.length} tasks done${blocked ? ` · <span class="home-task-blocked">${blocked} blocked</span>` : ''}</div>`;
+}
+
+function goalCard(g, selected) {
   const text = String(g.text || '(untitled)');
-  const you = /^operator\b/i.test(String(g.source ?? ''))
-    ? '<span class="home-goal-you" title="You set this goal">you</span>'
-    : '';
-  // medium is the default: a chip on every card is noise.
-  const pr =
-    g.priority && String(g.priority) !== 'medium'
-      ? `<span class="home-goal-pri pri-${esc(String(g.priority))}">${esc(String(g.priority))}</span>`
-      : '';
-  const notes = g.notes
-    ? `<div class="home-goal-notes">${esc(String(g.notes).slice(0, 160))}${String(g.notes).length > 160 ? '…' : ''}</div>`
-    : '';
-  const current = columnStatus ?? moveValue(g.status);
-  const options = GOAL_MOVES.map(
-    ([v, label]) => `<option value="${v}"${v === current ? ' selected' : ''}>${label}</option>`
-  ).join('');
-  return `<div class="home-goal-card" role="button" tabindex="0" data-goal="${esc(text)}" data-goal-id="${esc(g.id ?? '')}" aria-label="Open goal details" draggable="true">
-    <div class="home-goal-text">${esc(text)}</div>
-    ${notes}
-    <div class="home-goal-foot">${you}${pr}
-      <select class="home-goal-move" data-goal="${esc(text)}" aria-label="Move goal">${options}</select>
-    </div>
+  const title = String(g.headline || text);
+  return `<div class="home-goal-card${selected ? ' is-selected' : ''}" role="button" tabindex="0" aria-expanded="${selected}" data-goal="${esc(text)}" data-goal-id="${esc(g.id ?? '')}" style="--goal-color:${goalColor(g)}" aria-label="Show the tasks of this goal" draggable="true">
+    <div class="home-goal-text">${esc(title)}</div>
+    <div class="home-goal-meta">${priorityChip(g)}${goalBadge(g)}</div>
+    ${taskBar(g.tasks)}
   </div>`;
 }
 
-/** Add-a-goal form at the top of the To do column; agent-home.js wires it by delegation. */
+function taskCard(t, botId) {
+  const lane = taskLane(t);
+  const cycle =
+    t.cycleId && botId
+      ? `<button type="button" class="home-task-cycle" data-open-cycle="${esc(t.cycleId)}" data-bot-id="${esc(botId)}" title="Open the cycle that made this task">cycle</button>`
+      : '';
+  return `<div class="home-task-card${lane === 'done' ? ' is-done' : ''}" draggable="true" data-task-id="${esc(t.id ?? '')}">
+    <div class="home-task-text">${esc(String(t.text ?? ''))}</div>
+    <div class="home-task-meta">${taskBadge(t)}${cycle}</div>
+  </div>`;
+}
+
+/** The selected goal's tasks: header, then the four lanes lined up under the goal columns. */
+function goalTasksPanel(g, column, botId, addingTask) {
+  const text = String(g.text || '(untitled)');
+  const tasks = Array.isArray(g.tasks) ? g.tasks : [];
+  const status = moveValue(column);
+  const allDone =
+    tasks.length > 0 && status !== 'done' && tasks.every((t) => taskLane(t) === 'done');
+  const options = GOAL_MOVES.map(
+    ([v, label]) => `<option value="${v}"${v === status ? ' selected' : ''}>${label}</option>`
+  ).join('');
+  const lanes = TASK_LANES.map(([lane, label]) => {
+    const list = tasks.filter((t) => taskLane(t) === lane);
+    const add =
+      lane !== 'todo'
+        ? ''
+        : addingTask
+          ? `<form class="home-task-form" data-task-form><input class="home-goal-input" name="text" maxlength="200" placeholder="New task…" autocomplete="off" required><button class="btn btn-sm btn-primary" type="submit">Add</button></form>`
+          : '<button type="button" class="home-task-add" data-add-task>+ Add task</button>';
+    return `<div class="home-task-lane" data-task-status="${lane}">
+      <div class="home-board-head"><span class="home-board-dot dot-${lane === 'todo' ? 'pending' : lane}"></span>${label}<span class="home-board-count">${list.length}</span></div>
+      ${add}${list.map((t) => taskCard(t, botId)).join('')}
+    </div>`;
+  }).join('');
+  return `<section class="home-goal-panel" style="--goal-color:${goalColor(g)};--col:${GOAL_MOVES.findIndex(([v]) => v === status)}" data-panel-goal="${esc(text)}" data-panel-goal-id="${esc(g.id ?? '')}" aria-label="Tasks of this goal">
+    <div class="home-goal-panel-head">
+      <div class="home-goal-panel-main">
+        <div class="home-goal-panel-title">${esc(text)}</div>
+        <div class="home-goal-meta"><select class="home-goal-status status-${status}" data-goal="${esc(text)}" aria-label="Goal status">${options}</select>${priorityChip(g)}${goalBadge(g)}</div>
+        ${g.notes ? `<div class="home-goal-notes">${esc(String(g.notes))}</div>` : ''}
+        ${tasks.length ? taskBar(tasks) : ''}
+        ${allDone ? '<div class="home-goal-alldone">All tasks done <button type="button" class="btn btn-sm" data-complete-goal>Mark goal done</button></div>' : ''}
+      </div>
+      <button type="button" class="btn btn-sm btn-ghost" data-goal-history>History</button>
+      <button type="button" class="btn btn-sm btn-ghost home-goal-close" data-goal-close aria-label="Close tasks">✕</button>
+    </div>
+    <div class="home-task-lanes">${lanes}</div>
+  </section>`;
+}
+
+/** Add-a-goal form at the bottom of the To do column; agent-home.js wires it by delegation. */
 export function goalAddForm() {
   return `<form id="home-goal-form" class="home-goal-form">
     <input class="home-goal-input" name="title" maxlength="200" placeholder="Add a goal…" autocomplete="off" required>
@@ -345,29 +439,102 @@ export function goalMovePayload(goal, status) {
   return { goal: g, status };
 }
 
-/** Goals board: To do / In progress / Blocked / Done, with the add form in To do. */
-export function goalsColumns(goals) {
+/** How a PATCH names a goal: its id when it has one, else its title. */
+function goalRef(goal) {
+  return goal?.id ? { id: goal.id } : { goal: String(goal?.text ?? '') };
+}
+
+function wireTasks(tasks) {
+  return tasks.map((t) => ({ ...(t.id ? { id: t.id } : {}), text: t.text, status: taskLane(t) }));
+}
+
+/** PATCH body moving task `taskId` to `lane`, or null when nothing would change. */
+export function taskMovePayload(goal, taskId, lane) {
+  const tasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task || !TASK_LANE_IDS.includes(lane) || taskLane(task) === lane) return null;
+  return {
+    ...goalRef(goal),
+    tasks: wireTasks(tasks).map((t) => (t.id === taskId ? { ...t, status: lane } : t)),
+  };
+}
+
+/** PATCH body adding one To do task (single line), or null when the text is empty. */
+export function taskAddPayload(goal, text) {
+  const clean = String(text ?? '')
+    .replace(/\s*[\r\n]+\s*/g, ' ')
+    .trim();
+  if (!clean) return null;
+  const tasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
+  return { ...goalRef(goal), tasks: [...wireTasks(tasks), { text: clean, status: 'todo' }] };
+}
+
+/** The four goal columns of a home payload, in board order. */
+export function goalBuckets(goals) {
   const active = goals?.active ?? [];
-  const todo = goals?.todo ?? active.filter((g) => moveValue(g.status) === 'pending');
-  const doing = goals?.inProgress ?? active.filter((g) => moveValue(g.status) === 'in_progress');
-  const blocked = goals?.blocked ?? [];
-  const done = goals?.completedRecently ?? [];
-  const total = todo.length + doing.length + blocked.length + done.length;
-  const col = (
-    status,
-    title,
-    list,
-    empty,
-    extra = ''
-  ) => `<div class="home-board-col" data-status="${status}"${list.length ? '' : ' data-empty'}>
-    <div class="home-board-head"><span class="home-board-dot dot-${status}"></span>${title}<span class="home-board-count">${list.length}</span></div>
-    ${extra}
-    <div class="home-board-cards">${
-      list.length
-        ? list.map((g) => goalCard(g, status)).join('')
-        : `<div class="home-board-empty">${esc(empty)}</div>`
-    }</div>
-  </div>`;
+  return [
+    [
+      'pending',
+      'To do',
+      goals?.todo ?? active.filter((g) => moveValue(g.status) === 'pending'),
+      'Nothing queued',
+    ],
+    [
+      'in_progress',
+      'In progress',
+      goals?.inProgress ?? active.filter((g) => moveValue(g.status) === 'in_progress'),
+      'Nothing in progress',
+    ],
+    ['blocked', 'Blocked', goals?.blocked ?? [], 'Nothing blocked'],
+    ['done', 'Done', goals?.completedRecently ?? [], 'Nothing finished recently'],
+  ];
+}
+
+/** The goal a board selection names (by id, else by title), with its column. */
+export function findBoardGoal(goals, ref) {
+  if (!ref) return null;
+  for (const [status, , list] of goalBuckets(goals)) {
+    const goal = list.find((g) => (g.id && g.id === ref) || (!g.id && g.text === ref));
+    if (goal) return { goal, status };
+  }
+  return null;
+}
+
+/**
+ * Goals board: To do / In progress / Blocked / Done laid out row by row (row r
+ * holds the r-th goal of each column), so the selected goal's tasks open as a
+ * full-width row right under its own row. The add form sits at the bottom of To do.
+ */
+export function goalsColumns(goals, { selectedId, botId, addingTask = false } = {}) {
+  const buckets = goalBuckets(goals);
+  const total = buckets.reduce((n, [, , list]) => n + list.length, 0);
+  const selected = findBoardGoal(goals, selectedId);
+  const rows = Math.max(1, ...buckets.map(([, , list]) => list.length));
+  let html = buckets
+    .map(
+      ([status, title, list]) =>
+        `<div class="home-board-cell home-board-top" data-status="${status}"${list.length ? '' : ' data-empty'}><div class="home-board-head"><span class="home-board-dot dot-${status}"></span>${title}<span class="home-board-count">${list.length}</span></div></div>`
+    )
+    .join('');
+  for (let r = 0; r < rows; r++) {
+    for (const [status, , list, empty] of buckets) {
+      const g = list[r];
+      const body = g
+        ? goalCard(g, selected?.goal === g)
+        : r === 0
+          ? `<div class="home-board-empty">${esc(empty)}</div>`
+          : '';
+      html += `<div class="home-board-cell" data-status="${status}">${body}</div>`;
+    }
+    if (selected && buckets.find(([s]) => s === selected.status)[2].indexOf(selected.goal) === r)
+      html += goalTasksPanel(selected.goal, selected.status, botId, addingTask);
+  }
+  html += buckets
+    .map(
+      ([status]) =>
+        `<div class="home-board-cell home-board-bottom" data-status="${status}">${status === 'pending' ? goalAddForm() : ''}</div>`
+    )
+    .join('');
   const intro =
     total === 0
       ? emptyState({
@@ -376,12 +543,7 @@ export function goalsColumns(goals) {
           hint: 'Add one in To do: the agent works on goals you set before its own, and asks you if one is unclear.',
         })
       : '';
-  return `${intro}<div class="home-board">
-    ${col('pending', 'To do', todo, 'Nothing queued', goalAddForm())}
-    ${col('in_progress', 'In progress', doing, 'Nothing in progress')}
-    ${col('blocked', 'Blocked', blocked, 'Nothing blocked')}
-    ${col('done', 'Done', done, 'Nothing finished recently')}
-  </div>`;
+  return `${intro}<div class="home-board">${html}</div>`;
 }
 
 /** Radar axes from a traits record (0.1–0.9 values) — sorted by name for stability. */

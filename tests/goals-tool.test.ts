@@ -693,8 +693,8 @@ describe('goal subtasks (task: lines)', () => {
 `;
   test('parse reads task lines in order, done or not', () => {
     expect(parseGoals(md).active[0].tasks).toEqual([
-      { text: 'Pick three sources', done: true },
-      { text: 'Draft 600 words', done: false },
+      { text: 'Pick three sources', done: true, status: 'done' },
+      { text: 'Draft 600 words', done: false, status: 'todo' },
     ]);
   });
 
@@ -714,7 +714,7 @@ describe('goal subtasks (task: lines)', () => {
   test('editGoal replaces the task list; an empty list clears it', () => {
     const out = editGoal(md, 'g-aaaaaaaa', {
       tasks: [
-        { text: 'Pick three sources', done: true },
+        { text: 'Pick three sources', done: true, status: 'done' },
         { text: 'Draft 600 words', done: true },
         { text: 'Send to Diego', done: false },
       ],

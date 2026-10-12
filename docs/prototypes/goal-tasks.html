@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Prototype — Goals with tasks</title>
+<style>
+  :root {
+    --bg: #0b0d12; --surface: #12151c; --elevated: #181c25; --bg-hover: #1b1f29;
+    --border: #252a35; --border-strong: #323847;
+    --text: #e7e9ef; --text-dim: #8b91a3; --text-faint: #5f6577;
+    --accent: #7c9cff; --accent-bg: rgba(124,156,255,.14);
+    --ok: #34d399; --ok-bg: rgba(52,211,153,.14);
+    --warn: #fbbf24; --warn-bg: rgba(251,191,36,.14);
+    --danger: #f87171; --danger-bg: rgba(248,113,113,.12);
+    --info: #67e8f9; --muted-bg: rgba(139,145,163,.14);
+    --radius: 6px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, sans-serif; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--text-dim); margin: 0 0 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { background: none; border: 0; color: var(--text-dim); padding: 6px 12px; cursor: pointer; font: inherit; }
+  .seg button.on { background: var(--accent-bg); color: var(--accent); }
+  .btn { background: var(--elevated); border: 1px solid var(--border-strong); color: var(--text); border-radius: var(--radius); padding: 6px 12px; cursor: pointer; font: inherit; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.ghost { background: none; border-color: transparent; color: var(--text-dim); }
+  .spacer { flex: 1; }
+  input, select { background: var(--bg); border: 1px solid var(--border-strong); color: var(--text); border-radius: var(--radius); padding: 6px 10px; font: inherit; }
+
+  /* Columns */
+  .cols { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .col { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px; min-height: 80px; }
+  .col.over, .cell.over { outline: 2px dashed var(--accent); outline-offset: -4px; }
+  .col-h { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 2px 4px 10px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+  .count { margin-left: auto; background: var(--muted-bg); border-radius: 10px; padding: 0 7px; font-weight: 500; }
+  .empty { color: var(--text-faint); text-align: center; padding: 14px 0; font-size: 13px; }
+
+  /* Goal card */
+  .goal { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 12px 10px 16px; margin-bottom: 10px; cursor: grab; }
+  .goal::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 8px 0 0 8px; background: var(--g); }
+  .goal-title { font-weight: 600; margin-bottom: 6px; }
+  .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); }
+  .pill { border-radius: 10px; padding: 1px 8px; font-size: 12px; }
+  .pri-high { background: var(--warn-bg); color: var(--warn); }
+  .pri-medium { background: var(--muted-bg); color: var(--text-dim); }
+  .pri-low { background: var(--muted-bg); color: var(--text-faint); }
+  .by-you { background: var(--accent-bg); color: var(--accent); }
+  .by-agent { background: rgba(103,232,249,.12); color: var(--info); }
+  .progress { display: flex; gap: 2px; margin: 8px 0 4px; height: 6px; }
+  .progress span { flex: 1; border-radius: 2px; }
+  .ptxt { font-size: 12px; color: var(--text-dim); display: flex; gap: 8px; align-items: center; }
+  .ptxt .link { margin-left: auto; color: var(--accent); cursor: pointer; background: none; border: 0; font: inherit; font-size: 12px; }
+  .subtasks { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .st { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 13px; }
+  .st .txt { flex: 1; }
+  .st.done .txt { color: var(--text-faint); text-decoration: line-through; }
+  .st-status { cursor: pointer; border: 0; font: inherit; font-size: 11px; border-radius: 10px; padding: 1px 7px; }
+  .hint { background: var(--ok-bg); color: var(--ok); border-radius: var(--radius); font-size: 12px; padding: 6px 8px; margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  .hint button { margin-left: auto; font-size: 12px; padding: 2px 8px; }
+  .add-inline { display: flex; gap: 6px; margin-top: 6px; }
+  .add-inline input { flex: 1; padding: 4px 8px; font-size: 13px; }
+
+  /* Task card */
+  .task { position: relative; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--g); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; cursor: grab; font-size: 13px; }
+  .task .parent { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task .parent .dot { background: var(--g); }
+  .task .row { display: flex; gap: 6px; align-items: center; margin-top: 6px; font-size: 11px; color: var(--text-faint); }
+  .task.done .t { color: var(--text-faint); text-decoration: line-through; }
+  .task.flash, .goal.flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 2px var(--info); } 100% { box-shadow: 0 0 0 2px transparent; } }
+  .dragging { opacity: .4; }
+
+  /* D: selected goal opens its tasks below */
+  .view-below .goal { cursor: pointer; }
+  .goal.sel { border-color: var(--g); box-shadow: 0 0 0 1px var(--g); background: var(--elevated); }
+  .rows { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 12px; row-gap: 0; }
+  .rcell { background: var(--bg); border-left: 1px solid var(--border); border-right: 1px solid var(--border); padding: 5px 10px; display: flex; flex-direction: column; }
+  .rcell > .goal { margin: 0; flex: 1; }
+  .rhead { border-top: 1px solid var(--border); border-radius: 10px 10px 0 0; padding-top: 10px; }
+  .rhead .col-h { margin-bottom: 0; }
+  .rfoot { border-bottom: 1px solid var(--border); border-radius: 0 0 10px 10px; padding-bottom: 10px; min-height: 16px; }
+  .rcell.over { outline: 2px dashed var(--accent); outline-offset: -4px; }
+  .tasks-panel { position: relative; grid-column: 1 / -1; margin: 10px 0; border: 1px solid var(--border); border-top: 3px solid var(--g); border-radius: 10px; background: var(--surface); padding: 14px; }
+  .tasks-panel::before { content: ""; position: absolute; top: -9px; left: calc((100% - 36px) / 4 * var(--col) + 12px * var(--col) + (100% - 36px) / 8 - 8px); border: 8px solid transparent; border-top: 0; border-bottom-color: var(--g); }
+  .tp-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+  .tp-head .goal-title { font-size: 15px; margin-bottom: 4px; }
+  .tp-head .grow { flex: 1; min-width: 0; }
+  .tp-head .progress { max-width: 360px; }
+  .tp-add { background: none; border: 0; color: var(--text-faint); cursor: pointer; font: inherit; font-size: 12px; padding: 2px 0 8px; }
+  .tp-add:hover { color: var(--accent); }
+  .tp-hint { color: var(--text-faint); font-size: 13px; text-align: center; padding: 18px; border: 1px dashed var(--border-strong); border-radius: 10px; margin-top: 16px; }
+
+  /* Swimlanes */
+  .lanes { display: grid; grid-template-columns: 240px repeat(4, minmax(0, 1fr)); gap: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .lanes > div { border-bottom: 1px solid var(--border); }
+  .lh { background: var(--elevated); padding: 8px 10px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); display: flex; gap: 8px; align-items: center; }
+  .lane-goal { position: relative; padding: 10px 12px 10px 16px; background: var(--surface); border-right: 1px solid var(--border); }
+  .lane-goal::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--g); }
+  .lane-goal .goal-title { font-size: 13px; cursor: pointer; }
+  .cell { padding: 8px; background: var(--bg); min-height: 64px; border-right: 1px solid var(--border); }
+  .cell:last-child { border-right: 0; }
+  .cell .add { color: var(--text-faint); font-size: 12px; cursor: pointer; background: none; border: 0; padding: 2px 0; font: inherit; font-size: 12px; }
+  .cell .add:hover { color: var(--accent); }
+  .collapsed-note { grid-column: 2 / -1; padding: 10px; background: var(--bg); color: var(--text-faint); font-size: 12px; }
+
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border-strong); border-radius: 14px; padding: 3px 10px; font-size: 12px; cursor: pointer; color: var(--text-dim); background: none; font: inherit; font-size: 12px; }
+  .chip .dot { background: var(--g); }
+  .chip.on { border-color: var(--g); color: var(--text); background: var(--elevated); }
+
+  .notes { margin-top: 20px; color: var(--text-dim); font-size: 13px; }
+  .notes h2 { font-size: 14px; color: var(--text); margin: 0 0 8px; }
+  .notes ol { margin: 0; padding-left: 20px; }
+  .notes li { margin-bottom: 6px; }
+  .notes b { color: var(--text); }
+  .log { font-size: 12px; color: var(--info); min-height: 18px; }
+</style>
+</head>
+<body>
+<h1>Prototype — Goals with tasks</h1>
+<p class="sub">Throwaway mockup for agreement. Everything is local state: drag cards, add goals and tasks, press "Simulate agent cycle" to see what the AI adds.</p>
+
+<div class="card">
+  <div class="toolbar">
+    <div class="seg" id="views">
+      <button data-view="below">D · Click goal, tasks below</button>
+      <button data-view="goals">A · Goals board</button>
+      <button data-view="lanes">B · Tasks by goal</button>
+      <button data-view="flat">C · All tasks</button>
+    </div>
+    <span class="spacer"></span>
+    <span class="log" id="log"></span>
+    <button class="btn" id="sim">▶ Simulate agent cycle</button>
+  </div>
+  <div id="board"></div>
+</div>
+
+<div class="notes card" style="margin-top:16px">
+  <h2>Decisions to agree on</h2>
+  <ol>
+    <li><b>Which layout is the default?</b> A keeps today's goal board and folds tasks inside each card. B is a swimlane per goal (the parent is the row). C is a flat task board where every card carries its parent chip. These can be tabs of the same card.</li>
+    <li><b>Task status = the same four lanes as goals</b> (To do / In progress / Blocked / Done). Today tasks are only checkboxes (<code>- task: [x]</code> in GOALS.md); this needs a status per task and an author (<code>you</code> / <code>agent</code>).</li>
+    <li><b>Goal status from its tasks?</b> Proposal: the goal status stays yours/the agent's to set, but the board nudges: first task moves to In progress → goal moves to In progress; all tasks done → "mark goal done?" (shown in A). Blocked tasks never block the goal automatically.</li>
+    <li><b>Can a task move to another goal?</b> In B, dropping a task on another goal's row reparents it. Allow it, or restrict drag to the task's own row?</li>
+    <li><b>Agent-created tasks</b> flash once and carry the "agent" badge plus the cycle that created them (opens the cycle, like every Why). Should the agent be allowed to move or edit <i>your</i> tasks, or only its own?</li>
+    <li><b>Can the agent close a task you created?</b> Proposal: yes, with the cycle recorded so the Why shows it.</li>
+  </ol>
+</div>
+
+<script>
+const STATUSES = [
+  { id: 'todo', label: 'To do', color: 'var(--text-dim)', bg: 'var(--muted-bg)' },
+  { id: 'in_progress', label: 'In progress', color: 'var(--accent)', bg: 'var(--accent-bg)' },
+  { id: 'blocked', label: 'Blocked', color: 'var(--danger)', bg: 'var(--danger-bg)' },
+  { id: 'done', label: 'Done', color: 'var(--ok)', bg: 'var(--ok-bg)' },
+];
+const ST = Object.fromEntries(STATUSES.map((s) => [s.id, s]));
+const PALETTE = ['#7c9cff', '#f0a35e', '#c084fc', '#34d399', '#f472b6', '#67e8f9', '#facc15'];
+
+let seq = 100;
+const id = (p) => `${p}${++seq}`;
+
+const state = {
+  view: 'below',
+  selected: 'g2',
+  expanded: new Set(['g2']),
+  collapsedLanes: new Set(),
+  filter: new Set(),
+  addingTask: null,
+  flash: new Set(),
+  goals: [
+    { id: 'g1', title: 'Keep one clean list of open tasks with a next step on each, reviewed every morning', priority: 'high', status: 'todo', by: 'you' },
+    { id: 'g2', title: 'Live up to my purpose: research the best way to become a dark factory', priority: 'high', status: 'in_progress', by: 'agent' },
+    { id: 'g3', title: "Learn the operator's routine: when they work, what they postpone, what they ask for twice", priority: 'high', status: 'in_progress', by: 'agent' },
+    { id: 'g4', title: 'Get operator feedback on the Recruiting pilot design before any rollout', priority: 'high', status: 'blocked', by: 'agent' },
+    { id: 'g5', title: 'Turn recurring requests into reminders or cron entries after confirming with the operator', priority: 'medium', status: 'todo', by: 'you' },
+  ],
+  tasks: [
+    { id: 't1', goalId: 'g2', text: 'Map maturity levels L0–L4 from public sources', status: 'done', by: 'agent', cycle: '2d ago' },
+    { id: 't2', goalId: 'g2', text: 'Consolidate the L0–L4 map in core memory', status: 'done', by: 'agent', cycle: '1d ago' },
+    { id: 't3', goalId: 'g2', text: 'Find 3 companies running at L3+ and what they automated first', status: 'in_progress', by: 'agent', cycle: '2h ago' },
+    { id: 't4', goalId: 'g2', text: 'Send me a one-page summary I can forward', status: 'todo', by: 'you' },
+    { id: 't5', goalId: 'g3', text: 'Log when the operator answers asks (hour of day)', status: 'in_progress', by: 'agent', cycle: '5h ago' },
+    { id: 't6', goalId: 'g3', text: 'List questions asked twice in the last 30 days', status: 'todo', by: 'agent', cycle: '5h ago' },
+    { id: 't7', goalId: 'g4', text: 'Draft gold set, metrics and rollback plan', status: 'done', by: 'agent', cycle: '3d ago' },
+    { id: 't8', goalId: 'g4', text: 'Get approve/adjust from operator (ask_human #08)', status: 'blocked', by: 'agent', cycle: '3d ago', note: 'waiting on you' },
+    { id: 't9', goalId: 'g1', text: 'Agree on where the list lives (Telegram pin or file)', status: 'todo', by: 'you' },
+  ],
+};
+state.goals.forEach((g, i) => (g.color = PALETTE[i % PALETTE.length]));
+
+const goalOf = (t) => state.goals.find((g) => g.id === t.goalId);
+const tasksOf = (g) => state.tasks.filter((t) => t.goalId === g.id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const short = (s, n = 48) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+const byBadge = (by) => `<span class="pill by-${by}">${by === 'you' ? 'you' : '✦ agent'}</span>`;
+const statusPill = (t) => { const s = ST[t.status]; return `<button class="st-status" data-cycle-task="${t.id}" title="Click to change status" style="background:${s.bg};color:${s.color}">${s.label}</button>`; };
+
+function log(msg) { const el = document.getElementById('log'); el.textContent = msg; clearTimeout(log.t); log.t = setTimeout(() => (el.textContent = ''), 3500); }
+
+function progressBar(g) {
+  const ts = tasksOf(g);
+  if (!ts.length) return `<div class="ptxt">No tasks yet <button class="link" data-add-task="${g.id}">+ task</button></div>`;
+  const order = ['done', 'in_progress', 'blocked', 'todo'];
+  const sorted = [...ts].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
+  const done = ts.filter((t) => t.status === 'done').length;
+  const blocked = ts.filter((t) => t.status === 'blocked').length;
+  return `<div class="progress">${sorted.map((t) => `<span style="background:${t.status === 'todo' ? 'var(--border-strong)' : ST[t.status].color}"></span>`).join('')}</div>
+    <div class="ptxt">${done}/${ts.length} tasks done${blocked ? ` · <span style="color:var(--danger)">${blocked} blocked</span>` : ''}
+    <button class="link" data-toggle="${g.id}">${state.expanded.has(g.id) ? 'Hide tasks ▴' : 'Show tasks ▾'}</button></div>`;
+}
+
+function addTaskForm(goalId) {
+  if (state.addingTask !== goalId) return '';
+  return `<form class="add-inline" data-add-form="${goalId}"><input name="text" placeholder="New task…" autofocus><button class="btn primary" style="padding:4px 10px">Add</button></form>`;
+}
+
+function goalCard(g) {
+  const ts = tasksOf(g);
+  const allDone = ts.length && ts.every((t) => t.status === 'done') && g.status !== 'done';
+  const list = state.expanded.has(g.id)
+    ? `<div class="subtasks">${ts.map((t) => `<div class="st ${t.status}">${statusPill(t)}<span class="txt">${esc(t.text)}</span>${t.by === 'agent' ? '<span title="Created by the agent" style="color:var(--info)">✦</span>' : ''}</div>`).join('')}
+       ${state.addingTask === g.id ? addTaskForm(g.id) : `<button class="link" style="background:none;border:0;color:var(--text-faint);cursor:pointer;padding:4px 0;font:inherit;font-size:12px" data-add-task="${g.id}">+ Add task</button>`}</div>`
+    : (state.addingTask === g.id ? addTaskForm(g.id) : '');
+  return `<div class="goal ${state.flash.has(g.id) ? 'flash' : ''}" draggable="true" data-goal="${g.id}" style="--g:${g.color}">
+    <div class="goal-title">${esc(g.title)}</div>
+    <div class="meta"><span class="pill pri-${g.priority}">${g.priority}</span>${byBadge(g.by)}</div>
+    ${progressBar(g)}
+    ${allDone ? `<div class="hint">All tasks done <button class="btn" data-complete="${g.id}">Mark goal done</button></div>` : ''}
+    ${list}
+  </div>`;
+}
+
+function taskCard(t, { showParent }) {
+  const g = goalOf(t);
+  return `<div class="task ${t.status} ${state.flash.has(t.id) ? 'flash' : ''}" draggable="true" data-task="${t.id}" style="--g:${g.color}">
+    ${showParent ? `<div class="parent" title="${esc(g.title)}"><span class="dot"></span>${esc(short(g.title))}</div>` : ''}
+    <div class="t">${esc(t.text)}</div>
+    <div class="row">${byBadge(t.by)}${t.cycle ? `<span title="Open cycle">cycle · ${t.cycle}</span>` : ''}${t.note ? `<span style="color:var(--danger)">${esc(t.note)}</span>` : ''}</div>
+  </div>`;
+}
+
+function colHead(s, n) { return `<div class="col-h"><span class="dot" style="background:${s.color}"></span>${s.label}<span class="count">${n}</span></div>`; }
+
+function renderGoals() {
+  return `<div class="cols">${STATUSES.map((s) => {
+    const gs = state.goals.filter((g) => g.status === s.id);
+    const add = s.id === 'todo' ? `<form class="add-inline" data-add-goal style="margin-bottom:10px"><input name="text" placeholder="Add a goal…"><select name="pri"><option>medium</option><option>high</option><option>low</option></select><button class="btn primary">Add</button></form>` : '';
+    return `<div class="col" data-drop-goal="${s.id}">${colHead(s, gs.length)}${add}${gs.map(goalCard).join('') || '<div class="empty">Nothing here</div>'}</div>`;
+  }).join('')}</div>`;
+}
+
+function taskBar(ts) {
+  const order = ['done', 'in_progress', 'blocked', 'todo'];
+  const done = ts.filter((t) => t.status === 'done').length;
+  const blocked = ts.filter((t) => t.status === 'blocked').length;
+  if (!ts.length) return '<div class="ptxt" style="margin-top:6px">No tasks yet</div>';
+  return `<div class="progress">${[...ts].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status)).map((t) => `<span style="background:${t.status === 'todo' ? 'var(--border-strong)' : ST[t.status].color}"></span>`).join('')}</div>
+    <div class="ptxt">${done}/${ts.length} tasks done${blocked ? ` · <span style="color:var(--danger)">${blocked} blocked</span>` : ''}</div>`;
+}
+
+function compactGoal(g) {
+  return `<div class="goal ${state.selected === g.id ? 'sel' : ''} ${state.flash.has(g.id) ? 'flash' : ''}" draggable="true" data-goal="${g.id}" data-select="${g.id}" style="--g:${g.color}">
+    <div class="goal-title">${esc(g.title)}</div>
+    <div class="meta"><span class="pill pri-${g.priority}">${g.priority}</span>${byBadge(g.by)}</div>
+    ${taskBar(tasksOf(g))}
+  </div>`;
+}
+
+// D: the board is a grid of rows (row r = the r-th goal of every column), so the
+// clicked goal's tasks open as a full-width row right under that goal's row.
+function renderBelow() {
+  const byCol = STATUSES.map((s) => state.goals.filter((g) => g.status === s.id));
+  const rows = Math.max(1, ...byCol.map((c) => c.length));
+  const sel = state.goals.find((x) => x.id === state.selected);
+  const selRow = sel ? byCol[STATUSES.findIndex((s) => s.id === sel.status)].indexOf(sel) : -1;
+  const selCol = sel ? STATUSES.findIndex((s) => s.id === sel.status) : -1;
+  let html = '<div class="rows view-below">';
+  STATUSES.forEach((s, c) => { html += `<div class="rcell rhead" data-drop-goal="${s.id}">${colHead(s, byCol[c].length)}</div>`; });
+  for (let r = 0; r < rows; r++) {
+    STATUSES.forEach((s, c) => {
+      const g = byCol[c][r];
+      const cls = r === selRow && c === selCol ? ' rsel' : '';
+      html += `<div class="rcell${cls}" data-drop-goal="${s.id}">${g ? compactGoal(g) : (r === 0 ? '<div class="empty">Nothing here</div>' : '')}</div>`;
+    });
+    if (r === selRow) html += tasksPanel(sel, selCol);
+  }
+  STATUSES.forEach((s) => {
+    const add = s.id === 'todo' ? `<form class="add-inline" data-add-goal><input name="text" placeholder="Add a goal…"><select name="pri"><option>medium</option><option>high</option><option>low</option></select><button class="btn primary">Add</button></form>` : '';
+    html += `<div class="rcell rfoot" data-drop-goal="${s.id}">${add}</div>`;
+  });
+  return html + '</div>';
+}
+
+function tasksPanel(g, col) {
+  const gs = ST[g.status];
+  const ts = tasksOf(g);
+  const allDone = ts.length && ts.every((t) => t.status === 'done') && g.status !== 'done';
+  const lanes = STATUSES.map((s) => {
+    const list = ts.filter((t) => t.status === s.id);
+    const add = s.id === 'todo' ? (state.addingTask === g.id ? addTaskForm(g.id) : `<button class="tp-add" data-add-task="${g.id}">+ Add task</button>`) : '';
+    return `<div class="col" data-drop-task="${s.id}" data-drop-goal-id="${g.id}">${colHead(s, list.length)}${add}${list.map((t) => taskCard(t, { showParent: false })).join('')}</div>`;
+  }).join('');
+  return `<div class="tasks-panel" style="--g:${g.color};--col:${col}">
+    <div class="tp-head"><div class="grow">
+      <div class="goal-title">${esc(g.title)}</div>
+      <div class="meta"><span class="pill" style="background:${gs.bg};color:${gs.color}">${gs.label}</span><span class="pill pri-${g.priority}">${g.priority}</span>${byBadge(g.by)}</div>
+      ${ts.length ? taskBar(ts) : ''}
+      ${allDone ? `<div class="hint" style="max-width:360px">All tasks done <button class="btn" data-complete="${g.id}">Mark goal done</button></div>` : ''}
+    </div>
+    <button class="btn ghost" title="History of this goal (today's drawer)">History</button>
+    <button class="btn ghost" data-close-panel title="Close">✕</button></div>
+    <div class="cols">${lanes}</div>
+  </div>`;
+}
+
+function renderLanes() {
+  let html = `<div class="lanes"><div class="lh">Goal</div>${STATUSES.map((s) => `<div class="lh"><span class="dot" style="background:${s.color}"></span>${s.label}</div>`).join('')}`;
+  const order = ['in_progress', 'blocked', 'todo', 'done'];
+  const goals = [...state.goals].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
+  for (const g of goals) {
+    const collapsed = state.collapsedLanes.has(g.id);
+    const gs = ST[g.status];
+    html += `<div class="lane-goal" style="--g:${g.color}">
+      <div class="goal-title" data-collapse="${g.id}">${collapsed ? '▸' : '▾'} ${esc(g.title)}</div>
+      <div class="meta"><span class="pill" style="background:${gs.bg};color:${gs.color}">${gs.label}</span><span class="pill pri-${g.priority}">${g.priority}</span>${byBadge(g.by)}</div>
+      ${progressBar(g).replace(/<button class="link" data-toggle[^]*?<\/button>/, '')}
+    </div>`;
+    if (collapsed) { html += `<div class="collapsed-note">${tasksOf(g).length} tasks hidden</div>`; continue; }
+    for (const s of STATUSES) {
+      const ts = tasksOf(g).filter((t) => t.status === s.id);
+      const add = s.id === 'todo' ? (state.addingTask === g.id ? addTaskForm(g.id) : `<button class="add" data-add-task="${g.id}">+ Add task</button>`) : '';
+      html += `<div class="cell" data-drop-task="${s.id}" data-drop-goal-id="${g.id}">${ts.map((t) => taskCard(t, { showParent: false })).join('')}${add}</div>`;
+    }
+  }
+  return html + '</div>';
+}
+
+function renderFlat() {
+  const filters = `<div class="filters" style="margin-bottom:12px">${state.goals.map((g) => `<button class="chip ${state.filter.has(g.id) ? 'on' : ''}" data-filter="${g.id}" style="--g:${g.color}"><span class="dot"></span>${esc(short(g.title, 34))}</button>`).join('')}${state.filter.size ? '<button class="btn ghost" data-clear-filter>Clear</button>' : ''}</div>`;
+  const visible = state.tasks.filter((t) => !state.filter.size || state.filter.has(t.goalId));
+  return filters + `<div class="cols">${STATUSES.map((s) => {
+    const ts = visible.filter((t) => t.status === s.id);
+    return `<div class="col" data-drop-task="${s.id}">${colHead(s, ts.length)}${ts.map((t) => taskCard(t, { showParent: true })).join('') || '<div class="empty">Nothing here</div>'}</div>`;
+  }).join('')}</div>`;
+}
+
+function render() {
+  document.querySelectorAll('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === state.view));
+  const board = document.getElementById('board');
+  board.innerHTML = state.view === 'below' ? renderBelow() : state.view === 'goals' ? renderGoals() : state.view === 'lanes' ? renderLanes() : renderFlat();
+  board.querySelector('[autofocus]')?.focus();
+  if (state.flash.size) setTimeout(() => state.flash.clear(), 1700);
+}
+
+// Goal status nudge: the first task that starts moves a To do goal into In progress.
+function nudgeGoal(goalId) {
+  const g = state.goals.find((x) => x.id === goalId);
+  if (g.status === 'todo' && tasksOf(g).some((t) => t.status === 'in_progress' || t.status === 'done')) {
+    g.status = 'in_progress';
+    log(`Goal moved to In progress: "${short(g.title, 40)}"`);
+  }
+}
+
+function moveTask(taskId, status, goalId) {
+  const t = state.tasks.find((x) => x.id === taskId);
+  if (goalId && goalId !== t.goalId) { log(`Task moved to another goal: "${short(goalOf({ goalId }).title, 40)}"`); t.goalId = goalId; }
+  t.status = status;
+  t.note = status === 'blocked' ? t.note : undefined;
+  nudgeGoal(t.goalId);
+  render();
+}
+
+// Events
+document.getElementById('views').addEventListener('click', (e) => { const v = e.target.closest('button')?.dataset.view; if (v) { state.view = v; state.addingTask = null; render(); } });
+
+document.getElementById('board').addEventListener('click', (e) => {
+  const card = state.view === 'below' && !e.target.closest('button,form,input,select') && e.target.closest('[data-select]');
+  if (card) { state.selected = state.selected === card.dataset.select ? null : card.dataset.select; state.addingTask = null; return render(); }
+  const el = e.target.closest('[data-close-panel],[data-toggle],[data-add-task],[data-cycle-task],[data-complete],[data-collapse],[data-filter],[data-clear-filter]');
+  if (!el) return;
+  e.preventDefault();
+  const d = el.dataset;
+  if ('closePanel' in d) { state.selected = null; }
+  else if (d.toggle) { state.expanded.has(d.toggle) ? state.expanded.delete(d.toggle) : state.expanded.add(d.toggle); }
+  else if (d.addTask) { state.addingTask = d.addTask; state.expanded.add(d.addTask); }
+  else if (d.cycleTask) { const t = state.tasks.find((x) => x.id === d.cycleTask); const i = STATUSES.findIndex((s) => s.id === t.status); return moveTask(t.id, STATUSES[(i + 1) % 4].id); }
+  else if (d.complete) { state.goals.find((g) => g.id === d.complete).status = 'done'; }
+  else if (d.collapse) { state.collapsedLanes.has(d.collapse) ? state.collapsedLanes.delete(d.collapse) : state.collapsedLanes.add(d.collapse); }
+  else if (d.filter) { state.filter.has(d.filter) ? state.filter.delete(d.filter) : state.filter.add(d.filter); }
+  else if ('clearFilter' in d) { state.filter.clear(); }
+  render();
+});
+
+document.getElementById('board').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = e.target; const text = f.text.value.trim();
+  if (!text) { state.addingTask = null; return render(); }
+  if ('addGoal' in f.dataset) {
+    const g = { id: id('g'), title: text, priority: f.pri.value, status: 'todo', by: 'you', color: PALETTE[state.goals.length % PALETTE.length] };
+    state.goals.push(g); state.flash.add(g.id);
+  } else {
+    const t = { id: id('t'), goalId: f.dataset.addForm, text, status: 'todo', by: 'you' };
+    state.tasks.push(t); state.flash.add(t.id); state.addingTask = null;
+  }
+  render();
+});
+document.getElementById('board').addEventListener('keydown', (e) => { if (e.key === 'Escape') { state.addingTask = null; render(); } });
+
+// Drag and drop
+let dragged = null;
+document.addEventListener('dragstart', (e) => {
+  const el = e.target.closest('[data-task],[data-goal]'); if (!el) return;
+  dragged = el.dataset.task ? { kind: 'task', id: el.dataset.task } : { kind: 'goal', id: el.dataset.goal };
+  el.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move';
+});
+document.addEventListener('dragend', (e) => { e.target.classList?.remove('dragging'); document.querySelectorAll('.over').forEach((x) => x.classList.remove('over')); });
+const dropTarget = (e) => dragged && e.target.closest(dragged.kind === 'task' ? '[data-drop-task]' : '[data-drop-goal]');
+document.addEventListener('dragover', (e) => { const z = dropTarget(e); if (!z) return; e.preventDefault(); document.querySelectorAll('.over').forEach((x) => x !== z && x.classList.remove('over')); z.classList.add('over'); });
+document.addEventListener('drop', (e) => {
+  const z = dropTarget(e); if (!z) return; e.preventDefault();
+  if (dragged.kind === 'task') moveTask(dragged.id, z.dataset.dropTask, z.dataset.dropGoalId);
+  else { state.goals.find((g) => g.id === dragged.id).status = z.dataset.dropGoal; render(); }
+  dragged = null;
+});
+
+// What one agent cycle could do: create a task, start it, finish another, maybe propose a goal.
+let simStep = 0;
+document.getElementById('sim').addEventListener('click', () => {
+  const steps = [
+    () => { const t = { id: id('t'), goalId: 'g1', text: 'Collect open threads from the last 7 days into one list', status: 'in_progress', by: 'agent', cycle: 'just now' }; state.tasks.push(t); state.flash.add(t.id); nudgeGoal('g1'); return 'Agent added and started a task under "Keep one clean list…"'; },
+    () => { const t = state.tasks.find((x) => x.id === 't3'); t.status = 'done'; t.cycle = 'just now'; state.flash.add(t.id); const n = { id: id('t'), goalId: 'g2', text: 'Compare what the L3 companies automated first', status: 'todo', by: 'agent', cycle: 'just now' }; state.tasks.push(n); state.flash.add(n.id); return 'Agent finished a task and queued the next one'; },
+    () => { const g = { id: id('g'), title: 'Draft a weekly digest of what changed in the fleet', priority: 'medium', status: 'todo', by: 'agent', color: PALETTE[state.goals.length % PALETTE.length] }; state.goals.push(g); state.flash.add(g.id); state.tasks.push({ id: id('t'), goalId: g.id, text: 'Pick the 5 signals worth reporting', status: 'todo', by: 'agent', cycle: 'just now' }); return 'Agent proposed a new goal with a first task'; },
+    () => { for (const id of ['t4', 't9']) { const t = state.tasks.find((x) => x.id === id); if (t) { t.status = 'done'; t.cycle = 'just now'; state.flash.add(t.id); } } return 'Agent closed two of your tasks (open question 6)'; },
+  ];
+  if (simStep >= steps.length) { log('No more simulated steps'); return; }
+  log(steps[simStep++]()); render();
+});
+
+render();
+</script>
+</body>
+</html>

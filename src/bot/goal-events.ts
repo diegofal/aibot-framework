@@ -17,6 +17,7 @@ import {
   newGoalId,
   parseGoals,
   serializeGoals,
+  taskStatus,
 } from '../tools/goals';
 
 export { newGoalId };
@@ -35,15 +36,15 @@ export type GoalEventOp =
   | 'reopen'
   | 'remove';
 
-/** Subtasks as one comparable string (order, text and state). */
+/** Subtasks as one comparable string (order, text and lane; ids are bookkeeping). */
 function taskKey(g: GoalEntry): string {
-  return (g.tasks ?? []).map((t) => `${t.done ? 1 : 0}${t.text.trim()}`).join('\n');
+  return (g.tasks ?? []).map((t) => `${taskStatus(t)}|${t.text.trim()}`).join('\n');
 }
 
 /** `done/total`, how a tasks event reads in the timeline. */
 function taskTally(g: GoalEntry): string {
   const tasks = g.tasks ?? [];
-  return `${tasks.filter((t) => t.done).length}/${tasks.length}`;
+  return `${tasks.filter((t) => taskStatus(t) === 'done').length}/${tasks.length}`;
 }
 
 export type GoalActor =

@@ -666,13 +666,56 @@ describe('goal subtasks and delete (fleet board)', () => {
     });
     expect(res.status).toBe(200);
     const g = goals().active.find((x) => x.text === 'Research topic');
-    expect(g?.tasks).toEqual([
-      { text: 'Find 3 sources', done: true },
-      { text: 'Write summary', done: false },
+    expect(g?.tasks).toMatchObject([
+      { text: 'Find 3 sources', done: true, status: 'done', by: 'operator' },
+      { text: 'Write summary', done: false, status: 'todo', by: 'operator' },
     ]);
     const home = await (await app.request('/api/agents/b1/home')).json();
     const all = [...home.goals.todo, ...home.goals.inProgress, ...home.goals.blocked];
     expect(all.find((x: { text: string }) => x.text === 'Research topic').tasks).toEqual(g?.tasks);
+  });
+
+  it('PATCH { tasks } with status: lanes stick, agent tasks keep their author, a started task starts the goal', async () => {
+    const app = makeApp();
+    await send(app, 'PATCH', { goal: 'Research topic', tasks: [{ text: 'Mine', status: 'todo' }] });
+    const path = join(fx.soulDir('b1'), 'GOALS.md');
+    const seeded = readFileSync(path, 'utf-8').replace(
+      /( {2}- task: \[ \] Mine \{id: t-\w+, by: operator\})/,
+      '$1\n  - task: [ ] Theirs {id: t-agent1, by: agent, cycle: c-7}'
+    );
+    writeFileSync(path, seeded);
+    const mine = goals().active.find((x) => x.text === 'Research topic')?.tasks?.[0];
+    expect(mine?.by).toBe('operator');
+    const res = await send(app, 'PATCH', {
+      goal: 'Research topic',
+      tasks: [
+        { id: mine?.id, text: 'Mine', status: 'blocked' },
+        { id: 't-agent1', text: 'Theirs', status: 'in_progress', by: 'operator' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const g = goals().active.find((x) => x.text === 'Research topic');
+    expect(g?.tasks).toEqual([
+      { id: mine?.id, text: 'Mine', done: false, status: 'blocked', by: 'operator' },
+      {
+        id: 't-agent1',
+        text: 'Theirs',
+        done: false,
+        status: 'in_progress',
+        by: 'agent',
+        cycleId: 'c-7',
+      },
+    ]);
+    expect(g?.status).toBe('in_progress');
+  });
+
+  it('rejects a bad task status', async () => {
+    const app = makeApp();
+    const res = await send(app, 'PATCH', {
+      goal: 'Research topic',
+      tasks: [{ text: 'x', status: 'later' }],
+    });
+    expect(res.status).toBe(400);
   });
 
   it('rejects bad task lists', async () => {

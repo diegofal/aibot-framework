@@ -144,17 +144,123 @@ export interface GoalEntry {
   headline?: string;
 }
 
+/** Status of one subtask: the same four lanes as goals on the board. */
+export const TASK_STATUSES = ['todo', 'in_progress', 'blocked', 'done'] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/** Who created a subtask. */
+export type TaskAuthor = 'operator' | 'agent';
+
 /** One subtask of a goal. Stored as a metadata line, never as a `- [ ]` line (that would be a goal). */
 export interface GoalTask {
   text: string;
+  /** Kept for older readers; always `status === 'done'` when `status` is set. */
   done: boolean;
+  status?: TaskStatus;
+  /** Stable id (`t-` + 6 hex), assigned on write by `ensureGoalIds`. */
+  id?: string;
+  /** Absent on tasks written before authors were recorded (all set from the dashboard). */
+  by?: TaskAuthor;
+  /** The agent cycle that created the task. */
+  cycleId?: string;
 }
 
-const TASK_LINE = /^\[([ xX])\]\s*(.+)$/;
+const TASK_LINE = /^\[([ xX~!])\]\s*(.+)$/;
+const TASK_SUFFIX = /\s*\{((?:(?:id|by|cycle): [\w.:-]+)(?:, (?:id|by|cycle): [\w.:-]+)*)\}$/;
+const MARK_STATUS: Record<string, TaskStatus> = {
+  ' ': 'todo',
+  '~': 'in_progress',
+  '!': 'blocked',
+  x: 'done',
+  X: 'done',
+};
+const STATUS_MARK: Record<TaskStatus, string> = {
+  todo: ' ',
+  in_progress: '~',
+  blocked: '!',
+  done: 'x',
+};
+
+/** A task's status, falling back to its checkbox for tasks without one. */
+export function taskStatus(t: GoalTask): TaskStatus {
+  return t.status ?? (t.done ? 'done' : 'todo');
+}
+
+/** Parse the value of a `- task:` line, or null when it is not one. */
+function parseTaskValue(value: string): GoalTask | null {
+  const m = value.match(TASK_LINE);
+  if (!m) return null;
+  const status = MARK_STATUS[m[1]];
+  let text = m[2].trim();
+  const task: GoalTask = { text, done: status === 'done', status };
+  const suffix = text.match(TASK_SUFFIX);
+  if (suffix) {
+    text = text.slice(0, suffix.index).trim();
+    if (text) {
+      task.text = text;
+      for (const pair of suffix[1].split(', ')) {
+        const [key, val] = pair.split(': ');
+        if (key === 'id') task.id = val;
+        else if (key === 'by' && (val === 'agent' || val === 'operator')) task.by = val;
+        else if (key === 'cycle') task.cycleId = val;
+      }
+    }
+  }
+  return task;
+}
+
+function taskLine(t: GoalTask): string {
+  const meta = [
+    t.id ? `id: ${t.id}` : '',
+    t.by ? `by: ${t.by}` : '',
+    t.cycleId ? `cycle: ${t.cycleId}` : '',
+  ].filter(Boolean);
+  return `  - task: [${STATUS_MARK[taskStatus(t)]}] ${t.text}${meta.length ? ` {${meta.join(', ')}}` : ''}`;
+}
 
 function taskLines(g: GoalEntry): string[] {
   const head = g.headline ? [`  - headline: ${g.headline}`] : [];
-  return [...head, ...(g.tasks ?? []).map((t) => `  - task: [${t.done ? 'x' : ' '}] ${t.text}`)];
+  return [...head, ...(g.tasks ?? []).map(taskLine)];
+}
+
+/**
+ * A task list sent by an editor (the dashboard) merged onto the stored one: a
+ * known id keeps its author and cycle (an editor cannot rewrite who made a task),
+ * a new task is stamped with `author`, and `done` always follows `status`.
+ */
+export function mergeTasks(
+  existing: GoalTask[] | undefined,
+  incoming: GoalTask[],
+  author: TaskAuthor
+): GoalTask[] {
+  const byId = new Map((existing ?? []).filter((t) => t.id).map((t) => [t.id as string, t]));
+  return incoming.map((t) => {
+    const status = taskStatus(t);
+    const known = t.id ? byId.get(t.id) : undefined;
+    const out: GoalTask = { text: t.text, done: status === 'done', status };
+    if (known) {
+      out.id = known.id;
+      if (known.by) out.by = known.by;
+      if (known.cycleId) out.cycleId = known.cycleId;
+    } else {
+      out.by = author;
+    }
+    return out;
+  });
+}
+
+/**
+ * A To do goal whose tasks have started (one in progress or done) moves to
+ * in_progress. Mutates; returns true when it moved.
+ */
+function nudgeFromTasks(goal: GoalEntry, stamp: string): boolean {
+  if (goalBucket(goal.status) !== 'todo' || goal.status === 'completed') return false;
+  const started = (goal.tasks ?? []).some((t) => ['in_progress', 'done'].includes(taskStatus(t)));
+  if (!started) return false;
+  goal.status = 'in_progress';
+  goal.updated = stamp;
+  if (!goal.started) goal.started = stamp;
+  return true;
 }
 
 /** A fresh goal id: `g-` + 8 lowercase hex. */
@@ -162,7 +268,15 @@ export function newGoalId(): string {
   return `g-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
 }
 
-/** Give every goal without an id a fresh one (mutates). Returns how many were assigned. */
+/** A fresh task id: `t-` + 6 lowercase hex. */
+export function newTaskId(): string {
+  return `t-${randomUUID().replace(/-/g, '').slice(0, 6)}`;
+}
+
+/**
+ * Give every goal and every task without an id a fresh one (mutates).
+ * Returns how many goal ids were assigned.
+ */
 export function ensureGoalIds(active: GoalEntry[], completed: GoalEntry[]): number {
   let assigned = 0;
   for (const g of [...active, ...completed]) {
@@ -170,6 +284,7 @@ export function ensureGoalIds(active: GoalEntry[], completed: GoalEntry[]): numb
       g.id = newGoalId();
       assigned++;
     }
+    for (const t of g.tasks ?? []) if (!t.id) t.id = newTaskId();
   }
   return assigned;
 }
@@ -262,7 +377,10 @@ export function editGoal(content: string | null, ref: string, edits: GoalEdits):
   if (edits.text !== undefined) goal.text = edits.text;
   if (edits.notes !== undefined) goal.notes = edits.notes || undefined;
   if (edits.priority !== undefined) goal.priority = edits.priority;
-  if (edits.tasks !== undefined) goal.tasks = edits.tasks.length ? edits.tasks : undefined;
+  if (edits.tasks !== undefined) {
+    goal.tasks = edits.tasks.length ? edits.tasks : undefined;
+    if (active.includes(goal)) nudgeFromTasks(goal, new Date().toISOString());
+  }
   if (edits.headline !== undefined) goal.headline = edits.headline || undefined;
   return serializeGoals(active, completed);
 }
@@ -354,13 +472,16 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'add', 'update', 'complete'],
+              enum: ['list', 'add', 'update', 'complete', 'add_task', 'update_task'],
               description:
                 'Action to perform. ' +
                 '"list" — no extra params needed. ' +
                 '"add" — requires goal (text), optional priority, notes. ' +
                 '"update" — requires goal (substring match), optional status, priority, notes. ' +
-                '"complete" — requires goal (substring match), optional outcome.',
+                '"complete" — requires goal (substring match), optional outcome. ' +
+                '"add_task" — a step you will take toward a goal: requires goal (substring match) and task (text), optional status. ' +
+                '"update_task" — move a task between todo/in_progress/blocked/done: requires goal, task (its id like t-1a2b3c, or a substring of its text) and status. ' +
+                'Tasks are the `- task: [ ]` lines under a goal ([~] in progress, [!] blocked, [x] done); your operator sees and moves them on the board.',
             },
             goal: {
               type: 'string',
@@ -371,8 +492,14 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
             },
             status: {
               type: 'string',
-              enum: ['pending', 'in_progress', 'blocked'],
-              description: 'New status (for update action only)',
+              enum: ['pending', 'todo', 'in_progress', 'blocked', 'done'],
+              description:
+                'For update: the goal status (pending, in_progress, blocked). For add_task/update_task: the task status (todo, in_progress, blocked, done).',
+            },
+            task: {
+              type: 'string',
+              description:
+                'For add_task: the task text (one line). For update_task: the task id (t-…) or a substring of its text.',
             },
             priority: {
               type: 'string',
@@ -459,10 +586,29 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
             return completeGoal(soulLoader, goal, outcome);
           }
 
+          case 'add_task':
+          case 'update_task': {
+            const goal = resolveGoalParam(args);
+            if (!goal) return { success: false, content: 'Missing required parameter: goal' };
+            const task = String(args.task ?? '').trim();
+            if (!task) return { success: false, content: 'Missing required parameter: task' };
+            const rawStatus = args.status === undefined ? undefined : String(args.status).trim();
+            const status = rawStatus === 'pending' ? 'todo' : rawStatus;
+            if (status !== undefined && !(TASK_STATUSES as readonly string[]).includes(status)) {
+              return {
+                success: false,
+                content: `Invalid task status "${rawStatus}". Use: ${TASK_STATUSES.join(', ')}`,
+              };
+            }
+            return action === 'add_task'
+              ? addTask(soulLoader, goal, task, status as TaskStatus | undefined, cycleId)
+              : updateTask(soulLoader, goal, task, status as TaskStatus | undefined);
+          }
+
           default:
             return {
               success: false,
-              content: `Unknown action: ${action}. Use: list, add, update, complete`,
+              content: `Unknown action: ${action}. Use: list, add, update, complete, add_task, update_task`,
             };
         }
       } catch (error) {
@@ -545,13 +691,8 @@ export function parseGoals(content: string | null): {
       else if (key === 'updated') currentGoal.updated = value;
       else if (key === 'headline') currentGoal.headline = value;
       else if (key === 'task') {
-        const m = value.match(TASK_LINE);
-        if (m) {
-          currentGoal.tasks = [
-            ...(currentGoal.tasks ?? []),
-            { text: m[2].trim(), done: m[1] !== ' ' },
-          ];
-        }
+        const task = parseTaskValue(value);
+        if (task) currentGoal.tasks = [...(currentGoal.tasks ?? []), task];
       }
     }
   }
@@ -702,6 +843,89 @@ function completeGoal(soulLoader: SoulLoader, goalSubstring: string, outcome?: s
 
   soulLoader.writeGoals(serializeGoals(active, completed));
   return { success: true, content: `Goal completed: ${goal.text}` };
+}
+
+/** Find a task by id, then by case-insensitive substring of its text. */
+function findTaskIndex(tasks: GoalTask[], ref: string): number {
+  const byId = tasks.findIndex((t) => t.id === ref);
+  if (byId !== -1) return byId;
+  const lower = decodeHtmlEntities(ref).toLowerCase();
+  return tasks.findIndex((t) => t.text.toLowerCase().includes(lower));
+}
+
+function taskListHint(goal: GoalEntry): string {
+  const tasks = goal.tasks ?? [];
+  if (!tasks.length) return ' The goal has no tasks yet.';
+  const list = tasks.map((t) => `  ${t.id ?? '(no id)'} [${taskStatus(t)}] ${t.text.slice(0, 80)}`);
+  return `\nTasks:\n${list.join('\n')}`;
+}
+
+function addTask(
+  soulLoader: SoulLoader,
+  goalSubstring: string,
+  text: string,
+  status: TaskStatus = 'todo',
+  cycleId?: string
+): ToolResult {
+  const { active, completed } = parseGoals(soulLoader.readGoals());
+  const idx = findGoalIndex(active, goalSubstring);
+  if (idx === -1) {
+    return {
+      success: false,
+      content: `No active goal matching "${goalSubstring}".${goalListHint(active)}`,
+    };
+  }
+  const goal = active[idx];
+  const line = text.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+  const task: GoalTask = {
+    text: line,
+    done: status === 'done',
+    status,
+    id: newTaskId(),
+    by: 'agent',
+  };
+  if (cycleId) task.cycleId = cycleId;
+  goal.tasks = [...(goal.tasks ?? []), task];
+  nudgeFromTasks(goal, new Date().toISOString());
+  soulLoader.writeGoals(serializeGoals(active, completed));
+  return {
+    success: true,
+    content: `Task ${task.id} added to "${goal.text.slice(0, 80)}" (${status}): ${line}`,
+  };
+}
+
+function updateTask(
+  soulLoader: SoulLoader,
+  goalSubstring: string,
+  taskRef: string,
+  status?: TaskStatus
+): ToolResult {
+  if (!status) return { success: false, content: 'Missing required parameter: status' };
+  const { active, completed } = parseGoals(soulLoader.readGoals());
+  const idx = findGoalIndex(active, goalSubstring);
+  if (idx === -1) {
+    return {
+      success: false,
+      content: `No active goal matching "${goalSubstring}".${goalListHint(active)}`,
+    };
+  }
+  const goal = active[idx];
+  const ti = findTaskIndex(goal.tasks ?? [], taskRef);
+  if (ti === -1) {
+    return {
+      success: false,
+      content: `No task matching "${taskRef}" in "${goal.text.slice(0, 80)}".${taskListHint(goal)}`,
+    };
+  }
+  const task = (goal.tasks as GoalTask[])[ti];
+  task.status = status;
+  task.done = status === 'done';
+  nudgeFromTasks(goal, new Date().toISOString());
+  soulLoader.writeGoals(serializeGoals(active, completed));
+  const left = (goal.tasks ?? []).filter((t) => taskStatus(t) !== 'done').length;
+  const tail =
+    left === 0 ? ' All tasks of this goal are done: complete the goal if it is achieved.' : '';
+  return { success: true, content: `Task ${task.id ?? ''} → ${status}: ${task.text}.${tail}` };
 }
 
 // --- Per-user goal helpers ---

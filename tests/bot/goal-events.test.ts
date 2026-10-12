@@ -352,3 +352,25 @@ describe('writeGoalsFile: reasons (why-everywhere row 12)', () => {
     expect(raw).not.toContain('"runId"');
   });
 });
+
+describe('diffGoals task status', () => {
+  test('moving a task between lanes is a tasks event; a new task id alone is not', () => {
+    const base = { status: 'pending', priority: 'medium', text: 'A', id: 'a' };
+    const before = {
+      active: [{ ...base, tasks: [{ text: 'x', done: false, status: 'todo' as const }] }],
+      completed: [],
+    };
+    const moved = {
+      active: [{ ...base, tasks: [{ text: 'x', done: false, status: 'in_progress' as const }] }],
+      completed: [],
+    };
+    const withId = {
+      active: [
+        { ...base, tasks: [{ text: 'x', done: false, status: 'todo' as const, id: 't-123456' }] },
+      ],
+      completed: [],
+    };
+    expect(diffGoals(before, moved).map((e) => e.op)).toEqual(['tasks']);
+    expect(diffGoals(before, withId)).toEqual([]);
+  });
+});

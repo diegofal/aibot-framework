@@ -14,6 +14,7 @@ import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.
 import {
   AGENT_HOME_SHORTCUTS,
   applyPresence,
+  findBoardGoal,
   goalFormPayload,
   goalMovePayload,
   goalsColumns,
@@ -22,6 +23,8 @@ import {
   karmaBody,
   needsYouStrip,
   presenceHeader,
+  taskAddPayload,
+  taskMovePayload,
   timelineBody,
   traitsBody,
 } from './agent-home-helpers.js';
@@ -77,16 +80,34 @@ function actionsFor(identity, id) {
   return `<button class="btn btn-primary" id="home-toggle">${label}</button>${rest}`;
 }
 
-/** True while the operator is typing in the board's add form (a redraw would wipe it). */
+/** True while the operator is typing in a board form (a redraw would wipe it). */
 function boardBusy(board) {
-  const input = board?.querySelector('#home-goal-form [name="title"]');
-  return Boolean(input && (input.value.trim() || document.activeElement === input));
+  const inputs = board?.querySelectorAll('#home-goal-form [name="title"], [data-task-form] input');
+  return [...(inputs ?? [])].some((i) => i.value.trim() || document.activeElement === i);
+}
+
+/**
+ * Draw the board from a home payload, keeping the open goal (`data-selected`)
+ * and the add-task form (`data-adding`) across redraws.
+ */
+function paintBoard(board, goals, id) {
+  board._goals = goals;
+  if (board.dataset.selected && !findBoardGoal(goals, board.dataset.selected)) {
+    delete board.dataset.selected;
+    delete board.dataset.adding;
+  }
+  board.innerHTML = goalsColumns(goals, {
+    selectedId: board.dataset.selected,
+    botId: id,
+    addingTask: board.dataset.adding === '1',
+  });
+  if (board.dataset.adding === '1') board.querySelector('[data-task-form] input')?.focus();
 }
 
 async function redrawBoard(el, id) {
   const home = await api(homeUrl(id)).catch(() => null);
   const board = el.querySelector('#home-goals');
-  if (home && !home.error && board) board.innerHTML = goalsColumns(home.goals);
+  if (home && !home.error && board) paintBoard(board, home.goals, id);
 }
 
 /** Right-hand drawer with everything about one goal; title and notes edit in place. */
@@ -180,10 +201,11 @@ function wireGoalEditing(body, botId, load, onChange) {
   });
 }
 
-/** Goals board: add (submit) and move (change) by delegation, so redraws keep working. */
-function wireGoalBoard(el, id) {
+/** Goals board: select, add, move goals and tasks by delegation, so redraws keep working. */
+function wireGoalBoard(el, id, goals) {
   const board = el.querySelector('#home-goals');
   if (!board) return;
+  board._goals = goals;
   const url = `/api/agents/${encodeURIComponent(id)}/goals`;
   board.addEventListener('submit', async (e) => {
     const form = e.target.closest('#home-goal-form');
@@ -206,79 +228,146 @@ function wireGoalBoard(el, id) {
       if (btn) btn.disabled = false;
     }
   });
-  const openFrom = (target) => {
-    if (target.closest('.home-goal-move')) return;
-    const goalCard = target.closest('.home-goal-card');
-    if (goalCard)
-      openGoalDetail(id, goalCard.dataset.goalId, goalCard.dataset.goal, () => redrawBoard(el, id));
-  };
-  board.addEventListener('click', (e) => openFrom(e.target));
-  board.addEventListener('keydown', (e) => {
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('home-goal-card')) {
-      e.preventDefault();
-      openFrom(e.target);
-    }
-  });
-  const move = async (goal, status) => {
-    const payload = goalMovePayload(goal, status);
+  const repaint = () => paintBoard(board, board._goals, id);
+  const send = async (payload, okMessage) => {
     if (!payload) return;
     const res = await api(url, { method: 'PATCH', body: payload }).catch((err) => ({
       error: err?.message || 'Request failed',
     }));
     if (res?.error) showToast(res.error, { tone: 'danger' });
+    else if (okMessage) showToast(okMessage, { tone: 'ok' });
     await redrawBoard(el, id);
   };
+  const move = (goal, status) => send(goalMovePayload(goal, status));
+  const openGoal = () => findBoardGoal(board._goals, board.dataset.selected)?.goal;
+
+  // Click a goal: its tasks open under its row; click it again (or ✕) to close.
+  const toggle = (goalCard) => {
+    const key = goalCard.dataset.goalId || goalCard.dataset.goal;
+    if (board.dataset.selected === key) delete board.dataset.selected;
+    else board.dataset.selected = key;
+    delete board.dataset.adding;
+    repaint();
+    board.querySelector('.home-goal-card.is-selected')?.focus();
+  };
+  board.addEventListener('click', async (e) => {
+    const t = e.target;
+    if (t.closest('[data-open-cycle]')) return; // app.js opens the cycle sheet
+    if (t.closest('[data-goal-close]')) {
+      delete board.dataset.selected;
+      delete board.dataset.adding;
+      return repaint();
+    }
+    if (t.closest('[data-goal-history]')) {
+      const panel = t.closest('.home-goal-panel');
+      return openGoalDetail(id, panel.dataset.panelGoalId, panel.dataset.panelGoal, () =>
+        redrawBoard(el, id)
+      );
+    }
+    if (t.closest('[data-add-task]')) {
+      board.dataset.adding = '1';
+      return repaint();
+    }
+    if (t.closest('[data-complete-goal]')) {
+      const goal = openGoal();
+      if (goal) await move(goal.text, 'done');
+      return;
+    }
+    const goalCard = t.closest('.home-goal-card');
+    if (goalCard) toggle(goalCard);
+  });
+  board.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && board.dataset.adding) {
+      delete board.dataset.adding;
+      return repaint();
+    }
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('home-goal-card')) {
+      e.preventDefault();
+      toggle(e.target);
+    }
+  });
+  board.addEventListener('submit', async (e) => {
+    const form = e.target.closest('[data-task-form]');
+    if (!form) return;
+    e.preventDefault();
+    const payload = taskAddPayload(openGoal(), form.elements.text?.value);
+    if (!payload) return;
+    form.querySelector('button[type="submit"]')?.setAttribute('disabled', '');
+    delete board.dataset.adding;
+    await send(payload, 'Task added — the agent sees it next cycle');
+  });
   board.addEventListener('change', async (e) => {
-    const select = e.target.closest('.home-goal-move');
+    const select = e.target.closest('.home-goal-status');
     if (!select) return;
     select.disabled = true;
     await move(select.dataset.goal, select.value);
   });
 
-  // Drag a card onto another column to move it there.
+  // Drag a goal onto another column, or a task onto another lane of its goal.
   let dragged = null;
-  const clearOver = () =>
-    board
-      .querySelectorAll('.home-board-col.drag-over')
-      .forEach((c) => c.classList.remove('drag-over'));
+  const clearOver = () => {
+    for (const c of board.querySelectorAll('.drag-over')) c.classList.remove('drag-over');
+  };
+  const zoneOf = (target) => {
+    if (dragged?.kind === 'task') return target.closest?.('.home-task-lane') ?? null;
+    if (dragged?.kind === 'goal') return target.closest?.('.home-board-cell') ?? null;
+    return null;
+  };
   board.addEventListener('dragstart', (e) => {
-    const goalCard = e.target.closest?.('.home-goal-card');
-    if (!goalCard) return;
-    dragged = {
-      goal: goalCard.dataset.goal,
-      from: goalCard.closest('.home-board-col')?.dataset.status,
-    };
-    goalCard.classList.add('dragging');
+    const taskCard = e.target.closest?.('.home-task-card');
+    const goalCard = taskCard ? null : e.target.closest?.('.home-goal-card');
+    if (taskCard) {
+      dragged = {
+        kind: 'task',
+        task: taskCard.dataset.taskId,
+        from: taskCard.closest('.home-task-lane')?.dataset.taskStatus,
+      };
+    } else if (goalCard) {
+      dragged = {
+        kind: 'goal',
+        goal: goalCard.dataset.goal,
+        from: goalCard.closest('.home-board-cell')?.dataset.status,
+      };
+    } else return;
+    (taskCard ?? goalCard).classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', goalCard.dataset.goal || '');
+    e.dataTransfer.setData('text/plain', dragged.task ?? dragged.goal ?? '');
   });
   board.addEventListener('dragend', (e) => {
-    e.target.closest?.('.home-goal-card')?.classList.remove('dragging');
+    e.target.closest?.('.dragging')?.classList.remove('dragging');
     clearOver();
     dragged = null;
   });
   board.addEventListener('dragover', (e) => {
-    const col = e.target.closest('.home-board-col');
-    if (!col || !dragged) return;
+    const zone = zoneOf(e.target);
+    if (!zone) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    if (!col.classList.contains('drag-over')) {
-      clearOver();
-      col.classList.add('drag-over');
-    }
+    if (zone.classList.contains('drag-over')) return;
+    clearOver();
+    if (dragged.kind === 'task') zone.classList.add('drag-over');
+    else
+      for (const c of board.querySelectorAll(
+        `.home-board-cell[data-status="${zone.dataset.status}"]`
+      ))
+        c.classList.add('drag-over');
   });
   board.addEventListener('dragleave', (e) => {
-    const col = e.target.closest('.home-board-col');
-    if (col && !col.contains(e.relatedTarget)) col.classList.remove('drag-over');
+    if (!board.contains(e.relatedTarget)) clearOver();
   });
   board.addEventListener('drop', async (e) => {
-    const col = e.target.closest('.home-board-col');
-    if (!col || !dragged) return;
+    const zone = zoneOf(e.target);
+    if (!zone) return;
     e.preventDefault();
     clearOver();
-    const { goal, from } = dragged;
+    const drop = dragged;
     dragged = null;
-    if (col.dataset.status && col.dataset.status !== from) await move(goal, col.dataset.status);
+    if (drop.kind === 'task') {
+      const lane = zone.dataset.taskStatus;
+      if (lane && lane !== drop.from) await send(taskMovePayload(openGoal(), drop.task, lane));
+    } else if (zone.dataset.status && zone.dataset.status !== drop.from) {
+      await move(drop.goal, zone.dataset.status);
+    }
   });
 }
 
@@ -552,7 +641,7 @@ function scheduleHomeRefresh(el, id) {
     const needs = el.querySelector('#home-needs');
     if (needs) needs.innerHTML = needsYouStrip(home.needsYou, id);
     const goals = el.querySelector('#home-goals');
-    if (goals && !boardBusy(goals)) goals.innerHTML = goalsColumns(home.goals);
+    if (goals && !boardBusy(goals)) paintBoard(goals, home.goals, id);
   }, HOME_REFRESH_DEBOUNCE_MS);
 }
 
@@ -599,8 +688,8 @@ export async function renderAgentHome(el, id) {
       ${card({
         title: 'Goals',
         subtitle:
-          'Add goals in To do; click a card for its history, move it with its menu. The agent works on yours first.',
-        body: `<div id="home-goals">${goalsColumns(home.goals)}</div>`,
+          'Click a goal to see its tasks and drag them between lanes; drag goals between columns. The agent works on yours first.',
+        body: `<div id="home-goals">${goalsColumns(home.goals, { botId: id })}</div>`,
       })}
     </div>
     <div class="home-grid" style="margin-top:16px">
@@ -621,7 +710,7 @@ export async function renderAgentHome(el, id) {
     </div>`;
 
   wireActions(el, id, identity);
-  wireGoalBoard(el, id);
+  wireGoalBoard(el, id, home.goals);
   wireKeys(el, id, identity);
   wireFaceControl(el, id, {
     onChanged: (avatarUrl) => {

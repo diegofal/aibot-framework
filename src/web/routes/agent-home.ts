@@ -47,8 +47,11 @@ import {
   type BoardStatus,
   type GoalEdits,
   type GoalTask,
+  TASK_STATUSES,
+  type TaskStatus,
   appendGoal,
   editGoal,
+  mergeTasks,
   parseGoals,
   removeGoal,
   resolveGoalRef,
@@ -101,7 +104,7 @@ export const GOAL_TASK_TEXT_MAX = 200;
 
 /** `tasks` from a request body → a clean list, or an error message. */
 export function parseGoalTasks(value: unknown): GoalTask[] | string {
-  if (!Array.isArray(value)) return 'tasks must be an array of { text, done }';
+  if (!Array.isArray(value)) return 'tasks must be an array of { text, status | done, id? }';
   if (value.length > GOAL_TASKS_MAX) return `at most ${GOAL_TASKS_MAX} tasks per goal`;
   const out: GoalTask[] = [];
   for (const raw of value) {
@@ -111,8 +114,20 @@ export function parseGoalTasks(value: unknown): GoalTask[] | string {
     if (/[\r\n]/.test(text)) return 'a task must be a single line';
     if (text.length > GOAL_TASK_TEXT_MAX)
       return `a task is longer than ${GOAL_TASK_TEXT_MAX} characters`;
-    if (typeof t.done !== 'boolean') return 'task done must be true or false';
-    out.push({ text, done: t.done });
+    // Who made a task is never taken from the body: the route stamps it (mergeTasks).
+    const task: GoalTask = { text, done: false };
+    if (t.status !== undefined) {
+      if (!(TASK_STATUSES as readonly unknown[]).includes(t.status))
+        return `task status must be one of ${TASK_STATUSES.join(', ')}`;
+      task.status = t.status as TaskStatus;
+      task.done = t.status === 'done';
+    } else if (typeof t.done === 'boolean') {
+      task.done = t.done;
+    } else {
+      return 'task done must be true or false';
+    }
+    if (typeof t.id === 'string' && /^t-[\w-]{1,32}$/.test(t.id)) task.id = t.id;
+    out.push(task);
   }
   return out;
 }
@@ -396,6 +411,12 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
           (g) => g.text === target.text
         );
         key = fresh?.id ?? target.text;
+      }
+      if (edits.tasks) {
+        const stored = [...parseGoals(current).active, ...parseGoals(current).completed].find(
+          (g) => g.id === key || g.text === key
+        );
+        edits.tasks = mergeTasks(stored?.tasks, edits.tasks, 'operator');
       }
       next = editGoal(current, key, edits);
       summary = { goal: edits.text ?? target.text, ...edits };

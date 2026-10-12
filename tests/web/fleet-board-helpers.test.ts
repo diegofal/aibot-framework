@@ -250,3 +250,12 @@ describe('markup', () => {
     expect(html).toContain('id="fb-del"');
   });
 });
+
+describe('toggleTask keeps the lane in step with the checkbox', () => {
+  it('checking a task moves it to done; unchecking sends it back to todo', () => {
+    const list = [{ text: 'a', done: false, status: 'in_progress', id: 't-1' }];
+    const on = toggleTask(list, 0);
+    expect(on[0]).toEqual({ text: 'a', done: true, status: 'done', id: 't-1' });
+    expect(toggleTask(on, 0)[0]).toEqual({ text: 'a', done: false, status: 'todo', id: 't-1' });
+  });
+});
