@@ -6085,6 +6085,16 @@ body.ui-palette-open {
 .dispatch-more-wrap:has(> button[hidden]) {
   display: none;
 }
+/* Work → Sent to you: cards reuse .curio-dispatch */
+.sent-message {
+  white-space: pre-wrap;
+  line-height: 1.55;
+  color: var(--text);
+}
+.sent-reason {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
 .dispatch-keys-hint {
   text-align: center;
   margin-top: 4px;

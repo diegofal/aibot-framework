@@ -342,6 +342,16 @@ describe('Dispatches inbox (curiosity C7)', () => {
   });
 });
 
+describe('Sent to you (why-everywhere row 10)', () => {
+  it('#/work/sent is the Work tab right after Dispatches, with its own handler', () => {
+    expect(matchRoute('#/work/sent')?.route.handler).toBe('sent');
+    const work = AREAS.find((a) => a.id === 'work');
+    const ids = work?.tabs.map((t) => t.id) ?? [];
+    expect(ids.indexOf('sent')).toBe(ids.indexOf('dispatches') + 1);
+    expect(work?.tabs.find((t) => t.id === 'sent')?.label).toBe('Sent to you');
+  });
+});
+
 describe('UX overhaul wave 2: IA moves', () => {
   it('Insights has no Feedback tab and no Agent loop; Automations has no Tool Runner', () => {
     const all = AREAS.flatMap((a) => a.tabs.map((t) => t.href));

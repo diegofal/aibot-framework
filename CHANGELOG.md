@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (2026-10-11) — Work → Sent to you: the messages agents chose to send, with "Why this?" (why-everywhere row 10)
+- **Why.** Agents message the operator (and users) on their own with `send_proactive_message`, and the throttle refuses some of those sends, but the dashboard showed none of it: the only trace was the tool audit. The operator could not see what an agent had said, whether it arrived, or which cycle and goal made it decide to write.
+- **API.** `GET /api/proactive?limit=&before=&days=` (`src/web/routes/proactive.ts`): the fleet's proactive sends from the tool audit, newest first, tenant-scoped, each with recipient, message, `delivered` / refused by the throttle / failed and the reason, and a `why`.
+- **Why model.** `src/why/builders/proactive.ts` (`proactiveToWhy`, registered in `WHY_BUILDERS`): "A message it chose to send you", the recorded cycle (plan, goal) via `CycleIndex` (one cycle-log read per bot), the throttle rule in plain words ("One proactive message per agent every 60 min."), the outcome, and "No record of the cycle" when none was recorded. Nothing inferred by time.
+- **UI.** New Work tab "Sent to you" (`#/work/sent`, after Dispatches): cards with the agent, recipient, status badge, the message and the shared `whyPanel`; filters All / Delivered / Not sent; "Load older" by cursor.
+
 ### Added (2026-10-11) — One "Why this?" for the whole dashboard (phase 0)
 - **Why.** The dispatch "Why this?" proved useful, and the operator asked for the same everywhere, shown the same way. An audit found 17 more surfaces (Needs You, inbox, productions, goal timeline, timeline, idle reasons, posture, karma, traits, permissions, proposals, cron, collaboration, feedback, navigator history, memory edits) where the cycle and goal behind an item are often on disk but never shown. Plan: `docs/plans/why-everywhere-plan.md`. This change is the shared foundation; the surfaces follow one by one.
 - **One model.** `src/why/types.ts`: `Why` (what produced it, by whom, the cycle and goal, stated reason, rule, related items, outcome, notes, what is missing) with a strict `WhySchema`. Built only from what was recorded when it happened; anything reconstructed is marked.

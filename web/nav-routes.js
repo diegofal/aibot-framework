@@ -45,6 +45,7 @@ export const AREAS = [
     tabs: [
       { id: 'outputs', label: 'Outputs', href: '#/work' },
       { id: 'dispatches', label: 'Dispatches', href: '#/work/dispatches' },
+      { id: 'sent', label: 'Sent to you', href: '#/work/sent' },
       { id: 'productions', label: 'Productions', href: '#/work/productions' },
       { id: 'conversations', label: 'Conversations', href: '#/work/conversations' },
       { id: 'sessions', label: 'Sessions', href: '#/work/sessions' },
@@ -179,6 +180,7 @@ export const ROUTES = [
   },
   { pattern: /^#\/work\/sessions$/, handler: 'sessions', area: 'work', args: none },
   { pattern: /^#\/work\/dispatches$/, handler: 'dispatches', area: 'work', args: none },
+  { pattern: /^#\/work\/sent$/, handler: 'sent', area: 'work', args: none },
   { pattern: /^#\/work$/, handler: 'work', area: 'work', args: none },
 
   {

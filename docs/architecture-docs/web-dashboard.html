@@ -1240,6 +1240,12 @@
               <td>Body <code>{ signal: 'up' | 'down' }</code>. Operator verdict on the navigator's current direction; shown to the next navigator, strategist and planner ("operator rejected this direction &mdash; change course"). 404 when there is no direction yet</td>
               <td><code>curiosity.ts</code></td>
             </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/proactive?limit=50&amp;before=&lt;iso&gt;&amp;days=30</code></td>
+              <td>"Sent to you": the messages agents chose to send on their own (<code>send_proactive_message</code>), read from the tool audit (<code>&lt;data&gt;/tool-audit</code>) of every bot in the caller's tenant, newest first. Each: <code>botId</code>, <code>botName</code>, <code>avatarUrl</code>, <code>sentAt</code>, <code>recipient</code> (the <code>chatId</code> the agent asked for), <code>toOperator</code> (resolved with <code>resolveOperatorTarget</code>), <code>message</code>, <code>status</code> (<code>delivered</code> / <code>refused</code> = the <code>ProactiveThrottle</code>, audited as <code>failureKind: 'policy'</code> / <code>failed</code>), <code>delivered</code>, <code>reason</code> (refusal or error text, when not delivered), <code>cycleId</code>/<code>goalId</code> and <code>why</code> (<code>proactiveToWhy</code>: cycle + plan + goal from <code>&lt;data&gt;/agent-cycles</code>, one read per bot; the throttle rule in plain words; <code>missing</code> when no cycle was recorded). <code>limit</code> default 50, max 200; <code>days</code> window default 30, max 90, anchored at <code>before</code> (strictly older; unparsable: 400). Returns <code>{ messages, hasMore, nextBefore, days }</code>. A bot whose audit fails to read is logged and skipped</td>
+              <td><code>proactive.ts</code></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1713,7 +1719,7 @@ compaction                            // Context compaction
       <p>
         Canonical hashes: <code>#/</code> (Fleet Home), <code>#/agents[/:id[/config|/edit]]</code>,
         <code>#/needs[?bot=:id]</code>, <code>#/needs/{inbox[/:bot/:id]|permissions|proposals|feedback[/:bot]}</code>,
-        <code>#/work/{dispatches|productions[/:bot]|conversations[/:bot[/:id]]|sessions[/:id]}</code>,
+        <code>#/work/{dispatches|sent|productions[/:bot]|conversations[/:bot[/:id]]|sessions[/:id]}</code>,
         <code>#/automations/{cron[/new|/:id]|loop|skills[/new|/:id[/edit]]|tools[/:name]}</code>,
         <code>#/insights/{stats[/bot/:id|/behaviour|/infra|/hygiene]|karma[/:bot]|activity[?tab=&amp;bot=]}</code>,
         <code>#/settings[/integrations|/baas/{templates[/:id]|customizations|webhooks|analytics|tenants}]</code>.
@@ -2145,6 +2151,21 @@ compaction                            // Context compaction
              <code>wireCuriositySignals()</code> in <code>curiosity.js</code>, shared with Agent Home.
              Keys: <kbd>j</kbd>/<kbd>k</kbd> focus, <kbd>+</kbd> (or <kbd>=</kbd>) / <kbd>-</kbd> thumbs up / down; "Load more" raises
              the fetch limit up to the server cap of 200 (<code>nextDispatchLimit</code>).</p>
+        </div>
+
+        <div class="card">
+          <h3>Work &rarr; Sent to you</h3>
+          <p><span class="badge badge-yellow">2026-10-11</span> Third tab of the Work area
+             (<code>#/work/sent</code>, <code>web/pages/sent.js</code>, pure helpers in
+             <code>sent-helpers.js</code>): every message an agent chose to send on its own, newest first,
+             from <code>GET /api/proactive?limit=100</code>, "Load 100 older" with
+             <code>&amp;before=&lt;nextBefore&gt;</code>. Each card (dispatch card styles) shows the agent's
+             face and name, the recipient ("to you" or the chat / user id), a status badge
+             (<code>delivered</code>, <code>not sent &middot; throttled</code>, <code>not sent &middot; failed</code>),
+             age, the message itself, the refusal or error text, and the shared "Why this?" fold
+             (<code>whyPanel</code>: cycle, plan, goal, throttle rule, outcome). Filter chips
+             <em>All / Delivered / Not sent</em> with counts, kept in <code>sessionStorage</code> under
+             <code>aibot.sent.filter</code>. Read-only.</p>
         </div>
 
         <div class="card">

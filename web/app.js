@@ -48,6 +48,7 @@ import {
   renderBotProductions,
   renderProductions,
 } from './pages/productions.js';
+import { renderSent } from './pages/sent.js';
 import { renderSessionTranscript, renderSessions } from './pages/sessions.js';
 import { renderSettings } from './pages/settings.js';
 import { api, clearAuth, getAuthContext, getAuthToken } from './pages/shared.js';
@@ -193,6 +194,7 @@ const handlers = {
   agentProposals: page(() => renderAgentProposals(content)),
   work: page(() => renderWork(content), destroyWork),
   dispatches: page(() => renderDispatches(content), destroyDispatches),
+  sent: page(() => renderSent(content)),
   productions: page(() => renderProductions(content), destroyProductions),
   botProductions: page((botId) => renderBotProductions(content, botId), destroyProductions),
   conversations: page(() => renderConversations(content)),

@@ -510,7 +510,8 @@ Needs You        — Queue (asks, permissions, proposals, unreviewed outputs, fe
                    sidebar badge = /api/needs-you/count; #/needs?bot=<id> pre-filters an agent
 Work             — Outputs (what the agents produced, newest first, Approve/Reject inline, status +
                    agent filters), Dispatches (fleet inbox of curiosity dispatches, All / Sent / Held /
-                   Proposals, 👍 / 👎 / more like this), Productions (file explorer, evaluation, discussion threads),
+                   Proposals, 👍 / 👎 / more like this), Sent to you (messages agents chose to send,
+                   delivered or stopped by the throttle, each with "Why this?"), Productions (file explorer, evaluation, discussion threads),
                    Conversations (web chat with a bot), Sessions (transcripts with pagination)
 Automations      — Cron ("Tell an agent what to do and when" natural-language box with a previewed,
                    editable proposal; compact job list with schedules in words, agent filter, search,

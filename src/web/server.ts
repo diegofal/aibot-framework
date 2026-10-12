@@ -71,6 +71,7 @@ import {
   needsYouSourcesFromBotManager,
 } from './routes/needs-you';
 import { onboardingRoutes } from './routes/onboarding';
+import { proactiveRoutes } from './routes/proactive';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
 import { settingsRoutes } from './routes/settings';
@@ -232,6 +233,23 @@ export function startWebServer(deps: WebServerDeps): void {
       },
       readCycles: (botId, sinceMs, untilMs) =>
         readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs),
+    })
+  );
+  // "Sent to you" (docs/plans/why-everywhere-plan.md, row 10): the messages
+  // agents chose to send (send_proactive_message), from the tool audit.
+  app.route(
+    '/api/proactive',
+    proactiveRoutes({
+      config,
+      logger,
+      readToolAudit: (botId, sinceMs, untilMs) =>
+        readToolEntries(resolveStatsDirs(config).toolAudit, botId, sinceMs, untilMs),
+      readCycles: (botId, sinceMs, untilMs) =>
+        readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs),
+      avatarUrlFor: (botId) => {
+        const bot = config.bots.find((b) => b.id === botId);
+        return bot ? avatarUrl(botId, findAvatar(resolveBotPaths(config, bot).soulDir)) : null;
+      },
     })
   );
   app.route(

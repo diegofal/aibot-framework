@@ -8,6 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Dispatch } from '../../src/bot/curiosity/types';
 import { WHY_BUILDERS, type WhyBuilderName } from '../../src/why/builders';
+import type { ProactiveSend } from '../../src/why/builders/proactive';
 import { WhySchema } from '../../src/why/types';
 import { whyPanel } from '../../web/pages/why-helpers.js';
 
@@ -31,9 +32,23 @@ const dispatch: Dispatch = {
   origin: { trigger: 'insight', cycleId: 'c1', goalTitle: 'G', plan: 'P' },
 };
 
+const proactive: ProactiveSend = {
+  botId: 'b1',
+  sentAt: '2026-10-11T12:01:00Z',
+  recipient: 'operator',
+  toOperator: true,
+  message: 'm',
+  status: 'refused',
+  result:
+    'Proactive send throttled: b1 may send again at 2026-10-11T13:00:00.000Z. Per-bot cooldown 60m.',
+  cycleId: 'c1',
+  cycle: { cycleId: 'c1', startedAt: '2026-10-11T12:00:00Z', planSummary: 'P', goalTitle: 'G' },
+};
+
 /** One fixture per builder: its input. */
 const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0] } = {
   dispatch,
+  proactive,
 };
 
 describe('Why contract', () => {
