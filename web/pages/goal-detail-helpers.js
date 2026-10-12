@@ -36,7 +36,7 @@ export function goalDetailUrl(botId, { id, title }) {
     : `${base}?title=${encodeURIComponent(title ?? '')}`;
 }
 
-function when(value, nowMs) {
+export function when(value, nowMs) {
   if (!value) return '<span class="gd-dim">—</span>';
   // Date-only values (GOALS.md `created: 2026-10-04`) have no meaningful hour.
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return esc(value);
@@ -79,7 +79,7 @@ function header(goal, nowMs) {
   </div>`;
 }
 
-function section(title, body, extra = '') {
+export function section(title, body, extra = '') {
   return `<section class="gd-section"><div class="gd-label">${title}${extra}</div>${body}</section>`;
 }
 
@@ -120,7 +120,8 @@ function rows(title, list) {
   return `<div class="gd-sub"><div class="gd-sub-title">${title} <span class="gd-dim">${list.length}</span></div>${list.join('')}</div>`;
 }
 
-function cycleBlock(c, botId, nowMs, open) {
+/** One cycle: when, plan, then its LLM calls, tools, files, asks and karma. Also the cycle sheet's body. */
+export function cycleBlock(c, botId, nowMs, open) {
   const attr = ATTRIBUTION_LABEL[c.attribution] ?? c.attribution;
   const summary = c.planSummary || c.focus || 'No plan summary recorded';
   const tokens = c.llmCalls.reduce((s, l) => s + l.promptTokens + l.completionTokens, 0);

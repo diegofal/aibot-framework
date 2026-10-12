@@ -354,6 +354,12 @@ describe('GET /api/curiosity/dispatches — where each one came from', () => {
       inferred: true,
     });
     expect(body.dispatches.find((d: Dispatch) => d.id === 'd1').origin).toBeUndefined();
+    expect(d3.why).toMatchObject({
+      what: 'A finding from one of its work cycles',
+      cycle: { id: 'c-3', botId: 'b1', plan: 'Look for roles', inferred: true },
+      goal: { id: 'g-1', title: 'Find roles' },
+    });
+    expect(body.dispatches.find((d: Dispatch) => d.id === 'd1').why.missing).toContain('No record');
     expect(asked.sort()).toEqual(['b1', 'b2', 'b3']);
   });
 

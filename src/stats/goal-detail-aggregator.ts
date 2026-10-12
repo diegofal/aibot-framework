@@ -16,37 +16,42 @@
 import { basename, join } from 'node:path';
 import type { BotConfig } from '../config';
 import { titleTokens } from '../hygiene/text-utils';
-import { readEntries } from '../productions/changelog';
-import type { ProductionEntry } from '../productions/types';
 import { type GoalEntry, findGoalIndex, goalBucket, parseGoals } from '../tools/goals';
 import type { StatsContext } from './context';
+import {
+  type CycleCandidate,
+  type Rows,
+  clip,
+  karmaRowToCycleKarma,
+  readCycleSources,
+  reviewStateOf,
+  rowsOfCycle,
+  tagOf,
+  toGoalCycle,
+} from './cycle-rows';
 import { resolveBotPaths } from './paths';
-import { type AgentCycleRecord, readAgentCycles } from './readers/agent-cycles';
+import type { AgentCycleRecord } from './readers/agent-cycles';
 import {
   type GoalEvent,
   goalTitleKey,
   readGoalEvents,
   readGoalExtras,
 } from './readers/goal-events';
-import { type LlmQueryEntry, readLlmEntries } from './readers/llm-query-log';
-import { type ToolAuditEntry, isToolFailure, readToolEntries } from './readers/tool-audit';
+import type { LlmQueryEntry } from './readers/llm-query-log';
 import type {
   GoalAttribution,
   GoalCycle,
-  GoalCycleAsk,
   GoalCycleKarma,
-  GoalCycleProduction,
   GoalDetailHeader,
   GoalDetailResponse,
   GoalOrigin,
   GoalTimelineEvent,
 } from './types';
-import { readJsonlSafe, readTextSafe, toIso, toMs } from './util';
+import { readTextSafe, toMs } from './util';
 
 export const GOAL_DETAIL_DEFAULT_DAYS = 14;
 export const GOAL_DETAIL_MAX_DAYS = 30;
 export const GOAL_DETAIL_MAX_CYCLES = 30;
-const MAX_TOOLS_PER_CYCLE = 50;
 const DAY_MS = 86_400_000;
 /** A gap this long between agent-loop LLM calls always starts a new cycle. */
 const CYCLE_GAP_MS = 30 * 60_000;
@@ -61,8 +66,6 @@ const ORIGINS: GoalOrigin[] = [
   'curiosity',
   'preset',
 ];
-
-type Tagged = { cycleId?: string; goalId?: string };
 
 export interface GoalKey {
   id?: string | null;
@@ -123,64 +126,6 @@ export function reconstructCycleWindows(entries: LlmQueryEntry[]): CycleWindow[]
   return windows;
 }
 
-interface AskRow {
-  id: string;
-  type?: string;
-  title?: string;
-  createdAt: string;
-  inboxStatus?: string;
-  cycleId?: string;
-  goalId?: string;
-  metadata?: Tagged;
-}
-
-interface OutcomeRow {
-  timestamp: number;
-  description?: string;
-  cycleId?: string;
-}
-
-interface KarmaRow {
-  timestamp: string;
-  delta: number;
-  reason: string;
-  kind?: string;
-  metadata?: Record<string, unknown>;
-}
-
-interface Rows {
-  llm: LlmQueryEntry[];
-  tools: ToolAuditEntry[];
-  productions: ProductionEntry[];
-  asks: AskRow[];
-  outcomes: OutcomeRow[];
-}
-
-const tagOf = (row: unknown): Tagged => {
-  const r = (row ?? {}) as Tagged & { metadata?: Tagged };
-  return { cycleId: r.cycleId ?? r.metadata?.cycleId, goalId: r.goalId ?? r.metadata?.goalId };
-};
-
-function clip(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
-function readChangelog(workDir: string): ProductionEntry[] {
-  try {
-    return readEntries(join(workDir, 'changelog.jsonl'));
-  } catch {
-    return [];
-  }
-}
-
-function readAsks(dir: string, botId: string): AskRow[] {
-  const byId = new Map<string, AskRow>();
-  for (const c of readJsonlSafe<AskRow>(join(dir, botId, 'conversations.jsonl'))) {
-    if (c?.type === 'inbox' && c.id) byId.set(c.id, c);
-  }
-  return [...byId.values()];
-}
-
 export function buildGoalDetail(
   ctx: StatsContext,
   bot: BotConfig,
@@ -224,7 +169,8 @@ export function buildGoalDetail(
   // ── Timeline ──
   const events = readGoalEvents(paths.soulDir).filter((e) => isThisGoal(e.goalId, e.title));
   const firstEventMs = Math.min(...events.map((e) => toMs(e.ts) ?? Number.POSITIVE_INFINITY));
-  const tools = readToolEntries(ctx.dirs.toolAudit, bot.id, since, now);
+  const src = readCycleSources(ctx, bot, since, now);
+  const { tools } = src;
   const timeline: GoalTimelineEvent[] = [
     ...events.map((e: GoalEvent) => ({
       ts: e.ts,
@@ -269,27 +215,9 @@ export function buildGoalDetail(
   ].sort((a, b) => (toMs(a.ts) ?? 0) - (toMs(b.ts) ?? 0));
 
   // ── Rows ──
-  const llm = readLlmEntries(ctx.dirs.llmQueryLog, bot.id, since, now);
-  const changelog = readChangelog(paths.workDir);
-  const productions = changelog.filter((p) => (toMs(p.timestamp) ?? 0) >= since);
-  const asks = readAsks(ctx.dirs.conversations, bot.id).filter(
-    (a) => (toMs(a.createdAt) ?? 0) >= since
-  );
-  const outcomes = readJsonlSafe<OutcomeRow>(
-    join(ctx.dirs.outcomeLedger, bot.id, 'outcomes.jsonl')
-  ).filter((o) => (toMs(o?.timestamp) ?? 0) >= since);
-  const karmaRows = readJsonlSafe<KarmaRow>(join(ctx.dirs.karma, bot.id, 'events.jsonl')).filter(
-    (k) => (toMs(k?.timestamp) ?? 0) >= since
-  );
-  const records = readAgentCycles(ctx.dirs.agentCycles, bot.id, since, now);
-
-  const byCycle = (id: string): Rows => ({
-    llm: llm.filter((r) => tagOf(r).cycleId === id),
-    tools: tools.filter((r) => tagOf(r).cycleId === id),
-    productions: productions.filter((r) => tagOf(r).cycleId === id),
-    asks: asks.filter((r) => tagOf(r).cycleId === id),
-    outcomes: outcomes.filter((r) => tagOf(r).cycleId === id),
-  });
+  const { llm, changelog, productions, asks, outcomes, records } = src;
+  const karmaRows = src.karma;
+  const byCycle = (id: string): Rows => rowsOfCycle(src, id);
   const untagged = <T>(rows: T[]) => rows.filter((r) => !tagOf(r).cycleId);
   const inWindow = (ms: number | null, w: { startMs: number; endMs: number }) =>
     ms !== null && ms >= w.startMs - 1_000 && ms <= w.endMs + WINDOW_SLACK_MS;
@@ -329,17 +257,7 @@ export function buildGoalDetail(
     return null;
   };
 
-  interface Candidate {
-    cycleId: string | null;
-    startMs: number;
-    endMs: number;
-    status: string | null;
-    focus: string | null;
-    planSummary: string | null;
-    attribution: GoalAttribution;
-    reason: string;
-    rows: Rows;
-  }
+  type Candidate = CycleCandidate;
   const candidates: Candidate[] = [];
   const summaryOf = (rows: Rows, record?: AgentCycleRecord) =>
     record?.planSummary ||
@@ -424,18 +342,7 @@ export function buildGoalDetail(
 
   const kept = candidates.sort((a, b) => b.startMs - a.startMs).slice(0, GOAL_DETAIL_MAX_CYCLES);
 
-  // Review state per production row: its own verdict, else pending when it is
-  // the file's latest content row, else superseded (null).
-  const latestContent = new Map<string, string>();
-  for (const p of changelog) {
-    if (p.action === 'create' || p.action === 'edit') latestContent.set(p.path, p.id);
-  }
-  const reviewOf = (p: ProductionEntry): GoalCycleProduction['review'] => {
-    const s = p.evaluation?.status;
-    if (s === 'approved' || s === 'rejected') return s;
-    if (p.action !== 'create' && p.action !== 'edit') return null;
-    return latestContent.get(p.path) === p.id ? 'pending' : null;
-  };
+  const reviewOf = reviewStateOf(changelog);
 
   // Karma: tagged by cycle, or the review of a file the cycle produced
   // (credited to the newest kept cycle that produced it before the event).
@@ -451,62 +358,11 @@ export function buildGoalDetail(
         : undefined;
     if (!owner) continue;
     const list = karmaFor.get(owner) ?? [];
-    list.push({
-      ts: k.timestamp,
-      delta: Number(k.delta) || 0,
-      reason: k.reason,
-      kind: k.kind ?? null,
-    });
+    list.push(karmaRowToCycleKarma(k));
     karmaFor.set(owner, list);
   }
 
-  const cycles: GoalCycle[] = kept.map((c) => ({
-    cycleId: c.cycleId,
-    startedAt: toIso(c.startMs) ?? '',
-    endedAt: toIso(c.endMs) ?? '',
-    durationMs: Math.max(0, c.endMs - c.startMs),
-    status: c.status,
-    focus: c.focus,
-    planSummary: c.planSummary,
-    attribution: c.attribution,
-    reason: c.reason,
-    llmCalls: c.rows.llm.map((l) => ({
-      ts: l.timestamp,
-      caller: String(l.caller),
-      backend: l.backend,
-      model: l.model,
-      promptTokens: Number(l.promptTokens) || 0,
-      completionTokens: Number(l.completionTokens) || 0,
-      durationMs: Number(l.durationMs) || 0,
-      ok: l.success !== false,
-      error: l.error ? clip(l.error, 200) : null,
-    })),
-    toolCalls: c.rows.tools.slice(0, MAX_TOOLS_PER_CYCLE).map((t) => ({
-      ts: t.timestamp,
-      name: t.toolName,
-      ok: !isToolFailure(t),
-      failureKind: t.failureKind ?? null,
-      args: clip(JSON.stringify(t.args ?? {}), 160),
-      result: clip(String(t.result ?? ''), 200),
-    })),
-    productions: c.rows.productions.map((p) => ({
-      ts: p.timestamp,
-      path: p.path,
-      action: p.action,
-      size: p.size,
-      description: p.description,
-      review: reviewOf(p),
-    })),
-    asks: c.rows.asks.map(
-      (a): GoalCycleAsk => ({
-        id: a.id,
-        title: a.title ?? '',
-        createdAt: a.createdAt,
-        status: a.inboxStatus ?? null,
-      })
-    ),
-    karma: karmaFor.get(c) ?? [],
-  }));
+  const cycles: GoalCycle[] = kept.map((c) => toGoalCycle(c, karmaFor.get(c) ?? [], reviewOf));
 
   const started =
     gx.started ??

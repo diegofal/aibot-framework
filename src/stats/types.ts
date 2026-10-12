@@ -485,6 +485,15 @@ export interface GoalCycle {
   karma: GoalCycleKarma[];
 }
 
+/** One agent-loop cycle on its own (`GET /api/agents/:id/cycles/:cycleId`, the "Open cycle" sheet). */
+export interface CycleDetailResponse {
+  botId: string;
+  generatedAt: string;
+  cycle: GoalCycle;
+  /** The goal the cycle served, when it recorded one. */
+  goal: { id: string | null; title: string } | null;
+}
+
 export interface GoalDetailResponse {
   botId: string;
   generatedAt: string;

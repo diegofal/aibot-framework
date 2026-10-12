@@ -17,6 +17,7 @@
  */
 import { avatar, badge, card, cx, emptyState, esc } from '../ui/index.js';
 import { ago } from './agent-home-helpers.js';
+import { whyPanel } from './why-helpers.js';
 
 // ── Mirrors of src/bot/curiosity (parity-tested) ────────────────────────
 
@@ -431,125 +432,12 @@ export function dispatchCard(
       <summary>Evidence</summary><div class="curio-pre">${esc(d.evidence)}</div></details>`
         : ''
     }
-    ${dispatchWhy(d, { nowMs })}
+    ${whyPanel(d.why, { nowMs, botId })}
     ${d.action ? `<div class="curio-action">→ ${esc(d.action)}</div>` : ''}
     ${d.question ? `<div class="curio-question">${esc(d.question)}</div>` : ''}
     ${crossing}
     ${signalButtons('dispatch', botId, d.id, d.signal, ['up', 'down', 'more'])}
   </article>`;
-}
-
-// ── Why: where a dispatch came from ─────────────────────────────────────
-
-/** Written by the runner when it holds an insight without an editor pass. */
-const CADENCE_MARKER = 'held: cadence closed, not edited';
-
-const TRIGGER_TEXT = {
-  insight: 'A finding from one of its work cycles',
-  digest: 'A digest of findings that were held back',
-  frontier: 'A question it wants your permission to explore',
-  interest: 'An interest it thinks it is growing into',
-};
-
-const EXPLORE_REASON_TEXT = {
-  concentration: 'one topic was taking over its recent cycles',
-  'no-surprise': 'nothing had surprised it for a while',
-  budget: 'its regular exploration turn was due',
-  'operator-silent': 'you had been quiet, so it explores more often',
-};
-
-const HELD_TEXT = {
-  'cadence-closed':
-    'Held without editing: it had messaged you recently, so this waits for a digest.',
-  'editor-failed': 'Held: the editor call failed, so it was never scored.',
-  'fleet-cap': "Held: the fleet's daily message cap was already used up.",
-  'delivery-failed': 'Held: the editor approved it, but delivery failed.',
-  disabled: 'Held: dispatches are turned off for this agent.',
-};
-
-const score = (x) => (Number(x) || 0).toFixed(2);
-
-/** Goal titles are often whole briefs: the folded line keeps a short head. */
-const GIST_GOAL_CHARS = 60;
-const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
-
-/** One sentence: why this dispatch reached you, or why it did not. */
-export function holdExplanation(d) {
-  if (d.status === 'dropped') {
-    return 'Dropped: the editor judged it not worth sending, or a digest already covered it.';
-  }
-  if (d.status !== 'held') {
-    const via = d.deliveredVia === 'telegram' ? 'on Telegram' : 'in your dashboard feed';
-    return `Sent to you ${via} (editor score ${score(d.editorScore)}).`;
-  }
-  if (d.heldReason === 'editor' && typeof d.heldBar === 'number') {
-    return `Held: the editor scored it ${score(d.editorScore)}; it needed ${score(d.heldBar)} to reach you.`;
-  }
-  const reason = d.heldReason ?? (d.editorNotes === CADENCE_MARKER ? 'cadence-closed' : null);
-  if (reason && HELD_TEXT[reason]) return HELD_TEXT[reason];
-  return `Held: the editor scored it ${score(d.editorScore)}, below what it takes to reach you.`;
-}
-
-function originRows(d, nowMs) {
-  const o = d.origin;
-  const rows = [];
-  const trigger = TRIGGER_TEXT[o?.trigger ?? (d.kind === 'digest' ? 'digest' : '')];
-  if (trigger) rows.push(['What', esc(trigger)]);
-  if (!o?.cycleId && d.kind !== 'digest') {
-    rows.push([
-      'Cycle',
-      '<span class="text-dim">No record of the cycle that produced it (written before cycles were logged).</span>',
-    ]);
-  }
-  if (o?.goalTitle) {
-    rows.push(['Goal', `<a href="#/agents/${esc(enc(d.botId ?? ''))}">${esc(o.goalTitle)}</a>`]);
-  }
-  if (o?.plan) rows.push(['Working on', esc(o.plan)]);
-  if (o?.mode === 'explore') {
-    const why = EXPLORE_REASON_TEXT[o.modeReason];
-    const chasing = o.frontierQuestion ? `. Chasing: “${esc(o.frontierQuestion)}”` : '';
-    rows.push(['Mode', `Exploration cycle${why ? `: ${esc(why)}` : ''}${chasing}`]);
-  }
-  if (o?.cycleId && o.inferred) {
-    rows.push([
-      '',
-      '<span class="text-dim">Cycle matched by time, not recorded at the moment.</span>',
-    ]);
-  }
-  const items = d.sources?.items ?? [];
-  if (items.length) {
-    const list = items
-      .map(
-        (s) =>
-          `<li>${esc(s.hook)} <span class="text-dim text-sm">· ${esc(ago(s.createdAt, nowMs))} · score ${score(s.editorScore)}</span></li>`
-      )
-      .join('');
-    const note = d.sources.inferred
-      ? '<div class="text-dim text-sm">Sources reconstructed from what was held at the time.</div>'
-      : '';
-    rows.push(['Built from', `<ul class="curio-origin-sources">${list}</ul>${note}`]);
-  }
-  if (o?.draftHook) {
-    rows.push(['Draft', `The editor rewrote the headline. The agent wrote: “${esc(o.draftHook)}”`]);
-  }
-  rows.push(['Outcome', esc(holdExplanation(d))]);
-  if (d.editorNotes && d.editorNotes !== CADENCE_MARKER) rows.push(['Editor', esc(d.editorNotes)]);
-  return rows;
-}
-
-/** "Why this?": the cycle, goal and plan behind a dispatch, and why it was sent or held. */
-export function dispatchWhy(d, { nowMs = Date.now() } = {}) {
-  const rows = originRows(d, nowMs)
-    .map(
-      ([k, v]) =>
-        `<div class="curio-origin-row"><span class="curio-origin-key">${esc(k)}</span><span>${v}</span></div>`
-    )
-    .join('');
-  const gist = d.origin?.goalTitle
-    ? ` · goal: ${esc(clip(d.origin.goalTitle, GIST_GOAL_CHARS))}`
-    : '';
-  return `<details class="curio-origin">
-      <summary>Why this?<span class="text-dim">${gist}</span></summary><div class="curio-origin-body">${rows}</div></details>`;
 }
 
 export function dispatchList(list, opts = {}) {

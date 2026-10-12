@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { rmSync } from 'node:fs';
 import { Hono } from 'hono';
-import type { GoalDetailResponse } from '../../../src/stats/types';
+import type { CycleDetailResponse, GoalDetailResponse } from '../../../src/stats/types';
 import { agentHomeRoutes } from '../../../src/web/routes/agent-home';
 import {
   type GoalDetailFixture,
@@ -80,5 +80,21 @@ describe('GET /api/agents/:id/goals/detail', () => {
     // By title: on main, serializeGoals does not keep the id line yet (instrumentation adds it).
     const body = (await (await get(app, byTitle)).json()) as GoalDetailResponse;
     expect(body.goal.status).toBe('blocked');
+  });
+});
+
+describe('GET /api/agents/:id/cycles/:cycleId', () => {
+  it('returns one cycle with its goal', async () => {
+    const res = await makeApp().request('/api/agents/g1/cycles/c-exact');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as CycleDetailResponse;
+    expect(body.cycle.cycleId).toBe('c-exact');
+    expect(body.goal).toEqual({ id: 'g-lab00001', title: LAB_GOAL });
+  });
+
+  it('404 for an unknown cycle, an unknown bot, and a bot outside the tenant', async () => {
+    expect((await makeApp().request('/api/agents/g1/cycles/c-nope')).status).toBe(404);
+    expect((await makeApp().request('/api/agents/nope/cycles/c-exact')).status).toBe(404);
+    expect((await makeApp('t9').request('/api/agents/g1/cycles/c-exact')).status).toBe(404);
   });
 });

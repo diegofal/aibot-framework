@@ -7,17 +7,10 @@
  * inside the cycle, so the cycle whose [startedAt, endedAt] contains the
  * dispatch's `createdAt` is the one that produced it. Pure; never throws.
  */
+import { type CycleRow, findCycleAt } from '../../why/cycle-index';
 import type { Dispatch, DispatchOrigin, DispatchTrigger } from './types';
 
-/** The fields of an `<data>/agent-cycles` row this module reads. */
-export interface CycleRow {
-  cycleId: string;
-  startedAt: string;
-  endedAt?: string;
-  planSummary?: string | null;
-  goalId?: string | null;
-  goalTitle?: string | null;
-}
+export type { CycleRow };
 
 export interface DigestSource {
   id: string;
@@ -38,13 +31,7 @@ export function triggerOfDispatch(d: Dispatch): DispatchTrigger {
 /** The recorded origin, else one inferred from the cycle log, else undefined. */
 export function inferOrigin(d: Dispatch, cycles: CycleRow[]): DispatchOrigin | undefined {
   if (d.origin) return d.origin;
-  const at = Date.parse(d.createdAt);
-  if (!Number.isFinite(at)) return undefined;
-  const row = cycles.find((c) => {
-    const start = Date.parse(c.startedAt);
-    const end = c.endedAt ? Date.parse(c.endedAt) : Number.NaN;
-    return start <= at && at <= end;
-  });
+  const row = findCycleAt(cycles, d.createdAt);
   if (!row) return undefined;
   const origin: DispatchOrigin = { trigger: triggerOfDispatch(d), cycleId: row.cycleId };
   if (row.goalId) origin.goalId = row.goalId;

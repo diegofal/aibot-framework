@@ -26,6 +26,8 @@ import type { Dispatch } from '../../bot/curiosity/types';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import { dispatchToWhy } from '../../why/builders/dispatch';
+import { CycleIndex } from '../../why/cycle-index';
 
 /** The part of CuriosityService the routes use (tests pass a fake). */
 export interface CuriosityRouteSource {
@@ -49,9 +51,6 @@ export interface CuriosityRouteDeps {
    */
   readCycles?: (botId: string, sinceMs: number, untilMs: number) => CycleRow[];
 }
-
-/** A cycle can start this long before the dispatch it produced. */
-const CYCLE_LOOKBACK_MS = 86_400_000;
 
 export const DEFAULT_DISPATCH_LIMIT = 50;
 export const MAX_DISPATCH_LIMIT = 200;
@@ -101,38 +100,21 @@ export function curiosityRoutes(deps: CuriosityRouteDeps) {
     }
   };
 
-  /** One cycle-log read per bot on the page, spanning its dispatches. */
-  const cyclesFor = (page: Dispatch[]): Map<string, CycleRow[]> => {
-    const out = new Map<string, CycleRow[]>();
-    if (!deps.readCycles) return out;
-    const span = new Map<string, { min: number; max: number }>();
-    for (const d of page) {
-      if (d.origin) continue;
-      const t = Date.parse(d.createdAt);
-      if (!Number.isFinite(t)) continue;
-      const s = span.get(d.botId);
-      span.set(
-        d.botId,
-        s ? { min: Math.min(s.min, t), max: Math.max(s.max, t) } : { min: t, max: t }
-      );
-    }
-    for (const [botId, { min, max }] of span) {
-      try {
-        out.set(botId, deps.readCycles(botId, min - CYCLE_LOOKBACK_MS, max));
-      } catch (err) {
-        deps.logger.warn({ err, botId }, 'Curiosity: cycle log read failed');
-      }
-    }
-    return out;
-  };
-
-  /** Each dispatch with its origin (recorded or inferred) and, for a digest, its sources. */
+  /**
+   * Each dispatch with its origin (recorded or inferred), for a digest its
+   * sources, and the `why` the dashboard renders.
+   */
   const explain = <T extends Dispatch>(page: T[], byBot: Map<string, Dispatch[]>) => {
-    const cycles = cyclesFor(page);
+    const cycles = CycleIndex.for(
+      deps.readCycles,
+      page.filter((d) => !d.origin).map((d) => ({ botId: d.botId, at: d.createdAt })),
+      (botId, err) => deps.logger.warn({ err, botId }, 'Curiosity: cycle log read failed')
+    );
     return page.map((d) => {
-      const origin = inferOrigin(d, cycles.get(d.botId) ?? []);
+      const origin = inferOrigin(d, cycles.rowsFor(d.botId));
       const sources = digestSources(d, byBot.get(d.botId) ?? []);
-      return { ...d, ...(origin ? { origin } : {}), ...(sources ? { sources } : {}) };
+      const explained = { ...d, ...(origin ? { origin } : {}), ...(sources ? { sources } : {}) };
+      return { ...explained, why: dispatchToWhy(explained) };
     });
   };
 

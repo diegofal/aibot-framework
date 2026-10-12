@@ -5672,35 +5672,14 @@ body.ui-palette-open {
   font-weight: 600;
 }
 .curio-retro,
-.curio-evidence,
-.curio-origin {
+.curio-evidence {
   margin: var(--s2) 0;
   font-size: var(--fs-md);
 }
 .curio-retro summary,
-.curio-evidence summary,
-.curio-origin summary {
+.curio-evidence summary {
   cursor: pointer;
   color: var(--text-dim);
-}
-.curio-origin-body {
-  display: grid;
-  gap: var(--s1);
-  margin-top: var(--s2);
-  padding: var(--s2) var(--s3);
-  border-left: 2px solid var(--border-strong);
-}
-.curio-origin-row {
-  display: grid;
-  grid-template-columns: 6.5rem 1fr;
-  gap: var(--s2);
-}
-.curio-origin-key {
-  color: var(--text-dim);
-}
-.curio-origin-sources {
-  margin: 0;
-  padding-left: 1.1rem;
 }
 .curio-pre {
   white-space: pre-wrap;
@@ -8109,4 +8088,52 @@ a.gd-row-name:hover {
   .fb-board.no-blocked {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── "Why this?" — one fold for every surface (web/pages/why-helpers.js) ── */
+.why {
+  margin: var(--s2) 0;
+  font-size: var(--fs-md);
+}
+.why summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}
+.why-body {
+  display: grid;
+  gap: var(--s1);
+  margin-top: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--border-strong);
+}
+.why-row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  gap: var(--s2);
+}
+.why-key {
+  color: var(--text-dim);
+}
+.why-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.why-foot {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.why-open-cycle {
+  margin-left: var(--s1);
+  padding: 0 var(--s2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.gd-facts {
+  display: grid;
+  gap: var(--s1);
 }

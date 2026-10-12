@@ -17,12 +17,10 @@ import {
   dispatchCard,
   dispatchCounts,
   dispatchList,
-  dispatchWhy,
   dnaLine,
   exploreMix,
   filterDispatches,
   frontierPanel,
-  holdExplanation,
   knowledgePanel,
   mindSection,
   previewDials,
@@ -489,143 +487,17 @@ describe('curiositySummary', () => {
   });
 });
 
-describe('dispatchWhy (where a dispatch came from)', () => {
-  const origin = {
-    trigger: 'insight',
-    cycleId: 'c-1',
-    goalId: 'g-1',
-    goalTitle: 'Find remote <roles>',
-    plan: 'Search FDE roles on Greenhouse',
-    mode: 'exploit',
-    modeReason: 'default',
-  };
-
-  it('names the goal (linked to the agent), the plan and the trigger', () => {
-    const html = dispatchWhy(dispatch({ origin }), { nowMs: NOW });
-    expect(html).toMatch(/<details class="curio-origin"/);
-    expect(html).toContain('Find remote &lt;roles&gt;');
-    expect(html).toContain('href="#/agents/b1"');
-    expect(html).toContain('Search FDE roles on Greenhouse');
-    expect(html).toContain('A finding from one of its work cycles');
-    expect(html).not.toContain('matched by time');
-  });
-
-  it('says when the cycle was matched by time rather than recorded', () => {
-    expect(dispatchWhy(dispatch({ origin: { ...origin, inferred: true } }))).toContain(
-      'matched by time'
-    );
-  });
-
-  it('explains an exploration cycle and the question it chased', () => {
-    const html = dispatchWhy(
-      dispatch({
-        origin: {
-          ...origin,
-          mode: 'explore',
-          modeReason: 'no-surprise',
-          frontierQuestion: 'Do LATAM roles pay less?',
-        },
-      })
-    );
-    expect(html).toContain('Exploration cycle');
-    expect(html).toContain('nothing had surprised it');
-    expect(html).toContain('Do LATAM roles pay less?');
-  });
-
-  it('shows the agent draft when the editor rewrote the hook', () => {
-    const html = dispatchWhy(
-      dispatch({ origin: { ...origin, draftHook: 'Two findings & a bug' } })
-    );
-    expect(html).toContain('The editor rewrote the headline');
-    expect(html).toContain('Two findings &amp; a bug');
-  });
-
-  it('lists the findings a digest was built from', () => {
-    const html = dispatchWhy(
-      dispatch({
-        kind: 'digest',
-        origin: { trigger: 'digest' },
-        sources: {
-          inferred: true,
-          items: [
-            { id: 'h1', hook: 'Motum <FDE> is open', createdAt: hoursAgo(30), editorScore: 0.57 },
-          ],
-        },
-      }),
+describe('dispatchCard Why', () => {
+  it('renders the server-built why with the shared panel', () => {
+    const html = dispatchCard(
+      dispatch({ why: { what: 'A finding from one of its work cycles', outcome: 'Sent.' } }),
       { nowMs: NOW }
     );
-    expect(html).toContain('A digest of findings that were held back');
-    expect(html).toContain('Motum &lt;FDE&gt; is open');
-    expect(html).toContain('30h ago');
-    expect(html).toContain('reconstructed');
+    expect(html).toContain('<details class="why">');
+    expect(html).toContain('A finding from one of its work cycles');
   });
 
-  it('includes the editor notes, but not the internal cadence marker', () => {
-    expect(dispatchWhy(dispatch({ origin, editorNotes: 'FurtherAI is <unbacked>' }))).toContain(
-      'FurtherAI is &lt;unbacked&gt;'
-    );
-    expect(
-      dispatchWhy(
-        dispatch({ origin, status: 'held', editorNotes: 'held: cadence closed, not edited' })
-      )
-    ).not.toContain('held: cadence closed, not edited');
-  });
-
-  it('shortens a long goal in the folded line, keeping it whole inside', () => {
-    const goalTitle = `Build the brief ${'with labels '.repeat(12)}end`;
-    const html = dispatchWhy(dispatch({ origin: { ...origin, goalTitle } }));
-    const summary = /<summary>([\s\S]*?)<\/summary>/.exec(html)?.[1] ?? '';
-    expect(summary).toContain('…');
-    expect(summary).not.toContain('end');
-    expect(html).toContain(`${goalTitle}</a>`);
-  });
-
-  it('says so when no cycle record exists', () => {
-    expect(dispatchWhy(dispatch())).toContain('No record of the cycle');
-  });
-
-  it('dispatchCard carries the Why section', () => {
-    expect(dispatchCard(dispatch({ origin }), { nowMs: NOW })).toContain('curio-origin');
-  });
-});
-
-describe('holdExplanation', () => {
-  it('editor hold: the score against the bar', () => {
-    expect(
-      holdExplanation(
-        dispatch({ status: 'held', heldReason: 'editor', editorScore: 0.49, heldBar: 0.5 })
-      )
-    ).toBe('Held: the editor scored it 0.49; it needed 0.50 to reach you.');
-  });
-
-  it('every reason reads differently', () => {
-    const reasons = ['cadence-closed', 'editor-failed', 'fleet-cap', 'delivery-failed', 'disabled'];
-    const texts = reasons.map((heldReason) =>
-      holdExplanation(dispatch({ status: 'held', heldReason }))
-    );
-    expect(new Set(texts).size).toBe(reasons.length);
-    expect(texts[0]).toContain('messaged you recently');
-  });
-
-  it('older held dispatches: reads the cadence marker, else the bare score', () => {
-    expect(
-      holdExplanation(
-        dispatch({
-          status: 'held',
-          editorNotes: 'held: cadence closed, not edited',
-          editorScore: 0.5,
-        })
-      )
-    ).toContain('messaged you recently');
-    expect(holdExplanation(dispatch({ status: 'held', editorScore: 0.57 }))).toBe(
-      'Held: the editor scored it 0.57, below what it takes to reach you.'
-    );
-  });
-
-  it('sent and dropped dispatches', () => {
-    expect(holdExplanation(dispatch({ deliveredVia: 'telegram' }))).toBe(
-      'Sent to you on Telegram (editor score 0.82).'
-    );
-    expect(holdExplanation(dispatch({ status: 'dropped' }))).toContain('Dropped');
+  it('no why from the server: no fold', () => {
+    expect(dispatchCard(dispatch(), { nowMs: NOW })).not.toContain('class="why"');
   });
 });

@@ -30,6 +30,7 @@ import {
   renderConversations,
 } from './pages/conversations.js';
 import { renderCron, renderCronCreate, renderCronDetail } from './pages/cron.js';
+import { wireOpenCycle } from './pages/cycle-sheet.js';
 import { destroyDashboard, renderDashboard } from './pages/dashboard.js';
 import { destroyDispatches, renderDispatches } from './pages/dispatches.js';
 import { renderBotFeedback, renderFeedback } from './pages/feedback.js';
@@ -93,6 +94,8 @@ sidebar.addEventListener('click', (e) => {
   if (e.target.closest('a.nav-link')) setDrawer(false);
 });
 initTheme();
+// "Open cycle" in any Why fold, on every page.
+wireOpenCycle();
 let multiTenantEnabled = false;
 let adminSetupRequired = false;
 let badgeCounts = {};

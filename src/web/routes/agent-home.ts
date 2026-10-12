@@ -7,6 +7,7 @@
  *   POST /api/agents/:id/goals     operator adds a goal to GOALS.md (`source: operator`)
  *   PATCH /api/agents/:id/goals    operator moves a goal on the board ({ goal, status })
  *   GET /api/agents/:id/goals/detail?id=&title=&days=   one goal's history (cached 15 s)
+ *   GET /api/agents/:id/cycles/:cycleId   one agent-loop cycle, the "Open cycle" sheet (cached 15 s)
  *
  * Reads are tenant-scoped like /api/stats and never throw on missing data. The
  * writes go to the Active section through the goals tool's
@@ -22,6 +23,7 @@ import { writeGoalsFile } from '../../bot/goal-events';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
+import { buildCycleDetail } from '../../stats/cycle-detail';
 import { backupSoulFile } from '../../soul';
 import {
   type AgentHomeDeps,
@@ -232,6 +234,22 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     } catch (err) {
       deps.logger.warn({ err, botId: bot.id }, 'Goal detail aggregation failed');
       return c.json({ error: 'Goal detail aggregation failed' }, 500);
+    }
+  });
+
+  app.get('/:id/cycles/:cycleId', (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const cycleId = c.req.param('cycleId');
+    try {
+      const body = ctx.cache.get(`cycle:${bot.id}:${cycleId}`, ttl, () =>
+        buildCycleDetail(ctx, bot, cycleId)
+      );
+      if (!body) return c.json({ error: 'Cycle not found' }, 404);
+      return c.json(body);
+    } catch (err) {
+      deps.logger.warn({ err, botId: bot.id, cycleId }, 'Cycle detail aggregation failed');
+      return c.json({ error: 'Cycle detail aggregation failed' }, 500);
     }
   });
 
