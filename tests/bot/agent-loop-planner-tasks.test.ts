@@ -74,7 +74,7 @@ function fakePool(
     journal: () => [],
     stop: () => false,
     retry: () => ({ taskId: '', ok: false, reason: 'invalid', message: '' }),
-    onAnswer: () => {},
+    onAnswer: () => false,
     abortAll: async () => {},
     recover: () => {},
     stats: () => ({ running: 0, queued: 0, waiting: 0, byBot: {} }),
