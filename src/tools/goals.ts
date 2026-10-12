@@ -61,6 +61,10 @@ export function findGoalIndex(goals: GoalEntry[], rawSearch: string): number {
   if (!rawSearch || goals.length === 0) return -1;
   const search = decodeHtmlEntities(rawSearch);
 
+  // 0. Stable goal id (`g-` + 8 hex), as the goals view shows it to the agent.
+  const idKey = search.trim().toLowerCase();
+  if (/^g-[0-9a-f]{8}$/.test(idKey)) return goals.findIndex((g) => g.id?.toLowerCase() === idKey);
+
   // 1. Numeric ID → 1-based index
   if (/^\d+$/.test(search)) {
     const idx = Number.parseInt(search, 10) - 1;

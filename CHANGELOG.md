@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed (2026-10-12) — manage_goals finds a goal by its id
+- **Why.** Since the goals view shows ids, agents pass them to `manage_goals update/complete` (`g-5ba5ff60`), and `findGoalIndex` only matched text: live, myfirstmillion got "No active goal matching" and a tool-error karma charge. An exact `g-` + 8 hex id now resolves first; an unknown id never fuzzy-matches another goal. Test: `tests/goal-id-match.test.ts`.
+
 ### Added (2026-10-12) — Goal tasks phases 1–4: the planner breaks goals down, task workers (off by default), live worker view, upkeep
 - **Why.** The operator asked for goals broken into tasks that the AI actually works on, by workers that keep going until a task is finished, watched live. Plan: `docs/plans/goal-tasks-architecture-plan.md` (phase 0 shipped earlier today). Built in parallel by five workstreams against a shared contract (`src/workers/types.ts`), then integrated.
 - **Phase 1 — planner.** Both planner modes can return `new_tasks` (2–5 verifiable steps for a goal with no open task), `serves_task` and, when workers are on, `dispatch`. Written only from explicit output and never on explore, idle or hard-gated cycles. The cycle's own work carries `taskId`; cycle rows record the task, the tasks created and the runs dispatched, and the cycle Why names them. The planner's "extra tasks" rules now mean scope creep, not goal tasks. **This part is on for every bot.**
