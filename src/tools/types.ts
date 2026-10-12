@@ -61,11 +61,21 @@ export interface ToolResult {
    *                 but stats report it apart from breakage.
    * - `exit-nonzero` — a command ran to completion and exited non-zero. The exit
    *                 code is data (grep with no match), not breakage: no karma.
+   * - `approval-pending` — a `confirm` tool outside a conversation filed an
+   *                 approval request instead of running (never awaits): no karma.
+   * - `aborted`   — the run was cancelled (cycle timeout, Stop) before the call: no karma.
    */
   failureKind?: ToolFailureKind;
 }
 
-export type ToolFailureKind = 'error' | 'blocked' | 'not-found' | 'policy' | 'exit-nonzero';
+export type ToolFailureKind =
+  | 'error'
+  | 'blocked'
+  | 'not-found'
+  | 'policy'
+  | 'exit-nonzero'
+  | 'approval-pending'
+  | 'aborted';
 
 /**
  * A complete tool: its schema definition + execution logic

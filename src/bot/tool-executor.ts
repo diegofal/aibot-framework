@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { TOOL_ABORTED_MESSAGE, isAbortError } from '../core/abort';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { MEMORY_VIEWER_ARG, type MemoryViewer } from '../memory/viewer';
@@ -130,6 +131,27 @@ export interface ToolExecutorEvents {
 }
 
 /**
+ * Who a call ran for. A cycle executor carries `cycleId`; a future worker run
+ * carries `runId` / `taskId` / `dispatchCycleId` and never a `cycleId` (C17).
+ * Read at each call: the loop may resolve the goal mid-cycle.
+ */
+export interface ToolAttribution {
+  cycleId?: string;
+  goalId: string | null;
+  runId?: string;
+  taskId?: string;
+  dispatchCycleId?: string;
+}
+
+/** Failures that are not the bot's doing: logged and emitted, never charged as karma. */
+const UNCHARGED_FAILURES: ReadonlySet<ToolFailureKind> = new Set<ToolFailureKind>([
+  'blocked',
+  'exit-nonzero',
+  'approval-pending',
+  'aborted',
+]);
+
+/**
  * Options for configuring a ToolExecutor instance.
  */
 export interface ToolExecutorOptions {
@@ -168,7 +190,21 @@ export interface ToolExecutorOptions {
    * goal mid-cycle). Stamped on `tool:end`, productions and karma metadata;
    * the tool sees `_cycleId`.
    */
-  attribution?: { cycleId: string; goalId: string | null };
+  attribution?: ToolAttribution;
+  /**
+   * Agent-loop permission enforcement (`bots[].agentLoop.enforceToolPermissions`).
+   * Only read in `agent-loop` mode: off (default) a `confirm` tool runs as it
+   * always did; on, it runs only with a recent approval of the same call and
+   * otherwise files a request and returns `approval-pending`. Never awaits.
+   */
+  enforceToolPermissions?: boolean;
+  /**
+   * Cancellation of the run this executor serves (cycle timeout, Stop). Once
+   * aborted every call is refused (`aborted`); the tool sees it as `_signal`.
+   */
+  signal?: AbortSignal;
+  /** Working directory / write root override (default: the bot's workDir). */
+  workDir?: string;
   /**
    * Who is speaking in the conversation that triggered this call (relay
    * sender). Injected as `_requester`, always overriding model arguments;
@@ -367,7 +403,76 @@ export class ToolExecutor extends EventEmitter {
   private attributionFields(): { cycleId?: string; goalId?: string } {
     const a = this.options.attribution;
     if (!a) return {};
-    return { cycleId: a.cycleId, ...(a.goalId ? { goalId: a.goalId } : {}) };
+    return {
+      ...(a.cycleId ? { cycleId: a.cycleId } : {}),
+      ...(a.goalId ? { goalId: a.goalId } : {}),
+    };
+  }
+
+  /** A failed tool result that is really the run's cancellation. */
+  private stoppedByAbort(content: string): boolean {
+    return this.options.signal?.aborted === true || content === TOOL_ABORTED_MESSAGE;
+  }
+
+  /**
+   * Non-blocking confirm (C14). `null` = a recent approval of this very call
+   * (same tool, same described call, `AskPermissionStore.hasRecentApproval`)
+   * lets it run. Otherwise files the request — or reuses the pending one —
+   * with the run's attribution and returns `approval-pending`. The request's
+   * promise is never awaited; a later approval reaches the planner through
+   * `consumeDecisionsForBot` and the retried call then passes here.
+   */
+  private requestApprovalWithoutWaiting(
+    name: string,
+    args: Record<string, unknown>,
+    startMs: number
+  ): ToolExecutionResult | null {
+    const store = this.ctx.askPermissionStore;
+    const { botId } = this.options;
+    const resource = describeToolCall(name, args);
+    if (!store) {
+      return this.buildFailResult(
+        name,
+        args,
+        startMs,
+        `Tool "${name}" needs operator approval and no approval queue is available.`,
+        'execution',
+        0,
+        undefined,
+        'approval-pending'
+      );
+    }
+    if (store.hasRecentApproval(botId, name, resource)) return null;
+
+    const a = this.options.attribution;
+    const { id, promise } = store.request(
+      botId,
+      name,
+      resource,
+      `Agent loop tool: ${name}(${Object.keys(args).join(', ')})`,
+      'normal',
+      {
+        ...(a?.cycleId ? { cycleId: a.cycleId } : {}),
+        ...(a?.goalId ? { goalId: a.goalId } : {}),
+        ...(a?.runId ? { runId: a.runId } : {}),
+      }
+    );
+    // Never awaited: a dispose/clear rejection must not surface as unhandled.
+    promise.catch(() => {});
+    this.logger.info(
+      { tool: name, botId, permissionId: id },
+      'Tool needs operator approval: request filed, not waiting'
+    );
+    return this.buildFailResult(
+      name,
+      args,
+      startMs,
+      `Approval requested (id ${id}) for ${name}: ${resource}. The operator decides on the dashboard; do not retry it now — continue with other work.`,
+      'execution',
+      0,
+      undefined,
+      'approval-pending'
+    );
   }
 
   private buildFailResult(
@@ -398,7 +503,7 @@ export class ToolExecutor extends EventEmitter {
     // not the bot's doing, so it is logged and emitted but never charged.
     // `exit-nonzero` is a command that ran and returned a status the bot may
     // have wanted (grep with no match): not charged either.
-    const chargeable = failureKind !== 'blocked' && failureKind !== 'exit-nonzero';
+    const chargeable = !failureKind || !UNCHARGED_FAILURES.has(failureKind);
     if (
       chargeable &&
       this.options.karmaService &&
@@ -456,6 +561,20 @@ export class ToolExecutor extends EventEmitter {
       chatId,
       timestamp: startMs,
     });
+
+    // Cancelled run (cycle timeout, Stop): refuse before anything else runs.
+    if (this.options.signal?.aborted) {
+      return this.buildFailResult(
+        name,
+        args,
+        startMs,
+        `Tool "${name}" was not run: this run was cancelled. Stop and report.`,
+        'execution',
+        0,
+        undefined,
+        'aborted'
+      );
+    }
 
     // Loop detection pre-check (before any execution)
     let loopWarningMessage: string | undefined;
@@ -527,8 +646,17 @@ export class ToolExecutor extends EventEmitter {
         );
       }
 
-      // Inline approval interception: confirm-level tools in conversation mode
-      if (level === 'confirm') {
+      // Outside conversations a confirm tool never awaits the dashboard (C14):
+      // it runs (flag off, the long-standing behaviour) or, with
+      // enforceToolPermissions, runs only on a recent approval of this call.
+      if (level === 'confirm' && this.options.permissionMode === 'agent-loop') {
+        if (this.options.enforceToolPermissions) {
+          const pending = this.requestApprovalWithoutWaiting(name, args, startMs);
+          if (pending) return pending;
+        }
+        // Approved, or enforcement off — fall through to normal execution.
+      } else if (level === 'confirm') {
+        // Inline approval interception: confirm-level tools in conversation mode
         // Dashboard web path: use inline approval store (UI cards)
         if (this.options.inlineApprovalStore && this.options.sessionKey) {
           this.options.inlineApprovalStore.setPending(this.options.sessionKey, {
@@ -631,14 +759,20 @@ export class ToolExecutor extends EventEmitter {
           ? { [MEMORY_VIEWER_ARG]: this.options.memoryViewer }
           : {}),
         ...(this.options.tenantRoot ? { _tenantRoot: this.options.tenantRoot } : {}),
-        ...(this.options.attribution ? { _cycleId: this.options.attribution.cycleId } : {}),
+        ...(this.options.attribution?.cycleId
+          ? { _cycleId: this.options.attribution.cycleId }
+          : {}),
         ...(this.options.attribution?.goalId ? { _goalId: this.options.attribution.goalId } : {}),
+        ...(this.options.attribution?.runId ? { _runId: this.options.attribution.runId } : {}),
+        ...(this.options.attribution?.taskId ? { _taskId: this.options.attribution.taskId } : {}),
+        ...(this.options.signal ? { _signal: this.options.signal } : {}),
         _requester: this.options.requester,
       };
 
       // Per-bot workDir: resolve file paths and exec cwd
       const botConfigForWorkDir = this.ctx.config.bots.find((b) => b.id === botId);
       const workDir =
+        this.options.workDir ??
         botConfigForWorkDir?.workDir ??
         (this.ctx.config.productions?.baseDir
           ? `${this.ctx.config.productions.baseDir}/${botId}`
@@ -906,7 +1040,7 @@ export class ToolExecutor extends EventEmitter {
             'execution',
             attempt,
             undefined,
-            toolResult.failureKind
+            this.stoppedByAbort(toolResult.content) ? 'aborted' : toolResult.failureKind
           );
         }
 
@@ -941,6 +1075,20 @@ export class ToolExecutor extends EventEmitter {
         );
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
+        // A cancelled run: no retry, no karma — the tool did not break.
+        if (isAbortError(err) || this.options.signal?.aborted) {
+          this.logger.info({ tool: name, botId }, 'Tool stopped: run cancelled');
+          return this.buildFailResult(
+            name,
+            args,
+            startMs,
+            TOOL_ABORTED_MESSAGE,
+            'execution',
+            attempt,
+            lastError ?? undefined,
+            'aborted'
+          );
+        }
         this.logger.error({ tool: name, botId, attempt, error: err }, 'Tool execution error');
 
         // Record thrown errors in loop detector

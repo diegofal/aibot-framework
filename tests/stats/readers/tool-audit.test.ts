@@ -162,3 +162,12 @@ describe('aggregateTools failure kinds', () => {
     expect(days[0].calls).toBe(8);
   });
 });
+
+describe('isToolFailure — calls that never ran', () => {
+  it('approval-pending and aborted calls are not tool failures', async () => {
+    const { isToolFailure } = await import('../../../src/stats/readers/tool-audit');
+    expect(isToolFailure({ success: false, failureKind: 'approval-pending' })).toBe(false);
+    expect(isToolFailure({ success: false, failureKind: 'aborted' })).toBe(false);
+    expect(isToolFailure({ success: false, failureKind: 'error' })).toBe(true);
+  });
+});

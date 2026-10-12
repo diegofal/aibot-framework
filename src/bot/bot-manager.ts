@@ -53,6 +53,7 @@ import { WebhookService } from '../tenant/webhook-service';
 import { ActivityStream } from './activity-stream';
 import { type AgentFeedback, AgentFeedbackStore } from './agent-feedback-store';
 import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
+import { BackendCircuitBreaker, DEFAULT_CIRCUIT_BREAKER_CONFIG } from './agent-retry-engine';
 import { AskHumanStore, type PendingQuestionInfo } from './ask-human-store';
 import {
   AskPermissionStore,
@@ -350,6 +351,11 @@ export class BotManager {
       relayService: this.relayService,
       inlineApprovalStore: this.inlineApprovalStore,
       hooks: this.hookEmitter,
+      // One fleet-wide breaker per backend, shared by every runtime (AgentLoop
+      // planner/strategist/executor today; task workers next).
+      circuitBreaker: new BackendCircuitBreaker(
+        config.agentLoop.circuitBreaker ?? DEFAULT_CIRCUIT_BREAKER_CONFIG
+      ),
       // Operator chat (Telegram operator chat id) → curiosity directive. Public
       // users never steer: only operator surfaces call this.
       recordOperatorMessage: (botId: string, text: string) => {

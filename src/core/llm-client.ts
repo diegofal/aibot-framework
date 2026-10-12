@@ -51,7 +51,9 @@ export interface LLMGenerateOptions {
   priority?: CliPriority;
 }
 
-export interface LLMChatOptions extends ChatOptions {}
+export interface LLMChatOptions extends ChatOptions {
+  signal?: AbortSignal;
+}
 
 export interface LLMClient {
   readonly backend: 'ollama' | 'claude-cli';

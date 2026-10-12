@@ -191,6 +191,23 @@ describe('ToolRegistry.getDefinitionsByCategories', () => {
     expect(names.has('another_external')).toBe(true);
   });
 
+  test('with a permission mode, drops tools blocked for that mode (pre-selection path)', () => {
+    const { registry } = setupRegistry(
+      ['web_search', 'web_fetch', 'get_datetime'],
+      [{ id: 'bot-1', toolPermissions: { web_fetch: { agentLoop: 'blocked' } } } as never]
+    );
+    const names = registry
+      .getDefinitionsByCategories(['web'], 'bot-1', 'agent-loop')
+      .map((d) => d.function.name);
+    expect(names).toContain('web_search');
+    expect(names).not.toContain('web_fetch');
+    // empty categories fall back to the bot's tools, still mode-filtered
+    const all = registry
+      .getDefinitionsByCategories([], 'bot-1', 'agent-loop')
+      .map((d) => d.function.name);
+    expect(all).not.toContain('web_fetch');
+  });
+
   test('respects disabledTools on top of category filtering', () => {
     const { registry } = setupRegistry(
       ['web_search', 'web_fetch', 'get_datetime', 'ask_human'],

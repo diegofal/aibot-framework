@@ -19,16 +19,20 @@ export function readToolEntries(
   return readDailyEntries<ToolAuditEntry>(baseDir, botId, sinceMs, nowMs);
 }
 
+const NOT_FAILURES = new Set(['blocked', 'exit-nonzero', 'approval-pending', 'aborted']);
+
 /**
  * Whether an audited call counts as a tool failure. Two kinds of failed call
  * do not: a third party refusing the request (`blocked`: bot wall, 403, 429)
  * and a command that ran to completion with a non-zero exit (`exit-nonzero`).
- * Both are reported apart. Entries written before `failureKind` existed count
- * as failures, as they always did.
+ * Both are reported apart. A call that never ran is not one either: a confirm
+ * tool that filed an approval request (`approval-pending`) or a call refused
+ * because its run was cancelled (`aborted`). Entries written before
+ * `failureKind` existed count as failures, as they always did.
  */
 export function isToolFailure(e: Pick<ToolAuditEntry, 'success' | 'failureKind'>): boolean {
   if (e.success !== false) return false;
-  return e.failureKind !== 'blocked' && e.failureKind !== 'exit-nonzero';
+  return !NOT_FAILURES.has(e.failureKind ?? 'error');
 }
 
 export function aggregateTools(entries: ToolAuditEntry[], loopBreaks: number): ToolStats {
