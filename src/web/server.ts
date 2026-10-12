@@ -294,7 +294,7 @@ export function startWebServer(deps: WebServerDeps): void {
       llmFor: buildCronParseLlmResolver(deps.botManager, config, logger),
     })
   );
-  app.route('/api/cron', cronRoutes({ cronService: deps.cronService, config }));
+  app.route('/api/cron', cronRoutes({ cronService: deps.cronService, config, logger, readCycles }));
   app.route(
     '/api/settings',
     settingsRoutes({ config, configPath: deps.configPath, logger, botManager: deps.botManager })

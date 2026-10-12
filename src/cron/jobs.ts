@@ -135,6 +135,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
       consecutiveErrors: 0,
       ...input.state,
     },
+    ...(input.createdBy ? { createdBy: input.createdBy } : {}),
   };
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;

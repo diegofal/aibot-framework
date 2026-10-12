@@ -1,17 +1,35 @@
 import type { AgentInfo } from '../agent-registry';
+import type { CollaborationOrigin } from '../collaboration-session';
 import type { BotConfig } from '../config';
 import { resolveAgentConfig, resolveMaxToolRounds } from '../config';
 import type { KarmaService } from '../karma/service';
 import type { McpToolCallResult } from '../mcp/types';
 import type { ChatMessage } from '../ollama';
+import {
+  type CollaborationPhase,
+  clipOpening,
+  collaborationToWhy,
+} from '../why/builders/collaboration';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { sendLongMessage } from './telegram-utils';
 import { ToolExecutor } from './tool-executor';
 import type { ToolRegistry } from './tool-registry';
 import type { BotContext } from './types';
 
+/** The agent-loop cycle a collaboration was started from (`_cycleId` / `_goalId` of the tool call). */
+export interface CollabAttribution {
+  cycleId?: string;
+  goalId?: string;
+}
+
+/** The running cycle of a bot as the agent loop knows it (`AgentLoop.runningCycle`). */
+export type RunningCycleLookup = (
+  botId: string
+) => { cycleId: string; plan?: string; goalTitle?: string } | undefined;
+
 export class CollaborationManager {
   private karmaService?: KarmaService;
+  private cycleLookup?: RunningCycleLookup;
   private pendingTasks = new Map<string, Set<Promise<void>>>();
 
   constructor(
@@ -22,6 +40,51 @@ export class CollaborationManager {
 
   setKarmaService(ks: KarmaService): void {
     this.karmaService = ks;
+  }
+
+  setCycleLookup(lookup: RunningCycleLookup): void {
+    this.cycleLookup = lookup;
+  }
+
+  /**
+   * `cycleId` / `goalId` / `opening` plus the `why` the fleet feed renders,
+   * for a collab event. The plan and goal title come from the running cycle
+   * while it is still the one that started the collaboration.
+   */
+  private collabEventData(
+    sourceBotId: string,
+    targetBotId: string,
+    mode: 'visible' | 'internal' | 'mcp',
+    phase: CollaborationPhase,
+    origin: CollaborationOrigin & { openedAt?: number },
+    extra: { responseLength?: number } = {}
+  ): Record<string, unknown> {
+    let running: ReturnType<RunningCycleLookup>;
+    try {
+      running = origin.cycleId ? this.cycleLookup?.(sourceBotId) : undefined;
+    } catch {
+      running = undefined;
+    }
+    const cycle = running && running.cycleId === origin.cycleId ? running : undefined;
+    const targetName = this.ctx.config.bots.find((b) => b.id === targetBotId)?.name;
+    return {
+      ...(origin.cycleId ? { cycleId: origin.cycleId } : {}),
+      ...(origin.goalId ? { goalId: origin.goalId } : {}),
+      ...(origin.opening ? { opening: origin.opening } : {}),
+      why: collaborationToWhy({
+        botId: sourceBotId,
+        targetBotId,
+        ...(targetName ? { targetName } : {}),
+        mode,
+        phase,
+        ...(origin.cycleId ? { cycleId: origin.cycleId } : {}),
+        ...(origin.goalId ? { goalId: origin.goalId } : {}),
+        ...(cycle ? { cycle: { plan: cycle.plan, goalTitle: cycle.goalTitle } } : {}),
+        ...(origin.opening ? { opening: origin.opening } : {}),
+        ...(origin.openedAt ? { openedAt: new Date(origin.openedAt).toISOString() } : {}),
+        ...extra,
+      }),
+    };
   }
 
   /**
@@ -42,7 +105,8 @@ export class CollaborationManager {
     chatId: number,
     sourceBotId: string,
     targetBotId: string,
-    message: string
+    message: string,
+    attribution: CollabAttribution = {}
   ): Promise<void> {
     const bot = this.ctx.bots.get(sourceBotId);
     if (!bot) throw new Error(`Source bot has no Telegram instance (headless?): ${sourceBotId}`);
@@ -59,7 +123,14 @@ export class CollaborationManager {
       type: 'collab:start',
       botId: sourceBotId,
       timestamp: Date.now(),
-      data: { targetBotId: resolvedTargetId, mode: 'visible' },
+      data: {
+        targetBotId: resolvedTargetId,
+        mode: 'visible',
+        ...this.collabEventData(sourceBotId, resolvedTargetId, 'visible', 'start', {
+          ...newOrigin(attribution, message),
+          openedAt: Date.now(),
+        }),
+      },
     });
     await sendLongMessage((t) => bot.api.sendMessage(chatId, t), visibleText);
 
@@ -347,14 +418,22 @@ export class CollaborationManager {
     sessionId: string | undefined,
     targetBotId: string,
     message: string,
-    sourceBotId: string
+    sourceBotId: string,
+    attribution: CollabAttribution = {}
   ): Promise<{ sessionId: string; response: string }> {
     const resolvedId = this.ctx.resolveBotId(targetBotId);
     if (!resolvedId) {
       // Check if this is an external MCP agent
       const agent = this.ctx.agentRegistry.getByBotId(targetBotId);
       if (agent?.skills.includes('mcp-external') && this.ctx.mcpAgentBridge) {
-        return this.mcpCollaborationStep(sessionId, targetBotId, message, sourceBotId, agent);
+        return this.mcpCollaborationStep(
+          sessionId,
+          targetBotId,
+          message,
+          sourceBotId,
+          agent,
+          attribution
+        );
       }
       throw new Error(`Target bot not running: ${targetBotId}`);
     }
@@ -385,18 +464,29 @@ export class CollaborationManager {
     const targetSoulLoader = this.ctx.getSoulLoader(targetBotId);
     const botLogger = this.ctx.getBotLogger(targetBotId);
 
+    let session = sessionId ? this.ctx.collaborationSessions.get(sessionId) : undefined;
+    const isResumed = !!session;
+    if (!session) {
+      session = this.ctx.collaborationSessions.create(
+        sourceBotId,
+        targetBotId,
+        newOrigin(attribution, message)
+      );
+    }
+    const origin = sessionOrigin(session, isResumed, attribution, message);
+
     this.ctx.activityStream?.publish({
       type: 'collab:start',
       botId: sourceBotId,
       timestamp: Date.now(),
-      data: { targetBotId, mode: 'internal' },
+      data: {
+        targetBotId,
+        mode: 'internal',
+        sessionId: session.id,
+        ...(isResumed ? { resumed: true } : {}),
+        ...this.collabEventData(sourceBotId, targetBotId, 'internal', 'start', origin),
+      },
     });
-
-    let session = sessionId ? this.ctx.collaborationSessions.get(sessionId) : undefined;
-    const isResumed = !!session;
-    if (!session) {
-      session = this.ctx.collaborationSessions.create(sourceBotId, targetBotId);
-    }
 
     botLogger.debug(
       {
@@ -501,7 +591,14 @@ export class CollaborationManager {
       type: 'collab:end',
       botId: sourceBotId,
       timestamp: Date.now(),
-      data: { targetBotId, sessionId: session.id, responseLength: response.length },
+      data: {
+        targetBotId,
+        sessionId: session.id,
+        responseLength: response.length,
+        ...this.collabEventData(sourceBotId, targetBotId, 'internal', 'end', origin, {
+          responseLength: response.length,
+        }),
+      },
     });
 
     return { sessionId: session.id, response };
@@ -515,7 +612,8 @@ export class CollaborationManager {
     targetBotId: string,
     message: string,
     sourceBotId: string,
-    agent: AgentInfo
+    agent: AgentInfo,
+    attribution: CollabAttribution = {}
   ): Promise<{ sessionId: string; response: string }> {
     const bridge = this.ctx.mcpAgentBridge!;
     const botLogger = this.ctx.getBotLogger(sourceBotId);
@@ -530,18 +628,30 @@ export class CollaborationManager {
       throw new Error(`Collaboration blocked: ${check.reason}`);
     }
 
+    // Create or resume collaboration session
+    let session = sessionId ? this.ctx.collaborationSessions.get(sessionId) : undefined;
+    const isResumed = !!session;
+    if (!session) {
+      session = this.ctx.collaborationSessions.create(
+        sourceBotId,
+        targetBotId,
+        newOrigin(attribution, message)
+      );
+    }
+    const origin = sessionOrigin(session, isResumed, attribution, message);
+
     this.ctx.activityStream?.publish({
       type: 'collab:start',
       botId: sourceBotId,
       timestamp: Date.now(),
-      data: { targetBotId, mode: 'mcp' },
+      data: {
+        targetBotId,
+        mode: 'mcp',
+        sessionId: session.id,
+        ...(isResumed ? { resumed: true } : {}),
+        ...this.collabEventData(sourceBotId, targetBotId, 'mcp', 'start', origin),
+      },
     });
-
-    // Create or resume collaboration session
-    let session = sessionId ? this.ctx.collaborationSessions.get(sessionId) : undefined;
-    if (!session) {
-      session = this.ctx.collaborationSessions.create(sourceBotId, targetBotId);
-    }
 
     botLogger.info(
       { sessionId: session.id, sourceBotId, targetBotId, mode: 'mcp' },
@@ -612,7 +722,14 @@ export class CollaborationManager {
       type: 'collab:end',
       botId: sourceBotId,
       timestamp: Date.now(),
-      data: { targetBotId, sessionId: session.id, responseLength: response.length },
+      data: {
+        targetBotId,
+        sessionId: session.id,
+        responseLength: response.length,
+        ...this.collabEventData(sourceBotId, targetBotId, 'mcp', 'end', origin, {
+          responseLength: response.length,
+        }),
+      },
     });
 
     return { sessionId: session.id, response };
@@ -625,7 +742,8 @@ export class CollaborationManager {
     sourceBotId: string,
     targetBotId: string,
     topic: string,
-    maxTurns?: number
+    maxTurns?: number,
+    attribution: CollabAttribution = {}
   ): Promise<{ sessionId: string; transcript: string; turns: number }> {
     const collabConfig = this.ctx.config.collaboration;
     const turns = maxTurns ?? collabConfig.maxConverseTurns;
@@ -654,7 +772,8 @@ export class CollaborationManager {
         sessionId,
         targetBotId,
         currentMessage,
-        sourceBotId
+        sourceBotId,
+        attribution
       );
       sessionId = step.sessionId;
       transcriptLines.push(`[${sourceBotId}]: ${currentMessage}`);
@@ -726,7 +845,7 @@ export class CollaborationManager {
       sourceBotId,
       'collaborateCompleted',
       `Collaboration with ${targetName} completed in ${turnCount} turn(s)`,
-      { targetBotId, sessionId, turns: turnCount }
+      { targetBotId, sessionId, turns: turnCount, ...newOrigin(attribution, topic) }
     );
 
     return {
@@ -735,4 +854,40 @@ export class CollaborationManager {
       turns: turnCount,
     };
   }
+}
+
+/** What a new session records about where it came from: the cycle and the opening message. */
+function newOrigin(a: CollabAttribution, message: string): CollaborationOrigin {
+  const opening = clipOpening(message);
+  return {
+    ...(a.cycleId ? { cycleId: a.cycleId } : {}),
+    ...(a.goalId ? { goalId: a.goalId } : {}),
+    ...(opening ? { opening } : {}),
+  };
+}
+
+/**
+ * The origin of a step: a resumed session keeps the cycle and opening message
+ * that started it; a new one uses this step's.
+ */
+function sessionOrigin(
+  session: CollaborationOrigin & { createdAt?: number },
+  resumed: boolean,
+  a: CollabAttribution,
+  message: string
+): CollaborationOrigin & { openedAt?: number } {
+  const openedAt = session.createdAt ?? Date.now();
+  if (!resumed) return { ...newOrigin(a, message), openedAt };
+  // A session from before origins were recorded: this step's cycle, but its
+  // message is not the opening one.
+  if (!(session.cycleId || session.opening)) {
+    const { opening: _notOpening, ...own } = newOrigin(a, message);
+    return own;
+  }
+  return {
+    ...(session.cycleId ? { cycleId: session.cycleId } : {}),
+    ...(session.goalId ? { goalId: session.goalId } : {}),
+    ...(session.opening ? { opening: session.opening } : {}),
+    openedAt,
+  };
 }

@@ -8,14 +8,16 @@ export interface CollaborateHandler {
     sessionId: string | undefined,
     targetBotId: string,
     message: string,
-    sourceBotId: string
+    sourceBotId: string,
+    attribution?: { cycleId?: string; goalId?: string }
   ): Promise<{ sessionId: string; response: string }>;
   endSession(sessionId: string): void;
   sendVisibleMessage(
     chatId: number,
     sourceBotId: string,
     targetBotId: string,
-    message: string
+    message: string,
+    attribution?: { cycleId?: string; goalId?: string }
   ): Promise<void>;
 }
 
@@ -100,6 +102,11 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
         const message = args.message as string;
         const sessionId = args.sessionId as string | undefined;
         const visible = args.visible === true;
+        // The work cycle this was asked from (stamped by the tool executor; absent in a chat).
+        const attribution = {
+          ...(typeof args._cycleId === 'string' && args._cycleId ? { cycleId: args._cycleId } : {}),
+          ...(typeof args._goalId === 'string' && args._goalId ? { goalId: args._goalId } : {}),
+        };
 
         if (!targetBotId) {
           return { success: false, content: 'targetBotId is required for action "send"' };
@@ -122,7 +129,13 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
             );
           } else {
             try {
-              await handler.sendVisibleMessage(chatId, sourceBotId, targetBotId, message);
+              await handler.sendVisibleMessage(
+                chatId,
+                sourceBotId,
+                targetBotId,
+                message,
+                attribution
+              );
               return {
                 success: true,
                 content:
@@ -151,7 +164,8 @@ export function createCollaborateTool(getHandler: () => CollaborateHandler): Too
             sessionId,
             targetBotId,
             message,
-            sourceBotId
+            sourceBotId,
+            attribution
           );
           return {
             success: true,

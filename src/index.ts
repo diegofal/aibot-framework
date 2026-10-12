@@ -173,8 +173,8 @@ async function main() {
       sendMessage: async (chatId: number, text: string, botId: string) => {
         await botManager.sendMessage(chatId, text, botId);
       },
-      sendInstruction: async (chatId: number, text: string, botId: string) => {
-        return await botManager.handleCronInstruction(chatId, text, botId);
+      sendInstruction: async (chatId, text, botId, link) => {
+        return await botManager.handleCronInstruction(chatId, text, botId, link?.messageId);
       },
       resolveSkillHandler: (payload) => {
         const skill = skillRegistry.get(payload.skillId);

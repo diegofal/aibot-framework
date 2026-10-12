@@ -39,6 +39,15 @@ export type CronJobState = {
   consecutiveErrors: number;
 };
 
+/**
+ * Who set a job up: an agent through the `cron` tool (with the work cycle and
+ * goal it was in, when it was in one) or the operator on the dashboard. Jobs
+ * written before this existed have none.
+ */
+export type CronCreatedBy =
+  | { kind: 'agent'; botId: string; cycleId?: string; goalId?: string }
+  | { kind: 'operator' };
+
 export type CronJob = {
   id: string;
   name: string;
@@ -50,6 +59,7 @@ export type CronJob = {
   schedule: CronSchedule;
   payload: CronPayload;
   state: CronJobState;
+  createdBy?: CronCreatedBy;
 };
 
 export type CronStoreFile = {
@@ -61,7 +71,9 @@ export type CronJobCreate = Omit<CronJob, 'id' | 'createdAtMs' | 'updatedAtMs' |
   state?: Partial<CronJobState>;
 };
 
-export type CronJobPatch = Partial<Omit<CronJob, 'id' | 'createdAtMs' | 'state' | 'payload'>> & {
+export type CronJobPatch = Partial<
+  Omit<CronJob, 'id' | 'createdAtMs' | 'state' | 'payload' | 'createdBy'>
+> & {
   payload?: CronPayloadPatch;
   state?: Partial<CronJobState>;
 };

@@ -1,5 +1,6 @@
 import type { OperatorConfig } from '../config';
 import type { CronService } from '../cron';
+import type { CronCreatedBy } from '../cron/types';
 import { OPERATOR_NOT_CONFIGURED_ERROR, resolveOperatorTarget } from './send-proactive-message';
 import type { Tool, ToolResult } from './types';
 
@@ -224,6 +225,22 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
   };
 }
 
+/**
+ * The agent, and the work cycle and goal it was in when it scheduled the job
+ * (`_cycleId` / `_goalId`, stamped by the tool executor inside an agent-loop
+ * cycle; absent in a chat). Read by the Automations page's "Why this?".
+ */
+export function agentCreatedBy(botId: string, args: Record<string, unknown>): CronCreatedBy {
+  const cycleId = typeof args._cycleId === 'string' && args._cycleId ? args._cycleId : undefined;
+  const goalId = typeof args._goalId === 'string' && args._goalId ? args._goalId : undefined;
+  return {
+    kind: 'agent',
+    botId,
+    ...(cycleId ? { cycleId } : {}),
+    ...(goalId ? { goalId } : {}),
+  };
+}
+
 async function doAdd(
   cronService: CronService,
   args: Record<string, unknown>,
@@ -296,6 +313,7 @@ async function doAdd(
     deleteAfterRun,
     schedule: cronSchedule,
     payload,
+    createdBy: agentCreatedBy(botId, args),
   });
 
   logger.info(

@@ -673,19 +673,27 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/cron</code></td>
-              <td>List all cron jobs (including disabled)</td>
+              <td>List all cron jobs (including disabled). Each job carries <code>createdBy?</code>
+                (<code>{ kind: "agent", botId, cycleId?, goalId? }</code> | <code>{ kind: "operator" }</code>;
+                absent on jobs created before 2026-10-12) and <code>why</code> (<code>cronJobToWhy</code>: who set it
+                up, the cycle's plan and goal when an agent did, the schedule in words, what it tells the agent)</td>
               <td><code>cron.ts</code></td>
             </tr>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/cron/:id</code></td>
-              <td>Get single cron job with last 20 run history entries</td>
+              <td>Get single cron job with last 20 run history entries; the job and each run carry
+                <code>why</code> (run: <code>cronRunToWhy</code> &mdash; which job, when, status + output head). Run rows
+                of instruction jobs also carry <code>messageId</code>, the id of the synthetic message the agent got
+                (<code>cron-&lt;jobId&gt;-&lt;ms&gt;-&lt;rand&gt;</code>). Rendered on the job page as a "Why this?" block
+                and a Why column in the runs table</td>
               <td><code>cron.ts</code></td>
             </tr>
             <tr>
               <td><span class="badge badge-purple">POST</span></td>
               <td><code>/api/cron</code></td>
-              <td>Create a cron job (requires <code>name</code>, <code>schedule</code>, <code>payload</code>)</td>
+              <td>Create a cron job (requires <code>name</code>, <code>schedule</code>, <code>payload</code>).
+                Stamps <code>createdBy: { kind: "operator" }</code>; a <code>createdBy</code> in the body is ignored</td>
               <td><code>cron.ts</code></td>
             </tr>
             <tr>
@@ -1599,6 +1607,8 @@ agent:phase | agent:idle | agent:result // Agent loop phases
                                       // agent:idle data: { reasoning, cycleId?, why } (2026-10-11)
 memory:flush | memory:rag             // Memory operations
 collab:start | collab:end             // Bot-to-bot collaboration
+                                      // data: { targetBotId, mode, sessionId?, resumed?, cycleId?, goalId?,
+                                      //         opening? (clipped 300), responseLength? (end), why } (2026-10-12)
 compaction                            // Context compaction
 
 // ActivityEvent interface

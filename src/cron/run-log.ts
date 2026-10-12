@@ -8,6 +8,8 @@ export type CronRunLogEntry = {
   status?: 'ok' | 'error' | 'skipped';
   error?: string;
   output?: string;
+  /** Instruction runs: the synthetic message the agent received (`cron-<jobId>-…`). */
+  messageId?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
@@ -148,6 +150,7 @@ export async function readCronRunLogEntries(
         status: obj.status,
         error: obj.error,
         output: (obj as Record<string, unknown>).output as string | undefined,
+        ...(typeof obj.messageId === 'string' ? { messageId: obj.messageId } : {}),
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
         nextRunAtMs: obj.nextRunAtMs,

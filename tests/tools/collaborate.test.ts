@@ -82,7 +82,7 @@ describe('collaborate tool', () => {
     const parsed = JSON.parse(result.content);
     expect(parsed.sessionId).toBe('sess-1');
     expect(parsed.response).toBe('Hello from bot-2');
-    expect(stepFn).toHaveBeenCalledWith(undefined, 'bot-2', 'Hi there', 'bot-1');
+    expect(stepFn).toHaveBeenCalledWith(undefined, 'bot-2', 'Hi there', 'bot-1', {});
   });
 
   test('send visible collaboration works with chat context', async () => {
@@ -104,7 +104,7 @@ describe('collaborate tool', () => {
 
     expect(result.success).toBe(true);
     expect(result.content).toContain('visibly');
-    expect(visibleFn).toHaveBeenCalledWith(12345, 'bot-1', 'bot-2', 'Hi group');
+    expect(visibleFn).toHaveBeenCalledWith(12345, 'bot-1', 'bot-2', 'Hi group', {});
   });
 
   test('visible collaboration falls back to invisible when no chat context', async () => {
@@ -132,7 +132,7 @@ describe('collaborate tool', () => {
     // Should NOT have called sendVisibleMessage
     expect(visibleFn).not.toHaveBeenCalled();
     // Should have fallen back to invisible collaboration
-    expect(stepFn).toHaveBeenCalledWith(undefined, 'bot-2', 'Hi from agent loop', 'bot-1');
+    expect(stepFn).toHaveBeenCalledWith(undefined, 'bot-2', 'Hi from agent loop', 'bot-1', {});
     const parsed = JSON.parse(result.content);
     expect(parsed.response).toBe('Invisible reply');
   });
@@ -287,6 +287,45 @@ describe('collaborate tool', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(stepFn).toHaveBeenCalledWith('sess-1', 'bot-2', 'Follow-up', 'bot-1');
+    expect(stepFn).toHaveBeenCalledWith('sess-1', 'bot-2', 'Follow-up', 'bot-1', {});
+  });
+});
+
+describe('collaborate tool: the cycle it was asked from (Why row 17)', () => {
+  test('passes _cycleId / _goalId to the internal step', async () => {
+    const collaborationStep = mock(async () => ({ sessionId: 's', response: 'ok' }));
+    const tool = createCollaborateTool(() => createMockHandler({ collaborationStep }));
+    await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'bot-2',
+        message: 'help?',
+        _botId: 'bot-1',
+        _cycleId: 'c1',
+        _goalId: 'g1',
+      },
+      logger
+    );
+    expect(collaborationStep).toHaveBeenCalledWith(undefined, 'bot-2', 'help?', 'bot-1', {
+      cycleId: 'c1',
+      goalId: 'g1',
+    });
+  });
+
+  test('passes them to a visible send; empty outside a cycle', async () => {
+    const sendVisibleMessage = mock(async () => {});
+    const tool = createCollaborateTool(() => createMockHandler({ sendVisibleMessage }));
+    await tool.execute(
+      {
+        action: 'send',
+        targetBotId: 'bot-2',
+        message: 'hi',
+        visible: true,
+        _chatId: 5,
+        _botId: 'bot-1',
+      },
+      logger
+    );
+    expect(sendVisibleMessage).toHaveBeenCalledWith(5, 'bot-1', 'bot-2', 'hi', {});
   });
 });

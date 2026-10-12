@@ -187,6 +187,32 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
       backup: '.versions/MEMORY.md.2026-10-11T12-00-00.bak',
     },
   },
+  cronJob: {
+    job: {
+      id: 'j1',
+      name: 'Brief',
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: 'cron', expr: '0 9 * * *' },
+      payload: { kind: 'instruction', text: 't', chatId: 1, botId: 'b1' },
+      state: { consecutiveErrors: 0 },
+      createdBy: { kind: 'agent', botId: 'b1', cycleId: 'c1', goalId: 'g1' },
+    },
+    cycle: { cycleId: 'c1', startedAt: '2026-10-11T12:00:00Z', planSummary: 'P', goalTitle: 'G' },
+  },
+  cronRun: {
+    run: { ts: 1, jobId: 'j1', action: 'finished', status: 'ok', output: 'o', runAtMs: 0 },
+  },
+  collaboration: {
+    botId: 'b1',
+    targetBotId: 'b2',
+    mode: 'internal',
+    phase: 'start',
+    cycleId: 'c1',
+    opening: 'm',
+    openedAt: '2026-10-11T12:00:00Z',
+  },
 };
 
 describe('Why contract', () => {

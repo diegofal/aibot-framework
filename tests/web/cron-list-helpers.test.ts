@@ -11,9 +11,11 @@ import {
   inWords,
   jobAgentId,
   jobRow,
+  jobWhySection,
   lastRunCell,
   payloadCell,
   rerunSummary,
+  runWhyCell,
   sortJobs,
 } from '../../web/pages/cron-list-helpers.js';
 
@@ -263,5 +265,31 @@ describe('rerunSummary', () => {
 
   it('copes with a missing results array', () => {
     expect(rerunSummary({ attempted: 0 })).toEqual({ text: 'Re-ran 0/0', tone: 'danger' });
+  });
+});
+
+describe('Why this? on jobs and runs (Why row 16)', () => {
+  const why = {
+    what: 'A scheduled job the agent set up',
+    by: 'agent',
+    cycle: { id: 'c1', botId: 'cryptik', plan: 'Set up a brief' },
+    rule: 'Runs every day at 09:00',
+  };
+
+  it('the job detail renders the server Why with the shared panel', () => {
+    const html = jobWhySection({ ...skillJob, why }, NOW);
+    expect(html).toContain('<details class="why">');
+    expect(html).toContain('data-open-cycle="c1"');
+    expect(html).toContain('Runs every day at 09:00');
+    expect(jobWhySection(skillJob, NOW)).toBe('');
+  });
+
+  it('each run row gets its own fold cell; an old run without one gets an empty cell', () => {
+    const run = { ts: 1, why: { what: 'A run of "Brief"', by: 'cron', outcome: 'Ran fine.' } };
+    const cell = runWhyCell(run, NOW);
+    expect(cell).toStartWith('<td class="cron-run-why">');
+    expect(cell).toContain('<details class="why">');
+    expect(cell).toContain('Ran fine.');
+    expect(runWhyCell({ ts: 1 }, NOW)).toBe('<td class="cron-run-why"></td>');
   });
 });

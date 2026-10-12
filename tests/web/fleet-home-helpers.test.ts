@@ -244,7 +244,7 @@ describe('describeEvent', () => {
       tone: 'muted',
     });
     expect(describeEvent(ev('collab:start', { targetBotId: 'b3' }), names)).toEqual({
-      text: 'Bot One started collaborating with Bot Three',
+      text: 'Bot One asked Bot Three for help',
       tone: 'accent',
     });
     expect(describeEvent(ev('collab:end'), names)).toEqual({
@@ -603,5 +603,40 @@ describe('idle lines say why (Why row 7)', () => {
     expect(tickerRow(idle({ why }), names, NOW)).toContain('<details class="why">');
     expect(tickerRow(idle({}), names, NOW)).not.toContain('<details');
     expect(condensedTickerBody([idle({})], names, NOW)).toContain('Nothing has happened yet');
+  });
+});
+
+describe('collaboration lines say why (Why row 17)', () => {
+  const names = { b1: 'Bot One', b2: 'Bot Two' };
+  const why = {
+    what: 'Asked Bot Two for help',
+    by: 'agent',
+    cycle: { id: 'c1', botId: 'b1' },
+    related: { label: 'Opening message', items: [{ text: 'Can you check X?' }] },
+    outcome: "Waiting for Bot Two's answer.",
+  };
+  const collab = (type: string, data = {}) => ({ type, botId: 'b1', timestamp: NOW, data });
+
+  it('the lines name the peer: asked, followed up, heard back', () => {
+    expect(describeEvent(collab('collab:start', { targetBotId: 'b2' }), names).text).toBe(
+      'Bot One asked Bot Two for help'
+    );
+    expect(
+      describeEvent(collab('collab:start', { targetBotId: 'b2', resumed: true }), names).text
+    ).toBe('Bot One followed up with Bot Two');
+    expect(describeEvent(collab('collab:end', { targetBotId: 'b2' }), names).text).toBe(
+      'Bot One heard back from Bot Two'
+    );
+  });
+
+  it('the condensed feed renders the event Why with the shared panel', () => {
+    const html = condensedTickerBody(
+      [collab('collab:start', { targetBotId: 'b2', why })],
+      names,
+      NOW
+    );
+    expect(html).toContain('<details class="why">');
+    expect(html).toContain('data-open-cycle="c1"');
+    expect(html).toContain('Can you check X?');
   });
 });

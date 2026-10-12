@@ -1,5 +1,6 @@
 import { computeJobNextRunAtMs, nextWakeAtMs, recomputeNextRuns } from './jobs';
 import { locked } from './locked';
+import { cronMessageId } from './message-id';
 import { appendCronRunLog, resolveCronRunLogPath } from './run-log';
 import type { CronServiceState } from './service';
 import type { CronJob } from './types';
@@ -153,10 +154,15 @@ function findDueJobs(state: CronServiceState): CronJob[] {
   });
 }
 
-async function executeJobCore(
-  state: CronServiceState,
-  job: CronJob
-): Promise<{ status: 'ok' | 'error' | 'skipped'; error?: string; output?: string }> {
+type CoreResult = {
+  status: 'ok' | 'error' | 'skipped';
+  error?: string;
+  output?: string;
+  /** Instruction runs: the id of the message sent to the agent. */
+  messageId?: string;
+};
+
+async function executeJobCore(state: CronServiceState, job: CronJob): Promise<CoreResult> {
   if (job.payload.kind === 'message') {
     try {
       await state.deps.sendMessage(job.payload.chatId, job.payload.text, job.payload.botId);
@@ -167,15 +173,17 @@ async function executeJobCore(
   }
 
   if (job.payload.kind === 'instruction') {
+    const messageId = cronMessageId(job.id, state.deps.nowMs());
     try {
       const response = await state.deps.sendInstruction(
         job.payload.chatId,
         job.payload.text,
-        job.payload.botId
+        job.payload.botId,
+        { jobId: job.id, messageId }
       );
-      return { status: 'ok', output: response || 'Instruction processed' };
+      return { status: 'ok', output: response || 'Instruction processed', messageId };
     } catch (err) {
-      return { status: 'error', error: String(err) };
+      return { status: 'error', error: String(err), messageId };
     }
   }
 
@@ -226,14 +234,7 @@ async function onTimer(state: CronServiceState) {
       return due.map((j) => ({ id: j.id, job: j }));
     });
 
-    const results: Array<{
-      jobId: string;
-      status: 'ok' | 'error' | 'skipped';
-      error?: string;
-      output?: string;
-      startedAt: number;
-      endedAt: number;
-    }> = [];
+    const results: Array<CoreResult & { jobId: string; startedAt: number; endedAt: number }> = [];
 
     for (const { id, job } of dueJobs) {
       const startedAt = state.deps.nowMs();
@@ -305,6 +306,7 @@ async function onTimer(state: CronServiceState) {
             status: result.status,
             error: result.error,
             output: result.output,
+            ...(result.messageId ? { messageId: result.messageId } : {}),
             runAtMs: result.startedAt,
             durationMs: job.state.lastDurationMs,
             nextRunAtMs: job.state.nextRunAtMs,
@@ -339,7 +341,7 @@ export async function executeJob(
   job.state.lastError = undefined;
   emit(state, { jobId: job.id, action: 'started', runAtMs: startedAt });
 
-  let coreResult: { status: 'ok' | 'error' | 'skipped'; error?: string; output?: string };
+  let coreResult: CoreResult;
   try {
     coreResult = await executeJobCore(state, job);
   } catch (err) {
@@ -373,6 +375,7 @@ export async function executeJob(
     status: coreResult.status,
     error: coreResult.error,
     output: coreResult.output,
+    ...(coreResult.messageId ? { messageId: coreResult.messageId } : {}),
     runAtMs: startedAt,
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,

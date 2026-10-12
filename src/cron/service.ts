@@ -10,6 +10,7 @@ import {
 } from './jobs';
 import { locked } from './locked';
 import {
+  type CronRunLogEntry,
   clearCronRunLog,
   deleteCronRunLogEntries,
   readCronRunLogEntries,
@@ -31,7 +32,13 @@ export type CronServiceDeps = {
   storePath: string;
   cronEnabled: boolean;
   sendMessage: (chatId: number, text: string, botId: string) => Promise<void>;
-  sendInstruction: (chatId: number, text: string, botId: string) => Promise<string | undefined>;
+  /** `link`: the job and the id of the synthetic message the agent receives (`cronMessageId`). */
+  sendInstruction: (
+    chatId: number,
+    text: string,
+    botId: string,
+    link?: { jobId: string; messageId: string }
+  ) => Promise<string | undefined>;
   resolveSkillHandler: (
     payload: Extract<CronPayload, { kind: 'skillJob' }>
   ) => (() => Promise<string | undefined>) | undefined;
@@ -300,7 +307,7 @@ export class CronService {
     });
   }
 
-  async runs(jobId: string, opts?: { limit?: number }): Promise<unknown[]> {
+  async runs(jobId: string, opts?: { limit?: number }): Promise<CronRunLogEntry[]> {
     const logPath = resolveCronRunLogPath({
       storePath: this.state.deps.storePath,
       jobId,

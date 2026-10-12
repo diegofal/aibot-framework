@@ -53,7 +53,11 @@ describe('instruction payload', () => {
 
     expect(sendMessage).not.toHaveBeenCalled();
     expect(sendInstruction).toHaveBeenCalledTimes(1);
-    expect(sendInstruction).toHaveBeenCalledWith(123, 'Generate a news briefing', 'bot1');
+    // The fourth argument links the message to its job (Why row 16).
+    expect(sendInstruction).toHaveBeenCalledWith(123, 'Generate a news briefing', 'bot1', {
+      jobId: 'test-job',
+      messageId: expect.stringMatching(/^cron-test-job-\d+-/),
+    });
     expect(job.state.lastStatus).toBe('ok');
   });
 

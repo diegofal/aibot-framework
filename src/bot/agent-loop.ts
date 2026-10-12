@@ -101,6 +101,8 @@ interface CycleAttribution {
   goalSource: CycleGoalSource | null;
   plannerRef?: string;
   strategistRef?: string;
+  /** The plan once the planner answered, as the cycle log summarises it. */
+  planSummary?: string;
 }
 
 export interface AgentLoopResult {
@@ -333,6 +335,30 @@ export class AgentLoop {
     this.ctx.llmQueryLog?.append(
       a ? { ...entry, cycleId: a.cycleId, ...(a.goalId ? { goalId: a.goalId } : {}) } : entry
     );
+  }
+
+  /**
+   * The running cycle of a bot (id, plan once planned, goal once resolved),
+   * for events published mid-cycle such as collaborations; undefined between
+   * cycles. A copy: callers cannot change the attribution.
+   */
+  runningCycle(
+    botId: string
+  ): { cycleId: string; plan?: string; goalId?: string; goalTitle?: string } | undefined {
+    const a = this.cycleAttribution.get(botId);
+    if (!a) return undefined;
+    return {
+      cycleId: a.cycleId,
+      ...(a.planSummary ? { plan: a.planSummary } : {}),
+      ...(a.goalId ? { goalId: a.goalId } : {}),
+      ...(a.goalTitle ? { goalTitle: a.goalTitle } : {}),
+    };
+  }
+
+  /** Remember the plan of the running cycle (see `runningCycle`). */
+  private noteRunningPlan(botId: string, plan: string[]): void {
+    const a = this.cycleAttribution.get(botId);
+    if (a && plan.length > 0) a.planSummary = plan.join('; ').slice(0, 200);
   }
 
   /** Re-resolve the goal of the running cycle from the refs gathered so far. */
@@ -1961,6 +1987,7 @@ export class AgentLoop {
       selectedToolCategories = continuousResult.toolCategories;
       plannerTokenUsage = continuousResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: continuousResult.serves_goal });
+      this.noteRunningPlan(botId, plan);
     } else {
       const plannerInput = buildPlannerPrompt({
         identity,
@@ -2072,6 +2099,7 @@ export class AgentLoop {
       selectedToolCategories = plannerResult.toolCategories;
       plannerTokenUsage = plannerResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: plannerResult.serves_goal });
+      this.noteRunningPlan(botId, plan);
     }
 
     this.ctx.activityStream?.publish({

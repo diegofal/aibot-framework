@@ -15,7 +15,9 @@ import {
   cronTable,
   cronToolbar,
   filterJobs,
+  jobWhySection,
   rerunSummary,
+  runWhyCell,
 } from './cron-list-helpers.js';
 import { api, closeModal, escapeHtml, showModal, timeAgo } from './shared.js';
 
@@ -372,6 +374,7 @@ export async function renderCronDetail(el, id) {
         <tr><td class="text-dim">Created</td><td class="text-dim">${new Date(job.createdAtMs).toLocaleString()}</td></tr>
       </table>
     </div>
+    ${jobWhySection(job)}
 
     <div class="actions mb-16">
       <button class="btn btn-primary" id="btn-run">Run Now</button>
@@ -388,7 +391,7 @@ export async function renderCronDetail(el, id) {
         <button class="btn btn-sm btn-danger" id="btn-clear-logs">Clear Logs</button>
       </div>
       <table id="cron-detail-runs">
-        <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Output</th><th>Error</th><th></th></tr></thead>
+        <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Output</th><th>Error</th><th>Why</th><th></th></tr></thead>
         <tbody>
           ${job.runs
             .map(
@@ -399,6 +402,7 @@ export async function renderCronDetail(el, id) {
               <td class="text-dim">${r.durationMs != null ? `${r.durationMs}ms` : '--'}</td>
               <td class="text-sm">${r.output ? formatOutput(r.output) : ''}</td>
               <td class="text-sm" style="color:var(--red)">${r.error ? escapeHtml(r.error) : ''}</td>
+              ${runWhyCell(r)}
               <td><button class="btn btn-sm btn-icon" data-action="delete-run" data-ts="${r.ts}" title="Delete">&times;</button></td>
             </tr>
           `
@@ -751,7 +755,7 @@ function showRunLogsModal(job) {
   const runs = job.runs || [];
   const hasRuns = runs.length > 0;
   const rows = !hasRuns
-    ? '<tr><td colspan="6" class="text-dim">No run logs yet.</td></tr>'
+    ? '<tr><td colspan="7" class="text-dim">No run logs yet.</td></tr>'
     : runs
         .map(
           (r) => `
@@ -761,6 +765,7 @@ function showRunLogsModal(job) {
           <td class="text-dim text-sm">${r.durationMs != null ? formatDuration(r.durationMs) : '--'}</td>
           <td class="text-sm">${r.output ? formatOutput(r.output) : ''}</td>
           <td class="text-sm" style="color:var(--red)">${r.error ? escapeHtml(r.error) : ''}</td>
+          ${runWhyCell(r)}
           <td><button class="btn btn-sm btn-icon" data-action="modal-delete-run" data-ts="${r.ts}" title="Delete">&times;</button></td>
         </tr>
       `
@@ -771,7 +776,7 @@ function showRunLogsModal(job) {
     <div class="modal-title">${escapeHtml(job.name)} — Run Logs</div>
     <div style="max-height:400px;overflow:auto">
       <table>
-        <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Output</th><th>Error</th><th></th></tr></thead>
+        <thead><tr><th>Time</th><th>Status</th><th>Duration</th><th>Output</th><th>Error</th><th>Why</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>

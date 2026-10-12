@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { Bot, InputFile } from 'grammy';
 import { type AgentInfo, AgentRegistry } from '../agent-registry';
 import { appendWebSessionMessage } from '../channel/outbound';
+import type { InboundMessage } from '../channel/types';
 import { CollaborationSessionManager } from '../collaboration-session';
 import { CollaborationTracker } from '../collaboration-tracker';
 import type { BotConfig, Config } from '../config';
@@ -60,7 +61,7 @@ import {
 } from './ask-permission-store';
 import { BotDisabledError } from './auto-start';
 import { BotResetService } from './bot-reset';
-import { CollaborationManager } from './collaboration';
+import { type CollabAttribution, CollaborationManager } from './collaboration';
 import { ContextCompactor } from './context-compaction';
 import { ConversationPipeline } from './conversation-pipeline';
 import { GroupActivation } from './group-activation';
@@ -391,6 +392,8 @@ export class BotManager {
       this.conversationsService
     );
     this.agentLoop = new AgentLoop(ctx, this.systemPromptBuilder, this.toolRegistry);
+    // Collab events name the plan and goal of the cycle that asked (Why row 17).
+    this.collaborationManager.setCycleLookup((botId) => this.agentLoop.runningCycle(botId));
 
     // Wire karma service into modules that need it
     if (this.karmaService) {
@@ -529,17 +532,31 @@ export class BotManager {
           sessionId: string | undefined,
           targetBotId: string,
           message: string,
-          sourceBotId: string
+          sourceBotId: string,
+          attribution?: CollabAttribution
         ) =>
-          this.collaborationManager.collaborationStep(sessionId, targetBotId, message, sourceBotId),
+          this.collaborationManager.collaborationStep(
+            sessionId,
+            targetBotId,
+            message,
+            sourceBotId,
+            attribution
+          ),
         endSession: (sessionId: string) => this.collaborationSessions.end(sessionId),
         sendVisibleMessage: (
           chatId: number,
           sourceBotId: string,
           targetBotId: string,
-          message: string
+          message: string,
+          attribution?: CollabAttribution
         ) =>
-          this.collaborationManager.sendVisibleMessage(chatId, sourceBotId, targetBotId, message),
+          this.collaborationManager.sendVisibleMessage(
+            chatId,
+            sourceBotId,
+            targetBotId,
+            message,
+            attribution
+          ),
       }),
       askHumanDeps,
       {
@@ -1075,7 +1092,12 @@ export class BotManager {
    * Telegram instance, else any live one in the fleet, else the bot's web
    * session.
    */
-  async handleCronInstruction(chatId: number, text: string, botId: string): Promise<string> {
+  async handleCronInstruction(
+    chatId: number,
+    text: string,
+    botId: string,
+    messageId?: string
+  ): Promise<string> {
     const bot = this.bots.get(botId) ?? this.bots.values().next().value;
     const recorded = this.getChannelState(botId);
 
@@ -1090,16 +1112,7 @@ export class BotManager {
       'Cron instruction delivery resolved'
     );
 
-    const msg: import('../channel/types').InboundMessage = {
-      messageId: `cron-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      channelKind: kind,
-      text,
-      chatId: String(chatId),
-      chatType: 'private',
-      sender: { id: String(chatId), firstName: 'Cron' },
-      timestamp: Date.now(),
-    };
-
+    const msg = buildCronInboundMessage(chatId, text, kind, { messageId, nowMs: Date.now() });
     return this.handleChannelMessage(msg, channel, botId);
   }
 
@@ -1515,9 +1528,16 @@ export class BotManager {
     chatId: number,
     sourceBotId: string,
     targetBotId: string,
-    message: string
+    message: string,
+    attribution?: CollabAttribution
   ): Promise<void> {
-    return this.collaborationManager.sendVisibleMessage(chatId, sourceBotId, targetBotId, message);
+    return this.collaborationManager.sendVisibleMessage(
+      chatId,
+      sourceBotId,
+      targetBotId,
+      message,
+      attribution
+    );
   }
 
   async handleDelegation(
@@ -1537,13 +1557,15 @@ export class BotManager {
     sessionId: string | undefined,
     targetBotId: string,
     message: string,
-    sourceBotId: string
+    sourceBotId: string,
+    attribution?: CollabAttribution
   ): Promise<{ sessionId: string; response: string }> {
     return this.collaborationManager.collaborationStep(
       sessionId,
       targetBotId,
       message,
-      sourceBotId
+      sourceBotId,
+      attribution
     );
   }
 
@@ -1551,13 +1573,15 @@ export class BotManager {
     sourceBotId: string,
     targetBotId: string,
     topic: string,
-    maxTurns?: number
+    maxTurns?: number,
+    attribution?: CollabAttribution
   ): Promise<{ sessionId: string; transcript: string; turns: number }> {
     return this.collaborationManager.initiateCollaboration(
       sourceBotId,
       targetBotId,
       topic,
-      maxTurns
+      maxTurns,
+      attribution
     );
   }
 
@@ -1778,6 +1802,30 @@ export interface CronDeliveryDeps {
   telegram?: CronTelegramApi;
   /** Web fallback: append the reply to the bot's session transcript. */
   appendToSession: (text: string) => void;
+}
+
+/**
+ * The synthetic message a cron instruction hands its agent. `messageId` comes
+ * from the scheduler (`cron-<jobId>-<ms>-<rand>`, `src/cron/message-id.ts`) so
+ * the run-log row and the message point at each other; without one (a direct
+ * call) the old `cron-<ms>-<rand>` id is used. Either way the `cron-` prefix
+ * keeps it out of the human-inbound signals.
+ */
+export function buildCronInboundMessage(
+  chatId: number,
+  text: string,
+  channelKind: InboundMessage['channelKind'],
+  opts: { messageId?: string; nowMs: number }
+): InboundMessage {
+  return {
+    messageId: opts.messageId || `cron-${opts.nowMs}-${Math.random().toString(36).slice(2, 8)}`,
+    channelKind,
+    text,
+    chatId: String(chatId),
+    chatType: 'private',
+    sender: { id: String(chatId), firstName: 'Cron' },
+    timestamp: opts.nowMs,
+  };
 }
 
 /**

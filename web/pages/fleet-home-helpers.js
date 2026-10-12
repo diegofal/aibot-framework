@@ -389,11 +389,21 @@ export function describeEvent(ev, names = {}) {
     case 'memory:rag':
       return { text: `${who} recalled memory`, tone: 'muted' };
     case 'collab:start': {
-      const target = d.targetBotId ? ` with ${names?.[d.targetBotId] ?? d.targetBotId}` : '';
-      return { text: `${who} started collaborating${target}`, tone: 'accent' };
+      // The fold (`collaborationToWhy`, on `data.why`) says which cycle asked and with what message.
+      const peer = d.targetBotId ? (names?.[d.targetBotId] ?? d.targetBotId) : '';
+      if (!peer) return { text: `${who} started collaborating`, tone: 'accent' };
+      return {
+        text: d.resumed ? `${who} followed up with ${peer}` : `${who} asked ${peer} for help`,
+        tone: 'accent',
+      };
     }
-    case 'collab:end':
-      return { text: `${who} finished collaborating`, tone: 'accent' };
+    case 'collab:end': {
+      const peer = d.targetBotId ? (names?.[d.targetBotId] ?? d.targetBotId) : '';
+      return {
+        text: peer ? `${who} heard back from ${peer}` : `${who} finished collaborating`,
+        tone: 'accent',
+      };
+    }
     case 'compaction':
       return { text: `${who} compacted its context`, tone: 'muted' };
     case 'karma:change': {

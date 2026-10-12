@@ -1,11 +1,43 @@
 import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { CronService } from '../../cron';
+import type { CronRunLogEntry } from '../../cron/run-log';
 import type { CronJob, CronJobCreate, CronJobPatch } from '../../cron/types';
+import type { Logger } from '../../logger';
 import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
+import { cronJobToWhy, cronRunToWhy } from '../../why/builders/cron';
+import { CycleIndex, type CycleReader } from '../../why/cycle-index';
 
-export function cronRoutes(deps: { cronService: CronService; config: Config }) {
+export function cronRoutes(deps: {
+  cronService: CronService;
+  config: Config;
+  logger?: Logger;
+  /** Cycle-log rows of a bot, for the `why` of jobs an agent set up in a cycle. */
+  readCycles?: CycleReader;
+}) {
   const app = new Hono();
+
+  /** Each job with the `why` the Automations page renders (one cycle-log read per bot). */
+  const explain = (jobs: CronJob[]) => {
+    const fromCycles = jobs.filter((j) => j.createdBy?.kind === 'agent' && j.createdBy.cycleId);
+    const cycles = CycleIndex.for(
+      deps.readCycles,
+      fromCycles.map((j) => ({
+        botId: (j.createdBy as { botId: string }).botId,
+        at: new Date(j.createdAtMs).toISOString(),
+      })),
+      (botId, err) => deps.logger?.warn({ err, botId }, 'Cron: cycle log read failed')
+    );
+    return jobs.map((job) => {
+      const by = job.createdBy;
+      const cycle =
+        by?.kind === 'agent' && by.cycleId ? cycles.byId(by.botId, by.cycleId) : undefined;
+      return { ...job, why: cronJobToWhy({ job, ...(cycle ? { cycle } : {}) }) };
+    });
+  };
+
+  const explainRuns = (job: CronJob, runs: CronRunLogEntry[]) =>
+    runs.map((run) => ({ ...run, why: cronRunToWhy({ run, job }) }));
 
   /** Get the set of botIds accessible to the requesting tenant */
   function allowedBotIds(c: import('hono').Context): Set<string> | null {
@@ -26,8 +58,7 @@ export function cronRoutes(deps: { cronService: CronService; config: Config }) {
   app.get('/', async (c) => {
     const jobs = await deps.cronService.list({ includeDisabled: true });
     const allowed = allowedBotIds(c);
-    if (!allowed) return c.json(jobs);
-    return c.json(jobs.filter((j) => isJobAccessible(j, allowed)));
+    return c.json(explain(allowed ? jobs.filter((j) => isJobAccessible(j, allowed)) : jobs));
   });
 
   // Get single cron job
@@ -41,7 +72,8 @@ export function cronRoutes(deps: { cronService: CronService; config: Config }) {
 
     // Include recent run history
     const runs = await deps.cronService.runs(id, { limit: 20 });
-    return c.json({ ...job, runs });
+    const [explained] = explain([job]);
+    return c.json({ ...explained, runs: explainRuns(job, runs) });
   });
 
   /** Look up a cron job and verify tenant access. Returns the job or null. */
@@ -66,7 +98,8 @@ export function cronRoutes(deps: { cronService: CronService; config: Config }) {
       return c.json({ error: 'Bot not found' }, 404);
     }
 
-    const job = await deps.cronService.add(body);
+    // The dashboard (and any API caller) is the operator; a body cannot claim an agent made it.
+    const job = await deps.cronService.add({ ...body, createdBy: { kind: 'operator' } });
     return c.json(job, 201);
   });
 

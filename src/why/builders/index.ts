@@ -5,6 +5,8 @@
  */
 import { agentProposalToWhy } from './agent-proposal';
 import { askToWhy } from './ask';
+import { collaborationToWhy } from './collaboration';
+import { cronJobToWhy, cronRunToWhy } from './cron';
 import { cycleToWhy } from './cycle';
 import { directionToWhy } from './direction';
 import { dispatchToWhy } from './dispatch';
@@ -31,6 +33,9 @@ export const WHY_BUILDERS = {
   proactive: proactiveToWhy,
   production: productionToWhy,
   agentProposal: agentProposalToWhy,
+  collaboration: collaborationToWhy,
+  cronJob: cronJobToWhy,
+  cronRun: cronRunToWhy,
   direction: directionToWhy,
   feedback: feedbackToWhy,
   frontier: frontierItemToWhy,

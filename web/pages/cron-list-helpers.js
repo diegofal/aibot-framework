@@ -9,6 +9,7 @@
  */
 import { badge, dataTable, emptyState, esc, rowMenu } from '../ui/index.js';
 import { cronToHuman } from './automations-helpers.js';
+import { whyPanel } from './why-helpers.js';
 
 /** Sentinel for "jobs that do not belong to one agent" in the agent filter. */
 export const FLEET_FILTER = '__fleet__';
@@ -398,4 +399,20 @@ export function rerunSummary(res) {
   const succeeded = results.filter((r) => r?.ran).length;
   const attempted = Number(res.attempted) || 0;
   return { text: `Re-ran ${succeeded}/${attempted}`, tone: succeeded ? 'ok' : 'danger' };
+}
+
+// ── Why this? (Why row 16) ───────────────────────────────────────────────────
+// The server attaches `why` to each job (`cronJobToWhy`: who set it up, the
+// cycle and goal behind it, the schedule in words) and to each run
+// (`cronRunToWhy`: which job, when, how it went). Pages only render it.
+
+/** The job detail's "Why this?" block; empty when the server sent none. */
+export function jobWhySection(job, nowMs = Date.now()) {
+  const panel = whyPanel(job?.why, { nowMs, botId: jobAgentId(job) ?? undefined });
+  return panel ? `<div class="detail-card cron-why">${panel}</div>` : '';
+}
+
+/** One run's fold, as a table cell (empty for runs logged without one). */
+export function runWhyCell(run, nowMs = Date.now()) {
+  return `<td class="cron-run-why">${whyPanel(run?.why, { nowMs })}</td>`;
 }

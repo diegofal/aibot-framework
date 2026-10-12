@@ -8184,6 +8184,16 @@ a.gd-row-name:hover {
 .presence-why .why {
   margin: var(--s1) 0 0;
 }
+.cron-why .why {
+  margin: 0;
+}
+.cron-run-why {
+  min-width: 160px;
+  max-width: 420px;
+}
+.cron-run-why .why {
+  margin: 0;
+}
 .home-tl-cycle {
   border-bottom: 1px solid var(--border);
 }

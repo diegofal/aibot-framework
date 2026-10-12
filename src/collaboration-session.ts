@@ -3,7 +3,15 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChatMessage } from './ollama';
 
-export interface CollaborationSession {
+/** Where a collaboration came from: the cycle that started it and its first message. */
+export interface CollaborationOrigin {
+  cycleId?: string;
+  goalId?: string;
+  /** The opening message, clipped. */
+  opening?: string;
+}
+
+export interface CollaborationSession extends CollaborationOrigin {
   id: string;
   sourceBotId: string;
   targetBotId: string;
@@ -55,7 +63,11 @@ export class CollaborationSessionManager {
     }
   }
 
-  create(sourceBotId: string, targetBotId: string): CollaborationSession {
+  create(
+    sourceBotId: string,
+    targetBotId: string,
+    origin: CollaborationOrigin = {}
+  ): CollaborationSession {
     const id = randomUUID().slice(0, 8);
     const now = Date.now();
     const session: CollaborationSession = {
@@ -65,6 +77,9 @@ export class CollaborationSessionManager {
       messages: [],
       createdAt: now,
       lastActivityAt: now,
+      ...(origin.cycleId ? { cycleId: origin.cycleId } : {}),
+      ...(origin.goalId ? { goalId: origin.goalId } : {}),
+      ...(origin.opening ? { opening: origin.opening } : {}),
     };
     this.sessions.set(id, session);
     this.persistToDisk();

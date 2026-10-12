@@ -370,3 +370,30 @@ describe('agent-loop feedback attribution', () => {
     expect(applied[0][3]).toEqual({ cycleId: cycleRows()[0].cycleId });
   });
 });
+
+describe('runningCycle: what a running cycle is doing, for collab events (Why row 17)', () => {
+  test('during the executor: the cycle id, its plan and the goal it serves; nothing after', async () => {
+    const { loop, ctx } = makeLoop(
+      JSON.stringify({
+        reasoning: 'lab',
+        plan: ['Draft the October lab', 'Ask the researcher'],
+        priority: 'medium',
+        serves_goal: 'Monthly hands-on lab',
+      })
+    );
+    let seen: unknown;
+    const llm = ctx.getLLMClient();
+    llm.chat = mock(() => {
+      seen = loop.runningCycle('bot1');
+      return Promise.resolve({ text: 'executed' });
+    });
+    await loop.runOne('bot1');
+    expect(seen).toMatchObject({
+      plan: 'Draft the October lab; Ask the researcher',
+      goalId: 'g-bbbbbbbb',
+      goalTitle: 'Monthly hands-on lab',
+    });
+    expect((seen as { cycleId: string }).cycleId).toBe(cycleRows()[0].cycleId);
+    expect(loop.runningCycle('bot1')).toBeUndefined();
+  });
+});
