@@ -5,6 +5,8 @@
  * tool call is journaled with its side-effect class.
  */
 import { describe, expect, test } from 'bun:test';
+import { toolNotRunMessage } from '../../src/bot/tool-executor';
+import { TOOL_ABORTED_MESSAGE } from '../../src/core/abort';
 import type { TaskLane } from '../../src/goals/task-store';
 import type { ToolResult } from '../../src/tools/types';
 import {
@@ -108,14 +110,25 @@ function harness(
         });
         return { ok: false, stopReason: 'aborted', error: new Error('aborted'), text: '' };
       }
+      // Mimics ToolExecutor: the pre-execution refusal (N9) runs before the
+      // tool and still emits tool:end with its failureKind.
       const inner = async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
-        innerCalls.push(name);
+        const refused = req.refuseTool?.(name, args);
+        if (!refused) innerCalls.push(name);
         const extra = req.extraTools.find((t) => t.definition.function.name === name);
-        const result = extra
-          ? await extra.execute(args, undefined as never)
-          : typeof args._result === 'string'
-            ? { success: true, content: args._result }
-            : { success: true, content: 'ok' };
+        const result: ToolResult = refused
+          ? { success: false, content: refused.content, failureKind: refused.failureKind }
+          : extra
+            ? await extra.execute(args, undefined as never)
+            : typeof args._result === 'string'
+              ? {
+                  success: args._ok !== false,
+                  content: args._result,
+                  ...(typeof args._failureKind === 'string'
+                    ? { failureKind: args._failureKind as ToolResult['failureKind'] }
+                    : {}),
+                }
+              : { success: true, content: 'ok' };
         req.onToolEnd({
           toolName: name,
           args,
@@ -126,6 +139,7 @@ function harness(
           botId: 'b1',
           chatId: 0,
           timestamp: Date.now(),
+          ...(result.failureKind ? { failureKind: result.failureKind } : {}),
         });
         return result;
       };
@@ -629,5 +643,107 @@ describe('worker prompt (review S1)', () => {
     expect(p.system).toMatch(/pauses the run until the operator answers/);
     expect(p.system).toMatch(/approval/i);
     expect(p.system).toContain('task_blocked');
+  });
+
+  test('after asking, the step reports task_progress (N2)', () => {
+    const p = buildWorkerPrompt({
+      context: { goalTitle: 'g', taskText: 't', workDir: '/w' },
+      run: makeRun(),
+      steps: [],
+      answers: [],
+    });
+    expect(p.system).toMatch(/After asking, end the step with `task_progress`/);
+  });
+});
+
+describe('integration re-review: journal failureKind (N3)', () => {
+  test('a refused call is journaled with its failureKind', async () => {
+    const h = harness([
+      [
+        {
+          name: 'exec',
+          args: {
+            _result: 'Approval requested (id p-1) for exec',
+            _ok: false,
+            _failureKind: 'approval-pending',
+          },
+        },
+        { name: 'web_fetch', args: { _result: 'boom', _ok: false, _failureKind: 'error' } },
+        { name: 'file_read' },
+        progress(),
+      ],
+    ]);
+    h.env.takeWait = () => undefined;
+    await runWorker(h.env);
+    const tools = h.journal.filter((e) => e.kind === 'tool') as Array<
+      Extract<JournalEntry, { kind: 'tool' }>
+    >;
+    expect(tools.find((e) => e.name === 'exec')?.failureKind).toBe('approval-pending');
+    expect(tools.find((e) => e.name === 'web_fetch')?.failureKind).toBe('error');
+    expect(tools.find((e) => e.name === 'file_read')?.failureKind).toBeUndefined();
+  });
+
+  test('aborted is journaled only for a call refused before it ran', async () => {
+    const h = harness([
+      [
+        {
+          name: 'exec',
+          args: { _result: toolNotRunMessage('exec'), _ok: false, _failureKind: 'aborted' },
+        },
+        {
+          name: 'browser',
+          args: { _result: TOOL_ABORTED_MESSAGE, _ok: false, _failureKind: 'aborted' },
+        },
+        progress(),
+      ],
+    ]);
+    await runWorker(h.env);
+    const tools = h.journal.filter((e) => e.kind === 'tool') as Array<
+      Extract<JournalEntry, { kind: 'tool' }>
+    >;
+    expect(tools.find((e) => e.name === 'exec')?.failureKind).toBe('aborted');
+    expect(tools.find((e) => e.name === 'browser')?.failureKind).toBeUndefined();
+  });
+});
+
+describe('integration re-review: step timer after a CLI fallback (N8)', () => {
+  test('queued for a slot that never comes, the first tool call arms the step timer', async () => {
+    const h = harness([], { config: { stepTimeoutMs: 40 } });
+    h.env.runTurn = async (req) => {
+      h.requests.push(req);
+      req.onQueued?.();
+      // Fell back to another backend: no slot callback, but tools run.
+      const cb = req.wrapToolCallback(async () => ({ success: true, content: 'ok' }));
+      await cb('web_search', { q: 'x' });
+      await new Promise<void>((resolve) => {
+        if (req.signal.aborted) resolve();
+        else req.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return { ok: false, stopReason: 'aborted', text: '' };
+    };
+    const end = await Promise.race([
+      runWorker(h.env),
+      new Promise<'hung'>((r) => setTimeout(() => r('hung'), 1000)),
+    ]);
+    expect(end).not.toBe('hung');
+    expect((end as { status: string }).status).toBe('failed');
+    expect((end as { outcome: { note: string } }).outcome.note).toContain('timed out');
+  });
+});
+
+describe('integration re-review: scope refusals go through the executor (N9)', () => {
+  test('the request carries the write-root refusal; the wrapper no longer answers it', async () => {
+    const h = harness([
+      [{ name: 'file_write', args: { path: '/p/b1/other.md', content: 'x' } }, progress()],
+    ]);
+    await runWorker(h.env);
+    const req = h.requests[0];
+    expect(req.refuseTool?.('file_write', { path: '/p/b1/other.md' })).toMatchObject({
+      failureKind: 'scope',
+    });
+    expect(req.refuseTool?.('file_write', { path: 'ok.md' })).toBeUndefined();
+    const journaled = h.journal.find((e) => e.kind === 'tool' && e.name === 'file_write');
+    expect(journaled).toMatchObject({ ok: false, failureKind: 'scope' });
+    expect(h.innerCalls).not.toContain('file_write');
   });
 });

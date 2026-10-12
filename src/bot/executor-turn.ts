@@ -26,6 +26,7 @@ import {
   type ToolEndEvent,
   type ToolExecutionRecord,
   ToolExecutor,
+  type ToolExecutorOptions,
 } from './tool-executor';
 import type { ToolLoopDetector } from './tool-loop-detector';
 import type { ToolCategory, ToolRegistry } from './tool-registry';
@@ -93,6 +94,11 @@ export interface ExecutorTurnInput {
    * since `maxToolRounds` is ignored on claude-cli).
    */
   wrapToolCallback?: (callback: ToolCallback) => ToolCallback;
+  /**
+   * Pre-execution refusal inside the executor (a worker's write root): a
+   * refused call never runs but is audited and emitted like any failed call.
+   */
+  refuseTool?: ToolExecutorOptions['refuse'];
   /** Attach the turn's file writes to a pending ask_human inbox message. Default true. */
   autoAttachFiles?: boolean;
   logger: Logger;
@@ -205,6 +211,7 @@ export async function runExecutorTurn(input: ExecutorTurnInput): Promise<Executo
     enforceToolPermissions: input.enforceToolPermissions === true,
     signal: controller.signal,
     ...(input.workDir ? { workDir: input.workDir } : {}),
+    ...(input.refuseTool ? { refuse: input.refuseTool } : {}),
     ...(extra.length > 0 ? { tools: [...ctx.tools, ...extra] } : {}),
   });
 

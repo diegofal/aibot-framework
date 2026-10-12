@@ -263,6 +263,15 @@ export class AskHumanStore {
     this.persistAnswered();
   }
 
+  /** Withdraw every pending question of a run that ended (see `withdrawById`). Returns how many. */
+  withdrawByRun(runId: string): number {
+    let n = 0;
+    for (const [id, entry] of [...this.pending.entries()]) {
+      if (entry.runId === runId && this.withdrawById(id)) n++;
+    }
+    return n;
+  }
+
   /**
    * Close a run's question because the run ended (Stop, task moved, goal
    * closed): nothing is routed back to the run. The inbox thread is marked

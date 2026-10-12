@@ -23,7 +23,7 @@ import {
   type WorkerWait,
   type WorkersConfig,
 } from '../../src/workers/types';
-import { cancelWaitFrom, drainAnswersFrom } from '../../src/workers/wiring';
+import { cancelWaitFrom, drainAnswersFrom, withdrawRunAsksFrom } from '../../src/workers/wiring';
 import type { WorkerTurnRequest } from '../../src/workers/worker';
 
 const GOALS = `## Active Goals
@@ -495,7 +495,7 @@ describe('shutdown and recovery', () => {
     h.pool.dispose();
   });
 
-  test('recover re-binds every claim before queueing, then resumes at attempt + 1', async () => {
+  test('recover re-binds every claim before queueing, then resumes (a clean stop uses no attempt, N4)', async () => {
     const a = makePool();
     const t1 = addTask('b1', 'g-aaaaaaaa', 'one');
     a.scripts.set(t1, [[progress('first half')], 'hang']);
@@ -525,7 +525,7 @@ describe('shutdown and recovery', () => {
       reason: 'claimed',
     });
     const run = b.pool.list('b1')[0];
-    expect(run.attempt).toBe(2);
+    expect(run.attempt).toBe(1);
     await until(() => b.pool.get(run.runId)?.status === 'done');
     // Step 1 was finished before the restart: it is not run again.
     expect(b.requests).toHaveLength(1);
@@ -566,18 +566,20 @@ describe('shutdown and recovery', () => {
     b.pool.dispose();
   });
 
-  test('an interrupted run past maxAttempts is not resumed', async () => {
+  test('a run cut mid-step by a crash, past maxAttempts, is not resumed', async () => {
+    // Deliberately changed (N4): a clean stop (abortAll) costs no attempt, so
+    // this is now a crash — the process dies with the run still `running`.
     const a = makePool({ maxAttempts: 1 });
     const t = addTask('b1', 'g-aaaaaaaa', 'one');
     a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
     await until(() => a.requests.length === 1);
-    await a.pool.abortAll('shutdown');
-    a.pool.dispose();
     const b = makePool({ maxAttempts: 1 });
     b.pool.recover();
     expect(b.pool.list('b1')[0].status).toBe('failed');
     expect(tasks('b1').get(t)?.lane).toBe('blocked');
     b.pool.dispose();
+    await a.pool.abortAll('shutdown');
+    a.pool.dispose();
   });
 });
 
@@ -892,7 +894,7 @@ describe('review fixes: bot stop and start (S9, M2)', () => {
     running.b1 = true;
     h.pool.kick('b1');
     await until(() => h.pool.get(runId)?.status === 'done');
-    expect(h.pool.get(runId)?.attempt).toBe(2);
+    expect(h.pool.get(runId)?.attempt).toBe(1);
     h.pool.dispose();
   });
 
@@ -952,4 +954,239 @@ describe('review fixes: no stale-token release (M3)', () => {
       h.pool.dispose();
     });
   }
+});
+
+describe('integration re-review: asks of a run that ended (N2)', () => {
+  test('a step that asks and then reports done withdraws the question', async () => {
+    const log = makeLogger();
+    const ask = new AskHumanStore(log.logger, join(root, 'ask-human'));
+    const perms = new AskPermissionStore(log.logger, join(root, 'ask-permission'));
+    const h = makePool(
+      {},
+      {
+        tool: (name, args, req) => {
+          const runId = req.attribution.runId as string;
+          if (name === 'ask_human') {
+            const q = ask.ask('b1', 0, String(args.question), undefined, Date.now(), { runId });
+            q.promise.catch(() => {});
+            return { success: true, content: `Question sent (id ${q.id}) — the run will pause.` };
+          }
+          if (name === 'ask_permission') {
+            const p = perms.request('b1', 'exec', 'deploy', 'd', 'normal', { runId });
+            p.promise.catch(() => {});
+            return {
+              success: true,
+              content: `Permission request sent (id ${p.id}, exec on deploy)`,
+            };
+          }
+          return { success: true, content: 'ok' };
+        },
+        deps: {
+          withdrawRunAsks: withdrawRunAsksFrom({
+            askHumanStore: ask,
+            askPermissionStore: perms,
+          } as never),
+        },
+      }
+    );
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    h.scripts.set(t, [
+      [
+        { name: 'ask_human', args: { question: 'Tone?' } },
+        { name: 'ask_permission', args: { action: 'exec', resource: 'deploy' } },
+        done('finished anyway'),
+      ],
+    ]);
+    const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => h.pool.get(runId)?.status === 'done');
+    expect(ask.getPendingForBot('b1')).toEqual([]);
+    expect(perms.getPendingForBot('b1')).toEqual([]);
+    h.pool.dispose();
+  });
+
+  test('every run end calls the withdraw dep with the run id', async () => {
+    const withdrawn: string[] = [];
+    const h = makePool({}, { deps: { withdrawRunAsks: (id) => withdrawn.push(id) } });
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    h.scripts.set(t, ['error']);
+    const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => h.pool.get(runId)?.status === 'failed');
+    expect(withdrawn).toEqual([runId]);
+    h.pool.dispose();
+  });
+});
+
+describe('integration re-review: refused calls do not block a resume (N3)', () => {
+  const journalTool = (runId: string, extra: Record<string, unknown>) =>
+    new WorkerRunStore(join(root, 'data')).appendJournal('b1', runId, {
+      ts: new Date(clock).toISOString(),
+      runId,
+      kind: 'tool',
+      n: 1,
+      name: 'exec',
+      ok: false,
+      sideEffect: 'external',
+      target: 'deploy.sh',
+      ...extra,
+    } as JournalEntry);
+
+  for (const failureKind of ['approval-pending', 'blocked', 'scope', 'policy', 'aborted']) {
+    test(`an external call refused as ${failureKind} is not treated as done`, async () => {
+      const a = makePool();
+      const t = addTask('b1', 'g-aaaaaaaa', 'one');
+      a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+      await until(() => a.requests.length === 1);
+      const runId = a.pool.list('b1')[0].runId;
+      journalTool(runId, { failureKind });
+      await a.pool.abortAll('shutdown');
+      a.pool.dispose();
+
+      const b = makePool();
+      b.scripts.set(t, [[done()]]);
+      b.pool.recover();
+      await until(() => b.pool.get(runId)?.status === 'done');
+      b.pool.dispose();
+    });
+  }
+
+  test('an external call that failed while running still blocks the resume', async () => {
+    const a = makePool();
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    await until(() => a.requests.length === 1);
+    const runId = a.pool.list('b1')[0].runId;
+    journalTool(runId, { failureKind: 'error' });
+    await a.pool.abortAll('shutdown');
+    a.pool.dispose();
+    const b = makePool();
+    b.pool.recover();
+    expect(b.pool.get(runId)?.status).toBe('blocked');
+    b.pool.dispose();
+  });
+});
+
+describe('integration re-review: a clean stop costs no attempt (N4)', () => {
+  test('two restarts mid-step (no tool in flight) never fail the run', async () => {
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    const a = makePool({ maxAttempts: 2 });
+    a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    await until(() => a.requests.length === 1);
+    const runId = a.pool.list('b1')[0].runId;
+    await a.pool.abortAll('shutdown');
+    a.pool.dispose();
+    const b = makePool({ maxAttempts: 2 });
+    b.pool.recover();
+    await until(() => b.requests.length === 1);
+    await b.pool.abortAll('shutdown');
+    b.pool.dispose();
+    const c = makePool({ maxAttempts: 2 });
+    c.scripts.set(t, [[done()]]);
+    c.pool.recover();
+    await until(() => c.pool.get(runId)?.status === 'done');
+    expect(c.pool.get(runId)?.attempt).toBe(1);
+    c.pool.dispose();
+  });
+
+  test('a crash mid-step (no clean stop) still uses an attempt', async () => {
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    const a = makePool();
+    a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    await until(() => a.requests.length === 1);
+    const runId = a.pool.list('b1')[0].runId;
+    // The process dies: runs.json still says `running`.
+    const b = makePool();
+    b.scripts.set(t, [[done()]]);
+    b.pool.recover();
+    await until(() => b.pool.get(runId)?.status === 'done');
+    expect(b.pool.get(runId)?.attempt).toBe(2);
+    b.pool.dispose();
+    await a.pool.abortAll('shutdown');
+    a.pool.dispose();
+  });
+
+  test('a clean stop with a tool in flight uses an attempt', async () => {
+    const ran: string[] = [];
+    const a = makePool(
+      {},
+      {
+        tool: async (name, _args, req) => {
+          ran.push(name);
+          await new Promise<void>((resolve) => {
+            if (req.signal.aborted) resolve();
+            else req.signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+          return { success: false, content: 'aborted' };
+        },
+      }
+    );
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    a.scripts.set(t, [[{ name: 'web_search', args: { q: 'x' } }, progress()]]);
+    a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    await until(() => ran.length === 1);
+    const runId = a.pool.list('b1')[0].runId;
+    await a.pool.abortAll('shutdown');
+    a.pool.dispose();
+    const b = makePool();
+    b.scripts.set(t, [[done()]]);
+    b.pool.recover();
+    await until(() => b.pool.get(runId)?.status === 'done');
+    expect(b.pool.get(runId)?.attempt).toBe(2);
+    b.pool.dispose();
+  });
+});
+
+describe('integration re-review: a stopped bot does not hold its tasks (N5)', () => {
+  test('claims of a stopped bot are not renewed; on expiry the task goes back to To do', async () => {
+    const running = { b1: true };
+    const h = makePool(
+      { claimTtlMs: 60_000 },
+      { deps: { isBotRunning: (b) => running[b as 'b1'] ?? false } }
+    );
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => h.requests.length === 1);
+    running.b1 = false;
+    h.pool.stop(runId, 'shutdown');
+    await until(() => h.pool.get(runId)?.status === 'interrupted');
+    const before = h.opsLog.length;
+    clock += 30_000;
+    h.pool.sweep();
+    expect(h.opsLog.slice(before).filter((o) => o.startsWith('renew'))).toEqual([]);
+    expect(h.pool.get(runId)?.status).toBe('interrupted');
+    clock += 31_000;
+    h.pool.sweep();
+    const ended = h.pool.get(runId);
+    expect(ended?.status).toBe('stopped');
+    expect(ended?.outcome).toMatchObject({ kind: 'interrupted', note: 'bot stopped' });
+    const task = tasks('b1').get(t);
+    expect(task?.claim).toBeUndefined();
+    expect(task?.lane).toBe('todo');
+    expect(task?.note).toBe('bot stopped');
+    h.pool.dispose();
+  });
+});
+
+describe('integration re-review: a paused bot is not resumed by the sweep (N6)', () => {
+  test('pause, then stop: the sweep leaves the run alone until kick', async () => {
+    const h = makePool({}, { deps: { isBotRunning: () => true } });
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    h.scripts.set(t, ['hang', [done('resumed')]]);
+    const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => h.requests.length === 1);
+    h.pool.pause('b1');
+    h.pool.stop(runId, 'shutdown');
+    await until(() => h.pool.get(runId)?.status === 'interrupted');
+    // The bot is still in runningBots (cleanupBot has not run yet).
+    h.pool.sweep();
+    await settle();
+    expect(h.pool.get(runId)?.status).toBe('interrupted');
+    expect(h.requests).toHaveLength(1);
+    h.pool.kick('b1');
+    await until(() => h.pool.get(runId)?.status === 'done');
+    h.pool.dispose();
+  });
 });

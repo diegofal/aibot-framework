@@ -67,6 +67,20 @@ export function cancelWaitFrom(
   };
 }
 
+/**
+ * Close every question and permission request a run still has pending when it
+ * ends for good — also those it asked in a step that then reported done or
+ * blocked, which never parked the run on them.
+ */
+export function withdrawRunAsksFrom(
+  ctx: Pick<BotContext, 'askHumanStore' | 'askPermissionStore'>
+): (runId: string) => void {
+  return (runId) => {
+    ctx.askHumanStore?.withdrawByRun?.(runId);
+    ctx.askPermissionStore?.withdrawByRun?.(runId, 'withdrawn: the run ended');
+  };
+}
+
 export function createFleetWorkerPool(opts: FleetWorkerPoolOptions): WorkerPool {
   const { ctx } = opts;
   const logger = ctx.logger;
@@ -152,6 +166,7 @@ export function createFleetWorkerPool(opts: FleetWorkerPoolOptions): WorkerPool 
     wake: opts.wake,
     drainAnswers: drainAnswersFrom(ctx),
     cancelWait: cancelWaitFrom(ctx),
+    withdrawRunAsks: withdrawRunAsksFrom(ctx),
     logger,
     ...opts.overrides,
   };

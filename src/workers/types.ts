@@ -10,6 +10,8 @@
  * upkeep builders all read the same shapes.
  */
 
+import type { ToolFailureKind } from '../tools/types';
+
 // ── Runs ──────────────────────────────────────────────────────────────────
 
 export type WorkerRunStatus =
@@ -61,7 +63,27 @@ export interface WorkerToolCall {
   target?: string;
   ok: boolean;
   sideEffect: SideEffectClass;
+  /**
+   * Why the call failed, as the executor reported it. `aborted` only for a
+   * call refused before it ran (a call stopped mid-way has none: it was in
+   * flight). Resume ignores calls refused without running (`REFUSED_FAILURES`).
+   */
+  failureKind?: ToolFailureKind;
 }
+
+/**
+ * Failure kinds of a call that never ran (or ran nothing of ours): an
+ * approval filed instead, a third party refusing, the write root, a policy
+ * or denied / disabled tool, a cancelled run. A resume does not count them
+ * as side effects.
+ */
+export const REFUSED_FAILURES: readonly ToolFailureKind[] = [
+  'approval-pending',
+  'blocked',
+  'scope',
+  'policy',
+  'aborted',
+];
 
 export interface WorkerStepRecord {
   n: number;

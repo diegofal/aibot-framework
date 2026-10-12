@@ -44,4 +44,12 @@ describe('isDispatchOnlyCycle', () => {
     expect(isDispatchOnlyCycle({ toolCalls: [{ name: 'web_search' }], dispatched: 1 })).toBe(false);
     expect(isDispatchOnlyCycle({ toolCalls: [], dispatched: 0 })).toBe(false);
   });
+
+  test('N7: tasks added (no dispatch) count too', () => {
+    expect(isDispatchOnlyCycle({ toolCalls: [], dispatched: 0, added: 2 })).toBe(true);
+    expect(isDispatchOnlyCycle({ toolCalls: [{ name: 'exec' }], dispatched: 0, added: 2 })).toBe(
+      false
+    );
+    expect(isDispatchOnlyCycle({ toolCalls: [], dispatched: 0, added: 0 })).toBe(false);
+  });
 });

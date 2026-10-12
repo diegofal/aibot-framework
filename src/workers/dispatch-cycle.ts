@@ -1,6 +1,6 @@
 /**
  * A cycle whose plan only handed tasks to workers (C22): it dispatched at
- * least one run and called no tool of its own. Repetition karma exempts it —
+ * least one run or wrote tasks (new_tasks), and called no tool of its own. Repetition karma exempts it —
  * dispatching the same task family cycle after cycle is the loop working, not
  * the agent repeating itself; the runs are scored on their own outcomes.
  */
@@ -24,6 +24,8 @@ export function countDispatchedRuns(
 export function isDispatchOnlyCycle(input: {
   toolCalls: ReadonlyArray<{ name: string }>;
   dispatched: number;
+  /** Tasks the cycle's new_tasks wrote: breaking a goal down is orchestration too. */
+  added?: number;
 }): boolean {
-  return input.dispatched > 0 && input.toolCalls.length === 0;
+  return input.dispatched + (input.added ?? 0) > 0 && input.toolCalls.length === 0;
 }

@@ -107,7 +107,7 @@ export function buildTaskSchemaLines(opts: { workersEnabled: boolean }): string 
   ];
   if (opts.workersEnabled) {
     lines.push(
-      '- dispatch: array of open task ids to hand to workers (optional). plan may be an empty array when you only dispatch tasks (or only break a goal down with new_tasks) and do no work of your own this cycle'
+      '- dispatch: array of open task ids to hand to workers (optional). plan may be an empty array when you only dispatch tasks (or only break a goal down with new_tasks) and do no work of your own this cycle; such an answer still needs priority "low" or higher (priority "none" is idle and writes nothing)'
     );
   }
   return lines.join('\n');

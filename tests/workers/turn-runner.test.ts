@@ -151,6 +151,54 @@ describe('worker step on runExecutorTurn', () => {
   });
 });
 
+describe('integration re-review: scope refusals are audited (N9)', () => {
+  test('a write outside the task folder never runs, but has an audit row and a tool:end', async () => {
+    const s = setup([]);
+    const ran: string[] = [];
+    s.ctx.tools.push(tool('file_write', ran));
+    const ends: any[] = [];
+    const llm: any = {
+      backend: 'ollama',
+      chat: async (_messages: any[], opts: any) => {
+        const r = await opts.toolExecutor('file_write', { path: '/elsewhere/x.md', content: 'x' });
+        ends.push(r);
+        await opts.toolExecutor('task_progress', { note: 'tried' });
+        return { text: 'ok', stopReason: 'completed' };
+      },
+    };
+    const runner = createExecutorTurnRunner({
+      ctx: { ...s.ctx, getLLMClient: () => llm },
+      botId: 'b1',
+      toolRegistry: { getDefinitionsForBot: () => s.ctx.tools.map((t: Tool) => t.definition) },
+    });
+    const e = env(runner);
+    const journal: any[] = [];
+    e.journal = (j) => journal.push(j);
+    await runWorker(e);
+    expect(ran).toEqual([]);
+    expect(ends[0].success).toBe(false);
+    expect(ends[0].content).toContain('workers write only inside their task directory');
+    const row = s.audit.find((a) => a.toolName === 'file_write');
+    expect(row).toMatchObject({ success: false, failureKind: 'scope', runId: 'wr-1' });
+    expect(journal.find((j) => j.kind === 'tool' && j.name === 'file_write')).toMatchObject({
+      failureKind: 'scope',
+    });
+  });
+
+  test('N3: a denied tool is refused as policy, so a resume knows it never ran', async () => {
+    const s = setup(['send_message']);
+    const e = env(s.runner);
+    const journal: any[] = [];
+    e.journal = (j) => journal.push(j);
+    await runWorker(e);
+    expect(s.ran).toEqual([]);
+    expect(journal.find((j) => j.kind === 'tool' && j.name === 'send_message')).toMatchObject({
+      ok: false,
+      failureKind: 'policy',
+    });
+  });
+});
+
 describe('worker tools after phase 2b', () => {
   test('workers may ask: ask_human and ask_permission are not denied', () => {
     expect(workerDeniedTools()).not.toContain('ask_human');

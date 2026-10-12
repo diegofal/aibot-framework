@@ -1122,11 +1122,7 @@ export class BotManager {
     // A stopped bot's workers are interrupted, not stopped: claims and waits
     // are kept, and startBot resumes them (a restart or a tenant suspension is
     // not the operator stopping the work).
-    if (this.workerPool) {
-      for (const run of this.workerPool.list(botId, { endedLimit: 0 })) {
-        this.workerPool.stop(run.runId, 'shutdown');
-      }
-    }
+    this.pauseBotWorkers(botId);
 
     await this.cleanupBot(botId);
     this.restartAttempts.delete(botId);
@@ -1235,7 +1231,20 @@ export class BotManager {
     return undefined;
   }
 
-  /** Abort every worker run, persisting `interrupted` (claims kept) so boot resumes them. */
+  /**
+   * Interrupt a bot's runs as a bot stop does (claims and waits kept): pause
+   * it first so the sweep cannot resume them before the bot leaves
+   * `runningBots`; `startBot` → `kick` resumes them. The pool stays live.
+   */
+  private pauseBotWorkers(botId: string): void {
+    if (!this.workerPool) return;
+    this.workerPool.pause(botId);
+    for (const run of this.workerPool.list(botId, { endedLimit: 0 })) {
+      this.workerPool.stop(run.runId, 'shutdown');
+    }
+  }
+
+  /** Process shutdown: abort every worker run, persisting `interrupted` (claims kept) so boot resumes them. */
   private async interruptWorkers(): Promise<void> {
     if (!this.workerPool) return;
     await this.workerPool.abortAll('shutdown').catch((err) => {
@@ -1280,8 +1289,15 @@ export class BotManager {
 
   /** Gracefully stop all: drain agent loop (wait for executing cycles), then full cleanup */
   async gracefulStopAll(timeoutMs?: number): Promise<void> {
-    // Workers first, as in stopAll: persist `interrupted` (claims kept).
-    await this.interruptWorkers();
+    // Workers first, per bot as stopBot does (claims kept). Not abortAll +
+    // dispose: bots restarted after a stop-safe must get workers again.
+    if (this.workerPool) {
+      const bots = new Set([
+        ...this.runningBots,
+        ...this.workerPool.list(undefined, { endedLimit: 0 }).map((r) => r.botId),
+      ]);
+      for (const botId of bots) this.pauseBotWorkers(botId);
+    }
     this.stopTaskChangeForwarding();
     // Phase 1: Drain agent loop — executing bots finish their current cycle
     await this.agentLoop.gracefulStop(timeoutMs);

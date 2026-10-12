@@ -1313,6 +1313,7 @@ export class AgentLoop {
           countDispatchedRuns(this.ctx.workerPool, botId, cycleAttr?.cycleId),
           cycleAttr?.dispatched?.filter((d) => d.ok).length ?? 0
         ),
+        added: cycleAttr?.newTasks?.length ?? 0,
       });
       if (
         this.karmaService &&
@@ -2399,8 +2400,13 @@ export class AgentLoop {
     // Dispatch-only: no work of its own, but tasks to write or hand to
     // workers. The explore rule and the hard engagement gate still apply to
     // the dispatch itself (applyPlannerTasks); if nothing was written or
-    // dispatched the cycle is idle as before.
-    if (plan.length === 0 && (plannerTaskFields.dispatch || plannerTaskFields.new_tasks)) {
+    // dispatched the cycle is idle as before. An idle answer (priority none)
+    // stays idle and writes nothing, whatever task fields it carries.
+    if (
+      plan.length === 0 &&
+      priority !== 'none' &&
+      (plannerTaskFields.dispatch || plannerTaskFields.new_tasks)
+    ) {
       const acted = this.applyPlannerTaskFields(botId, goals, plannerTaskFields, {
         exploring,
         hardGateActive: !!(
@@ -2421,7 +2427,7 @@ export class AgentLoop {
           plannerReasoning,
           plan: [],
           toolCalls: [],
-          priority: priority === 'none' ? 'low' : priority,
+          priority,
           dispatchOnly: true,
           strategistRan,
           strategistReflection,

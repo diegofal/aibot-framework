@@ -532,4 +532,29 @@ describe('review fixes: waits and withdrawals', () => {
     expect(perms.getHistoryById(req.id)?.note).toContain('the run ended');
     expect(perms.withdrawById(req.id)).toBe(false);
   });
+
+  test('N2: withdrawByRun closes every pending question of that run, and only those', () => {
+    const s = new AskHumanStore(logger, `${dir}/ask-human-3`);
+    const a = s.ask('b', 0, 'One?', undefined, Date.now(), { runId: 'run-1' });
+    const b = s.ask('b', 0, 'Two?', undefined, Date.now(), { runId: 'run-1' });
+    const c = s.ask('b', 0, 'Other?', undefined, Date.now(), { runId: 'run-2' });
+    const d = s.ask('b', 0, 'Cycle?', undefined, Date.now());
+    for (const q of [a, b, c, d]) q.promise.catch(() => {});
+    expect(s.withdrawByRun('run-1')).toBe(2);
+    expect(
+      s
+        .getPendingForBot('b')
+        .map((q) => q.id)
+        .sort()
+    ).toEqual([c.id, d.id].sort());
+    expect(s.withdrawByRun('run-1')).toBe(0);
+  });
+
+  test('N2: withdrawByRun closes every pending permission request of that run', async () => {
+    const p1 = perms.request('b', 'exec', 'a', 'd', 'normal', { runId: 'run-1' });
+    const p2 = perms.request('b', 'exec', 'b', 'd', 'normal', { runId: 'run-2' });
+    expect(perms.withdrawByRun('run-1', 'the run ended')).toBe(1);
+    expect(await p1.promise).toBe('denied');
+    expect(perms.getPendingForBot('b').map((p) => p.id)).toEqual([p2.id]);
+  });
 });

@@ -306,6 +306,15 @@ export class AskPermissionStore {
    * history keeps it as denied with the note, already consumed. False when it
    * is not pending.
    */
+  withdrawByRun(runId: string, note = 'withdrawn'): number {
+    let n = 0;
+    for (const [id, entry] of [...this.pending.entries()]) {
+      if (entry.request.runId === runId && this.withdrawById(id, note)) n++;
+    }
+    return n;
+  }
+
+  /** Close one pending request whose asker went away (see `withdrawByRun`). */
   withdrawById(id: string, note = 'withdrawn'): boolean {
     const entry = this.pending.get(id);
     if (!entry) return false;

@@ -254,12 +254,66 @@ describe('agent loop: planner task fields', () => {
     expect(row.taskId).toBeUndefined();
   });
 
-  test('dispatch-only: an empty plan that dispatches is a completed cycle with no executor', async () => {
+  test('N7: priority none stays idle even with new_tasks and dispatch; nothing is written', async () => {
     const pool = fakePool(true);
     store.apply([{ op: 'add', goalId: 'g-bbbbbbbb', text: 'Book the room' }], { actor: 'agent' });
     const id = store.list()[0].id;
     const { loop, llm } = makeLoop(
-      JSON.stringify({ reasoning: 'hand it off', plan: [], priority: 'none', dispatch: [id] }),
+      JSON.stringify({
+        reasoning: 'waiting for the operator',
+        plan: [],
+        priority: 'none',
+        new_tasks: { goal: 'g-bbbbbbbb', tasks: ['Send invitations'] },
+        dispatch: [id],
+      }),
+      pool
+    );
+    const result = await loop.runOne('bot1');
+    expect(result.isIdle).toBe(true);
+    expect(store.list()).toHaveLength(1);
+    expect(pool.requests).toEqual([]);
+    expect(llm.chat).not.toHaveBeenCalled();
+    expect(cycleRows()[0].status).toBe('idle');
+  });
+
+  test('N7: an add-only cycle (new_tasks, no dispatch) earns no repetition karma', async () => {
+    const pool = fakePool(true);
+    const answer = (task: string) =>
+      JSON.stringify({
+        reasoning: 'break it down',
+        plan: [],
+        priority: 'low',
+        new_tasks: { goal: 'g-bbbbbbbb', tasks: [task] },
+      });
+    const { loop, ctx } = makeLoop(
+      ['Book the room', 'Send invitations', 'Order food', 'Print badges'].map(answer),
+      pool
+    );
+    ctx.config.karma = { enabled: true };
+    const karma = {
+      addEvent: mock(() => {}),
+      recordOutcome: mock(() => null),
+      renderForPrompt: () => '',
+    };
+    (loop as any).karmaService = karma;
+    for (let i = 0; i < 4; i++) {
+      await loop.runOne('bot1');
+      // The goal has no open task again (new_tasks only breaks down such a goal).
+      for (const t of store.list().filter((x) => x.lane !== 'done'))
+        store.apply([{ op: 'move', id: t.id, lane: 'done' }], { actor: 'operator' });
+    }
+    expect(store.list()).toHaveLength(4);
+    expect(karma.addEvent).not.toHaveBeenCalled();
+  });
+
+  test('dispatch-only: an empty plan that dispatches is a completed cycle with no executor', async () => {
+    // Deliberately changed (N7): priority was 'none'; an idle answer now stays
+    // idle, so a dispatch-only answer needs a real priority.
+    const pool = fakePool(true);
+    store.apply([{ op: 'add', goalId: 'g-bbbbbbbb', text: 'Book the room' }], { actor: 'agent' });
+    const id = store.list()[0].id;
+    const { loop, llm } = makeLoop(
+      JSON.stringify({ reasoning: 'hand it off', plan: [], priority: 'low', dispatch: [id] }),
       pool
     );
     const result = await loop.runOne('bot1');

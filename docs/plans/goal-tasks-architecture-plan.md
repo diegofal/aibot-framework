@@ -126,7 +126,7 @@ What we do differently, because of our runtime and their gaps:
 
 | # | Component | What |
 |---|---|---|
-| C21 | **Strategist** | Goal ops may carry tasks. `single_deliverable` becomes a task only when `serves_goal` resolves, else `lastFocus` stays. A goal completed or removed releases its claims and stops its workers. |
+| C21 | **Strategist** | Goal ops may carry tasks. `single_deliverable` stays `lastFocus` and never becomes a task: the planner owns the breakdown (`new_tasks`; decided in review). A goal completed or removed releases its claims and stops its workers. |
 | C22 | **Lint, karma, Why** | Goal-lint: In progress without a run or event for ≥ 3 cycles, Blocked > 72 h without an ask, done without a note, orphans. Karma per run outcome (protocol violation = tool error); repetition karma exempts dispatch cycles. Why builders: `taskEventToWhy`, `workerRunToWhy` (dispatching cycle, reason, steps, outcome); the cycle Why lists its runs. |
 
 ### Decisions

@@ -29,6 +29,7 @@ import {
   type DispatchRequest,
   type DispatchResult,
   type JournalEntry,
+  REFUSED_FAILURES,
   type StopReason,
   type WorkerAnswer,
   type WorkerEvent,
@@ -104,6 +105,11 @@ export interface WorkerPoolDeps {
    * request without routing anything back to it (wired to the ask stores).
    */
   cancelWait?: (wait: WorkerWait) => void;
+  /**
+   * A run that ends for good: withdraw every question and permission request
+   * it still has pending (a step may ask and then report done), by run id.
+   */
+  withdrawRunAsks?: (runId: string) => void;
   now?: () => number;
   logger?: Logger;
 }
@@ -127,6 +133,8 @@ export class WorkerPool implements WorkerPoolApi {
   private readonly held = new Map<string, WorkerAnswer[]>();
   /** Runs loaded from disk that nothing has resumed yet (recover / kick take them). */
   private readonly survivors = new Set<string>();
+  /** Bots being stopped: nothing resumes or starts their runs until `kick`. */
+  private readonly paused = new Set<string>();
   private readonly listeners = new Set<(e: WorkerEvent) => void>();
   private readonly wakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly daily = new Map<string, { day: string; steps: number }>();
@@ -302,6 +310,7 @@ export class WorkerPool implements WorkerPoolApi {
 
   recover(): void {
     this.shuttingDown = false;
+    this.paused.clear();
     this.resume(this.resumable());
     this.ensureSweep();
     this.pump();
@@ -314,9 +323,25 @@ export class WorkerPool implements WorkerPoolApi {
    */
   kick(botId?: string): void {
     if (this.shuttingDown) return;
+    if (botId) this.paused.delete(botId);
+    else this.paused.clear();
     this.resume(this.resumable(botId));
     this.ensureSweep();
     this.pump();
+  }
+
+  /**
+   * A bot is being stopped (call before interrupting its runs): until `kick`,
+   * neither the sweep nor the queue resumes or starts its runs — the bot may
+   * still look running while it is torn down.
+   */
+  pause(botId: string): void {
+    this.paused.add(botId);
+  }
+
+  /** The bot is up: running and not being stopped. */
+  private botUp(botId: string): boolean {
+    return !this.paused.has(botId) && (this.deps.isBotRunning?.(botId) ?? true);
   }
 
   /** Runs nothing is running: loaded from disk and not resumed yet, or interrupted here. */
@@ -361,7 +386,11 @@ export class WorkerPool implements WorkerPoolApi {
       }
       const journal = this.deps.store.readJournal(run.botId, run.runId);
       const unfinished = unfinishedStep(journal);
-      const external = unfinished?.toolCalls.find((t) => t.sideEffect === 'external');
+      const external = unfinished?.toolCalls.find(
+        (t) =>
+          t.sideEffect === 'external' &&
+          !(t.failureKind && REFUSED_FAILURES.includes(t.failureKind))
+      );
       if (external) {
         const what = `${external.name}${external.target ? ` (${external.target})` : ''}`;
         const during = unfinished?.inFlight.includes(external);
@@ -374,8 +403,15 @@ export class WorkerPool implements WorkerPoolApi {
         this.endRun(run, 'stopped', { kind: 'interrupted', note }, { lane: 'todo', note });
         continue;
       }
-      // Only a step cut in the middle costs an attempt (a queued run never ran).
-      const attempt = unfinished ? run.attempt + 1 : run.attempt;
+      // Only a step cut in the middle costs an attempt (a queued run never
+      // ran), and not when we stopped it cleanly (shutdown, bot stop: the run
+      // was persisted `interrupted`) with no tool in flight. A crash leaves it
+      // `running`.
+      const clean =
+        run.status === 'interrupted' &&
+        !run.currentTool &&
+        (unfinished?.inFlight.length ?? 0) === 0;
+      const attempt = unfinished && !clean ? run.attempt + 1 : run.attempt;
       if (attempt > cfg.maxAttempts) {
         const note = `interrupted; ${run.attempt} of ${cfg.maxAttempts} attempts used`;
         this.endRun(run, 'failed', { kind: 'interrupted', note }, { lane: 'blocked', note });
@@ -419,11 +455,7 @@ export class WorkerPool implements WorkerPoolApi {
     const cfg = this.deps.config();
     const now = this.now();
     // A bot that is running again but was never kicked: resume its interrupted runs.
-    this.resume(
-      this.resumable().filter(
-        (r) => r.status === 'interrupted' && (this.deps.isBotRunning?.(r.botId) ?? true)
-      )
-    );
+    this.resume(this.resumable().filter((r) => r.status === 'interrupted' && this.botUp(r.botId)));
     for (const run of [...this.runs.values()]) {
       if (run.status === 'running') {
         const hb = Date.parse(run.heartbeatAt ?? run.startedAt ?? run.createdAt);
@@ -436,6 +468,15 @@ export class WorkerPool implements WorkerPoolApi {
           const ctl = this.controllers.get(run.runId);
           if (ctl) ctl.abort('sweep');
           else this.finish(run, { status: 'stopped', outcome: { kind: 'stopped', note: 'sweep' } });
+        }
+        continue;
+      }
+      // A stopped bot does not hold its tasks: no renewal, and once the claim
+      // expires the run ends and the task goes back to To do.
+      if (!this.botUp(run.botId)) {
+        if (run.claimToken && this.claimExpired(run, now)) {
+          const note = 'bot stopped';
+          this.endRun(run, 'stopped', { kind: 'interrupted', note }, { lane: 'todo', note });
         }
         continue;
       }
@@ -550,7 +591,7 @@ export class WorkerPool implements WorkerPoolApi {
         if (s.running >= cfg.maxConcurrent) break;
         if ((s.byBot[run.botId]?.running ?? 0) >= cfg.maxPerBot) continue;
         if (!this.isEnabledFor(run.botId)) continue;
-        if (this.deps.isBotRunning && !this.deps.isBotRunning(run.botId)) continue;
+        if (!this.botUp(run.botId)) continue;
         const backend = this.deps.botBackend?.(run.botId);
         if (backend && this.deps.breaker?.isOpen(backend)) continue;
         this.start(run);
@@ -739,6 +780,16 @@ export class WorkerPool implements WorkerPoolApi {
         );
       }
     }
+    if (this.deps.withdrawRunAsks) {
+      try {
+        this.deps.withdrawRunAsks(run.runId);
+      } catch (err) {
+        this.deps.logger?.warn(
+          { err, runId: run.runId },
+          'Workers: could not withdraw the pending asks of the run'
+        );
+      }
+    }
     this.journalOf(run, { kind: 'run-end', status, outcome });
     this.runs.delete(run.runId);
     this.persist(run.botId);
@@ -836,6 +887,16 @@ export class WorkerPool implements WorkerPoolApi {
       { actor: 'system', runId: run.runId, claimToken: run.claimToken }
     );
     return r.ok;
+  }
+
+  /** The run's claim lapsed (its token still on the task, past expiry). Someone else's claim: dropped. */
+  private claimExpired(run: WorkerRun, now: number): boolean {
+    const task = this.deps.taskStore(run.botId)?.get(run.taskId);
+    if (!task?.claim || task.claim.token !== run.claimToken) {
+      run.claimToken = undefined;
+      return true;
+    }
+    return !liveClaim(task, now);
   }
 
   private release(run: WorkerRun, lane: TaskLane, note: string): boolean {

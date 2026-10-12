@@ -1,8 +1,8 @@
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ExecutorTurnStopReason, ToolCallback } from '../bot/executor-turn';
 import { runExecutorTurn } from '../bot/executor-turn';
-import type { ToolAttribution, ToolEndEvent } from '../bot/tool-executor';
-import { toolTarget } from '../bot/tool-executor';
+import type { ToolAttribution, ToolEndEvent, ToolRefusal } from '../bot/tool-executor';
+import { toolNotRunMessage, toolTarget } from '../bot/tool-executor';
 import { ToolLoopDetector } from '../bot/tool-loop-detector';
 import { getPermissionLevel } from '../bot/tool-permissions';
 import type { ToolRegistry } from '../bot/tool-registry';
@@ -23,7 +23,7 @@ import { resolveAgentConfig } from '../config';
 import type { TaskLane } from '../goals/task-store';
 import type { KarmaService } from '../karma/service';
 import { resolvePathParam } from '../tools/file';
-import type { Tool, ToolResult } from '../tools/types';
+import type { Tool, ToolFailureKind, ToolResult } from '../tools/types';
 import { productionsDirOfTaskWorkDir } from './paths';
 import { createReportTools, isReportTool } from './report-tools';
 import {
@@ -141,6 +141,27 @@ export function taskDirRefusal(
   return `${TASK_DIR_REFUSAL}: ${root} (refused ${name} on ${raw})`;
 }
 
+/** The write-root refusal as the executor's pre-execution hook (N9: audited like any call). */
+export function taskDirRefuser(
+  workDir: string
+): (name: string, args: Record<string, unknown>) => ToolRefusal | undefined {
+  return (name, args) => {
+    const content = taskDirRefusal(name, args, workDir);
+    return content ? { content, failureKind: 'scope' } : undefined;
+  };
+}
+
+/**
+ * The failureKind a tool entry is journaled with: the executor's, except an
+ * `aborted` call that had already started (stopped mid-way), which keeps none
+ * — it was in flight, so a resume must treat it as having happened.
+ */
+export function journalFailureKind(e: ToolEndEvent): ToolFailureKind | undefined {
+  if (!e.failureKind) return undefined;
+  if (e.failureKind === 'aborted' && e.result !== toolNotRunMessage(e.toolName)) return undefined;
+  return e.failureKind;
+}
+
 /** Tools a worker never gets (orchestration and outreach stay with the cycle). Asks are allowed: they route per run. */
 export function workerDeniedTools(): string[] {
   return [...WORKER_DENIED_TOOLS];
@@ -234,7 +255,7 @@ export function buildWorkerPrompt(input: {
     '- A step without a report is a protocol violation; two in a row end your run.',
     '- Your memory between steps is only the step log below: put what the next step needs in the note.',
     `- Write files only inside your task folder: ${c.workDir}`,
-    '- To ask the operator, call `ask_human` (one question): it pauses the run until the operator answers, and the answer reaches your next step. Report the step as usual after asking.',
+    '- To ask the operator, call `ask_human` (one question): it pauses the run until the operator answers, and the answer reaches your next step. After asking, end the step with `task_progress` (not task_done or task_blocked): the run pauses for the answer.',
     '- A tool that needs approval files an approval request instead of running; the run waits for the decision. Do not retry it in the same step.',
     '- You cannot message people, manage goals or schedule jobs here: if the task needs that, report task_blocked and say what is needed.',
   ]
@@ -310,6 +331,7 @@ export function stepsFromJournal(entries: JournalEntry[]): WorkerStepRecord[] {
           ok: e.ok,
           sideEffect: e.sideEffect,
           ...(e.target ? { target: e.target } : {}),
+          ...(e.failureKind ? { failureKind: e.failureKind } : {}),
         });
         break;
       case 'report':
@@ -348,6 +370,8 @@ export interface WorkerTurnRequest {
   extraTools: Tool[];
   denied: string[];
   wrapToolCallback: (callback: ToolCallback) => ToolCallback;
+  /** Refusal checked inside the executor before a tool runs (the task's write root). */
+  refuseTool?: (name: string, args: Record<string, unknown>) => ToolRefusal | undefined;
   onToolEnd: (event: ToolEndEvent) => void;
   signal: AbortSignal;
   timeoutMs: number;
@@ -496,6 +520,7 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
     let stepTimer: ReturnType<typeof setTimeout> | undefined;
     let queueTimer: ReturnType<typeof setTimeout> | undefined;
     let turnStarted = false;
+    let queued = false;
     const armStepTimer = () => {
       const ms = Math.min(config.stepTimeoutMs, wallLeftNow());
       stepTimer = setTimeout(() => step.abort(new StepTimeout(`step timed out after ${ms}ms`)), ms);
@@ -508,6 +533,7 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
     };
     const onQueued = () => {
       if (turnStarted || step.signal.aborted) return;
+      queued = true;
       clearTimers();
       const watch = () => {
         if (turnStarted || step.signal.aborted) return;
@@ -538,21 +564,11 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
         if (run.used.toolCalls >= run.budget.toolCalls)
           return { success: false, content: BUDGET_USED_MESSAGE };
         run.used.toolCalls++;
+        // A tool call means the LLM call is running even if no CLI slot was
+        // ever reported (a fallback to another backend): the step clock runs.
+        if (queued) onTurnStart();
         const sideEffect = classifySideEffect(name);
         const target = toolTarget(args);
-        const refusal = taskDirRefusal(name, args, ctx.workDir);
-        if (refusal) {
-          stepCalls.push({ name, ok: false });
-          env.journal({
-            kind: 'tool',
-            n,
-            name,
-            ok: false,
-            sideEffect,
-            ...(target ? { target } : {}),
-          });
-          return { success: false, content: refusal, failureKind: 'scope' };
-        }
         run.currentTool = name;
         run.heartbeatAt = new Date(env.now()).toISOString();
         // Before the call: a process that dies during it must not replay it.
@@ -580,6 +596,7 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
           stepWait = stepWait ?? waitFromToolEnd(e, new Date(env.now()).toISOString());
           stepCalls.push({ name: e.toolName, ok: e.success });
           const target = toolTarget(e.args);
+          const failureKind = journalFailureKind(e);
           env.journal({
             kind: 'tool',
             n,
@@ -587,8 +604,10 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
             ok: e.success,
             sideEffect: classifySideEffect(e.toolName),
             ...(target ? { target } : {}),
+            ...(failureKind ? { failureKind } : {}),
           });
         },
+        refuseTool: taskDirRefuser(ctx.workDir),
         signal: step.signal,
         // Backstop only: the step's own timers fire first (a queued turn may
         // legitimately wait longer than one step timeout).
@@ -780,6 +799,7 @@ export function createExecutorTurnRunner(deps: ExecutorTurnRunnerDeps): WorkerTu
       priority: 'worker',
       ...(queues && req.onTurnStart ? { onLlmSlot: req.onTurnStart } : {}),
       wrapToolCallback: req.wrapToolCallback,
+      ...(req.refuseTool ? { refuseTool: req.refuseTool } : {}),
       onToolEnd: req.onToolEnd,
       autoAttachFiles: false,
       queryLog: (entry) =>

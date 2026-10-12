@@ -10,6 +10,7 @@ import { BotManager } from '../../src/bot/bot-manager';
 import { loadConfig } from '../../src/config';
 import { SkillRegistry } from '../../src/core/skill-registry';
 import { CronService } from '../../src/cron/service';
+import { TaskStore } from '../../src/goals/task-store';
 import { SessionManager } from '../../src/session';
 
 const silent: any = {
@@ -133,22 +134,66 @@ describe('BotManager worker wiring — review fixes', () => {
     await m.stopAll();
   });
 
-  test('S2: gracefulStopAll interrupts the workers first, like stopAll', async () => {
+  test('S2/N1: gracefulStopAll interrupts each bot’s workers and keeps the pool live', async () => {
+    // Deliberately changed (N1): gracefulStopAll (POST /agent-loop/stop-safe)
+    // used abortAll + dispose, which shut the pool for good. Process shutdown
+    // (stopAll) keeps that path.
     const m = await manager({ enabled: true, bots: ['b1'] });
     const pool = m.getWorkerPool() as NonNullable<ReturnType<BotManager['getWorkerPool']>>;
     const seen: string[] = [];
-    const orig = pool.abortAll.bind(pool);
     pool.abortAll = async (r) => {
       seen.push(`abortAll:${r}`);
-      return orig(r);
     };
-    const origDispose = pool.dispose.bind(pool);
     pool.dispose = () => {
       seen.push('dispose');
-      origDispose();
+    };
+    pool.list = () => [{ runId: 'wr-1', botId: 'b1', status: 'running' } as never];
+    pool.pause = (botId: string) => {
+      seen.push(`pause:${botId}`);
+    };
+    pool.stop = (id, reason) => {
+      seen.push(`stop:${id}:${reason}`);
+      return true;
     };
     await m.gracefulStopAll(10);
-    expect(seen).toEqual(['abortAll:shutdown', 'dispose']);
+    expect(seen).toEqual(['pause:b1', 'stop:wr-1:shutdown']);
+  });
+
+  test('N1: after stop-safe, a restarted bot gets workers again', async () => {
+    const m = await manager({ enabled: true, bots: ['b1'] });
+    const pool = m.getWorkerPool() as NonNullable<ReturnType<BotManager['getWorkerPool']>>;
+    const soul = join(dir, 'data', 'soul', 'b1');
+    mkdirSync(soul, { recursive: true });
+    writeFileSync(
+      join(soul, 'GOALS.md'),
+      '## Active Goals\n- [ ] Launch\n  - status: pending\n  - priority: high\n  - id: g-aaaaaaaa\n'
+    );
+    const bot = (m as any).config.bots.find((b: any) => b.id === 'b1');
+    await m.startBot(bot);
+    await m.gracefulStopAll(10);
+    // A scripted turn: report done at once.
+    (pool as any).deps.runTurnFor = () => async (req: any) => {
+      const cb = req.wrapToolCallback(async (name: string, args: Record<string, unknown>) => {
+        const t = req.extraTools.find((x: any) => x.definition.function.name === name);
+        return t.execute(args, undefined);
+      });
+      await cb('task_done', { note: 'ran' });
+      return { ok: true, stopReason: 'completed', text: '' };
+    };
+    await m.startBot(bot);
+    const ts = new TaskStore(soul);
+    const added = ts.apply([{ op: 'add', goalId: 'g-aaaaaaaa', text: 'Write it' }], {
+      actor: 'operator',
+    });
+    if (!added.ok) throw new Error(added.message);
+    const [r] = pool.dispatch({ botId: 'b1', taskIds: [added.results[0].id], cycleId: null });
+    expect(r.ok).toBe(true);
+    const runId = (r as { runId: string }).runId;
+    const end = Date.now() + 2000;
+    while (pool.get(runId)?.status !== 'done' && Date.now() < end)
+      await new Promise((res) => setTimeout(res, 10));
+    expect(pool.get(runId)?.status).toBe('done');
+    await m.stopAll();
   });
 
   test('S9: stopping a bot interrupts its runs (claims kept), never as the operator', async () => {

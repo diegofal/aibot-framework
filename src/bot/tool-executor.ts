@@ -169,6 +169,21 @@ export interface ToolAttribution {
   dispatchCycleId?: string;
 }
 
+/**
+ * The refusal of a call made after its run was cancelled: the tool never ran
+ * (failureKind `aborted`). A call stopped mid-way returns
+ * `TOOL_ABORTED_MESSAGE` instead, so readers (worker resume) can tell them apart.
+ */
+export function toolNotRunMessage(name: string): string {
+  return `Tool "${name}" was not run: this run was cancelled. Stop and report.`;
+}
+
+/** A pre-execution refusal (`ToolExecutorOptions.refuse`): the tool never runs. */
+export interface ToolRefusal {
+  content: string;
+  failureKind: ToolFailureKind;
+}
+
 /** Failures that are not the bot's doing: logged and emitted, never charged as karma. */
 const UNCHARGED_FAILURES: ReadonlySet<ToolFailureKind> = new Set<ToolFailureKind>([
   'blocked',
@@ -232,6 +247,12 @@ export interface ToolExecutorOptions {
   signal?: AbortSignal;
   /** Working directory / write root override (default: the bot's workDir). */
   workDir?: string;
+  /**
+   * Pre-execution refusal (a task worker's write root): checked after the
+   * disabled / permission checks, before the tool runs. A refusal is a normal
+   * failed call — `tool:end` with its failureKind, so it reaches the audit.
+   */
+  refuse?: (name: string, args: Record<string, unknown>) => ToolRefusal | undefined;
   /**
    * Who is speaking in the conversation that triggered this call (relay
    * sender). Injected as `_requester`, always overriding model arguments;
@@ -619,7 +640,7 @@ export class ToolExecutor extends EventEmitter {
         name,
         args,
         startMs,
-        `Tool "${name}" was not run: this run was cancelled. Stop and report.`,
+        toolNotRunMessage(name),
         'execution',
         0,
         undefined,
@@ -672,7 +693,32 @@ export class ToolExecutor extends EventEmitter {
     // Check if tool is disabled
     if (this.disabledTools.has(name)) {
       this.logger.warn({ tool: name, botId }, 'Disabled tool requested');
-      return this.buildFailResult(name, args, startMs, `Tool "${name}" is not available`, 'lookup');
+      return this.buildFailResult(
+        name,
+        args,
+        startMs,
+        `Tool "${name}" is not available`,
+        'lookup',
+        0,
+        undefined,
+        'policy'
+      );
+    }
+
+    // Caller's pre-execution refusal (a worker's write root): before any
+    // approval is filed, and never charged (lookup phase).
+    const refusal = this.options.refuse?.(name, args);
+    if (refusal) {
+      return this.buildFailResult(
+        name,
+        args,
+        startMs,
+        refusal.content,
+        'lookup',
+        0,
+        undefined,
+        refusal.failureKind
+      );
     }
 
     // Permission matrix safety net: block tools that shouldn't be available in this mode
@@ -693,7 +739,10 @@ export class ToolExecutor extends EventEmitter {
           args,
           startMs,
           `Tool "${name}" is not available in this context`,
-          'lookup'
+          'lookup',
+          0,
+          undefined,
+          'policy'
         );
       }
 
