@@ -9,6 +9,7 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import type { StoredTask } from '../goals/task-store';
 import type { Logger } from '../logger';
 import { type GoalEntry, goalFromManageGoalsArgs, resolveGoalRef } from '../tools/goals';
 
@@ -53,6 +54,14 @@ export interface AgentCycleEntry {
   reflection?: string;
   /** Trait deltas the strategist applied this cycle (after clamping and policy). */
   traitAdjustments?: Record<string, number>;
+  /** The open task the cycle's own work served (planner `serves_task`). */
+  taskId?: string;
+  /** That task's text when the cycle ran. */
+  taskText?: string;
+  /** Ids of the tasks the planner's `new_tasks` wrote this cycle. */
+  newTasks?: string[];
+  /** What the planner's `dispatch` became: a worker run, or why not. */
+  dispatched?: Array<{ taskId: string; runId?: string; ok: boolean; reason?: string }>;
 }
 
 /** Cap for `reason` and `reflection` on a cycle row. */
@@ -128,6 +137,8 @@ export function resolveCycleGoal(
     planner?: string;
     strategist?: string;
     toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+    /** Store tasks, so `update_task` / `note_task` calls resolve through their task's goal. */
+    tasks?: StoredTask[];
   },
   goals: GoalEntry[]
 ): CycleGoal {
@@ -138,7 +149,7 @@ export function resolveCycleGoal(
     hit(resolveGoalRef(refs.strategist, goals), 'strategist') ??
     (refs.toolCalls ?? [])
       .filter((c) => c.name === 'manage_goals')
-      .map((c) => hit(goalFromManageGoalsArgs(c.args, goals), 'manage_goals'))
+      .map((c) => hit(goalFromManageGoalsArgs(c.args, goals, refs.tasks), 'manage_goals'))
       .find((g) => g !== null) ??
     NO_GOAL
   );

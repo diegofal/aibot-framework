@@ -20,6 +20,8 @@ export interface ToolAuditEntry {
   cycleId?: string;
   /** Goal the cycle served, when known. */
   goalId?: string;
+  /** Goal task the call worked on, when known. */
+  taskId?: string;
 }
 
 /** Max characters of a tool result kept in the audit log. */
@@ -40,6 +42,7 @@ export function toolEndToAuditEntry(event: ToolEndEvent): ToolAuditEntry {
     ...(event.failureKind ? { failureKind: event.failureKind } : {}),
     ...(event.cycleId ? { cycleId: event.cycleId } : {}),
     ...(event.goalId ? { goalId: event.goalId } : {}),
+    ...(event.taskId ? { taskId: event.taskId } : {}),
   };
 }
 

@@ -307,14 +307,31 @@ export function resolveGoalRef(ref: string | undefined, goals: GoalEntry[]): Goa
   return idx === -1 ? null : goals[idx];
 }
 
-/** The goal a `manage_goals` call names (add/update/complete), or null. */
+/**
+ * The goal a `manage_goals` call names (add/update/complete/add_task), or
+ * null. `update_task` / `note_task` resolve through their task's goal in
+ * `tasks` (id, else a single text match), else the `goal` they pass.
+ */
 export function goalFromManageGoalsArgs(
   args: Record<string, unknown>,
-  goals: GoalEntry[]
+  goals: GoalEntry[],
+  tasks: StoredTask[] = []
 ): GoalEntry | null {
   const action = String(args.action ?? '');
-  if (!['add', 'update', 'complete'].includes(action)) return null;
-  return resolveGoalRef(resolveGoalParam(args), goals);
+  if (['add', 'update', 'complete', 'add_task'].includes(action)) {
+    return resolveGoalRef(resolveGoalParam(args), goals);
+  }
+  if (action !== 'update_task' && action !== 'note_task') return null;
+  const ref = String(args.task ?? args.task_id ?? args.taskId ?? '').trim();
+  let task = ref ? tasks.find((t) => t.id === ref) : undefined;
+  if (!task && ref) {
+    const key = ref.toLowerCase();
+    const hits = tasks.filter((t) => t.text.toLowerCase().includes(key));
+    if (hits.length === 1) task = hits[0];
+  }
+  if (task) return goals.find((g) => g.id === task.goalId) ?? null;
+  const goal = String(args.goal ?? '').trim();
+  return goal ? resolveGoalRef(goal, goals) : null;
 }
 
 /** Statuses the dashboard board can move a goal to. */

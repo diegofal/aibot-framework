@@ -100,6 +100,11 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
       startedAt: '2026-10-11T12:00:00Z',
       status: 'completed',
       goalTitle: 'G',
+      // goal tasks phase 1: the served task, created tasks and dispatched runs
+      taskId: 't-111111',
+      taskText: 'T',
+      newTasks: ['t-111111'],
+      dispatched: [{ taskId: 't-222222', runId: 'r-1', ok: true }],
     },
   },
   ask: { botId: 'b1', cycleId: 'c1', goalId: 'g1', status: 'pending' },
