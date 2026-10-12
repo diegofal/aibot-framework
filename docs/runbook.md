@@ -717,3 +717,23 @@ docker compose up -d --build
 **Outcome.** `healthy` in ~35 s, dashboard 200, the image's `src/tools/goals.ts` has the id match, no new errors in the boot logs. No backup: code-only change, taken 10 minutes after the 19:21Z backup.
 
 **Reversible?** Check out `1278939` and rebuild.
+
+### 2026-10-12 19:38Z — Workers enabled for all bots (live config)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1`, volume `aibot-framework_aibot_config` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Turn on task workers (phase 2) for every bot, with a conservative daily budget for the first day |
+
+```bash
+bun scripts/docker/backup.ts backup
+# in the container: cp /app/config/config.json /app/config/config.json.pre-workers-20261012
+# then added, via a bun one-off (JSON parse → add key → write, 2-space indent):
+#   "workers": { "enabled": true, "bots": [], "maxConcurrent": 2, "maxPerBot": 1, "dailyStepsPerBot": 30 }
+docker compose restart aibot
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-12T19-37-50`. The block validated with `WorkersConfigSchema` in the container; a parse-and-compare confirmed `workers` is the only key added. After the restart: `healthy` in ~40 s, boot errors only the known Telegram `getMe` 401. First cycle per bot after the restart: all `completed`, no tasks written and nothing dispatched yet — most were curiosity exploration cycles (which never write tasks by design); job-seeker served a goal and its planner did not break it down.
+
+**Reversible?** Yes: restore `/app/config/config.json.pre-workers-20261012` (or set `workers.enabled` to false) and restart.

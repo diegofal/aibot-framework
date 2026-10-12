@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed (2026-10-12) — Task workers enabled for all bots (live config)
+- `workers: { enabled: true, bots: [], maxConcurrent: 2, maxPerBot: 1, dailyStepsPerBot: 30 }` in the live `config.json` (half the default daily budget for the first day). Backup and steps in `docs/runbook.md`.
+
 ### Fixed (2026-10-12) — manage_goals finds a goal by its id
 - **Why.** Since the goals view shows ids, agents pass them to `manage_goals update/complete` (`g-5ba5ff60`), and `findGoalIndex` only matched text: live, myfirstmillion got "No active goal matching" and a tool-error karma charge. An exact `g-` + 8 hex id now resolves first; an unknown id never fuzzy-matches another goal. Test: `tests/goal-id-match.test.ts`.
 
