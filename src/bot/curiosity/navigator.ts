@@ -19,9 +19,11 @@ import type {
   CycleMode,
   CycleTopicEntry,
   Direction,
+  DirectionRecord,
   Dispatch,
   KnowledgeMap,
   LimitDials,
+  NavigatorRunTrigger,
   NavigatorState,
   ResolvedCuriosity,
 } from './types';
@@ -60,6 +62,33 @@ export function shouldRunNavigator(
 
 /** Backoff after a failed navigator attempt. */
 export const NAVIGATOR_RETRY_MS = 2 * 3_600_000;
+
+/**
+ * Why a navigator run is starting, read from navigator state before the
+ * attempt is stamped: an attempt newer than the last landed run failed, so
+ * this is a retry; no landed run and no attempt is the first run; otherwise
+ * `navigatorEvery` elapsed.
+ */
+export function navigatorTrigger(
+  nav: NavigatorState,
+  cfg: Pick<ResolvedCuriosity, 'navigatorEveryMs'>
+): NavigatorRunTrigger {
+  const everyHours = Math.round((cfg.navigatorEveryMs / 3_600_000) * 100) / 100;
+  const last = nav.lastNavigatorAt ?? undefined;
+  const attempt = nav.lastNavigatorAttemptAt ?? undefined;
+  const lastMs = last ? Date.parse(last) : Number.NaN;
+  const attemptMs = attempt ? Date.parse(attempt) : Number.NaN;
+  if (attempt && !Number.isNaN(attemptMs) && (Number.isNaN(lastMs) || attemptMs > lastMs)) {
+    return {
+      kind: 'retry',
+      everyHours,
+      ...(last ? { lastRunAt: last } : {}),
+      failedAttemptAt: attempt,
+    };
+  }
+  if (!last) return { kind: 'first', everyHours };
+  return { kind: 'due', everyHours, lastRunAt: last };
+}
 
 // ── Prompt ─────────────────────────────────────────────────────────────
 
@@ -376,11 +405,17 @@ export interface ApplyNavigatorArgs {
   result: NavigatorResult;
   limits: LimitDials;
   now: string;
+  /** Id of this run; stamped on the direction and the frontier items it adds or drops. */
+  runId?: string;
+  /** What made this run happen (`navigatorTrigger`). */
+  trigger?: NavigatorRunTrigger;
 }
 
 export interface ApplyNavigatorOutput {
   map: KnowledgeMap;
   nav: NavigatorState;
+  /** The run as a DIRECTIONS.jsonl row; the caller appends it. */
+  record: DirectionRecord;
   /** For applyGoalOperations — the caller owns GOALS.md. */
   goalOperations: GoalOperation[];
   /** Identity dial `ask`: interests to propose to the operator. */
@@ -389,11 +424,19 @@ export interface ApplyNavigatorOutput {
 
 export function applyNavigatorResult(args: ApplyNavigatorArgs): ApplyNavigatorOutput {
   const { result, limits, now } = args;
+  const runId = args.runId ?? randomUUID();
   const map = structuredClone(args.map);
 
   // Frontier: drops, then bet targets, then additions.
   const drop = new Set(result.frontierDrop);
-  for (const f of map.frontier) if (drop.has(f.id)) f.status = 'dropped';
+  const dropped: string[] = [];
+  const added: string[] = [];
+  for (const f of map.frontier) {
+    if (!drop.has(f.id)) continue;
+    if (f.status !== 'dropped') dropped.push(f.id);
+    f.status = 'dropped';
+    f.droppedReason = { by: 'navigator', at: now, runId };
+  }
   for (const bet of result.direction.bets) {
     const item = bet.frontierId ? map.frontier.find((f) => f.id === bet.frontierId) : undefined;
     if (item && item.status !== 'dropped') item.status = 'exploring';
@@ -401,8 +444,10 @@ export function applyNavigatorResult(args: ApplyNavigatorArgs): ApplyNavigatorOu
   for (const add of result.frontierAdd) {
     const question = add.question.trim();
     if (!question || map.frontier.some((f) => isDup(f.question, question))) continue;
+    const id = shortId();
+    added.push(id);
     map.frontier.push({
-      id: shortId(),
+      id,
       question,
       whyInteresting: add.whyInteresting.trim(),
       bridge: add.bridge?.trim() || undefined,
@@ -411,6 +456,7 @@ export function applyNavigatorResult(args: ApplyNavigatorArgs): ApplyNavigatorOu
       fromTopic: add.fromTopic?.trim() ? topicId(add.fromTopic) : undefined,
       createdAt: now,
       status: 'open',
+      createdBy: { by: 'navigator', runId, at: now },
     });
   }
 
@@ -431,14 +477,16 @@ export function applyNavigatorResult(args: ApplyNavigatorArgs): ApplyNavigatorOu
   map.updatedAt = now;
 
   const served = new Set(result.servedDirectiveIds);
+  const bets = result.direction.bets.map((b) => ({ ...b, id: shortId() }));
   const nav: NavigatorState = {
     ...args.nav,
     lastNavigatorAt: now,
     direction: {
+      runId,
       at: now,
       summary: result.direction.summary,
       retrospective: result.retrospective,
-      bets: result.direction.bets.map((b) => ({ ...b, id: shortId() })),
+      bets,
     },
     directives: args.nav.directives.map((d) =>
       served.has(d.id) && d.status === 'active'
@@ -448,9 +496,23 @@ export function applyNavigatorResult(args: ApplyNavigatorArgs): ApplyNavigatorOu
     cycleLog: [...args.nav.cycleLog],
   };
 
+  const record: DirectionRecord = {
+    runId,
+    at: now,
+    summary: result.direction.summary,
+    retrospective: result.retrospective,
+    bets: bets.map((b) => ({ ...b })),
+    learned: [...result.learned],
+    surprised: [...result.surprised],
+    ...(args.trigger ? { trigger: { ...args.trigger } } : {}),
+    frontierAdded: added,
+    frontierDropped: dropped,
+  };
+
   return {
     map: pruneKnowledgeMap(map),
     nav,
+    record,
     goalOperations: result.goalOperations.map((op) => ({ ...op })),
     interestProposals,
   };

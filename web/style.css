@@ -5756,6 +5756,18 @@ body.ui-palette-open {
   gap: 6px;
   font-size: var(--fs-md);
 }
+.curio-dir-history {
+  margin-top: var(--s3);
+  border-top: 1px solid var(--border);
+}
+.curio-dir-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--s2);
+  font-size: var(--fs-md);
+}
 .curio-frontier {
   display: grid;
   gap: var(--s3);

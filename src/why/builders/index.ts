@@ -5,7 +5,9 @@
  */
 import { askToWhy } from './ask';
 import { cycleToWhy } from './cycle';
+import { directionToWhy } from './direction';
 import { dispatchToWhy } from './dispatch';
+import { frontierItemToWhy } from './frontier';
 import { goalEventToWhy } from './goal-event';
 import { idleToWhy } from './idle';
 import { karmaEventToWhy } from './karma';
@@ -25,6 +27,8 @@ export const WHY_BUILDERS = {
   posture: postureToWhy,
   proactive: proactiveToWhy,
   production: productionToWhy,
+  direction: directionToWhy,
+  frontier: frontierItemToWhy,
 } as const;
 
 export type WhyBuilderName = keyof typeof WHY_BUILDERS;

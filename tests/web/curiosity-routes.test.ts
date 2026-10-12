@@ -407,3 +407,66 @@ describe('GET /api/curiosity/dispatches — where each one came from', () => {
     expect(d3.origin).toMatchObject({ cycleId: 'c-3', inferred: true });
   });
 });
+
+describe('GET /api/curiosity/:botId — direction history and frontier why', () => {
+  const run = (runId: string, at: string) => ({
+    runId,
+    at,
+    summary: `summary ${runId}`,
+    retrospective: `retro ${runId}`,
+    bets: [],
+    learned: ['l'],
+    surprised: [],
+    trigger: { kind: 'due' as const, everyHours: 24 },
+  });
+
+  it('each direction and each frontier item carries its why', async () => {
+    const { app, svc } = makeApp();
+    const item = {
+      ...frontier('f1'),
+      createdBy: { by: 'navigator' as const, runId: 'r1', at: '2026-10-01T00:00:00Z' },
+    };
+    svc.snapshot = (botId) =>
+      ({
+        botId,
+        dispatches: [],
+        navigator: {
+          direction: {
+            runId: 'r2',
+            at: '2026-10-02T00:00:00Z',
+            summary: 's',
+            retrospective: 'r',
+            bets: [],
+            operatorSignal: 'up',
+          },
+        },
+        directions: [run('r2', '2026-10-02T00:00:00Z'), run('r1', '2026-10-01T00:00:00Z')],
+        frontier: [
+          { item, verdict: { allowed: true, crosses: [], needsApproval: [], blockedBy: [] } },
+        ],
+      }) as unknown as CuriositySnapshot;
+    const body = await (await app.request('/api/curiosity/b1')).json();
+    expect(body.directions.map((d: { runId: string }) => d.runId)).toEqual(['r2', 'r1']);
+    expect(body.directions[0].why).toMatchObject({
+      what: 'A new direction for its exploration',
+      by: 'navigator',
+      reason: { text: 'retro r2', source: 'Navigator retrospective' },
+    });
+    // The current direction's verdict reaches its history row.
+    expect(body.directions[0].why.notes).toEqual([
+      { label: 'Your verdict', text: 'You marked it a good direction.' },
+    ]);
+    expect(body.directions[1].why.notes).toBeUndefined();
+    expect(body.frontier[0].why).toMatchObject({
+      what: 'A question the navigator put on its frontier',
+      related: { label: 'Added in the navigator run', items: [{ text: 'summary r1' }] },
+    });
+  });
+
+  it('a snapshot without history still answers', async () => {
+    const { app } = makeApp();
+    const body = await (await app.request('/api/curiosity/b1')).json();
+    expect(body.directions).toEqual([]);
+    expect(body.frontier).toEqual([]);
+  });
+});

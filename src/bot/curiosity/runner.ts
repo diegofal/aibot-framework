@@ -51,7 +51,12 @@ import { buildDnaSection } from './dna';
 import { type ExtractedDispatch, runExtractor } from './extractor';
 import { markFrontier, mergeExtraction, renderKnowledgeForPrompt, topicId } from './knowledge-map';
 import type { DispatchDelivery } from './loop-wiring';
-import { applyNavigatorResult, runNavigator, shouldRunNavigator } from './navigator';
+import {
+  applyNavigatorResult,
+  navigatorTrigger,
+  runNavigator,
+  shouldRunNavigator,
+} from './navigator';
 import type { CuriosityService } from './service';
 import type { CuriosityStore } from './store';
 import { applyIgnored, likedTopicScores, renderTasteForPrompt } from './taste';
@@ -62,6 +67,7 @@ import type {
   DispatchOrigin,
   DispatchTrigger,
   FrontierItem,
+  NavigatorRunTrigger,
   ResolvedCuriosity,
 } from './types';
 
@@ -214,11 +220,13 @@ async function beginLocked(deps: RunnerDeps, args: BeginArgs): Promise<Curiosity
   // and the next cycle reads it. The attempt is stamped first so failures back off.
   let navigatorStarted = false;
   if (shouldRunNavigator(nav, cfg, Date.parse(now))) {
+    // Read before the attempt is stamped: afterwards every run looks like a retry.
+    const trigger = navigatorTrigger(nav, cfg);
     nav = { ...nav, lastNavigatorAttemptAt: now };
     store.saveNavigator(nav);
     const snapshot = nav;
     navigatorStarted = deps.service.startNavigator(args.botId, () =>
-      runNavigatorInBackground(deps, args, store, cfg, snapshot, taste, now)
+      runNavigatorInBackground(deps, args, store, cfg, snapshot, taste, now, trigger)
     );
   }
   if (cancelled()) return null;
@@ -266,7 +274,8 @@ async function runNavigatorInBackground(
   cfg: ResolvedCuriosity,
   nav: ReturnType<CuriosityStore['loadNavigator']>,
   taste: ReturnType<CuriosityStore['loadTaste']>,
-  now: string
+  now: string,
+  trigger: NavigatorRunTrigger
 ): Promise<void> {
   const log = deps.logger;
   try {
@@ -303,10 +312,16 @@ async function runNavigatorInBackground(
       result,
       limits: cfg.limits,
       now,
+      trigger,
     });
     const pending = [...(applied.nav.pendingInterests ?? []), ...applied.interestProposals];
     store.saveMap(applied.map);
     store.saveNavigator({ ...applied.nav, pendingInterests: [...new Set(pending)].slice(-5) });
+    try {
+      store.appendDirection(applied.record);
+    } catch (err) {
+      log.warn({ err, botId: args.botId }, 'Curiosity: direction history append failed');
+    }
     if (applied.goalOperations.length > 0) {
       try {
         deps.applyGoalOperations(applied.goalOperations);
@@ -441,7 +456,9 @@ async function finishLocked(deps: RunnerDeps, args: FinishArgs): Promise<FinishR
   };
 
   // Fresh state after the await.
-  let map = mergeExtraction(store.loadMap(), extraction, now);
+  let map = mergeExtraction(store.loadMap(), extraction, now, {
+    cycleId: args.attribution?.cycleId,
+  });
   if (cycle.frontierItem) map = markFrontier(map, cycle.frontierItem.id, 'explored', now);
   store.saveMap(map);
 

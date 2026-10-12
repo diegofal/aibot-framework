@@ -117,6 +117,33 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
       trackOnly: false,
     },
   },
+  direction: {
+    botId: 'b1',
+    direction: {
+      runId: 'r1',
+      at: '2026-10-11T12:00:00Z',
+      summary: 'S',
+      retrospective: 'R',
+      bets: [{ id: 'x', title: 'T', kind: 'explore', rationale: 'r' }],
+      learned: ['l'],
+      surprised: ['s'],
+      trigger: { kind: 'first', everyHours: 24 },
+    },
+  },
+  frontier: {
+    botId: 'b1',
+    item: {
+      id: 'f1',
+      question: 'q?',
+      whyInteresting: 'w',
+      bridge: 'b',
+      distance: 1,
+      surpriseScore: 0.5,
+      createdAt: '2026-10-11T12:00:00Z',
+      status: 'open',
+      createdBy: { by: 'extractor', cycleId: 'c1', at: '2026-10-11T12:00:00Z' },
+    },
+  },
 };
 
 describe('Why contract', () => {

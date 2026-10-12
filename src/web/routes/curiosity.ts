@@ -9,7 +9,8 @@
  *                                                    `nextBefore` to read past the limit
  *                                                    cap (dispatches sharing that exact
  *                                                    timestamp are skipped)
- *   GET  /api/curiosity/:botId                       CuriositySnapshot (+ botName)
+ *   GET  /api/curiosity/:botId                       CuriositySnapshot (+ botName; dispatches,
+ *                                                    directions and frontier items carry `why`)
  *   POST /api/curiosity/:botId/dispatches/:id/signal { signal: up|down|more }
  *   POST /api/curiosity/:botId/frontier/:id/signal   { signal: up|down }
  *   POST /api/curiosity/:botId/direction/signal      { signal: up|down }
@@ -26,7 +27,9 @@ import type { Dispatch } from '../../bot/curiosity/types';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import { directionToWhy } from '../../why/builders/direction';
 import { dispatchToWhy } from '../../why/builders/dispatch';
+import { frontierItemToWhy } from '../../why/builders/frontier';
 import { CycleIndex } from '../../why/cycle-index';
 
 /** The part of CuriosityService the routes use (tests pass a fake). */
@@ -168,9 +171,29 @@ export function curiosityRoutes(deps: CuriosityRouteDeps) {
         snap.dispatches.map((d) => ({ ...d, botId: d.botId || bot.id })),
         new Map([[bot.id, own]])
       );
+      const history = snap.directions ?? [];
+      const current = snap.navigator?.direction ?? null;
+      const directions = history.map((d) => {
+        // The operator's verdict lives on the current direction only.
+        const signal =
+          current?.runId && current.runId === d.runId ? current.operatorSignal : undefined;
+        const row = signal ? { ...d, operatorSignal: signal } : d;
+        return { ...row, why: directionToWhy({ botId: bot.id, direction: row }) };
+      });
+      const runs = new Map(history.map((d) => [d.runId, d]));
+      const frontier = (snap.frontier ?? []).map((f) => {
+        const runId = f.item.createdBy?.runId;
+        const run = runId ? (runs.get(runId) ?? null) : undefined;
+        return {
+          ...f,
+          why: frontierItemToWhy({ botId: bot.id, item: f.item, verdict: f.verdict, run }),
+        };
+      });
       return c.json({
         ...snap,
         dispatches,
+        directions,
+        frontier,
         botName: bot.name ?? bot.id,
         avatarUrl: avatarFor(bot.id),
       });

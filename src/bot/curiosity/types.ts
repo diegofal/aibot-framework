@@ -13,6 +13,7 @@
  *   NAVIGATOR.json  — NavigatorState
  *   TASTE.json      — TasteProfile
  *   DISPATCHES.jsonl — one Dispatch per line
+ *   DIRECTIONS.jsonl — one DirectionRecord per navigator run that landed
  */
 
 // ── Limit dials ─────────────────────────────────────────────────────────
@@ -120,6 +121,28 @@ export interface FrontierItem {
   /** Operator verdict: 'up' approves an `ask`-gated item, 'down' drops it. */
   operatorSignal?: 'up' | 'down';
   exploredAt?: string;
+  /** What added it. Absent on items written before provenance was kept. */
+  createdBy?: FrontierOrigin;
+  /** Why it was dropped (status 'dropped'). Absent on older drops. */
+  droppedReason?: FrontierDrop;
+}
+
+/** The navigator run (`runId`) or the work cycle (`cycleId`) that added a frontier item. */
+export interface FrontierOrigin {
+  by: 'navigator' | 'extractor';
+  runId?: string;
+  cycleId?: string;
+  at: string;
+}
+
+/** Who dropped a frontier item: the navigator's `frontier_drop`, or the operator's 👎. */
+export interface FrontierDrop {
+  by: 'navigator' | 'operator';
+  at: string;
+  /** Navigator run that dropped it. */
+  runId?: string;
+  /** Operator: on the frontier card, or on the dispatch that proposed it. */
+  via?: 'frontier' | 'dispatch';
 }
 
 export interface KnowledgeMap {
@@ -158,6 +181,8 @@ export interface DirectionBet {
 }
 
 export interface Direction {
+  /** Navigator run that set it (matches `DirectionRecord.runId`). */
+  runId?: string;
   at: string;
   /** One-paragraph "where I'm going and why". */
   summary: string;
@@ -165,6 +190,33 @@ export interface Direction {
   bets: DirectionBet[];
   /** Operator verdict on this direction. */
   operatorSignal?: 'up' | 'down';
+}
+
+/** What made a navigator run happen, from navigator state at the time. */
+export interface NavigatorRunTrigger {
+  /** first: never set a direction; due: `navigatorEvery` elapsed; retry: the last attempt failed. */
+  kind: 'first' | 'due' | 'retry';
+  /** `navigatorEvery` in hours. */
+  everyHours: number;
+  /** Last run that landed. */
+  lastRunAt?: string;
+  /** The failed attempt this retries. */
+  failedAttemptAt?: string;
+}
+
+/** One navigator run that landed — a line of DIRECTIONS.jsonl. */
+export interface DirectionRecord {
+  runId: string;
+  at: string;
+  summary: string;
+  retrospective: string;
+  bets: DirectionBet[];
+  learned: string[];
+  surprised: string[];
+  trigger?: NavigatorRunTrigger;
+  /** Frontier item ids it added / dropped. */
+  frontierAdded?: string[];
+  frontierDropped?: string[];
 }
 
 export interface CycleTopicEntry {

@@ -381,6 +381,21 @@
             dispatch) and emits goal operations applied through <code>applyGoalOperations</code> &mdash; it may close
             self-referential bookkeeping goals. Temperature 0.7, retry at 0.3 on a parse failure.
           </p>
+          <p>
+            <span class="badge badge-yellow">2026-10-11</span> <strong>Direction history.</strong> Each run that
+            lands appends a <code>DirectionRecord</code> to <code>&lt;soulDir&gt;/DIRECTIONS.jsonl</code>
+            (<code>CuriosityStore.appendDirection</code>, newest 100 kept, travels with the export): <code>runId</code>,
+            summary, retrospective, bets, <code>learned</code>, <code>surprised</code>, the frontier ids it added and
+            dropped, and <code>trigger</code> &mdash; <code>navigatorTrigger</code> reads navigator state before the
+            attempt is stamped: <code>first</code> (never set a direction), <code>retry</code> (the last attempt is newer
+            than the last landed run) or <code>due</code> (<code>navigatorEvery</code> elapsed). The current
+            <code>Direction</code> carries the same <code>runId</code>. Frontier items record
+            <code>createdBy</code> (<code>navigator</code> + <code>runId</code>, or <code>extractor</code> + the cycle's
+            <code>cycleId</code>) and <code>droppedReason</code> (<code>navigator</code> for <code>frontier_drop</code>,
+            <code>operator</code> for a &#128078; on the frontier card or on the dispatch that proposed it). Nothing is
+            written for a run that fails. The Mind section renders both with the shared Why fold
+            (<code>directionToWhy</code>, <code>frontierItemToWhy</code>).
+          </p>
         </div>
 
         <div class="module-section">

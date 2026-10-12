@@ -13,6 +13,7 @@ import { CuriosityStore } from './store';
 import { applySignal } from './taste';
 import type {
   Direction,
+  DirectionRecord,
   DirectiveSource,
   Dispatch,
   DispatchSignal,
@@ -44,7 +45,12 @@ export interface CuriositySnapshot {
   dispatches: Dispatch[];
   concentration: TopicConcentration;
   frontier: Array<{ item: FrontierItem; verdict: FrontierVerdict }>;
+  /** Navigator runs that landed (DIRECTIONS.jsonl), newest first. */
+  directions: DirectionRecord[];
 }
+
+/** Direction history rows the snapshot carries. */
+export const SNAPSHOT_DIRECTION_LIMIT = 20;
 
 export class CuriosityService {
   private now: () => string;
@@ -102,7 +108,10 @@ export class CuriosityService {
     return resolveCuriosity(inputs.global, inputs.bot, inputs.curiosityTrait);
   }
 
-  snapshot(botId: string, opts: { dispatchLimit?: number } = {}): CuriositySnapshot | null {
+  snapshot(
+    botId: string,
+    opts: { dispatchLimit?: number; directionLimit?: number } = {}
+  ): CuriositySnapshot | null {
     const store = this.storeFor(botId);
     const config = this.resolve(botId);
     if (!store || !config) return null;
@@ -120,6 +129,7 @@ export class CuriosityService {
         item,
         verdict: evaluateFrontierItem(item, config.limits),
       })),
+      directions: store.listDirections(opts.directionLimit ?? SNAPSHOT_DIRECTION_LIMIT),
     };
   }
 
@@ -159,7 +169,8 @@ export class CuriosityService {
       const next = setFrontierSignal(
         store.loadMap(),
         updated.frontierId,
-        signal === 'down' ? 'down' : 'up'
+        signal === 'down' ? 'down' : 'up',
+        { at: now, via: 'dispatch' }
       );
       if (next) store.saveMap(next);
     }
@@ -169,7 +180,10 @@ export class CuriosityService {
   signalFrontier(botId: string, frontierId: string, signal: 'up' | 'down'): FrontierItem | null {
     const store = this.storeFor(botId);
     if (!store) return null;
-    const next = setFrontierSignal(store.loadMap(), frontierId, signal);
+    const next = setFrontierSignal(store.loadMap(), frontierId, signal, {
+      at: this.now(),
+      via: 'frontier',
+    });
     if (!next) return null;
     store.saveMap(next);
     return next.frontier.find((f) => f.id === frontierId) ?? null;

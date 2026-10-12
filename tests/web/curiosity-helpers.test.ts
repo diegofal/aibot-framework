@@ -501,3 +501,90 @@ describe('dispatchCard Why', () => {
     expect(dispatchCard(dispatch(), { nowMs: NOW })).not.toContain('class="why"');
   });
 });
+
+describe('Mind: direction history and frontier why', () => {
+  const why = (what: string, extra: Record<string, unknown> = {}) => ({
+    what,
+    by: 'navigator',
+    ...extra,
+  });
+  const row = (runId: string, h: number, summary: string) => ({
+    runId,
+    at: hoursAgo(h),
+    summary,
+    retrospective: `retro ${runId}`,
+    bets: [],
+    learned: [],
+    surprised: [],
+    why: why('A new direction for its exploration', {
+      reason: { text: `retro ${runId}`, source: 'Navigator retrospective' },
+    }),
+  });
+
+  it('the current direction folds its why; earlier ones list compactly, each with a fold', () => {
+    const current = { ...snapshot().navigator.direction, runId: 'r3' };
+    const history = [
+      row('r3', 5, 'Go deeper on reranking'),
+      row('r2', 30, 'Chunking & <b>'),
+      row('r1', 60, 'Start'),
+    ];
+    const html = directionPanel(current, 'b1', NOW, history);
+    const [head, prev] = html.split('Previous directions');
+    expect(head).toContain('<details class="why">');
+    expect(head).toContain('retro r3');
+    expect(prev).toBeDefined();
+    expect(prev).toContain('Chunking &amp; &lt;b&gt;');
+    expect(prev).toContain('Start');
+    expect(prev).not.toContain('retro r3');
+    expect((prev.match(/<details class="why">/g) ?? []).length).toBe(2);
+    expect(prev).toContain('30h ago');
+  });
+
+  it('without history the retrospective fold stays and no previous list shows', () => {
+    const html = directionPanel(snapshot().navigator.direction, 'b1', NOW, []);
+    expect(html).toContain('Retrospective');
+    expect(html).not.toContain('Previous directions');
+    expect(html).not.toContain('class="why"');
+  });
+
+  it('every frontier item folds its why; explained drops list apart', () => {
+    const items = [
+      {
+        item: {
+          id: 'a',
+          question: 'Open q',
+          whyInteresting: 'w',
+          distance: 1,
+          surpriseScore: 0.5,
+          status: 'open',
+        },
+        verdict: { allowed: true, crosses: [], needsApproval: [], blockedBy: [] },
+        why: why('A question the navigator put on its frontier'),
+      },
+      {
+        item: {
+          id: 'b',
+          question: 'Gone q',
+          whyInteresting: 'w',
+          distance: 1,
+          surpriseScore: 0.9,
+          status: 'dropped',
+        },
+        verdict: { allowed: true, crosses: [], needsApproval: [], blockedBy: [] },
+        why: why('A question on its frontier', { outcome: 'Dropped: you turned it down.' }),
+      },
+    ];
+    const html = frontierPanel(items, 'b1');
+    const [live, dropped] = html.split('Dropped recently');
+    expect(live).toContain('Open q');
+    expect(live).not.toContain('Gone q');
+    expect((live.match(/<details class="why">/g) ?? []).length).toBe(1);
+    expect(dropped).toContain('Gone q');
+    expect(dropped).toContain('Dropped: you turned it down.');
+  });
+
+  it('mindSection passes the history through', () => {
+    const snap = snapshot({ directions: [row('r9', 5, 'Now'), row('r8', 50, 'Before')] });
+    expect(mindSection(snap, { nowMs: NOW })).toContain('Previous directions');
+  });
+});

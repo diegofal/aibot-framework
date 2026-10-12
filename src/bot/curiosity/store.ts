@@ -14,16 +14,26 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { emptyKnowledgeMap } from './knowledge-map';
-import type { Dispatch, KnowledgeMap, NavigatorState, TasteProfile } from './types';
+import type {
+  DirectionRecord,
+  Dispatch,
+  KnowledgeMap,
+  NavigatorState,
+  TasteProfile,
+} from './types';
 
 /** DISPATCHES.jsonl keeps the newest this many entries (trimmed once it is 100 over). */
 export const DISPATCH_KEEP = 500;
+
+/** DIRECTIONS.jsonl keeps the newest this many navigator runs. */
+export const DIRECTION_KEEP = 100;
 
 export const CURIOSITY_FILES = {
   knowledge: 'KNOWLEDGE.json',
   navigator: 'NAVIGATOR.json',
   taste: 'TASTE.json',
   dispatches: 'DISPATCHES.jsonl',
+  directions: 'DIRECTIONS.jsonl',
 } as const;
 
 export function emptyNavigatorState(): NavigatorState {
@@ -149,5 +159,43 @@ export class CuriosityStore {
     all[idx] = { ...all[idx], ...patch, id };
     this.writeDispatches(all);
     return all[idx];
+  }
+
+  private readDirections(): DirectionRecord[] {
+    const p = this.path(CURIOSITY_FILES.directions);
+    if (!existsSync(p)) return [];
+    const out: DirectionRecord[] = [];
+    for (const line of readFileSync(p, 'utf-8').split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const d = JSON.parse(line);
+        if (d && typeof d.runId === 'string' && typeof d.at === 'string') {
+          out.push(d as DirectionRecord);
+        }
+      } catch {
+        // skip malformed line
+      }
+    }
+    return out;
+  }
+
+  /** One row per navigator run that landed; trimmed to the newest DIRECTION_KEEP. */
+  appendDirection(record: DirectionRecord): void {
+    mkdirSync(this.soulDir, { recursive: true });
+    const p = this.path(CURIOSITY_FILES.directions);
+    appendFileSync(p, `${JSON.stringify(record)}\n`, 'utf-8');
+    const all = this.readDirections();
+    if (all.length > DIRECTION_KEEP) {
+      const tmp = `${p}.tmp-${process.pid}`;
+      const keep = all.slice(-DIRECTION_KEEP);
+      writeFileSync(tmp, `${keep.map((x) => JSON.stringify(x)).join('\n')}\n`, 'utf-8');
+      renameSync(tmp, p);
+    }
+  }
+
+  /** Newest first. */
+  listDirections(limit?: number): DirectionRecord[] {
+    const all = this.readDirections().reverse();
+    return limit === undefined ? all : all.slice(0, limit);
   }
 }

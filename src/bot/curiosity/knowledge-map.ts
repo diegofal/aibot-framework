@@ -90,11 +90,15 @@ function findTopic(map: KnowledgeMap, name: string): KnowledgeTopic | undefined 
   );
 }
 
-/** Fold one cycle's extraction into the map. */
+/**
+ * Fold one cycle's extraction into the map. `origin.cycleId` (the agent-loop
+ * cycle) is stamped on the frontier items it adds.
+ */
 export function mergeExtraction(
   map: KnowledgeMap,
   ex: CycleExtraction,
-  now: string = new Date().toISOString()
+  now: string = new Date().toISOString(),
+  origin: { cycleId?: string } = {}
 ): KnowledgeMap {
   const next = cloneMap(map);
   const name = ex.topic.trim() || 'general';
@@ -158,6 +162,11 @@ export function mergeExtraction(
       fromTopic: topic.id,
       createdAt: now,
       status: 'open',
+      createdBy: {
+        by: 'extractor',
+        ...(origin.cycleId ? { cycleId: origin.cycleId } : {}),
+        at: now,
+      },
     });
   }
 
@@ -217,18 +226,32 @@ export function markFrontier(
   return next;
 }
 
-/** Operator verdict on a frontier item. 'down' drops it. Null when unknown. */
+/**
+ * Operator verdict on a frontier item. 'down' drops it and records the drop
+ * (`via`: the frontier card or the dispatch that proposed it); 'up' revives a
+ * dropped item and clears it. Null when unknown.
+ */
 export function setFrontierSignal(
   map: KnowledgeMap,
   id: string,
-  signal: 'up' | 'down'
+  signal: 'up' | 'down',
+  opts: { at?: string; via?: 'frontier' | 'dispatch' } = {}
 ): KnowledgeMap | null {
   const next = cloneMap(map);
   const item = next.frontier.find((f) => f.id === id);
   if (!item) return null;
   item.operatorSignal = signal;
-  if (signal === 'down') item.status = 'dropped';
-  else if (item.status === 'dropped') item.status = 'open';
+  if (signal === 'down') {
+    item.status = 'dropped';
+    item.droppedReason = {
+      by: 'operator',
+      at: opts.at ?? new Date().toISOString(),
+      ...(opts.via ? { via: opts.via } : {}),
+    };
+  } else {
+    if (item.status === 'dropped') item.status = 'open';
+    item.droppedReason = undefined;
+  }
   return next;
 }
 

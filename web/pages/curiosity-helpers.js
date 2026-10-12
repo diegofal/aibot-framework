@@ -195,13 +195,51 @@ export function dnaLine(snapshot) {
 
 // ── Direction ───────────────────────────────────────────────────────────
 
-export function directionPanel(direction, botId, nowMs = Date.now()) {
+/** Clip a summary for the compact history list. */
+const clipLine = (text, max = 140) => {
+  const t = String(text ?? '');
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+};
+
+/** The history row of the current direction: same run id, else same timestamp. */
+function currentRow(direction, history) {
+  if (!direction) return null;
+  return (
+    history.find((d) => direction.runId && d.runId === direction.runId) ??
+    history.find((d) => d.at === direction.at) ??
+    null
+  );
+}
+
+/** Earlier navigator runs, newest first, one line each with its fold. */
+function directionHistory(rows, botId, nowMs) {
+  if (rows.length === 0) return '';
+  const items = rows
+    .map(
+      (d) => `<li class="curio-dir-row">
+        <div><span class="text-dim text-sm">${esc(ago(d.at, nowMs))}</span> ${esc(clipLine(d.summary))}</div>
+        ${whyPanel(d.why, { nowMs, botId })}
+      </li>`
+    )
+    .join('');
+  return `<div class="curio-dir-history"><div class="curio-sub">Previous directions</div><ul class="curio-dir-list">${items}</ul></div>`;
+}
+
+export function directionPanel(direction, botId, nowMs = Date.now(), history = []) {
+  const rows = Array.isArray(history) ? history.filter((d) => d?.runId) : [];
+  const current = currentRow(direction, rows);
+  const previous = directionHistory(
+    rows.filter((d) => d !== current),
+    botId,
+    nowMs
+  );
   if (!direction) {
-    return emptyState({
+    const empty = emptyState({
       icon: '➶',
       title: 'No direction yet',
       hint: 'The navigator writes one about once a day, after the agent has run a few cycles.',
     });
+    return previous ? `${empty}${previous}` : empty;
   }
   const bets = (direction.bets ?? [])
     .map(
@@ -213,11 +251,13 @@ export function directionPanel(direction, botId, nowMs = Date.now()) {
       </li>`
     )
     .join('');
-  const retro = direction.retrospective
-    ? `<details class="curio-retro"><summary>Retrospective</summary><div class="curio-pre">${esc(
-        direction.retrospective
-      )}</div></details>`
-    : '';
+  const retro = current?.why
+    ? whyPanel(current.why, { nowMs, botId })
+    : direction.retrospective
+      ? `<details class="curio-retro"><summary>Retrospective</summary><div class="curio-pre">${esc(
+          direction.retrospective
+        )}</div></details>`
+      : '';
   return `<div class="curio-direction">
     <p class="curio-summary">${esc(direction.summary)}</p>
     ${bets ? `<ul class="curio-bets">${bets}</ul>` : ''}
@@ -230,6 +270,7 @@ export function directionPanel(direction, botId, nowMs = Date.now()) {
       ['up', 'down'],
       { up: 'Good direction', down: 'Rethink' }
     )}</div>
+    ${previous}
   </div>`;
 }
 
@@ -319,8 +360,30 @@ function distanceLabel(n) {
   return d <= 0 ? 'core' : d === 1 ? 'adjacent' : `far (${d})`;
 }
 
+/** Dropped items the server explained (`why`), newest drop first, at most five. */
+function droppedFrontier(frontier, botId) {
+  const dropped = (frontier ?? [])
+    .filter((f) => f?.item?.status === 'dropped' && f.why)
+    .sort((a, b) =>
+      String(b.item.droppedReason?.at ?? '').localeCompare(String(a.item.droppedReason?.at ?? ''))
+    )
+    .slice(0, 5);
+  if (dropped.length === 0) return '';
+  const items = dropped
+    .map(
+      (f) =>
+        `<li class="curio-dir-row"><div class="text-dim">${esc(f.item.question)}</div>${whyPanel(
+          f.why,
+          { botId }
+        )}</li>`
+    )
+    .join('');
+  return `<div class="curio-dir-history"><div class="curio-sub">Dropped recently</div><ul class="curio-dir-list">${items}</ul></div>`;
+}
+
 export function frontierPanel(frontier, botId) {
   const rank = (s) => (s === 'open' || s === 'exploring' ? 0 : 1);
+  const droppedList = droppedFrontier(frontier, botId);
   const items = (frontier ?? [])
     .filter((f) => f?.item && f.item.status !== 'dropped')
     .sort(
@@ -330,14 +393,14 @@ export function frontierPanel(frontier, botId) {
     )
     .slice(0, 8);
   if (items.length === 0) {
-    return emptyState({
+    return `${emptyState({
       icon: '✧',
       title: 'No open questions on the frontier',
       hint: 'Surprises and open questions become candidate directions here.',
-    });
+    })}${droppedList}`;
   }
   return `<div class="curio-frontier">${items
-    .map(({ item, verdict }) => {
+    .map(({ item, verdict, why }) => {
       const v = verdict ?? {};
       const badges = [
         badge(distanceLabel(item.distance), Number(item.distance) >= 2 ? 'warn' : 'muted'),
@@ -357,13 +420,14 @@ export function frontierPanel(frontier, botId) {
         ${item.whyInteresting ? `<div class="text-sm">${esc(item.whyInteresting)}</div>` : ''}
         ${item.bridge ? `<div class="text-dim text-sm">↳ ${esc(item.bridge)}</div>` : ''}
         <div class="curio-badges">${badges}</div>
+        ${whyPanel(why, { botId })}
         ${signalButtons('frontier', botId, item.id, item.operatorSignal, ['up', 'down'], {
           up: 'Approve',
           down: 'Drop',
         })}
       </div>`;
     })
-    .join('')}</div>`;
+    .join('')}</div>${droppedList}`;
 }
 
 // ── Dispatches ──────────────────────────────────────────────────────────
@@ -466,7 +530,12 @@ export function mindSection(snapshot, { nowMs = Date.now() } = {}) {
         ${card({
           title: 'Direction',
           subtitle: 'Where it is going and why',
-          body: directionPanel(snapshot?.navigator?.direction ?? null, botId, nowMs),
+          body: directionPanel(
+            snapshot?.navigator?.direction ?? null,
+            botId,
+            nowMs,
+            snapshot?.directions ?? []
+          ),
         })}
         ${card({
           title: 'Frontier',
