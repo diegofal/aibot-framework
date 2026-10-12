@@ -6,7 +6,7 @@ import type { Skill, SkillContext } from '../../core/types';
 import { localDateStr, localTimeStr } from '../../date-utils';
 import type { ChatMessage } from '../../ollama';
 import { backupSoulFile } from '../../soul';
-import { parseGoals, serializeGoals } from '../../tools/goals';
+import { parseGoals, resolveParentGoalId, serializeGoals } from '../../tools/goals';
 import type { Tool, ToolResult } from '../../tools/types';
 import { createWebFetchTool } from '../../tools/web-fetch';
 import { createWebSearchTool } from '../../tools/web-search';
@@ -52,7 +52,7 @@ interface ImprovementResult {
   soul_patch: string | null;
   journal_entry: string;
   soul_changed: boolean;
-  suggested_goals?: Array<{ text: string; priority?: string; notes?: string }>;
+  suggested_goals?: Array<{ text: string; priority?: string; notes?: string; parent?: string }>;
 }
 
 // Max chars for context sent to LLM
@@ -671,7 +671,7 @@ export default skill;
  */
 export function appendSuggestedGoals(
   soulDir: string,
-  suggested: Array<{ text: string; priority?: string; notes?: string }>,
+  suggested: Array<{ text: string; priority?: string; notes?: string; parent?: string }>,
   logger: SkillContext['logger'],
   today: string = localDateStr()
 ): number {
@@ -684,6 +684,7 @@ export function appendSuggestedGoals(
     const prefix = sg.text.slice(0, 30).toLowerCase();
     const isDuplicate = active.some((g) => g.text.toLowerCase().includes(prefix));
     if (isDuplicate) continue;
+    const parent = resolveParentGoalId(active, completed, sg.parent);
 
     active.push({
       text: sg.text,
@@ -691,6 +692,7 @@ export function appendSuggestedGoals(
       priority: sg.priority ?? 'medium',
       notes: sg.notes,
       source: `reflection:${today}`,
+      ...(parent ? { parent } : {}),
     });
     goalsAdded++;
   }

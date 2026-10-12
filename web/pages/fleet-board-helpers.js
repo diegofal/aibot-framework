@@ -5,7 +5,9 @@
  * Two levels plus a drawer, designed for reading first:
  *   overview  one compact row per agent: who + state → focus → up next → needs you
  *   board     one agent's goals in In progress / Up next / Blocked / Done
- *   drawer    one goal: status, priority, subtasks, brief, notes, delete
+ *   drawer    one goal: status, priority, subtasks, brief, notes, spawned goals, activity, delete
+ * In-progress cards also say when a cycle last served the goal (`goalPulse`),
+ * measured against the bot's loop interval, so a goal nobody works on shows.
  * Cards show a short headline (`goal.headline`, else derived from the text by
  * `goalHeadline`); the full text is the brief the agent reads, shown in the drawer.
  */
@@ -194,6 +196,142 @@ export function filterLanes(lanes = [], filter = 'all', query = '') {
   });
 }
 
+// ── Activity: is the goal really being worked on? ──
+
+const PULSE_DAYS = 7;
+const ACTIVITY_SHOWN = 4;
+const NO_WORK = new Set(['idle', 'skipped']);
+/** The agent loop cuts `planSummary` at this many chars (`agent-loop.ts`). */
+const PLAN_SUMMARY_CAP = 200;
+
+/**
+ * `{ tone, text, week, daily }` for an In progress card, from `home.goals.activity[id]`:
+ * fresh under one loop interval since the last cycle, quiet up to three, stalled
+ * after that or when no cycle served it.
+ */
+export function goalPulse(activity, intervalMs = 86_400_000, nowMs = Date.now()) {
+  const last = Date.parse(activity?.lastCycleAt ?? '');
+  const daily = Array.isArray(activity?.daily) ? activity.daily : new Array(PULSE_DAYS).fill(0);
+  const week = Number(activity?.cycles7d) || 0;
+  if (!Number.isFinite(last)) return { tone: 'stalled', text: 'never worked', week: 0, daily };
+  const ago = relativeTime(activity.lastCycleAt, nowMs);
+  const age = nowMs - last;
+  const unit = intervalMs > 0 ? intervalMs : 86_400_000;
+  if (age < unit) return { tone: 'fresh', text: `worked ${ago}`, week, daily };
+  if (age < unit * 3) return { tone: 'quiet', text: `quiet · ${ago}`, week, daily };
+  return { tone: 'stalled', text: `stalled · ${ago}`, week, daily };
+}
+
+function pulseHtml(activity, intervalMs, nowMs) {
+  const p = goalPulse(activity, intervalMs, nowMs);
+  const max = Math.max(1, ...p.daily);
+  const bars = p.daily
+    .map((n, i) => {
+      const h = n ? 4 + Math.round((n / max) * 10) : 3;
+      const day = PULSE_DAYS - 1 - i;
+      const when = day === 0 ? 'last 24h' : `${day}–${day + 1}d ago`;
+      return `<i${n ? ' class="on"' : ''} style="height:${h}px" title="${n} cycle${n === 1 ? '' : 's'}, ${when}"></i>`;
+    })
+    .join('');
+  return `<div class="fb-gpulse ${p.tone}"><span class="fb-gpulse-dot"></span><span class="fb-gpulse-w">${esc(p.text)}</span><span class="fb-gpulse-n" title="${p.week} cycle${p.week === 1 ? '' : 's'} in the last 7 days">· ${p.week} cycle${p.week === 1 ? '' : 's'} / 7d</span><span class="fb-spark" aria-hidden="true">${bars}</span></div>`;
+}
+
+function isDone(goal) {
+  return goal?.section === 'completed' || goal?.status === 'completed';
+}
+
+/** Cycles that recorded this goal and did work (not idle/skipped), newest first, from goal detail. */
+export function activityCycles(detail) {
+  const cycles = Array.isArray(detail?.cycles) ? detail.cycles : [];
+  return cycles
+    .filter((c) => c?.attribution === 'exact' && !NO_WORK.has(c.status ?? ''))
+    .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+}
+
+function toolChips(calls) {
+  const n = {};
+  for (const c of Array.isArray(calls) ? calls : []) if (c?.name) n[c.name] = (n[c.name] ?? 0) + 1;
+  return Object.entries(n)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([k, v]) => `<span class="fb-chip">${esc(k)}${v > 1 ? ` ×${v}` : ''}</span>`)
+    .join('');
+}
+
+/**
+ * The drawer's Activity section body. `detail`: `GET /api/agents/:id/goals/detail`
+ * (undefined while loading, `{ error }` when it failed).
+ */
+export function activityHtml(
+  detail,
+  { nowMs = Date.now(), botId = '', showAll = false, inProgress = false, intervalMs } = {}
+) {
+  if (detail === undefined) return '<div class="fb-dim">Loading activity…</div>';
+  if (!detail || detail.error) return '<div class="fb-dim">Could not load activity.</div>';
+  const cycles = activityCycles(detail);
+  if (!cycles.length) {
+    return `<div class="fb-dim">${
+      inProgress
+        ? 'No cycle has served this goal yet. It is In progress only because someone put it there.'
+        : 'No cycle has served this goal in the last 30 days.'
+    }</div>`;
+  }
+  const week = cycles.filter(
+    (c) => nowMs - Date.parse(c.startedAt) < PULSE_DAYS * 86_400_000
+  ).length;
+  const tools = cycles.reduce(
+    (n, c) => n + (Array.isArray(c.toolCalls) ? c.toolCalls.length : 0),
+    0
+  );
+  const tone = goalPulse({ lastCycleAt: cycles[0].startedAt }, intervalMs, nowMs).tone;
+  const shown = showAll ? cycles : cycles.slice(0, ACTIVITY_SHOWN);
+  const rows = shown
+    .map((c) => {
+      const d = new Date(c.startedAt).toISOString();
+      const plan = c.planSummary || c.focus || '(no plan summary recorded)';
+      const cut = String(c.planSummary ?? '').length >= PLAN_SUMMARY_CAP ? '…' : '';
+      const open = c.cycleId
+        ? `<button type="button" class="fb-link fb-cyc-open" data-open-cycle="${esc(c.cycleId)}" data-bot-id="${esc(botId)}">Open cycle →</button>`
+        : '';
+      return `<div class="fb-cyc"><div class="fb-cyc-when"><b>${esc(relativeTime(c.startedAt, nowMs))}</b>${d.slice(5, 10)} ${d.slice(11, 16)} UTC</div>
+        <div><div class="fb-cyc-plan" title="${esc(plan)}">${esc(plan)}${cut}</div><div class="fb-cyc-meta">${toolChips(c.toolCalls)}${open}</div></div></div>`;
+    })
+    .join('');
+  const more =
+    cycles.length > ACTIVITY_SHOWN
+      ? `<button type="button" class="fb-link fb-more-cyc" id="fb-morecyc">${showAll ? 'Show fewer' : `Show all ${cycles.length}`}</button>`
+      : '';
+  return `<div class="fb-act-sum">
+      <span><b class="fb-act-last ${tone}">${esc(relativeTime(cycles[0].startedAt, nowMs))}</b> <span class="fb-dim">last cycle</span></span>
+      <span><b>${week}</b> <span class="fb-dim">cycles in 7 days</span></span>
+      <span><b>${tools}</b> <span class="fb-dim">tool calls</span></span>
+    </div>${rows}${more}`;
+}
+
+function originOf(goal) {
+  const src = String(goal?.source ?? '');
+  return /^operator/.test(src) ? 'you' : src.split(':')[0] || 'agent';
+}
+
+/** "Spawned from this goal": goals made from it (`home.goals.spawned[id]`), each opens in the drawer. */
+export function spawnedHtml(kids) {
+  const list = Array.isArray(kids) ? kids : [];
+  if (!list.length) return '';
+  return list
+    .map((k) => {
+      const added = String(k?.source ?? '').split(':')[1] ?? '';
+      const done = isDone(k);
+      const text = k?.notes || k?.outcome || '';
+      const open = k?.id ? ` data-open-goal="${esc(k.id)}" role="button" tabindex="0"` : '';
+      return `<div class="fb-kid"${open}>
+        <div class="fb-kid-t">${esc(k?.text ?? '')}</div>
+        <div class="fb-kid-m">by ${esc(originOf(k))}${added ? ` · added ${esc(added)}` : ''}${done ? ` · <span class="fb-done-pill">done${k.completed ? ` ${esc(k.completed)}` : ''}</span>` : ''}</div>
+        ${text ? `<div class="fb-notes fb-kid-n">${esc(text)}</div>` : ''}
+      </div>`;
+    })
+    .join('');
+}
+
 // ── Markup ──
 
 const PRIORITIES = ['low', 'medium', 'high'];
@@ -291,6 +429,15 @@ export function agentLine(
   </div>`;
 }
 
+function boardCtx(home, nowMs) {
+  return {
+    activity: home?.goals?.activity ?? {},
+    intervalMs: home?.goals?.loopIntervalMs,
+    spawned: home?.goals?.spawned ?? {},
+    nowMs,
+  };
+}
+
 /** The expanded part: what it is doing, what it waits on (the real items), controls, its goals. */
 export function agentPanel(lane, needs = [], { nowMs = Date.now(), selectedRef = null } = {}) {
   const { agent, presence: p, home } = lane;
@@ -314,7 +461,7 @@ export function agentPanel(lane, needs = [], { nowMs = Date.now(), selectedRef =
       : '<div class="fb-dim">Nothing waiting on you. It can keep going.</div>';
   const cols = boardColumns(home);
   const board = home
-    ? `<div class="fb-board${cols.blocked.length ? '' : ' no-blocked'}" data-bot="${esc(id)}">${BOARD_COLUMNS.map((c) => column(c, cols[c.id], selectedRef)).join('')}</div>`
+    ? `<div class="fb-board${cols.blocked.length ? '' : ' no-blocked'}" data-bot="${esc(id)}">${BOARD_COLUMNS.map((c) => column(c, cols[c.id], selectedRef, boardCtx(home, nowMs))).join('')}</div>`
     : `<div class="fb-error">Could not load goals for this agent. <button type="button" class="btn btn-sm" data-reload="${esc(id)}">Retry</button></div>`;
   return `<div class="fb-panel">
     <aside class="fb-side">
@@ -329,7 +476,7 @@ export function agentPanel(lane, needs = [], { nowMs = Date.now(), selectedRef =
 }
 
 /** One goal card: headline (≤ 2 lines), quiet meta, priority as a colored edge. */
-export function cardHtml(goal, selected) {
+export function cardHtml(goal, selected, ctx = {}) {
   const { head, tag } = goalHeadline(goal);
   const ref = esc(refValue(goal));
   if (goal?.section === 'completed' || goal?.status === 'completed') {
@@ -339,14 +486,21 @@ export function cardHtml(goal, selected) {
   return `<div class="fb-card ${pri}${selected ? ' sel' : ''}" data-goal="${ref}" draggable="true" tabindex="0">
     <div class="fb-h">${esc(head)}</div>
     <div class="fb-meta">${tag ? `<span class="fb-tag sleep">${esc(tag)}</span>` : ''}${sourceTag(goal)}${goal?.notes ? '<span class="fb-dim" title="Has notes">✎</span>' : ''}<span class="fb-sp"></span>${mini(goal?.tasks)}</div>
+    ${goal?.status === 'in_progress' ? pulseHtml(ctx.activity?.[goal?.id], ctx.intervalMs, ctx.nowMs ?? Date.now()) : ''}${kidsLine(ctx.spawned?.[goal?.id])}
   </div>`;
 }
 
-function column(col, goals, selectedRef) {
+function kidsLine(kids) {
+  if (!Array.isArray(kids) || !kids.length) return '';
+  const done = kids.filter(isDone).length;
+  return `<div class="fb-kids">↳ ${kids.length} spawned goal${kids.length === 1 ? '' : 's'} · ${done} done</div>`;
+}
+
+function column(col, goals, selectedRef, ctx = {}) {
   if (col.id === 'blocked' && goals.length === 0) {
     return `<div class="fb-col slim" data-col="${col.id}" data-status="${col.status}" title="Blocked — drop a goal here"><div class="fb-slim-label">Blocked · 0</div></div>`;
   }
-  const cards = goals.map((g) => cardHtml(g, refValue(g) === selectedRef)).join('');
+  const cards = goals.map((g) => cardHtml(g, refValue(g) === selectedRef, ctx)).join('');
   return `<div class="fb-col" data-col="${col.id}" data-status="${col.status}">
     <div class="fb-col-h"><h3>${esc(col.label)}</h3><span class="fb-n">${goals.length}</span><span class="fb-hint">${esc(col.hint)}</span></div>
     <div class="fb-cards">${cards || '<div class="fb-dim fb-empty-col">Nothing here. Drag a goal in.</div>'}</div>
@@ -355,7 +509,18 @@ function column(col, goals, selectedRef) {
 }
 
 /** The goal drawer. Every control carries a data attribute the page delegates. */
-export function drawerHtml(agent, goal) {
+export function drawerHtml(
+  agent,
+  goal,
+  {
+    nowMs = Date.now(),
+    botId = agent?.id ?? '',
+    detail,
+    spawned = [],
+    showAll = false,
+    intervalMs,
+  } = {}
+) {
   const { head } = goalHeadline(goal);
   const done = goal?.section === 'completed' || goal?.status === 'completed';
   const status = done
@@ -413,6 +578,9 @@ export function drawerHtml(agent, goal) {
         ${brief.length > 180 ? '<button type="button" class="fb-link" id="fb-morebrief">Show full brief</button>' : ''}</div>
       <div class="fb-field"><div class="fb-lbl">Notes<span class="fb-sp"></span><button type="button" class="fb-link" id="fb-editnotes">${notes ? 'Edit' : 'Add'}</button></div>
         <div id="fb-notes">${notes ? `<div class="fb-notes">${esc(notes)}</div>` : '<div class="fb-dim">No notes yet.</div>'}</div></div>
+      ${spawned.length ? `<div class="fb-field"><div class="fb-lbl">Spawned from this goal<span class="fb-sp"></span><span class="fb-lbl-note">its progress lives here</span></div>${spawnedHtml(spawned)}</div>` : ''}
+      <div class="fb-field"><div class="fb-lbl">Activity<span class="fb-sp"></span><span class="fb-lbl-note">cycles that served this goal</span></div>
+        <div id="fb-activity">${activityHtml(detail, { nowMs, botId, showAll, intervalMs, inProgress: status === 'in_progress' })}</div></div>
     </div>
     <div class="fb-d-foot"><button type="button" class="btn btn-sm btn-danger" id="fb-del">Delete goal</button><span class="fb-sp"></span><button type="button" class="btn btn-sm" data-close>Done</button></div>`;
 }

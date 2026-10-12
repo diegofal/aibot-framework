@@ -786,6 +786,8 @@ export interface StrategistResult {
     outcome?: string;
     /** One short sentence: why this change (optional). */
     reason?: string;
+    /** For add: the existing goal (title or id) the new one serves (optional). */
+    parent?: string;
   }>;
   /** @deprecated Use single_deliverable instead */
   focus?: string;
@@ -928,6 +930,7 @@ JSON Schema:
   - notes: string (optional context)
   - outcome: string (for complete: what was achieved) — optional
   - reason: string (one short sentence: why this change)
+  - parent: string (for add: exact title or id of the existing goal the new one is a concrete step toward, so its progress shows under that goal) — optional
 - single_deliverable: string (ONE specific, bounded, achievable task — 5-15 minutes max)
 - serves_goal: string, the exact title (or id) of the active goal the deliverable serves (optional)
 - alignment_confidence: number (0.0-1.0, how well the deliverable serves the agent's identity/soul — below 0.6 triggers re-derivation)

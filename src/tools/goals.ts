@@ -142,6 +142,8 @@ export interface GoalEntry {
   tasks?: GoalTask[];
   /** Short card title set on the board; `text` stays the full brief the agent reads. */
   headline?: string;
+  /** Id of the goal this one was made from (`- parent: g-…`): reflection, strategist or the agent. */
+  parent?: string;
 }
 
 /** Status of one subtask: the same four lanes as goals on the board. */
@@ -287,6 +289,30 @@ export function ensureGoalIds(active: GoalEntry[], completed: GoalEntry[]): numb
     for (const t of g.tasks ?? []) if (!t.id) t.id = newTaskId();
   }
   return assigned;
+}
+
+const GOAL_ID = /^g-[0-9a-f]{8}$/;
+
+/**
+ * The id of the goal `ref` names (an id, or a title / piece of one, matched like
+ * every other goal reference), for a new goal's `parent`. A goal written before
+ * ids gets one here (mutates), so the link survives the write. Undefined when
+ * nothing matches.
+ */
+export function resolveParentGoalId(
+  active: GoalEntry[],
+  completed: GoalEntry[],
+  ref: string | undefined
+): string | undefined {
+  const raw = String(ref ?? '').trim();
+  if (!raw) return undefined;
+  const all = [...active, ...completed];
+  if (GOAL_ID.test(raw)) return all.some((g) => g.id === raw) ? raw : undefined;
+  const idx = findGoalIndex(all, raw);
+  if (idx === -1) return undefined;
+  const goal = all[idx];
+  goal.id ??= newGoalId();
+  return goal.id;
 }
 
 /** True when the operator set this goal from the dashboard (not the agent, not a preset). */
@@ -476,7 +502,7 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
               description:
                 'Action to perform. ' +
                 '"list" — no extra params needed. ' +
-                '"add" — requires goal (text), optional priority, notes. ' +
+                '"add" — requires goal (text), optional priority, notes, parent. ' +
                 '"update" — requires goal (substring match), optional status, priority, notes. ' +
                 '"complete" — requires goal (substring match), optional outcome. ' +
                 '"add_task" — a step you will take toward a goal: requires goal (substring match) and task (text), optional status. ' +
@@ -513,6 +539,11 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
             outcome: {
               type: 'string',
               description: 'Outcome summary (for complete action)',
+            },
+            parent: {
+              type: 'string',
+              description:
+                'For "add": the existing goal this new one serves (its title or id), when you are breaking a bigger goal into a concrete one. Omit for unrelated goals.',
             },
             scope: {
               type: 'string',
@@ -552,7 +583,8 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
             if (userId && scope !== 'shared') {
               return addUserGoal(soulLoader, userId, goal, priority, notes);
             }
-            return addGoal(soulLoader, goal, priority, notes);
+            const parent = args.parent ? String(args.parent).trim() : undefined;
+            return addGoal(soulLoader, goal, priority, notes, parent);
           }
 
           case 'update': {
@@ -690,6 +722,7 @@ export function parseGoals(content: string | null): {
       else if (key === 'started') currentGoal.started = value;
       else if (key === 'updated') currentGoal.updated = value;
       else if (key === 'headline') currentGoal.headline = value;
+      else if (key === 'parent') currentGoal.parent = value;
       else if (key === 'task') {
         const task = parseTaskValue(value);
         if (task) currentGoal.tasks = [...(currentGoal.tasks ?? []), task];
@@ -714,6 +747,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       if (g.notes) lines.push(`  - notes: ${g.notes}`);
       lines.push(...taskLines(g));
       if (g.source) lines.push(`  - source: ${g.source}`);
+      if (g.parent) lines.push(`  - parent: ${g.parent}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
       if (g.id) lines.push(`  - id: ${g.id}`);
       if (g.started) lines.push(`  - started: ${g.started}`);
@@ -737,6 +771,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       if (g.notes) lines.push(`  - notes: ${g.notes}`);
       lines.push(...taskLines(g));
       if (g.source) lines.push(`  - source: ${g.source}`);
+      if (g.parent) lines.push(`  - parent: ${g.parent}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
       if (g.id) lines.push(`  - id: ${g.id}`);
       if (g.started) lines.push(`  - started: ${g.started}`);
@@ -762,10 +797,12 @@ function addGoal(
   soulLoader: SoulLoader,
   goal: string,
   priority: string,
-  notes?: string
+  notes?: string,
+  parentRef?: string
 ): ToolResult {
   const content = soulLoader.readGoals();
   const { active, completed } = parseGoals(content);
+  const parent = resolveParentGoalId(active, completed, parentRef);
 
   active.push({
     text: goal,
@@ -774,6 +811,7 @@ function addGoal(
     notes,
     source: 'agent',
     created: localDateStr(),
+    ...(parent ? { parent } : {}),
   });
 
   soulLoader.writeGoals(serializeGoals(active, completed));

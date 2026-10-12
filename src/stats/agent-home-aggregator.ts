@@ -23,6 +23,12 @@ import { CycleIndex } from '../why/cycle-index';
 import type { Why } from '../why/types';
 import { type StatsContext, liveSchedule } from './context';
 import { getBotStats } from './fleet-aggregator';
+import {
+  GOAL_ACTIVITY_LOOKBACK_DAYS,
+  type GoalActivity,
+  buildGoalActivity,
+  loopIntervalMs,
+} from './goal-activity';
 import { type NowTone, describeNow } from './now-line';
 import { resolveBotPaths } from './paths';
 import type { LivePresence } from './presence-tracker';
@@ -157,6 +163,12 @@ export interface AgentHomeResponse {
     todo: GoalDetail[];
     inProgress: GoalDetail[];
     completedRecently: GoalDetail[];
+    /** How recently each goal was worked on, by goal id (`buildGoalActivity`); absent = no cycle in 30 days. */
+    activity: Record<string, GoalActivity>;
+    /** The bot's agent-loop interval: the board's yardstick for "quiet" and "stalled". */
+    loopIntervalMs: number;
+    /** Goals made from each goal (`parent`), by parent id, active and completed. */
+    spawned: Record<string, GoalDetail[]>;
   };
   traits: TraitStats;
   /** Recent trait changes, newest first, each with its Why (`traitChangeToWhy`). */
@@ -447,6 +459,12 @@ function buildTraitChanges(ctx: StatsContext, botId: string, soulDir: string): T
   });
 }
 
+function spawnedByParent(goals: GoalDetail[]): Record<string, GoalDetail[]> {
+  const out: Record<string, GoalDetail[]> = {};
+  for (const g of goals) if (g.parent) (out[g.parent] ??= []).push(g);
+  return out;
+}
+
 export function buildAgentHome(
   ctx: StatsContext,
   bot: BotConfig,
@@ -507,6 +525,21 @@ export function buildAgentHome(
         (g) => g.section === 'active' && goalBucket(g.status) === 'inProgress'
       ),
       completedRecently: completed,
+      activity: safe(
+        () =>
+          buildGoalActivity(
+            readAgentCycles(
+              ctx.dirs.agentCycles,
+              bot.id,
+              now - GOAL_ACTIVITY_LOOKBACK_DAYS * 86_400_000,
+              now
+            ),
+            now
+          ),
+        {}
+      ),
+      loopIntervalMs: loopIntervalMs(bot, ctx.config),
+      spawned: spawnedByParent(goals),
     },
     traits: readTraits(paths.soulDir).stats,
     traitChanges: safe(() => buildTraitChanges(ctx, bot.id, paths.soulDir), []),

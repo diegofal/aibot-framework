@@ -8335,6 +8335,169 @@ a.gd-row-name:hover {
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
+/* Goal activity: card pulse line, drawer Activity and Spawned sections */
+.fb-gpulse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.fb-gpulse > span {
+  white-space: nowrap;
+  flex: none;
+}
+.fb-gpulse > .fb-gpulse-n {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fb-gpulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-faint);
+}
+.fb-gpulse.fresh .fb-gpulse-dot {
+  background: var(--ok);
+}
+.fb-gpulse.quiet .fb-gpulse-dot {
+  background: var(--warn);
+}
+.fb-gpulse.stalled .fb-gpulse-dot {
+  background: var(--danger);
+}
+.fb-gpulse.fresh .fb-gpulse-w,
+.fb-act-last.fresh {
+  color: var(--ok);
+}
+.fb-gpulse.quiet .fb-gpulse-w,
+.fb-act-last.quiet {
+  color: var(--warn);
+}
+.fb-gpulse.stalled .fb-gpulse-w,
+.fb-act-last.stalled {
+  color: var(--danger);
+}
+.fb-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+  margin-left: auto;
+}
+.fb-spark i {
+  width: 5px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+.fb-spark i.on {
+  background: var(--accent);
+}
+.fb-kids {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.fb-act-sum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.fb-act-sum b {
+  font-size: 16px;
+}
+.fb-cyc {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--border);
+}
+.fb-act-sum + .fb-cyc {
+  border-top: 0;
+}
+.fb-cyc-when {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.fb-cyc-when b {
+  display: block;
+  color: var(--text);
+  font-weight: 500;
+}
+.fb-cyc-plan {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.fb-cyc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.fb-chip {
+  background: var(--muted-bg);
+  border-radius: 10px;
+  padding: 0 7px;
+}
+.fb-cyc-open {
+  margin-left: auto;
+}
+.fb-more-cyc {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.fb-kid {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.fb-kid:hover,
+.fb-kid:focus-visible {
+  border-color: var(--border-strong);
+}
+.fb-kid-t {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.fb-kid-m {
+  margin: 2px 0 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.fb-done-pill {
+  background: var(--ok-bg);
+  color: var(--ok);
+  border-radius: 10px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+.fb-notes.fb-kid-n {
+  font-size: 13px;
+}
+/* "Open cycle" from the board drawer: the sheet goes above the drawer (z-index 901). */
+body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet-backdrop {
+  z-index: 950;
+}
+body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
+  z-index: 960;
+}
 .fb-edit {
   width: 100%;
   box-sizing: border-box;

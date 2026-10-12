@@ -190,7 +190,7 @@ Based on this analysis, generate:
 
 4. **soul_changed**: Boolean — true only if soul_patch is not null.
 
-5. **suggested_goals**: An array of 0-3 new goals addressing genuine gaps found in the analysis. Each goal has text, priority (high/medium/low), and optional notes. Rules: only suggest goals for real gaps not already covered by existing goals. An empty array is perfectly fine — do not invent goals just to fill the field.
+5. **suggested_goals**: An array of 0-3 new goals addressing genuine gaps found in the analysis. Each goal has text, priority (high/medium/low), optional notes, and optional parent: when the new goal is a concrete step toward an existing goal, parent is that goal's exact title (its progress then shows under it). Rules: only suggest goals for real gaps not already covered by existing goals. An empty array is perfectly fine — do not invent goals just to fill the field.
 
 Respond with this exact JSON structure:
 {
@@ -198,7 +198,7 @@ Respond with this exact JSON structure:
   "soul_patch": null,
   "journal_entry": "2-3 sentence summary",
   "soul_changed": false,
-  "suggested_goals": [{"text": "goal description", "priority": "medium", "notes": "optional context"}]
+  "suggested_goals": [{"text": "goal description", "priority": "medium", "notes": "optional context", "parent": "optional: title of the existing goal it serves"}]
 }`;
 
   return { system, prompt };

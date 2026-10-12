@@ -234,6 +234,8 @@ export interface GoalDetail {
   tasks: { text: string; done: boolean }[];
   /** Short card title set on the board; null = the board derives one from `text`. */
   headline: string | null;
+  /** Id of the goal this one was made from (`- parent:`), null when none. */
+  parent: string | null;
 }
 
 export interface TraitSnapshot {

@@ -783,3 +783,85 @@ describe('goal headline and brief edits (fleet board drawer)', () => {
     );
   });
 });
+
+describe('goal activity and spawned goals (fleet board)', () => {
+  const DAY = 24 * H;
+  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  function setup() {
+    writeFileSync(
+      join(fx.soulDir('b1'), 'GOALS.md'),
+      [
+        '## Active Goals',
+        '- [ ] Research what people say about LLMs',
+        '  - status: in_progress',
+        '  - priority: medium',
+        '  - source: operator',
+        '  - id: g-7cb6a370',
+        '- [ ] Monthly lab',
+        '  - status: in_progress',
+        '  - priority: medium',
+        '  - id: g-0b7cdc2f',
+        '',
+        '## Completed',
+        '- [x] Publish the first daily practitioner digest',
+        '  - completed: 2026-10-11',
+        '  - notes: Top priority this cycle.',
+        '  - source: reflection:2026-10-11',
+        '  - parent: g-7cb6a370',
+        '  - id: g-1001d015',
+        '',
+      ].join('\n')
+    );
+    const rows = [
+      { at: fx.now - 8 * H, goalId: 'g-7cb6a370', status: 'completed' },
+      { at: fx.now - 30 * H, goalId: 'g-7cb6a370', status: 'completed' },
+      { at: fx.now - 2 * H, goalId: 'g-7cb6a370', status: 'idle' },
+      { at: fx.now - 2 * DAY - H, goalId: 'g-0b7cdc2f', status: 'completed' },
+    ];
+    for (const r of rows) {
+      const dir = join(fx.dir, 'agent-cycles', 'b1');
+      mkdirSync(dir, { recursive: true });
+      appendFileSync(
+        join(dir, `${day(r.at)}.jsonl`),
+        `${JSON.stringify({ cycleId: `c${r.at}`, botId: 'b1', startedAt: new Date(r.at).toISOString(), endedAt: new Date(r.at + 60_000).toISOString(), status: r.status, goalId: r.goalId })}\n`
+      );
+    }
+  }
+
+  it('carries per-goal activity and the loop interval', async () => {
+    setup();
+    const body = await (await makeApp().request('/api/agents/b1/home')).json();
+    const a = body.goals.activity['g-7cb6a370'];
+    expect(a.lastCycleAt).toBe(new Date(fx.now - 8 * H).toISOString());
+    expect(a.cycles7d).toBe(2);
+    expect(a.daily).toHaveLength(7);
+    expect(body.goals.activity['g-0b7cdc2f'].cycles7d).toBe(1);
+    expect(typeof body.goals.loopIntervalMs).toBe('number');
+    expect(body.goals.loopIntervalMs).toBeGreaterThan(0);
+  });
+
+  it('lists the goals spawned from each goal, with parent on the child', async () => {
+    setup();
+    const body = await (await makeApp().request('/api/agents/b1/home')).json();
+    const kids = body.goals.spawned['g-7cb6a370'];
+    expect(kids).toHaveLength(1);
+    expect(kids[0]).toMatchObject({
+      id: 'g-1001d015',
+      text: 'Publish the first daily practitioner digest',
+      section: 'completed',
+      completed: '2026-10-11',
+      notes: 'Top priority this cycle.',
+      source: 'reflection:2026-10-11',
+      parent: 'g-7cb6a370',
+    });
+    expect(body.goals.spawned['g-0b7cdc2f']).toBeUndefined();
+    const parent = body.goals.inProgress.find((g: { id: string }) => g.id === 'g-7cb6a370');
+    expect(parent.parent).toBeNull();
+  });
+
+  it('no cycle log: empty activity, never a 500', async () => {
+    const res = await makeApp().request('/api/agents/b1/home');
+    expect(res.status).toBe(200);
+    expect((await res.json()).goals.activity).toEqual({});
+  });
+});

@@ -5,11 +5,12 @@
  * how much waits on you). Click a line to expand it in place: what the agent is
  * doing, the actual items waiting on you (from Needs You), its controls, and
  * its goals in four compact columns. A card opens the goal drawer (title,
- * status, priority, subtasks, brief, notes, delete). Markup lives in
+ * status, priority, subtasks, brief, notes, spawned goals, activity, delete). Markup lives in
  * fleet-board-helpers.js (pure, tested).
  *
  * Data: `/api/agents`, `/api/agents/presence` (live via `watchFleet`),
- * `/api/needs-you`, and `/api/agents/:id/home` per agent; cached briefly.
+ * `/api/needs-you`, and `/api/agents/:id/home` per agent; cached briefly. The
+ * drawer's Activity section loads `/api/agents/:id/goals/detail` when it opens.
  * Writes: POST / PATCH / DELETE `/api/agents/:id/goals`.
  */
 import { confirmInline, showToast, skeleton } from '../ui/index.js';
@@ -102,6 +103,38 @@ async function loadAll() {
   return cache;
 }
 
+const ACTIVITY_DAYS = 30;
+
+function detailKey(botId, goal) {
+  return `${botId}:${goal?.id || goal?.text || ''}`;
+}
+
+/** The goal's cycles for the drawer's Activity section; repaints when it lands. */
+async function loadDetail(botId, goal) {
+  const key = detailKey(botId, goal);
+  const have = state.details[key];
+  if (have && Date.now() - have.at < CACHE_MS) return;
+  const q = goal.id
+    ? `id=${encodeURIComponent(goal.id)}`
+    : `title=${encodeURIComponent(goal.text)}`;
+  const res = await api(
+    `/api/agents/${encodeURIComponent(botId)}/goals/detail?${q}&days=${ACTIVITY_DAYS}`
+  ).catch((err) => ({ error: err?.message || 'Request failed' }));
+  if (!state) return;
+  state.details[key] = { at: Date.now(), body: res && !res.error ? res : { error: res?.error } };
+  const open = currentGoal();
+  if (open && detailKey(state.drawer.botId, open) === key) paintDrawer();
+}
+
+function openDrawer(botId, ref) {
+  state.drawer = { botId, ref };
+  state.showAllCycles = false;
+  paintRow(botId);
+  paintDrawer();
+  const goal = currentGoal();
+  if (goal) loadDetail(botId, goal);
+}
+
 function lanes() {
   return sortFleet(cache.agents, cache.presence).map((agent) => ({
     agent,
@@ -118,6 +151,7 @@ function findGoal(botId, ref) {
     ...(g.todo ?? []),
     ...(g.blocked ?? []),
     ...(g.completedRecently ?? []),
+    ...Object.values(g.spawned ?? {}).flat(),
   ];
   return all.find((x) => x.id === ref) ?? all.find((x) => x.text === ref) ?? null;
 }
@@ -170,8 +204,15 @@ function paintDrawer() {
   drawer.classList.toggle('on', Boolean(goal));
   scrim.classList.toggle('on', Boolean(goal));
   if (!goal) return;
-  const agent = cache.agents.find((a) => a.id === state.drawer.botId);
-  drawer.innerHTML = drawerHtml(agent, goal);
+  const botId = state.drawer.botId;
+  const agent = cache.agents.find((a) => a.id === botId);
+  drawer.innerHTML = drawerHtml(agent, goal, {
+    botId,
+    detail: state.details[detailKey(botId, goal)]?.body,
+    spawned: (goal.id && cache.homes[botId]?.goals?.spawned?.[goal.id]) || [],
+    showAll: state.showAllCycles,
+    intervalMs: cache.homes[botId]?.goals?.loopIntervalMs,
+  });
 }
 
 function busy() {
@@ -311,11 +352,7 @@ async function onClick(e) {
   const card = t.closest('.fb-card[data-goal]');
   if (card) {
     const botId = card.closest('[data-row]')?.dataset.row;
-    if (botId) {
-      state.drawer = { botId, ref: card.dataset.goal };
-      paintRow(botId);
-      paintDrawer();
-    }
+    if (botId) openDrawer(botId, card.dataset.goal);
     return;
   }
   if (t.closest('[data-close]') || t.classList.contains('fb-scrim')) {
@@ -348,6 +385,16 @@ async function onClick(e) {
   if (mv) {
     const next = moveTask(goal.tasks ?? [], i, Number(mv.dataset.tmove));
     if (next !== goal.tasks) await saveTasks(goal, next);
+    return;
+  }
+  if (t.id === 'fb-morecyc') {
+    state.showAllCycles = !state.showAllCycles;
+    paintDrawer();
+    return;
+  }
+  const kid = t.closest('[data-open-goal]');
+  if (kid) {
+    openDrawer(botId, kid.dataset.openGoal);
     return;
   }
   if (t.id === 'fb-morebrief') {
@@ -457,12 +504,19 @@ async function keydown(e) {
     t.blur();
     return;
   }
+  if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('[data-open-goal]') && state.drawer) {
+    e.preventDefault();
+    openDrawer(state.drawer.botId, t.dataset.openGoal);
+    return;
+  }
   if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('[data-toggle]')) {
     e.preventDefault();
     toggleRow(t.dataset.toggle);
     return;
   }
   if (e.key === 'Escape') {
+    // An Open cycle sheet on top of the drawer closes on its own Escape.
+    if (document.body.classList.contains('ui-sheet-open')) return;
     if (inField) {
       t.blur();
       return;
@@ -546,6 +600,8 @@ export async function renderFleetBoard(el, focusId) {
     el,
     open: readOpen(),
     drawer: null,
+    details: {},
+    showAllCycles: false,
     filter: ['all', 'live', 'needs'].includes(saved) ? saved : 'all',
     query: '',
     kb: 0,

@@ -2,7 +2,7 @@ import type { BotConfig } from '../config';
 import type { LLMClient, TokenUsage } from '../core/llm-client';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
-import { parseGoals, serializeGoals } from '../tools/goals';
+import { parseGoals, resolveParentGoalId, serializeGoals } from '../tools/goals';
 import { parseDurationMs } from './agent-loop';
 import { buildStrategistPrompt } from './agent-loop-prompts';
 import { logToMemory } from './agent-loop-utils';
@@ -18,6 +18,8 @@ export interface GoalOperation {
   outcome?: string;
   /** One short sentence: why this change (stated at decision time; optional). */
   reason?: string;
+  /** For add: the existing goal (title or id) the new one serves (optional). */
+  parent?: string;
 }
 
 export interface StrategistResult {
@@ -341,12 +343,14 @@ export function applyGoalOperations(
   for (const op of operations) {
     switch (op.action) {
       case 'add': {
+        const parent = resolveParentGoalId(active, completed, op.parent);
         active.push({
           text: op.goal,
           status: 'pending',
           priority: op.priority ?? 'medium',
           notes: op.notes,
           source: `strategist:${localDateStr()}`,
+          ...(parent ? { parent } : {}),
         });
         noteReason(op.goal, op);
         logger.debug({ goal: op.goal }, 'Strategist: added goal');

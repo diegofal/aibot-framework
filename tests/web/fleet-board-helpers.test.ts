@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
   BOARD_COLUMNS,
+  activityCycles,
+  activityHtml,
   addTask,
   agentLine,
   agentPanel,
@@ -10,12 +12,14 @@ import {
   filterLanes,
   fleetPulse,
   goalHeadline,
+  goalPulse,
   goalRef,
   lastCycle,
   moveTask,
   needsByBot,
   removeTask,
   renameTask,
+  spawnedHtml,
   stateLine,
   taskProgress,
   toggleTask,
@@ -257,5 +261,172 @@ describe('toggleTask keeps the lane in step with the checkbox', () => {
     const on = toggleTask(list, 0);
     expect(on[0]).toEqual({ text: 'a', done: true, status: 'done', id: 't-1' });
     expect(toggleTask(on, 0)[0]).toEqual({ text: 'a', done: false, status: 'todo', id: 't-1' });
+  });
+});
+
+describe('goal activity: is it really being worked on?', () => {
+  const H = 3_600_000;
+  const DAY = 24 * H;
+  const iso = (agoMs: number) => new Date(NOW - agoMs).toISOString();
+  const act = (agoMs: number, cycles7d = 4) => ({
+    lastCycleAt: iso(agoMs),
+    cycles7d,
+    daily: [0, 0, 0, 1, 1, 0, 2],
+  });
+
+  it('goalPulse: fresh under one loop interval, quiet up to three, stalled after', () => {
+    expect(goalPulse(act(8 * H), DAY, NOW)).toMatchObject({ tone: 'fresh', text: 'worked 8h ago' });
+    expect(goalPulse(act(2 * DAY), DAY, NOW)).toMatchObject({
+      tone: 'quiet',
+      text: 'quiet · 2d ago',
+    });
+    expect(goalPulse(act(4 * DAY), DAY, NOW)).toMatchObject({
+      tone: 'stalled',
+      text: 'stalled · 4d ago',
+    });
+    expect(goalPulse(act(3 * H), 6 * H, NOW).tone).toBe('fresh');
+    expect(goalPulse(act(7 * H), 6 * H, NOW).tone).toBe('quiet');
+  });
+
+  it('goalPulse: no cycle at all is "never worked", stalled', () => {
+    expect(goalPulse(undefined, DAY, NOW)).toMatchObject({
+      tone: 'stalled',
+      text: 'never worked',
+      week: 0,
+      daily: [0, 0, 0, 0, 0, 0, 0],
+    });
+  });
+
+  it('In progress cards carry the pulse line and 7-day bars; other columns do not', () => {
+    const ctx = { activity: { 'g-11111111': act(8 * H) }, intervalMs: DAY, nowMs: NOW };
+    const html = cardHtml(goal(), false, ctx);
+    expect(html).toContain('fb-gpulse fresh');
+    expect(html).toContain('worked 8h ago');
+    expect(html).toContain('4 cycles / 7d');
+    expect((html.match(/<i class="on"/g) ?? []).length).toBe(3);
+    expect(cardHtml(goal({ status: 'pending' }), false, ctx)).not.toContain('fb-gpulse');
+    expect(cardHtml(goal({ status: 'blocked' }), false, ctx)).not.toContain('fb-gpulse');
+  });
+
+  it('a card with spawned goals says how many and how many are done', () => {
+    const kids = [
+      goal({ id: 'g-k1', section: 'completed', status: 'completed' }),
+      goal({ id: 'g-k2' }),
+    ];
+    const html = cardHtml(goal(), false, { spawned: { 'g-11111111': kids }, nowMs: NOW });
+    expect(html).toContain('↳ 2 spawned goals · 1 done');
+    expect(cardHtml(goal(), false, { spawned: { 'g-11111111': [kids[1]] } })).toContain(
+      '↳ 1 spawned goal · 0 done'
+    );
+    expect(cardHtml(goal(), false, {})).not.toContain('spawned');
+  });
+
+  const cycle = (over: Record<string, unknown> = {}) => ({
+    cycleId: 'c122e93f-aaaa',
+    startedAt: iso(9 * H),
+    status: 'completed',
+    attribution: 'exact',
+    planSummary: 'web_search for vendor postmortems on coding-agent regressions',
+    toolCalls: [{ name: 'web_search' }, { name: 'web_search' }, { name: 'web_fetch' }],
+    ...over,
+  });
+
+  it('activityCycles: only cycles that recorded this goal and did work, newest first', () => {
+    const list = activityCycles({
+      cycles: [
+        cycle({ cycleId: 'old', startedAt: iso(3 * DAY) }),
+        cycle({ cycleId: 'weak', attribution: 'weak' }),
+        cycle({ cycleId: 'idle', status: 'idle' }),
+        cycle({ cycleId: 'new', startedAt: iso(H) }),
+      ],
+    });
+    expect(list.map((c: { cycleId: string }) => c.cycleId)).toEqual(['new', 'old']);
+    expect(activityCycles(null)).toEqual([]);
+  });
+
+  it('activityHtml: summary, rows with tools and Open cycle, newest first', () => {
+    const html = activityHtml(
+      { cycles: [cycle(), cycle({ cycleId: 'c2', startedAt: iso(2 * DAY), toolCalls: [] })] },
+      { nowMs: NOW, botId: 'ai-perfectionist' }
+    );
+    expect(html).toContain('fb-act-last fresh');
+    expect(html).toContain('9h ago');
+    expect(html).toContain('last cycle');
+    expect(html).toContain('cycles in 7 days');
+    expect(html).toContain('<b>3</b>');
+    expect(html).toContain('web_search ×2');
+    expect(html).toContain('data-open-cycle="c122e93f-aaaa"');
+    expect(html).toContain('data-bot-id="ai-perfectionist"');
+    expect(html.indexOf('c122e93f-aaaa')).toBeLessThan(html.indexOf('"c2"'));
+  });
+
+  it('activityHtml: a plan summary cut at the log cap ends in an ellipsis, full text on hover', () => {
+    const long = 'x'.repeat(200);
+    const html = activityHtml(
+      { cycles: [cycle({ planSummary: long })] },
+      { nowMs: NOW, botId: 'b' }
+    );
+    expect(html).toContain(`${long}…</div>`);
+    expect(html).toContain(`title="${long}"`);
+    const short = activityHtml({ cycles: [cycle()] }, { nowMs: NOW, botId: 'b' });
+    expect(short).not.toContain('…</div>');
+  });
+
+  it('activityHtml: four rows, then "Show all N"', () => {
+    const many = {
+      cycles: [1, 2, 3, 4, 5, 6].map((n) => cycle({ cycleId: `c${n}`, startedAt: iso(n * H) })),
+    };
+    const short = activityHtml(many, { nowMs: NOW, botId: 'b' });
+    expect((short.match(/data-open-cycle=/g) ?? []).length).toBe(4);
+    expect(short).toContain('Show all 6');
+    const all = activityHtml(many, { nowMs: NOW, botId: 'b', showAll: true });
+    expect((all.match(/data-open-cycle=/g) ?? []).length).toBe(6);
+    expect(all).toContain('Show fewer');
+  });
+
+  it('activityHtml: loading, failed and empty states say so', () => {
+    expect(activityHtml(undefined, { nowMs: NOW })).toContain('Loading activity');
+    expect(activityHtml({ error: 'x' }, { nowMs: NOW })).toContain('Could not load activity');
+    expect(activityHtml({ cycles: [] }, { nowMs: NOW, inProgress: true })).toContain(
+      'In progress only because someone put it there'
+    );
+    expect(activityHtml({ cycles: [] }, { nowMs: NOW })).toContain('No cycle has served this goal');
+  });
+
+  it('spawnedHtml: each spawned goal with who made it, its state and latest notes', () => {
+    const html = spawnedHtml([
+      goal({
+        id: 'g-1001d015',
+        text: 'Publish the first daily practitioner digest',
+        source: 'reflection:2026-10-11',
+        section: 'completed',
+        status: 'completed',
+        completed: '2026-10-11',
+        notes: 'Top priority this cycle.',
+      }),
+    ]);
+    expect(html).toContain('Publish the first daily practitioner digest');
+    expect(html).toContain('by reflection');
+    expect(html).toContain('added 2026-10-11');
+    expect(html).toContain('done 2026-10-11');
+    expect(html).toContain('Top priority this cycle.');
+    expect(html).toContain('data-open-goal="g-1001d015"');
+    expect(spawnedHtml([])).toBe('');
+  });
+
+  it('drawer: Spawned and Activity sections after Notes', () => {
+    const html = drawerHtml({ id: 'b1', name: 'Bot' }, goal(), {
+      nowMs: NOW,
+      botId: 'b1',
+      detail: { cycles: [cycle()] },
+      spawned: [goal({ id: 'g-k', text: 'Kid goal' })],
+    });
+    const notes = html.indexOf('Notes');
+    const kids = html.indexOf('Spawned from this goal');
+    const activity = html.indexOf('>Activity<');
+    expect(notes).toBeGreaterThan(-1);
+    expect(kids).toBeGreaterThan(notes);
+    expect(activity).toBeGreaterThan(kids);
+    expect(drawerHtml({ id: 'b1' }, goal())).not.toContain('Spawned from this goal');
   });
 });
