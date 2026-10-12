@@ -78,6 +78,16 @@ const KINDS: Record<KarmaOutcomeKind | LegacyKind, KindInfo> = {
     by: 'agent',
     rule: 'A finished collaboration earns karma.rewards.collaborateCompleted (0 by default).',
   },
+  workerProtocol: {
+    what: 'A task worker broke the step protocol',
+    by: 'agent',
+    rule: 'A worker run that ends a step without its report tool costs karma.rewards.workerProtocol, like a failed tool call.',
+  },
+  workerDone: {
+    what: 'A task worker finished its task',
+    by: 'agent',
+    rule: 'A worker run that finishes its task with a note earns karma.rewards.workerDone (0 by default).',
+  },
   manual: { what: 'Manual adjustment', by: 'operator' },
   other: { what: 'Karma event' },
 };

@@ -111,6 +111,17 @@ export function startWebServer(deps: WebServerDeps): void {
 
   const app = new Hono();
 
+  /**
+   * The task worker pool, when BotManager exposes one (C21/C22): closing a goal
+   * stops its runs, goal-lint reads live runs. Absent → both fall back to claims.
+   */
+  const workerPool = (): import('../workers/types').WorkerPoolApi | undefined => {
+    const bm = deps.botManager as unknown as {
+      getWorkerPool?: () => import('../workers/types').WorkerPoolApi | undefined;
+    };
+    return typeof bm.getWorkerPool === 'function' ? bm.getWorkerPool() : undefined;
+  };
+
   /** Agent-loop cycle rows of a bot: every "Why this?" reads its cycle's plan and goal here (src/why/). */
   const readCycles: CycleReader = (botId, sinceMs, untilMs) =>
     readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs);
@@ -212,6 +223,7 @@ export function startWebServer(deps: WebServerDeps): void {
       presence: presenceTracker,
       pendingPermissions: (botId) =>
         deps.botManager.getPermissionsPending().filter((r) => r.botId === botId).length,
+      workerPool,
     })
   );
   app.route(
@@ -458,6 +470,7 @@ export function startWebServer(deps: WebServerDeps): void {
       );
     },
     channelStateOf: (botId) => deps.botManager.getChannelState(botId)?.state,
+    workerRuns: (botId) => workerPool()?.list(botId, { endedLimit: 20 }) ?? [],
     // productions-triage archives through the service so index.html is rebuilt.
     archiveProduction: productionsService
       ? (botId, path, reason) => productionsService.archiveFile(botId, path, reason)

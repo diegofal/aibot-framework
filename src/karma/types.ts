@@ -28,6 +28,10 @@ export interface KarmaRewards {
   collaborateCompleted: number;
   /** A tool call failed (execution/validation) */
   toolError: number;
+  /** A task worker run broke the step protocol (ended a step without its report tool) */
+  workerProtocol: number;
+  /** A task worker run finished its task with a note (0 by default: configurable) */
+  workerDone: number;
 }
 
 export type KarmaOutcomeKind = keyof KarmaRewards;
@@ -41,6 +45,8 @@ export const DEFAULT_KARMA_REWARDS: KarmaRewards = {
   humanReply: 3,
   collaborateCompleted: 0,
   toolError: -1,
+  workerProtocol: -1,
+  workerDone: 0,
 };
 
 /** Which ledger source each outcome kind is filed under */
@@ -53,6 +59,8 @@ export const KARMA_KIND_SOURCE: Record<KarmaOutcomeKind, KarmaSource> = {
   humanReply: 'engagement',
   collaborateCompleted: 'agent-loop',
   toolError: 'tool',
+  workerProtocol: 'tool',
+  workerDone: 'agent-loop',
 };
 
 export interface KarmaEvent {

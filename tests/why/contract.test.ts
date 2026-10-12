@@ -50,6 +50,44 @@ const proactive: ProactiveSend = {
 const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0] } = {
   dispatch,
   proactive,
+  taskEvent: {
+    botId: 'b1',
+    event: {
+      ts: '2026-10-12T10:00:00Z',
+      op: 'task-move',
+      from: 'in_progress',
+      to: 'done',
+      actor: 'system',
+      cycleId: null,
+      runId: 'run-1',
+      taskId: 't-abc123',
+      task: 'Summarise the findings',
+      note: 'Saved to 03_summary.md',
+    },
+    goal: { id: 'g-1', title: 'Research' },
+  },
+  workerRun: {
+    run: {
+      runId: 'run-1',
+      botId: 'b1',
+      taskId: 't-abc123',
+      goalId: 'g-1',
+      dispatchCycleId: 'c1',
+      taskText: 'Summarise the findings',
+      goalTitle: 'Research',
+      status: 'done',
+      attempt: 1,
+      step: 1,
+      budget: { steps: 8, toolCalls: 40, wallMs: 3_600_000 },
+      used: { steps: 1, toolCalls: 2, wallMs: 60_000 },
+      createdAt: '2026-10-12T10:00:00Z',
+      outcome: { kind: 'done', note: 'Saved' },
+    },
+    journal: [
+      { ts: '2026-10-12T10:01:00Z', runId: 'run-1', kind: 'step-end', n: 1, summary: 'Wrote it' },
+    ],
+    cycle: { cycleId: 'c1', startedAt: '2026-10-12T09:59:00Z', planSummary: 'P' },
+  },
   goalEvent: {
     botId: 'b1',
     event: {

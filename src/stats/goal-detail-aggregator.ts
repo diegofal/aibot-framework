@@ -18,6 +18,7 @@ import type { BotConfig } from '../config';
 import { titleTokens } from '../hygiene/text-utils';
 import { type GoalEntry, findGoalIndex, goalBucket, parseGoals } from '../tools/goals';
 import { goalEventToWhy } from '../why/builders/goal-event';
+import { taskEventToWhy } from '../why/builders/task-event';
 import { CycleIndex } from '../why/cycle-index';
 import type { StatsContext } from './context';
 import {
@@ -150,7 +151,11 @@ function explainTimeline(
   );
   return changes.map((c) => {
     const cycle = c.cycleId ? (known.get(c.cycleId) ?? index.byId(botId, c.cycleId)) : undefined;
-    return { ...c, why: goalEventToWhy({ botId, event: c, ...(cycle ? { cycle } : {}) }) };
+    const input = { botId, event: c, ...(cycle ? { cycle } : {}) };
+    return {
+      ...c,
+      why: c.op.startsWith('task-') ? taskEventToWhy(input) : goalEventToWhy(input),
+    };
   });
 }
 
@@ -208,6 +213,7 @@ export function buildGoalDetail(
       actor: e.actor ?? null,
       note: e.note ?? null,
       ...(e.task ? { task: e.task } : {}),
+      ...(e.taskId ? { taskId: e.taskId } : {}),
       inferred: false,
       source: 'goal-events' as const,
       cycleId: e.cycleId ?? null,

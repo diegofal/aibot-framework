@@ -19,6 +19,7 @@ import {
   titleTokens,
 } from '../text-utils';
 import type { HygieneApplyResult, HygieneContext, HygieneFinding, HygieneRoutine } from '../types';
+import { taskFindings } from './goal-lint-tasks';
 
 const GOALS_FILE = 'GOALS.md';
 const NOTES_LIMIT = 1000;
@@ -43,7 +44,7 @@ export const goalLint: HygieneRoutine = {
   id: 'goal-lint',
   name: 'Goal lint',
   description:
-    'Checks GOALS.md for archived goals left under Active, duplicate titles, oversized notes, stale blocks and triggers tied to a dead channel.',
+    'Checks GOALS.md for archived goals left under Active, duplicate titles, oversized notes, stale blocks and triggers tied to a dead channel; reports goal tasks that stalled, sit Blocked with nobody asked, were done without a note, or lost their goal.',
   scope: 'bot',
   canApply: true,
 
@@ -145,6 +146,7 @@ export const goalLint: HygieneRoutine = {
       }
     }
 
+    findings.push(...taskFindings(ctx, content));
     return findings;
   },
 

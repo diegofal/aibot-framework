@@ -20,7 +20,9 @@ import { postureToWhy } from './posture';
 import { proactiveToWhy } from './proactive';
 import { productionToWhy } from './production';
 import { soulEventToWhy } from './soul-event';
+import { taskEventToWhy } from './task-event';
 import { traitChangeToWhy } from './trait-change';
+import { workerRunToWhy } from './worker-run';
 
 export const WHY_BUILDERS = {
   cycle: cycleToWhy,
@@ -42,6 +44,8 @@ export const WHY_BUILDERS = {
   frontier: frontierItemToWhy,
   soulEvent: soulEventToWhy,
   traitChange: traitChangeToWhy,
+  taskEvent: taskEventToWhy,
+  workerRun: workerRunToWhy,
 } as const;
 
 export type WhyBuilderName = keyof typeof WHY_BUILDERS;

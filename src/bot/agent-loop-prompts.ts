@@ -957,8 +957,9 @@ JSON Schema:
   - outcome: string (for complete: what was achieved) — optional
   - reason: string (one short sentence: why this change)
   - parent: string (for add: exact title or id of the existing goal the new one is a concrete step toward, so its progress shows under that goal) — optional
+  - tasks: array of strings (for add: the goal's initial breakdown, 2-5 concrete steps, each one short sentence; they become the goal's tasks) — optional
 - single_deliverable: string (ONE specific, bounded, achievable task — 5-15 minutes max)
-- serves_goal: string, the exact title (or id) of the active goal the deliverable serves (optional)
+- serves_goal: string, the exact title (or id) of the active goal the deliverable serves (optional; when it names an active goal, the deliverable becomes a task on that goal unless an open task already says the same)
 - alignment_confidence: number (0.0-1.0, how well the deliverable serves the agent's identity/soul — below 0.6 triggers re-derivation)
 - focus: string (deprecated, use single_deliverable)
 - reflection: string (brief analysis of the agent's current state and trajectory)

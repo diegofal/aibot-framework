@@ -470,6 +470,8 @@ describe('KarmaService.recordOutcome', () => {
       humanReply: 3,
       collaborateCompleted: 0,
       toolError: -1,
+      workerProtocol: -1,
+      workerDone: 0,
     });
   });
 

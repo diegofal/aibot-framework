@@ -1002,6 +1002,8 @@ const KarmaRewardsSchema = z
     humanReply: z.number().default(3),
     collaborateCompleted: z.number().default(0),
     toolError: z.number().default(-1),
+    workerProtocol: z.number().default(-1),
+    workerDone: z.number().default(0),
   })
   .default({});
 

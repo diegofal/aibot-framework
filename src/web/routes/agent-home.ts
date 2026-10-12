@@ -30,6 +30,7 @@ import { writeGoalsFile } from '../../bot/goal-events';
 import { type SoulEvent, readSoulEvents } from '../../bot/soul-events';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
+import { closeGoalTasks } from '../../goals/goal-closure';
 import { TASK_LANES, type TaskLane, type TaskOp, TaskStore } from '../../goals/task-store';
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
@@ -64,6 +65,7 @@ import {
 import { soulEventToWhy } from '../../why/builders/soul-event';
 import { CycleIndex } from '../../why/cycle-index';
 import type { Why } from '../../why/types';
+import type { WorkerPoolApi } from '../../workers/types';
 
 /** Reason stamped on goal events the operator makes from the dashboard. */
 const OPERATOR_GOAL_REASON = 'You, from the dashboard';
@@ -158,6 +160,8 @@ export interface AgentHomeRouteDeps {
   /** Injectable clock (tests). */
   now?: () => number;
   cacheTtlMs?: number;
+  /** The task worker pool, when wired: a goal the operator closes stops its runs (C21). */
+  workerPool?: () => Pick<WorkerPoolApi, 'list' | 'stop'> | null | undefined;
 }
 
 export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
@@ -180,6 +184,26 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     const bot = deps.config.bots.find((b) => b.id === id);
     if (!bot || !isBotAccessible(bot, getTenantId(c))) return null;
     return bot;
+  };
+
+  /** A goal the operator completed or removed: stop its runs, release its claims. Never throws. */
+  const closeGoal = (botId: string, soulDir: string, goalId: string | undefined) => {
+    if (!goalId) return;
+    let pool: Pick<WorkerPoolApi, 'list' | 'stop'> | null | undefined;
+    try {
+      pool = deps.workerPool?.();
+    } catch {
+      pool = undefined;
+    }
+    const closed = closeGoalTasks({
+      botId,
+      goalIds: [goalId],
+      store: taskStoreFor(soulDir),
+      pool,
+      onError: (err) => deps.logger.warn({ err, botId, goalId }, 'Closing goal tasks failed'),
+    });
+    if (closed.stopped.length + closed.released.length > 0)
+      deps.logger.info({ botId, goalId, ...closed }, 'Operator closed a goal: workers stopped');
   };
 
   // Literal path first: with a bot whose id is "presence" the fleet map still wins.
@@ -339,7 +363,9 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
           : '';
     if (!ref) return c.json({ error: 'goal or id is required' }, 400);
 
-    const goalsPath = join(resolveBotPaths(deps.config, bot).soulDir, 'GOALS.md');
+    const soulDir = resolveBotPaths(deps.config, bot).soulDir;
+    const goalsPath = join(soulDir, 'GOALS.md');
+    let closingGoalId: string | undefined;
     const write = (content: string) =>
       writeGoalsFile(goalsPath, content, {
         actor: 'operator',
@@ -362,6 +388,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
       ]);
       next = setGoalStatus(current, target?.text ?? ref, status);
       summary = { goal: target?.text ?? ref, status };
+      if (status === 'done') closingGoalId = target?.id;
     } else {
       const edits = parseGoalEdits(b);
       if (typeof edits === 'string') return c.json({ error: edits }, 400);
@@ -394,6 +421,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
       deps.logger.warn({ err, botId: bot.id }, 'Updating goal failed');
       return c.json({ error: 'Could not write GOALS.md' }, 500);
     }
+    closeGoal(bot.id, soulDir, closingGoalId);
     ctx.cache.invalidate();
     deps.logger.info({ botId: bot.id, ...summary }, 'Operator updated goal');
     return c.json(summary);
@@ -600,8 +628,11 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
           ? b.goal.trim()
           : '';
     if (!ref) return c.json({ error: 'goal or id is required' }, 400);
-    const goalsPath = join(resolveBotPaths(deps.config, bot).soulDir, 'GOALS.md');
+    const soulDir = resolveBotPaths(deps.config, bot).soulDir;
+    const goalsPath = join(soulDir, 'GOALS.md');
     const current = existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null;
+    const parsed = parseGoals(current);
+    const removedId = resolveGoalRef(ref, [...parsed.active, ...parsed.completed])?.id;
     const next = removeGoal(current, ref);
     if (next === null) return c.json({ error: 'Goal not found' }, 404);
     try {
@@ -614,6 +645,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
       deps.logger.warn({ err, botId: bot.id }, 'Removing goal failed');
       return c.json({ error: 'Could not write GOALS.md' }, 500);
     }
+    closeGoal(bot.id, soulDir, removedId);
     ctx.cache.invalidate();
     deps.logger.info({ botId: bot.id, goal: ref }, 'Operator removed goal');
     return c.json({ removed: ref });

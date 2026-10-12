@@ -95,6 +95,12 @@ export interface HygieneDeps {
    * appends the changelog entry, leaving index.html for the next rebuild.
    */
   archiveProduction?: (botId: string, relativePath: string, reason: string) => boolean;
+  /**
+   * The bot's task worker runs (active and recently ended), when the pool is
+   * wired. goal-lint reads it for "no live run" and "no pending ask"; absent,
+   * a live claim on the task is the only sign of a run.
+   */
+  workerRuns?: (botId: string) => import('../workers/types').WorkerRunView[];
 }
 
 export interface HygieneContext {

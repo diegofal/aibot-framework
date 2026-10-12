@@ -55,6 +55,7 @@ export interface HygieneRegistryDeps {
   channelStateOf?: HygieneDeps['channelStateOf'];
   lastHealthCheckOf?: HygieneDeps['lastHealthCheckOf'];
   archiveProduction?: HygieneDeps['archiveProduction'];
+  workerRuns?: HygieneDeps['workerRuns'];
 }
 
 export interface HygieneRunRequest {
@@ -194,6 +195,7 @@ export class HygieneRegistry {
       ...(registryDeps.archiveProduction
         ? { archiveProduction: registryDeps.archiveProduction }
         : {}),
+      ...(registryDeps.workerRuns ? { workerRuns: registryDeps.workerRuns } : {}),
     };
     this.history = new HygieneHistory(this.dataDir, registryDeps.logger);
     for (const r of [goalLint, soulStructure, memoryHygiene, productionsTriage, dataCleanup]) {
