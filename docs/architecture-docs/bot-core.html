@@ -38,7 +38,7 @@
 
       <div class="page-header">
         <h1>Bot Core Modules</h1>
-        <p>Deep dive into all 40 modules in <code>src/bot/</code></p>
+        <p>Deep dive into all 40 modules in <code>src/bot/</code>, plus the curiosity and relay packages</p>
       </div>
 
       <!-- Stats -->
@@ -184,6 +184,14 @@
           Telegram messages become <a href="#curiosity">curiosity directives</a>.
         </p>
         <p>
+          <span class="badge badge-yellow">2026-10-11</span> <code>handleConversation()</code> also tracks every human Telegram sender
+          (groups included, bots excluded) in the <code>UserDirectory</code>; before, only
+          <code>handleChannelMessage</code> did, so nobody who talked to a bot on Telegram could be addressed
+          later. Both paths resolve the turn's <code>requester</code> (<code>relayService.speaker()</code>; MCP
+          callers excluded), pass it to <code>createExecutor</code> (it becomes <code>_requester</code>) and add
+          the speaker's <a href="#relay">relay sections</a> to the prompt as <code>relayContext</code>.
+        </p>
+        <p>
           <span class="badge badge-yellow">2026-08-24</span> The first <code>channel.showTyping()</code>
           call in <code>handleChannelMessage()</code> is wrapped in the same ignore-errors try/catch as
           the interval's repeated calls. It used to sit outside that guard: a delivery target the
@@ -294,6 +302,13 @@
           broadcast), and mention stripping. Provides a single <code>evaluate()</code> method that
           returns whether the message should proceed to the conversation pipeline.
         </p>
+        <p>
+          <span class="badge badge-yellow">2026-10-11</span> <strong>Step 0, relay reply-to:</strong> a Telegram reply to a message that
+          was passed on through a bot (<a href="#relay">relay</a>) goes to
+          <code>relayService.routeTelegramReply()</code>, which forwards the text verbatim to whoever asked,
+          with no LLM turn. The answerer gets the deterministic acknowledgement and the gate stops with
+          <code>reason: 'relay_reply'</code>; if routing throws, the message is handled normally.
+        </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">
           <li><code>ConversationGate</code></li>
@@ -306,7 +321,7 @@
           </tbody>
         </table>
         <h4>Dependencies</h4>
-        <p><code>./types</code>, <code>./group-activation</code>, <code>./ask-human-store</code></p>
+        <p><code>./types</code>, <code>./group-activation</code>, <code>./ask-human-store</code>, <code>../relay/service</code> (via <code>ctx.relayService</code>)</p>
       </div>
 
       <!-- group-activation.ts -->
@@ -498,6 +513,14 @@
           which left the manager pointing at the pre-filter copy. Both now mutate the array in place through
           the module-private helper <code>removeToolsInPlace(tools, predicate)</code>.
         </p>
+        <p>
+          <span class="badge badge-yellow">2026-10-11</span> <code>createExecutor(..., memoryViewer?, requester?)</code> passes the
+          conversation's speaker to the executor and subscribes the tool audit (<code>toolEndToAuditEntry</code>)
+          to <code>tool:end</code>, so conversation tool calls are audited with their <code>chatId</code> like the
+          agent loop's (which builds its own executors and subscribes itself). <code>send_message</code> is
+          registered only with <code>userDirectory</code> + <code>relayService</code> and runs on
+          <a href="#relay">relays</a>.
+        </p>
         <h4>Exported Classes</h4>
         <ul class="inline-list">
           <li><code>ToolRegistry</code></li>
@@ -515,7 +538,7 @@
             <tr><td>getCollaborationToolsForBot</td><td>botId: string</td><td>Returns tools excluding collaborate/delegate, respecting per-bot disabled set</td></tr>
             <tr><td>getCollaborationTools</td><td>(none)</td><td>Returns all tools minus collaborate/delegate_to_bot</td></tr>
             <tr><td>clearExternalSkillsForBot</td><td>botId: string</td><td>Removes all external skill tools belonging to a bot from runtime (ctx.tools[], toolDefinitions[], maps). Returns removed skill IDs.</td></tr>
-            <tr><td>createExecutor</td><td>chatId: number, botId: string</td><td>Creates a ToolExecutor callback for Ollama/LLM client chat calls</td></tr>
+            <tr><td>createExecutor</td><td>chatId: number, botId: string, memoryViewer?, requester?: RelayParty</td><td>Creates a ToolExecutor callback for Ollama/LLM client chat calls; wires the tool audit and the relay <code>requester</code></td></tr>
             <tr><td>getDynamicToolStore</td><td>(none)</td><td>Returns the DynamicToolStore instance (for web API)</td></tr>
             <tr><td>getDynamicToolRegistry</td><td>(none)</td><td>Returns the DynamicToolRegistry instance (for web API approve/reject)</td></tr>
           </tbody>
@@ -539,6 +562,9 @@
           Auto-bridges tool lifecycle events to <code>ctx.activityStream</code> in the constructor
           (when available), ensuring all ToolExecutor instances &mdash; agent-loop, conversation
           pipeline, collaboration &mdash; surface events in the Activity stream without manual wiring.
+          <span class="badge badge-yellow">2026-10-11</span> <code>ToolExecutorOptions.requester</code> (the person speaking in the
+          conversation, a <code>RelayParty</code>) is injected as <code>_requester</code>, always overriding model
+          arguments; absent (agent loop, collaboration) means the bot itself.
         </p>
         <h4>Exported Classes / Functions</h4>
         <ul class="inline-list">
@@ -772,7 +798,9 @@
           (full tool instructions), <code>collaboration</code> (memory_search + soul only), and
           <code>autonomous</code> (agent loop). Appends mode-specific tool instruction blocks,
           group chat awareness, karma injection, Core Memory context, RAG context, and memory
-          search reinforcement reminders.
+          search reinforcement reminders. <span class="badge badge-yellow">2026-10-11</span> <code>relayContext</code> (conversation mode
+          only): the speaker's <a href="#relay">relay sections</a> &mdash; what waits on their answer and what
+          they asked the bot to pass on.
         </p>
         <h4>Exported Types / Classes</h4>
         <ul class="inline-list">
@@ -1357,6 +1385,66 @@
       </div>
 
       <!-- ================================================================ -->
+      <!-- RELAY -->
+      <!-- ================================================================ -->
+      <div class="category-header" id="relay">
+        <h2>Relay</h2>
+        <span class="count">10 modules</span>
+      </div>
+
+      <p><span class="badge badge-yellow">2026-10-11</span> Messages one person asks a bot to pass to another,
+        both ways (plan: <code>docs/plans/relay-plan.md</code>). A relay is a durable record plus the
+        system-owned obligation to route the answer back; the operator and users share one mechanism and differ
+        only in policy. Built after a bot told a user her message had reached the operator when the "web"
+        delivery had only appended to a session nobody reads. Config:
+        <a href="configuration.html#relay"><code>bots[].relay</code></a>. Tool: <a href="tools-skills.html">send_message</a>.</p>
+
+      <div class="module-section" id="relay-package">
+        <h3>src/relay/</h3>
+        <div class="file-path">src/relay/*.ts &middot; ~1,100 lines</div>
+        <p class="responsibility">
+          One people directory (every human sender is tracked, Telegram included; the operator is one contact
+          seeded from <code>config.operator</code>), a deterministic delivery resolver with honest statuses
+          (<code>delivered</code> = a person was reached, <code>queued</code> = stored, nobody notified,
+          <code>failed</code>), durable records, and a return path owned by the system: a Telegram reply to a
+          relay message is forwarded to the requester without an LLM turn
+          (<a href="#conversation-gate">ConversationGate step 0</a>), a free-text answer is closed with
+          <code>send_message(replyTo)</code>, and the conversation prompt lists what waits on the speaker and what
+          they asked to pass on. The sender is always the executor-injected <code>_requester</code>, never a model
+          argument.
+        </p>
+        <table>
+          <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td><code>types.ts</code></td><td><code>DeliveryStatus</code>, <code>DeliveryAttempt</code>, <code>DeliveryOutcome</code> (every route tried, <code>viaBotId</code>, <code>telegramMessageId</code>), <code>RelayParty</code>, <code>RelayStatus</code> (+ <code>answered</code>), <code>RelayRecord</code> (<code>from: null</code> = the bot itself: no header, no return path)</td></tr>
+            <tr><td><code>config.ts</code></td><td><code>RELAY_DEFAULTS</code> (<code>enabled: true</code>, <code>peerToPeer: false</code>, <code>locale: 'es'</code>), <code>resolveRelayConfig(bot)</code></td></tr>
+            <tr><td><code>policy.ts</code></td><td><code>canRelay(from, to, { peerToPeer })</code>: the bot itself, anyone &rarr; operator and operator &rarr; anyone are allowed; person &rarr; person only with <code>peerToPeer</code>. The refusal is returned as tool output</td></tr>
+            <tr><td><code>format.ts</code></td><td>Pure, <code>es</code>/<code>en</code>: system-stamped header ("&#128232; De X (v&iacute;a Bot):"), reply footer when an answer is expected, answer with an 80-char quote of the original, deterministic acknowledgement / not-delivered lines, <code>relayDedupeKey</code></td></tr>
+            <tr><td><code>delivery.ts</code></td><td><code>deliverToContact</code>: Telegram (verified channels first; each through the bot's own instance, then every fleet instance; a 403 / "chat not found" moves on) &rarr; WhatsApp &rarr; web. Web is <code>delivered</code> only when <code>isWebLive</code> says so &mdash; not wired yet, so web is always <code>queued</code> &mdash; and a non-numeric web address is refused rather than written into the shared anonymous <code>private:0</code> session. Never throws</td></tr>
+            <tr><td><code>store.ts</code></td><td><code>RelayStore</code>: <code>data/relays/{botId}.jsonl</code>, append-only, last line per id wins. <code>openFor</code>, <code>sentBy</code>, <code>findDuplicate</code> (a failed relay does not count), <code>findByTelegramDelivery</code> (searches every bot: a headless bot's relay is carried by another bot's Telegram instance)</td></tr>
+            <tr><td><code>prompt.ts</code></td><td><code>renderRelaySections</code>: "Messages waiting for this person's answer" (with the id for <code>replyTo</code>) and "Messages this person asked you to pass on" (last 7 days, with status), 5 items each; delivery facts in a reply must come from these records</td></tr>
+            <tr><td><code>service.ts</code></td><td><code>RelayService</code>, the one path every relay takes: <code>ensureOperator</code>, <code>speaker</code>, <code>recipientParty</code>, <code>promptSections</code>, <code>send</code> (10-minute dedupe &rarr; record &rarr; delivery &rarr; mark the original <code>answered</code> &rarr; append to the other person's session transcript), <code>routeTelegramReply</code>. Reads config live; never throws for data problems</td></tr>
+            <tr><td><code>wiring.ts</code></td><td><code>createRelayService</code> (built once by <code>BotManager</code>, shared as <code>BotContext.relayService</code>): fleet Telegram instances (own first), WhatsApp, web session and private transcript appends</td></tr>
+            <tr><td><code>index.ts</code></td><td>Barrel re-export</td></tr>
+          </tbody>
+        </table>
+        <h4>Directory changes (<code>user-directory.ts</code>)</h4>
+        <p><code>ensureOperator(botId, { name, telegramChatId, email })</code> keeps one contact with
+          <code>metadata.role = 'operator'</code> and folds older entries owning the same addresses into it
+          (channels, aliases, first/last seen); folded entries are marked <code>mergedInto</code> and disappear from
+          <code>find</code> / <code>list</code>. New: <code>getOperator</code>, <code>addAlias</code>,
+          <code>findByChannel</code>. <code>find</code> returns the single exact match (id, name, alias, @username,
+          address, or "operator"/"operador") before partial matches.</p>
+        <h4>Related fix: ask_human in conversations</h4>
+        <p>Asked from a user's conversation, <code>ask_human</code> no longer writes "needs your input" into that
+          user's chat (<code>mayNotifyAskingChat</code>: only the operator's chat or an agent-loop / collaboration
+          report chat), and <a href="#ask-human-store">AskHumanStore</a>'s single-pending fallback only resolves a
+          question whose notification landed in that chat.</p>
+        <h4>Dependencies</h4>
+        <p><code>../bot/user-directory</code>, <code>../channel/outbound</code> (<code>appendWebSessionMessage</code>, <code>webSessionUserId</code>), <code>../channel/whatsapp</code>, <code>../session</code>, <code>../logger</code>; consumed by <code>src/tools/send-message.ts</code>, <code>conversation-gate.ts</code>, <code>conversation-pipeline.ts</code> and <code>bot-manager.ts</code></p>
+      </div>
+
+      <!-- ================================================================ -->
       <!-- FACADE -->
       <!-- ================================================================ -->
       <div class="category-header">
@@ -1403,7 +1491,7 @@
         <table class="methods-table">
           <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td>startBot</td><td>config: BotConfig</td><td>Starts a bot: sets up LLM client, soul loader, feedback loading, soul health check, Telegram polling or headless mode, registers in agent registry. <strong>Throws <code>BotDisabledError</code> when <code>config.enabled === false</code></strong> &mdash; the single choke point that makes <code>enabled</code> the runtime authority for every caller (boot auto-start, dashboard route, tenant path, poller auto-restart)</td></tr>
+            <tr><td>startBot</td><td>config: BotConfig</td><td>Starts a bot: sets up LLM client, soul loader, feedback loading, soul health check, Telegram polling or headless mode, registers in agent registry. <strong>Throws <code>BotDisabledError</code> when <code>config.enabled === false</code></strong> &mdash; the single choke point that makes <code>enabled</code> the runtime authority for every caller (boot auto-start, dashboard route, tenant path, poller auto-restart). Seeds the configured operator into the bot's contact directory (<code>relayService.ensureOperator</code>, never throws) so <code>"operator"</code> resolves in <code>send_message</code> before the operator ever wrote to the bot</td></tr>
             <tr><td>stopBot</td><td>botId: string</td><td>Stops polling and cleans up all bot state</td></tr>
             <tr><td>resetBot</td><td>botId: string</td><td>Full reset (22 steps): clears sessions, soul files (baseline restore), goals, memory, versions, feedback, core memory, index, ask-human/ask-permission stores, dynamic tools, karma, production skill tools (runtime + disk + config refs), conversations, tool audit logs, entire productions directory, agent scheduler state, collaboration tracker records, collaboration sessions, and activity stream events</td></tr>
             <tr><td>sendMessage</td><td>chatId, text, botId</td><td>Sends a message via a bot's Telegram instance</td></tr>
@@ -1713,7 +1801,8 @@ tenants/...            tenant tree minus per-bot soul directories (carried by ag
             <tr><td>CollaborationSessionManager</td><td><code>data/collaboration/sessions.json</code></td><td>JSON: { sessions }</td></tr>
             <tr><td>ToolAuditLog</td><td><code>data/tool-audit/{botId}/YYYY-MM-DD.jsonl</code></td><td>Append-only JSONL, daily rotation</td></tr>
             <tr><td>LlmQueryLog</td><td><code>data/llm-query-log/{botId}/YYYY-MM-DD.jsonl</code></td><td>Append-only JSONL, daily rotation — every LLM call traced</td></tr>
-            <tr><td>UserDirectory</td><td><code>data/user-directory/{botId}.jsonl</code></td><td>Append-only JSONL, last-write-wins per contact ID</td></tr>
+            <tr><td>UserDirectory</td><td><code>data/user-directory/{botId}.jsonl</code></td><td>Append-only JSONL, last-write-wins per contact ID; a <code>lastSeen</code>-only change is written at most once an hour; entries folded into the operator keep <code>metadata.mergedInto</code></td></tr>
+            <tr><td>RelayStore</td><td><code>data/relays/{botId}.jsonl</code></td><td>Append-only JSONL, last line per relay ID wins</td></tr>
           </tbody>
         </table>
 
@@ -1721,7 +1810,7 @@ tenants/...            tenant tree minus per-bot soul directories (carried by ag
         <p>
           <code>src/bot/tool-audit-log.ts</code> &mdash; Persists tool execution audit entries to
           daily JSONL files. Subscribes to <code>tool:end</code> events from <code>ToolExecutor</code>
-          in the agent loop. Each entry records timestamp, botId, chatId, toolName, args, success,
+          in the agent loop and, since 2026-10-11, in conversations (<code>ToolRegistry.createExecutor</code>). Each entry records timestamp, botId, chatId, toolName, args, success,
           result (truncated to 500 chars), durationMs, and retryAttempts.
         </p>
 

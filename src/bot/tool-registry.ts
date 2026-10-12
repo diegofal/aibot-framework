@@ -14,12 +14,13 @@ import type { Logger } from '../logger';
 import { adaptAllMcpTools } from '../mcp/tool-adapter';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import type { InlineApprovalStore } from './inline-approval';
+import { toolEndToAuditEntry } from './tool-audit-log';
 import { ToolExecutor } from './tool-executor';
 import { type PermissionMode, getBlockedTools } from './tool-permissions';
 import type { BotContext } from './types';
 
-import { createOutboundChannel } from '../channel/outbound';
 import type { MemoryViewer } from '../memory/viewer';
+import type { RelayParty } from '../relay/types';
 import { AgentProposalStore } from '../tools/agent-proposal-store';
 import { createArchiveFileTool } from '../tools/archive-file';
 import { type AskHumanDeps, createAskHumanTool } from '../tools/ask-human';
@@ -460,22 +461,12 @@ export class ToolRegistry {
     );
     logger.info('send_proactive_message tool initialized');
 
-    // Channel-agnostic send_message tool (with contact directory lookup)
-    if (this.ctx.userDirectory) {
-      const outboundDeps = {
-        getTelegramBot: (botId: string) =>
-          this.ctx.bots?.get(botId) ?? this.ctx.bots?.values().next().value,
-        getWhatsAppConfig: (botId: string) => {
-          const botConfig = this.ctx.config.bots.find((b) => b.id === botId);
-          return botConfig?.whatsapp ?? undefined;
-        },
-        sessionManager: this.ctx.sessionManager,
-      };
+    // send_message: person-to-person relays (src/relay/) with contact lookup
+    if (this.ctx.userDirectory && this.ctx.relayService) {
       tools.push(
         createSendMessageTool({
           userDirectory: this.ctx.userDirectory,
-          createOutboundChannel: (botId, contact) =>
-            createOutboundChannel(outboundDeps, botId, contact),
+          relays: this.ctx.relayService,
         })
       );
       logger.info('send_message tool initialized');
@@ -868,7 +859,8 @@ export class ToolRegistry {
     permissionMode?: PermissionMode,
     inlineApprovalStore?: InlineApprovalStore,
     sessionKey?: string,
-    memoryViewer?: MemoryViewer
+    memoryViewer?: MemoryViewer,
+    requester?: RelayParty
   ): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
     const executor = new ToolExecutor(this.ctx, {
       botId,
@@ -881,7 +873,14 @@ export class ToolRegistry {
       permissionMode,
       inlineApprovalStore,
       sessionKey,
+      requester,
     });
+    // Conversation tool calls go to the same audit as the agent loop's (which
+    // builds its own executors and subscribes itself — no double write).
+    const auditLog = this.ctx.toolAuditLog;
+    if (auditLog) {
+      executor.on('tool:end', (event) => auditLog.append(toolEndToAuditEntry(event)));
+    }
     return executor.createCallback();
   }
 

@@ -7,7 +7,11 @@
  * can still be delivered through the fleet's live Telegram connection.
  */
 import { describe, expect, test } from 'bun:test';
-import { appendWebSessionMessage, createOutboundChannel } from '../../src/channel/outbound';
+import {
+  appendWebSessionMessage,
+  createOutboundChannel,
+  webSessionUserId,
+} from '../../src/channel/outbound';
 import type { OutboundChannelDeps } from '../../src/channel/outbound';
 
 function makeSessionManager() {
@@ -128,5 +132,21 @@ describe('appendWebSessionMessage', () => {
 
     expect(sessions.appended).toHaveLength(1);
     expect(sessions.appended[0].messages).toEqual([{ role: 'assistant', content: 'hello' }]);
+  });
+});
+
+describe('webSessionUserId', () => {
+  // The widget reads `bot:<id>:private:<Number(senderId) || Number(chatId) || 0>`
+  // (src/web/routes/chat-history.ts, BotManager.handleChannelMessage), so a
+  // non-numeric address can only ever reach the shared `private:0` bucket.
+  test('numeric addresses map to their user id', () => {
+    expect(webSessionUserId('99')).toBe(99);
+  });
+
+  test('non-numeric or empty addresses have no addressable session', () => {
+    expect(webSessionUserId('widget-user-ab12')).toBeUndefined();
+    expect(webSessionUserId('op@example.test')).toBeUndefined();
+    expect(webSessionUserId('')).toBeUndefined();
+    expect(webSessionUserId('0')).toBeUndefined();
   });
 });

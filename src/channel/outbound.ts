@@ -27,10 +27,30 @@ export interface OutboundChannelDeps {
 }
 
 /**
+ * The user id a web address keys its private session with, or undefined when
+ * it has none of its own.
+ *
+ * Web sessions are keyed `bot:<id>:private:<Number(senderId) || Number(chatId) || 0>`
+ * — that is how `BotManager.handleChannelMessage` stores a widget conversation
+ * and how `GET /api/v1/chat/:botId/history` reads it back. The widget's own
+ * ids (`widget-user-…`, `widget-<ts>-…`) and emails are not numeric, so every
+ * such address collapses into the one shared `private:0` bucket that every
+ * anonymous widget visitor replays. Callers that must not leak a message to
+ * strangers (the relay resolver) check this before writing.
+ */
+export function webSessionUserId(address: string): number | undefined {
+  return Number(address) || undefined;
+}
+
+/**
  * Append an assistant message to a bot's private web session — the transcript
  * the widget replays on reconnect. Shared by the web outbound channel, the
  * proactive message tool and the cron instruction fallback so the three cannot
  * drift apart on how a session key is derived.
+ *
+ * Note: a non-numeric address lands in the shared `private:0` session (see
+ * `webSessionUserId`). Behaviour kept as is for the existing callers; the
+ * relay resolver (`src/relay/delivery.ts`) refuses such addresses instead.
  */
 export function appendWebSessionMessage(
   sessionManager: SessionManager,
@@ -42,7 +62,7 @@ export function appendWebSessionMessage(
     botId,
     chatType: 'private',
     chatId: 0,
-    userId: Number(address) || undefined,
+    userId: webSessionUserId(address),
   });
   sessionManager.appendMessages(sessionKey, [{ role: 'assistant', content: text }], 100);
 }

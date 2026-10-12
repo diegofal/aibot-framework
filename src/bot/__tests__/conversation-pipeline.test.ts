@@ -265,6 +265,63 @@ describe('ConversationPipeline', () => {
     });
   });
 
+  describe('user directory tracking (Telegram)', () => {
+    const withDirectory = () => {
+      const track = jest.fn();
+      (mockBotContext as any).userDirectory = { track };
+      return track;
+    };
+
+    it('tracks the human sender of a private Telegram message', async () => {
+      const track = withDirectory();
+      const ctx = createMockContext({
+        from: { id: 4242, first_name: 'Ana', username: 'ana_test', is_bot: false },
+      } as any);
+
+      await pipeline.handleConversation(ctx, createMockBotConfig(), 'user:4242', 'hola');
+
+      expect(track).toHaveBeenCalledTimes(1);
+      const [botId, inbound] = track.mock.calls[0];
+      expect(botId).toBe('test-bot');
+      expect(inbound.channelKind).toBe('telegram');
+      expect(inbound.sender).toEqual({ id: '4242', firstName: 'Ana', username: 'ana_test' });
+      expect(inbound.chatId).toBe('123456');
+      expect(inbound.chatType).toBe('private');
+      expect(typeof inbound.timestamp).toBe('number');
+    });
+
+    it('tracks the sender of a group message too', async () => {
+      const track = withDirectory();
+      const ctx = createMockContext({
+        chat: { id: -100777, type: 'supergroup', title: 'Grupo' },
+        from: { id: 5151, first_name: 'Bruno', is_bot: false },
+      } as any);
+
+      await pipeline.handleConversation(ctx, createMockBotConfig(), 'group:-100777', 'hola');
+
+      expect(track).toHaveBeenCalledTimes(1);
+      expect(track.mock.calls[0][1].sender.id).toBe('5151');
+      expect(track.mock.calls[0][1].chatType).toBe('supergroup');
+    });
+
+    it('does not track bots or messages without a sender', async () => {
+      const track = withDirectory();
+      await pipeline.handleConversation(
+        createMockContext({ from: { id: 999, first_name: 'OtherBot', is_bot: true } } as any),
+        createMockBotConfig(),
+        'user:999',
+        'beep'
+      );
+      await pipeline.handleConversation(
+        createMockContext({ from: undefined } as any),
+        createMockBotConfig(),
+        'user:0',
+        'anon'
+      );
+      expect(track).not.toHaveBeenCalled();
+    });
+  });
+
   describe('session management', () => {
     it('should flush and clear expired sessions', async () => {
       const expiredHistory = [
@@ -1686,6 +1743,90 @@ describe('ConversationPipeline', () => {
       // It is stored as the command the person typed.
       const [, messages] = (mockSessionManager.appendMessages as jest.Mock).mock.calls[0];
       expect(messages[0].content).toMatch(/\] \/new$/);
+    });
+  });
+
+  describe('relay requester and prompt sections', () => {
+    const def = {
+      type: 'function' as const,
+      function: { name: 'send_message', description: '', parameters: {} },
+    };
+    let speakers: unknown[];
+    let sections: unknown[];
+
+    beforeEach(() => {
+      speakers = [];
+      sections = [];
+      (mockToolRegistry.getDefinitionsForBot as jest.Mock).mockReturnValue([def]);
+      (mockBotContext as any).relayService = {
+        speaker: (botId: string, s: Record<string, unknown>) => {
+          speakers.push([botId, s]);
+          return { ...s, contactId: 'c-1', isOperator: false };
+        },
+        promptSections: (botId: string, speaker: unknown) => {
+          sections.push([botId, speaker]);
+          return "## Messages waiting for this person's answer";
+        },
+      };
+    });
+
+    it('Telegram: the sender is the requester, and their relays reach the prompt', async () => {
+      await pipeline.handleConversation(
+        createMockContext(),
+        createMockBotConfig(),
+        'user:789',
+        'pasale esto al operador'
+      );
+      const requester = {
+        channelKind: 'telegram',
+        address: '789',
+        displayName: 'TestUser',
+        contactId: 'c-1',
+        isOperator: false,
+      };
+      expect(speakers).toEqual([
+        ['test-bot', { channelKind: 'telegram', address: '789', displayName: 'TestUser' }],
+      ]);
+      const execArgs = (mockToolRegistry.createExecutor as jest.Mock).mock.calls[0];
+      expect(execArgs[8]).toEqual(requester);
+      expect(sections).toEqual([['test-bot', requester]]);
+      const buildOpts = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
+      expect(buildOpts.relayContext).toBe("## Messages waiting for this person's answer");
+    });
+
+    it('Telegram: a bot sender has no requester', async () => {
+      await pipeline.handleConversation(
+        createMockContext({ from: { id: 55, first_name: 'Peer', is_bot: true } } as any),
+        createMockBotConfig(),
+        'user:55',
+        'hola'
+      );
+      expect(speakers).toEqual([]);
+      expect((mockToolRegistry.createExecutor as jest.Mock).mock.calls[0][8]).toBeUndefined();
+    });
+
+    it('channel messages: the sender on that channel is the requester', async () => {
+      const msg = {
+        text: 'hola',
+        chatId: '4242',
+        chatType: 'private' as const,
+        channelKind: 'web',
+        sender: { id: '4242', firstName: 'Dora' },
+      };
+      const channel = {
+        kind: 'web' as const,
+        sendText: jest.fn().mockResolvedValue(undefined),
+        showTyping: jest.fn().mockResolvedValue(undefined),
+      };
+      await pipeline.handleChannelMessage(msg as any, channel as any, createMockBotConfig(), 'k');
+      expect(speakers).toEqual([
+        ['test-bot', { channelKind: 'web', address: '4242', displayName: 'Dora' }],
+      ]);
+      expect((mockToolRegistry.createExecutor as jest.Mock).mock.calls[0][8]).toMatchObject({
+        address: '4242',
+      });
+      const buildOpts = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
+      expect(buildOpts.relayContext).toBe("## Messages waiting for this person's answer");
     });
   });
 });

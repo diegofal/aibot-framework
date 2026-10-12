@@ -298,6 +298,18 @@ describe('SystemPromptBuilder', () => {
       expect(prompt).toContain('## Previous conversation');
     });
 
+    test('adds the relay sections in conversation mode only', () => {
+      const builder = new SystemPromptBuilder(createMockCtx(), createMockToolRegistry([]));
+      const base = { botId: 'testbot', botConfig, isGroup: false };
+      const relayContext = "## Messages waiting for this person's answer\n- r-12345678 · from Ana";
+      expect(builder.build({ ...base, mode: 'conversation', relayContext })).toContain(
+        '- r-12345678 · from Ana'
+      );
+      expect(builder.build({ ...base, mode: 'collaboration', relayContext })).not.toContain(
+        'r-12345678'
+      );
+    });
+
     test('renders core memory for the viewer (person, or null = shared only)', () => {
       const scopes: unknown[] = [];
       const ctx = createMockCtx();

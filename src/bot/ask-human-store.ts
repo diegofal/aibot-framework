@@ -333,7 +333,10 @@ export class AskHumanStore {
   /**
    * Try to match an incoming reply to a pending question in this chat.
    * If replyToMessageId matches a pending question's messageId, resolve it.
-   * If no replyToMessageId but there's exactly one pending question in the chat, resolve that.
+   * If no replyToMessageId but there's exactly one pending question in the chat
+   * AND its notification was sent to that chat (`messageId` set), resolve that.
+   * A question asked from someone else's conversation never wrote into the chat,
+   * so it must not capture that person's next message.
    * Returns true if a question was matched and resolved.
    */
   handleReply(
@@ -360,11 +363,14 @@ export class AskHumanStore {
       }
     }
 
-    // Fallback: if exactly one pending question in this chat, match it
+    // Fallback: exactly one pending question in this chat, and it was notified here.
+    // Entries restored from an older pending.json follow the same rule: a
+    // messageId means the notification landed in this chat, so they keep the old
+    // behaviour; without one they never capture plain messages.
     if (questionIds.size === 1) {
       const qId = questionIds.values().next().value as string;
       const entry = this.pending.get(qId);
-      if (entry) {
+      if (entry && entry.messageId !== null) {
         this.logger.info({ questionId: qId, chatId }, 'AskHuman: reply matched (single pending)');
         this.recordAnswer(entry, text);
         const conversationId = entry.conversationId;

@@ -149,7 +149,8 @@ describe('AskHumanStore onAnswer', () => {
     const s = newStore({ onAnswer: (a) => seen.push(a) });
     const web = s.ask('bot1', 0, 'Web?');
     s.answerById(web.id, 'via web');
-    s.ask('bot1', 42, 'Telegram?');
+    const tg = s.ask('bot1', 42, 'Telegram?');
+    s.setMessageId(tg.id, 1); // the notification landed in chat 42
     s.handleReply('bot1', 42, 'via telegram');
 
     expect(seen.map((a) => [a.question, a.answer])).toEqual([

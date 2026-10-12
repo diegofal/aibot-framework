@@ -212,6 +212,39 @@ export class ConversationPipeline {
       this.ctx.recordOperatorMessage?.(config.id, userText);
     }
 
+    // Auto-track the human sender in the user directory, as handleChannelMessage
+    // does for the other channels. Telegram never goes through that path, so
+    // without this nobody who talks to a bot on Telegram can be addressed later.
+    if (ctx.from && !ctx.from.is_bot) {
+      this.ctx.userDirectory?.track(config.id, {
+        messageId: String(ctx.message?.message_id ?? ''),
+        channelKind: 'telegram',
+        text: userText,
+        chatId: String(chatId),
+        chatType: ctx.chat?.type ?? 'private',
+        sender: {
+          id: String(ctx.from.id),
+          firstName: ctx.from.first_name,
+          username: ctx.from.username,
+        },
+        timestamp: Date.now(),
+      });
+    }
+
+    // The person speaking is the sender of any relay (send_message) this turn
+    // makes; the executor injects it, so the model cannot claim another sender.
+    const requester =
+      ctx.from && !ctx.from.is_bot
+        ? this.ctx.relayService?.speaker(config.id, {
+            channelKind: 'telegram',
+            address: String(ctx.from.id),
+            displayName: ctx.from.first_name ?? ctx.from.username ?? String(ctx.from.id),
+          })
+        : undefined;
+    const relayContext = requester
+      ? this.ctx.relayService?.promptSections(config.id, requester) || undefined
+      : undefined;
+
     const senderName = isGroup ? (ctx.from?.first_name ?? 'Unknown') : undefined;
     botLogger.info(
       {
@@ -349,6 +382,7 @@ export class ConversationPipeline {
         memoryViewer,
         permissionMode,
         previousSession,
+        relayContext,
       });
 
       // In groups, prefix messages with sender name
@@ -462,7 +496,8 @@ export class ConversationPipeline {
                     permissionMode,
                     undefined,
                     undefined,
-                    memoryViewer
+                    memoryViewer,
+                    requester
                   )
                 : undefined,
               maxToolRounds,
@@ -529,7 +564,8 @@ export class ConversationPipeline {
                       permissionMode,
                       undefined,
                       undefined,
-                      memoryViewer
+                      memoryViewer,
+                      requester
                     )
                   : undefined,
                 maxToolRounds,
@@ -933,6 +969,20 @@ export class ConversationPipeline {
     // Auto-track sender in user directory
     this.ctx.userDirectory?.track(config.id, msg);
 
+    // Relay sender for this turn (see handleConversation). MCP callers are
+    // agents, not people.
+    const requester =
+      msg.sender.id && msg.channelKind !== 'mcp'
+        ? this.ctx.relayService?.speaker(config.id, {
+            channelKind: msg.channelKind,
+            address: msg.sender.id,
+            displayName: msg.sender.firstName ?? msg.sender.username ?? msg.sender.id,
+          })
+        : undefined;
+    const relayContext = requester
+      ? this.ctx.relayService?.promptSections(config.id, requester) || undefined
+      : undefined;
+
     // Resolve userId for user isolation
     // Auto-enable user isolation for tenant bots (BaaS multi-tenant)
     const userIsolation = config.userIsolation;
@@ -1048,6 +1098,7 @@ export class ConversationPipeline {
         memoryViewer,
         permissionMode,
         previousSession,
+        relayContext,
       });
 
       // In groups, prefix messages with sender name
@@ -1262,7 +1313,8 @@ export class ConversationPipeline {
                       permissionMode,
                       undefined,
                       undefined,
-                      memoryViewer
+                      memoryViewer,
+                      requester
                     )
                   : undefined,
                 maxToolRounds,
@@ -1313,7 +1365,8 @@ export class ConversationPipeline {
                         permissionMode,
                         undefined,
                         undefined,
-                        memoryViewer
+                        memoryViewer,
+                        requester
                       )
                     : undefined,
                   maxToolRounds,

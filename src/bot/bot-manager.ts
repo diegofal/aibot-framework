@@ -39,6 +39,8 @@ import { CuriosityService } from './curiosity/service';
 import { ConversationsService } from '../conversations/service';
 import { KarmaService } from '../karma/service';
 import { ProductionsService } from '../productions/service';
+import type { RelayService } from '../relay/service';
+import { createRelayService } from '../relay/wiring';
 import { AnalyticsService } from '../tenant/analytics-service';
 import { CustomizationService } from '../tenant/customization';
 import type { TenantManagerConfig } from '../tenant/manager';
@@ -135,6 +137,7 @@ export class BotManager {
   private webhookService?: WebhookService;
   private analyticsService?: AnalyticsService;
   private userDirectory: UserDirectory;
+  private relayService: RelayService;
   private inlineApprovalStore: InlineApprovalStore;
   private hookEmitter: HookEmitter;
   private botContext!: BotContext;
@@ -285,6 +288,16 @@ export class BotManager {
     this.userDirectory = new UserDirectory(dataDir, logger);
     logger.info('User directory initialized');
 
+    // Person-to-person relays (send_message, Telegram reply-to routing)
+    this.relayService = createRelayService({
+      config: () => this.config,
+      dataDir,
+      bots: this.bots,
+      sessionManager,
+      userDirectory: this.userDirectory,
+      logger,
+    });
+
     // Initialize inline approval store (persisted to disk for confirm-level tool approvals)
     this.inlineApprovalStore = new InlineApprovalStore(join(dataDir, 'inline-approval'));
 
@@ -332,6 +345,7 @@ export class BotManager {
       mcpAgentBridge: this.mcpAgentBridge,
       tenantFacade: this.tenantFacade,
       userDirectory: this.userDirectory,
+      relayService: this.relayService,
       inlineApprovalStore: this.inlineApprovalStore,
       hooks: this.hookEmitter,
       // Operator chat (Telegram operator chat id) → curiosity directive. Public
@@ -641,6 +655,10 @@ export class BotManager {
       );
       throw new BotDisabledError(config.id);
     }
+
+    // "operator" must resolve in send_message before the operator ever wrote
+    // to this bot (headless bots included). Never throws.
+    this.relayService.ensureOperator(config.id);
 
     try {
       const botLogger = this.getBotLogger(config.id);

@@ -72,6 +72,76 @@ describe('ConversationGate', () => {
     vi.clearAllMocks();
   });
 
+  describe('relay reply-to', () => {
+    it('a reply to a relay message is routed without an LLM turn and acknowledged', async () => {
+      const route = vi.fn().mockResolvedValue({
+        handled: true,
+        ack: 'ACK',
+        relay: { id: 'r-1' },
+        answer: { record: { status: 'delivered' } },
+      });
+      const ctx = createMockCtx({ relayService: { routeTelegramReply: route } });
+      const gctx = createMockGrammyCtx({
+        message: { text: 'Sos Ana', message_id: 9, reply_to_message: { message_id: 7 } },
+        from: { id: 9001, first_name: 'Op' },
+        chat: { id: 9001, type: 'private' },
+      });
+      gctx.reply = vi.fn().mockResolvedValue(undefined);
+      const result = await new ConversationGate(ctx, createMockGroupActivation()).evaluate(
+        gctx,
+        createMockConfig(),
+        mockLogger
+      );
+      expect(result).toEqual({ allowed: false, reason: 'relay_reply' });
+      expect(route).toHaveBeenCalledWith({
+        viaBotId: 'bot1',
+        chatAddress: '9001',
+        messageId: 7,
+        answererAddress: '9001',
+        answererName: 'Op',
+        text: 'Sos Ana',
+      });
+      expect(gctx.reply).toHaveBeenCalledWith('ACK');
+    });
+
+    it('a reply that is not to an open relay goes on as a normal message', async () => {
+      const route = vi.fn().mockResolvedValue({ handled: false });
+      const ctx = createMockCtx({ relayService: { routeTelegramReply: route } });
+      const result = await new ConversationGate(ctx, createMockGroupActivation()).evaluate(
+        createMockGrammyCtx({
+          message: { text: 'hola', message_id: 9, reply_to_message: { message_id: 7 } },
+        }),
+        createMockConfig(),
+        mockLogger
+      );
+      expect(result.allowed).toBe(true);
+    });
+
+    it('a message that is not a reply never looks for a relay', async () => {
+      const route = vi.fn();
+      const ctx = createMockCtx({ relayService: { routeTelegramReply: route } });
+      await new ConversationGate(ctx, createMockGroupActivation()).evaluate(
+        createMockGrammyCtx(),
+        createMockConfig(),
+        mockLogger
+      );
+      expect(route).not.toHaveBeenCalled();
+    });
+
+    it('a routing error falls through to the normal pipeline', async () => {
+      const route = vi.fn().mockRejectedValue(new Error('disk'));
+      const ctx = createMockCtx({ relayService: { routeTelegramReply: route } });
+      const result = await new ConversationGate(ctx, createMockGroupActivation()).evaluate(
+        createMockGrammyCtx({
+          message: { text: 'hola', message_id: 9, reply_to_message: { message_id: 7 } },
+        }),
+        createMockConfig(),
+        mockLogger
+      );
+      expect(result.allowed).toBe(true);
+    });
+  });
+
   it('allows a normal private message', async () => {
     const ctx = createMockCtx();
     const gate = new ConversationGate(ctx, createMockGroupActivation());

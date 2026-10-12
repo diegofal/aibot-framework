@@ -1,240 +1,268 @@
-import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { UserDirectory } from '../src/bot/user-directory';
-import type { Channel } from '../src/channel/types';
+/**
+ * send_message on top of relays: honest delivery statuses, sender attribution
+ * from `_requester`, policy, dedupe and `replyTo`. Synthetic data only.
+ */
+import { afterEach, describe, expect, test } from 'bun:test';
+import type { RelayParty } from '../src/relay';
 import { createSendMessageTool } from '../src/tools/send-message';
+import {
+  ANA_CHAT,
+  BRUNO_CHAT,
+  OP_CHAT,
+  type World,
+  fakeTelegram,
+  makeWorld,
+  seedPeople,
+  silentLogger,
+  tgError,
+} from './relay/fixture';
 
-const silentLogger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-  child: () => silentLogger,
-} as any;
+let w: World;
+afterEach(() => w?.cleanup());
 
-let tmpDir: string;
-let ud: UserDirectory;
-let sentMessages: Array<{ channel: string; text: string }>;
-
-function makeChannel(kind: string): Channel {
-  return {
-    kind: kind as any,
-    async sendText(text: string) {
-      sentMessages.push({ channel: kind, text });
-    },
-    async showTyping() {},
-  };
+function setup(opts: Parameters<typeof makeWorld>[0] = {}) {
+  w = makeWorld(opts);
+  seedPeople(w);
+  return createSendMessageTool({ userDirectory: w.directory, relays: w.service });
 }
 
-beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'sm-test-'));
-  ud = new UserDirectory(tmpDir, silentLogger);
-  sentMessages = [];
+const party = (address: number, displayName: string): RelayParty => ({
+  displayName,
+  channelKind: 'telegram',
+  address: String(address),
+});
+const anaSpeaking = () => w.service.speaker('bot1', party(ANA_CHAT, 'Ana'));
+const opSpeaking = () => w.service.speaker('bot1', party(OP_CHAT, 'Op'));
+
+const run = (tool: ReturnType<typeof setup>, args: Record<string, unknown>) =>
+  tool.execute({ _botId: 'bot1', ...args }, silentLogger);
+
+describe('send_message — validation and lookup', () => {
+  test('missing recipient, missing message, too long', async () => {
+    const tool = setup();
+    expect((await run(tool, { message: 'x' })).content).toBe('Missing recipient');
+    expect((await run(tool, { recipient: 'Ana' })).content).toBe('Missing message');
+    expect((await run(tool, { recipient: 'Ana', message: 'x'.repeat(4001) })).content).toBe(
+      'Message too long (max 4000 chars)'
+    );
+  });
+
+  test('unknown contact without register asks for details', async () => {
+    const tool = setup();
+    const r = await run(tool, { recipient: 'Zoe', message: 'hola' });
+    expect(r.success).toBe(false);
+    expect(r.content).toContain('not found in directory');
+  });
+
+  test('several matches return a list with ids', async () => {
+    const tool = setup();
+    w.directory.register('bot1', {
+      displayName: 'Ana Two',
+      channel: { kind: 'telegram', address: '1003', verified: true },
+    });
+    w.directory.register('bot1', {
+      displayName: 'Ana Three',
+      channel: { kind: 'telegram', address: '1004', verified: true },
+    });
+    const r = await run(tool, { recipient: 'Ana T', message: 'hola' });
+    expect(r.success).toBe(false);
+    expect(r.content).toContain('Multiple contacts match');
+    expect(r.content).toContain('id: ');
+  });
+
+  test('register adds an unverified contact and delivers', async () => {
+    const tool = setup();
+    const r = await run(tool, {
+      recipient: 'Carla',
+      message: 'hola',
+      register: { displayName: 'Carla', channelKind: 'telegram', address: '1005' },
+    });
+    expect(r.success).toBe(true);
+    expect(w.sent.at(-1)).toMatchObject({ chatId: 1005, text: 'hola' });
+    expect(w.directory.find('bot1', 'Carla')[0].channels[0].verified).toBe(false);
+  });
+
+  test('"operator" resolves to the seeded operator, even when it was in the directory twice', async () => {
+    const tool = setup();
+    w.directory.register('bot1', {
+      displayName: 'Op',
+      channel: { kind: 'telegram', address: String(OP_CHAT), verified: true },
+    });
+    w.directory.register('bot1', {
+      displayName: 'Op (operator)',
+      channel: { kind: 'web', address: 'op@example.test', verified: true },
+    });
+    for (const recipient of ['operator', 'Op', 'operador', 'Op (operator)']) {
+      const r = await run(tool, {
+        recipient,
+        message: `ping ${recipient}`,
+        _requester: anaSpeaking(),
+      });
+      expect(r.content).toStartWith('Delivered to Op via telegram');
+    }
+  });
 });
 
-afterAll(() => {
-  try {
-    rmSync(tmpDir, { recursive: true, force: true });
-  } catch {}
+describe('send_message — delivery statuses', () => {
+  test('the bot speaking (no requester): bare text, delivered', async () => {
+    const tool = setup();
+    const r = await run(tool, { recipient: 'Ana', message: 'Hola Ana' });
+    expect(r.success).toBe(true);
+    expect(r.content).toMatch(/^Delivered to Ana via telegram \(relay r-[0-9a-f]{8}\)\.$/);
+    expect(w.sent).toEqual([expect.objectContaining({ chatId: ANA_CHAT, text: 'Hola Ana' })]);
+  });
+
+  test('a requester is attributed in the header; expectsReply explains the return path', async () => {
+    const tool = setup();
+    const r = await run(tool, {
+      recipient: 'operator',
+      message: '¿Quién soy?',
+      expectsReply: true,
+      _requester: anaSpeaking(),
+    });
+    expect(r.success).toBe(true);
+    const id = /relay (r-[0-9a-f]{8})/.exec(r.content)![1];
+    expect(r.content).toContain(
+      `When they reply to that message it will be forwarded to Ana automatically; if they answer in free text, close it with send_message replyTo=${id}.`
+    );
+    expect(w.sent[0].text).toBe(
+      '📨 De Ana (vía Bot):\n\n¿Quién soy?\n\n↩️ Respondé a este mensaje y se lo paso a Ana.'
+    );
+    expect(w.store.get('bot1', id)).toMatchObject({ expectsReply: true, status: 'delivered' });
+  });
+
+  test('carried by another bot instance: says so', async () => {
+    const tool = setup({ instances: ['bot2'] });
+    const r = await run(tool, { recipient: 'Ana', message: 'hola' });
+    expect(r.content).toStartWith("Delivered to Ana via telegram (through bot2's account)");
+  });
+
+  test('queued (web only, nobody connected): NOT delivered', async () => {
+    const tool = setup();
+    w.directory.register('bot1', {
+      displayName: 'Dora',
+      channel: { kind: 'web', address: '4242', verified: true },
+    });
+    const r = await run(tool, { recipient: 'Dora', message: 'hola' });
+    expect(r.success).toBe(false);
+    expect(r.content).toMatch(
+      /^NOT delivered — Dora has no reachable channel right now \(no live connection; stored, not notified\)\. Stored as relay r-[0-9a-f]{8}\. Do not tell anyone it was delivered\.$/
+    );
+  });
+
+  test('channel preference narrows the routes', async () => {
+    const tool = setup();
+    const ana = w.directory.findByChannel('bot1', 'telegram', String(ANA_CHAT))!;
+    w.directory.addChannel('bot1', ana.id, { kind: 'web', address: '4343', verified: true });
+    const r = await run(tool, { recipient: 'Ana', message: 'hola', channel: 'web' });
+    expect(r.content).toStartWith('NOT delivered');
+    expect(w.sent).toEqual([]);
+  });
+
+  test('a 403 on the first instance falls through to the next; all failing → FAILED', async () => {
+    const tool = setup({ instances: ['bot1', 'bot2'] });
+    const blocked = () => tgError(403, 'Forbidden: bot was blocked by the user');
+    w.instances.set('bot1', fakeTelegram('bot1', w.sent, blocked));
+    const ok = await run(tool, { recipient: 'Ana', message: 'uno' });
+    expect(ok.content).toStartWith("Delivered to Ana via telegram (through bot2's account)");
+
+    w.instances.set('bot2', fakeTelegram('bot2', w.sent, blocked));
+    const r = await run(tool, { recipient: 'Ana', message: 'dos' });
+    expect(r.success).toBe(false);
+    expect(r.content).toStartWith('Delivery FAILED to Ana: Not delivered — telegram via bot1');
+    expect(r.content).toEndWith(
+      'Nothing was sent. Do not claim it was sent; tell the requester plainly.'
+    );
+  });
+
+  test('the same message within 10 minutes is not re-sent', async () => {
+    const tool = setup();
+    const first = await run(tool, { recipient: 'Ana', message: 'hola' });
+    const id = /relay (r-[0-9a-f]{8})/.exec(first.content)![1];
+    const again = await run(tool, { recipient: 'Ana', message: 'Hola ' });
+    expect(w.sent).toHaveLength(1);
+    expect(again.success).toBe(true);
+    expect(again.content).toBe(
+      `Already delivered to Ana (relay ${id}, status delivered). Do not resend it.`
+    );
+  });
 });
 
-function createTool(channelFactory?: (botId: string, contact: any) => Channel | null) {
-  return createSendMessageTool({
-    userDirectory: ud,
-    createOutboundChannel: channelFactory ?? ((_botId, contact) => makeChannel(contact.kind)),
+describe('send_message — policy', () => {
+  test('person to person is refused by default', async () => {
+    const tool = setup();
+    const r = await run(tool, { recipient: 'Bruno', message: 'hola', _requester: anaSpeaking() });
+    expect(r.success).toBe(false);
+    expect(r.content).toContain('relay.peerToPeer');
+    expect(w.sent).toEqual([]);
   });
-}
 
-describe('send_message tool', () => {
-  test('single match — sends message successfully', async () => {
-    ud.register('bot1', {
-      displayName: 'Diego',
-      channel: { kind: 'telegram', address: '12345', verified: true },
+  test('person to person is allowed with relay.peerToPeer', async () => {
+    const tool = setup({ bots: [{ id: 'bot1', name: 'Bot', relay: { peerToPeer: true } }] });
+    const r = await run(tool, { recipient: 'Bruno', message: 'hola', _requester: anaSpeaking() });
+    expect(r.success).toBe(true);
+    expect(w.sent[0]).toMatchObject({ chatId: BRUNO_CHAT });
+  });
+
+  test('relay.enabled false: the bot speaks for itself (no attribution, no return path)', async () => {
+    const tool = setup({ bots: [{ id: 'bot1', name: 'Bot', relay: { enabled: false } }] });
+    const r = await run(tool, {
+      recipient: 'Bruno',
+      message: 'hola',
+      expectsReply: true,
+      _requester: anaSpeaking(),
     });
-
-    const tool = createTool();
-    const result = await tool.execute(
-      { recipient: 'Diego', message: 'Hola!', _botId: 'bot1' },
-      silentLogger
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.content).toContain('Diego');
-    expect(result.content).toContain('telegram');
-    expect(sentMessages).toHaveLength(1);
-    expect(sentMessages[0].text).toBe('Hola!');
+    expect(r.success).toBe(true);
+    expect(w.sent[0].text).toBe('hola');
+    expect(r.content).not.toContain('forwarded');
   });
+});
 
-  test('multiple matches — returns disambiguation list', async () => {
-    ud.register('bot1', {
-      displayName: 'Diego A',
-      channel: { kind: 'telegram', address: '111', verified: true },
+describe('send_message — replyTo', () => {
+  async function anaAsksOperator(tool: ReturnType<typeof setup>) {
+    const r = await run(tool, {
+      recipient: 'operator',
+      message: '¿Quién soy?',
+      expectsReply: true,
+      _requester: anaSpeaking(),
     });
-    ud.register('bot1', {
-      displayName: 'Diego B',
-      channel: { kind: 'telegram', address: '222', verified: true },
-    });
+    return /relay (r-[0-9a-f]{8})/.exec(r.content)![1];
+  }
 
-    const tool = createTool();
-    const result = await tool.execute(
-      { recipient: 'Diego', message: 'Hola!', _botId: 'bot1' },
-      silentLogger
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.content).toContain('Multiple contacts');
-    expect(result.content).toContain('Diego A');
-    expect(result.content).toContain('Diego B');
-    expect(sentMessages).toHaveLength(0);
+  test('the recipient answers in free text: routed to the requester, original answered', async () => {
+    const tool = setup();
+    const id = await anaAsksOperator(tool);
+    const r = await run(tool, { replyTo: id, message: 'Sos Ana', _requester: opSpeaking() });
+    expect(r.success).toBe(true);
+    expect(r.content).toStartWith('Delivered to Ana via telegram');
+    expect(w.sent.at(-1)!.chatId).toBe(ANA_CHAT);
+    expect(w.sent.at(-1)!.text).toBe('↩️ Respuesta de Op (vía Bot) a: «¿Quién soy?»\n\nSos Ana');
+    expect(w.store.get('bot1', id)?.status).toBe('answered');
   });
 
-  test('no match without register — returns instructions to ask user', async () => {
-    const tool = createTool();
-    const result = await tool.execute(
-      { recipient: 'Unknown', message: 'Hi', _botId: 'bot1' },
-      silentLogger
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.content).toContain('not found');
-    expect(result.content).toContain('Ask the user');
-    expect(sentMessages).toHaveLength(0);
+  test('unknown relay id', async () => {
+    const tool = setup();
+    const r = await run(tool, { replyTo: 'r-00000000', message: 'x', _requester: opSpeaking() });
+    expect(r.success).toBe(false);
+    expect(r.content).toBe('Relay r-00000000 not found.');
   });
 
-  test('no match with register — registers and sends', async () => {
-    const tool = createTool();
-    const result = await tool.execute(
-      {
-        recipient: 'NewUser',
-        message: 'Welcome!',
-        _botId: 'bot1',
-        register: {
-          displayName: 'NewUser',
-          channelKind: 'telegram',
-          address: '99999',
-        },
-      },
-      silentLogger
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.content).toContain('NewUser');
-    expect(sentMessages).toHaveLength(1);
-
-    // Verify contact was persisted
-    expect(ud.find('bot1', 'NewUser')).toHaveLength(1);
+  test('only the person the relay was for can answer it', async () => {
+    const tool = setup();
+    const id = await anaAsksOperator(tool);
+    const bruno = w.service.speaker('bot1', party(BRUNO_CHAT, 'Bruno'));
+    const r = await run(tool, { replyTo: id, message: 'x', _requester: bruno });
+    expect(r.success).toBe(false);
+    expect(r.content).toContain('was addressed to Op');
+    expect(w.store.get('bot1', id)?.status).toBe('delivered');
   });
 
-  test('channel preference — uses specified channel', async () => {
-    ud.register('bot1', {
-      displayName: 'Multi',
-      channel: { kind: 'telegram', address: '111', verified: true },
-    });
-    const entry = ud.find('bot1', 'Multi')[0];
-    ud.addChannel('bot1', entry.id, {
-      kind: 'whatsapp',
-      address: '+54911',
-      verified: true,
-    });
-
-    const tool = createTool();
-    const result = await tool.execute(
-      { recipient: 'Multi', message: 'Hi', channel: 'whatsapp', _botId: 'bot1' },
-      silentLogger
-    );
-
-    expect(result.success).toBe(true);
-    expect(sentMessages[0].channel).toBe('whatsapp');
-  });
-
-  test('auto channel — picks telegram first', async () => {
-    ud.register('bot1', {
-      displayName: 'Multi',
-      channel: { kind: 'web', address: 'sess-1', verified: true },
-    });
-    const entry = ud.find('bot1', 'Multi')[0];
-    ud.addChannel('bot1', entry.id, {
-      kind: 'telegram',
-      address: '111',
-      verified: true,
-    });
-
-    const tool = createTool();
-    await tool.execute({ recipient: 'Multi', message: 'Hi', _botId: 'bot1' }, silentLogger);
-
-    expect(sentMessages[0].channel).toBe('telegram');
-  });
-
-  test('outbound channel returns null — error message', async () => {
-    ud.register('bot1', {
-      displayName: 'RestUser',
-      channel: { kind: 'rest', address: 'req-1', verified: true },
-    });
-
-    const tool = createTool((_botId, _contact) => null);
-    const result = await tool.execute(
-      { recipient: 'RestUser', message: 'Hi', _botId: 'bot1' },
-      silentLogger
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.content).toContain('Cannot create outbound channel');
-  });
-
-  test('missing recipient — returns error', async () => {
-    const tool = createTool();
-    const result = await tool.execute(
-      { recipient: '', message: 'Hi', _botId: 'bot1' },
-      silentLogger
-    );
-    expect(result.success).toBe(false);
-    expect(result.content).toContain('Missing recipient');
-  });
-
-  test('missing message — returns error', async () => {
-    const tool = createTool();
-    const result = await tool.execute(
-      { recipient: 'Diego', message: '', _botId: 'bot1' },
-      silentLogger
-    );
-    expect(result.success).toBe(false);
-    expect(result.content).toContain('Missing message');
-  });
-
-  test('message too long — returns error', async () => {
-    const tool = createTool();
-    const result = await tool.execute(
-      { recipient: 'Diego', message: 'x'.repeat(4001), _botId: 'bot1' },
-      silentLogger
-    );
-    expect(result.success).toBe(false);
-    expect(result.content).toContain('too long');
-  });
-
-  test('delivery failure — returns error message', async () => {
-    ud.register('bot1', {
-      displayName: 'Diego',
-      channel: { kind: 'telegram', address: '12345', verified: true },
-    });
-
-    const failChannel: Channel = {
-      kind: 'telegram',
-      async sendText() {
-        throw new Error('Telegram API error 403: bot was blocked');
-      },
-      async showTyping() {},
-    };
-
-    const tool = createTool((_botId, _contact) => failChannel);
-    const result = await tool.execute(
-      { recipient: 'Diego', message: 'Hi', _botId: 'bot1' },
-      silentLogger
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.content).toContain('Delivery failed');
-    expect(result.content).toContain('403');
+  test('an answered relay cannot be answered again', async () => {
+    const tool = setup();
+    const id = await anaAsksOperator(tool);
+    await run(tool, { replyTo: id, message: 'Sos Ana', _requester: opSpeaking() });
+    const r = await run(tool, { replyTo: id, message: 'Otra cosa', _requester: opSpeaking() });
+    expect(r.success).toBe(false);
+    expect(r.content).toContain('already answered');
   });
 });

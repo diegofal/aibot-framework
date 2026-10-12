@@ -224,6 +224,7 @@ describe('AskHumanStore', () => {
   test('handleReply returns conversationId when set', () => {
     const { id } = store.ask('bot1', 100, 'q1');
     store.setConversationId(id, 'conv-abc');
+    store.setMessageId(id, 1); // the notification landed in chat 100
 
     const result = store.handleReply('bot1', 100, 'answer');
     expect(result.matched).toBe(true);

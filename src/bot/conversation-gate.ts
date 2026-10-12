@@ -54,6 +54,34 @@ export class ConversationGate {
     const chatId = grammyCtx.chat.id;
     const sessionConfig = this.ctx.config.session;
 
+    // 0. Relay reply-to: a reply to a message passed on through a bot goes back
+    // to whoever asked, verbatim, with no LLM turn (src/relay/service.ts).
+    const relayReplyTo = grammyCtx.message.reply_to_message?.message_id;
+    if (relayReplyTo !== undefined && this.ctx.relayService) {
+      try {
+        const routed = await this.ctx.relayService.routeTelegramReply({
+          viaBotId: config.id,
+          chatAddress: String(chatId),
+          messageId: relayReplyTo,
+          answererAddress: String(grammyCtx.from.id),
+          answererName: grammyCtx.from.first_name ?? grammyCtx.from.username ?? 'Unknown',
+          text,
+        });
+        if (routed.handled) {
+          botLogger.info(
+            { chatId, relayId: routed.relay.id, answerStatus: routed.answer.record.status },
+            'Message handled as relay reply'
+          );
+          await grammyCtx.reply(routed.ack).catch((err: unknown) => {
+            botLogger.warn({ err, chatId }, 'relay reply: ack failed');
+          });
+          return { allowed: false, reason: 'relay_reply' };
+        }
+      } catch (err) {
+        botLogger.warn({ err, chatId }, 'relay reply routing failed; handling as a normal message');
+      }
+    }
+
     // 1. ask_human reply intercept
     if (this.askHumanStore?.hasPending(config.id, chatId)) {
       const replyToId = grammyCtx.message.reply_to_message?.message_id;

@@ -399,6 +399,19 @@ const TopicGuardConfigSchema = z
   })
   .optional();
 
+/**
+ * Relays (`send_message` between people, docs/plans/relay-plan.md).
+ * `peerToPeer`: allow relays between two non-operator people; `locale`: the
+ * language of the system-stamped header, reply footer and acknowledgement.
+ */
+export const BotRelayConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    peerToPeer: z.boolean().default(false),
+    locale: z.enum(['es', 'en']).default('es'),
+  })
+  .optional();
+
 export const BotConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -437,6 +450,8 @@ export const BotConfigSchema = z.object({
   topicGuard: TopicGuardConfigSchema,
   /** Trait pinning / locking — see TraitRegisters */
   traits: BotTraitsConfigSchema,
+  /** Person-to-person relays through `send_message` — see src/relay/ */
+  relay: BotRelayConfigSchema,
   allowedWritePaths: z.array(z.string()).optional(),
   // Tool permission matrix (per-tool overrides: agent-loop vs conversation)
   toolPermissions: z

@@ -15,6 +15,7 @@ import type { MemoryManager } from '../memory/manager';
 import type { MessageBuffer } from '../message-buffer';
 import type { OllamaClient } from '../ollama';
 import type { ProductionsService } from '../productions/service';
+import type { RelayService } from '../relay/service';
 import type { SessionManager } from '../session';
 import type { SoulLoader } from '../soul';
 import type { Tool, ToolDefinition } from '../tools/types';
@@ -82,6 +83,8 @@ export interface BotContext {
   readonly analyticsService?: import('../tenant/analytics-service').AnalyticsService;
   readonly customizationService?: import('../tenant/customization').CustomizationService;
   readonly userDirectory?: UserDirectory;
+  /** Person-to-person relays (src/relay/): send_message and Telegram reply-to routing. */
+  readonly relayService?: RelayService;
   readonly inlineApprovalStore?: InlineApprovalStore;
   readonly hooks?: import('./hooks').HookEmitter;
 

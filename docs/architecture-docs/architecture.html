@@ -190,12 +190,12 @@
             <tr>
               <td><code>tool-executor.ts</code></td>
               <td style="text-align: right;">729</td>
-              <td>Tool call execution with error handling and logging</td>
+              <td>Tool call execution with error handling and logging; injects <code>_requester</code> (relay sender)</td>
             </tr>
             <tr>
               <td><code>tool-registry.ts</code></td>
               <td style="text-align: right;">347</td>
-              <td>Tool initialization, filtering, collaboration-safe tools</td>
+              <td>Tool initialization, filtering, collaboration-safe tools; conversation executors write the tool audit</td>
             </tr>
             <tr>
               <td><code>types.ts</code></td>
@@ -216,6 +216,16 @@
         <code>BotManager.getChannelState()</code>. Neither writes runtime bot state. Module tables for both live
         in <code>CLAUDE.md</code>; behaviour is described on the <a href="web-dashboard.html">Web Dashboard</a>,
         <a href="operator-api.html">Operator API</a> and <a href="memory-soul.html">Memory &amp; Soul</a> pages.
+      </p>
+
+      <p>
+        <span class="badge badge-yellow">2026-10-11</span> <code>src/relay/</code> sits <em>inside</em> the facade:
+        <code>BotManager</code> builds one <code>RelayService</code> (<code>createRelayService</code>) and shares it
+        as <code>BotContext.relayService</code>. It carries messages one person asks a bot to pass to another
+        &mdash; <code>send_message</code>, the Telegram reply-to step in <code>ConversationGate</code>, the
+        <code>requester</code> and relay prompt sections in <code>ConversationPipeline</code>, and the operator seed in
+        <code>startBot</code>. It depends on <code>UserDirectory</code>, <code>SessionManager</code> and the fleet's
+        Telegram instances. Module table: <a href="bot-core.html#relay">Bot Core &rarr; Relay</a>.
       </p>
 
       <!-- ============================================================

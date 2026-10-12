@@ -157,6 +157,8 @@ src/
 │   ├── websocket.ts        #   Widget chat + streaming
 │   ├── rest.ts             #   REST API adapter
 │   └── outbound.ts         #   Proactive message delivery factory
+├── relay/                  # Person-to-person relays through a bot (send_message): delivery
+│                           #   resolver, durable records, return path, policy
 ├── a2a/                    # Agent-to-Agent Protocol (v0.3.0)
 │   ├── server.ts           #   JSON-RPC handler + directory endpoints
 │   ├── client.ts           #   HTTP client for external agents
@@ -286,11 +288,15 @@ Token-by-token streaming for Ollama backend (opt-in via `conversation.streaming`
 
 ### Multi-Channel Support
 
-Channel-agnostic architecture with adapters for Telegram (grammy), WhatsApp Cloud API (images, interactive buttons, status tracking), Discord (REST API + Gateway WebSocket, no discord.js), REST API, and WebSocket widget. Outbound channel factory enables proactive messaging across all channels via the `send_message` tool with contact directory lookup.
+Channel-agnostic architecture with adapters for Telegram (grammy), WhatsApp Cloud API (images, interactive buttons, status tracking), Discord (REST API + Gateway WebSocket, no discord.js), REST API, and WebSocket widget. Outbound channel factory enables proactive messaging across all channels. `send_message` is built on relays (below).
 
 **Headless bots run cron instructions too.** `handleCronInstruction()` no longer needs the bot's own Telegram connection: delivery resolves own instance → any live fleet instance → the bot's web session, and the synthetic message carries the real `channelKind`. A `null` outbound channel now means genuinely undeliverable. The trade-off to know about: a headless bot's cron reply delivered through another bot's Telegram connection arrives **from that other bot's account**.
 
 A human message arriving on REST, WebSocket, WhatsApp or Discord emits the `human_inbound` event from `handleChannelMessage()`, which `AgentScheduler` turns into an engagement-gate feedback signal and `humanReply` karma. Peer agents, MCP traffic, synthetic messages and cron-generated messages are excluded.
+
+### Relays (person-to-person messages)
+
+`send_message` passes a message from the person talking to the bot to another person (the operator or a known contact) and routes the answer back. A relay is a durable record (`<data>/relays/<botId>.jsonl`) with an honest delivery status: `delivered` (Telegram or WhatsApp accepted it, or a live web connection exists), `queued` (stored in a web session, nobody notified) or `failed` — never "sent" when nothing reached a person. Route order is fixed: Telegram (the bot's own instance, then any fleet instance) → WhatsApp → web. The sender is the conversation's speaker, injected by the executor (`_requester`), never a model argument; the recipient sees a system-stamped header ("📨 De Ana (vía Bot)") and, when an answer is expected, a reply footer. A Telegram reply to a relay message is forwarded to the requester verbatim without an LLM turn; free-text answers close the relay with `send_message(replyTo)`; the conversation prompt lists what waits on the speaker and what they asked to pass on. Identical text to the same recipient within 10 minutes is not sent twice. Policy: anyone → operator and operator → anyone; person → person only with `bots[].relay.peerToPeer`. Every human who talks to a bot (Telegram included) is tracked in the contact directory, and the configured operator is one contact seeded from `config.operator` at bot start.
 
 ### A2A Protocol
 
@@ -437,7 +443,7 @@ Routine options are surfaced as checkboxes on each routine card at `#/stats/hygi
 
 Configuration lives in `config/config.json`, validated at startup by Zod schemas in `src/config.ts`. Key sections:
 
-- **`bots[]`** — Per-bot: token (`null` = headless on purpose; a non-token-shaped string is reported as `placeholder` and never sent to Telegram), `enabled` (starts at boot; a disabled bot cannot be started at all), model, allowedUsers, disabledTools, disabledSkills, workDir, llmBackend, tts overrides, `agentLoop.plannerBackend`, `agentLoop.engagementGate { enabled, mode, threshold, lookbackHours: 168 }` (per-bot only — there is no global `agentLoop.engagementGate`), `traits { pinned, locked }`
+- **`bots[]`** — Per-bot: token (`null` = headless on purpose; a non-token-shaped string is reported as `placeholder` and never sent to Telegram), `enabled` (starts at boot; a disabled bot cannot be started at all), model, allowedUsers, disabledTools, disabledSkills, workDir, llmBackend, tts overrides, `agentLoop.plannerBackend`, `agentLoop.engagementGate { enabled, mode, threshold, lookbackHours: 168 }` (per-bot only — there is no global `agentLoop.engagementGate`), `traits { pinned, locked }`, `relay { enabled: true, peerToPeer: false, locale: 'es' | 'en' }`
 - **`startup`** — `autoStartBots` (default `true`): start every enabled bot at boot. Override with `AIBOT_AUTOSTART_BOTS`
 - **`operator`** — The human the bots report to: `name`, `telegramChatId`, `email`, `notifyOnAsk`, `proactiveCooldownMinutes` (60 when unset), `proactiveDailyCap` (10 when unset) — all optional. `chatId: "operator"` in `send_proactive_message` / `cron` resolves to `telegramChatId`; `notifyOnAsk` also pings the operator on every `ask_human`
 - **`claudeCli`** — `enabled` (default `true`), `model`, `crossBackendFallback` (default **`false`**: a failed `claude-cli` call is *not* silently re-issued to Ollama)

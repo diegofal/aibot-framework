@@ -5,6 +5,7 @@ import type { AskHumanStore, PendingQuestionInfo } from '../bot/ask-human-store'
 import type { OperatorConfig } from '../config';
 import type { ConversationsService } from '../conversations/service';
 import type { Logger } from '../logger';
+import { MEMORY_VIEWER_ARG } from '../memory/viewer';
 import type { FileRef } from '../types/thread';
 import { OPERATOR_CHAT_ALIAS, resolveOperatorTarget } from './send-proactive-message';
 import type { Tool, ToolResult } from './types';
@@ -383,6 +384,25 @@ async function notifyOperatorOfAsk(
 }
 
 /**
+ * May the asking bot write its "needs your input" message into `chatId`?
+ *
+ * Only when nobody but the operator reads that chat: the operator's own chat
+ * (`operator.telegramChatId`), or a chat the agent loop / collaboration
+ * reports to — those executors inject `_memoryViewer: null` (no human viewer).
+ * In a conversation `_chatId` is the speaker's chat (viewer = the speaker, or
+ * absent for legacy callers), and the question is not theirs to answer.
+ */
+export function mayNotifyAskingChat(
+  chatId: number,
+  args: Record<string, unknown>,
+  operator: OperatorConfig | undefined
+): boolean {
+  if (!chatId) return false;
+  if (operator?.telegramChatId && operator.telegramChatId === chatId) return true;
+  return MEMORY_VIEWER_ARG in args && args[MEMORY_VIEWER_ARG] === null;
+}
+
+/**
  * Tool that lets the bot ask the human operator a question.
  * The question is queued to the web inbox and returns immediately (non-blocking).
  * The answer will be injected into the bot's next agent loop cycle.
@@ -550,9 +570,10 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
         }
       }
 
-      // Send Telegram notification if we have a valid chatId and bot instance
+      // Send Telegram notification into the asking chat — only when that chat is
+      // the operator's or an agent-loop report chat, never a user's conversation.
       const notifiedChatIds = new Set<number>();
-      if (chatId) {
+      if (mayNotifyAskingChat(chatId, args, deps.getOperator?.())) {
         const bot = deps.getBotInstance(botId);
         if (bot) {
           const botName = deps.getBotName(botId);

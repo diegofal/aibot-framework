@@ -1,36 +1,22 @@
-import type { ContactChannel, ContactEntry, UserDirectory } from '../bot/user-directory';
-import type { Channel, ChannelKind } from '../channel/types';
+import type { ContactEntry, UserDirectory } from '../bot/user-directory';
+import type { ChannelKind } from '../channel/types';
 /**
- * send_message tool — channel-agnostic message sending with contact lookup.
+ * send_message tool — person-to-person relays (docs/plans/relay-plan.md).
  *
- * Searches the UserDirectory by name/username/ID, resolves the best channel,
- * and delivers the message. If the contact is unknown, instructs the LLM to
- * ask the user for details and call again with the `register` parameter.
+ * The recipient comes from the contact directory (or, with `replyTo`, from
+ * the relay being answered); the sender is the executor-injected `_requester`,
+ * never a model argument. Delivery goes through `RelayService`, and the result
+ * text says exactly what happened: delivered, queued (stored, nobody
+ * notified) or failed.
  */
 import type { Logger } from '../logger';
+import { type RelayParty, type RelayService, canRelay } from '../relay';
+import type { RelayRecord } from '../relay/types';
 import type { Tool, ToolResult } from './types';
 
 export interface SendMessageDeps {
   userDirectory: UserDirectory;
-  createOutboundChannel: (botId: string, contact: ContactChannel) => Channel | null;
-}
-
-/** Channel preference order for "auto" mode */
-const CHANNEL_PRIORITY: ChannelKind[] = ['telegram', 'whatsapp', 'web'];
-
-function pickChannel(
-  entry: ContactEntry,
-  preferredKind: string | undefined
-): ContactChannel | null {
-  if (preferredKind && preferredKind !== 'auto') {
-    return entry.channels.find((c) => c.kind === preferredKind) ?? null;
-  }
-  // Auto: pick by priority
-  for (const kind of CHANNEL_PRIORITY) {
-    const ch = entry.channels.find((c) => c.kind === kind);
-    if (ch) return ch;
-  }
-  return entry.channels[0] ?? null;
+  relays: RelayService;
 }
 
 function formatContact(e: ContactEntry): string {
@@ -38,33 +24,58 @@ function formatContact(e: ContactEntry): string {
   return `• ${e.displayName} (id: ${e.id}, channels: ${channels})`;
 }
 
+/** Whether `party` is the person `relay` was addressed to. */
+function isRecipientOf(
+  relay: RelayRecord,
+  party: RelayParty,
+  sameContact: (a: string, b: string) => boolean
+): boolean {
+  if (relay.to.contactId && party.contactId && sameContact(relay.to.contactId, party.contactId)) {
+    return true;
+  }
+  return relay.to.channelKind === party.channelKind && relay.to.address === party.address;
+}
+
 export function createSendMessageTool(deps: SendMessageDeps): Tool {
+  const { userDirectory, relays } = deps;
   return {
     definition: {
       type: 'function',
       function: {
         name: 'send_message',
         description:
-          'Send a message to a contact. Searches the contact directory by name, @username, or contact ID. ' +
-          'If the contact is not found and you have their details, pass the "register" parameter to add them. ' +
-          "If you do not have their details, ask the user for the recipient's name and contact info (e.g. Telegram chatId or phone number).",
+          'Pass a message to another person (the operator or a contact). Use it whenever someone asks you to tell, ask or pass something to another person. ' +
+          'The person you are talking with is attributed as the sender automatically. Set expectsReply when they want an answer back: ' +
+          'a reply to the delivered message is routed back to them by the system. When the person you are talking with answers a message that was passed to them, call send_message with replyTo=<relay id> (recipient not needed). ' +
+          'Never tell anyone a message was delivered unless the result starts with "Delivered". ' +
+          'Contacts are searched by name, @username, contact ID or "operator". If the contact is not found and you have their details, pass "register" to add them.',
         parameters: {
           type: 'object',
           properties: {
             recipient: {
               type: 'string',
               description:
-                'Name, @username, or contact ID of the recipient. Searched in the contact directory.',
+                'Name, @username, contact ID or "operator". Optional when replyTo is given.',
             },
             message: {
               type: 'string',
-              description: 'The message text to send (max 4000 chars)',
+              description:
+                'The message text, worded as the requester wants it passed (max 4000 chars)',
+            },
+            expectsReply: {
+              type: 'boolean',
+              description: 'The requester wants the answer back.',
+            },
+            replyTo: {
+              type: 'string',
+              description:
+                'Relay id (r-xxxxxxxx) this message answers; the answer goes to whoever asked.',
             },
             channel: {
               type: 'string',
               enum: ['telegram', 'whatsapp', 'web', 'auto'],
               description:
-                'Channel to deliver through. "auto" (default) picks the best available channel.',
+                'Restrict delivery to one channel. "auto" (default) tries Telegram, WhatsApp, then web.',
             },
             register: {
               type: 'object',
@@ -86,7 +97,7 @@ export function createSendMessageTool(deps: SendMessageDeps): Tool {
               required: ['displayName', 'channelKind', 'address'],
             },
           },
-          required: ['recipient', 'message'],
+          required: ['message'],
         },
       },
     },
@@ -95,98 +106,143 @@ export function createSendMessageTool(deps: SendMessageDeps): Tool {
       const recipient = String(args.recipient ?? '').trim();
       const message = String(args.message ?? '').trim();
       const channelPref = (args.channel as string) || 'auto';
+      const replyTo = typeof args.replyTo === 'string' ? args.replyTo.trim() : '';
       const botId = String(args._botId ?? '');
+      const requester = (args._requester as RelayParty | undefined) ?? null;
       const registerData = args.register as
         | { displayName: string; channelKind: string; address: string; username?: string }
         | undefined;
 
-      if (!recipient) return { success: false, content: 'Missing recipient' };
+      if (!recipient && !replyTo) return { success: false, content: 'Missing recipient' };
       if (!message) return { success: false, content: 'Missing message' };
       if (message.length > 4000)
         return { success: false, content: 'Message too long (max 4000 chars)' };
 
-      // Search contact directory
-      let matches = deps.userDirectory.find(botId, recipient);
+      relays.ensureOperator(botId);
+      const settings = relays.settings(botId);
 
-      // No matches — try to register if data provided
-      if (matches.length === 0 && registerData) {
-        const entry = deps.userDirectory.register(botId, {
-          displayName: registerData.displayName,
-          channel: {
-            kind: registerData.channelKind as ChannelKind,
-            address: registerData.address,
-            username: registerData.username,
-            verified: false,
-          },
-        });
-        matches = [entry];
-        logger.info(
-          { botId, contactId: entry.id, name: entry.displayName },
-          'send_message: registered new contact'
-        );
+      // --- Resolve the recipient ---
+      let contact: ContactEntry;
+      let answering: RelayRecord | undefined;
+      if (replyTo) {
+        const original = relays.store.get(botId, replyTo);
+        if (!original) return { success: false, content: `Relay ${replyTo} not found.` };
+        if (!original.from) {
+          return {
+            success: false,
+            content: `Relay ${replyTo} was sent by the bot itself; there is nobody to answer to.`,
+          };
+        }
+        if (original.status === 'answered' || original.answeredAt) {
+          return { success: false, content: `Relay ${replyTo} was already answered.` };
+        }
+        const sameContact = (a: string, b: string) =>
+          a === b || userDirectory.getById(botId, a)?.id === userDirectory.getById(botId, b)?.id;
+        if (!requester || !isRecipientOf(original, requester, sameContact)) {
+          return {
+            success: false,
+            content: `Relay ${replyTo} was addressed to ${original.to.displayName}; only they can answer it, from their own conversation.`,
+          };
+        }
+        answering = original;
+        contact = relays.contactFor(botId, original.from);
+      } else {
+        let matches = userDirectory.find(botId, recipient);
+        if (matches.length === 0 && registerData) {
+          const entry = userDirectory.register(botId, {
+            displayName: registerData.displayName,
+            channel: {
+              kind: registerData.channelKind as ChannelKind,
+              address: registerData.address,
+              username: registerData.username,
+              verified: false,
+            },
+          });
+          matches = [entry];
+          logger.info(
+            { botId, contactId: entry.id, name: entry.displayName },
+            'send_message: registered new contact'
+          );
+        }
+        if (matches.length === 0) {
+          return {
+            success: false,
+            content: `Contact "${recipient}" not found in directory. Ask the user for the recipient's contact details (name and their Telegram chatId, WhatsApp phone number, or other channel address), then call send_message again with the "register" parameter to add and message them.`,
+          };
+        }
+        if (matches.length > 1) {
+          const list = matches.map(formatContact).join('\n');
+          return {
+            success: false,
+            content: `Multiple contacts match "${recipient}":\n${list}\n\nCall send_message again with the specific contact ID as the recipient.`,
+          };
+        }
+        contact = matches[0];
       }
 
-      // No matches and no register data — instruct LLM to ask
-      if (matches.length === 0) {
+      if (channelPref !== 'auto') {
+        const channels = contact.channels.filter((c) => c.kind === channelPref);
+        if (channels.length === 0) {
+          return {
+            success: false,
+            content: `Contact "${contact.displayName}" has no ${channelPref} channel.`,
+          };
+        }
+        contact = { ...contact, channels };
+      }
+
+      // --- Sender and policy ---
+      const from = settings.enabled ? requester : null;
+      const expectsReply = !!from && !answering && args.expectsReply === true;
+      if (!answering) {
+        const decision = canRelay(from, relays.recipientParty(contact), settings);
+        if (!decision.allowed) return { success: false, content: decision.reason };
+      }
+
+      // --- Deliver ---
+      const result = await relays.send({
+        botId,
+        from,
+        to: contact,
+        text: message,
+        expectsReply,
+        answering,
+      });
+      const name = contact.displayName;
+      const { record } = result;
+
+      if (result.duplicate) {
+        const reached = record.status === 'delivered' || record.status === 'answered';
+        return {
+          success: reached,
+          content: reached
+            ? `Already delivered to ${name} (relay ${record.id}, status ${record.status}). Do not resend it.`
+            : `Already stored for ${name} (relay ${record.id}, status ${record.status}) — not delivered. Do not resend it.`,
+        };
+      }
+
+      const { outcome } = result;
+      if (outcome.status === 'delivered') {
+        const via =
+          outcome.viaBotId && outcome.viaBotId !== botId
+            ? ` (through ${outcome.viaBotId}'s account)`
+            : '';
+        let content = `Delivered to ${name} via ${outcome.channel}${via} (relay ${record.id}).`;
+        if (expectsReply && from) {
+          content += ` When they reply to that message it will be forwarded to ${from.displayName} automatically; if they answer in free text, close it with send_message replyTo=${record.id}.`;
+        }
+        return { success: true, content };
+      }
+      if (outcome.status === 'queued') {
         return {
           success: false,
-          content: `Contact "${recipient}" not found in directory. Ask the user for the recipient's contact details (name and their Telegram chatId, WhatsApp phone number, or other channel address), then call send_message again with the "register" parameter to add and message them.`,
+          content: `NOT delivered — ${name} has no reachable channel right now (${outcome.error ?? 'stored, not notified'}). Stored as relay ${record.id}. Do not tell anyone it was delivered.`,
         };
       }
-
-      // Multiple matches — return list for disambiguation
-      if (matches.length > 1) {
-        const list = matches.map(formatContact).join('\n');
-        return {
-          success: false,
-          content: `Multiple contacts match "${recipient}":\n${list}\n\nCall send_message again with the specific contact ID as the recipient.`,
-        };
-      }
-
-      // Single match — deliver
-      const contact = matches[0];
-      const targetChannel = pickChannel(contact, channelPref);
-      if (!targetChannel) {
-        return {
-          success: false,
-          content: `Contact "${contact.displayName}" has no ${channelPref === 'auto' ? 'available' : channelPref} channel.`,
-        };
-      }
-
-      const outbound = deps.createOutboundChannel(botId, targetChannel);
-      if (!outbound) {
-        return {
-          success: false,
-          content:
-            `Cannot create outbound channel for ${targetChannel.kind}. ` +
-            `The bot may not have an active ${targetChannel.kind} connection or the required config is missing.`,
-        };
-      }
-
-      try {
-        await outbound.sendText(message);
-        logger.info(
-          {
-            botId,
-            contactId: contact.id,
-            contactName: contact.displayName,
-            channel: targetChannel.kind,
-            messageLength: message.length,
-          },
-          'send_message: delivered'
-        );
-        return {
-          success: true,
-          content: `Message sent to ${contact.displayName} via ${targetChannel.kind}`,
-        };
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        logger.error(
-          { err, contactId: contact.id, channel: targetChannel.kind },
-          'send_message: delivery failed'
-        );
-        return { success: false, content: `Delivery failed: ${errMsg}` };
-      }
+      return {
+        success: false,
+        content: `Delivery FAILED to ${name}: ${outcome.error ?? 'no route'}. Nothing was sent. Do not claim it was sent; tell the requester plainly.`,
+      };
     },
   };
 }

@@ -366,7 +366,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>email</code></td>
               <td>string</td>
               <td>&mdash; (optional)</td>
-              <td>Also accepted as the operator alias in <code>chatId</code> (case-insensitive)</td>
+              <td>Also accepted as the operator alias in <code>chatId</code> (case-insensitive). With <code>telegramChatId</code>, seeds the operator contact in every bot's directory at <code>startBot</code> (<code>UserDirectory.ensureOperator</code>), so <code>send_message</code> resolves <code>"operator"</code> to one contact</td>
             </tr>
             <tr>
               <td><code>notifyOnAsk</code></td>
@@ -2577,6 +2577,12 @@ const config = await loadConfig('./config/config.json');
               <td>string[]</td>
               <td>&mdash; (optional)</td>
               <td>Paths where the bot can write without <code>ask_permission</code>. Default at runtime: <code>["productions/"]</code></td>
+            </tr>
+            <tr id="relay">
+              <td><code>relay</code></td>
+              <td>object</td>
+              <td>&mdash; (optional)</td>
+              <td><span class="badge badge-yellow">2026-10-11</span> Person-to-person relays through <code>send_message</code> (<code>BotRelayConfigSchema</code>, <a href="bot-core.html#relay">Bot Core &rarr; Relay</a>): <code>enabled</code> (default <code>true</code>; <code>false</code> sends as the bot itself &mdash; no sender header, no return path, delivery statuses unchanged), <code>peerToPeer</code> (default <code>false</code>: relays between two non-operator people are refused; anyone &harr; operator is always allowed), <code>locale</code> (<code>'es' | 'en'</code>, default <code>'es'</code>: language of the system-stamped header, reply footer and acknowledgements)</td>
             </tr>
           </tbody>
         </table>

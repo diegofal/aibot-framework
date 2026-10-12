@@ -26,6 +26,8 @@ export interface SystemPromptOptions {
   permissionMode?: PermissionMode;
   /** How the chat's previous conversation left off (session-continuity.ts), conversation mode only */
   previousSession?: string;
+  /** Relays waiting on / requested by the current speaker (relay/prompt.ts), conversation mode only */
+  relayContext?: string;
 }
 
 export class SystemPromptBuilder {
@@ -133,6 +135,10 @@ export class SystemPromptBuilder {
 
     if (mode === 'conversation' && options.previousSession) {
       prompt += `\n\n${options.previousSession}`;
+    }
+
+    if (mode === 'conversation' && options.relayContext) {
+      prompt += `\n\n${options.relayContext}`;
     }
 
     // Memory search reinforcement (always when memory tools exist)

@@ -88,7 +88,8 @@ describe('Cross-bot isolation: AskHumanStore', () => {
   });
 
   test('single-pending fallback is scoped by bot', () => {
-    store.ask('bot-a', 100, 'Q from A', 60_000);
+    const { id } = store.ask('bot-a', 100, 'Q from A', 60_000);
+    store.setMessageId(id, 1); // the fallback only applies to questions notified in this chat
 
     // bot-b has no pending in chat 100, so single-pending fallback shouldn't trigger
     const resultB = store.handleReply('bot-b', 100, 'answer');

@@ -11,6 +11,7 @@ import {
   normalizeEntryPath,
 } from '../productions/paths';
 import { ProductionsService } from '../productions/service';
+import type { RelayParty } from '../relay/types';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
 import type { Tool, ToolDefinition, ToolFailureKind, ToolResult } from '../tools/types';
 import { clampToChainContextWindow } from './context-compaction';
@@ -168,6 +169,12 @@ export interface ToolExecutorOptions {
    * the tool sees `_cycleId`.
    */
   attribution?: { cycleId: string; goalId: string | null };
+  /**
+   * Who is speaking in the conversation that triggered this call (relay
+   * sender). Injected as `_requester`, always overriding model arguments;
+   * absent (agent loop, collaboration) = the bot itself.
+   */
+  requester?: RelayParty;
 }
 
 /**
@@ -626,6 +633,7 @@ export class ToolExecutor extends EventEmitter {
         ...(this.options.tenantRoot ? { _tenantRoot: this.options.tenantRoot } : {}),
         ...(this.options.attribution ? { _cycleId: this.options.attribution.cycleId } : {}),
         ...(this.options.attribution?.goalId ? { _goalId: this.options.attribution.goalId } : {}),
+        _requester: this.options.requester,
       };
 
       // Per-bot workDir: resolve file paths and exec cwd
