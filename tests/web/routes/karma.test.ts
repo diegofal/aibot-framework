@@ -6,6 +6,7 @@ import type { Config } from '../../../src/config';
 import { KarmaService } from '../../../src/karma/service';
 import type { Logger } from '../../../src/logger';
 import { karmaRoutes } from '../../../src/web/routes/karma';
+import type { CycleReader } from '../../../src/why/cycle-index';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -24,7 +25,7 @@ const mockConfig = {
   ],
 } as unknown as Config;
 
-function makeApp(karmaService: KarmaService) {
+function makeApp(karmaService: KarmaService, readCycles?: CycleReader) {
   const app = new Hono();
   app.route(
     '/api/karma',
@@ -32,6 +33,7 @@ function makeApp(karmaService: KarmaService) {
       karmaService,
       config: mockConfig,
       logger: noopLogger,
+      readCycles,
     })
   );
   return app;
@@ -135,6 +137,44 @@ describe('karma routes', () => {
 
       expect(data.events.length).toBe(2);
       expect(data.events[0].reason).toBe('Event 2');
+    });
+
+    test('each event carries a why, its cycle read once per request', async () => {
+      const now = Date.now();
+      service.addEvent('bot1', -2, 'Repeated action: search', 'agent-loop', {
+        cycleId: 'c-1',
+        goalId: 'g-1',
+      });
+      service.addEvent('bot1', 4, 'Nice', 'manual');
+      const reads: string[] = [];
+      const app = makeApp(service, (botId) => {
+        reads.push(botId);
+        return [
+          {
+            cycleId: 'c-1',
+            startedAt: new Date(now - 60_000).toISOString(),
+            endedAt: new Date(now + 60_000).toISOString(),
+            planSummary: 'Search the boards',
+            goalId: 'g-1',
+            goalTitle: 'Find roles',
+          },
+        ];
+      });
+      const res = await app.request('http://localhost/api/karma/bot1/history');
+      const data = await res.json();
+      expect(reads).toEqual(['bot1']);
+      expect(data.events[0].why).toMatchObject({ what: 'Manual adjustment', by: 'operator' });
+      expect(data.events[1].why.cycle).toMatchObject({ id: 'c-1', plan: 'Search the boards' });
+      expect(data.events[1].why.goal).toEqual({ id: 'g-1', title: 'Find roles' });
+    });
+
+    test('a failing cycle reader still answers, with the bare cycle id', async () => {
+      service.addEvent('bot1', -2, 'Repeated action: x', 'agent-loop', { cycleId: 'c-9' });
+      const app = makeApp(service, () => {
+        throw new Error('disk');
+      });
+      const data = await (await app.request('http://localhost/api/karma/bot1/history')).json();
+      expect(data.events[0].why.cycle).toEqual({ id: 'c-9', botId: 'bot1' });
     });
 
     test('uses default limit of 50', async () => {

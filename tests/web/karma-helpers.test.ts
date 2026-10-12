@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'bun:test';
-import { agentNames, filterKarma, karmaToolbar, sortKarma } from '../../web/pages/karma-helpers.js';
+import {
+  agentNames,
+  filterKarma,
+  karmaEventRow,
+  karmaToolbar,
+  sortKarma,
+} from '../../web/pages/karma-helpers.js';
 
 const scores = [
   { botId: 'b1', current: 40, trend: 'rising', recentEvents: [1, 2] },
@@ -46,5 +52,34 @@ describe('karmaToolbar', () => {
     expect(html).toContain('data-page-filter');
     expect(html).toContain('<option value="name" selected>');
     expect(html).toContain('<option value="rising" selected>');
+  });
+});
+
+describe('karmaEventRow', () => {
+  const NOW = Date.parse('2026-10-11T12:00:00Z');
+  const evt = {
+    id: 'k1',
+    botId: 'b1',
+    timestamp: '2026-10-11T11:00:00Z',
+    delta: -1,
+    reason: 'Tool error: <web_fetch>',
+    source: 'tool',
+    why: { what: 'A tool call failed', by: 'agent', cycle: { id: 'c-1', botId: 'b1' } },
+  };
+
+  it('renders delta, source, escaped reason, time and the shared Why fold', () => {
+    const html = karmaEventRow(evt, { nowMs: NOW, botId: 'b1' });
+    expect(html).toContain('-1');
+    expect(html).toContain('badge-error');
+    expect(html).toContain('Tool error: &lt;web_fetch&gt;');
+    expect(html).toContain('1h ago');
+    expect(html).toContain('<details class="why">');
+    expect(html).toContain('data-open-cycle="c-1"');
+  });
+
+  it('an event without a why renders no fold', () => {
+    const html = karmaEventRow({ ...evt, why: undefined, delta: 2 }, { nowMs: NOW });
+    expect(html).toContain('+2');
+    expect(html).not.toContain('<details');
   });
 });

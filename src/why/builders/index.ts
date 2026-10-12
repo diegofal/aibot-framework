@@ -4,10 +4,14 @@
  * the shared panel; a builder file not listed here fails that test.
  */
 import { dispatchToWhy } from './dispatch';
+import { goalEventToWhy } from './goal-event';
+import { karmaEventToWhy } from './karma';
 import { proactiveToWhy } from './proactive';
 
 export const WHY_BUILDERS = {
   dispatch: dispatchToWhy,
+  goalEvent: goalEventToWhy,
+  karma: karmaEventToWhy,
   proactive: proactiveToWhy,
 } as const;
 

@@ -360,6 +360,12 @@
             </tr>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id/goals/detail</code></td>
+              <td><span class="badge badge-yellow">2026-10-11</span> Goal drawer payload (<code>GoalDetailResponse</code>, <code>buildGoalDetail</code>; <code>?id=&amp;title=&amp;days=</code>, cached 15 s, tenant-scoped). Each <code>timeline[]</code> event (<code>GoalTimelineEvent</code>) now also carries <code>cycleId: string | null</code> and <code>why</code> (<code>goalEventToWhy</code>, <code>src/why/builders/goal-event.ts</code>): the op in words, the actor, the cycle and its plan, from &rarr; to</td>
+              <td><code>agent-home.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents/:id/presence</code></td>
               <td>Uncached presence slice: posture, <code>nowLine</code> + <code>tone</code>, <code>isExecuting</code>, live <code>phase</code> / <code>currentTool</code> from the <code>PresenceTracker</code>, next/last run, pending asks. The agent page refetches it on every activity event for the bot</td>
               <td><code>agent-home.ts</code></td>
@@ -1114,7 +1120,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/karma/:botId/history</code></td>
-              <td>Get paginated karma history (<code>?limit=50&amp;offset=0</code>)</td>
+              <td>Get paginated karma history (<code>?limit=50&amp;offset=0</code>). <span class="badge badge-yellow">2026-10-11</span> Each event carries <code>why</code> (<code>karmaEventToWhy</code>, <code>src/why/builders/karma.ts</code>): kind in words, who, the cycle + plan + goal from <code>metadata.cycleId</code> and the cycle log (one read per request), the production it is about, the reward rule, delta + reason</td>
               <td><code>karma.ts</code></td>
             </tr>
             <tr>

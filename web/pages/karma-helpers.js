@@ -1,8 +1,10 @@
 /**
  * Karma list helpers (UX overhaul phase 4): agent names instead of raw
- * botIds, sort and filter. Pure; covered by `tests/web/karma-helpers.test.ts`.
+ * botIds, sort and filter; one history row with its "Why this?" fold. Pure; covered by `tests/web/karma-helpers.test.ts`.
  */
 import { esc } from '../ui/index.js';
+import { ago } from './agent-home-helpers.js';
+import { whyPanel } from './why-helpers.js';
 
 /** `{ id: name }` from `/api/agents`; anything else gives `{}`. */
 export function agentNames(agents) {
@@ -64,4 +66,35 @@ export function karmaToolbar({ query = '', sortBy = 'score-desc', trend = '' } =
       ${KARMA_SORTS.map((s) => option(s.id, s.label, sortBy)).join('')}
     </select>
   </div>`;
+}
+
+/** The ledger source as a badge (manual, production, tool, ...). */
+export function sourceBadge(source) {
+  const cls =
+    source === 'manual'
+      ? 'badge-disabled'
+      : source === 'feedback'
+        ? 'eval-badge-approved'
+        : source === 'production' || source === 'engagement'
+          ? 'badge-ok'
+          : source === 'tool'
+            ? 'badge-error'
+            : 'badge-disabled';
+  return `<span class="badge ${cls}">${esc(source)}</span>`;
+}
+
+/**
+ * One karma history row: delta, source, reason, when, and the shared Why
+ * fold (`evt.why`, built by `src/why/builders/karma.ts`) under it.
+ */
+export function karmaEventRow(evt, { nowMs = Date.now(), botId } = {}) {
+  const sign = evt.delta >= 0 ? '+' : '';
+  const color = evt.delta > 0 ? 'var(--green)' : evt.delta < 0 ? 'var(--red)' : 'var(--text-dim)';
+  return `<div style="display:flex;align-items:center;gap:12px">
+      <span style="font-weight:600;color:${color};min-width:48px;font-family:monospace;font-size:14px">${sign}${esc(String(evt.delta))}</span>
+      ${sourceBadge(evt.source)}
+      <span style="flex:1">${esc(evt.reason)}</span>
+      <span class="text-dim text-sm">${esc(ago(evt.timestamp, nowMs))}</span>
+    </div>
+    ${whyPanel(evt.why, { nowMs, botId })}`;
 }

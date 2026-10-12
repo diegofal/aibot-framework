@@ -1,16 +1,37 @@
 import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { KarmaService } from '../../karma/service';
+import type { KarmaEvent } from '../../karma/types';
 import type { Logger } from '../../logger';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import { karmaEventToWhy } from '../../why/builders/karma';
+import { CycleIndex, type CycleReader } from '../../why/cycle-index';
 
 export function karmaRoutes(deps: {
   karmaService: KarmaService;
   config: Config;
   logger: Logger;
+  /** Cycle-log rows of a bot, for each event's `why` (one read per request). */
+  readCycles?: CycleReader;
 }) {
   const app = new Hono();
   const { karmaService, config, logger } = deps;
+
+  /** Each event with the `why` the Karma page renders. */
+  const explain = (events: KarmaEvent[]) => {
+    const cycles = CycleIndex.for(
+      deps.readCycles,
+      events
+        .filter((e) => typeof e.metadata?.cycleId === 'string')
+        .map((e) => ({ botId: e.botId, at: e.timestamp })),
+      (botId, err) => logger.warn({ err, botId }, 'Karma: cycle log read failed')
+    );
+    return events.map((event) => {
+      const id = event.metadata?.cycleId;
+      const cycle = typeof id === 'string' ? cycles.byId(event.botId, id) : undefined;
+      return { ...event, why: karmaEventToWhy({ event, ...(cycle ? { cycle } : {}) }) };
+    });
+  };
 
   // Get karma for all bots (tenant-scoped)
   app.get('/', (c) => {
@@ -42,7 +63,7 @@ export function karmaRoutes(deps: {
     const limit = Number(c.req.query('limit')) || 50;
     const offset = Number(c.req.query('offset')) || 0;
     const result = karmaService.getHistory(botId, { limit, offset });
-    return c.json(result);
+    return c.json({ ...result, events: explain(result.events) });
   });
 
   // Clear all events (reset karma)

@@ -197,6 +197,21 @@ describe('goalDetailBody', () => {
     expect(html).toContain('pending → in_progress');
   });
 
+  it('each timeline event gets the shared Why fold when it has one', () => {
+    const base = detail();
+    (base.timeline as Array<Record<string, unknown>>)[1] = {
+      ...base.timeline[1],
+      why: {
+        what: 'Moved to In progress',
+        by: 'agent',
+        cycle: { id: 'c-exact', botId: 'ai-perfectionist', plan: 'Draft the lab' },
+      },
+    };
+    const html = goalDetailBody(base, 'ai-perfectionist', NOW);
+    expect(html.match(/<details class="why">/g)).toHaveLength(1);
+    expect(html).toContain('data-open-cycle="c-exact"');
+  });
+
   it('renders each cycle with attribution, LLM calls, tools, files, asks and karma', () => {
     const html = goalDetailBody(detail(), 'ai-perfectionist', NOW);
     expect(html.match(/<details class="gd-cycle/g)).toHaveLength(2);

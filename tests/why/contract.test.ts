@@ -49,6 +49,32 @@ const proactive: ProactiveSend = {
 const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0] } = {
   dispatch,
   proactive,
+  goalEvent: {
+    botId: 'b1',
+    event: {
+      ts: '2026-10-11T12:00:00Z',
+      op: 'status',
+      from: 'pending',
+      to: 'in_progress',
+      actor: 'strategist',
+      cycleId: 'c1',
+      inferred: false,
+      note: null,
+    },
+    cycle: { cycleId: 'c1', startedAt: '2026-10-11T11:59:00Z', planSummary: 'P' },
+  },
+  karma: {
+    event: {
+      id: 'k1',
+      botId: 'b1',
+      timestamp: '2026-10-11T12:00:00Z',
+      delta: 3,
+      reason: 'Production approved: "a.md"',
+      source: 'production',
+      kind: 'productionApproved',
+      metadata: { path: 'a.md' },
+    },
+  },
 };
 
 describe('Why contract', () => {

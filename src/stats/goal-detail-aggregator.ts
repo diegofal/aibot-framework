@@ -17,6 +17,8 @@ import { basename, join } from 'node:path';
 import type { BotConfig } from '../config';
 import { titleTokens } from '../hygiene/text-utils';
 import { type GoalEntry, findGoalIndex, goalBucket, parseGoals } from '../tools/goals';
+import { goalEventToWhy } from '../why/builders/goal-event';
+import { CycleIndex } from '../why/cycle-index';
 import type { StatsContext } from './context';
 import {
   type CycleCandidate,
@@ -30,7 +32,7 @@ import {
   toGoalCycle,
 } from './cycle-rows';
 import { resolveBotPaths } from './paths';
-import type { AgentCycleRecord } from './readers/agent-cycles';
+import { type AgentCycleRecord, readAgentCycles } from './readers/agent-cycles';
 import {
   type GoalEvent,
   goalTitleKey,
@@ -126,6 +128,32 @@ export function reconstructCycleWindows(entries: LlmQueryEntry[]): CycleWindow[]
   return windows;
 }
 
+/**
+ * Each timeline change with its `why`: the cycle row comes from the cycles
+ * already read for the window, and changes older than the window get one more
+ * read of the cycle log spanning just them (`CycleIndex.for`).
+ */
+function explainTimeline(
+  ctx: StatsContext,
+  botId: string,
+  changes: Array<Omit<GoalTimelineEvent, 'why'>>,
+  records: AgentCycleRecord[],
+  since: number
+): GoalTimelineEvent[] {
+  const known = new Map(records.map((r) => [r.cycleId, r]));
+  const older = changes.filter(
+    (c) => c.cycleId && !known.has(c.cycleId) && (toMs(c.ts) ?? since) < since
+  );
+  const index = CycleIndex.for(
+    older.length > 0 ? (b, s, u) => readAgentCycles(ctx.dirs.agentCycles, b, s, u) : undefined,
+    older.map((c) => ({ botId, at: c.ts }))
+  );
+  return changes.map((c) => {
+    const cycle = c.cycleId ? (known.get(c.cycleId) ?? index.byId(botId, c.cycleId)) : undefined;
+    return { ...c, why: goalEventToWhy({ botId, event: c, ...(cycle ? { cycle } : {}) }) };
+  });
+}
+
 export function buildGoalDetail(
   ctx: StatsContext,
   bot: BotConfig,
@@ -171,7 +199,7 @@ export function buildGoalDetail(
   const firstEventMs = Math.min(...events.map((e) => toMs(e.ts) ?? Number.POSITIVE_INFINITY));
   const src = readCycleSources(ctx, bot, since, now);
   const { tools } = src;
-  const timeline: GoalTimelineEvent[] = [
+  const changes: Array<Omit<GoalTimelineEvent, 'why'>> = [
     ...events.map((e: GoalEvent) => ({
       ts: e.ts,
       op: e.op,
@@ -181,6 +209,7 @@ export function buildGoalDetail(
       note: null,
       inferred: false,
       source: 'goal-events' as const,
+      cycleId: e.cycleId ?? null,
     })),
     ...tools
       .filter(
@@ -210,9 +239,11 @@ export function buildGoalDetail(
           note: notes,
           inferred: true,
           source: 'tool-audit' as const,
+          cycleId: tagOf(t).cycleId ?? null,
         };
       }),
   ].sort((a, b) => (toMs(a.ts) ?? 0) - (toMs(b.ts) ?? 0));
+  const timeline = explainTimeline(ctx, bot.id, changes, src.records, since);
 
   // ── Rows ──
   const { llm, changelog, productions, asks, outcomes, records } = src;

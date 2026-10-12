@@ -4,6 +4,7 @@
  * These shapes are frozen: the dashboard frontend (web/pages/stats.js) is
  * built against them. Add fields if you must, never rename or remove.
  */
+import type { Why } from '../why/types';
 
 export type StatsWindow = '24h' | '7d' | '30d';
 
@@ -421,6 +422,10 @@ export interface GoalTimelineEvent {
   /** True when reconstructed (from a manage_goals call), not read from the goal-event log. */
   inferred: boolean;
   source: 'goal-events' | 'tool-audit';
+  /** The agent-loop cycle the change happened in, when recorded. */
+  cycleId: string | null;
+  /** "Why this?" for the change (`goalEventToWhy`, `src/why/builders/goal-event.ts`). */
+  why: Why;
 }
 
 export interface GoalCycleLlmCall {

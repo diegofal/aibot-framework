@@ -6,6 +6,7 @@
 import { badge, esc } from '../ui/index.js';
 import { ago } from './agent-home-helpers.js';
 import { prodHash } from './productions-helpers.js';
+import { whyPanel } from './why-helpers.js';
 
 const BUCKET_LABEL = {
   todo: ['To do', 'muted'],
@@ -100,7 +101,7 @@ function totals(t) {
     .join('')}</div>`;
 }
 
-function timeline(events, nowMs) {
+function timeline(events, nowMs, botId) {
   if (!events.length) return '<div class="gd-empty">No recorded changes yet.</div>';
   return `<ol class="gd-tl">${events
     .map((e) => {
@@ -110,6 +111,7 @@ function timeline(events, nowMs) {
         <div class="gd-tl-op">${esc(e.op)}${change ? ` <span class="gd-tl-change">${change}</span>` : ''}${e.actor ? ` <span class="gd-dim">by ${esc(e.actor)}</span>` : ''}</div>
         <div class="gd-tl-when">${when(e.ts, nowMs)}</div>
         ${e.note ? `<div class="gd-tl-note">${esc(e.note)}</div>` : ''}
+        ${whyPanel(e.why, { nowMs, botId })}
       </li>`;
     })
     .join('')}</ol>`;
@@ -194,7 +196,7 @@ export function goalDetailBody(detail, botId, nowMs = Date.now()) {
     ${header(g, nowMs)}
     ${section('Notes', `<div data-edit-slot="notes">${notes}</div>${outcome}`)}
     ${totals(detail.totals)}
-    ${section('Status history', timeline(detail.timeline, nowMs))}
+    ${section('Status history', timeline(detail.timeline, nowMs, botId))}
     ${section(
       'Work on this goal',
       `<div class="gd-track">${esc(detail.tracking.note)}</div>${cycles}`,

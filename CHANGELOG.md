@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (2026-10-11) — "Why this?" on goal changes and karma events (phase 1, rows 5 and 9)
+- **Why.** The goal drawer's status history said *what* changed but not in which cycle or what that cycle was doing (the aggregator read `cycleId` from `goal-events.jsonl` and dropped it), and a karma row was a delta and a sentence with no way to see the cycle, goal or production behind it, although the events carry `metadata.cycleId` / `goalId` / `path`.
+- **Goal timeline.** Each event in `GET /api/agents/:id/goals/detail` now has `cycleId` and `why` (`goalEventToWhy`, `src/why/builders/goal-event.ts`): the op in words ("Moved to In progress", "Priority changed"…), who (goal-event actors mapped to Why actors; the wizard counts as the operator, a `manage_goals` call as the agent), the cycle and its plan, from → to. Events older than the drawer's window find their cycle with one extra cycle-log read. Changes reconstructed from the tool audit say so. No reason is shown: goal changes do not record one yet (plan row 12), and none is invented.
+- **Karma events.** `GET /api/karma/:botId/history` returns `why` per event (`karmaEventToWhy`, `src/why/builders/karma.ts`): the kind in words, who caused it (manual adjustments and production verdicts are the operator), the cycle, plan and goal, the production it is about (linked), the reward rule, and the delta with its reason. A cycle kind without a recorded cycle says so; a tool error outside a cycle says it may have come from a conversation.
+- **Display.** Both render with the shared `whyPanel`: one fold per timeline row in the goal drawer, one per karma history row (`karmaEventRow` in `web/pages/karma-helpers.js`).
+
 ### Added (2026-10-11) — Work → Sent to you: the messages agents chose to send, with "Why this?" (why-everywhere row 10)
 - **Why.** Agents message the operator (and users) on their own with `send_proactive_message`, and the throttle refuses some of those sends, but the dashboard showed none of it: the only trace was the tool audit. The operator could not see what an agent had said, whether it arrived, or which cycle and goal made it decide to write.
 - **API.** `GET /api/proactive?limit=&before=&days=` (`src/web/routes/proactive.ts`): the fleet's proactive sends from the tool audit, newest first, tenant-scoped, each with recipient, message, `delivered` / refused by the throttle / failed and the reason, and a `why`.

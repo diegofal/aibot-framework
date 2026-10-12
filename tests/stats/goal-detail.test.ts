@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createStatsContext } from '../../src/stats/context';
 import {
@@ -121,6 +121,48 @@ describe('buildGoalDetail', () => {
     ]);
     expect(tl[0].to).toBe('in_progress');
     expect(tl[2].actor).toBe('tool');
+  });
+
+  it('every timeline event carries its cycle id and a why with the cycle plan', () => {
+    const d = buildGoalDetail(ctxOf(), fx.bot, { id: 'g-lab00001', days: 14 });
+    const tl = d?.timeline ?? [];
+    expect(tl.map((e) => e.cycleId)).toEqual([null, null, 'c-exact']);
+    expect(tl[0].why.missing).toContain('Reconstructed from a manage_goals call');
+    expect(tl[1].why).toMatchObject({ what: 'Goal added', by: 'operator' });
+    expect(tl[2].why.what).toBe('Moved to In progress');
+    expect(tl[2].why.cycle).toMatchObject({ id: 'c-exact', plan: 'Draft the October lab' });
+    expect(tl[2].why.outcome).toBe('To do → In progress');
+  });
+
+  it('a goal event older than the window still finds its cycle in the cycle log', () => {
+    const old = fx.now - 5 * 86_400_000;
+    const day = new Date(old).toISOString().slice(0, 10);
+    appendFileSync(
+      join(fx.dir, 'agent-cycles', 'g1', `${day}.jsonl`),
+      `${JSON.stringify({
+        cycleId: 'c-old',
+        startedAt: new Date(old).toISOString(),
+        endedAt: new Date(old + 60_000).toISOString(),
+        planSummary: 'Outline the lab',
+      })}\n`
+    );
+    appendFileSync(
+      join(fx.soulDir, 'goal-events.jsonl'),
+      `${JSON.stringify({
+        ts: new Date(old + 30_000).toISOString(),
+        goalId: 'g-lab00001',
+        title: LAB_GOAL,
+        op: 'priority',
+        from: 'medium',
+        to: 'high',
+        actor: 'strategist',
+        cycleId: 'c-old',
+      })}\n`
+    );
+    const d = buildGoalDetail(ctxOf(), fx.bot, { id: 'g-lab00001', days: 1 });
+    const ev = d?.timeline.find((e) => e.cycleId === 'c-old');
+    expect(ev?.why).toMatchObject({ by: 'strategist', outcome: 'medium → high' });
+    expect(ev?.why.cycle?.plan).toBe('Outline the lab');
   });
 
   it('attributes cycles: exact by id, inferred by manage_goals / file in notes, weak by words', () => {

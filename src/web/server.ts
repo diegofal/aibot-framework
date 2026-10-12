@@ -402,7 +402,16 @@ export function startWebServer(deps: WebServerDeps): void {
 
   // Karma routes (only if enabled)
   if (karmaService) {
-    app.route('/api/karma', karmaRoutes({ karmaService, config, logger }));
+    app.route(
+      '/api/karma',
+      karmaRoutes({
+        karmaService,
+        config,
+        logger,
+        readCycles: (botId, sinceMs, untilMs) =>
+          readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs),
+      })
+    );
   }
 
   // Stats & Behaviour: read-only aggregations over the on-disk telemetry

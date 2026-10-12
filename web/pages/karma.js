@@ -1,6 +1,13 @@
 import { confirmDialog, emptyState, showToast } from '../ui/index.js';
-import { agentNames, filterKarma, karmaToolbar, sortKarma } from './karma-helpers.js';
-import { api, escapeHtml, timeAgo } from './shared.js';
+import {
+  agentNames,
+  filterKarma,
+  karmaEventRow,
+  karmaToolbar,
+  sortKarma,
+  sourceBadge,
+} from './karma-helpers.js';
+import { api, escapeHtml } from './shared.js';
 
 // Sort + filter of the karma list; survives re-renders.
 const karmaView = { query: '', trend: '', sortBy: 'score-desc' };
@@ -9,20 +16,6 @@ function trendBadge(trend) {
   if (trend === 'rising') return '<span class="badge badge-ok">&#8593; rising</span>';
   if (trend === 'falling') return '<span class="badge badge-error">&#8595; falling</span>';
   return '<span class="badge badge-disabled">&#8594; stable</span>';
-}
-
-function sourceBadge(source) {
-  const cls =
-    source === 'manual'
-      ? 'badge-disabled'
-      : source === 'feedback'
-        ? 'eval-badge-approved'
-        : source === 'production' || source === 'engagement'
-          ? 'badge-ok'
-          : source === 'tool'
-            ? 'badge-error'
-            : 'badge-disabled';
-  return `<span class="badge ${cls}">${escapeHtml(source)}</span>`;
 }
 
 function signedDelta(n) {
@@ -266,17 +259,8 @@ export async function renderBotKarma(el, botId) {
   function renderEvents(container, eventList) {
     for (const evt of eventList) {
       const row = document.createElement('div');
-      const sign = evt.delta >= 0 ? '+' : '';
-      const deltaColor =
-        evt.delta > 0 ? 'var(--green)' : evt.delta < 0 ? 'var(--red)' : 'var(--text-dim)';
-      row.style.cssText =
-        'display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)';
-      row.innerHTML = `
-        <span style="font-weight:600;color:${deltaColor};min-width:48px;font-family:monospace;font-size:14px">${sign}${evt.delta}</span>
-        ${sourceBadge(evt.source)}
-        <span style="flex:1">${escapeHtml(evt.reason)}</span>
-        <span class="text-dim text-sm">${timeAgo(evt.timestamp)}</span>
-      `;
+      row.style.cssText = 'padding:8px 0;border-bottom:1px solid var(--border)';
+      row.innerHTML = karmaEventRow(evt, { botId });
       container.appendChild(row);
     }
   }
