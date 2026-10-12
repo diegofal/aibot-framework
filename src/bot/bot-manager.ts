@@ -452,7 +452,6 @@ export class BotManager {
     this.workerPoolOf = () => ctx.workerPool;
     this.wireWorkerKarma();
 
-
     // Initialize evolution modules — gated by config.evolution.enabled
     if (config.evolution?.enabled) {
       const evoConfig = config.evolution;
