@@ -354,6 +354,36 @@
             </tr>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id/workers</code></td>
+              <td><span class="badge badge-yellow">2026-10-12</span> Task workers of one agent: active runs + last 20 ended (<code>WorkerRunView</code>, never the claim token). <code>{ enabled: false, runs: [] }</code> when workers are off for the bot. Tenant-scoped.</td>
+              <td><code>workers.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/workers</code></td>
+              <td><span class="badge badge-yellow">2026-10-12</span> Workers across the bots the caller can see (ended capped at 50).</td>
+              <td><code>workers.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/workers/:runId</code></td>
+              <td><span class="badge badge-yellow">2026-10-12</span> One run with its journal and steps grouped (<code>groupJournalSteps</code>); 404 across tenants or when workers are off.</td>
+              <td><code>workers.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/workers/:runId/stop</code></td>
+              <td><span class="badge badge-yellow">2026-10-12</span> Abort the run (really aborts the LLM call and tools); the task goes back to To do. 409 when the run is not active.</td>
+              <td><code>workers.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-blue">POST</span></td>
+              <td><code>/api/workers/:runId/retry</code></td>
+              <td><span class="badge badge-yellow">2026-10-12</span> Start a new attempt of an ended run's task; 409 when refused (claimed, budget, cap…).</td>
+              <td><code>workers.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents/:id/cycles/:cycleId</code></td>
               <td><span class="badge badge-yellow">2026-10-11</span> One agent-loop cycle for the "Open cycle" sheet every "Why this?" fold links to: <code>CycleDetailResponse { botId, generatedAt, cycle: GoalCycle, goal: { id, title } | null }</code>, the same cycle shape as the goal drawer (<code>src/stats/cycle-rows.ts</code>, <code>buildCycleDetail</code> in <code>src/stats/cycle-detail.ts</code>), looked up over the last 30 days. 404 for an unknown cycle or a bot outside the tenant; cached 15 s. <span class="badge badge-yellow">2026-10-12</span> Also <code>cycleReason: { text, source } | null</code> (why it was idle/skipped/errored, in plain words; source Planner, Engagement gate, Circuit breaker, Error, System), <code>strategistRan</code>, <code>reflection</code> and <code>traitAdjustments</code> from the cycle log (null on older rows); the sheet shows them in "This cycle".</td>
               <td><code>agent-home.ts</code></td>

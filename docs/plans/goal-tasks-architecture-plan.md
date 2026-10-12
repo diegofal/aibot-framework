@@ -175,7 +175,7 @@ What we do differently, because of our runtime and their gaps:
    - C14: non-blocking confirm behind a flag;
    - extract `runExecutorTurn()`;
    - C17: the shared breaker and the claude-cli semaphore.
-1. **Planner uses tasks** — `new_tasks`, `taskId` on cycle work, the cycle Why names its tasks. Watch the breakdown quality on live cycles before any worker runs.
+1. **Planner uses tasks** — **built 2026-10-12** (with phases 2–4, branch `feat/workers`; workers off by default) — `new_tasks`, `taskId` on cycle work, the cycle Why names its tasks. Watch the breakdown quality on live cycles before any worker runs.
 2. **Workers.**
    - **2a:** pool, step loop, run store and journal, report tools, sweep, wake-on-end, per-task directories. Workers get no `ask_human` and no `confirm` tools.
    - **2b:** asks and approvals per run (C15); shutdown, resume and boot re-bind (C16).
