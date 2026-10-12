@@ -53,6 +53,11 @@ import { getTenantId, isAdminOrSingleTenant, scopeBots } from '../../tenant/tena
 import type { AgentProposal } from '../../tools/agent-proposal-store';
 import type { DynamicToolMeta } from '../../tools/dynamic-tool-store';
 import type { ThreadMessage } from '../../types/thread';
+import { askToWhy } from '../../why/builders/ask';
+import { permissionToWhy } from '../../why/builders/permission';
+import { fileHistory, productionToWhy } from '../../why/builders/production';
+import { CycleIndex, type CycleReader } from '../../why/cycle-index';
+import type { Why } from '../../why/types';
 
 export type NeedsYouKind = 'ask' | 'permission' | 'proposal' | 'production' | 'feedback' | 'tool';
 export type NeedsYouUrgency = 'high' | 'normal' | 'low';
@@ -107,6 +112,11 @@ export interface NeedsYouItem {
   /** Where the item lives in the old pages (history view, full thread). */
   href: string;
   meta: Record<string, string | number | boolean | string[] | null>;
+  /**
+   * "Why this?" (`src/why/`) for asks, productions and permissions, on
+   * `GET /api/needs-you` only (the count and write paths never read the cycle log).
+   */
+  why?: Why;
 }
 
 export interface NeedsYouResponse {
@@ -256,6 +266,8 @@ export interface NeedsYouRouteDeps {
   actions?: NeedsYouActionHandlers;
   /** Injectable clock (tests). */
   now?: () => number;
+  /** Agent-loop cycle rows of a bot started in [sinceMs, untilMs]: plan and goal for each item's `why`. */
+  readCycles?: CycleReader;
 }
 
 const URGENCY_RANK: Record<NeedsYouUrgency, number> = { high: 0, normal: 1, low: 2 };
@@ -313,6 +325,64 @@ interface BuildContext {
   nameOf: (botId: string) => string;
   nowMs: number;
   logger: Logger;
+  /** Set when the caller wants `why`: each item queues its builder, run once the cycle log is read. */
+  why?: WhyJob[];
+}
+
+/** A `why` waiting for the cycle log: the times it spans and the builder to run. */
+interface WhyJob {
+  item: NeedsYouItem;
+  botId: string;
+  at: string[];
+  build: (cycles: CycleIndex) => Why;
+}
+
+/** Queue the item's `why`; a no-op unless the caller asked for them. */
+function withWhy(
+  ctx: BuildContext,
+  item: NeedsYouItem,
+  at: string[],
+  build: (cycles: CycleIndex) => Why
+): NeedsYouItem {
+  ctx.why?.push({ item, botId: item.botId, at, build });
+  return item;
+}
+
+/** One cycle-log read per bot, then every queued builder; one that throws leaves its item without a `why`. */
+function attachWhy(ctx: BuildContext, jobs: WhyJob[], read: CycleReader | undefined): void {
+  if (jobs.length === 0) return;
+  const cycles = CycleIndex.for(
+    read,
+    jobs.flatMap((j) => j.at.map((at) => ({ botId: j.botId, at }))),
+    (botId, err) => ctx.logger.warn({ err, botId }, 'needs-you: cycle log read failed')
+  );
+  for (const job of jobs) {
+    try {
+      job.item.why = job.build(cycles);
+    } catch (err) {
+      ctx.logger.warn({ err, id: job.item.id }, 'needs-you: why failed, skipping');
+    }
+  }
+}
+
+const cycleRow = (cycles: CycleIndex, botId: string, cycleId: unknown) =>
+  typeof cycleId === 'string' && cycleId ? cycles.byId(botId, cycleId) : undefined;
+
+const idOrNull = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+
+function askWhyJob(
+  ctx: BuildContext,
+  item: NeedsYouItem,
+  ids: { cycleId: string | null; goalId: string | null }
+): NeedsYouItem {
+  return withWhy(ctx, item, [item.createdAt], (cycles) =>
+    askToWhy({
+      botId: item.botId,
+      ...ids,
+      cycle: cycleRow(cycles, item.botId, ids.cycleId),
+      status: 'pending',
+    })
+  );
 }
 
 function allowedBot(ctx: BuildContext, botId: string): boolean {
@@ -468,7 +538,7 @@ function buildAsks(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[] 
           const files = firstBot?.files
             ?.map((f) => (f && typeof f.path === 'string' ? f.path : null))
             .filter((p): p is string => !!p);
-          return {
+          const item: NeedsYouItem = {
             id: `ask:${conv.id}`,
             kind: 'ask',
             botId,
@@ -487,6 +557,10 @@ function buildAsks(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[] 
               files: files && files.length > 0 ? files : null,
             },
           };
+          return askWhyJob(ctx, item, {
+            cycleId: idOrNull(conv.cycleId) ?? idOrNull(q?.cycleId),
+            goalId: idOrNull(conv.goalId) ?? idOrNull(q?.goalId),
+          });
         })
       );
     }
@@ -496,7 +570,7 @@ function buildAsks(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[] 
     ...safeMap(ctx, 'asks', [...live.values()], (q) => {
       if (consumed.has(q.id) || !allowedBot(ctx, q.botId)) return null;
       const question = str(q.question) || 'Question';
-      return {
+      const item: NeedsYouItem = {
         id: `ask:${q.id}`,
         kind: 'ask',
         botId: q.botId,
@@ -515,6 +589,7 @@ function buildAsks(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[] 
           files: null,
         },
       };
+      return askWhyJob(ctx, item, { cycleId: idOrNull(q.cycleId), goalId: idOrNull(q.goalId) });
     })
   );
   return items;
@@ -530,7 +605,7 @@ function buildPermissions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
     const id = encodeURIComponent(r.id);
     const action = str(r.action, 'action');
     const resource = str(r.resource);
-    return {
+    const item: NeedsYouItem = {
       id: `permission:${r.id}`,
       kind: 'permission',
       botId: r.botId,
@@ -563,6 +638,14 @@ function buildPermissions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
       href: '#/needs/permissions',
       meta: { action, resource, requestId: r.id },
     };
+    return withWhy(ctx, item, [], () =>
+      permissionToWhy({
+        botId: r.botId,
+        action: str(r.action),
+        resource,
+        description: str(r.description),
+      })
+    );
   });
 }
 
@@ -683,7 +766,7 @@ function buildProductions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
         const details = [e.path, typeof e.size === 'number' ? `${e.size} bytes` : '', str(e.tool)]
           .filter(Boolean)
           .join(' · ');
-        return {
+        const item: NeedsYouItem = {
           id: `production:${botId}:${e.id}`,
           kind: 'production',
           botId,
@@ -738,6 +821,22 @@ function buildProductions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
             priorSize: prior?.size ?? null,
           },
         };
+        if (!ctx.why) return item;
+        const { created, edits } = fileHistory(entries, e, normalize);
+        return withWhy(
+          ctx,
+          item,
+          [e.timestamp, ...(created ? [created.timestamp] : [])],
+          (cycles) =>
+            productionToWhy({
+              entry: e,
+              cycle: cycleRow(cycles, botId, e.cycleId),
+              created,
+              createdCycle: created ? cycleRow(cycles, botId, created.cycleId) : undefined,
+              edits,
+              priorVerdict: prior ? { status: prior.status, at: prior.at } : null,
+            })
+        );
       })
     );
   }
@@ -876,10 +975,10 @@ function buildTools(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[]
  * (S9 web push) can build the list without HTTP.
  */
 export function buildNeedsYou(
-  deps: Pick<NeedsYouRouteDeps, 'config' | 'logger' | 'sources'>,
+  deps: Pick<NeedsYouRouteDeps, 'config' | 'logger' | 'sources' | 'readCycles'>,
   allowed: Set<string> | undefined,
   nowMs: number,
-  opts: { admin?: boolean } = {}
+  opts: { admin?: boolean; why?: boolean } = {}
 ): NeedsYouItem[] {
   const names = new Map(deps.config.bots.map((b) => [b.id, b.name ?? b.id]));
   const ctx: BuildContext = {
@@ -888,9 +987,10 @@ export function buildNeedsYou(
     nameOf: (id) => names.get(id) ?? id,
     nowMs,
     logger: deps.logger,
+    ...(opts.why ? { why: [] } : {}),
   };
   const s = deps.sources;
-  return sortNeedsYou([
+  const items = sortNeedsYou([
     ...buildAsks(ctx, s),
     ...buildPermissions(ctx, s),
     ...buildProposals(ctx, s),
@@ -898,6 +998,15 @@ export function buildNeedsYou(
     ...buildFeedback(ctx, s),
     ...buildTools(ctx, s),
   ]);
+  // Only items that survived mapping: a row safeMap skipped never costs a read.
+  const listed = new Set(items);
+  if (ctx.why)
+    attachWhy(
+      ctx,
+      ctx.why.filter((j) => listed.has(j.item)),
+      deps.readCycles
+    );
+  return items;
 }
 
 // ─── write side ───
@@ -1030,10 +1139,12 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
     return new Set(scopeBots(deps.config.bots, tenantId).map((b) => b.id));
   }
 
-  function build(c: import('hono').Context): NeedsYouItem[] {
+  /** `why`: only the list the page renders reads the cycle log. */
+  function build(c: import('hono').Context, opts: { why?: boolean } = {}): NeedsYouItem[] {
     try {
       return buildNeedsYou(deps, allowedFor(c), now(), {
         admin: isAdminOrSingleTenant(getTenantId(c)),
+        why: opts.why,
       });
     } catch (err) {
       deps.logger.error({ err }, 'needs-you: queue aggregation failed');
@@ -1220,7 +1331,7 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
   });
 
   app.get('/', (c) => {
-    const items = build(c);
+    const items = build(c, { why: true });
     const body: NeedsYouResponse = {
       generatedAt: new Date(now()).toISOString(),
       ...countSummary(items),

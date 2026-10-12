@@ -6,6 +6,7 @@ import type { Config } from '../../../src/config';
 import { ConversationsService } from '../../../src/conversations/service';
 import type { Logger } from '../../../src/logger';
 import { conversationsRoutes } from '../../../src/web/routes/conversations';
+import type { CycleReader } from '../../../src/why/cycle-index';
 
 const TEST_DIR = join(import.meta.dir, '.tmp-conversations-routes-test');
 
@@ -69,7 +70,7 @@ function makeDeps(overrides?: Record<string, unknown>) {
   };
 }
 
-function makeApp(deps: ReturnType<typeof makeDeps>) {
+function makeApp(deps: ReturnType<typeof makeDeps> & { readCycles?: CycleReader }) {
   const app = new Hono();
   app.route('/api/conversations', conversationsRoutes(deps));
   return app;
@@ -198,6 +199,61 @@ describe('conversations routes', () => {
       expect(data.conversation.id).toBe(convo.id);
       expect(data.messages.length).toBe(1);
       expect(data.messages[0].content).toBe('Hello');
+    });
+
+    test('an ask_human thread carries the why of the cycle that asked it', async () => {
+      const startedAt = new Date(Date.now() - 60_000).toISOString();
+      const reads: string[] = [];
+      const deps = {
+        ...makeDeps(),
+        readCycles: (botId: string) => {
+          reads.push(botId);
+          return [
+            {
+              cycleId: 'c-1',
+              startedAt,
+              endedAt: new Date(Date.now() + 60_000).toISOString(),
+              planSummary: 'Draft the letter',
+              goalId: 'g-1',
+              goalTitle: 'Land a role',
+            },
+          ];
+        },
+      };
+      const app = makeApp(deps);
+      const convo = deps.conversationsService.createConversation('bot1', 'inbox', 'Ship?', {
+        inboxStatus: 'answered',
+        cycleId: 'c-1',
+        goalId: 'g-1',
+      });
+      const data = await (
+        await app.request(`http://localhost/api/conversations/bot1/${convo.id}`)
+      ).json();
+      expect(data.why).toEqual({
+        what: 'A question it asked you during a work cycle',
+        by: 'agent',
+        cycle: { id: 'c-1', botId: 'bot1', startedAt, plan: 'Draft the letter' },
+        goal: { id: 'g-1', title: 'Land a role' },
+        outcome: 'You answered it.',
+      });
+      expect(reads).toEqual(['bot1']);
+    });
+
+    test('a general conversation has no why and reads no cycle log', async () => {
+      const reads: string[] = [];
+      const deps = {
+        ...makeDeps(),
+        readCycles: (botId: string) => {
+          reads.push(botId);
+          return [];
+        },
+      };
+      const convo = deps.conversationsService.createConversation('bot1');
+      const data = await (
+        await makeApp(deps).request(`http://localhost/api/conversations/bot1/${convo.id}`)
+      ).json();
+      expect(data.why).toBeUndefined();
+      expect(reads).toEqual([]);
     });
 
     test('returns 404 for non-existent conversation', async () => {

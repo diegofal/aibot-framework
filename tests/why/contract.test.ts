@@ -102,6 +102,21 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
       goalTitle: 'G',
     },
   },
+  ask: { botId: 'b1', cycleId: 'c1', goalId: 'g1', status: 'pending' },
+  permission: { botId: 'b1', action: 'exec', resource: 'ls', description: 'Look around' },
+  production: {
+    entry: {
+      id: 'e1',
+      timestamp: '2026-10-11T12:00:00Z',
+      botId: 'b1',
+      tool: 'file_write',
+      path: 'a.md',
+      action: 'create',
+      description: 'd',
+      size: 1,
+      trackOnly: false,
+    },
+  },
 };
 
 describe('Why contract', () => {

@@ -1,5 +1,6 @@
 import { fitComposer } from '../ui/composer.js';
 import { confirmDialog, showToast } from '../ui/index.js';
+import { threadWhy } from './inbox-helpers.js';
 import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
 
 let refreshTimer = null;
@@ -166,6 +167,8 @@ export async function renderInboxChat(el, botId, conversationId) {
   }
 
   const { conversation, messages } = data;
+  /** Server-built "Why this?" of the ask (absent on general threads and old servers). */
+  let why = data.why;
   const threadMessages = messages;
   let generating = false;
   let errorMsg = null;
@@ -220,6 +223,15 @@ export async function renderInboxChat(el, botId, conversationId) {
     }, 2000);
   }
 
+  /** The why's outcome follows the status: re-read it after a local status change. */
+  async function refreshWhy() {
+    const fresh = await api(`/api/conversations/${encodeURIComponent(botId)}/${conversationId}`);
+    if (!fresh?.why) return;
+    why = fresh.why;
+    const slot = el.querySelector('.inbox-why');
+    if (slot) slot.outerHTML = threadWhy(why, { botId, nowMs: Date.now() });
+  }
+
   function renderView() {
     const status = conversation.inboxStatus || 'pending';
     const badgeClass = STATUS_BADGE_CLASS[status] || '';
@@ -235,6 +247,7 @@ export async function renderInboxChat(el, botId, conversationId) {
           <a href="#/needs/inbox" class="btn btn-sm">&larr; Back</a>
         </div>
       </div>
+      ${threadWhy(why, { botId, nowMs: Date.now() })}
       ${status === 'pending' ? '<div class="inbox-pending-banner"><span>This question is awaiting your response. Your first reply will be delivered to the bot.</span></div>' : ''}
       <div id="inbox-thread-container"></div>`;
 
@@ -243,6 +256,7 @@ export async function renderInboxChat(el, botId, conversationId) {
       if (await dismissInboxQuestion(conversationId)) {
         conversation.inboxStatus = 'dismissed';
         renderView();
+        refreshWhy();
       }
     });
     document.getElementById('inbox-delete-btn')?.addEventListener('click', async () => {
@@ -352,6 +366,7 @@ export async function renderInboxChat(el, botId, conversationId) {
         if (res.inboxResolved) {
           conversation.inboxStatus = 'answered';
           renderView();
+          refreshWhy();
         }
 
         // Update title if it changed (auto-title on first message)

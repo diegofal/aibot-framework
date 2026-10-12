@@ -88,6 +88,35 @@ export function toWhyCycle(
   return c;
 }
 
+/** What an item that recorded its cycle and goal ids can say about them. */
+export interface CycleAttribution {
+  cycle?: WhyCycle;
+  goal?: { id?: string; title: string };
+  /** A cycle id was recorded but the cycle log has no row for it. */
+  unlogged?: true;
+}
+
+/**
+ * Cycle and goal of an item that recorded `cycleId` / `goalId` when it was
+ * written. The cycle row, when the log has it, adds the plan and the goal's
+ * title (the item itself only stores the goal id). No cycle id: nothing.
+ */
+export function cycleAttribution(
+  botId: string,
+  ids: { cycleId?: string | null; goalId?: string | null },
+  row: CycleRow | undefined
+): CycleAttribution {
+  if (!ids.cycleId) return {};
+  if (!row) return { cycle: { id: ids.cycleId, botId }, unlogged: true };
+  const out: CycleAttribution = { cycle: toWhyCycle(botId, row) };
+  const goalId = ids.goalId || row.goalId || undefined;
+  // The row's title names the row's goal: never put it on a different recorded goal.
+  const sameGoal = !ids.goalId || !row.goalId || ids.goalId === row.goalId;
+  if (row.goalTitle && sameGoal)
+    out.goal = { ...(goalId ? { id: goalId } : {}), title: row.goalTitle };
+  return out;
+}
+
 const MODE_REASON_TEXT: Record<string, string> = {
   concentration: 'one topic was taking over its recent cycles',
   'no-surprise': 'nothing had surprised it for a while',

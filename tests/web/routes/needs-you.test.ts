@@ -206,7 +206,13 @@ describe('GET /api/needs-you', () => {
     const body = await (await makeApp(src).request('/api/needs-you')).json();
     expect(body.items).toHaveLength(5);
     for (const item of body.items as NeedsYouItem[]) {
-      expect(Object.keys(item).sort()).toEqual(
+      // `why` is additive: asks, permissions and productions carry it, the rest do not.
+      expect('why' in item).toBe(['ask', 'permission', 'production'].includes(item.kind));
+      expect(
+        Object.keys(item)
+          .filter((k) => k !== 'why')
+          .sort()
+      ).toEqual(
         [
           'actions',
           'body',
@@ -872,5 +878,112 @@ describe('GET /api/needs-you — productions edited since review', () => {
     });
     const body = await (await makeApp(src).request('/api/needs-you')).json();
     expect(body.items).toEqual([]);
+  });
+});
+
+describe('GET /api/needs-you — why', () => {
+  const cycleRow = (cycleId: string, startMs: number, goalTitle = 'Ship the launch') => ({
+    cycleId,
+    startedAt: iso(startMs),
+    endedAt: iso(startMs + 5 * 60_000),
+    planSummary: `Plan of ${cycleId}`,
+    goalId: 'g-1',
+    goalTitle,
+  });
+
+  function appWithCycles(src: NeedsYouSources, rows: ReturnType<typeof cycleRow>[]) {
+    const reads: string[] = [];
+    const app = new Hono();
+    app.route(
+      '/api/needs-you',
+      needsYouRoutes({
+        config,
+        logger: noopLogger,
+        sources: src,
+        now: () => NOW,
+        readCycles: (botId) => {
+          reads.push(botId);
+          return rows;
+        },
+      })
+    );
+    return { app, reads };
+  }
+
+  it('explains asks, productions and permissions from the cycle log, one read per bot', async () => {
+    const src = sources({
+      asks: () => [{ ...ask('q1', 'b1', 2), cycleId: 'c-ask', goalId: 'g-1' }],
+      conversations: {
+        getBotIds: () => ['b1'],
+        listConversations: () =>
+          [
+            {
+              id: 'conv1',
+              botId: 'b1',
+              type: 'inbox',
+              title: 'Ship?',
+              createdAt: iso(NOW - H),
+              inboxStatus: 'pending',
+              cycleId: 'c-conv',
+              goalId: 'g-1',
+            },
+          ] as never,
+        getMessages: () => [],
+      },
+      permissions: () => [permission('p1', 'b1', 'normal', 1)],
+      productions: () => [
+        production('e0', 'b1', 'out.md', 30, { cycleId: 'c-old' }),
+        production('e1', 'b1', 'out.md', 3, {
+          action: 'edit',
+          tool: 'file_edit',
+          cycleId: 'c-prod',
+          goalId: 'g-1',
+        }),
+      ],
+    });
+    const { app, reads } = appWithCycles(src, [
+      cycleRow('c-ask', NOW - 2 * H - 60_000),
+      cycleRow('c-conv', NOW - H - 60_000),
+      cycleRow('c-prod', NOW - 3 * H - 60_000),
+      cycleRow('c-old', NOW - 30 * H - 60_000),
+    ]);
+    const body = await (await app.request('/api/needs-you')).json();
+    const byId = new Map(body.items.map((i: NeedsYouItem) => [i.id, i]));
+    expect(reads).toEqual(['b1']);
+
+    const conv = byId.get('ask:conv1') as NeedsYouItem;
+    expect(conv.why?.cycle).toMatchObject({ id: 'c-conv', botId: 'b1', plan: 'Plan of c-conv' });
+    expect(conv.why?.goal).toEqual({ id: 'g-1', title: 'Ship the launch' });
+    expect(conv.why?.outcome).toBe('Waiting for your answer.');
+
+    const live = byId.get('ask:q1') as NeedsYouItem;
+    expect(live.why?.cycle?.id).toBe('c-ask');
+
+    const prod = byId.get('production:b1:e1') as NeedsYouItem;
+    expect(prod.why?.what).toBe('Last edited with file_edit');
+    expect(prod.why?.cycle?.plan).toBe('Plan of c-prod');
+    expect(prod.why?.related?.items[0]).toMatchObject({
+      text: 'Created with file_write',
+      detail: 'Plan of c-old',
+    });
+    expect(prod.why?.outcome).toBe('Waiting for your review.');
+
+    const perm = byId.get('permission:p1') as NeedsYouItem;
+    expect(perm.why?.reason?.text).toBe('Write p1');
+    expect(perm.why?.missing).toContain('do not record the cycle');
+  });
+
+  it('without a cycle log the asks still get a why that says what is missing', async () => {
+    const src = sources({ asks: () => [ask('q1', 'b1', 2)] });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect(body.items[0].why.what).toBe('A question it asked you');
+    expect(body.items[0].why.missing).toContain('No record of a work cycle');
+  });
+
+  it('the count endpoint never reads the cycle log', async () => {
+    const src = sources({ asks: () => [{ ...ask('q1', 'b1', 2), cycleId: 'c' }] });
+    const { app, reads } = appWithCycles(src, []);
+    await app.request('/api/needs-you/count');
+    expect(reads).toEqual([]);
   });
 });

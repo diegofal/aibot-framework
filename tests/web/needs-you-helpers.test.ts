@@ -339,3 +339,25 @@ describe('markup', () => {
     expect(queueSummary({})).toBe('All clear');
   });
 });
+
+describe('detailPanel — why', () => {
+  const why = {
+    what: 'A question it asked you during a work cycle',
+    by: 'agent',
+    cycle: { id: 'c-1', botId: 'b1', plan: 'Draft <the> letter' },
+    goal: { id: 'g-1', title: 'Land a role' },
+    outcome: 'Waiting for your answer.',
+  };
+
+  it('renders the server-built why with the shared panel', () => {
+    const html = detailPanel({ ...askItem, why }, {}, NOW);
+    expect(html).toContain('<details class="why">');
+    expect(html).toContain('data-open-cycle="c-1"');
+    expect(html).toContain('Draft &lt;the&gt; letter');
+    expect(html).toContain('Land a role');
+  });
+
+  it('no why from an old server, no fold', () => {
+    expect(detailPanel(askItem, {}, NOW)).not.toContain('class="why"');
+  });
+});

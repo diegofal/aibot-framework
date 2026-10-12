@@ -8164,6 +8164,11 @@ a.gd-row-name:hover {
   font-size: var(--fs-sm);
   cursor: pointer;
 }
+/* Where the fold sits: under the inbox thread header, above the productions file content. */
+.inbox-why,
+.prod-file-why {
+  margin-bottom: var(--s3);
+}
 .gd-facts {
   display: grid;
   gap: var(--s1);

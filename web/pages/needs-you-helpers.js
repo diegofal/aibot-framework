@@ -9,11 +9,13 @@
  * Item shape (frozen by `src/web/routes/needs-you.ts`):
  *   { id, kind, botId, botName, title, body, options, createdAt, urgency,
  *     actions: [{ id, label, method, path, body?, input?, tone, hotkey? }],
- *     href, meta }
+ *     href, meta, why? }
+ * `why` (asks, productions, permissions) renders with the shared panel.
  */
 import { avatar, badge, emptyState, esc } from '../ui/index.js';
 import { bulkToolbar, toggleAll } from '../ui/select-all.js';
 import { ago } from './agent-home-helpers.js';
+import { whyPanel } from './why-helpers.js';
 
 export const KIND_LABEL = {
   ask: 'Question',
@@ -722,6 +724,7 @@ export function detailPanel(item, state = {}, nowMs = Date.now()) {
     ${editedNote(item, nowMs)}
     <div class="needs-detail-body">${esc(item.body)}</div>
     ${fileChips(item.meta)}
+    ${whyPanel(item.why, { nowMs, botId: item.botId })}
     ${chips}
     ${reply}
     <div class="needs-actions">${actions}</div>

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   CycleIndex,
   type CycleRow,
+  cycleAttribution,
   describeModeReason,
   findCycleAt,
   toWhyCycle,
@@ -83,5 +84,29 @@ describe('describeModeReason', () => {
     expect(describeModeReason('no-surprise')).toContain('nothing had surprised it');
     expect(describeModeReason('default')).toBeUndefined();
     expect(describeModeReason(undefined)).toBeUndefined();
+  });
+});
+
+describe('cycleAttribution', () => {
+  it('takes plan and goal title from the cycle row', () => {
+    expect(cycleAttribution('b1', { cycleId: 'c1', goalId: 'g-1' }, row())).toEqual({
+      cycle: { id: 'c1', botId: 'b1', startedAt: '2026-10-11T12:00:00.000Z', plan: 'Search roles' },
+      goal: { id: 'g-1', title: 'Find roles' },
+    });
+  });
+  it("uses the row's goal when the item recorded none", () => {
+    expect(cycleAttribution('b1', { cycleId: 'c1' }, row()).goal).toEqual({
+      id: 'g-1',
+      title: 'Find roles',
+    });
+  });
+  it('keeps a recorded cycle the log has no row for, and says so', () => {
+    expect(cycleAttribution('b1', { cycleId: 'c9', goalId: 'g-1' }, undefined)).toEqual({
+      cycle: { id: 'c9', botId: 'b1' },
+      unlogged: true,
+    });
+  });
+  it('is empty without a cycle id', () => {
+    expect(cycleAttribution('b1', { cycleId: null, goalId: 'g-1' }, row())).toEqual({});
   });
 });

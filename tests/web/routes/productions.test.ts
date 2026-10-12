@@ -102,6 +102,103 @@ function tick(ms = 50): Promise<void> {
 }
 
 describe('productions routes', () => {
+  describe('GET /:botId/:id — why', () => {
+    const rows = [
+      {
+        id: 'e2',
+        timestamp: '2026-10-11T12:01:00.000Z',
+        botId: 'bot1',
+        tool: 'file_edit',
+        path: 'reports/01_market.md',
+        action: 'edit',
+        description: 'Tightened',
+        size: 300,
+        trackOnly: false,
+        cycleId: 'c-2',
+        goalId: 'g-1',
+        evaluation: { status: 'approved', evaluatedAt: '2026-10-11T14:00:00.000Z' },
+      },
+      {
+        id: 'e1',
+        timestamp: '2026-10-10T09:01:00.000Z',
+        botId: 'bot1',
+        tool: 'file_write',
+        path: '/data/productions/bot1/reports/01_market.md',
+        action: 'create',
+        description: 'Market scan',
+        size: 120,
+        trackOnly: false,
+        cycleId: 'c-1',
+      },
+    ];
+    const cycles = [
+      {
+        cycleId: 'c-1',
+        startedAt: '2026-10-10T09:00:00.000Z',
+        endedAt: '2026-10-10T09:05:00.000Z',
+        planSummary: 'First draft',
+      },
+      {
+        cycleId: 'c-2',
+        startedAt: '2026-10-11T12:00:00.000Z',
+        endedAt: '2026-10-11T12:05:00.000Z',
+        planSummary: 'Tighten the scan',
+        goalId: 'g-1',
+        goalTitle: 'Map the market',
+      },
+    ];
+
+    function appFor(readCycles?: (botId: string) => typeof cycles) {
+      const deps = makeMockDeps();
+      deps.productionsService.getEntry = (_b: string, id: string) =>
+        rows.find((r) => r.id === id) ?? null;
+      deps.productionsService.getChangelog = () => rows;
+      deps.productionsService.resolveDir = () => '/data/productions/bot1';
+      const app = new Hono();
+      app.route('/api/productions', productionsRoutes({ ...deps, readCycles }));
+      return app;
+    }
+
+    test('names the cycle that last edited the file, its goal, the creation and the verdict', async () => {
+      const reads: string[] = [];
+      const app = appFor((botId) => {
+        reads.push(botId);
+        return cycles;
+      });
+      const data = await (await app.request('/api/productions/bot1/e2')).json();
+      expect(data.why).toEqual({
+        what: 'Last edited with file_edit',
+        by: 'agent',
+        cycle: {
+          id: 'c-2',
+          botId: 'bot1',
+          startedAt: '2026-10-11T12:00:00.000Z',
+          plan: 'Tighten the scan',
+        },
+        goal: { id: 'g-1', title: 'Map the market' },
+        related: {
+          label: 'History',
+          items: [
+            {
+              text: 'Created with file_write',
+              at: '2026-10-10T09:01:00.000Z',
+              detail: 'First draft',
+            },
+          ],
+          note: 'Edited 1 time since.',
+        },
+        outcome: 'You approved it on 2026-10-11.',
+      });
+      expect(reads).toEqual(['bot1']);
+    });
+
+    test('without a cycle log the why keeps the recorded cycle and says what is missing', async () => {
+      const data = await (await appFor().request('/api/productions/bot1/e1')).json();
+      expect(data.why.cycle).toEqual({ id: 'c-1', botId: 'bot1' });
+      expect(data.why.missing).toContain('cycle log has no row');
+    });
+  });
+
   describe('GET /all-entries', () => {
     test('returns entries and total', async () => {
       const deps = makeMockDeps();

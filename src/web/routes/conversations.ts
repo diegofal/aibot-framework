@@ -8,6 +8,8 @@ import type { ChatMessage } from '../../ollama';
 import type { ProductionsService } from '../../productions/service';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 import type { ApprovalRequest, DocumentRef } from '../../types/thread';
+import { askToWhy } from '../../why/builders/ask';
+import { CycleIndex, type CycleReader } from '../../why/cycle-index';
 import { webGenerate } from './web-tool-helpers';
 
 const ALLOWED_DOC_MIME_TYPES = new Set([
@@ -60,6 +62,8 @@ export function conversationsRoutes(deps: {
   logger: Logger;
   config: Config;
   productionsService?: ProductionsService;
+  /** Agent-loop cycle rows of a bot: plan and goal for an ask_human thread's `why`. */
+  readCycles?: CycleReader;
 }) {
   const app = new Hono();
   const { conversationsService, botManager, logger, config, productionsService } = deps;
@@ -299,7 +303,21 @@ export function conversationsRoutes(deps: {
     }
 
     const messages = conversationsService.getMessages(botId, id);
-    return c.json({ conversation, messages });
+    if (conversation.type !== 'inbox') return c.json({ conversation, messages });
+    // An ask_human thread: where the question came from (src/why/).
+    const cycles = conversation.cycleId
+      ? CycleIndex.for(deps.readCycles, [{ botId, at: conversation.createdAt }], (b, err) =>
+          logger.warn({ err, botId: b }, 'conversations: cycle log read failed')
+        )
+      : null;
+    const why = askToWhy({
+      botId,
+      cycleId: conversation.cycleId,
+      goalId: conversation.goalId,
+      cycle: conversation.cycleId ? cycles?.byId(botId, conversation.cycleId) : undefined,
+      status: conversation.inboxStatus,
+    });
+    return c.json({ conversation, messages, why });
   });
 
   // Delete all conversations across all bots

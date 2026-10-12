@@ -3,9 +3,17 @@ import type { BotManager } from '../../bot';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
+import { normalizeEntryPath } from '../../productions/paths';
 import type { ProductionsService } from '../../productions/service';
+import type { ProductionEntry } from '../../productions/types';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import { fileHistory, productionToWhy } from '../../why/builders/production';
+import { CycleIndex, type CycleReader } from '../../why/cycle-index';
+import type { Why } from '../../why/types';
 import { webGenerate } from './web-tool-helpers';
+
+/** Changelog rows scanned for a file's history (the "Why this?" of one file). */
+export const PRODUCTION_HISTORY_LIMIT = 5000;
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
@@ -56,9 +64,50 @@ export function productionsRoutes(deps: {
   botManager: BotManager;
   logger: Logger;
   config: Config;
+  /** Agent-loop cycle rows of a bot: plan and goal for a file's `why`. */
+  readCycles?: CycleReader;
 }) {
   const app = new Hono();
   const { productionsService, botManager, logger, config } = deps;
+
+  /**
+   * "Why this?" of one file (src/why/): the cycle behind its latest version,
+   * its creation, its verdict. Never fails the request: a throw means no `why`.
+   */
+  function whyFor(botId: string, entry: ProductionEntry): Why | undefined {
+    if (entry.action !== 'create' && entry.action !== 'edit') return undefined;
+    try {
+      const normalize = (path: string): string => {
+        try {
+          return normalizeEntryPath(productionsService.resolveDir(botId), path);
+        } catch {
+          return path;
+        }
+      };
+      const rows = productionsService.getChangelog(botId, { limit: PRODUCTION_HISTORY_LIMIT });
+      const { created, edits, priorVerdict } = fileHistory(rows, entry, normalize);
+      const cycles = CycleIndex.for(
+        deps.readCycles,
+        [entry, ...(created ? [created] : [])]
+          .filter((e) => e.cycleId)
+          .map((e) => ({ botId, at: e.timestamp })),
+        (b, err) => logger.warn({ err, botId: b }, 'productions: cycle log read failed')
+      );
+      const row = (cycleId: string | undefined) =>
+        cycleId ? cycles.byId(botId, cycleId) : undefined;
+      return productionToWhy({
+        entry,
+        cycle: row(entry.cycleId),
+        created,
+        createdCycle: row(created?.cycleId),
+        edits,
+        priorVerdict,
+      });
+    } catch (err) {
+      logger.warn({ err, botId, id: entry.id }, 'productions: why failed');
+      return undefined;
+    }
+  }
 
   const generatingBots = new Set<string>();
   const generationState = new Map<string, { status: 'generating' | 'error'; error?: string }>();
@@ -674,7 +723,8 @@ export function productionsRoutes(deps: {
     }
 
     const content = productionsService.getFileContent(botId, id);
-    return c.json({ entry, content });
+    const why = whyFor(botId, entry);
+    return c.json({ entry, content, ...(why ? { why } : {}) });
   });
 
   // Evaluate a production

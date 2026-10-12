@@ -33,6 +33,7 @@ import { RateLimiter } from '../tenant/rate-limiter';
 import { SessionStore } from '../tenant/session-store';
 import { TenantConfigStore } from '../tenant/tenant-config-store';
 import { getTenantId, scopeBots } from '../tenant/tenant-scoping';
+import type { CycleReader } from '../why/cycle-index';
 import {
   type LogTailState,
   pollLogTail,
@@ -103,6 +104,10 @@ export function startWebServer(deps: WebServerDeps): void {
   const { port, host } = config.web;
 
   const app = new Hono();
+
+  /** Agent-loop cycle rows of a bot: every "Why this?" reads its cycle's plan and goal here (src/why/). */
+  const readCycles: CycleReader = (botId, sinceMs, untilMs) =>
+    readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs);
 
   // --- Session & credential stores ---
   const dataDir = config.multiTenant?.dataDir ?? './data/tenants';
@@ -231,8 +236,7 @@ export function startWebServer(deps: WebServerDeps): void {
         const bot = config.bots.find((b) => b.id === botId);
         return bot ? avatarUrl(botId, findAvatar(resolveBotPaths(config, bot).soulDir)) : null;
       },
-      readCycles: (botId, sinceMs, untilMs) =>
-        readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs),
+      readCycles,
     })
   );
   // "Sent to you" (docs/plans/why-everywhere-plan.md, row 10): the messages
@@ -244,8 +248,7 @@ export function startWebServer(deps: WebServerDeps): void {
       logger,
       readToolAudit: (botId, sinceMs, untilMs) =>
         readToolEntries(resolveStatsDirs(config).toolAudit, botId, sinceMs, untilMs),
-      readCycles: (botId, sinceMs, untilMs) =>
-        readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs),
+      readCycles,
       avatarUrlFor: (botId) => {
         const bot = config.bots.find((b) => b.id === botId);
         return bot ? avatarUrl(botId, findAvatar(resolveBotPaths(config, bot).soulDir)) : null;
@@ -331,6 +334,7 @@ export function startWebServer(deps: WebServerDeps): void {
       logger,
       sources: needsYouSourcesFromBotManager(deps.botManager),
       actions: needsYouActionsFromBotManager(deps.botManager),
+      readCycles,
     })
   );
   app.route(
@@ -344,7 +348,13 @@ export function startWebServer(deps: WebServerDeps): void {
   if (productionsService) {
     app.route(
       '/api/productions',
-      productionsRoutes({ productionsService, botManager: deps.botManager, logger, config })
+      productionsRoutes({
+        productionsService,
+        botManager: deps.botManager,
+        logger,
+        config,
+        readCycles,
+      })
     );
 
     // Static file serving for production index.html and its file links
@@ -408,8 +418,7 @@ export function startWebServer(deps: WebServerDeps): void {
         karmaService,
         config,
         logger,
-        readCycles: (botId, sinceMs, untilMs) =>
-          readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs),
+        readCycles,
       })
     );
   }
@@ -480,6 +489,7 @@ export function startWebServer(deps: WebServerDeps): void {
       logger,
       config,
       productionsService,
+      readCycles,
     })
   );
 

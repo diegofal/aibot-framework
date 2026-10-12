@@ -577,7 +577,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/needs-you</code></td>
-              <td>Everything waiting on a human as one sorted list: <code>{ generatedAt, count, byKind, items[] }</code>. Item: <code>{ id, kind: ask|permission|proposal|production|feedback|tool, botId, botName, title, body, options, createdAt, urgency: high|normal|low, actions[], href, meta }</code>. <code>actions[]</code> entries are <code>{ id, label, method, path, body?, input?: { field, required, placeholder }, tone, hotkey?: a|d, confirm? }</code> and point at the existing routes; action ids include <code>archive</code> (neutral output archive, no karma) and <code>delete</code>, and <code>confirm</code> makes the page ask first. <code>meta</code> carries <code>requestId|proposalId|productionId|feedbackId|toolId</code>. Sorted by urgency then newest first; tenant-scoped; a failing source or malformed row is skipped, never a 500. Pending = inbox conversation <code>pending</code> (ask), pending request (permission), <code>status: pending</code> (proposal), active file with no <code>evaluation.status</code> (production), pending feedback whose thread ends with the bot (feedback), pending dynamic tool (tool &mdash; admin / single-tenant only)</td>
+              <td>Everything waiting on a human as one sorted list: <code>{ generatedAt, count, byKind, items[] }</code>. Item: <code>{ id, kind: ask|permission|proposal|production|feedback|tool, botId, botName, title, body, options, createdAt, urgency: high|normal|low, actions[], href, meta, why? }</code>. <code>why</code> (asks, productions, permissions; this route only, never <code>/count</code> or the write paths) is the shared Why model (<code>src/why/types.ts</code>) built by <code>askToWhy</code> / <code>productionToWhy</code> / <code>permissionToWhy</code>, with the cycle's plan and goal title from one <code>&lt;data&gt;/agent-cycles</code> read per bot; the detail panel renders it with <code>whyPanel</code>. <code>actions[]</code> entries are <code>{ id, label, method, path, body?, input?: { field, required, placeholder }, tone, hotkey?: a|d, confirm? }</code> and point at the existing routes; action ids include <code>archive</code> (neutral output archive, no karma) and <code>delete</code>, and <code>confirm</code> makes the page ask first. <code>meta</code> carries <code>requestId|proposalId|productionId|feedbackId|toolId</code>. Sorted by urgency then newest first; tenant-scoped; a failing source or malformed row is skipped, never a 500. Pending = inbox conversation <code>pending</code> (ask), pending request (permission), <code>status: pending</code> (proposal), active file with no <code>evaluation.status</code> (production), pending feedback whose thread ends with the bot (feedback), pending dynamic tool (tool &mdash; admin / single-tenant only)</td>
               <td><code>needs-you.ts</code></td>
             </tr>
             <tr>
@@ -867,7 +867,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/productions/:botId/:id</code></td>
-              <td>Get single production entry with file content</td>
+              <td>Get single production entry with file content: <code>{ entry, content, why? }</code>. <code>why</code> (create/edit rows) comes from <code>productionToWhy</code>: the cycle behind the latest version with its plan and goal, the tool, the row that created the file (with its cycle's plan) and the edit count, and the review state as the outcome. The file panel renders it with <code>whyPanel</code></td>
               <td><code>productions.ts</code></td>
             </tr>
             <tr>
@@ -984,7 +984,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/conversations/:botId/:id</code></td>
-              <td>Get conversation with all messages. Inbox conversations carry <code>inboxStatus</code> (<code>pending | answered | dismissed | timed_out | closed</code>) and <code>askOptions?: string[]</code>, which the inbox thread view renders as quick-reply buttons while the status is <code>pending</code></td>
+              <td>Get conversation with all messages. Inbox conversations carry <code>inboxStatus</code> (<code>pending | answered | dismissed | timed_out | closed</code>) and <code>askOptions?: string[]</code>, which the inbox thread view renders as quick-reply buttons while the status is <code>pending</code>. Inbox (ask_human) threads also return <code>why</code> (<code>askToWhy</code>: the cycle that asked, its plan and goal, what happened to the question), shown under the thread header with <code>whyPanel</code></td>
               <td><code>conversations.ts</code></td>
             </tr>
             <tr>

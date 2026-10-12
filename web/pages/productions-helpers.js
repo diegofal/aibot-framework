@@ -6,6 +6,7 @@
  */
 import { esc } from '../ui/index.js';
 import { bulkToolbar } from '../ui/select-all.js';
+import { whyPanel } from './why-helpers.js';
 
 const enc = encodeURIComponent;
 
@@ -164,4 +165,14 @@ export function productionsBulkBar({ visibleIds = [], selected = new Set(), trac
       { id: 'delete', label: 'Delete', count, tone: 'danger' },
     ],
   });
+}
+
+/**
+ * The file panel's "Why this?": `why` comes from `GET /api/productions/:botId/:id`
+ * (the cycle behind the latest version, its goal, the creation, the verdict).
+ * None, no fold.
+ */
+export function fileWhy(why, { botId, nowMs = Date.now() } = {}) {
+  const panel = whyPanel(why, { nowMs, botId });
+  return panel ? `<div class="prod-file-why">${panel}</div>` : '';
 }

@@ -23,6 +23,7 @@ import {
   bulkPlan,
   collectVisibleItems,
   deleteLabel,
+  fileWhy,
   matchesProductionFilters,
   prodHash,
   prodRequest,
@@ -342,11 +343,14 @@ async function mountFileViewer(panel, { botId, node, botLabel = '', onTreeChange
 
   let content = null;
   let entry = null;
+  /** Server-built "Why this?" of the file (absent on old servers and untracked files). */
+  let why = null;
   if (node.entryId) {
     const data = await api(`/api/productions/${encodeURIComponent(botId)}/${node.entryId}`);
     if (!data.error) {
       content = data.content;
       entry = data.entry;
+      why = data.why ?? null;
     }
   }
   if (content == null) {
@@ -448,6 +452,7 @@ async function mountFileViewer(panel, { botId, node, botLabel = '', onTreeChange
       });
     renderViewer();
     if (note) sendThreadMessage(note);
+    refreshWhy();
   }
 
   function removeWith(action) {
@@ -562,6 +567,15 @@ async function mountFileViewer(panel, { botId, node, botLabel = '', onTreeChange
     });
   }
 
+  /** The why's outcome is the verdict: re-read it after one. */
+  async function refreshWhy() {
+    const fresh = await api(entryUrl());
+    if (!fresh?.why) return;
+    why = fresh.why;
+    const slot = panel.querySelector('.prod-file-why');
+    if (slot) slot.outerHTML = fileWhy(why, { botId, nowMs: Date.now() });
+  }
+
   function renderViewer() {
     const title = botLabel
       ? `<a href="${prodHash({ botId, single: true })}" style="font-size:13px;font-weight:400">${escapeHtml(botLabel)}</a> / ${escapeHtml(node.path)}`
@@ -587,6 +601,8 @@ async function mountFileViewer(panel, { botId, node, botLabel = '', onTreeChange
       </div>`
           : ''
       }
+
+      ${fileWhy(why, { botId, nowMs: Date.now() })}
 
       <div class="production-content">${content != null ? renderContent(content, node.name) : '<p class="text-dim" style="padding:12px">File not found or empty</p>'}</div>
 
