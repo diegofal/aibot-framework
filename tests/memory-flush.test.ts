@@ -1,6 +1,10 @@
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MemoryFlusher, type ScoredFact } from '../src/bot/memory-flush';
+import { readSoulEvents } from '../src/bot/soul-events';
 import type { BotContext } from '../src/bot/types';
 import type { Config } from '../src/config';
 import type { Logger } from '../src/logger';
@@ -256,5 +260,75 @@ describe('MemoryFlusher.flushSessionToMemory dating', () => {
     expect(prompts[0]).toContain('today');
 
     db.close();
+  });
+});
+
+describe('MemoryFlusher soul events', () => {
+  const SCHEMA = `
+    CREATE TABLE core_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bot_id TEXT NOT NULL DEFAULT 'default',
+      user_id TEXT,
+      category TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      importance INTEGER NOT NULL DEFAULT 5,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(bot_id, user_id, category, key)
+    );`;
+  let soulDir: string;
+  let db: Database;
+  beforeEach(() => {
+    soulDir = mkdtempSync(join(tmpdir(), 'flush-events-'));
+    db = new Database(':memory:');
+    db.exec(SCHEMA);
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(soulDir, { recursive: true, force: true });
+  });
+
+  function flusherReturning(facts: unknown[], withCore = true) {
+    const ctx = createMockContext(db) as unknown as Record<string, unknown>;
+    ctx.ollamaClient = { chat: async () => ({ text: JSON.stringify(facts) }) };
+    ctx.getSoulLoader = () => ({ appendDailyMemory: () => {}, getDir: () => soulDir });
+    if (!withCore) ctx.memoryManager = undefined;
+    return new MemoryFlusher(ctx as unknown as BotContext);
+  }
+
+  test('records the facts saved, the conversation they came from and when it happened', async () => {
+    const flusher = flusherReturning([
+      { fact: 'Synthetic user plays chess', importance: 6, category: 'preferences' },
+    ]);
+    await flusher.flushWithScoring([{ role: 'user', content: 'synthetic' }], 'b1', 'u1', {
+      observedAt: '2026-10-10T12:00:00.000Z',
+      source: { trigger: 'conversation-end', conversation: 'bot:b1:private:1', endReason: 'daily' },
+    });
+    const [event] = readSoulEvents(soulDir);
+    expect(event.op).toBe('facts-saved');
+    expect(event.actor).toBe('system');
+    expect(event.file).toBe('core-memory');
+    expect(event.added).toEqual(['[preferences] Synthetic user plays chess']);
+    expect(event.conversation).toBe('bot:b1:private:1');
+    expect(event.trigger).toBe('conversation-end');
+    expect(event.endReason).toBe('daily');
+    expect(event.observedAt).toBe('2026-10-10T12:00:00.000Z');
+    expect(event.summary).toContain('1 fact');
+  });
+
+  test('names the daily log when core memory is unavailable', async () => {
+    const flusher = flusherReturning(
+      [{ fact: 'Synthetic fact', importance: 5, category: 'general' }],
+      false
+    );
+    await flusher.flushWithScoring([{ role: 'user', content: 'synthetic' }], 'b1');
+    const [event] = readSoulEvents(soulDir);
+    expect(event.file).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
+  });
+
+  test('writes nothing when no facts were extracted', async () => {
+    await flusherReturning([]).flushWithScoring([{ role: 'user', content: 'synthetic' }], 'b1');
+    expect(readSoulEvents(soulDir)).toEqual([]);
   });
 });

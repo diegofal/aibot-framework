@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BotExportService, ConflictError } from '../../src/bot/bot-export-service';
+import { SOUL_EVENTS_FILE, appendSoulEvent } from '../../src/bot/soul-events';
 import type { BotConfig, Config } from '../../src/config';
 import { packTarGz, unpackTarGz } from '../../src/system/tar-archive';
 import { createTempDir, removeTempDir } from '../helpers/temp-dir';
@@ -216,6 +217,26 @@ describe('BotExportService', () => {
 
       const archive = extract(buffer);
       expect(archive.paths().some((path) => path.includes('.versions'))).toBe(false);
+    });
+
+    it('carries the goal and soul edit logs in soul/', async () => {
+      const bot = makeBot();
+      const config = makeConfig([bot]);
+      const soulDir = join(SOUL_DIR, 'test-bot');
+      mkdirSync(soulDir, { recursive: true });
+      writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Test Bot\n');
+      writeFileSync(join(soulDir, 'goal-events.jsonl'), '{}\n');
+      appendSoulEvent(soulDir, {
+        file: 'MEMORY.md',
+        op: 'consolidate',
+        actor: 'system',
+        summary: 'synthetic',
+      });
+
+      const service = new BotExportService(config, CONFIG_PATH, createMockLogger());
+      const archive = extract(await service.exportBot('test-bot'));
+      expect(archive.has('soul/goal-events.jsonl')).toBe(true);
+      expect(archive.text(`soul/${SOUL_EVENTS_FILE}`)).toContain('"op":"consolidate"');
     });
 
     it('includes the uploaded avatar in soul/ (session S4)', async () => {

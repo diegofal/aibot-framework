@@ -17,6 +17,7 @@ import { permissionToWhy } from './permission';
 import { postureToWhy } from './posture';
 import { proactiveToWhy } from './proactive';
 import { productionToWhy } from './production';
+import { soulEventToWhy } from './soul-event';
 
 export const WHY_BUILDERS = {
   cycle: cycleToWhy,
@@ -33,6 +34,7 @@ export const WHY_BUILDERS = {
   direction: directionToWhy,
   feedback: feedbackToWhy,
   frontier: frontierItemToWhy,
+  soulEvent: soulEventToWhy,
 } as const;
 
 export type WhyBuilderName = keyof typeof WHY_BUILDERS;

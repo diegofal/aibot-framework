@@ -8,6 +8,7 @@
  *   PATCH /api/agents/:id/goals    operator moves a goal on the board ({ goal, status })
  *   GET /api/agents/:id/goals/detail?id=&title=&days=   one goal's history (cached 15 s)
  *   GET /api/agents/:id/cycles/:cycleId   one agent-loop cycle, the "Open cycle" sheet (cached 15 s)
+ *   GET /api/agents/:id/memory-history?limit=   memory/soul edits (`soul-events.jsonl`), newest first, each with its why (not cached)
  *
  * Reads are tenant-scoped like /api/stats and never throw on missing data. The
  * writes go to the Active section through the goals tool's
@@ -20,6 +21,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import { writeGoalsFile } from '../../bot/goal-events';
+import { type SoulEvent, readSoulEvents } from '../../bot/soul-events';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
@@ -38,6 +40,7 @@ import { buildCycleDetail } from '../../stats/cycle-detail';
 import { buildGoalDetail } from '../../stats/goal-detail-aggregator';
 import { resolveBotPaths } from '../../stats/paths';
 import type { PresenceTracker } from '../../stats/presence-tracker';
+import { readAgentCycles } from '../../stats/readers/agent-cycles';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 import {
   BOARD_STATUSES,
@@ -51,8 +54,21 @@ import {
   resolveGoalRef,
   setGoalStatus,
 } from '../../tools/goals';
+import { soulEventToWhy } from '../../why/builders/soul-event';
+import { CycleIndex } from '../../why/cycle-index';
+import type { Why } from '../../why/types';
 
 export const GOAL_TITLE_MAX = 200;
+export const MEMORY_HISTORY_DEFAULT_LIMIT = 50;
+export const MEMORY_HISTORY_MAX_LIMIT = 200;
+
+export interface MemoryHistoryResponse {
+  botId: string;
+  /** Newest first. */
+  events: Array<SoulEvent & { why: Why }>;
+  /** Rows in the log, before `limit`. */
+  total: number;
+}
 export const GOAL_NOTES_MAX = 600;
 const GOAL_PRIORITIES = ['low', 'medium', 'high'] as const;
 
@@ -250,6 +266,39 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     } catch (err) {
       deps.logger.warn({ err, botId: bot.id, cycleId }, 'Cycle detail aggregation failed');
       return c.json({ error: 'Cycle detail aggregation failed' }, 500);
+    }
+  });
+
+  app.get('/:id/memory-history', (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    const asked = Number(c.req.query('limit'));
+    const limit =
+      Number.isFinite(asked) && asked > 0
+        ? Math.min(Math.floor(asked), MEMORY_HISTORY_MAX_LIMIT)
+        : MEMORY_HISTORY_DEFAULT_LIMIT;
+    try {
+      const all = readSoulEvents(resolveBotPaths(deps.config, bot).soulDir);
+      const rows = all.slice(-limit).reverse();
+      const withCycle = rows.filter((e) => e.cycleId);
+      const index = CycleIndex.for(
+        withCycle.length > 0
+          ? (b, s, u) => readAgentCycles(ctx.dirs.agentCycles, b, s, u)
+          : undefined,
+        withCycle.map((e) => ({ botId: bot.id, at: e.ts }))
+      );
+      const events = rows.map((event) => {
+        const cycle = event.cycleId ? index.byId(bot.id, event.cycleId) : undefined;
+        return {
+          ...event,
+          why: soulEventToWhy({ botId: bot.id, event, ...(cycle ? { cycle } : {}) }),
+        };
+      });
+      const body: MemoryHistoryResponse = { botId: bot.id, events, total: all.length };
+      return c.json(body);
+    } catch (err) {
+      deps.logger.warn({ err, botId: bot.id }, 'Memory history failed');
+      return c.json({ error: 'Memory history failed' }, 500);
     }
   });
 

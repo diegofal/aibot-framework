@@ -305,7 +305,9 @@ export class ConversationPipeline {
           this.ctx.sessionManager.markMemoryFlushed(serializedKey);
           // Use flushWithScoring for importance-weighted Core Memory storage
           this.memoryFlusher
-            .flushWithScoring(recentHistory, config.id, memoryViewer ?? userId)
+            .flushWithScoring(recentHistory, config.id, memoryViewer ?? userId, {
+              source: { trigger: 'proactive', conversation: serializedKey },
+            })
             .catch((err) => {
               botLogger.warn({ err }, 'Proactive memory flush failed');
             });
@@ -1022,7 +1024,9 @@ export class ConversationPipeline {
             .slice(-unflushed);
           this.ctx.sessionManager.markMemoryFlushed(sessionKey);
           this.memoryFlusher
-            .flushWithScoring(recentHistory, config.id, memoryViewer ?? userId)
+            .flushWithScoring(recentHistory, config.id, memoryViewer ?? userId, {
+              source: { trigger: 'proactive', conversation: sessionKey },
+            })
             .catch((err) => {
               botLogger.warn({ err }, 'Proactive memory flush failed');
             });

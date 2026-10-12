@@ -174,6 +174,19 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
     cycleId: 'c1',
     cycle: { cycleId: 'c1', startedAt: '2026-10-11T12:00:00Z', planSummary: 'P' },
   },
+  soulEvent: {
+    botId: 'b1',
+    event: {
+      ts: '2026-10-11T12:00:00Z',
+      file: 'MEMORY.md',
+      op: 'consolidate',
+      actor: 'system',
+      summary: 'Merged 1 daily log into MEMORY.md.',
+      added: ['- synthetic line'],
+      detail: ['2026-10-10.md'],
+      backup: '.versions/MEMORY.md.2026-10-11T12-00-00.bak',
+    },
+  },
 };
 
 describe('Why contract', () => {

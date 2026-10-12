@@ -89,15 +89,20 @@ describe('buildSessionStartPrompt', () => {
 describe('endConversation', () => {
   const key = 'bot:finny:private:42';
   let sessionManager: SessionManager;
-  let flushed: Array<{ history: ChatMessage[]; userId?: string; observedAt?: string }>;
+  let flushed: Array<{
+    history: ChatMessage[];
+    userId?: string;
+    observedAt?: string;
+    source?: unknown;
+  }>;
   const memoryFlusher = {
     flushSessionToMemory: async (
       history: ChatMessage[],
       _botId: string,
       userId?: string,
-      options?: { observedAt?: string }
+      options?: { observedAt?: string; source?: unknown }
     ) => {
-      flushed.push({ history, userId, observedAt: options?.observedAt });
+      flushed.push({ history, userId, observedAt: options?.observedAt, source: options?.source });
     },
   };
 
@@ -146,6 +151,16 @@ describe('endConversation', () => {
     expect(flushed[0].userId).toBe('42');
     expect(flushed[0].observedAt).toBe(lastActivityAt);
     expect(sessionManager.getFullHistory(key)).toEqual([]);
+  });
+
+  test('tells the flush which conversation it came from and why it ended', async () => {
+    sessionManager.appendMessages(key, [{ role: 'user', content: 'synthetic' }], 100);
+    await endConversation(deps(), { botId: 'finny', serializedKey: key, reason: 'daily' });
+    expect(flushed[0].source).toEqual({
+      trigger: 'conversation-end',
+      conversation: key,
+      endReason: 'daily',
+    });
   });
 
   test('skips the flush when everything was already flushed', async () => {

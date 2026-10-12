@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSoulEvents } from '../../src/bot/soul-events';
 import { HygieneHistory, HygieneRegistry } from '../../src/hygiene/registry';
 import { HYGIENE_HISTORY_LIMIT, type HygieneRun } from '../../src/hygiene/types';
 import { createTempDir, removeTempDir } from '../helpers/temp-dir';
@@ -87,6 +88,39 @@ describe('HygieneRegistry.run', () => {
     expect(history).toHaveLength(1);
     expect(history[0].runId).toBe(run.runId);
     expect(existsSync(join(root, 'data', 'hygiene', 'runs.jsonl'))).toBe(true);
+  });
+
+  test('apply on a soul file leaves a hygiene-fix row in the soul log with the run id', async () => {
+    const soulDir = join(root, 'data', 'tenants', '__admin__', 'bots', 'bot1', 'soul');
+    writeFile(
+      join(soulDir, 'GOALS.md'),
+      '## Active Goals\n- [ ] X\n  - status: archived\n  - priority: low\n'
+    );
+    const registry = makeRegistry();
+    await registry.run({ routine: 'goal-lint', botId: 'bot1' });
+    expect(readSoulEvents(soulDir)).toEqual([]); // a preview records nothing
+
+    const run = await registry.run({ routine: 'goal-lint', botId: 'bot1', apply: true });
+    const [event] = readSoulEvents(soulDir);
+    expect(event.op).toBe('hygiene-fix');
+    expect(event.actor).toBe('hygiene');
+    expect(event.runId).toBe(run.runId);
+    expect(event.file).toBe('GOALS.md');
+    expect(event.detail).toEqual(['"X" moved to Completed']);
+    expect(event.summary).toContain('goal-lint');
+    expect(event.backup).toStartWith('.versions/GOALS.md.');
+  });
+
+  test('the all routine records soul fixes per bot under the one run id', async () => {
+    const soulDir = join(root, 'data', 'tenants', '__admin__', 'bots', 'bot1', 'soul');
+    writeFile(
+      join(soulDir, 'GOALS.md'),
+      '## Active Goals\n- [ ] X\n  - status: archived\n  - priority: low\n'
+    );
+    const run = await makeRegistry().run({ routine: 'all', apply: true });
+    const events = readSoulEvents(soulDir);
+    expect(events.map((e) => e.file).sort()).toEqual(['GOALS.md', 'MEMORY.md']);
+    expect(events.every((e) => e.runId === run.runId)).toBe(true);
   });
 
   test('unknown routine → run with error, not persisted', async () => {

@@ -3607,6 +3607,39 @@ body.ui-sheet-open {
   color: var(--danger);
 }
 
+/* Memory history (Agent Home) */
+.home-memory-row {
+  margin-top: 16px;
+}
+.home-mem-list {
+  max-height: min(520px, 60vh);
+  overflow-y: auto;
+}
+.home-mem-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.home-mem-row:last-child {
+  border-bottom: none;
+}
+.home-mem-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.home-mem-title {
+  font-weight: 500;
+}
+.home-mem-summary {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.home-mem-more {
+  padding-top: 6px;
+}
+
 /* Goals board */
 .home-goals-row {
   margin-top: 16px;

@@ -360,6 +360,12 @@
             </tr>
             <tr>
               <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/agents/:id/memory-history</code></td>
+              <td><span class="badge badge-yellow">2026-10-12</span> The agent's memory history: rows of <code>&lt;soulDir&gt;/soul-events.jsonl</code> (memory consolidation, facts saved from a conversation, hygiene fixes), newest first, each with <code>why</code> (<code>soulEventToWhy</code>, <code>src/why/builders/soul-event.ts</code>). <code>?limit=</code> default 50, max 200; <code>MemoryHistoryResponse { botId, events, total }</code>. Tenant-scoped, 404 outside the tenant, not cached. Rendered by the "Memory history" card on Agent Home (<code>web/pages/memory-history-helpers.js</code>)</td>
+              <td><code>agent-home.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents/:id/goals/detail</code></td>
               <td><span class="badge badge-yellow">2026-10-11</span> Goal drawer payload (<code>GoalDetailResponse</code>, <code>buildGoalDetail</code>; <code>?id=&amp;title=&amp;days=</code>, cached 15 s, tenant-scoped). Each <code>timeline[]</code> event (<code>GoalTimelineEvent</code>) now also carries <code>cycleId: string | null</code> and <code>why</code> (<code>goalEventToWhy</code>, <code>src/why/builders/goal-event.ts</code>): the op in words, the actor, the cycle and its plan, from &rarr; to</td>
               <td><code>agent-home.ts</code></td>

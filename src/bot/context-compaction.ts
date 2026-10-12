@@ -208,9 +208,13 @@ export class ContextCompactor {
     }
 
     // Fire-and-forget memory flush of older messages
-    this.memoryFlusher.flushWithScoring(olderMessages, botId, userId).catch((err) => {
-      botLogger.warn({ err }, 'Memory flush during compaction failed (non-fatal)');
-    });
+    this.memoryFlusher
+      .flushWithScoring(olderMessages, botId, userId, {
+        source: { trigger: 'compaction', conversation: serializedKey },
+      })
+      .catch((err) => {
+        botLogger.warn({ err }, 'Memory flush during compaction failed (non-fatal)');
+      });
 
     // LLM summarization
     let summaryText: string;

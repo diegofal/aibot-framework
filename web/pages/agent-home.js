@@ -4,7 +4,8 @@
  *
  * Presence header (live), needs-you strip, a chat panel that talks to the
  * agent through the dashboard conversations API, the timeline, then goals,
- * traits and karma. Data comes from `/api/agents/:id/home`; live updates
+ * traits, karma and the memory history (consolidations, facts saved,
+ * hygiene fixes, its own request). Data comes from `/api/agents/:id/home`; live updates
  * ride the shared `watchAgent()` link.
  */
 import { card, emptyState, openSheet, showToast, skeleton } from '../ui/index.js';
@@ -35,6 +36,7 @@ import {
   goalEditor,
 } from './goal-detail-helpers.js';
 import { watchAgent } from './live-presence.js';
+import { memoryHistoryBody, memoryHistoryUrl } from './memory-history-helpers.js';
 import { api, renderThread } from './shared.js';
 
 const HOME_REFRESH_DEBOUNCE_MS = 3000;
@@ -530,6 +532,16 @@ function wireKeys(el, id, identity) {
   document.addEventListener('keydown', keyHandler);
 }
 
+/** Its own request, like the Mind section: a slow read never holds the home back. */
+async function mountMemoryHistory(box, id) {
+  if (!box) return;
+  const res = await api(memoryHistoryUrl(id)).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (!box.isConnected) return;
+  box.innerHTML = memoryHistoryBody(res, { botId: id });
+}
+
 function scheduleHomeRefresh(el, id) {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
@@ -598,6 +610,14 @@ export async function renderAgentHome(el, id) {
         body: karmaBody(home.karma),
         actions: `<a class="btn btn-sm" href="#/insights/karma/${encodeURIComponent(id)}">Details</a>`,
       })}
+    </div>
+    <div class="home-memory-row">
+      ${card({
+        title: 'Memory history',
+        subtitle:
+          'Edits to its memory you did not make: consolidations, facts saved, hygiene fixes',
+        body: `<div id="home-memory">${skeleton({ lines: 3 })}</div>`,
+      })}
     </div>`;
 
   wireActions(el, id, identity);
@@ -614,6 +634,7 @@ export async function renderAgentHome(el, id) {
   // Curiosity DNA (knowledge map, frontier, direction, dispatches): its own
   // request so a slow or missing curiosity state never holds the home back.
   mountMind(el.querySelector('#home-mind'), id);
+  mountMemoryHistory(el.querySelector('#home-memory'), id);
   watch = watchAgent(id, {
     onPresence: (p) => applyPresence(el, p, identity),
     onEvent: () => scheduleHomeRefresh(el, id),

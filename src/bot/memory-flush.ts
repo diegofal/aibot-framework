@@ -1,5 +1,7 @@
 import { claudeGenerate } from '../claude-cli';
+import { localDateStr } from '../date-utils';
 import type { ChatMessage } from '../ollama';
+import { type FlushTrigger, appendSoulEvent } from './soul-events';
 import type { BotContext } from './types';
 
 export interface ScoredFact {
@@ -11,7 +13,23 @@ export interface ScoredFact {
 export interface FlushOptions {
   /** ISO timestamp of when the conversation happened; facts are dated by it, not by the flush. */
   observedAt?: string;
+  /** Where the flushed messages came from; recorded in `soul-events.jsonl`. */
+  source?: FlushSource;
 }
+
+export interface FlushSource {
+  trigger: FlushTrigger;
+  /** Session key of the conversation. */
+  conversation?: string;
+  /** Why the conversation ended (`conversation-end` only). */
+  endReason?: string;
+}
+
+const TRIGGER_TEXT: Record<FlushTrigger, string> = {
+  proactive: 'after enough new messages',
+  compaction: 'before compacting a long conversation',
+  'conversation-end': 'when the conversation ended',
+};
 
 export class MemoryFlusher {
   constructor(private ctx: BotContext) {}
@@ -187,6 +205,7 @@ export class MemoryFlusher {
           { count: facts.length },
           'Conversation flushed to Core Memory with scoring'
         );
+        this.recordFactsSaved(botId, 'core-memory', facts, options);
         this.ctx.activityStream?.publish({
           type: 'memory:flush',
           botId: botId || '',
@@ -199,6 +218,13 @@ export class MemoryFlusher {
         const soulLoader = this.ctx.getSoulLoader(botId);
         const summary = facts.map((f) => `[${f.importance}/10] ${f.fact}`).join('\n');
         soulLoader.appendDailyMemory(summary, userId);
+        const day = `${localDateStr()}.md`;
+        this.recordFactsSaved(
+          botId,
+          userId ? `memory/users/${userId}/${day}` : `memory/${day}`,
+          facts,
+          options
+        );
         this.ctx.logger.info(
           { count: facts.length },
           'Conversation flushed to daily log (Core Memory unavailable)'
@@ -212,6 +238,42 @@ export class MemoryFlusher {
       await this.flushToDaily(history, botId, userId);
       return [];
     }
+  }
+
+  /**
+   * One `facts-saved` row in the bot's soul log: the fact heads it stored (the
+   * fact text is what memory keeps anyway, never the messages), the
+   * conversation and when it happened. Never throws.
+   */
+  private recordFactsSaved(
+    botId: string,
+    file: string,
+    facts: ScoredFact[],
+    options: FlushOptions
+  ): void {
+    let soulDir: string | undefined;
+    try {
+      soulDir = this.ctx.getSoulLoader(botId)?.getDir?.();
+    } catch {
+      soulDir = undefined;
+    }
+    if (!soulDir) return;
+    const src = options.source;
+    const n = facts.length;
+    appendSoulEvent(soulDir, {
+      file,
+      op: 'facts-saved',
+      actor: 'system',
+      summary: `Saved ${n} fact${n === 1 ? '' : 's'} from a conversation${src ? ` ${TRIGGER_TEXT[src.trigger]}` : ''}.`,
+      added: facts.map((f) => `[${f.category}] ${f.fact}`),
+      addedCount: n,
+      ...(src?.conversation ? { conversation: src.conversation } : {}),
+      ...(src?.trigger ? { trigger: src.trigger } : {}),
+      ...(src?.endReason ? { endReason: src.endReason } : {}),
+      ...(options.observedAt ? { observedAt: options.observedAt } : {}),
+      onError: (err) =>
+        this.ctx.logger.warn({ err, botId }, 'Memory flush: failed to record soul event'),
+    });
   }
 
   /**

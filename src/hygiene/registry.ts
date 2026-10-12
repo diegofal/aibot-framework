@@ -9,7 +9,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { appendSoulEvent } from '../bot/soul-events';
 import {
   type BotConfig,
   type Config,
@@ -130,6 +131,53 @@ export class HygieneHistory {
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
+
+/** Routines whose fixes rewrite files in the bot's soul dir. */
+const SOUL_ROUTINES = new Set(['goal-lint', 'soul-structure', 'memory-hygiene']);
+
+/**
+ * One `hygiene-fix` row per soul file a routine changed, in the bot's
+ * `soul-events.jsonl`, carrying the run id: the soul log is where the agent's
+ * memory history is read, the run history stays where the run is read. The
+ * fix lines are the routine's own result text (never the redacted content).
+ */
+function recordSoulFixes(
+  runId: string,
+  routine: HygieneRoutine,
+  ctx: HygieneContext,
+  findings: HygieneFinding[],
+  result: HygieneApplyResult
+): void {
+  const soulDir = ctx.soulDir;
+  if (!soulDir || !SOUL_ROUTINES.has(routine.id) || result.applied.length === 0) return;
+  const fileOf = new Map(findings.map((f) => [f.id, f.file]));
+  const byFile = new Map<string, string[]>();
+  for (const a of result.applied) {
+    const file = fileOf.get(a.findingId);
+    if (!file) continue;
+    byFile.set(file, [...(byFile.get(file) ?? []), a.result]);
+  }
+  for (const [file, lines] of byFile) {
+    const abs = join(soulDir, file);
+    const versions = join(dirname(abs), '.versions');
+    const backup = result.backups.find(
+      (b) =>
+        dirname(resolve(b)) === resolve(versions) && basename(b).startsWith(`${basename(abs)}.`)
+    );
+    const n = lines.length;
+    appendSoulEvent(soulDir, {
+      file,
+      op: 'hygiene-fix',
+      actor: 'hygiene',
+      runId,
+      summary: `${routine.id} applied ${n} fix${n === 1 ? '' : 'es'} to ${file}.`,
+      detail: lines,
+      ...(backup ? { backup: relative(soulDir, backup).replace(/\\/g, '/') } : {}),
+      now: () => ctx.now,
+      onError: (err) => ctx.logger.warn({ err, file }, 'Hygiene: failed to record soul event'),
+    });
+  }
+}
 
 export class HygieneRegistry {
   readonly history: HygieneHistory;
@@ -278,6 +326,7 @@ export class HygieneRegistry {
       run.findings = routine.preview(ctx);
       if (apply) {
         const result = routine.apply(ctx, run.findings);
+        recordSoulFixes(run.runId, routine, ctx, run.findings, result);
         run.applied = result.applied;
         run.skipped = result.skipped;
         run.backups = result.backups;
@@ -339,6 +388,7 @@ export class HygieneRegistry {
         const ctx = this.buildContext(bot, options);
         const findings = routine.preview(ctx);
         const result = apply ? routine.apply(ctx, findings) : null;
+        if (result) recordSoulFixes(run.runId, routine, ctx, findings, result);
         // Re-preview on a fresh context so `remaining` reflects the disk after the fixes.
         const remaining = apply ? routine.preview(this.buildContext(bot, options)) : null;
         merge(prefix, bot?.id, findings, result, remaining);

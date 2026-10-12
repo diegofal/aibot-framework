@@ -341,7 +341,10 @@ describe('ConversationPipeline', () => {
         expiredHistory,
         'test-bot',
         '789', // the sender owns the facts, even without userIsolation
-        { observedAt: '2026-10-03T21:10:00.000Z' } // dated when it was said, not today
+        {
+          observedAt: '2026-10-03T21:10:00.000Z', // dated when it was said, not today
+          source: { trigger: 'conversation-end', conversation: 'user:123', endReason: 'idle' },
+        }
       );
     });
 
@@ -591,6 +594,9 @@ describe('ConversationPipeline', () => {
 
       expect(mockMemoryFlusher.flushWithScoring).toHaveBeenCalled();
       expect(mockSessionManager.markMemoryFlushed).toHaveBeenCalledWith('user:123');
+      // The soul log says which conversation the facts came from.
+      const options = (mockMemoryFlusher.flushWithScoring as jest.Mock).mock.calls[0][3];
+      expect(options).toEqual({ source: { trigger: 'proactive', conversation: 'user:123' } });
     });
 
     it('should not flush until enough messages arrived since the last flush', async () => {

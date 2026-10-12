@@ -567,7 +567,17 @@ score = 1 / (1 + |bm25_rank|)</code></pre>
           <li>Claude CLI runs in prompt-only mode (<code>-p</code> flag, <code>--output-format text</code>) with no file editing tools.</li>
           <li>Processed daily logs are moved to <code>memory/archive/</code> via <code>renameSync()</code>.</li>
           <li>Output starts with a <code>&lt;!-- last-consolidated: YYYY-MM-DD --&gt;</code> metadata comment.</li>
+          <li><span class="badge badge-yellow">2026-10-12</span> Every run leaves a row in <code>soul-events.jsonl</code> (see below): the daily logs merged, the MEMORY.md lines added and dropped, the backup path; a rejected output is recorded as <code>consolidate-rejected</code>.</li>
         </ul>
+
+        <h3 id="soul-events">Soul events: the memory history</h3>
+        <p><span class="badge badge-yellow">2026-10-12</span> <code>src/bot/soul-events.ts</code> keeps an append-only <code>&lt;soulDir&gt;/soul-events.jsonl</code> of the edits to an agent's memory nobody watches, in the style of <code>goal-events.jsonl</code>. Each row records only what the writer already knew (no LLM call): <code>{ ts, file, op, actor, summary, added?, removed?, detail?, conversation?, trigger?, endReason?, observedAt?, runId?, backup?, cycleId? }</code>.</p>
+        <ul>
+          <li><code>consolidate</code> / <code>consolidate-rejected</code> (actor <code>system</code>): <code>consolidateMemory()</code>; daily logs in <code>detail</code>, a line diff of MEMORY.md before/after in <code>added</code>/<code>removed</code> with full counts.</li>
+          <li><code>facts-saved</code> (actor <code>system</code>): <code>MemoryFlusher.flushWithScoring()</code>; the facts as <code>[category] fact</code>, the file (<code>core-memory</code> or the daily log), and <code>FlushOptions.source</code>: <code>proactive</code>, <code>compaction</code> or <code>conversation-end</code> with the session key and why it ended, plus <code>observedAt</code>. Never the messages.</li>
+          <li><code>hygiene-fix</code> (actor <code>hygiene</code>): one row per soul file a goal-lint, soul-structure or memory-hygiene apply changed, with the hygiene <code>runId</code>, the routine's result lines and the backup.</li>
+        </ul>
+        <p>Heads are capped at 120 characters and 8 per list, since memory is real user data; past 512 KB the file keeps its newest half; a failed write is logged and never fails the edit. It lives in the soul dir, so it travels with the bot export. <code>GET /api/agents/:id/memory-history</code> serves it newest first with a <code>why</code> per row (<code>soulEventToWhy</code>); Agent Home shows it as the "Memory history" card.</p>
 
         <!-- ============================================================ -->
         <!-- SQLite Schema Reference                                      -->

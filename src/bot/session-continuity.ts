@@ -110,7 +110,14 @@ export async function endConversation(
         result.history.slice(-unflushed),
         input.botId,
         input.memoryUserId,
-        { observedAt: result.ended.lastActivityAt }
+        {
+          observedAt: result.ended.lastActivityAt,
+          source: {
+            trigger: 'conversation-end',
+            conversation: input.serializedKey,
+            endReason: input.reason,
+          },
+        }
       );
     } catch (err) {
       deps.logger.warn(

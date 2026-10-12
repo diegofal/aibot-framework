@@ -49,9 +49,10 @@ function sanitizeFact(fact: string): string | null {
  * Creates a `.versions/` subdirectory and copies the file with a timestamp.
  * Uses `.bak` extension to prevent the memory indexer (which watches *.md) from indexing backups.
  * Prunes oldest versions beyond maxVersions per filename.
+ * Returns the backup path, or null when there was nothing to back up or the copy failed.
  */
-export function backupSoulFile(filepath: string, logger: Logger, maxVersions = 10): void {
-  if (!existsSync(filepath)) return;
+export function backupSoulFile(filepath: string, logger: Logger, maxVersions = 10): string | null {
+  if (!existsSync(filepath)) return null;
 
   const dir = dirname(filepath);
   const name = basename(filepath);
@@ -73,7 +74,7 @@ export function backupSoulFile(filepath: string, logger: Logger, maxVersions = 1
     logger.debug({ filepath, backupPath }, 'Soul file backed up');
   } catch (err) {
     logger.warn({ err, filepath }, 'Failed to back up soul file');
-    return;
+    return null;
   }
 
   // Prune old versions for this filename
@@ -93,6 +94,7 @@ export function backupSoulFile(filepath: string, logger: Logger, maxVersions = 1
   } catch (err) {
     logger.warn({ err }, 'Failed to prune soul file versions');
   }
+  return backupPath;
 }
 
 export class SoulLoader {

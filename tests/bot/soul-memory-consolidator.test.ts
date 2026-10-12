@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSoulEvents } from '../../src/bot/soul-events';
 import { consolidateMemory, getUnconsolidatedLogs } from '../../src/bot/soul-memory-consolidator';
 import { localDateStr } from '../../src/date-utils';
 
@@ -249,5 +250,54 @@ describe('consolidateMemory', () => {
     // Verify the original MEMORY.md was NOT overwritten
     const content = readFileSync(join(TEST_DIR, 'MEMORY.md'), 'utf-8');
     expect(content).toBe(largeContent);
+  });
+
+  describe('soul events', () => {
+    const ollama = (text: string) =>
+      ({ generate: async () => ({ text }) }) as unknown as import('../../src/ollama').OllamaClient;
+
+    it('records which daily logs were merged, the lines added and dropped, and the backup', async () => {
+      writeFileSync(
+        join(TEST_DIR, 'MEMORY.md'),
+        '<!-- last-consolidated: 2026-01-01 -->\n# Memory\n- Synthetic user likes tea\n- Synthetic user lives in a flat\n'
+      );
+      writeFileSync(join(TEST_DIR, 'memory', '2026-01-15.md'), '- has a bike');
+      writeFileSync(join(TEST_DIR, 'memory', '2026-01-16.md'), '- moved');
+
+      await consolidateMemory({
+        soulDir: TEST_DIR,
+        logger: createMockLogger(),
+        llmBackend: 'ollama',
+        ollamaClient: ollama(
+          '<!-- last-consolidated: 2026-01-16 -->\n# Memory\n- Synthetic user likes tea\n- Synthetic user has a bike\n- Synthetic user moved house'
+        ),
+      });
+
+      const [event] = readSoulEvents(TEST_DIR);
+      expect(event.op).toBe('consolidate');
+      expect(event.actor).toBe('system');
+      expect(event.file).toBe('MEMORY.md');
+      expect(event.detail).toEqual(['2026-01-15.md', '2026-01-16.md']);
+      expect(event.added).toEqual(['- Synthetic user has a bike', '- Synthetic user moved house']);
+      expect(event.removed).toEqual(['- Synthetic user lives in a flat']);
+      expect(event.addedCount).toBe(2);
+      expect(event.removedCount).toBe(1);
+      expect(event.backup).toStartWith('.versions/MEMORY.md.');
+      expect(event.summary).toContain('2 daily logs');
+    });
+
+    it('records a rejected consolidation and leaves MEMORY.md alone', async () => {
+      writeFileSync(join(TEST_DIR, 'memory', '2026-01-15.md'), '- fact');
+      await consolidateMemory({
+        soulDir: TEST_DIR,
+        logger: createMockLogger(),
+        llmBackend: 'ollama',
+        ollamaClient: ollama('no header here'),
+      });
+      const [event] = readSoulEvents(TEST_DIR);
+      expect(event.op).toBe('consolidate-rejected');
+      expect(event.summary).toContain('header');
+      expect(existsSync(join(TEST_DIR, 'MEMORY.md'))).toBe(false);
+    });
   });
 });

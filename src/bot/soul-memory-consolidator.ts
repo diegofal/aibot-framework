@@ -6,12 +6,13 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
+import { appendSoulEvent, diffLines } from './soul-events';
 
 /**
  * Detect daily logs older than today that haven't been consolidated yet.
@@ -190,6 +191,19 @@ async function generateConsolidation(
   }
 }
 
+/** A consolidation the guards refused: MEMORY.md is untouched, but say so in the soul log. */
+function recordRejected(opts: ConsolidateMemoryOptions, logFiles: string[], why: string): void {
+  appendSoulEvent(opts.soulDir, {
+    file: 'MEMORY.md',
+    op: 'consolidate-rejected',
+    actor: 'system',
+    summary: `Consolidation rejected: ${why}. MEMORY.md was left as it was.`,
+    detail: logFiles,
+    onError: (err) =>
+      opts.logger.warn({ err }, 'Memory consolidation: failed to record soul event'),
+  });
+}
+
 /**
  * Run memory consolidation: merge old daily logs into MEMORY.md, archive processed logs.
  */
@@ -244,6 +258,7 @@ export async function consolidateMemory(
     logger.debug('Memory consolidation: daily logs were empty, nothing to merge');
     return { merged: 0, archived: 0 };
   }
+  const logFiles = dailyLogContents.map((d) => `${d.date}.md`);
 
   const prompt = buildConsolidationPrompt(
     soulDir,
@@ -270,6 +285,7 @@ export async function consolidateMemory(
       { outputLen: output.length },
       'Memory consolidation: output missing <!-- last-consolidated: --> header, rejecting'
     );
+    recordRejected(opts, logFiles, 'the output had no <!-- last-consolidated --> header');
     return { merged: 0, archived: 0 };
   }
 
@@ -280,13 +296,16 @@ export async function consolidateMemory(
         { outputLen: output.length, existingLen: existingMemory.length, ratio: ratio.toFixed(2) },
         'Memory consolidation: output is <50% of existing MEMORY.md size, rejecting to prevent data loss'
       );
+      recordRejected(
+        opts,
+        logFiles,
+        `the output was ${Math.round(ratio * 100)}% of the current MEMORY.md (under 50%), so it would have lost memory`
+      );
       return { merged: 0, archived: 0 };
     }
   }
 
-  if (existsSync(memoryMdPath)) {
-    backupSoulFile(memoryMdPath, logger);
-  }
+  const backupPath = existsSync(memoryMdPath) ? backupSoulFile(memoryMdPath, logger) : null;
 
   writeFileSync(memoryMdPath, output, 'utf-8');
   logger.info({ outputLen: output.length }, 'Memory consolidation: MEMORY.md written');
@@ -310,6 +329,22 @@ export async function consolidateMemory(
   }
 
   logger.info({ merged: dailyLogContents.length, archived }, 'Memory consolidation: complete');
+
+  const { added, removed } = diffLines(existingMemory, output);
+  const n = dailyLogContents.length;
+  appendSoulEvent(soulDir, {
+    file: 'MEMORY.md',
+    op: 'consolidate',
+    actor: 'system',
+    summary: `Merged ${n} daily log${n === 1 ? '' : 's'} into MEMORY.md: ${added.length} line${added.length === 1 ? '' : 's'} added, ${removed.length} dropped; ${archived} log${archived === 1 ? '' : 's'} archived.`,
+    detail: logFiles,
+    added,
+    removed,
+    addedCount: added.length,
+    removedCount: removed.length,
+    ...(backupPath ? { backup: relative(soulDir, backupPath).replace(/\\/g, '/') } : {}),
+    onError: (err) => logger.warn({ err }, 'Memory consolidation: failed to record soul event'),
+  });
 
   return { merged: dailyLogContents.length, archived };
 }

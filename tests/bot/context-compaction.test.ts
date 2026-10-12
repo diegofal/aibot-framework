@@ -401,6 +401,22 @@ describe('ContextCompactor', () => {
     expect(result.messages[result.messages.length - 1].content).toBe('Latest user message');
   });
 
+  test('tells the memory flush it came from compacting this conversation', async () => {
+    const calls: unknown[][] = [];
+    flusher.flushWithScoring = (async (...args: unknown[]) => {
+      calls.push(args);
+      return [];
+    }) as typeof flusher.flushWithScoring;
+    const result = await compactor.maybeCompact(
+      makeMessages(10, 100),
+      'test-key',
+      'bot1',
+      defaultConfig
+    );
+    expect(result.compacted).toBe(true);
+    expect(calls[0][3]).toEqual({ source: { trigger: 'compaction', conversation: 'test-key' } });
+  });
+
   test('keeps system prompt and recent messages intact', async () => {
     const messages = makeMessages(10, 100);
     const result = await compactor.maybeCompact(messages, 'test-key', 'bot1', defaultConfig);
