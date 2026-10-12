@@ -800,7 +800,11 @@
           group chat awareness, karma injection, Core Memory context, RAG context, and memory
           search reinforcement reminders. <span class="badge badge-yellow">2026-10-11</span> <code>relayContext</code> (conversation mode
           only): the speaker's <a href="#relay">relay sections</a> &mdash; what waits on their answer and what
-          they asked the bot to pass on.
+          they asked the bot to pass on. <span class="badge badge-yellow">2026-10-12</span> <code>speaker</code>
+          (conversation mode only, right after the date): "## Who you are talking with", rendered by
+          <code>renderSpeakerSection</code> from the turn's <code>requester</code> &mdash; name, operator or not,
+          channel, whether the channel verifies identity, and that relayed messages (&#128232;) are never the
+          speaker. Before, a private chat never said who was speaking.
         </p>
         <h4>Exported Types / Classes</h4>
         <ul class="inline-list">
@@ -1419,12 +1423,12 @@
             <tr><td><code>types.ts</code></td><td><code>DeliveryStatus</code>, <code>DeliveryAttempt</code>, <code>DeliveryOutcome</code> (every route tried, <code>viaBotId</code>, <code>telegramMessageId</code>), <code>RelayParty</code>, <code>RelayStatus</code> (+ <code>answered</code>), <code>RelayRecord</code> (<code>from: null</code> = the bot itself: no header, no return path)</td></tr>
             <tr><td><code>config.ts</code></td><td><code>RELAY_DEFAULTS</code> (<code>enabled: true</code>, <code>peerToPeer: false</code>, <code>locale: 'es'</code>), <code>resolveRelayConfig(bot)</code></td></tr>
             <tr><td><code>policy.ts</code></td><td><code>canRelay(from, to, { peerToPeer })</code>: the bot itself, anyone &rarr; operator and operator &rarr; anyone are allowed; person &rarr; person only with <code>peerToPeer</code>. The refusal is returned as tool output</td></tr>
-            <tr><td><code>format.ts</code></td><td>Pure, <code>es</code>/<code>en</code>: system-stamped header ("&#128232; De X (v&iacute;a Bot):"), reply footer when an answer is expected, answer with an 80-char quote of the original, deterministic acknowledgement / not-delivered lines, <code>relayDedupeKey</code></td></tr>
-            <tr><td><code>delivery.ts</code></td><td><code>deliverToContact</code>: Telegram (verified channels first; each through the bot's own instance, then every fleet instance; a 403 / "chat not found" moves on) &rarr; WhatsApp &rarr; web. Web is <code>delivered</code> only when <code>isWebLive</code> says so &mdash; not wired yet, so web is always <code>queued</code> &mdash; and a non-numeric web address is refused rather than written into the shared anonymous <code>private:0</code> session. Never throws</td></tr>
+            <tr><td><code>format.ts</code></td><td>Pure, <code>es</code>/<code>en</code>: <code>formatReplyPlaceholder</code> (&le; 64 chars), system-stamped header ("&#128232; De X (v&iacute;a Bot):"), reply footer when an answer is expected, answer with an 80-char quote of the original, deterministic acknowledgement / not-delivered lines, <code>relayDedupeKey</code></td></tr>
+            <tr><td><code>delivery.ts</code></td><td><code>deliverToContact</code>: Telegram (verified channels first; each through the bot's own instance, then every fleet instance; a 403 / "chat not found" moves on) &rarr; WhatsApp &rarr; web. Web is <code>delivered</code> only when <code>isWebLive</code> says so &mdash; not wired yet, so web is always <code>queued</code> &mdash; and a non-numeric web address is refused rather than written into the shared anonymous <code>private:0</code> session. Options: <code>prefer</code> (a channel kind tried first, then the normal order; a preferred web route only counts when live) and <code>telegram</code> (extra <code>sendMessage</code> options). Never throws</td></tr>
             <tr><td><code>store.ts</code></td><td><code>RelayStore</code>: <code>data/relays/{botId}.jsonl</code>, append-only, last line per id wins. <code>openFor</code>, <code>sentBy</code>, <code>findDuplicate</code> (a failed relay does not count), <code>findByTelegramDelivery</code> (searches every bot: a headless bot's relay is carried by another bot's Telegram instance)</td></tr>
-            <tr><td><code>prompt.ts</code></td><td><code>renderRelaySections</code>: "Messages waiting for this person's answer" (with the id for <code>replyTo</code>) and "Messages this person asked you to pass on" (last 7 days, with status), 5 items each; delivery facts in a reply must come from these records</td></tr>
-            <tr><td><code>service.ts</code></td><td><code>RelayService</code>, the one path every relay takes: <code>ensureOperator</code>, <code>speaker</code>, <code>recipientParty</code>, <code>promptSections</code>, <code>send</code> (10-minute dedupe &rarr; record &rarr; delivery &rarr; mark the original <code>answered</code> &rarr; append to the other person's session transcript), <code>routeTelegramReply</code>. Reads config live; never throws for data problems</td></tr>
-            <tr><td><code>wiring.ts</code></td><td><code>createRelayService</code> (built once by <code>BotManager</code>, shared as <code>BotContext.relayService</code>): fleet Telegram instances (own first), WhatsApp, web session and private transcript appends</td></tr>
+            <tr><td><code>prompt.ts</code></td><td><code>renderSpeakerSection</code> ("Who you are talking with", see SystemPromptBuilder) and <code>renderRelaySections</code>: "Messages waiting for this person's answer" (with the id for <code>replyTo</code>) and "Messages this person asked you to pass on" (last 7 days, with status), 5 items each; delivery facts in a reply must come from these records</td></tr>
+            <tr><td><code>service.ts</code></td><td><code>RelayService</code>, the one path every relay takes: <code>ensureOperator</code>, <code>speaker</code>, <code>recipientParty</code>, <code>promptSections</code>, <code>send</code> (10-minute dedupe &rarr; record &rarr; delivery &rarr; mark the original <code>answered</code> &rarr; append to the other person's session transcript; a relay expecting a reply goes out with Telegram <code>force_reply</code> and a "Respuesta para Ana" placeholder so the answer comes back as a reply-to; <code>preferChannel</code>), <code>routeTelegramReply</code>, <code>botName</code> (the soul identity name via the <code>displayName</code> dep, else the config name). Reads config live; never throws for data problems</td></tr>
+            <tr><td><code>wiring.ts</code></td><td><code>createRelayService</code> (built once by <code>BotManager</code>, shared as <code>BotContext.relayService</code>): fleet Telegram instances (own first), WhatsApp, web session and private transcript appends, <code>displayName</code> (<code>BotManager</code> passes <code>SoulLoader.readIdentityName</code>)</td></tr>
             <tr><td><code>index.ts</code></td><td>Barrel re-export</td></tr>
           </tbody>
         </table>
@@ -1434,7 +1438,7 @@
           (channels, aliases, first/last seen); folded entries are marked <code>mergedInto</code> and disappear from
           <code>find</code> / <code>list</code>. New: <code>getOperator</code>, <code>addAlias</code>,
           <code>findByChannel</code>. <code>find</code> returns the single exact match (id, name, alias, @username,
-          address, or "operator"/"operador") before partial matches.</p>
+          address, or "operator"/"operador") before partial matches; the exact id of a folded entry returns the contact it was folded into.</p>
         <h4>Related fix: ask_human in conversations</h4>
         <p>Asked from a user's conversation, <code>ask_human</code> no longer writes "needs your input" into that
           user's chat (<code>mayNotifyAskingChat</code>: only the operator's chat or an agent-loop / collaboration

@@ -215,6 +215,134 @@ describe('RelayService.send', () => {
   });
 });
 
+describe('RelayService.send — Telegram reply prompt and channel preference', () => {
+  const anaFrom = (w: World) =>
+    w.service.speaker('bot1', {
+      channelKind: 'telegram',
+      address: String(ANA_CHAT),
+      displayName: 'Ana',
+    });
+
+  test('a relay expecting a reply opens a Telegram reply to it (force_reply, placeholder)', async () => {
+    w = makeWorld();
+    seedPeople(w);
+    const op = w.service.ensureOperator('bot1')!;
+    await w.service.send({
+      botId: 'bot1',
+      from: anaFrom(w),
+      to: op,
+      text: '¿Quién soy?',
+      expectsReply: true,
+    });
+    expect(w.sent[0].opts).toEqual({
+      reply_markup: { force_reply: true, input_field_placeholder: 'Respuesta para Ana' },
+    });
+  });
+
+  test('the placeholder follows the locale and fits the 64-char Telegram limit', async () => {
+    w = makeWorld({ bots: [{ id: 'bot1', name: 'Bot', relay: { locale: 'en' } }] });
+    seedPeople(w);
+    const op = w.service.ensureOperator('bot1')!;
+    const from = { ...anaFrom(w), displayName: `Ana ${'x'.repeat(80)}` };
+    await w.service.send({ botId: 'bot1', from, to: op, text: 'Hi', expectsReply: true });
+    const placeholder = (w.sent[0].opts as any).reply_markup.input_field_placeholder as string;
+    expect(placeholder.startsWith('Reply to Ana')).toBe(true);
+    expect(placeholder.length).toBeLessThanOrEqual(64);
+  });
+
+  test('no force_reply without expectsReply, nor on answers', async () => {
+    w = makeWorld();
+    seedPeople(w);
+    const op = w.service.ensureOperator('bot1')!;
+    await w.service.send({
+      botId: 'bot1',
+      from: anaFrom(w),
+      to: op,
+      text: 'Aviso',
+      expectsReply: false,
+    });
+    const q = await w.service.send({
+      botId: 'bot1',
+      from: anaFrom(w),
+      to: op,
+      text: '¿Quién soy?',
+      expectsReply: true,
+    });
+    const opParty = w.service.speaker('bot1', {
+      channelKind: 'telegram',
+      address: String(OP_CHAT),
+      displayName: 'Op',
+    });
+    await w.service.send({
+      botId: 'bot1',
+      from: opParty,
+      to: ana(w),
+      text: 'Sos Ana',
+      expectsReply: false,
+      answering: q.record,
+    });
+    expect(w.sent.map((m) => m.opts === undefined)).toEqual([true, false, true]);
+  });
+
+  test('preferChannel is a preference: an unusable web address falls back to telegram', async () => {
+    w = makeWorld();
+    seedPeople(w);
+    const op = w.service.ensureOperator('bot1')!;
+    const res = await w.service.send({
+      botId: 'bot1',
+      from: null,
+      to: op,
+      text: 'Hola',
+      expectsReply: false,
+      preferChannel: 'web',
+    });
+    if (res.duplicate) throw new Error('unexpected duplicate');
+    expect(res.outcome).toMatchObject({ status: 'delivered', channel: 'telegram' });
+    expect(res.outcome.attempts[0]).toMatchObject({ channel: 'web', status: 'failed' });
+  });
+});
+
+describe('RelayService.botName', () => {
+  test("prefers the bot's identity name and falls back to the config name", async () => {
+    w = makeWorld({
+      bots: [
+        { id: 'bot1', name: 'AIBot' },
+        { id: 'bot2', name: 'Other' },
+      ],
+      displayName: (botId) => (botId === 'bot1' ? 'Finny' : undefined),
+    });
+    expect(w.service.botName('bot1')).toBe('Finny');
+    expect(w.service.botName('bot2')).toBe('Other');
+    expect(w.service.botName('ghost')).toBe('ghost');
+  });
+
+  test('the relay header uses the identity name', async () => {
+    w = makeWorld({ bots: [{ id: 'bot1', name: 'AIBot' }], displayName: () => 'Finny' });
+    seedPeople(w);
+    const op = w.service.ensureOperator('bot1')!;
+    const from = w.service.speaker('bot1', {
+      channelKind: 'telegram',
+      address: String(ANA_CHAT),
+      displayName: 'Ana',
+    });
+    await w.service.send({ botId: 'bot1', from, to: op, text: 'Hola', expectsReply: false });
+    expect(w.sent[0].text).toContain('📨 De Ana (vía Finny):');
+  });
+
+  test('a throwing or blank identity lookup falls back to the config name', () => {
+    w = makeWorld({
+      bots: [{ id: 'bot1', name: 'AIBot' }],
+      displayName: () => {
+        throw new Error('boom');
+      },
+    });
+    expect(w.service.botName('bot1')).toBe('AIBot');
+    w.cleanup();
+    w = makeWorld({ bots: [{ id: 'bot1', name: 'AIBot' }], displayName: () => '  ' });
+    expect(w.service.botName('bot1')).toBe('AIBot');
+  });
+});
+
 describe('RelayService.routeTelegramReply', () => {
   async function askOperator(w: World) {
     const op = w.service.ensureOperator('bot1')!;

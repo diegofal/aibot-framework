@@ -295,6 +295,7 @@ export class BotManager {
       bots: this.bots,
       sessionManager,
       userDirectory: this.userDirectory,
+      displayName: (botId) => this.soulLoaders.get(botId)?.readIdentityName() ?? undefined,
       logger,
     });
 

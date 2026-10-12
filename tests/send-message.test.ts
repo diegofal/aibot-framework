@@ -150,13 +150,52 @@ describe('send_message — delivery statuses', () => {
     );
   });
 
-  test('channel preference narrows the routes', async () => {
+  // `channel` used to restrict the routes; an agent loop that remembered
+  // "channel: web" for the operator then failed every send. It is a preference.
+  test('channel is a preference: an offline web route falls back to telegram', async () => {
     const tool = setup();
     const ana = w.directory.findByChannel('bot1', 'telegram', String(ANA_CHAT))!;
     w.directory.addChannel('bot1', ana.id, { kind: 'web', address: '4343', verified: true });
     const r = await run(tool, { recipient: 'Ana', message: 'hola', channel: 'web' });
-    expect(r.content).toStartWith('NOT delivered');
-    expect(w.sent).toEqual([]);
+    expect(r.content).toStartWith('Delivered to Ana via telegram');
+    expect(w.sent).toHaveLength(1);
+  });
+
+  test('channel web for the operator (email address): refused, then delivered via telegram', async () => {
+    const tool = setup();
+    w.service.ensureOperator('bot1');
+    const r = await run(tool, { recipient: 'operator', message: 'reporte', channel: 'web' });
+    expect(r.success).toBe(true);
+    expect(r.content).toStartWith('Delivered to Op via telegram');
+    expect(w.sent[0]).toMatchObject({ chatId: OP_CHAT });
+    const record = w.store.get('bot1', /relay (r-[0-9a-f]{8})/.exec(r.content)![1])!;
+    expect(record.delivery.attempts.map((a) => `${a.channel}:${a.status}`)).toEqual([
+      'web:failed',
+      'telegram:delivered',
+    ]);
+  });
+
+  test('a channel the contact does not have is just skipped', async () => {
+    const tool = setup();
+    const r = await run(tool, { recipient: 'Ana', message: 'hola', channel: 'whatsapp' });
+    expect(r.content).toStartWith('Delivered to Ana via telegram');
+  });
+
+  test('the old id of a merged contact still reaches it', async () => {
+    const tool = setup();
+    w.directory.register('bot1', {
+      displayName: 'Op',
+      channel: { kind: 'telegram', address: String(OP_CHAT), verified: true },
+    });
+    const web = w.directory.register('bot1', {
+      displayName: 'Op (operator)',
+      channel: { kind: 'web', address: 'op@example.test', verified: true },
+    });
+    w.directory.getById('bot1', web.id)!.firstSeen = Date.now() + 60_000; // folded, not kept
+    const op = w.service.ensureOperator('bot1')!;
+    expect(op.id).not.toBe(web.id);
+    const r = await run(tool, { recipient: web.id, message: 'hola' });
+    expect(r.content).toStartWith('Delivered to Op via telegram');
   });
 
   test('a 403 on the first instance falls through to the next; all failing → FAILED', async () => {

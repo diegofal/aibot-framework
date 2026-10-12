@@ -437,6 +437,17 @@ export class SoulLoader {
     return this.readFile('IDENTITY.md');
   }
 
+  /** The `name:` field of IDENTITY.md (the name the bot goes by), or null. */
+  readIdentityName(): string | null {
+    const raw = this.readIdentity();
+    if (!raw) return null;
+    for (const line of raw.split('\n')) {
+      const match = line.match(/^name\s*:\s*(.+)$/i);
+      if (match?.[1].trim()) return match[1].trim();
+    }
+    return null;
+  }
+
   /**
    * Read GOALS.md content
    */

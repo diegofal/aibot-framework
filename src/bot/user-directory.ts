@@ -286,10 +286,16 @@ export class UserDirectory {
    * Search contacts by displayName, alias, username, address, or contact ID.
    * If exactly one contact matches exactly (id, name, alias, username, address,
    * or — for the operator — "operator"/"operador"), only that one is returned;
-   * otherwise displayName/alias match partially. Merged entries never match.
+   * otherwise displayName/alias match partially. Merged entries never match,
+   * except by their exact id: an old id resolves to the contact it was merged into.
    */
   find(botId: string, query: string): ContactEntry[] {
     const live = this.list(botId);
+    const merged = this.cache.get(botId)?.get(query.trim());
+    if (merged && isMerged(merged)) {
+      const target = this.getById(botId, merged.id);
+      if (target && !isMerged(target)) return [target];
+    }
     const q = query.trim().toLowerCase().replace(/^@/, '');
 
     const exact = live.filter(

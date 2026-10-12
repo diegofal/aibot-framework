@@ -5,7 +5,8 @@
  * Telegram (verified channels first; each channel through every instance in
  * order — own bot first, then the fleet) → WhatsApp → web. Web is `delivered`
  * only with a live connection; otherwise the text is stored in the session
- * and the result is `queued` (nobody was notified).
+ * and the result is `queued` (nobody was notified). `options.prefer` moves one
+ * channel kind to the front without dropping the others.
  */
 import type { ContactChannel, ContactEntry } from '../bot/user-directory';
 import { webSessionUserId } from '../channel/outbound';
@@ -58,12 +59,27 @@ const errText = (err: unknown): string =>
 const bySendOrder = (a: ContactChannel, b: ContactChannel) =>
   Number(b.verified) - Number(a.verified);
 
+/** Per-delivery options (all optional; defaults keep the fixed route order). */
+export interface DeliveryOptions {
+  /**
+   * Try this channel kind first, then the normal order. A preference, not a
+   * restriction. A preferred web route only counts when someone is connected:
+   * an offline web copy is stored only as the last resort, as usual.
+   */
+  prefer?: ChannelKind;
+  /** Extra `sendMessage` options for Telegram (e.g. `reply_markup`). */
+  telegram?: Record<string, unknown>;
+}
+
+const DEFAULT_ORDER: ChannelKind[] = ['telegram', 'whatsapp', 'web'];
+
 /** Deliver `text` to a contact. Never throws. */
 export async function deliverToContact(
   botId: string,
   contact: ContactEntry,
   text: string,
-  deps: DeliveryDeps
+  deps: DeliveryDeps,
+  options: DeliveryOptions = {}
 ): Promise<DeliveryOutcome> {
   const attempts: DeliveryAttempt[] = [];
   const channelsOf = (kind: ChannelKind) =>
@@ -73,9 +89,9 @@ export async function deliverToContact(
     attempts,
   });
 
-  // 1. Telegram
-  const telegram = channelsOf('telegram');
-  if (telegram.length > 0) {
+  const viaTelegram = async (): Promise<DeliveryOutcome | undefined> => {
+    const telegram = channelsOf('telegram');
+    if (telegram.length === 0) return undefined;
     let instances: TelegramSender[] = [];
     try {
       instances = deps.telegramInstances(botId);
@@ -102,7 +118,9 @@ export async function deliverToContact(
       }
       for (const inst of instances) {
         try {
-          const sent = await inst.api.sendMessage(chatId, text);
+          const sent = options.telegram
+            ? await inst.api.sendMessage(chatId, text, options.telegram)
+            : await inst.api.sendMessage(chatId, text);
           attempts.push({ channel: 'telegram', viaBotId: inst.botId, status: 'delivered' });
           return done({
             status: 'delivered',
@@ -121,10 +139,11 @@ export async function deliverToContact(
         }
       }
     }
-  }
+    return undefined;
+  };
 
-  // 2. WhatsApp
-  if (deps.sendWhatsApp) {
+  const viaWhatsApp = async (): Promise<DeliveryOutcome | undefined> => {
+    if (!deps.sendWhatsApp) return undefined;
     for (const ch of channelsOf('whatsapp')) {
       try {
         await deps.sendWhatsApp(botId, ch.address, text);
@@ -134,38 +153,73 @@ export async function deliverToContact(
         attempts.push({ channel: 'whatsapp', status: 'failed', error: errText(err) });
       }
     }
-  }
+    return undefined;
+  };
 
-  // 3. Web — stored in the session; delivered only when someone is connected.
-  for (const ch of channelsOf('web')) {
-    if (webSessionUserId(ch.address) === undefined) {
-      // A non-numeric address maps to the shared anonymous widget session
-      // (`private:0`); writing there would show it to every widget visitor.
-      attempts.push({
-        channel: 'web',
-        status: 'failed',
-        error: `web address "${ch.address}" is not a widget session id; not stored`,
-      });
-      continue;
-    }
+  // Web — stored in the session; delivered only when someone is connected.
+  // `liveOnly` (a preferred web route ahead of the others): nothing is stored
+  // unless someone is connected, and a refused address is reported once.
+  const refusedWeb = new Set<string>();
+  const isLive = (address: string): boolean => {
     try {
-      deps.appendWebSession(botId, ch.address, text);
-    } catch (err) {
-      attempts.push({ channel: 'web', status: 'failed', error: errText(err) });
-      continue;
-    }
-    let live = false;
-    try {
-      live = deps.isWebLive?.(botId, ch.address) ?? false;
+      return deps.isWebLive?.(botId, address) ?? false;
     } catch {
-      live = false;
+      return false;
     }
-    if (live) {
-      attempts.push({ channel: 'web', status: 'delivered' });
-      return done({ status: 'delivered', channel: 'web', address: ch.address });
+  };
+  const viaWeb = async (liveOnly: boolean): Promise<DeliveryOutcome | undefined> => {
+    for (const ch of channelsOf('web')) {
+      if (webSessionUserId(ch.address) === undefined) {
+        // A non-numeric address maps to the shared anonymous widget session
+        // (`private:0`); writing there would show it to every widget visitor.
+        if (refusedWeb.has(ch.address)) continue;
+        refusedWeb.add(ch.address);
+        attempts.push({
+          channel: 'web',
+          status: 'failed',
+          error: `web address "${ch.address}" is not a widget session id; not stored`,
+        });
+        continue;
+      }
+      if (liveOnly && !isLive(ch.address)) continue;
+      try {
+        deps.appendWebSession(botId, ch.address, text);
+      } catch (err) {
+        attempts.push({ channel: 'web', status: 'failed', error: errText(err) });
+        continue;
+      }
+      if (liveOnly || isLive(ch.address)) {
+        attempts.push({ channel: 'web', status: 'delivered' });
+        return done({ status: 'delivered', channel: 'web', address: ch.address });
+      }
+      attempts.push({ channel: 'web', status: 'queued', error: WEB_QUEUED_NOTE });
+      return done({
+        status: 'queued',
+        channel: 'web',
+        address: ch.address,
+        error: WEB_QUEUED_NOTE,
+      });
     }
-    attempts.push({ channel: 'web', status: 'queued', error: WEB_QUEUED_NOTE });
-    return done({ status: 'queued', channel: 'web', address: ch.address, error: WEB_QUEUED_NOTE });
+    return undefined;
+  };
+
+  const stage = (kind: ChannelKind, preferred: boolean) => {
+    if (kind === 'telegram') return viaTelegram();
+    if (kind === 'whatsapp') return viaWhatsApp();
+    if (kind === 'web') return viaWeb(preferred);
+    return Promise.resolve(undefined);
+  };
+
+  const prefer = options.prefer;
+  if (prefer && DEFAULT_ORDER.includes(prefer)) {
+    const first = await stage(prefer, true);
+    if (first) return first;
+  }
+  for (const kind of DEFAULT_ORDER) {
+    // A preferred web route was only tried live; it stays last as the stored fallback.
+    if (kind === prefer && kind !== 'web') continue;
+    const outcome = await stage(kind, false);
+    if (outcome) return outcome;
   }
 
   if (attempts.length === 0) {

@@ -29,11 +29,19 @@ export interface SentTg {
   chatId: number | string;
   text: string;
   messageId: number;
+  /** `sendMessage` options, when any were passed. */
+  opts?: unknown;
 }
 
 export interface FakeTelegram {
   botId: string;
-  api: { sendMessage(chatId: number | string, text: string): Promise<{ message_id: number }> };
+  api: {
+    sendMessage(
+      chatId: number | string,
+      text: string,
+      opts?: unknown
+    ): Promise<{ message_id: number }>;
+  };
 }
 
 let nextMessageId = 500;
@@ -46,11 +54,11 @@ export function fakeTelegram(
   return {
     botId,
     api: {
-      async sendMessage(chatId, text) {
+      async sendMessage(chatId, text, opts) {
         const err = fail?.(chatId);
         if (err) throw err;
         const messageId = nextMessageId++;
-        sent.push({ via: botId, chatId, text, messageId });
+        sent.push({ via: botId, chatId, text, messageId, ...(opts !== undefined ? { opts } : {}) });
         return { message_id: messageId };
       },
     },
@@ -82,6 +90,8 @@ export function makeWorld(
     bots?: RelayServiceConfigView['bots'];
     instances?: string[];
     operator?: RelayServiceConfigView['operator'];
+    /** The bot's soul identity name (`RelayServiceDeps.displayName`). */
+    displayName?: (botId: string) => string | undefined;
   } = {}
 ): World {
   const dir = mkdtempSync(join(tmpdir(), 'relay-world-'));
@@ -109,6 +119,7 @@ export function makeWorld(
     },
     config: () => config,
     appendToSession: (botId, party, text) => sessions.push({ botId, party, text }),
+    ...(opts.displayName ? { displayName: opts.displayName } : {}),
     logger: silentLogger,
   });
   return {

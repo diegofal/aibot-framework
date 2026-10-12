@@ -52,6 +52,8 @@ export interface RelayWiringDeps {
   bots: ReadonlyMap<string, TelegramApiLike>;
   sessionManager: SessionManager;
   userDirectory: UserDirectory;
+  /** The bot's identity name (soul IDENTITY.md), used in relay headers. */
+  displayName?: (botId: string) => string | undefined;
   logger: Logger;
 }
 
@@ -61,6 +63,7 @@ export function createRelayService(deps: RelayWiringDeps): RelayService {
     store: new RelayStore(deps.dataDir, logger),
     directory: deps.userDirectory,
     config: deps.config,
+    ...(deps.displayName ? { displayName: deps.displayName } : {}),
     logger,
     delivery: {
       telegramInstances: (botId) => telegramInstancesFor(deps.bots, botId),

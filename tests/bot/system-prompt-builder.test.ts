@@ -310,6 +310,38 @@ describe('SystemPromptBuilder', () => {
       );
     });
 
+    test('says who is speaking, early, in conversation mode only', () => {
+      const builder = new SystemPromptBuilder(createMockCtx(), createMockToolRegistry([]));
+      const base = { botId: 'testbot', botConfig, isGroup: false };
+      const speaker = {
+        displayName: 'Op',
+        channelKind: 'telegram' as const,
+        address: '9001',
+        isOperator: true,
+      };
+      const prompt = builder.build({
+        ...base,
+        mode: 'conversation',
+        speaker,
+        relayContext: '## Messages waiting for this person',
+      });
+      expect(prompt).toContain('## Who you are talking with');
+      expect(prompt).toContain('Op — your operator (telegram, identity verified by the channel).');
+      // Before the tool blocks and the relay sections, right after the date.
+      expect(prompt.indexOf('## Who you are talking with')).toBeGreaterThan(
+        prompt.indexOf('Today is')
+      );
+      expect(prompt.indexOf('## Who you are talking with')).toBeLessThan(
+        prompt.indexOf('## Messages waiting for this person')
+      );
+      expect(builder.build({ ...base, mode: 'collaboration', speaker })).not.toContain(
+        'Who you are talking with'
+      );
+      expect(builder.build({ ...base, mode: 'conversation' })).not.toContain(
+        'Who you are talking with'
+      );
+    });
+
     test('renders core memory for the viewer (person, or null = shared only)', () => {
       const scopes: unknown[] = [];
       const ctx = createMockCtx();

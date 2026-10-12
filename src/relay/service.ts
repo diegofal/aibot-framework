@@ -14,6 +14,7 @@ import {
   formatAnswerForRequester,
   formatAnswerNotDelivered,
   formatRelayForRecipient,
+  formatReplyPlaceholder,
   relayDedupeKey,
 } from './format';
 import { renderRelaySections } from './prompt';
@@ -36,6 +37,8 @@ export interface RelayServiceDeps {
   config: () => RelayServiceConfigView;
   /** Append an assistant line to `party`'s private session with `botId`. */
   appendToSession?: (botId: string, party: RelayParty, text: string) => void;
+  /** The bot's identity name (soul IDENTITY.md); the config `name` is the fallback. */
+  displayName?: (botId: string) => string | undefined;
   logger: Logger;
 }
 
@@ -48,6 +51,8 @@ export interface RelaySendInput {
   expectsReply: boolean;
   /** The relay this message answers: formatted as an answer, original marked answered. */
   answering?: RelayRecord;
+  /** Channel kind to try first (`send_message` `channel`): a preference, not a restriction. */
+  preferChannel?: ChannelKind;
 }
 
 export type RelaySendResult =
@@ -71,8 +76,15 @@ export class RelayService {
     return resolveRelayConfig(this.deps.config().bots.find((b) => b.id === botId));
   }
 
+  /** The name the bot goes by: its identity name, else the config name, else the id. */
   botName(botId: string): string {
-    return this.deps.config().bots.find((b) => b.id === botId)?.name ?? botId;
+    let identity: string | undefined;
+    try {
+      identity = this.deps.displayName?.(botId)?.trim();
+    } catch {
+      identity = undefined;
+    }
+    return identity || (this.deps.config().bots.find((b) => b.id === botId)?.name ?? botId);
   }
 
   /** Seed the configured operator into `botId`'s directory. Never throws. */
@@ -174,7 +186,7 @@ export class RelayService {
 
   /** Dedupe → record → deliver → update → answer bookkeeping → session transcript. */
   async send(input: RelaySendInput): Promise<RelaySendResult> {
-    const { botId, from, to, text, expectsReply, answering } = input;
+    const { botId, from, to, text, expectsReply, answering, preferChannel } = input;
     const { store, logger } = this.deps;
     // An answer is keyed by the relay it answers: "sí" to two questions is two answers.
     const target = answering ? `${to.id}#${answering.id}` : to.id;
@@ -201,7 +213,21 @@ export class RelayService {
       ? formatAnswerForRequester(text, from?.displayName ?? botName, answering, botName, locale)
       : formatRelayForRecipient({ from, text, expectsReply }, botName, locale);
 
-    const outcome = await deliverToContact(botId, to, delivered, this.deps.delivery);
+    // A relay waiting for an answer opens Telegram's reply box on it, so the
+    // answer comes back as a reply-to and is routed without an LLM turn.
+    const outcome = await deliverToContact(botId, to, delivered, this.deps.delivery, {
+      ...(preferChannel ? { prefer: preferChannel } : {}),
+      ...(!answering && expectsReply && from
+        ? {
+            telegram: {
+              reply_markup: {
+                force_reply: true,
+                input_field_placeholder: formatReplyPlaceholder(from.displayName, locale),
+              },
+            },
+          }
+        : {}),
+    });
     const reached: RelayParty = {
       ...toParty,
       ...(outcome.channel ? { channelKind: outcome.channel } : {}),

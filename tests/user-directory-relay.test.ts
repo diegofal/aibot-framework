@@ -235,6 +235,19 @@ describe('UserDirectory aliases and find()', () => {
     expect(ud.find('bot1', 'an')).toHaveLength(3);
   });
 
+  test('the exact id of a merged entry finds the contact it was merged into', () => {
+    const ud = new UserDirectory(tmpDir, silentLogger);
+    // Telegram "Op" is the earliest owner, so the web entry is folded into it.
+    ud.track('bot1', inbound({ sender: { id: '7007', firstName: 'Op' }, chatId: '7007' }));
+    const web = ud.register('bot1', {
+      displayName: 'Op (operator)',
+      channel: { kind: 'web', address: 'op@example.test', verified: false },
+    });
+    const op = ud.ensureOperator('bot1', OP);
+    expect(op.id).not.toBe(web.id);
+    expect(ud.find('bot1', web.id).map((e) => e.id)).toEqual([op.id]);
+  });
+
   test('two exact matches fall back to the partial result set', () => {
     const ud = new UserDirectory(tmpDir, silentLogger);
     ud.track('bot1', inbound());

@@ -383,6 +383,7 @@ export class ConversationPipeline {
         permissionMode,
         previousSession,
         relayContext,
+        speaker: requester,
       });
 
       // In groups, prefix messages with sender name
@@ -1099,6 +1100,7 @@ export class ConversationPipeline {
         permissionMode,
         previousSession,
         relayContext,
+        speaker: requester,
       });
 
       // In groups, prefix messages with sender name

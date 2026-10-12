@@ -1761,7 +1761,7 @@ describe('ConversationPipeline', () => {
       (mockBotContext as any).relayService = {
         speaker: (botId: string, s: Record<string, unknown>) => {
           speakers.push([botId, s]);
-          return { ...s, contactId: 'c-1', isOperator: false };
+          return { ...s, contactId: 'c-1', isOperator: s.address === '9001' };
         },
         promptSections: (botId: string, speaker: unknown) => {
           sections.push([botId, speaker]);
@@ -1792,6 +1792,42 @@ describe('ConversationPipeline', () => {
       expect(sections).toEqual([['test-bot', requester]]);
       const buildOpts = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
       expect(buildOpts.relayContext).toBe("## Messages waiting for this person's answer");
+    });
+
+    // Live bug: in a private chat the model was never told who was speaking,
+    // and greeted the operator as the person whose relay came last.
+    it('Telegram private: the speaker (not the operator) reaches the system prompt', async () => {
+      await pipeline.handleConversation(
+        createMockContext(),
+        createMockBotConfig(),
+        'user:789',
+        'hola'
+      );
+      const buildOpts = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
+      expect(buildOpts.speaker).toMatchObject({
+        displayName: 'TestUser',
+        channelKind: 'telegram',
+        address: '789',
+        isOperator: false,
+      });
+    });
+
+    it('Telegram private: the operator is the speaker after a relay was delivered to him', async () => {
+      await pipeline.handleConversation(
+        createMockContext({
+          from: { id: 9001, first_name: 'Op', is_bot: false },
+          chat: { id: 9001, type: 'private' },
+        } as any),
+        createMockBotConfig(),
+        'user:9001',
+        'decile que sí'
+      );
+      const buildOpts = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
+      expect(buildOpts.speaker).toMatchObject({
+        displayName: 'Op',
+        address: '9001',
+        isOperator: true,
+      });
     });
 
     it('Telegram: a bot sender has no requester', async () => {
@@ -1827,6 +1863,11 @@ describe('ConversationPipeline', () => {
       });
       const buildOpts = (mockSystemPromptBuilder.build as jest.Mock).mock.calls[0][0];
       expect(buildOpts.relayContext).toBe("## Messages waiting for this person's answer");
+      expect(buildOpts.speaker).toMatchObject({
+        displayName: 'Dora',
+        channelKind: 'web',
+        isOperator: false,
+      });
     });
   });
 });

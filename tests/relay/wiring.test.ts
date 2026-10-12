@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { relaySessionKey, telegramInstancesFor } from '../../src/relay/wiring';
+import { UserDirectory } from '../../src/bot/user-directory';
+import { createRelayService, relaySessionKey, telegramInstancesFor } from '../../src/relay/wiring';
 import { SessionManager } from '../../src/session';
 import { silentLogger } from './fixture';
 
@@ -42,5 +43,29 @@ describe('relaySessionKey', () => {
   test('a non-numeric address has no private session (never the shared bucket)', () => {
     const sm = { serializeKey: () => 'bot:bot1:private:0' } as never;
     expect(relaySessionKey(sm, 'bot1', 'op@example.test')).toBeUndefined();
+  });
+});
+
+describe('createRelayService', () => {
+  test('names the bot by its identity name, falling back to the config name', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'relay-wiring-'));
+    dirs.push(dir);
+    const sm = new SessionManager({ dataDir: dir } as never, silentLogger);
+    const service = createRelayService({
+      config: () => ({
+        bots: [
+          { id: 'finny-test', name: 'AIBot' },
+          { id: 'plain', name: 'Plain' },
+        ],
+      }),
+      dataDir: dir,
+      bots: new Map(),
+      sessionManager: sm,
+      userDirectory: new UserDirectory(dir, silentLogger),
+      displayName: (botId) => (botId === 'finny-test' ? 'Finny' : undefined),
+      logger: silentLogger,
+    });
+    expect(service.botName('finny-test')).toBe('Finny');
+    expect(service.botName('plain')).toBe('Plain');
   });
 });

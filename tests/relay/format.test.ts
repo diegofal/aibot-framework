@@ -4,6 +4,7 @@ import {
   formatAnswerForRequester,
   formatAnswerNotDelivered,
   formatRelayForRecipient,
+  formatReplyPlaceholder,
   relayDedupeKey,
 } from '../../src/relay/format';
 import type { RelayRecord } from '../../src/relay/types';
@@ -27,6 +28,19 @@ const record = (overrides: Partial<RelayRecord> = {}): RelayRecord => ({
   delivery: { status: 'delivered', attempts: [] },
   dedupeKey: 'k',
   ...overrides,
+});
+
+describe('formatReplyPlaceholder', () => {
+  test('names the requester in the locale', () => {
+    expect(formatReplyPlaceholder('Ana')).toBe('Respuesta para Ana');
+    expect(formatReplyPlaceholder('Ana', 'en')).toBe('Reply to Ana');
+  });
+
+  test('is cut to 64 chars with an ellipsis', () => {
+    const out = formatReplyPlaceholder('A'.repeat(100), 'en');
+    expect(out).toHaveLength(64);
+    expect(out.endsWith('…')).toBe(true);
+  });
 });
 
 describe('formatRelayForRecipient', () => {

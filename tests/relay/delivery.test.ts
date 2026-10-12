@@ -14,17 +14,17 @@ const silentLogger = {
   child: () => silentLogger,
 } as any;
 
-type Sent = { via: string; chatId: number | string; text: string };
+type Sent = { via: string; chatId: number | string; text: string; opts?: unknown };
 
 function tgInstance(botId: string, sent: Sent[], fail?: (chatId: number | string) => Error | null) {
   let nextId = 100;
   return {
     botId,
     api: {
-      async sendMessage(chatId: number | string, text: string) {
+      async sendMessage(chatId: number | string, text: string, opts?: unknown) {
         const err = fail?.(chatId);
         if (err) throw err;
-        sent.push({ via: botId, chatId, text });
+        sent.push({ via: botId, chatId, text, ...(opts !== undefined ? { opts } : {}) });
         return { message_id: nextId++ };
       },
     },
@@ -333,6 +333,147 @@ describe('deliverToContact', () => {
       d
     );
     expect(out.status).toBe('failed');
+  });
+});
+
+describe('deliverToContact options', () => {
+  test('telegram options are passed to sendMessage', async () => {
+    const sent: Sent[] = [];
+    const reply_markup = { force_reply: true, input_field_placeholder: 'Respuesta para Ana' };
+    const out = await deliverToContact(
+      'bot1',
+      contact([{ kind: 'telegram', address: '1001', verified: true }]),
+      'hola',
+      deps({ telegramInstances: () => [tgInstance('bot1', sent)] }),
+      { telegram: { reply_markup } }
+    );
+    expect(out.status).toBe('delivered');
+    expect(sent[0].opts).toEqual({ reply_markup });
+  });
+
+  test('without telegram options sendMessage gets none', async () => {
+    const sent: Sent[] = [];
+    await deliverToContact(
+      'bot1',
+      contact([{ kind: 'telegram', address: '1001', verified: true }]),
+      'hola',
+      deps({ telegramInstances: () => [tgInstance('bot1', sent)] })
+    );
+    expect(sent[0].opts).toBeUndefined();
+  });
+
+  test('a preferred channel is tried first', async () => {
+    const sent: Sent[] = [];
+    const wa: string[] = [];
+    const out = await deliverToContact(
+      'bot1',
+      contact([
+        { kind: 'telegram', address: '1001', verified: true },
+        { kind: 'whatsapp', address: '+5400000001', verified: true },
+      ]),
+      'hola',
+      deps({
+        telegramInstances: () => [tgInstance('bot1', sent)],
+        sendWhatsApp: async (_b, address) => {
+          wa.push(address);
+        },
+      }),
+      { prefer: 'whatsapp' }
+    );
+    expect(out).toMatchObject({ status: 'delivered', channel: 'whatsapp' });
+    expect(sent).toHaveLength(0);
+  });
+
+  test('a failing preferred channel falls back to the normal order', async () => {
+    const sent: Sent[] = [];
+    const out = await deliverToContact(
+      'bot1',
+      contact([
+        { kind: 'telegram', address: '1001', verified: true },
+        { kind: 'whatsapp', address: '+5400000001', verified: true },
+      ]),
+      'hola',
+      deps({
+        telegramInstances: () => [tgInstance('bot1', sent)],
+        sendWhatsApp: async () => {
+          throw new Error('wa down');
+        },
+      }),
+      { prefer: 'whatsapp' }
+    );
+    expect(out).toMatchObject({ status: 'delivered', channel: 'telegram' });
+    expect(out.attempts.map((a) => `${a.channel}:${a.status}`)).toEqual([
+      'whatsapp:failed',
+      'telegram:delivered',
+    ]);
+  });
+
+  test('preferred web with a live connection wins over telegram', async () => {
+    const sent: Sent[] = [];
+    const d = deps({ telegramInstances: () => [tgInstance('bot1', sent)], isWebLive: () => true });
+    const out = await deliverToContact(
+      'bot1',
+      contact([
+        { kind: 'telegram', address: '1001', verified: true },
+        { kind: 'web', address: '42', verified: true },
+      ]),
+      'hola',
+      d,
+      { prefer: 'web' }
+    );
+    expect(out).toMatchObject({ status: 'delivered', channel: 'web' });
+    expect(sent).toHaveLength(0);
+  });
+
+  test('preferred web without a live connection does not store; telegram delivers', async () => {
+    const sent: Sent[] = [];
+    const d = deps({ telegramInstances: () => [tgInstance('bot1', sent)], isWebLive: () => false });
+    const out = await deliverToContact(
+      'bot1',
+      contact([
+        { kind: 'telegram', address: '1001', verified: true },
+        { kind: 'web', address: '42', verified: true },
+      ]),
+      'hola',
+      d,
+      { prefer: 'web' }
+    );
+    expect(out).toMatchObject({ status: 'delivered', channel: 'telegram' });
+    expect(d.web).toHaveLength(0);
+  });
+
+  test('preferred web on a non-session address (an email) is refused, telegram delivers', async () => {
+    const sent: Sent[] = [];
+    const d = deps({ telegramInstances: () => [tgInstance('bot1', sent)], isWebLive: () => true });
+    const out = await deliverToContact(
+      'bot1',
+      contact([
+        { kind: 'telegram', address: '9001', verified: true },
+        { kind: 'web', address: 'op@example.test', verified: false },
+      ]),
+      'hola',
+      d,
+      { prefer: 'web' }
+    );
+    expect(out).toMatchObject({ status: 'delivered', channel: 'telegram', address: '9001' });
+    expect(out.attempts[0]).toMatchObject({ channel: 'web', status: 'failed' });
+    expect(d.web).toHaveLength(0);
+  });
+
+  test('preferred web offline and telegram unreachable: still stored as queued', async () => {
+    const d = deps({ isWebLive: () => false });
+    const out = await deliverToContact(
+      'bot1',
+      contact([
+        { kind: 'telegram', address: '1001', verified: true },
+        { kind: 'web', address: '42', verified: true },
+      ]),
+      'hola',
+      d,
+      { prefer: 'web' }
+    );
+    expect(out).toMatchObject({ status: 'queued', channel: 'web' });
+    expect(d.web).toHaveLength(1);
   });
 });
 

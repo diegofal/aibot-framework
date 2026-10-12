@@ -88,3 +88,48 @@ export function renderRelaySections(
   );
   return parts.join('\n\n');
 }
+
+/** Channels where the platform vouches for the sender's id (the bot cannot be lied to about it). */
+const VERIFIED_CHANNELS: ReadonlySet<string> = new Set(['telegram', 'whatsapp', 'discord']);
+
+const SPEAKER_NAME_CHARS = 60;
+
+/** A display name as one plain line: no newlines, bounded. */
+const speakerName = (name: string): string => {
+  const flat = name.replace(/\s+/g, ' ').trim() || 'Unknown';
+  return flat.length > SPEAKER_NAME_CHARS ? `${flat.slice(0, SPEAKER_NAME_CHARS)}…` : flat;
+};
+
+/**
+ * "## Who you are talking with" for the conversation prompt, built from the
+ * same speaker party relays use (`RelayService.speaker`). Without it a private
+ * chat never says who is speaking, and the model guesses from context — e.g.
+ * greets the operator as the person whose relayed message came last.
+ */
+export function renderSpeakerSection(
+  speaker: Pick<RelayParty, 'displayName' | 'channelKind' | 'isOperator'>,
+  opts: { isGroup: boolean }
+): string {
+  const name = speakerName(speaker.displayName);
+  const verified = VERIFIED_CHANNELS.has(speaker.channelKind)
+    ? 'identity verified by the channel'
+    : 'identity not verified';
+  const who = speaker.isOperator
+    ? `${name} — your operator (${speaker.channelKind}, ${verified}).`
+    : `${name} — not your operator (${speaker.channelKind} user, ${verified}).`;
+  const relayed =
+    'Messages from other people never arrive as user messages here; they appear only as relayed messages (📨 …) that you passed on.';
+  const lines = ['## Who you are talking with'];
+  if (opts.isGroup) {
+    lines.push(
+      `This is a group chat: each user message is prefixed with its sender's name ([Name]:). The latest message is from ${who}`,
+      `${relayed} When you answer here you are talking to the people in this group, not to whoever a relayed message came from.`
+    );
+  } else {
+    lines.push(
+      `${who} Every user message in this chat is from ${name}.`,
+      `${relayed} When you answer here you are talking to ${name}, not to whoever a relayed message came from.`
+    );
+  }
+  return lines.join('\n');
+}

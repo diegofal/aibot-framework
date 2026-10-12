@@ -4,6 +4,8 @@ import { localDateStr } from '../date-utils';
 import { HUMANIZER_PROMPT } from '../humanizer-prompt';
 import type { KarmaService } from '../karma/service';
 import { type MemoryViewer, memoryScope } from '../memory/viewer';
+import { renderSpeakerSection } from '../relay/prompt';
+import type { RelayParty } from '../relay/types';
 import type { CustomizationService } from '../tenant/customization';
 import { ENVELOPE_PROMPT_NOTE } from './message-envelope';
 import { type PermissionMode, buildSensitiveActionProtocol } from './tool-permissions';
@@ -28,6 +30,11 @@ export interface SystemPromptOptions {
   previousSession?: string;
   /** Relays waiting on / requested by the current speaker (relay/prompt.ts), conversation mode only */
   relayContext?: string;
+  /**
+   * The person sending this turn (RelayService.speaker), conversation mode only:
+   * rendered as "## Who you are talking with" right after the date.
+   */
+  speaker?: RelayParty;
 }
 
 export class SystemPromptBuilder {
@@ -64,6 +71,9 @@ export class SystemPromptBuilder {
     prompt += `\n\nToday is ${localDateStr(now)} (${weekday}). Anything dated earlier in your memory happened then, not now.`;
     if (mode === 'conversation') {
       prompt += ` ${ENVELOPE_PROMPT_NOTE}`;
+      if (options.speaker) {
+        prompt += `\n\n${renderSpeakerSection(options.speaker, { isGroup })}`;
+      }
     }
 
     // Tenant customization overlay (identity, knowledge, goals, rules)

@@ -17,6 +17,7 @@ const STRINGS: Record<
   {
     header: (from: string, bot: string) => string;
     replyFooter: (from: string) => string;
+    replyPlaceholder: (from: string) => string;
     answerHeader: (answerer: string, bot: string, quote: string) => string;
     ack: (name: string) => string;
     answerQueued: (name: string) => string;
@@ -26,6 +27,7 @@ const STRINGS: Record<
   es: {
     header: (from, bot) => `📨 De ${from} (vía ${bot}):`,
     replyFooter: (from) => `↩️ Respondé a este mensaje y se lo paso a ${from}.`,
+    replyPlaceholder: (from) => `Respuesta para ${from}`,
     answerHeader: (answerer, bot, quote) => `↩️ Respuesta de ${answerer} (vía ${bot}) a: «${quote}»`,
     ack: (name) => `✅ Se lo pasé a ${name}.`,
     answerQueued: (name) =>
@@ -35,6 +37,7 @@ const STRINGS: Record<
   en: {
     header: (from, bot) => `📨 From ${from} (via ${bot}):`,
     replyFooter: (from) => `↩️ Reply to this message and I'll pass it to ${from}.`,
+    replyPlaceholder: (from) => `Reply to ${from}`,
     answerHeader: (answerer, bot, quote) => `↩️ Answer from ${answerer} (via ${bot}) to: «${quote}»`,
     ack: (name) => `✅ Passed to ${name}.`,
     answerQueued: (name) =>
@@ -58,6 +61,23 @@ export function formatRelayForRecipient(
   const parts = [s.header(from, botName), record.text];
   if (record.expectsReply) parts.push(s.replyFooter(from));
   return parts.join('\n\n');
+}
+
+/** Telegram's limit for `input_field_placeholder`. */
+export const REPLY_PLACEHOLDER_MAX_CHARS = 64;
+
+/**
+ * Placeholder of the reply box Telegram opens on a relay that expects an
+ * answer (`force_reply`): "Respuesta para Ana" / "Reply to Ana", ≤ 64 chars.
+ */
+export function formatReplyPlaceholder(
+  from: string,
+  locale: RelayLocale = DEFAULT_RELAY_LOCALE
+): string {
+  const text = STRINGS[locale].replyPlaceholder(from.trim());
+  return text.length > REPLY_PLACEHOLDER_MAX_CHARS
+    ? `${text.slice(0, REPLY_PLACEHOLDER_MAX_CHARS - 1)}…`
+    : text;
 }
 
 /** The text the requester receives when the answer comes back. */

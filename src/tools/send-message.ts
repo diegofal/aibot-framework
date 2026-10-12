@@ -19,6 +19,9 @@ export interface SendMessageDeps {
   relays: RelayService;
 }
 
+/** `channel` values that name a route `deliverToContact` can put first. */
+const PREFERABLE_CHANNELS: readonly ChannelKind[] = ['telegram', 'whatsapp', 'web'];
+
 function formatContact(e: ContactEntry): string {
   const channels = e.channels.map((c) => `${c.kind}:${c.address}`).join(', ');
   return `• ${e.displayName} (id: ${e.id}, channels: ${channels})`;
@@ -75,7 +78,7 @@ export function createSendMessageTool(deps: SendMessageDeps): Tool {
               type: 'string',
               enum: ['telegram', 'whatsapp', 'web', 'auto'],
               description:
-                'Restrict delivery to one channel. "auto" (default) tries Telegram, WhatsApp, then web.',
+                'Channel to try first; a preference, not a restriction: if it cannot reach the person, the normal order (Telegram, WhatsApp, then web) follows. "auto" (default) = normal order.',
             },
             register: {
               type: 'object',
@@ -180,16 +183,10 @@ export function createSendMessageTool(deps: SendMessageDeps): Tool {
         contact = matches[0];
       }
 
-      if (channelPref !== 'auto') {
-        const channels = contact.channels.filter((c) => c.kind === channelPref);
-        if (channels.length === 0) {
-          return {
-            success: false,
-            content: `Contact "${contact.displayName}" has no ${channelPref} channel.`,
-          };
-        }
-        contact = { ...contact, channels };
-      }
+      // A preference, not a restriction: tried first, then the normal order.
+      const preferChannel = PREFERABLE_CHANNELS.includes(channelPref as ChannelKind)
+        ? (channelPref as ChannelKind)
+        : undefined;
 
       // --- Sender and policy ---
       const from = settings.enabled ? requester : null;
@@ -207,6 +204,7 @@ export function createSendMessageTool(deps: SendMessageDeps): Tool {
         text: message,
         expectsReply,
         answering,
+        ...(preferChannel ? { preferChannel } : {}),
       });
       const name = contact.displayName;
       const { record } = result;

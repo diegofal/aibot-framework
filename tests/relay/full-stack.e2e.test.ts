@@ -32,7 +32,10 @@ import { SessionManager } from '../../src/session';
 import type { ToolResult } from '../../src/tools/types';
 
 const BOT_ID = 'finny-test';
+/** The soul identity name (IDENTITY.md); what relay headers must show. */
 const BOT_NAME = 'Finny';
+/** The config `name`, which used to leak into headers ("vía AIBot"). */
+const CONFIG_NAME = 'AIBot';
 const OTHER_BOT_ID = 'otto-test';
 const OP_ID = 9001;
 const ANA_ID = 1001;
@@ -268,7 +271,7 @@ async function makeHarness(
     JSON.stringify([
       {
         id: BOT_ID,
-        name: BOT_NAME,
+        name: CONFIG_NAME,
         token: '',
         skills: [],
         soulDir: join(data, 'soul', BOT_ID),
@@ -303,6 +306,11 @@ async function makeHarness(
     undefined,
     configPath
   );
+
+  // The bot's identity lives in its soul, as on a live install.
+  const soulDir = join(data, 'soul', BOT_ID);
+  mkdirSync(soulDir, { recursive: true });
+  writeFileSync(join(soulDir, 'IDENTITY.md'), `name: ${BOT_NAME}\nemoji: 🐟\n`);
 
   // startBot with an empty token: headless start, operator seeded in the directory.
   const botConfig = must(config.bots.find((b) => b.id === BOT_ID));
@@ -430,6 +438,13 @@ describe('relay full stack: Ana → Op → Ana (scenarios 1–3)', () => {
     expect(text).toContain('¿Quién es Ana para vos?');
     expect(text).toContain('↩️ Respondé a este mensaje y se lo paso a Ana.');
     expect(toOp[0].via).toBe(BOT_ID);
+    // Telegram opens a reply to the relay, so Op's answer takes the reply-to path.
+    expect(toOp[0].payload.reply_markup).toEqual({
+      force_reply: true,
+      input_field_placeholder: 'Respuesta para Ana',
+    });
+    // Ana's own reply in her chat carries no reply prompt.
+    expect(h.sentTo(ANA_ID).every((c) => c.payload.reply_markup === undefined)).toBe(true);
 
     // The model was told the truth.
     const call = h.llm.conversationCalls[0];
@@ -477,6 +492,27 @@ describe('relay full stack: Ana → Op → Ana (scenarios 1–3)', () => {
     const anaHistory = h.history(ANA_ID).map((m) => m.content);
     expect(anaHistory.some((c) => c.includes('Es mi pareja'))).toBe(true);
     expect(h.sessions.getFullHistory(PRIVATE_0)).toHaveLength(0);
+  });
+
+  // Live bug: Op typed his answer as a plain message (no reply-to) and the bot
+  // answered him "Hola Ana, Finny acá…": nothing told the model who was speaking.
+  test('2b. Op answers in free text: his turn’s prompt says the speaker is Op, the operator', async () => {
+    await anaAsksOp();
+    h.llm.turns.push({ tools: [], reply: 'Anotado.' });
+    await h.send(OP, 'Es mi pareja');
+
+    const call = must(h.llm.conversationCalls.at(-1));
+    expect(call.lastUser).toContain('Es mi pareja');
+    expect(call.system).toContain('## Who you are talking with');
+    expect(call.system).toContain(
+      'Op — your operator (telegram, identity verified by the channel). Every user message in this chat is from Op.'
+    );
+    expect(call.system).toContain(
+      'you are talking to Op, not to whoever a relayed message came from'
+    );
+    expect(call.system).not.toContain('Ana — not your operator');
+    // The relay is still listed as waiting on Op's answer, closable with replyTo.
+    expect(call.system).toContain("## Messages waiting for this person's answer");
   });
 
   test('3. Ana’s next turn: the prompt lists her relay as answered with the answer', async () => {
