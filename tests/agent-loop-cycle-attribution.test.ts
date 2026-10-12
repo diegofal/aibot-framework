@@ -103,7 +103,7 @@ function makeLoop(
     { getDefinitionsForBot: () => [], getDefinitionsByCategories: () => [] } as any
   );
   (loop as any).scheduler.syncSchedules();
-  return { loop, queries, goalWrites };
+  return { loop, queries, goalWrites, ctx };
 }
 
 function cycleRows(): any[] {
@@ -186,6 +186,24 @@ describe('agent-loop cycle attribution', () => {
     const { loop } = makeLoop(JSON.stringify({ reasoning: 'wait', plan: [], priority: 'none' }));
     await loop.runOne('bot1');
     expect(cycleRows()[0]).toMatchObject({ status: 'idle', plan: [], toolCalls: 0 });
+  });
+
+  test('the agent:idle event carries the cycle id and a Why with the planner reasoning', async () => {
+    const { loop, ctx } = makeLoop(
+      JSON.stringify({ reasoning: 'Waiting for feedback.', plan: [], priority: 'none' })
+    );
+    await loop.runOne('bot1');
+    const idle = ctx.activityStream.publish.mock.calls
+      .map((c: any[]) => c[0])
+      .find((e: any) => e.type === 'agent:idle');
+    const cycleId = cycleRows()[0].cycleId;
+    expect(idle.data.reasoning).toBe('Waiting for feedback.');
+    expect(idle.data.cycleId).toBe(cycleId);
+    expect(idle.data.why).toMatchObject({
+      what: 'Idle cycle',
+      cycle: { id: cycleId, botId: 'bot1' },
+      reason: { text: 'Waiting for feedback.', source: 'Planner' },
+    });
   });
 });
 

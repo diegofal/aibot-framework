@@ -39,6 +39,8 @@ export function readInboxAsks(baseDir: string, botId: string): AskDetail[] {
       inboxStatus: c.inboxStatus ?? null,
       questionChars: question?.content?.length ?? 0,
       answeredAt: answer?.createdAt ?? null,
+      ...(c.cycleId ? { cycleId: c.cycleId } : {}),
+      ...(c.goalId ? { goalId: c.goalId } : {}),
     });
   }
   return out;

@@ -8132,6 +8132,27 @@ a.gd-row-name:hover {
   color: var(--text-dim);
   font-size: var(--fs-sm);
 }
+.fleet-tick > .why {
+  grid-column: 2 / -1;
+  margin: 0 0 var(--s1);
+}
+.presence-why .why {
+  margin: var(--s1) 0 0;
+}
+.home-tl-cycle {
+  border-bottom: 1px solid var(--border);
+}
+.home-tl-cycle > .home-tl-row {
+  border-bottom: none;
+}
+.home-tl-cycle > .why {
+  margin: 0 0 var(--s1) 50px;
+}
+.home-tl-cycle-rows {
+  margin-left: 50px;
+  padding-left: var(--s2);
+  border-left: 2px solid var(--border);
+}
 .why-open-cycle {
   margin-left: var(--s1);
   padding: 0 var(--s2);

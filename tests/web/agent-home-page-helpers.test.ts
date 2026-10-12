@@ -5,6 +5,7 @@ import {
   goalFormPayload,
   goalMovePayload,
   goalsColumns,
+  groupTimelineByCycle,
   groupTimelineByHour,
   homeTabs,
   hourLabel,
@@ -67,6 +68,44 @@ describe('timelineRow / timelineBody', () => {
     const html = timelineBody([{ ts: at(14, 5), kind: 'llm', title: 'call' }], NOW);
     expect(html).toContain('home-tl-group-label">Today 14:00<');
     expect(html).toContain('>call<');
+  });
+});
+
+describe('timeline grouped by cycle (Why row 6)', () => {
+  const cycleWhy = {
+    what: 'Agent-loop cycle',
+    by: 'agent',
+    cycle: { id: 'c1', botId: 'b1', plan: 'Draft the digest' },
+    goal: { id: 'g1', title: 'Weekly digest' },
+  };
+  const items = [
+    { ts: at(14, 50), kind: 'cycle', title: 'Cycle · completed', cycleId: 'c1', why: cycleWhy },
+    { ts: at(14, 45), kind: 'tool', title: 'file_write', cycleId: 'c1' },
+    { ts: at(14, 44), kind: 'karma', title: 'Karma +3' },
+    { ts: at(14, 40), kind: 'llm', title: 'planner', cycleId: 'c1' },
+    { ts: at(14, 30), kind: 'tool', title: 'web_search', cycleId: 'c2' },
+  ];
+
+  it('collects every row of a cycle where its newest row is; others stay loose', () => {
+    const entries = groupTimelineByCycle(items);
+    expect(entries.map((e) => e.cycleId ?? e.item.title)).toEqual(['c1', 'Karma +3', 'c2']);
+    expect(entries[0].head.title).toBe('Cycle · completed');
+    expect(entries[0].items.map((i) => i.title)).toEqual(['file_write', 'planner']);
+    expect(entries[2].head).toBeNull();
+    expect(entries[2].items.map((i) => i.title)).toEqual(['web_search']);
+    expect(groupTimelineByCycle(undefined)).toEqual([]);
+  });
+
+  it('renders one Why per cycle group, with its rows inside', () => {
+    const html = timelineBody(items, NOW);
+    expect(html.match(/<details class="why">/g)).toHaveLength(1);
+    expect(html.match(/home-tl-cycle"/g)).toHaveLength(2);
+    expect(html).toContain('data-open-cycle="c1"');
+    expect(html).toContain('Weekly digest');
+    const c1 = html.slice(html.indexOf('home-tl-cycle"'), html.indexOf('Karma +3'));
+    expect(c1).toContain('file_write');
+    expect(c1).toContain('planner');
+    expect(html).toContain('Cycle with no record yet');
   });
 });
 

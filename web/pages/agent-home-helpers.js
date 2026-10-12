@@ -7,6 +7,7 @@
  */
 import { avatar, badge, emptyState, esc, kpi, radar, sparkline, tabs } from '../ui/index.js';
 import { faceControl, speakButton } from './agent-face-helpers.js';
+import { whyPanel } from './why-helpers.js';
 
 export const POSTURE_TONE = {
   active: 'ok',
@@ -95,6 +96,10 @@ export function presenceHeader(
         presence.tone ?? tone
       )}" id="presence-now">${esc(presence.nowLine ?? '…')}</div>${voice ? speakButton() : ''}</div>
       <div class="presence-meta text-dim" id="presence-meta">${esc(meta)}</div>
+      <div class="presence-why" id="presence-why">${whyPanel(presence.postureWhy, {
+        nowMs,
+        botId: identity.id,
+      })}</div>
     </div>
     <div class="presence-actions">${actions}</div>
   </header>`;
@@ -123,6 +128,16 @@ export function applyPresence(root, presence, identity = {}, nowMs = Date.now())
   if (dot) dot.className = `ui-avatar-dot ui-avatar-dot-${tone}`;
   const meta = root.querySelector('#presence-meta');
   if (meta) meta.textContent = presenceMeta(identity, presence, nowMs);
+  const why = root.querySelector('#presence-why');
+  if (why && presence.postureWhy) {
+    const html = whyPanel(presence.postureWhy, { nowMs, botId: identity.id });
+    if (why.innerHTML !== html) {
+      const wasOpen = Boolean(why.querySelector('details')?.open);
+      why.innerHTML = html;
+      const fold = why.querySelector('details');
+      if (wasOpen && fold) fold.open = true;
+    }
+  }
   return true;
 }
 
@@ -200,9 +215,46 @@ export function timelineRow(item) {
   </div>`;
 }
 
-/** Whole timeline body (grouped) or an empty state. */
+/**
+ * Newest-first timeline items as entries: a cycle (`{ cycleId, ts, head, items }`,
+ * `head` = its row from the cycle log or null) placed where its newest row is,
+ * holding every row of that cycle; rows without a cycle stay loose (`{ ts, item }`).
+ */
+export function groupTimelineByCycle(items) {
+  const entries = [];
+  const byCycle = new Map();
+  for (const it of Array.isArray(items) ? items : []) {
+    if (!it?.cycleId) {
+      entries.push({ ts: it?.ts, item: it });
+      continue;
+    }
+    let g = byCycle.get(it.cycleId);
+    if (!g) {
+      g = { cycleId: it.cycleId, ts: it.ts, head: null, items: [] };
+      byCycle.set(it.cycleId, g);
+      entries.push(g);
+    }
+    if (it.kind === 'cycle' && !g.head) g.head = it;
+    else g.items.push(it);
+  }
+  return entries;
+}
+
+/** One cycle group: its header row, the cycle's Why, then its rows. */
+function cycleGroup(g, nowMs) {
+  const head = g.head
+    ? timelineRow(g.head)
+    : timelineRow({ ts: g.ts, kind: 'cycle', title: 'Cycle with no record yet', ok: null });
+  const why = g.head?.why ? whyPanel(g.head.why, { nowMs }) : '';
+  const rows = g.items.length
+    ? `<div class="home-tl-cycle-rows">${g.items.map(timelineRow).join('')}</div>`
+    : '';
+  return `<div class="home-tl-cycle">${head}${why}${rows}</div>`;
+}
+
+/** Whole timeline body (grouped by hour, rows of one cycle together) or an empty state. */
 export function timelineBody(items, nowMs = Date.now()) {
-  const groups = groupTimelineByHour(items, nowMs);
+  const groups = groupTimelineByHour(groupTimelineByCycle(items), nowMs);
   if (groups.length === 0) {
     return emptyState({
       icon: '◷',
@@ -214,7 +266,7 @@ export function timelineBody(items, nowMs = Date.now()) {
     .map(
       (g) => `<div class="home-tl-group">
       <div class="home-tl-group-label">${esc(g.label)}</div>
-      ${g.items.map(timelineRow).join('')}
+      ${g.items.map((e) => (e.cycleId ? cycleGroup(e, nowMs) : timelineRow(e.item))).join('')}
     </div>`
     )
     .join('');

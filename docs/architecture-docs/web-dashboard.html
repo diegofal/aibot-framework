@@ -343,7 +343,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents/:id/home</code></td>
-              <td>Agent Home payload (cached 15 s): <code>identity</code>, <code>presence</code> (posture + first-person now-line), <code>goals</code> by bucket, <code>traits</code>, <code>karma</code> with a reconstructed history, a merged <code>timeline</code> (LLM calls, tools, productions, asks, cycles, karma) and <code>needsYou</code> counts. Tenant-scoped; never throws on missing data. <span class="badge badge-yellow">2026-10-10</span> Each goal carries <code>tasks: [{ text, done }]</code></td>
+              <td>Agent Home payload (cached 15 s): <code>identity</code>, <code>presence</code> (posture + first-person now-line), <code>goals</code> by bucket, <code>traits</code>, <code>karma</code> with a reconstructed history, a merged <code>timeline</code> (LLM calls, tools, productions, asks, cycles, karma) and <code>needsYou</code> counts. Tenant-scoped; never throws on missing data. <span class="badge badge-yellow">2026-10-11</span> <code>presence.postureWhy</code> (a <code>Why</code>: the posture rule that fired, in plain words, and the numbers it decided on); every <code>TimelineItem</code> may carry <code>cycleId</code> / <code>goalId</code> (tool audit, LLM log, changelog, asks, karma metadata), and cycle rows come from the cycle log (<code>&lt;data&gt;/agent-cycles</code>, <code>ts</code> = end of the cycle) with a <code>why</code> each (<code>cycleToWhy</code>: plan, goal, focus, outcome); the scheduler's <code>recentActions</code> only fill the history before the cycle log began. <span class="badge badge-yellow">2026-10-10</span> Each goal carries <code>tasks: [{ text, done }]</code></td>
               <td><code>agent-home.ts</code></td>
             </tr>
             <tr>
@@ -367,7 +367,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/agents/:id/presence</code></td>
-              <td>Uncached presence slice: posture, <code>nowLine</code> + <code>tone</code>, <code>isExecuting</code>, live <code>phase</code> / <code>currentTool</code> from the <code>PresenceTracker</code>, next/last run, pending asks. The agent page refetches it on every activity event for the bot</td>
+              <td>Uncached presence slice: posture, <code>nowLine</code> + <code>tone</code>, <code>isExecuting</code>, live <code>phase</code> / <code>currentTool</code> from the <code>PresenceTracker</code>, next/last run, pending asks. The agent page refetches it on every activity event for the bot. <span class="badge badge-yellow">2026-10-11</span> Also <code>postureWhy</code></td>
               <td><code>agent-home.ts</code></td>
             </tr>
             <tr>
@@ -1160,7 +1160,7 @@
             <tr>
               <td><span class="badge badge-green">GET</span></td>
               <td><code>/api/stats/fleet?window=24h|7d|30d</code></td>
-              <td><code>FleetResponse</code>: one <code>FleetBotStats</code> per visible bot &mdash; <code>backend</code>/<code>model</code>, <code>channel { kind, state }</code>, live <code>loop</code> state (cadence, mode, next/last run, idle streak, retry count, last error), a one-word <code>posture</code> (<code>active | standby | dormant | blocked | idle | unknown</code>, see <code>computePosture()</code>), <code>lastHumanContactAt</code>, <code>llm</code> (calls, failures, avg duration, tokens, by caller, by model, last error), <code>tools</code> (calls, failures, top tools, loop breaks), <code>output</code> (active/archived files, approved/rejected/unreviewed, outcomes), <code>engagement</code> (asks sent/answered/pending/closed, proactive messages, collaborate calls, mesh posts), <code>goals</code>, <code>karma</code>, <code>traits</code> (current, baseline, drift), <code>soul</code> (last reflection/health check, file sizes, pending daily logs, missing files) and <code>cycles</code>; plus <code>totals</code>. Default window <code>7d</code>. <code>GET /api/stats/</code> is an alias.</td>
+              <td><code>FleetResponse</code>: one <code>FleetBotStats</code> per visible bot &mdash; <code>backend</code>/<code>model</code>, <code>channel { kind, state }</code>, live <code>loop</code> state (cadence, mode, next/last run, idle streak, retry count, last error), a one-word <code>posture</code> (<code>active | standby | dormant | blocked | idle | unknown</code>, see <code>computePosture()</code>), <span class="badge badge-yellow">2026-10-11</span> <code>postureVerdict { posture, rule, inputs }</code> (<code>computePostureWithRule()</code>; <code>rule</code> = <code>disabled | never-ran | retries | all-goals-blocked | no-goals | idle-streak | stale-run | no-recent-outcome | active</code>), <code>lastHumanContactAt</code>, <code>llm</code> (calls, failures, avg duration, tokens, by caller, by model, last error), <code>tools</code> (calls, failures, top tools, loop breaks), <code>output</code> (active/archived files, approved/rejected/unreviewed, outcomes), <code>engagement</code> (asks sent/answered/pending/closed, proactive messages, collaborate calls, mesh posts), <code>goals</code>, <code>karma</code>, <code>traits</code> (current, baseline, drift), <code>soul</code> (last reflection/health check, file sizes, pending daily logs, missing files) and <code>cycles</code>; plus <code>totals</code>. Default window <code>7d</code>. <code>GET /api/stats/</code> is an alias.</td>
               <td><code>stats.ts</code></td>
             </tr>
             <tr>
@@ -1590,6 +1590,7 @@ tool:start | tool:end | tool:error    // Tool execution lifecycle
 llm:start | llm:end                   // LLM call lifecycle (include backend + caller fields)
 llm:error | llm:fallback              // LLM failure and primary→fallback transitions
 agent:phase | agent:idle | agent:result // Agent loop phases
+                                      // agent:idle data: { reasoning, cycleId?, why } (2026-10-11)
 memory:flush | memory:rag             // Memory operations
 collab:start | collab:end             // Bot-to-bot collaboration
 compaction                            // Context compaction
@@ -1985,13 +1986,15 @@ compaction                            // Context compaction
             a tab strip (Home, Config, Stats, Productions, Conversations), a "Needs you" strip
             (pending asks, permissions, unreviewed outputs), a chat panel backed by the newest
             <code>general</code> dashboard conversation (created on first send; same status polling,
-            retry and approval flow as the Conversations page), the timeline grouped by hour, and
+            retry and approval flow as the Conversations page), the timeline grouped by hour (2026-10-11: the rows of one agent-loop cycle sit together under
+            its cycle row, with that cycle's "Why this?" fold), and
             goals / traits radar / karma cards. All card bodies are pure helpers in
             <code>agent-home-helpers.js</code>. The former detail page lives at
             <code>#/agents/:id/config</code> with the same header and tabs.
             <strong>Presence header (S1).</strong> The agent page opens with a live header from
             <code>web/pages/agent-home-helpers.js</code>: avatar with a posture dot, the posture badge,
             a first-person "now" line (<code>/api/agents/:id/presence</code>), backend / channel / next run,
+            a "Why this?" fold with the posture rule (<code>presence.postureWhy</code>, kept open across live refreshes),
             and the Start/Stop/Run/Edit/Clone/Reset/Reflect actions. <code>web/pages/live-presence.js</code>
             (<code>watchAgent(botId, { onPresence, onEvent })</code>) keeps one <code>/ws/activity</code>
             socket per open page and refetches the presence slice (debounced 800 ms) on every

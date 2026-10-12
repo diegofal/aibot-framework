@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { KarmaEvent } from '../../../src/karma/types';
@@ -305,6 +305,102 @@ describe('GET /api/agents/presence (fleet)', () => {
     // A bot literally named "presence" would collide; the fleet route must win.
     expect((await makeApp().request('/api/agents/presence/home')).status).toBe(404);
     expect((await makeApp().request('/api/agents/b1/presence')).status).toBe(200);
+  });
+});
+
+describe('Why on Agent Home', () => {
+  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  const appendJsonl = (path: string, rows: unknown[]) => {
+    mkdirSync(join(path, '..'), { recursive: true });
+    appendFileSync(
+      path,
+      rows
+        .map(
+          (r) => `${JSON.stringify(r)}
+`
+        )
+        .join('')
+    );
+  };
+  const iso = (ms: number) => new Date(ms).toISOString();
+
+  it('presence carries the posture rule as a Why', async () => {
+    const body = await (await makeApp().request('/api/agents/b1/home')).json();
+    expect(body.presence.postureWhy.what).toBe(`Posture: ${body.presence.posture}`);
+    expect(typeof body.presence.postureWhy.rule).toBe('string');
+    const live = await (await makeApp().request('/api/agents/b1/presence')).json();
+    expect(live.postureWhy.rule).toBe(body.presence.postureWhy.rule);
+  });
+
+  it('timeline rows carry their cycle; cycles come from the cycle log with one Why each', async () => {
+    const start = fx.now - 90 * 60_000;
+    appendJsonl(join(fx.dir, 'agent-cycles', 'b1', `${day(start)}.jsonl`), [
+      {
+        cycleId: 'cyc-1',
+        botId: 'b1',
+        startedAt: iso(start),
+        endedAt: iso(start + 40 * 60_000),
+        status: 'completed',
+        planSummary: 'Draft the digest',
+        toolCalls: 1,
+        tools: ['file_write'],
+        goalId: 'g-1',
+        goalTitle: 'Weekly digest',
+      },
+    ]);
+    appendJsonl(join(fx.dir, 'tool-audit', 'b1', `${day(fx.now)}.jsonl`), [
+      {
+        timestamp: iso(start + 10 * 60_000),
+        botId: 'b1',
+        chatId: 0,
+        toolName: 'web_search',
+        args: {},
+        success: true,
+        result: 'ok',
+        durationMs: 3,
+        retryAttempts: 0,
+        cycleId: 'cyc-1',
+        goalId: 'g-1',
+      },
+    ]);
+    const body = await (await makeApp().request('/api/agents/b1/home')).json();
+    const tool = body.timeline.find((t: { title: string }) => t.title === 'web_search');
+    expect(tool).toMatchObject({ cycleId: 'cyc-1', goalId: 'g-1' });
+    const cycles = body.timeline.filter((t: { kind: string }) => t.kind === 'cycle');
+    const logged = cycles.find((t: { cycleId?: string }) => t.cycleId === 'cyc-1');
+    expect(logged.ts).toBe(iso(start + 40 * 60_000));
+    expect(logged.detail).toBe('Draft the digest');
+    expect(logged.why.goal).toEqual({ id: 'g-1', title: 'Weekly digest' });
+    expect(logged.why.cycle).toMatchObject({ id: 'cyc-1', botId: 'b1' });
+    // the scheduler's recentActions row (now - 1 h) is newer than the first logged
+    // cycle, so it is the same history and is not shown twice
+    expect(cycles.filter((t: { cycleId?: string }) => !t.cycleId)).toEqual([]);
+  });
+
+  it('asks keep the cycle and goal they were asked from', async () => {
+    appendJsonl(join(fx.dir, 'conversations', 'b1', 'conversations.jsonl'), [
+      {
+        id: 'ask-cyc',
+        botId: 'b1',
+        type: 'inbox',
+        title: 'Which city?',
+        createdAt: iso(fx.now - 30 * 60_000),
+        updatedAt: iso(fx.now - 30 * 60_000),
+        inboxStatus: 'pending',
+        cycleId: 'cyc-9',
+        goalId: 'g-9',
+      },
+    ]);
+    const body = await (await makeApp().request('/api/agents/b1/home')).json();
+    const ask = body.timeline.find((t: { title: string }) => t.title === 'Asked: Which city?');
+    expect(ask).toMatchObject({ cycleId: 'cyc-9', goalId: 'g-9' });
+  });
+
+  it('without a cycle log the scheduler cycles still show, without a cycle id', async () => {
+    const body = await (await makeApp().request('/api/agents/b1/home')).json();
+    const cycles = body.timeline.filter((t: { kind: string }) => t.kind === 'cycle');
+    expect(cycles).toHaveLength(1);
+    expect(cycles[0].cycleId).toBeUndefined();
   });
 });
 

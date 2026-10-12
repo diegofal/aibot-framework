@@ -58,9 +58,20 @@ function summaryLine(agents, presence, needsYou) {
 function redrawTicker() {
   const el = state?.el?.querySelector('#fleet-ticker-body');
   if (el) {
+    // A redraw on every event would snap an open "Why this?" fold shut.
+    const open = new Set(
+      [...el.querySelectorAll('li[data-key] > details[open]')].map(
+        (d) => d.parentElement.dataset.key
+      )
+    );
     el.innerHTML = condensedTickerBody(state.ticker, state.names, Date.now(), {
       expanded: state.tickerExpanded,
     });
+    for (const li of el.querySelectorAll('li[data-key]')) {
+      if (!open.has(li.dataset.key)) continue;
+      const fold = li.querySelector(':scope > details');
+      if (fold) fold.open = true;
+    }
   }
 }
 

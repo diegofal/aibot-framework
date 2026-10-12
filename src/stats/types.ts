@@ -28,6 +28,38 @@ export interface BackendCircuitSnapshot {
 }
 export type Posture = 'active' | 'standby' | 'dormant' | 'blocked' | 'idle' | 'unknown';
 
+/** What `computePosture` decides on (`src/stats/posture.ts`). */
+export interface PostureInput {
+  enabled: boolean;
+  nowMs: number;
+  lastRunAt: number | null;
+  retryCount: number;
+  lastError: string | null;
+  consecutiveIdleCycles: number;
+  goalsActive: number;
+  goalsByStatus: Record<string, number>;
+  lastOutcomeAt: number | null;
+}
+
+/** The posture rule that fired, first match wins (`computePostureWithRule`). */
+export type PostureRule =
+  | 'disabled'
+  | 'never-ran'
+  | 'retries'
+  | 'all-goals-blocked'
+  | 'no-goals'
+  | 'idle-streak'
+  | 'stale-run'
+  | 'no-recent-outcome'
+  | 'active';
+
+/** A posture with the rule that produced it and what it decided on; `postureToWhy` explains it. */
+export interface PostureVerdict {
+  posture: Posture;
+  rule: PostureRule;
+  inputs: PostureInput;
+}
+
 export interface LlmStats {
   calls: number;
   failed: number;
@@ -141,6 +173,8 @@ export interface FleetBotStats {
   channel: { kind: ChannelKind; state: ChannelState };
   loop: LoopStats;
   posture: Posture;
+  /** The rule behind `posture` and what it decided on (`postureToWhy` explains it). */
+  postureVerdict: PostureVerdict;
   lastHumanContactAt: string | null;
   llm: LlmStats;
   tools: ToolStats;
@@ -216,6 +250,9 @@ export interface AskDetail {
   inboxStatus: string | null;
   questionChars: number;
   answeredAt: string | null;
+  /** Agent-loop cycle / goal the question was asked from, when recorded. */
+  cycleId?: string;
+  goalId?: string;
 }
 
 export interface BotDetailResponse extends FleetBotStats {

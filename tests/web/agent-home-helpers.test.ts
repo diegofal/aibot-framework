@@ -117,6 +117,38 @@ describe('isPresenceEvent', () => {
   });
 });
 
+describe('posture Why (Why row 8)', () => {
+  const postureWhy = { what: 'Posture: standby', by: 'system', rule: '5 idle cycles in a row.' };
+  it('the header renders the posture fold next to the now line', () => {
+    const html = presenceHeader(
+      { identity: { id: 'b1' }, presence: { posture: 'standby', nowLine: 'x', postureWhy } },
+      { nowMs: NOW }
+    );
+    expect(html).toContain('id="presence-why"');
+    expect(html).toContain('<details class="why">');
+    expect(html).toContain('5 idle cycles in a row.');
+    expect(presenceHeader({ identity: {}, presence: {} })).not.toContain('<details');
+  });
+  it('applyPresence refreshes the fold and keeps it open', () => {
+    let fold = { open: true };
+    let html = '';
+    const why = {
+      get innerHTML() {
+        return html;
+      },
+      set innerHTML(v: string) {
+        html = v;
+        fold = { open: false };
+      },
+      querySelector: (sel: string) => (sel === 'details' ? fold : null),
+    };
+    const root = { querySelector: (sel: string) => (sel === '#presence-why' ? why : null) };
+    applyPresence(root, { posture: 'standby', postureWhy }, {}, NOW);
+    expect(html).toContain('5 idle cycles in a row.');
+    expect(fold.open).toBe(true);
+  });
+});
+
 describe('applyPresence', () => {
   it('is a no-op without a DOM root', () => {
     expect(applyPresence(null, { posture: 'active' })).toBe(false);

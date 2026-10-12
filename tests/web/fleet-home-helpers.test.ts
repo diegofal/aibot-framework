@@ -574,3 +574,34 @@ describe('tool failures name the real cause and the site', () => {
     ]);
   });
 });
+
+describe('idle lines say why (Why row 7)', () => {
+  const names = { b1: 'Bot One' };
+  const why = {
+    what: 'Idle cycle',
+    by: 'system',
+    cycle: { id: 'c1', botId: 'b1' },
+    reason: { text: 'Publish another guide.', source: 'Planner' },
+    rule: 'Engagement gate: 6 outputs and 0 feedback since your last response, so content plans wait until you react.',
+  };
+  const idle = (data = {}) => ({ type: 'agent:idle', botId: 'b1', timestamp: NOW, data });
+
+  it('the line carries the stated reason, clipped', () => {
+    expect(describeEvent(idle({ reasoning: 'Waiting for <feedback>.' }), names).text).toBe(
+      'Bot One is idle: Waiting for <feedback>.'
+    );
+    const long = describeEvent(idle({ reasoning: 'x'.repeat(300) }), names).text;
+    expect(long.length).toBeLessThanOrEqual('Bot One is idle: '.length + 100);
+    expect(long.endsWith('…')).toBe(true);
+  });
+
+  it('the condensed and plain rows render the event Why with the shared panel', () => {
+    const condensed = condensedTickerBody([idle({ reasoning: 'r', why })], names, NOW);
+    expect(condensed).toContain('<details class="why">');
+    expect(condensed).toContain('data-open-cycle="c1"');
+    expect(condensed).toContain('Engagement gate');
+    expect(tickerRow(idle({ why }), names, NOW)).toContain('<details class="why">');
+    expect(tickerRow(idle({}), names, NOW)).not.toContain('<details');
+    expect(condensedTickerBody([idle({})], names, NOW)).toContain('Nothing has happened yet');
+  });
+});

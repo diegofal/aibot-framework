@@ -7,6 +7,7 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Dispatch } from '../../src/bot/curiosity/types';
+import { computePostureWithRule } from '../../src/stats/posture';
 import { WHY_BUILDERS, type WhyBuilderName } from '../../src/why/builders';
 import type { ProactiveSend } from '../../src/why/builders/proactive';
 import { WhySchema } from '../../src/why/types';
@@ -73,6 +74,32 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
       source: 'production',
       kind: 'productionApproved',
       metadata: { path: 'a.md' },
+    },
+  },
+  posture: computePostureWithRule({
+    enabled: true,
+    nowMs: Date.UTC(2026, 9, 11, 12),
+    lastRunAt: Date.UTC(2026, 9, 11, 11),
+    retryCount: 0,
+    lastError: null,
+    consecutiveIdleCycles: 5,
+    goalsActive: 1,
+    goalsByStatus: { active: 1 },
+    lastOutcomeAt: null,
+  }),
+  idle: {
+    botId: 'b1',
+    cycleId: 'c1',
+    reasoning: 'r',
+    gate: { outputCount: 6, feedbackCount: 0, plan: ['p'] },
+  },
+  cycle: {
+    botId: 'b1',
+    cycle: {
+      cycleId: 'c1',
+      startedAt: '2026-10-11T12:00:00Z',
+      status: 'completed',
+      goalTitle: 'G',
     },
   },
 };

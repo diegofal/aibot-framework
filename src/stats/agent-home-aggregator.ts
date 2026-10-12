@@ -16,11 +16,15 @@ import type { BotConfig } from '../config';
 import type { KarmaEvent } from '../karma/types';
 import { readEntries } from '../productions/changelog';
 import { goalBucket } from '../tools/goals';
+import { cycleToWhy } from '../why/builders/cycle';
+import { postureToWhy } from '../why/builders/posture';
+import type { Why } from '../why/types';
 import { type StatsContext, liveSchedule } from './context';
 import { getBotStats } from './fleet-aggregator';
 import { type NowTone, describeNow } from './now-line';
 import { resolveBotPaths } from './paths';
 import type { LivePresence } from './presence-tracker';
+import { readAgentCycles } from './readers/agent-cycles';
 import { readInboxAsks } from './readers/conversations';
 import { readLlmEntries } from './readers/llm-query-log';
 import { readProductionOutput } from './readers/productions';
@@ -62,10 +66,17 @@ export interface TimelineItem {
   title: string;
   detail: string | null;
   ok: boolean | null;
+  /** Agent-loop cycle the row belongs to, when recorded; the page groups rows by it. */
+  cycleId?: string;
+  goalId?: string;
+  /** Cycle rows from the cycle log: what the cycle was for (`cycleToWhy`). */
+  why?: Why;
 }
 
 export interface AgentPresence {
   posture: Posture;
+  /** The posture rule that fired, in plain words (`postureToWhy`). */
+  postureWhy: Why;
   nowLine: string;
   tone: NowTone;
   enabled: boolean;
@@ -193,6 +204,7 @@ export function buildPresence(
   });
   return {
     posture: base.posture,
+    postureWhy: postureToWhy(base.postureVerdict),
     nowLine: line.text,
     tone: line.tone,
     enabled,
@@ -287,6 +299,17 @@ export function mergeTimeline(items: TimelineItem[], limit = TIMELINE_LIMIT): Ti
     .slice(0, limit);
 }
 
+/** `{ cycleId, goalId }` of a record, only the ones it carries. */
+function attribution(e: { cycleId?: unknown; goalId?: unknown }): {
+  cycleId?: string;
+  goalId?: string;
+} {
+  const out: { cycleId?: string; goalId?: string } = {};
+  if (typeof e.cycleId === 'string' && e.cycleId) out.cycleId = e.cycleId;
+  if (typeof e.goalId === 'string' && e.goalId) out.goalId = e.goalId;
+  return out;
+}
+
 function buildTimeline(
   ctx: StatsContext,
   bot: BotConfig,
@@ -307,6 +330,7 @@ function buildTimeline(
         ? clip(`${tokens ? `${tokens} tokens, ` : ''}${Math.round(e.durationMs / 1000)}s`)
         : clip(e.error ?? 'failed'),
       ok: e.success,
+      ...attribution(e),
     });
   }
   for (const e of readToolEntries(ctx.dirs.toolAudit, bot.id, since, now)) {
@@ -316,6 +340,7 @@ function buildTimeline(
       title: e.toolName,
       detail: clip(e.result),
       ok: e.success,
+      ...attribution(e),
     });
   }
   for (const e of safe(() => readEntries(join(workDir, 'changelog.jsonl')), [])) {
@@ -327,6 +352,7 @@ function buildTimeline(
       title: `${e.action} ${e.path}`,
       detail: clip(e.description),
       ok: e.evaluation ? e.evaluation.status !== 'rejected' : null,
+      ...attribution(e),
     });
   }
   for (const a of readInboxAsks(ctx.dirs.conversations, bot.id)) {
@@ -338,13 +364,31 @@ function buildTimeline(
       title: `Asked: ${clip(a.title, 80) ?? 'question'}`,
       detail: a.inboxStatus ? `status ${a.inboxStatus}` : null,
       ok: a.inboxStatus === 'answered' ? true : a.inboxStatus === 'pending' ? null : false,
+      ...attribution(a),
     });
   }
+  // Cycles: the cycle log (plan, goal, cycle id) where it exists; the
+  // scheduler's recentActions only for the history before it began.
+  const logged = safe(() => readAgentCycles(ctx.dirs.agentCycles, bot.id, since, now), []);
+  for (const c of logged) {
+    const tools = Array.isArray(c.tools) && c.tools.length ? ` (${c.tools.join(', ')})` : '';
+    items.push({
+      ts: c.endedAt ?? c.startedAt,
+      kind: 'cycle',
+      title: `Cycle · ${c.status ?? 'unknown'}${tools}`,
+      detail: clip(c.planSummary),
+      ok: c.status === 'error' ? false : null,
+      ...attribution(c),
+      why: cycleToWhy({ botId: bot.id, cycle: c }),
+    });
+  }
+  const logStart = logged.length > 0 ? (toMs(logged[0].startedAt) ?? now) : now;
   const schedule = readSchedules(ctx.dirs.scheduler)[bot.id];
   if (Array.isArray(schedule?.recentActions)) {
     for (const a of schedule.recentActions) {
       const t = Number(a.timestamp);
       if (!Number.isFinite(t) || t < since) continue;
+      if (logged.length > 0 && t >= logStart) continue;
       const tools = Array.isArray(a.tools) && a.tools.length ? ` (${a.tools.join(', ')})` : '';
       items.push({
         ts: new Date(t).toISOString(),
@@ -365,6 +409,7 @@ function buildTimeline(
       title: `Karma ${d > 0 ? '+' : ''}${d}`,
       detail: clip(k.reason),
       ok: d >= 0,
+      ...attribution(k.metadata ?? {}),
     });
   }
   return mergeTimeline(items);

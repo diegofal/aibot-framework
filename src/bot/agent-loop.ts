@@ -8,6 +8,7 @@ import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
+import { idleToWhy } from '../why/builders/idle';
 import {
   type AdaptiveParams,
   computeAdaptiveAdjustments,
@@ -2101,11 +2102,25 @@ export class AgentLoop {
           },
           gate.summary
         );
+        const idleCycleId = this.cycleAttribution.get(botId)?.cycleId;
         this.ctx.activityStream?.publish({
           type: 'agent:idle',
           botId,
           timestamp: Date.now(),
-          data: { reasoning: gate.summary },
+          data: {
+            reasoning: gate.summary,
+            ...(idleCycleId ? { cycleId: idleCycleId } : {}),
+            why: idleToWhy({
+              botId,
+              cycleId: idleCycleId,
+              reasoning: plannerReasoning,
+              gate: {
+                outputCount: engagement.outputCount,
+                feedbackCount: engagement.feedbackCount,
+                plan,
+              },
+            }),
+          },
         });
         if (consumedPermissionIds.length > 0) {
           this.ctx.askPermissionStore.reportExecution(
@@ -2133,11 +2148,16 @@ export class AgentLoop {
     }
 
     if (plan.length === 0 || priority === 'none') {
+      const idleCycleId = this.cycleAttribution.get(botId)?.cycleId;
       this.ctx.activityStream?.publish({
         type: 'agent:idle',
         botId,
         timestamp: Date.now(),
-        data: { reasoning: plannerReasoning.slice(0, 200) },
+        data: {
+          reasoning: plannerReasoning.slice(0, 200),
+          ...(idleCycleId ? { cycleId: idleCycleId } : {}),
+          why: idleToWhy({ botId, cycleId: idleCycleId, reasoning: plannerReasoning }),
+        },
       });
       if (consumedPermissionIds.length > 0) {
         const idleSummary =

@@ -1,21 +1,11 @@
-import type { Posture } from './types';
+import type { Posture, PostureInput, PostureVerdict } from './types';
 
-export interface PostureInput {
-  enabled: boolean;
-  nowMs: number;
-  lastRunAt: number | null;
-  retryCount: number;
-  lastError: string | null;
-  consecutiveIdleCycles: number;
-  goalsActive: number;
-  goalsByStatus: Record<string, number>;
-  lastOutcomeAt: number | null;
-}
+export type { PostureInput, PostureRule, PostureVerdict } from './types';
 
-const RETRY_BLOCKED_THRESHOLD = 3;
-const IDLE_STANDBY_THRESHOLD = 5;
-const RECENT_OUTCOME_MS = 48 * 3_600_000;
-const STALE_RUN_MS = 3 * 86_400_000;
+export const RETRY_BLOCKED_THRESHOLD = 3;
+export const IDLE_STANDBY_THRESHOLD = 5;
+export const RECENT_OUTCOME_MS = 48 * 3_600_000;
+export const STALE_RUN_MS = 3 * 86_400_000;
 
 /**
  * Posture heuristic — a single word summarising what a bot is doing, in
@@ -34,21 +24,39 @@ const STALE_RUN_MS = 3 * 86_400_000;
  *                  non-idle latest cycle).
  */
 export function computePosture(input: PostureInput): Posture {
-  if (!input.enabled) return 'dormant';
-  if (input.lastRunAt === null) return 'unknown';
+  return computePostureWithRule(input).posture;
+}
 
-  if (input.retryCount >= RETRY_BLOCKED_THRESHOLD && input.lastError) return 'blocked';
+/** The posture plus the rule that fired and the inputs it decided on. */
+export function computePostureWithRule(input: PostureInput): PostureVerdict {
+  const verdict = (posture: Posture, rule: PostureVerdict['rule']): PostureVerdict => ({
+    posture,
+    rule,
+    inputs: { ...input, goalsByStatus: { ...input.goalsByStatus } },
+  });
+  if (!input.enabled) return verdict('dormant', 'disabled');
+  if (input.lastRunAt === null) return verdict('unknown', 'never-ran');
+
+  if (input.retryCount >= RETRY_BLOCKED_THRESHOLD && input.lastError) {
+    return verdict('blocked', 'retries');
+  }
   const blockedGoals = input.goalsByStatus.blocked ?? 0;
-  if (input.goalsActive > 0 && blockedGoals >= input.goalsActive) return 'blocked';
+  if (input.goalsActive > 0 && blockedGoals >= input.goalsActive) {
+    return verdict('blocked', 'all-goals-blocked');
+  }
 
-  if (input.goalsActive === 0) return 'idle';
+  if (input.goalsActive === 0) return verdict('idle', 'no-goals');
 
-  if (input.consecutiveIdleCycles >= IDLE_STANDBY_THRESHOLD) return 'standby';
-  if (input.nowMs - input.lastRunAt > STALE_RUN_MS) return 'standby';
+  if (input.consecutiveIdleCycles >= IDLE_STANDBY_THRESHOLD) {
+    return verdict('standby', 'idle-streak');
+  }
+  if (input.nowMs - input.lastRunAt > STALE_RUN_MS) return verdict('standby', 'stale-run');
 
   const recentOutcome =
     input.lastOutcomeAt !== null && input.nowMs - input.lastOutcomeAt <= RECENT_OUTCOME_MS;
-  if (!recentOutcome && input.consecutiveIdleCycles > 0) return 'standby';
+  if (!recentOutcome && input.consecutiveIdleCycles > 0) {
+    return verdict('standby', 'no-recent-outcome');
+  }
 
-  return 'active';
+  return verdict('active', 'active');
 }

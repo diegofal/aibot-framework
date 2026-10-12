@@ -12,7 +12,7 @@ import {
   windowSince,
 } from './context';
 import { classifyToken, resolveBotPaths } from './paths';
-import { computePosture } from './posture';
+import { computePostureWithRule } from './posture';
 import { lastHumanMessageAt, readInboxAsks, summariseAsks } from './readers/conversations';
 import { readKarmaStats } from './readers/karma';
 import { aggregateLlm, llmDaily, readLlmEntries, topErrors } from './readers/llm-query-log';
@@ -167,7 +167,7 @@ export function buildBotStats(
     readFeedbackLastAt(paths.soulDir)
   );
 
-  const posture = computePosture({
+  const postureVerdict = computePostureWithRule({
     enabled: bot.enabled !== false,
     nowMs: now,
     lastRunAt: loop.lastRunAt,
@@ -189,7 +189,8 @@ export function buildBotStats(
     model: paths.model,
     channel: resolveChannel(ctx, bot, logs),
     loop,
-    posture,
+    posture: postureVerdict.posture,
+    postureVerdict,
     lastHumanContactAt: toIso(lastHumanContact),
     llm,
     tools,

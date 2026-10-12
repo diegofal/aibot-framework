@@ -7,6 +7,10 @@
  */
 import { avatar, badge, emptyState, esc } from '../ui/index.js';
 import { ago, formatNext, postureTone } from './agent-home-helpers.js';
+import { whyPanel } from './why-helpers.js';
+
+/** Idle reasons are whole planner paragraphs; the line keeps a head, the fold the rest. */
+const IDLE_REASON_CHARS = 100;
 
 /** Raw events kept for the ticker; condensing turns ~30 events into a handful of lines. */
 export const TICKER_LIMIT = 30;
@@ -16,7 +20,7 @@ export const TICKER_SHOW = 5;
 export const TICKER_GROUP_GAP_MS = 15 * 60_000;
 /** How close a tool:error and the failed tool:end of the same call are (same tick in practice). */
 export const FAILURE_PAIR_MS = 5_000;
-/** Event types that never earn a ticker line on their own. */
+/** Event types that never earn a ticker line on their own (`agent:idle` does when it says why). */
 export const NOISE_EVENTS = new Set([
   'llm:start',
   'llm:end',
@@ -367,8 +371,17 @@ export function describeEvent(ev, names = {}) {
       };
     case 'agent:phase':
       return { text: `${who}: ${phaseWords(ev.phase ?? d.phase) || 'new phase'}`, tone: 'info' };
-    case 'agent:idle':
-      return { text: `${who} is idle`, tone: 'muted' };
+    case 'agent:idle': {
+      const reason = String(d.reasoning ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!reason) return { text: `${who} is idle`, tone: 'muted' };
+      const head =
+        reason.length > IDLE_REASON_CHARS
+          ? `${reason.slice(0, IDLE_REASON_CHARS - 1).trimEnd()}…`
+          : reason;
+      return { text: `${who} is idle: ${head}`, tone: 'muted' };
+    }
     case 'agent:result':
       return { text: `${who} finished a cycle`, tone: 'ok' };
     case 'memory:flush':
@@ -415,6 +428,7 @@ export function tickerRow(ev, names = {}, nowMs = Date.now()) {
     <span class="fleet-tick-dot"></span>
     <a class="fleet-tick-text" href="#/agents/${id}">${esc(text)}</a>
     <span class="fleet-tick-time">${esc(ago(ev?.timestamp, nowMs))}</span>
+    ${whyPanel(ev?.data?.why, { nowMs, botId: ev?.botId })}
   </li>`;
 }
 
@@ -452,6 +466,10 @@ function toolList(tools) {
  * Newest-first condensed lines `{ key, text, tone, timestamp, botId }` from a
  * newest-first raw event list (what `pushTicker` keeps).
  */
+function explainsIdle(ev) {
+  return Boolean(ev.data?.why?.what || String(ev.data?.reasoning ?? '').trim());
+}
+
 export function condenseEvents(events, names = {}) {
   const items = [];
   const groups = new Map(); // botId -> { tools: [], ts, item }
@@ -481,7 +499,9 @@ export function condenseEvents(events, names = {}) {
   });
 
   for (const ev of oldestFirst) {
-    if (NOISE_EVENTS.has(ev.type) || supersededErrors.has(ev)) continue;
+    if (supersededErrors.has(ev)) continue;
+    // An idle cycle that says why is news; a bare one (older events) is noise.
+    if (NOISE_EVENTS.has(ev.type) && !(ev.type === 'agent:idle' && explainsIdle(ev))) continue;
     const botId = String(ev.botId ?? '');
     const who = botName(ev, names);
     const d = ev.data ?? {};
@@ -511,7 +531,7 @@ export function condenseEvents(events, names = {}) {
     // Anything else gets its own line and ends the agent's current run of tools.
     closeGroup(botId);
     const { text, tone } = describeEvent(ev, names);
-    if (text) items.push({ key: '', text, tone, timestamp: ts, botId });
+    if (text) items.push({ key: '', text, tone, timestamp: ts, botId, why: d.why ?? null });
   }
 
   for (const [botId, ev] of pending) {
@@ -525,10 +545,11 @@ export function condenseEvents(events, names = {}) {
 
 function condensedRow(item, nowMs) {
   const id = encodeURIComponent(item.botId ?? '');
-  return `<li class="fleet-tick fleet-tick-${esc(item.tone)}" data-ts="${esc(String(item.timestamp))}">
+  return `<li class="fleet-tick fleet-tick-${esc(item.tone)}" data-ts="${esc(String(item.timestamp))}" data-key="${esc(item.key ?? '')}">
     <span class="fleet-tick-dot"></span>
     <a class="fleet-tick-text" href="#/agents/${id}">${esc(item.text)}</a>
     <span class="fleet-tick-time">${esc(ago(item.timestamp, nowMs))}</span>
+    ${whyPanel(item.why, { nowMs, botId: item.botId })}
   </li>`;
 }
 

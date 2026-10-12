@@ -1041,6 +1041,10 @@ plannerBackend: 'inherit' | 'ollama' | 'claude-cli'   // default 'inherit'</code
             classified as <strong>CONTENT</strong>, the cycle is downgraded to idle with the summary
             <code>Engagement gate: content blocked until feedback (N outputs, 0 feedback)</code>, an
             <code>agent:idle</code> activity event and a <code>warn</code> log listing the feedback signals.
+            Since 2026-10-11 every <code>agent:idle</code> event carries <code>cycleId</code> and a <code>why</code>
+            (<code>idleToWhy</code>, <code>src/why/builders/idle.ts</code>): the planner's reasoning, and for the gate
+            the rule with its counts and the plan it held back. The fleet feed shows the reason on the line and
+            the fold under it.
             OUTREACH, ASSESSMENT, RESEARCH and MAINTENANCE plans pass &mdash; they are how the bot earns
             feedback. Soft mode never blocks.
           </p>
