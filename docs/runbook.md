@@ -651,3 +651,17 @@ docker compose up -d --build
 **Outcome.** Container recreated and `healthy` within ~30 s. Served `/style.css` has `fb-gpulse`; served `/pages/fleet-board-helpers.js` has `activityHtml` / `goalPulse`; the image's `src/stats/agent-home-aggregator.ts` calls `buildGoalActivity`. Boot errors: the known Telegram `getMe` 401 (revoked token) and "Ollama daemon is unreachable", both in earlier deploys, neither from this change. Not exercised logged in (the dashboard needs a session). No data written: live goals carry no `parent` until reflection, the strategist or `manage_goals add` writes one.
 
 **Reversible?** Yes: check out `5efe173` and rebuild. `- parent:` lines written since are ignored by the older parser and dropped on its next GOALS.md write.
+
+### 2026-10-12 12:14Z — Volume backup before linking a goal parent
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Before adding `- parent: g-7cb6a370` to AI Perfectionist's digest goal (`g-1001d015`) in the live GOALS.md |
+
+```bash
+bun scripts/docker/backup.ts backup
+```
+
+**Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-12T12-14-04`; the script restarted aibot. The link itself was **not** written: the one-off script threw in `backupSoulFile` (wrong arguments) before calling `writeGoalsFile`, and the follow-up check inside the container was blocked by the session's permission policy, so it is left for Diego. GOALS.md is unchanged as far as the script got.
