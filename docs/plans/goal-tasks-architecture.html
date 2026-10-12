@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Goal tasks and task workers — architecture</title>
+<style>
+  :root {
+    --bg: #0b0d12; --surface: #12151c; --elevated: #181c25; --border: #252a35; --border-strong: #323847;
+    --text: #e7e9ef; --dim: #8b91a3; --faint: #5f6577;
+    --accent: #7c9cff; --ok: #34d399; --warn: #fbbf24; --danger: #f87171; --info: #67e8f9; --violet: #c084fc; --orange: #f0a35e;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 Inter, system-ui, sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  h2 { font-size: 17px; margin: 40px 0 6px; }
+  .lede { color: var(--dim); max-width: 900px; margin: 0 0 18px; }
+  .principle { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 14px 18px; font-size: 15px; }
+  .principle b { color: var(--accent); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-top: 12px; }
+  .sub { color: var(--dim); margin: 0 0 8px; font-size: 13px; }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { font-family: Inter, system-ui, sans-serif; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  code { background: var(--elevated); border-radius: 4px; padding: 0 4px; font-size: 12px; }
+  .tag { display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .t-new { background: rgba(124,156,255,.15); color: var(--accent); }
+  .t-change { background: rgba(251,191,36,.14); color: var(--warn); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+  ol.phases { padding-left: 20px; margin: 6px 0 0; } ol.phases li { margin-bottom: 8px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--dim); margin-top: 8px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+  pre { background: var(--elevated); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; margin: 0; }
+
+  /* live view mockup */
+  .mock { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .wk { flex: 1 1 260px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--g); border-radius: 8px; padding: 10px 12px; }
+  .wk-h { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 rgba(124,156,255,.6); animation: p 1.6s infinite; flex: none; }
+  .pulse.wait { background: var(--warn); animation: none; }
+  @keyframes p { 70% { box-shadow: 0 0 0 7px rgba(124,156,255,0); } 100% { box-shadow: 0 0 0 0 rgba(124,156,255,0); } }
+  .wk-m { color: var(--dim); font-size: 12px; margin-top: 4px; }
+  .bar { height: 5px; background: var(--border-strong); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .lane { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-height: 90px; }
+  .lane h4 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; color: var(--dim); text-transform: uppercase; }
+  .tk { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid #7c9cff; border-radius: 6px; padding: 7px 9px; font-size: 12px; margin-bottom: 6px; }
+  .tk .w { display: flex; gap: 6px; align-items: center; margin-top: 6px; font-size: 11px; color: var(--accent); }
+  .tk.done { color: var(--faint); text-decoration: line-through; }
+  .sheet { margin-top: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; }
+  .sheet .row { display: grid; grid-template-columns: 60px 1fr auto; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .sheet .row:last-child { border-bottom: 0; }
+  .btn { display: inline-block; border: 1px solid var(--border-strong); border-radius: 6px; padding: 2px 10px; font-size: 12px; color: var(--text); }
+  .btn.danger { border-color: rgba(248,113,113,.4); color: var(--danger); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Goal tasks and task workers</h1>
+  <p class="lede">How tasks become the unit of work, and how a cycle hands them to workers that keep going until the task is finished while the operator watches. Revision 4: two adversarial reviews against the code reshaped it (section 7). Plan: <code>docs/plans/goal-tasks-architecture-plan.md</code>.</p>
+  <div class="principle"><b>The cycle orchestrates; workers do task work.</b> The planner breaks goals into tasks and dispatches them. Each worker works one task in persisted, bounded steps, reporting after every step, until it is done, blocked or out of budget. Everything it does carries <code>runId</code> + <code>taskId</code>; the operator sees every running worker live and can stop it.</div>
+
+  <!-- 1 components -->
+  <h2>1 · Components</h2>
+  <p class="sub">C-numbers match the plan. Dashed boxes are phase 0 foundations that also fix live bugs.</p>
+  <div class="card">
+  <svg viewBox="0 0 1200 700" role="img" aria-label="Component diagram">
+    <defs>
+      <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8b91a3"/></marker>
+    </defs>
+    <g font-size="12" font-weight="600" fill="#8b91a3" letter-spacing="1">
+      <text x="20" y="22">AGENT (per bot)</text><text x="430" y="22">WORKERS (fleet runtime)</text><text x="880" y="22">STATE &amp; LIVE VIEW</text>
+    </g>
+
+    <!-- agent column -->
+    <rect x="20" y="40" width="370" height="250" rx="12" fill="#12151c" stroke="#34d399"/>
+    <text x="36" y="64" fill="#34d399" font-weight="700" font-size="14">Cycle (scheduler, unchanged cadence)</text>
+    <g font-size="12">
+      <rect x="36" y="78" width="338" height="58" rx="8" fill="#181c25" stroke="#f0a35e"/>
+      <text x="50" y="99" fill="#e7e9ef" font-weight="600">Planner = dispatcher (C8)</text>
+      <text x="50" y="117" fill="#8b91a3">sees goals view + Workers block → new_tasks,</text>
+      <text x="50" y="131" fill="#8b91a3">dispatch [taskIds]; never on explore/idle/gated</text>
+      <rect x="36" y="146" width="338" height="44" rx="8" fill="#181c25" stroke="#323847"/>
+      <text x="50" y="166" fill="#e7e9ef" font-weight="600">Cycle executor — non-task work</text>
+      <text x="50" y="182" fill="#8b91a3">maintenance, outreach (send_proactive_message)</text>
+      <rect x="36" y="200" width="338" height="76" rx="8" fill="#181c25" stroke="#67e8f9" stroke-dasharray="5 3"/>
+      <text x="50" y="221" fill="#67e8f9" font-weight="600">runExecutorTurn() — extracted (phase 0)</text>
+      <text x="50" y="239" fill="#8b91a3">prompt build · tool defs (blocked enforced) ·</text>
+      <text x="50" y="254" fill="#8b91a3">ToolExecutor · audit · abort-aware timeout ·</text>
+      <text x="50" y="269" fill="#8b91a3">shared by the cycle executor and worker steps</text>
+    </g>
+
+    <rect x="20" y="310" width="370" height="150" rx="12" fill="#12151c" stroke="#fbbf24"/>
+    <text x="36" y="334" fill="#fbbf24" font-weight="700" font-size="14">Rails (phase 0)</text>
+    <g font-size="12" fill="#e7e9ef">
+      <text x="36" y="358">• Real abort through LLM clients (C12), guarded so</text>
+      <text x="48" y="374" fill="#8b91a3">a Stop never triggers model/backend fallback</text>
+      <text x="36" y="396">• Confirm tools never block outside chats (C14)</text>
+      <text x="36" y="418">• Shared circuit breaker + global claude-cli</text>
+      <text x="48" y="434" fill="#8b91a3">semaphore (workers lowest priority) (C17)</text>
+      <text x="36" y="452">• Per-step metering</text>
+    </g>
+
+    <rect x="20" y="480" width="370" height="100" rx="12" fill="#12151c" stroke="#7c9cff"/>
+    <text x="36" y="504" fill="#7c9cff" font-weight="700" font-size="14">Operator</text>
+    <g font-size="12" fill="#e7e9ef">
+      <text x="36" y="526">Agent Home board · Fleet Board · Worker sheet</text>
+      <text x="36" y="546" fill="#8b91a3">task ops with rev (C6) · Stop / Retry a worker (C19)</text>
+      <text x="36" y="566" fill="#8b91a3">moving a claimed task stops its worker</text>
+    </g>
+
+    <!-- workers column -->
+    <rect x="430" y="40" width="400" height="120" rx="12" fill="#181c25" stroke="#c084fc" stroke-width="1.5"/>
+    <text x="446" y="64" fill="#c084fc" font-weight="700" font-size="14">WorkerPool (C10) — the only place runs start</text>
+    <g font-size="12" fill="#8b91a3">
+      <text x="446" y="86">admission: fleet 2 · per bot 1 · one run per task (claim)</text>
+      <text x="446" y="103">· daily step budget · tenant quota · breaker closed</text>
+      <text x="446" y="124">queue by goal priority → task order · sweep every 60 s</text>
+      <text x="446" y="141">run ends → wake the bot's cycle (debounced)</text>
+    </g>
+
+    <rect x="430" y="180" width="400" height="230" rx="12" fill="#12151c" stroke="#c084fc"/>
+    <text x="446" y="204" fill="#c084fc" font-weight="700" font-size="14">Worker run (C11) — step loop</text>
+    <g font-size="12">
+      <rect x="446" y="216" width="368" height="56" rx="8" fill="#181c25" stroke="#323847"/>
+      <text x="460" y="236" fill="#e7e9ef">step = one runExecutorTurn: protocol + task +</text>
+      <text x="460" y="252" fill="#e7e9ef">notes + answers + step log so far</text>
+      <text x="460" y="266" fill="#8b91a3">cwd / write root: productions/&lt;bot&gt;/tasks/&lt;taskId&gt;</text>
+      <rect x="446" y="282" width="368" height="44" rx="8" fill="#181c25" stroke="#323847"/>
+      <text x="460" y="301" fill="#e7e9ef">tools: bot's tools − orchestration + report tools</text>
+      <text x="460" y="317" fill="#8b91a3">task_progress · task_done · task_blocked (C13)</text>
+      <rect x="446" y="336" width="368" height="62" rx="8" fill="#181c25" stroke="#323847"/>
+      <text x="460" y="356" fill="#e7e9ef">budgets: steps · tool calls (callback counter,</text>
+      <text x="460" y="372" fill="#e7e9ef">works on claude-cli) · wall time · step timeout</text>
+      <text x="460" y="388" fill="#8b91a3">no report ×2 → blocked "stopped reporting"</text>
+    </g>
+
+    <rect x="430" y="430" width="400" height="150" rx="12" fill="#12151c" stroke="#fbbf24"/>
+    <text x="446" y="454" fill="#fbbf24" font-weight="700" font-size="14">Asks, approvals, restarts (C15–C16, phase 2b)</text>
+    <g font-size="12" fill="#e7e9ef">
+      <text x="446" y="476">• ask / approval carries runId → run waits, frees</text>
+      <text x="458" y="492" fill="#8b91a3">its slot; the answer resumes that run only</text>
+      <text x="446" y="514">• shutdown: abort + persist "interrupted" in 20 s</text>
+      <text x="446" y="536">• boot: re-bind claims before the scheduler starts;</text>
+      <text x="458" y="552" fill="#8b91a3">resume from the journal (max 2 attempts); a step</text>
+      <text x="458" y="568" fill="#8b91a3">that sent/executed something never re-runs</text>
+    </g>
+
+    <!-- state column -->
+    <g font-size="12">
+      <rect x="880" y="40" width="300" height="74" rx="10" fill="#12151c" stroke="#7c9cff"/>
+      <text x="896" y="62" fill="#7c9cff" font-weight="700" font-size="13">TaskStore — TASKS.json (C1–C3)</text>
+      <text x="896" y="82" fill="#8b91a3">ops + rev; claim {runId, token, expiry}</text>
+      <text x="896" y="98" fill="#8b91a3">task-* events → goal-events.jsonl</text>
+
+      <rect x="880" y="126" width="300" height="74" rx="10" fill="#12151c" stroke="#c084fc"/>
+      <text x="896" y="148" fill="#c084fc" font-weight="700" font-size="13">WorkerRun store (C9)</text>
+      <text x="896" y="168" fill="#8b91a3">runs.json (active) · &lt;runId&gt;.jsonl journal</text>
+      <text x="896" y="184" fill="#8b91a3">(every tool:end, step report) · daily ended log</text>
+
+      <rect x="880" y="212" width="300" height="74" rx="10" fill="#12151c" stroke="#34d399"/>
+      <text x="896" y="234" fill="#34d399" font-weight="700" font-size="13">Attribution (C16–C17)</text>
+      <text x="896" y="254" fill="#8b91a3">workers: runId + taskId + dispatchCycleId</text>
+      <text x="896" y="270" fill="#8b91a3">(never cycleId) · cycles: cycleId + taskId</text>
+
+      <rect x="880" y="298" width="300" height="104" rx="10" fill="#12151c" stroke="#67e8f9" stroke-dasharray="5 3"/>
+      <text x="896" y="320" fill="#67e8f9" font-weight="700" font-size="13">ActivityStream + /ws/activity (C18–C19)</text>
+      <text x="896" y="340" fill="#8b91a3">phase 0: tenant bound at upgrade; broadcasts,</text>
+      <text x="896" y="356" fill="#8b91a3">history replay and /ws/logs filtered</text>
+      <text x="896" y="376" fill="#e7e9ef">worker:queued|started|step|tool|waiting|ended</text>
+      <text x="896" y="392" fill="#e7e9ef">task:changed</text>
+
+      <rect x="880" y="414" width="300" height="166" rx="10" fill="#181c25" stroke="#7c9cff" stroke-width="1.5"/>
+      <text x="896" y="436" fill="#7c9cff" font-weight="700" font-size="13">Live view (C20)</text>
+      <text x="896" y="458" fill="#e7e9ef">• task badge: step n/budget, tool, elapsed</text>
+      <text x="896" y="478" fill="#e7e9ef">• Agent Home "Active workers" strip</text>
+      <text x="896" y="498" fill="#e7e9ef">• Fleet Workers view</text>
+      <text x="896" y="518" fill="#e7e9ef">• Worker sheet: journal, Stop, Retry</text>
+      <text x="896" y="538" fill="#e7e9ef">• Needs You: waiting workers</text>
+      <text x="896" y="562" fill="#8b91a3">event → refetch + slow poll + reconnect</text>
+    </g>
+
+    <!-- arrows -->
+    <g stroke="#8b91a3" stroke-width="1.4" fill="none" marker-end="url(#a1)">
+      <path d="M374,105 L428,100"/>                       <!-- planner → pool -->
+      <path d="M630,160 L630,178"/>                       <!-- pool → run -->
+      <path d="M374,238 C405,238 410,240 444,244"/>         <!-- runExecutorTurn → step -->
+      <path d="M830,80 L878,78"/>                         <!-- pool → task store claim -->
+      <path d="M830,300 C855,300 860,170 878,165"/>         <!-- run → run store -->
+      <path d="M830,320 C860,320 860,250 878,250"/>         <!-- run → attribution -->
+      <path d="M830,350 C860,350 860,350 878,350"/>         <!-- run → events -->
+      <path d="M1030,402 L1030,412"/>                     <!-- events → live -->
+      <path d="M878,500 C700,640 420,640 392,540"/>         <!-- live → operator -->
+      <path d="M392,520 C700,600 860,140 878,100"/>         <!-- operator → task store -->
+      <path d="M630,428 L630,412"/>                       <!-- asks → run -->
+    </g>
+    <g font-size="11" fill="#8b91a3">
+      <text x="380" y="92">dispatch</text>
+      <text x="836" y="70">claim</text>
+      <text x="600" y="640">live updates</text>
+      <text x="600" y="470" transform="rotate(0)"></text>
+    </g>
+  </svg>
+  <div class="legend">
+    <span style="--c:#34d399">agent cycle</span><span style="--c:#c084fc">worker runtime</span><span style="--c:#7c9cff">tasks &amp; operator</span><span style="--c:#67e8f9">phase 0 foundations</span><span style="--c:#fbbf24">rails, asks, restarts</span>
+  </div>
+  </div>
+
+  <!-- 2 sequence -->
+  <h2>2 · Dispatch and a worker's run</h2>
+  <p class="sub">The cycle does not wait for workers. A run spans as many cycles as it needs; when it ends it wakes the cycle.</p>
+  <div class="card">
+  <svg viewBox="0 0 1200 820" role="img" aria-label="Sequence diagram">
+    <defs><marker id="s1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8b91a3"/></marker></defs>
+    <g font-size="13" font-weight="600" text-anchor="middle">
+      <rect x="20" y="10" width="150" height="34" rx="6" fill="#181c25" stroke="#34d399"/><text x="95" y="32" fill="#e7e9ef">Cycle</text>
+      <rect x="210" y="10" width="150" height="34" rx="6" fill="#181c25" stroke="#7c9cff"/><text x="285" y="32" fill="#e7e9ef">TaskStore</text>
+      <rect x="400" y="10" width="150" height="34" rx="6" fill="#181c25" stroke="#c084fc"/><text x="475" y="32" fill="#e7e9ef">WorkerPool</text>
+      <rect x="590" y="10" width="150" height="34" rx="6" fill="#181c25" stroke="#c084fc"/><text x="665" y="32" fill="#e7e9ef">Worker run</text>
+      <rect x="780" y="10" width="150" height="34" rx="6" fill="#181c25" stroke="#fbbf24"/><text x="855" y="32" fill="#e7e9ef">Asks / approvals</text>
+      <rect x="970" y="10" width="190" height="34" rx="6" fill="#181c25" stroke="#67e8f9"/><text x="1065" y="32" fill="#e7e9ef">Events → live view</text>
+    </g>
+    <g stroke="#323847" stroke-dasharray="3 4">
+      <line x1="95" y1="44" x2="95" y2="805"/><line x1="285" y1="44" x2="285" y2="805"/><line x1="475" y1="44" x2="475" y2="805"/>
+      <line x1="665" y1="44" x2="665" y2="805"/><line x1="855" y1="44" x2="855" y2="805"/><line x1="1065" y1="44" x2="1065" y2="805"/>
+    </g>
+    <g font-size="12" fill="#e7e9ef">
+      <text x="105" y="68" fill="#8b91a3">planner reads goals view + Workers block (running / ended since last cycle)</text>
+      <line x1="95" y1="95" x2="280" y2="95" stroke="#8b91a3" marker-end="url(#s1)"/>
+      <text x="105" y="88">① add new_tasks</text>
+      <line x1="95" y1="130" x2="470" y2="130" stroke="#8b91a3" marker-end="url(#s1)"/>
+      <text x="105" y="123">② dispatch [t-1, t-2] (planner named them; gate/explore/idle checked)</text>
+      <text x="300" y="150" fill="#8b91a3">cycle continues with non-task work and ends — it does not wait</text>
+      <line x1="475" y1="180" x2="290" y2="180" stroke="#8b91a3" marker-end="url(#s1)"/>
+      <text x="300" y="173">③ claim t-1 (CAS) → In progress</text>
+      <text x="300" y="196" fill="#8b91a3">t-2 queued: per-bot cap 1</text>
+      <line x1="475" y1="220" x2="660" y2="220" stroke="#8b91a3" marker-end="url(#s1)"/>
+      <text x="485" y="213">④ start run</text>
+      <line x1="475" y1="235" x2="1060" y2="235" stroke="#67e8f9" stroke-dasharray="5 3" marker-end="url(#s1)"/>
+      <text x="760" y="252" fill="#67e8f9">worker:started</text>
+
+      <rect x="560" y="268" width="390" height="190" rx="8" fill="rgba(192,132,252,.07)" stroke="#c084fc"/>
+      <text x="574" y="290" fill="#c084fc" font-weight="600">⑤ step loop (each step persisted)</text>
+      <text x="574" y="312">runExecutorTurn(protocol, task, step log, answers)</text>
+      <text x="574" y="332">tool calls → journal + tool events (runId, taskId)</text>
+      <text x="574" y="352">ends with task_progress | task_done | task_blocked</text>
+      <text x="574" y="372">→ renew claim · heartbeat · worker:step</text>
+      <text x="574" y="394" fill="#8b91a3">budget used → release to To do with progress note</text>
+      <text x="574" y="412" fill="#8b91a3">no report ×2 → blocked "stopped reporting"</text>
+      <text x="574" y="430" fill="#8b91a3">Stop / timeout → abort (no fallback replay)</text>
+      <text x="574" y="448" fill="#8b91a3">step tool count capped in the callback (claude-cli too)</text>
+      <line x1="950" y1="330" x2="1060" y2="330" stroke="#67e8f9" stroke-dasharray="5 3" marker-end="url(#s1)"/>
+      <text x="960" y="322" fill="#67e8f9">step · tool</text>
+
+      <line x1="665" y1="490" x2="850" y2="490" stroke="#fbbf24" stroke-dasharray="5 3" marker-end="url(#s1)"/>
+      <text x="675" y="483">⑥ ask / approval (runId) — phase 2b</text>
+      <text x="675" y="508" fill="#8b91a3">run → waiting, slot freed, task Blocked "waiting on you"</text>
+      <line x1="855" y1="540" x2="480" y2="540" stroke="#fbbf24" marker-end="url(#s1)"/>
+      <text x="560" y="533">⑦ answer routed by runId → re-queue that run (not the cycle)</text>
+
+      <line x1="665" y1="590" x2="290" y2="590" stroke="#8b91a3" marker-end="url(#s1)"/>
+      <text x="320" y="583">⑧ task_done(note) → Done · release claim</text>
+      <line x1="665" y1="620" x2="480" y2="620" stroke="#8b91a3" marker-end="url(#s1)"/>
+      <text x="500" y="613">run ended</text>
+      <line x1="475" y1="650" x2="100" y2="650" stroke="#8b91a3" marker-end="url(#s1)"/>
+      <text x="140" y="643">⑨ wake the cycle (debounced) · start queued t-2</text>
+      <line x1="475" y1="672" x2="1060" y2="672" stroke="#67e8f9" stroke-dasharray="5 3" marker-end="url(#s1)"/>
+      <text x="760" y="690" fill="#67e8f9">worker:ended · task:changed</text>
+
+      <line x1="20" y1="715" x2="1180" y2="715" stroke="#323847"/>
+      <text x="20" y="738" fill="#8b91a3">restart:</text>
+      <text x="90" y="738">SIGTERM → pool.abortAll → "interrupted" persisted (≤ 20 s) · boot → re-bind claims → then the scheduler starts →</text>
+      <text x="90" y="758">runs resume at their last finished step (attempt + 1, max 2); a step whose journal shows a send/exec goes to the operator</text>
+      <text x="20" y="790" fill="#8b91a3">operator:</text>
+      <text x="90" y="790">Stop → abort the run · moving a claimed task on the board → releases the claim and stops its worker</text>
+    </g>
+  </svg>
+  </div>
+
+  <!-- 3 lifecycle -->
+  <h2>3 · Lifecycles</h2>
+  <div class="grid2">
+  <div class="card">
+    <p class="sub">Worker run</p>
+    <svg viewBox="0 0 580 380" role="img" aria-label="Worker run state machine">
+      <defs><marker id="l1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8b91a3"/></marker></defs>
+      <g font-size="13" font-weight="600" text-anchor="middle">
+        <rect x="20" y="40" width="110" height="38" rx="19" fill="#12151c" stroke="#8b91a3"/><text x="75" y="64" fill="#e7e9ef">queued</text>
+        <rect x="235" y="40" width="110" height="38" rx="19" fill="#12151c" stroke="#7c9cff"/><text x="290" y="64" fill="#7c9cff">running</text>
+        <rect x="235" y="170" width="110" height="38" rx="19" fill="#12151c" stroke="#fbbf24"/><text x="290" y="194" fill="#fbbf24">waiting</text>
+        <rect x="20" y="170" width="120" height="38" rx="19" fill="#12151c" stroke="#8b91a3"/><text x="80" y="194" fill="#e7e9ef">interrupted</text>
+        <rect x="450" y="20" width="110" height="34" rx="17" fill="#12151c" stroke="#34d399"/><text x="505" y="42" fill="#34d399">done</text>
+        <rect x="450" y="70" width="110" height="34" rx="17" fill="#12151c" stroke="#f87171"/><text x="505" y="92" fill="#f87171">blocked</text>
+        <rect x="450" y="120" width="110" height="34" rx="17" fill="#12151c" stroke="#f87171"/><text x="505" y="142" fill="#f87171">failed</text>
+        <rect x="450" y="170" width="110" height="34" rx="17" fill="#12151c" stroke="#8b91a3"/><text x="505" y="192" fill="#e7e9ef">stopped</text>
+      </g>
+      <g stroke="#8b91a3" stroke-width="1.3" fill="none" marker-end="url(#l1)">
+        <path d="M130,59 L233,59"/>
+        <path d="M345,52 L448,37"/><path d="M345,60 L448,85"/><path d="M345,66 L448,135"/><path d="M340,76 L452,180"/>
+        <path d="M282,78 L282,168"/><path d="M298,168 C330,130 330,110 300,80"/>
+        <path d="M240,72 C150,110 110,140 90,168"/><path d="M60,168 L60,80"/>
+      </g>
+      <g font-size="11" fill="#8b91a3">
+        <text x="150" y="52">admitted</text>
+        <text x="368" y="30">task_done</text><text x="368" y="78">task_blocked · no report ×2</text>
+        <text x="372" y="118">no heartbeat · errors</text><text x="360" y="172">Stop · task moved</text>
+        <text x="188" y="130">ask / approval</text><text x="318" y="130">answered</text>
+        <text x="110" y="128">SIGTERM</text><text x="12" y="128">boot resume</text>
+      </g>
+      <text x="20" y="250" font-size="12" fill="#e7e9ef">Budget used → task released to To do with a progress note; the run ends as done=false, the planner decides.</text>
+      <text x="20" y="272" font-size="12" fill="#e7e9ef">dismissed / stale ask → blocked. ≥ 2 failed attempts → task Blocked.</text>
+      <text x="20" y="294" font-size="12" fill="#e7e9ef">A waiting run holds no pool slot.</text>
+      <text x="20" y="330" font-size="12" fill="#8b91a3">Every transition: journal row + worker:* event + task-* event when the task lane changes.</text>
+    </svg>
+  </div>
+  <div class="card">
+    <p class="sub">Task lanes and who moves them</p>
+    <table>
+      <tr><th>Move</th><th>By</th></tr>
+      <tr><td>To do → In progress</td><td>pool claim when a run starts · operator · agent in a conversation</td></tr>
+      <tr><td>In progress → Done</td><td>worker <code>task_done(note)</code> · operator</td></tr>
+      <tr><td>In progress → Blocked</td><td>worker <code>task_blocked(why)</code> · run waiting on an ask · ≥ 2 failed attempts · operator</td></tr>
+      <tr><td>In progress → To do</td><td>budget used · run failed/stopped · claim expired</td></tr>
+      <tr><td>Blocked → To do</td><td>answer arrives (run re-queued) · operator</td></tr>
+      <tr><td>any → any</td><td>operator; on a claimed task it releases the claim and stops the worker</td></tr>
+    </table>
+    <p class="sub" style="margin-top:12px">Task record, <code>TASKS.json</code></p>
+<pre>{ "id": "t-3f9a1c", "goalId": "g-1a2b3c4d",
+  "text": "Find 3 companies running at L3+",
+  "lane": "in_progress", "order": 2, "by": "agent",
+  "note": "2 of 3 found: Acme, Globex",
+  "claim": { "runId": "r-…", "expiresAt": "…" },
+  "cycles": ["…"] }</pre>
+  </div>
+  </div>
+
+  <!-- 4 live view -->
+  <h2>4 · What the operator sees live</h2>
+  <p class="sub">Mockup of the Agent Home additions (C20). Badges update from <code>worker:*</code> events; the sheet shows the run's journal.</p>
+  <div class="card">
+  <div class="mock">
+    <div class="strip">
+      <div class="wk" style="--g:#7c9cff"><div class="wk-h"><span class="pulse"></span>Find 3 companies running at L3+</div>
+        <div class="wk-m">Dark factory research · step 3 / 8 · web_fetch acme.com/about · 6 min</div><div class="bar"><i style="width:38%"></i></div></div>
+      <div class="wk" style="--g:#f0a35e"><div class="wk-h"><span class="pulse wait"></span>Draft the pilot rollback plan</div>
+        <div class="wk-m">Recruiting pilot · waiting on you: "Which metric decides a rollback?" · 2 h</div><div class="bar"><i style="width:50%;background:#fbbf24"></i></div></div>
+    </div>
+    <div class="lanes">
+      <div class="lane"><h4>To do</h4><div class="tk">Compare what they automated first</div><div class="tk">Send me a one-page summary</div></div>
+      <div class="lane"><h4>In progress</h4><div class="tk">Find 3 companies running at L3+<div class="w"><span class="pulse"></span>worker · step 3/8 · web_fetch</div></div></div>
+      <div class="lane"><h4>Blocked</h4></div>
+      <div class="lane"><h4>Done</h4><div class="tk done">Map L0–L4</div><div class="tk done">Consolidate the map in memory</div></div>
+    </div>
+    <div class="sheet">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><b>Worker r-7c1e · Find 3 companies running at L3+</b><span style="color:var(--dim)">dispatched by cycle 09:12 · attempt 1</span><span style="flex:1"></span><span class="btn">Retry</span><span class="btn danger">Stop</span></div>
+      <div class="row"><span style="color:var(--dim)">step 1</span><span>Searched public sources; shortlisted 6 candidates. <span style="color:var(--dim)">web_search ×2</span></span><span style="color:var(--ok)">progress</span></div>
+      <div class="row"><span style="color:var(--dim)">step 2</span><span>Confirmed Acme (L3, lights-out packaging). <span style="color:var(--dim)">web_fetch ×3 · file_write notes.md</span></span><span style="color:var(--ok)">progress</span></div>
+      <div class="row"><span style="color:var(--dim)">step 3</span><span>Checking Globex… <span style="color:var(--dim)">web_fetch (running)</span></span><span style="color:var(--accent)">running</span></div>
+    </div>
+  </div>
+  </div>
+
+  <!-- 5 decisions -->
+  <h2>5 · Decisions</h2>
+  <div class="card"><table>
+    <tr><th style="width:34%">Decision</th><th>Why</th></tr>
+    <tr><td><b>D1</b> Tasks in their own store (<code>TASKS.json</code>)</td><td>Notes, claims and revisions do not fit the GOALS.md line; the completed-goals cap deletes tasks.</td></tr>
+    <tr><td><b>D2</b> Planner chooses, loop + pool act, worker reports</td><td>The loop never dispatches what the planner did not name; gate, explore and idle rules apply at dispatch.</td></tr>
+    <tr><td><b>D3</b> Worker = in-process step loop of the same agent on a shared <code>runExecutorTurn()</code></td><td>Rejected: worker as a cycle variant (everything keyed by bot, strategist/planner cost per step); a long CLI session (one-shot, no resume); a separate bot (split identity, needs approval).</td></tr>
+    <tr><td><b>D4</b> Budgets: steps, tool calls, wall time, daily steps per bot</td><td>One full-prompt call per step: an 8-step task costs ~2–3 of today's cycles. OpenClaw bounds only time and still lets runs overrun.</td></tr>
+    <tr><td><b>D5</b> Caps start at 1 per bot, 2 fleet-wide, global claude-cli semaphore</td><td>Nothing limits CLI processes today; worker 429s must open the shared breaker.</td></tr>
+    <tr><td><b>D6</b> Resume from the journal, max 2 attempts; sent/executed steps never re-run</td><td>Resuming is safe only when side effects are known. OpenClaw finalizes instead.</td></tr>
+    <tr><td><b>D7</b> Permissions never block outside conversations</td><td>The blocking path has no timeout: enforcing it as-is would stall every cycle.</td></tr>
+    <tr><td><b>D9</b> Socket tenant filter in phase 0</td><td>Executors already stream tool events to every connected client.</td></tr>
+  </table></div>
+
+  <!-- 6 phases -->
+  <h2>6 · Phases</h2>
+  <div class="card"><ol class="phases" start="0">
+    <li><b>Foundations</b> — TaskStore + op API + both boards + goals view; socket tenant filter; real abort with fallback guards; non-blocking confirm behind a flag; <code>runExecutorTurn()</code>; shared breaker + claude-cli semaphore. No change to how agents plan; several live bugs fixed.</li>
+    <li><b>Planner uses tasks</b> — <code>new_tasks</code>, <code>taskId</code> on cycle work. Judge breakdown quality before any worker runs.</li>
+    <li><b>Workers</b> — 2a: pool, step loop, journal, report tools, sweep, per-task dirs, wake-on-end (no asks, no confirm tools). 2b: asks/approvals per run, shutdown + resume. Behind <code>workers.enabled</code>, one bot first.</li>
+    <li><b>Live visibility</b> — worker events, API, badges, Active workers strip, Fleet Workers view, worker sheet with Stop/Retry.</li>
+    <li><b>Strategist and upkeep</b> — deliverable → task, lint, karma per run, Why for tasks and runs.</li>
+  </ol></div>
+
+  <!-- 7 verification -->
+  <h2>7 · How this was verified</h2>
+  <p class="sub">Four read-only research passes (OpenClaw progress_card, Workboard and sub-agents; our agent loop; our runtime building blocks), then two adversarial reviews against the code. The load-bearing claims were re-checked by hand: <code>llm-client.ts:34-39, 172-187</code>, <code>ask-human.ts:487-498</code>, <code>tool-executor.ts:584</code>, <code>goals.ts:169, 730</code>, <code>agent-retry-engine.ts:520</code>, <code>docker-compose.yml:87</code>.</p>
+  <div class="card"><table>
+    <tr><th style="width:30%">Earlier idea</th><th style="width:40%">What the code showed</th><th>Now</th></tr>
+    <tr><td>Tasks as GOALS.md lines with a note</td><td>Suffix grammar breaks on free text; completed cap deletes tasks</td><td><span class="tag t-change">changed</span> own store</td></tr>
+    <tr><td>Reconcile with a follow-up LLM turn</td><td>No transcript to continue</td><td><span class="tag t-change">changed</span> every worker step must report</td></tr>
+    <tr><td>Loop starts a fallback task</td><td>Would start work under the gate / explore / idle</td><td><span class="tag t-change">changed</span> dispatch only what the planner named</td></tr>
+    <tr><td>Fix the board race inside <code>writeGoalsFile</code></td><td>The stale data is the client's whole-list PATCH (both boards)</td><td><span class="tag t-change">changed</span> op API + revisions + claims</td></tr>
+    <tr><td><code>maxToolRounds</code> bounds a worker step</td><td>Ignored on claude-cli</td><td><span class="tag t-change">changed</span> counter in the tool callback</td></tr>
+    <tr><td>Abort through the client</td><td>Abort triggers model/backend fallbacks that replay tools</td><td><span class="tag t-change">changed</span> abort guards on every fallback</td></tr>
+    <tr><td>Workers use the confirm path</td><td>Awaits with no timeout — would stall every cycle</td><td><span class="tag t-change">changed</span> non-blocking confirm</td></tr>
+    <tr><td>Answers route to a run</td><td>One pending question per bot; resolved approvals re-planned by the cycle</td><td><span class="tag t-change">changed</span> per-run asks and approvals</td></tr>
+    <tr><td>Shutdown finishes the current tool call</td><td>30 s grace vs 300 s CLI steps</td><td><span class="tag t-change">changed</span> abort + persist ≤ 20 s, journal</td></tr>
+    <tr><td>Lock for production numbering</td><td>Renumbering is synchronous; the real race is a shared workDir</td><td><span class="tag t-change">changed</span> a directory per task</td></tr>
+    <tr><td>Worker rows carry the dispatching <code>cycleId</code></td><td>Stretches cycle windows in stats; presence mixes runs</td><td><span class="tag t-change">changed</span> <code>runId</code> + <code>dispatchCycleId</code></td></tr>
+    <tr><td>Tenant filter with the UI (phase 3)</td><td>Tool events already stream to every client</td><td><span class="tag t-change">changed</span> phase 0</td></tr>
+    <tr><td>3 fleet / 2 per bot</td><td>No CLI process limiter; worker 429s never open the breaker</td><td><span class="tag t-change">changed</span> 2 / 1, semaphore, shared breaker</td></tr>
+  </table></div>
+</main>
+</body>
+</html>
