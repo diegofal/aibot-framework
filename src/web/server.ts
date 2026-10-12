@@ -20,6 +20,7 @@ import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { PresenceTracker } from '../stats/presence-tracker';
+import { readAgentCycles } from '../stats/readers/agent-cycles';
 import { readToolEntries } from '../stats/readers/tool-audit';
 import { AdminCredentialStore } from '../tenant/admin-credentials';
 import { createAdminAuthMiddleware } from '../tenant/admin-middleware';
@@ -229,6 +230,8 @@ export function startWebServer(deps: WebServerDeps): void {
         const bot = config.bots.find((b) => b.id === botId);
         return bot ? avatarUrl(botId, findAvatar(resolveBotPaths(config, bot).soulDir)) : null;
       },
+      readCycles: (botId, sinceMs, untilMs) =>
+        readAgentCycles(resolveStatsDirs(config).agentCycles, botId, sinceMs, untilMs),
     })
   );
   app.route(

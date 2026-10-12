@@ -40,9 +40,9 @@ import {
   applyRevision,
   buildDigestCandidate,
   buildDispatch,
-  decideDispatch,
   findHypeWords,
   isCadenceOpen,
+  judgeDispatch,
   proposalCandidate,
   renderDispatchBody,
   runEditor,
@@ -55,7 +55,15 @@ import { applyNavigatorResult, runNavigator, shouldRunNavigator } from './naviga
 import type { CuriosityService } from './service';
 import type { CuriosityStore } from './store';
 import { applyIgnored, likedTopicScores, renderTasteForPrompt } from './taste';
-import type { CycleMode, Direction, Dispatch, FrontierItem, ResolvedCuriosity } from './types';
+import type {
+  CycleMode,
+  Direction,
+  Dispatch,
+  DispatchOrigin,
+  DispatchTrigger,
+  FrontierItem,
+  ResolvedCuriosity,
+} from './types';
 
 export type CuriosityCaller = 'curiosity:navigator' | 'curiosity:extractor' | 'curiosity:editor';
 
@@ -363,6 +371,8 @@ export interface FinishArgs {
   summary: string;
   toolCalls: Array<{ name: string; args?: Record<string, unknown>; success?: boolean }>;
   idle?: boolean;
+  /** The agent-loop cycle and the goal it served, stamped on the dispatch's origin. */
+  attribution?: { cycleId: string; goalId?: string | null; goalTitle?: string | null };
 }
 
 export interface FinishResult {
@@ -461,6 +471,38 @@ function heldScore(c: DispatchCandidate): number {
   return Math.max(0, 0.5 - 0.1 * findHypeWords(`${c.hook} ${c.whyCare}`).length);
 }
 
+/** Which step produced a candidate. */
+function triggerOf(c: DispatchCandidate, interest: string | undefined): DispatchTrigger {
+  if (c.kind === 'digest') return 'digest';
+  if (c.kind === 'proposal') return interest ? 'interest' : 'frontier';
+  return 'insight';
+}
+
+/** Where a dispatch came from: the cycle, its goal and plan, and how it was chosen. */
+function buildOrigin(
+  args: FinishArgs,
+  candidate: DispatchCandidate,
+  interest: string | undefined,
+  finalHook: string
+): DispatchOrigin {
+  const { attribution: a, cycle } = args;
+  const plan = args.plan.join('; ').slice(0, ORIGIN_PLAN_MAX_CHARS);
+  const origin: DispatchOrigin = { trigger: triggerOf(candidate, interest) };
+  if (a?.cycleId) origin.cycleId = a.cycleId;
+  if (a?.goalId) origin.goalId = a.goalId;
+  if (a?.goalTitle) origin.goalTitle = a.goalTitle;
+  if (plan) origin.plan = plan;
+  origin.mode = cycle.decision.mode;
+  origin.modeReason = cycle.decision.reason;
+  if (cycle.frontierItem) origin.frontierQuestion = cycle.frontierItem.question;
+  if (candidate.sourceIds?.length) origin.sourceIds = [...candidate.sourceIds];
+  if (finalHook !== candidate.hook) origin.draftHook = candidate.hook;
+  return origin;
+}
+
+/** Cap for the cycle plan kept on a dispatch's origin. */
+const ORIGIN_PLAN_MAX_CHARS = 300;
+
 /** At most one dispatch per cycle: insight → interest proposal → frontier proposal → digest. */
 async function maybeDispatch(
   deps: RunnerDeps,
@@ -520,10 +562,12 @@ async function maybeDispatch(
       emoji: args.emoji,
       maxChars: cfg.dispatch.maxChars,
     });
-    const held = {
+    const held: Dispatch = {
       ...buildDispatch({ botId: args.botId, candidate, body, editor: null, status: 'held', now }),
       editorScore: heldScore(candidate),
       editorNotes: 'held: cadence closed, not edited',
+      origin: buildOrigin(args, candidate, interest, candidate.hook),
+      heldReason: 'cadence-closed',
     };
     store.appendDispatch(held);
     return held;
@@ -549,19 +593,34 @@ async function maybeDispatch(
   });
   if (editor) editor = applyHypePenalty(editor, body);
 
-  let status = decideDispatch({ kind: revised.kind, editor, cadenceOpen, settings: cfg.dispatch });
-  if (status === 'sent' && deps.fleetAllows && !deps.fleetAllows(args.botId)) status = 'held';
+  const judgement = judgeDispatch({
+    kind: revised.kind,
+    editor,
+    cadenceOpen,
+    settings: cfg.dispatch,
+  });
+  let { status, heldReason } = judgement;
+  if (status === 'sent' && deps.fleetAllows && !deps.fleetAllows(args.botId)) {
+    status = 'held';
+    heldReason = 'fleet-cap';
+  }
   let deliveredVia: DispatchDelivery = false;
   if (status === 'sent') {
     deliveredVia = await deps.deliver(args.botId, body).catch(() => false as const);
     if (deliveredVia) deps.onDelivered?.(args.botId);
-    else status = 'held';
+    else {
+      status = 'held';
+      heldReason = 'delivery-failed';
+    }
   }
 
   const dispatch: Dispatch = {
     ...buildDispatch({ botId: args.botId, candidate: revised, body, editor, status, now }),
     ...(interest ? { interest } : {}),
     ...(deliveredVia ? { deliveredVia } : {}),
+    origin: buildOrigin(args, candidate, interest, revised.hook),
+    ...(status === 'held' && heldReason ? { heldReason } : {}),
+    ...(heldReason === 'editor' && judgement.bar !== undefined ? { heldBar: judgement.bar } : {}),
   };
   store.appendDispatch(dispatch);
   if (interest) {

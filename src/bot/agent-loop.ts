@@ -1187,6 +1187,7 @@ export class AgentLoop {
       // Curiosity DNA: turn the cycle into knowledge, maybe a dispatch to the operator
       if (detail.curiosity) {
         const { cycle, deps, deliverable, identity } = detail.curiosity;
+        const attribution = this.cycleAttribution.get(botId);
         await raceTimeout(
           finishCuriosityCycle(deps, {
             botId,
@@ -1199,6 +1200,7 @@ export class AgentLoop {
             summary: detail.summary,
             toolCalls: detail.toolCalls,
             idle: isIdle,
+            attribution,
           }),
           CURIOSITY_FINISH_TIMEOUT_MS,
           { extracted: false }

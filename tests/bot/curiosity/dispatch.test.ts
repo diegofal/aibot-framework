@@ -13,6 +13,7 @@ import {
   decideDispatch,
   findHypeWords,
   isCadenceOpen,
+  judgeDispatch,
   parseEditorResult,
   proposalCandidate,
   renderDispatchBody,
@@ -638,5 +639,64 @@ describe('proposalCandidate', () => {
     const c = proposalCandidate({ item: rest as FrontierItem, crossing: ['purpose'] });
     expect(c.evidence.length).toBeGreaterThan(0);
     expect(c.topic).toBe('frontier');
+  });
+});
+
+describe('judgeDispatch (why a dispatch was held)', () => {
+  const base = {
+    kind: 'insight' as const,
+    editor: editor(),
+    cadenceOpen: true,
+    settings: settings(),
+  };
+
+  it('agrees with decideDispatch on the status', () => {
+    for (const over of [
+      {},
+      { cadenceOpen: false },
+      { editor: null },
+      { editor: editor({ verdict: 'drop' as const }) },
+      { editor: editor({ score: 0.69 }) },
+      { kind: 'digest' as const, editor: editor({ score: 0.55, verdict: 'hold' as const }) },
+    ]) {
+      const args = { ...base, ...over };
+      expect(judgeDispatch(args).status).toBe(decideDispatch(args));
+    }
+  });
+
+  it('names no reason for a sent or dropped dispatch', () => {
+    expect(judgeDispatch(base).heldReason).toBeUndefined();
+    expect(
+      judgeDispatch({ ...base, editor: editor({ verdict: 'drop' }) }).heldReason
+    ).toBeUndefined();
+  });
+
+  it('says the editor held it, with the bar it missed', () => {
+    const j = judgeDispatch({ ...base, editor: editor({ score: 0.69 }) });
+    expect(j).toEqual({ status: 'held', heldReason: 'editor', bar: 0.7 });
+  });
+
+  it('a proposal or digest is judged against the lower proposal bar', () => {
+    const j = judgeDispatch({ ...base, kind: 'digest', editor: editor({ score: 0.49 }) });
+    expect(j).toEqual({ status: 'held', heldReason: 'editor', bar: 0.5 });
+  });
+
+  it('names the closed cadence, the missing editor and disabled dispatch apart', () => {
+    expect(judgeDispatch({ ...base, cadenceOpen: false }).heldReason).toBe('cadence-closed');
+    expect(judgeDispatch({ ...base, editor: null }).heldReason).toBe('editor-failed');
+    expect(judgeDispatch({ ...base, settings: settings({ enabled: false }) }).heldReason).toBe(
+      'disabled'
+    );
+  });
+});
+
+describe('buildDigestCandidate sources', () => {
+  it('lists the held dispatches it summarises, strongest first', () => {
+    const digest = buildDigestCandidate([
+      heldDispatch({ id: 'a', hook: 'Weak', editorScore: 0.2 }),
+      heldDispatch({ id: 'b', hook: 'Strong', editorScore: 0.6 }),
+      heldDispatch({ id: 'c', hook: 'Old digest', editorScore: 0.9, kind: 'digest' }),
+    ]);
+    expect(digest?.sourceIds).toEqual(['b', 'a']);
   });
 });

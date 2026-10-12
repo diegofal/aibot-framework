@@ -196,6 +196,43 @@ export type DispatchKind = 'insight' | 'proposal' | 'digest';
 export type DispatchStatus = 'sent' | 'held' | 'dropped';
 export type DispatchSignal = 'up' | 'down' | 'more';
 
+/**
+ * Why a dispatch was held instead of sent: the editor scored it under the bar
+ * (or chose to hold), the cadence was closed (held unedited), the editor call
+ * failed, the fleet-wide daily cap was spent, delivery failed, or dispatch is off.
+ */
+export type HeldReason =
+  | 'editor'
+  | 'cadence-closed'
+  | 'editor-failed'
+  | 'fleet-cap'
+  | 'delivery-failed'
+  | 'disabled';
+
+/** Which step of the dispatch pipeline produced a dispatch. */
+export type DispatchTrigger = 'insight' | 'interest' | 'frontier' | 'digest';
+
+/** Where a dispatch came from, so the operator can judge it for themselves. */
+export interface DispatchOrigin {
+  trigger: DispatchTrigger;
+  /** The agent-loop cycle that produced it (`<data>/agent-cycles`). */
+  cycleId?: string;
+  goalId?: string;
+  goalTitle?: string;
+  /** What that cycle set out to do (its plan, capped). */
+  plan?: string;
+  mode?: CycleMode;
+  modeReason?: string;
+  /** Explore cycle: the frontier question it chased. */
+  frontierQuestion?: string;
+  /** Digest: the held dispatches it summarises, strongest first. */
+  sourceIds?: string[];
+  /** The agent's own hook, when the editor rewrote it. */
+  draftHook?: string;
+  /** Matched to the cycle log by time after the fact, not recorded at creation. */
+  inferred?: boolean;
+}
+
 export interface Dispatch {
   id: string;
   botId: string;
@@ -225,6 +262,10 @@ export interface Dispatch {
   interest?: string;
   /** Where a sent dispatch went: a Telegram ping, or only the dashboard feed. */
   deliveredVia?: 'telegram' | 'inbox';
+  origin?: DispatchOrigin;
+  /** Held only: why, and (editor) the score it needed to be sent. */
+  heldReason?: HeldReason;
+  heldBar?: number;
 }
 
 export interface DispatchCadence {

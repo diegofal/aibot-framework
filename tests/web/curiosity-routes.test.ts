@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { Hono } from 'hono';
+import type { CycleRow } from '../../src/bot/curiosity/origin';
 import type { CuriositySnapshot } from '../../src/bot/curiosity/service';
 import type { Direction, Dispatch, FrontierItem } from '../../src/bot/curiosity/types';
 import type { BotConfig, Config } from '../../src/config';
@@ -96,7 +97,12 @@ function fakeService() {
   return { svc, calls, dispatches, frontierById, direction };
 }
 
-function makeApp(opts: { tenantId?: string } = {}) {
+function makeApp(
+  opts: {
+    tenantId?: string;
+    readCycles?: (botId: string, sinceMs: number, untilMs: number) => CycleRow[];
+  } = {}
+) {
   const fake = fakeService();
   const config = {
     bots: [
@@ -119,6 +125,7 @@ function makeApp(opts: { tenantId?: string } = {}) {
       botManager: { getCuriosityService: () => fake.svc },
       logger: noopLogger,
       avatarUrlFor: (id) => (id === 'b1' ? '/api/agents/b1/avatar?v=1' : null),
+      readCycles: opts.readCycles,
     })
   );
   return { app, ...fake };
@@ -315,5 +322,82 @@ describe('POST /api/curiosity/:botId/direction/signal', () => {
   it('400s on a bad signal', async () => {
     const { app } = makeApp();
     expect((await post(app, '/api/curiosity/b1/direction/signal', {})).status).toBe(400);
+  });
+});
+
+describe('GET /api/curiosity/dispatches — where each one came from', () => {
+  const cycleRow: CycleRow = {
+    cycleId: 'c-3',
+    startedAt: '2026-10-03T09:59:00Z',
+    endedAt: '2026-10-03T10:01:00Z',
+    planSummary: 'Look for roles',
+    goalId: 'g-1',
+    goalTitle: 'Find roles',
+  };
+
+  it('infers the origin of an older dispatch from the cycle log of its bot', async () => {
+    const asked: string[] = [];
+    const { app } = makeApp({
+      readCycles: (botId) => {
+        asked.push(botId);
+        return botId === 'b1' ? [cycleRow] : [];
+      },
+    });
+    const body = await (await app.request('/api/curiosity/dispatches')).json();
+    const d3 = body.dispatches.find((d: Dispatch) => d.id === 'd3');
+    expect(d3.origin).toEqual({
+      trigger: 'insight',
+      cycleId: 'c-3',
+      goalId: 'g-1',
+      goalTitle: 'Find roles',
+      plan: 'Look for roles',
+      inferred: true,
+    });
+    expect(body.dispatches.find((d: Dispatch) => d.id === 'd1').origin).toBeUndefined();
+    expect(asked.sort()).toEqual(['b1', 'b2', 'b3']);
+  });
+
+  it('a cycle-log failure leaves the page intact, without origins', async () => {
+    const { app } = makeApp({
+      readCycles: () => {
+        throw new Error('disk');
+      },
+    });
+    const res = await app.request('/api/curiosity/dispatches');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.dispatches).toHaveLength(4);
+  });
+
+  it('attaches the findings a digest summarised', async () => {
+    const { app, dispatches } = makeApp();
+    dispatches.b1.push(
+      dispatch('b1', 'dg', '2026-10-05T10:00:00Z', {
+        kind: 'digest',
+        status: 'held',
+        origin: { trigger: 'digest', sourceIds: ['d3'] },
+      })
+    );
+    const body = await (await app.request('/api/curiosity/dispatches')).json();
+    const dg = body.dispatches.find((d: Dispatch) => d.id === 'dg');
+    expect(dg.sources).toEqual({
+      inferred: false,
+      items: [
+        {
+          id: 'd3',
+          hook: expect.any(String),
+          createdAt: '2026-10-03T10:00:00Z',
+          editorScore: expect.any(Number),
+        },
+      ],
+    });
+    expect(body.dispatches.find((d: Dispatch) => d.id === 'd3').sources).toBeUndefined();
+  });
+
+  it('the per-bot snapshot explains its dispatches the same way', async () => {
+    const { app } = makeApp({ readCycles: () => [cycleRow] });
+    const body = await (await app.request('/api/curiosity/b1')).json();
+    const d3 = body.dispatches.find((d: Dispatch) => d.id === 'd3');
+    expect(d3.origin).toMatchObject({ cycleId: 'c-3', inferred: true });
   });
 });

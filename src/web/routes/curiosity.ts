@@ -20,6 +20,7 @@
  * be reached through its sub-paths.
  */
 import { type Context, Hono } from 'hono';
+import { type CycleRow, digestSources, inferOrigin } from '../../bot/curiosity/origin';
 import type { CuriosityService } from '../../bot/curiosity/service';
 import type { Dispatch } from '../../bot/curiosity/types';
 import type { Config } from '../../config';
@@ -42,7 +43,15 @@ export interface CuriosityRouteDeps {
   logger: Logger;
   /** Face URL for the inbox (null = initials avatar). */
   avatarUrlFor?: (botId: string) => string | null;
+  /**
+   * Agent-loop cycle rows of a bot started in [sinceMs, untilMs]: dispatches
+   * written before they recorded their origin get it inferred from these.
+   */
+  readCycles?: (botId: string, sinceMs: number, untilMs: number) => CycleRow[];
 }
+
+/** A cycle can start this long before the dispatch it produced. */
+const CYCLE_LOOKBACK_MS = 86_400_000;
 
 export const DEFAULT_DISPATCH_LIMIT = 50;
 export const MAX_DISPATCH_LIMIT = 200;
@@ -92,6 +101,41 @@ export function curiosityRoutes(deps: CuriosityRouteDeps) {
     }
   };
 
+  /** One cycle-log read per bot on the page, spanning its dispatches. */
+  const cyclesFor = (page: Dispatch[]): Map<string, CycleRow[]> => {
+    const out = new Map<string, CycleRow[]>();
+    if (!deps.readCycles) return out;
+    const span = new Map<string, { min: number; max: number }>();
+    for (const d of page) {
+      if (d.origin) continue;
+      const t = Date.parse(d.createdAt);
+      if (!Number.isFinite(t)) continue;
+      const s = span.get(d.botId);
+      span.set(
+        d.botId,
+        s ? { min: Math.min(s.min, t), max: Math.max(s.max, t) } : { min: t, max: t }
+      );
+    }
+    for (const [botId, { min, max }] of span) {
+      try {
+        out.set(botId, deps.readCycles(botId, min - CYCLE_LOOKBACK_MS, max));
+      } catch (err) {
+        deps.logger.warn({ err, botId }, 'Curiosity: cycle log read failed');
+      }
+    }
+    return out;
+  };
+
+  /** Each dispatch with its origin (recorded or inferred) and, for a digest, its sources. */
+  const explain = <T extends Dispatch>(page: T[], byBot: Map<string, Dispatch[]>) => {
+    const cycles = cyclesFor(page);
+    return page.map((d) => {
+      const origin = inferOrigin(d, cycles.get(d.botId) ?? []);
+      const sources = digestSources(d, byBot.get(d.botId) ?? []);
+      return { ...d, ...(origin ? { origin } : {}), ...(sources ? { sources } : {}) };
+    });
+  };
+
   app.get('/dispatches', (c) => {
     const limit = parseLimit(c.req.query('limit'));
     const offset = parseOffset(c.req.query('offset'));
@@ -102,11 +146,15 @@ export function curiosityRoutes(deps: CuriosityRouteDeps) {
     }
     const bots = scopeBots(deps.config.bots, getTenantId(c));
     const all: Array<Dispatch & { botName: string }> = [];
+    /** Every dispatch of a bot, cursor or not: a digest's sources may be older. */
+    const byBot = new Map<string, Dispatch[]>();
     for (const bot of bots) {
       try {
         // Unbounded: the store reads the whole JSONL either way, and a bounded
         // read would hide anything past the first `limit` behind the cursor.
-        for (const d of svc().storeFor(bot.id)?.listDispatches() ?? []) {
+        const list = svc().storeFor(bot.id)?.listDispatches() ?? [];
+        byBot.set(bot.id, list);
+        for (const d of list) {
           if (beforeMs !== null && !(Date.parse(d.createdAt) < beforeMs)) continue;
           all.push({ ...d, botId: d.botId || bot.id, botName: bot.name ?? bot.id });
         }
@@ -116,7 +164,7 @@ export function curiosityRoutes(deps: CuriosityRouteDeps) {
     }
     all.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     const faces = new Map<string, string | null>();
-    const page = all.slice(offset, offset + limit).map((d) => {
+    const page = explain(all.slice(offset, offset + limit), byBot).map((d) => {
       if (!faces.has(d.botId)) faces.set(d.botId, avatarFor(d.botId));
       return { ...d, avatarUrl: faces.get(d.botId) ?? null };
     });
@@ -133,7 +181,17 @@ export function curiosityRoutes(deps: CuriosityRouteDeps) {
     try {
       const snap = svc().snapshot(bot.id, { dispatchLimit: SNAPSHOT_DISPATCH_LIMIT });
       if (!snap) return c.json({ error: 'No curiosity state for this bot' }, 404);
-      return c.json({ ...snap, botName: bot.name ?? bot.id, avatarUrl: avatarFor(bot.id) });
+      const own = svc().storeFor(bot.id)?.listDispatches() ?? [];
+      const dispatches = explain(
+        snap.dispatches.map((d) => ({ ...d, botId: d.botId || bot.id })),
+        new Map([[bot.id, own]])
+      );
+      return c.json({
+        ...snap,
+        dispatches,
+        botName: bot.name ?? bot.id,
+        avatarUrl: avatarFor(bot.id),
+      });
     } catch (err) {
       deps.logger.warn({ err, botId: bot.id }, 'Curiosity snapshot failed');
       return c.json({ error: 'Curiosity snapshot failed' }, 500);

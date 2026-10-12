@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveCycleGoal } from '../src/bot/agent-cycle-log';
 import { AgentLoop } from '../src/bot/agent-loop';
+import { CuriosityService } from '../src/bot/curiosity/service';
 import { GlobalAgentLoopConfigSchema } from '../src/config';
 import { type GoalEntry, startGoal } from '../src/tools/goals';
 
@@ -41,7 +42,8 @@ const GOALS = `## Active Goals
 function makeLoop(
   plan: string,
   mode: 'periodic' | 'continuous' = 'periodic',
-  goals: string = GOALS
+  goals: string = GOALS,
+  generate?: (prompt: string, opts: { system?: string }) => Promise<{ text: string }>
 ) {
   const goalWrites: Array<{ content: string; opts: any }> = [];
   const soulLoader = {
@@ -56,7 +58,7 @@ function makeLoop(
   };
   const llm: any = {
     backend: 'ollama',
-    generate: mock(() => Promise.resolve({ text: plan })),
+    generate: mock(generate ?? (() => Promise.resolve({ text: plan }))),
     chat: mock(() => Promise.resolve({ text: 'executed' })),
     getBackendClient: () => llm,
   };
@@ -184,6 +186,63 @@ describe('agent-loop cycle attribution', () => {
     const { loop } = makeLoop(JSON.stringify({ reasoning: 'wait', plan: [], priority: 'none' }));
     await loop.runOne('bot1');
     expect(cycleRows()[0]).toMatchObject({ status: 'idle', plan: [], toolCalls: 0 });
+  });
+});
+
+describe('a curiosity dispatch carries the cycle that produced it', () => {
+  test('origin has the cycleId and goal of the cycle row', async () => {
+    const plan = JSON.stringify({
+      reasoning: 'lab',
+      plan: ['Draft the October lab'],
+      priority: 'medium',
+      serves_goal: 'Monthly hands-on lab',
+    });
+    const extractor = JSON.stringify({
+      topic: 'Lab design',
+      findings: [{ claim: 'c', evidence: 'e', confidence: 'medium' }],
+      surprises: [],
+      open_questions: [],
+      frontier: [],
+      served_directive_ids: [],
+      no_surprise: true,
+      dispatch: {
+        hook: 'Labs land better with a dataset',
+        why_care: 'w',
+        evidence: 'e',
+        action: 'a',
+      },
+    });
+    const editor = JSON.stringify({
+      insight: 0.2,
+      novelty: 0.2,
+      backed: 0.9,
+      verdict: 'hold',
+      notes: 'n',
+    });
+    const { loop } = makeLoop(plan, 'periodic', GOALS, async (_p, opts) => {
+      const sys = opts?.system ?? '';
+      if (/distill one work cycle/i.test(sys)) return { text: extractor };
+      if (/editor/i.test(sys)) return { text: editor };
+      return { text: plan };
+    });
+    const soulDir = join(dataDir, 'soul', 'bot1');
+    const svc = new CuriosityService({
+      getSoulDir: () => soulDir,
+      getCuriosityInputs: () => ({ global: undefined, bot: {} }),
+    });
+    loop.setCuriosityService(svc);
+    await loop.runOne('bot1');
+    await svc.waitForNavigator('bot1');
+
+    const [row] = cycleRows();
+    const [dispatch] = svc.storeFor('bot1')!.listDispatches();
+    expect(dispatch?.origin).toMatchObject({
+      trigger: 'insight',
+      cycleId: row.cycleId,
+      goalId: 'g-bbbbbbbb',
+      goalTitle: 'Monthly hands-on lab',
+      plan: 'Draft the October lab',
+    });
   });
 });
 

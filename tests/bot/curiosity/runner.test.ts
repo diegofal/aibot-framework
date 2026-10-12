@@ -357,4 +357,105 @@ describe('curiosity runner', () => {
     expect(r.dispatch?.status).toBe('held');
     expect(delivered).toHaveLength(0);
   });
+
+  describe('where a dispatch came from', () => {
+    const insight = (hook = 'A tiny reranker beat a 4x bigger embedding model') =>
+      extractorJson({ hook, why_care: 'w', evidence: 'e', action: 'a' });
+    const attribution = { cycleId: 'cyc-1', goalId: 'g-1', goalTitle: 'Pick an embedding model' };
+
+    it('records the cycle, its goal, its plan and the cycle mode', async () => {
+      const llm = fakeLLM({ extractor: insight(), editor: editorJson() });
+      const cycle = await begun(llm);
+      const r = await finishCuriosityCycle(deps(llm), { ...finishArgs(cycle), attribution });
+      expect(r.dispatch?.origin).toEqual({
+        trigger: 'insight',
+        cycleId: 'cyc-1',
+        goalId: 'g-1',
+        goalTitle: 'Pick an embedding model',
+        plan: 'Write eval',
+        mode: cycle.decision.mode,
+        modeReason: cycle.decision.reason,
+      });
+      expect(svc.storeFor('b')!.listDispatches()[0].origin?.cycleId).toBe('cyc-1');
+    });
+
+    it('a cycle without attribution still records what the cycle did', async () => {
+      const llm = fakeLLM({ extractor: insight(), editor: editorJson() });
+      const cycle = await begun(llm);
+      const r = await finishCuriosityCycle(deps(llm), finishArgs(cycle));
+      expect(r.dispatch?.origin).toMatchObject({ trigger: 'insight', plan: 'Write eval' });
+      expect(r.dispatch?.origin?.cycleId).toBeUndefined();
+    });
+
+    it('a held insight names the editor and the bar it missed', async () => {
+      const llm = fakeLLM({
+        extractor: insight('Meh'),
+        editor: editorJson({ insight: 0.2, novelty: 0.2, verdict: 'hold' }),
+      });
+      const cycle = await begun(llm);
+      const r = await finishCuriosityCycle(deps(llm), finishArgs(cycle));
+      expect(r.dispatch).toMatchObject({ status: 'held', heldReason: 'editor', heldBar: 0.7 });
+    });
+
+    it('a closed cadence, the fleet cap and a failed delivery are told apart', async () => {
+      const store = svc.storeFor('b')!;
+      const llm = fakeLLM({ extractor: insight(), editor: editorJson() });
+
+      const fleet = await finishCuriosityCycle(
+        deps(llm, { fleetAllows: () => false }),
+        finishArgs(await begun(llm))
+      );
+      expect(fleet.dispatch?.heldReason).toBe('fleet-cap');
+
+      const failed = await finishCuriosityCycle(
+        deps(llm, { deliver: async () => false as const }),
+        finishArgs(await begun(llm))
+      );
+      expect(failed.dispatch?.heldReason).toBe('delivery-failed');
+
+      const taste = store.loadTaste();
+      store.saveTaste({ ...taste, cadence: { ...taste.cadence, lastSentAt: NOW } });
+      const closed = await finishCuriosityCycle(deps(llm), finishArgs(await begun(llm)));
+      expect(closed.dispatch?.heldReason).toBe('cadence-closed');
+    });
+
+    it('keeps the draft hook when the editor rewrote it', async () => {
+      const llm = fakeLLM({
+        extractor: insight('Rerankers, embeddings, and also a tool bug'),
+        editor: editorJson({ revised: { hook: 'A tiny reranker beat a big embedding model' } }),
+      });
+      const r = await finishCuriosityCycle(deps(llm), finishArgs(await begun(llm)));
+      expect(r.dispatch?.hook).toBe('A tiny reranker beat a big embedding model');
+      expect(r.dispatch?.origin?.draftHook).toBe('Rerankers, embeddings, and also a tool bug');
+    });
+
+    it('a digest lists the held dispatches it was built from', async () => {
+      const store = svc.storeFor('b')!;
+      store.appendDispatch({
+        id: 'old1',
+        botId: 'b',
+        createdAt: '2026-09-20T12:00:00.000Z',
+        kind: 'insight',
+        topic: 't',
+        hook: 'An older finding',
+        whyCare: 'w',
+        evidence: 'e',
+        action: 'a',
+        body: 'b',
+        editorScore: 0.5,
+        status: 'held',
+      });
+      const llm = fakeLLM({ extractor: extractorJson(), editor: editorJson({ insight: 0.6 }) });
+      const r = await finishCuriosityCycle(deps(llm), {
+        ...finishArgs(await begun(llm)),
+        attribution,
+      });
+      expect(r.dispatch?.kind).toBe('digest');
+      expect(r.dispatch?.origin).toMatchObject({
+        trigger: 'digest',
+        cycleId: 'cyc-1',
+        sourceIds: ['old1'],
+      });
+    });
+  });
 });

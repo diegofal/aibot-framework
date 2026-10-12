@@ -22,6 +22,7 @@ import type {
   DispatchKind,
   DispatchSettings,
   DispatchStatus,
+  HeldReason,
   LimitDial,
 } from './types';
 
@@ -35,6 +36,8 @@ export interface DispatchCandidate {
   question?: string;
   crossing?: LimitDial[];
   frontierId?: string;
+  /** Digest: the held dispatches it summarises. */
+  sourceIds?: string[];
 }
 
 // ── Hype detector ───────────────────────────────────────────────────────
@@ -374,21 +377,39 @@ export function isCadenceOpen(cadence: DispatchCadence, nowMs: number): boolean 
 /** Score a proposal or digest needs (they are already filtered: frontier gate / held items). */
 const PROPOSAL_MIN_SCORE = 0.5;
 
-export function decideDispatch(args: {
+interface DecideArgs {
   kind: DispatchKind;
   editor: EditorResult | null;
   cadenceOpen: boolean;
   settings: DispatchSettings;
-}): DispatchStatus {
+}
+
+export interface DispatchJudgement {
+  status: DispatchStatus;
+  heldReason?: HeldReason;
+  /** `editor` holds: the score that would have sent it. */
+  bar?: number;
+}
+
+/** The send/hold/drop decision, and for a hold, why. */
+export function judgeDispatch(args: DecideArgs): DispatchJudgement {
   const { kind, editor, cadenceOpen, settings } = args;
-  if (!settings.enabled) return 'held';
-  if (!editor) return 'held';
-  if (editor.verdict === 'drop') return 'dropped';
-  if (!cadenceOpen) return 'held';
+  if (!settings.enabled) return { status: 'held', heldReason: 'disabled' };
+  if (!editor) return { status: 'held', heldReason: 'editor-failed' };
+  if (editor.verdict === 'drop') return { status: 'dropped' };
+  if (!cadenceOpen) return { status: 'held', heldReason: 'cadence-closed' };
   if (kind === 'proposal' || kind === 'digest') {
-    return editor.score >= PROPOSAL_MIN_SCORE ? 'sent' : 'held';
+    return editor.score >= PROPOSAL_MIN_SCORE
+      ? { status: 'sent' }
+      : { status: 'held', heldReason: 'editor', bar: PROPOSAL_MIN_SCORE };
   }
-  return editor.verdict === 'send' && editor.score >= settings.minEditorScore ? 'sent' : 'held';
+  return editor.verdict === 'send' && editor.score >= settings.minEditorScore
+    ? { status: 'sent' }
+    : { status: 'held', heldReason: 'editor', bar: settings.minEditorScore };
+}
+
+export function decideDispatch(args: DecideArgs): DispatchStatus {
+  return judgeDispatch(args).status;
 }
 
 // ── Builders ────────────────────────────────────────────────────────────
@@ -454,6 +475,7 @@ export function buildDigestCandidate(held: Dispatch[], max = 3): DispatchCandida
     whyCare: 'None cleared the bar on its own; together they show where I have been digging.',
     evidence: top.map((d, i) => `${i + 1}. ${d.hook}`).join('\n'),
     action: 'Each one is in the Dispatches feed; 👍 the ones you want me to take further.',
+    sourceIds: top.map((d) => d.id),
   };
 }
 

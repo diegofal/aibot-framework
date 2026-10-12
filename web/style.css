@@ -5672,14 +5672,35 @@ body.ui-palette-open {
   font-weight: 600;
 }
 .curio-retro,
-.curio-evidence {
+.curio-evidence,
+.curio-origin {
   margin: var(--s2) 0;
   font-size: var(--fs-md);
 }
 .curio-retro summary,
-.curio-evidence summary {
+.curio-evidence summary,
+.curio-origin summary {
   cursor: pointer;
   color: var(--text-dim);
+}
+.curio-origin-body {
+  display: grid;
+  gap: var(--s1);
+  margin-top: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--border-strong);
+}
+.curio-origin-row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  gap: var(--s2);
+}
+.curio-origin-key {
+  color: var(--text-dim);
+}
+.curio-origin-sources {
+  margin: 0;
+  padding-left: 1.1rem;
 }
 .curio-pre {
   white-space: pre-wrap;
