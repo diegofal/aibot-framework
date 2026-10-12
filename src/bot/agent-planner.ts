@@ -2,6 +2,7 @@ import type { BotConfig } from '../config';
 import type { LLMClient, TokenUsage } from '../core/llm-client';
 import type { Logger } from '../logger';
 import type { ContinuousPlannerResult, PlannerResult } from './agent-loop-prompts';
+import { parsePlannerTaskFields } from './agent-loop-tasks';
 import { parseLLMJson } from './llm-json-parser';
 import { TOOL_CATEGORY_NAMES } from './tool-registry';
 
@@ -110,6 +111,7 @@ export function parsePlannerResult(
         ...(typeof parsed.serves_goal === 'string' && parsed.serves_goal.trim()
           ? { serves_goal: parsed.serves_goal.trim() }
           : {}),
+        ...parsePlannerTaskFields(parsed),
       };
     },
     label: 'planner',

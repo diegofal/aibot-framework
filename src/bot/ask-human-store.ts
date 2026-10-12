@@ -19,6 +19,8 @@ export interface PendingQuestion {
   cycleId?: string;
   /** Goal that cycle served, when known. */
   goalId?: string;
+  /** Goal task the cycle worked on, when known. */
+  taskId?: string;
 }
 
 export interface PendingQuestionInfo {
@@ -33,6 +35,8 @@ export interface PendingQuestionInfo {
   cycleId?: string;
   /** Goal that cycle served, when known. */
   goalId?: string;
+  /** Goal task the cycle worked on, when known. */
+  taskId?: string;
 }
 
 export interface AnsweredQuestion {
@@ -228,7 +232,7 @@ export class AskHumanStore {
     question: string,
     options?: string[],
     createdAt: number = Date.now(),
-    attribution: { cycleId?: string; goalId?: string } = {}
+    attribution: { cycleId?: string; goalId?: string; taskId?: string } = {}
   ): { id: string; promise: Promise<string> } {
     const id = randomUUID();
 
@@ -246,6 +250,7 @@ export class AskHumanStore {
       createdAt,
       ...(attribution.cycleId ? { cycleId: attribution.cycleId } : {}),
       ...(attribution.goalId ? { goalId: attribution.goalId } : {}),
+      ...(attribution.taskId ? { taskId: attribution.taskId } : {}),
     };
 
     this.pending.set(id, entry);
@@ -316,6 +321,7 @@ export class AskHumanStore {
       createdAt: entry.createdAt,
       ...(entry.cycleId ? { cycleId: entry.cycleId } : {}),
       ...(entry.goalId ? { goalId: entry.goalId } : {}),
+      ...(entry.taskId ? { taskId: entry.taskId } : {}),
     };
   }
 

@@ -4,11 +4,13 @@
  * came of it. Idle/skipped/error cycles explain themselves with the `reason`
  * the row recorded (planner reasoning → Reason; engagement gate or circuit
  * breaker → Rule; error → note); a strategist pass adds its reflection and the
- * trait deltas it applied. "Open cycle" in the panel shows the rest.
+ * trait deltas it applied. The task it served is a note; the tasks its planner
+ * created and the runs it dispatched are the related items. "Open cycle" in
+ * the panel shows the rest.
  */
 import type { AgentCycleRecord } from '../../stats/readers/agent-cycles';
 import { toWhyCycle } from '../cycle-index';
-import type { Why } from '../types';
+import type { Why, WhyRelatedItem } from '../types';
 
 export interface CycleWhyInput {
   botId: string;
@@ -55,6 +57,23 @@ export function traitDeltaText(deltas: Record<string, number>): string {
 
 const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 
+/** The tasks the cycle's planner created and the runs it dispatched. */
+function taskItems(c: AgentCycleRecord): WhyRelatedItem[] {
+  const items: WhyRelatedItem[] = [];
+  for (const id of Array.isArray(c.newTasks) ? c.newTasks : []) {
+    if (typeof id === 'string' && id) items.push({ text: `Created task ${id}` });
+  }
+  for (const d of Array.isArray(c.dispatched) ? c.dispatched : []) {
+    if (!d || typeof d.taskId !== 'string' || !d.taskId) continue;
+    items.push({
+      text: d.ok
+        ? `Dispatched ${d.taskId} to a worker${d.runId ? ` (run ${d.runId})` : ''}`
+        : `Did not dispatch ${d.taskId}: ${d.reason || 'refused'}`,
+    });
+  }
+  return items;
+}
+
 export function cycleToWhy({ botId, cycle }: CycleWhyInput): Why {
   const why: Why = { what: 'Agent-loop cycle', by: 'agent', cycle: toWhyCycle(botId, cycle) };
   if (cycle.goalTitle) {
@@ -77,6 +96,13 @@ export function cycleToWhy({ botId, cycle }: CycleWhyInput): Why {
   if (reflection) notes.push({ label: 'Strategist reflection', text: reflection });
   const traits = cycle.traitAdjustments ? traitDeltaText(cycle.traitAdjustments) : '';
   if (traits) notes.push({ label: 'Traits adjusted', text: traits });
+  const taskId = text(cycle.taskId);
+  if (taskId) {
+    const taskText = text(cycle.taskText);
+    notes.unshift({ label: 'Task', text: taskText ? `${taskText} (${taskId})` : taskId });
+  }
+  const related = taskItems(cycle);
+  if (related.length > 0) why.related = { label: 'Tasks', items: related };
   if (notes.length > 0) why.notes = notes;
   if (!cycle.goalTitle && cycle.status === 'completed') {
     why.missing = 'The cycle did not name a goal it served.';

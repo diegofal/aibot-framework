@@ -6,6 +6,13 @@
 import { renderGoalsForPrompt } from '../goals/goals-view';
 import type { StoredTask } from '../goals/task-store';
 import { isOperatorGoal, parseGoals } from '../tools/goals';
+import type { PlannerTaskFields } from '../workers/types';
+import {
+  type PlannerWorkersInput,
+  buildTaskOutputSection,
+  buildTaskSchemaLines,
+  buildWorkersSection,
+} from './agent-loop-tasks';
 
 /** The raw GOALS.md plus the store tasks a prompt input carries. */
 export interface GoalsSource {
@@ -65,6 +72,8 @@ export interface PlannerPromptInput {
   outcomeRecent?: string;
   /** Environmental sensor context */
   environmentContext?: string;
+  /** Workers on for the bot: the runs for the Workers block. Absent = workers off (no dispatch). */
+  workers?: PlannerWorkersInput;
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -111,9 +120,12 @@ export interface ContinuousPlannerPromptInput {
   outcomeRecent?: string;
   /** Environmental sensor context */
   environmentContext?: string;
+  /** Workers on for the bot: the runs for the Workers block. Absent = workers off (no dispatch). */
+  workers?: PlannerWorkersInput;
 }
 
-export interface PlannerResult {
+/** The planner answer, with the optional task fields (goal tasks plan, phase 1). */
+export interface PlannerResult extends PlannerTaskFields {
   reasoning: string;
   plan: string[];
   priority: 'high' | 'medium' | 'low' | 'none';
@@ -330,10 +342,20 @@ export function buildDirectivesSection(directives?: string[]): string {
   return `\n## Operator Directives\n\nYour operator has assigned these standing directives. These are ongoing behavioral instructions (not one-time goals). Factor them into your planning when relevant:\n\n${directives.map((d) => `- ${d}`).join('\n')}\n`;
 }
 
+/** Workers block (when workers are on) plus the Tasks guidance, for both planner modes. */
+function buildPlannerTasksBlock(workers: PlannerWorkersInput | undefined): string {
+  const tasks = buildTaskOutputSection({ workersEnabled: !!workers });
+  return workers
+    ? `${buildWorkersSection(workers)}
+
+${tasks}`
+    : tasks;
+}
+
 export function buildPlannerPrompt(input: PlannerPromptInput): { system: string; prompt: string } {
   const system = `You are an autonomous agent operating in SINGLE-FOCUS MODE. Your value comes from completing ONE concrete deliverable per session.
 
-SINGLE-FOCUS RULE: You will be assigned ONE deliverable by the strategist. Your job is to break it into 1-3 concrete steps and complete it. Do NOT add extra tasks.
+SINGLE-FOCUS RULE: You will be assigned ONE deliverable by the strategist. Your job is to break it into 1-3 concrete plan steps and complete it. No scope creep: do NOT add extra work beyond it.
 
 NOVELTY IMPERATIVE: Repeating the same action is worse than doing nothing.
 If your Recent Actions show you already did something, it is BANNED for this cycle.
@@ -369,7 +391,7 @@ The strategist has assigned ONE concrete deliverable for this session:
 
 **${input.singleDeliverable}**
 
-Your entire plan must serve this deliverable. Do NOT add tasks beyond completing this one thing.
+Your entire plan must serve this deliverable. No scope creep: do NOT add plan steps beyond completing this one thing.
 `
     : input.focus
       ? `
@@ -405,12 +427,14 @@ Tools you create require human approval before becoming available.
     : ''
 }
 
+${buildPlannerTasksBlock(input.workers)}
+
 ${buildAlignmentSection(input.curiosityBlock)}
 
 SINGLE-FOCUS MODE INSTRUCTIONS:
 1. Break the assigned deliverable into 1-3 concrete steps
 2. Each step must directly contribute to completing the deliverable
-3. Do NOT add "bonus" tasks or "while I'm at it" items
+3. Do NOT add "bonus" plan steps or "while I'm at it" items (scope creep; breaking a goal down into tasks is different, see Tasks)
 4. When the deliverable is complete, STOP — don't start anything else
 
 HUMAN COLLABORATION:
@@ -429,7 +453,7 @@ ANTI-PATTERNS (banned):
 - Verifying documents you already verified
 - Creating templates or checklists without real data to fill them
 - Writing about what you plan to do instead of doing it
-- Adding extra tasks beyond the assigned deliverable
+- Scope creep: plan steps beyond the assigned deliverable
 - Creating a new file when a similar one already exists (check index.html first)
 - Creating subdirectories — place ALL files at root level
 
@@ -452,6 +476,7 @@ JSON Schema (MUST follow exactly):
 - plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none")
 - priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
 - serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)
+${buildTaskSchemaLines({ workersEnabled: !!input.workers })}
 
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.
 Each step should produce a concrete result: a file written, a goal updated, a memory saved, a test run.
@@ -470,7 +495,7 @@ export function buildContinuousPlannerPrompt(input: ContinuousPlannerPromptInput
 } {
   const system = `You are an autonomous agent running in continuous mode with SINGLE-FOCUS MODE enabled. Your value comes from completing ONE concrete deliverable per session.
 
-SINGLE-FOCUS RULE: You will be assigned ONE deliverable by the strategist. Your job is to break it into 1-3 concrete steps and complete it. Do NOT add extra tasks.
+SINGLE-FOCUS RULE: You will be assigned ONE deliverable by the strategist. Your job is to break it into 1-3 concrete plan steps and complete it. No scope creep: do NOT add extra work beyond it.
 
 NOVELTY IMPERATIVE: Repeating the same action is worse than doing nothing.
 If your Recent Actions show you already did something, it is BANNED for this cycle.
@@ -506,7 +531,7 @@ The strategist has assigned ONE concrete deliverable for this session:
 
 **${input.singleDeliverable}**
 
-Your entire plan must serve this deliverable. Do NOT add tasks beyond completing this one thing.
+Your entire plan must serve this deliverable. No scope creep: do NOT add plan steps beyond completing this one thing.
 `
     : input.focus
       ? `
@@ -552,12 +577,14 @@ Tools you create require human approval before becoming available.
     : ''
 }
 
+${buildPlannerTasksBlock(input.workers)}
+
 ${buildAlignmentSection(input.curiosityBlock)}
 
 SINGLE-FOCUS MODE INSTRUCTIONS:
 1. Break the assigned deliverable into 1-3 concrete steps
 2. Each step must directly contribute to completing the deliverable
-3. Do NOT add "bonus" tasks or "while I'm at it" items
+3. Do NOT add "bonus" plan steps or "while I'm at it" items (scope creep; breaking a goal down into tasks is different, see Tasks)
 4. When the deliverable is complete, STOP — don't start anything else
 
 HUMAN COLLABORATION:
@@ -576,7 +603,7 @@ ANTI-PATTERNS (banned):
 - Verifying documents you already verified
 - Creating templates or checklists without real data to fill them
 - Writing about what you plan to do instead of doing it
-- Adding extra tasks beyond the assigned deliverable
+- Scope creep: plan steps beyond the assigned deliverable
 - Creating a new file when a similar one already exists (check index.html first)
 - Creating subdirectories — place ALL files at root level
 
@@ -599,6 +626,7 @@ JSON Schema (MUST follow exactly):
 - plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none")
 - priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
 - serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)
+${buildTaskSchemaLines({ workersEnabled: !!input.workers })}
 
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.
 Each step should produce a concrete result: a file written, a goal updated, a memory saved, a test run.`;

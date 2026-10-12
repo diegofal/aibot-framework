@@ -65,6 +65,8 @@ export interface ToolEndEvent {
   cycleId?: string;
   /** Goal the cycle served, when known at call time. */
   goalId?: string;
+  /** Goal task the call worked on (the cycle's `serves_task`), when known. */
+  taskId?: string;
 }
 
 const TARGET_MAX = 80;
@@ -399,13 +401,14 @@ export class ToolExecutor extends EventEmitter {
    * Build a failure result, emit error + end events, and log the execution.
    * @param emitError - The error string to emit in the tool:error event (may differ from content).
    */
-  /** `{ cycleId, goalId }` of the current agent-loop cycle, or `{}` outside one. */
-  private attributionFields(): { cycleId?: string; goalId?: string } {
+  /** `{ cycleId, goalId, taskId }` of the current agent-loop cycle, or `{}` outside one. */
+  private attributionFields(): { cycleId?: string; goalId?: string; taskId?: string } {
     const a = this.options.attribution;
     if (!a) return {};
     return {
       ...(a.cycleId ? { cycleId: a.cycleId } : {}),
       ...(a.goalId ? { goalId: a.goalId } : {}),
+      ...(a.taskId ? { taskId: a.taskId } : {}),
     };
   }
 

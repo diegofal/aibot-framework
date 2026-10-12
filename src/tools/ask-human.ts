@@ -501,6 +501,7 @@ export function createAskHumanTool(deps: AskHumanDeps): Tool {
       const attribution = {
         ...(args._cycleId ? { cycleId: String(args._cycleId) } : {}),
         ...(args._goalId ? { goalId: String(args._goalId) } : {}),
+        ...(args._taskId ? { taskId: String(args._taskId) } : {}),
       };
       const { id, promise } = deps.store.ask(
         botId,

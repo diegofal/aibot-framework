@@ -9,6 +9,7 @@ import type { ChatMessage } from '../ollama';
 import { parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import { idleToWhy } from '../why/builders/idle';
+import type { PlannerTaskFields } from '../workers/types';
 import {
   type AdaptiveParams,
   computeAdaptiveAdjustments,
@@ -28,6 +29,14 @@ import {
   buildFeedbackProcessorPrompt,
   buildPlannerPrompt,
 } from './agent-loop-prompts';
+import {
+  type CycleDispatch,
+  type PlannerWorkersInput,
+  WORKERS_ENDED_FALLBACK_MS,
+  WORKERS_ENDED_LIMIT,
+  applyPlannerTasks,
+  cyclePendingQuestions,
+} from './agent-loop-tasks';
 import {
   type ActionType,
   buildRecentActionsDigest,
@@ -112,6 +121,22 @@ interface CycleAttribution {
   planSummary?: string;
   /** Trait deltas the strategist applied in this cycle (for the cycle row). */
   traitAdjustments?: Record<string, number>;
+  /** The open task the cycle's own work serves (planner `serves_task`); stamped on its tool calls. */
+  taskId?: string;
+  taskText?: string;
+  /** Tasks the planner's `new_tasks` wrote this cycle (for the cycle row). */
+  newTasks?: string[];
+  /** The planner's `dispatch`, as the pool answered (for the cycle row). */
+  dispatched?: CycleDispatch[];
+}
+
+/** The optional task fields of a planner answer. */
+function taskFieldsOf(r: PlannerTaskFields): PlannerTaskFields {
+  return {
+    ...(r.new_tasks ? { new_tasks: r.new_tasks } : {}),
+    ...(r.dispatch ? { dispatch: r.dispatch } : {}),
+    ...(r.serves_task ? { serves_task: r.serves_task } : {}),
+  };
 }
 
 export interface AgentLoopResult {
@@ -324,6 +349,8 @@ export class AgentLoop {
   private cycleAborts = new Map<string, AbortController>();
   /** `<paths.data>/agent-cycles` — one row per cycle. */
   private cycleLog: AgentCycleLog;
+  /** When each bot's planner last saw the Workers block (ended runs are shown once). */
+  private workersSeenAt = new Map<string, number>();
 
   constructor(
     private ctx: BotContext,
@@ -401,6 +428,26 @@ export class AgentLoop {
       if (goal.goalId) Object.assign(a, goal);
     } catch {
       // attribution is best-effort; never fail a cycle over it
+    }
+  }
+
+  /**
+   * The Workers block input for the planner, or undefined when workers are
+   * off for the bot (the prompt then never mentions dispatch). Ended runs are
+   * the ones that ended since the previous planner call (a day on first call).
+   */
+  private plannerWorkersInput(botId: string): PlannerWorkersInput | undefined {
+    const pool = this.ctx.workerPool;
+    if (!pool) return undefined;
+    try {
+      if (!pool.isEnabledFor(botId)) return undefined;
+      const now = Date.now();
+      const endedSinceMs = this.workersSeenAt.get(botId) ?? now - WORKERS_ENDED_FALLBACK_MS;
+      this.workersSeenAt.set(botId, now);
+      return { runs: pool.list(botId, { endedLimit: WORKERS_ENDED_LIMIT }), endedSinceMs };
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId }, 'Workers block: could not list runs');
+      return undefined;
     }
   }
 
@@ -933,8 +980,12 @@ export class AgentLoop {
         goalSource: attribution.goalSource,
       };
       if (!goal.goalId && toolCalls.length > 0) {
-        const goals = this.ctx.soulLoaders.get(botId)?.readGoals?.() ?? null;
-        const found = resolveCycleGoal({ toolCalls }, parseGoals(goals).active);
+        const loader = this.ctx.soulLoaders.get(botId);
+        const goals = loader?.readGoals?.() ?? null;
+        const found = resolveCycleGoal(
+          { toolCalls, tasks: loader?.readTasks?.() ?? [] },
+          parseGoals(goals).active
+        );
         if (found.goalId) goal = found;
       }
       const plan = result?.plan ?? null;
@@ -962,12 +1013,65 @@ export class AgentLoop {
         ...(attribution.traitAdjustments && Object.keys(attribution.traitAdjustments).length > 0
           ? { traitAdjustments: attribution.traitAdjustments }
           : {}),
+        ...(attribution.taskId
+          ? { taskId: attribution.taskId, taskText: attribution.taskText }
+          : {}),
+        ...(attribution.newTasks?.length ? { newTasks: attribution.newTasks } : {}),
+        ...(attribution.dispatched?.length ? { dispatched: attribution.dispatched } : {}),
       });
       if (status === 'completed' && goal.goalId) {
         this.startCycleGoal(botId, goal.goalId, attribution.cycleId);
       }
     } catch (err) {
       this.ctx.logger.warn({ err, botId }, 'Agent cycle log: failed to record cycle');
+    }
+  }
+
+  /**
+   * Act on the planner's task fields (goal tasks plan, phase 1): write
+   * `new_tasks`, dispatch named tasks to the worker pool and stamp the served
+   * task on the cycle's attribution. Called only once the plan is accepted
+   * (not idle, not gated); explore cycles skip the writes. Never throws.
+   */
+  private applyPlannerTaskFields(
+    botId: string,
+    goalsContent: string | null | undefined,
+    fields: PlannerTaskFields,
+    opts: { exploring: boolean; hardGateActive: boolean; logger: Logger }
+  ): void {
+    const a = this.cycleAttribution.get(botId);
+    if (!a || (!fields.new_tasks && !fields.dispatch && !fields.serves_task)) return;
+    try {
+      const loader = this.ctx.soulLoaders.get(botId);
+      const goals = parseGoals(goalsContent ?? null).active;
+      const out = applyPlannerTasks({
+        botId,
+        cycleId: a.cycleId,
+        fields,
+        store: loader?.getTaskStore?.(),
+        goals,
+        workerPool: this.ctx.workerPool,
+        exploring: opts.exploring,
+        idle: false,
+        gateBlocked: false,
+        hardGateActive: opts.hardGateActive,
+        logger: opts.logger,
+      });
+      if (out.newTaskIds.length > 0) a.newTasks = out.newTaskIds;
+      if (out.dispatched.length > 0) a.dispatched = out.dispatched;
+      const served = out.servesTask;
+      if (served) {
+        a.taskId = served.id;
+        a.taskText = served.text;
+        const goal = a.goalId ? undefined : goals.find((g) => g.id === served.goalId);
+        if (goal?.id) {
+          a.goalId = goal.id;
+          a.goalTitle = goal.text;
+          a.goalSource = 'planner';
+        }
+      }
+    } catch (err) {
+      opts.logger.warn({ err, botId }, 'Planner tasks: could not apply the planner task fields');
     }
   }
 
@@ -1778,7 +1882,8 @@ export class AgentLoop {
     }
 
     // Answered questions were consumed above (before the strategist); pending ones are listed here
-    const pendingQuestions = this.ctx.askHumanStore.getPendingForBot(botId);
+    // (questions a worker run asked belong to that run: see the Workers block)
+    const pendingQuestions = cyclePendingQuestions(this.ctx.askHumanStore.getPendingForBot(botId));
 
     if (answeredQuestions.length > 0) {
       botLogger.info(
@@ -1916,6 +2021,9 @@ export class AgentLoop {
         ? `## Autonomous Run Notice\n\nYou have been running autonomously for ${cyclesSinceAskHuman} cycles without checking in with your human operator. Consider using ask_human to check in — ask for feedback on recent work, confirm priorities, or request direction.`
         : undefined;
 
+    const plannerWorkers = this.plannerWorkersInput(botId);
+    let plannerTaskFields: PlannerTaskFields = {};
+
     if (isContinuous) {
       const lastCycleSummary = schedule?.lastResult?.summary;
       const continuousInput = buildContinuousPlannerPrompt({
@@ -1955,6 +2063,7 @@ export class AgentLoop {
         engagementGateNote,
         outcomeRecent,
         environmentContext: plannerEnvContext,
+        workers: plannerWorkers,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
 
@@ -2031,6 +2140,7 @@ export class AgentLoop {
       selectedToolCategories = continuousResult.toolCategories;
       plannerTokenUsage = continuousResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: continuousResult.serves_goal });
+      plannerTaskFields = taskFieldsOf(continuousResult);
       this.noteRunningPlan(botId, plan);
     } else {
       const plannerInput = buildPlannerPrompt({
@@ -2069,6 +2179,7 @@ export class AgentLoop {
         engagementGateNote,
         outcomeRecent,
         environmentContext: plannerEnvContext,
+        workers: plannerWorkers,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
 
@@ -2144,6 +2255,7 @@ export class AgentLoop {
       selectedToolCategories = plannerResult.toolCategories;
       plannerTokenUsage = plannerResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: plannerResult.serves_goal });
+      plannerTaskFields = taskFieldsOf(plannerResult);
       this.noteRunningPlan(botId, plan);
     }
 
@@ -2254,6 +2366,16 @@ export class AgentLoop {
             : undefined,
       };
     }
+
+    this.applyPlannerTaskFields(botId, goals, plannerTaskFields, {
+      exploring,
+      hardGateActive: !!(
+        engagementGateEnabled &&
+        engagementGateMode === 'hard' &&
+        engagement?.gateTriggered
+      ),
+      logger: botLogger,
+    });
 
     botLogger.info(
       { botId, planSteps: plan.length, reasoning: plannerReasoning },

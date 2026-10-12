@@ -53,4 +53,6 @@ export interface ProductionEntry {
   cycleId?: string;
   /** Goal that cycle served, when known. */
   goalId?: string;
+  /** Goal task the output was for, when known. */
+  taskId?: string;
 }

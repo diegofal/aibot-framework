@@ -32,6 +32,13 @@ export interface AgentCycleRecord {
   reflection?: string;
   /** Trait deltas the strategist applied this cycle. */
   traitAdjustments?: Record<string, number>;
+  /** The task the cycle served (`AgentCycleEntry.taskId`). */
+  taskId?: string;
+  taskText?: string;
+  /** Tasks the planner created this cycle. */
+  newTasks?: string[];
+  /** Tasks the planner dispatched to workers, and what came of it. */
+  dispatched?: Array<{ taskId: string; runId?: string; ok: boolean; reason?: string }>;
 }
 
 const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
