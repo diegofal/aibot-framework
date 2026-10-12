@@ -23,6 +23,15 @@ export interface AgentCycleRecord {
   goalId?: string | null;
   goalTitle?: string | null;
   goalSource?: string | null;
+  /** Why an idle/skipped/error cycle went that way (`AgentCycleEntry.reason`). */
+  reason?: string;
+  /** `planner` | `engagement-gate` | `circuit-breaker` | `error` | `system` */
+  reasonSource?: string;
+  strategistRan?: boolean;
+  /** Strategist reflection, capped at 600 chars when written. */
+  reflection?: string;
+  /** Trait deltas the strategist applied this cycle. */
+  traitAdjustments?: Record<string, number>;
 }
 
 const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;

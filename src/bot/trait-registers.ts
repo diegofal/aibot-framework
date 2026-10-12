@@ -66,15 +66,38 @@ export interface TraitDrift {
   delta: Record<TraitName, number>;
 }
 
-interface TraitSnapshot {
+/** Why a proposed delta was not applied: the operator's policy on the trait. */
+export type TraitRejectionRule = 'pinned' | 'locked';
+
+export interface TraitSnapshot {
   timestamp: number;
   source: TraitSource;
   traits: TraitSet;
+  /** The agent-loop cycle that proposed the change (strategist). */
+  cycleId?: string;
+  /** The proposer's stated reason per trait, written at decision time. */
+  reasons?: Partial<Record<TraitName, string>>;
+  /** Applied deltas: what was asked and the from → to it produced. */
+  changes?: Partial<Record<TraitName, { from: number; to: number; requested: number }>>;
+  /** Proposed deltas the operator's policy refused. */
+  rejected?: Partial<Record<TraitName, { requested: number; rule: TraitRejectionRule }>>;
+}
+
+/** Who proposed a change and why (`adjust`'s optional 4th argument). */
+export interface TraitAdjustMeta {
+  cycleId?: string;
+  reasons?: Record<string, string>;
 }
 
 interface TraitFile {
   current: TraitSet;
   history: TraitSnapshot[];
+  /**
+   * Proposals where every delta was refused by policy: nothing changed, so
+   * they stay out of `history` (drift and the adjustment count), but the
+   * refusal is still on record. Capped like history.
+   */
+  rejections?: TraitSnapshot[];
 }
 
 // ── Constants ──
@@ -231,8 +254,14 @@ export class TraitRegisters {
    * Deltas for locked traits are dropped (logged once per call at debug);
    * pinned traits are restored afterwards. Returns the new trait set.
    */
-  adjust(botId: string, adjustments: Partial<TraitSet>, source: TraitSource): TraitSet {
+  adjust(
+    botId: string,
+    adjustments: Partial<TraitSet>,
+    source: TraitSource,
+    meta: TraitAdjustMeta = {}
+  ): TraitSet {
     const current = this.load(botId);
+    const original = { ...current };
     const maxDelta = MAX_DELTA[source];
     const policy = this.getPolicy(botId);
     const locked = new Set<TraitName>(policy?.locked ?? []);
@@ -243,14 +272,18 @@ export class TraitRegisters {
     );
 
     const dropped: Partial<Record<TraitName, number>> = {};
+    const rejected: NonNullable<TraitSnapshot['rejected']> = {};
+    const requested: Partial<Record<TraitName, number>> = {};
     let applied = 0;
     for (const key of TRAIT_NAMES) {
       const delta = adjustments[key];
       if (delta === undefined) continue;
       if (locked.has(key) || pinnedKeys.has(key)) {
         dropped[key] = delta;
+        rejected[key] = { requested: delta, rule: locked.has(key) ? 'locked' : 'pinned' };
         continue;
       }
+      requested[key] = delta;
 
       // Clamp delta to max for this source
       const clampedDelta = Math.max(-maxDelta, Math.min(maxDelta, delta));
@@ -265,13 +298,30 @@ export class TraitRegisters {
       );
     }
 
+    const proposed = new Set<string>([...Object.keys(requested), ...Object.keys(rejected)]);
+    const reasons: Partial<Record<TraitName, string>> = {};
+    for (const [k, v] of Object.entries(meta.reasons ?? {})) {
+      if (proposed.has(k) && typeof v === 'string' && v.trim()) reasons[k as TraitName] = v.trim();
+    }
+    const why: Partial<TraitSnapshot> = {
+      ...(meta.cycleId ? { cycleId: meta.cycleId } : {}),
+      ...(Object.keys(reasons).length > 0 ? { reasons } : {}),
+      ...(Object.keys(rejected).length > 0 ? { rejected } : {}),
+    };
+
     if (applied === 0) {
-      // Nothing changed — do not write a history entry for a no-op
+      // Nothing changed — no history entry for a no-op; a policy refusal is
+      // still recorded, in the rejection log.
+      if (Object.keys(rejected).length > 0) this.saveRejection(botId, current, source, why);
       return { ...current };
     }
 
     const result = this.applyPins(botId, current);
-    this.save(botId, result, source);
+    const changes: NonNullable<TraitSnapshot['changes']> = {};
+    for (const [k, req] of Object.entries(requested) as Array<[TraitName, number]>) {
+      changes[k] = { from: original[k], to: result[k], requested: req };
+    }
+    this.save(botId, result, source, { ...why, changes });
     this.cache.set(botId, result);
 
     this.logger.info(
@@ -357,6 +407,18 @@ export class TraitRegisters {
     }
   }
 
+  /** Proposals refused entirely by the operator's policy (oldest first). */
+  getRejections(botId: string): TraitSnapshot[] {
+    const filePath = this.getFilePath(botId);
+    if (!existsSync(filePath)) return [];
+    try {
+      const raw: TraitFile = JSON.parse(readFileSync(filePath, 'utf-8'));
+      return raw.rejections ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Drift since the first persisted snapshot. Baseline = first `adaptive`
    * history entry (the defaults written on first load); falls back to the
@@ -395,28 +457,55 @@ export class TraitRegisters {
     return result;
   }
 
-  private save(botId: string, traits: TraitSet, source: TraitSource): void {
+  private saveRejection(
+    botId: string,
+    traits: TraitSet,
+    source: TraitSource,
+    why: Partial<TraitSnapshot>
+  ): void {
+    const filePath = this.getFilePath(botId);
+    if (!existsSync(filePath)) return;
+    try {
+      const raw: TraitFile = JSON.parse(readFileSync(filePath, 'utf-8'));
+      const rejections = [
+        ...(raw.rejections ?? []),
+        { timestamp: Date.now(), source, traits: { ...traits }, ...why },
+      ].slice(-MAX_HISTORY);
+      writeFileSync(filePath, JSON.stringify({ ...raw, rejections }, null, 2), 'utf-8');
+    } catch (err) {
+      this.logger.warn({ err, botId }, 'TraitRegisters: could not record a rejected proposal');
+    }
+  }
+
+  private save(
+    botId: string,
+    traits: TraitSet,
+    source: TraitSource,
+    why: Partial<TraitSnapshot> = {}
+  ): void {
     const filePath = this.getFilePath(botId);
     const dir = join(this.soulBaseDir, botId);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
     let history: TraitSnapshot[] = [];
+    let rejections: TraitSnapshot[] | undefined;
     if (existsSync(filePath)) {
       try {
         const raw: TraitFile = JSON.parse(readFileSync(filePath, 'utf-8'));
         history = raw.history ?? [];
+        rejections = raw.rejections;
       } catch {
         // start fresh
       }
     }
 
     // Add snapshot and prune to MAX_HISTORY
-    history.push({ timestamp: Date.now(), source, traits: { ...traits } });
+    history.push({ timestamp: Date.now(), source, traits: { ...traits }, ...why });
     if (history.length > MAX_HISTORY) {
       history = history.slice(-MAX_HISTORY);
     }
 
-    const file: TraitFile = { current: traits, history };
+    const file: TraitFile = { current: traits, history, ...(rejections ? { rejections } : {}) };
     writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8');
   }
 
@@ -434,6 +523,16 @@ export class TraitRegisters {
 }
 
 // ── Helpers ──
+
+/** Rounded `after − before` for every trait that moved (the applied deltas of a cycle). */
+export function traitDeltas(before: TraitSet, after: TraitSet): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const key of TRAIT_NAMES) {
+    const d = round2(after[key] - before[key]);
+    if (d !== 0) out[key] = d;
+  }
+  return out;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));

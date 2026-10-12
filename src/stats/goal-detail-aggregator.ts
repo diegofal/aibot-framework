@@ -210,6 +210,8 @@ export function buildGoalDetail(
       inferred: false,
       source: 'goal-events' as const,
       cycleId: e.cycleId ?? null,
+      reason: e.reason ?? null,
+      runId: e.runId ?? null,
     })),
     ...tools
       .filter(
@@ -240,6 +242,8 @@ export function buildGoalDetail(
           inferred: true,
           source: 'tool-audit' as const,
           cycleId: tagOf(t).cycleId ?? null,
+          reason: null,
+          runId: null,
         };
       }),
   ].sort((a, b) => (toMs(a.ts) ?? 0) - (toMs(b.ts) ?? 0));

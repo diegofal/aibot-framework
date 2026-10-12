@@ -604,7 +604,7 @@ export async function renderAgentHome(el, id) {
       })}
     </div>
     <div class="home-grid" style="margin-top:16px">
-      ${card({ title: 'Traits', body: traitsBody(home.traits) })}
+      ${card({ title: 'Traits', body: traitsBody(home.traits, home.traitChanges, { nowMs: Date.now(), botId: home.identity?.id }) })}
       ${card({
         title: 'Karma',
         body: karmaBody(home.karma),

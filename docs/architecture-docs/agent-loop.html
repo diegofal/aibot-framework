@@ -510,11 +510,24 @@
 
           <h4>Output Format: StrategistResult</h4>
 <pre><code>interface StrategistResult {
-  goal_operations: GoalOperation[];
+  goal_operations: GoalOperation[]; // each may carry reason: one short sentence, why this change
   focus: string;           // 1-2 sentence directive for next cycles
   reflection: string;      // Analysis of agent's current state
   next_strategy_in?: string; // Suggested next run, e.g. "6h"
+  trait_adjustments?: Record&lt;string, number&gt;; // also accepted: { delta, reason }
+  trait_reasons?: Record&lt;string, string&gt;;     // one sentence per adjusted trait
 }</code></pre>
+          <p>
+            <span class="badge badge-yellow">2026-10-12</span> <strong>Reasons at decision time</strong> ("Why this?" plan rows 11&ndash;13).
+            The strategist prompt asks for <code>reason</code> on each goal operation and <code>trait_reasons</code> per adjusted trait;
+            the navigator asks for <code>reason</code> on its goal operations. Both are optional when parsing, so older outputs still parse.
+            <code>applyGoalOperations</code> passes the reasons to <code>writeGoalsFile</code>, which stamps them on the
+            <code>goal-events.jsonl</code> rows (<code>reason</code>, plus <code>runId</code> for goal-lint).
+            Every cycle row in <code>&lt;data&gt;/agent-cycles</code> now also records <code>reason</code> + <code>reasonSource</code>
+            (idle: engagement-gate verdict or the planner's reasoning; skipped: <code>skippedReason</code> such as
+            <code>circuit-open:claude-cli</code>; error: the error), <code>strategistRan</code>, <code>reflection</code> (capped 600)
+            and <code>traitAdjustments</code> (applied deltas) &mdash; <code>explainCycle</code> in <code>agent-cycle-log.ts</code>.
+          </p>
 
           <h4>Behavioral Pattern Analysis</h4>
           <p>
@@ -1304,13 +1317,14 @@ traits: {
               <tr><td>Adjust</td><td><code>adjust()</code> drops deltas for locked <em>and</em> pinned traits (debug log), re-applies pins afterwards, and writes no history entry when nothing changed.</td></tr>
               <tr><td>Drift</td><td><code>getDrift(botId)</code> &rarr; <code>{ baseline, current, delta }</code>; baseline is the first <code>adaptive</code> history snapshot (the defaults written on first load), falling back to the first entry of any source, then the defaults.</td></tr>
               <tr><td>Prompt</td><td><code>renderForPrompt()</code> appends <em>Locked traits (proposals ignored)</em> and <em>Pinned traits (fixed by the operator)</em> lines to the Current Trait State block.</td></tr>
+              <tr><td>Why <span class="badge badge-yellow">2026-10-12</span></td><td><code>adjust(botId, deltas, source, { cycleId, reasons })</code>: each history snapshot records <code>cycleId</code>, <code>reasons</code> (per proposed trait), <code>changes</code> (<code>{ from, to, requested }</code>) and <code>rejected</code> (<code>{ requested, rule: pinned|locked }</code>). A proposal refused entirely leaves <code>history</code> untouched and is kept in <code>TRAITS.json.rejections</code> (<code>getRejections</code>, last 10). Agent Home's Traits card lists recent changes with a "Why this?" fold each (<code>traitChangeToWhy</code>).</td></tr>
               <tr><td>Evolution state</td><td><code>AgentLoop.getEvolutionState()</code> exposes <code>traitDrift</code> and <code>traitPolicy { pinned, locked }</code> next to <code>traits</code>, <code>traitParams</code> and <code>traitHistory</code>.</td></tr>
             </tbody>
           </table>
           <h4>De-biased strategist guidance (<code>agent-loop-prompts.ts</code>)</h4>
           <ul>
             <li>"No change" is the expected answer most cycles &mdash; omit <code>trait_adjustments</code> or send <code>{}</code>. Traits describe who the agent is, not a lever for short-term engagement numbers.</li>
-            <li>Every delta must cite a concrete observation from <em>this</em> agent's recent actions or outcomes (a named action, a repeated error class, an explicit operator request, a rejected production), named in <code>reflection</code>.</li>
+            <li>Every delta must cite a concrete observation from <em>this</em> agent's recent actions or outcomes (a named action, a repeated error class, an explicit operator request, a rejected production), named in <code>trait_reasons</code>.</li>
             <li>Identity consistency: a reactive, guardian, watchdog or monitor identity must not drift toward higher sociability or lower independence because engagement is low &mdash; low engagement with no users is evidence about the audience, not the trait. There is no universal direction.</li>
             <li>Patterns that do count: the same tool error class repeating (caution up / risk_tolerance down), work rejected as shallow (depth up), a confirmed behavioural rut (curiosity up), an explicit operator request for more or less outreach (sociability accordingly).</li>
             <li>Locked or pinned traits listed in the trait state are not to be proposed.</li>

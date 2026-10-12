@@ -460,11 +460,21 @@ export class SoulLoader {
   /**
    * Write GOALS.md content
    */
-  writeGoals(content: string, opts: { actor?: GoalActor; cycleId?: string } = {}): void {
+  writeGoals(
+    content: string,
+    opts: {
+      actor?: GoalActor;
+      cycleId?: string;
+      reason?: string;
+      reasons?: Record<string, string>;
+    } = {}
+  ): void {
     const goalsPath = join(this.dir, 'GOALS.md');
     writeGoalsFile(goalsPath, content, {
       actor: opts.actor ?? 'agent',
       cycleId: opts.cycleId,
+      reason: opts.reason,
+      reasons: opts.reasons,
       backup: this.versioningEnabled
         ? (p) => backupSoulFile(p, this.logger, this.maxVersions)
         : undefined,

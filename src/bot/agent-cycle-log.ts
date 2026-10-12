@@ -14,6 +14,14 @@ import { type GoalEntry, goalFromManageGoalsArgs, resolveGoalRef } from '../tool
 
 export type CycleGoalSource = 'planner' | 'strategist' | 'manage_goals';
 
+/** Who or what the `reason` of an idle/skipped/error cycle comes from. */
+export type CycleReasonSource =
+  | 'planner'
+  | 'engagement-gate'
+  | 'circuit-breaker'
+  | 'error'
+  | 'system';
+
 export interface AgentCycleEntry {
   cycleId: string;
   botId: string;
@@ -31,6 +39,75 @@ export interface AgentCycleEntry {
   goalId: string | null;
   goalTitle: string | null;
   goalSource: CycleGoalSource | null;
+  /**
+   * Why an idle/skipped/error cycle went that way, as recorded when it did:
+   * the planner's reasoning, the engagement-gate verdict, the `skippedReason`
+   * (`circuit-open:<backend>`) or the error. Absent on completed cycles and on
+   * rows written before it was recorded.
+   */
+  reason?: string;
+  reasonSource?: CycleReasonSource;
+  /** Whether the strategist ran in this cycle (absent on older rows). */
+  strategistRan?: boolean;
+  /** The strategist's reflection, capped at `CYCLE_TEXT_MAX` chars. */
+  reflection?: string;
+  /** Trait deltas the strategist applied this cycle (after clamping and policy). */
+  traitAdjustments?: Record<string, number>;
+}
+
+/** Cap for `reason` and `reflection` on a cycle row. */
+export const CYCLE_TEXT_MAX = 600;
+
+const capText = (s: string): string => {
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length > CYCLE_TEXT_MAX ? `${t.slice(0, CYCLE_TEXT_MAX - 1)}…` : t;
+};
+
+/** The parts of a cycle result `explainCycle` reads. */
+export interface CycleResultLike {
+  summary: string;
+  plannerReasoning: string;
+  strategistRan: boolean;
+  strategistReflection?: string;
+  skippedReason?: string;
+  /** Set when the engagement gate held a content plan back. */
+  idleRule?: string;
+}
+
+/**
+ * The why-fields of a cycle row, from what the cycle itself produced (never
+ * re-asked): idle → engagement-gate verdict, else the planner's reasoning;
+ * skipped → `skippedReason` (circuit breaker) or the summary; error → the
+ * error summary. Plus whether the strategist ran and its reflection.
+ */
+export function explainCycle(
+  status: string,
+  result: CycleResultLike | undefined
+): Pick<AgentCycleEntry, 'reason' | 'reasonSource' | 'strategistRan' | 'reflection'> {
+  const out: Pick<AgentCycleEntry, 'reason' | 'reasonSource' | 'strategistRan' | 'reflection'> = {
+    strategistRan: result?.strategistRan === true,
+  };
+  if (!result) return out;
+  const set = (text: string | undefined, source: CycleReasonSource) => {
+    const t = text ? capText(text) : '';
+    if (t) {
+      out.reason = t;
+      out.reasonSource = source;
+    }
+  };
+  if (status === 'idle') {
+    if (result.idleRule) set(result.idleRule, 'engagement-gate');
+    else set(result.plannerReasoning || result.summary, 'planner');
+  } else if (status === 'skipped') {
+    if (result.skippedReason?.startsWith('circuit-open:'))
+      set(result.skippedReason, 'circuit-breaker');
+    else set(result.skippedReason || result.summary, 'system');
+  } else if (status === 'error') {
+    set(result.summary, 'error');
+  }
+  const reflection = result.strategistReflection ? capText(result.strategistReflection) : '';
+  if (out.strategistRan && reflection) out.reflection = reflection;
+  return out;
 }
 
 export interface CycleGoal {

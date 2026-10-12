@@ -129,6 +129,8 @@ describe('buildGoalDetail', () => {
     expect(tl.map((e) => e.cycleId)).toEqual([null, null, 'c-exact']);
     expect(tl[0].why.missing).toContain('Reconstructed from a manage_goals call');
     expect(tl[1].why).toMatchObject({ what: 'Goal added', by: 'operator' });
+    expect(tl[1].reason).toBe('You, from the dashboard');
+    expect(tl[1].why.reason).toEqual({ text: 'You, from the dashboard', source: 'You' });
     expect(tl[2].why.what).toBe('Moved to In progress');
     expect(tl[2].why.cycle).toMatchObject({ id: 'c-exact', plan: 'Draft the October lab' });
     expect(tl[2].why.outcome).toBe('To do → In progress');

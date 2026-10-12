@@ -16,6 +16,8 @@ export interface GoalOperation {
   status?: string;
   notes?: string;
   outcome?: string;
+  /** One short sentence: why this change (stated at decision time; optional). */
+  reason?: string;
 }
 
 export interface StrategistResult {
@@ -30,8 +32,43 @@ export interface StrategistResult {
   next_strategy_in?: string;
   /** Trait adjustments proposed by strategist (max ±0.05 per trait) */
   trait_adjustments?: Record<string, number>;
+  /** One short reason per adjusted trait, as the strategist stated it (optional). */
+  trait_reasons?: Record<string, string>;
   /** Title or id of the active goal the deliverable serves (record only). */
   serves_goal?: string;
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v);
+
+const shortText = (v: unknown): string | undefined =>
+  typeof v === 'string' && v.trim() ? v.replace(/\s+/g, ' ').trim().slice(0, 300) : undefined;
+
+/**
+ * `trait_adjustments` (numbers, or `{ delta, reason }`) and `trait_reasons`
+ * (one short reason per trait). Non-numeric deltas are dropped; reasons are
+ * optional so outputs written before they were asked for still parse.
+ */
+export function parseTraitAdjustments(
+  rawAdjustments: unknown,
+  rawReasons: unknown
+): { adjustments?: Record<string, number>; reasons?: Record<string, string> } {
+  if (!isPlainObject(rawAdjustments)) return {};
+  const adjustments: Record<string, number> = {};
+  const reasons: Record<string, string> = {};
+  const given = isPlainObject(rawReasons) ? rawReasons : {};
+  for (const [trait, value] of Object.entries(rawAdjustments)) {
+    const delta = isPlainObject(value) ? value.delta : value;
+    if (typeof delta !== 'number' || !Number.isFinite(delta)) continue;
+    adjustments[trait] = delta;
+    const reason =
+      shortText(given[trait]) ?? (isPlainObject(value) ? shortText(value.reason) : undefined);
+    if (reason) reasons[trait] = reason;
+  }
+  return {
+    adjustments,
+    ...(Object.keys(reasons).length > 0 ? { reasons } : {}),
+  };
 }
 
 /**
@@ -51,13 +88,10 @@ export function parseStrategistResult(
         typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1
           ? rawConfidence
           : undefined;
-      // Extract trait_adjustments if present
-      const traitAdj =
-        parsed.trait_adjustments &&
-        typeof parsed.trait_adjustments === 'object' &&
-        !Array.isArray(parsed.trait_adjustments)
-          ? (parsed.trait_adjustments as Record<string, number>)
-          : undefined;
+      const { adjustments: traitAdj, reasons: traitReasons } = parseTraitAdjustments(
+        parsed.trait_adjustments,
+        parsed.trait_reasons
+      );
 
       return {
         goal_operations: Array.isArray(parsed.goal_operations) ? parsed.goal_operations : [],
@@ -67,6 +101,7 @@ export function parseStrategistResult(
         reflection: String(parsed.reflection),
         next_strategy_in: parsed.next_strategy_in ? String(parsed.next_strategy_in) : undefined,
         trait_adjustments: traitAdj,
+        ...(traitReasons ? { trait_reasons: traitReasons } : {}),
         ...(typeof parsed.serves_goal === 'string' && parsed.serves_goal.trim()
           ? { serves_goal: parsed.serves_goal.trim() }
           : {}),
@@ -296,6 +331,12 @@ export function applyGoalOperations(
     logger.debug({ botId }, 'No goals file found, starting fresh');
   }
   const { active, completed } = parseGoals(content);
+  /** Stated reason per goal touched, keyed by lower-cased title (goal-events matches on it). */
+  const reasons: Record<string, string> = {};
+  const noteReason = (title: string, op: GoalOperation) => {
+    const reason = shortText(op.reason);
+    if (reason) reasons[title.trim().toLowerCase()] = reason;
+  };
 
   for (const op of operations) {
     switch (op.action) {
@@ -307,6 +348,7 @@ export function applyGoalOperations(
           notes: op.notes,
           source: `strategist:${localDateStr()}`,
         });
+        noteReason(op.goal, op);
         logger.debug({ goal: op.goal }, 'Strategist: added goal');
         break;
       }
@@ -318,6 +360,7 @@ export function applyGoalOperations(
           break;
         }
         const [goal] = active.splice(idx, 1);
+        noteReason(goal.text, op);
         goal.status = 'completed';
         goal.completed = localDateStr();
         if (op.outcome) goal.outcome = op.outcome;
@@ -335,6 +378,7 @@ export function applyGoalOperations(
         if (op.status) found.status = op.status;
         if (op.priority) found.priority = op.priority;
         if (op.notes) found.notes = op.notes;
+        noteReason(found.text, op);
         logger.debug({ goal: found.text }, 'Strategist: updated goal');
         break;
       }
@@ -346,6 +390,7 @@ export function applyGoalOperations(
           break;
         }
         const [removed] = active.splice(idx, 1);
+        noteReason(removed.text, op);
         logger.debug({ goal: removed.text }, 'Strategist: removed goal');
         break;
       }
@@ -357,6 +402,7 @@ export function applyGoalOperations(
   soulLoader.writeGoals(serializeGoals(active, completed), {
     actor: writeOpts.actor ?? 'strategist',
     cycleId: writeOpts.cycleId,
+    ...(Object.keys(reasons).length > 0 ? { reasons } : {}),
   });
   logger.debug({ botId, goalCount: active.length + completed.length }, 'Goals written back');
 }

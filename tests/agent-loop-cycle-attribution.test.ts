@@ -7,9 +7,10 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveCycleGoal } from '../src/bot/agent-cycle-log';
+import { explainCycle, resolveCycleGoal } from '../src/bot/agent-cycle-log';
 import { AgentLoop } from '../src/bot/agent-loop';
 import { CuriosityService } from '../src/bot/curiosity/service';
+import { TraitRegisters } from '../src/bot/trait-registers';
 import { GlobalAgentLoopConfigSchema } from '../src/config';
 import { type GoalEntry, startGoal } from '../src/tools/goals';
 
@@ -395,5 +396,115 @@ describe('runningCycle: what a running cycle is doing, for collab events (Why ro
     });
     expect((seen as { cycleId: string }).cycleId).toBe(cycleRows()[0].cycleId);
     expect(loop.runningCycle('bot1')).toBeUndefined();
+  });
+});
+
+describe('the cycle row says why (why-everywhere row 11)', () => {
+  test('an idle cycle records the planner reasoning; the strategist did not run', async () => {
+    const { loop } = makeLoop(
+      JSON.stringify({ reasoning: 'Waiting for feedback.', plan: [], priority: 'none' })
+    );
+    await loop.runOne('bot1');
+    expect(cycleRows()[0]).toMatchObject({
+      status: 'idle',
+      reason: 'Waiting for feedback.',
+      reasonSource: 'planner',
+      strategistRan: false,
+    });
+    expect(cycleRows()[0].reflection).toBeUndefined();
+  });
+
+  test('a cycle skipped by an open circuit records the skippedReason', async () => {
+    const { loop } = makeLoop('{}');
+    (loop as any).circuitBreaker.shouldSkip = () => ({ skip: true, until: Date.now() + 60_000 });
+    await loop.runOne('bot1');
+    expect(cycleRows()[0]).toMatchObject({
+      status: 'skipped',
+      reason: 'circuit-open:ollama',
+      reasonSource: 'circuit-breaker',
+      strategistRan: false,
+    });
+  });
+
+  test('a strategist run records its reflection and the trait deltas it applied, with their reasons', async () => {
+    const strategist = JSON.stringify({
+      goal_operations: [],
+      single_deliverable: 'Draft the October lab',
+      reflection: 'Three web_fetch errors on the same host this week.',
+      trait_adjustments: { caution: 0.03 },
+      trait_reasons: { caution: 'web_fetch failed on the same host three times.' },
+    });
+    const plan = JSON.stringify({ reasoning: 'r', plan: ['Draft'], priority: 'medium' });
+    const { loop, ctx } = makeLoop(plan, 'periodic', GOALS, (_p, opts) =>
+      Promise.resolve({ text: /strategic oversight/i.test(opts?.system ?? '') ? strategist : plan })
+    );
+    ctx.config.bots[0].agentLoop.strategist = { enabled: true, everyCycles: 1 };
+    const sched = (loop as any).scheduler.getSchedule('bot1');
+    sched.strategistCycleCount = 1;
+    sched.lastStrategistAt = null;
+    const traits = new TraitRegisters(join(dataDir, 'traits'), mockLogger());
+    traits.load('bot1');
+    loop.setTraitRegisters(traits);
+    await loop.runOne('bot1');
+    const row = cycleRows()[0];
+    expect(row).toMatchObject({
+      strategistRan: true,
+      reflection: 'Three web_fetch errors on the same host this week.',
+      traitAdjustments: { caution: 0.03 },
+    });
+    const snap = traits.getHistory('bot1').at(-1);
+    expect(snap).toMatchObject({
+      source: 'strategist',
+      cycleId: row.cycleId,
+      reasons: { caution: 'web_fetch failed on the same host three times.' },
+    });
+  });
+});
+
+describe('explainCycle', () => {
+  const base = { plannerReasoning: '', strategistRan: false, summary: '' };
+
+  test('idle: the engagement gate wins over the planner', () => {
+    expect(
+      explainCycle('idle', {
+        ...base,
+        plannerReasoning: 'post more',
+        idleRule: 'Engagement gate: content blocked until feedback (6 outputs, 0 feedback)',
+      })
+    ).toEqual({
+      reason: 'Engagement gate: content blocked until feedback (6 outputs, 0 feedback)',
+      reasonSource: 'engagement-gate',
+      strategistRan: false,
+    });
+    expect(explainCycle('idle', { ...base, summary: 'Planner produced no plan steps.' })).toEqual({
+      reason: 'Planner produced no plan steps.',
+      reasonSource: 'planner',
+      strategistRan: false,
+    });
+  });
+
+  test('skipped and error say what stopped them; completed has no reason', () => {
+    expect(
+      explainCycle('skipped', { ...base, summary: 'API call quota exceeded for tenant' })
+    ).toMatchObject({ reason: 'API call quota exceeded for tenant', reasonSource: 'system' });
+    expect(explainCycle('error', { ...base, summary: 'Agent loop error: boom' })).toMatchObject({
+      reason: 'Agent loop error: boom',
+      reasonSource: 'error',
+    });
+    expect(explainCycle('error', undefined)).toEqual({ strategistRan: false });
+    expect(explainCycle('completed', { ...base, plannerReasoning: 'x' })).toEqual({
+      strategistRan: false,
+    });
+  });
+
+  test('the reflection is capped at 600 chars', () => {
+    const out = explainCycle('completed', {
+      ...base,
+      strategistRan: true,
+      strategistReflection: 'x'.repeat(900),
+    });
+    expect(out.strategistRan).toBe(true);
+    expect(out.reflection?.length).toBe(600);
+    expect(out.reflection?.endsWith('…')).toBe(true);
   });
 });

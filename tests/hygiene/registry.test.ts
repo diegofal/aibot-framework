@@ -88,6 +88,12 @@ describe('HygieneRegistry.run', () => {
     expect(history).toHaveLength(1);
     expect(history[0].runId).toBe(run.runId);
     expect(existsSync(join(root, 'data', 'hygiene', 'runs.jsonl'))).toBe(true);
+    // The goal event names the run that made it (why-everywhere row 12).
+    const events = readFileSync(join(soulDir, 'goal-events.jsonl'), 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    expect(events.map((e) => e.runId)).toEqual([run.runId]);
   });
 
   test('apply on a soul file leaves a hygiene-fix row in the soul log with the run id', async () => {

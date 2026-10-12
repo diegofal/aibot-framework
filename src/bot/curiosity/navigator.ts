@@ -226,7 +226,7 @@ ${exploreRule}
 - Propose new frontier items: "distance" 0 = core, 1 = adjacent, 2+ = far; "bridge" = one sentence tying it to your purpose (omit it when it does not serve your purpose — that crosses the purpose dial); "surpriseScore" 0–1 = expected surprise.
 - "served_directive_ids": ids of operator instructions your outputs have already answered.
 ${interestRule}
-- "goal_operations": close self-referential bookkeeping goals (about your own process, karma, logs) that serve neither your purpose nor the operator. Same schema as the strategist: {"action": "add"|"complete"|"update"|"remove", "goal": "...", "priority"?, "status"?, "notes"?, "outcome"?}.
+- "goal_operations": close self-referential bookkeeping goals (about your own process, karma, logs) that serve neither your purpose nor the operator. Same schema as the strategist: {"action": "add"|"complete"|"update"|"remove", "goal": "...", "priority"?, "status"?, "notes"?, "outcome"?, "reason"}, where "reason" is one short sentence saying why.
 
 Respond with ONLY a JSON object, no prose:
 {
@@ -342,7 +342,7 @@ function parseGoalOperation(v: unknown): GoalOperation | null {
   const goal = str(v.goal);
   if (!GOAL_ACTIONS.has(action) || !goal) return null;
   const op: GoalOperation = { action: action as GoalOperation['action'], goal };
-  for (const k of ['priority', 'status', 'notes', 'outcome'] as const) {
+  for (const k of ['priority', 'status', 'notes', 'outcome', 'reason'] as const) {
     const s = optStr(v[k]);
     if (s) op[k] = s;
   }

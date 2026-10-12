@@ -3904,6 +3904,25 @@ body.ui-sheet-open {
   justify-content: center;
 }
 
+/* Traits card: recent changes, each with its "Why this?" fold (Why plan row 13). */
+.home-trait-changes {
+  margin-top: var(--s3);
+}
+.home-trait-changes ul {
+  list-style: none;
+  margin: var(--s1) 0 0;
+  padding: 0;
+}
+.home-trait-change {
+  padding: var(--s1) 0;
+  border-top: 1px solid var(--border);
+}
+.home-trait-change-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
 /* ---------------------------------------------------------------------------
    Navigation areas + area tab strip (session S3)
    Seven sidebar areas rendered by app.js from web/nav-routes.js; sub-pages

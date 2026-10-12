@@ -4,6 +4,7 @@
  * in the goal drawer (`cycle-rows.ts`). Read-only, never throws on missing data.
  */
 import type { BotConfig } from '../config';
+import { cycleRuleText } from '../why/builders/cycle';
 import type { StatsContext } from './context';
 import {
   type CycleCandidate,
@@ -14,6 +15,7 @@ import {
   tagOf,
   toGoalCycle,
 } from './cycle-rows';
+import type { AgentCycleRecord } from './readers/agent-cycles';
 import type { CycleDetailResponse, GoalCycleKarma } from './types';
 import { toMs } from './util';
 
@@ -88,5 +90,35 @@ export function buildCycleDetail(
     generatedAt: new Date(now).toISOString(),
     cycle: toGoalCycle(candidate, karma, reviewStateOf(src.changelog)),
     goal: goalTitle ? { id: goalId, title: goalTitle } : null,
+    ...recordedWhy(record),
+  };
+}
+
+const REASON_SOURCES: Record<string, string> = {
+  planner: 'Planner',
+  'engagement-gate': 'Engagement gate',
+  'circuit-breaker': 'Circuit breaker',
+  error: 'Error',
+  system: 'System',
+};
+
+/** The why-fields the cycle log recorded for the cycle (row 11 of the Why plan). */
+function recordedWhy(
+  record: AgentCycleRecord | undefined
+): Pick<CycleDetailResponse, 'cycleReason' | 'strategistRan' | 'reflection' | 'traitAdjustments'> {
+  const reason = typeof record?.reason === 'string' ? record.reason.trim() : '';
+  const reflection = typeof record?.reflection === 'string' ? record.reflection.trim() : '';
+  const traits = record?.traitAdjustments;
+  return {
+    cycleReason: reason
+      ? {
+          text: cycleRuleText(reason, record?.reasonSource),
+          source: REASON_SOURCES[record?.reasonSource ?? ''] ?? 'Recorded',
+        }
+      : null,
+    strategistRan: typeof record?.strategistRan === 'boolean' ? record.strategistRan : null,
+    reflection: reflection || null,
+    traitAdjustments:
+      traits && typeof traits === 'object' && Object.keys(traits).length > 0 ? traits : null,
   };
 }

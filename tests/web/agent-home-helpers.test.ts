@@ -7,6 +7,8 @@ import {
   postureTone,
   presenceHeader,
   presenceMeta,
+  traitChangesList,
+  traitsBody,
 } from '../../web/pages/agent-home-helpers.js';
 
 const NOW = 1_700_000_000_000;
@@ -174,5 +176,44 @@ describe('applyPresence', () => {
     expect(nodes['#presence-badge'].innerHTML).toContain('ui-badge-danger');
     expect(nodes['.ui-avatar-dot'].className).toBe('ui-avatar-dot ui-avatar-dot-danger');
     expect(nodes['#presence-meta'].textContent).toBe('claude-cli · next run in 1m');
+  });
+});
+
+describe('traits history (Why row 13)', () => {
+  const change = {
+    ts: new Date(NOW - 2 * 60 * M).toISOString(),
+    source: 'strategist',
+    cycleId: 'c-1',
+    changes: [{ trait: 'caution', from: 0.5, to: 0.53, requested: 0.03 }],
+    rejected: [],
+    reasons: { caution: 'Repeated <errors>.' },
+    derived: false,
+    why: {
+      what: 'Trait adjusted: caution +0.03',
+      by: 'strategist',
+      reason: { text: 'Repeated <errors>.', source: 'Strategist' },
+      cycle: { id: 'c-1', botId: 'b1' },
+    },
+  };
+
+  it('lists each change with who, when and its Why fold', () => {
+    const html = traitChangesList([change], { nowMs: NOW, botId: 'b1' });
+    expect(html).toContain('Trait adjusted: caution +0.03');
+    expect(html).toContain('strategist');
+    expect(html).toContain('2h ago');
+    expect(html).toContain('<details class="why">');
+    expect(html).toContain('Repeated &lt;errors&gt;.');
+    expect(html).toContain('data-open-cycle="c-1"');
+  });
+
+  it('is empty without changes; the traits card includes it under the radar', () => {
+    expect(traitChangesList([], { nowMs: NOW })).toBe('');
+    expect(traitChangesList(undefined, { nowMs: NOW })).toBe('');
+    const traits = { current: { a: 0.5, b: 0.5, c: 0.5 }, adjustments: 2, drift: null };
+    const html = traitsBody(traits, [change], { nowMs: NOW, botId: 'b1' });
+    expect(html).toContain('home-traits-radar');
+    expect(html).toContain('Recent changes');
+    expect(html).toContain('<details class="why">');
+    expect(traitsBody(traits)).not.toContain('Recent changes');
   });
 });

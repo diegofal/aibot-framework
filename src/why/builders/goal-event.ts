@@ -1,8 +1,10 @@
 /**
  * Why for one change in a goal's timeline (the goal drawer): the op in words,
  * who made it (`goal-events.jsonl` actor), the cycle it happened in with that
- * cycle's plan, and from → to. Reasons for goal changes are not recorded yet
- * (plan row 12), so `reason` stays empty rather than guessed.
+ * cycle's plan, from → to, and the reason the writer recorded with it (the
+ * strategist's or navigator's own sentence, goal-lint's outcome text, the
+ * reflection day, "You, from the dashboard"). No reason recorded → `missing`,
+ * never a guess.
  */
 import { type CycleRow, toWhyCycle } from '../cycle-index';
 import type { Why, WhyActor } from '../types';
@@ -19,6 +21,10 @@ export interface GoalEventWhyInput {
     /** Reconstructed from a manage_goals call in the tool audit. */
     inferred: boolean;
     note?: string | null;
+    /** Recorded with the change by whoever made it. */
+    reason?: string | null;
+    /** Hygiene run that made the change. */
+    runId?: string | null;
   };
   /** The cycle-log row of `event.cycleId`, when the log still has it. */
   cycle?: CycleRow;
@@ -39,6 +45,21 @@ const ACTORS: Record<string, WhyActor> = {
   operator: 'operator',
   wizard: 'operator',
 };
+
+/** Who stated a recorded reason, by goal-event actor. */
+const REASON_SOURCES: Record<string, string> = {
+  agent: 'Agent',
+  tool: 'Agent',
+  strategist: 'Strategist',
+  curiosity: 'Navigator',
+  reflection: 'Reflection',
+  lint: 'Goal lint',
+  operator: 'You',
+  wizard: 'You, when creating the agent',
+};
+
+/** Writers that record a reason with every change since 2026-10-12 (the operator needs none). */
+const REASONING_ACTORS = new Set(['strategist', 'curiosity', 'reflection', 'lint']);
 
 /** Actors that only act inside an agent-loop cycle. */
 const LOOP_ACTORS = new Set<WhyActor>(['agent', 'strategist', 'curiosity', 'reflection']);
@@ -103,9 +124,18 @@ export function goalEventToWhy(input: GoalEventWhyInput): Why {
   } else if (!e.cycleId && by && LOOP_ACTORS.has(by)) {
     missing.push('No cycle was recorded with this change (written before cycles were logged).');
   }
+  const reason = typeof e.reason === 'string' ? e.reason.trim() : '';
+  if (reason) {
+    why.reason = { text: reason, source: (e.actor && REASON_SOURCES[e.actor]) || 'Recorded' };
+  } else if (e.actor && REASONING_ACTORS.has(e.actor)) {
+    missing.push('No reason was recorded with this change (changes before 2026-10-12 have none).');
+  }
   const outcome = outcomeOf(e.op, e.from, e.to);
   if (outcome) why.outcome = outcome;
-  if (e.note) why.notes = [{ label: 'Notes', text: e.note }];
+  const notes: Array<{ label: string; text: string }> = [];
+  if (e.note) notes.push({ label: 'Notes', text: e.note });
+  if (e.runId) notes.push({ label: 'Hygiene run', text: e.runId });
+  if (notes.length > 0) why.notes = notes;
   if (missing.length > 0) why.missing = missing.join(' ');
   return why;
 }

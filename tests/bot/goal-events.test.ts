@@ -316,3 +316,39 @@ describe('writeGoalsFile free-form content', () => {
     expect(events()).toEqual([]);
   });
 });
+
+describe('writeGoalsFile: reasons (why-everywhere row 12)', () => {
+  const two =
+    '## Active Goals\n- [ ] Ship it\n  - id: g-11111111\n- [ ] Write docs\n  - id: g-22222222\n';
+
+  test('a write-wide reason and runId land on every event of the write', () => {
+    writeGoalsFile(path, two, {
+      actor: 'lint',
+      reason: '"Ship it" moved to Completed',
+      runId: 'run-9',
+      now: () => NOW,
+    });
+    expect(events().map((e) => [e.reason, e.runId])).toEqual([
+      ['"Ship it" moved to Completed', 'run-9'],
+      ['"Ship it" moved to Completed', 'run-9'],
+    ]);
+  });
+
+  test('per-goal reasons match by id or title and win over the write-wide reason', () => {
+    writeGoalsFile(path, two, {
+      actor: 'strategist',
+      reason: 'fallback',
+      reasons: { 'g-11111111': 'by id', 'write docs': 'by title' },
+      now: () => NOW,
+    });
+    const byTitle = Object.fromEntries(events().map((e) => [e.title, e.reason]));
+    expect(byTitle).toEqual({ 'Ship it': 'by id', 'Write docs': 'by title' });
+  });
+
+  test('no reason given leaves the field out of the row', () => {
+    writeGoalsFile(path, two, { actor: 'agent', now: () => NOW });
+    const raw = readFileSync(join(dir, GOAL_EVENTS_FILE), 'utf-8');
+    expect(raw).not.toContain('"reason"');
+    expect(raw).not.toContain('"runId"');
+  });
+});

@@ -703,3 +703,29 @@ describe('runNavigator', () => {
     await expect(runNavigator(client, promptInput(), 'm', logger)).rejects.toThrow('boom');
   });
 });
+
+describe('navigator goal operations carry a reason (why-everywhere row 12)', () => {
+  it('the prompt asks for one short reason per goal operation', () => {
+    expect(buildNavigatorPrompt(promptInput()).prompt).toMatch(/"reason"/);
+  });
+
+  it('a stated reason is kept; an op without one still parses', () => {
+    const r = parseNavigatorResult(
+      validJson({
+        goalOperations: [
+          {
+            action: 'complete',
+            goal: 'Track my own karma',
+            reason: 'Self-referential bookkeeping.',
+          },
+          { action: 'remove', goal: 'Other' },
+        ],
+      }),
+      logger
+    )!;
+    expect(r.goalOperations).toEqual([
+      { action: 'complete', goal: 'Track my own karma', reason: 'Self-referential bookkeeping.' },
+      { action: 'remove', goal: 'Other' },
+    ]);
+  });
+});

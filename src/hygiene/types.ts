@@ -113,6 +113,8 @@ export interface HygieneContext {
   now: Date;
   options: Record<string, unknown>;
   deps: HygieneDeps;
+  /** The run this context belongs to; routines stamp it on what they write (goal events). */
+  runId?: string;
 }
 
 export interface HygieneApplyResult {

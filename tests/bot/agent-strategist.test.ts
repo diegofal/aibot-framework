@@ -500,3 +500,82 @@ describe('applyGoalOperations', () => {
     expect(parsed.completed[0].text).toBe('Task A');
   });
 });
+
+// ---------- reasons (why-everywhere rows 12 and 13) ----------
+
+describe('strategist reasons', () => {
+  beforeEach(resetLogger);
+
+  test('goal operations keep a stated reason; old outputs without one still parse', () => {
+    const raw = JSON.stringify({
+      goal_operations: [
+        { action: 'add', goal: 'New goal', reason: 'The operator asked for it twice.' },
+        { action: 'remove', goal: 'Old goal' },
+      ],
+      single_deliverable: 'Do X',
+      reflection: 'ok',
+    });
+    const result = parseStrategistResult(raw, mockLogger);
+    expect(result?.goal_operations[0].reason).toBe('The operator asked for it twice.');
+    expect(result?.goal_operations[1].reason).toBeUndefined();
+  });
+
+  test('trait_reasons are kept per trait; the {delta, reason} form is accepted too', () => {
+    const raw = JSON.stringify({
+      single_deliverable: 'Do X',
+      reflection: 'ok',
+      trait_adjustments: {
+        caution: 0.03,
+        depth: { delta: 0.02, reason: 'Shallow work rejected.' },
+      },
+      trait_reasons: { caution: 'web_fetch failed 4 times on the same host.' },
+    });
+    const result = parseStrategistResult(raw, mockLogger);
+    expect(result?.trait_adjustments).toEqual({ caution: 0.03, depth: 0.02 });
+    expect(result?.trait_reasons).toEqual({
+      caution: 'web_fetch failed 4 times on the same host.',
+      depth: 'Shallow work rejected.',
+    });
+  });
+
+  test('trait adjustments without reasons parse as before (no trait_reasons)', () => {
+    const raw = JSON.stringify({
+      single_deliverable: 'Do X',
+      reflection: 'ok',
+      trait_adjustments: { caution: 0.03, bogus: 'x' },
+    });
+    const result = parseStrategistResult(raw, mockLogger);
+    expect(result?.trait_adjustments).toEqual({ caution: 0.03 });
+    expect(result?.trait_reasons).toBeUndefined();
+  });
+
+  test('applyGoalOperations hands each op reason to the writer, keyed by the goal it touched', () => {
+    const soulLoader = {
+      readGoals: vi
+        .fn()
+        .mockReturnValue(
+          serializeGoals([{ text: 'Finish the report', status: 'pending', priority: 'high' }], [])
+        ),
+      writeGoals: vi.fn(),
+    };
+    applyGoalOperations(
+      'b',
+      [
+        { action: 'complete', goal: 'finish the', reason: 'Report was sent yesterday.' },
+        { action: 'add', goal: 'Plan Q4', reason: 'Q3 work is done.' },
+        { action: 'add', goal: 'No reason here' },
+      ],
+      mockLogger as any,
+      soulLoader as any,
+      { actor: 'curiosity', cycleId: 'c-1' }
+    );
+    expect(soulLoader.writeGoals.mock.calls[0][1]).toEqual({
+      actor: 'curiosity',
+      cycleId: 'c-1',
+      reasons: {
+        'finish the report': 'Report was sent yesterday.',
+        'plan q4': 'Q3 work is done.',
+      },
+    });
+  });
+});

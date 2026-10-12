@@ -18,6 +18,8 @@ import { readEntries } from '../productions/changelog';
 import { goalBucket } from '../tools/goals';
 import { cycleToWhy } from '../why/builders/cycle';
 import { postureToWhy } from '../why/builders/posture';
+import { traitChangeToWhy } from '../why/builders/trait-change';
+import { CycleIndex } from '../why/cycle-index';
 import type { Why } from '../why/types';
 import { type StatsContext, liveSchedule } from './context';
 import { getBotStats } from './fleet-aggregator';
@@ -29,9 +31,16 @@ import { readInboxAsks } from './readers/conversations';
 import { readLlmEntries } from './readers/llm-query-log';
 import { readProductionOutput } from './readers/productions';
 import { readSchedules } from './readers/schedules';
-import { readGoals, readTraits } from './readers/soul';
+import { readGoals, readTraitChanges, readTraits } from './readers/soul';
 import { readToolEntries } from './readers/tool-audit';
-import type { ChannelKind, ChannelState, GoalDetail, Posture, TraitStats } from './types';
+import type {
+  ChannelKind,
+  ChannelState,
+  GoalDetail,
+  Posture,
+  TraitChange,
+  TraitStats,
+} from './types';
 import { toIso, toMs } from './util';
 
 export const HOME_CACHE_TTL_MS = 15_000;
@@ -150,6 +159,8 @@ export interface AgentHomeResponse {
     completedRecently: GoalDetail[];
   };
   traits: TraitStats;
+  /** Recent trait changes, newest first, each with its Why (`traitChangeToWhy`). */
+  traitChanges: TraitChange[];
   karma: {
     score: number | null;
     trend: 'rising' | 'falling' | 'stable';
@@ -423,6 +434,19 @@ function safe<T>(fn: () => T, fallback: T): T {
   }
 }
 
+/** Trait changes with their Why; one cycle-log read spanning them for the cycle plans. */
+function buildTraitChanges(ctx: StatsContext, botId: string, soulDir: string): TraitChange[] {
+  const records = readTraitChanges(soulDir);
+  const index = CycleIndex.for(
+    (b, since, until) => readAgentCycles(ctx.dirs.agentCycles, b, since, until),
+    records.filter((r) => r.cycleId).map((r) => ({ botId, at: r.ts }))
+  );
+  return records.map((r) => {
+    const cycle = r.cycleId ? index.byId(botId, r.cycleId) : undefined;
+    return { ...r, why: traitChangeToWhy({ botId, change: r, ...(cycle ? { cycle } : {}) }) };
+  });
+}
+
 export function buildAgentHome(
   ctx: StatsContext,
   bot: BotConfig,
@@ -485,6 +509,7 @@ export function buildAgentHome(
       completedRecently: completed,
     },
     traits: readTraits(paths.soulDir).stats,
+    traitChanges: safe(() => buildTraitChanges(ctx, bot.id, paths.soulDir), []),
     karma: {
       score,
       trend: safe(() => deps.karma?.getTrend?.(bot.id) ?? 'stable', 'stable'),

@@ -247,3 +247,18 @@ describe('goal-lint writes through the goal-event log', () => {
     ]);
   });
 });
+
+describe('goal-lint states what it did on each goal event (why-everywhere row 12)', () => {
+  test('the event carries the apply outcome text and the hygiene runId', () => {
+    goals(`## Active Goals
+- [ ] Old thing
+  - status: archived
+  - priority: low
+`);
+    const ctx = makeCtx(root, { soulDir, runId: 'run-42' });
+    goalLint.apply(ctx, goalLint.preview(ctx));
+    const [ev] = readGoalEvents(soulDir);
+    expect(ev.reason).toBe('"Old thing" moved to Completed');
+    expect(ev.runId).toBe('run-42');
+  });
+});

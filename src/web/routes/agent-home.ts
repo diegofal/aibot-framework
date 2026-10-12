@@ -58,6 +58,8 @@ import { soulEventToWhy } from '../../why/builders/soul-event';
 import { CycleIndex } from '../../why/cycle-index';
 import type { Why } from '../../why/types';
 
+/** Reason stamped on goal events the operator makes from the dashboard. */
+const OPERATOR_GOAL_REASON = 'You, from the dashboard';
 export const GOAL_TITLE_MAX = 200;
 export const MEMORY_HISTORY_DEFAULT_LIMIT = 50;
 export const MEMORY_HISTORY_MAX_LIMIT = 200;
@@ -323,6 +325,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
       const current = existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null;
       writeGoalsFile(goalsPath, appendGoal(current, goal), {
         actor: 'operator',
+        reason: OPERATOR_GOAL_REASON,
         backup: (p) => backupSoulFile(p, deps.logger),
       });
     } catch (err) {
@@ -354,6 +357,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     const write = (content: string) =>
       writeGoalsFile(goalsPath, content, {
         actor: 'operator',
+        reason: OPERATOR_GOAL_REASON,
         backup: (p) => backupSoulFile(p, deps.logger),
       });
     const read = () => (existsSync(goalsPath) ? readFileSync(goalsPath, 'utf-8') : null);
@@ -427,6 +431,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     try {
       writeGoalsFile(goalsPath, next, {
         actor: 'operator',
+        reason: OPERATOR_GOAL_REASON,
         backup: (p) => backupSoulFile(p, deps.logger),
       });
     } catch (err) {

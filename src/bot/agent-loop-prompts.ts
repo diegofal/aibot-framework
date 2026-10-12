@@ -775,6 +775,8 @@ export interface StrategistResult {
     status?: string;
     notes?: string;
     outcome?: string;
+    /** One short sentence: why this change (optional). */
+    reason?: string;
   }>;
   /** @deprecated Use single_deliverable instead */
   focus?: string;
@@ -790,6 +792,8 @@ export interface StrategistResult {
   next_strategy_in?: string;
   /** Trait adjustments proposed by strategist (max ±0.05 per trait) */
   trait_adjustments?: Record<string, number>;
+  /** One short reason per adjusted trait (optional). */
+  trait_reasons?: Record<string, string>;
 }
 
 export function buildStrategistPrompt(input: StrategistPromptInput): {
@@ -914,6 +918,7 @@ JSON Schema:
   - status: string (for update: "pending" | "in_progress" | "blocked") — optional
   - notes: string (optional context)
   - outcome: string (for complete: what was achieved) — optional
+  - reason: string (one short sentence: why this change)
 - single_deliverable: string (ONE specific, bounded, achievable task — 5-15 minutes max)
 - serves_goal: string, the exact title (or id) of the active goal the deliverable serves (optional)
 - alignment_confidence: number (0.0-1.0, how well the deliverable serves the agent's identity/soul — below 0.6 triggers re-derivation)
@@ -921,6 +926,7 @@ JSON Schema:
 - reflection: string (brief analysis of the agent's current state and trajectory)
 - next_strategy_in: string (when to run strategist again, e.g. "4h", "8h", "1d")
 - trait_adjustments: object (optional — propose small shifts to mechanical personality traits, max ±0.05 per trait)
+- trait_reasons: object (one short sentence per trait in trait_adjustments: the observation behind it)
 
 ## Trait Adjustments
 If a "Current Trait State" section is present above, you MAY propose trait_adjustments to shift the agent's mechanical parameters. Each trait ranges 0.1-0.9; max ±0.05 per trait per cycle.
@@ -928,14 +934,14 @@ If a "Current Trait State" section is present above, you MAY propose trait_adjus
 "No change" is the expected answer most cycles — omit trait_adjustments or use {}. Traits describe WHO this agent is; they are not a lever for short-term engagement numbers.
 
 Rules for any delta you do propose:
-- Each delta must cite a concrete observation from THIS agent's recent actions or outcomes (a named action, a repeated error class, an explicit operator request, a rejected production). Name it in "reflection". A delta without such an observation is invalid.
+- Each delta must cite a concrete observation from THIS agent's recent actions or outcomes (a named action, a repeated error class, an explicit operator request, a rejected production). Name it in "trait_reasons". A delta without such an observation is invalid.
 - Identity consistency: every delta must agree with the identity and soul above. A reactive, guardian, watchdog or monitor identity must not drift toward higher sociability or lower independence just because engagement is low. Low engagement with no users is not evidence about the trait — it is evidence about the audience.
 - There is no universal direction. Low engagement, a stale streak or a quiet week do not by themselves justify any delta for any trait.
 - Patterns that DO count as evidence: the same tool error class repeating across sessions (caution up / risk_tolerance down); the operator rejecting work as shallow (depth up); a confirmed behavioral rut in the analysis above (curiosity up); the operator explicitly asking for more or less outreach (sociability accordingly).
 - Traits listed as locked or pinned in the trait state are ignored — do not propose them.
 
 Example (no trait change warranted):
-{"goal_operations":[{"action":"complete","goal":"set up monitoring","outcome":"Monitoring dashboard deployed and working"},{"action":"add","goal":"Explore partnership opportunities with DeFi protocols","priority":"high"}],"single_deliverable":"Send 3 partnership outreach messages to DeFi protocols identified in the research phase","alignment_confidence":0.9,"reflection":"Agent has been stuck optimizing internal tools for 3 days instead of pursuing its core mission of community growth. Time to execute, not plan.","next_strategy_in":"6h","trait_adjustments":{}}`;
+{"goal_operations":[{"action":"complete","goal":"set up monitoring","outcome":"Monitoring dashboard deployed and working","reason":"Dashboard has been live for a week."},{"action":"add","goal":"Explore partnership opportunities with DeFi protocols","priority":"high","reason":"Growth is the core mission and nothing serves it now."}],"single_deliverable":"Send 3 partnership outreach messages to DeFi protocols identified in the research phase","alignment_confidence":0.9,"reflection":"Agent has been stuck optimizing internal tools for 3 days instead of pursuing its core mission of community growth. Time to execute, not plan.","next_strategy_in":"6h","trait_adjustments":{}}`;
 
   const prompt =
     'Perform a strategic review and assign ONE concrete deliverable for the next session. Remember: the executor will STOP after completing this ONE deliverable. Make it specific, achievable, and bounded. Respond with ONLY the JSON object.';

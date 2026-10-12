@@ -15,7 +15,12 @@ import {
   computeAdaptiveMetrics,
   createDefaultAdaptiveParams,
 } from './adaptive-planning';
-import { AgentCycleLog, type CycleGoalSource, resolveCycleGoal } from './agent-cycle-log';
+import {
+  AgentCycleLog,
+  type CycleGoalSource,
+  explainCycle,
+  resolveCycleGoal,
+} from './agent-cycle-log';
 import type { AgentFeedback } from './agent-feedback-store';
 import {
   buildContinuousPlannerPrompt,
@@ -80,6 +85,7 @@ import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
 import { ToolLoopDetector } from './tool-loop-detector';
 import type { PermissionMode } from './tool-permissions';
 import { TOOL_CATEGORY_NAMES, type ToolCategory, type ToolRegistry } from './tool-registry';
+import { traitDeltas } from './trait-registers';
 import type { BotContext } from './types';
 
 // Backward-compat re-exports — consumers may import these from agent-loop
@@ -103,6 +109,8 @@ interface CycleAttribution {
   strategistRef?: string;
   /** The plan once the planner answered, as the cycle log summarises it. */
   planSummary?: string;
+  /** Trait deltas the strategist applied in this cycle (for the cycle row). */
+  traitAdjustments?: Record<string, number>;
 }
 
 export interface AgentLoopResult {
@@ -123,6 +131,8 @@ export interface AgentLoopResult {
   retryAttempt?: number;
   /** Machine-readable reason for a `skipped` status (e.g. `circuit-open:ollama`) */
   skippedReason?: string;
+  /** Engagement-gate verdict when the gate turned a content plan into an idle cycle */
+  idleRule?: string;
   /** Tool categories selected by planner for pre-selection */
   selectedToolCategories?: string[];
   /** Number of tool definitions sent to executor after pre-selection */
@@ -162,6 +172,8 @@ interface ExecuteLoopDetail {
   tokenUsage?: AgentLoopResult['tokenUsage'];
   alignmentWarnings?: string[];
   loopDetection?: AgentLoopResult['loopDetection'];
+  /** Engagement-gate verdict when the gate held the plan back */
+  idleRule?: string;
   /** Curiosity cycle to finish after the executor (knowledge extraction + dispatch) */
   curiosity?: {
     cycle: CuriosityCycle;
@@ -933,6 +945,10 @@ export class AgentLoop {
         toolCalls: toolCalls.length,
         tools: toolCalls.map((t) => t.name),
         ...goal,
+        ...explainCycle(status, result),
+        ...(attribution.traitAdjustments && Object.keys(attribution.traitAdjustments).length > 0
+          ? { traitAdjustments: attribution.traitAdjustments }
+          : {}),
       });
       if (status === 'completed' && goal.goalId) {
         this.startCycleGoal(botId, goal.goalId, attribution.cycleId);
@@ -1278,6 +1294,7 @@ export class AgentLoop {
         strategistReflection: detail.strategistReflection,
         focus: detail.focus,
         isIdle,
+        ...(detail.idleRule ? { idleRule: detail.idleRule } : {}),
         consecutiveIdleCycles: schedule?.consecutiveIdleCycles ?? 0,
         selectedToolCategories: detail.selectedToolCategories,
         executorToolCount: detail.executorToolCount,
@@ -1690,11 +1707,15 @@ export class AgentLoop {
         // Apply trait adjustments proposed by strategist
         if (this.traitRegisters && strategistResult.trait_adjustments) {
           try {
-            this.traitRegisters.adjust(
+            const before = this.traitRegisters.load(botId);
+            const attribution = this.cycleAttribution.get(botId);
+            const after = this.traitRegisters.adjust(
               botId,
               strategistResult.trait_adjustments as Record<string, number>,
-              'strategist'
+              'strategist',
+              { cycleId: attribution?.cycleId, reasons: strategistResult.trait_reasons }
             );
+            if (attribution) attribution.traitAdjustments = traitDeltas(before, after);
             botLogger.debug(
               { botId, adjustments: strategistResult.trait_adjustments },
               'Applied strategist trait adjustments'
@@ -2160,6 +2181,7 @@ export class AgentLoop {
         }
         return {
           summary: gate.summary,
+          idleRule: gate.summary,
           plannerReasoning,
           plan: [],
           toolCalls: [],

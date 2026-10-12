@@ -118,3 +118,34 @@ describe('goalEventToWhy', () => {
     expect(goalEventToWhy(input({ op: 'notes', from: null, to: null })).outcome).toBeUndefined();
   });
 });
+
+describe('goalEventToWhy: the stated reason (why-everywhere row 12)', () => {
+  it('a recorded reason is the Reason row, sourced from who wrote it', () => {
+    const cases: Array<[string, string]> = [
+      ['strategist', 'Strategist'],
+      ['curiosity', 'Navigator'],
+      ['lint', 'Goal lint'],
+      ['reflection', 'Reflection'],
+      ['operator', 'You'],
+      ['agent', 'Agent'],
+    ];
+    for (const [actor, source] of cases) {
+      const why = goalEventToWhy(input({ actor, reason: 'Because.' }, { cycle: row }));
+      expect(why.reason).toEqual({ text: 'Because.', source });
+      expect(WhySchema.safeParse(why).success).toBe(true);
+    }
+  });
+
+  it('a hygiene run id is a note', () => {
+    const why = goalEventToWhy(
+      input({ actor: 'lint', cycleId: null, reason: '"X" moved to Completed', runId: 'run-1' })
+    );
+    expect(why.notes).toEqual([{ label: 'Hygiene run', text: 'run-1' }]);
+  });
+
+  it('a strategist change without a reason says so plainly', () => {
+    const why = goalEventToWhy(input({ actor: 'strategist' }, { cycle: row }));
+    expect(why.reason).toBeUndefined();
+    expect(why.missing).toContain('No reason was recorded');
+  });
+});

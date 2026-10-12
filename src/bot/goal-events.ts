@@ -65,9 +65,13 @@ export interface GoalEvent {
   to?: string;
   actor: GoalActor;
   cycleId?: string;
+  /** Why the writer made the change, in its own words at the time (never written later). */
+  reason?: string;
+  /** Hygiene run that made the change (goal-lint). */
+  runId?: string;
 }
 
-/** A change without its envelope (ts, actor, cycleId). */
+/** A change without its envelope (ts, actor, cycleId, reason). */
 export type GoalChange = Pick<GoalEvent, 'goalId' | 'title' | 'op' | 'from' | 'to'>;
 
 export interface GoalsState {
@@ -78,6 +82,15 @@ export interface GoalsState {
 export interface GoalWriteOptions {
   actor: GoalActor;
   cycleId?: string;
+  /** Why this write happened; stamped on every event of the write. */
+  reason?: string;
+  /**
+   * Per-goal reasons, keyed by goal id or lower-cased title; win over `reason`
+   * (the strategist states one reason per goal operation).
+   */
+  reasons?: Record<string, string>;
+  /** Hygiene run id (goal-lint). */
+  runId?: string;
   /** Injectable clock (tests). */
   now?: () => Date;
   /** Called with the GOALS.md path before it is overwritten (soul-file versioning). */
@@ -169,6 +182,17 @@ function carryOver(prev: GoalsState, next: GoalsState): void {
   }
 }
 
+const REASON_MAX = 300;
+
+/** The reason for one change: per-goal (by id, then title), else the write-wide one. */
+function reasonFor(c: GoalChange, opts: GoalWriteOptions): string | undefined {
+  const r = opts.reasons;
+  const raw = (r && (r[c.goalId] ?? r[c.title.trim().toLowerCase()])) ?? opts.reason ?? undefined;
+  const text = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
+  if (!text) return undefined;
+  return text.length > REASON_MAX ? `${text.slice(0, REASON_MAX - 1)}…` : text;
+}
+
 /** Read a bot's goal events (oldest first); malformed lines are skipped. */
 export function readGoalEvents(soulDir: string): GoalEvent[] {
   const path = join(soulDir, GOAL_EVENTS_FILE);
@@ -236,6 +260,9 @@ export function writeGoalsFile(
     const rows = changes.map((c) => {
       const ev: GoalEvent = { ts: now, ...c, actor: opts.actor };
       if (opts.cycleId) ev.cycleId = opts.cycleId;
+      const reason = reasonFor(c, opts);
+      if (reason) ev.reason = reason;
+      if (opts.runId) ev.runId = opts.runId;
       return JSON.stringify(ev);
     });
     if (rows.length > 0) {

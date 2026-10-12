@@ -258,7 +258,11 @@ export class HygieneRegistry {
     return { soulDir: resolve(resolved.soulDir), workDir: resolve(resolved.workDir) };
   }
 
-  buildContext(bot: BotConfig | null, options: Record<string, unknown>): HygieneContext {
+  buildContext(
+    bot: BotConfig | null,
+    options: Record<string, unknown>,
+    runId?: string
+  ): HygieneContext {
     const paths = bot ? this.resolveBotPaths(bot) : null;
     const allowedRoots = this.baseRoots();
     if (paths) allowedRoots.push(paths.soulDir, paths.workDir);
@@ -273,6 +277,7 @@ export class HygieneRegistry {
       now: this.now(),
       options,
       deps: this.deps,
+      ...(runId ? { runId } : {}),
     };
   }
 
@@ -322,7 +327,7 @@ export class HygieneRegistry {
 
     const run = base(bot?.id ?? null);
     try {
-      const ctx = this.buildContext(bot, options);
+      const ctx = this.buildContext(bot, options, run.runId);
       run.findings = routine.preview(ctx);
       if (apply) {
         const result = routine.apply(ctx, run.findings);
@@ -385,7 +390,7 @@ export class HygieneRegistry {
     const execute = (routine: HygieneRoutine, bot: BotConfig | null) => {
       const prefix = bot ? bot.id : 'fleet';
       try {
-        const ctx = this.buildContext(bot, options);
+        const ctx = this.buildContext(bot, options, run.runId);
         const findings = routine.preview(ctx);
         const result = apply ? routine.apply(ctx, findings) : null;
         if (result) recordSoulFixes(run.runId, routine, ctx, findings, result);

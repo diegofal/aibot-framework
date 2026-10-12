@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { KarmaEvent } from '../../../src/karma/types';
@@ -95,6 +95,7 @@ describe('GET /api/agents/:id/home', () => {
         'needsYou',
         'presence',
         'timeline',
+        'traitChanges',
         'traits',
       ].sort()
     );
@@ -396,6 +397,38 @@ describe('Why on Agent Home', () => {
     expect(ask).toMatchObject({ cycleId: 'cyc-9', goalId: 'g-9' });
   });
 
+  it('trait changes: newest first, each with a Why naming the trait, reason and cycle', async () => {
+    const start = fx.now - 60 * 60_000;
+    appendJsonl(join(fx.dir, 'agent-cycles', 'b1', `${day(start)}.jsonl`), [
+      { cycleId: 'cyc-t', botId: 'b1', startedAt: iso(start), planSummary: 'Review errors' },
+    ]);
+    writeFileSync(
+      join(fx.soulDir('b1'), 'TRAITS.json'),
+      JSON.stringify({
+        current: { curiosity: 0.5, caution: 0.53 },
+        history: [
+          { timestamp: start - 1000, source: 'adaptive', traits: { curiosity: 0.5, caution: 0.5 } },
+          {
+            timestamp: start + 1000,
+            source: 'strategist',
+            traits: { curiosity: 0.5, caution: 0.53 },
+            cycleId: 'cyc-t',
+            reasons: { caution: 'Repeated web_fetch errors.' },
+            changes: { caution: { from: 0.5, to: 0.53, requested: 0.03 } },
+          },
+        ],
+      })
+    );
+    const body = await (await makeApp().request('/api/agents/b1/home')).json();
+    expect(body.traitChanges).toHaveLength(1);
+    expect(body.traitChanges[0]).toMatchObject({ source: 'strategist', cycleId: 'cyc-t' });
+    expect(body.traitChanges[0].why).toMatchObject({
+      what: 'Trait adjusted: caution +0.03',
+      reason: { text: 'Repeated web_fetch errors.', source: 'Strategist' },
+      cycle: { id: 'cyc-t', plan: 'Review errors' },
+    });
+  });
+
   it('without a cycle log the scheduler cycles still show, without a cycle id', async () => {
     const body = await (await makeApp().request('/api/agents/b1/home')).json();
     const cycles = body.timeline.filter((t: { kind: string }) => t.kind === 'cycle');
@@ -555,6 +588,7 @@ describe('operator goal writes are logged as goal events', () => {
     const mine = events('b1').filter((e) => e.title === 'Logged goal');
     expect(mine.map((e) => e.op)).toEqual(['add', 'status']);
     expect(mine.every((e) => e.actor === 'operator')).toBe(true);
+    expect(mine.every((e) => e.reason === 'You, from the dashboard')).toBe(true);
     expect(mine[1].to).toBe('in_progress');
     const goal = parseGoals(readFileSync(join(fx.soulDir('b1'), 'GOALS.md'), 'utf-8')).active.find(
       (g) => g.text === 'Logged goal'
@@ -594,7 +628,11 @@ describe('PATCH /api/agents/:id/goals edits title and notes', () => {
     const res2 = await patch(app, { id: g?.id, notes: 'line one\nline two' });
     expect(res2.status).toBe(200);
     expect(goals().active.find((x) => x.id === g?.id)?.notes).toBe('line one line two');
-    expect(events().at(-1)).toMatchObject({ op: 'notes', actor: 'operator' });
+    expect(events().at(-1)).toMatchObject({
+      op: 'notes',
+      actor: 'operator',
+      reason: 'You, from the dashboard',
+    });
   });
 
   it('rejects bad edits', async () => {

@@ -1,3 +1,4 @@
+import type { TraitChangeRecord } from '../why/builders/trait-change';
 /**
  * Stats & Behaviour dashboard — API contract types.
  *
@@ -128,6 +129,11 @@ export interface KarmaStats {
   score: number | null;
   delta: number;
   events: number;
+}
+
+/** One trait change on Agent Home (`readTraitChanges` + `traitChangeToWhy`). */
+export interface TraitChange extends TraitChangeRecord {
+  why: Why;
 }
 
 export interface TraitStats {
@@ -461,6 +467,10 @@ export interface GoalTimelineEvent {
   source: 'goal-events' | 'tool-audit';
   /** The agent-loop cycle the change happened in, when recorded. */
   cycleId: string | null;
+  /** The reason its writer recorded with the change (strategist, navigator, lint, …). */
+  reason: string | null;
+  /** Hygiene run that made the change (goal-lint). */
+  runId: string | null;
   /** "Why this?" for the change (`goalEventToWhy`, `src/why/builders/goal-event.ts`). */
   why: Why;
 }
@@ -534,6 +544,18 @@ export interface CycleDetailResponse {
   cycle: GoalCycle;
   /** The goal the cycle served, when it recorded one. */
   goal: { id: string | null; title: string } | null;
+  /**
+   * Why an idle/skipped/error cycle went that way, as the cycle log recorded
+   * it (plain words; source: Planner, Engagement gate, Circuit breaker, Error,
+   * System). Null on completed cycles and rows written before it was kept.
+   */
+  cycleReason: { text: string; source: string } | null;
+  /** Whether the strategist ran; null when the row predates the field. */
+  strategistRan: boolean | null;
+  /** Strategist reflection (capped 600 chars), when it ran. */
+  reflection: string | null;
+  /** Trait deltas the strategist applied in the cycle. */
+  traitAdjustments: Record<string, number> | null;
 }
 
 export interface GoalDetailResponse {

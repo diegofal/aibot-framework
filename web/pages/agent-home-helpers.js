@@ -449,8 +449,28 @@ export function ago(iso, nowMs = Date.now()) {
   return `${Math.round(diff / 86_400_000)}d ago`;
 }
 
-/** Traits card body: radar when there are at least three traits. */
-export function traitsBody(traits) {
+/**
+ * Recent trait changes (newest first), each with who made it, when, and its
+ * "Why this?" fold (`traitChangeToWhy`, built server-side). '' when none.
+ */
+export function traitChangesList(changes, { nowMs = Date.now(), botId } = {}) {
+  if (!Array.isArray(changes) || changes.length === 0) return '';
+  const items = changes
+    .filter((c) => c?.why?.what)
+    .map(
+      (c) => `<li class="home-trait-change">
+        <div class="home-trait-change-head"><span>${esc(c.why.what)}</span>
+          <span class="text-dim text-sm">${esc(c.source ?? '')} · ${esc(ago(c.ts, nowMs))}</span></div>
+        ${whyPanel(c.why, { nowMs, botId })}
+      </li>`
+    )
+    .join('');
+  if (!items) return '';
+  return `<div class="home-trait-changes"><div class="text-dim text-sm">Recent changes</div><ul>${items}</ul></div>`;
+}
+
+/** Traits card body: radar when there are at least three traits, then the change history. */
+export function traitsBody(traits, changes, opts = {}) {
   const axes = traitAxes(traits?.current);
   if (axes.length < 3) {
     return emptyState({
@@ -470,7 +490,7 @@ export function traitsBody(traits) {
   return `<div class="home-traits-radar">${radar(axes, { size: 220 })}</div>
     <div class="text-dim text-sm" style="text-align:center;margin-top:6px">${esc(
       note || 'stable since baseline'
-    )}</div>`;
+    )}</div>${traitChangesList(changes, opts)}`;
 }
 
 /** Karma card body: score tile, sparkline, last events. */

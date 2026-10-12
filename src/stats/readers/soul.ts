@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { getUnconsolidatedLogs } from '../../bot/soul-memory-consolidator';
 import { createDefaultTraits } from '../../bot/trait-registers';
 import { type GoalEntry, parseGoals } from '../../tools/goals';
+import type { TraitChangeRecord } from '../../why/builders/trait-change';
 import type { GoalDetail, GoalsStats, SoulStats, TraitSnapshot, TraitStats } from '../types';
 import { readJsonSafe, readJsonlSafe, readTextSafe, statSizeSafe, toIso, toMs } from '../util';
 import { type GoalExtras, goalTitleKey, readGoalExtras } from './goal-events';
@@ -92,17 +93,118 @@ export function readGoals(soulDir: string): { stats: GoalsStats; detail: GoalDet
 
 // ── Traits ──
 
+interface TraitSnapshotLike {
+  timestamp?: number;
+  source?: string;
+  traits?: Record<string, number>;
+  cycleId?: string;
+  reasons?: Record<string, unknown>;
+  changes?: Record<string, { from?: unknown; to?: unknown; requested?: unknown }>;
+  rejected?: Record<string, { requested?: unknown; rule?: unknown }>;
+}
+
 interface TraitFileLike {
   current?: Record<string, number>;
-  history?: Array<{ timestamp?: number; source?: string; traits?: Record<string, number> }>;
+  history?: TraitSnapshotLike[];
+  rejections?: TraitSnapshotLike[];
+}
+
+function readTraitFile(soulDir: string): TraitFileLike | null {
+  // TraitRegisters writes `<botDir>/TRAITS.json`, a sibling of `soul/`; older
+  // layouts kept it inside the soul dir. Accept both.
+  return (
+    readJsonSafe<TraitFileLike>(join(soulDir, 'TRAITS.json')) ??
+    readJsonSafe<TraitFileLike>(join(soulDir, '..', 'TRAITS.json'))
+  );
+}
+
+/** How many trait changes the Agent Home lists. */
+export const TRAIT_CHANGES_LIMIT = 8;
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** Recorded fields of one snapshot → a change record (`derived` false). */
+function recordedChange(s: TraitSnapshotLike): Omit<TraitChangeRecord, 'ts' | 'source'> {
+  const changes: TraitChangeRecord['changes'] = [];
+  for (const [trait, c] of Object.entries(s.changes ?? {})) {
+    const from = num(c?.from);
+    const to = num(c?.to);
+    if (from === null || to === null) continue;
+    const requested = num(c?.requested);
+    changes.push({ trait, from, to, ...(requested !== null ? { requested } : {}) });
+  }
+  const rejected: TraitChangeRecord['rejected'] = [];
+  for (const [trait, r] of Object.entries(s.rejected ?? {})) {
+    const requested = num(r?.requested);
+    if (requested === null || (r?.rule !== 'pinned' && r?.rule !== 'locked')) continue;
+    rejected.push({ trait, requested, rule: r.rule });
+  }
+  const reasons: Record<string, string> = {};
+  for (const [trait, text] of Object.entries(s.reasons ?? {})) {
+    if (typeof text === 'string' && text.trim()) reasons[trait] = text.trim();
+  }
+  return { cycleId: s.cycleId ?? null, changes, rejected, reasons, derived: false };
+}
+
+/**
+ * A bot's trait changes, newest first (Agent Home → Traits): history
+ * snapshots with their recorded `changes`/`rejected`/`reasons`, proposals
+ * refused entirely (`rejections`), and legacy snapshots diffed against the
+ * one before them (`derived`). The first snapshot is the baseline, not a
+ * change; snapshots where nothing moved are left out.
+ */
+export function readTraitChanges(
+  soulDir: string,
+  limit: number = TRAIT_CHANGES_LIMIT
+): TraitChangeRecord[] {
+  const raw = readTraitFile(soulDir);
+  if (!raw) return [];
+  const out: TraitChangeRecord[] = [];
+  const history = (Array.isArray(raw.history) ? raw.history : []).filter(
+    (h) => h?.traits && typeof h.traits === 'object'
+  );
+  history.forEach((snap, i) => {
+    const ts = toIso(Number(snap.timestamp) || 0) ?? new Date(0).toISOString();
+    const source = String(snap.source ?? 'unknown');
+    if (snap.changes || snap.rejected) {
+      const rec = recordedChange(snap);
+      if (rec.changes.length + rec.rejected.length > 0) out.push({ ts, source, ...rec });
+      return;
+    }
+    const prev = history[i - 1]?.traits;
+    if (!prev) return;
+    const changes: TraitChangeRecord['changes'] = [];
+    for (const [trait, value] of Object.entries(snap.traits ?? {})) {
+      const from = num(prev[trait]);
+      const to = num(value);
+      if (from === null || to === null || Math.abs(to - from) < 0.005) continue;
+      changes.push({ trait, from, to });
+    }
+    if (changes.length === 0) return;
+    out.push({
+      ts,
+      source,
+      cycleId: snap.cycleId ?? null,
+      changes,
+      rejected: [],
+      reasons: {},
+      derived: true,
+    });
+  });
+  for (const snap of Array.isArray(raw.rejections) ? raw.rejections : []) {
+    const rec = recordedChange(snap);
+    if (rec.rejected.length === 0) continue;
+    out.push({
+      ts: toIso(Number(snap.timestamp) || 0) ?? new Date(0).toISOString(),
+      source: String(snap.source ?? 'unknown'),
+      ...rec,
+    });
+  }
+  return out.sort((a, b) => (toMs(b.ts) ?? 0) - (toMs(a.ts) ?? 0)).slice(0, Math.max(0, limit));
 }
 
 export function readTraits(soulDir: string): { stats: TraitStats; history: TraitSnapshot[] } {
-  // TraitRegisters writes `<botDir>/TRAITS.json`, a sibling of `soul/`; older
-  // layouts kept it inside the soul dir. Accept both.
-  const raw =
-    readJsonSafe<TraitFileLike>(join(soulDir, 'TRAITS.json')) ??
-    readJsonSafe<TraitFileLike>(join(soulDir, '..', 'TRAITS.json'));
+  const raw = readTraitFile(soulDir);
   if (!raw || !raw.current || typeof raw.current !== 'object') {
     return { stats: { current: null, baseline: null, drift: null, adjustments: 0 }, history: [] };
   }

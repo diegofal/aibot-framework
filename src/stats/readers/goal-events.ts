@@ -16,6 +16,10 @@ export interface GoalEvent {
   to?: string | null;
   actor?: string;
   cycleId?: string;
+  /** Recorded by the writer with the change (strategist, navigator, lint, …). */
+  reason?: string;
+  /** Hygiene run that made the change. */
+  runId?: string;
 }
 
 export interface GoalExtras {

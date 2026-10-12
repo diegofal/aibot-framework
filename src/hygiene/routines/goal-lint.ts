@@ -163,6 +163,8 @@ export const goalLint: HygieneRoutine = {
     const today = localDate(ctx.now);
     const toMove = new Set<number>();
     const memoryAppends: string[] = [];
+    /** What lint did to each goal, by lower-cased title: the goal event's reason. */
+    const reasons: Record<string, string> = {};
     let dirty = false;
 
     for (const f of findings) {
@@ -182,11 +184,9 @@ export const goalLint: HygieneRoutine = {
 
       if (f.kind === 'archived-in-active') {
         toMove.add(index);
-        result.applied.push({
-          findingId: f.id,
-          action: 'move-to-completed',
-          result: `"${goal.text}" moved to Completed`,
-        });
+        const outcome = `"${goal.text}" moved to Completed`;
+        reasons[goal.text.trim().toLowerCase()] = outcome;
+        result.applied.push({ findingId: f.id, action: 'move-to-completed', result: outcome });
         dirty = true;
       } else if (f.kind === 'oversized-notes') {
         if (!goal.notes || goal.notes.length <= NOTES_LIMIT) {
@@ -197,11 +197,9 @@ export const goalLint: HygieneRoutine = {
           `- [${localTime(ctx.now)}] [goal-lint] Trimmed notes of goal: ${goal.text}\n  ${goal.notes}`
         );
         goal.notes = trimmedNotes(goal.notes, today);
-        result.applied.push({
-          findingId: f.id,
-          action: 'trim-notes',
-          result: `Notes of "${goal.text}" trimmed to ${NOTES_KEEP} chars`,
-        });
+        const outcome = `Notes of "${goal.text}" trimmed to ${NOTES_KEEP} chars`;
+        reasons[goal.text.trim().toLowerCase()] = outcome;
+        result.applied.push({ findingId: f.id, action: 'trim-notes', result: outcome });
         dirty = true;
       } else {
         result.skipped.push({ findingId: f.id, reason: `unknown fix for ${f.kind}` });
@@ -230,6 +228,8 @@ export const goalLint: HygieneRoutine = {
     // Backed up above; the goal-event log records what lint changed.
     writeGoalsFile(path, serializeGoals(nextActive, nextCompleted), {
       actor: 'lint',
+      reasons,
+      ...(ctx.runId ? { runId: ctx.runId } : {}),
       onError: (err) => ctx.logger.warn({ err }, 'goal-lint: goal events append failed'),
     });
 

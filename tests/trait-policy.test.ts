@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { TraitRegisters, createDefaultTraits } from '../src/bot/trait-registers';
+import { TraitRegisters, createDefaultTraits, traitDeltas } from '../src/bot/trait-registers';
 import type { TraitPolicy } from '../src/bot/trait-registers';
 
 const TEST_DIR = join(import.meta.dir, '.tmp-trait-policy');
@@ -187,5 +187,81 @@ describe('TraitRegisters.getDrift', () => {
       JSON.stringify({ current: { ...createDefaultTraits(), depth: 0.7 } })
     );
     expect(fresh.getDrift(BOT).baseline.depth).toBe(0.5);
+  });
+});
+
+describe('trait changes say why (why-everywhere row 13)', () => {
+  let logger: any;
+  beforeEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    logger = makeLogger();
+  });
+  afterEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test('a snapshot carries the cycle, the stated reasons and from → to of each applied trait', () => {
+    const registers = new TraitRegisters(TEST_DIR, logger);
+    const before = registers.load(BOT);
+    registers.adjust(BOT, { caution: 0.03, depth: 0.2 }, 'strategist', {
+      cycleId: 'c-1',
+      reasons: { caution: 'Repeated web_fetch errors.', curiosity: 'not proposed, dropped' },
+    });
+    const snap = registers.getHistory(BOT).at(-1);
+    expect(snap).toMatchObject({
+      source: 'strategist',
+      cycleId: 'c-1',
+      reasons: { caution: 'Repeated web_fetch errors.' },
+      changes: {
+        caution: { from: before.caution, to: before.caution + 0.03, requested: 0.03 },
+        depth: { from: before.depth, to: before.depth + 0.05, requested: 0.2 },
+      },
+    });
+    expect(snap?.reasons).not.toHaveProperty('curiosity');
+    expect(snap?.rejected).toBeUndefined();
+  });
+
+  test('pinned and locked proposals are recorded as rejected, with the rule', () => {
+    const registers = new TraitRegisters(TEST_DIR, logger, () => ({
+      locked: ['sociability'],
+      pinned: { depth: 0.8 },
+    }));
+    registers.load(BOT);
+    registers.adjust(BOT, { sociability: 0.03, depth: 0.02, caution: 0.01 }, 'strategist', {
+      cycleId: 'c-2',
+      reasons: { sociability: 'More outreach.' },
+    });
+    const snap = registers.getHistory(BOT).at(-1);
+    expect(snap?.rejected).toEqual({
+      sociability: { requested: 0.03, rule: 'locked' },
+      depth: { requested: 0.02, rule: 'pinned' },
+    });
+    expect(Object.keys(snap?.changes ?? {})).toEqual(['caution']);
+  });
+
+  test('a proposal that is all rejected leaves history alone and lands in the rejection log', () => {
+    const registers = new TraitRegisters(TEST_DIR, logger, () => ({ locked: ['sociability'] }));
+    registers.load(BOT);
+    const before = registers.getHistory(BOT).length;
+    registers.adjust(BOT, { sociability: 0.03 }, 'strategist', {
+      cycleId: 'c-3',
+      reasons: { sociability: 'More outreach.' },
+    });
+    expect(registers.getHistory(BOT).length).toBe(before);
+    expect(registers.getRejections(BOT)).toEqual([
+      expect.objectContaining({
+        source: 'strategist',
+        cycleId: 'c-3',
+        reasons: { sociability: 'More outreach.' },
+        rejected: { sociability: { requested: 0.03, rule: 'locked' } },
+      }),
+    ]);
+  });
+
+  test('traitDeltas: rounded after − before, only for traits that moved', () => {
+    const a = createDefaultTraits();
+    const b = { ...a, caution: a.caution + 0.03, depth: a.depth - 0.05 };
+    expect(traitDeltas(a, b)).toEqual({ caution: 0.03, depth: -0.05 });
   });
 });

@@ -101,6 +101,7 @@ export function createGoalDetailFixture(): GoalDetailFixture {
       op: 'add',
       to: 'pending',
       actor: 'operator',
+      reason: 'You, from the dashboard',
     },
     {
       ts: iso(t.exact + 50_000),

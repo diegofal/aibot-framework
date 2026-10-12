@@ -323,36 +323,7 @@ async function runReflection(ctx: SkillContext, trigger: 'manual' | 'cron'): Pro
   // Step 4.6 — Append suggested goals (never modifies existing)
   if (improvement.suggested_goals?.length) {
     try {
-      const goalsContent = readSoulFile(soulDir, 'GOALS.md');
-      const { active, completed } = parseGoals(goalsContent);
-      const today = localDateStr();
-      let goalsAdded = 0;
-
-      for (const sg of improvement.suggested_goals) {
-        // Dedup: check if first 30 chars of the goal text already exist
-        const prefix = sg.text.slice(0, 30).toLowerCase();
-        const isDuplicate = active.some((g) => g.text.toLowerCase().includes(prefix));
-        if (isDuplicate) continue;
-
-        active.push({
-          text: sg.text,
-          status: 'pending',
-          priority: sg.priority ?? 'medium',
-          notes: sg.notes,
-          source: `reflection:${today}`,
-        });
-        goalsAdded++;
-      }
-
-      if (goalsAdded > 0) {
-        const goalsPath = join(soulDir, 'GOALS.md');
-        writeGoalsFile(goalsPath, serializeGoals(active, completed), {
-          actor: 'reflection',
-          backup: (p) => backupSoulFile(p, ctx.logger),
-          onError: (err) => ctx.logger.warn({ err }, 'Reflection: goal events append failed'),
-        });
-        ctx.logger.info({ goalsAdded }, 'Reflection: appended suggested goals');
-      }
+      appendSuggestedGoals(soulDir, improvement.suggested_goals, ctx.logger);
     } catch (err) {
       ctx.logger.warn({ err }, 'Reflection: failed to append suggested goals');
     }
@@ -692,3 +663,47 @@ async function runExploration(
 }
 
 export default skill;
+
+/**
+ * Append the goals a reflection suggested (never modifies existing ones; a
+ * goal whose first 30 chars already appear is skipped). Each goal event says
+ * which day's reflection added it. Returns how many were added.
+ */
+export function appendSuggestedGoals(
+  soulDir: string,
+  suggested: Array<{ text: string; priority?: string; notes?: string }>,
+  logger: SkillContext['logger'],
+  today: string = localDateStr()
+): number {
+  const goalsContent = readSoulFile(soulDir, 'GOALS.md');
+  const { active, completed } = parseGoals(goalsContent);
+  let goalsAdded = 0;
+
+  for (const sg of suggested) {
+    // Dedup: check if first 30 chars of the goal text already exist
+    const prefix = sg.text.slice(0, 30).toLowerCase();
+    const isDuplicate = active.some((g) => g.text.toLowerCase().includes(prefix));
+    if (isDuplicate) continue;
+
+    active.push({
+      text: sg.text,
+      status: 'pending',
+      priority: sg.priority ?? 'medium',
+      notes: sg.notes,
+      source: `reflection:${today}`,
+    });
+    goalsAdded++;
+  }
+
+  if (goalsAdded > 0) {
+    const goalsPath = join(soulDir, 'GOALS.md');
+    writeGoalsFile(goalsPath, serializeGoals(active, completed), {
+      actor: 'reflection',
+      reason: `Suggested by the reflection of ${today}`,
+      backup: (p) => backupSoulFile(p, logger),
+      onError: (err) => logger.warn({ err }, 'Reflection: goal events append failed'),
+    });
+    logger.info({ goalsAdded }, 'Reflection: appended suggested goals');
+  }
+  return goalsAdded;
+}

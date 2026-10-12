@@ -327,3 +327,23 @@ describe('buildOperatorGoalsSection with subtasks', () => {
     expect(out).toContain('subtasks');
   });
 });
+
+describe('strategist prompt asks for reasons (why-everywhere rows 12 and 13)', () => {
+  const system = () =>
+    buildStrategistPrompt({
+      identity: 'TestBot',
+      soul: 'A bot',
+      motivations: 'Be helpful',
+      goals: '## Goals\n- Goal 1',
+      recentMemory: 'Did stuff',
+      datetime: '2026-03-08T12:00:00Z',
+    }).system;
+
+  test('one short reason per goal operation', () => {
+    expect(system()).toMatch(/- reason: string \(one short sentence: why this change\)/);
+  });
+
+  test('one short reason per adjusted trait, in trait_reasons', () => {
+    expect(system()).toMatch(/- trait_reasons: object/);
+  });
+});

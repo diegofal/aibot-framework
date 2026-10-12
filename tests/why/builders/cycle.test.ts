@@ -48,3 +48,70 @@ describe('cycleToWhy', () => {
     expect(WhySchema.safeParse(w).success).toBe(true);
   });
 });
+
+describe('cycleToWhy: what the cycle row recorded (why-everywhere row 11)', () => {
+  const base = { cycleId: 'c3', startedAt: row.startedAt };
+
+  it('idle: the planner reasoning is the reason', () => {
+    const w = cycleToWhy({
+      botId: 'b1',
+      cycle: { ...base, status: 'idle', reason: 'Waiting for feedback.', reasonSource: 'planner' },
+    });
+    expect(w.reason).toEqual({ text: 'Waiting for feedback.', source: 'Planner' });
+    expect(WhySchema.safeParse(w).success).toBe(true);
+  });
+
+  it('idle by the engagement gate, skipped by the circuit breaker: a rule', () => {
+    const gate = cycleToWhy({
+      botId: 'b1',
+      cycle: {
+        ...base,
+        status: 'idle',
+        reason: 'Engagement gate: content blocked until feedback (6 outputs, 0 feedback)',
+        reasonSource: 'engagement-gate',
+      },
+    });
+    expect(gate.rule).toBe(
+      'Engagement gate: content blocked until feedback (6 outputs, 0 feedback)'
+    );
+    const circuit = cycleToWhy({
+      botId: 'b1',
+      cycle: {
+        ...base,
+        status: 'skipped',
+        reason: 'circuit-open:claude-cli',
+        reasonSource: 'circuit-breaker',
+      },
+    });
+    expect(circuit.rule).toBe(
+      'The claude-cli circuit breaker was open after repeated quota/429 errors, so the cycle sat out.'
+    );
+    expect(WhySchema.safeParse(circuit).success).toBe(true);
+  });
+
+  it('error: the error is a note; strategist reflection and trait deltas are notes too', () => {
+    const w = cycleToWhy({
+      botId: 'b1',
+      cycle: {
+        ...row,
+        strategistRan: true,
+        reflection: 'Stuck on tooling.',
+        traitAdjustments: { caution: 0.03, depth: -0.02 },
+      },
+    });
+    expect(w.notes).toEqual([
+      { label: 'Strategist reflection', text: 'Stuck on tooling.' },
+      { label: 'Traits adjusted', text: 'caution +0.03, depth −0.02' },
+    ]);
+    const err = cycleToWhy({
+      botId: 'b1',
+      cycle: { ...base, status: 'error', reason: 'Agent loop error: boom', reasonSource: 'error' },
+    });
+    expect(err.notes).toEqual([{ label: 'Error', text: 'Agent loop error: boom' }]);
+  });
+
+  it('an idle cycle without a recorded reason says so', () => {
+    const w = cycleToWhy({ botId: 'b1', cycle: { ...base, status: 'idle' } });
+    expect(w.missing).toContain('No reason was recorded');
+  });
+});

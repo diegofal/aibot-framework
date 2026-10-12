@@ -213,6 +213,19 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
     opening: 'm',
     openedAt: '2026-10-11T12:00:00Z',
   },
+  traitChange: {
+    botId: 'b1',
+    change: {
+      ts: '2026-10-12T10:00:00.000Z',
+      source: 'strategist',
+      cycleId: 'c1',
+      changes: [{ trait: 'caution', from: 0.5, to: 0.53, requested: 0.03 }],
+      rejected: [{ trait: 'sociability', requested: 0.03, rule: 'locked' }],
+      reasons: { caution: 'r' },
+      derived: false,
+    },
+    cycle: { cycleId: 'c1', startedAt: '2026-10-12T09:59:00Z', planSummary: 'P' },
+  },
 };
 
 describe('Why contract', () => {
