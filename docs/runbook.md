@@ -737,3 +737,19 @@ docker compose restart aibot
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-12T19-37-50`. The block validated with `WorkersConfigSchema` in the container; a parse-and-compare confirmed `workers` is the only key added. After the restart: `healthy` in ~40 s, boot errors only the known Telegram `getMe` 401. First cycle per bot after the restart: all `completed`, no tasks written and nothing dispatched yet — most were curiosity exploration cycles (which never write tasks by design); job-seeker served a goal and its planner did not break it down.
 
 **Reversible?** Yes: restore `/app/config/config.json.pre-workers-20261012` (or set `workers.enabled` to false) and restart.
+
+### 2026-10-12 21:07Z — Deployed `087d0ae` (goals with an end state must be broken down; standing goals)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | No bot wrote a task after workers went live: breakdown was optional. Now required for goals with an end state; goals without one are marked standing and get no tasks |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** `healthy` in ~37 s, the image has `standing_goal` in `src/bot/agent-loop-tasks.ts`, the live config still has `workers`, served `/pages/agent-home-helpers.js` has `goalKindPayload`, no new errors in the boot logs. No backup: code only; GOALS.md gains a `- kind: standing` line when a goal is marked.
+
+**Reversible?** Check out `8e4abd3` and rebuild; older code ignores the `kind` line.
