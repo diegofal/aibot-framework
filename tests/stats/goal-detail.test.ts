@@ -263,8 +263,16 @@ describe('task-store rows in the goal timeline', () => {
     );
     const d = buildGoalDetail(ctxOf(), fx.bot, { id: 'g-brief001', days: 14 });
     const ev = d?.timeline.find((e) => e.op === 'task-move');
-    expect(ev).toMatchObject({ task: 'Pick sources', note: 'three found', to: 'in_progress' });
-    expect(ev?.why.what).toBe('Task moved to In progress');
+    expect(ev).toMatchObject({
+      task: 'Pick sources',
+      taskId: 't-aaaaaa',
+      note: 'three found',
+      to: 'in_progress',
+    });
+    // Task rows are explained by taskEventToWhy (src/why/builders/task-event.ts).
+    expect(ev?.why.what).toBe('Task moved to In progress: "Pick sources"');
+    expect(ev?.why.notes).toContainEqual({ label: 'Task', text: 't-aaaaaa' });
+    expect(ev?.why.outcome).toBe('To do → In progress');
     expect(d?.goal.started).toBeNull();
   });
 });

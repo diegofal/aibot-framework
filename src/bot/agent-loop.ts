@@ -9,6 +9,7 @@ import type { ChatMessage } from '../ollama';
 import { parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import { idleToWhy } from '../why/builders/idle';
+import { countDispatchedRuns, isDispatchOnlyCycle } from '../workers/dispatch-cycle';
 import type { PlannerTaskFields } from '../workers/types';
 import {
   type AdaptiveParams,
@@ -599,6 +600,7 @@ export class AgentLoop {
         applyGoalOperations(botId, ops, botLogger, soulLoader, {
           actor: 'curiosity',
           cycleId: this.cycleAttribution.get(botId)?.cycleId,
+          workerPool: this.ctx.workerPool,
         }),
       fleetAllows: (id) => limiter.allows(id),
       onDelivered: (id) => limiter.record(id),
@@ -1258,8 +1260,23 @@ export class AgentLoop {
         }
       }
 
-      // Karma: track novel vs repetitive actions
-      if (this.karmaService && this.ctx.config.karma?.enabled && schedule && !isIdle) {
+      // Karma: track novel vs repetitive actions. A cycle that only dispatched
+      // workers is exempt: its runs are scored on their own outcomes.
+      const dispatchOnly = isDispatchOnlyCycle({
+        toolCalls: detail.toolCalls,
+        dispatched: countDispatchedRuns(
+          this.ctx.workerPool,
+          botId,
+          this.cycleAttribution.get(botId)?.cycleId
+        ),
+      });
+      if (
+        this.karmaService &&
+        this.ctx.config.karma?.enabled &&
+        schedule &&
+        !isIdle &&
+        !dispatchOnly
+      ) {
         const planSummary = detail.plan.join('; ').slice(0, 200);
         const isRepetitive = isRepetitiveAction(schedule.recentActions, planSummary);
         if (isRepetitive) {

@@ -492,7 +492,9 @@ export interface GoalTimelineEvent {
   runId: string | null;
   /** Task-store rows (`task-*` ops): the task's text at the time. */
   task?: string | null;
-  /** "Why this?" for the change (`goalEventToWhy`, `src/why/builders/goal-event.ts`). */
+  /** Task-store rows: the task id. */
+  taskId?: string | null;
+  /** "Why this?" for the change (`goalEventToWhy`; task rows `taskEventToWhy`). */
   why: Why;
 }
 

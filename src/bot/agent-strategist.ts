@@ -1,8 +1,11 @@
 import type { BotConfig } from '../config';
 import type { LLMClient, TokenUsage } from '../core/llm-client';
 import { localDateStr } from '../date-utils';
+import { closeGoalTasks } from '../goals/goal-closure';
+import type { TaskStore } from '../goals/task-store';
 import type { Logger } from '../logger';
-import { parseGoals, resolveParentGoalId, serializeGoals } from '../tools/goals';
+import { parseGoals, resolveGoalRef, resolveParentGoalId, serializeGoals } from '../tools/goals';
+import type { WorkerPoolApi } from '../workers/types';
 import { parseDurationMs } from './agent-loop';
 import { buildStrategistPrompt } from './agent-loop-prompts';
 import { logToMemory } from './agent-loop-utils';
@@ -20,6 +23,8 @@ export interface GoalOperation {
   reason?: string;
   /** For add: the existing goal (title or id) the new one serves (optional). */
   parent?: string;
+  /** For add: the initial breakdown, written to the task store as agent tasks (optional). */
+  tasks?: string[];
 }
 
 export interface StrategistResult {
@@ -299,8 +304,17 @@ export async function runStrategist(
   if (result.goal_operations?.length > 0) {
     applyGoalOperations(botId, result.goal_operations, botLogger, soulContext.soulLoader, {
       cycleId: options.cycleId,
+      workerPool: ctx.workerPool,
     });
   }
+  // The deliverable is a task only when it names the goal it serves; otherwise
+  // it stays the free-text focus (lastFocus) as before.
+  const deliverableTask = applyStrategistDeliverable(soulContext.soulLoader, result, {
+    cycleId: options.cycleId,
+    onError: (err) => botLogger.warn({ err, botId }, 'Strategist: deliverable task not written'),
+  });
+  if (deliverableTask)
+    botLogger.debug({ botId, taskId: deliverableTask }, 'Strategist: deliverable task');
 
   const deliverable = result.single_deliverable || result.focus;
   const reflectionEntry = `[strategist] Focus: ${deliverable}\nReflection: ${result.reflection}`;
@@ -322,7 +336,12 @@ export function applyGoalOperations(
   operations: GoalOperation[],
   logger: Logger,
   soulLoader: ReturnType<BotContext['getSoulLoader']>,
-  writeOpts: { actor?: 'strategist' | 'curiosity'; cycleId?: string } = {}
+  writeOpts: {
+    actor?: 'strategist' | 'curiosity';
+    cycleId?: string;
+    /** Workers of a goal this completes or removes are stopped (C21). */
+    workerPool?: Pick<WorkerPoolApi, 'list' | 'stop'> | null;
+  } = {}
 ): void {
   logger.info(
     { botId, operationCount: operations.length, types: operations.map((o) => o.action) },
@@ -334,6 +353,10 @@ export function applyGoalOperations(
     logger.debug({ botId }, 'No goals file found, starting fresh');
   }
   const { active, completed } = parseGoals(content);
+  /** Goals this write closes (completed or removed): their workers stop. */
+  const closedIds: string[] = [];
+  /** Added goal title → its initial tasks. */
+  const breakdowns: Array<{ title: string; tasks: string[] }> = [];
   /** Stated reason per goal touched, keyed by lower-cased title (goal-events matches on it). */
   const reasons: Record<string, string> = {};
   const noteReason = (title: string, op: GoalOperation) => {
@@ -354,6 +377,8 @@ export function applyGoalOperations(
           ...(parent ? { parent } : {}),
         });
         noteReason(op.goal, op);
+        const tasks = cleanTaskList(op.tasks);
+        if (tasks.length > 0) breakdowns.push({ title: op.goal, tasks });
         logger.debug({ goal: op.goal }, 'Strategist: added goal');
         break;
       }
@@ -366,6 +391,7 @@ export function applyGoalOperations(
         }
         const [goal] = active.splice(idx, 1);
         noteReason(goal.text, op);
+        if (goal.id) closedIds.push(goal.id);
         goal.status = 'completed';
         goal.completed = localDateStr();
         if (op.outcome) goal.outcome = op.outcome;
@@ -396,6 +422,7 @@ export function applyGoalOperations(
         }
         const [removed] = active.splice(idx, 1);
         noteReason(removed.text, op);
+        if (removed.id) closedIds.push(removed.id);
         logger.debug({ goal: removed.text }, 'Strategist: removed goal');
         break;
       }
@@ -410,4 +437,92 @@ export function applyGoalOperations(
     ...(Object.keys(reasons).length > 0 ? { reasons } : {}),
   });
   logger.debug({ botId, goalCount: active.length + completed.length }, 'Goals written back');
+
+  const store = taskStoreOf(soulLoader);
+  if (!store) return;
+  const onError = (err: unknown) => logger.warn({ err, botId }, 'Strategist: task store warning');
+  if (breakdowns.length > 0) {
+    // Ids are assigned by the write; find the new goals by title.
+    const fresh = parseGoals(soulLoader.readGoals?.() ?? null).active;
+    for (const { title, tasks } of breakdowns) {
+      const goal = fresh.find((g) => g.text.trim() === title.trim());
+      if (!goal?.id) continue;
+      for (const text of tasks) {
+        try {
+          const r = store.apply([{ op: 'add', goalId: goal.id, text }], {
+            actor: 'agent',
+            ...(writeOpts.cycleId ? { cycleId: writeOpts.cycleId } : {}),
+          });
+          if (!r.ok) logger.debug({ botId, reason: r.reason, text }, 'Strategist: task not added');
+        } catch (err) {
+          onError(err);
+        }
+      }
+    }
+  }
+  if (closedIds.length > 0) {
+    const closed = closeGoalTasks({
+      botId,
+      goalIds: closedIds,
+      store,
+      pool: writeOpts.workerPool,
+      cycleId: writeOpts.cycleId,
+      onError,
+    });
+    if (closed.stopped.length + closed.released.length > 0)
+      logger.info({ botId, ...closed }, 'Closed goals: workers stopped, claims released');
+  }
+}
+
+/** At most 12 non-empty task texts (the store caps open tasks per goal at 12). */
+function cleanTaskList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((t): t is string => typeof t === 'string')
+    .map((t) => t.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function taskStoreOf(soulLoader: unknown): TaskStore | null {
+  const get = (soulLoader as { getTaskStore?: () => TaskStore }).getTaskStore;
+  if (typeof get !== 'function') return null;
+  try {
+    return get.call(soulLoader);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The strategist's deliverable as a task on the goal `serves_goal` names (C21).
+ * Null when it names no active goal (the deliverable stays free-text focus) or
+ * the store refuses; the store's add dedupes against the goal's open tasks, so
+ * a repeat returns the existing task id. Never throws.
+ */
+export function applyStrategistDeliverable(
+  soulLoader: unknown,
+  result: Pick<StrategistResult, 'single_deliverable' | 'focus' | 'serves_goal'>,
+  opts: { cycleId?: string; onError?: (err: unknown) => void }
+): string | null {
+  const text = String(result.single_deliverable || result.focus || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text || !result.serves_goal) return null;
+  try {
+    const store = taskStoreOf(soulLoader);
+    if (!store) return null;
+    const read = (soulLoader as { readGoals?: () => string | null }).readGoals;
+    const goalsMd = typeof read === 'function' ? read.call(soulLoader) : null;
+    const goal = resolveGoalRef(result.serves_goal, parseGoals(goalsMd).active);
+    if (!goal?.id) return null;
+    const r = store.apply([{ op: 'add', goalId: goal.id, text }], {
+      actor: 'agent',
+      ...(opts.cycleId ? { cycleId: opts.cycleId } : {}),
+    });
+    return r.ok ? (r.results[0]?.id ?? null) : null;
+  } catch (err) {
+    opts.onError?.(err);
+    return null;
+  }
 }

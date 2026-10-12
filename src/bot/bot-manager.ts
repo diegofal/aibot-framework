@@ -50,6 +50,7 @@ import { TemplateService } from '../tenant/template-service';
 import type { BillingProvider } from '../tenant/types';
 import type { UsageEventType } from '../tenant/types';
 import { WebhookService } from '../tenant/webhook-service';
+import { createWorkerKarmaListener } from '../workers/karma';
 import { ActivityStream } from './activity-stream';
 import { type AgentFeedback, AgentFeedbackStore } from './agent-feedback-store';
 import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
@@ -127,6 +128,10 @@ export class BotManager {
   private productionsService?: ProductionsService;
   private conversationsService: ConversationsService;
   private karmaService?: KarmaService;
+  /** The pool karma listener is subscribed to (C22); re-wired if the pool changes. */
+  private workerKarmaPool?: import('../workers/types').WorkerPoolApi;
+  private workerPoolOf: () => import('../workers/types').WorkerPoolApi | undefined = () =>
+    undefined;
   private toolAuditLog: ToolAuditLog;
   private llmQueryLog: LlmQueryLog;
   private tenantFacade: TenantFacade;
@@ -420,6 +425,10 @@ export class BotManager {
       this.toolRegistry.setKarmaService(this.karmaService);
       this.collaborationManager.setKarmaService(this.karmaService);
     }
+    // Karma per worker run outcome. The pool may be attached to ctx after
+    // construction, so this is re-checked on every startBot (idempotent).
+    this.workerPoolOf = () => ctx.workerPool;
+    this.wireWorkerKarma();
 
     // Initialize evolution modules — gated by config.evolution.enabled
     if (config.evolution?.enabled) {
@@ -669,6 +678,22 @@ export class BotManager {
     return undefined;
   }
 
+  /** Subscribe karma to the worker pool's run outcomes once per pool. Never throws. */
+  private wireWorkerKarma(): void {
+    const pool = this.workerPoolOf();
+    if (!pool || !this.karmaService || this.workerKarmaPool === pool) return;
+    try {
+      pool.subscribe(
+        createWorkerKarmaListener(this.karmaService, (err) =>
+          this.logger.warn({ err }, 'Worker karma: recording failed')
+        )
+      );
+      this.workerKarmaPool = pool;
+    } catch (err) {
+      this.logger.warn({ err }, 'Worker karma: subscribe failed');
+    }
+  }
+
   async startBot(config: BotConfig): Promise<void> {
     if (this.runningBots.has(config.id)) {
       this.logger.warn({ botId: config.id }, 'Bot already running');
@@ -698,6 +723,7 @@ export class BotManager {
 
     try {
       const botLogger = this.getBotLogger(config.id);
+      this.wireWorkerKarma();
 
       // Shared setup: LLM client, soul loader, model
       // Use tenant-aware config resolution when tenantId is present

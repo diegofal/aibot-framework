@@ -68,6 +68,8 @@ describe('config: karma.rewards and bot.traits', () => {
       humanReply: 3,
       collaborateCompleted: 0,
       toolError: -1,
+      workerProtocol: -1,
+      workerDone: 0,
     });
     expect(parsed.humanReplyCooldownHours).toBe(6);
 
