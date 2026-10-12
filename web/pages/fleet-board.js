@@ -4,39 +4,22 @@
  * One screen: a compact line per agent (state, focus, goal and subtask counts,
  * how much waits on you). Click a line to expand it in place: what the agent is
  * doing, the actual items waiting on you (from Needs You), its controls, and
- * its goals in four compact columns. A card opens the goal drawer (title,
- * status, priority, subtasks, brief, notes, spawned goals, activity, delete). Markup lives in
+ * its goals in four compact columns, each card with its open tasks inline. The
+ * board itself (drag, + New goal, inline tasks, the goal drawer) is the shared
+ * goal-board.js, the same one Agent Home uses. Markup lives in
  * fleet-board-helpers.js (pure, tested).
  *
  * Data: `/api/agents`, `/api/agents/presence` (live via `watchFleet`),
- * `/api/needs-you`, and `/api/agents/:id/home` per agent; cached briefly. The
- * drawer's Activity section loads `/api/agents/:id/goals/detail` when it opens.
- * Writes: POST / PATCH / DELETE `/api/agents/:id/goals`; subtasks one op at a time
- * (`/api/agents/:id/goals/:goalId/tasks[/reorder]`, `/api/agents/:id/tasks/:taskId`).
+ * `/api/needs-you`, and `/api/agents/:id/home` per agent; cached briefly.
+ * Goal and task writes: see goal-board.js.
  */
-import { confirmInline, showToast, skeleton } from '../ui/index.js';
+import { showToast, skeleton } from '../ui/index.js';
 import { authedAvatarSrc } from './agent-face.js';
-import {
-  addTask,
-  agentLine,
-  drawerHtml,
-  filterLanes,
-  fleetPulse,
-  goalRef,
-  moveTask,
-  needsByBot,
-  removeTask,
-  renameTask,
-  taskAddRequest,
-  taskRemoveRequest,
-  taskRenameRequest,
-  taskReorderRequest,
-  taskToggleRequest,
-  toggleTask,
-} from './fleet-board-helpers.js';
+import { agentLine, filterLanes, fleetPulse, needsByBot } from './fleet-board-helpers.js';
 import { fleetErrorState, sortFleet } from './fleet-home-helpers.js';
+import { mountGoalBoard } from './goal-board.js';
 import { watchFleet } from './live-presence.js';
-import { api, escapeHtml } from './shared.js';
+import { api } from './shared.js';
 
 const OPTS = { avatarSrc: authedAvatarSrc };
 const CACHE_MS = 30_000;
@@ -55,6 +38,7 @@ let state = null;
 let watch = null;
 let timer = null;
 let onKey = null;
+let board = null;
 
 export function destroyFleetBoard() {
   watch?.stop();
@@ -63,8 +47,8 @@ export function destroyFleetBoard() {
   timer = null;
   if (onKey) document.removeEventListener('keydown', onKey);
   onKey = null;
-  document.querySelector('.fb-drawer')?.remove();
-  document.querySelector('.fb-scrim')?.remove();
+  board?.destroy();
+  board = null;
   state = null;
 }
 
@@ -109,57 +93,12 @@ async function loadAll() {
   return cache;
 }
 
-const ACTIVITY_DAYS = 30;
-
-function detailKey(botId, goal) {
-  return `${botId}:${goal?.id || goal?.text || ''}`;
-}
-
-/** The goal's cycles for the drawer's Activity section; repaints when it lands. */
-async function loadDetail(botId, goal) {
-  const key = detailKey(botId, goal);
-  const have = state.details[key];
-  if (have && Date.now() - have.at < CACHE_MS) return;
-  const q = goal.id
-    ? `id=${encodeURIComponent(goal.id)}`
-    : `title=${encodeURIComponent(goal.text)}`;
-  const res = await api(
-    `/api/agents/${encodeURIComponent(botId)}/goals/detail?${q}&days=${ACTIVITY_DAYS}`
-  ).catch((err) => ({ error: err?.message || 'Request failed' }));
-  if (!state) return;
-  state.details[key] = { at: Date.now(), body: res && !res.error ? res : { error: res?.error } };
-  const open = currentGoal();
-  if (open && detailKey(state.drawer.botId, open) === key) paintDrawer();
-}
-
-function openDrawer(botId, ref) {
-  state.drawer = { botId, ref };
-  state.showAllCycles = false;
-  paintRow(botId);
-  paintDrawer();
-  const goal = currentGoal();
-  if (goal) loadDetail(botId, goal);
-}
-
 function lanes() {
   return sortFleet(cache.agents, cache.presence).map((agent) => ({
     agent,
     presence: cache.presence[agent.id],
     home: cache.homes[agent.id],
   }));
-}
-
-function findGoal(botId, ref) {
-  const g = cache?.homes[botId]?.goals;
-  if (!g || !ref) return null;
-  const all = [
-    ...(g.inProgress ?? []),
-    ...(g.todo ?? []),
-    ...(g.blocked ?? []),
-    ...(g.completedRecently ?? []),
-    ...Object.values(g.spawned ?? {}).flat(),
-  ];
-  return all.find((x) => x.id === ref) ?? all.find((x) => x.text === ref) ?? null;
 }
 
 // ── painting ──
@@ -170,7 +109,7 @@ function lineHtml(lane, i) {
     ...OPTS,
     expanded: state.open.has(id),
     selected: i === state.kb,
-    selectedRef: state.drawer?.botId === id ? state.drawer.ref : null,
+    selectedRef: board?.selectedRef(id) ?? null,
   });
 }
 
@@ -202,25 +141,6 @@ function paintRow(id) {
   if (row && lane && i >= 0) row.outerHTML = lineHtml(lane, i);
 }
 
-function paintDrawer() {
-  const drawer = document.querySelector('.fb-drawer');
-  const scrim = document.querySelector('.fb-scrim');
-  const goal = state?.drawer && findGoal(state.drawer.botId, state.drawer.ref);
-  if (!drawer || !scrim) return;
-  drawer.classList.toggle('on', Boolean(goal));
-  scrim.classList.toggle('on', Boolean(goal));
-  if (!goal) return;
-  const botId = state.drawer.botId;
-  const agent = cache.agents.find((a) => a.id === botId);
-  drawer.innerHTML = drawerHtml(agent, goal, {
-    botId,
-    detail: state.details[detailKey(botId, goal)]?.body,
-    spawned: (goal.id && cache.homes[botId]?.goals?.spawned?.[goal.id]) || [],
-    showAll: state.showAllCycles,
-    intervalMs: cache.homes[botId]?.goals?.loopIntervalMs,
-  });
-}
-
 function busy() {
   const a = document.activeElement;
   return Boolean(
@@ -231,7 +151,7 @@ function busy() {
 function repaint({ force = false } = {}) {
   if (!state || (!force && busy())) return;
   paintList();
-  paintDrawer();
+  board?.paintDrawer();
 }
 
 // ── writes ──
@@ -239,75 +159,6 @@ function repaint({ force = false } = {}) {
 async function reloadAgent(id) {
   const home = await loadHome(id);
   if (cache) cache.homes[id] = home;
-}
-
-async function goalWrite(botId, method, body, okText) {
-  const res = await api(`/api/agents/${encodeURIComponent(botId)}/goals`, { method, body }).catch(
-    (err) => ({ error: err?.message })
-  );
-  const ok = res && !res.error;
-  if (!ok)
-    showToast(`Could not save: ${res?.error || 'request failed'}`, {
-      tone: 'danger',
-      duration: 8000,
-    });
-  else if (okText) showToast(okText, { tone: 'ok' });
-  await reloadAgent(botId);
-  if (!state) return ok;
-  if (state.drawer?.botId === botId) {
-    if (method === 'DELETE') state.drawer = null;
-    else {
-      // A goal without an id gets one on its first write: follow it by id from now on.
-      const g =
-        findGoal(botId, state.drawer.ref) ?? (body.brief ? findGoal(botId, body.brief) : null);
-      if (g) state.drawer.ref = g.id || g.text;
-    }
-  }
-  paintRow(botId);
-  paintDrawer();
-  return ok;
-}
-
-function currentGoal() {
-  return state?.drawer ? findGoal(state.drawer.botId, state.drawer.ref) : null;
-}
-
-/** The agent's task-store revision, sent back as `expectedRev` with a task op. */
-function tasksRev(botId) {
-  return cache?.homes[botId]?.goals?.tasksRev;
-}
-
-/**
- * One subtask op: paint `tasks` right away, send `req`, then reload the agent.
- * A 409 (the board was stale, or a worker run holds the task) reloads too.
- */
-async function saveTasks(goal, tasks, req) {
-  if (!req) return false;
-  const botId = state.drawer.botId;
-  goal.tasks = tasks;
-  paintDrawer();
-  paintRow(botId);
-  const res = await api(req.path, { method: req.method, body: req.body }).catch((err) => ({
-    error: err?.message,
-  }));
-  const ok = res && !res.error;
-  if (!ok) {
-    const stale = res?.reason === 'conflict' || res?.reason === 'claimed';
-    showToast(
-      stale
-        ? `The board changed meanwhile, so it was reloaded. ${res.error}`
-        : `Could not save: ${res?.error || 'request failed'}`,
-      { tone: stale ? 'warn' : 'danger', duration: 8000 }
-    );
-  }
-  await reloadAgent(botId);
-  if (!state) return ok;
-  // A goal without an id gets one on its first task write: follow it by id from now on.
-  const g = findGoal(botId, state.drawer.ref) ?? findGoal(botId, goal.text);
-  if (g && state.drawer?.botId === botId) state.drawer.ref = g.id || g.text;
-  paintRow(botId);
-  paintDrawer();
-  return ok;
 }
 
 function toggleRow(id) {
@@ -386,137 +237,6 @@ async function onClick(e) {
     toggleRow(toggle.dataset.toggle);
     return;
   }
-  const card = t.closest('.fb-card[data-goal]');
-  if (card) {
-    const botId = card.closest('[data-row]')?.dataset.row;
-    if (botId) openDrawer(botId, card.dataset.goal);
-    return;
-  }
-  if (t.closest('[data-close]') || t.classList.contains('fb-scrim')) {
-    const botId = state.drawer?.botId;
-    state.drawer = null;
-    if (botId) paintRow(botId);
-    paintDrawer();
-    return;
-  }
-  const goal = currentGoal();
-  if (!goal || !t.closest('.fb-drawer')) return;
-  const botId = state.drawer.botId;
-  const st = t.closest('[data-st]');
-  if (st) {
-    await goalWrite(botId, 'PATCH', { ...goalRef(goal), status: st.dataset.st });
-    return;
-  }
-  const pr = t.closest('[data-pri]');
-  if (pr) {
-    await goalWrite(botId, 'PATCH', { ...goalRef(goal), priority: pr.dataset.pri });
-    return;
-  }
-  const li = t.closest('.fb-task');
-  const i = li ? Number(li.dataset.i) : -1;
-  if (t.closest('[data-tdel]')) {
-    const tasks = goal.tasks ?? [];
-    await saveTasks(goal, removeTask(tasks, i), taskRemoveRequest(botId, tasks, i));
-    return;
-  }
-  const mv = t.closest('[data-tmove]');
-  if (mv) {
-    const dir = Number(mv.dataset.tmove);
-    const next = moveTask(goal.tasks ?? [], i, dir);
-    if (next !== goal.tasks)
-      await saveTasks(goal, next, taskReorderRequest(botId, goal, i, dir, tasksRev(botId)));
-    return;
-  }
-  if (t.id === 'fb-morecyc') {
-    state.showAllCycles = !state.showAllCycles;
-    paintDrawer();
-    return;
-  }
-  const kid = t.closest('[data-open-goal]');
-  if (kid) {
-    openDrawer(botId, kid.dataset.openGoal);
-    return;
-  }
-  if (t.id === 'fb-morebrief') {
-    document.getElementById('fb-brief')?.classList.remove('clamp');
-    t.remove();
-    return;
-  }
-  if (t.id === 'fb-editbrief') {
-    const box = document.getElementById('fb-brief')?.closest('.fb-brief');
-    if (box) {
-      box.outerHTML = `<textarea class="fb-edit" id="fb-briefed" maxlength="1000">${escapeHtml(goal.text)}</textarea><div class="fb-edit-row"><button type="button" class="btn btn-sm btn-primary" id="fb-savebrief">Save brief</button><button type="button" class="btn btn-sm" data-cancel>Cancel</button></div>`;
-      document.getElementById('fb-morebrief')?.remove();
-      document.getElementById('fb-briefed')?.focus();
-    }
-    return;
-  }
-  if (t.id === 'fb-savebrief') {
-    const brief = document.getElementById('fb-briefed')?.value.trim();
-    if (brief) await goalWrite(botId, 'PATCH', { ...goalRef(goal), brief }, 'Brief saved');
-    return;
-  }
-  if (t.id === 'fb-editnotes') {
-    const box = document.getElementById('fb-notes');
-    if (box) {
-      box.innerHTML = `<textarea class="fb-edit" id="fb-notesed" maxlength="600">${escapeHtml(goal.notes ?? '')}</textarea><div class="fb-edit-row"><button type="button" class="btn btn-sm btn-primary" id="fb-savenotes">Save notes</button><button type="button" class="btn btn-sm" data-cancel>Cancel</button></div>`;
-      document.getElementById('fb-notesed')?.focus();
-    }
-    return;
-  }
-  if (t.id === 'fb-savenotes') {
-    const notes = document.getElementById('fb-notesed')?.value ?? '';
-    await goalWrite(botId, 'PATCH', { ...goalRef(goal), notes }, 'Notes saved');
-    return;
-  }
-  if (t.closest('[data-cancel]')) {
-    paintDrawer();
-    return;
-  }
-  if (t.id === 'fb-del' && confirmInline(t, { label: 'Click again to delete' })) {
-    await goalWrite(botId, 'DELETE', goalRef(goal), 'Goal deleted');
-  }
-}
-
-async function onChange(e) {
-  const li = e.target.closest?.('.fb-task');
-  const goal = currentGoal();
-  if (!li || !goal || e.target.type !== 'checkbox') return;
-  const tasks = goal.tasks ?? [];
-  const i = Number(li.dataset.i);
-  const botId = state.drawer.botId;
-  await saveTasks(goal, toggleTask(tasks, i), taskToggleRequest(botId, tasks, i, tasksRev(botId)));
-}
-
-async function onFocusOut(e) {
-  const goal = currentGoal();
-  if (!goal) return;
-  if (e.target.id === 'fb-title') {
-    const v = e.target.value.replace(/\s+/g, ' ').trim();
-    const shown = e.target.defaultValue.replace(/\s+/g, ' ').trim();
-    if (v && v !== shown) {
-      await goalWrite(
-        state.drawer.botId,
-        'PATCH',
-        { ...goalRef(goal), headline: v },
-        'Title saved'
-      );
-    }
-    return;
-  }
-  if (e.target.classList?.contains('fb-tx')) {
-    const i = Number(e.target.closest('.fb-task')?.dataset.i);
-    const v = e.target.textContent.trim();
-    const tasks = goal.tasks ?? [];
-    const botId = state.drawer.botId;
-    if (!v) await saveTasks(goal, removeTask(tasks, i), taskRemoveRequest(botId, tasks, i));
-    else if (v !== tasks[i]?.text)
-      await saveTasks(
-        goal,
-        renameTask(tasks, i, v),
-        taskRenameRequest(botId, tasks, i, v, tasksRev(botId))
-      );
-  }
 }
 
 function onInput(e) {
@@ -526,64 +246,21 @@ function onInput(e) {
   paintList();
 }
 
-async function keydown(e) {
-  if (!state) return;
+function keydown(e) {
+  // goal-board.js handled it (a card opened, the drawer closed, a task added).
+  if (!state || e.defaultPrevented) return;
   const t = e.target;
   const inField = t.matches?.('input, textarea, [contenteditable]');
-  if (e.key === 'Enter' && t.id === 'fb-addtask' && t.value.trim()) {
-    const goal = currentGoal();
-    const text = t.value;
-    t.value = '';
-    if (goal)
-      await saveTasks(
-        goal,
-        addTask(goal.tasks ?? [], text),
-        taskAddRequest(state.drawer.botId, goal, text)
-      );
-    document.getElementById('fb-addtask')?.focus();
-    return;
-  }
-  if (e.key === 'Enter' && t.matches?.('[data-addgoal]') && t.value.trim()) {
-    const botId = t.closest('[data-row]')?.dataset.row;
-    const title = t.value.trim();
-    t.value = '';
-    if (botId) await goalWrite(botId, 'POST', { title }, 'Goal added to Up next');
-    state?.el
-      .querySelector(`.fb-agent-row[data-row="${CSS.escape(botId)}"] [data-addgoal]`)
-      ?.focus();
-    return;
-  }
-  if (e.key === 'Enter' && (t.id === 'fb-title' || t.classList?.contains('fb-tx'))) {
-    e.preventDefault();
-    t.blur();
-    return;
-  }
-  if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('[data-open-goal]') && state.drawer) {
-    e.preventDefault();
-    openDrawer(state.drawer.botId, t.dataset.openGoal);
-    return;
-  }
   if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('[data-toggle]')) {
     e.preventDefault();
     toggleRow(t.dataset.toggle);
     return;
   }
   if (e.key === 'Escape') {
-    // An Open cycle sheet on top of the drawer closes on its own Escape.
-    if (document.body.classList.contains('ui-sheet-open')) return;
-    if (inField) {
-      t.blur();
-      return;
-    }
-    if (state.drawer) {
-      const botId = state.drawer.botId;
-      state.drawer = null;
-      paintRow(botId);
-      paintDrawer();
-    }
+    if (inField) t.blur();
     return;
   }
-  if (inField || state.drawer) return;
+  if (inField || board?.isOpen()) return;
   if (e.key === 'j' || e.key === 'k') {
     const max = (state.shown?.length ?? 1) - 1;
     state.kb = Math.max(0, Math.min(max, state.kb + (e.key === 'j' ? 1 : -1)));
@@ -592,50 +269,6 @@ async function keydown(e) {
   } else if (e.key === 'Enter' && state.shown?.[state.kb]) {
     toggleRow(state.shown[state.kb]);
   }
-}
-
-function wireDrag(root) {
-  let dragged = null;
-  const clear = () =>
-    root.querySelectorAll('.fb-col.over').forEach((c) => c.classList.remove('over'));
-  root.addEventListener('dragstart', (e) => {
-    const card = e.target.closest?.('.fb-card[draggable="true"]');
-    if (!card) return;
-    dragged = {
-      botId: card.closest('[data-row]')?.dataset.row,
-      ref: card.dataset.goal,
-      from: card.closest('.fb-col')?.dataset.status,
-    };
-    card.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', dragged.ref);
-  });
-  root.addEventListener('dragend', (e) => {
-    e.target.closest?.('.fb-card')?.classList.remove('dragging');
-    clear();
-    dragged = null;
-  });
-  root.addEventListener('dragover', (e) => {
-    const col = e.target.closest('.fb-col');
-    // Goals belong to one agent: only that agent's columns accept the card.
-    if (!col || !dragged || col.closest('[data-row]')?.dataset.row !== dragged.botId) return;
-    e.preventDefault();
-    if (!col.classList.contains('over')) {
-      clear();
-      col.classList.add('over');
-    }
-  });
-  root.addEventListener('drop', async (e) => {
-    const col = e.target.closest('.fb-col');
-    if (!col || !dragged || col.closest('[data-row]')?.dataset.row !== dragged.botId) return;
-    e.preventDefault();
-    clear();
-    const { botId, ref, from } = dragged;
-    dragged = null;
-    if (col.dataset.status === from) return;
-    const goal = findGoal(botId, ref);
-    if (goal) await goalWrite(botId, 'PATCH', { ...goalRef(goal), status: col.dataset.status });
-  });
 }
 
 export async function renderFleetBoard(el, focusId) {
@@ -653,9 +286,6 @@ export async function renderFleetBoard(el, focusId) {
   state = {
     el,
     open: readOpen(),
-    drawer: null,
-    details: {},
-    showAllCycles: false,
     filter: ['all', 'live', 'needs'].includes(saved) ? saved : 'all',
     query: '',
     kb: 0,
@@ -693,23 +323,17 @@ export async function renderFleetBoard(el, focusId) {
       .querySelector(`.fb-agent-row[data-row="${CSS.escape(focusId)}"]`)
       ?.scrollIntoView({ block: 'start' });
   }
-  // The drawer sits outside the page container so it can overlay everything.
-  document.body.insertAdjacentHTML(
-    'beforeend',
-    '<div class="fb-scrim"></div><aside class="fb-drawer" aria-label="Goal"></aside>'
-  );
-
   const root = el.querySelector('.fb-root');
-  const drawer = document.querySelector('.fb-drawer');
-  const scrim = document.querySelector('.fb-scrim');
-  for (const target of [root, drawer]) {
-    target.addEventListener('click', onClick);
-    target.addEventListener('change', onChange);
-    target.addEventListener('focusout', onFocusOut);
-  }
-  scrim.addEventListener('click', onClick);
+  // Goal-board keys first, so a key it handled is not also a j / k / Enter here.
+  board = mountGoalBoard({
+    root,
+    getHome: (id) => cache?.homes[id],
+    getAgent: (id) => cache?.agents.find((a) => a.id === id),
+    reload: reloadAgent,
+    paint: paintRow,
+  });
+  root.addEventListener('click', onClick);
   root.addEventListener('input', onInput);
-  wireDrag(root);
   onKey = keydown;
   document.addEventListener('keydown', onKey);
 

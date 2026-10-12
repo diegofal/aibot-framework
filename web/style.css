@@ -3647,458 +3647,17 @@ body.ui-sheet-open {
 .home-goals-row .ui-card {
   margin-bottom: 0;
 }
-/*
- * Goals board, row by row: row r holds the r-th goal of each column, so the
- * selected goal's tasks open as a full-width row (.home-goal-panel) right under
- * its own row. Each column is drawn as a stack of cells (top, body, bottom).
- */
+/* The shared goal board (.fb-*) inside the Goals card; scrolls sideways when narrow. */
 #home-goals {
   overflow-x: auto;
 }
-.home-board {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  column-gap: 12px;
-  row-gap: 0;
-}
-@media (max-width: 1200px) {
-  .home-board {
-    min-width: 960px;
-  }
-}
-.home-board-cell {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding: 5px 10px;
-  background: var(--bg);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-}
-.home-board-cell > .home-goal-card {
-  flex: 1;
-}
-.home-board-top {
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-  border-radius: 10px 10px 0 0;
-}
-.home-board-bottom {
-  min-height: 16px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0 0 10px 10px;
-}
-.home-board-cell.drag-over {
-  background: var(--accent-bg);
-  border-color: var(--accent);
-}
-.home-board-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 2px 4px 5px;
-  font-size: var(--fs-sm, 12px);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-.home-board-top[data-empty] .home-board-count {
-  opacity: 0.55;
-}
+/* Count pill used by the workers strip and lists. */
 .home-board-count {
   margin-left: auto;
   padding: 0 7px;
   border-radius: 10px;
   background: var(--muted-bg);
   font-weight: 500;
-}
-.home-board-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-.home-board-dot.dot-in_progress {
-  background: var(--accent);
-}
-.home-board-dot.dot-blocked {
-  background: var(--danger);
-}
-.home-board-dot.dot-done {
-  background: var(--ok);
-}
-.home-board-empty {
-  padding: 14px 0;
-  font-size: var(--fs-md, 13px);
-  color: var(--text-faint);
-  text-align: center;
-}
-
-/* Goal card: a stripe in the goal's colour, priority, who set it, its task bar. */
-.home-goal-card {
-  position: relative;
-  padding: 12px 12px 10px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color var(--fast, 120ms) ease, background var(--fast, 120ms) ease;
-}
-.home-goal-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 4px;
-  border-radius: 8px 0 0 8px;
-  background: var(--goal-color);
-}
-.home-goal-card:hover {
-  border-color: var(--border-strong);
-}
-.home-goal-card:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--accent-bg);
-}
-.home-goal-card.is-selected {
-  background: var(--elevated);
-  border-color: var(--goal-color);
-  box-shadow: 0 0 0 1px var(--goal-color);
-}
-.home-goal-card[draggable="true"] {
-  cursor: pointer;
-}
-.home-goal-card.dragging,
-.home-task-card.dragging {
-  opacity: 0.4;
-  cursor: grabbing;
-}
-.home-board-cell[data-status="done"] .home-goal-text {
-  color: var(--text-dim);
-}
-.home-goal-text {
-  margin-bottom: 6px;
-  font-size: var(--fs-base, 14px);
-  font-weight: 600;
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-.home-goal-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-sm, 12px);
-  color: var(--text-dim);
-}
-.home-goal-you,
-.home-goal-agent,
-.home-goal-pri {
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-size: var(--fs-sm, 12px);
-  line-height: 1.45;
-  white-space: nowrap;
-}
-.home-goal-you {
-  color: var(--accent);
-  background: var(--accent-bg);
-}
-.home-goal-agent {
-  color: var(--info);
-  background: rgba(103, 232, 249, 0.12);
-}
-.home-goal-pri {
-  color: var(--text-dim);
-  background: var(--muted-bg);
-}
-.home-goal-pri.pri-high {
-  color: var(--warn);
-  background: var(--warn-bg);
-}
-.home-goal-pri.pri-low {
-  color: var(--text-faint);
-}
-.home-goal-notes {
-  margin-top: 6px;
-  font-size: var(--fs-md, 13px);
-  line-height: 1.45;
-  color: var(--text-dim);
-  overflow-wrap: anywhere;
-}
-
-/* Task bar: one segment per task, done → in progress → blocked → to do. */
-.home-task-bar {
-  display: flex;
-  gap: 2px;
-  height: 6px;
-  margin: 8px 0 4px;
-}
-.home-task-seg {
-  flex: 1;
-  border-radius: 2px;
-  background: var(--border-strong);
-}
-.home-task-seg.seg-done {
-  background: var(--ok);
-}
-.home-task-seg.seg-in_progress {
-  background: var(--accent);
-}
-.home-task-seg.seg-blocked {
-  background: var(--danger);
-}
-.home-task-tally {
-  margin-top: 6px;
-  font-size: var(--fs-sm, 12px);
-  color: var(--text-dim);
-}
-.home-task-bar + .home-task-tally {
-  margin-top: 0;
-}
-.home-task-blocked {
-  color: var(--danger);
-}
-
-/* The selected goal's tasks, as a full-width row under its card's row. */
-.home-goal-panel {
-  position: relative;
-  grid-column: 1 / -1;
-  margin: 10px 0;
-  padding: 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-top: 3px solid var(--goal-color);
-  border-radius: 10px;
-}
-.home-goal-panel::before {
-  content: "";
-  position: absolute;
-  top: -9px;
-  left: calc((100% - 36px) / 4 * var(--col) + 12px * var(--col) + (100% - 36px) / 8 - 8px);
-  border: 8px solid transparent;
-  border-top: 0;
-  border-bottom-color: var(--goal-color);
-}
-.home-goal-panel-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.home-goal-panel-main {
-  flex: 1;
-  min-width: 0;
-}
-.home-goal-panel-main .home-task-bar,
-.home-goal-panel-main .home-task-tally,
-.home-goal-panel-main .home-goal-alldone {
-  max-width: 360px;
-}
-.home-goal-panel-title {
-  margin-bottom: 4px;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-.home-goal-status {
-  appearance: none;
-  -webkit-appearance: none;
-  padding: 1px 22px 1px 8px;
-  font: inherit;
-  font-size: var(--fs-sm, 12px);
-  line-height: 1.45;
-  color: var(--text-dim);
-  background-color: var(--muted-bg);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b91a3' stroke-width='1.5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 7px center;
-  border: 0;
-  border-radius: 10px;
-  cursor: pointer;
-}
-.home-goal-status.status-in_progress {
-  color: var(--accent);
-  background-color: var(--accent-bg);
-}
-.home-goal-status.status-blocked {
-  color: var(--danger);
-  background-color: var(--danger-bg);
-}
-.home-goal-status.status-done {
-  color: var(--ok);
-  background-color: var(--ok-bg);
-}
-.home-goal-status:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-.home-goal-alldone {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 6px 8px;
-  font-size: var(--fs-sm, 12px);
-  color: var(--ok);
-  background: var(--ok-bg);
-  border-radius: var(--radius, 6px);
-}
-.home-goal-alldone .btn {
-  margin-left: auto;
-}
-.home-task-lanes {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-.home-task-lane {
-  min-width: 0;
-  min-height: 80px;
-  padding: 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-.home-task-lane .home-board-head {
-  margin-bottom: 10px;
-}
-.home-task-lane.drag-over {
-  outline: 2px dashed var(--accent);
-  outline-offset: -4px;
-}
-.home-task-add {
-  padding: 2px 0 8px;
-  font: inherit;
-  font-size: var(--fs-sm, 12px);
-  color: var(--text-faint);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-.home-task-add:hover {
-  color: var(--accent);
-}
-.home-task-form {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-.home-task-form .home-goal-input {
-  flex: 1;
-  min-width: 0;
-  padding: 4px 8px;
-}
-.home-task-card {
-  margin-bottom: 8px;
-  padding: 8px 10px;
-  font-size: var(--fs-md, 13px);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--goal-color);
-  border-radius: 6px;
-  cursor: grab;
-}
-.home-task-text {
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-.home-task-card.is-done .home-task-text {
-  color: var(--text-faint);
-  text-decoration: line-through;
-}
-.home-task-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: var(--fs-xs, 11px);
-  color: var(--text-faint);
-}
-.home-task-cycle {
-  padding: 0;
-  font: inherit;
-  color: var(--text-faint);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-.home-task-cycle:hover {
-  color: var(--accent);
-}
-
-.home-goal-pri-select {
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b91a3' stroke-width='1.5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  cursor: pointer;
-}
-/* Native option lists: theme colours, or they inherit the dim select text on a white list. */
-.home-goal-status option,
-.home-goal-pri-select option {
-  background-color: var(--elevated);
-  color: var(--text);
-}
-/* One line at the bottom of To do: title, priority, Add. */
-.home-goal-form {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 5px;
-}
-.home-goal-form .home-goal-input {
-  flex: 1;
-  min-width: 0;
-  height: 30px;
-}
-.home-goal-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 7px 9px;
-  font: inherit;
-  font-size: var(--fs-md, 13px);
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-}
-.home-goal-input::placeholder {
-  color: var(--text-dim);
-}
-.home-goal-input:focus,
-.home-goal-pri-select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-bg);
-}
-.home-goal-form-row {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-.home-goal-form-row > * {
-  height: 30px;
-}
-.home-goal-pri-select {
-  flex: 0 0 92px;
-  width: 92px;
-  padding: 0 24px 0 8px;
-  font-size: var(--fs-sm, 12px);
-  color: var(--text);
-  background-color: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
 }
 
 /* Karma */
@@ -8402,6 +7961,136 @@ a.gd-row-name:hover {
   font-size: 12px;
   color: var(--text-dim);
 }
+/* Inline tasks on a card: open tasks, one line each, lane as a tint. */
+.fb-tag.standing {
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+  padding: 0 5px;
+  border-radius: 4px;
+}
+.fb-itasks {
+  list-style: none;
+  margin: 7px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.fb-itask {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 2px 6px 2px 4px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.fb-itask:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.fb-itask.ip {
+  background: var(--accent-bg);
+  color: var(--text);
+}
+.fb-itask.bl {
+  background: var(--danger-bg-soft);
+  color: var(--text);
+}
+.fb-itask-box {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+}
+.fb-itask.ip .fb-itask-box {
+  border-color: var(--accent);
+}
+.fb-itask.ip .fb-itask-box::after {
+  content: "";
+  position: absolute;
+  inset: 2px 50% 2px 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+.fb-itask.bl .fb-itask-box {
+  border-color: var(--danger);
+}
+.fb-itask-box:hover,
+.fb-itask-box:focus-visible {
+  outline: none;
+  border-color: var(--ok);
+  background: var(--ok-bg);
+}
+.fb-itask-box:disabled {
+  opacity: 0.5;
+}
+.fb-itask-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fb-itask .wk-badge.is-compact {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 48%;
+  margin: 0;
+  font-size: 11px;
+}
+.fb-itask-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  padding-left: 4px;
+}
+.fb-itask-more,
+.fb-itask-add {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.fb-itask-more {
+  color: var(--text-dim);
+}
+.fb-itask-more:hover,
+.fb-itask-add:hover {
+  color: var(--accent);
+}
+.fb-itask-in {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.fb-itask-in:focus {
+  outline: none;
+}
+.fb-card.working {
+  border-color: var(--accent);
+}
+.fb-standing-note {
+  margin-bottom: 6px;
+  font-size: 12.5px;
+}
 .fb-act-sum {
   display: flex;
   flex-wrap: wrap;
@@ -8662,10 +8351,6 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
   .wk-pulse {
     animation: none;
   }
-}
-.home-goal-working .home-goal-text .wk-pulse {
-  margin-right: 6px;
-  vertical-align: middle;
 }
 .wk-badge {
   display: flex;

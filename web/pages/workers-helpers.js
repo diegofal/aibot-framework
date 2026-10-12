@@ -126,22 +126,28 @@ export function activeWorkersByTask(runs) {
 const pulse = (wait) =>
   `<span class="wk-pulse${wait ? ' is-wait' : ''}" aria-hidden="true"></span>`;
 
-/** The badge on a board task card; '' without an active run. */
-export function workerTaskBadge(run, nowMs = Date.now()) {
+/**
+ * The badge on a board task; '' without an active run. `compact` (the inline
+ * task rows of a board card): only step n/budget and the tool, or "waiting on you".
+ */
+export function workerTaskBadge(run, nowMs = Date.now(), { compact = false } = {}) {
   if (!run) return '';
   const m = run.sinceMs !== undefined && 'active' in run ? run : workerModel(run);
   if (!m.active) return '';
   const wait = m.status === 'waiting';
+  const step = m.steps ? `step ${m.step}/${m.steps}` : null;
   const parts = wait
-    ? ['waiting on you', m.question ? `"${m.question}"` : null]
-    : [
-        m.status === 'queued' ? 'queued' : 'worker',
-        m.steps ? `step ${m.step}/${m.steps}` : null,
-        m.tool,
-        elapsedOf(m, nowMs),
-      ];
+    ? ['waiting on you', compact ? null : m.question ? `"${m.question}"` : null]
+    : compact
+      ? m.status === 'queued'
+        ? ['queued']
+        : step || m.tool
+          ? [step, m.tool]
+          : ['worker']
+      : [m.status === 'queued' ? 'queued' : 'worker', step, m.tool, elapsedOf(m, nowMs)];
   const text = parts.filter(Boolean).join(' · ');
-  return `<button type="button" class="wk-badge${wait ? ' is-wait' : ''}" data-open-worker="${esc(m.runId)}" title="Open the worker">${pulse(wait)}<span class="wk-badge-text">${esc(text)}</span></button>`;
+  const title = wait && m.question ? `Waiting on you: ${m.question}` : 'Open the worker';
+  return `<button type="button" class="wk-badge${compact ? ' is-compact' : ''}${wait ? ' is-wait' : ''}" data-open-worker="${esc(m.runId)}" title="${esc(title)}">${pulse(wait)}<span class="wk-badge-text">${esc(text)}</span></button>`;
 }
 
 function stripCard(m, nowMs) {

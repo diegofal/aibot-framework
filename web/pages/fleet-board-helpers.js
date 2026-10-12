@@ -15,6 +15,7 @@ import { avatar, esc } from '../ui/index.js';
 import { formatNext, postureTone } from './agent-home-helpers.js';
 import { fleetQuickActions } from './fleet-home-helpers.js';
 import { relativeTime } from './stats-helpers.js';
+import { activeWorkersByTask, workerTaskBadge } from './workers-helpers.js';
 
 /** Board columns, left to right; `status` is what a drop / the drawer PATCHes. */
 export const BOARD_COLUMNS = [
@@ -185,6 +186,13 @@ export function stateLine(p, nowMs = Date.now()) {
 /** How the routes find a goal: its id, else its exact text (goals written before ids). */
 export function goalRef(goal) {
   return goal?.id ? { id: goal.id } : { goal: goal?.text ?? '' };
+}
+
+/** PATCH body switching a goal between standing (`'standing'`) and project (`''`), or null. */
+export function goalKindPayload(goal, kind) {
+  if (kind !== 'standing' && kind !== '') return null;
+  const ref = goalRef(goal);
+  return ref.id || ref.goal ? { ...ref, kind } : null;
 }
 function refValue(goal) {
   return goal?.id || goal?.text || '';
@@ -508,9 +516,8 @@ export function agentPanel(lane, needs = [], { nowMs = Date.now(), selectedRef =
     : fallback
       ? `<a class="fb-link" href="#/needs?bot=${encodeURIComponent(id)}">${fallback} item${fallback === 1 ? '' : 's'} in Needs you</a>`
       : '<div class="fb-dim">Nothing waiting on you. It can keep going.</div>';
-  const cols = boardColumns(home);
   const board = home
-    ? `<div class="fb-board${cols.blocked.length ? '' : ' no-blocked'}" data-bot="${esc(id)}">${BOARD_COLUMNS.map((c) => column(c, cols[c.id], selectedRef, boardCtx(home, nowMs))).join('')}</div>`
+    ? boardHtml(home, { botId: id, selectedRef, nowMs })
     : `<div class="fb-error">Could not load goals for this agent. <button type="button" class="btn btn-sm" data-reload="${esc(id)}">Retry</button></div>`;
   return `<div class="fb-panel">
     <aside class="fb-side">
@@ -524,7 +531,65 @@ export function agentPanel(lane, needs = [], { nowMs = Date.now(), selectedRef =
   </div>`;
 }
 
-/** One goal card: headline (≤ 2 lines), quiet meta, priority as a colored edge. */
+// ── Inline tasks on a card ──
+
+/** Open task rows shown on a card before "+N more" (the rest live in the drawer). */
+export const INLINE_TASKS_SHOWN = 5;
+const TASK_LANES = ['todo', 'in_progress', 'blocked', 'done'];
+/** Inline order: what is being worked on, then what is stuck, then what is queued. */
+const INLINE_ORDER = ['in_progress', 'blocked', 'todo'];
+const LANE_CLASS = { in_progress: 'ip', blocked: 'bl', todo: 'td' };
+
+/** A task's lane; tasks written before lanes fall back to their checkbox. */
+export function taskLaneOf(t) {
+  if (t?.done) return 'done';
+  if (TASK_LANES.includes(t?.status)) return t.status;
+  if (TASK_LANES.includes(t?.lane)) return t.lane;
+  return 'todo';
+}
+
+/** A goal's open tasks in inline order: `[{ task, i, lane }]`, `i` = index in `tasks`. */
+export function inlineTasks(tasks) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  return list
+    .map((task, i) => ({ task, i, lane: taskLaneOf(task) }))
+    .filter((r) => r.lane !== 'done')
+    .sort((a, b) => INLINE_ORDER.indexOf(a.lane) - INLINE_ORDER.indexOf(b.lane) || a.i - b.i);
+}
+
+/** The worker on a task: a live run from the workers data, else its claim. */
+function taskWorker(t, workers) {
+  const run = workers?.get?.(t?.id);
+  if (run) return run;
+  return t?.claim?.runId ? { runId: t.claim.runId, taskId: t.id, status: 'running' } : null;
+}
+
+function inlineTaskRow({ task: t, i, lane }, ctx) {
+  const text = String(t?.text ?? '');
+  const badge = workerTaskBadge(taskWorker(t, ctx.workers), ctx.nowMs ?? Date.now(), {
+    compact: true,
+  });
+  return `<li class="fb-itask ${LANE_CLASS[lane]}" data-task-id="${esc(t?.id ?? '')}" data-ti="${i}">
+      <button type="button" class="fb-itask-box" data-itoggle title="Mark done" aria-label="Mark done: ${esc(text)}"></button>
+      <span class="fb-itask-t" title="${esc(text)}">${esc(text)}</span>${badge}
+    </li>`;
+}
+
+/** Open tasks under the card's meta row, at most five, then "+N more" and "+ task". */
+function inlineTasksHtml(goal, ctx) {
+  const open = inlineTasks(goal?.tasks);
+  const shown = open.slice(0, INLINE_TASKS_SHOWN);
+  const more = open.length - shown.length;
+  const list = shown.length
+    ? `<ul class="fb-itasks">${shown.map((r) => inlineTaskRow(r, ctx)).join('')}</ul>`
+    : '';
+  return `${list}<div class="fb-itask-foot">${more > 0 ? `<button type="button" class="fb-itask-more" data-imore title="Open the goal">+${more} more</button>` : ''}<button type="button" class="fb-itask-add" data-iadd title="Add a task to this goal">+ task</button></div>`;
+}
+
+/**
+ * One goal card: headline (≤ 2 lines), quiet meta, priority as a colored edge,
+ * then its open tasks (a standing goal has none, and says so).
+ */
 export function cardHtml(goal, selected, ctx = {}) {
   const { head, tag } = goalHeadline(goal);
   const ref = esc(refValue(goal));
@@ -532,11 +597,33 @@ export function cardHtml(goal, selected, ctx = {}) {
     return `<div class="fb-card done" data-goal="${ref}"><div class="fb-h"><span class="fb-check">✓</span>${esc(head)}</div></div>`;
   }
   const pri = PRIORITIES.includes(goal?.priority) ? goal.priority : 'medium';
-  return `<div class="fb-card ${pri}${selected ? ' sel' : ''}" data-goal="${ref}" draggable="true" tabindex="0">
+  const standing = goal?.kind === 'standing';
+  const working = (Array.isArray(goal?.tasks) ? goal.tasks : []).some(
+    (t) => taskLaneOf(t) !== 'done' && taskWorker(t, ctx.workers)
+  );
+  return `<div class="fb-card ${pri}${selected ? ' sel' : ''}${working ? ' working' : ''}" data-goal="${ref}" draggable="true" tabindex="0">
     <div class="fb-h">${esc(head)}</div>
-    <div class="fb-meta">${tag ? `<span class="fb-tag sleep">${esc(tag)}</span>` : ''}${sourceTag(goal)}${goal?.notes ? '<span class="fb-dim" title="Has notes">✎</span>' : ''}<span class="fb-sp"></span>${mini(goal?.tasks)}</div>
+    <div class="fb-meta">${tag ? `<span class="fb-tag sleep">${esc(tag)}</span>` : ''}${standing ? '<span class="fb-tag standing" title="No end state: the agent does a round of it each time it serves it">standing</span>' : ''}${sourceTag(goal)}${goal?.notes ? '<span class="fb-dim" title="Has notes">✎</span>' : ''}<span class="fb-sp"></span>${mini(goal?.tasks)}</div>
+    ${standing ? '' : inlineTasksHtml(goal, ctx)}
     ${goal?.status === 'in_progress' ? pulseHtml(ctx.activity?.[goal?.id], ctx.intervalMs, ctx.nowMs ?? Date.now()) : ''}${kidsLine(ctx.spawned?.[goal?.id])}
   </div>`;
+}
+
+/**
+ * One agent's goals as the board (Fleet Board panel and Agent Home alike).
+ * `workers`: runs from `GET /api/agents/:id/workers` (or a map from
+ * `activeWorkersByTask`); without them a claimed task still shows its worker.
+ */
+export function boardHtml(
+  home,
+  { botId = '', selectedRef = null, nowMs = Date.now(), workers } = {}
+) {
+  const cols = boardColumns(home);
+  const ctx = {
+    ...boardCtx(home, nowMs),
+    workers: workers instanceof Map ? workers : activeWorkersByTask(workers),
+  };
+  return `<div class="fb-board${cols.blocked.length ? '' : ' no-blocked'}" data-bot="${esc(botId)}">${BOARD_COLUMNS.map((c) => column(c, cols[c.id], selectedRef, ctx)).join('')}</div>`;
 }
 
 function kidsLine(kids) {
@@ -581,6 +668,7 @@ export function drawerHtml(
         : 'in_progress';
   const tasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
   const p = taskProgress(tasks);
+  const standing = !done && goal?.kind === 'standing';
   const notes = goal?.notes ? String(goal.notes) : '';
   const brief = String(goal?.text ?? '');
   const seg = (attr, items, on) =>
@@ -610,7 +698,8 @@ export function drawerHtml(
           ]),
           goal?.priority
         )}</div></div>
-      <div class="fb-field"><div class="fb-lbl">Subtasks<span class="fb-sp"></span>${p.total ? `${p.done}/${p.total}` : ''}</div>
+      <div class="fb-field"><div class="fb-lbl">Subtasks<span class="fb-sp"></span>${p.total ? `${p.done}/${p.total}` : ''}${done || standing ? '' : '<button type="button" class="fb-link" data-kind="standing" title="No end state: the agent does a round of it instead of breaking it into tasks">Mark standing</button>'}</div>
+        ${standing ? '<div class="fb-dim fb-standing-note">Standing goal: no end state, so no subtasks. The agent does a round of it each time it serves it. <button type="button" class="fb-link" data-kind="" title="Treat it as a project: the agent breaks it into tasks">Make it a project</button></div>' : ''}
         ${p.total ? `<div class="fb-prog"><em style="width:${p.pct}%"></em></div>` : ''}
         <ul class="fb-tasks">${tasks
           .map(
@@ -621,7 +710,7 @@ export function drawerHtml(
         </li>`
           )
           .join('')}</ul>
-        ${done ? '' : '<input class="fb-add" id="fb-addtask" maxlength="200" placeholder="+ Add a subtask, then Enter" aria-label="Add subtask">'}</div>
+        ${done || standing ? '' : '<input class="fb-add" id="fb-addtask" maxlength="200" placeholder="+ Add a subtask, then Enter" aria-label="Add subtask">'}</div>
       <div class="fb-field"><div class="fb-lbl">Brief<span class="fb-sp"></span><span class="fb-lbl-note">what the agent reads</span><button type="button" class="fb-link" id="fb-editbrief">Edit</button></div>
         <div class="fb-brief"><div class="fb-brief-text${brief.length > 180 ? ' clamp' : ''}" id="fb-brief">${esc(brief)}</div></div>
         ${brief.length > 180 ? '<button type="button" class="fb-link" id="fb-morebrief">Show full brief</button>' : ''}</div>
@@ -631,5 +720,5 @@ export function drawerHtml(
       <div class="fb-field"><div class="fb-lbl">Activity<span class="fb-sp"></span><span class="fb-lbl-note">cycles that served this goal</span></div>
         <div id="fb-activity">${activityHtml(detail, { nowMs, botId, showAll, intervalMs, inProgress: status === 'in_progress' })}</div></div>
     </div>
-    <div class="fb-d-foot"><button type="button" class="btn btn-sm btn-danger" id="fb-del">Delete goal</button><span class="fb-sp"></span><button type="button" class="btn btn-sm" data-close>Done</button></div>`;
+    <div class="fb-d-foot"><button type="button" class="btn btn-sm btn-danger" id="fb-del">Delete goal</button><span class="fb-sp"></span><button type="button" class="btn btn-sm" data-history title="Every change to this goal, and the cycles that served it">History</button><button type="button" class="btn btn-sm" data-close>Done</button></div>`;
 }

@@ -3,43 +3,30 @@
  * docs/plans/jarvis-fleet-plan.md).
  *
  * Presence header (live), needs-you strip, a chat panel that talks to the
- * agent through the dashboard conversations API, the timeline, then goals,
+ * agent through the dashboard conversations API, the timeline, then goals
+ * (the shared goal board of goal-board.js, the same one as the Fleet Board),
  * traits, karma and the memory history (consolidations, facts saved,
  * hygiene fixes, its own request). Data comes from `/api/agents/:id/home`; live updates
  * ride the shared `watchAgent()` link.
  */
-import { card, emptyState, openSheet, showToast, skeleton } from '../ui/index.js';
+import { card, emptyState, showToast, skeleton } from '../ui/index.js';
 import { registerPageShortcuts } from '../ui/shortcuts.js';
 import { authedAvatarSrc, wireFaceControl, wireSpeakButton } from './agent-face.js';
 import {
   AGENT_HOME_SHORTCUTS,
   applyPresence,
-  findBoardGoal,
-  goalFormPayload,
-  goalKindPayload,
-  goalMovePayload,
-  goalsColumns,
   homeKeyAction,
   homeTabs,
-  isTaskConflict,
   karmaBody,
   needsYouStrip,
   presenceHeader,
-  taskAddRequest,
-  taskMoveRequest,
   timelineBody,
   traitsBody,
 } from './agent-home-helpers.js';
 import { FOCUS_CHAT_KEY } from './agent-wizard-helpers.js';
 import { mountMind } from './curiosity.js';
-import {
-  goalDetailBody,
-  goalDetailError,
-  goalDetailLoading,
-  goalDetailUrl,
-  goalEditPayload,
-  goalEditor,
-} from './goal-detail-helpers.js';
+import { boardHtml } from './fleet-board-helpers.js';
+import { mountGoalBoard } from './goal-board.js';
 import { watchAgent } from './live-presence.js';
 import { memoryHistoryBody, memoryHistoryUrl } from './memory-history-helpers.js';
 import { api, renderThread } from './shared.js';
@@ -59,6 +46,10 @@ let speaker = null;
 let keyHandler = null;
 let workersTimer = null;
 let workersPoll = null;
+/** The shared goal board, the home payload it draws from, and the live worker runs. */
+let board = null;
+let boardHome = null;
+let workerRuns = [];
 
 export function destroyAgentHome() {
   if (keyHandler) document.removeEventListener('keydown', keyHandler);
@@ -75,6 +66,10 @@ export function destroyAgentHome() {
   workersTimer = null;
   clearInterval(workersPoll);
   workersPoll = null;
+  board?.destroy();
+  board = null;
+  boardHome = null;
+  workerRuns = [];
 }
 
 function homeUrl(id) {
@@ -92,321 +87,30 @@ function actionsFor(identity, id) {
   return `<button class="btn btn-primary" id="home-toggle">${label}</button>${rest}`;
 }
 
-/** True while the operator is typing in a board form (a redraw would wipe it). */
-function boardBusy(board) {
-  const inputs = board?.querySelectorAll('#home-goal-form [name="title"], [data-task-form] input');
-  return [...(inputs ?? [])].some((i) => i.value.trim() || document.activeElement === i);
-}
-
-/**
- * Draw the board from a home payload, keeping the open goal (`data-selected`)
- * and the add-task form (`data-adding`) across redraws.
- */
-function paintBoard(board, goals, id) {
-  board._goals = goals;
-  if (board.dataset.selected && !findBoardGoal(goals, board.dataset.selected)) {
-    delete board.dataset.selected;
-    delete board.dataset.adding;
-  }
-  board.innerHTML = goalsColumns(goals, {
-    selectedId: board.dataset.selected,
+/** Draw the goal board (the drawer's goal marked) from the latest home payload. */
+function paintGoals(el, id) {
+  const box = el.querySelector('#home-goals');
+  if (!box || !boardHome) return;
+  box.innerHTML = boardHtml(boardHome, {
     botId: id,
-    addingTask: board.dataset.adding === '1',
-    workers: board._workers,
-  });
-  if (board.dataset.adding === '1') board.querySelector('[data-task-form] input')?.focus();
-}
-
-async function redrawBoard(el, id) {
-  const home = await api(homeUrl(id)).catch(() => null);
-  const board = el.querySelector('#home-goals');
-  if (home && !home.error && board) paintBoard(board, home.goals, id);
-}
-
-/** Right-hand drawer with everything about one goal; title and notes edit in place. */
-async function openGoalDetail(botId, goalId, title, onChange) {
-  const body = openSheet({ title: 'Goal', body: goalDetailLoading(), wide: true });
-  if (!body) return;
-  const load = async (key) => {
-    const detail = await api(goalDetailUrl(botId, key)).catch((err) => ({
-      error: err?.message || 'Request failed',
-    }));
-    if (!body.isConnected) return;
-    body.innerHTML =
-      !detail || detail.error
-        ? goalDetailError(detail?.error || 'no response')
-        : goalDetailBody(detail, botId);
-  };
-  await load({ id: goalId, title });
-  wireGoalEditing(body, botId, load, onChange);
-}
-
-function wireGoalEditing(body, botId, load, onChange) {
-  const startEdit = (target) => {
-    if (body.querySelector('.gd-editor')) return;
-    const field = target.dataset.edit;
-    const root = body.querySelector('.gd');
-    if (!root || !field) return;
-    const value =
-      field === 'title'
-        ? root.dataset.goal
-        : target.classList.contains('gd-notes-empty')
-          ? ''
-          : target.textContent.trim();
-    const holder = document.createElement('div');
-    holder.innerHTML = goalEditor(field, value);
-    const editor = holder.firstElementChild;
-    target.replaceWith(editor);
-    const input = editor.querySelector('textarea');
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-    const goal = { id: root.dataset.goalId, title: root.dataset.goal };
-    const reload = () => load({ id: goal.id, title: goal.title });
-    const save = async () => {
-      const payload = goalEditPayload(goal, field, input.value);
-      if (!payload) {
-        showToast('A goal needs a title', { tone: 'danger' });
-        return;
-      }
-      editor.querySelectorAll('button').forEach((btn) => {
-        btn.disabled = true;
-      });
-      const res = await api(`/api/agents/${encodeURIComponent(botId)}/goals`, {
-        method: 'PATCH',
-        body: payload,
-      }).catch((err) => ({ error: err?.message || 'Request failed' }));
-      if (res?.error) {
-        showToast(res.error, { tone: 'danger' });
-        editor.querySelectorAll('button').forEach((btn) => {
-          btn.disabled = false;
-        });
-        return;
-      }
-      if (field === 'title') goal.title = payload.title;
-      await reload();
-      onChange?.();
-    };
-    editor.addEventListener('click', (e) => {
-      if (e.target.closest('[data-edit-save]')) save();
-      else if (e.target.closest('[data-edit-cancel]')) reload();
-    });
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        reload();
-      } else if (e.key === 'Enter' && (field === 'title' ? !e.shiftKey : e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        save();
-      }
-    });
-  };
-  body.addEventListener('click', (e) => {
-    const target = e.target.closest('[data-edit]');
-    if (target && !e.target.closest('a')) startEdit(target);
-  });
-  body.addEventListener('keydown', (e) => {
-    const target = e.target.closest?.('[data-edit]');
-    if (target && e.key === 'Enter' && e.target === target) {
-      e.preventDefault();
-      startEdit(target);
-    }
+    selectedRef: board?.selectedRef(id) ?? null,
+    workers: workerRuns,
   });
 }
 
-/** Goals board: select, add, move goals and tasks by delegation, so redraws keep working. */
-function wireGoalBoard(el, id, goals) {
-  const board = el.querySelector('#home-goals');
-  if (!board) return;
-  board._goals = goals;
-  const url = `/api/agents/${encodeURIComponent(id)}/goals`;
-  board.addEventListener('submit', async (e) => {
-    const form = e.target.closest('#home-goal-form');
-    if (!form) return;
-    e.preventDefault();
-    const payload = goalFormPayload(form.elements.title?.value, form.elements.priority?.value);
-    if (!payload) return;
-    const btn = form.querySelector('button[type="submit"]');
-    if (btn) btn.disabled = true;
-    try {
-      const res = await api(url, { method: 'POST', body: payload });
-      if (res?.error) {
-        showToast(res.error, { tone: 'danger' });
-        return;
-      }
-      form.reset();
-      showToast('Goal added — the agent picks it up next cycle', { tone: 'ok' });
-      await redrawBoard(el, id);
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  });
-  const repaint = () => paintBoard(board, board._goals, id);
-  const send = async (payload, okMessage) => {
-    if (!payload) return;
-    const res = await api(url, { method: 'PATCH', body: payload }).catch((err) => ({
-      error: err?.message || 'Request failed',
-    }));
-    if (res?.error) showToast(res.error, { tone: 'danger' });
-    else if (okMessage) showToast(okMessage, { tone: 'ok' });
-    await redrawBoard(el, id);
-  };
-  const move = (goal, status) => send(goalMovePayload(goal, status));
-  // Task ops go one at a time to the task store, with the board's rev: a stale
-  // board (or a task a worker holds) gets a 409, and we refetch and repaint.
-  const sendTask = async (req, okMessage) => {
-    if (!req) return;
-    const res = await api(req.path, { method: req.method, body: req.body }).catch((err) => ({
-      error: err?.message || 'Request failed',
-    }));
-    if (isTaskConflict(res))
-      showToast(`The board changed meanwhile, so it was reloaded. ${res.error}`, { tone: 'warn' });
-    else if (res?.error) showToast(res.error, { tone: 'danger' });
-    else if (okMessage) showToast(okMessage, { tone: 'ok' });
-    await redrawBoard(el, id);
-  };
-  const openGoal = () => findBoardGoal(board._goals, board.dataset.selected)?.goal;
-
-  // Click a goal: its tasks open under its row; click it again (or ✕) to close.
-  const toggle = (goalCard) => {
-    const key = goalCard.dataset.goalId || goalCard.dataset.goal;
-    if (board.dataset.selected === key) delete board.dataset.selected;
-    else board.dataset.selected = key;
-    delete board.dataset.adding;
-    repaint();
-    board.querySelector('.home-goal-card.is-selected')?.focus();
-  };
-  board.addEventListener('click', async (e) => {
-    const t = e.target;
-    if (t.closest('[data-open-cycle]')) return; // app.js opens the cycle sheet
-    if (t.closest('[data-open-worker]')) return; // app.js opens the worker sheet
-    if (t.closest('[data-goal-close]')) {
-      delete board.dataset.selected;
-      delete board.dataset.adding;
-      return repaint();
-    }
-    const kindBtn = t.closest('[data-goal-kind]');
-    if (kindBtn) {
-      const goal = openGoal();
-      kindBtn.disabled = true;
-      return send(
-        goal ? goalKindPayload(goal, kindBtn.dataset.goalKind) : null,
-        kindBtn.dataset.goalKind
-          ? 'Marked standing — no tasks for this one'
-          : 'Now a project — the agent breaks it down'
-      );
-    }
-    if (t.closest('[data-goal-history]')) {
-      const panel = t.closest('.home-goal-panel');
-      return openGoalDetail(id, panel.dataset.panelGoalId, panel.dataset.panelGoal, () =>
-        redrawBoard(el, id)
-      );
-    }
-    if (t.closest('[data-add-task]')) {
-      board.dataset.adding = '1';
-      return repaint();
-    }
-    if (t.closest('[data-complete-goal]')) {
-      const goal = openGoal();
-      if (goal) await move(goal.text, 'done');
-      return;
-    }
-    const goalCard = t.closest('.home-goal-card');
-    if (goalCard) toggle(goalCard);
-  });
-  board.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && board.dataset.adding) {
-      delete board.dataset.adding;
-      return repaint();
-    }
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('home-goal-card')) {
-      e.preventDefault();
-      toggle(e.target);
-    }
-  });
-  board.addEventListener('submit', async (e) => {
-    const form = e.target.closest('[data-task-form]');
-    if (!form) return;
-    e.preventDefault();
-    const req = taskAddRequest(id, openGoal(), form.elements.text?.value);
-    if (!req) return;
-    form.querySelector('button[type="submit"]')?.setAttribute('disabled', '');
-    delete board.dataset.adding;
-    await sendTask(req, 'Task added — the agent sees it next cycle');
-  });
-  board.addEventListener('change', async (e) => {
-    const select = e.target.closest('.home-goal-status');
-    if (!select) return;
-    select.disabled = true;
-    await move(select.dataset.goal, select.value);
-  });
-
-  // Drag a goal onto another column, or a task onto another lane of its goal.
-  let dragged = null;
-  const clearOver = () => {
-    for (const c of board.querySelectorAll('.drag-over')) c.classList.remove('drag-over');
-  };
-  const zoneOf = (target) => {
-    if (dragged?.kind === 'task') return target.closest?.('.home-task-lane') ?? null;
-    if (dragged?.kind === 'goal') return target.closest?.('.home-board-cell') ?? null;
-    return null;
-  };
-  board.addEventListener('dragstart', (e) => {
-    const taskCard = e.target.closest?.('.home-task-card');
-    const goalCard = taskCard ? null : e.target.closest?.('.home-goal-card');
-    if (taskCard) {
-      dragged = {
-        kind: 'task',
-        task: taskCard.dataset.taskId,
-        from: taskCard.closest('.home-task-lane')?.dataset.taskStatus,
-      };
-    } else if (goalCard) {
-      dragged = {
-        kind: 'goal',
-        goal: goalCard.dataset.goal,
-        from: goalCard.closest('.home-board-cell')?.dataset.status,
-      };
-    } else return;
-    (taskCard ?? goalCard).classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', dragged.task ?? dragged.goal ?? '');
-  });
-  board.addEventListener('dragend', (e) => {
-    e.target.closest?.('.dragging')?.classList.remove('dragging');
-    clearOver();
-    dragged = null;
-  });
-  board.addEventListener('dragover', (e) => {
-    const zone = zoneOf(e.target);
-    if (!zone) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (zone.classList.contains('drag-over')) return;
-    clearOver();
-    if (dragged.kind === 'task') zone.classList.add('drag-over');
-    else
-      for (const c of board.querySelectorAll(
-        `.home-board-cell[data-status="${zone.dataset.status}"]`
-      ))
-        c.classList.add('drag-over');
-  });
-  board.addEventListener('dragleave', (e) => {
-    if (!board.contains(e.relatedTarget)) clearOver();
-  });
-  board.addEventListener('drop', async (e) => {
-    const zone = zoneOf(e.target);
-    if (!zone) return;
-    e.preventDefault();
-    clearOver();
-    const drop = dragged;
-    dragged = null;
-    if (drop.kind === 'task') {
-      const lane = zone.dataset.taskStatus;
-      if (lane && lane !== drop.from)
-        await sendTask(taskMoveRequest(id, openGoal(), drop.task, lane, board._goals?.tasksRev));
-    } else if (zone.dataset.status && zone.dataset.status !== drop.from) {
-      await move(drop.goal, zone.dataset.status);
-    }
+/** The goals card: the shared board for this one agent. */
+function wireGoalBoard(el, id, identity) {
+  const root = el.querySelector('#home-goals');
+  if (!root) return;
+  board = mountGoalBoard({
+    root,
+    getHome: () => boardHome,
+    getAgent: () => ({ id, name: identity.name }),
+    reload: async () => {
+      const home = await api(homeUrl(id)).catch(() => null);
+      if (home && !home.error) boardHome = home;
+    },
+    paint: () => paintGoals(el, id),
   });
 }
 
@@ -636,6 +340,8 @@ function wireKeys(el, id, identity) {
   keyHandler = (e) => {
     if (!el.isConnected) return;
     if (document.getElementById('ui-dialog-root')) return;
+    // The goal drawer is open: its keys, not the page shortcuts.
+    if (board?.isOpen()) return;
     const action = homeKeyAction(e);
     if (!action) return;
     if (action === 'run') {
@@ -683,12 +389,9 @@ async function refreshWorkers(el, id) {
   const runs = Array.isArray(res.runs) ? res.runs : [];
   const strip = el.querySelector('#home-workers');
   if (strip) strip.innerHTML = workersStrip(runs);
-  const board = el.querySelector('#home-goals');
-  if (!board) return;
-  const before = JSON.stringify(board._workers ?? []);
-  board._workers = runs;
-  if (board._goals && JSON.stringify(runs) !== before && !boardBusy(board))
-    paintBoard(board, board._goals, id);
+  const changed = JSON.stringify(runs) !== JSON.stringify(workerRuns);
+  workerRuns = runs;
+  if (changed && !board?.busy()) paintGoals(el, id);
 }
 
 function scheduleWorkersRefresh(el, id) {
@@ -705,8 +408,11 @@ function scheduleHomeRefresh(el, id) {
     if (tl) tl.innerHTML = timelineBody(home.timeline);
     const needs = el.querySelector('#home-needs');
     if (needs) needs.innerHTML = needsYouStrip(home.needsYou, id);
-    const goals = el.querySelector('#home-goals');
-    if (goals && !boardBusy(goals)) paintBoard(goals, home.goals, id);
+    boardHome = home;
+    if (!board?.busy()) {
+      paintGoals(el, id);
+      board?.paintDrawer();
+    }
   }, HOME_REFRESH_DEBOUNCE_MS);
 }
 
@@ -753,8 +459,8 @@ export async function renderAgentHome(el, id) {
       ${card({
         title: 'Goals',
         subtitle:
-          'Click a goal to see its tasks and drag them between lanes; drag goals between columns. The agent works on yours first.',
-        body: `<div id="home-workers"></div><div id="home-goals">${goalsColumns(home.goals, { botId: id })}</div>`,
+          'Tick a task to finish it; click a goal to open it; drag goals between columns. The agent works on yours first.',
+        body: `<div id="home-workers"></div><div id="home-goals">${boardHtml(home, { botId: id })}</div>`,
       })}
     </div>
     <div class="home-grid" style="margin-top:16px">
@@ -775,7 +481,8 @@ export async function renderAgentHome(el, id) {
     </div>`;
 
   wireActions(el, id, identity);
-  wireGoalBoard(el, id, home.goals);
+  boardHome = home;
+  wireGoalBoard(el, id, identity);
   wireKeys(el, id, identity);
   wireFaceControl(el, id, {
     onChanged: (avatarUrl) => {
