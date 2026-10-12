@@ -185,7 +185,7 @@ describe('integration re-review: scope refusals are audited (N9)', () => {
     });
   });
 
-  test('N3: a denied tool is refused as policy, so a resume knows it never ran', async () => {
+  test('N3: a denied tool is refused as disabled, so a resume knows it never ran', async () => {
     const s = setup(['send_message']);
     const e = env(s.runner);
     const journal: any[] = [];
@@ -194,7 +194,7 @@ describe('integration re-review: scope refusals are audited (N9)', () => {
     expect(s.ran).toEqual([]);
     expect(journal.find((j) => j.kind === 'tool' && j.name === 'send_message')).toMatchObject({
       ok: false,
-      failureKind: 'policy',
+      failureKind: 'disabled',
     });
   });
 });

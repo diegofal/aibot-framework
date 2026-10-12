@@ -701,7 +701,7 @@ export class ToolExecutor extends EventEmitter {
         'lookup',
         0,
         undefined,
-        'policy'
+        'disabled'
       );
     }
 
@@ -742,7 +742,7 @@ export class ToolExecutor extends EventEmitter {
           'lookup',
           0,
           undefined,
-          'policy'
+          'disabled'
         );
       }
 

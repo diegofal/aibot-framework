@@ -82,6 +82,7 @@ export const REFUSED_FAILURES: readonly ToolFailureKind[] = [
   'blocked',
   'scope',
   'policy',
+  'disabled',
   'aborted',
 ];
 

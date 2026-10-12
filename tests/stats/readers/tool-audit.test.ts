@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   aggregateTools,
   engagementFromTools,
+  isToolFailure,
   readToolEntries,
   toolsDaily,
 } from '../../../src/stats/readers/tool-audit';
@@ -169,5 +170,23 @@ describe('isToolFailure — calls that never ran', () => {
     expect(isToolFailure({ success: false, failureKind: 'approval-pending' })).toBe(false);
     expect(isToolFailure({ success: false, failureKind: 'aborted' })).toBe(false);
     expect(isToolFailure({ success: false, failureKind: 'error' })).toBe(true);
+  });
+});
+
+describe('worker refusals and disabled tools in stats', () => {
+  it('a write refused for being outside the task directory (scope) is not a failure', () => {
+    expect(isToolFailure({ success: false, failureKind: 'scope' })).toBe(false);
+  });
+
+  it('a disabled tool still counts as a failure, but not in the policy bucket', () => {
+    const stats = aggregateTools(
+      [
+        entry({ toolName: 'send_message', success: false, failureKind: 'disabled' }),
+        entry({ toolName: 'web_fetch', success: false, failureKind: 'policy' }),
+      ] as any,
+      0
+    );
+    expect(stats.failed).toBe(2);
+    expect(stats.policy).toBe(1);
   });
 });

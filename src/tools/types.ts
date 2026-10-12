@@ -78,7 +78,9 @@ export type ToolFailureKind =
   | 'exit-nonzero'
   | 'approval-pending'
   | 'aborted'
-  | 'scope';
+  | 'scope'
+  /** The tool is disabled, denied to this caller or blocked by the permission matrix: it never ran. */
+  | 'disabled';
 
 /**
  * A complete tool: its schema definition + execution logic
