@@ -206,8 +206,8 @@ describe('GET /api/needs-you', () => {
     const body = await (await makeApp(src).request('/api/needs-you')).json();
     expect(body.items).toHaveLength(5);
     for (const item of body.items as NeedsYouItem[]) {
-      // `why` is additive: asks, permissions and productions carry it, the rest do not.
-      expect('why' in item).toBe(['ask', 'permission', 'production'].includes(item.kind));
+      // `why` is additive: every kind but dynamic tools carries it.
+      expect('why' in item).toBe(item.kind !== 'tool');
       expect(
         Object.keys(item)
           .filter((k) => k !== 'why')
@@ -969,8 +969,44 @@ describe('GET /api/needs-you — why', () => {
     expect(prod.why?.outcome).toBe('Waiting for your review.');
 
     const perm = byId.get('permission:p1') as NeedsYouItem;
-    expect(perm.why?.reason?.text).toBe('Write p1');
-    expect(perm.why?.missing).toContain('do not record the cycle');
+    expect(perm.why?.reason).toEqual({ text: 'Write p1', source: "Agent's request" });
+    expect(perm.why?.missing).toContain('No record of the cycle that asked');
+  });
+
+  it('permissions and proposals name their cycle, feedback replies say they wait (rows 14, 15, 18)', async () => {
+    const src = sources({
+      permissions: () => [
+        { ...permission('p1', 'b1', 'normal', 1), cycleId: 'c-perm', goalId: 'g-1' },
+      ],
+      proposals: () => [{ ...proposal('pr1', 'b1'), cycleId: 'c-prop', goalId: 'g-1' }],
+      feedback: {
+        botIds: () => ['b1'],
+        // Needs You lists only pending feedback the agent replied to in the thread.
+        list: () => [feedbackEntry('fb1', 'b1', [{ role: 'bot', content: 'ok', ageH: 1 }])],
+      },
+    });
+    const { app, reads } = appWithCycles(src, [
+      cycleRow('c-perm', NOW - H - 60_000),
+      cycleRow('c-prop', NOW - H - 60_000),
+    ]);
+    const body = await (await app.request('/api/needs-you')).json();
+    const byId = new Map(body.items.map((i: NeedsYouItem) => [i.id, i]));
+    expect(reads).toEqual(['b1']);
+
+    const perm = byId.get('permission:p1') as NeedsYouItem;
+    expect(perm.why?.cycle).toMatchObject({ id: 'c-perm', plan: 'Plan of c-perm' });
+    expect(perm.why?.goal).toEqual({ id: 'g-1', title: 'Ship the launch' });
+    expect(perm.why?.missing).toBeUndefined();
+
+    const prop = byId.get('proposal:pr1') as NeedsYouItem;
+    expect(prop.why?.cycle?.id).toBe('c-prop');
+    expect(prop.why?.reason).toEqual({ text: 'Because', source: "Agent's justification" });
+    expect(prop.why?.outcome).toBe('Waiting for your decision.');
+
+    const fb = byId.get('feedback:b1:fb1') as NeedsYouItem;
+    expect(fb.why?.what).toBe('Your feedback');
+    expect(fb.why?.by).toBe('operator');
+    expect(fb.why?.outcome).toBe('Not handled yet.');
   });
 
   it('without a cycle log the asks still get a why that says what is missing', async () => {

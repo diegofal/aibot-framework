@@ -10,7 +10,7 @@
  *   { id, kind, botId, botName, title, body, options, createdAt, urgency,
  *     actions: [{ id, label, method, path, body?, input?, tone, hotkey? }],
  *     href, meta, why? }
- * `why` (asks, productions, permissions) renders with the shared panel.
+ * `why` (every kind but dynamic tools) renders with the shared panel.
  */
 import { avatar, badge, emptyState, esc } from '../ui/index.js';
 import { bulkToolbar, toggleAll } from '../ui/select-all.js';

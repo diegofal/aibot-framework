@@ -235,4 +235,58 @@ describe('agent proposal routes', () => {
     });
     expect(res.status).toBe(404);
   });
+
+  test('GET / attaches why: cycle, goal and justification (why plan row 15)', async () => {
+    const storePath = join(TEST_DIR, 'proposals');
+    const store = new AgentProposalStore(storePath);
+    const reads: string[] = [];
+    const app = new Hono();
+    app.route(
+      '/api/agent-proposals',
+      agentProposalRoutes({
+        store,
+        config: createTestConfig(),
+        configPath: createTestConfigPath(),
+        logger: noopLogger,
+        readCycles: (botId) => {
+          reads.push(botId);
+          return [
+            {
+              cycleId: 'c-1',
+              startedAt: new Date(Date.now() - 60_000).toISOString(),
+              endedAt: new Date(Date.now() + 60_000).toISOString(),
+              planSummary: 'Find research help',
+              goalId: 'g-1',
+              goalTitle: 'Grow the team',
+            },
+          ];
+        },
+      })
+    );
+    store.create({
+      agentId: 'scout',
+      agentName: 'Scout',
+      role: 'Research',
+      personalityDescription: 'Curious and careful, always cites sources for every claim.',
+      skills: [],
+      justification: 'Nobody covers research.',
+      proposedBy: 'bot-1',
+      cycleId: 'c-1',
+      goalId: 'g-1',
+    });
+    addProposal(store, { agentId: 'old-one' });
+
+    const data = await (await app.request('http://localhost/api/agent-proposals')).json();
+    expect(reads).toEqual(['bot-1']);
+    const scout = data.find((p: any) => p.agentId === 'scout');
+    expect(scout.why).toMatchObject({
+      what: 'It proposed a new agent: Scout',
+      cycle: { id: 'c-1', plan: 'Find research help' },
+      goal: { id: 'g-1', title: 'Grow the team' },
+      reason: { text: 'Nobody covers research.', source: "Agent's justification" },
+      outcome: 'Waiting for your decision.',
+    });
+    const old = data.find((p: any) => p.agentId === 'old-one');
+    expect(old.why.missing).toContain('No record of the cycle that proposed it');
+  });
 });

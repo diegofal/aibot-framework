@@ -1,11 +1,50 @@
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
+import type { AgentFeedback } from '../../bot/agent-feedback-store';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
 import type { ProductionsService } from '../../productions/service';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import { feedbackToWhy } from '../../why/builders/feedback';
+import { CycleIndex, type CycleReader } from '../../why/cycle-index';
+import type { Why } from '../../why/types';
 import { webGenerate } from './web-tool-helpers';
+
+/**
+ * "Why this?" for each feedback entry of a bot: one cycle-log read, then
+ * `feedbackToWhy` (the cycle that handled it, or not handled yet). A builder
+ * that throws leaves its entry without one.
+ */
+export function withFeedbackWhy(
+  botId: string,
+  entries: AgentFeedback[],
+  read: CycleReader | undefined,
+  logger: Logger
+): Array<AgentFeedback & { why?: Why }> {
+  const cycles = CycleIndex.for(
+    read,
+    entries.flatMap((e) => (e.cycleId && e.appliedAt ? [{ botId, at: e.appliedAt }] : [])),
+    (id, err) => logger.warn({ err, botId: id }, 'agent-feedback: cycle log read failed')
+  );
+  return entries.map((e) => {
+    try {
+      return {
+        ...e,
+        why: feedbackToWhy({
+          botId,
+          status: e.status,
+          appliedAt: e.appliedAt,
+          cycleId: e.cycleId,
+          cycle: e.cycleId ? cycles.byId(botId, e.cycleId) : undefined,
+        }),
+      };
+    } catch (err) {
+      logger.warn({ err, id: e.id }, 'agent-feedback: why failed, skipping');
+      return e;
+    }
+  });
+}
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
@@ -98,6 +137,8 @@ export function agentFeedbackRoutes(deps: {
   botManager: BotManager;
   logger: Logger;
   productionsService?: ProductionsService;
+  /** Agent-loop cycle rows of a bot (shared `readCycles` of server.ts): the cycle that handled each entry. */
+  readCycles?: CycleReader;
 }) {
   const app = new Hono();
 
@@ -252,7 +293,10 @@ export function agentFeedbackRoutes(deps: {
     });
 
     const botName = deps.config.bots.find((b) => b.id === botId)?.name ?? botId;
-    return c.json({ entries, botName });
+    return c.json({
+      entries: withFeedbackWhy(botId, entries, deps.readCycles, deps.logger),
+      botName,
+    });
   });
 
   // Submit new feedback

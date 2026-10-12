@@ -7,6 +7,17 @@ export type PermissionUrgency = 'low' | 'normal' | 'high';
 export type PermissionStatus = 'pending' | 'approved' | 'denied';
 export type ExecutionStatus = 'decided' | 'consumed' | 'executed' | 'failed';
 
+/**
+ * The agent-loop cycle and goal that asked (the tool's `_cycleId` / `_goalId`).
+ * Carried from the request into the resolved decision and the history, so
+ * "Why this?" can name them. Absent = asked outside a cycle, or before
+ * requests recorded it.
+ */
+export interface PermissionAttribution {
+  cycleId?: string;
+  goalId?: string;
+}
+
 export interface PermissionRequest {
   id: string;
   botId: string;
@@ -18,6 +29,8 @@ export interface PermissionRequest {
   createdAt: number;
   resolvedAt?: number;
   note?: string;
+  cycleId?: string;
+  goalId?: string;
 }
 
 export interface PermissionRequestInfo {
@@ -29,6 +42,8 @@ export interface PermissionRequestInfo {
   urgency: PermissionUrgency;
   status: 'pending';
   createdAt: number;
+  cycleId?: string;
+  goalId?: string;
 }
 
 export interface ResolvedPermission {
@@ -38,8 +53,12 @@ export interface ResolvedPermission {
   resource: string;
   description: string;
   status: 'approved' | 'denied';
+  /** When it was asked; absent on decisions recorded before 2026-10-11. */
+  createdAt?: number;
   resolvedAt: number;
   note?: string;
+  cycleId?: string;
+  goalId?: string;
 }
 
 export interface PermissionHistoryEntry extends ResolvedPermission {
@@ -150,7 +169,8 @@ export class AskPermissionStore {
     action: string,
     resource: string,
     description: string,
-    urgency: PermissionUrgency = 'normal'
+    urgency: PermissionUrgency = 'normal',
+    attribution: PermissionAttribution = {}
   ): { id: string; promise: Promise<'approved' | 'denied'> } {
     // Dedup check
     const existing = this.findPendingDuplicate(botId, action, resource);
@@ -190,6 +210,7 @@ export class AskPermissionStore {
       urgency,
       status: 'pending',
       createdAt: Date.now(),
+      ...attributionOf(attribution),
     };
 
     this.pending.set(id, { request, resolve, reject });
@@ -220,8 +241,10 @@ export class AskPermissionStore {
       resource: entry.request.resource,
       description: entry.request.description,
       status: 'approved',
+      createdAt: entry.request.createdAt,
       resolvedAt: entry.request.resolvedAt,
       note,
+      ...attributionOf(entry.request),
     };
 
     this.resolved.set(id, resolved);
@@ -253,8 +276,10 @@ export class AskPermissionStore {
       resource: entry.request.resource,
       description: entry.request.description,
       status: 'denied',
+      createdAt: entry.request.createdAt,
       resolvedAt: entry.request.resolvedAt,
       note,
+      ...attributionOf(entry.request),
     };
 
     this.resolved.set(id, resolved);
@@ -303,6 +328,7 @@ export class AskPermissionStore {
         urgency: entry.request.urgency,
         status: 'pending',
         createdAt: entry.request.createdAt,
+        ...attributionOf(entry.request),
       });
     }
     return results;
@@ -323,6 +349,7 @@ export class AskPermissionStore {
         urgency: entry.request.urgency,
         status: 'pending',
         createdAt: entry.request.createdAt,
+        ...attributionOf(entry.request),
       });
     }
     return results;
@@ -430,8 +457,10 @@ export class AskPermissionStore {
       resource: hist.resource,
       description: hist.description,
       status: 'approved',
+      ...(hist.createdAt ? { createdAt: hist.createdAt } : {}),
       resolvedAt: hist.resolvedAt,
       note: hist.note,
+      ...attributionOf(hist),
     };
     this.resolved.set(id, resolved);
 
@@ -558,4 +587,12 @@ export class AskPermissionStore {
     this.resolved.clear();
     this.history.clear();
   }
+}
+
+/** Only the ids that were recorded: a request outside a cycle carries none. */
+function attributionOf(a: PermissionAttribution): PermissionAttribution {
+  const out: PermissionAttribution = {};
+  if (typeof a.cycleId === 'string' && a.cycleId) out.cycleId = a.cycleId;
+  if (typeof a.goalId === 'string' && a.goalId) out.goalId = a.goalId;
+  return out;
 }

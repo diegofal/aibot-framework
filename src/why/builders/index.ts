@@ -3,10 +3,12 @@
  * against a fixture, validates the result with `WhySchema` and renders it with
  * the shared panel; a builder file not listed here fails that test.
  */
+import { agentProposalToWhy } from './agent-proposal';
 import { askToWhy } from './ask';
 import { cycleToWhy } from './cycle';
 import { directionToWhy } from './direction';
 import { dispatchToWhy } from './dispatch';
+import { feedbackToWhy } from './feedback';
 import { frontierItemToWhy } from './frontier';
 import { goalEventToWhy } from './goal-event';
 import { idleToWhy } from './idle';
@@ -27,7 +29,9 @@ export const WHY_BUILDERS = {
   posture: postureToWhy,
   proactive: proactiveToWhy,
   production: productionToWhy,
+  agentProposal: agentProposalToWhy,
   direction: directionToWhy,
+  feedback: feedbackToWhy,
   frontier: frontierItemToWhy,
 } as const;
 

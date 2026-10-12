@@ -12,6 +12,8 @@ export interface AgentFeedback {
   status: 'pending' | 'applied' | 'dismissed';
   appliedAt?: string;
   response?: string;
+  /** The agent-loop cycle that handled it (`markApplied`); absent on older entries. */
+  cycleId?: string;
   thread?: ThreadMessage[];
 }
 
@@ -143,8 +145,13 @@ export class AgentFeedbackStore {
     return msg;
   }
 
-  /** Mark feedback as applied with the bot's response. */
-  markApplied(botId: string, id: string, response: string): AgentFeedback | null {
+  /** Mark feedback as applied with the bot's response and the cycle that handled it. */
+  markApplied(
+    botId: string,
+    id: string,
+    response: string,
+    opts: { cycleId?: string } = {}
+  ): AgentFeedback | null {
     const items = this.entries.get(botId);
     if (!items) return null;
 
@@ -154,6 +161,7 @@ export class AgentFeedbackStore {
     entry.status = 'applied';
     entry.appliedAt = new Date().toISOString();
     entry.response = response;
+    if (opts.cycleId) entry.cycleId = opts.cycleId;
 
     this.rewriteJSONL(botId);
     this.logger.info({ botId, id }, 'AgentFeedback: marked applied');

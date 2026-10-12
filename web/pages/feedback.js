@@ -1,6 +1,7 @@
 import { attachAutoGrow, fitComposer } from '../ui/composer.js';
 import { showToast } from '../ui/index.js';
 import { api, escapeHtml, renderThread, timeAgo } from './shared.js';
+import { whyPanel } from './why-helpers.js';
 
 function statusBadge(status) {
   if (status === 'applied') return '<span class="badge eval-badge-approved">Applied</span>';
@@ -211,6 +212,7 @@ export async function renderBotFeedback(el, botId) {
         `
             : ''
         }
+        ${whyPanel(entry.why, { botId })}
         <div style="margin-top:8px;display:flex;gap:8px">
           <button class="btn btn-sm reply-btn" data-id="${entry.id}">Reply</button>
           ${entry.status === 'pending' ? `<button class="btn btn-sm btn-danger dismiss-btn" data-id="${escapeHtml(entry.id)}">Dismiss</button>` : ''}

@@ -103,7 +103,18 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
     },
   },
   ask: { botId: 'b1', cycleId: 'c1', goalId: 'g1', status: 'pending' },
-  permission: { botId: 'b1', action: 'exec', resource: 'ls', description: 'Look around' },
+  permission: {
+    botId: 'b1',
+    action: 'exec',
+    resource: 'ls',
+    description: 'Look around',
+    cycleId: 'c1',
+    goalId: 'g1',
+    cycle: { cycleId: 'c1', startedAt: '2026-10-11T12:00:00Z', planSummary: 'P', goalTitle: 'G' },
+    status: 'approved',
+    executionStatus: 'executed',
+    executionSummary: 'Listed it.',
+  },
   production: {
     entry: {
       id: 'e1',
@@ -143,6 +154,25 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
       status: 'open',
       createdBy: { by: 'extractor', cycleId: 'c1', at: '2026-10-11T12:00:00Z' },
     },
+  },
+  agentProposal: {
+    proposal: {
+      proposedBy: 'b1',
+      agentName: 'Scout',
+      agentId: 'scout',
+      justification: 'Nobody covers research.',
+      status: 'pending',
+      cycleId: 'c1',
+      goalId: 'g1',
+    },
+    cycle: { cycleId: 'c1', startedAt: '2026-10-11T12:00:00Z', planSummary: 'P', goalTitle: 'G' },
+  },
+  feedback: {
+    botId: 'b1',
+    status: 'applied',
+    appliedAt: '2026-10-11T12:02:00Z',
+    cycleId: 'c1',
+    cycle: { cycleId: 'c1', startedAt: '2026-10-11T12:00:00Z', planSummary: 'P' },
   },
 };
 

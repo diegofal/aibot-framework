@@ -1226,7 +1226,7 @@
             <tr><td>submit</td><td>botId: string, content: string</td><td>Creates a new pending feedback entry, persists to JSONL</td></tr>
             <tr><td>getPending</td><td>botId: string</td><td>Returns all pending feedback for a bot</td></tr>
             <tr><td>getAll</td><td>botId: string, opts?</td><td>Returns feedback with optional status filter, limit, offset (newest first)</td></tr>
-            <tr><td>markApplied</td><td>botId: string, id: string, response: string</td><td>Marks feedback as applied with the bot's response, rewrites JSONL</td></tr>
+            <tr><td>markApplied</td><td>botId: string, id: string, response: string, opts?: { cycleId? }</td><td>Marks feedback as applied with the bot's response and the agent-loop cycle that handled it (<code>AgentFeedback.cycleId</code>, for "Why this?"), rewrites JSONL</td></tr>
             <tr><td>dismiss</td><td>botId: string, id: string</td><td>Marks feedback as dismissed</td></tr>
             <tr><td>getPendingCount</td><td>(none)</td><td>Total pending count across all bots</td></tr>
             <tr><td>getBotIds</td><td>(none)</td><td>Returns all bot IDs that have been loaded</td></tr>
@@ -1321,7 +1321,7 @@
         <table class="methods-table">
           <thead><tr><th>Method</th><th>Params</th><th>Description</th></tr></thead>
           <tbody>
-            <tr><td>request</td><td>botId, action, resource, description, urgency</td><td>Registers a permission request (no timeout — persists until decided). Returns { id, promise } where promise resolves with the decision.</td></tr>
+            <tr><td>request</td><td>botId, action, resource, description, urgency, attribution?: { cycleId?, goalId? }</td><td>Registers a permission request (no timeout — persists until decided). Returns { id, promise } where promise resolves with the decision. The cycle and goal that asked (the tool's <code>_cycleId</code> / <code>_goalId</code>) travel to the pending info, the resolved decision (with <code>createdAt</code>) and the history, persisted in <code>history.json</code>; "Why this?" reads them.</td></tr>
             <tr><td>approveById</td><td>id: string</td><td>Approves a pending permission request from the web dashboard</td></tr>
             <tr><td>denyById</td><td>id: string</td><td>Denies a pending permission request from the web dashboard</td></tr>
             <tr><td>consumeDecisionsForBot</td><td>botId: string</td><td>Returns and deletes all decided permissions for a bot (consumed by agent loop)</td></tr>

@@ -716,3 +716,69 @@ describe('AskPermissionStore persistence', () => {
     store2.dispose();
   });
 });
+
+describe('AskPermissionStore cycle attribution (why plan row 14)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ask-perm-why-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('the cycle and goal that asked survive approve, requeue and a reload', async () => {
+    const store1 = new AskPermissionStore(makeLogger(), tmpDir);
+    const { id, promise } = store1.request('bot1', 'exec', 'ls', 'Look', 'normal', {
+      cycleId: 'c-1',
+      goalId: 'g-1',
+    });
+    expect(store1.getAll()[0]).toMatchObject({ cycleId: 'c-1', goalId: 'g-1' });
+    expect(store1.getPendingForBot('bot1')[0]).toMatchObject({ cycleId: 'c-1', goalId: 'g-1' });
+    store1.approveById(id);
+    await promise;
+    expect(store1.getHistory()[0]).toMatchObject({ cycleId: 'c-1', goalId: 'g-1' });
+    const consumed = store1.consumeDecisionsForBot('bot1');
+    expect(consumed[0]).toMatchObject({ cycleId: 'c-1', goalId: 'g-1' });
+    store1.reportExecution([id], 'ran', [], false);
+    expect(store1.requeueById(id)).toBe(true);
+
+    const store2 = new AskPermissionStore(makeLogger(), tmpDir);
+    expect(store2.getHistory()[0]).toMatchObject({ cycleId: 'c-1', goalId: 'g-1' });
+    expect(store2.consumeDecisionsForBot('bot1')[0]).toMatchObject({ cycleId: 'c-1' });
+  });
+
+  test('a request outside a cycle stores no ids', () => {
+    const store = new AskPermissionStore(makeLogger());
+    const { promise } = store.request('bot1', 'exec', 'ls', 'Look');
+    promise.catch(() => {});
+    const r = store.getAll()[0];
+    expect('cycleId' in r).toBe(false);
+    expect('goalId' in r).toBe(false);
+    store.dispose();
+  });
+
+  test('the tool passes _cycleId / _goalId to the store', async () => {
+    const store = new AskPermissionStore(makeLogger());
+    const tool = createAskPermissionTool({
+      store,
+      getBotInstance: () => undefined,
+      getBotName: () => 'TestBot',
+    });
+    await tool.execute(
+      {
+        action: 'exec',
+        resource: 'ls',
+        description: 'Look',
+        _botId: 'bot1',
+        _chatId: 0,
+        _cycleId: 'c-9',
+        _goalId: 'g-9',
+      },
+      makeLogger()
+    );
+    expect(store.getAll()[0]).toMatchObject({ cycleId: 'c-9', goalId: 'g-9' });
+    store.dispose();
+  });
+});

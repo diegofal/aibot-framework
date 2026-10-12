@@ -116,6 +116,24 @@ describe('AgentFeedbackStore', () => {
   });
 
   describe('markApplied', () => {
+    test('records the cycle that handled it (why plan row 18)', () => {
+      store.loadFromDisk('bot1', tmpDir);
+      const f1 = store.submit('bot1', 'Shorter replies');
+      const updated = store.markApplied('bot1', f1.id, 'ok', { cycleId: 'c-1' });
+      expect(updated?.cycleId).toBe('c-1');
+
+      const reloaded = new AgentFeedbackStore(noopLogger);
+      reloaded.loadFromDisk('bot1', tmpDir);
+      expect(reloaded.getById('bot1', f1.id)?.cycleId).toBe('c-1');
+    });
+
+    test('handled outside a cycle stores no cycle id', () => {
+      store.loadFromDisk('bot1', tmpDir);
+      const f1 = store.submit('bot1', 'x');
+      const updated = store.markApplied('bot1', f1.id, 'ok');
+      expect(updated && 'cycleId' in updated).toBe(false);
+    });
+
     test('sets status to applied with response', () => {
       store.loadFromDisk('bot1', tmpDir);
       const f1 = store.submit('bot1', 'Change tone');

@@ -16,6 +16,10 @@ export interface AgentProposal {
   llmBackend?: 'ollama' | 'claude-cli';
   agentLoop?: { mode?: 'periodic' | 'continuous'; every?: string };
   proposedBy: string;
+  /** The agent-loop cycle that proposed it (the tool's `_cycleId`); absent outside a cycle or on older proposals. */
+  cycleId?: string;
+  /** The goal that cycle served (the tool's `_goalId`). */
+  goalId?: string;
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;
   updatedAt: string;

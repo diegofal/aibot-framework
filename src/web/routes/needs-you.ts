@@ -53,7 +53,9 @@ import { getTenantId, isAdminOrSingleTenant, scopeBots } from '../../tenant/tena
 import type { AgentProposal } from '../../tools/agent-proposal-store';
 import type { DynamicToolMeta } from '../../tools/dynamic-tool-store';
 import type { ThreadMessage } from '../../types/thread';
+import { agentProposalToWhy } from '../../why/builders/agent-proposal';
 import { askToWhy } from '../../why/builders/ask';
+import { feedbackToWhy } from '../../why/builders/feedback';
 import { permissionToWhy } from '../../why/builders/permission';
 import { fileHistory, productionToWhy } from '../../why/builders/production';
 import { CycleIndex, type CycleReader } from '../../why/cycle-index';
@@ -113,7 +115,7 @@ export interface NeedsYouItem {
   href: string;
   meta: Record<string, string | number | boolean | string[] | null>;
   /**
-   * "Why this?" (`src/why/`) for asks, productions and permissions, on
+   * "Why this?" (`src/why/`) for every kind but dynamic tools, on
    * `GET /api/needs-you` only (the count and write paths never read the cycle log).
    */
   why?: Why;
@@ -638,12 +640,15 @@ function buildPermissions(ctx: BuildContext, sources: NeedsYouSources): NeedsYou
       href: '#/needs/permissions',
       meta: { action, resource, requestId: r.id },
     };
-    return withWhy(ctx, item, [], () =>
+    const ids = { cycleId: idOrNull(r.cycleId), goalId: idOrNull(r.goalId) };
+    return withWhy(ctx, item, [item.createdAt], (cycles) =>
       permissionToWhy({
         botId: r.botId,
         action: str(r.action),
         resource,
         description: str(r.description),
+        ...ids,
+        cycle: cycleRow(cycles, r.botId, ids.cycleId),
       })
     );
   });
@@ -669,7 +674,7 @@ function buildProposals(ctx: BuildContext, sources: NeedsYouSources): NeedsYouIt
         ? `Model: ${[str(p.llmBackend), str(p.model)].filter(Boolean).join(' · ')}`
         : '',
     ].filter(Boolean);
-    return {
+    const item: NeedsYouItem = {
       id: `proposal:${p.id}`,
       kind: 'proposal',
       botId,
@@ -701,6 +706,21 @@ function buildProposals(ctx: BuildContext, sources: NeedsYouSources): NeedsYouIt
       href: '#/needs/proposals',
       meta: { agentId: str(p.agentId) || null, role: str(p.role) || null, proposalId: p.id },
     };
+    const ids = { cycleId: idOrNull(p.cycleId), goalId: idOrNull(p.goalId) };
+    return withWhy(ctx, item, [item.createdAt], (cycles) =>
+      agentProposalToWhy({
+        proposal: {
+          proposedBy: botId,
+          agentName: str(p.agentName),
+          agentId: str(p.agentId),
+          justification: str(p.justification),
+          status: 'pending',
+          ...(ids.cycleId ? { cycleId: ids.cycleId } : {}),
+          ...(ids.goalId ? { goalId: ids.goalId } : {}),
+        },
+        cycle: cycleRow(cycles, botId, ids.cycleId),
+      })
+    );
   });
 }
 
@@ -875,7 +895,7 @@ function buildFeedback(ctx: BuildContext, sources: NeedsYouSources): NeedsYouIte
         if (!reply) return null;
         const b = encodeURIComponent(botId);
         const id = encodeURIComponent(e.id);
-        return {
+        const item: NeedsYouItem = {
           id: `feedback:${botId}:${e.id}`,
           kind: 'feedback',
           botId,
@@ -907,6 +927,17 @@ function buildFeedback(ctx: BuildContext, sources: NeedsYouSources): NeedsYouIte
           href: `#/needs/feedback/${b}`,
           meta: { feedback: truncate(str(e.content), 200), feedbackId: e.id },
         };
+        const cycleId = idOrNull(e.cycleId);
+        const appliedAt = typeof e.appliedAt === 'string' ? e.appliedAt : undefined;
+        return withWhy(ctx, item, appliedAt ? [appliedAt] : [], (cycles) =>
+          feedbackToWhy({
+            botId,
+            status: e.status,
+            ...(appliedAt ? { appliedAt } : {}),
+            cycleId,
+            cycle: cycleRow(cycles, botId, cycleId),
+          })
+        );
       })
     );
   }

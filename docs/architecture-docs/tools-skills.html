@@ -975,7 +975,7 @@
         <ol style="margin: 12px 0 12px 24px; color: var(--text-dim); font-size: 14px;">
           <li>An agent identifies a gap in the ecosystem and calls <code>create_agent</code> with the new agent's ID, name, role, personality, skills, and justification</li>
           <li>Validation checks: ID format, reserved names, duplicates, per-bot limits, total agent cap</li>
-          <li>The proposal is stored in <code>AgentProposalStore</code> with status <span class="badge badge-medium">PENDING</span></li>
+          <li>The proposal is stored in <code>AgentProposalStore</code> with status <span class="badge badge-medium">PENDING</span>, plus the <code>cycleId</code> / <code>goalId</code> of the agent-loop cycle that proposed it (the tool's <code>_cycleId</code> / <code>_goalId</code>; absent outside a cycle)</li>
           <li>A human reviews the proposal in the <strong>Agent Proposals</strong> dashboard page</li>
           <li>On approval: a <code>BotConfig</code> entry is created (disabled, no token), soul directory is initialized, and AI soul generation is attempted (Claude CLI by default, configurable via <code>llmBackend</code>/<code>model</code> parameters)</li>
           <li>The human starts the new agent from the Agents page when ready</li>

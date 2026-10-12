@@ -348,3 +348,25 @@ describe('resolveCycleGoal', () => {
     });
   });
 });
+
+describe('agent-loop feedback attribution', () => {
+  test('feedback handled in a cycle is marked with that cycle id (why plan row 18)', async () => {
+    const { loop, ctx } = makeLoop(
+      JSON.stringify({ reasoning: 'x', plan: ['Do a thing'], priority: 'low' })
+    );
+    const applied: any[] = [];
+    let served = false;
+    ctx.agentFeedbackStore = {
+      getPending: () => {
+        if (served) return [];
+        served = true;
+        return [{ id: 'fb1', botId: 'bot1', content: 'Shorter', createdAt: '', status: 'pending' }];
+      },
+      markApplied: (...args: any[]) => applied.push(args),
+    };
+    await loop.runOne('bot1');
+    expect(applied).toHaveLength(1);
+    expect(applied[0][1]).toBe('fb1');
+    expect(applied[0][3]).toEqual({ cycleId: cycleRows()[0].cycleId });
+  });
+});

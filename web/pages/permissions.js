@@ -1,5 +1,6 @@
 import { showToast } from '../ui/index.js';
 import { api, escapeHtml } from './shared.js';
+import { whyPanel } from './why-helpers.js';
 
 let refreshTimer = null;
 /** Bumped on destroy: a render still in flight must not paint over the next page. */
@@ -73,6 +74,7 @@ function renderRequestCard(r) {
       <code style="background:var(--bg);padding:2px 6px;border-radius:3px;font-size:13px">${escapeHtml(r.resource)}</code>
     </div>
     <div class="inbox-card-question">${escapeHtml(r.description)}</div>
+    ${whyPanel(r.why, { botId: r.botId })}
     <div class="inbox-answer-form">
       <input type="text" class="inbox-answer-input" placeholder="Optional note..." />
       <button class="btn btn-primary btn-approve" style="background:var(--green)">Approve</button>
@@ -133,6 +135,7 @@ function renderHistoryCard(entry) {
     ${entry.note ? `<div style="font-size:12px;color:var(--text-dim);margin:4px 0"><em>Note: ${escapeHtml(entry.note)}</em></div>` : ''}
     ${toolCallsHtml}
     ${summaryHtml}
+    ${whyPanel(entry.why, { botId: entry.botId })}
     ${retryHtml}
   </div>`;
 }

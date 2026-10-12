@@ -8,12 +8,42 @@ import { backupSoulFile } from '../../soul';
 import { generateSoul } from '../../soul-generator';
 import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
 import type { AgentProposal, AgentProposalStore } from '../../tools/agent-proposal-store';
+import { agentProposalToWhy } from '../../why/builders/agent-proposal';
+import { CycleIndex, type CycleReader } from '../../why/cycle-index';
+import type { Why } from '../../why/types';
+
+/**
+ * "Why this?" for each proposal: one cycle-log read per proposing bot, then
+ * `agentProposalToWhy`. A builder that throws leaves its proposal without one.
+ */
+export function withProposalWhy(
+  proposals: AgentProposal[],
+  read: CycleReader | undefined,
+  logger: Logger
+): Array<AgentProposal & { why?: Why }> {
+  const cycles = CycleIndex.for(
+    read,
+    proposals.flatMap((p) => (p.cycleId ? [{ botId: p.proposedBy, at: p.createdAt }] : [])),
+    (botId, err) => logger.warn({ err, botId }, 'agent-proposals: cycle log read failed')
+  );
+  return proposals.map((p) => {
+    try {
+      const cycle = p.cycleId ? cycles.byId(p.proposedBy, p.cycleId) : undefined;
+      return { ...p, why: agentProposalToWhy({ proposal: p, cycle }) };
+    } catch (err) {
+      logger.warn({ err, id: p.id }, 'agent-proposals: why failed, skipping');
+      return p;
+    }
+  });
+}
 
 export function agentProposalRoutes(deps: {
   store: AgentProposalStore;
   config: Config;
   configPath: string;
   logger: Logger;
+  /** Agent-loop cycle rows of a bot (shared `readCycles` of server.ts): plan and goal for `why`. */
+  readCycles?: CycleReader;
 }) {
   const app = new Hono();
 
@@ -36,7 +66,7 @@ export function agentProposalRoutes(deps: {
   // List all proposals
   app.get('/', (c) => {
     const proposals = filterByTenant(deps.store.list(), c);
-    return c.json(proposals);
+    return c.json(withProposalWhy(proposals, deps.readCycles, deps.logger));
   });
 
   // Pending count (for badge polling)

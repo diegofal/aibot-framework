@@ -748,4 +748,48 @@ describe('agent-feedback routes', () => {
       }));
     });
   });
+
+  test('GET /:botId attaches why: the cycle that handled each entry (why plan row 18)', async () => {
+    const handled = store.submit('bot1', 'Shorter replies');
+    store.markApplied('bot1', handled.id, 'ok', { cycleId: 'c-1' });
+    store.submit('bot1', 'Not yet');
+    const reads: string[] = [];
+    const whyApp = new Hono();
+    whyApp.route(
+      '/api/agent-feedback',
+      agentFeedbackRoutes({
+        config: mockConfig,
+        botManager: {
+          getAgentFeedback: (botId: string, opts?: any) => store.getAll(botId, opts),
+        } as any,
+        logger: noopLogger,
+        readCycles: (botId) => {
+          reads.push(botId);
+          return [
+            {
+              cycleId: 'c-1',
+              startedAt: new Date(Date.now() - 60_000).toISOString(),
+              endedAt: new Date(Date.now() + 60_000).toISOString(),
+              planSummary: 'Review feedback',
+            },
+          ];
+        },
+      })
+    );
+    const data = await (await whyApp.request('http://localhost/api/agent-feedback/bot1')).json();
+    expect(reads).toEqual(['bot1']);
+    const byContent = new Map(data.entries.map((e: any) => [e.content, e]));
+    expect((byContent.get('Shorter replies') as any).why).toEqual({
+      what: 'Your feedback',
+      by: 'operator',
+      cycle: {
+        id: 'c-1',
+        botId: 'bot1',
+        startedAt: expect.any(String),
+        plan: 'Review feedback',
+      },
+      outcome: 'Handled in a cycle.',
+    });
+    expect((byContent.get('Not yet') as any).why.outcome).toBe('Not handled yet.');
+  });
 });

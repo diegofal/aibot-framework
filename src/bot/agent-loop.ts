@@ -2600,6 +2600,9 @@ export class AgentLoop {
     soulLoader: ReturnType<BotContext['getSoulLoader']>
   ): Promise<void> {
     const feedbackLLM = this.ctx.getLLMClient(botId);
+    // The cycle handling this feedback, recorded on it for "Why this?" (plan row 18).
+    const cycleId = this.cycleAttribution.get(botId)?.cycleId;
+    const handledIn = cycleId ? { cycleId } : {};
     const globalConfig = this.ctx.config.agentLoop;
     const botOverride = botConfig.agentLoop;
 
@@ -2715,7 +2718,7 @@ export class AgentLoop {
         }
 
         const responseText = response || '(no response)';
-        this.ctx.agentFeedbackStore.markApplied(botId, feedback.id, responseText);
+        this.ctx.agentFeedbackStore.markApplied(botId, feedback.id, responseText, handledIn);
         logToMemory(this.ctx, botId, `[feedback] Applied: "${feedback.content}" → ${responseText}`);
         botLogger.info({ botId, feedbackId: feedback.id }, 'Agent loop: feedback processed');
       } catch (err) {
@@ -2726,7 +2729,8 @@ export class AgentLoop {
         this.ctx.agentFeedbackStore.markApplied(
           botId,
           feedback.id,
-          `Error processing feedback: ${err instanceof Error ? err.message : String(err)}`
+          `Error processing feedback: ${err instanceof Error ? err.message : String(err)}`,
+          handledIn
         );
       }
     }

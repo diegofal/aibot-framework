@@ -94,7 +94,11 @@ export function createAskPermissionTool(deps: AskPermissionDeps): Tool {
         : 'normal';
 
       // Register in store (no timeout — permissions never expire)
-      const { id, promise } = deps.store.request(botId, action, resource, description, urgency);
+      // The cycle and goal that asked (injected by ToolExecutor), for "Why this?".
+      const { id, promise } = deps.store.request(botId, action, resource, description, urgency, {
+        cycleId: typeof args._cycleId === 'string' ? args._cycleId : undefined,
+        goalId: typeof args._goalId === 'string' ? args._goalId : undefined,
+      });
       promise.catch((err) => {
         logger.info(
           { requestId: id, botId, reason: err.message },

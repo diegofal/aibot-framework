@@ -213,4 +213,18 @@ describe('create_agent tool', () => {
     expect(result.success).toBe(false);
     expect(result.content).toContain('llm_backend');
   });
+
+  test('records the cycle and goal that proposed it (why plan row 15)', async () => {
+    const tool = createCreateAgentTool(store, configBots, 20, 3);
+    await tool.execute(makeValidArgs({ _cycleId: 'c-1', _goalId: 'g-1' }), noopLogger);
+    expect(store.list()[0]).toMatchObject({ cycleId: 'c-1', goalId: 'g-1' });
+  });
+
+  test('a proposal outside a cycle stores no ids', async () => {
+    const tool = createCreateAgentTool(store, configBots, 20, 3);
+    await tool.execute(makeValidArgs(), noopLogger);
+    const p = store.list()[0];
+    expect('cycleId' in p).toBe(false);
+    expect('goalId' in p).toBe(false);
+  });
 });

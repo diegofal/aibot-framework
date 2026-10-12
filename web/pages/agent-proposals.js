@@ -1,5 +1,6 @@
 import { confirmInline, promptDialog, showToast, undoable } from '../ui/index.js';
 import { api, escapeHtml, timeAgo } from './shared.js';
+import { whyPanel } from './why-helpers.js';
 
 const STATUS_BADGES = {
   pending: '<span class="badge badge-pending">Pending</span>',
@@ -81,6 +82,7 @@ export async function renderAgentProposals(el) {
           <strong class="text-dim">Justification:</strong>
           <p class="mt-4">${escapeHtml(p.justification)}</p>
         </div>
+        ${whyPanel(p.why, { botId: p.proposedBy })}
         <div class="actions">
           <button class="btn btn-primary" data-action="approve" data-id="${escapeHtml(p.id)}">Approve & Create Agent</button>
           <button class="btn btn-danger" data-action="reject" data-id="${escapeHtml(p.id)}">Reject</button>
@@ -161,7 +163,7 @@ export async function renderAgentProposals(el) {
     for (const p of resolved) {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${p.emoji ? `${escapeHtml(p.emoji)} ` : ''}${escapeHtml(p.agentName)} <span class="text-dim">(${escapeHtml(p.agentId)})</span></td>
+        <td>${p.emoji ? `${escapeHtml(p.emoji)} ` : ''}${escapeHtml(p.agentName)} <span class="text-dim">(${escapeHtml(p.agentId)})</span>${whyPanel(p.why, { botId: p.proposedBy })}</td>
         <td class="text-dim">${escapeHtml(p.role)}</td>
         <td>${STATUS_BADGES[p.status] || p.status}</td>
         <td class="text-dim">${escapeHtml(p.proposedBy)}</td>

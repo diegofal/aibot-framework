@@ -311,7 +311,7 @@ export function startWebServer(deps: WebServerDeps): void {
   );
   app.route(
     '/api/ask-permission',
-    askPermissionRoutes({ botManager: deps.botManager, logger, config })
+    askPermissionRoutes({ botManager: deps.botManager, logger, config, readCycles })
   );
   app.route(
     '/api/agent-feedback',
@@ -320,6 +320,7 @@ export function startWebServer(deps: WebServerDeps): void {
       botManager: deps.botManager,
       logger,
       productionsService: deps.botManager.getProductionsService(),
+      readCycles,
     })
   );
 
@@ -518,6 +519,7 @@ export function startWebServer(deps: WebServerDeps): void {
         config,
         configPath: deps.configPath,
         logger,
+        readCycles,
       })
     );
   }

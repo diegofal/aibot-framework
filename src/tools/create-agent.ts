@@ -217,6 +217,9 @@ export function createCreateAgentTool(
           llmBackend,
           agentLoop,
           proposedBy: botId,
+          // The cycle and goal that proposed it (injected by ToolExecutor), for "Why this?".
+          ...(typeof args._cycleId === 'string' && args._cycleId ? { cycleId: args._cycleId } : {}),
+          ...(typeof args._goalId === 'string' && args._goalId ? { goalId: args._goalId } : {}),
         });
 
         logger.info(
