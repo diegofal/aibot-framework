@@ -7,12 +7,14 @@ import {
   type NeedsYouItem,
   type NeedsYouSources,
   buildNeedsYou,
+  buildWaitingWorkers,
   needsYouActionsFromBotManager,
   needsYouRoutes,
   needsYouSourcesFromBotManager,
   pendingProductionFiles,
   sortNeedsYou,
 } from '../../../src/web/routes/needs-you';
+import { makeRun } from '../../helpers/fake-worker-pool';
 import { createTempDir, removeTempDir } from '../../helpers/temp-dir';
 
 const noopLogger = {
@@ -1021,5 +1023,101 @@ describe('GET /api/needs-you — why', () => {
     const { app, reads } = appWithCycles(src, []);
     await app.request('/api/needs-you/count');
     expect(reads).toEqual([]);
+  });
+});
+
+describe('waiting workers (C20)', () => {
+  const waiting = (
+    runId: string,
+    botId: string,
+    waitId: string,
+    kind: 'ask' | 'approval' = 'ask'
+  ) =>
+    makeRun({
+      runId,
+      botId,
+      status: 'waiting',
+      taskText: `Task of ${runId}`,
+      wait: { kind, id: waitId, question: `Which metric for ${runId}?`, since: iso(NOW - H) },
+    });
+
+  it('buildWaitingWorkers keeps waiting runs of allowed bots, oldest wait first', () => {
+    const out = buildWaitingWorkers(
+      [
+        makeRun({ runId: 'r-run', botId: 'b1' }),
+        waiting('r-2', 'b1', 'q2'),
+        {
+          ...waiting('r-1', 'b1', 'q1'),
+          wait: { kind: 'ask', id: 'q1', question: 'Old?', since: iso(NOW - 3 * H) },
+        },
+        waiting('r-3', 'b2', 'q3'),
+        makeRun({ runId: 'r-nowait', botId: 'b1', status: 'waiting' }),
+      ],
+      new Set(['b1']),
+      (id) => (id === 'b1' ? 'Bot One' : id)
+    );
+    expect(out.map((w) => w.runId)).toEqual(['r-1', 'r-2', 'r-nowait']);
+    expect(out[0]).toMatchObject({
+      botId: 'b1',
+      botName: 'Bot One',
+      taskText: 'Task of r-1',
+      question: 'Old?',
+      waitKind: 'ask',
+      waitId: 'q1',
+    });
+    expect(out[2].question).toBeNull();
+  });
+
+  it('GET / lists waiting workers and tags the ask they wait on', async () => {
+    const src = sources({
+      asks: () => [ask('q1', 'b1', 1)],
+      permissions: () => [permission('p1', 'b1', 'normal', 1)],
+      workers: () => [waiting('r-1', 'b1', 'q1'), waiting('r-2', 'b1', 'p1', 'approval')],
+    });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect(body.waitingWorkers.map((w: { runId: string }) => w.runId).sort()).toEqual([
+      'r-1',
+      'r-2',
+    ]);
+    const askItem = body.items.find((i: NeedsYouItem) => i.id === 'ask:q1');
+    expect(askItem.meta).toMatchObject({ workerRunId: 'r-1', workerTask: 'Task of r-1' });
+    const perm = body.items.find((i: NeedsYouItem) => i.id === 'permission:p1');
+    expect(perm.meta.workerRunId).toBe('r-2');
+    expect(body.waitingWorkers.find((w: { runId: string }) => w.runId === 'r-1').itemId).toBe(
+      'ask:q1'
+    );
+  });
+
+  it('GET / is scoped by tenant and survives a throwing or missing worker source', async () => {
+    const src = sources({
+      workers: () => [waiting('r-1', 'b1', 'q1'), waiting('r-3', 'b2', 'q3')],
+    });
+    const t2 = await (await makeApp(src, 't2').request('/api/needs-you')).json();
+    expect(t2.waitingWorkers.map((w: { runId: string }) => w.runId)).toEqual(['r-3']);
+    const bad = sources({
+      workers: () => {
+        throw new Error('boom');
+      },
+    });
+    expect((await (await makeApp(bad).request('/api/needs-you')).json()).waitingWorkers).toEqual(
+      []
+    );
+    expect(
+      (await (await makeApp(sources()).request('/api/needs-you')).json()).waitingWorkers
+    ).toEqual([]);
+  });
+
+  it('needsYouSourcesFromBotManager reads the pool lazily', () => {
+    const holder: { pool?: { list: () => unknown[] } } = {};
+    const src = needsYouSourcesFromBotManager({
+      getAskHumanPending: () => [],
+      getPermissionsPending: () => [],
+      getAgentFeedbackBotIds: () => [],
+      getAgentFeedback: () => [],
+      getWorkerPool: () => holder.pool as never,
+    } as never);
+    expect(src.workers?.()).toEqual([]);
+    holder.pool = { list: () => [waiting('r-1', 'b1', 'q1')] };
+    expect(src.workers?.()).toHaveLength(1);
   });
 });

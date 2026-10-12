@@ -7,6 +7,7 @@ import { FLEET_PRESENCE_TTL_MS, mergeTimeline } from '../../../src/stats/agent-h
 import { PresenceTracker } from '../../../src/stats/presence-tracker';
 import { parseGoals } from '../../../src/tools/goals';
 import { agentHomeRoutes } from '../../../src/web/routes/agent-home';
+import { type FakePool, createFakePool } from '../../helpers/fake-worker-pool';
 import { removeTempDir } from '../../helpers/temp-dir';
 import { type StatsFixture, createStatsFixture } from '../../stats/fixture';
 
@@ -42,6 +43,7 @@ function makeApp(
     executing?: boolean;
     now?: () => number;
     events?: KarmaEvent[];
+    pool?: FakePool;
   } = {}
 ) {
   const app = new Hono();
@@ -76,6 +78,7 @@ function makeApp(
       presence: opts.presence,
       pendingPermissions: (id) => (id === 'b1' ? 2 : 0),
       now: opts.now ?? (() => fx.now),
+      workerPool: opts.pool ? () => opts.pool : undefined,
     })
   );
   return app;
@@ -271,6 +274,7 @@ describe('GET /api/agents/presence (fleet)', () => {
         'lastOutputAt',
         'channel',
         'avatarUrl',
+        'workers',
       ].sort()
     );
     expect(b1).toMatchObject({ id: 'b1', name: 'Bot One', karma: 62, running: true });
@@ -784,6 +788,112 @@ describe('goal tasks: op endpoints (task store)', () => {
       body: JSON.stringify({ text: 'x' }),
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('workers on Agent Home (C19/C20)', () => {
+  const workerEvent = (type: 'worker:started' | 'worker:waiting', runId: string, extra = {}) => ({
+    type,
+    botId: 'b1',
+    timestamp: fx.now - 60_000,
+    data: {
+      runId,
+      taskId: 't-1',
+      goalId: 'g-1',
+      status: type === 'worker:waiting' ? 'waiting' : 'running',
+      step: 1,
+      budget: { steps: 8, toolCalls: 40, wallMs: 3_600_000 },
+      used: { steps: 1, toolCalls: 2, wallMs: 1000 },
+      ...extra,
+    },
+  });
+
+  it('presence and fleet presence carry the live workers; none without a tracker', async () => {
+    const tracker = new PresenceTracker();
+    tracker.handle(workerEvent('worker:started', 'r-1') as never);
+    tracker.handle({
+      type: 'tool:start',
+      botId: 'b1',
+      timestamp: fx.now,
+      data: { toolName: 'web_fetch', runId: 'r-1' },
+    });
+    const app = makeApp({ presence: tracker });
+    const p = await (await app.request('/api/agents/b1/presence')).json();
+    expect(p.isExecuting).toBe(false);
+    expect(p.currentTool).toBeNull();
+    expect(p.workers).toMatchObject([{ runId: 'r-1', step: 1, tool: 'web_fetch' }]);
+    const fleet = await (await app.request('/api/agents/presence')).json();
+    expect(fleet.agents.b1.workers).toHaveLength(1);
+    expect(fleet.agents.b2.workers).toEqual([]);
+    const none = await (await makeApp().request('/api/agents/b1/presence')).json();
+    expect(none.workers).toEqual([]);
+  });
+
+  const call = (app: Hono, method: string, path: string, body?: unknown) =>
+    app.request(`/api/agents/b1${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const claimedTask = async (app: Hono) => {
+    const tid = (
+      await (
+        await call(app, 'POST', `/goals/${encodeURIComponent('Research topic')}/tasks`, {
+          text: 'Work',
+        })
+      ).json()
+    ).task.id;
+    const { TaskStore } = await import('../../../src/goals/task-store');
+    new TaskStore(fx.soulDir('b1')).apply(
+      [{ op: 'claim', id: tid, runId: 'r-1', ttlMs: 3_600_000 }],
+      { actor: 'system' }
+    );
+    return tid as string;
+  };
+
+  it('an operator move of a claimed task stops its worker (task-moved)', async () => {
+    const pool = createFakePool();
+    const app = makeApp({ pool });
+    const tid = await claimedTask(app);
+    const res = await call(app, 'PATCH', `/tasks/${tid}`, { lane: 'todo' });
+    expect(res.status).toBe(200);
+    expect(pool.stops).toEqual([{ runId: 'r-1', reason: 'task-moved' }]);
+  });
+
+  it('an operator remove of a claimed task stops its worker', async () => {
+    const pool = createFakePool();
+    const app = makeApp({ pool });
+    const tid = await claimedTask(app);
+    expect((await call(app, 'DELETE', `/tasks/${tid}`)).status).toBe(200);
+    expect(pool.stops).toEqual([{ runId: 'r-1', reason: 'task-moved' }]);
+  });
+
+  it('a move without a claim, or without a pool, stops nothing and still answers', async () => {
+    const pool = createFakePool();
+    const app = makeApp({ pool });
+    const tid = (
+      await (
+        await call(app, 'POST', `/goals/${encodeURIComponent('Research topic')}/tasks`, {
+          text: 'Plain',
+        })
+      ).json()
+    ).task.id;
+    await call(app, 'PATCH', `/tasks/${tid}`, { lane: 'done' });
+    expect(pool.stops).toEqual([]);
+    const bare = makeApp();
+    const t2 = await claimedTask(bare);
+    const res = await call(bare, 'PATCH', `/tasks/${t2}`, { lane: 'todo' });
+    expect(await res.json()).toMatchObject({ releasedClaim: { runId: 'r-1' } });
+  });
+
+  it('a pool whose stop throws never fails the task write', async () => {
+    const pool = createFakePool();
+    pool.stop = () => {
+      throw new Error('boom');
+    };
+    const app = makeApp({ pool });
+    const tid = await claimedTask(app);
+    expect((await call(app, 'PATCH', `/tasks/${tid}`, { lane: 'todo' })).status).toBe(200);
   });
 });
 

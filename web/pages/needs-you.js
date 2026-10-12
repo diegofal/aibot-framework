@@ -57,6 +57,7 @@ import {
   visibleItems,
 } from './needs-you-helpers.js';
 import { api, escapeHtml } from './shared.js';
+import { waitingWorkersSection } from './workers-helpers.js';
 
 const POLL_MS = 15_000;
 /** After an action the server may have follow-up state (bot reply, evaluation); re-read once. */
@@ -66,6 +67,8 @@ const DEFAULT_STALE_HOURS = 72;
 let root = null;
 let state = null;
 let byKind = {};
+/** Task-worker runs waiting on you (C20); the answer goes through their ask / permission item. */
+let waitingWorkers = [];
 let pollTimer = null;
 let keyHandler = null;
 let busy = false;
@@ -105,6 +108,8 @@ function redrawHead() {
   if (count) count.textContent = String(decisionCount(visibleItems({ ...state, filter: {} })));
   const summary = root?.querySelector('#needs-summary');
   if (summary) summary.textContent = queueSummary(byKind);
+  const workers = root?.querySelector('#needs-workers');
+  if (workers) workers.innerHTML = waitingWorkersSection(waitingWorkers);
 }
 
 function redrawFilters() {
@@ -187,6 +192,7 @@ async function load(prevSelectedId) {
     hidden: [...pendingHide],
   });
   byKind = res.byKind ?? {};
+  waitingWorkers = Array.isArray(res.waitingWorkers) ? res.waitingWorkers : [];
   return { ok: true };
 }
 
@@ -518,6 +524,7 @@ export async function renderNeedsYou(el, { bot = null } = {}) {
       </div>
     </div>
     <div id="needs-filters"></div>
+    <div id="needs-workers">${waitingWorkersSection(waitingWorkers)}</div>
     <div class="needs-layout">
       <div class="needs-list-col">
         <div id="needs-toolbar"></div>

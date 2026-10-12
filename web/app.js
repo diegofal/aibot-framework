@@ -68,6 +68,8 @@ import {
 } from './pages/stats.js';
 import { renderToolDetail, renderTools } from './pages/tools.js';
 import { destroyWork, renderWork } from './pages/work.js';
+import { wireOpenWorker } from './pages/worker-sheet.js';
+import { destroyWorkers, renderWorkers } from './pages/workers.js';
 import { confirmDialog } from './ui/dialog.js';
 import { initPalette, openPalette } from './ui/palette.js';
 import { closeSheet } from './ui/sheet.js';
@@ -97,6 +99,8 @@ sidebar.addEventListener('click', (e) => {
 initTheme();
 // "Open cycle" in any Why fold, on every page.
 wireOpenCycle();
+// Any task-worker badge, strip card or row opens the worker sheet.
+wireOpenWorker();
 let multiTenantEnabled = false;
 let adminSetupRequired = false;
 let badgeCounts = {};
@@ -195,6 +199,7 @@ const handlers = {
   work: page(() => renderWork(content), destroyWork),
   dispatches: page(() => renderDispatches(content), destroyDispatches),
   sent: page(() => renderSent(content)),
+  workers: page(() => renderWorkers(content), destroyWorkers),
   productions: page(() => renderProductions(content), destroyProductions),
   botProductions: page((botId) => renderBotProductions(content, botId), destroyProductions),
   conversations: page(() => renderConversations(content)),

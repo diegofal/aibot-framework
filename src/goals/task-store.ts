@@ -28,6 +28,7 @@ import {
 } from '../bot/goal-events';
 import { textSimilarity } from '../hygiene/text-utils';
 import { type GoalEntry, newTaskId, parseGoals, startGoal, taskStatus } from '../tools/goals';
+import { emitTaskChanged } from './task-events-bus';
 
 export const TASKS_FILE = 'TASKS.json';
 export const TASK_LANES = ['todo', 'in_progress', 'blocked', 'done'] as const;
@@ -125,6 +126,8 @@ export interface TaskStoreOptions {
   backup?: (path: string) => void;
   /** Event-log and parse warnings; never thrown. */
   onError?: (err: unknown) => void;
+  /** The bot this soul dir belongs to, stamped on `task:changed` notices when known. */
+  botId?: string;
 }
 
 const LEGACY_TASK_LINE = /^\s*- task:/m;
@@ -580,7 +583,27 @@ export class TaskStore {
     this.writeFile(next);
     appendGoalEvents(this.soulDir, rows, this.opts.onError);
     for (const goalId of toStart) this.startGoal(goalId, opts);
+    this.publishChanges(rows, next.rev);
     return { ok: true, rev: next.rev, results };
+  }
+
+  /** One `task:changed` notice per written row (renews write no row: heartbeats stay quiet). */
+  private publishChanges(rows: GoalEvent[], rev: number): void {
+    for (const r of rows) {
+      emitTaskChanged({
+        soulDir: this.soulDir,
+        ...(this.opts.botId ? { botId: this.opts.botId } : {}),
+        data: {
+          taskId: r.taskId ?? '',
+          goalId: r.goalId,
+          op: r.op,
+          ...(r.from !== undefined ? { from: r.from } : {}),
+          ...(r.to !== undefined ? { to: r.to } : {}),
+          ...(r.runId ? { runId: r.runId } : {}),
+          rev,
+        },
+      });
+    }
   }
 
   /** A To do goal whose task started (or finished) moves to in_progress. */

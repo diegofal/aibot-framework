@@ -34,6 +34,7 @@ import { SessionStore } from '../tenant/session-store';
 import { TenantConfigStore } from '../tenant/tenant-config-store';
 import { getTenantId, scopeBots } from '../tenant/tenant-scoping';
 import type { CycleReader } from '../why/cycle-index';
+import type { WorkerPoolApi } from '../workers/types';
 import {
   type LogTailState,
   pollLogTail,
@@ -87,6 +88,7 @@ import { toolsRoutes } from './routes/tools';
 import { ttsRoutes } from './routes/tts';
 import { webhookRoutes } from './routes/webhooks';
 import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
+import { workersRoutes } from './routes/workers';
 import { dashboardNoCache } from './static-cache';
 import {
   type ActivitySocket,
@@ -202,6 +204,12 @@ export function startWebServer(deps: WebServerDeps): void {
   // events into a live phase / tool per bot; the routes compose the stats readers.
   const karmaService = deps.botManager.getKarmaService();
   const presenceTracker = new PresenceTracker().attach(deps.botManager.getActivityStream());
+  // Task workers (C19): the pool lives in BotManager when workers are built in;
+  // read it per request and treat a missing getter / pool as "workers off".
+  const getWorkerPool = (): WorkerPoolApi | undefined =>
+    (
+      deps.botManager as { getWorkerPool?: () => WorkerPoolApi | null | undefined }
+    ).getWorkerPool?.() ?? undefined;
   app.route(
     '/api/agents',
     agentHomeRoutes({
@@ -212,8 +220,12 @@ export function startWebServer(deps: WebServerDeps): void {
       presence: presenceTracker,
       pendingPermissions: (botId) =>
         deps.botManager.getPermissionsPending().filter((r) => r.botId === botId).length,
+      workerPool: getWorkerPool,
     })
   );
+  // Workers API: /api/agents/:id/workers and /api/workers/* (own literal segment,
+  // no collision with agentsRoutes' GET /:id).
+  app.route('/api', workersRoutes({ config, logger, workerPool: getWorkerPool }));
   app.route(
     '/api/agents',
     agentsRoutes({

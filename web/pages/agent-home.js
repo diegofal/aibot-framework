@@ -42,16 +42,22 @@ import {
 import { watchAgent } from './live-presence.js';
 import { memoryHistoryBody, memoryHistoryUrl } from './memory-history-helpers.js';
 import { api, renderThread } from './shared.js';
+import { isWorkerEvent, workersStrip } from './workers-helpers.js';
 
 const HOME_REFRESH_DEBOUNCE_MS = 3000;
 const CHAT_POLL_MS = 2000;
 const CHAT_MAX_POLLS = 90;
+/** Worker strip + board badges: refetch soon after a worker / task event, and on a slow poll. */
+const WORKERS_DEBOUNCE_MS = 800;
+const WORKERS_POLL_MS = 20_000;
 
 let watch = null;
 let chat = null;
 let refreshTimer = null;
 let speaker = null;
 let keyHandler = null;
+let workersTimer = null;
+let workersPoll = null;
 
 export function destroyAgentHome() {
   if (keyHandler) document.removeEventListener('keydown', keyHandler);
@@ -64,6 +70,10 @@ export function destroyAgentHome() {
   speaker = null;
   clearTimeout(refreshTimer);
   refreshTimer = null;
+  clearTimeout(workersTimer);
+  workersTimer = null;
+  clearInterval(workersPoll);
+  workersPoll = null;
 }
 
 function homeUrl(id) {
@@ -101,6 +111,7 @@ function paintBoard(board, goals, id) {
     selectedId: board.dataset.selected,
     botId: id,
     addingTask: board.dataset.adding === '1',
+    workers: board._workers,
   });
   if (board.dataset.adding === '1') board.querySelector('[data-task-form] input')?.focus();
 }
@@ -267,6 +278,7 @@ function wireGoalBoard(el, id, goals) {
   board.addEventListener('click', async (e) => {
     const t = e.target;
     if (t.closest('[data-open-cycle]')) return; // app.js opens the cycle sheet
+    if (t.closest('[data-open-worker]')) return; // app.js opens the worker sheet
     if (t.closest('[data-goal-close]')) {
       delete board.dataset.selected;
       delete board.dataset.adding;
@@ -646,6 +658,26 @@ async function mountMemoryHistory(box, id) {
   box.innerHTML = memoryHistoryBody(res, { botId: id });
 }
 
+/** Active workers strip + task badges from `GET /api/agents/:id/workers`. */
+async function refreshWorkers(el, id) {
+  const res = await api(`/api/agents/${encodeURIComponent(id)}/workers`).catch(() => null);
+  if (!res || res.error || !el.isConnected) return;
+  const runs = Array.isArray(res.runs) ? res.runs : [];
+  const strip = el.querySelector('#home-workers');
+  if (strip) strip.innerHTML = workersStrip(runs);
+  const board = el.querySelector('#home-goals');
+  if (!board) return;
+  const before = JSON.stringify(board._workers ?? []);
+  board._workers = runs;
+  if (board._goals && JSON.stringify(runs) !== before && !boardBusy(board))
+    paintBoard(board, board._goals, id);
+}
+
+function scheduleWorkersRefresh(el, id) {
+  clearTimeout(workersTimer);
+  workersTimer = setTimeout(() => refreshWorkers(el, id), WORKERS_DEBOUNCE_MS);
+}
+
 function scheduleHomeRefresh(el, id) {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
@@ -704,7 +736,7 @@ export async function renderAgentHome(el, id) {
         title: 'Goals',
         subtitle:
           'Click a goal to see its tasks and drag them between lanes; drag goals between columns. The agent works on yours first.',
-        body: `<div id="home-goals">${goalsColumns(home.goals, { botId: id })}</div>`,
+        body: `<div id="home-workers"></div><div id="home-goals">${goalsColumns(home.goals, { botId: id })}</div>`,
       })}
     </div>
     <div class="home-grid" style="margin-top:16px">
@@ -739,8 +771,15 @@ export async function renderAgentHome(el, id) {
   // request so a slow or missing curiosity state never holds the home back.
   mountMind(el.querySelector('#home-mind'), id);
   mountMemoryHistory(el.querySelector('#home-memory'), id);
+  refreshWorkers(el, id);
+  workersPoll = setInterval(() => refreshWorkers(el, id), WORKERS_POLL_MS);
   watch = watchAgent(id, {
     onPresence: (p) => applyPresence(el, p, identity),
-    onEvent: () => scheduleHomeRefresh(el, id),
+    onEvent: (ev) => {
+      if (isWorkerEvent(ev)) scheduleWorkersRefresh(el, id);
+      // A worker's own tool events change nothing on the page but its badge.
+      if (ev?.data?.runId && String(ev.type).startsWith('tool:')) return;
+      scheduleHomeRefresh(el, id);
+    },
   });
 }
