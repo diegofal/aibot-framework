@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
 import { ollamaUsage } from '../ollama';
 import type { ToolCall } from '../tools/types';
+import { withTimeoutSignal } from './abort';
 import type { TokenUsage } from './llm-client';
 import { buildOllamaJsonHeaders } from './ollama-http';
 import type { ToolCallingStrategy } from './tool-runner';
@@ -49,7 +50,7 @@ export class NativeToolStrategy implements ToolCallingStrategy {
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: buildOllamaJsonHeaders(this.apiKey),
-      signal: AbortSignal.timeout(this.timeout),
+      signal: withTimeoutSignal(this.timeout, opts.signal),
       body: JSON.stringify(body),
     });
 

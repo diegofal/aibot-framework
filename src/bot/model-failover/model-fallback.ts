@@ -17,6 +17,7 @@
  * Target: src/bot/model-failover/model-fallback.ts
  */
 
+import { abortErrorFrom } from '../../core/abort';
 import {
   FailoverError,
   type FailoverReason,
@@ -142,7 +143,7 @@ export async function runWithModelFallback<T>(
 
     // Check abort signal
     if (signal?.aborted) {
-      throw new Error('Aborted');
+      throw abortErrorFrom(signal);
     }
 
     // Skip if backend was flagged by a previous auth/billing error

@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserToolsConfig } from '../config';
+import { TOOL_ABORTED_MESSAGE, isAbortError, raceAbort, toolSignal } from '../core/abort';
 import type { Logger } from '../logger';
 import {
   closeBrowser,
@@ -337,25 +338,44 @@ export function createBrowserTool(config: BrowserToolsConfig): Tool {
       const action = String(args.action ?? '').trim();
       const botId = String(args._botId ?? '');
 
-      switch (action) {
-        case 'status':
-          return handleStatus(botId, logger);
-        case 'navigate':
-          return handleNavigate(botId, args, config, logger);
-        case 'snapshot':
-          return handleSnapshot(botId, config, logger);
-        case 'act':
-          return handleAct(botId, args, config, logger);
-        case 'screenshot':
-          return handleScreenshot(botId, args, config, logger);
-        case 'close':
-          return handleClose(botId, logger);
-        default:
-          return {
-            success: false,
-            content: `Unknown action: ${action}. Valid actions: status, navigate, snapshot, act, screenshot, close`,
-          };
+      // C12: Playwright actions take no signal, so a Stop makes the tool stop
+      // waiting (the page action finishes on its own, bounded by its timeouts).
+      const signal = toolSignal(args);
+      if (signal?.aborted) return { success: false, content: TOOL_ABORTED_MESSAGE };
+      try {
+        return await raceAbort(runBrowserAction(action, botId, args, config, logger), signal);
+      } catch (err) {
+        if (isAbortError(err)) return { success: false, content: TOOL_ABORTED_MESSAGE };
+        throw err;
       }
     },
   };
+}
+
+async function runBrowserAction(
+  action: string,
+  botId: string,
+  args: Record<string, unknown>,
+  config: BrowserToolsConfig,
+  logger: Logger
+): Promise<ToolResult> {
+  switch (action) {
+    case 'status':
+      return handleStatus(botId, logger);
+    case 'navigate':
+      return handleNavigate(botId, args, config, logger);
+    case 'snapshot':
+      return handleSnapshot(botId, config, logger);
+    case 'act':
+      return handleAct(botId, args, config, logger);
+    case 'screenshot':
+      return handleScreenshot(botId, args, config, logger);
+    case 'close':
+      return handleClose(botId, logger);
+    default:
+      return {
+        success: false,
+        content: `Unknown action: ${action}. Valid actions: status, navigate, snapshot, act, screenshot, close`,
+      };
+  }
 }

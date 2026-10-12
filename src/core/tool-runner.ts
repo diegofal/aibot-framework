@@ -1,6 +1,7 @@
 import type { Logger } from '../logger';
 import type { ChatMessage, ChatOptions } from '../ollama';
 import type { ToolCall, ToolDefinition, ToolExecutor } from '../tools/types';
+import { throwIfAborted } from './abort';
 import type { LLMResponse, TokenUsage } from './llm-client';
 import type { LoopBreakDetector, LoopDetector } from './loop-detector';
 
@@ -96,6 +97,8 @@ export async function runToolLoop(
   let accumulatedUsage: TokenUsage | undefined;
 
   for (let round = 0; round <= opts.maxRounds; round++) {
+    // C12: a Stop ends the loop before the next LLM round.
+    throwIfAborted(chatOptions.signal);
     const isLastRound = round === opts.maxRounds;
 
     // On last round, omit tools and inject a summarization prompt
@@ -187,6 +190,8 @@ export async function runToolLoop(
       // Execute each tool call
       for (const toolCall of result.toolCalls) {
         const { name, arguments: args } = toolCall.function;
+        // C12: never start another tool after a Stop.
+        throwIfAborted(chatOptions.signal);
         calledTools.add(name);
         opts.logger.debug({ tool: name, args }, 'Executing tool call');
 

@@ -13,6 +13,8 @@ import { ALL_DISALLOWED_NATIVE_TOOLS } from '../bot/tool-permissions';
 import { claudeGenerate, claudeGenerateWithTools } from '../claude-cli';
 import type { Logger } from '../logger';
 import type { ChatMessage, ChatOptions, OllamaClient } from '../ollama';
+import { isAbort, throwIfAborted, toAbortError } from './abort';
+import type { CliPriority } from './cli-semaphore';
 
 /** Cap on images per Claude CLI call: each one is base64 on stdin and costs input tokens. */
 const MAX_CLI_IMAGES = 8;
@@ -43,6 +45,10 @@ export interface LLMGenerateOptions {
   system?: string;
   temperature?: number;
   maxTokens?: number;
+  /** Cancels the call; see `ChatOptions.signal` (C12). Never falls back on abort. */
+  signal?: AbortSignal;
+  /** Claude CLI queue priority; see `ChatOptions.priority`. */
+  priority?: CliPriority;
 }
 
 export interface LLMChatOptions extends ChatOptions {}
@@ -113,13 +119,14 @@ export class ClaudeCliLLMClient implements LLMClient {
   }
 
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
-    return this.generateWithImages(prompt, opts?.system, []);
+    return this.generateWithImages(prompt, opts?.system, [], opts);
   }
 
   private async generateWithImages(
     prompt: string,
     system: string | undefined,
-    images: string[]
+    images: string[],
+    call?: { signal?: AbortSignal; priority?: CliPriority }
   ): Promise<LLMResponse> {
     const result = await claudeGenerate(prompt, {
       claudePath: this.claudePath,
@@ -128,6 +135,8 @@ export class ClaudeCliLLMClient implements LLMClient {
       logger: this.logger,
       systemPrompt: system,
       images,
+      signal: call?.signal,
+      priority: call?.priority,
     });
     return { text: result.response, usage: result.usage };
   }
@@ -182,13 +191,15 @@ export class ClaudeCliLLMClient implements LLMClient {
           opts.toolExecutor ??
           (async () => ({ success: false, content: 'No tool executor configured' })),
         disallowedNativeTools: ALL_DISALLOWED_NATIVE_TOOLS,
+        signal: opts.signal,
+        priority: opts.priority,
       });
 
       return { text: result.response, usage: result.usage };
     }
 
     // Simple path: no tools, single generate call
-    return this.generateWithImages(prompt, system, images);
+    return this.generateWithImages(prompt, system, images, opts);
   }
 }
 
@@ -210,6 +221,20 @@ function unwrapBackendClient(
     if (bare) return bare;
   }
   return undefined;
+}
+
+/**
+ * Run one failover candidate so that any failure while the caller's signal is
+ * aborted surfaces as `LLMAbortedError` (named `AbortError`), which
+ * `runWithModelFallback` rethrows instead of trying the next candidate (C12).
+ */
+async function abortAware<T>(signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isAbort(err, signal)) throw toAbortError(err, signal);
+    throw err;
+  }
 }
 
 export interface FallbackEvent {
@@ -243,6 +268,8 @@ export class LLMClientWithFallback implements LLMClient {
     try {
       return await this.primary.generate(prompt, opts);
     } catch (err) {
+      // C12: a Stop never crosses backends (the fallback would replay the tool loop).
+      if (isAbort(err, opts?.signal)) throw toAbortError(err, opts?.signal);
       const classified = classifyFailoverReason(err);
       const reason = classified?.reason ?? 'unknown';
 
@@ -278,6 +305,8 @@ export class LLMClientWithFallback implements LLMClient {
     try {
       return await this.primary.chat(messages, opts);
     } catch (err) {
+      // C12: a Stop never crosses backends (the fallback would replay the tool loop).
+      if (isAbort(err, opts?.signal)) throw toAbortError(err, opts?.signal);
       const classified = classifyFailoverReason(err);
       const reason = classified?.reason ?? 'unknown';
 
@@ -345,12 +374,15 @@ export class FailoverLLMClient implements LLMClient {
   }
 
   async generate(prompt: string, opts?: LLMGenerateOptions): Promise<LLMResponse> {
+    const signal = opts?.signal;
+    throwIfAborted(signal);
     const result = await runWithModelFallback<LLMResponse>({
       candidates: this.candidates,
-      run: async (backend, model) => {
-        const client = this.clientFactory(backend, model);
-        return client.generate(prompt, { ...opts, model });
-      },
+      signal,
+      run: (backend, model) =>
+        abortAware(signal, () =>
+          this.clientFactory(backend, model).generate(prompt, { ...opts, model })
+        ),
       onError: ({ attempt, index }) => {
         if (index > 0) {
           this.onFallback?.({
@@ -385,12 +417,13 @@ export class FailoverLLMClient implements LLMClient {
   }
 
   async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<LLMResponse> {
+    const signal = opts?.signal;
+    throwIfAborted(signal);
     const result = await runWithModelFallback<LLMResponse>({
       candidates: this.candidates,
-      run: async (backend, model) => {
-        const client = this.clientFactory(backend, model);
-        return client.chat(messages, { ...opts });
-      },
+      signal,
+      run: (backend, model) =>
+        abortAware(signal, () => this.clientFactory(backend, model).chat(messages, { ...opts })),
       onError: ({ attempt, index }) => {
         if (index > 0) {
           this.onFallback?.({

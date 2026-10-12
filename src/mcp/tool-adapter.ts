@@ -5,6 +5,7 @@
  * Follows the same pattern as external-tool-adapter.ts.
  */
 
+import { TOOL_ABORTED_MESSAGE, isAbortError, toolSignal } from '../core/abort';
 import type { Logger } from '../logger';
 import type { Tool, ToolResult } from '../tools/types';
 import type { McpClientPool } from './client-pool';
@@ -44,7 +45,8 @@ export function adaptMcpTool(
         for (const [k, v] of Object.entries(args)) {
           if (!k.startsWith('_')) cleanArgs[k] = v;
         }
-        const result = await pool.callTool(serverName, mcpTool.name, cleanArgs);
+        const signal = toolSignal(args);
+        const result = await pool.callTool(serverName, mcpTool.name, cleanArgs, { signal });
 
         // Extract text content from MCP result
         const textParts = result.content
@@ -58,6 +60,9 @@ export function adaptMcpTool(
           content,
         };
       } catch (err) {
+        if (isAbortError(err)) {
+          return { success: false, content: TOOL_ABORTED_MESSAGE };
+        }
         const message = err instanceof Error ? err.message : String(err);
         logger.warn(
           { server: serverName, tool: mcpTool.name, err: message },

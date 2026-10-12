@@ -852,6 +852,13 @@ export const ClaudeCliConfigSchema = z
      * are willing to spend that way; an explicit `failover` chain is better.
      */
     crossBackendFallback: z.boolean().default(false),
+    /**
+     * Most Claude CLI processes alive at once, process-wide (plan C17). Each
+     * call spawns a process plus an MCP bridge; cycles, conversations,
+     * feedback, curiosity and task workers all queue on one semaphore
+     * (`src/core/cli-semaphore.ts`), conversations first, workers last.
+     */
+    maxConcurrent: z.number().int().min(1).default(3),
   })
   .default({});
 

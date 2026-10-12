@@ -358,6 +358,13 @@ describe('ClaudeCliConfigSchema', () => {
     expect(() => ClaudeCliConfigSchema.parse({ enabled: 'no' })).toThrow();
   });
 
+  test('maxConcurrent defaults to 3 and must be a positive integer', () => {
+    expect(ClaudeCliConfigSchema.parse({}).maxConcurrent).toBe(3);
+    expect(ClaudeCliConfigSchema.parse({ maxConcurrent: 5 }).maxConcurrent).toBe(5);
+    expect(() => ClaudeCliConfigSchema.parse({ maxConcurrent: 0 })).toThrow();
+    expect(() => ClaudeCliConfigSchema.parse({ maxConcurrent: 1.5 })).toThrow();
+  });
+
   test('a parsed enabled:false config drops the claude-cli failover candidate', () => {
     const parsed = ClaudeCliConfigSchema.parse({ enabled: false, model: 'sonnet' });
     const candidates = resolveCandidatesFromConfig({

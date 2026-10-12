@@ -199,7 +199,11 @@ export class McpClient {
   }
 
   /** Call a tool on the remote server */
-  async callTool(toolName: string, args: Record<string, unknown>): Promise<McpToolCallResult> {
+  async callTool(
+    toolName: string,
+    args: Record<string, unknown>,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<McpToolCallResult> {
     if (!this.transport?.connected) {
       throw new Error(`MCP server ${this.serverConfig.name} not connected`);
     }
@@ -217,7 +221,28 @@ export class McpClient {
 
     this.transport.send(callReq);
 
-    const callResp = await waitForResponse(this.transport, callReq.id, this.serverConfig.timeout);
+    let callResp: Awaited<ReturnType<typeof waitForResponse>>;
+    try {
+      callResp = await waitForResponse(
+        this.transport,
+        callReq.id,
+        this.serverConfig.timeout,
+        opts.signal
+      );
+    } catch (err) {
+      if (opts.signal?.aborted && this.transport?.connected) {
+        // C12: tell the server to stop working on it (MCP cancellation notification).
+        try {
+          this.transport.send(
+            createJsonRpcNotification('notifications/cancelled', {
+              requestId: callReq.id,
+              reason: 'cancelled by the caller',
+            })
+          );
+        } catch {}
+      }
+      throw err;
+    }
     const durationMs = Date.now() - startMs;
 
     if (callResp.error) {
