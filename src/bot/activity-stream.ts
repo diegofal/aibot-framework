@@ -26,7 +26,9 @@ export type ActivityEventType =
   | 'collab:end'
   | 'compaction'
   | 'karma:change'
-  | 'security:audit';
+  | 'security:audit'
+  | import('../workers/types').WorkerEventType
+  | typeof import('../workers/types').TASK_CHANGED_EVENT;
 
 export type LlmCaller = 'conversation' | 'planner' | 'strategist' | 'executor' | 'feedback';
 

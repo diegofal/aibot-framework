@@ -95,6 +95,11 @@ export interface BotContext {
    * feeds the same circuit.
    */
   circuitBreaker?: BackendCircuitBreaker;
+  /**
+   * Task workers (docs/plans/goal-tasks-architecture-plan.md). Absent until the
+   * pool is wired; `isEnabledFor(botId)` gates every use.
+   */
+  workerPool?: import('../workers/types').WorkerPoolApi;
 
   // Helper methods
   getActiveModel(botId: string): string;

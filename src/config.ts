@@ -838,6 +838,29 @@ const HumanizerConfigSchema = z.object({
   enabled: z.boolean().default(false),
 });
 
+/** Task workers (src/workers/types.ts WORKERS_DEFAULTS mirrors these defaults). */
+export const WorkersConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    bots: z.array(z.string()).default([]),
+    maxConcurrent: z.number().int().min(1).max(10).default(2),
+    maxPerBot: z.number().int().min(1).max(5).default(1),
+    budget: z
+      .object({
+        steps: z.number().int().min(1).max(50).default(8),
+        toolCalls: z.number().int().min(1).max(500).default(40),
+        wallMs: z.number().int().min(60_000).default(3_600_000),
+      })
+      .default({}),
+    stepTimeoutMs: z.number().int().min(10_000).default(300_000),
+    maxToolRoundsPerStep: z.number().int().min(1).max(50).default(12),
+    dailyStepsPerBot: z.number().int().min(1).default(60),
+    claimTtlMs: z.number().int().min(60_000).default(1_800_000),
+    maxAttempts: z.number().int().min(1).max(5).default(2),
+    sweepIntervalMs: z.number().int().min(5_000).default(60_000),
+  })
+  .default({});
+
 export const ClaudeCliConfigSchema = z
   .object({
     /**
@@ -1259,6 +1282,7 @@ const ConfigSchema = z.object({
   buffer: BufferConfigSchema,
   web: WebConfigSchema.default({}),
   agentLoop: GlobalAgentLoopConfigSchema,
+  workers: WorkersConfigSchema,
   browserTools: BrowserToolsConfigSchema.default({}),
   dynamicTools: DynamicToolsConfigSchema,
   agentProposals: AgentProposalsConfigSchema,
