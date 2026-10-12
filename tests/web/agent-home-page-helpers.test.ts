@@ -453,3 +453,43 @@ describe('goals board drag and drop', () => {
       expect(html).toContain(`data-status="${s}"`);
   });
 });
+
+describe('goal board — live workers (C20)', () => {
+  const NOW_W = Date.parse('2026-10-12T10:00:00Z');
+  const worker = {
+    runId: 'r-1',
+    taskId: 't-2',
+    status: 'running',
+    step: 3,
+    budget: { steps: 8, toolCalls: 40, wallMs: 3_600_000 },
+    used: { steps: 3, toolCalls: 7, wallMs: 1 },
+    currentTool: 'web_fetch',
+    startedAt: '2026-10-12T09:54:00Z',
+  };
+
+  it('the task a worker runs carries its badge; other tasks do not', () => {
+    const html = goalsColumns(board({ inProgress: [research] }), {
+      selectedId: 'g-1',
+      botId: 'b1',
+      workers: [worker],
+      nowMs: NOW_W,
+    });
+    const card = html.split('data-task-id="t-2"')[1].split('home-task-card')[0];
+    expect(card).toContain('data-open-worker="r-1"');
+    expect(card).toContain('step 3/8');
+    expect(html.split('data-task-id="t-4"')[1].split('home-task-card')[0]).not.toContain(
+      'data-open-worker'
+    );
+  });
+
+  it('a goal card pulses while a worker runs one of its tasks', () => {
+    const html = goalsColumns(board({ inProgress: [research] }), {
+      botId: 'b1',
+      workers: [worker],
+    });
+    expect(html).toContain('home-goal-working');
+    expect(goalsColumns(board({ inProgress: [research] }), { botId: 'b1' })).not.toContain(
+      'home-goal-working'
+    );
+  });
+});

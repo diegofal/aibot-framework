@@ -217,3 +217,11 @@ describe('traits history (Why row 13)', () => {
     expect(traitsBody(traits)).not.toContain('Recent changes');
   });
 });
+
+describe('isPresenceEvent — workers', () => {
+  it('accepts worker:* and task:changed of the bot', () => {
+    expect(isPresenceEvent({ type: 'worker:step', botId: 'b1' }, 'b1')).toBe(true);
+    expect(isPresenceEvent({ type: 'task:changed', botId: 'b1' }, 'b1')).toBe(true);
+    expect(isPresenceEvent({ type: 'worker:step', botId: 'b2' }, 'b1')).toBe(false);
+  });
+});

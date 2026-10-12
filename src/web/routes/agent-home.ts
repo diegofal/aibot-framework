@@ -157,11 +157,14 @@ export interface AgentHomeRouteDeps {
   karmaService?: HomeKarmaSource;
   presence?: PresenceTracker;
   pendingPermissions?: (botId: string) => number;
+  /**
+   * The task-worker pool, read per request (it may come up after the routes): a claimed
+   * task the operator moves stops its run (C19); a goal the operator closes stops its runs (C21).
+   */
+  workerPool?: () => WorkerPoolApi | null | undefined;
   /** Injectable clock (tests). */
   now?: () => number;
   cacheTtlMs?: number;
-  /** The task worker pool, when wired: a goal the operator closes stops its runs (C21). */
-  workerPool?: () => Pick<WorkerPoolApi, 'list' | 'stop'> | null | undefined;
 }
 
 export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
@@ -175,6 +178,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
   const homeDeps: AgentHomeDeps = {
     karma: deps.karmaService,
     presence: deps.presence ? (id) => deps.presence?.get(id) ?? undefined : undefined,
+    workers: deps.presence ? (id) => deps.presence?.workers(id) ?? [] : undefined,
     isRunning: (id) => deps.botManager.isRunning?.(id) ?? false,
     pendingPermissions: deps.pendingPermissions,
   } as AgentHomeDeps;
@@ -429,11 +433,24 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
 
   // ── Task ops (the task store, TASKS.json). Every response carries the store `rev`. ──
 
-  const taskStoreFor = (soulDir: string) =>
+  const taskStoreFor = (soulDir: string, botId?: string) =>
     new TaskStore(soulDir, {
       backup: (p) => backupSoulFile(p, deps.logger),
       onError: (err) => deps.logger.warn({ err }, 'Task store: warning'),
+      ...(botId ? { botId } : {}),
     });
+
+  /** An operator move/remove that ended a claim stops that worker (C19). Never throws. */
+  const stopReleasedWorker = (botId: string, released: { runId: string } | undefined) => {
+    if (!released) return;
+    try {
+      const pool = deps.workerPool?.();
+      if (pool?.stop(released.runId, 'task-moved'))
+        deps.logger.info({ botId, runId: released.runId }, 'Stopped the worker of a moved task');
+    } catch (err) {
+      deps.logger.warn({ err, botId, runId: released.runId }, 'Could not stop the worker');
+    }
+  };
 
   /** `{ status, body }` for a failed apply. */
   const taskFailure = (r: { reason: string; message: string; rev: number }) => {
@@ -497,7 +514,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     if (!Array.isArray(b.ids) || !b.ids.every((x) => typeof x === 'string'))
       return c.json({ error: 'ids must be an array of task ids' }, 400);
     const { soulDir } = resolveBotPaths(deps.config, bot);
-    const store = taskStoreFor(soulDir);
+    const store = taskStoreFor(soulDir, bot.id);
     const goalId = goalIdFor(soulDir, c.req.param('goalId'));
     if (!goalId) return c.json({ error: 'Goal not found', rev: store.read().rev }, 404);
     const r = store.apply([{ op: 'reorder', goalId, ids: b.ids as string[] }], {
@@ -525,7 +542,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     if (lane !== undefined && !(TASK_LANES as readonly string[]).includes(lane))
       return c.json({ error: `lane must be one of ${TASK_LANES.join(', ')}` }, 400);
     const { soulDir } = resolveBotPaths(deps.config, bot);
-    const store = taskStoreFor(soulDir);
+    const store = taskStoreFor(soulDir, bot.id);
     const goalId = goalIdFor(soulDir, c.req.param('goalId'));
     if (!goalId) return c.json({ error: 'Goal not found', rev: store.read().rev }, 404);
     const r = store.apply(
@@ -576,7 +593,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     }
     if (ops.length === 0)
       return c.json({ error: 'nothing to change: send lane, text or note' }, 400);
-    const store = taskStoreFor(resolveBotPaths(deps.config, bot).soulDir);
+    const store = taskStoreFor(resolveBotPaths(deps.config, bot).soulDir, bot.id);
     const r = store.apply(ops, { actor: 'operator', expectedRev });
     if (!r.ok) {
       const f = taskFailure(r);
@@ -584,6 +601,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     }
     ctx.cache.invalidate();
     const released = r.results.find((x) => x.releasedClaim)?.releasedClaim;
+    stopReleasedWorker(bot.id, released);
     const task = store.get(id);
     deps.logger.info(
       { botId: bot.id, taskId: id, ops: ops.map((o) => o.op) },
@@ -604,7 +622,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     if (expectedRev === null)
       return c.json({ error: 'expectedRev must be a revision number' }, 400);
     const id = c.req.param('taskId');
-    const store = taskStoreFor(resolveBotPaths(deps.config, bot).soulDir);
+    const store = taskStoreFor(resolveBotPaths(deps.config, bot).soulDir, bot.id);
     const r = store.apply([{ op: 'remove', id }], { actor: 'operator', expectedRev });
     if (!r.ok) {
       const f = taskFailure(r);
@@ -612,6 +630,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     }
     ctx.cache.invalidate();
     const released = r.results[0]?.releasedClaim;
+    stopReleasedWorker(bot.id, released);
     deps.logger.info({ botId: bot.id, taskId: id }, 'Operator removed a task');
     return c.json({ removed: id, rev: r.rev, ...(released ? { releasedClaim: released } : {}) });
   });

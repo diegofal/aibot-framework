@@ -8,6 +8,7 @@
 import { avatar, badge, emptyState, esc, kpi, radar, sparkline, tabs } from '../ui/index.js';
 import { faceControl, speakButton } from './agent-face-helpers.js';
 import { whyPanel } from './why-helpers.js';
+import { activeWorkersByTask, workerTaskBadge } from './workers-helpers.js';
 
 export const POSTURE_TONE = {
   active: 'ok',
@@ -109,7 +110,11 @@ export function presenceHeader(
 export function isPresenceEvent(event, botId) {
   if (!event || event.botId !== botId || typeof event.type !== 'string') return false;
   return (
-    event.type.startsWith('agent:') || event.type.startsWith('tool:') || event.type === 'llm:start'
+    event.type.startsWith('agent:') ||
+    event.type.startsWith('tool:') ||
+    event.type === 'llm:start' ||
+    event.type.startsWith('worker:') ||
+    event.type === 'task:changed'
   );
 }
 
@@ -349,17 +354,21 @@ function taskBar(tasks) {
     <div class="home-task-tally">${done}/${list.length} tasks done${blocked ? ` · <span class="home-task-blocked">${blocked} blocked</span>` : ''}</div>`;
 }
 
-function goalCard(g, selected) {
+function goalCard(g, selected, workers) {
   const text = String(g.text || '(untitled)');
   const title = String(g.headline || text);
-  return `<div class="home-goal-card${selected ? ' is-selected' : ''}" role="button" tabindex="0" aria-expanded="${selected}" data-goal="${esc(text)}" data-goal-id="${esc(g.id ?? '')}" style="--goal-color:${goalColor(g)}" aria-label="Show the tasks of this goal" draggable="true">
-    <div class="home-goal-text">${esc(title)}</div>
+  const working = (Array.isArray(g.tasks) ? g.tasks : []).some((t) => workers?.has(t.id));
+  const pulse = working
+    ? '<span class="wk-pulse" title="A worker is on one of its tasks" aria-label="A worker is on one of its tasks"></span>'
+    : '';
+  return `<div class="home-goal-card${selected ? ' is-selected' : ''}${working ? ' home-goal-working' : ''}" role="button" tabindex="0" aria-expanded="${selected}" data-goal="${esc(text)}" data-goal-id="${esc(g.id ?? '')}" style="--goal-color:${goalColor(g)}" aria-label="Show the tasks of this goal" draggable="true">
+    <div class="home-goal-text">${pulse}${esc(title)}</div>
     <div class="home-goal-meta">${priorityChip(g)}${goalBadge(g)}</div>
     ${taskBar(g.tasks)}
   </div>`;
 }
 
-function taskCard(t, botId) {
+function taskCard(t, botId, workers, nowMs) {
   const lane = taskLane(t);
   const cycle =
     t.cycleId && botId
@@ -368,11 +377,12 @@ function taskCard(t, botId) {
   return `<div class="home-task-card${lane === 'done' ? ' is-done' : ''}" draggable="true" data-task-id="${esc(t.id ?? '')}">
     <div class="home-task-text">${esc(String(t.text ?? ''))}</div>
     <div class="home-task-meta">${taskBadge(t)}${cycle}</div>
+    ${workerTaskBadge(workers?.get(t.id) ?? null, nowMs)}
   </div>`;
 }
 
 /** The selected goal's tasks: header, then the four lanes lined up under the goal columns. */
-function goalTasksPanel(g, column, botId, addingTask) {
+function goalTasksPanel(g, column, botId, addingTask, workers, nowMs) {
   const text = String(g.text || '(untitled)');
   const tasks = Array.isArray(g.tasks) ? g.tasks : [];
   const status = moveValue(column);
@@ -391,7 +401,7 @@ function goalTasksPanel(g, column, botId, addingTask) {
           : '<button type="button" class="home-task-add" data-add-task>+ Add task</button>';
     return `<div class="home-task-lane" data-task-status="${lane}">
       <div class="home-board-head"><span class="home-board-dot dot-${lane === 'todo' ? 'pending' : lane}"></span>${label}<span class="home-board-count">${list.length}</span></div>
-      ${add}${list.map((t) => taskCard(t, botId)).join('')}
+      ${add}${list.map((t) => taskCard(t, botId, workers, nowMs)).join('')}
     </div>`;
   }).join('');
   return `<section class="home-goal-panel" style="--goal-color:${goalColor(g)};--col:${GOAL_MOVES.findIndex(([v]) => v === status)}" data-panel-goal="${esc(text)}" data-panel-goal-id="${esc(g.id ?? '')}" aria-label="Tasks of this goal">
@@ -519,8 +529,12 @@ export function findBoardGoal(goals, ref) {
  * holds the r-th goal of each column), so the selected goal's tasks open as a
  * full-width row right under its own row. The add form sits at the bottom of To do.
  */
-export function goalsColumns(goals, { selectedId, botId, addingTask = false } = {}) {
+export function goalsColumns(
+  goals,
+  { selectedId, botId, addingTask = false, workers, nowMs = Date.now() } = {}
+) {
   const buckets = goalBuckets(goals);
+  const byTask = activeWorkersByTask(workers);
   const total = buckets.reduce((n, [, , list]) => n + list.length, 0);
   const selected = findBoardGoal(goals, selectedId);
   const rows = Math.max(1, ...buckets.map(([, , list]) => list.length));
@@ -534,14 +548,14 @@ export function goalsColumns(goals, { selectedId, botId, addingTask = false } = 
     for (const [status, , list, empty] of buckets) {
       const g = list[r];
       const body = g
-        ? goalCard(g, selected?.goal === g)
+        ? goalCard(g, selected?.goal === g, byTask)
         : r === 0
           ? `<div class="home-board-empty">${esc(empty)}</div>`
           : '';
       html += `<div class="home-board-cell" data-status="${status}">${body}</div>`;
     }
     if (selected && buckets.find(([s]) => s === selected.status)[2].indexOf(selected.goal) === r)
-      html += goalTasksPanel(selected.goal, selected.status, botId, addingTask);
+      html += goalTasksPanel(selected.goal, selected.status, botId, addingTask, byTask, nowMs);
   }
   html += buckets
     .map(

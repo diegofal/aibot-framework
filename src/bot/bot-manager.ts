@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { Bot, InputFile } from 'grammy';
 import { type AgentInfo, AgentRegistry } from '../agent-registry';
 import { appendWebSessionMessage } from '../channel/outbound';
@@ -17,6 +17,7 @@ import {
 } from '../core/llm-client';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
+import { forwardTaskChanges } from '../goals/task-events-bus';
 import type { Logger } from '../logger';
 import { McpAgentBridge } from '../mcp/agent-bridge';
 import type { McpServerConfig } from '../mcp/client';
@@ -136,6 +137,7 @@ export class BotManager {
   private llmQueryLog: LlmQueryLog;
   private tenantFacade: TenantFacade;
   private activityStream: ActivityStream;
+  private stopTaskChangeForwarding: () => void = () => {};
   private botResetService: BotResetService;
   private mcpClientPool: McpClientPool;
   private mcpAgentBridge: McpAgentBridge;
@@ -255,6 +257,10 @@ export class BotManager {
 
     // Initialize activity stream for real-time visibility (with persistent LLM stats)
     this.activityStream = new ActivityStream(undefined, join(dataDir, 'llm-stats'));
+    // Every task write (operator, agent, worker) reaches the dashboard socket as `task:changed`.
+    this.stopTaskChangeForwarding = forwardTaskChanges(this.activityStream, (soulDir) =>
+      this.botIdForSoulDir(soulDir)
+    );
 
     // Initialize MCP client pool
     this.mcpClientPool = new McpClientPool(logger);
@@ -491,19 +497,7 @@ export class BotManager {
     // state. Soul dir comes from the live loader, else the same resolution
     // startBot uses, so the dashboard can read a stopped bot too.
     this.curiosityService = new CuriosityService({
-      getSoulDir: (botId) => {
-        const loader = this.soulLoaders.get(botId);
-        if (loader) return loader.getDir();
-        const bot = this.config.bots.find((b) => b.id === botId);
-        if (!bot) return null;
-        try {
-          return bot.tenantId && this.config.multiTenant?.enabled
-            ? resolveAgentConfigWithTenant(this.config, undefined, bot, bot.tenantId).soulDir
-            : resolveAgentConfig(this.config, bot).soulDir;
-        } catch {
-          return null;
-        }
-      },
+      getSoulDir: (botId) => this.resolveSoulDir(botId),
       getCuriosityInputs: (botId) => {
         const bot = this.config.bots.find((b) => b.id === botId);
         if (!bot) return null;
@@ -1182,7 +1176,33 @@ export class BotManager {
     return channelStatusForUnstartedToken(botConfig.token);
   }
 
+  /** Soul dir of a bot: the live loader's, else the same resolution `startBot` uses. */
+  private resolveSoulDir(botId: string): string | null {
+    const loader = this.soulLoaders.get(botId);
+    if (loader) return loader.getDir();
+    const bot = this.config.bots.find((b) => b.id === botId);
+    if (!bot) return null;
+    try {
+      return bot.tenantId && this.config.multiTenant?.enabled
+        ? resolveAgentConfigWithTenant(this.config, undefined, bot, bot.tenantId).soulDir
+        : resolveAgentConfig(this.config, bot).soulDir;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The bot whose soul dir this is (`task:changed` attribution). */
+  private botIdForSoulDir(soulDir: string): string | undefined {
+    const target = resolvePath(soulDir);
+    for (const bot of this.config.bots) {
+      const dir = this.resolveSoulDir(bot.id);
+      if (dir && resolvePath(dir) === target) return bot.id;
+    }
+    return undefined;
+  }
+
   async stopAll(): Promise<void> {
+    this.stopTaskChangeForwarding();
     this.agentLoop.stop();
     this.messageBuffer.dispose();
     this.collaborationTracker.dispose();

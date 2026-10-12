@@ -60,6 +60,7 @@ import { permissionToWhy } from '../../why/builders/permission';
 import { fileHistory, productionToWhy } from '../../why/builders/production';
 import { CycleIndex, type CycleReader } from '../../why/cycle-index';
 import type { Why } from '../../why/types';
+import type { WorkerPoolApi, WorkerRunView } from '../../workers/types';
 
 export type NeedsYouKind = 'ask' | 'permission' | 'proposal' | 'production' | 'feedback' | 'tool';
 export type NeedsYouUrgency = 'high' | 'normal' | 'low';
@@ -129,6 +130,30 @@ export interface NeedsYouResponse {
   /** Outputs already approved/rejected that the bot edited since (listed in `items`). */
   editedSinceReview: number;
   items: NeedsYouItem[];
+  /**
+   * Task-worker runs waiting on you (C20), oldest wait first. The answer itself
+   * goes through the ask / permission item they wait on (`itemId`, tagged with
+   * `meta.workerRunId`); these rows link to the worker sheet. Not counted.
+   */
+  waitingWorkers: NeedsYouWaitingWorker[];
+}
+
+export interface NeedsYouWaitingWorker {
+  runId: string;
+  botId: string;
+  botName: string;
+  taskId: string;
+  taskText: string;
+  goalTitle: string | null;
+  step: number;
+  stepsBudget: number;
+  question: string | null;
+  waitKind: 'ask' | 'approval' | null;
+  waitId: string | null;
+  /** When the run started waiting (ISO). */
+  since: string;
+  /** The Needs You item the run waits on, when it is listed. */
+  itemId?: string;
 }
 
 export interface NeedsYouCountResponse {
@@ -165,6 +190,8 @@ export interface NeedsYouSources {
   feedback?: { botIds(): string[]; list(botId: string): AgentFeedback[] };
   /** Dynamic tools (admin-only queue kind `tool`); only `status: 'pending'` are listed. */
   tools?: () => DynamicToolMeta[];
+  /** Task-worker runs (active ones); the `waiting` ones are listed as `waitingWorkers`. */
+  workers?: () => WorkerRunView[];
 }
 
 /**
@@ -1040,6 +1067,45 @@ export function buildNeedsYou(
   return items;
 }
 
+// ─── waiting workers ───
+
+/** Waiting runs of the bots in `allowed` (undefined = all), oldest wait first. Pure. */
+export function buildWaitingWorkers(
+  runs: WorkerRunView[],
+  allowed: Set<string> | undefined,
+  nameOf: (botId: string) => string
+): NeedsYouWaitingWorker[] {
+  return runs
+    .filter((r) => r && r.status === 'waiting' && (!allowed || allowed.has(r.botId)))
+    .map((r) => ({
+      runId: r.runId,
+      botId: r.botId,
+      botName: nameOf(r.botId),
+      taskId: r.taskId,
+      taskText: r.taskText,
+      goalTitle: r.goalTitle ?? null,
+      step: r.step,
+      stepsBudget: r.budget?.steps ?? 0,
+      question: r.wait?.question || null,
+      waitKind: r.wait?.kind ?? null,
+      waitId: r.wait?.id ?? null,
+      since: r.wait?.since ?? r.heartbeatAt ?? r.createdAt,
+    }))
+    .sort((a, b) => a.since.localeCompare(b.since));
+}
+
+/** Tag the ask / permission items a waiting run waits on, and link the run to its item. */
+export function linkWaitingWorkers(items: NeedsYouItem[], waiting: NeedsYouWaitingWorker[]): void {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  for (const w of waiting) {
+    if (!w.waitId) continue;
+    const item = byId.get(`${w.waitKind === 'approval' ? 'permission' : 'ask'}:${w.waitId}`);
+    if (!item) continue;
+    item.meta = { ...item.meta, workerRunId: w.runId, workerTask: w.taskText };
+    w.itemId = item.id;
+  }
+}
+
 // ─── write side ───
 
 function metaStr(item: NeedsYouItem, key: string): string | null {
@@ -1361,12 +1427,30 @@ export function needsYouRoutes(deps: NeedsYouRouteDeps) {
     return c.json({ cleared, byKind, results });
   });
 
+  function waitingWorkers(c: import('hono').Context): NeedsYouWaitingWorker[] {
+    if (!deps.sources.workers) return [];
+    try {
+      const names = new Map(deps.config.bots.map((b) => [b.id, b.name ?? b.id]));
+      return buildWaitingWorkers(
+        deps.sources.workers(),
+        allowedFor(c),
+        (id) => names.get(id) ?? id
+      );
+    } catch (err) {
+      deps.logger.warn({ err }, 'needs-you: waiting workers unavailable');
+      return [];
+    }
+  }
+
   app.get('/', (c) => {
     const items = build(c, { why: true });
+    const waiting = waitingWorkers(c);
+    linkWaitingWorkers(items, waiting);
     const body: NeedsYouResponse = {
       generatedAt: new Date(now()).toISOString(),
       ...countSummary(items),
       items,
+      waitingWorkers: waiting,
     };
     return c.json(body);
   });
@@ -1400,6 +1484,8 @@ export interface NeedsYouBotManager {
     | null
     | undefined;
   getDynamicToolStore?(): { list(): DynamicToolMeta[] } | null | undefined;
+  /** Task-worker pool (C19); absent until workers are built in. */
+  getWorkerPool?(): Pick<WorkerPoolApi, 'list'> | null | undefined;
 }
 
 export const PRODUCTIONS_SCAN_LIMIT = 5_000;
@@ -1528,6 +1614,8 @@ export function needsYouSourcesFromBotManager(bm: NeedsYouBotManager): NeedsYouS
   const toolStore = bm.getDynamicToolStore?.();
   return {
     tools: toolStore ? () => toolStore.list() : undefined,
+    // Read per call: the pool may come up after the routes.
+    workers: () => bm.getWorkerPool?.()?.list() ?? [],
     asks: () => bm.getAskHumanPending(),
     conversations: bm.getConversationsService?.() ?? null,
     permissions: () => bm.getPermissionsPending(),

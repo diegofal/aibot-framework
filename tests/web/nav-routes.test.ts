@@ -433,3 +433,11 @@ describe('no in-page links to legacy hashes', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('Work → Workers (C20)', () => {
+  it('#/work/workers is a Work tab with its own handler', () => {
+    expect(matchRoute('#/work/workers')?.route.handler).toBe('workers');
+    const work = AREAS.find((a) => a.id === 'work');
+    expect(work?.tabs.find((t) => t.id === 'workers')?.href).toBe('#/work/workers');
+  });
+});

@@ -34,6 +34,7 @@ import { SessionStore } from '../tenant/session-store';
 import { TenantConfigStore } from '../tenant/tenant-config-store';
 import { getTenantId, scopeBots } from '../tenant/tenant-scoping';
 import type { CycleReader } from '../why/cycle-index';
+import type { WorkerPoolApi } from '../workers/types';
 import {
   type LogTailState,
   pollLogTail,
@@ -87,6 +88,7 @@ import { toolsRoutes } from './routes/tools';
 import { ttsRoutes } from './routes/tts';
 import { webhookRoutes } from './routes/webhooks';
 import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
+import { workersRoutes } from './routes/workers';
 import { dashboardNoCache } from './static-cache';
 import {
   type ActivitySocket,
@@ -226,6 +228,9 @@ export function startWebServer(deps: WebServerDeps): void {
       workerPool,
     })
   );
+  // Workers API: /api/agents/:id/workers and /api/workers/* (own literal segment,
+  // no collision with agentsRoutes' GET /:id).
+  app.route('/api', workersRoutes({ config, logger, workerPool }));
   app.route(
     '/api/agents',
     agentsRoutes({

@@ -31,7 +31,7 @@ import {
 } from './goal-activity';
 import { type NowTone, describeNow } from './now-line';
 import { resolveBotPaths } from './paths';
-import type { LivePresence } from './presence-tracker';
+import type { LivePresence, LiveWorker } from './presence-tracker';
 import { readAgentCycles } from './readers/agent-cycles';
 import { readInboxAsks } from './readers/conversations';
 import { readLlmEntries } from './readers/llm-query-log';
@@ -67,6 +67,8 @@ export interface AgentHomeDeps {
   karma?: HomeKarmaSource;
   /** Live phase / tool for a bot (PresenceTracker.get). */
   presence?: (botId: string) => LivePresence;
+  /** Live task-worker runs of a bot (PresenceTracker.workers). */
+  workers?: (botId: string) => LiveWorker[];
   /** Bot process is up (BotManager.isRunning). */
   isRunning?: (botId: string) => boolean;
   /** Pending ask_permission requests for a bot. */
@@ -104,6 +106,8 @@ export interface AgentPresence {
   skippedReason: string | null;
   lastError: string | null;
   pendingAsks: number;
+  /** Live task-worker runs (C20), newest first; [] when none or untracked. */
+  workers: LiveWorker[];
   generatedAt: string;
 }
 
@@ -128,6 +132,8 @@ export interface FleetPresenceEntry {
   channel: { kind: ChannelKind; state: ChannelState };
   /** Uploaded face (session S4), versioned by mtime; null = seed avatar. */
   avatarUrl: string | null;
+  /** Live task-worker runs (C20). */
+  workers: LiveWorker[];
 }
 
 export interface FleetPresenceResponse {
@@ -242,6 +248,7 @@ export function buildPresence(
     skippedReason,
     lastError,
     pendingAsks,
+    workers: safe(() => deps.workers?.(bot.id) ?? [], []),
     generatedAt: new Date(now).toISOString(),
   };
 }
@@ -290,6 +297,7 @@ function fleetEntry(ctx: StatsContext, bot: BotConfig, deps: AgentHomeDeps): Fle
     lastOutputAt: base.output.lastFileAt,
     channel: base.channel,
     avatarUrl: faceUrl(ctx, bot),
+    workers: p.workers,
   };
 }
 
@@ -313,6 +321,7 @@ function fallbackEntry(bot: BotConfig): FleetPresenceEntry {
     lastOutputAt: null,
     channel: { kind: 'headless', state: 'missing' },
     avatarUrl: null,
+    workers: [],
   };
 }
 
