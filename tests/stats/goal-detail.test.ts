@@ -228,6 +228,73 @@ describe('buildGoalDetail', () => {
     expect(short?.cycles.map((c) => c.attribution)).toEqual(['exact', 'weak']);
   });
 
+  it('worker rows (runId, or taskId without cycleId) never join a fallback cycle window (M1)', () => {
+    const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    const at = (ms: number) => new Date(ms).toISOString();
+    const workerTool = (ts: number, runId: string, taskId: string) =>
+      JSON.stringify({
+        timestamp: at(ts),
+        botId: 'g1',
+        chatId: 0,
+        toolName: 'manage_goals',
+        args: { action: 'note_task', goal: LAB_GOAL },
+        success: true,
+        result: 'ok',
+        durationMs: 5,
+        retryAttempts: 0,
+        runId,
+        taskId,
+      });
+    // A worker's manage_goals call naming the goal, inside the unrelated window.
+    const inWindow = fx.t.unrelated + 30_000;
+    appendFileSync(
+      join(fx.dir, 'tool-audit', 'g1', `${day(inWindow)}.jsonl`),
+      `${workerTool(inWindow, 'r-1', 't-111111')}\n`
+    );
+    // A worker run on its own: LLM calls with a runId and a tool call naming the goal.
+    const solo = fx.now - 6 * 86_400_000;
+    const workerLlm = (off: number) =>
+      JSON.stringify({
+        timestamp: at(solo + off),
+        botId: 'g1',
+        caller: 'worker',
+        model: 'm',
+        backend: 'claude-cli',
+        durationMs: 1_000,
+        success: true,
+        runId: 'r-2',
+        taskId: 't-222222',
+      });
+    appendFileSync(
+      join(fx.dir, 'llm-query-log', 'g1', `${day(solo)}.jsonl`),
+      `${workerLlm(2_000)}\n${workerLlm(60_000)}\n`
+    );
+    appendFileSync(
+      join(fx.dir, 'tool-audit', 'g1', `${day(solo)}.jsonl`),
+      `${workerTool(solo + 30_000, 'r-2', 't-222222')}\n`
+    );
+    // A worker production (taskId, no cycleId) inside the weak window.
+    appendFileSync(
+      join(fx.dir, 'productions', 'g1', 'changelog.jsonl'),
+      `${JSON.stringify({
+        id: 'p-worker',
+        timestamp: at(fx.t.weak + 30_000),
+        action: 'create',
+        path: '99_worker_notes.md',
+        botId: 'g1',
+        size: 10,
+        taskId: 't-333333',
+      })}\n`
+    );
+    const d = buildGoalDetail(ctxOf(), fx.bot, { id: 'g-lab00001', days: 14 });
+    const cycles = d?.cycles ?? [];
+    expect(cycles).toHaveLength(4);
+    const inferredManage = cycles.filter((c) => c.reason === 'manage_goals named this goal');
+    expect(inferredManage).toHaveLength(1);
+    const weak = cycles.find((c) => c.attribution === 'weak');
+    expect(weak?.productions.map((p) => p.path)).not.toContain('99_worker_notes.md');
+  });
+
   it('works on data without any ids (before instrumentation)', () => {
     writeFileSync(
       join(fx.soulDir, 'GOALS.md'),

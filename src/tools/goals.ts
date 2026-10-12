@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { localDateStr } from '../date-utils';
+import { closeGoalTasks } from '../goals/goal-closure';
 import type { StoredTask } from '../goals/task-store';
 import type { Logger } from '../logger';
 import type { SoulLoader } from '../soul';
+import type { WorkerPoolApi } from '../workers/types';
 import type { Tool, ToolResult } from './types';
 
 type SoulLoaderResolver = (botId: string) => SoulLoader;
@@ -458,7 +460,15 @@ function writingAs(loader: SoulLoader, opts: { actor: 'agent'; cycleId?: string 
 /**
  * Tool that lets the LLM manage structured goals in GOALS.md
  */
-export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
+export interface GoalsToolOptions {
+  /** The fleet worker pool, when workers are on: closing a goal stops its runs. */
+  getWorkerPool?: () => Pick<WorkerPoolApi, 'list' | 'stop'> | null | undefined;
+}
+
+export function createGoalsTool(
+  getSoulLoader: SoulLoaderResolver,
+  opts: GoalsToolOptions = {}
+): Tool {
   return {
     definition: {
       type: 'function',
@@ -552,6 +562,33 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
       try {
         const cycleId = args._cycleId ? String(args._cycleId) : undefined;
         const soulLoader = writingAs(getSoulLoader(botId), { actor: 'agent', cycleId });
+        /** A goal this call completed: stop its workers and release its claims. Never throws. */
+        const closeTasksOf = (goalId: string | undefined) => {
+          if (!goalId) return;
+          let pool: Pick<WorkerPoolApi, 'list' | 'stop'> | null | undefined;
+          let store: ReturnType<SoulLoader['getTaskStore']> | null = null;
+          try {
+            pool = opts.getWorkerPool?.();
+          } catch {
+            pool = undefined;
+          }
+          try {
+            store = soulLoader.getTaskStore();
+          } catch {
+            store = null;
+          }
+          const closed = closeGoalTasks({
+            botId,
+            goalIds: [goalId],
+            store,
+            pool,
+            cycleId,
+            onError: (err) =>
+              logger.warn({ err, botId, goalId }, 'manage_goals: closing goal tasks failed'),
+          });
+          if (closed.stopped.length + closed.released.length > 0)
+            logger.info({ botId, goalId, ...closed }, 'manage_goals: goal closed, workers stopped');
+        };
 
         switch (action) {
           case 'list': {
@@ -591,7 +628,7 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
             if (userId && scope !== 'shared') {
               return updateUserGoal(soulLoader, userId, goal, { status, notes, priority });
             }
-            return updateGoal(soulLoader, goal, { status, notes, priority });
+            return updateGoal(soulLoader, goal, { status, notes, priority }, closeTasksOf);
           }
 
           case 'complete': {
@@ -601,7 +638,7 @@ export function createGoalsTool(getSoulLoader: SoulLoaderResolver): Tool {
             if (userId && scope !== 'shared') {
               return completeUserGoal(soulLoader, userId, goal, outcome);
             }
-            return completeGoal(soulLoader, goal, outcome);
+            return completeGoal(soulLoader, goal, outcome, closeTasksOf);
           }
 
           case 'add_task': {
@@ -820,7 +857,8 @@ function goalListHint(active: GoalEntry[]): string {
 function updateGoal(
   soulLoader: SoulLoader,
   goalSubstring: string,
-  updates: { status?: string; notes?: string; priority?: string }
+  updates: { status?: string; notes?: string; priority?: string },
+  onClosed?: (goalId: string | undefined) => void
 ): ToolResult {
   const content = soulLoader.readGoals();
   const { active, completed } = parseGoals(content);
@@ -843,6 +881,7 @@ function updateGoal(
     if (updates.notes) goal.outcome = updates.notes;
     completed.push(goal);
     soulLoader.writeGoals(serializeGoals(active, completed));
+    onClosed?.(goal.id);
     return { success: true, content: `Goal completed (via update): ${goal.text}` };
   }
 
@@ -854,7 +893,12 @@ function updateGoal(
   return { success: true, content: `Goal updated: ${found.text}` };
 }
 
-function completeGoal(soulLoader: SoulLoader, goalSubstring: string, outcome?: string): ToolResult {
+function completeGoal(
+  soulLoader: SoulLoader,
+  goalSubstring: string,
+  outcome?: string,
+  onClosed?: (goalId: string | undefined) => void
+): ToolResult {
   const content = soulLoader.readGoals();
   const { active, completed } = parseGoals(content);
 
@@ -873,6 +917,7 @@ function completeGoal(soulLoader: SoulLoader, goalSubstring: string, outcome?: s
   completed.push(goal);
 
   soulLoader.writeGoals(serializeGoals(active, completed));
+  onClosed?.(goal.id);
   return { success: true, content: `Goal completed: ${goal.text}` };
 }
 

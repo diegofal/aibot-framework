@@ -1,6 +1,6 @@
 /**
  * The worker sheet (C20): one task-worker run — journal per step, budget used,
- * the dispatching cycle (Open cycle), Stop and Retry. Opened from any
+ * the dispatching cycle (Open cycle), its Why (shared panel), Stop and Retry. Opened from any
  * `[data-open-worker]` (one delegated listener, wired in app.js). While the
  * run is active the sheet refetches every few seconds; markup lives in
  * workers-helpers.js.
@@ -33,7 +33,11 @@ export async function openWorkerSheet(runId) {
       body.innerHTML = message(`Could not load this worker: ${detail?.error || 'no response'}`);
       return;
     }
+    // The sheet repaints while the run is active: keep an open Why fold open.
+    const whyOpen = !!body.querySelector('details.why')?.open;
     body.innerHTML = workerSheetBody(detail);
+    const why = body.querySelector('details.why');
+    if (why && whyOpen) why.open = true;
     if (ACTIVE.has(detail.run?.status)) pollTimer = setTimeout(load, SHEET_POLL_MS);
   };
 

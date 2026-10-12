@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import { Hono } from 'hono';
 import type { Config } from '../../../src/config';
 import { groupJournalSteps, workersRoutes } from '../../../src/web/routes/workers';
+import type { CycleReader } from '../../../src/why/cycle-index';
+import { WhySchema } from '../../../src/why/types';
 import type { JournalEntry } from '../../../src/workers/types';
 import { type FakePool, createFakePool, makeRun } from '../../helpers/fake-worker-pool';
 
@@ -20,7 +22,7 @@ const config = {
   ],
 } as unknown as Config;
 
-function makeApp(pool: FakePool | undefined, tenantId?: string) {
+function makeApp(pool: FakePool | undefined, tenantId?: string, readCycles?: CycleReader) {
   const app = new Hono();
   if (tenantId) {
     app.use('*', async (c, next) => {
@@ -28,7 +30,10 @@ function makeApp(pool: FakePool | undefined, tenantId?: string) {
       return next();
     });
   }
-  app.route('/api', workersRoutes({ config, logger: noopLogger, workerPool: () => pool }));
+  app.route(
+    '/api',
+    workersRoutes({ config, logger: noopLogger, workerPool: () => pool, readCycles })
+  );
   return app;
 }
 
@@ -122,6 +127,43 @@ describe('GET /api/workers/:runId', () => {
     expect(body.steps).toMatchObject([
       { n: 1, startedAt: 'b', toolCalls: [{ name: 'web_search' }] },
     ]);
+  });
+
+  it('attaches the why of the run, with the dispatching cycle from the cycle log (C22)', async () => {
+    const pool = fleetPool();
+    const reads: Array<[string, number, number]> = [];
+    const readCycles: CycleReader = (botId, since, until) => {
+      reads.push([botId, since, until]);
+      return [
+        {
+          cycleId: 'c-1',
+          startedAt: '2026-10-12T08:59:00.000Z',
+          endedAt: '2026-10-12T09:01:00.000Z',
+          planSummary: 'Hand the room booking to a worker',
+        },
+      ];
+    };
+    const body = await (
+      await makeApp(pool, undefined, readCycles).request('/api/workers/r-1')
+    ).json();
+    expect(WhySchema.safeParse(body.why).success).toBe(true);
+    expect(body.why.by).toBe('agent');
+    expect(body.why.cycle).toMatchObject({ id: 'c-1', plan: 'Hand the room booking to a worker' });
+    expect(reads.map((r) => r[0])).toEqual(['b1']);
+  });
+
+  it('the why survives a cycle log that cannot be read (the cycle has no plan)', async () => {
+    const pool = fleetPool();
+    const readCycles: CycleReader = () => {
+      throw new Error('disk');
+    };
+    const res = await makeApp(pool, undefined, readCycles).request('/api/workers/r-1');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.why.cycle).toMatchObject({ id: 'c-1' });
+    expect(body.why.missing).toContain('cycle log');
+    const bare = await (await makeApp(pool).request('/api/workers/r-1')).json();
+    expect(bare.why.cycle).toMatchObject({ id: 'c-1' });
   });
 
   it('404 for an unknown run, another tenant’s run, or no pool', async () => {

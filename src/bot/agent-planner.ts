@@ -8,6 +8,8 @@ import { TOOL_CATEGORY_NAMES } from './tool-registry';
 
 export interface PlannerResultWithUsage extends PlannerResult {
   usage?: TokenUsage;
+  /** Every attempt failed to parse: this is the empty fallback, not an answer. */
+  parseFailed?: true;
 }
 
 // ── Planner backend selection ──
@@ -92,7 +94,11 @@ export function parsePlannerResult(
       const priority = ['high', 'medium', 'low', 'none'].includes(parsed.priority)
         ? parsed.priority
         : 'medium';
-      if (parsed.plan.length === 0 && priority !== 'none') return null;
+      const taskFields = parsePlannerTaskFields(parsed);
+      // An empty plan is idle (priority none) or dispatch-only: the answer
+      // hands tasks to workers or breaks a goal down and does no work itself.
+      const actsOnTasks = !!(taskFields.dispatch || taskFields.new_tasks);
+      if (parsed.plan.length === 0 && priority !== 'none' && !actsOnTasks) return null;
 
       // Extract and validate toolCategories
       let toolCategories: string[] | undefined;
@@ -111,7 +117,7 @@ export function parsePlannerResult(
         ...(typeof parsed.serves_goal === 'string' && parsed.serves_goal.trim()
           ? { serves_goal: parsed.serves_goal.trim() }
           : {}),
-        ...parsePlannerTaskFields(parsed),
+        ...taskFields,
       };
     },
     label: 'planner',
@@ -166,5 +172,6 @@ export async function runPlannerWithRetry(
     reasoning: 'Failed to parse planner output after retries',
     plan: [],
     priority: 'none',
+    parseFailed: true,
   };
 }

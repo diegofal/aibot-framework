@@ -238,7 +238,7 @@ export class ToolRegistry {
         createSaveMemoryTool(soulResolver),
         createUpdateSoulTool(soulResolver),
         createUpdateIdentityTool(soulResolver),
-        createGoalsTool(soulResolver)
+        createGoalsTool(soulResolver, { getWorkerPool: () => this.ctx.workerPool })
       );
       logger.info('Soul tools initialized (including goals)');
     }

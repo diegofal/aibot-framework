@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   activeWorkersByTask,
   formatElapsed,
+  homeEventEffects,
   isWorkerEvent,
   waitingWorkersSection,
   workerActionPath,
@@ -10,6 +11,7 @@ import {
   workerSheetBody,
   workerTaskBadge,
   workersList,
+  workersPollingWanted,
   workersStrip,
 } from '../../web/pages/workers-helpers.js';
 
@@ -310,5 +312,71 @@ describe('events and urls', () => {
     expect(workerDetailUrl('r/1')).toBe('/api/workers/r%2F1');
     expect(workerActionPath('r-1', 'stop')).toBe('/api/workers/r-1/stop');
     expect(workerActionPath('r-1', 'retry')).toBe('/api/workers/r-1/retry');
+  });
+});
+
+describe('agent home live updates (M6)', () => {
+  it('homeEventEffects: worker progress refreshes only the workers strip, not the home', () => {
+    expect(homeEventEffects({ type: 'worker:tool', botId: 'b1' })).toEqual({
+      workers: true,
+      home: false,
+    });
+    expect(homeEventEffects({ type: 'worker:step', botId: 'b1' })).toEqual({
+      workers: true,
+      home: false,
+    });
+    expect(homeEventEffects({ type: 'tool:start', botId: 'b1', data: { runId: 'r-1' } })).toEqual({
+      workers: false,
+      home: false,
+    });
+  });
+
+  it('homeEventEffects: a run that ends or a task change refreshes both', () => {
+    expect(homeEventEffects({ type: 'worker:ended', botId: 'b1' })).toEqual({
+      workers: true,
+      home: true,
+    });
+    expect(homeEventEffects({ type: 'task:changed', botId: 'b1' })).toEqual({
+      workers: true,
+      home: true,
+    });
+    expect(homeEventEffects({ type: 'agent:result', botId: 'b1' })).toEqual({
+      workers: false,
+      home: true,
+    });
+    expect(homeEventEffects(null)).toEqual({ workers: false, home: false });
+  });
+
+  it('workersPollingWanted: stop polling once the route says workers are off', () => {
+    expect(workersPollingWanted({ enabled: false })).toBe(false);
+    expect(workersPollingWanted({ enabled: true, runs: [] })).toBe(true);
+    expect(workersPollingWanted({ runs: [] })).toBe(true);
+    // a failed request says nothing: keep polling
+    expect(workersPollingWanted(null)).toBe(true);
+    expect(workersPollingWanted({ error: 'boom' })).toBe(true);
+  });
+});
+
+describe('worker sheet why (C22)', () => {
+  it('renders the run why with the shared panel, Open cycle included', () => {
+    const html = workerSheetBody(
+      {
+        run: run(),
+        steps: [],
+        why: {
+          what: 'A worker run on "Book the room"',
+          by: 'agent',
+          cycle: { id: 'c-1', botId: 'b1', plan: 'Hand it off' },
+        },
+      },
+      NOW
+    );
+    expect(html).toContain('<details class="why">');
+    expect(html).toContain('Hand it off');
+    expect(html).toContain('data-open-cycle="c-1"');
+  });
+
+  it('no why, no fold', () => {
+    expect(workerSheetBody({ run: run(), steps: [] }, NOW)).not.toContain('class="why"');
   });
 });

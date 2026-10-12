@@ -234,3 +234,64 @@ describe('manage_goals task actions (task store)', () => {
     expect(res.content).toContain('+1 done');
   });
 });
+
+describe('manage_goals closing a goal stops its workers (S6)', () => {
+  let dir: string;
+  let soul: SoulLoader;
+  const stops: Array<[string, string]> = [];
+  const pool = {
+    list: () => [
+      { runId: 'r-1', botId: 'b', taskId: 't-cccccc', goalId: 'g-aaaaaaaa', status: 'running' },
+    ],
+    stop: (runId: string, reason: string) => {
+      stops.push([runId, reason]);
+      return true;
+    },
+  } as any;
+  const run = (args: Record<string, unknown>, withPool = true) =>
+    createGoalsTool(() => soul, withPool ? { getWorkerPool: () => pool } : undefined).execute(
+      { _botId: 'b', ...args },
+      logger
+    );
+
+  beforeEach(() => {
+    stops.length = 0;
+    dir = mkdtempSync(join(tmpdir(), 'goal-task-close-'));
+    writeFileSync(join(dir, 'GOALS.md'), md, 'utf-8');
+    soul = new SoulLoader(
+      { enabled: true, dir, versioning: { enabled: false, maxVersionsPerFile: 10 } } as any,
+      logger
+    );
+    soul.getTaskStore().apply([{ op: 'claim', id: 't-cccccc', runId: 'r-1', ttlMs: 60_000 }], {
+      actor: 'system',
+    });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test('complete stops the runs on its tasks and releases their claims', async () => {
+    const res = await run({ action: 'complete', goal: 'dark factories' });
+    expect(res.success).toBe(true);
+    expect(stops).toEqual([['r-1', 'goal-closed']]);
+    expect(soul.getTaskStore().get('t-cccccc')?.claim).toBeFalsy();
+  });
+
+  test('update with status done closes the goal the same way', async () => {
+    const res = await run({ action: 'update', goal: 'dark factories', status: 'done' });
+    expect(res.success).toBe(true);
+    expect(stops).toEqual([['r-1', 'goal-closed']]);
+    expect(soul.getTaskStore().get('t-cccccc')?.claim).toBeFalsy();
+  });
+
+  test('without a pool the claims are still released', async () => {
+    await run({ action: 'complete', goal: 'dark factories' }, false);
+    expect(stops).toEqual([]);
+    expect(soul.getTaskStore().get('t-cccccc')?.claim).toBeFalsy();
+  });
+
+  test('a failed complete touches nothing', async () => {
+    const res = await run({ action: 'complete', goal: 'no such goal' });
+    expect(res.success).toBe(false);
+    expect(stops).toEqual([]);
+    expect(soul.getTaskStore().get('t-cccccc')?.claim).toBeTruthy();
+  });
+});

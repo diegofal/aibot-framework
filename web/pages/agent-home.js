@@ -42,7 +42,7 @@ import {
 import { watchAgent } from './live-presence.js';
 import { memoryHistoryBody, memoryHistoryUrl } from './memory-history-helpers.js';
 import { api, renderThread } from './shared.js';
-import { isWorkerEvent, workersStrip } from './workers-helpers.js';
+import { homeEventEffects, workersPollingWanted, workersStrip } from './workers-helpers.js';
 
 const HOME_REFRESH_DEBOUNCE_MS = 3000;
 const CHAT_POLL_MS = 2000;
@@ -661,7 +661,13 @@ async function mountMemoryHistory(box, id) {
 /** Active workers strip + task badges from `GET /api/agents/:id/workers`. */
 async function refreshWorkers(el, id) {
   const res = await api(`/api/agents/${encodeURIComponent(id)}/workers`).catch(() => null);
-  if (!res || res.error || !el.isConnected) return;
+  if (!el.isConnected) return;
+  // Workers off for this bot: stop polling (a worker event starts it again).
+  if (!workersPollingWanted(res)) {
+    clearInterval(workersPoll);
+    workersPoll = null;
+  }
+  if (!res || res.error) return;
   const runs = Array.isArray(res.runs) ? res.runs : [];
   const strip = el.querySelector('#home-workers');
   if (strip) strip.innerHTML = workersStrip(runs);
@@ -771,15 +777,20 @@ export async function renderAgentHome(el, id) {
   // request so a slow or missing curiosity state never holds the home back.
   mountMind(el.querySelector('#home-mind'), id);
   mountMemoryHistory(el.querySelector('#home-memory'), id);
+  const startWorkersPoll = () => {
+    if (!workersPoll) workersPoll = setInterval(() => refreshWorkers(el, id), WORKERS_POLL_MS);
+  };
+  startWorkersPoll();
   refreshWorkers(el, id);
-  workersPoll = setInterval(() => refreshWorkers(el, id), WORKERS_POLL_MS);
   watch = watchAgent(id, {
     onPresence: (p) => applyPresence(el, p, identity),
     onEvent: (ev) => {
-      if (isWorkerEvent(ev)) scheduleWorkersRefresh(el, id);
-      // A worker's own tool events change nothing on the page but its badge.
-      if (ev?.data?.runId && String(ev.type).startsWith('tool:')) return;
-      scheduleHomeRefresh(el, id);
+      const fx = homeEventEffects(ev);
+      if (fx.workers) {
+        startWorkersPoll();
+        scheduleWorkersRefresh(el, id);
+      }
+      if (fx.home) scheduleHomeRefresh(el, id);
     },
   });
 }

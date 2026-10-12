@@ -201,6 +201,8 @@ interface ExecuteLoopDetail {
   loopDetection?: AgentLoopResult['loopDetection'];
   /** Engagement-gate verdict when the gate held the plan back */
   idleRule?: string;
+  /** The plan was empty but the cycle wrote or dispatched tasks: completed, no executor. */
+  dispatchOnly?: boolean;
   /** Curiosity cycle to finish after the executor (knowledge extraction + dispatch) */
   curiosity?: {
     cycle: CuriosityCycle;
@@ -208,6 +210,20 @@ interface ExecuteLoopDetail {
     deliverable?: string;
     identity: string;
   };
+}
+
+/** What a cycle did, for repetition tracking: its plan, or its summary when it had none (dispatch-only). */
+function cyclePlanSummary(detail: { plan: string[]; summary: string }): string {
+  return (detail.plan.length > 0 ? detail.plan.join('; ') : detail.summary).slice(0, 200);
+}
+
+/** "Dispatched N task(s) to workers" (and/or tasks added), or null when the cycle did neither. */
+export function dispatchOnlySummary(acted: { added: number; dispatched: number }): string | null {
+  if (acted.added > 0 && acted.dispatched > 0)
+    return `Added ${acted.added} task(s); dispatched ${acted.dispatched} task(s) to workers`;
+  if (acted.dispatched > 0) return `Dispatched ${acted.dispatched} task(s) to workers`;
+  if (acted.added > 0) return `Added ${acted.added} task(s) to break a goal down`;
+  return null;
 }
 
 /** Upper bound for the post-cycle curiosity step (extractor + editor + delivery). */
@@ -435,21 +451,37 @@ export class AgentLoop {
   /**
    * The Workers block input for the planner, or undefined when workers are
    * off for the bot (the prompt then never mentions dispatch). Ended runs are
-   * the ones that ended since the previous planner call (a day on first call).
+   * the ones that ended since the previous successful planner call (a day on
+   * first call). The caller marks them seen with `markWorkersSeen` only once
+   * the planner answered, so a failed call never hides an ended run.
    */
-  private plannerWorkersInput(botId: string): PlannerWorkersInput | undefined {
+  private plannerWorkersInput(
+    botId: string
+  ): (PlannerWorkersInput & { builtAt: number }) | undefined {
     const pool = this.ctx.workerPool;
     if (!pool) return undefined;
     try {
       if (!pool.isEnabledFor(botId)) return undefined;
       const now = Date.now();
       const endedSinceMs = this.workersSeenAt.get(botId) ?? now - WORKERS_ENDED_FALLBACK_MS;
-      this.workersSeenAt.set(botId, now);
-      return { runs: pool.list(botId, { endedLimit: WORKERS_ENDED_LIMIT }), endedSinceMs };
+      return {
+        runs: pool.list(botId, { endedLimit: WORKERS_ENDED_LIMIT }),
+        endedSinceMs,
+        builtAt: now,
+      };
     } catch (err) {
       this.ctx.logger.warn({ err, botId }, 'Workers block: could not list runs');
       return undefined;
     }
+  }
+
+  /** The planner answered with the Workers block built at `builtAt`: its ended runs are seen. */
+  private markWorkersSeen(
+    botId: string,
+    input: { builtAt: number } | undefined,
+    result: { parseFailed?: boolean }
+  ): void {
+    if (input && !result.parseFailed) this.workersSeenAt.set(botId, input.builtAt);
   }
 
   /** Per-backend circuit breaker state — read by the dashboard. */
@@ -1040,9 +1072,10 @@ export class AgentLoop {
     goalsContent: string | null | undefined,
     fields: PlannerTaskFields,
     opts: { exploring: boolean; hardGateActive: boolean; logger: Logger }
-  ): void {
+  ): { added: number; dispatched: number } {
+    const acted = { added: 0, dispatched: 0 };
     const a = this.cycleAttribution.get(botId);
-    if (!a || (!fields.new_tasks && !fields.dispatch && !fields.serves_task)) return;
+    if (!a || (!fields.new_tasks && !fields.dispatch && !fields.serves_task)) return acted;
     try {
       const loader = this.ctx.soulLoaders.get(botId);
       const goals = parseGoals(goalsContent ?? null).active;
@@ -1058,7 +1091,16 @@ export class AgentLoop {
         gateBlocked: false,
         hardGateActive: opts.hardGateActive,
         logger: opts.logger,
+        assignGoalIds: () => {
+          // A rewrite of GOALS.md gives goals written before ids their id.
+          const content = loader?.readGoals?.();
+          if (!content || !loader?.writeGoals) return null;
+          loader.writeGoals(content);
+          return parseGoals(loader.readGoals?.() ?? null).active;
+        },
       });
+      acted.added = out.newTaskIds.length;
+      acted.dispatched = out.dispatched.filter((d) => d.ok).length;
       if (out.newTaskIds.length > 0) a.newTasks = out.newTaskIds;
       if (out.dispatched.length > 0) a.dispatched = out.dispatched;
       const served = out.servesTask;
@@ -1075,6 +1117,7 @@ export class AgentLoop {
     } catch (err) {
       opts.logger.warn({ err, botId }, 'Planner tasks: could not apply the planner task fields');
     }
+    return acted;
   }
 
   /**
@@ -1217,7 +1260,8 @@ export class AgentLoop {
       const durationMs = Date.now() - startMs;
       const isContinuous = this.scheduler.isContinuousBot(botId);
       const schedule = this.scheduler.getSchedule(botId);
-      const isIdle = detail.plan.length === 0 || detail.priority === 'none';
+      const isIdle =
+        !detail.dispatchOnly && (detail.plan.length === 0 || detail.priority === 'none');
       const idleSuppression = globalConfig.idleSuppression !== false;
 
       // Track idle cycles
@@ -1238,7 +1282,7 @@ export class AgentLoop {
         // Track recent actions for repetition detection
         if (!isIdle) {
           const toolNames = detail.toolCalls.map((t) => t.name);
-          const planSummary = detail.plan.join('; ').slice(0, 200);
+          const planSummary = cyclePlanSummary(detail);
           schedule.recentActions.push({
             cycle: (schedule.continuousCycleCount ?? 0) + 1,
             timestamp: Date.now(),
@@ -1262,12 +1306,12 @@ export class AgentLoop {
 
       // Karma: track novel vs repetitive actions. A cycle that only dispatched
       // workers is exempt: its runs are scored on their own outcomes.
+      const cycleAttr = this.cycleAttribution.get(botId);
       const dispatchOnly = isDispatchOnlyCycle({
         toolCalls: detail.toolCalls,
-        dispatched: countDispatchedRuns(
-          this.ctx.workerPool,
-          botId,
-          this.cycleAttribution.get(botId)?.cycleId
+        dispatched: Math.max(
+          countDispatchedRuns(this.ctx.workerPool, botId, cycleAttr?.cycleId),
+          cycleAttr?.dispatched?.filter((d) => d.ok).length ?? 0
         ),
       });
       if (
@@ -1277,7 +1321,7 @@ export class AgentLoop {
         !isIdle &&
         !dispatchOnly
       ) {
-        const planSummary = detail.plan.join('; ').slice(0, 200);
+        const planSummary = cyclePlanSummary(detail);
         const isRepetitive = isRepetitiveAction(schedule.recentActions, planSummary);
         if (isRepetitive) {
           const reason = `Repeated action: ${planSummary.slice(0, 80)}`;
@@ -2158,6 +2202,7 @@ export class AgentLoop {
       plannerTokenUsage = continuousResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: continuousResult.serves_goal });
       plannerTaskFields = taskFieldsOf(continuousResult);
+      this.markWorkersSeen(botId, plannerWorkers, continuousResult);
       this.noteRunningPlan(botId, plan);
     } else {
       const plannerInput = buildPlannerPrompt({
@@ -2273,6 +2318,7 @@ export class AgentLoop {
       plannerTokenUsage = plannerResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: plannerResult.serves_goal });
       plannerTaskFields = taskFieldsOf(plannerResult);
+      this.markWorkersSeen(botId, plannerWorkers, plannerResult);
       this.noteRunningPlan(botId, plan);
     }
 
@@ -2339,6 +2385,44 @@ export class AgentLoop {
           plan: [],
           toolCalls: [],
           priority: 'none',
+          strategistRan,
+          strategistReflection,
+          focus,
+          curiosity:
+            curiosityCycle && curiosityDeps
+              ? { cycle: curiosityCycle, deps: curiosityDeps, deliverable: focus, identity }
+              : undefined,
+        };
+      }
+    }
+
+    // Dispatch-only: no work of its own, but tasks to write or hand to
+    // workers. The explore rule and the hard engagement gate still apply to
+    // the dispatch itself (applyPlannerTasks); if nothing was written or
+    // dispatched the cycle is idle as before.
+    if (plan.length === 0 && (plannerTaskFields.dispatch || plannerTaskFields.new_tasks)) {
+      const acted = this.applyPlannerTaskFields(botId, goals, plannerTaskFields, {
+        exploring,
+        hardGateActive: !!(
+          engagementGateEnabled &&
+          engagementGateMode === 'hard' &&
+          engagement?.gateTriggered
+        ),
+        logger: botLogger,
+      });
+      const summary = dispatchOnlySummary(acted);
+      if (summary) {
+        botLogger.info({ botId, ...acted, reasoning: plannerReasoning }, `Agent loop: ${summary}`);
+        if (consumedPermissionIds.length > 0) {
+          this.ctx.askPermissionStore.reportExecution(consumedPermissionIds, summary, [], true);
+        }
+        return {
+          summary,
+          plannerReasoning,
+          plan: [],
+          toolCalls: [],
+          priority: priority === 'none' ? 'low' : priority,
+          dispatchOnly: true,
           strategistRan,
           strategistReflection,
           focus,

@@ -77,6 +77,16 @@ export interface GoalKey {
 }
 
 /** Who set a goal and when, from its `source` line (`operator:2026-10-04`). */
+/** A row a worker run wrote: it carries a runId, or a taskId outside any cycle. */
+function isWorkerRow(row: unknown): boolean {
+  const r = (row ?? {}) as {
+    runId?: unknown;
+    taskId?: unknown;
+    metadata?: Record<string, unknown>;
+  };
+  return !!(r.runId || r.taskId || r.metadata?.runId || r.metadata?.taskId);
+}
+
 export function goalOrigin(source: string | null | undefined): {
   origin: GoalOrigin;
   date: string | null;
@@ -260,7 +270,9 @@ export function buildGoalDetail(
   const { llm, changelog, productions, asks, outcomes, records } = src;
   const karmaRows = src.karma;
   const byCycle = (id: string): Rows => rowsOfCycle(src, id);
-  const untagged = <T>(rows: T[]) => rows.filter((r) => !tagOf(r).cycleId);
+  // Rows with no cycle id and no worker run: a worker's rows (runId, or a
+  // taskId without a cycleId) belong to its run, never to a fallback window.
+  const untagged = <T>(rows: T[]) => rows.filter((r) => !tagOf(r).cycleId && !isWorkerRow(r));
   const inWindow = (ms: number | null, w: { startMs: number; endMs: number }) =>
     ms !== null && ms >= w.startMs - 1_000 && ms <= w.endMs + WINDOW_SLACK_MS;
   const byWindow = (w: { startMs: number; endMs: number }, llmRows: LlmQueryEntry[]): Rows => ({

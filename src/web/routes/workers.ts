@@ -3,7 +3,7 @@
  *
  *   GET  /api/agents/:id/workers    active runs + the last 20 ended ones of a bot
  *   GET  /api/workers               the same across every bot the caller can see
- *   GET  /api/workers/:runId        run + journal + the journal grouped by step
+ *   GET  /api/workers/:runId        run + journal + the journal grouped by step + why
  *   POST /api/workers/:runId/stop   abort an active run (reason `operator`)
  *   POST /api/workers/:runId/retry  a new attempt of an ended run's task
  *
@@ -17,6 +17,9 @@ import type { Context } from 'hono';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import { workerRunToWhy } from '../../why/builders/worker-run';
+import { CycleIndex, type CycleReader } from '../../why/cycle-index';
+import type { Why } from '../../why/types';
 import {
   type JournalEntry,
   type WorkerPoolApi,
@@ -37,6 +40,8 @@ export interface WorkersRouteDeps {
   logger: Logger;
   /** The pool, read per request (it may come up after the routes, or never). */
   workerPool: () => WorkerPoolApi | undefined;
+  /** Cycle-log rows of a bot, for the dispatching cycle in a run's `why`. */
+  readCycles?: CycleReader;
 }
 
 export interface WorkersListResponse {
@@ -48,6 +53,8 @@ export interface WorkerDetailResponse {
   run: WorkerRunView;
   journal: JournalEntry[];
   steps: WorkerStepRecord[];
+  /** Who dispatched the run and why (`workerRunToWhy`). */
+  why: Why;
 }
 
 /** The journal of a run folded into one record per step, in step order. Pure. */
@@ -177,10 +184,18 @@ export function workersRoutes(deps: WorkersRouteDeps) {
     if (!found) return c.json({ error: 'Run not found' }, 404);
     try {
       const journal = found.pool.journal(found.run.runId);
+      const run = view(found.run);
+      const cycleId = run.dispatchCycleId;
+      const cycle = cycleId
+        ? CycleIndex.for(deps.readCycles, [{ botId: run.botId, at: run.createdAt }], (botId, err) =>
+            deps.logger.warn({ err, botId }, 'Worker detail: cycle log read failed')
+          ).byId(run.botId, cycleId)
+        : undefined;
       return c.json({
-        run: view(found.run),
+        run,
         journal,
         steps: groupJournalSteps(journal),
+        why: workerRunToWhy({ run, journal, ...(cycle ? { cycle } : {}) }),
       } satisfies WorkerDetailResponse);
     } catch (err) {
       deps.logger.warn({ err, runId: found.run.runId }, 'Worker detail failed');

@@ -106,7 +106,9 @@ export function buildTaskSchemaLines(opts: { workersEnabled: boolean }): string 
     '- serves_task: string, the id of the open task your plan works on (optional)',
   ];
   if (opts.workersEnabled) {
-    lines.push('- dispatch: array of open task ids to hand to workers (optional)');
+    lines.push(
+      '- dispatch: array of open task ids to hand to workers (optional). plan may be an empty array when you only dispatch tasks (or only break a goal down with new_tasks) and do no work of your own this cycle'
+    );
   }
   return lines.join('\n');
 }
@@ -200,6 +202,11 @@ export interface ApplyPlannerTasksInput {
   gateBlocked: boolean;
   /** The hard engagement gate is on (content held back), even if this plan passed. */
   hardGateActive: boolean;
+  /**
+   * Give goals written before ids their id (a rewrite of GOALS.md does) and
+   * return the fresh active goals. Used when `new_tasks` names a goal with no id.
+   */
+  assignGoalIds?: () => GoalEntry[] | null | undefined;
   logger?: { info: (obj: object, msg: string) => void; warn: (obj: object, msg: string) => void };
   nowMs?: number;
 }
@@ -250,7 +257,18 @@ export function applyPlannerTasks(input: ApplyPlannerTasksInput): ApplyPlannerTa
   // 1. new_tasks
   const added: StoredTask[] = [];
   if (fields.new_tasks) {
-    const goal = resolveGoalRef(fields.new_tasks.goal, input.goals);
+    let goal = resolveGoalRef(fields.new_tasks.goal, input.goals);
+    if (goal && !goal.id && input.assignGoalIds) {
+      try {
+        const fresh = input.assignGoalIds() ?? [];
+        goal =
+          resolveGoalRef(fields.new_tasks.goal, fresh) ??
+          fresh.find((g) => g.text.trim() === goal?.text.trim()) ??
+          goal;
+      } catch (err) {
+        logger?.warn({ botId, err }, 'Planner tasks: could not assign goal ids');
+      }
+    }
     if (!goal?.id) {
       logger?.warn(
         { botId, goal: fields.new_tasks.goal },

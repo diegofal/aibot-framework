@@ -230,7 +230,7 @@ export function startWebServer(deps: WebServerDeps): void {
   );
   // Workers API: /api/agents/:id/workers and /api/workers/* (own literal segment,
   // no collision with agentsRoutes' GET /:id).
-  app.route('/api', workersRoutes({ config, logger, workerPool }));
+  app.route('/api', workersRoutes({ config, logger, workerPool, readCycles }));
   app.route(
     '/api/agents',
     agentsRoutes({

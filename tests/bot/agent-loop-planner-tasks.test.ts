@@ -17,6 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentLoop } from '../../src/bot/agent-loop';
+import { writeGoalsFile } from '../../src/bot/goal-events';
 import { GlobalAgentLoopConfigSchema } from '../../src/config';
 import { TaskStore } from '../../src/goals/task-store';
 import type { DispatchRequest, WorkerPoolApi, WorkerRunView } from '../../src/workers/types';
@@ -81,25 +82,36 @@ function fakePool(
   };
 }
 
-function makeLoop(plan: string, pool?: WorkerPoolApi) {
+function makeLoop(
+  plan: string | string[],
+  pool?: WorkerPoolApi,
+  opts: { goalsOnDisk?: boolean } = {}
+) {
+  const goalsPath = join(soulDir, 'GOALS.md');
+  const readGoals = () => (opts.goalsOnDisk ? readFileSync(goalsPath, 'utf-8') : GOALS);
+  // A list of answers is served in order; the last one repeats.
+  const answers = Array.isArray(plan) ? [...plan] : [plan];
   const soulLoader = {
     readIdentity: () => 'id',
     readSoul: () => 'soul',
     readMotivations: () => 'mot',
-    readGoals: () => GOALS,
-    readTasks: () => store.listForGoals(GOALS),
+    readGoals,
+    readTasks: () => store.listForGoals(readGoals()),
     getTaskStore: () => store,
     readRecentDailyLogs: () => '',
     readDailyLogsSince: () => '',
     appendDailyMemory: () => {},
-    writeGoals: () => {},
+    writeGoals: (content: string) => {
+      if (opts.goalsOnDisk) writeGoalsFile(goalsPath, content, { actor: 'agent' });
+    },
   };
   const systems: string[] = [];
   const llm: any = {
     backend: 'ollama',
     generate: mock((_p: string, opts: { system?: string }) => {
       systems.push(opts?.system ?? '');
-      return Promise.resolve({ text: plan });
+      const text = answers.length > 1 ? (answers.shift() as string) : answers[0];
+      return Promise.resolve({ text });
     }),
     chat: mock(() => Promise.resolve({ text: 'executed' })),
     getBackendClient: () => llm,
@@ -219,21 +231,163 @@ describe('agent loop: planner task fields', () => {
   });
 
   test('an idle cycle writes no task and dispatches nothing', async () => {
+    // Deliberately changed (S8): an empty plan that names tasks to write or
+    // dispatch is a dispatch-only cycle (tests below). Idle is an empty plan
+    // with nothing to write or dispatch; its serves_task is not stamped.
     const pool = fakePool(true);
+    store.apply([{ op: 'add', goalId: 'g-bbbbbbbb', text: 'Book the room' }], { actor: 'agent' });
     const { loop } = makeLoop(
       JSON.stringify({
         reasoning: 'waiting',
         plan: [],
         priority: 'none',
+        serves_task: store.list()[0].id,
+      }),
+      pool
+    );
+    await loop.runOne('bot1');
+    expect(store.list()).toHaveLength(1);
+    expect(pool.requests).toEqual([]);
+    const [row] = cycleRows();
+    expect(row.status).toBe('idle');
+    expect(row.newTasks).toBeUndefined();
+    expect(row.taskId).toBeUndefined();
+  });
+
+  test('dispatch-only: an empty plan that dispatches is a completed cycle with no executor', async () => {
+    const pool = fakePool(true);
+    store.apply([{ op: 'add', goalId: 'g-bbbbbbbb', text: 'Book the room' }], { actor: 'agent' });
+    const id = store.list()[0].id;
+    const { loop, llm } = makeLoop(
+      JSON.stringify({ reasoning: 'hand it off', plan: [], priority: 'none', dispatch: [id] }),
+      pool
+    );
+    const result = await loop.runOne('bot1');
+    expect(pool.requests).toHaveLength(1);
+    expect(pool.requests[0].taskIds).toEqual([id]);
+    expect(llm.chat).not.toHaveBeenCalled();
+    expect(result.isIdle).toBe(false);
+    expect(result.summary).toBe('Dispatched 1 task(s) to workers');
+    const [row] = cycleRows();
+    expect(row.status).toBe('completed');
+    expect(row.dispatched).toEqual([{ taskId: id, runId: `run-${id}`, ok: true }]);
+  });
+
+  test('dispatch-only: new_tasks plus dispatch of one of them by its text', async () => {
+    const pool = fakePool(true);
+    const { loop, llm } = makeLoop(
+      JSON.stringify({
+        reasoning: 'break down and hand off',
+        plan: [],
+        priority: 'low',
         new_tasks: { goal: 'g-bbbbbbbb', tasks: ['Book the room', 'Send invitations'] },
         dispatch: ['Book the room'],
       }),
       pool
     );
+    const result = await loop.runOne('bot1');
+    expect(store.forGoal('g-bbbbbbbb')).toHaveLength(2);
+    expect(pool.requests).toHaveLength(1);
+    expect(llm.chat).not.toHaveBeenCalled();
+    expect(result.summary).toBe('Added 2 task(s); dispatched 1 task(s) to workers');
+    expect(cycleRows()[0].status).toBe('completed');
+  });
+
+  test('dispatch-only: repeated dispatch cycles earn no repetition karma', async () => {
+    const pool = fakePool(true);
+    store.apply([{ op: 'add', goalId: 'g-bbbbbbbb', text: 'Book the room' }], { actor: 'agent' });
+    const id = store.list()[0].id;
+    const { loop, ctx } = makeLoop(
+      JSON.stringify({ reasoning: 'r', plan: [], priority: 'low', dispatch: [id] }),
+      pool
+    );
+    ctx.config.karma = { enabled: true };
+    const karma = {
+      addEvent: mock(() => {}),
+      recordOutcome: mock(() => null),
+      renderForPrompt: () => '',
+    };
+    (loop as any).karmaService = karma;
     await loop.runOne('bot1');
-    expect(store.list()).toEqual([]);
+    await loop.runOne('bot1');
+    expect(pool.requests).toHaveLength(2);
+    expect(karma.addEvent).not.toHaveBeenCalled();
+    expect(karma.recordOutcome).not.toHaveBeenCalled();
+  });
+
+  test('dispatch-only: when nothing could be dispatched the cycle is idle', async () => {
+    const pool = fakePool(true);
+    const { loop, llm } = makeLoop(
+      JSON.stringify({ reasoning: 'r', plan: [], priority: 'low', dispatch: ['t-ffffff'] }),
+      pool
+    );
+    const result = await loop.runOne('bot1');
     expect(pool.requests).toEqual([]);
-    expect(cycleRows()[0].newTasks).toBeUndefined();
+    expect(llm.chat).not.toHaveBeenCalled();
+    expect(result.isIdle).toBe(true);
+    expect(cycleRows()[0].status).toBe('idle');
+  });
+
+  test('ended runs stay in the Workers block until a planner call succeeds (M5)', async () => {
+    const ended = {
+      runId: 'r-2',
+      botId: 'bot1',
+      taskId: 't-dddddd',
+      goalId: 'g-bbbbbbbb',
+      dispatchCycleId: null,
+      taskText: 'Book the room',
+      goalTitle: 'Monthly hands-on lab',
+      status: 'done',
+      attempt: 1,
+      step: 3,
+      budget: { steps: 8, toolCalls: 40, wallMs: 1 },
+      used: { steps: 3, toolCalls: 4, wallMs: 1 },
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      endedAt: new Date(Date.now() - 60_000).toISOString(),
+      outcome: { kind: 'done', note: 'room booked' },
+    } as unknown as WorkerRunView;
+    const pool = fakePool(true, [ended]);
+    const ok = JSON.stringify({ reasoning: 'r', plan: ['x'], priority: 'low' });
+    // First cycle: the planner answers garbage on both attempts (parse fails).
+    const { loop, systems } = makeLoop(['not json', 'still not json', ok], pool);
+    const plannerPrompts = () => systems.filter((s) => s.includes('JSON Schema'));
+    await loop.runOne('bot1');
+    expect(plannerPrompts()[0]).toContain('t-dddddd');
+    await loop.runOne('bot1');
+    // the failed cycle did not mark the ended run as seen
+    expect(plannerPrompts()[2]).toContain('t-dddddd');
+    // the successful one did
+    await loop.runOne('bot1');
+    expect(plannerPrompts()[3]).not.toContain('t-dddddd');
+  });
+
+  test('new_tasks for a goal written before ids gives it an id first (M8)', async () => {
+    writeFileSync(
+      join(soulDir, 'GOALS.md'),
+      '## Active Goals\n- [ ] Monthly hands-on lab\n  - status: in_progress\n  - priority: medium\n\n## Completed\n'
+    );
+    const { loop } = makeLoop(
+      JSON.stringify({
+        reasoning: 'r',
+        plan: ['Pick the lab topic'],
+        priority: 'medium',
+        new_tasks: {
+          goal: 'Monthly hands-on lab',
+          tasks: ['Pick the lab topic', 'Book the room'],
+        },
+      }),
+      undefined,
+      { goalsOnDisk: true }
+    );
+    await loop.runOne('bot1');
+    const md = readFileSync(join(soulDir, 'GOALS.md'), 'utf-8');
+    const goalId = md.match(/id: (g-[0-9a-f]{8})/)?.[1];
+    expect(goalId).toBeTruthy();
+    expect(store.forGoal(goalId as string).map((t) => t.text)).toEqual([
+      'Pick the lab topic',
+      'Book the room',
+    ]);
+    expect(cycleRows()[0].newTasks).toHaveLength(2);
   });
 
   test('without workers: no dispatch call, no Workers block, no dispatch in the prompt', async () => {

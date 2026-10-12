@@ -5,7 +5,7 @@
  * acts only on explicit planner output, never on explore, idle or gated cycles.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildContinuousPlannerPrompt, buildPlannerPrompt } from '../../src/bot/agent-loop-prompts';
@@ -18,6 +18,7 @@ import {
   resolveTaskRef,
 } from '../../src/bot/agent-loop-tasks';
 import { parsePlannerResult } from '../../src/bot/agent-planner';
+import { writeGoalsFile } from '../../src/bot/goal-events';
 import { TaskStore } from '../../src/goals/task-store';
 import { parseGoals } from '../../src/tools/goals';
 import type {
@@ -468,5 +469,111 @@ describe('cyclePendingQuestions', () => {
       { id: 'q3', question: 'empty run id', runId: '' },
     ];
     expect(cyclePendingQuestions(qs).map((q) => q.id)).toEqual(['q1', 'q3']);
+  });
+});
+
+describe('new_tasks for a goal written before ids (M8)', () => {
+  const LEGACY = `## Active Goals
+- [ ] Ship the weekly brief
+  - status: pending
+  - priority: high
+
+## Completed
+`;
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'planner-tasks-legacy-'));
+    writeFileSync(join(dir, 'GOALS.md'), LEGACY);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test('assigns the goal an id first, then writes the tasks under it', () => {
+    const store = new TaskStore(dir);
+    const path = join(dir, 'GOALS.md');
+    let assigned = 0;
+    const out = applyPlannerTasks({
+      botId: 'b1',
+      cycleId: 'c1',
+      store,
+      goals: parseGoals(LEGACY).active,
+      logger,
+      exploring: false,
+      idle: false,
+      gateBlocked: false,
+      hardGateActive: false,
+      fields: { new_tasks: { goal: 'Ship the weekly brief', tasks: ['Draft', 'Send'] } },
+      assignGoalIds: () => {
+        assigned++;
+        writeGoalsFile(path, readFileSync(path, 'utf-8'), { actor: 'agent' });
+        return parseGoals(readFileSync(path, 'utf-8')).active;
+      },
+    });
+    expect(assigned).toBe(1);
+    const goalId = parseGoals(readFileSync(path, 'utf-8')).active[0].id;
+    expect(goalId).toMatch(/^g-[0-9a-f]{8}$/);
+    expect(out.newTaskIds).toHaveLength(2);
+    expect(store.forGoal(goalId as string).map((t) => t.text)).toEqual(['Draft', 'Send']);
+  });
+
+  test('without a way to assign ids it still skips (and never throws)', () => {
+    const store = new TaskStore(dir);
+    const out = applyPlannerTasks({
+      botId: 'b1',
+      cycleId: 'c1',
+      store,
+      goals: parseGoals(LEGACY).active,
+      logger,
+      exploring: false,
+      idle: false,
+      gateBlocked: false,
+      hardGateActive: false,
+      fields: { new_tasks: { goal: 'Ship the weekly brief', tasks: ['Draft'] } },
+      assignGoalIds: () => {
+        throw new Error('disk full');
+      },
+    });
+    expect(out.newTaskIds).toEqual([]);
+  });
+});
+
+describe('dispatch-only planner answers (S8)', () => {
+  test('plan [] parses when the answer dispatches or breaks a goal down', () => {
+    const d = parsePlannerResult(
+      JSON.stringify({ reasoning: 'r', plan: [], priority: 'low', dispatch: ['t-111111'] }),
+      warn
+    );
+    expect(d?.plan).toEqual([]);
+    expect(d?.dispatch).toEqual(['t-111111']);
+    const n = parsePlannerResult(
+      JSON.stringify({
+        reasoning: 'r',
+        plan: [],
+        priority: 'medium',
+        new_tasks: { goal: 'g-aaaaaaaa', tasks: ['A', 'B'] },
+      }),
+      warn
+    );
+    expect(n?.new_tasks?.tasks).toEqual(['A', 'B']);
+  });
+
+  test('plan [] without task fields still needs priority none', () => {
+    expect(
+      parsePlannerResult(JSON.stringify({ reasoning: 'r', plan: [], priority: 'low' }), warn)
+    ).toBeNull();
+    expect(
+      parsePlannerResult(
+        JSON.stringify({ reasoning: 'r', plan: [], priority: 'low', serves_task: 't-111111' }),
+        warn
+      )
+    ).toBeNull();
+  });
+
+  test('the planner prompt says a plan may be empty when it only dispatches', () => {
+    for (const build of [buildPlannerPrompt, buildContinuousPlannerPrompt] as any[]) {
+      expect(build({ ...basePrompt, workers: { runs: [] } }).system).toContain(
+        'empty array when you only dispatch'
+      );
+      expect(build(basePrompt).system).not.toContain('only dispatch');
+    }
   });
 });

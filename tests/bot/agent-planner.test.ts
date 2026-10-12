@@ -232,6 +232,8 @@ describe('runPlannerWithRetry', () => {
       reasoning: 'Failed to parse planner output after retries',
       plan: [],
       priority: 'none',
+      // M5: the fallback says it is not an answer (ended worker runs stay unseen)
+      parseFailed: true,
     });
     expect(mockClient.generate).toHaveBeenCalledTimes(2);
   });

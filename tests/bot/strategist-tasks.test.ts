@@ -1,6 +1,6 @@
 /**
- * C21: the strategist's goal operations may carry tasks; its deliverable becomes
- * a task only when serves_goal resolves; a goal it completes or removes stops
+ * C21: the strategist's goal operations may carry tasks; its deliverable stays
+ * the focus (never a task, M7); a goal it completes or removes stops
  * its workers and releases its claims.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -9,8 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   applyGoalOperations,
-  applyStrategistDeliverable,
   parseStrategistResult,
+  runStrategist,
 } from '../../src/bot/agent-strategist';
 import { readGoalEvents } from '../../src/bot/goal-events';
 import { SoulLoader } from '../../src/soul';
@@ -85,46 +85,44 @@ describe('goal_operations.add with tasks', () => {
   });
 });
 
+// Deliberately changed (M7): the deliverable used to become a task on the goal
+// `serves_goal` names, on every strategist run, so every served goal always had
+// an open task and the planner's `new_tasks` breakdown ("only for a goal with
+// no open task") never applied. The deliverable is the cycle's focus only.
 describe('single_deliverable', () => {
-  test('becomes a task on the goal serves_goal names (id or title)', () => {
-    const id = applyStrategistDeliverable(
-      loader,
-      { single_deliverable: 'Draft the October issue', serves_goal: 'Write the newsletter' },
+  test('stays the focus: a strategist run writes no task for it', async () => {
+    const answer = JSON.stringify({
+      focus: 'Newsletter',
+      single_deliverable: 'Draft the October issue',
+      serves_goal: 'Write the newsletter',
+      goal_operations: [],
+      reflection: 'r',
+      next_strategy_in: '4h',
+    });
+    const client = { generate: async () => ({ text: answer }) } as never;
+    const ctx = {
+      soulLoaders: new Map([['b1', loader]]),
+      logger: quiet,
+      getLLMClient: () => client,
+      getActiveModel: () => 'm',
+    } as never;
+    const result = await runStrategist(
+      ctx,
+      'b1',
+      { id: 'b1', name: 'B1' } as never,
+      quiet,
+      {
+        identity: 'id',
+        soul: 'soul',
+        motivations: 'mot',
+        goals: GOALS,
+        datetime: '2026-10-12',
+        soulLoader: loader as never,
+      },
+      { client, model: 'm' },
       { cycleId: 'cyc-2' }
     );
-    expect(id).toMatch(/^t-/);
-    expect(store().get(id as string)).toMatchObject({
-      goalId: 'g-bbbbbbbb',
-      text: 'Draft the October issue',
-      createdCycle: 'cyc-2',
-      by: 'agent',
-    });
-  });
-
-  test('dedupes against an open task of the goal', () => {
-    const first = applyStrategistDeliverable(
-      loader,
-      { single_deliverable: 'Draft the October issue', serves_goal: 'g-bbbbbbbb' },
-      {}
-    );
-    const again = applyStrategistDeliverable(
-      loader,
-      { single_deliverable: 'Draft the October issue.', serves_goal: 'g-bbbbbbbb' },
-      {}
-    );
-    expect(again).toBe(first);
-    expect(store().forGoal('g-bbbbbbbb')).toHaveLength(1);
-  });
-
-  test('without a resolvable serves_goal nothing is written', () => {
-    expect(applyStrategistDeliverable(loader, { single_deliverable: 'Something' }, {})).toBeNull();
-    expect(
-      applyStrategistDeliverable(
-        loader,
-        { single_deliverable: 'Something', serves_goal: 'No such goal at all' },
-        {}
-      )
-    ).toBeNull();
+    expect(result?.single_deliverable).toBe('Draft the October issue');
     expect(store().list()).toEqual([]);
   });
 });
@@ -184,7 +182,7 @@ describe('closing goals stops their workers', () => {
 });
 
 describe('strategist prompt', () => {
-  test('asks for an optional task breakdown on add and explains the deliverable task', async () => {
+  test('asks for an optional task breakdown on add; the deliverable is never a task (M7)', async () => {
     const { buildStrategistPrompt } = await import('../../src/bot/agent-loop-prompts');
     const { system } = buildStrategistPrompt({
       identity: 'TestBot',
@@ -195,6 +193,7 @@ describe('strategist prompt', () => {
       datetime: '2026-03-08T12:00:00Z',
     });
     expect(system).toContain('tasks: array of strings (for add');
-    expect(system).toContain('becomes a task on that goal');
+    expect(system).not.toContain('becomes a task on that goal');
+    expect(system).toContain('it attributes the cycle to that goal');
   });
 });

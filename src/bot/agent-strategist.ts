@@ -4,7 +4,7 @@ import { localDateStr } from '../date-utils';
 import { closeGoalTasks } from '../goals/goal-closure';
 import type { TaskStore } from '../goals/task-store';
 import type { Logger } from '../logger';
-import { parseGoals, resolveGoalRef, resolveParentGoalId, serializeGoals } from '../tools/goals';
+import { parseGoals, resolveParentGoalId, serializeGoals } from '../tools/goals';
 import type { WorkerPoolApi } from '../workers/types';
 import { parseDurationMs } from './agent-loop';
 import { buildStrategistPrompt } from './agent-loop-prompts';
@@ -307,14 +307,9 @@ export async function runStrategist(
       workerPool: ctx.workerPool,
     });
   }
-  // The deliverable is a task only when it names the goal it serves; otherwise
-  // it stays the free-text focus (lastFocus) as before.
-  const deliverableTask = applyStrategistDeliverable(soulContext.soulLoader, result, {
-    cycleId: options.cycleId,
-    onError: (err) => botLogger.warn({ err, botId }, 'Strategist: deliverable task not written'),
-  });
-  if (deliverableTask)
-    botLogger.debug({ botId, taskId: deliverableTask }, 'Strategist: deliverable task');
+  // The deliverable is the cycle's focus (lastFocus), never a task: writing
+  // one per run left every served goal with an open task, so the planner's
+  // new_tasks breakdown never applied (M7).
 
   const deliverable = result.single_deliverable || result.focus;
   const reflectionEntry = `[strategist] Focus: ${deliverable}\nReflection: ${result.reflection}`;
@@ -490,39 +485,6 @@ function taskStoreOf(soulLoader: unknown): TaskStore | null {
   try {
     return get.call(soulLoader);
   } catch {
-    return null;
-  }
-}
-
-/**
- * The strategist's deliverable as a task on the goal `serves_goal` names (C21).
- * Null when it names no active goal (the deliverable stays free-text focus) or
- * the store refuses; the store's add dedupes against the goal's open tasks, so
- * a repeat returns the existing task id. Never throws.
- */
-export function applyStrategistDeliverable(
-  soulLoader: unknown,
-  result: Pick<StrategistResult, 'single_deliverable' | 'focus' | 'serves_goal'>,
-  opts: { cycleId?: string; onError?: (err: unknown) => void }
-): string | null {
-  const text = String(result.single_deliverable || result.focus || '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!text || !result.serves_goal) return null;
-  try {
-    const store = taskStoreOf(soulLoader);
-    if (!store) return null;
-    const read = (soulLoader as { readGoals?: () => string | null }).readGoals;
-    const goalsMd = typeof read === 'function' ? read.call(soulLoader) : null;
-    const goal = resolveGoalRef(result.serves_goal, parseGoals(goalsMd).active);
-    if (!goal?.id) return null;
-    const r = store.apply([{ op: 'add', goalId: goal.id, text }], {
-      actor: 'agent',
-      ...(opts.cycleId ? { cycleId: opts.cycleId } : {}),
-    });
-    return r.ok ? (r.results[0]?.id ?? null) : null;
-  } catch (err) {
-    opts.onError?.(err);
     return null;
   }
 }

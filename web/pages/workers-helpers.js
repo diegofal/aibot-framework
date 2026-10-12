@@ -8,6 +8,7 @@
  * `[data-open-worker]` opens the sheet (one delegated listener, worker-sheet.js).
  */
 import { badge, emptyState, esc } from '../ui/index.js';
+import { whyPanel } from './why-helpers.js';
 
 const ACTIVE = new Set(['queued', 'running', 'waiting', 'interrupted']);
 
@@ -40,6 +41,26 @@ export function isWorkerEvent(event, botId) {
   if (!event || typeof event.type !== 'string') return false;
   if (botId && event.botId !== botId) return false;
   return event.type.startsWith('worker:') || event.type === 'task:changed';
+}
+
+/**
+ * What an activity event refreshes on the Agent Home: the workers strip and
+ * task badges, the rest of the home (timeline, Needs You, board), or both.
+ * Worker progress (a tool, a step, a worker's own tool:* events) changes only
+ * the badges; a full home refresh for each of them would refetch the home on
+ * every tool call a worker makes.
+ */
+export function homeEventEffects(event) {
+  if (!event || typeof event.type !== 'string') return { workers: false, home: false };
+  const workers = isWorkerEvent(event);
+  if (event.data?.runId && event.type.startsWith('tool:')) return { workers, home: false };
+  if (event.type === 'worker:tool' || event.type === 'worker:step') return { workers, home: false };
+  return { workers, home: true };
+}
+
+/** False once `GET /api/agents/:id/workers` says workers are off; a failed request keeps polling. */
+export function workersPollingWanted(res) {
+  return !(res && res.enabled === false);
 }
 
 /** "<1 min", "6 min", "2 h", "3 d"; '' for a non-number. */
@@ -219,6 +240,7 @@ export function workerSheetBody(detail, nowMs = Date.now()) {
     <div class="wk-sheet-usage text-dim">Budget used: ${esc(usage(raw))}</div>
     <div class="wk-bar"><i style="width:${pct(m)}%"></i></div>
     ${wait}${outcome}
+    ${whyPanel(detail?.why, { nowMs, botId: m.botId ?? undefined })}
     <div class="wk-steps">${steps.length ? steps.map((s) => stepRow(s, m)).join('') : '<div class="text-dim wk-empty">No steps yet.</div>'}</div>
   </div>`;
 }

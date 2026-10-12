@@ -473,7 +473,7 @@ Examples:
 
 JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
-- plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none")
+- plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none"${input.workers ? ' or a dispatch-only answer (see dispatch)' : ''})
 - priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
 - serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)
 ${buildTaskSchemaLines({ workersEnabled: !!input.workers })}
@@ -623,7 +623,7 @@ Examples:
 
 JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
-- plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none")
+- plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none"${input.workers ? ' or a dispatch-only answer (see dispatch)' : ''})
 - priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
 - serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)
 ${buildTaskSchemaLines({ workersEnabled: !!input.workers })}
@@ -987,7 +987,7 @@ JSON Schema:
   - parent: string (for add: exact title or id of the existing goal the new one is a concrete step toward, so its progress shows under that goal) — optional
   - tasks: array of strings (for add: the goal's initial breakdown, 2-5 concrete steps, each one short sentence; they become the goal's tasks) — optional
 - single_deliverable: string (ONE specific, bounded, achievable task — 5-15 minutes max)
-- serves_goal: string, the exact title (or id) of the active goal the deliverable serves (optional; when it names an active goal, the deliverable becomes a task on that goal unless an open task already says the same)
+- serves_goal: string, the exact title (or id) of the active goal the deliverable serves (optional; it attributes the cycle to that goal)
 - alignment_confidence: number (0.0-1.0, how well the deliverable serves the agent's identity/soul — below 0.6 triggers re-derivation)
 - focus: string (deprecated, use single_deliverable)
 - reflection: string (brief analysis of the agent's current state and trajectory)
