@@ -667,3 +667,20 @@ bun scripts/docker/backup.ts backup
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-12T12-14-04`; the script restarted aibot. The link itself was **not** written: the one-off script threw in `backupSoulFile` (wrong arguments) before calling `writeGoalsFile`, and the follow-up check inside the container was blocked by the session's permission policy, so it is left for Diego. GOALS.md is unchanged as far as the script got.
 
 **Follow-up (12:2xZ).** Diego ran the corrected one-off script himself (`docker cp … link.ts` + `bun _link.ts` in `/app`, which backs GOALS.md up to `.versions/` and writes through `writeGoalsFile` as `operator`): output `linked g-1001d015 -> g-7cb6a370`. The digest goal now carries `- parent: g-7cb6a370`; the LLMs goal's drawer lists it under "Spawned from this goal".
+
+### 2026-10-12 13:30Z — Backup, then deployed `591dff3` (goal tasks phase 0)
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship goal tasks phase 0 (`docs/plans/goal-tasks-architecture-plan.md`): TASKS.json store + op API, goals view, real cancellation, Claude CLI semaphore, `blocked` enforced in the loop, tenant-scoped dashboard sockets. The task migration rewrites GOALS.md on first read, so the volumes were backed up first |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-12T13-29-58` (aibot_data 143.7 MB, productions, ollama identity; the script restarted the container). Before the rebuild, 0 of 24 live GOALS.md files had `- task:` lines, so the migration had nothing to move and no `TASKS.json` exists yet (one is created on the first task write). After the rebuild: `healthy` in ~35 s, dashboard 200, the image has `src/goals/{task-store,goals-view}.ts`, `src/core/cli-semaphore.ts`, `src/web/ws-tenant-filter.ts`, `src/bot/executor-turn.ts`; served `/pages/ws-reconnect.js` is the new one; `PATCH /api/agents/:id/tasks/:taskId` answers 401 without a session (route mounted behind auth). Agent cycles ran planner → tool pre-selection → executor on the new code. Boot errors seen: Telegram `getMe` 401 (revoked token, known), "Ollama daemon is unreachable" (known), a Telegram "can't parse entities" on an `ask_human` send (also in five older rotated logs), one `web_fetch` failure. Task moves from the boards not exercised from here (needs a dashboard session).
+
+**Reversible?** Code: check out `2b8fde5` and rebuild. Data: `TASKS.json` files written after this deploy are ignored by the older code (tasks would disappear from the boards until redeployed); restore from the backup above only if GOALS.md itself needs to go back.
