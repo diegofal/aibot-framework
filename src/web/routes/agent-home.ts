@@ -23,7 +23,6 @@ import { writeGoalsFile } from '../../bot/goal-events';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
 import type { Logger } from '../../logger';
-import { buildCycleDetail } from '../../stats/cycle-detail';
 import { backupSoulFile } from '../../soul';
 import {
   type AgentHomeDeps,
@@ -35,6 +34,7 @@ import {
   buildPresence,
 } from '../../stats/agent-home-aggregator';
 import { type StatsBotManager, createStatsContext } from '../../stats/context';
+import { buildCycleDetail } from '../../stats/cycle-detail';
 import { buildGoalDetail } from '../../stats/goal-detail-aggregator';
 import { resolveBotPaths } from '../../stats/paths';
 import type { PresenceTracker } from '../../stats/presence-tracker';
