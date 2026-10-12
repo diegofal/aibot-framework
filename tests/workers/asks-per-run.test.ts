@@ -10,7 +10,11 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { AskHumanStore } from '../../src/bot/ask-human-store';
 import { AskPermissionStore } from '../../src/bot/ask-permission-store';
 import { autoAttachFiles } from '../../src/bot/executor-turn';
-import type { ToolExecutionRecord } from '../../src/bot/tool-executor';
+import {
+  type ToolEndEvent,
+  type ToolExecutionRecord,
+  ToolExecutor,
+} from '../../src/bot/tool-executor';
 import type { BotContext } from '../../src/bot/types';
 import { ConversationsService } from '../../src/conversations/service';
 import type { Logger } from '../../src/logger';
@@ -21,7 +25,10 @@ import {
   sweepStaleAskHumanQuestions,
 } from '../../src/tools/ask-human';
 import { createAskPermissionTool } from '../../src/tools/ask-permission';
+import type { Tool, ToolResult } from '../../src/tools/types';
 import type { WorkerAnswer } from '../../src/workers/types';
+import { drainAnswersFrom } from '../../src/workers/wiring';
+import { parseWaitId, waitFromToolEnd } from '../../src/workers/worker';
 import { createTempDir } from '../helpers/temp-dir';
 
 const HOUR = 3_600_000;
@@ -356,5 +363,173 @@ describe('ask_permission per run', () => {
     const dup = await tool.execute({ ...args, _runId: 'run-1' }, logger);
     expect(dup.content).toContain('already have a pending permission request');
     expect(store.getPendingForBot('b')).toHaveLength(2);
+  });
+});
+
+describe('review fixes: waits and withdrawals', () => {
+  let dir: string;
+  let store: AskHumanStore;
+  let perms: AskPermissionStore;
+  let conversations: ConversationsService;
+
+  beforeEach(() => {
+    dir = createTempDir('asks-review');
+    store = new AskHumanStore(logger, `${dir}/ask-human`);
+    perms = new AskPermissionStore(logger, `${dir}/ask-permission`);
+    conversations = new ConversationsService(`${dir}/conversations`);
+  });
+
+  const end = (toolName: string, args: Record<string, unknown>, r: ToolResult): ToolEndEvent => ({
+    toolName,
+    args,
+    success: r.success,
+    result: r.content,
+    ...(r.failureKind ? { failureKind: r.failureKind } : {}),
+    durationMs: 1,
+    retryAttempts: 0,
+    botId: 'b',
+    chatId: 0,
+    timestamp: Date.now(),
+  });
+
+  test('B2: the real ask_human, ask_permission and confirm outputs each park the run', async () => {
+    const ask = createAskHumanTool({
+      store,
+      getBotInstance: () => undefined,
+      getBotName: (id) => id,
+      conversationsService: conversations,
+    });
+    // Two question marks: the result starts with a tip, not with "Question sent".
+    const askArgs = { question: 'Which tone? Formal?', _botId: 'b', _runId: 'run-1' };
+    const asked = await ask.execute(askArgs, logger);
+    const [q] = store.getPendingForBot('b');
+    expect(waitFromToolEnd(end('ask_human', askArgs, asked), 'now')).toMatchObject({
+      kind: 'ask',
+      id: q.id,
+    });
+
+    const perm = createAskPermissionTool({
+      store: perms,
+      getBotInstance: () => undefined,
+      getBotName: (id) => id,
+    });
+    const permArgs = {
+      action: 'exec',
+      resource: 'rm -rf build',
+      description: 'clean',
+      _botId: 'b',
+      _runId: 'run-1',
+    };
+    const requested = await perm.execute(permArgs, logger);
+    const [p] = perms.getPendingForBot('b');
+    expect(requested.content).toStartWith('Permission request sent');
+    expect(waitFromToolEnd(end('ask_permission', permArgs, requested), 'now')).toMatchObject({
+      kind: 'approval',
+      id: p.id,
+    });
+
+    // A confirm-level tool under enforceToolPermissions: the executor files the approval.
+    const tools: Tool[] = [
+      {
+        definition: {
+          type: 'function',
+          function: {
+            name: 'exec',
+            description: 'exec',
+            parameters: { type: 'object', properties: {} },
+          },
+        },
+        execute: async () => ({ success: true, content: 'ran' }),
+      },
+    ];
+    const confirmStore = new AskPermissionStore(logger);
+    const ctx = {
+      config: { bots: [{ id: 'b', name: 'B', model: 'm' }] },
+      logger,
+      tools,
+      toolDefinitions: tools.map((t) => t.definition),
+      askPermissionStore: confirmStore,
+    } as unknown as BotContext;
+    const executor = new ToolExecutor(ctx, {
+      botId: 'b',
+      chatId: 0,
+      permissionMode: 'agent-loop',
+      enforceToolPermissions: true,
+      attribution: { goalId: null, runId: 'run-1' },
+    });
+    const ends: ToolEndEvent[] = [];
+    executor.on('tool:end', (e) => ends.push(e));
+    await executor.execute('exec', { command: 'deploy' });
+    const [c] = confirmStore.getPendingForBot('b');
+    expect(waitFromToolEnd(ends.at(-1) as ToolEndEvent, 'now')).toMatchObject({
+      kind: 'approval',
+      id: c.id,
+    });
+  });
+
+  test('B2: ids are parsed when followed by a comma too', () => {
+    expect(parseWaitId('Permission request sent (id 1b2c-3d, exec on ls) — x')).toBe('1b2c-3d');
+    expect(parseWaitId('Approval requested (id p-3) for exec: ls')).toBe('p-3');
+  });
+
+  test('B1: a run dismissal the pool could not take is kept for the run', () => {
+    store.setRunRouter(() => false);
+    const r = store.ask('b', 0, 'Run?', undefined, Date.now(), { runId: 'run-1' });
+    r.promise.catch(() => {});
+    store.dismissById(r.id);
+    const kept = store.consumeAnswersForRun('run-1');
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({ id: r.id, dismissed: true });
+    expect(store.consumeAnswersForBot('b')).toEqual([]);
+    expect(
+      drainAnswersFrom({ askHumanStore: store, askPermissionStore: perms } as never)('run-1')
+    ).toEqual([]);
+  });
+
+  test('B1: drainAnswersFrom maps a kept dismissal to a dismissed WorkerAnswer', () => {
+    store.setRunRouter(() => false);
+    const r = store.ask('b', 0, 'Run?', undefined, Date.now(), { runId: 'run-1' });
+    r.promise.catch(() => {});
+    store.dismissById(r.id);
+    expect(
+      drainAnswersFrom({ askHumanStore: store, askPermissionStore: perms } as never)('run-1')
+    ).toEqual([{ kind: 'ask', id: r.id, dismissed: true }]);
+  });
+
+  test('S7: withdrawing a run question closes it without routing back to the run', () => {
+    const calls: WorkerAnswer[] = [];
+    const dismissedThreads: string[] = [];
+    const s = new AskHumanStore(logger, `${dir}/ask-human-2`, {
+      onDismiss: (id) => dismissedThreads.push(id),
+    });
+    s.setRunRouter((_r, a) => {
+      calls.push(a);
+      return true;
+    });
+    const r = s.ask('b', 0, 'Run?', undefined, Date.now(), { runId: 'run-1' });
+    r.promise.catch(() => {});
+    expect(s.withdrawById(r.id)).toBe(true);
+    expect(s.getPendingForBot('b')).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(dismissedThreads).toEqual([r.id]);
+    expect(s.consumeAnswersForRun('run-1')).toEqual([]);
+    expect(s.withdrawById(r.id)).toBe(false);
+  });
+
+  test('S7: withdrawing a run permission closes it without a decision for anyone', async () => {
+    const calls: WorkerAnswer[] = [];
+    perms.setRunRouter((_r, a) => {
+      calls.push(a);
+      return true;
+    });
+    const req = perms.request('b', 'exec', 'deploy', 'd', 'normal', { runId: 'run-1' });
+    expect(perms.withdrawById(req.id, 'the run ended')).toBe(true);
+    expect(await req.promise).toBe('denied');
+    expect(perms.getPendingForBot('b')).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(perms.consumeDecisionsForRun('run-1')).toEqual([]);
+    expect(perms.consumeDecisionsForBot('b')).toEqual([]);
+    expect(perms.getHistoryById(req.id)?.note).toContain('the run ended');
+    expect(perms.withdrawById(req.id)).toBe(false);
   });
 });

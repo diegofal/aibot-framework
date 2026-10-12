@@ -80,6 +80,8 @@ export interface AnsweredQuestion {
   conversationId?: string;
   /** Set when a worker run asked and the pool did not take the answer: it waits for the run. */
   runId?: string;
+  /** A run's question closed without an answer (kept for the run only; `answer` is empty). */
+  dismissed?: boolean;
 }
 
 export interface HandleReplyResult {
@@ -240,15 +242,44 @@ export class AskHumanStore {
     }
   }
 
-  /** A run's question closed without an answer: the run ends blocked. */
+  /**
+   * A run's question closed without an answer: the run ends blocked. A
+   * dismissal the pool did not take (the run's step is still running, or no
+   * pool) is kept for `consumeAnswersForRun`, like an answer.
+   */
   private routeDismissed(entry: PendingQuestion): void {
     if (!entry.runId) return;
-    if (!this.routeToRun(entry.runId, { kind: 'ask', id: entry.id, dismissed: true })) {
-      this.logger.warn(
-        { runId: entry.runId, questionId: entry.id },
-        'AskHuman: dismissal of a run question not delivered (no worker pool)'
-      );
+    if (this.routeToRun(entry.runId, { kind: 'ask', id: entry.id, dismissed: true })) return;
+    this.answered.set(entry.id, {
+      id: entry.id,
+      botId: entry.botId,
+      question: entry.question,
+      answer: '',
+      answeredAt: Date.now(),
+      conversationId: entry.conversationId,
+      runId: entry.runId,
+      dismissed: true,
+    });
+    this.persistAnswered();
+  }
+
+  /**
+   * Close a run's question because the run ended (Stop, task moved, goal
+   * closed): nothing is routed back to the run. The inbox thread is marked
+   * dismissed (`onDismiss`). False when it is not pending.
+   */
+  withdrawById(id: string): boolean {
+    const entry = this.pending.get(id);
+    if (!entry) return false;
+    this.logger.info({ questionId: id, runId: entry.runId }, 'AskHuman: withdrawn (run ended)');
+    entry.reject(new Error('Question withdrawn: the run ended'));
+    this.cleanup(id);
+    try {
+      this.onDismiss?.(id, entry.botId, entry.conversationId);
+    } catch (err) {
+      this.logger.warn({ err, questionId: id }, 'AskHuman: onDismiss callback failed');
     }
+    return true;
   }
 
   /**

@@ -108,3 +108,74 @@ describe('BotManager worker wiring', () => {
     expect(aborted).toBe(true);
   });
 });
+
+describe('BotManager worker wiring — review fixes', () => {
+  test('B1: an answer the pool did not take stays in the store for the run', async () => {
+    const m = await manager({ enabled: true, bots: ['b1'] });
+    const pool = m.getWorkerPool() as NonNullable<ReturnType<BotManager['getWorkerPool']>>;
+    const taken: string[] = [];
+    pool.onAnswer = (runId) => {
+      taken.push(runId);
+      return false; // the run is still running its step
+    };
+    const store = (m as any).askHumanStore;
+    const q = store.ask('b1', 0, 'Tone?', undefined, Date.now(), { runId: 'wr-1' });
+    q.promise.catch(() => {});
+    store.answerById(q.id, 'Formal');
+    expect(taken).toEqual(['wr-1']);
+    expect(store.consumeAnswersForRun('wr-1').map((a: any) => a.answer)).toEqual(['Formal']);
+
+    const perms = (m as any).askPermissionStore;
+    const p = perms.request('b1', 'exec', 'ls', 'list', 'normal', { runId: 'wr-1' });
+    p.promise.catch(() => {});
+    perms.approveById(p.id);
+    expect(perms.consumeDecisionsForRun('wr-1').map((d: any) => d.id)).toEqual([p.id]);
+    await m.stopAll();
+  });
+
+  test('S2: gracefulStopAll interrupts the workers first, like stopAll', async () => {
+    const m = await manager({ enabled: true, bots: ['b1'] });
+    const pool = m.getWorkerPool() as NonNullable<ReturnType<BotManager['getWorkerPool']>>;
+    const seen: string[] = [];
+    const orig = pool.abortAll.bind(pool);
+    pool.abortAll = async (r) => {
+      seen.push(`abortAll:${r}`);
+      return orig(r);
+    };
+    const origDispose = pool.dispose.bind(pool);
+    pool.dispose = () => {
+      seen.push('dispose');
+      origDispose();
+    };
+    await m.gracefulStopAll(10);
+    expect(seen).toEqual(['abortAll:shutdown', 'dispose']);
+  });
+
+  test('S9: stopping a bot interrupts its runs (claims kept), never as the operator', async () => {
+    const m = await manager({ enabled: true, bots: ['b1'] });
+    const pool = m.getWorkerPool() as NonNullable<ReturnType<BotManager['getWorkerPool']>>;
+    const stops: string[] = [];
+    pool.list = () => [{ runId: 'wr-1', botId: 'b1', status: 'running' } as never];
+    pool.stop = (_id, reason) => {
+      stops.push(reason);
+      return true;
+    };
+    (m as any).runningBots.add('b1');
+    await m.stopBot('b1');
+    expect(stops).toEqual(['shutdown']);
+    await m.stopAll();
+  });
+
+  test('M2: starting a bot kicks the pool for that bot', async () => {
+    const m = await manager({ enabled: true, bots: ['b1'] });
+    const pool = m.getWorkerPool() as NonNullable<ReturnType<BotManager['getWorkerPool']>>;
+    const kicks: Array<string | undefined> = [];
+    pool.kick = (botId?: string) => {
+      kicks.push(botId);
+    };
+    const bot = (m as any).config.bots.find((b: any) => b.id === 'b1');
+    await m.startBot(bot);
+    expect(kicks).toEqual(['b1']);
+    await m.stopAll();
+  });
+});

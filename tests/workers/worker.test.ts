@@ -390,3 +390,244 @@ describe('runWorker — tool context', () => {
       expect(`${p.system}\n${p.user}`).toContain(s);
   });
 });
+
+describe('runWorker — side effects (review S4)', () => {
+  test('tools that send, post, register or call out are external', () => {
+    for (const n of [
+      'calendar_schedule',
+      'mesh_publish',
+      'moltbook_register',
+      'twitter_post',
+      'phone_call',
+      'exec',
+      'process',
+      'browser',
+    ])
+      expect(classifySideEffect(n)).toBe('external');
+  });
+
+  test('unknown tools (custom, MCP, A2A, skill tools) default to external', () => {
+    for (const n of [
+      'my_custom_tool',
+      'mcp_github_create_issue',
+      'a2a_peer_search',
+      'schedule_brief',
+    ])
+      expect(classifySideEffect(n)).toBe('external');
+  });
+
+  test('read-only tools are read, own-state writers are write', () => {
+    for (const n of [
+      'web_search',
+      'web_fetch',
+      'file_read',
+      'memory_search',
+      'memory_get',
+      'recall_memory',
+      'core_memory_search',
+      'get_datetime',
+      'calendar_list',
+      'calendar_availability',
+      'reddit_search',
+      'twitter_search',
+      'mesh_query',
+      'read_production_log',
+    ])
+      expect(classifySideEffect(n)).toBe('read');
+    for (const n of [
+      'file_write',
+      'file_edit',
+      'archive_file',
+      'save_memory',
+      'ask_human',
+      'ask_permission',
+    ])
+      expect(classifySideEffect(n)).toBe('write');
+  });
+});
+
+describe('runWorker — in-flight tools (review S3)', () => {
+  test('a tool-start is journaled before the call runs, with its side-effect class', async () => {
+    const h = harness([
+      [{ name: 'exec', args: { command: 'curl -X POST x' } }, progress()],
+      [{ name: 'task_done', args: { note: 'x' } }],
+    ]);
+    await runWorker(h.env);
+    const kinds = h.journal.map((e) => e.kind);
+    const start = kinds.indexOf('tool-start');
+    expect(start).toBeGreaterThan(-1);
+    expect(start).toBeLessThan(kinds.indexOf('tool'));
+    expect(h.journal[start]).toMatchObject({ n: 1, name: 'exec', sideEffect: 'external' });
+    // Report tools are not tool calls.
+    expect(h.journal.filter((e) => e.kind === 'tool-start')).toHaveLength(1);
+  });
+
+  test('a stop mid-tool keeps currentTool on the run', async () => {
+    const ctl = new AbortController();
+    const h = harness([], { signal: ctl.signal });
+    h.env.runTurn = async (req) => {
+      h.requests.push(req);
+      const cb = req.wrapToolCallback(async () => {
+        ctl.abort('shutdown');
+        await new Promise((r) => setTimeout(r, 5));
+        return { success: false, content: 'aborted' };
+      });
+      await cb('exec', { command: 'deploy' });
+      return { ok: false, stopReason: 'aborted', text: '' };
+    };
+    const end = await runWorker(h.env);
+    expect(end.status).toBe('stopped');
+    expect(h.run.currentTool).toBe('exec');
+  });
+
+  test('currentTool is cleared once the call returns', async () => {
+    const h = harness([
+      [{ name: 'web_search', args: { q: 'x' } }, progress()],
+      [{ name: 'task_done', args: { note: 'x' } }],
+    ]);
+    await runWorker(h.env);
+    expect(h.run.currentTool).toBeUndefined();
+  });
+});
+
+describe('runWorker — write root (review S5)', () => {
+  const WORK = '/p/b1/tasks/t-1';
+
+  /** Runs one call then reports; returns what the wrapped callback answered for it. */
+  async function callOnce(call: Call) {
+    const h = harness([[call, progress()], [{ name: 'task_done', args: { note: 'x' } }]]);
+    const results: ToolResult[] = [];
+    const orig = h.env.runTurn;
+    h.env.runTurn = (req) =>
+      orig({
+        ...req,
+        wrapToolCallback: (inner) => {
+          const cb = req.wrapToolCallback(inner);
+          return async (n, a) => {
+            const r = await cb(n, a);
+            if (n === call.name) results.push(r);
+            return r;
+          };
+        },
+      });
+    await runWorker(h.env);
+    return { h, result: results[0] };
+  }
+
+  test('relative paths and absolute paths inside the task folder pass', async () => {
+    for (const call of [
+      { name: 'file_write', args: { path: 'brief.md', content: 'x' } },
+      { name: 'file_write', args: { path: `${WORK}/notes/a.md`, content: 'x' } },
+      { name: 'file_edit', args: { file_path: './brief.md' } },
+      { name: 'archive_file', args: { path: 'tasks/t-1/old.md', reason: 'r' } },
+    ]) {
+      const { h, result } = await callOnce(call);
+      expect(h.innerCalls).toContain(call.name);
+      expect(result.success).toBe(true);
+    }
+  });
+
+  test('absolute paths outside and ../ escapes are refused before the call', async () => {
+    for (const call of [
+      { name: 'file_write', args: { path: '/p/b1/other.md', content: 'x' } },
+      { name: 'file_write', args: { path: '../t-2/brief.md', content: 'x' } },
+      { name: 'file_edit', args: { path: 'sub/../../../escape.md' } },
+      { name: 'file_write', args: { filepath: '/etc/passwd', content: 'x' } },
+      { name: 'archive_file', args: { path: 'report.md', reason: 'r' } },
+      { name: 'archive_file', args: { path: 'tasks/t-2/x.md', reason: 'r' } },
+    ]) {
+      const { h, result } = await callOnce(call);
+      expect(h.innerCalls).not.toContain(call.name);
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('workers write only inside their task directory');
+      expect(result.failureKind).toBe('scope');
+      const journaled = h.journal.find((e) => e.kind === 'tool' && e.name === call.name);
+      expect(journaled).toMatchObject({ ok: false, sideEffect: 'write' });
+    }
+  });
+
+  test.if(process.platform === 'win32')('win32: the comparison ignores case', async () => {
+    const { h } = await callOnce({
+      name: 'file_write',
+      args: { path: '/P/B1/TASKS/T-1/a.md', content: 'x' },
+    });
+    expect(h.innerCalls).toContain('file_write');
+  });
+});
+
+describe('runWorker — LLM queue time (review M4)', () => {
+  const waitAbort = (signal: AbortSignal) =>
+    new Promise<void>((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+
+  test('time queued for an LLM slot does not count toward the step timeout', async () => {
+    const h = harness([], { config: { stepTimeoutMs: 40 } });
+    let turn = 0;
+    h.env.runTurn = async (req) => {
+      h.requests.push(req);
+      turn++;
+      req.onQueued?.();
+      await new Promise((r) => setTimeout(r, 120)); // queued 3× the step timeout
+      req.onTurnStart?.();
+      const cb = req.wrapToolCallback(async (name, args) => {
+        const extra = req.extraTools.find((t) => t.definition.function.name === name);
+        return extra ? extra.execute(args, undefined as never) : { success: true, content: 'ok' };
+      });
+      await cb(turn === 1 ? 'task_progress' : 'task_done', { note: `step ${turn}` });
+      return { ok: !req.signal.aborted, stopReason: 'completed', text: '' };
+    };
+    const end = await runWorker(h.env);
+    expect(h.requests[0].signal.aborted).toBe(false);
+    expect(end.status).toBe('done');
+  });
+
+  test('once the turn starts, the step timeout applies', async () => {
+    const h = harness([], { config: { stepTimeoutMs: 40 } });
+    h.env.runTurn = async (req) => {
+      h.requests.push(req);
+      req.onQueued?.();
+      await new Promise((r) => setTimeout(r, 60));
+      req.onTurnStart?.();
+      await waitAbort(req.signal);
+      return { ok: false, stopReason: 'aborted', text: '' };
+    };
+    const end = await runWorker(h.env);
+    expect(end.status).toBe('failed');
+    expect(end.outcome.note).toContain('timed out');
+  });
+
+  test('a queue that outlasts the time budget ends the step', async () => {
+    const h = harness([], {
+      config: { stepTimeoutMs: 20 },
+      run: { budget: { steps: 8, toolCalls: 40, wallMs: 60 } },
+    });
+    h.env.runTurn = async (req) => {
+      h.requests.push(req);
+      req.onQueued?.();
+      await waitAbort(req.signal);
+      return { ok: false, stopReason: 'aborted', text: '' };
+    };
+    const end = await runWorker(h.env);
+    expect(h.requests[0].signal.aborted).toBe(true);
+    expect(end.status).toBe('failed');
+    expect(end.outcome.note).toContain('LLM slot');
+  });
+});
+
+describe('worker prompt (review S1)', () => {
+  test('asks pause the run and approvals wait; no blanket "cannot ask"', () => {
+    const p = buildWorkerPrompt({
+      context: { goalTitle: 'g', taskText: 't', workDir: '/w' },
+      run: makeRun(),
+      steps: [],
+      answers: [],
+    });
+    expect(p.system).not.toContain('ask the operator here');
+    expect(p.system).toContain('ask_human');
+    expect(p.system).toMatch(/pauses the run until the operator answers/);
+    expect(p.system).toMatch(/approval/i);
+    expect(p.system).toContain('task_blocked');
+  });
+});

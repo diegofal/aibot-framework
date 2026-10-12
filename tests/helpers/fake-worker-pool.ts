@@ -68,7 +68,7 @@ export function createFakePool(runs: WorkerRunView[] = []): FakePool {
         return { taskId: r.taskId, ok: false, reason: 'claimed', message: 'Still running' };
       return { taskId: r.taskId, ok: true, runId: `${runId}-retry`, queued: true };
     },
-    onAnswer: () => {},
+    onAnswer: () => false,
     abortAll: async () => {},
     recover: () => {},
     stats: () => ({ running: 0, queued: 0, waiting: 0, byBot: {} }),

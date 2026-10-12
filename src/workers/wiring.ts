@@ -14,7 +14,7 @@ import { resolveBotPaths } from '../stats/paths';
 import { parseGoals } from '../tools/goals';
 import { type PoolGoal, WorkerPool, type WorkerPoolDeps } from './pool';
 import { WorkerRunStore } from './run-store';
-import type { WorkerAnswer } from './types';
+import type { WorkerAnswer, WorkerWait } from './types';
 import { createExecutorTurnRunner } from './worker';
 
 export interface FleetWorkerPoolOptions {
@@ -37,10 +37,33 @@ export function drainAnswersFrom(
   return (runId) => {
     const out: WorkerAnswer[] = [];
     for (const a of ctx.askHumanStore?.consumeAnswersForRun?.(runId) ?? [])
-      out.push({ kind: 'ask', id: a.id, answer: a.answer });
+      out.push(
+        a.dismissed
+          ? { kind: 'ask', id: a.id, dismissed: true }
+          : {
+              kind: 'ask',
+              id: a.id,
+              answer: a.answer,
+              ...(a.question ? { question: a.question } : {}),
+            }
+      );
     for (const d of ctx.askPermissionStore?.consumeDecisionsForRun?.(runId) ?? [])
       out.push({ kind: 'approval', id: d.id, decision: d.status });
     return out;
+  };
+}
+
+/**
+ * Close what a run was waiting on when it ends for good (Stop, task moved,
+ * goal closed): the question or the permission request leaves the queues
+ * without routing anything back to the (ended) run.
+ */
+export function cancelWaitFrom(
+  ctx: Pick<BotContext, 'askHumanStore' | 'askPermissionStore'>
+): (wait: WorkerWait) => void {
+  return (wait) => {
+    if (wait.kind === 'ask') ctx.askHumanStore?.withdrawById?.(wait.id);
+    else ctx.askPermissionStore?.withdrawById?.(wait.id, 'withdrawn: the run ended');
   };
 }
 
@@ -128,6 +151,7 @@ export function createFleetWorkerPool(opts: FleetWorkerPoolOptions): WorkerPool 
     activityStream: ctx.activityStream,
     wake: opts.wake,
     drainAnswers: drainAnswersFrom(ctx),
+    cancelWait: cancelWaitFrom(ctx),
     logger,
     ...opts.overrides,
   };
