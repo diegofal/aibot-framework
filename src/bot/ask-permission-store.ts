@@ -300,6 +300,37 @@ export class AskPermissionStore {
     return true;
   }
 
+  /**
+   * Close a pending request because its asker went away (a worker run that
+   * ended): no decision is queued or routed — nobody would act on it. The
+   * history keeps it as denied with the note, already consumed. False when it
+   * is not pending.
+   */
+  withdrawById(id: string, note = 'withdrawn'): boolean {
+    const entry = this.pending.get(id);
+    if (!entry) return false;
+    this.logger.info({ id, botId: entry.request.botId }, 'AskPermission: withdrawn');
+    const resolvedAt = Date.now();
+    this.writeHistory(
+      {
+        id,
+        botId: entry.request.botId,
+        action: entry.request.action,
+        resource: entry.request.resource,
+        description: entry.request.description,
+        status: 'denied',
+        createdAt: entry.request.createdAt,
+        resolvedAt,
+        note,
+        ...attributionOf(entry.request),
+      },
+      'consumed'
+    );
+    entry.resolve('denied');
+    this.cleanup(id);
+    return true;
+  }
+
   /** Wire the worker pool (BotManager). Undefined unwires it. */
   setRunRouter(router: RunAnswerRouter | undefined): void {
     this.runRouter = router;

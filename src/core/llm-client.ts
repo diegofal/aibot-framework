@@ -128,7 +128,7 @@ export class ClaudeCliLLMClient implements LLMClient {
     prompt: string,
     system: string | undefined,
     images: string[],
-    call?: { signal?: AbortSignal; priority?: CliPriority }
+    call?: { signal?: AbortSignal; priority?: CliPriority; onSlot?: () => void }
   ): Promise<LLMResponse> {
     const result = await claudeGenerate(prompt, {
       claudePath: this.claudePath,
@@ -139,6 +139,7 @@ export class ClaudeCliLLMClient implements LLMClient {
       images,
       signal: call?.signal,
       priority: call?.priority,
+      onSlot: call?.onSlot,
     });
     return { text: result.response, usage: result.usage };
   }
@@ -195,6 +196,7 @@ export class ClaudeCliLLMClient implements LLMClient {
         disallowedNativeTools: ALL_DISALLOWED_NATIVE_TOOLS,
         signal: opts.signal,
         priority: opts.priority,
+        onSlot: opts.onSlot,
       });
 
       return { text: result.response, usage: result.usage };

@@ -43,6 +43,11 @@ export interface ChatOptions {
    * `interactive` (conversations) > `loop` (default) > `worker`. Ignored by Ollama.
    */
   priority?: import('./core/cli-semaphore').CliPriority;
+  /**
+   * Called once the call holds its Claude CLI slot (claude-cli only): the
+   * time before it was spent in the semaphore queue. Ignored by Ollama.
+   */
+  onSlot?: () => void;
   /** @internal Prevent recursive fallback loops */
   _skipFallbacks?: boolean;
 }

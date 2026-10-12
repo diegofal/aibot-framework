@@ -138,11 +138,17 @@ export function toRunView(run: WorkerRun): WorkerRunView {
 export type JournalEntry = { ts: string; runId: string } & (
   | { kind: 'run-start'; attempt: number }
   | { kind: 'step-start'; n: number }
+  /**
+   * Written before a tool call runs. A start without its `tool` entry means the
+   * call was in flight when the process stopped: recovery treats it as done.
+   */
+  | ({ kind: 'tool-start'; n: number } & Omit<WorkerToolCall, 'ok'>)
   | ({ kind: 'tool'; n: number } & WorkerToolCall)
   | { kind: 'report'; n: number; report: StepReport }
   | { kind: 'step-end'; n: number; summary: string; error?: string }
   | { kind: 'wait'; wait: WorkerWait }
-  | { kind: 'resume'; answer?: string }
+  /** `question`: set when the answer is to another question than the run's last wait. */
+  | { kind: 'resume'; answer?: string; question?: string }
   | { kind: 'run-end'; status: WorkerRunStatus; outcome: WorkerOutcome }
 );
 
@@ -179,6 +185,8 @@ export interface WorkerAnswer {
   decision?: 'approved' | 'denied';
   /** Dismissed, closed stale or cleared: the run ends `blocked`. */
   dismissed?: boolean;
+  /** The question it answers, when the store knows it. */
+  question?: string;
 }
 
 export type StopReason = 'operator' | 'task-moved' | 'goal-closed' | 'shutdown' | 'sweep';
@@ -203,8 +211,13 @@ export interface WorkerPoolApi {
   stop(runId: string, reason: StopReason): boolean;
   /** Start a new attempt of an ended run's task (operator). */
   retry(runId: string): DispatchResult;
-  /** Route an answer / decision / dismissal to the waiting run (phase 2b). */
-  onAnswer(runId: string, answer: WorkerAnswer): void;
+  /**
+   * Route an answer / decision / dismissal to a run (phase 2b). True when the
+   * pool took it. False when no active run has that id, or the run is not
+   * waiting on it yet (its step is still running): the store must then keep
+   * it for `drainAnswers`, which the pool reads when the step parks the run.
+   */
+  onAnswer(runId: string, answer: WorkerAnswer): boolean;
   /** Shutdown: abort every run and persist `interrupted` synchronously before resolving. */
   abortAll(reason: StopReason): Promise<void>;
   /** Boot, before the agent loop starts: re-bind claims of interrupted runs, then re-queue them. */
@@ -280,7 +293,11 @@ export const WORKER_DENIED_TOOLS: readonly string[] = [
   'send_message',
 ];
 
-/** Tool names whose calls are `external` (non-idempotent) for resume. Others: `write` if they write, else `read`. */
+/**
+ * Tool names whose calls are `external` (non-idempotent) for resume. A tool on
+ * no list (custom `create_tool` tools, skill, MCP and A2A tools) is `external`
+ * too; only the known read-only and own-state lists in `worker.ts` are not.
+ */
 export const EXTERNAL_SIDE_EFFECT_TOOLS: readonly string[] = [
   'exec',
   'process',
@@ -289,6 +306,14 @@ export const EXTERNAL_SIDE_EFFECT_TOOLS: readonly string[] = [
   'twitter_post',
   'phone_call',
   'browser',
+  'calendar_schedule',
+  'mesh_publish',
+  'moltbook_register',
+  'create_tool',
+  'collaborate',
+  'delegate_to_bot',
+  'create_agent',
+  'cron',
 ];
 
 // ── Planner output (phase 1) ─────────────────────────────────────────────

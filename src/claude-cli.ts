@@ -64,6 +64,8 @@ export interface ClaudeGenerateOptions {
   signal?: AbortSignal;
   /** Queue priority for the process-wide `claudeCli.maxConcurrent` limiter. Default `loop`. */
   priority?: CliPriority;
+  /** Called once the slot is held, right before the CLI starts (queue time ends). */
+  onSlot?: () => void;
 }
 
 /** Bound on waiting for a tool callback already in flight when a call is aborted. */
@@ -100,6 +102,11 @@ async function withCliSlot<T>(opts: ClaudeGenerateOptions, fn: () => Promise<T>)
   const release = await claudeCliSemaphore.acquire(opts.priority ?? 'loop', opts.signal);
   try {
     throwIfAborted(opts.signal);
+    try {
+      opts.onSlot?.();
+    } catch {
+      // A caller's bookkeeping never fails the call.
+    }
     return await fn();
   } finally {
     release();

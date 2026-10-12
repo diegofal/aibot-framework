@@ -85,6 +85,8 @@ export interface ExecutorTurnInput {
   onStart?: (info: { toolCount: number }) => void;
   /** Claude CLI queue priority (workers queue last). Default: the client's. */
   priority?: CliPriority;
+  /** Claude CLI only: called once the turn holds its CLI slot (queue time ends there). */
+  onLlmSlot?: () => void;
   /**
    * Wraps the tool callback handed to the LLM client: the one place every
    * call passes on both backends (a worker's tool-call budget lives here,
@@ -274,6 +276,7 @@ export async function runExecutorTurn(input: ExecutorTurnInput): Promise<Executo
         maxToolRounds: input.maxToolRounds,
         signal: controller.signal,
         ...(input.priority ? { priority: input.priority } : {}),
+        ...(input.onLlmSlot ? { onSlot: input.onLlmSlot } : {}),
       }),
       guard,
     ]);

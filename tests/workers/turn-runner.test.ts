@@ -84,7 +84,7 @@ function setup(calls: string[], agentLoop: Record<string, unknown> = {}) {
     botId: 'b1',
     toolRegistry: { getDefinitionsForBot: () => tools.map((t) => t.definition) },
   });
-  return { ran, audit, chatOpts, runner };
+  return { ran, audit, chatOpts, runner, ctx };
 }
 
 function env(runTurn: WorkerEnv['runTurn'], budget: Partial<WorkerRun['budget']> = {}): WorkerEnv {
@@ -184,5 +184,51 @@ describe('drainAnswersFrom', () => {
     ]);
     expect(drainAnswersFrom(ctx)('wr-2')).toEqual([]);
     expect(drainAnswersFrom({} as any)('wr-1')).toEqual([]);
+  });
+});
+
+describe('LLM queue time on the real runner (review M4)', () => {
+  test('claude-cli: a slow semaphore queue does not time the step out', async () => {
+    const s = setup([]);
+    const llm: any = {
+      backend: 'claude-cli',
+      chat: async (_messages: any[], opts: any) => {
+        s.chatOpts.push(opts);
+        await new Promise((r) => setTimeout(r, 120)); // waiting for a CLI slot
+        opts.onSlot?.();
+        await opts.toolExecutor('task_done', { note: 'done after the queue' });
+        return { text: 'ok', stopReason: 'completed' };
+      },
+    };
+    const runner = createExecutorTurnRunner({
+      ctx: { ...(s as any).ctx, getLLMClient: () => llm },
+      botId: 'b1',
+      toolRegistry: { getDefinitionsForBot: () => [] },
+    });
+    const e = env(runner);
+    e.config = { ...WORKERS_DEFAULTS, stepTimeoutMs: 40 };
+    const end = await runWorker(e);
+    expect(typeof s.chatOpts[0].onSlot).toBe('function');
+    expect(end.status).toBe('done');
+  });
+
+  test('ollama: no slot callback; the step clock starts with the step', async () => {
+    const s = setup([]);
+    const llm: any = {
+      backend: 'ollama',
+      chat: async (_messages: any[], opts: any) => {
+        s.chatOpts.push(opts);
+        await opts.toolExecutor('task_done', { note: 'ok' });
+        return { text: 'ok', stopReason: 'completed' };
+      },
+    };
+    const runner = createExecutorTurnRunner({
+      ctx: { ...(s as any).ctx, getLLMClient: () => llm },
+      botId: 'b1',
+      toolRegistry: { getDefinitionsForBot: () => [] },
+    });
+    const end = await runWorker(env(runner));
+    expect(s.chatOpts[0].onSlot).toBeUndefined();
+    expect(end.status).toBe('done');
   });
 });

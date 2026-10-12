@@ -175,6 +175,7 @@ const UNCHARGED_FAILURES: ReadonlySet<ToolFailureKind> = new Set<ToolFailureKind
   'exit-nonzero',
   'approval-pending',
   'aborted',
+  'scope',
 ]);
 
 /**

@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ExecutorTurnStopReason, ToolCallback } from '../bot/executor-turn';
 import { runExecutorTurn } from '../bot/executor-turn';
 import type { ToolAttribution, ToolEndEvent } from '../bot/tool-executor';
@@ -21,7 +22,9 @@ import type { BotContext } from '../bot/types';
 import { resolveAgentConfig } from '../config';
 import type { TaskLane } from '../goals/task-store';
 import type { KarmaService } from '../karma/service';
+import { resolvePathParam } from '../tools/file';
 import type { Tool, ToolResult } from '../tools/types';
+import { productionsDirOfTaskWorkDir } from './paths';
 import { createReportTools, isReportTool } from './report-tools';
 import {
   EXTERNAL_SIDE_EFFECT_TOOLS,
@@ -41,29 +44,101 @@ import {
 
 // ── Side effects ─────────────────────────────────────────────────────────
 
-/** Tools that change our own state (files, memory, soul): `write`. */
+/**
+ * Tools that change only our own state (files, memory, soul, the ask and
+ * approval queues, the task): `write`. Replaying them is safe enough.
+ */
 export const WRITE_SIDE_EFFECT_TOOLS: readonly string[] = [
   'file_write',
   'file_edit',
   'file_delete',
   'file_move',
+  'archive_file',
   'save_memory',
   'core_memory_append',
   'core_memory_replace',
   'update_soul',
   'update_identity',
+  'improve',
+  'signal_completion',
+  'ask_human',
+  'ask_permission',
+  'task_progress',
+  'task_done',
+  'task_blocked',
+];
+
+/** Tools that only read (our files and memory, the web, calendars, feeds): `read`. */
+export const READ_SIDE_EFFECT_TOOLS: readonly string[] = [
+  'file_read',
+  'web_search',
+  'web_fetch',
+  'memory_search',
+  'memory_get',
+  'recall_memory',
+  'core_memory_search',
+  'read_production_log',
+  'get_datetime',
+  'calendar_list',
+  'calendar_availability',
+  'reddit_hot',
+  'reddit_read',
+  'reddit_search',
+  'twitter_read',
+  'twitter_search',
+  'mesh_query',
 ];
 
 /**
- * What a call may have done: the contract's external list, plus MCP and A2A
- * tools (a remote server can do anything, so they are never replayed);
- * known writers are `write`; the rest `read`.
+ * What a call may have done. Known readers are `read` and known own-state
+ * writers `write`; everything else is `external` — the contract's list, MCP
+ * and A2A tools (a remote server can do anything), and any tool name we do
+ * not know (custom `create_tool` tools, skill tools): never replayed.
  */
 export function classifySideEffect(name: string): SideEffectClass {
   if (EXTERNAL_SIDE_EFFECT_TOOLS.includes(name)) return 'external';
-  if (name.startsWith('mcp_') || name.startsWith('a2a_')) return 'external';
   if (WRITE_SIDE_EFFECT_TOOLS.includes(name)) return 'write';
-  return 'read';
+  if (READ_SIDE_EFFECT_TOOLS.includes(name)) return 'read';
+  return 'external';
+}
+
+// ── Write root ───────────────────────────────────────────────────────────
+
+/** File tools whose target must stay inside the run's task folder (C11). */
+export const TASK_DIR_WRITE_TOOLS: readonly string[] = [
+  'file_write',
+  'file_edit',
+  'file_delete',
+  'file_move',
+  'archive_file',
+];
+
+export const TASK_DIR_REFUSAL = 'workers write only inside their task directory';
+
+function isWithin(root: string, target: string): boolean {
+  const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const rel = relative(fold(root), fold(target));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * The refusal for a file write outside the task folder, or undefined. Paths
+ * resolve as the executor resolves them: against the task folder, except
+ * `archive_file`, whose path is relative to the bot's productions dir. A call
+ * without a path is left to the tool (it fails on its own).
+ */
+export function taskDirRefusal(
+  name: string,
+  args: Record<string, unknown>,
+  workDir: string
+): string | undefined {
+  if (!TASK_DIR_WRITE_TOOLS.includes(name)) return undefined;
+  const raw = resolvePathParam(args);
+  if (!raw) return undefined;
+  const root = resolve(workDir);
+  const base = name === 'archive_file' ? resolve(productionsDirOfTaskWorkDir(workDir)) : root;
+  if (isWithin(root, resolve(base, raw))) return undefined;
+  return `${TASK_DIR_REFUSAL}: ${root} (refused ${name} on ${raw})`;
 }
 
 /** Tools a worker never gets (orchestration and outreach stay with the cycle). Asks are allowed: they route per run. */
@@ -75,11 +150,12 @@ export function workerDeniedTools(): string[] {
 
 /**
  * The id in a tool result that parks the run: "Question sent (id q-1) — the
- * run will pause …" (ask_human) or "Approval requested (id p-1) for …" (a
- * confirm tool / ask_permission). Parsed defensively: no id, no wait.
+ * run will pause …" (ask_human), "Permission request sent (id p-1, exec on
+ * x) — …" (ask_permission) or "Approval requested (id p-1) for …" (a confirm
+ * tool). Parsed defensively: no id, no wait.
  */
 export function parseWaitId(content: string): string | undefined {
-  const m = /\(id[:\s]+([A-Za-z0-9_.:-]+)\)/.exec(content);
+  const m = /\(id[:\s]+([A-Za-z0-9_.:-]+)[,)]/.exec(content);
   return m?.[1];
 }
 
@@ -91,6 +167,17 @@ export function waitFromToolEnd(e: ToolEndEvent, nowIso: string): WorkerWait | u
     if (!id) return undefined;
     const q = typeof e.args?.question === 'string' ? e.args.question : 'a question';
     return { kind: 'ask', id, question: q.slice(0, 300), since: nowIso };
+  }
+  if (
+    /^\s*Permission request sent/i.test(content) ||
+    (e.toolName === 'ask_permission' && e.success)
+  ) {
+    const id = parseWaitId(content);
+    if (!id) return undefined;
+    const action = typeof e.args?.action === 'string' ? e.args.action : 'an action';
+    const resource = typeof e.args?.resource === 'string' ? e.args.resource : '';
+    const question = `${action}${resource ? ` on ${resource}` : ''}`;
+    return { kind: 'approval', id, question: question.slice(0, 300), since: nowIso };
   }
   if (/^\s*Approval requested/i.test(content) || e.failureKind === 'approval-pending') {
     const id = parseWaitId(content);
@@ -147,7 +234,9 @@ export function buildWorkerPrompt(input: {
     '- A step without a report is a protocol violation; two in a row end your run.',
     '- Your memory between steps is only the step log below: put what the next step needs in the note.',
     `- Write files only inside your task folder: ${c.workDir}`,
-    '- You cannot message people, manage goals, schedule jobs or ask the operator here: if you need any of that, report task_blocked.',
+    '- To ask the operator, call `ask_human` (one question): it pauses the run until the operator answers, and the answer reaches your next step. Report the step as usual after asking.',
+    '- A tool that needs approval files an approval request instead of running; the run waits for the decision. Do not retry it in the same step.',
+    '- You cannot message people, manage goals or schedule jobs here: if the task needs that, report task_blocked and say what is needed.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -247,7 +336,7 @@ export function answersFromJournal(entries: JournalEntry[]): WorkerAnswerRecord[
   for (const e of entries) {
     if (e.kind === 'wait') lastQuestion = e.wait.question;
     else if (e.kind === 'resume' && e.answer)
-      out.push({ question: lastQuestion, answer: e.answer });
+      out.push({ question: e.question ?? lastQuestion, answer: e.answer });
   }
   return out;
 }
@@ -265,6 +354,13 @@ export interface WorkerTurnRequest {
   maxToolRounds: number;
   attribution: ToolAttribution;
   workDir: string;
+  /**
+   * The runner calls this when the turn may wait for an LLM slot (the Claude
+   * CLI semaphore): the step timeout stops counting until `onTurnStart`.
+   */
+  onQueued?: () => void;
+  /** The runner calls this once the LLM call actually starts (slot held). */
+  onTurnStart?: () => void;
 }
 
 export interface WorkerTurnOutcome {
@@ -390,25 +486,85 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
     const onRunAbort = () => step.abort(env.signal.reason);
     if (env.signal.aborted) step.abort(env.signal.reason);
     else env.signal.addEventListener('abort', onRunAbort, { once: true });
-    const wallLeft = Math.max(1, run.budget.wallMs - run.used.wallMs);
-    const stepTimeoutMs = Math.min(config.stepTimeoutMs, wallLeft);
-    const timer = setTimeout(
-      () => step.abort(new StepTimeout(`step timed out after ${stepTimeoutMs}ms`)),
-      stepTimeoutMs
-    );
+    const wallLeftNow = () =>
+      Math.max(1, run.budget.wallMs - run.used.wallMs - (env.now() - stepStart));
+    const wallLeft = wallLeftNow();
+
+    // The step timeout counts the turn's own time, not a wait for an LLM slot
+    // (`onQueued` … `onTurnStart`). While queued, a watchdog keeps the
+    // heartbeat fresh and ends the step only when the time budget is gone.
+    let stepTimer: ReturnType<typeof setTimeout> | undefined;
+    let queueTimer: ReturnType<typeof setTimeout> | undefined;
+    let turnStarted = false;
+    const armStepTimer = () => {
+      const ms = Math.min(config.stepTimeoutMs, wallLeftNow());
+      stepTimer = setTimeout(() => step.abort(new StepTimeout(`step timed out after ${ms}ms`)), ms);
+    };
+    const clearTimers = () => {
+      if (stepTimer) clearTimeout(stepTimer);
+      if (queueTimer) clearTimeout(queueTimer);
+      stepTimer = undefined;
+      queueTimer = undefined;
+    };
+    const onQueued = () => {
+      if (turnStarted || step.signal.aborted) return;
+      clearTimers();
+      const watch = () => {
+        if (turnStarted || step.signal.aborted) return;
+        run.heartbeatAt = new Date(env.now()).toISOString();
+        env.save();
+        if (env.now() - stepStart >= run.budget.wallMs - run.used.wallMs) {
+          step.abort(new StepTimeout('time budget used while waiting for an LLM slot'));
+          return;
+        }
+        queueTimer = setTimeout(watch, Math.min(config.stepTimeoutMs, wallLeftNow()));
+      };
+      queueTimer = setTimeout(watch, Math.min(config.stepTimeoutMs, wallLeftNow()));
+    };
+    const onTurnStart = () => {
+      if (turnStarted) return;
+      turnStarted = true;
+      clearTimers();
+      if (step.signal.aborted) return;
+      run.heartbeatAt = new Date(env.now()).toISOString();
+      armStepTimer();
+    };
+    armStepTimer();
 
     const wrapToolCallback = (inner: ToolCallback): ToolCallback => {
       return async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
         if (report !== undefined) return { success: false, content: REPORTED_MESSAGE };
-        if (!isReportTool(name)) {
-          if (run.used.toolCalls >= run.budget.toolCalls)
-            return { success: false, content: BUDGET_USED_MESSAGE };
-          run.used.toolCalls++;
-          run.currentTool = name;
-          run.heartbeatAt = new Date(env.now()).toISOString();
-          env.onToolStart?.(name);
+        if (isReportTool(name)) return inner(name, args);
+        if (run.used.toolCalls >= run.budget.toolCalls)
+          return { success: false, content: BUDGET_USED_MESSAGE };
+        run.used.toolCalls++;
+        const sideEffect = classifySideEffect(name);
+        const target = toolTarget(args);
+        const refusal = taskDirRefusal(name, args, ctx.workDir);
+        if (refusal) {
+          stepCalls.push({ name, ok: false });
+          env.journal({
+            kind: 'tool',
+            n,
+            name,
+            ok: false,
+            sideEffect,
+            ...(target ? { target } : {}),
+          });
+          return { success: false, content: refusal, failureKind: 'scope' };
         }
-        return inner(name, args);
+        run.currentTool = name;
+        run.heartbeatAt = new Date(env.now()).toISOString();
+        // Before the call: a process that dies during it must not replay it.
+        env.journal({ kind: 'tool-start', n, name, sideEffect, ...(target ? { target } : {}) });
+        env.save();
+        env.onToolStart?.(name);
+        try {
+          return await inner(name, args);
+        } finally {
+          // Stopped during the call: the record keeps the tool that was in flight.
+          if (!env.signal.aborted) run.currentTool = undefined;
+        }
       };
     };
 
@@ -434,8 +590,9 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
           });
         },
         signal: step.signal,
-        // Backstop only: the step's own timer fires first.
-        timeoutMs: stepTimeoutMs + 5_000,
+        // Backstop only: the step's own timers fire first (a queued turn may
+        // legitimately wait longer than one step timeout).
+        timeoutMs: wallLeft + 5_000,
         maxToolRounds: config.maxToolRoundsPerStep,
         attribution: {
           runId: run.runId,
@@ -444,11 +601,13 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
           ...(run.dispatchCycleId ? { dispatchCycleId: run.dispatchCycleId } : {}),
         },
         workDir: ctx.workDir,
+        onQueued,
+        onTurnStart,
       });
     } catch (err) {
       turn = { ok: false, stopReason: 'error', error: err, text: '' };
     } finally {
-      clearTimeout(timer);
+      clearTimers();
       env.signal.removeEventListener('abort', onRunAbort);
     }
 
@@ -456,9 +615,9 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
     const timedOut = step.signal.reason instanceof StepTimeout;
     if (env.signal.aborted) {
       // Stopped mid-step: the step is NOT finished (no step-end), so a resume
-      // re-runs it — unless its journal shows an external side effect.
+      // re-runs it — unless its journal shows an external side effect. A tool
+      // still in flight stays on the record (`currentTool`).
       run.used.wallMs += durationMs;
-      run.currentTool = undefined;
       if (report) run.lastReport = report;
       env.save();
       return stopped();
@@ -592,11 +751,16 @@ export function createExecutorTurnRunner(deps: ExecutorTurnRunnerDeps): WorkerTu
         })
       : undefined;
     const a = req.attribution;
+    const llmClient = ctx.getLLMClient(botId);
+    // Claude CLI turns may queue for a slot: the step clock waits for it.
+    const queues = llmClient.backend === 'claude-cli';
+    if (queues) req.onQueued?.();
+    else req.onTurnStart?.();
     const turn = await runExecutorTurn({
       ctx,
       botId,
       botConfig,
-      llmClient: ctx.getLLMClient(botId),
+      llmClient,
       model: ctx.getActiveModel(botId) || resolveAgentConfig(ctx.config, botConfig).model,
       caller: 'worker',
       prompt: req.prompt,
@@ -614,6 +778,7 @@ export function createExecutorTurnRunner(deps: ExecutorTurnRunnerDeps): WorkerTu
       enforceToolPermissions: enforce,
       breaker: ctx.circuitBreaker,
       priority: 'worker',
+      ...(queues && req.onTurnStart ? { onLlmSlot: req.onTurnStart } : {}),
       wrapToolCallback: req.wrapToolCallback,
       onToolEnd: req.onToolEnd,
       autoAttachFiles: false,

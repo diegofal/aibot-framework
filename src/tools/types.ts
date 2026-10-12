@@ -64,6 +64,8 @@ export interface ToolResult {
    * - `approval-pending` — a `confirm` tool outside a conversation filed an
    *                 approval request instead of running (never awaits): no karma.
    * - `aborted`   — the run was cancelled (cycle timeout, Stop) before the call: no karma.
+   * - `scope`     — a task worker wrote outside its own task folder; refused before
+   *                 the tool ran (the run's write root, not a rule the bot broke): no karma.
    */
   failureKind?: ToolFailureKind;
 }
@@ -75,7 +77,8 @@ export type ToolFailureKind =
   | 'policy'
   | 'exit-nonzero'
   | 'approval-pending'
-  | 'aborted';
+  | 'aborted'
+  | 'scope';
 
 /**
  * A complete tool: its schema definition + execution logic

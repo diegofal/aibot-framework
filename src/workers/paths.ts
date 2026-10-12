@@ -13,3 +13,8 @@ export function runJournalPath(dataDir: string, botId: string, runId: string): s
 export function taskWorkDir(botProductionsDir: string, taskId: string): string {
   return join(botProductionsDir, 'tasks', taskId);
 }
+
+/** The inverse of `taskWorkDir`: the bot's productions dir of a task folder. */
+export function productionsDirOfTaskWorkDir(workDir: string): string {
+  return join(workDir, '..', '..');
+}

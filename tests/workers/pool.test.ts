@@ -8,15 +8,22 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AskHumanStore } from '../../src/bot/ask-human-store';
+import { AskPermissionStore } from '../../src/bot/ask-permission-store';
 import { TaskStore } from '../../src/goals/task-store';
+import type { Logger } from '../../src/logger';
+import type { ToolResult } from '../../src/tools/types';
 import { WorkerPool, type WorkerPoolDeps } from '../../src/workers/pool';
 import { WorkerRunStore } from '../../src/workers/run-store';
 import {
   type JournalEntry,
   WORKERS_DEFAULTS,
+  type WorkerAnswer,
   type WorkerEvent,
+  type WorkerWait,
   type WorkersConfig,
 } from '../../src/workers/types';
+import { cancelWaitFrom, drainAnswersFrom } from '../../src/workers/wiring';
 import type { WorkerTurnRequest } from '../../src/workers/worker';
 
 const GOALS = `## Active Goals
@@ -87,6 +94,13 @@ function makePool(
   opts: {
     scripts?: Map<string, Step[]>;
     onTurn?: (req: WorkerTurnRequest, pool: WorkerPool) => void;
+    /** A non-report tool's result (default: ok). */
+    tool?: (
+      name: string,
+      args: Record<string, unknown>,
+      req: WorkerTurnRequest
+    ) => Promise<ToolResult> | ToolResult;
+    deps?: Partial<WorkerPoolDeps>;
   } = {}
 ): Harness {
   const events: WorkerEvent[] = [];
@@ -146,7 +160,9 @@ function makePool(
         const extra = req.extraTools.find((t) => t.definition.function.name === name);
         const result = extra
           ? await extra.execute(args, undefined as never)
-          : { success: true, content: 'ok' };
+          : opts.tool
+            ? await opts.tool(name, args, req)
+            : { success: true, content: 'ok' };
         req.onToolEnd({
           toolName: name,
           args,
@@ -163,6 +179,7 @@ function makePool(
       for (const c of script) await cb(c.name, c.args ?? {});
       return { ok: true, stopReason: 'completed', text: '' };
     },
+    ...opts.deps,
   };
   const pool = new WorkerPool(deps);
   pool.subscribe((e) => events.push(e));
@@ -594,4 +611,345 @@ describe('sweep', () => {
     expect(task?.lane).toBe('todo');
     h.pool.dispose();
   });
+});
+
+function makeLogger() {
+  const warns: string[] = [];
+  const logger: any = {
+    info: () => {},
+    debug: () => {},
+    error: () => {},
+    warn: (_o: unknown, msg?: string) => warns.push(String(msg ?? _o)),
+  };
+  logger.child = () => logger;
+  return { logger: logger as Logger, warns };
+}
+
+describe('review fixes: answers that arrive while the step runs (B1)', () => {
+  function withStores() {
+    const log = makeLogger();
+    const ask = new AskHumanStore(log.logger, join(root, 'ask-human'));
+    const perms = new AskPermissionStore(log.logger, join(root, 'ask-permission'));
+    const asked: string[] = [];
+    const harness = makePool(
+      {},
+      {
+        tool: (name, args, req) => {
+          if (name !== 'ask_human') return { success: true, content: 'ok' };
+          const q = ask.ask('b1', 0, String(args.question), undefined, Date.now(), {
+            runId: req.attribution.runId as string,
+          });
+          q.promise.catch(() => {});
+          asked.push(q.id);
+          if (typeof args.after === 'function') (args.after as (id: string) => void)(q.id);
+          return { success: true, content: `Question sent (id ${q.id}) — the run will pause.` };
+        },
+        deps: {
+          drainAnswers: drainAnswersFrom({
+            askHumanStore: ask,
+            askPermissionStore: perms,
+          } as never),
+        },
+      }
+    );
+    const route = (runId: string, a: WorkerAnswer) => harness.pool.onAnswer(runId, a);
+    ask.setRunRouter(route);
+    perms.setRunRouter(route);
+    return { ...harness, ask, perms, asked, log };
+  }
+
+  test('an answer given before the step ends resumes the run with it', async () => {
+    const s = withStores();
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    s.scripts.set(t, [
+      [
+        {
+          name: 'ask_human',
+          args: { question: 'Which tone?', after: (id: string) => s.ask.answerById(id, 'Formal') },
+        },
+        progress('asked'),
+      ],
+      [done()],
+    ]);
+    const [r] = s.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => s.pool.get(runId)?.status === 'done');
+    expect(s.requests[1].prompt.user).toContain('Formal');
+    expect(s.ask.consumeAnswersForRun(runId)).toEqual([]);
+    s.pool.dispose();
+  });
+
+  test('a dismissal before the step ends ends the run blocked', async () => {
+    const s = withStores();
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    s.scripts.set(t, [
+      [
+        {
+          name: 'ask_human',
+          args: { question: 'Which tone?', after: (id: string) => s.ask.dismissById(id) },
+        },
+        progress('asked'),
+      ],
+      'hang',
+    ]);
+    const [r] = s.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => s.pool.get(runId)?.status === 'blocked');
+    expect(tasks('b1').get(t)?.lane).toBe('blocked');
+    expect(s.requests).toHaveLength(1);
+    s.pool.dispose();
+  });
+
+  test('a second wait opened in the same step: its early answer is kept, not dropped', async () => {
+    const s = withStores();
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    s.scripts.set(t, [
+      [
+        { name: 'ask_human', args: { question: 'Tone?' } },
+        {
+          name: 'ask_human',
+          args: { question: 'Length?', after: (id: string) => s.ask.answerById(id, 'Short') },
+        },
+        progress('asked twice'),
+      ],
+      [done()],
+    ]);
+    const [r] = s.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => s.pool.get(runId)?.status === 'waiting');
+    expect(s.pool.get(runId)?.wait?.id).toBe(s.asked[0]);
+    // The sweep drains what the stores kept: the run keeps waiting for the first question.
+    s.pool.sweep();
+    expect(s.pool.get(runId)?.status).toBe('waiting');
+    expect(s.ask.answerById(s.asked[0], 'Formal').ok).toBe(true);
+    await until(() => s.pool.get(runId)?.status === 'done');
+    expect(s.requests[1].prompt.user).toContain('Formal');
+    expect(s.requests[1].prompt.user).toContain('Short');
+    expect(s.requests[1].prompt.user).toContain('Length?');
+    s.pool.dispose();
+  });
+});
+
+describe('review fixes: stopping a waiting run withdraws its ask (S7)', () => {
+  test('Stop on a waiting run withdraws the question; no answer is routed back', async () => {
+    const cancelled: WorkerWait[] = [];
+    const h = makePool(
+      {},
+      {
+        onTurn: (req, pool) =>
+          pool.markWaiting(req.attribution.runId as string, {
+            kind: 'ask',
+            id: 'q-5',
+            question: 'q',
+            since: 'x',
+          }),
+        deps: { cancelWait: (w) => cancelled.push(w) },
+      }
+    );
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    h.scripts.set(t, [[progress()]]);
+    const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => h.pool.get(runId)?.status === 'waiting');
+    expect(h.pool.stop(runId, 'operator')).toBe(true);
+    expect(h.pool.get(runId)?.status).toBe('stopped');
+    expect(cancelled).toMatchObject([{ kind: 'ask', id: 'q-5' }]);
+    // A late answer for the ended run is not taken.
+    expect(h.pool.onAnswer(runId, { kind: 'ask', id: 'q-5', answer: 'late' })).toBe(false);
+    h.pool.dispose();
+  });
+
+  test('with the real stores: the pending question and permission are closed', async () => {
+    const log = makeLogger();
+    const ask = new AskHumanStore(log.logger, join(root, 'ask-human'));
+    const perms = new AskPermissionStore(log.logger, join(root, 'ask-permission'));
+    const q = ask.ask('b1', 0, 'Tone?', undefined, Date.now(), { runId: 'placeholder' });
+    q.promise.catch(() => {});
+    const p = perms.request('b1', 'exec', 'deploy', 'd', 'normal', { runId: 'placeholder' });
+    const cancel = cancelWaitFrom({ askHumanStore: ask, askPermissionStore: perms } as never);
+    cancel({ kind: 'ask', id: q.id, question: 'Tone?', since: 'x' });
+    cancel({ kind: 'approval', id: p.id, question: 'exec', since: 'x' });
+    expect(ask.getPendingForBot('b1')).toEqual([]);
+    expect(perms.getPendingForBot('b1')).toEqual([]);
+    expect(await p.promise).toBe('denied');
+  });
+
+  test('a dismissal that ends the run does not try to withdraw it again', async () => {
+    const cancelled: WorkerWait[] = [];
+    const h = makePool(
+      {},
+      {
+        onTurn: (req, pool) =>
+          pool.markWaiting(req.attribution.runId as string, {
+            kind: 'ask',
+            id: 'q-6',
+            question: 'q',
+            since: 'x',
+          }),
+        deps: { cancelWait: (w) => cancelled.push(w) },
+      }
+    );
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    h.scripts.set(t, [[progress()]]);
+    const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => h.pool.get(runId)?.status === 'waiting');
+    expect(h.pool.onAnswer(runId, { kind: 'ask', id: 'q-6', dismissed: true })).toBe(true);
+    expect(h.pool.get(runId)?.status).toBe('blocked');
+    expect(cancelled).toEqual([]);
+    h.pool.dispose();
+  });
+});
+
+describe('review fixes: in-flight external call at shutdown (S3)', () => {
+  const hangingTool =
+    (ran: string[]) =>
+    async (name: string, _args: Record<string, unknown>, req: WorkerTurnRequest) => {
+      ran.push(name);
+      await new Promise<void>((resolve) => {
+        if (req.signal.aborted) resolve();
+        else req.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return { success: false, content: 'aborted' };
+    };
+
+  test('killed mid external call: recover ends the run blocked, the call is not re-run', async () => {
+    const ran: string[] = [];
+    const a = makePool({}, { tool: hangingTool(ran) });
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    a.scripts.set(t, [[{ name: 'twitter_post', args: { text: 'launch!' } }, progress()]]);
+    a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    await until(() => ran.length === 1);
+    const runId = a.pool.list('b1')[0].runId;
+    // The process dies now: no abortAll, no tool end in the journal.
+    const persisted = JSON.parse(
+      readFileSync(join(root, 'data', 'workers', 'b1', 'runs.json'), 'utf-8')
+    ).runs[0];
+    expect(persisted).toMatchObject({ status: 'running', currentTool: 'twitter_post' });
+
+    const b = makePool();
+    b.pool.recover();
+    const ended = b.pool.get(runId);
+    expect(ended?.status).toBe('blocked');
+    expect(ended?.outcome?.note).toContain('twitter_post');
+    expect(tasks('b1').get(t)?.lane).toBe('blocked');
+    await settle();
+    expect(b.requests).toHaveLength(0);
+    b.pool.dispose();
+    await a.pool.abortAll('shutdown');
+    a.pool.dispose();
+  });
+
+  test('abortAll keeps the tool in flight on the interrupted record', async () => {
+    const ran: string[] = [];
+    const a = makePool({}, { tool: hangingTool(ran) });
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    a.scripts.set(t, [[{ name: 'twitter_post', args: { text: 'launch!' } }, progress()]]);
+    a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    await until(() => ran.length === 1);
+    await a.pool.abortAll('shutdown');
+    a.pool.dispose();
+    const persisted = JSON.parse(
+      readFileSync(join(root, 'data', 'workers', 'b1', 'runs.json'), 'utf-8')
+    ).runs[0];
+    expect(persisted).toMatchObject({ status: 'interrupted', currentTool: 'twitter_post' });
+  });
+
+  test('an in-flight read call is replayed as before', async () => {
+    const ran: string[] = [];
+    const a = makePool({}, { tool: hangingTool(ran) });
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    a.scripts.set(t, [[{ name: 'web_search', args: { q: 'x' } }, progress()]]);
+    a.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    await until(() => ran.length === 1);
+    await a.pool.abortAll('shutdown');
+    a.pool.dispose();
+    const b = makePool();
+    b.scripts.set(t, [[done()]]);
+    b.pool.recover();
+    const run = b.pool.list('b1')[0];
+    await until(() => b.pool.get(run.runId)?.status === 'done');
+    b.pool.dispose();
+  });
+});
+
+describe('review fixes: bot stop and start (S9, M2)', () => {
+  test('a bot stop interrupts its runs and keeps their claims; kick resumes them', async () => {
+    const running = { b1: true };
+    const h = makePool({}, { deps: { isBotRunning: (b) => running[b as 'b1'] ?? false } });
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    h.scripts.set(t, ['hang', [done('resumed')]]);
+    const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    await until(() => h.requests.length === 1);
+    running.b1 = false;
+    expect(h.pool.stop(runId, 'shutdown')).toBe(true);
+    await until(() => h.pool.get(runId)?.status === 'interrupted');
+    expect(tasks('b1').get(t)?.claim?.runId).toBe(runId);
+    expect(h.pool.get(runId)?.outcome).toBeUndefined();
+    expect(h.events.some((e) => e.type === 'worker:ended')).toBe(false);
+
+    running.b1 = true;
+    h.pool.kick('b1');
+    await until(() => h.pool.get(runId)?.status === 'done');
+    expect(h.pool.get(runId)?.attempt).toBe(2);
+    h.pool.dispose();
+  });
+
+  test('a queued run interrupted by a bot stop resumes without using an attempt', async () => {
+    const running = { b1: true };
+    const h = makePool(
+      { maxPerBot: 1 },
+      { deps: { isBotRunning: (b) => running[b as 'b1'] ?? false } }
+    );
+    running.b1 = false;
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    h.scripts.set(t, [[done()]]);
+    const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    const runId = (r as { runId: string }).runId;
+    expect(h.pool.get(runId)?.status).toBe('queued');
+    h.pool.stop(runId, 'shutdown');
+    expect(h.pool.get(runId)?.status).toBe('interrupted');
+    running.b1 = true;
+    h.pool.kick('b1');
+    await until(() => h.pool.get(runId)?.status === 'done');
+    expect(h.pool.get(runId)?.attempt).toBe(1);
+    h.pool.dispose();
+  });
+
+  test('kick starts queued runs at once, without waiting for the sweep', async () => {
+    const running = { b1: false };
+    const h = makePool({}, { deps: { isBotRunning: (b) => running[b as 'b1'] ?? false } });
+    const t = addTask('b1', 'g-aaaaaaaa', 'one');
+    h.scripts.set(t, [[done()]]);
+    h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+    await settle();
+    expect(h.requests).toHaveLength(0);
+    running.b1 = true;
+    h.pool.kick();
+    await until(() => h.requests.length === 1);
+    h.pool.dispose();
+  });
+});
+
+describe('review fixes: no stale-token release (M3)', () => {
+  for (const reason of ['task-moved', 'goal-closed'] as const) {
+    test(`${reason}: the run ends without a "release failed" warning`, async () => {
+      const log = makeLogger();
+      const h = makePool({}, { deps: { logger: log.logger } });
+      const t = addTask('b1', 'g-aaaaaaaa', 'one');
+      const [r] = h.pool.dispatch({ botId: 'b1', taskIds: [t], cycleId: null });
+      const runId = (r as { runId: string }).runId;
+      await until(() => h.requests.length === 1);
+      // The move / the closure released the claim already.
+      const tok = tasks('b1').get(t)?.claim?.token as string;
+      tasks('b1').apply([{ op: 'release', id: t, token: tok, lane: 'todo' }], {
+        actor: 'operator',
+      });
+      expect(h.pool.stop(runId, reason)).toBe(true);
+      await until(() => h.pool.get(runId)?.status === 'stopped');
+      expect(log.warns.filter((w) => w.includes('release failed'))).toEqual([]);
+      h.pool.dispose();
+    });
+  }
 });

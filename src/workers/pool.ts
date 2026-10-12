@@ -40,6 +40,8 @@ import {
   type WorkerRun,
   type WorkerRunStatus,
   type WorkerRunView,
+  type WorkerStepRecord,
+  type WorkerToolCall,
   type WorkerWait,
   type WorkersConfig,
   isActiveRun,
@@ -97,6 +99,11 @@ export interface WorkerPoolDeps {
    * stores keep them). Drained on recover, when a run starts and by the sweep.
    */
   drainAnswers?: (runId: string) => WorkerAnswer[];
+  /**
+   * A run that ends for good while waiting: close its question / permission
+   * request without routing anything back to it (wired to the ask stores).
+   */
+  cancelWait?: (wait: WorkerWait) => void;
   now?: () => number;
   logger?: Logger;
 }
@@ -116,6 +123,10 @@ export class WorkerPool implements WorkerPoolApi {
   private readonly running = new Map<string, Promise<void>>();
   private readonly stopReasons = new Map<string, StopReason>();
   private readonly pendingWaits = new Map<string, WorkerWait>();
+  /** Answers to another question of a waiting run: kept until it waits on it or runs again. */
+  private readonly held = new Map<string, WorkerAnswer[]>();
+  /** Runs loaded from disk that nothing has resumed yet (recover / kick take them). */
+  private readonly survivors = new Set<string>();
   private readonly listeners = new Set<(e: WorkerEvent) => void>();
   private readonly wakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly daily = new Map<string, { day: string; steps: number }>();
@@ -128,7 +139,10 @@ export class WorkerPool implements WorkerPoolApi {
     this.now = deps.now ?? (() => Date.now());
     // Load what survived the last process so dispatch never overwrites it.
     for (const botId of deps.store.listBots()) {
-      for (const run of deps.store.loadActive(botId)) this.runs.set(run.runId, run);
+      for (const run of deps.store.loadActive(botId)) {
+        this.runs.set(run.runId, run);
+        this.survivors.add(run.runId);
+      }
     }
   }
 
@@ -190,6 +204,8 @@ export class WorkerPool implements WorkerPoolApi {
   stop(runId: string, reason: StopReason): boolean {
     const run = this.runs.get(runId);
     if (!run || !isActiveRun(run.status)) return false;
+    // The move / the closure already released (or releases) the claim itself.
+    if (reason === 'task-moved' || reason === 'goal-closed') run.claimToken = undefined;
     this.stopReasons.set(runId, reason);
     const ctl = this.controllers.get(runId);
     if (ctl) {
@@ -224,7 +240,11 @@ export class WorkerPool implements WorkerPoolApi {
     return r.ok ? { ...r, queued: this.runs.get(r.runId)?.status === 'queued' } : r;
   }
 
-  /** Accepts an answer for a waiting run. True when it reached the run. */
+  /**
+   * Accepts an answer for a run waiting on it. False otherwise (no such active
+   * run, its step still running, or it waits on another question): the store
+   * keeps the answer and `drainFor` picks it up when the run parks.
+   */
   onAnswer(runId: string, answer: WorkerAnswer): boolean {
     const run = this.runs.get(runId);
     if (!run || run.status !== 'waiting') {
@@ -259,7 +279,7 @@ export class WorkerPool implements WorkerPoolApi {
     const bots = new Set<string>();
     for (const run of this.runs.values()) {
       if (run.status === 'running' || run.status === 'queued') run.status = 'interrupted';
-      run.currentTool = undefined;
+      // `currentTool` stays: the record says which call was in flight.
       this.stopReasons.set(run.runId, reason);
       bots.add(run.botId);
     }
@@ -282,8 +302,42 @@ export class WorkerPool implements WorkerPoolApi {
 
   recover(): void {
     this.shuttingDown = false;
+    this.resume(this.resumable());
+    this.ensureSweep();
+    this.pump();
+  }
+
+  /**
+   * A bot (re)started: resume its interrupted runs (a bot stop keeps their
+   * claims) and start whatever is queued, without waiting for the sweep.
+   * Without a bot id, every bot.
+   */
+  kick(botId?: string): void {
+    if (this.shuttingDown) return;
+    this.resume(this.resumable(botId));
+    this.ensureSweep();
+    this.pump();
+  }
+
+  /** Runs nothing is running: loaded from disk and not resumed yet, or interrupted here. */
+  private resumable(botId?: string): WorkerRun[] {
+    return [...this.runs.values()].filter(
+      (r) =>
+        (!botId || r.botId === botId) &&
+        !this.running.has(r.runId) &&
+        (this.survivors.has(r.runId) || r.status === 'interrupted')
+    );
+  }
+
+  /**
+   * Re-bind every claim before anything is queued, then resume, block or fail
+   * each run. A step cut in the middle uses an attempt and is never replayed
+   * when it did (or was doing) something external.
+   */
+  private resume(survivors: WorkerRun[]): void {
+    if (survivors.length === 0) return;
     const cfg = this.deps.config();
-    const survivors = [...this.runs.values()];
+    for (const run of survivors) this.survivors.delete(run.runId);
 
     // 1. Re-bind every claim before anything is queued, so a cycle that runs
     //    right after boot can never dispatch the same task twice.
@@ -310,7 +364,8 @@ export class WorkerPool implements WorkerPoolApi {
       const external = unfinished?.toolCalls.find((t) => t.sideEffect === 'external');
       if (external) {
         const what = `${external.name}${external.target ? ` (${external.target})` : ''}`;
-        const note = `interrupted after ${what}; check it before retrying`;
+        const during = unfinished?.inFlight.includes(external);
+        const note = `interrupted ${during ? 'during' : 'after'} ${what}; check it before retrying`;
         this.endRun(run, 'blocked', { kind: 'interrupted', note }, { lane: 'blocked', note });
         continue;
       }
@@ -319,7 +374,8 @@ export class WorkerPool implements WorkerPoolApi {
         this.endRun(run, 'stopped', { kind: 'interrupted', note }, { lane: 'todo', note });
         continue;
       }
-      const attempt = run.attempt + 1;
+      // Only a step cut in the middle costs an attempt (a queued run never ran).
+      const attempt = unfinished ? run.attempt + 1 : run.attempt;
       if (attempt > cfg.maxAttempts) {
         const note = `interrupted; ${run.attempt} of ${cfg.maxAttempts} attempts used`;
         this.endRun(run, 'failed', { kind: 'interrupted', note }, { lane: 'blocked', note });
@@ -331,8 +387,6 @@ export class WorkerPool implements WorkerPoolApi {
       this.persist(run.botId);
       this.publish('worker:queued', run);
     }
-    this.ensureSweep();
-    this.pump();
   }
 
   stats(): WorkerPoolStats {
@@ -364,6 +418,12 @@ export class WorkerPool implements WorkerPoolApi {
     if (this.shuttingDown) return;
     const cfg = this.deps.config();
     const now = this.now();
+    // A bot that is running again but was never kicked: resume its interrupted runs.
+    this.resume(
+      this.resumable().filter(
+        (r) => r.status === 'interrupted' && (this.deps.isBotRunning?.(r.botId) ?? true)
+      )
+    );
     for (const run of [...this.runs.values()]) {
       if (run.status === 'running') {
         const hb = Date.parse(run.heartbeatAt ?? run.startedAt ?? run.createdAt);
@@ -627,9 +687,8 @@ export class WorkerPool implements WorkerPoolApi {
     this.stopReasons.delete(run.runId);
 
     if (this.shuttingDown || reason === 'shutdown') {
-      // Keep the claim; recover resumes it.
+      // Keep the claim (and the tool in flight); recover / kick resume it.
       run.status = 'interrupted';
-      run.currentTool = undefined;
       this.persist(run.botId);
       return;
     }
@@ -663,11 +722,23 @@ export class WorkerPool implements WorkerPoolApi {
       if (rel) this.release(run, rel.lane, rel.note);
       else if (status !== 'done' && status !== 'blocked') this.release(run, 'todo', outcome.note);
     }
+    const wait = run.wait;
     run.status = status;
     run.outcome = outcome;
     run.endedAt = new Date(this.now()).toISOString();
     run.currentTool = undefined;
     run.wait = undefined;
+    this.held.delete(run.runId);
+    if (wait && this.deps.cancelWait) {
+      try {
+        this.deps.cancelWait(wait);
+      } catch (err) {
+        this.deps.logger?.warn(
+          { err, runId: run.runId, waitId: wait.id },
+          'Workers: could not withdraw the wait'
+        );
+      }
+    }
     this.journalOf(run, { kind: 'run-end', status, outcome });
     this.runs.delete(run.runId);
     this.persist(run.botId);
@@ -686,6 +757,8 @@ export class WorkerPool implements WorkerPoolApi {
 
   private applyAnswer(run: WorkerRun, answer: WorkerAnswer): void {
     if (answer.dismissed) {
+      // The question is closed already: nothing to withdraw.
+      run.wait = undefined;
       this.journalOf(run, { kind: 'resume' });
       const note = 'the question was dismissed';
       this.endRun(run, 'blocked', { kind: 'blocked', note }, { lane: 'blocked', note });
@@ -703,29 +776,46 @@ export class WorkerPool implements WorkerPoolApi {
     this.publish('worker:queued', run);
   }
 
-  /** Answers that arrived while no pool took them (phase 2b stores). */
+  /**
+   * Answers that arrived while the pool could not take them (the stores keep
+   * them), plus answers held for another question of this run. A waiting run
+   * resumes with the one it waits on; an answer to another of its questions
+   * is held until it waits on that one or runs again; a running or queued run
+   * gets them in its journal, so its next step reads them.
+   */
   private drainFor(run: WorkerRun): void {
-    if (!this.deps.drainAnswers) return;
-    let answers: WorkerAnswer[];
-    try {
-      answers = this.deps.drainAnswers(run.runId);
-    } catch (err) {
-      this.deps.logger?.warn({ err, runId: run.runId }, 'Workers: draining answers failed');
-      return;
-    }
-    for (const a of answers) {
-      if (run.status === 'waiting') {
-        if (!run.wait || run.wait.id === a.id) {
-          this.applyAnswer(run, a);
-          if (!this.runs.has(run.runId)) return;
-        }
-      } else {
-        // Already running (or queued): record it so the next step reads it.
-        if (a.dismissed) continue;
-        const text = a.answer ?? (a.decision ? `Permission ${a.decision}` : '');
-        if (text) this.journalOf(run, { kind: 'resume', answer: text });
+    const answers = this.held.get(run.runId) ?? [];
+    this.held.delete(run.runId);
+    if (this.deps.drainAnswers) {
+      try {
+        answers.push(...this.deps.drainAnswers(run.runId));
+      } catch (err) {
+        this.deps.logger?.warn({ err, runId: run.runId }, 'Workers: draining answers failed');
       }
     }
+    const keep: WorkerAnswer[] = [];
+    for (const a of answers) {
+      if (!this.runs.has(run.runId)) return;
+      if (run.status === 'waiting') {
+        if (!run.wait || run.wait.id === a.id) this.applyAnswer(run, a);
+        else keep.push(a);
+      } else this.recordEarlyAnswer(run, a);
+    }
+    if (keep.length === 0 || !this.runs.has(run.runId)) return;
+    if (run.status === 'waiting') this.held.set(run.runId, keep);
+    else for (const a of keep) this.recordEarlyAnswer(run, a);
+  }
+
+  /** An answer the run did not wait on: journaled for its next step (dismissals dropped). */
+  private recordEarlyAnswer(run: WorkerRun, a: WorkerAnswer): void {
+    if (a.dismissed) return;
+    const text = a.answer ?? (a.decision ? `Permission ${a.decision}` : '');
+    if (text)
+      this.journalOf(run, {
+        kind: 'resume',
+        answer: text,
+        ...(a.question ? { question: a.question } : {}),
+      });
   }
 
   // ── Claims ─────────────────────────────────────────────────────────────
@@ -942,13 +1032,39 @@ export class WorkerPool implements WorkerPoolApi {
   }
 }
 
-/** The step a run was in when it stopped: started, never ended. */
-export function unfinishedStep(journal: JournalEntry[]) {
-  const ended = new Set(
-    journal.filter((e) => e.kind === 'step-end').map((e) => (e as { n: number }).n)
-  );
-  const starts = journal.filter((e) => e.kind === 'step-start') as Array<{ n: number }>;
-  const last = starts.at(-1);
-  if (!last || ended.has(last.n)) return undefined;
-  return stepsFromJournal(journal).find((s) => s.n === last.n);
+/**
+ * The step a run was in when it stopped: started, never ended. `inFlight`:
+ * calls journaled as started without their end (the process stopped during
+ * them); they count as done, so they are in `toolCalls` too.
+ */
+export function unfinishedStep(
+  journal: JournalEntry[]
+): (WorkerStepRecord & { inFlight: WorkerToolCall[] }) | undefined {
+  let lastStart = -1;
+  for (let i = journal.length - 1; i >= 0; i--) {
+    if (journal[i].kind === 'step-start') {
+      lastStart = i;
+      break;
+    }
+  }
+  if (lastStart < 0) return undefined;
+  const n = (journal[lastStart] as { n: number }).n;
+  if (journal.some((e) => e.kind === 'step-end' && e.n === n)) return undefined;
+  const record = stepsFromJournal(journal).find((s) => s.n === n);
+  if (!record) return undefined;
+  const inFlight: WorkerToolCall[] = [];
+  for (const e of journal.slice(lastStart + 1)) {
+    if (e.kind === 'tool-start' && e.n === n) {
+      inFlight.push({
+        name: e.name,
+        ok: false,
+        sideEffect: e.sideEffect,
+        ...(e.target ? { target: e.target } : {}),
+      });
+    } else if (e.kind === 'tool' && e.n === n) {
+      const i = inFlight.findIndex((c) => c.name === e.name);
+      if (i >= 0) inFlight.splice(i, 1);
+    }
+  }
+  return { ...record, toolCalls: [...record.toolCalls, ...inFlight], inFlight };
 }

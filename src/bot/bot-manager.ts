@@ -223,8 +223,9 @@ export class BotManager {
     const routeToRun: RunAnswerRouter = (runId, answer) => {
       const pool = this.botContext?.workerPool;
       if (!pool) return false;
-      pool.onAnswer(runId, answer);
-      return true;
+      // False while the run's step is still running: the store keeps the
+      // answer and the pool drains it when the step parks the run.
+      return pool.onAnswer(runId, answer);
     };
     this.askHumanStore.setRunRouter(routeToRun);
     this.askPermissionStore.setRunRouter(routeToRun);
@@ -879,6 +880,14 @@ export class BotManager {
       // Wake the agent loop so it picks up the new bot immediately
       if (this.config.agentLoop.enabled) this.agentLoop.wakeUp();
 
+      // Its workers: resume runs a bot stop interrupted and start queued ones
+      // now, not at the next sweep. Never fails the start.
+      try {
+        this.workerPool?.kick(config.id);
+      } catch (err) {
+        this.logger.warn({ err, botId: config.id }, 'Workers: kick failed');
+      }
+
       // Emit webhook for bot start (fire-and-forget)
       if (config.tenantId && this.webhookService) {
         this.webhookService
@@ -1110,10 +1119,12 @@ export class BotManager {
       this.webhookService.emit(botConfig.tenantId, 'bot.stopped', { botId }, botId).catch(() => {});
     }
 
-    // A stopped bot's workers stop too (their tasks go back to To do).
+    // A stopped bot's workers are interrupted, not stopped: claims and waits
+    // are kept, and startBot resumes them (a restart or a tenant suspension is
+    // not the operator stopping the work).
     if (this.workerPool) {
       for (const run of this.workerPool.list(botId, { endedLimit: 0 })) {
-        this.workerPool.stop(run.runId, 'operator');
+        this.workerPool.stop(run.runId, 'shutdown');
       }
     }
 
@@ -1224,14 +1235,18 @@ export class BotManager {
     return undefined;
   }
 
+  /** Abort every worker run, persisting `interrupted` (claims kept) so boot resumes them. */
+  private async interruptWorkers(): Promise<void> {
+    if (!this.workerPool) return;
+    await this.workerPool.abortAll('shutdown').catch((err) => {
+      this.logger.error({ err }, 'Workers: abortAll failed');
+    });
+    this.workerPool.dispose();
+  }
+
   async stopAll(): Promise<void> {
     // Workers first: persist `interrupted` (claims kept) so boot can resume them.
-    if (this.workerPool) {
-      await this.workerPool.abortAll('shutdown').catch((err) => {
-        this.logger.error({ err }, 'Workers: abortAll failed');
-      });
-      this.workerPool.dispose();
-    }
+    await this.interruptWorkers();
     this.stopTaskChangeForwarding();
     this.agentLoop.stop();
     this.messageBuffer.dispose();
@@ -1265,6 +1280,9 @@ export class BotManager {
 
   /** Gracefully stop all: drain agent loop (wait for executing cycles), then full cleanup */
   async gracefulStopAll(timeoutMs?: number): Promise<void> {
+    // Workers first, as in stopAll: persist `interrupted` (claims kept).
+    await this.interruptWorkers();
+    this.stopTaskChangeForwarding();
     // Phase 1: Drain agent loop — executing bots finish their current cycle
     await this.agentLoop.gracefulStop(timeoutMs);
     // Phase 2: Full cleanup (same as stopAll)
