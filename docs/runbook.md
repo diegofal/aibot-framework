@@ -564,3 +564,26 @@ docker compose build
 **Outcome.** Backup written to `D:\aibot-backups\aibot-backup-2026-10-12T00-33-52`; the script restarted `aibot`. Image `aibot-framework:latest` built with the relay code. The recreate (`docker compose up -d`) and moving the shared web session `bot:default:private:0` out of `sessions/` were refused by the session's permission classifier and are left for Diego to run.
 
 **Reversible?** Yes: the backup restores with `bun scripts/docker/backup.ts restore … --force`.
+
+### 2026-10-12 00:45Z — Deployed `9c590a7` (relays) and cleaned Finny's directory and web session
+
+| | |
+| --- | --- |
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Ship relays; Finny's text for the operator sat in the shared anonymous widget session, and an old web-only "operator" contact kept its own entry |
+
+```bash
+docker compose stop aibot
+MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps --entrypoint bun aibot -e "$(cat /d/tmp/clear-shared-web-session.js)"
+docker compose up -d
+# then, with the container stopped again: append two lines to /app/data/user-directory/default.jsonl
+# (old web-only operator entry -> metadata.mergedInto = operator id; operator gets its name and email as aliases)
+docker compose stop aibot
+MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps --entrypoint bun aibot -e '<append merge lines>'
+docker compose up -d
+```
+
+**Outcome.** `bot:default:private:0` moved to `/app/data/_trash/2026-10-12T00-45-20-629Z-relay-shared-web-session/` (13 sessions left). The image has `src/relay/`. On boot, `startBot` seeded the operator: one `role: operator` contact with Telegram + the config email. After the merge, the operator's name, "operador", the old contact's name and its email all resolve to that contact. Container healthy, dashboard 200, no boot errors besides the known revoked `job-seeker` token. Backup of the directory file: `default.jsonl.bak-relay-merge`. Not yet exercised from Telegram.
+
+**Reversible?** Yes. Restore the backup from 00:33Z, or copy `default.jsonl.bak-relay-merge` back and move the session out of `_trash`. Code: check out `5697e01` and rebuild.
