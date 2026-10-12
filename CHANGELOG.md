@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed (2026-10-12) — The daily reset also fires before the reset hour
+- **Why.** Between midnight and `session.resetPolicy.daily.hour` (4 am by default) a chat idle for days was not ended: `SessionManager.resetReason` only compared the last activity against *today's* reset hour, which had not happened yet. CI caught it as a test that failed in the evening (UTC past midnight). It now compares against the last reset hour that already passed (yesterday's before the hour, today's after).
+- Tests: `tests/session-end.test.ts` (new boundary test, both sides, any time of day).
+
 ### Added (2026-10-11) — Every dispatch says where it came from ("Why this?")
 - **Why.** A dispatch showed a claim and its evidence but not what produced it, so the operator could not judge it. The job-seeker's "Not all FDE titles are US-gated" card was a DIGEST that read like an insight: a held Oct 5 insight, turned into a digest six days later when the agent had been quiet, rewritten by the editor into the single finding, and held again at 0.49 with a note that the FurtherAI claim was not backed. None of that was visible: the editor's notes were stored but never shown, the reason for a hold was not stored, and nothing linked a dispatch to its cycle, goal or (for a digest) the findings it summarised.
 - **Recorded on new dispatches.** `Dispatch.origin`: trigger (insight / interest / frontier / digest), the agent-loop `cycleId` and the goal the cycle served, the cycle's plan, explore/exploit and why, the frontier question an explore cycle chased, a digest's `sourceIds`, and the agent's own headline (`draftHook`) when the editor rewrote it. `heldReason` (+ `heldBar`): editor under the bar, cadence closed, editor failed, fleet daily cap, delivery failed, dispatch off (`judgeDispatch` in `src/bot/curiosity/dispatch.ts`; `decideDispatch` is now its status).

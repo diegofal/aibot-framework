@@ -490,20 +490,11 @@ export class SessionManager {
     // Daily reset
     const daily = this.config.resetPolicy.daily;
     if (daily.enabled) {
-      const resetToday = new Date(now);
-      resetToday.setHours(daily.hour, 0, 0, 0);
-
-      // If last activity was before today's reset hour, reset
-      if (lastActivity < resetToday && now >= resetToday) {
-        return 'daily';
-      }
-
-      // If last activity was yesterday or earlier (even if before reset hour)
-      const lastActivityDay = new Date(lastActivity);
-      lastActivityDay.setHours(0, 0, 0, 0);
-      const todayStart = new Date(now);
-      todayStart.setHours(0, 0, 0, 0);
-      if (lastActivityDay < todayStart && now >= resetToday) {
+      // The last reset hour that already passed: today's, or yesterday's before it.
+      const boundary = new Date(now);
+      boundary.setHours(daily.hour, 0, 0, 0);
+      if (boundary > now) boundary.setDate(boundary.getDate() - 1);
+      if (lastActivity < boundary) {
         return 'daily';
       }
     }

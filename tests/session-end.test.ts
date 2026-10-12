@@ -161,6 +161,23 @@ describe('SessionManager.expiryReason', () => {
     expect(m.expiryReason(key)).toBe('daily');
   });
 
+  test('the boundary is the last reset hour that passed, at any time of day', () => {
+    // Before 04:00 the last boundary is yesterday's 04:00, not today's.
+    const boundary = new Date();
+    boundary.setHours(4, 0, 0, 0);
+    if (boundary.getTime() > Date.now()) boundary.setDate(boundary.getDate() - 1);
+    const m = managerWith({
+      daily: { enabled: true, hour: 4 },
+      idle: { enabled: false, minutes: 60 },
+    });
+
+    ageSession(m, Date.now() - boundary.getTime() + 60_000);
+    expect(m.expiryReason(key)).toBe('daily');
+
+    ageSession(m, Math.max(0, Date.now() - boundary.getTime() - 60_000));
+    expect(m.expiryReason(key)).toBeNull();
+  });
+
   test('is null while no policy fires', () => {
     const m = managerWith({
       daily: { enabled: false, hour: 4 },

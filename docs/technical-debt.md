@@ -106,7 +106,9 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** Two to three days: a post-reply check (pattern or cheap LLM pass) against the turn's tool calls, cron jobs and relay records, with a correction or an operator flag on a miss.
 
-### Time-of-day-dependent test in `tests/session-end.test.ts`
+## Paid
+
+### Time-of-day-dependent test in `tests/session-end.test.ts` — paid 2026-10-12 (commit "fix(session): the daily reset also fires before the reset hour")
 
 | | |
 | --- | --- |
@@ -124,8 +126,4 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** Under an hour: pass a fixed `now` to the code under test (or use fake timers) instead of `Date.now()`.
 
----
-
-## Paid
-
-_Nothing yet._
+**How it was paid.** It was not a test bug. `SessionManager.resetReason` only compared against today's reset hour, so between midnight and that hour a session idle for days was never reset. It now compares against the last reset hour that already passed, and a new test checks both sides of that boundary at any time of day.
