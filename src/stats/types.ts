@@ -253,6 +253,8 @@ export interface GoalDetail {
   headline: string | null;
   /** Id of the goal this one was made from (`- parent:`), null when none. */
   parent: string | null;
+  /** `standing`: no end state, so no tasks (`- kind: standing`); null = a project. Additive. */
+  kind?: 'standing' | null;
 }
 
 export interface TraitSnapshot {

@@ -349,6 +349,8 @@ export interface PlannerTaskFields {
   dispatch?: string[];
   /** The task the cycle's own work serves (attribution), when it is not dispatched. */
   serves_task?: string;
+  /** A goal with no end state (a habit, a recurring duty): it gets no tasks; the cycle does a round of it. */
+  standing_goal?: string;
 }
 
 // ── Config ───────────────────────────────────────────────────────────────

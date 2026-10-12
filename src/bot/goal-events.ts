@@ -32,6 +32,7 @@ export type GoalEventOp =
   | 'priority'
   | 'tasks'
   | 'headline'
+  | 'kind'
   | 'complete'
   | 'reopen'
   | 'remove'
@@ -168,6 +169,8 @@ export function diffGoals(prev: GoalsState, next: GoalsState): GoalChange[] {
       out.push(change(g, 'priority', old.goal.priority, g.priority));
     if (norm(old.goal.headline) !== norm(g.headline))
       out.push(change(g, 'headline', old.goal.headline, g.headline));
+    if ((old.goal.kind ?? '') !== (g.kind ?? ''))
+      out.push(change(g, 'kind', old.goal.kind ?? 'project', g.kind ?? 'project'));
     if (taskKey(old.goal) !== taskKey(g))
       out.push(change(g, 'tasks', taskTally(old.goal), taskTally(g)));
   };

@@ -340,9 +340,12 @@ function priorityChip(g) {
 }
 
 /** Segmented bar (done, in progress, blocked, to do) plus "d/t tasks done · n blocked". */
-function taskBar(tasks) {
+function taskBar(tasks, kind) {
   const list = Array.isArray(tasks) ? tasks : [];
-  if (!list.length) return '<div class="home-task-tally">No tasks yet</div>';
+  if (!list.length)
+    return kind === 'standing'
+      ? '<div class="home-task-tally home-goal-standing" title="No end state: the agent does a round of it each time it serves it">Standing goal</div>'
+      : '<div class="home-task-tally">No tasks yet</div>';
   const order = ['done', 'in_progress', 'blocked', 'todo'];
   const segs = [...list]
     .sort((a, b) => order.indexOf(taskLane(a)) - order.indexOf(taskLane(b)))
@@ -364,7 +367,7 @@ function goalCard(g, selected, workers) {
   return `<div class="home-goal-card${selected ? ' is-selected' : ''}${working ? ' home-goal-working' : ''}" role="button" tabindex="0" aria-expanded="${selected}" data-goal="${esc(text)}" data-goal-id="${esc(g.id ?? '')}" style="--goal-color:${goalColor(g)}" aria-label="Show the tasks of this goal" draggable="true">
     <div class="home-goal-text">${pulse}${esc(title)}</div>
     <div class="home-goal-meta">${priorityChip(g)}${goalBadge(g)}</div>
-    ${taskBar(g.tasks)}
+    ${taskBar(g.tasks, g.kind)}
   </div>`;
 }
 
@@ -410,9 +413,10 @@ function goalTasksPanel(g, column, botId, addingTask, workers, nowMs) {
         <div class="home-goal-panel-title">${esc(text)}</div>
         <div class="home-goal-meta"><select class="home-goal-status status-${status}" data-goal="${esc(text)}" aria-label="Goal status">${options}</select>${priorityChip(g)}${goalBadge(g)}</div>
         ${g.notes ? `<div class="home-goal-notes">${esc(String(g.notes))}</div>` : ''}
-        ${tasks.length ? taskBar(tasks) : ''}
+        ${tasks.length ? taskBar(tasks) : g.kind === 'standing' ? taskBar(tasks, 'standing') : ''}
         ${allDone ? '<div class="home-goal-alldone">All tasks done <button type="button" class="btn btn-sm" data-complete-goal>Mark goal done</button></div>' : ''}
       </div>
+      <button type="button" class="btn btn-sm btn-ghost" data-goal-kind="${g.kind === 'standing' ? '' : 'standing'}" title="${g.kind === 'standing' ? 'Treat it as a project: the agent breaks it into tasks' : 'No end state: the agent does a round of it instead of breaking it into tasks'}">${g.kind === 'standing' ? 'Make it a project' : 'Mark standing'}</button>
       <button type="button" class="btn btn-sm btn-ghost" data-goal-history>History</button>
       <button type="button" class="btn btn-sm btn-ghost home-goal-close" data-goal-close aria-label="Close tasks">✕</button>
     </div>
@@ -440,6 +444,14 @@ export function goalFormPayload(title, priority) {
   const t = String(title ?? '').trim();
   if (!t) return null;
   return { title: t, priority: priority || 'medium' };
+}
+
+/** PATCH body switching a goal between standing (`'standing'`) and project (`''`), or null. */
+export function goalKindPayload(goal, kind) {
+  if (kind !== 'standing' && kind !== '') return null;
+  if (goal?.id) return { id: goal.id, kind };
+  const g = String(goal?.text ?? '').trim();
+  return g ? { goal: g, kind } : null;
 }
 
 /** PATCH body for moving a goal on the board, or null when it cannot be sent. */

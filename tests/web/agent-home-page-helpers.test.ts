@@ -3,6 +3,7 @@ import {
   ago,
   goalAddForm,
   goalFormPayload,
+  goalKindPayload,
   goalMovePayload,
   goalsColumns,
   groupTimelineByCycle,
@@ -491,5 +492,43 @@ describe('goal board — live workers (C20)', () => {
     expect(goalsColumns(board({ inProgress: [research] }), { botId: 'b1' })).not.toContain(
       'home-goal-working'
     );
+  });
+});
+
+describe('standing goals on the board', () => {
+  const standing = { id: 'g-s', text: 'Read 2 sources per cycle', kind: 'standing', tasks: [] };
+  const project = { id: 'g-p', text: 'Fill the skills map', tasks: [] };
+  const cols = (sel) =>
+    goalsColumns(
+      { todo: [], inProgress: [standing, project], blocked: [], completedRecently: [] },
+      { selectedId: sel, botId: 'b1' }
+    );
+
+  it('a standing goal says so instead of "No tasks yet"', () => {
+    const html = cols();
+    const card = (id) =>
+      html.slice(
+        html.indexOf(`data-goal-id="${id}"`),
+        html.indexOf('</div>\n  </div>', html.indexOf(`data-goal-id="${id}"`))
+      );
+    expect(card('g-s')).toContain('Standing goal');
+    expect(card('g-s')).not.toContain('No tasks yet');
+    expect(card('g-p')).toContain('No tasks yet');
+  });
+
+  it('the panel offers to switch between standing and project', () => {
+    expect(cols('g-s')).toContain('data-goal-kind=""');
+    expect(cols('g-p')).toContain('data-goal-kind="standing"');
+  });
+});
+
+describe('goalKindPayload', () => {
+  it('builds the PATCH body', () => {
+    expect(goalKindPayload({ id: 'g-1', text: 'x' }, 'standing')).toEqual({
+      id: 'g-1',
+      kind: 'standing',
+    });
+    expect(goalKindPayload({ text: 'x' }, '')).toEqual({ goal: 'x', kind: '' });
+    expect(goalKindPayload({ id: 'g-1' }, 'other')).toBeNull();
   });
 });

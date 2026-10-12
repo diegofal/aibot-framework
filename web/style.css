@@ -8890,3 +8890,8 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
   display: block;
   color: var(--danger);
 }
+
+/* A standing goal (no end state): no tasks, the agent does a round of it. */
+.home-goal-standing {
+  color: var(--info);
+}

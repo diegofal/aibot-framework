@@ -76,6 +76,13 @@ export function renderGoalsForPrompt(input: GoalsViewInput): string {
       lines.push(`  ${meta.join(' · ')}`);
       if (lv.goalNotes && g.notes) lines.push(`  notes: ${g.notes}`);
       const tasks = byGoal.get(g.id ?? '') ?? [];
+      if (g.kind === 'standing') {
+        lines.push('  standing goal: no tasks; when you serve it, do one round of it');
+      } else if (!tasks.some((t) => t.lane !== 'done')) {
+        lines.push(
+          '  no tasks yet: break it down (new_tasks) when you serve it, or mark it standing_goal'
+        );
+      }
       for (const t of tasks) {
         if (t.lane === 'done') continue;
         const note = lv.taskNotes && t.note ? ` — note: ${t.note}` : '';

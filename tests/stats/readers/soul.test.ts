@@ -78,6 +78,7 @@ describe('readGoals', () => {
       tasks: [],
       headline: null,
       parent: null,
+      kind: null,
     });
     expect(g.detail[4].section).toBe('completed');
   });

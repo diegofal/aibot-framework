@@ -79,6 +79,7 @@ function toDetail(
     tasks: tasksOf(id),
     headline: g.headline ?? null,
     parent: g.parent ?? null,
+    kind: g.kind ?? null,
   };
 }
 

@@ -92,6 +92,7 @@ const OP_TEXT: Record<string, string> = {
   notes: 'Notes edited',
   title: 'Renamed',
   headline: 'Short title changed',
+  kind: 'Kind changed (standing goals get no tasks)',
   tasks: 'Subtasks updated',
   'task-add': 'Task added',
   'task-edit': 'Task renamed',

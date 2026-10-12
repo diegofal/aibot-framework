@@ -112,6 +112,10 @@ export const TASKS_RETIRED_MESSAGE =
 export function parseGoalEdits(body: unknown): GoalEdits | string {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   const out: GoalEdits = {};
+  if (b.kind !== undefined) {
+    if (b.kind !== 'standing' && b.kind !== '') return "kind must be 'standing' or ''";
+    out.kind = b.kind;
+  }
   if (b.title !== undefined) {
     const title = typeof b.title === 'string' ? b.title.trim() : '';
     if (!title) return 'title cannot be empty';

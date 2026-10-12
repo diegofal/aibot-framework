@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed (2026-10-12) — Goals get broken down for sure; standing goals get none
+- **Why.** After workers went live, no bot wrote a task: breaking a goal down was optional, and many goals are not projects at all ("read 2 sources per cycle", "every day research X"), where forced tasks would be filler.
+- **Rule.** When the goal the planner serves has an end state and no open tasks, it MUST answer with `new_tasks` (2–5 verifiable steps) in that cycle. A goal with no end state is marked standing instead (`standing_goal` in the planner answer → `- kind: standing` in GOALS.md, written as the agent with the cycle and a reason) and gets no tasks: the cycle does one round of it. Explore, idle and gated cycles still write nothing. The goals view says which goals are standing and which still need a breakdown. Dispatch guidance: hand multi-step tasks to workers, do single-step ones in the cycle.
+- **Board.** A standing goal shows "Standing goal" instead of "No tasks yet"; the goal panel has "Mark standing" / "Make it a project" (PATCH `{ kind }`). Goal events record a `kind` change.
+- Tests: `tests/goals/standing-goals.test.ts`, `tests/web/agent-home-page-helpers.test.ts`; `tests/stats/readers/soul.test.ts` expects the new `kind` field.
+
 ### Changed (2026-10-12) — Task workers enabled for all bots (live config)
 - `workers: { enabled: true, bots: [], maxConcurrent: 2, maxPerBot: 1, dailyStepsPerBot: 30 }` in the live `config.json` (half the default daily budget for the first day). Backup and steps in `docs/runbook.md`.
 

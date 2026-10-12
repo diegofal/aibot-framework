@@ -16,6 +16,7 @@ import {
   applyPresence,
   findBoardGoal,
   goalFormPayload,
+  goalKindPayload,
   goalMovePayload,
   goalsColumns,
   homeKeyAction,
@@ -283,6 +284,17 @@ function wireGoalBoard(el, id, goals) {
       delete board.dataset.selected;
       delete board.dataset.adding;
       return repaint();
+    }
+    const kindBtn = t.closest('[data-goal-kind]');
+    if (kindBtn) {
+      const goal = openGoal();
+      kindBtn.disabled = true;
+      return send(
+        goal ? goalKindPayload(goal, kindBtn.dataset.goalKind) : null,
+        kindBtn.dataset.goalKind
+          ? 'Marked standing — no tasks for this one'
+          : 'Now a project — the agent breaks it down'
+      );
     }
     if (t.closest('[data-goal-history]')) {
       const panel = t.closest('.home-goal-panel');

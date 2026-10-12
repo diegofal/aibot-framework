@@ -154,6 +154,11 @@ export interface GoalEntry {
   headline?: string;
   /** Id of the goal this one was made from (`- parent: g-…`): reflection, strategist or the agent. */
   parent?: string;
+  /**
+   * `standing`: a goal with no end state (a habit or recurring duty). It gets no
+   * tasks; the cycle does one round of it when it serves it. Absent = a project.
+   */
+  kind?: 'standing';
 }
 
 /** Status of one subtask: the same four lanes as goals on the board. */
@@ -372,6 +377,8 @@ export interface GoalEdits {
   priority?: string;
   /** Short card title; `''` clears it. */
   headline?: string;
+  /** `standing`, or `''` to make it a project again. */
+  kind?: 'standing' | '';
 }
 
 /**
@@ -389,6 +396,7 @@ export function editGoal(content: string | null, ref: string, edits: GoalEdits):
   if (edits.notes !== undefined) goal.notes = edits.notes || undefined;
   if (edits.priority !== undefined) goal.priority = edits.priority;
   if (edits.headline !== undefined) goal.headline = edits.headline || undefined;
+  if (edits.kind !== undefined) goal.kind = edits.kind === 'standing' ? 'standing' : undefined;
   return serializeGoals(active, completed);
 }
 
@@ -757,6 +765,8 @@ export function parseGoals(content: string | null): {
       else if (key === 'updated') currentGoal.updated = value;
       else if (key === 'headline') currentGoal.headline = value;
       else if (key === 'parent') currentGoal.parent = value;
+      else if (key === 'kind')
+        currentGoal.kind = value.trim() === 'standing' ? 'standing' : undefined;
       else if (key === 'task') {
         const task = parseTaskValue(value);
         if (task) currentGoal.tasks = [...(currentGoal.tasks ?? []), task];
@@ -782,6 +792,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       lines.push(...taskLines(g));
       if (g.source) lines.push(`  - source: ${g.source}`);
       if (g.parent) lines.push(`  - parent: ${g.parent}`);
+      if (g.kind) lines.push(`  - kind: ${g.kind}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
       if (g.id) lines.push(`  - id: ${g.id}`);
       if (g.started) lines.push(`  - started: ${g.started}`);
@@ -806,6 +817,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       lines.push(...taskLines(g));
       if (g.source) lines.push(`  - source: ${g.source}`);
       if (g.parent) lines.push(`  - parent: ${g.parent}`);
+      if (g.kind) lines.push(`  - kind: ${g.kind}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
       if (g.id) lines.push(`  - id: ${g.id}`);
       if (g.started) lines.push(`  - started: ${g.started}`);

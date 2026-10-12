@@ -88,12 +88,13 @@ export function buildTaskOutputSection(opts: { workersEnabled: boolean }): strin
     '## Tasks',
     '',
     'Goals list their open tasks with ids (t-…). Tasks are the steps of a goal and outlive this cycle; they are different from your plan steps.',
-    '- BREAK A GOAL DOWN: when the goal you will work on has no open task, add "new_tasks": {"goal": "<goal id or exact title>", "tasks": [2–5 concrete, verifiable steps]}. One line each; each names a result someone could check (a file written, a message sent, a decision recorded). Only that one goal, and only when it has no open task.',
+    '- BREAK A GOAL DOWN: when the goal you serve this cycle has an end state and no open task, you MUST add "new_tasks": {"goal": "<goal id or exact title>", "tasks": [2–5 concrete, verifiable steps]} in this answer. One line each; each names a result someone could check (a file written, a message sent, a decision recorded). Only that one goal, and only when it has no open task.',
+    '- STANDING GOALS: a goal with no end state (a habit or a recurring duty, e.g. "read 2 sources per cycle", "every day research X") gets no tasks. The first time you serve one that is not marked standing yet, add "standing_goal": "<goal id>" and do one round of it in your plan. Goals already marked standing goal: just do a round.',
     '- "serves_task": the id of the open task your own plan works on, when it works on one.',
   ];
   if (opts.workersEnabled) {
     lines.push(
-      '- "dispatch": ["t-…"] — open tasks to hand to workers, who work them in the background while you do something else. Only tasks no worker holds (see Workers). A task you add in new_tasks this cycle may be named by its exact text. Do not dispatch the task your own plan serves.'
+      '- "dispatch": ["t-…"] — open tasks to hand to workers, who work them in the background while you do something else. Prefer handing a multi-step task to a worker; do a single-step task yourself. Only tasks no worker holds (see Workers). A task you add in new_tasks this cycle may be named by its exact text. Do not dispatch the task your own plan serves.'
     );
   }
   return lines.join('\n');
@@ -104,6 +105,7 @@ export function buildTaskSchemaLines(opts: { workersEnabled: boolean }): string 
   const lines = [
     '- new_tasks: {"goal": string, "tasks": array of 2-5 strings} (optional — only for a goal with no open task)',
     '- serves_task: string, the id of the open task your plan works on (optional)',
+    '- standing_goal: string, the id of a goal with no end state you are marking standing (optional)',
   ];
   if (opts.workersEnabled) {
     lines.push(
@@ -151,6 +153,8 @@ export function parsePlannerTaskFields(parsed: Record<string, unknown>): Planner
   }
   const serves = cleanLine(parsed.serves_task);
   if (serves) out.serves_task = serves;
+  const standing = cleanLine(parsed.standing_goal);
+  if (standing) out.standing_goal = standing;
   return out;
 }
 
@@ -207,6 +211,8 @@ export interface ApplyPlannerTasksInput {
    * return the fresh active goals. Used when `new_tasks` names a goal with no id.
    */
   assignGoalIds?: () => GoalEntry[] | null | undefined;
+  /** Mark a goal standing (writes `- kind: standing` as the agent). Returns whether it was written. */
+  markStanding?: (goal: GoalEntry) => boolean;
   logger?: { info: (obj: object, msg: string) => void; warn: (obj: object, msg: string) => void };
   nowMs?: number;
 }
@@ -217,6 +223,8 @@ export interface ApplyPlannerTasksResult {
   dispatched: CycleDispatch[];
   /** The open task the cycle's own work serves. */
   servesTask?: { id: string; text: string; goalId: string };
+  /** The goal the planner marked standing this cycle. */
+  standingGoalId?: string;
   /** Why nothing was done (explore / idle / gated). */
   skipped?: 'explore' | 'idle' | 'gated';
 }
@@ -237,12 +245,32 @@ export function applyPlannerTasks(input: ApplyPlannerTasksInput): ApplyPlannerTa
         ? 'explore'
         : undefined;
   if (skipped) {
-    if (fields.new_tasks || fields.dispatch) {
+    if (fields.new_tasks || fields.dispatch || fields.standing_goal) {
       logger?.info({ botId, cycleId, skipped }, 'Planner tasks: not acted on in this cycle');
     }
     result.skipped = skipped;
     return result;
   }
+  // 0. standing_goal: a goal with no end state gets no tasks.
+  if (fields.standing_goal && input.markStanding) {
+    const g = resolveGoalRef(fields.standing_goal, input.goals);
+    if (!g) {
+      logger?.warn(
+        { botId, goal: fields.standing_goal },
+        'Planner tasks: standing_goal names no active goal'
+      );
+    } else if (g.kind !== 'standing') {
+      try {
+        if (input.markStanding(g)) {
+          result.standingGoalId = g.id;
+          logger?.info({ botId, goalId: g.id }, 'Planner tasks: goal marked standing');
+        }
+      } catch (err) {
+        logger?.warn({ botId, err }, 'Planner tasks: marking a goal standing failed');
+      }
+    }
+  }
+
   const store = input.store;
   if (!store) return result;
   const nowMs = input.nowMs ?? Date.now();

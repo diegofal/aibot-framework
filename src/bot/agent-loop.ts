@@ -6,7 +6,7 @@ import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
-import { parseGoals, startGoal } from '../tools/goals';
+import { editGoal, parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import { idleToWhy } from '../why/builders/idle';
 import { countDispatchedRuns, isDispatchOnlyCycle } from '../workers/dispatch-cycle';
@@ -1075,7 +1075,11 @@ export class AgentLoop {
   ): { added: number; dispatched: number } {
     const acted = { added: 0, dispatched: 0 };
     const a = this.cycleAttribution.get(botId);
-    if (!a || (!fields.new_tasks && !fields.dispatch && !fields.serves_task)) return acted;
+    if (
+      !a ||
+      (!fields.new_tasks && !fields.dispatch && !fields.serves_task && !fields.standing_goal)
+    )
+      return acted;
     try {
       const loader = this.ctx.soulLoaders.get(botId);
       const goals = parseGoals(goalsContent ?? null).active;
@@ -1097,6 +1101,19 @@ export class AgentLoop {
           if (!content || !loader?.writeGoals) return null;
           loader.writeGoals(content);
           return parseGoals(loader.readGoals?.() ?? null).active;
+        },
+        markStanding: (goal) => {
+          // A goal with no end state: `- kind: standing`, written as the agent in this cycle.
+          const content = loader?.readGoals?.();
+          if (!content || !loader?.writeGoals || !goal.id) return false;
+          const next = editGoal(content, goal.id, { kind: 'standing' });
+          if (!next) return false;
+          loader.writeGoals(next, {
+            actor: 'agent',
+            cycleId: a.cycleId,
+            reason: 'No end state: a standing goal, worked a round at a time',
+          });
+          return true;
         },
       });
       acted.added = out.newTaskIds.length;
