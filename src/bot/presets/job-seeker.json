@@ -24,15 +24,18 @@
     },
     {
       "text": "Keep a pipeline of matching roles with status (found, tailored, applied, interview, closed) and a next step",
-      "priority": "high"
+      "priority": "high",
+      "kind": "standing"
     },
     {
       "text": "Tailor one CV and cover letter per role and hand them over for approval before anything is sent",
-      "priority": "medium"
+      "priority": "medium",
+      "kind": "standing"
     },
     {
       "text": "Remind the operator of follow-ups and interview dates a day ahead",
-      "priority": "medium"
+      "priority": "medium",
+      "kind": "standing"
     }
   ]
 }

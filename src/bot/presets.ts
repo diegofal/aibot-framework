@@ -42,6 +42,8 @@ export const PresetGoalSchema = z.object({
     .min(1)
     .refine((s) => !s.includes('\n'), 'one line')
     .optional(),
+  /** A recurring duty with no end state: written as `- kind: standing`, never broken into tasks. */
+  kind: z.literal('standing').optional(),
 });
 
 export const AgentPresetSchema = z.object({
@@ -151,6 +153,7 @@ export function presetGoalsMarkdown(preset: AgentPreset, purpose: string): strin
     priority: g.priority,
     notes: g.notes,
     source: `preset:${preset.id}`,
+    kind: g.kind,
   }));
   return `${serializeGoals([purposeGoalEntry(purpose), ...goals], [])}\n`;
 }

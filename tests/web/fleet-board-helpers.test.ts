@@ -14,6 +14,7 @@ import {
   goalHeadline,
   goalPulse,
   goalRef,
+  goalYardstickMs,
   lastCycle,
   moveTask,
   needsByBot,
@@ -311,6 +312,25 @@ describe('goal activity: is it really being worked on?', () => {
     expect((html.match(/<i class="on"/g) ?? []).length).toBe(3);
     expect(cardHtml(goal({ status: 'pending' }), false, ctx)).not.toContain('fb-gpulse');
     expect(cardHtml(goal({ status: 'blocked' }), false, ctx)).not.toContain('fb-gpulse');
+  });
+
+  it('the yardstick is how long a goal waits for its turn, else the loop interval', () => {
+    expect(goalYardstickMs({ goals: { loopIntervalMs: 2 * H, turnIntervalMs: 13 * H } })).toBe(
+      13 * H
+    );
+    expect(goalYardstickMs({ goals: { loopIntervalMs: 2 * H } })).toBe(2 * H);
+    expect(goalYardstickMs(null)).toBeUndefined();
+  });
+
+  it('a goal with an end state and no open task says "no tasks yet"; standing and done ones do not', () => {
+    const tag = 'no tasks yet';
+    expect(cardHtml(goal({ tasks: [] }), false, {})).toContain(tag);
+    expect(cardHtml(goal({ tasks: [t('Pick sources', true)] }), false, {})).toContain(tag);
+    expect(cardHtml(goal(), false, {})).not.toContain(tag);
+    expect(cardHtml(goal({ tasks: [], kind: 'standing' }), false, {})).not.toContain(tag);
+    expect(
+      cardHtml(goal({ tasks: [], section: 'completed', status: 'completed' }), false, {})
+    ).not.toContain(tag);
   });
 
   it('a card with spawned goals says how many and how many are done', () => {

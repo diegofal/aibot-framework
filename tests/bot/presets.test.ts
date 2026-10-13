@@ -101,6 +101,7 @@ describe('preset catalogue', () => {
           expect(active[i + 1].priority).toBe(goal.priority);
           expect(active[i + 1].source).toBe(`preset:${preset.id}`);
           if (goal.notes) expect(active[i + 1].notes).toBe(goal.notes);
+          expect(active[i + 1].kind).toBe(goal.kind);
         }
       });
 
@@ -112,6 +113,23 @@ describe('preset catalogue', () => {
       });
     });
   }
+
+  it('marks the recurring duties standing so they never wait for a breakdown', () => {
+    const standing = (id: AgentPreset['id']) =>
+      (getPreset(id) as AgentPreset).goals.filter((g) => g.kind === 'standing').map((g) => g.text);
+    expect(standing('assistant')).toHaveLength(3);
+    expect(standing('coder').some((t) => t.startsWith('Map the work directory'))).toBe(false);
+    expect(standing('job-seeker').some((t) => t.startsWith("Build the operator's profile"))).toBe(
+      false
+    );
+    for (const id of PRESET_IDS) expect(standing(id).length).toBeGreaterThan(0);
+  });
+
+  it('AgentPresetSchema rejects a goal kind other than standing', () => {
+    const base = getPreset('assistant') as AgentPreset;
+    const goals = [{ ...base.goals[0], kind: 'project' }];
+    expect(() => AgentPresetSchema.parse({ ...base, goals })).toThrow();
+  });
 
   it('AgentPresetSchema rejects an unknown skill shape and an out-of-band slider', () => {
     const base = getPreset('assistant') as AgentPreset;

@@ -2,7 +2,8 @@
  * Phase 1 of the goal tasks plan (C8): the planner breaks goals down into
  * tasks (`new_tasks`), names the task its own work serves (`serves_task`) and,
  * when workers are on, hands open tasks to workers (`dispatch`). The loop
- * acts only on explicit planner output, never on explore, idle or gated cycles.
+ * acts only on explicit planner output; idle cycles write nothing and explore
+ * or gated cycles write tasks but never dispatch.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -315,25 +316,57 @@ describe('applyPlannerTasks', () => {
     expect(store.list()).toEqual([]);
   });
 
-  test('never writes or dispatches on explore, idle or gated cycles', () => {
+  test('never writes or dispatches on an idle cycle', () => {
     const pool = fakePool();
-    for (const flags of [{ exploring: true }, { idle: true }, { gateBlocked: true }]) {
+    const out = applyPlannerTasks({
+      ...base(),
+      idle: true,
+      workerPool: pool,
+      fields: {
+        new_tasks: { goal: 'g-aaaaaaaa', tasks: ['Draft outline', 'Collect sources'] },
+        dispatch: ['Draft outline'],
+      },
+    });
+    expect(out.newTaskIds).toEqual([]);
+    expect(out.dispatched).toEqual([]);
+    expect(out.skipped).toBe('idle');
+    expect(store.list()).toEqual([]);
+    expect(pool.requests).toEqual([]);
+  });
+
+  // Explore and gated cycles still keep the books (a breakdown, a standing
+  // mark): a goal served mostly by explore cycles was never broken down.
+  for (const [flags, why] of [
+    [{ exploring: true }, 'explore'],
+    [{ gateBlocked: true }, 'gated'],
+  ] as const) {
+    test(`a ${why} cycle writes new_tasks and standing_goal but never dispatches`, () => {
+      const pool = fakePool();
+      const marked: string[] = [];
       const out = applyPlannerTasks({
         ...base(),
         ...flags,
         workerPool: pool,
+        markStanding: (g) => {
+          marked.push(g.id ?? '');
+          return true;
+        },
         fields: {
           new_tasks: { goal: 'g-aaaaaaaa', tasks: ['Draft outline', 'Collect sources'] },
+          standing_goal: 'g-bbbbbbbb',
           dispatch: ['Draft outline'],
+          serves_task: 'Draft outline',
         },
       });
-      expect(out.newTaskIds).toEqual([]);
+      expect(out.newTaskIds).toHaveLength(2);
+      expect(out.standingGoalId).toBe('g-bbbbbbbb');
+      expect(marked).toEqual(['g-bbbbbbbb']);
       expect(out.dispatched).toEqual([]);
-      expect(out.skipped).toBeDefined();
-    }
-    expect(store.list()).toEqual([]);
-    expect(pool.requests).toEqual([]);
-  });
+      expect(out.servesTask).toBeUndefined();
+      expect(out.skipped).toBe(why);
+      expect(pool.requests).toEqual([]);
+    });
+  }
 
   test('skips new_tasks for an unknown goal or a goal that already has open tasks', () => {
     applyPlannerTasks({

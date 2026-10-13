@@ -20,15 +20,18 @@
     {
       "text": "Learn the operator's routine: when they work, what they postpone, what they ask for twice",
       "priority": "high",
-      "notes": "Write what you learn to memory; do not ask the same question twice."
+      "notes": "Write what you learn to memory; do not ask the same question twice.",
+      "kind": "standing"
     },
     {
       "text": "Keep one clean list of open tasks with a next step on each, reviewed every morning",
-      "priority": "high"
+      "priority": "high",
+      "kind": "standing"
     },
     {
       "text": "Turn recurring requests into reminders or cron entries after confirming with the operator",
-      "priority": "medium"
+      "priority": "medium",
+      "kind": "standing"
     }
   ]
 }

@@ -197,3 +197,76 @@ describe('strategist prompt', () => {
     expect(system).toContain('it attributes the cycle to that goal');
   });
 });
+
+// A goal with no open task and no standing mark used to wait for the planner
+// to serve it in a plain cycle; one served by explore cycles never got either.
+// The strategist settles it on its own cadence.
+describe('goal triage on update', () => {
+  test('kind standing marks the goal standing and adds no task', () => {
+    applyGoalOperations(
+      'b1',
+      [{ action: 'update', goal: 'Write the newsletter', kind: 'standing', reason: 'recurring' }],
+      quiet,
+      loader,
+      { cycleId: 'cyc-2' }
+    );
+    const goal = parseGoals(loader.readGoals()).active.find((g) => g.id === 'g-bbbbbbbb');
+    expect(goal?.kind).toBe('standing');
+    expect(store().forGoal('g-bbbbbbbb')).toEqual([]);
+  });
+
+  test('tasks break down an existing goal that has no open task', () => {
+    applyGoalOperations(
+      'b1',
+      [
+        {
+          action: 'update',
+          goal: 'Research dark factories',
+          tasks: ['List L0-L4', 'Pick 3 cases'],
+        },
+      ],
+      quiet,
+      loader,
+      { cycleId: 'cyc-3' }
+    );
+    const tasks = store().forGoal('g-aaaaaaaa');
+    expect(tasks.map((t) => [t.text, t.by, t.createdCycle])).toEqual([
+      ['List L0-L4', 'agent', 'cyc-3'],
+      ['Pick 3 cases', 'agent', 'cyc-3'],
+    ]);
+  });
+
+  test('tasks never pile onto a goal that already has open tasks, or a standing one', () => {
+    store().apply([{ op: 'add', goalId: 'g-aaaaaaaa', text: 'Existing step' }], { actor: 'agent' });
+    applyGoalOperations(
+      'b1',
+      [
+        { action: 'update', goal: 'Research dark factories', tasks: ['Another step'] },
+        { action: 'update', goal: 'Write the newsletter', kind: 'standing', tasks: ['Nope'] },
+      ],
+      quiet,
+      loader
+    );
+    expect(
+      store()
+        .forGoal('g-aaaaaaaa')
+        .map((t) => t.text)
+    ).toEqual(['Existing step']);
+    expect(store().forGoal('g-bbbbbbbb')).toEqual([]);
+  });
+
+  test('the prompt asks to settle every goal with no tasks yet', async () => {
+    const { buildStrategistPrompt } = await import('../../src/bot/agent-loop-prompts');
+    const { system } = buildStrategistPrompt({
+      identity: 'TestBot',
+      soul: 'A bot',
+      motivations: 'Be helpful',
+      goals: GOALS,
+      recentMemory: 'Did stuff',
+      datetime: '2026-03-08T12:00:00Z',
+    });
+    expect(system).toContain('GOAL TRIAGE');
+    expect(system).toContain('kind: "standing"');
+    expect(system).toContain('tasks: array of strings (for add, or for update');
+  });
+});

@@ -963,6 +963,7 @@ Your single_deliverable MUST follow these constraints:
 - Keep active goals between 3-7. Too few = no direction, too many = scattered
 - Prefer completing existing goals + adding fresh ones over endlessly updating the same goals
 - If the agent is stuck in a loop, break the pattern: suggest a different approach or pivot
+- GOAL TRIAGE: every active goal marked "no tasks yet" must be settled in this answer with one update operation: kind: "standing" when it has no end state (a habit or a recurring duty), or tasks (2-5 verifiable steps) when it has one. Leave goals already standing or with open tasks alone
 
 ## Human Check-In Cadence
 
@@ -985,7 +986,8 @@ JSON Schema:
   - outcome: string (for complete: what was achieved) — optional
   - reason: string (one short sentence: why this change)
   - parent: string (for add: exact title or id of the existing goal the new one is a concrete step toward, so its progress shows under that goal) — optional
-  - tasks: array of strings (for add: the goal's initial breakdown, 2-5 concrete steps, each one short sentence; they become the goal's tasks) — optional
+  - tasks: array of strings (for add, or for update of a goal with no tasks yet: the goal's breakdown, 2-5 concrete steps, each one short sentence naming a result someone could check; they become the goal's tasks) — optional
+  - kind: "standing" (for update: the goal has no end state — a habit or recurring duty; it gets no tasks) — optional
 - single_deliverable: string (ONE specific, bounded, achievable task — 5-15 minutes max)
 - serves_goal: string, the exact title (or id) of the active goal the deliverable serves (optional; it attributes the cycle to that goal)
 - alignment_confidence: number (0.0-1.0, how well the deliverable serves the agent's identity/soul — below 0.6 triggers re-derivation)

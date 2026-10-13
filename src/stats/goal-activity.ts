@@ -63,3 +63,34 @@ export function loopIntervalMs(bot: BotConfig, config: Config): number {
   const ms = n * (unit === 'm' ? 60_000 : unit === 'h' ? 3_600_000 : DAY_MS);
   return ms > 0 ? ms : DAY_MS;
 }
+
+/** Below this many cycles in the week, the share of goal-serving cycles is not trusted. */
+const MIN_CYCLES_FOR_SHARE = 4;
+/** A bot that served goals in fewer than a quarter of its cycles still reads as a 4× stretch at most. */
+const MIN_GOAL_SHARE = 0.25;
+
+/**
+ * How long one goal waits for its turn: the loop interval times the goals
+ * that share it, stretched by the cycles that served no goal (explore, idle,
+ * skipped) over the last 7 days. The board judges "worked / quiet / stalled"
+ * against this, not the raw interval: a bot works one goal per cycle.
+ */
+export function goalTurnIntervalMs(input: {
+  loopMs: number;
+  /** Active goals that can be served (blocked ones excluded). */
+  goalCount: number;
+  cycles: AgentCycleRecord[];
+  nowMs: number;
+}): number {
+  const since = input.nowMs - GOAL_ACTIVITY_DAYS * DAY_MS;
+  let total = 0;
+  let served = 0;
+  for (const c of input.cycles) {
+    const t = toMs(c.startedAt);
+    if (t === null || t < since || t > input.nowMs) continue;
+    total++;
+    if (c.goalId && !NO_WORK.has(c.status ?? '')) served++;
+  }
+  const share = total < MIN_CYCLES_FOR_SHARE ? 1 : Math.max(MIN_GOAL_SHARE, served / total);
+  return Math.round((input.loopMs * Math.max(1, input.goalCount)) / share);
+}

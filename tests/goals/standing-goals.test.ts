@@ -95,19 +95,25 @@ describe('planner: breakdown is required for goals with an end state', () => {
     expect(r.standingGoalId).toBe('g-bbbbbbbb');
   });
 
-  test('never on explore, idle or gated cycles', () => {
-    for (const skip of [{ exploring: true }, { idle: true }, { gateBlocked: true }]) {
+  // Deliberately changed: explore and gated cycles keep the books too (a goal
+  // served mostly by explore cycles was never marked); idle still writes nothing.
+  test('marked on explore and gated cycles, never on idle ones', () => {
+    for (const [flags, expected] of [
+      [{ exploring: true }, ['g-bbbbbbbb']],
+      [{ gateBlocked: true }, ['g-bbbbbbbb']],
+      [{ idle: true }, []],
+    ] as const) {
       const marked: string[] = [];
       applyPlannerTasks({
         ...base,
-        ...skip,
+        ...flags,
         fields: { standing_goal: 'g-bbbbbbbb' },
         markStanding: (g) => {
           marked.push(g.id ?? '');
           return true;
         },
       });
-      expect(marked).toEqual([]);
+      expect(marked).toEqual([...expected]);
     }
   });
 

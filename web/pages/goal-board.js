@@ -23,6 +23,7 @@ import {
   drawerHtml,
   goalKindPayload,
   goalRef,
+  goalYardstickMs,
   moveTask,
   removeTask,
   renameTask,
@@ -184,7 +185,7 @@ export function mountGoalBoard({ root, getHome, getAgent, reload, paint }) {
       detail: st.details[detailKey(botId, goal)]?.body,
       spawned: (goal.id && home?.goals?.spawned?.[goal.id]) || [],
       showAll: st.showAllCycles,
-      intervalMs: home?.goals?.loopIntervalMs,
+      intervalMs: goalYardstickMs(home),
     });
   }
 

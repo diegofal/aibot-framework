@@ -23,8 +23,13 @@ export interface GoalOperation {
   reason?: string;
   /** For add: the existing goal (title or id) the new one serves (optional). */
   parent?: string;
-  /** For add: the initial breakdown, written to the task store as agent tasks (optional). */
+  /**
+   * For add, or for update of a goal with no open task: its breakdown, written
+   * to the task store as agent tasks (optional). Ignored for a standing goal.
+   */
   tasks?: string[];
+  /** For update: "standing" marks a goal with no end state (no tasks, a round per cycle). */
+  kind?: string;
 }
 
 export interface StrategistResult {
@@ -350,7 +355,7 @@ export function applyGoalOperations(
   const { active, completed } = parseGoals(content);
   /** Goals this write closes (completed or removed): their workers stop. */
   const closedIds: string[] = [];
-  /** Added goal title → its initial tasks. */
+  /** Added or triaged goal title → its initial tasks. */
   const breakdowns: Array<{ title: string; tasks: string[] }> = [];
   /** Stated reason per goal touched, keyed by lower-cased title (goal-events matches on it). */
   const reasons: Record<string, string> = {};
@@ -404,6 +409,11 @@ export function applyGoalOperations(
         if (op.status) found.status = op.status;
         if (op.priority) found.priority = op.priority;
         if (op.notes) found.notes = op.notes;
+        if (op.kind === 'standing') found.kind = 'standing';
+        if (found.kind !== 'standing') {
+          const tasks = cleanTaskList(op.tasks);
+          if (tasks.length > 0) breakdowns.push({ title: found.text, tasks });
+        }
         noteReason(found.text, op);
         logger.debug({ goal: found.text }, 'Strategist: updated goal');
         break;
@@ -441,7 +451,18 @@ export function applyGoalOperations(
     const fresh = parseGoals(soulLoader.readGoals?.() ?? null).active;
     for (const { title, tasks } of breakdowns) {
       const goal = fresh.find((g) => g.text.trim() === title.trim());
-      if (!goal?.id) continue;
+      if (!goal?.id || goal.kind === 'standing') continue;
+      // A breakdown is for a goal with no open task: never pile onto a plan.
+      let hasOpen = false;
+      try {
+        hasOpen = store.forGoal(goal.id).some((t) => t.lane !== 'done');
+      } catch (err) {
+        onError(err);
+      }
+      if (hasOpen) {
+        logger.debug({ botId, goalId: goal.id }, 'Strategist: goal already has open tasks');
+        continue;
+      }
       for (const text of tasks) {
         try {
           const r = store.apply([{ op: 'add', goalId: goal.id, text }], {

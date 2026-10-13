@@ -85,7 +85,7 @@ function fakePool(
 function makeLoop(
   plan: string | string[],
   pool?: WorkerPoolApi,
-  opts: { goalsOnDisk?: boolean } = {}
+  opts: { goalsOnDisk?: boolean; extraCtx?: Record<string, unknown> } = {}
 ) {
   const goalsPath = join(soulDir, 'GOALS.md');
   const readGoals = () => (opts.goalsOnDisk ? readFileSync(goalsPath, 'utf-8') : GOALS);
@@ -150,6 +150,7 @@ function makeLoop(
     resolveBotId: (id: string) => id,
     activityStream: { publish: mock(() => {}) },
     ...(pool ? { workerPool: pool } : {}),
+    ...(opts.extraCtx ?? {}),
   };
   const loop = new AgentLoop(
     ctx,
@@ -252,6 +253,84 @@ describe('agent loop: planner task fields', () => {
     expect(row.status).toBe('idle');
     expect(row.newTasks).toBeUndefined();
     expect(row.taskId).toBeUndefined();
+  });
+
+  test('a cycle the engagement gate turns down still writes its breakdown, never dispatches', async () => {
+    const pool = fakePool(true);
+    // six unreviewed creates and no feedback: the hard gate holds content back
+    const now = Date.now();
+    const changelog = Array.from({ length: 6 }, (_, i) => ({
+      timestamp: new Date(now - (i + 1) * 60_000).toISOString(),
+      action: 'create',
+      path: `0${i}_draft.md`,
+    }));
+    const { loop } = makeLoop(
+      JSON.stringify({
+        reasoning: 'write the handout',
+        plan: ['Write the lab handout and save it to productions'],
+        priority: 'medium',
+        serves_goal: 'g-bbbbbbbb',
+        new_tasks: { goal: 'g-bbbbbbbb', tasks: ['Pick the lab topic', 'Book the room'] },
+        dispatch: ['Book the room'],
+      }),
+      pool,
+      { extraCtx: { productionsService: { getChangelog: () => changelog } } }
+    );
+    await loop.runOne('bot1');
+    const [row] = cycleRows();
+    expect(row.status).toBe('idle');
+    expect(row.reason).toContain('Engagement gate');
+    expect(store.forGoal('g-bbbbbbbb').map((t) => t.text)).toEqual([
+      'Pick the lab topic',
+      'Book the room',
+    ]);
+    expect(row.newTasks).toHaveLength(2);
+    expect(pool.requests).toEqual([]);
+  });
+
+  test('a standing_goal answer reaches GOALS.md as kind: standing', async () => {
+    const { loop } = makeLoop(
+      JSON.stringify({
+        reasoning: 'a recurring duty',
+        plan: ['Do one round of the lab prep'],
+        priority: 'medium',
+        serves_goal: 'g-bbbbbbbb',
+        standing_goal: 'g-bbbbbbbb',
+      }),
+      undefined,
+      { goalsOnDisk: true }
+    );
+    await loop.runOne('bot1');
+    expect(readFileSync(join(soulDir, 'GOALS.md'), 'utf-8')).toContain('- kind: standing');
+  });
+
+  test('the cycle row records what the planner was offered and what it answered about tasks', async () => {
+    store.apply([{ op: 'add', goalId: 'g-bbbbbbbb', text: 'Book the room' }], { actor: 'agent' });
+    const pool = fakePool(true);
+    const { loop } = makeLoop(
+      JSON.stringify({
+        reasoning: 'r',
+        plan: ['Book the room'],
+        priority: 'medium',
+        serves_task: store.list()[0].id,
+      }),
+      pool
+    );
+    await loop.runOne('bot1');
+    const [row] = cycleRows();
+    expect(row.plannerTasks).toEqual({
+      serves_task: store.list()[0].id,
+      workersOffered: true,
+      openTasks: 1,
+    });
+  });
+
+  test('an idle answer still records the planner task answer (nothing offered to dispatch)', async () => {
+    const { loop } = makeLoop(JSON.stringify({ reasoning: 'nothing', plan: [], priority: 'none' }));
+    await loop.runOne('bot1');
+    const [row] = cycleRows();
+    expect(row.status).toBe('idle');
+    expect(row.plannerTasks).toEqual({ workersOffered: false, openTasks: 0 });
   });
 
   test('N7: priority none stays idle even with new_tasks and dispatch; nothing is written', async () => {

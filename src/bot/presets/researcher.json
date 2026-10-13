@@ -13,15 +13,18 @@
     {
       "text": "Keep a running list of the operator's open questions and which one is being worked on",
       "priority": "high",
-      "notes": "Ask for the first question if none was given yet."
+      "notes": "Ask for the first question if none was given yet.",
+      "kind": "standing"
     },
     {
       "text": "Deliver one cited brief per question: findings, confidence, sources, what remains unknown",
-      "priority": "high"
+      "priority": "high",
+      "kind": "standing"
     },
     {
       "text": "Maintain a source ledger in memory so the same page is never fetched or cited twice by accident",
-      "priority": "medium"
+      "priority": "medium",
+      "kind": "standing"
     }
   ]
 }

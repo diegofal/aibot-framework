@@ -1013,6 +1013,13 @@ describe('goal activity and spawned goals (fleet board)', () => {
     expect(body.goals.loopIntervalMs).toBeGreaterThan(0);
   });
 
+  it('carries the turn interval: the loop shared by the goals, stretched by cycles that served none', async () => {
+    setup();
+    const body = await (await makeApp().request('/api/agents/b1/home')).json();
+    // two goals that can move; 3 of the 4 cycles in the week served a goal
+    expect(body.goals.turnIntervalMs).toBe(Math.round((body.goals.loopIntervalMs * 2) / 0.75));
+  });
+
   it('lists the goals spawned from each goal, with parent on the child', async () => {
     setup();
     const body = await (await makeApp().request('/api/agents/b1/home')).json();

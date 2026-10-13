@@ -27,6 +27,7 @@ import {
   GOAL_ACTIVITY_LOOKBACK_DAYS,
   type GoalActivity,
   buildGoalActivity,
+  goalTurnIntervalMs,
   loopIntervalMs,
 } from './goal-activity';
 import { type NowTone, describeNow } from './now-line';
@@ -171,8 +172,13 @@ export interface AgentHomeResponse {
     completedRecently: GoalDetail[];
     /** How recently each goal was worked on, by goal id (`buildGoalActivity`); absent = no cycle in 30 days. */
     activity: Record<string, GoalActivity>;
-    /** The bot's agent-loop interval: the board's yardstick for "quiet" and "stalled". */
+    /** The bot's agent-loop interval. */
     loopIntervalMs: number;
+    /**
+     * How long one goal waits for its turn (`goalTurnIntervalMs`): the board's
+     * yardstick for "quiet" and "stalled".
+     */
+    turnIntervalMs: number;
     /** Goals made from each goal (`parent`), by parent id, active and completed. */
     spawned: Record<string, GoalDetail[]>;
     /** Revision of the task store: send it back as `expectedRev` with a task op. */
@@ -492,6 +498,17 @@ export function buildAgentHome(
     .filter((g) => g.section === 'completed')
     .sort((a, b) => ((a.completed ?? '') < (b.completed ?? '') ? 1 : -1))
     .slice(0, 5);
+  const goalCycles = safe(
+    () =>
+      readAgentCycles(
+        ctx.dirs.agentCycles,
+        bot.id,
+        now - GOAL_ACTIVITY_LOOKBACK_DAYS * 86_400_000,
+        now
+      ),
+    []
+  );
+  const loopMs = loopIntervalMs(bot, ctx.config);
 
   const karmaEvents = safe(() => deps.karma?.getRecentEvents?.(bot.id, KARMA_EVENTS) ?? [], []);
   const ascending = [...karmaEvents].sort(
@@ -537,20 +554,18 @@ export function buildAgentHome(
         (g) => g.section === 'active' && goalBucket(g.status) === 'inProgress'
       ),
       completedRecently: completed,
-      activity: safe(
+      activity: safe(() => buildGoalActivity(goalCycles, now), {}),
+      loopIntervalMs: loopMs,
+      turnIntervalMs: safe(
         () =>
-          buildGoalActivity(
-            readAgentCycles(
-              ctx.dirs.agentCycles,
-              bot.id,
-              now - GOAL_ACTIVITY_LOOKBACK_DAYS * 86_400_000,
-              now
-            ),
-            now
-          ),
-        {}
+          goalTurnIntervalMs({
+            loopMs,
+            goalCount: goals.filter((g) => g.section === 'active' && g.status !== 'blocked').length,
+            cycles: goalCycles,
+            nowMs: now,
+          }),
+        loopMs
       ),
-      loopIntervalMs: loopIntervalMs(bot, ctx.config),
       spawned: spawnedByParent(goals),
       tasksRev: goalsRead.tasksRev,
     },

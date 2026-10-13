@@ -13,15 +13,18 @@
     {
       "text": "Learn the operator's voice and topics from what they share and approve; keep a style note in memory",
       "priority": "high",
-      "notes": "Ask for three posts they are proud of if memory is empty."
+      "notes": "Ask for three posts they are proud of if memory is empty.",
+      "kind": "standing"
     },
     {
       "text": "Watch the communities and threads that matter and surface at most one worth answering per day",
-      "priority": "high"
+      "priority": "high",
+      "kind": "standing"
     },
     {
       "text": "Keep a queue of drafted posts and replies awaiting approval, each with the context it answers",
-      "priority": "medium"
+      "priority": "medium",
+      "kind": "standing"
     }
   ]
 }

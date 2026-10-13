@@ -3,8 +3,9 @@
  * that ask for them, their parsing, and the loop step that acts on them.
  *
  * D2: the planner chooses; the loop and the worker pool act. The loop writes
- * `new_tasks` and dispatches only what the planner named explicitly, never on
- * explore, idle or engagement-gated cycles, and never a content task while
+ * `new_tasks` and dispatches only what the planner named explicitly. Idle
+ * cycles write nothing; explore and engagement-gated cycles write tasks and
+ * standing marks but never dispatch; a content task is never dispatched while
  * the hard engagement gate is on.
  */
 import { type StoredTask, TASK_TEXT_MAX, type TaskStore, liveClaim } from '../goals/task-store';
@@ -225,7 +226,7 @@ export interface ApplyPlannerTasksResult {
   servesTask?: { id: string; text: string; goalId: string };
   /** The goal the planner marked standing this cycle. */
   standingGoalId?: string;
-  /** Why nothing was done (explore / idle / gated). */
+  /** Idle: nothing was done. Explore / gated: only the books (new_tasks, standing_goal) were kept. */
   skipped?: 'explore' | 'idle' | 'gated';
 }
 
@@ -237,19 +238,28 @@ export interface ApplyPlannerTasksResult {
 export function applyPlannerTasks(input: ApplyPlannerTasksInput): ApplyPlannerTasksResult {
   const { fields, botId, cycleId, logger } = input;
   const result: ApplyPlannerTasksResult = { newTaskIds: [], dispatched: [] };
-  const skipped: ApplyPlannerTasksResult['skipped'] = input.gateBlocked
-    ? 'gated'
-    : input.idle
-      ? 'idle'
-      : input.exploring
-        ? 'explore'
-        : undefined;
-  if (skipped) {
+  // An idle answer writes nothing. Explore and gated cycles still keep the
+  // books (a breakdown, a standing mark) but hand nothing to workers and
+  // serve no task: their own work is not the goal's.
+  if (input.idle) {
     if (fields.new_tasks || fields.dispatch || fields.standing_goal) {
-      logger?.info({ botId, cycleId, skipped }, 'Planner tasks: not acted on in this cycle');
+      logger?.info(
+        { botId, cycleId, skipped: 'idle' },
+        'Planner tasks: not acted on in this cycle'
+      );
     }
-    result.skipped = skipped;
+    result.skipped = 'idle';
     return result;
+  }
+  const bookkeepingOnly = input.gateBlocked ? 'gated' : input.exploring ? 'explore' : undefined;
+  if (bookkeepingOnly) {
+    result.skipped = bookkeepingOnly;
+    if (fields.dispatch || fields.serves_task) {
+      logger?.info(
+        { botId, cycleId, skipped: bookkeepingOnly },
+        'Planner tasks: dispatch and serves_task not acted on in this cycle'
+      );
+    }
   }
   // 0. standing_goal: a goal with no end state gets no tasks.
   if (fields.standing_goal && input.markStanding) {
@@ -346,7 +356,7 @@ export function applyPlannerTasks(input: ApplyPlannerTasksInput): ApplyPlannerTa
   // 2. dispatch
   const pool = input.workerPool;
   const dispatchedOk = new Set<string>();
-  if (fields.dispatch && pool) {
+  if (fields.dispatch && pool && !bookkeepingOnly) {
     let enabled = false;
     try {
       enabled = pool.isEnabledFor(botId);
@@ -400,7 +410,7 @@ export function applyPlannerTasks(input: ApplyPlannerTasksInput): ApplyPlannerTa
   }
 
   // 3. serves_task
-  if (fields.serves_task) {
+  if (fields.serves_task && !bookkeepingOnly) {
     const t = resolve(fields.serves_task);
     if (t && !dispatchedOk.has(t.id)) {
       result.servesTask = { id: t.id, text: t.text, goalId: t.goalId };

@@ -129,6 +129,8 @@ interface CycleAttribution {
   newTasks?: string[];
   /** The planner's `dispatch`, as the pool answered (for the cycle row). */
   dispatched?: CycleDispatch[];
+  /** The planner's task answer and what it was offered (for the cycle row). */
+  plannerTasks?: PlannerTaskFields & { workersOffered: boolean; openTasks: number };
 }
 
 /** The optional task fields of a planner answer. */
@@ -137,6 +139,7 @@ function taskFieldsOf(r: PlannerTaskFields): PlannerTaskFields {
     ...(r.new_tasks ? { new_tasks: r.new_tasks } : {}),
     ...(r.dispatch ? { dispatch: r.dispatch } : {}),
     ...(r.serves_task ? { serves_task: r.serves_task } : {}),
+    ...(r.standing_goal ? { standing_goal: r.standing_goal } : {}),
   };
 }
 
@@ -1052,6 +1055,7 @@ export class AgentLoop {
           : {}),
         ...(attribution.newTasks?.length ? { newTasks: attribution.newTasks } : {}),
         ...(attribution.dispatched?.length ? { dispatched: attribution.dispatched } : {}),
+        ...(attribution.plannerTasks ? { plannerTasks: attribution.plannerTasks } : {}),
       });
       if (status === 'completed' && goal.goalId) {
         this.startCycleGoal(botId, goal.goalId, attribution.cycleId);
@@ -1064,14 +1068,16 @@ export class AgentLoop {
   /**
    * Act on the planner's task fields (goal tasks plan, phase 1): write
    * `new_tasks`, dispatch named tasks to the worker pool and stamp the served
-   * task on the cycle's attribution. Called only once the plan is accepted
-   * (not idle, not gated); explore cycles skip the writes. Never throws.
+   * task on the cycle's attribution. Called once the plan is accepted, and
+   * from a cycle the engagement gate turned down (`gateBlocked`). Explore and
+   * gated cycles keep the books (new_tasks, standing_goal) but never dispatch.
+   * Never throws.
    */
   private applyPlannerTaskFields(
     botId: string,
     goalsContent: string | null | undefined,
     fields: PlannerTaskFields,
-    opts: { exploring: boolean; hardGateActive: boolean; logger: Logger }
+    opts: { exploring: boolean; hardGateActive: boolean; gateBlocked?: boolean; logger: Logger }
   ): { added: number; dispatched: number } {
     const acted = { added: 0, dispatched: 0 };
     const a = this.cycleAttribution.get(botId);
@@ -1092,7 +1098,7 @@ export class AgentLoop {
         workerPool: this.ctx.workerPool,
         exploring: opts.exploring,
         idle: false,
-        gateBlocked: false,
+        gateBlocked: opts.gateBlocked === true,
         hardGateActive: opts.hardGateActive,
         logger: opts.logger,
         assignGoalIds: () => {
@@ -1135,6 +1141,24 @@ export class AgentLoop {
       opts.logger.warn({ err, botId }, 'Planner tasks: could not apply the planner task fields');
     }
     return acted;
+  }
+
+  /** The planner's task answer and what it was offered, for the cycle row. Never throws. */
+  private notePlannerTasks(
+    botId: string,
+    fields: PlannerTaskFields,
+    workersOffered: boolean
+  ): void {
+    const a = this.cycleAttribution.get(botId);
+    if (!a) return;
+    let openTasks = 0;
+    try {
+      const store = this.ctx.soulLoaders.get(botId)?.getTaskStore?.();
+      openTasks = store ? store.list().filter((t) => t.lane !== 'done').length : 0;
+    } catch {
+      openTasks = 0;
+    }
+    a.plannerTasks = { ...fields, workersOffered, openTasks };
   }
 
   /**
@@ -2220,6 +2244,7 @@ export class AgentLoop {
       plannerTokenUsage = continuousResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: continuousResult.serves_goal });
       plannerTaskFields = taskFieldsOf(continuousResult);
+      this.notePlannerTasks(botId, plannerTaskFields, !!plannerWorkers);
       this.markWorkersSeen(botId, plannerWorkers, continuousResult);
       this.noteRunningPlan(botId, plan);
     } else {
@@ -2336,6 +2361,7 @@ export class AgentLoop {
       plannerTokenUsage = plannerResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: plannerResult.serves_goal });
       plannerTaskFields = taskFieldsOf(plannerResult);
+      this.notePlannerTasks(botId, plannerTaskFields, !!plannerWorkers);
       this.markWorkersSeen(botId, plannerWorkers, plannerResult);
       this.noteRunningPlan(botId, plan);
     }
@@ -2368,6 +2394,14 @@ export class AgentLoop {
           },
           gate.summary
         );
+        // The content is held back, not the bookkeeping: a breakdown or a
+        // standing mark the planner asked for is still written.
+        this.applyPlannerTaskFields(botId, goals, plannerTaskFields, {
+          exploring,
+          hardGateActive: true,
+          gateBlocked: true,
+          logger: botLogger,
+        });
         const idleCycleId = this.cycleAttribution.get(botId)?.cycleId;
         this.ctx.activityStream?.publish({
           type: 'agent:idle',

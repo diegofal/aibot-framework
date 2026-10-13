@@ -26,11 +26,13 @@
     },
     {
       "text": "Keep a task list of bugs and improvements with one concrete next step each, ordered by value",
-      "priority": "high"
+      "priority": "high",
+      "kind": "standing"
     },
     {
       "text": "Ship every change with a passing test and a short rationale the operator can review in one minute",
-      "priority": "medium"
+      "priority": "medium",
+      "kind": "standing"
     }
   ]
 }

@@ -1,3 +1,8 @@
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import type { StoredTask } from '../goals/task-store';
+import type { Logger } from '../logger';
+import { type GoalEntry, goalFromManageGoalsArgs, resolveGoalRef } from '../tools/goals';
 /**
  * Agent cycle log — one row per agent-loop cycle, the spine of per-goal
  * attribution. Every LLM call, tool call, production, outcome, ask and karma
@@ -7,11 +12,7 @@
  * Path: `<paths.data>/agent-cycles/<botId>/YYYY-MM-DD.jsonl` (UTC date of
  * `startedAt`, the same convention as the tool audit). Appends never throw.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import type { StoredTask } from '../goals/task-store';
-import type { Logger } from '../logger';
-import { type GoalEntry, goalFromManageGoalsArgs, resolveGoalRef } from '../tools/goals';
+import type { PlannerTaskFields } from '../workers/types';
 
 export type CycleGoalSource = 'planner' | 'strategist' | 'manage_goals';
 
@@ -62,6 +63,13 @@ export interface AgentCycleEntry {
   newTasks?: string[];
   /** What the planner's `dispatch` became: a worker run, or why not. */
   dispatched?: Array<{ taskId: string; runId?: string; ok: boolean; reason?: string }>;
+  /**
+   * The planner's answer about tasks, as it gave it (`new_tasks`, `dispatch`,
+   * `serves_task`, `standing_goal`), with what it was offered: whether the
+   * prompt let it dispatch and how many open tasks its goals had. Absent when
+   * the planner did not answer. Lets "why was nothing dispatched?" be read.
+   */
+  plannerTasks?: PlannerTaskFields & { workersOffered: boolean; openTasks: number };
 }
 
 /** Cap for `reason` and `reflection` on a cycle row. */

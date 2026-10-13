@@ -92,6 +92,15 @@ describe('renderGoalsForPrompt', () => {
     expect(out.indexOf('first')).toBeLessThan(out.indexOf('second'));
   });
 
+  test('a blocked goal is listed after the goals that can move, with how to serve it', () => {
+    const md = MD.replace('status: in_progress', 'status: blocked');
+    const out = renderGoalsForPrompt({ goalsMd: md, tasks: [] });
+    expect(out.indexOf('g-bbbbbbbb')).toBeLessThan(out.indexOf('g-aaaaaaaa'));
+    const blockedBlock = out.slice(out.indexOf('g-aaaaaaaa'));
+    expect(blockedBlock).toContain('blocked: it waits on someone else');
+    expect(out.slice(0, out.indexOf('g-aaaaaaaa'))).not.toContain('waits on someone else');
+  });
+
   test('over budget: completed goals go first, then done counts; ids stay', () => {
     const tasks = [
       task('g-aaaaaaaa', 'Map levels', 'todo', { note: 'n'.repeat(150) }),

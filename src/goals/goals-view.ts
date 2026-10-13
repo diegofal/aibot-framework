@@ -6,6 +6,8 @@
  * "worker running" marker), how many tasks are done, then the completed goals
  * one line each.
  *
+ * Blocked goals come last, each with how to serve it (only to unblock it).
+ *
  * Bounded by `maxChars`: completed goals are dropped first, then the done
  * counts, then goal notes, then task notes. Ids are never dropped: `serves_goal`
  * and `update_task` resolve by them.
@@ -48,7 +50,14 @@ const LEVELS: Level[] = [
 export function renderGoalsForPrompt(input: GoalsViewInput): string {
   const raw = input.goalsMd ?? '';
   const max = input.maxChars ?? GOALS_VIEW_MAX_CHARS;
-  const { active, completed } = parseGoals(raw);
+  const parsed = parseGoals(raw);
+  const { completed } = parsed;
+  // Goals that can move first: a blocked goal waits on someone else, and
+  // listed first it soaked up cycles that produced more for it while it waited.
+  const active = [
+    ...parsed.active.filter((g) => g.status !== 'blocked'),
+    ...parsed.active.filter((g) => g.status === 'blocked'),
+  ];
   if (active.length + completed.length === 0) {
     const text = raw.trim();
     return text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -75,6 +84,11 @@ export function renderGoalsForPrompt(input: GoalsViewInput): string {
       if (g.source) meta.push(`source: ${g.source}`);
       lines.push(`  ${meta.join(' · ')}`);
       if (lv.goalNotes && g.notes) lines.push(`  notes: ${g.notes}`);
+      if (g.status === 'blocked') {
+        lines.push(
+          '  blocked: it waits on someone else. Serve it only to unblock it (one question or one check), never to produce more for it; prefer a goal that can move'
+        );
+      }
       const tasks = byGoal.get(g.id ?? '') ?? [];
       if (g.kind === 'standing') {
         lines.push('  standing goal: no tasks; when you serve it, do one round of it');

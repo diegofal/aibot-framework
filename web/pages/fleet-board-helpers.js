@@ -262,9 +262,19 @@ const NO_WORK = new Set(['idle', 'skipped']);
 const PLAN_SUMMARY_CAP = 200;
 
 /**
+ * The yardstick for a goal's pulse: how long one goal waits for its turn
+ * (`home.goals.turnIntervalMs`: the loop shared by the goals, stretched by
+ * cycles that served none), else the raw loop interval.
+ */
+export function goalYardstickMs(home) {
+  const g = home?.goals;
+  return g?.turnIntervalMs ?? g?.loopIntervalMs;
+}
+
+/**
  * `{ tone, text, week, daily }` for an In progress card, from `home.goals.activity[id]`:
- * fresh under one loop interval since the last cycle, quiet up to three, stalled
- * after that or when no cycle served it.
+ * fresh under one turn (`goalYardstickMs`) since the last cycle, quiet up to
+ * three, stalled after that or when no cycle served it.
  */
 export function goalPulse(activity, intervalMs = 86_400_000, nowMs = Date.now()) {
   const last = Date.parse(activity?.lastCycleAt ?? '');
@@ -489,7 +499,7 @@ export function agentLine(
 function boardCtx(home, nowMs) {
   return {
     activity: home?.goals?.activity ?? {},
-    intervalMs: home?.goals?.loopIntervalMs,
+    intervalMs: goalYardstickMs(home),
     spawned: home?.goals?.spawned ?? {},
     nowMs,
   };
@@ -598,12 +608,12 @@ export function cardHtml(goal, selected, ctx = {}) {
   }
   const pri = PRIORITIES.includes(goal?.priority) ? goal.priority : 'medium';
   const standing = goal?.kind === 'standing';
-  const working = (Array.isArray(goal?.tasks) ? goal.tasks : []).some(
-    (t) => taskLaneOf(t) !== 'done' && taskWorker(t, ctx.workers)
-  );
+  const goalTasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
+  const working = goalTasks.some((t) => taskLaneOf(t) !== 'done' && taskWorker(t, ctx.workers));
+  const noTasks = !standing && !goalTasks.some((t) => taskLaneOf(t) !== 'done');
   return `<div class="fb-card ${pri}${selected ? ' sel' : ''}${working ? ' working' : ''}" data-goal="${ref}" draggable="true" tabindex="0">
     <div class="fb-h">${esc(head)}</div>
-    <div class="fb-meta">${tag ? `<span class="fb-tag sleep">${esc(tag)}</span>` : ''}${standing ? '<span class="fb-tag standing" title="No end state: the agent does a round of it each time it serves it">standing</span>' : ''}${sourceTag(goal)}${goal?.notes ? '<span class="fb-dim" title="Has notes">✎</span>' : ''}<span class="fb-sp"></span>${mini(goal?.tasks)}</div>
+    <div class="fb-meta">${tag ? `<span class="fb-tag sleep">${esc(tag)}</span>` : ''}${standing ? '<span class="fb-tag standing" title="No end state: the agent does a round of it each time it serves it">standing</span>' : ''}${noTasks ? '<span class="fb-tag notasks" title="Not broken down yet: the agent adds its steps (or marks it standing) the next time it serves it">no tasks yet</span>' : ''}${sourceTag(goal)}${goal?.notes ? '<span class="fb-dim" title="Has notes">✎</span>' : ''}<span class="fb-sp"></span>${mini(goal?.tasks)}</div>
     ${standing ? '' : inlineTasksHtml(goal, ctx)}
     ${goal?.status === 'in_progress' ? pulseHtml(ctx.activity?.[goal?.id], ctx.intervalMs, ctx.nowMs ?? Date.now()) : ''}${kidsLine(ctx.spawned?.[goal?.id])}
   </div>`;

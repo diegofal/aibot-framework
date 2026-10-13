@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   GOAL_ACTIVITY_DAYS,
   buildGoalActivity,
+  goalTurnIntervalMs,
   loopIntervalMs,
 } from '../../src/stats/goal-activity';
 import type { AgentCycleRecord } from '../../src/stats/readers/agent-cycles';
@@ -82,5 +83,48 @@ describe('loopIntervalMs', () => {
   test('unparseable or missing → 24h', () => {
     expect(loopIntervalMs({ agentLoop: { every: 'soon' } } as never, {} as never)).toBe(DAY);
     expect(loopIntervalMs({} as never, {} as never)).toBe(DAY);
+  });
+});
+
+// The bot works one goal per cycle, and explore cycles serve none: judged
+// against the raw loop interval, every goal of a bot with 4 goals and a 2 h
+// loop read "stalled" most of the time.
+describe('goalTurnIntervalMs', () => {
+  const served = (n: number, step = H) => Array.from({ length: n }, (_, i) => cyc('g-a', i * step));
+  const unserved = (n: number, step = H) =>
+    Array.from({ length: n }, (_, i) => cyc(null, i * step + 1));
+
+  test('the loop interval times the goals that share it', () => {
+    expect(goalTurnIntervalMs({ loopMs: 2 * H, goalCount: 4, cycles: served(8), nowMs: NOW })).toBe(
+      8 * H
+    );
+  });
+
+  test('cycles that served no goal stretch the turn', () => {
+    const cycles = [...served(5), ...unserved(5)];
+    expect(goalTurnIntervalMs({ loopMs: 2 * H, goalCount: 4, cycles, nowMs: NOW })).toBe(16 * H);
+  });
+
+  test('idle and skipped cycles count as cycles that served no goal', () => {
+    const cycles = [...served(5), cyc('g-a', 30 * H, 'idle'), ...unserved(4)];
+    expect(goalTurnIntervalMs({ loopMs: 2 * H, goalCount: 1, cycles, nowMs: NOW })).toBe(4 * H);
+  });
+
+  test('cycles older than 7 days are not counted', () => {
+    const cycles = [
+      ...served(4),
+      ...unserved(10, 0).map((c) => ({ ...c, startedAt: new Date(NOW - 8 * DAY).toISOString() })),
+    ];
+    expect(goalTurnIntervalMs({ loopMs: H, goalCount: 2, cycles, nowMs: NOW })).toBe(2 * H);
+  });
+
+  test('too few cycles to judge: no stretch; never below one goal; share floored at a quarter', () => {
+    expect(goalTurnIntervalMs({ loopMs: H, goalCount: 3, cycles: unserved(3), nowMs: NOW })).toBe(
+      3 * H
+    );
+    expect(goalTurnIntervalMs({ loopMs: H, goalCount: 0, cycles: [], nowMs: NOW })).toBe(H);
+    expect(goalTurnIntervalMs({ loopMs: H, goalCount: 1, cycles: unserved(10), nowMs: NOW })).toBe(
+      4 * H
+    );
   });
 });
