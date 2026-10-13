@@ -770,3 +770,25 @@ docker compose up -d --build
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-13T21-07-32`. `healthy` in ~30 s; the image passes `standing_goal` through `taskFieldsOf`, has `goalTurnIntervalMs`, and the assistant preset has 3 standing goals; served `/style.css` has `.fb-tag.notasks` and `/pages/fleet-board-helpers.js` has `goalYardstickMs`; bots started. The "Ollama daemon is unreachable" boot error was already there on the previous boot (all bots run claude-cli).
 
 **Reversible?** Check out `1538c33` and rebuild; data from the backup above with `restore … --force` if ever needed (this deploy writes only `- kind: standing` lines and tasks).
+
+### 2026-10-13 — Deploy living documents (`fa554d2`) and archive all but one document per goal
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1`; productions volumes |
+| **Who** | Diego (via Claude), approved by Diego (deploy, and the keep/archive list with two swaps) |
+| **Why** | Bots wrote a new file per cycle (jarvis-factory 12 files on one thread). The new rules keep one short document per goal; the backlog was cut to match |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+docker cp D:/tmp/aibot-scripts/plan-archive.js aibot-framework-aibot-1:/tmp/plan-archive.js
+docker exec aibot-framework-aibot-1 bun /tmp/plan-archive.js            # read-only plan
+docker cp D:/tmp/aibot-scripts/apply-archive.ts aibot-framework-aibot-1:/tmp/apply-archive.ts
+docker exec -w /app aibot-framework-aibot-1 bun /tmp/apply-archive.ts   # dry run: 39, 0 problems
+docker exec -w /app aibot-framework-aibot-1 bun /tmp/apply-archive.ts --apply
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-13T22-29-00`. Container healthy in ~30 s with `livingDocRefusalFor` and PROGRESS IMPERATIVE in the image. 39 documents archived with `ProductionsService.archiveFile` (moved to `archived/`, changelog `archive` entries, reason "Living documents cleanup 2026-10-13"), 12 kept: the newest document per active goal, except jarvis-factory purpose goal → `06_lights-off-gating-rules-v1.md` and job-seeker roles brief → `11_weekly_roles_brief_2026-10-12.md` (operator swaps). Documents with no goal or a closed goal were archived. Code files untouched. No karma charged (not the Needs You / auto-archive path).
+
+**Reversible?** Files are in each bot's `archived/`; restore one from the Productions page or move it back. Whole state: `restore D:\aibot-backups\aibot-backup-2026-10-13T22-29-00 --force`. Code: rebuild from `d57f6ef`.
