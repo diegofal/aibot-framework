@@ -753,3 +753,20 @@ docker compose up -d --build
 **Outcome.** `healthy` in ~37 s, the image has `standing_goal` in `src/bot/agent-loop-tasks.ts`, the live config still has `workers`, served `/pages/agent-home-helpers.js` has `goalKindPayload`, no new errors in the boot logs. No backup: code only; GOALS.md gains a `- kind: standing` line when a goal is marked.
 
 **Reversible?** Check out `8e4abd3` and rebuild; older code ignores the `kind` line.
+
+### 2026-10-13 — Deploy goal-flow fixes (`d57f6ef`): standing marks land, fair stalled pulse
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | A day after goal tasks went live: no goal was ever marked standing (`standing_goal` dropped in `taskFieldsOf`), explore/gated cycles wrote no tasks, and the board showed most In progress goals "stalled" |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-13T21-07-32`. `healthy` in ~30 s; the image passes `standing_goal` through `taskFieldsOf`, has `goalTurnIntervalMs`, and the assistant preset has 3 standing goals; served `/style.css` has `.fb-tag.notasks` and `/pages/fleet-board-helpers.js` has `goalYardstickMs`; bots started. The "Ollama daemon is unreachable" boot error was already there on the previous boot (all bots run claude-cli).
+
+**Reversible?** Check out `1538c33` and rebuild; data from the backup above with `restore … --force` if ever needed (this deploy writes only `- kind: standing` lines and tasks).

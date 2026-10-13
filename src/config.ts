@@ -978,6 +978,17 @@ export const ProductionsConfigSchema = z
         intervalHours: z.number().positive().default(24),
       })
       .default({}),
+    /**
+     * Living documents (src/productions/living-docs.ts): in an agent-loop
+     * cycle a goal keeps one document, updated in place and under `maxChars`;
+     * explore cycles write none.
+     */
+    livingDocs: z
+      .object({
+        enabled: z.boolean().default(true),
+        maxChars: z.number().int().positive().default(6000),
+      })
+      .default({}),
   })
   .default({});
 

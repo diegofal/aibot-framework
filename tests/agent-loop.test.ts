@@ -98,9 +98,15 @@ describe('planner prompt — novelty imperative', () => {
     expect(system).not.toContain('next_check_in');
   });
 
-  test('contains NOVELTY IMPERATIVE (not SURVIVAL IMPERATIVE)', () => {
+  // Deliberately changed: NOVELTY IMPERATIVE banned continuing a line of work,
+  // so every cycle opened a new angle and a new file. Progress is the rule now.
+  test('contains PROGRESS IMPERATIVE (not NOVELTY or SURVIVAL IMPERATIVE)', () => {
     const { system } = buildPlannerPrompt(baseInput);
-    expect(system).toContain('NOVELTY IMPERATIVE');
+    expect(system).toContain('PROGRESS IMPERATIVE');
+    expect(system).toContain('the next step on the same question is progress, not repetition');
+    expect(system).toContain('ONE step forward');
+    expect(system).not.toContain('NOVELTY IMPERATIVE');
+    expect(system).not.toContain('ONE concrete deliverable per session');
     expect(system).not.toContain('SURVIVAL IMPERATIVE');
     expect(system).not.toContain('eliminated');
   });
@@ -120,9 +126,9 @@ describe('planner prompt — novelty imperative', () => {
     expect(system).not.toContain('self-improvement');
   });
 
-  test('suggests boundary-pushing activities', () => {
+  test('asks to challenge assumptions, not to chase new territory every cycle', () => {
     const { system } = buildPlannerPrompt(baseInput);
-    expect(system).toContain('Push into unfamiliar territory');
+    expect(system).not.toContain('Push into unfamiliar territory');
     expect(system).toContain('Challenge your own assumptions');
     expect(system).toContain('Find blind spots');
   });
@@ -598,9 +604,11 @@ describe('buildContinuousPlannerPrompt', () => {
     expect(system).not.toContain('should_act');
   });
 
-  test('contains NOVELTY IMPERATIVE', () => {
+  test('contains PROGRESS IMPERATIVE', () => {
     const { system } = buildContinuousPlannerPrompt(baseInput);
-    expect(system).toContain('NOVELTY IMPERATIVE');
+    expect(system).toContain('PROGRESS IMPERATIVE');
+    expect(system).toContain('ONE step forward');
+    expect(system).not.toContain('NOVELTY IMPERATIVE');
     expect(system).not.toContain('SURVIVAL IMPERATIVE');
   });
 

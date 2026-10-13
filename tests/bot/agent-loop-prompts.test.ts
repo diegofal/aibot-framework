@@ -204,15 +204,27 @@ describe('buildExecutorPrompt productionsEnabled', () => {
     const result = buildExecutorPrompt(baseExecutorInput);
     expect(result).toContain('## Working Directory Contents');
     expect(result).toContain('## Production Directory Rules');
-    expect(result).toContain('ARCHIVAL PROTOCOL');
+    expect(result).toContain('LIVING DOCUMENTS');
     expect(result).toContain('file_read/file_write/file_edit');
+  });
+
+  // Deliberately changed: "create a new version, archive the old one" made
+  // v1/v2 files; a goal now keeps one document, edited in place and short.
+  test('one living document per goal, edited in place and kept short; research step by step', () => {
+    const result = buildExecutorPrompt(baseExecutorInput);
+    expect(result).toContain('ONE document per goal');
+    expect(result).toContain('Edit it in place');
+    expect(result).toContain('about a page');
+    expect(result).toContain('exploration cycle');
+    expect(result).not.toContain('create the replacement');
+    expect(result).not.toContain('When you create a new version of a file');
   });
 
   test('includes production sections when productionsEnabled is true', () => {
     const result = buildExecutorPrompt({ ...baseExecutorInput, productionsEnabled: true });
     expect(result).toContain('## Working Directory Contents');
     expect(result).toContain('## Production Directory Rules');
-    expect(result).toContain('ARCHIVAL PROTOCOL');
+    expect(result).toContain('LIVING DOCUMENTS');
   });
 
   test('tells the executor supporting code is a scratch file and only the write-up is reviewed', () => {
@@ -227,8 +239,7 @@ describe('buildExecutorPrompt productionsEnabled', () => {
     const result = buildExecutorPrompt({ ...baseExecutorInput, productionsEnabled: false });
     expect(result).not.toContain('## Working Directory Contents');
     expect(result).not.toContain('## Production Directory Rules');
-    expect(result).not.toContain('ARCHIVAL PROTOCOL');
-    expect(result).not.toContain('ANTI-DUPLICATION');
+    expect(result).not.toContain('LIVING DOCUMENTS');
     expect(result).not.toContain('file_read/file_write/file_edit');
     expect(result).not.toContain('Use RELATIVE paths');
   });

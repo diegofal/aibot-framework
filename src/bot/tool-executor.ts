@@ -1,11 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { TOOL_ABORTED_MESSAGE, isAbortError } from '../core/abort';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { MEMORY_VIEWER_ARG, type MemoryViewer } from '../memory/viewer';
+import { LIVING_DOC_DEFAULTS, livingDocRefusal } from '../productions/living-docs';
 import {
   isScratchProductionPath,
   isUntrackedProductionPath,
@@ -167,6 +168,8 @@ export interface ToolAttribution {
   runId?: string;
   taskId?: string;
   dispatchCycleId?: string;
+  /** A curiosity explore cycle: its findings go to memory, not to production documents. */
+  exploring?: boolean;
 }
 
 /**
@@ -543,6 +546,51 @@ export class ToolExecutor extends EventEmitter {
       undefined,
       'approval-pending'
     );
+  }
+
+  /**
+   * The living-document refusal for an agent-loop cycle's write in productions
+   * (`src/productions/living-docs.ts`); undefined outside a cycle, for worker
+   * runs (their task folder is their scope), outside productions, or when
+   * `productions.livingDocs.enabled` is false. Never throws.
+   */
+  private livingDocRefusalFor(
+    name: string,
+    args: Record<string, unknown>,
+    botId: string
+  ): string | undefined {
+    if (name !== 'file_write' && name !== 'file_edit') return undefined;
+    const a = this.options.attribution;
+    const ps = this.ctx.productionsService;
+    const cfg = { ...LIVING_DOC_DEFAULTS, ...(this.ctx.config.productions?.livingDocs ?? {}) };
+    if (!a?.cycleId || a.runId || !ps || !cfg.enabled || typeof args.path !== 'string')
+      return undefined;
+    try {
+      if (!ps.isEnabled(botId)) return undefined;
+      const dir = resolve(ps.resolveDir(botId));
+      const rel = relative(dir, resolve(args.path)).split(sep).join('/');
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) return undefined;
+      return livingDocRefusal({
+        tool: name,
+        relPath: rel,
+        args,
+        exploring: a.exploring === true,
+        goalId: a.goalId,
+        entries: ps.getChangelog(botId, { limit: 5000 }),
+        exists: (p) => existsSync(join(dir, p)),
+        read: (p) => {
+          try {
+            return readFileSync(join(dir, p), 'utf-8');
+          } catch {
+            return null;
+          }
+        },
+        maxChars: cfg.maxChars,
+      });
+    } catch (err) {
+      this.logger.warn({ err, botId, tool: name }, 'Living documents: check failed, write allowed');
+      return undefined;
+    }
   }
 
   private buildFailResult(
@@ -935,6 +983,26 @@ export class ToolExecutor extends EventEmitter {
         if (name === 'exec' && !effectiveArgs.workdir) {
           effectiveArgs.workdir = workDir;
         }
+      }
+
+      // Living documents: a cycle keeps one short document per goal and an
+      // explore cycle writes none. Refused before the tool runs, uncharged.
+      const docRefusal = this.livingDocRefusalFor(name, effectiveArgs, botId);
+      if (docRefusal) {
+        this.logger.info(
+          { tool: name, botId, path: effectiveArgs.path },
+          'Living documents: write refused'
+        );
+        return this.buildFailResult(
+          name,
+          args,
+          startMs,
+          docRefusal,
+          'lookup',
+          0,
+          undefined,
+          'scope'
+        );
       }
 
       // Include previous error feedback for retry attempts

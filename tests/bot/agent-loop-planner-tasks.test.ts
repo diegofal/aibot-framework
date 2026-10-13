@@ -4,7 +4,7 @@
  * worker pool when workers are on, stamps the served task on the cycle's work
  * and records all of it on the cycle row. Never on an idle cycle.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentLoop } from '../../src/bot/agent-loop';
+import * as curiosityRunner from '../../src/bot/curiosity/runner';
 import { writeGoalsFile } from '../../src/bot/goal-events';
 import { GlobalAgentLoopConfigSchema } from '../../src/config';
 import { TaskStore } from '../../src/goals/task-store';
@@ -590,5 +591,36 @@ describe('agent loop: planner task fields', () => {
     expect(planner).toContain('## Workers');
     expect(planner).toContain('t-abcdef');
     expect(planner).toContain('step 3/8');
+  });
+
+  test('an explore cycle marks its attribution exploring, so its executor writes no document', async () => {
+    const begin = spyOn(curiosityRunner, 'beginCuriosityCycle').mockResolvedValue({
+      botId: 'bot1',
+      decision: { mode: 'explore', reason: 'budget' },
+      frontierItem: null,
+      proposals: [],
+      curiosityBlock: '',
+      navigatorStarted: false,
+    } as never);
+    const finish = spyOn(curiosityRunner, 'finishCuriosityCycle').mockResolvedValue(
+      undefined as never
+    );
+    try {
+      const { loop, llm } = makeLoop(
+        JSON.stringify({ reasoning: 'r', plan: ['Look into X'], priority: 'medium' })
+      );
+      (loop as any).buildCuriosityDeps = () => ({});
+      let seen: any;
+      llm.chat = mock(() => {
+        seen = { ...(loop as any).cycleAttribution.get('bot1') };
+        return Promise.resolve({ text: 'executed' });
+      });
+      await loop.runOne('bot1');
+      expect(begin).toHaveBeenCalled();
+      expect(seen.exploring).toBe(true);
+    } finally {
+      begin.mockRestore();
+      finish.mockRestore();
+    }
   });
 });

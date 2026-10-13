@@ -353,13 +353,15 @@ ${tasks}`
 }
 
 export function buildPlannerPrompt(input: PlannerPromptInput): { system: string; prompt: string } {
-  const system = `You are an autonomous agent operating in SINGLE-FOCUS MODE. Your value comes from completing ONE concrete deliverable per session.
+  const system = `You are an autonomous agent operating in SINGLE-FOCUS MODE. Your value comes from moving ONE goal ONE step forward per session: a question answered with evidence, a claim checked, the goal's document made shorter and truer. Not a new file.
 
 SINGLE-FOCUS RULE: You will be assigned ONE deliverable by the strategist. Your job is to break it into 1-3 concrete plan steps and complete it. No scope creep: do NOT add extra work beyond it.
 
-NOVELTY IMPERATIVE: Repeating the same action is worse than doing nothing.
-If your Recent Actions show you already did something, it is BANNED for this cycle.
-Push into unfamiliar territory. Challenge your own assumptions. Find blind spots.
+PROGRESS IMPERATIVE: Repeating an action that adds nothing new is worse than doing nothing.
+If your Recent Actions show you already did something and got the same result, it is BANNED for this cycle.
+Continuing a line of work is not repetition: the next step on the same question is progress, not repetition.
+Research is iterative and incremental: one open question per cycle, find the evidence, fold the finding into the goal's document (and its notes), then the next question.
+Challenge your own assumptions. Find blind spots.
 
 You have the following identity and purpose:
 
@@ -454,7 +456,7 @@ ANTI-PATTERNS (banned):
 - Creating templates or checklists without real data to fill them
 - Writing about what you plan to do instead of doing it
 - Scope creep: plan steps beyond the assigned deliverable
-- Creating a new file when a similar one already exists (check index.html first)
+- Starting a new file for a goal that already has its document (update that document instead)
 - Creating subdirectories — place ALL files at root level
 
 Assign a priority to your plan:
@@ -493,13 +495,15 @@ export function buildContinuousPlannerPrompt(input: ContinuousPlannerPromptInput
   system: string;
   prompt: string;
 } {
-  const system = `You are an autonomous agent running in continuous mode with SINGLE-FOCUS MODE enabled. Your value comes from completing ONE concrete deliverable per session.
+  const system = `You are an autonomous agent running in continuous mode with SINGLE-FOCUS MODE enabled. Your value comes from moving ONE goal ONE step forward per session: a question answered with evidence, a claim checked, the goal's document made shorter and truer. Not a new file.
 
 SINGLE-FOCUS RULE: You will be assigned ONE deliverable by the strategist. Your job is to break it into 1-3 concrete plan steps and complete it. No scope creep: do NOT add extra work beyond it.
 
-NOVELTY IMPERATIVE: Repeating the same action is worse than doing nothing.
-If your Recent Actions show you already did something, it is BANNED for this cycle.
-Push into unfamiliar territory. Challenge your own assumptions. Find blind spots.
+PROGRESS IMPERATIVE: Repeating an action that adds nothing new is worse than doing nothing.
+If your Recent Actions show you already did something and got the same result, it is BANNED for this cycle.
+Continuing a line of work is not repetition: the next step on the same question is progress, not repetition.
+Research is iterative and incremental: one open question per cycle, find the evidence, fold the finding into the goal's document (and its notes), then the next question.
+Challenge your own assumptions. Find blind spots.
 
 You have the following identity and purpose:
 
@@ -604,7 +608,7 @@ ANTI-PATTERNS (banned):
 - Creating templates or checklists without real data to fill them
 - Writing about what you plan to do instead of doing it
 - Scope creep: plan steps beyond the assigned deliverable
-- Creating a new file when a similar one already exists (check index.html first)
+- Starting a new file for a goal that already has its document (update that document instead)
 - Creating subdirectories — place ALL files at root level
 
 Assign a priority to your plan:
@@ -736,15 +740,12 @@ SUPPORTING WORK:
 - Only the write-up your operator should read gets a normal name. Put the key numbers and how you got them in the write-up itself, so it stands alone.
 - Before starting another follow-up on a thread nobody has reviewed yet, add to the existing write-up instead of creating a new file.
 
-ARCHIVAL PROTOCOL:
-- When you create a new version of a file, archive the old one first using \`archive_file\`.
-- When content becomes stale (superseded by newer content), archive it.
-- NEVER delete production files — always archive with a reason.
-
-ANTI-DUPLICATION:
-- Before creating a new file, check if a similar file exists (use file_read on index.html to see the file listing).
-- If it exists, UPDATE the existing file instead of creating a new one.
-- If the existing file is outdated, archive it first, then create the replacement.`
+LIVING DOCUMENTS:
+- Keep ONE document per goal. Edit it in place: file_edit the section that changed, or file_write the whole document to its path. No new file per cycle, no v2 files: a new document for a goal that already has one is refused.
+- Keep it short, about a page: a write that leaves it longer is refused. When you add a finding, cut what it supersedes and merge repeated points. The document says what is true now; the changelog keeps the history.
+- Research step by step: one open question, its evidence, the finding folded into the document with its source, the next question named.
+- In an exploration cycle, save what you found to memory, not to productions.
+- NEVER delete production files: archive_file a document that is wrong or no longer needed, with a reason.`
     : ''
 }`;
 }
@@ -866,7 +867,7 @@ export function buildStrategistPrompt(input: StrategistPromptInput): {
   prompt: string;
 } {
   const system = `You are the strategic oversight layer for an autonomous agent.
-Your job is to review the agent's goals, recent activity, and overall direction — then assign ONE concrete deliverable for the next session.
+Your job is to review the agent's goals, recent activity, and overall direction — then assign ONE concrete deliverable for the next session. A deliverable is a step forward on a goal (a question answered, a claim checked, the goal's document made shorter and truer), not a new file.
 
 ## Agent Identity
 

@@ -129,6 +129,8 @@ interface CycleAttribution {
   newTasks?: string[];
   /** The planner's `dispatch`, as the pool answered (for the cycle row). */
   dispatched?: CycleDispatch[];
+  /** A curiosity explore cycle: the executor writes no production document (living documents). */
+  exploring?: boolean;
   /** The planner's task answer and what it was offered (for the cycle row). */
   plannerTasks?: PlannerTaskFields & { workersOffered: boolean; openTasks: number };
 }
@@ -1769,6 +1771,8 @@ export class AgentLoop {
       }
     }
     const exploring = curiosityCycle?.decision.mode === 'explore';
+    const cycleAttr = this.cycleAttribution.get(botId);
+    if (cycleAttr) cycleAttr.exploring = exploring;
 
     // Phase 0: Strategist (conditional)
     if (checkTimeout && !checkTimeout('before_strategist')) {

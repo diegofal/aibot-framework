@@ -89,7 +89,7 @@ export function buildTaskOutputSection(opts: { workersEnabled: boolean }): strin
     '## Tasks',
     '',
     'Goals list their open tasks with ids (t-…). Tasks are the steps of a goal and outlive this cycle; they are different from your plan steps.',
-    '- BREAK A GOAL DOWN: when the goal you serve this cycle has an end state and no open task, you MUST add "new_tasks": {"goal": "<goal id or exact title>", "tasks": [2–5 concrete, verifiable steps]} in this answer. One line each; each names a result someone could check (a file written, a message sent, a decision recorded). Only that one goal, and only when it has no open task.',
+    '- BREAK A GOAL DOWN: when the goal you serve this cycle has an end state and no open task, you MUST add "new_tasks": {"goal": "<goal id or exact title>", "tasks": [2–5 concrete, verifiable steps]} in this answer. One line each; each names a result someone could check (a file written, a message sent, a decision recorded). Only that one goal, and only when it has no open task. For a research goal, the tasks are its open questions, in the order you will answer them.',
     '- STANDING GOALS: a goal with no end state (a habit or a recurring duty, e.g. "read 2 sources per cycle", "every day research X") gets no tasks. The first time you serve one that is not marked standing yet, add "standing_goal": "<goal id>" and do one round of it in your plan. Goals already marked standing goal: just do a round.',
     '- "serves_task": the id of the open task your own plan works on, when it works on one.',
   ];
