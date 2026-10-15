@@ -828,3 +828,21 @@ docker compose up -d --build
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T12-53-12`. Healthy in ~35 s; `/api/claude-accounts` and `/api/stats/usage` answer JSON (401 without a session). Inside the container `createClaudeAccounts(config).list()` returns `default` (`/app/data/claude`, logged in, diego.falciola@agilityio.com, active). `CLAUDE_CONFIG_DIR=/app/data/claude`. Add-account login not exercised with a real second account yet.
 
 **Reversible?** Rebuild from `8cb8f70`. Accounts added later live in `/app/data/claude-accounts/`; deleting `accounts.json` there falls back to the original login.
+
+### 2026-10-15 — Deploy accounts CRUD + test button + cost backfill script (`6813840`)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | Accounts could not be renamed or removed and there was no way to check one works; Usage showed $0 cost |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+docker exec -w /app aibot-framework-aibot-1 bun /tmp/bf/scripts/usage/backfill-claude-costs.ts /app/data   # dry run only, before the deploy
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T13-06-51`. Healthy in ~35 s; the image has `ClaudeAccountService.test` and `scripts/usage/backfill-claude-costs.ts`; served `claude-accounts-helpers.js` has the Test button. Test from inside the container: `default` (agilityio) 429 weekly limit, resets 15:00 BA; `test-123` (bairesdev) OK in 5.8 s, $0.047. Backfill dry run: 1,875 sessions, 1,766 matched to 1,652 calls, $195.85 since 2026-09-26, $6.27 unattributed. **Not applied** (writes the data volume): `docker exec -w /app aibot-framework-aibot-1 bun scripts/usage/backfill-claude-costs.ts --apply`.
+
+**Reversible?** Rebuild from `673a9f7`.
