@@ -882,3 +882,20 @@ docker exec -w /app aibot-framework-aibot-1 bun /tmp/acctest.ts   # Test on ever
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T13-19-21`. Healthy in ~35 s. Test: `default` (agilityio) rejected, week 100 % used, resets 18:00 UTC; `test-123` (bairesdev, active, switched by the operator from the dashboard) allowed, 5 h 29 % used (resets 14:40 UTC), week 43 % (resets 2026-10-17 21:00 UTC). Saved in `/app/data/claude-accounts/limits.json`.
 
 **Reversible?** Rebuild from `35acea2`.
+
+### 2026-10-15 — Deploy standing-goal rotation + drop goals/tasks (`66cf3ef`)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Standing goals were never served (board "stalled"); nothing could say a goal or task no longer applies |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T13-51-14`. Healthy in ~35 s; the image has `src/goals/standing-rotation.ts` and `plannerStandingDue`; bots started; active Claude account `test-123` (applied at boot). In the first ~2.5 min: 15 LLM calls, all successful, all `account: test-123`, cost recorded; worker runs active.
+
+**Reversible?** Rebuild from `163ad36`.
