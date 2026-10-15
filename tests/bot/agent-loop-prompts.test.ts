@@ -210,11 +210,23 @@ describe('buildExecutorPrompt productionsEnabled', () => {
 
   // Deliberately changed: "create a new version, archive the old one" made
   // v1/v2 files; a goal now keeps one document, edited in place and short.
+  test('the executor is told the cap and the size of each document', () => {
+    const result = buildExecutorPrompt({
+      ...baseExecutorInput,
+      documents: {
+        maxChars: 12_000,
+        docs: [{ path: '06_rules.md', chars: 11_500, goalId: 'g-1' }],
+      },
+    });
+    expect(result).toContain('12,000 characters');
+    expect(result).toContain('06_rules.md (goal g-1): 11,500 / 12,000');
+  });
+
   test('one living document per goal, edited in place and kept short; research step by step', () => {
     const result = buildExecutorPrompt(baseExecutorInput);
     expect(result).toContain('ONE document per goal');
     expect(result).toContain('Edit it in place');
-    expect(result).toContain('about a page');
+    expect(result).toContain('about two pages');
     expect(result).toContain('exploration cycle');
     expect(result).not.toContain('create the replacement');
     expect(result).not.toContain('When you create a new version of a file');

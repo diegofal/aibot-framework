@@ -6,6 +6,7 @@ import { mergeTokenUsage } from '../core/tool-runner';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import { type DocumentSize, LIVING_DOC_DEFAULTS, listDocuments } from '../productions/living-docs';
 import { editGoal, parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import { idleToWhy } from '../why/builders/idle';
@@ -1083,9 +1084,14 @@ export class AgentLoop {
   ): { added: number; dispatched: number } {
     const acted = { added: 0, dispatched: 0 };
     const a = this.cycleAttribution.get(botId);
+    const autoDispatch = this.ctx.config.workers?.autoDispatch !== false && !!this.ctx.workerPool;
     if (
       !a ||
-      (!fields.new_tasks && !fields.dispatch && !fields.serves_task && !fields.standing_goal)
+      (!autoDispatch &&
+        !fields.new_tasks &&
+        !fields.dispatch &&
+        !fields.serves_task &&
+        !fields.standing_goal)
     )
       return acted;
     try {
@@ -1102,6 +1108,7 @@ export class AgentLoop {
         idle: false,
         gateBlocked: opts.gateBlocked === true,
         hardGateActive: opts.hardGateActive,
+        autoDispatch,
         logger: opts.logger,
         assignGoalIds: () => {
           // A rewrite of GOALS.md gives goals written before ids their id.
@@ -1143,6 +1150,26 @@ export class AgentLoop {
       opts.logger.warn({ err, botId }, 'Planner tasks: could not apply the planner task fields');
     }
     return acted;
+  }
+
+  /**
+   * The cap and each document's size for the executor prompt (living
+   * documents), so the agent cuts before it writes instead of after a refusal.
+   * Undefined when the rules are off or productions are not wired. Never throws.
+   */
+  private livingDocuments(botId: string): { maxChars: number; docs: DocumentSize[] } | undefined {
+    const ps = this.ctx.productionsService;
+    const cfg = { ...LIVING_DOC_DEFAULTS, ...(this.ctx.config.productions?.livingDocs ?? {}) };
+    if (!ps || !cfg.enabled) return undefined;
+    try {
+      if (!ps.isEnabled(botId)) return undefined;
+      return {
+        maxChars: cfg.maxChars,
+        docs: listDocuments(ps.resolveDir(botId), ps.getChangelog(botId, { limit: 5000 })),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   /** The planner's task answer and what it was offered, for the cycle row. Never throws. */
@@ -2578,6 +2605,7 @@ export class AgentLoop {
       fileTree,
       directives: directives.length > 0 ? directives : undefined,
       productionsEnabled,
+      documents: productionsEnabled ? this.livingDocuments(botId) : undefined,
     });
 
     const loopDetector = this.createLoopDetector(globalConfig, botOverride);

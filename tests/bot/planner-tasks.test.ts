@@ -610,3 +610,100 @@ describe('dispatch-only planner answers (S8)', () => {
     }
   });
 });
+
+// Live, the planner was offered workers with open tasks in 41 cycles and
+// dispatched none. The loop now hands one open task of another goal to a
+// worker itself when the planner did not, and the bot has no run going.
+describe('auto-dispatch', () => {
+  let dir: string;
+  let store: TaskStore;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'auto-dispatch-'));
+    writeFileSync(join(dir, 'GOALS.md'), GOALS_MD);
+    store = new TaskStore(dir);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const add = (goalId: string, text: string) => {
+    store.apply([{ op: 'add', goalId, text }], { actor: 'agent' });
+    return store.list().find((t) => t.text === text)?.id as string;
+  };
+  const base = (pool: WorkerPoolApi, over: Record<string, unknown> = {}) => ({
+    botId: 'b1',
+    cycleId: 'c1',
+    store,
+    goals: parseGoals(GOALS_MD).active,
+    logger,
+    exploring: false,
+    idle: false,
+    gateBlocked: false,
+    hardGateActive: false,
+    workerPool: pool,
+    autoDispatch: true,
+    fields: {},
+    ...over,
+  });
+
+  test('hands one open task to a worker when the planner dispatched none, marked auto', () => {
+    const pool = fakePool();
+    const id = add('g-aaaaaaaa', 'Collect three sources on the weekly topic');
+    const out = applyPlannerTasks(base(pool));
+    expect(pool.requests).toHaveLength(1);
+    expect(pool.requests[0].taskIds).toEqual([id]);
+    expect(out.dispatched).toEqual([{ taskId: id, runId: 'r-0', ok: true, auto: true }]);
+  });
+
+  test('prefers a goal the cycle is not serving, and never the served task', () => {
+    const pool = fakePool();
+    const served = add('g-aaaaaaaa', 'Draft the outline of the brief');
+    const other = add('g-bbbbbbbb', 'List the lab equipment needed');
+    applyPlannerTasks(base(pool, { fields: { serves_task: served } }));
+    expect(pool.requests[0].taskIds).toEqual([other]);
+  });
+
+  test('nothing when the bot already has a run going, or the planner dispatched itself', () => {
+    add('g-aaaaaaaa', 'Collect three sources on the weekly topic');
+    const busy = fakePool();
+    busy.list = () => [run({ status: 'running' })];
+    applyPlannerTasks(base(busy));
+    expect(busy.requests).toEqual([]);
+
+    const pool = fakePool();
+    const b = add('g-bbbbbbbb', 'List the lab equipment needed');
+    applyPlannerTasks(base(pool, { fields: { dispatch: [b] } }));
+    expect(pool.requests).toHaveLength(1);
+    expect(pool.requests[0].taskIds).toEqual([b]);
+  });
+
+  test('nothing on explore, gated or idle cycles, or with autoDispatch off', () => {
+    add('g-aaaaaaaa', 'Collect three sources on the weekly topic');
+    for (const over of [
+      { exploring: true },
+      { gateBlocked: true },
+      { idle: true },
+      { autoDispatch: false },
+    ]) {
+      const pool = fakePool();
+      applyPlannerTasks(base(pool, over));
+      expect(pool.requests).toEqual([]);
+    }
+  });
+
+  test('skips tasks that wait on the operator, blocked or standing goals, and content under the hard gate', () => {
+    const md = GOALS_MD.replace('status: in_progress', 'status: blocked');
+    writeFileSync(join(dir, 'GOALS.md'), md);
+    add('g-aaaaaaaa', 'Ask the operator to approve the pilot');
+    add('g-bbbbbbbb', 'List the lab equipment needed');
+    const pool = fakePool();
+    applyPlannerTasks(base(pool, { goals: parseGoals(md).active }));
+    expect(pool.requests).toEqual([]);
+
+    const write = add('g-aaaaaaaa', 'Write the weekly brief article');
+    const gated = fakePool();
+    applyPlannerTasks(base(gated, { goals: parseGoals(md).active, hardGateActive: true }));
+    expect(gated.requests).toEqual([]);
+    const open = fakePool();
+    applyPlannerTasks(base(open, { goals: parseGoals(md).active }));
+    expect(open.requests[0].taskIds).toEqual([write]);
+  });
+});

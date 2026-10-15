@@ -369,6 +369,8 @@ export interface WorkersConfig {
   claimTtlMs: number;
   maxAttempts: number;
   sweepIntervalMs: number;
+  /** The loop hands one open task to a worker per cycle when the planner dispatched none. */
+  autoDispatch: boolean;
 }
 
 export const WORKERS_DEFAULTS: WorkersConfig = {
@@ -383,4 +385,5 @@ export const WORKERS_DEFAULTS: WorkersConfig = {
   claimTtlMs: 30 * 60_000,
   maxAttempts: 2,
   sweepIntervalMs: 60_000,
+  autoDispatch: true,
 };

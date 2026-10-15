@@ -858,6 +858,8 @@ export const WorkersConfigSchema = z
     claimTtlMs: z.number().int().min(60_000).default(1_800_000),
     maxAttempts: z.number().int().min(1).max(5).default(2),
     sweepIntervalMs: z.number().int().min(5_000).default(60_000),
+    /** The loop hands one open task to a worker per cycle when the planner dispatched none. */
+    autoDispatch: z.boolean().default(true),
   })
   .default({});
 
@@ -986,7 +988,7 @@ export const ProductionsConfigSchema = z
     livingDocs: z
       .object({
         enabled: z.boolean().default(true),
-        maxChars: z.number().int().positive().default(6000),
+        maxChars: z.number().int().positive().default(12000),
       })
       .default({}),
   })

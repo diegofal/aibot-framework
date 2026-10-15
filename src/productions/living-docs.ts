@@ -9,10 +9,13 @@
  * (`_x`) are supporting work and never refused. Pure; the executor supplies
  * the changelog and file access (`livingDocRefusal`).
  */
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { isScratchProductionPath, isUntrackedProductionPath } from './paths';
 import type { ProductionEntry } from './types';
 
-export const LIVING_DOC_DEFAULTS = { enabled: true, maxChars: 6000 } as const;
+/** About two pages: room for a full design, still a limit that forces consolidation. */
+export const LIVING_DOC_DEFAULTS = { enabled: true, maxChars: 12000 } as const;
 
 const DOCUMENT_EXT = /\.(md|markdown|html?|txt)$/i;
 
@@ -109,7 +112,59 @@ export function livingDocRefusal(c: LivingDocCheck): string | undefined {
   if (next === null) return undefined;
   const before = current?.length ?? 0;
   if (next.length > c.maxChars && next.length > before) {
-    return `Not written: ${path} would be ${next.length} characters; documents stay under ${c.maxChars} (about a page). Make it shorter and truer: cut what the new finding supersedes, merge repeated points, keep the conclusion, the key numbers and their sources. Then write it again.`;
+    return `Not written: ${path} would be ${next.length} characters; documents stay under ${c.maxChars}. Make it shorter and truer: cut what the new finding supersedes, merge repeated points, keep the conclusion, the key numbers and their sources. Then write it again.`;
   }
   return undefined;
+}
+
+export interface DocumentSize {
+  path: string;
+  chars: number;
+  goalId?: string;
+}
+
+/** The documents at the productions root, by name, with their size and the goal that last wrote them. Never throws. */
+export function listDocuments(dir: string, entries: ProductionEntry[]): DocumentSize[] {
+  try {
+    if (!existsSync(dir)) return [];
+    const owner = new Map<string, string | undefined>();
+    for (const e of entries) {
+      if (e.action === 'archive' || e.action === 'delete') continue;
+      owner.set(e.path, e.goalId ?? owner.get(e.path));
+    }
+    return readdirSync(dir)
+      .filter((f) => isDocumentPath(f))
+      .filter((f) => statSync(join(dir, f)).isFile())
+      .sort()
+      .map((f) => {
+        const goalId = owner.get(f);
+        return { path: f, chars: statSync(join(dir, f)).size, ...(goalId ? { goalId } : {}) };
+      });
+  } catch {
+    return [];
+  }
+}
+
+const n = (v: number) => v.toLocaleString('en-US');
+
+/** The executor's view of its documents: the cap, each size against it and the room left. */
+export function documentsSection(docs: DocumentSize[], maxChars: number): string {
+  const lines = [`Limit: ${n(maxChars)} characters per document.`];
+  if (docs.length === 0) {
+    lines.push('No documents yet.');
+    return lines.join('\n');
+  }
+  lines.push('Your documents now:');
+  for (const d of docs) {
+    const goal = d.goalId ? ` (goal ${d.goalId})` : '';
+    const left = maxChars - d.chars;
+    const room =
+      left < 0
+        ? ' — over the limit: it can only get shorter'
+        : left < maxChars * 0.1
+          ? ` — ${n(left)} left, cut before you add`
+          : ` — ${n(left)} left`;
+    lines.push(`- ${d.path}${goal}: ${n(d.chars)} / ${n(maxChars)}${room}`);
+  }
+  return lines.join('\n');
 }

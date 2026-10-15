@@ -623,4 +623,63 @@ describe('agent loop: planner task fields', () => {
       finish.mockRestore();
     }
   });
+
+  test('the executor prompt shows the document cap and each document size', async () => {
+    const prod = join(dataDir, 'productions', 'bot1');
+    mkdirSync(prod, { recursive: true });
+    writeFileSync(join(prod, '01_brief.md'), 'x'.repeat(11_000));
+    const { loop, llm } = makeLoop(
+      JSON.stringify({ reasoning: 'r', plan: ['Tighten the brief'], priority: 'medium' }),
+      undefined,
+      {
+        extraCtx: {
+          productionsService: {
+            isEnabled: () => true,
+            resolveDir: () => prod,
+            getChangelog: () => [
+              { path: '01_brief.md', action: 'create', goalId: 'g-bbbbbbbb', timestamp: 't' },
+            ],
+          },
+        },
+      }
+    );
+    let prompt = '';
+    llm.chat = mock((messages: Array<{ content: string }>) => {
+      prompt = messages.map((m) => m.content).join(' ');
+      return Promise.resolve({ text: 'executed' });
+    });
+    await loop.runOne('bot1');
+    expect(prompt).toContain('Limit: 12,000 characters per document.');
+    expect(prompt).toContain('01_brief.md (goal g-bbbbbbbb): 11,000 / 12,000 — 1,000 left');
+  });
+  test('auto-dispatch: a plan with no task fields still hands an open task to a worker', async () => {
+    store.apply([{ op: 'add', goalId: 'g-bbbbbbbb', text: 'List the lab equipment needed' }], {
+      actor: 'agent',
+    });
+    const id = store.list()[0].id;
+    const pool = fakePool(true);
+    const { loop } = makeLoop(
+      JSON.stringify({ reasoning: 'r', plan: ['Draft the agenda'], priority: 'medium' }),
+      pool
+    );
+    await loop.runOne('bot1');
+    expect(pool.requests).toHaveLength(1);
+    expect(pool.requests[0].taskIds).toEqual([id]);
+    const [row] = cycleRows();
+    expect(row.dispatched).toEqual([{ taskId: id, runId: `run-${id}`, ok: true, auto: true }]);
+  });
+
+  test('auto-dispatch: off with workers.autoDispatch false', async () => {
+    store.apply([{ op: 'add', goalId: 'g-bbbbbbbb', text: 'List the lab equipment needed' }], {
+      actor: 'agent',
+    });
+    const pool = fakePool(true);
+    const { loop, ctx } = makeLoop(
+      JSON.stringify({ reasoning: 'r', plan: ['Draft the agenda'], priority: 'medium' }),
+      pool
+    );
+    ctx.config.workers = { autoDispatch: false };
+    await loop.runOne('bot1');
+    expect(pool.requests).toEqual([]);
+  });
 });

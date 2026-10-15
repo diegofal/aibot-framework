@@ -6,8 +6,13 @@
  * "swe_trends" file every day.
  */
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   LIVING_DOC_DEFAULTS,
+  documentsSection,
+  listDocuments,
   type LivingDocCheck,
   goalDocuments,
   isDocumentPath,
@@ -141,7 +146,49 @@ describe('livingDocRefusal', () => {
     expect(livingDocRefusal({ ...over, args: { old_text: 'x', new_text: 'yy' } })).toContain('cut');
   });
 
-  test('defaults: on, about one page', () => {
-    expect(LIVING_DOC_DEFAULTS).toEqual({ enabled: true, maxChars: 6000 });
+  // Deliberately changed: 6000 (one page) was a guess; a pilot design with its
+  // gold set, metrics and rollback runs to two pages and kept bouncing off it.
+  test('defaults: on, about two pages', () => {
+    expect(LIVING_DOC_DEFAULTS).toEqual({ enabled: true, maxChars: 12000 });
+  });
+});
+
+describe('what the agent is told about its documents', () => {
+  test('listDocuments: each document at the productions root with its size and goal', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'living-docs-list-'));
+    try {
+      writeFileSync(join(dir, '01_brief.md'), 'x'.repeat(5000));
+      writeFileSync(join(dir, '02_notes.md'), 'y'.repeat(40));
+      writeFileSync(join(dir, '_sim.ts'), 'code');
+      writeFileSync(join(dir, 'index.html'), '<html>');
+      const docs = listDocuments(dir, [entry({ path: '01_brief.md', goalId: 'g-1' })]);
+      expect(docs).toEqual([
+        { path: '01_brief.md', chars: 5000, goalId: 'g-1' },
+        { path: '02_notes.md', chars: 40 },
+      ]);
+      expect(listDocuments(join(dir, 'missing'), [])).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('documentsSection: the cap, each size against it and the room left', () => {
+    const text = documentsSection(
+      [
+        { path: '06_rules.md', chars: 11_500, goalId: 'g-1' },
+        { path: '02_notes.md', chars: 400 },
+      ],
+      12_000
+    );
+    expect(text).toContain('12,000 characters');
+    expect(text).toContain('06_rules.md (goal g-1): 11,500 / 12,000 — 500 left, cut before you add');
+    expect(text).toContain('02_notes.md: 400 / 12,000');
+    expect(documentsSection([], 12_000)).toContain('No documents yet');
+  });
+
+  test('documentsSection: a document already over the cap must shrink', () => {
+    expect(documentsSection([{ path: 'big.md', chars: 13_000 }], 12_000)).toContain(
+      'big.md: 13,000 / 12,000 — over the limit: it can only get shorter'
+    );
   });
 });

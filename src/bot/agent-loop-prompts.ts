@@ -1,10 +1,11 @@
+import { renderGoalsForPrompt } from '../goals/goals-view';
+import type { StoredTask } from '../goals/task-store';
 /**
  * Prompt templates for the autonomous agent loop.
  * Planner: lightweight LLM call to decide whether and what to do.
  * Executor: full agentic call with tool access to carry out the plan.
  */
-import { renderGoalsForPrompt } from '../goals/goals-view';
-import type { StoredTask } from '../goals/task-store';
+import { type DocumentSize, documentsSection } from '../productions/living-docs';
 import { isOperatorGoal, parseGoals } from '../tools/goals';
 import type { PlannerTaskFields } from '../workers/types';
 import {
@@ -152,6 +153,8 @@ export interface ExecutorPromptInput {
   singleDeliverable?: string;
   /** Pre-scanned file tree of workDir, or null if empty/missing */
   fileTree?: string | null;
+  /** Living documents: the cap and each document's size (`documentsSection`). */
+  documents?: { maxChars: number; docs: DocumentSize[] };
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
   /** Whether productions are enabled for this bot (controls working directory and production rules sections) */
@@ -742,10 +745,16 @@ SUPPORTING WORK:
 
 LIVING DOCUMENTS:
 - Keep ONE document per goal. Edit it in place: file_edit the section that changed, or file_write the whole document to its path. No new file per cycle, no v2 files: a new document for a goal that already has one is refused.
-- Keep it short, about a page: a write that leaves it longer is refused. When you add a finding, cut what it supersedes and merge repeated points. The document says what is true now; the changelog keeps the history.
+- Keep it short, about two pages at most: a write that leaves it over the limit is refused. When you add a finding, cut what it supersedes and merge repeated points. The document says what is true now; the changelog keeps the history.
 - Research step by step: one open question, its evidence, the finding folded into the document with its source, the next question named.
 - In an exploration cycle, save what you found to memory, not to productions.
-- NEVER delete production files: archive_file a document that is wrong or no longer needed, with a reason.`
+- NEVER delete production files: archive_file a document that is wrong or no longer needed, with a reason.${
+        input.documents
+          ? `
+
+${documentsSection(input.documents.docs, input.documents.maxChars)}`
+          : ''
+      }`
     : ''
 }`;
 }

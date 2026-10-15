@@ -189,6 +189,8 @@ export interface CycleDispatch {
   runId?: string;
   ok: boolean;
   reason?: string;
+  /** The loop picked it (`pickAutoDispatch`), not the planner. */
+  auto?: true;
 }
 
 export interface ApplyPlannerTasksInput {
@@ -212,6 +214,12 @@ export interface ApplyPlannerTasksInput {
    * return the fresh active goals. Used when `new_tasks` names a goal with no id.
    */
   assignGoalIds?: () => GoalEntry[] | null | undefined;
+  /**
+   * When the planner dispatched nothing, hand one open task of another goal to
+   * a worker (`pickAutoDispatch`). Off by default; the loop passes
+   * `workers.autoDispatch`.
+   */
+  autoDispatch?: boolean;
   /** Mark a goal standing (writes `- kind: standing` as the agent). Returns whether it was written. */
   markStanding?: (goal: GoalEntry) => boolean;
   logger?: { info: (obj: object, msg: string) => void; warn: (obj: object, msg: string) => void };
@@ -409,6 +417,39 @@ export function applyPlannerTasks(input: ApplyPlannerTasksInput): ApplyPlannerTa
     }
   }
 
+  // 2b. auto-dispatch: the planner was offered workers in every cycle and
+  // dispatched nothing, so the loop hands one task over itself.
+  if (input.autoDispatch && pool && !bookkeepingOnly && !result.dispatched.some((d) => d.ok)) {
+    try {
+      if (pool.isEnabledFor(botId) && !pool.list(botId).some((r) => isActiveRun(r.status))) {
+        const served = fields.serves_task ? resolve(fields.serves_task) : null;
+        const pick = pickAutoDispatch({
+          tasks: list(),
+          goals: input.goals,
+          servedTaskId: served?.id,
+          servedGoalId: served?.goalId,
+          hardGateActive: input.hardGateActive,
+          nowMs,
+        });
+        if (pick) {
+          const [r] = pool.dispatch({ botId, taskIds: [pick.id], cycleId });
+          if (r?.ok) {
+            dispatchedOk.add(r.taskId);
+            result.dispatched.push({ taskId: r.taskId, runId: r.runId, ok: true, auto: true });
+          } else if (r) {
+            result.dispatched.push({ taskId: r.taskId, ok: false, reason: r.reason, auto: true });
+          }
+          logger?.info(
+            { botId, cycleId, taskId: pick.id, ok: r?.ok },
+            'Planner tasks: auto-dispatched'
+          );
+        }
+      }
+    } catch (err) {
+      logger?.warn({ botId, err }, 'Planner tasks: auto-dispatch failed');
+    }
+  }
+
   // 3. serves_task
   if (fields.serves_task && !bookkeepingOnly) {
     const t = resolve(fields.serves_task);
@@ -417,6 +458,58 @@ export function applyPlannerTasks(input: ApplyPlannerTasksInput): ApplyPlannerTa
     }
   }
   return result;
+}
+
+/** A task a worker cannot move on its own: it waits on the operator's answer or approval. */
+const WAITS_ON_OPERATOR =
+  /\b(operator|operador|human|ask_human|approv|aprob|decision|decisión|veredicto|verdict|feedback)/i;
+
+const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+
+/**
+ * The open task the loop hands to a worker when the planner dispatched none:
+ * to do, unclaimed, not the task the cycle serves, of an active goal that is
+ * neither blocked nor standing, not waiting on the operator, and not content
+ * while the hard engagement gate is on. A goal other than the served one
+ * first, then goal priority, goal order and task order. Null when none fits.
+ */
+export function pickAutoDispatch(input: {
+  tasks: StoredTask[];
+  goals: GoalEntry[];
+  servedTaskId?: string;
+  servedGoalId?: string;
+  hardGateActive: boolean;
+  nowMs: number;
+}): StoredTask | null {
+  const goalAt = new Map<string, { index: number; goal: GoalEntry }>();
+  input.goals.forEach((goal, index) => {
+    if (goal.id) goalAt.set(goal.id, { index, goal });
+  });
+  const candidates = input.tasks.filter((t) => {
+    const g = goalAt.get(t.goalId)?.goal;
+    if (!g || g.status === 'blocked' || g.kind === 'standing') return false;
+    if (t.lane !== 'todo' || t.id === input.servedTaskId) return false;
+    if (liveClaim(t, input.nowMs)) return false;
+    if (WAITS_ON_OPERATOR.test(t.text)) return false;
+    if (input.hardGateActive && classifyAction(t.text) === 'CONTENT') return false;
+    return true;
+  });
+  const key = (t: StoredTask): number[] => {
+    const at = goalAt.get(t.goalId) as { index: number; goal: GoalEntry };
+    return [
+      t.goalId === input.servedGoalId ? 1 : 0,
+      PRIORITY_RANK[at.goal.priority ?? 'medium'] ?? 1,
+      at.index,
+      t.order,
+    ];
+  };
+  candidates.sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
+    return 0;
+  });
+  return candidates[0] ?? null;
 }
 
 function orderOf(
