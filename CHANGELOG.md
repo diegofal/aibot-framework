@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (2026-10-15) — A failed reply says why: account limits are not retried, the operator sees the detail
+- **Why.** Live, the Claude account hit its weekly limit; every chat message was retried 4 times and answered "Failed to generate response. Please try again later." with no reason or reset time.
+- **What.** `classifyLLMError` reads a Claude CLI 429 (`apiErrorStatus`) first as a new `quota` category, not retried. The conversation throws `LLMCallFailedError` (classified error, attempts, backend) and replies with `describeLLMFailure` (`src/bot/llm-error-message.ts`): the operator's chat (requester is the operator, or the `operator.telegramChatId` chat) gets the headline plus the provider's message, backend, HTTP status, terminal reason, category, attempts, when the limit resets and how to fix a logged-out CLI; anyone else gets the reason and when, without internals. Both paths (Telegram and channels).
+- Tests: `tests/bot/llm-error-message.test.ts`, two cases in `src/bot/__tests__/conversation-pipeline.test.ts`.
+
 ### Changed (2026-10-15) — Workers get work; the document cap is 12,000 and the bots see it; less exploration
 - **Why** (37 h of live data after living documents): the planner was offered workers with open tasks in 41 cycles and dispatched none; jarvis-factory had 9 edits refused at 6,001–6,939 characters because it only learned the cap from the refusal; 55 % of its cycles were exploration, which cannot touch documents.
 - **Auto-dispatch** (`pickAutoDispatch` in `src/bot/agent-loop-tasks.ts`, `workers.autoDispatch`, default on): when the planner dispatched nothing and the bot has no run going, the loop hands one open task to a worker: to do, unclaimed, not the task the cycle serves, of an active goal that is neither blocked nor standing, not waiting on the operator (operator / approve / decision / feedback in its text), not content under the hard gate; a goal other than the served one first, then goal priority and order. Never on explore, gated or idle cycles. The cycle row marks it `auto: true`.

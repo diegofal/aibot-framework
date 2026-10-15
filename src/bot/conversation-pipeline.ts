@@ -12,6 +12,7 @@ import { unflushedMessageCount } from '../session';
 import { generateSpeech } from '../tts';
 import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from './agent-loop-utils';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
+import { LLMCallFailedError, describeLLMFailure } from './llm-error-message';
 import {
   CircuitBreaker,
   DEFAULT_CIRCUIT_CONFIG,
@@ -593,6 +594,8 @@ export class ConversationPipeline {
           const error = llmResult.error ?? {
             message: 'unknown error',
             category: 'unknown' as const,
+            originalError: undefined,
+            retryable: false,
           };
           botLogger.error(
             {
@@ -632,7 +635,10 @@ export class ConversationPipeline {
             success: false,
             error: error.message,
           });
-          throw new Error(`LLM call failed: ${error.message}`);
+          throw new LLMCallFailedError(error, {
+            attempts: llmResult.attempts,
+            backend: llmBackend,
+          });
         }
 
         const llmResponse = llmResult.data;
@@ -830,27 +836,12 @@ export class ConversationPipeline {
         });
       }
 
-      // Determine user-facing message based on error context
-      let userMessage = '❌ Failed to generate response. Please try again later.';
-
-      if (error instanceof Error) {
-        // Check if it's a circuit breaker open error
-        if (error.message.includes('Circuit breaker is open')) {
-          userMessage =
-            '⏳ The AI service is temporarily overloaded. Please wait a moment and try again.';
-        }
-        // Check if it was a timeout after retries
-        else if (error.message.includes('timeout') || error.message.includes('timed out')) {
-          userMessage = '⏱️ The request took too long. The service might be busy. Please try again.';
-        }
-        // Check for context length errors
-        else if (
-          error.message.includes('context length') ||
-          error.message.includes('too many tokens')
-        ) {
-          userMessage = '📏 The conversation is too long. Try /reset to start fresh.';
-        }
-      }
+      // The operator's chat gets the detail; anyone else the reason and when.
+      const userMessage = describeLLMFailure(error, {
+        detailed:
+          requester?.isOperator === true ||
+          (chatId !== undefined && chatId === this.ctx.config.operator?.telegramChatId),
+      });
 
       try {
         await ctx.reply(userMessage);
@@ -1410,6 +1401,8 @@ export class ConversationPipeline {
             const error = llmResult.error ?? {
               message: 'unknown error',
               category: 'unknown' as const,
+              originalError: undefined,
+              retryable: false,
             };
             this.ctx.activityStream?.publish({
               type: 'llm:error',
@@ -1424,7 +1417,10 @@ export class ConversationPipeline {
                 caller: `channel:${msg.channelKind}`,
               },
             });
-            throw new Error(`LLM call failed: ${error.message}`);
+            throw new LLMCallFailedError(error, {
+              attempts: llmResult.attempts,
+              backend: llmBackend,
+            });
           }
 
           response = stripEnvelope(llmResult.data?.text ?? '');
@@ -1597,19 +1593,7 @@ export class ConversationPipeline {
         });
       }
 
-      let userMessage = 'Failed to generate response. Please try again later.';
-      if (error instanceof Error) {
-        if (error.message.includes('Circuit breaker is open')) {
-          userMessage = 'The AI service is temporarily overloaded. Please wait and try again.';
-        } else if (error.message.includes('timeout') || error.message.includes('timed out')) {
-          userMessage = 'The request took too long. The service might be busy. Please try again.';
-        } else if (
-          error.message.includes('context length') ||
-          error.message.includes('too many tokens')
-        ) {
-          userMessage = 'The conversation is too long. Try starting a new conversation.';
-        }
-      }
+      const userMessage = describeLLMFailure(error, { detailed: requester?.isOperator === true });
 
       try {
         await channel.sendText(userMessage);

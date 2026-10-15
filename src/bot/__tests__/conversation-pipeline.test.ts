@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import type { Context } from 'grammy';
+import { ClaudeCliError } from '../../claude-cli';
 import type { BotConfig } from '../../config';
 import type { LLMClient } from '../../core/llm-client';
 import type { Logger } from '../../logger';
@@ -710,6 +711,39 @@ describe('ConversationPipeline', () => {
         expect.objectContaining({ error: expect.any(Error) }),
         'Conversation handler failed'
       );
+    });
+
+    // Live 2026-10-15: a weekly Claude limit was retried 4 times and answered
+    // with the generic line. Now: no retry, and the reason (with the detail
+    // for the operator's chat).
+    const weeklyLimit = () =>
+      new ClaudeCliError('Claude CLI exited with code 1: {…}', 1, {
+        apiErrorStatus: 429,
+        isError: true,
+        terminalReason: 'api_error',
+        resultText: "You've hit your weekly limit · resets 3pm (America/Argentina/Buenos_Aires)",
+      });
+
+    it('an account limit is not retried; the operator chat sees the detail', async () => {
+      (mockBotContext as any).config.operator = { telegramChatId: 123456 };
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(weeklyLimit());
+      const ctx = createMockContext();
+      await pipeline.handleConversation(ctx, createMockBotConfig(), 'user:123', 'Hola');
+      expect((mockLLMClient.chat as jest.Mock).mock.calls.length).toBe(1);
+      const reply = (ctx.reply as jest.Mock).mock.calls.at(-1)?.[0] as string;
+      expect(reply).toContain('usage limit');
+      expect(reply).toContain("You've hit your weekly limit");
+      expect(reply).toContain('HTTP 429');
+    });
+
+    it('an account limit in someone else’s chat: the reason, not the internals', async () => {
+      (mockBotContext as any).config.operator = { telegramChatId: 999 };
+      (mockLLMClient.chat as jest.Mock).mockRejectedValue(weeklyLimit());
+      const ctx = createMockContext();
+      await pipeline.handleConversation(ctx, createMockBotConfig(), 'user:123', 'Hola');
+      const reply = (ctx.reply as jest.Mock).mock.calls.at(-1)?.[0] as string;
+      expect(reply).toContain('usage limit');
+      expect(reply).not.toContain('HTTP 429');
     });
 
     it('should handle reply errors after successful LLM call', async () => {

@@ -15,6 +15,7 @@ export type LLMErrorCategory =
   | 'transient' // Retryable: timeouts, rate limits, temporary failures
   | 'permanent' // Non-retryable: auth errors, invalid requests
   | 'context_length' // Non-retryable: prompt too large
+  | 'quota' // Non-retryable: the account's usage limit (Claude 429 with a reset time)
   | 'unknown'; // Unknown, may retry with caution
 
 /**
@@ -167,6 +168,21 @@ export class CircuitBreaker {
  * Classify an error from an LLM call.
  */
 export function classifyLLMError(error: unknown): LLMErrorInfo {
+  // The account's usage limit (Claude CLI reports the upstream 429 and a
+  // "resets <time>" hint): retrying cannot help until it resets. Read before
+  // the message patterns, which call any 429 a transient rate limit.
+  const status = (error as { apiErrorStatus?: unknown } | null)?.apiErrorStatus;
+  if (error instanceof Error && status === 429) {
+    const text = (error as { resultText?: string }).resultText;
+    return {
+      category: 'quota',
+      message: text || error.message,
+      originalError: error,
+      retryable: false,
+      suggestedAction: 'Wait for the limit to reset or switch the Claude account',
+    };
+  }
+
   // Handle Error objects
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
@@ -450,6 +466,8 @@ export function formatLLMErrorForUser(error: LLMErrorInfo): string {
   switch (error.category) {
     case 'context_length':
       return '❌ The conversation is too long. Try starting a new session with /reset.';
+    case 'quota':
+      return '⏳ The AI account hit its usage limit. Please try again after it resets.';
     case 'transient':
       return '❌ The AI service is temporarily unavailable. Please try again in a moment.';
     case 'permanent':
