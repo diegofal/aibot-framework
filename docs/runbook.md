@@ -863,3 +863,22 @@ docker exec -w /app aibot-framework-aibot-1 bun scripts/usage/backfill-claude-co
 **Outcome.** 1,880 sessions; 1,771 matched to 1,657 calls ($189.58); 109 unattributed ($6.27) appended to `llm-query-log/_unattributed/`. 76 files rewritten; backup at `/app/data/llm-query-log.bak-backfill-2026-10-15T13-12-49-466Z`. A second run finds 0 sessions to backfill. Usage now: 7d $150.84 (1,883 calls), 30d $190.63; the $5.22 gap to the total is cryptik, econ-student and milei-rocca, no longer in the bot config.
 
 **Reversible?** `rm -rf /app/data/llm-query-log && mv /app/data/llm-query-log.bak-backfill-2026-10-15T13-12-49-466Z /app/data/llm-query-log` inside the container (calls logged after 13:12 UTC would be lost from the log).
+
+### 2026-10-15 — Deploy account availability (Available column)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude) |
+| **Why** | The operator needs to see what each Claude account has left before switching |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+docker cp D:/tmp/aibot-scripts/acctest.ts aibot-framework-aibot-1:/tmp/acctest.ts
+docker exec -w /app aibot-framework-aibot-1 bun /tmp/acctest.ts   # Test on every account
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T13-19-21`. Healthy in ~35 s. Test: `default` (agilityio) rejected, week 100 % used, resets 18:00 UTC; `test-123` (bairesdev, active, switched by the operator from the dashboard) allowed, 5 h 29 % used (resets 14:40 UTC), week 43 % (resets 2026-10-17 21:00 UTC). Saved in `/app/data/claude-accounts/limits.json`.
+
+**Reversible?** Rebuild from `35acea2`.
