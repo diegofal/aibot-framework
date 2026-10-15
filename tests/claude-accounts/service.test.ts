@@ -257,6 +257,61 @@ describe('ClaudeAccountService.test (a real call with the account)', () => {
     expect(r.error).toContain('weekly limit');
   });
 
+  // The plan's remaining capacity comes with every streamed call as a
+  // `rate_limit_event` (five-hour and seven-day windows, utilization 0-1).
+  const NL = '\n';
+  const rateEvent = (status = 'allowed') =>
+    JSON.stringify({
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status,
+        rateLimitType: 'five_hour',
+        unifiedWindows: {
+          five_hour: { utilization: 0.27, resetsAt: 1792075200 },
+          seven_day: { utilization: 0.43, resetsAt: 1792270800 },
+        },
+      },
+    });
+  const resultLine = JSON.stringify({
+    type: 'result',
+    is_error: false,
+    result: 'OK',
+    total_cost_usd: 0.07,
+    modelUsage: { 'claude-opus-5-5': {} },
+  });
+
+  test('a streamed answer: the reply plus what is left of each window, saved for the list', async () => {
+    const s = svc(
+      cliAnswer([JSON.stringify({ type: 'system' }), rateEvent(), resultLine].join(NL))
+    );
+    const r = await s.test('default');
+    expect(r).toMatchObject({ ok: true, reply: 'OK', costUsd: 0.07 });
+    expect(r.limits).toMatchObject({
+      status: 'allowed',
+      fiveHour: { utilization: 0.27, resetsAt: '2026-10-15T14:40:00.000Z' },
+      sevenDay: { utilization: 0.43, resetsAt: '2026-10-17T21:00:00.000Z' },
+    });
+    const [listed] = await s.list();
+    expect(listed.limits?.fiveHour?.utilization).toBe(0.27);
+    expect(typeof listed.limits?.checkedAt).toBe('string');
+  });
+
+  test('a rejected account keeps the reset time of its limit', async () => {
+    const out = [
+      rateEvent('rejected'),
+      JSON.stringify({
+        type: 'result',
+        is_error: true,
+        api_error_status: 429,
+        result: "You've hit your weekly limit · resets 3pm (America/Argentina/Buenos_Aires)",
+      }),
+    ].join(NL);
+    const r = await svc(cliAnswer(out, 1)).test('default');
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(429);
+    expect(r.limits?.status).toBe('rejected');
+  });
+
   test('unparseable output is a failure with the raw tail', async () => {
     const r = await svc(cliAnswer('segfault', 139)).test('default');
     expect(r.ok).toBe(false);

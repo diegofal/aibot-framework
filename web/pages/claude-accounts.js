@@ -96,7 +96,7 @@ export async function mountClaudeAccounts(card) {
         tests[testSlug] = await api(`/api/claude-accounts/${encodeURIComponent(testSlug)}/test`, {
           method: 'POST',
         });
-        return paint();
+        return refresh();
       }
       const relogin = t.getAttribute('data-ca-relogin');
       if (relogin) return startLogin({ slug: relogin }, true);

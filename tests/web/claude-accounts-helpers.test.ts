@@ -95,3 +95,57 @@ describe('claude accounts card', () => {
     ).toContain('Log in again');
   });
 });
+
+describe('availability column', () => {
+  const { availabilityHtml } = require('../../web/pages/claude-accounts-helpers.js');
+  const NOW = Date.parse('2026-10-15T14:00:00Z');
+
+  test('what is left of each window, when it resets, and when it was checked', () => {
+    const html = availabilityHtml(
+      {
+        checkedAt: '2026-10-15T13:57:00Z',
+        status: 'allowed',
+        fiveHour: { utilization: 0.27, resetsAt: '2026-10-15T14:40:00Z' },
+        sevenDay: { utilization: 0.43, resetsAt: '2026-10-17T21:00:00Z' },
+      },
+      NOW
+    );
+    expect(html).toContain('5h: 73% left');
+    expect(html).toContain('resets in 40m');
+    expect(html).toContain('Week: 57% left');
+    expect(html).toContain('resets in 2d 7h');
+    expect(html).toContain('checked 3m ago');
+  });
+
+  test('a rejected account says it is blocked; never checked says so', () => {
+    expect(
+      availabilityHtml(
+        {
+          checkedAt: '2026-10-15T13:00:00Z',
+          status: 'rejected',
+          sevenDay: { utilization: 1, resetsAt: '2026-10-15T18:00:00Z' },
+        },
+        NOW
+      )
+    ).toContain('Blocked');
+    expect(availabilityHtml(undefined, NOW)).toContain('Not checked yet');
+  });
+
+  test('the table shows the column for each account', () => {
+    const html = accountsHtml([
+      {
+        slug: 'a',
+        label: 'A',
+        active: true,
+        loggedIn: true,
+        limits: {
+          checkedAt: '2026-10-15T13:00:00Z',
+          status: 'allowed',
+          fiveHour: { utilization: 0.5 },
+        },
+      },
+    ]);
+    expect(html).toContain('Available');
+    expect(html).toContain('5h: 50% left');
+  });
+});

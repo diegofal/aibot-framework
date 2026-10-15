@@ -9,6 +9,40 @@ const esc = (v) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
+function span(ms) {
+  const min = Math.max(1, Math.round(ms / 60_000));
+  const d = Math.floor(min / 1440);
+  const h = Math.floor((min % 1440) / 60);
+  const m = min % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function windowLine(label, w, nowMs) {
+  if (!w || typeof w.utilization !== 'number') return '';
+  const left = Math.max(0, Math.round((1 - w.utilization) * 100));
+  const reset = w.resetsAt ? Date.parse(w.resetsAt) - nowMs : Number.NaN;
+  const resets = Number.isFinite(reset) && reset > 0 ? ` · resets in ${span(reset)}` : '';
+  const color = left <= 10 ? 'var(--warn)' : 'inherit';
+  return `<div style="color:${color}">${label}: ${left}% left${resets}</div>`;
+}
+
+/**
+ * The Available cell: what is left of the 5-hour and weekly windows at the
+ * last Test, when each resets and how old the reading is. Pure.
+ */
+export function availabilityHtml(limits, nowMs = Date.now()) {
+  if (!limits) return '<span class="text-dim text-sm">Not checked yet · press Test</span>';
+  const checked = Date.parse(limits.checkedAt);
+  const age = Number.isFinite(checked) ? `checked ${span(Math.max(0, nowMs - checked))} ago` : '';
+  const blocked =
+    limits.status === 'rejected'
+      ? '<div style="color:var(--warn)">Blocked: at its limit</div>'
+      : '';
+  return `<div class="text-sm">${blocked}${windowLine('5h', limits.fiveHour, nowMs)}${windowLine('Week', limits.sevenDay, nowMs)}<div class="text-dim">${age}</div></div>`;
+}
+
 /** The line under a row after "Test": pending, works (latency, model), or why not. Pure. */
 export function testResultHtml(t) {
   if (!t) return '';
@@ -59,17 +93,18 @@ export function accountsHtml(accounts, opts = {}) {
         remove,
       ].join(' ');
       const result = tests[a.slug]
-        ? `<tr><td colspan="4" class="text-sm" style="padding-top:0">${testResultHtml(tests[a.slug])}</td></tr>`
+        ? `<tr><td colspan="5" class="text-sm" style="padding-top:0">${testResultHtml(tests[a.slug])}</td></tr>`
         : '';
       return `<tr>
         <td>${name}</td>
         <td>${a.email ? esc(a.email) : '<span class="text-dim">—</span>'}</td>
         <td>${state}</td>
+        <td>${availabilityHtml(a.limits, opts.nowMs)}</td>
         <td style="text-align:right;white-space:nowrap">${actions}</td>
       </tr>${result}`;
     })
     .join('');
-  return `<table class="data-table" style="width:100%"><thead><tr><th>Account</th><th>Email</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="data-table" style="width:100%"><thead><tr><th>Account</th><th>Email</th><th>State</th><th>Available</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 /** The pending-login panel: the link to open and the box for the code. Pure. */

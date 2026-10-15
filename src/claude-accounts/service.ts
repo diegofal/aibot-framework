@@ -35,6 +35,58 @@ export interface ClaudeAccountStatus extends ClaudeAccount {
   loggedIn: boolean;
   email?: string;
   error?: string;
+  /** What was left of the plan windows at the last Test (absent until one ran). */
+  limits?: AccountLimits;
+}
+
+export interface LimitWindow {
+  /** Share used, 0-1. */
+  utilization: number;
+  resetsAt?: string;
+}
+
+/** The plan's windows as the CLI reported them on the last streamed call. */
+export interface AccountLimits {
+  checkedAt: string;
+  /** `allowed`, `allowed_warning` or `rejected`. */
+  status: string;
+  fiveHour?: LimitWindow;
+  sevenDay?: LimitWindow;
+}
+
+interface RateLimitInfo {
+  status?: string;
+  resetsAt?: number;
+  unifiedWindows?: Record<string, { utilization?: number; resetsAt?: number }>;
+}
+
+interface StreamResult {
+  is_error?: boolean;
+  result?: string;
+  api_error_status?: number;
+  total_cost_usd?: number;
+  modelUsage?: Record<string, unknown>;
+}
+
+function toLimits(info: RateLimitInfo, now = new Date()): AccountLimits {
+  const win = (k: string): LimitWindow | undefined => {
+    const w = info.unifiedWindows?.[k];
+    if (!w || typeof w.utilization !== 'number') return undefined;
+    return {
+      utilization: w.utilization,
+      ...(typeof w.resetsAt === 'number'
+        ? { resetsAt: new Date(w.resetsAt * 1000).toISOString() }
+        : {}),
+    };
+  };
+  const fiveHour = win('five_hour');
+  const sevenDay = win('seven_day');
+  return {
+    checkedAt: now.toISOString(),
+    status: info.status ?? 'unknown',
+    ...(fiveHour ? { fiveHour } : {}),
+    ...(sevenDay ? { sevenDay } : {}),
+  };
 }
 
 interface Registry {
@@ -65,6 +117,7 @@ export interface AccountTestResult {
   /** Upstream HTTP status the CLI reported (429 = the account's limit). */
   status?: number;
   error?: string;
+  limits?: AccountLimits;
 }
 
 export interface ClaudeAccountServiceOptions {
@@ -224,11 +277,13 @@ export class ClaudeAccountService {
 
   async list(): Promise<ClaudeAccountStatus[]> {
     const r = this.read();
+    const limits = this.readLimits();
     return Promise.all(
       r.accounts.map(async (a) => ({
         ...a,
         active: a.slug === r.active,
         ...(await this.status(a.dir)),
+        ...(limits[a.slug] ? { limits: limits[a.slug] } : {}),
       }))
     );
   }
@@ -355,15 +410,19 @@ export class ClaudeAccountService {
     this.write(r);
   }
 
-  /** One real call with the account (`claude -p`), to see it answers: latency, reply, cost, or why not. */
+  /**
+   * One real call with the account (`claude -p`, streamed), to see it answers:
+   * latency, reply, cost, or why not — and what is left of its plan windows
+   * (the stream's `rate_limit_event`), saved so the list shows it without a call.
+   */
   async test(slug: string): Promise<AccountTestResult> {
     const a = this.read().accounts.find((x) => x.slug === slug);
     if (!a) throw new Error(`Unknown account: ${slug}`);
     const started = Date.now();
-    const proc = this.spawn([this.opts.claudePath, '-p', TEST_PROMPT, '--output-format', 'json'], {
-      ...this.env,
-      CLAUDE_CONFIG_DIR: a.dir,
-    });
+    const proc = this.spawn(
+      [this.opts.claudePath, '-p', TEST_PROMPT, '--output-format', 'stream-json', '--verbose'],
+      { ...this.env, CLAUDE_CONFIG_DIR: a.dir }
+    );
     let out = '';
     proc.onOutput((t) => {
       out += t;
@@ -374,26 +433,55 @@ export class ClaudeAccountService {
       proc.kill();
       return { ok: false, latencyMs, error: `No answer in ${TEST_TIMEOUT_MS / 1000} s` };
     }
-    try {
-      const parsed = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) as {
-        is_error?: boolean;
-        result?: string;
-        api_error_status?: number;
-        total_cost_usd?: number;
-        modelUsage?: Record<string, unknown>;
-      };
-      const model = parsed.modelUsage ? Object.keys(parsed.modelUsage)[0] : undefined;
-      const base = {
-        latencyMs,
-        ...(model ? { model } : {}),
-        ...(typeof parsed.total_cost_usd === 'number' ? { costUsd: parsed.total_cost_usd } : {}),
-        ...(typeof parsed.api_error_status === 'number' ? { status: parsed.api_error_status } : {}),
-      };
-      if (parsed.is_error || exit !== 0)
-        return { ok: false, ...base, error: parsed.result || `claude exited ${exit}` };
-      return { ok: true, ...base, reply: (parsed.result ?? '').slice(0, 200) };
-    } catch {
+    let result: StreamResult | null = null;
+    let limits: AccountLimits | undefined;
+    for (const line of out.split('\n')) {
+      const t = line.trim();
+      if (!t.startsWith('{')) continue;
+      try {
+        const o = JSON.parse(t) as StreamResult & {
+          type?: string;
+          rate_limit_info?: RateLimitInfo;
+        };
+        if (o.type === 'rate_limit_event' && o.rate_limit_info)
+          limits = toLimits(o.rate_limit_info);
+        else if (o.type === 'result' || 'is_error' in o || 'total_cost_usd' in o) result = o;
+      } catch {
+        /* not a JSON line */
+      }
+    }
+    if (limits) this.saveLimits(slug, limits);
+    if (!result)
       return { ok: false, latencyMs, error: (out.trim() || `claude exited ${exit}`).slice(-400) };
+    const model = result.modelUsage ? Object.keys(result.modelUsage)[0] : undefined;
+    const base = {
+      latencyMs,
+      ...(model ? { model } : {}),
+      ...(typeof result.total_cost_usd === 'number' ? { costUsd: result.total_cost_usd } : {}),
+      ...(typeof result.api_error_status === 'number' ? { status: result.api_error_status } : {}),
+      ...(limits ? { limits } : {}),
+    };
+    if (result.is_error || exit !== 0)
+      return { ok: false, ...base, error: result.result || `claude exited ${exit}` };
+    return { ok: true, ...base, reply: (result.result ?? '').slice(0, 200) };
+  }
+
+  private readLimits(): Record<string, AccountLimits> {
+    try {
+      return JSON.parse(readFileSync(join(this.opts.rootDir, 'limits.json'), 'utf8'));
+    } catch {
+      return {};
+    }
+  }
+
+  private saveLimits(slug: string, limits: AccountLimits): void {
+    try {
+      mkdirSync(this.opts.rootDir, { recursive: true });
+      const all = this.readLimits();
+      all[slug] = limits;
+      writeFileSync(join(this.opts.rootDir, 'limits.json'), `${JSON.stringify(all, null, 2)}\n`);
+    } catch {
+      /* the test result still carries them */
     }
   }
 
