@@ -47,6 +47,15 @@ export interface ToolRunnerOptions {
 }
 
 /** Accumulate token usage across multiple rounds, merging by model. */
+function sumOptional(
+  key: 'cacheReadTokens' | 'cacheCreationTokens' | 'costUsd',
+  a: TokenUsage,
+  b: TokenUsage
+): Partial<TokenUsage> {
+  if (a[key] === undefined && b[key] === undefined) return {};
+  return { [key]: (a[key] ?? 0) + (b[key] ?? 0) };
+}
+
 export function mergeTokenUsage(
   accumulated: TokenUsage | undefined,
   next: TokenUsage | undefined
@@ -58,6 +67,9 @@ export function mergeTokenUsage(
     promptTokens: accumulated.promptTokens + next.promptTokens,
     completionTokens: accumulated.completionTokens + next.completionTokens,
     totalTokens: accumulated.totalTokens + next.totalTokens,
+    ...sumOptional('cacheReadTokens', accumulated, next),
+    ...sumOptional('cacheCreationTokens', accumulated, next),
+    ...sumOptional('costUsd', accumulated, next),
   };
 }
 

@@ -8586,3 +8586,18 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .home-goal-standing {
   color: var(--info);
 }
+
+/* Insights → Usage: tokens per day, one bar each. */
+.stats-day-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 20px;
+}
+.stats-day-bars .stats-day-bar {
+  display: inline-block;
+  width: 5px;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0.8;
+}

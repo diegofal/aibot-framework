@@ -1,5 +1,6 @@
 import type { CompactionConfig } from '../config';
 import type { ChatMessage } from '../ollama';
+import { usageExtras } from './llm-query-log';
 import type { MemoryFlusher } from './memory-flush';
 import { type ChainContextWindow, resolveChainContextWindow } from './model-failover';
 import type { BotContext } from './types';
@@ -297,6 +298,7 @@ export class ContextCompactor {
       temperature: 0.3,
       promptTokens: result.usage?.promptTokens,
       completionTokens: result.usage?.completionTokens,
+      ...usageExtras(result.usage),
       totalTokens: result.usage?.totalTokens,
       messageCount: summaryMessages.length,
       durationMs: Date.now() - startMs,

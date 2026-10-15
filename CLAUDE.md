@@ -180,6 +180,10 @@ Imágenes con `claude-cli`: `ClaudeCliLLMClient` las manda como bloques de image
 
 Los errores del Claude CLI llegan como `ClaudeCliError` (`src/claude-cli.ts`) con `exitCode`, `apiErrorStatus`, `isError`, `terminalReason`, `resultText` y `resetsAt`; `parseResetsAt()` convierte el hint `resets 12:20pm (zona)` en un instante absoluto.
 
+### Claude accounts (`src/claude-accounts/`, prototipo)
+
+Varias cuentas de Claude, cada una su `CLAUDE_CONFIG_DIR` en `<data>/claude-accounts/<slug>` (la original, `/app/data/claude`, es `default`); una activa para toda la flota. `ClaudeAccountService`: `startLogin(label)` corre `claude auth login` sin terminal y devuelve la URL, `submitCode(id, code)` le pasa el código por stdin y agrega la cuenta si `claude auth status` dice logueada, `activate(slug)` setea `process.env.CLAUDE_CONFIG_DIR` (cada spawn del CLI lo copia) + `accounts.json` + `onActivate` (→ `BotManager.resetBackendCircuit('claude-cli')`), `applyActive()` en el boot (`src/index.ts`, antes de todo), `remove`. Rutas `src/web/routes/claude-accounts.ts` (`/api/claude-accounts`, sólo admin). UI: card arriba de Integrations (`web/pages/claude-accounts.js`, renderers en `claude-accounts-helpers.js`). El query log estampa `account` en las llamadas claude-cli (`claudeAccountOf`) y guarda `cacheReadTokens` / `cacheCreationTokens` / `costUsd` (`usageExtras`); Insights → Usage (`GET /api/stats/usage`, `src/stats/usage-aggregator.ts`) los suma por bot, caller, cuenta y día.
+
 ### Módulos System (`src/system/`)
 
 Export/import de la instancia completa. Guía de operador: `docs/system-backup-restore.md`.

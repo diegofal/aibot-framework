@@ -1,9 +1,10 @@
+import type { Logger } from '../../logger';
+import { ProactiveThrottle } from '../../tools/send-proactive-message';
 /**
  * Glue between the curiosity runner and the fleet: how a dispatch reaches the
  * operator, and the fleet-wide daily cap it shares with proactive sends.
  */
-import type { Logger } from '../../logger';
-import { ProactiveThrottle } from '../../tools/send-proactive-message';
+import { usageExtras } from '../llm-query-log';
 import type { LlmQueryEntry } from '../llm-query-log';
 import type { CuriosityLLMCall } from './runner';
 
@@ -84,6 +85,7 @@ export function createCuriosityCallRecorder(deps: {
         backend: deps.backend,
         promptTokens: call.usage?.promptTokens,
         completionTokens: call.usage?.completionTokens,
+        ...usageExtras(call.usage),
         totalTokens: call.usage?.totalTokens,
         durationMs: call.durationMs,
         success: call.success,

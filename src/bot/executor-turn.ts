@@ -1,3 +1,12 @@
+import type { BotConfig } from '../config';
+import type { CliPriority } from '../core/cli-semaphore';
+import type { LLMClient, TokenUsage } from '../core/llm-client';
+import type { KarmaService } from '../karma/service';
+import type { Logger } from '../logger';
+import type { ChatMessage } from '../ollama';
+import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
+import type { BackendCircuitBreaker } from './agent-retry-engine';
+import { askedQuestionId } from './ask-human-store';
 /**
  * One executor turn: the system + user prompt, the tool definitions offered,
  * a `ToolExecutor` (agent-loop permission mode, attribution, abort signal),
@@ -9,15 +18,7 @@
  * attribution (`{ runId, taskId, goalId, dispatchCycleId }`) and write root.
  * Never throws: the caller decides what an error means for its run.
  */
-import type { BotConfig } from '../config';
-import type { CliPriority } from '../core/cli-semaphore';
-import type { LLMClient, TokenUsage } from '../core/llm-client';
-import type { KarmaService } from '../karma/service';
-import type { Logger } from '../logger';
-import type { ChatMessage } from '../ollama';
-import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
-import type { BackendCircuitBreaker } from './agent-retry-engine';
-import { askedQuestionId } from './ask-human-store';
+import { usageExtras } from './llm-query-log';
 import type { LlmQueryEntry } from './llm-query-log';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { toolEndToAuditEntry } from './tool-audit-log';
@@ -310,6 +311,7 @@ export async function runExecutorTurn(input: ExecutorTurnInput): Promise<Executo
       temperature: input.temperature,
       promptTokens: usage?.promptTokens,
       completionTokens: usage?.completionTokens,
+      ...usageExtras(usage),
       totalTokens: usage?.totalTokens,
       toolCount: toolDefinitions.length,
       durationMs: Date.now() - startMs,

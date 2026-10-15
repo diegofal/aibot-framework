@@ -4,6 +4,7 @@ import { BotManager, autoStartEnabledBots, resolveAutoStart } from './bot';
 import { checkClaudeCli, formatPreflight } from './bot/claude-cli-preflight';
 import { ModelValidationError, runStartupModelValidation } from './bot/model-failover';
 import { resolveCandidatesFromConfig } from './bot/model-failover/model-fallback';
+import { createClaudeAccounts } from './claude-accounts';
 import { loadConfig, resolveAgentConfig } from './config';
 import { configureClaudeCliConcurrency } from './core/cli-semaphore';
 import { createLLMClient } from './core/llm-client';
@@ -33,6 +34,10 @@ async function main() {
 
     const logger = createLogger(config.logging);
     configureClaudeCliConcurrency(config.claudeCli?.maxConcurrent);
+    // The Claude account chosen in the dashboard: every CLI spawn copies
+    // CLAUDE_CONFIG_DIR from process.env, so set it before anything runs.
+    const claudeAccounts = createClaudeAccounts(config);
+    claudeAccounts.applyActive();
 
     logger.info('Starting AIBot Framework v1.0.0');
     logger.info({ platform: process.platform, node: process.version }, 'System info');
@@ -354,6 +359,7 @@ async function main() {
         sessionManager,
         skillRegistry,
         cronService,
+        claudeAccounts,
       });
     }
 

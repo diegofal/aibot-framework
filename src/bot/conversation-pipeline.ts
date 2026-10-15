@@ -13,6 +13,7 @@ import { generateSpeech } from '../tts';
 import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from './agent-loop-utils';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
 import { LLMCallFailedError, describeLLMFailure } from './llm-error-message';
+import { usageExtras } from './llm-query-log';
 import {
   CircuitBreaker,
   DEFAULT_CIRCUIT_CONFIG,
@@ -681,6 +682,7 @@ export class ConversationPipeline {
           temperature: resolved.temperature,
           promptTokens: tokenUsage?.promptTokens,
           completionTokens: tokenUsage?.completionTokens,
+          ...usageExtras(tokenUsage),
           totalTokens: tokenUsage?.totalTokens,
           messageCount: currentMessages.length,
           toolCount: hasTools ? botToolDefs.length : 0,

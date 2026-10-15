@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import type { TokenUsage } from '../core/llm-client';
 import type { Logger } from '../logger';
 
 export interface LlmQueryEntry {
@@ -26,6 +27,13 @@ export interface LlmQueryEntry {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** Claude prompt-cache reads and writes, billed apart from `promptTokens`. */
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  /** Cost the provider reported (Claude CLI `total_cost_usd`). */
+  costUsd?: number;
+  /** Claude account that served a claude-cli call (stamped by `append`). */
+  account?: string;
   messageCount?: number;
   toolCount?: number;
   durationMs: number;
@@ -47,6 +55,30 @@ export interface LlmQueryEntry {
  * Persists LLM query entries to daily JSONL files for traceability.
  * Path: {dataDir}/{botId}/YYYY-MM-DD.jsonl
  */
+/** The cache and cost fields of a call's usage, only those present (for a query-log entry). */
+export function usageExtras(
+  usage: Pick<TokenUsage, 'cacheReadTokens' | 'cacheCreationTokens' | 'costUsd'> | undefined
+): Pick<LlmQueryEntry, 'cacheReadTokens' | 'cacheCreationTokens' | 'costUsd'> {
+  if (!usage) return {};
+  return {
+    ...(usage.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+    ...(usage.cacheCreationTokens !== undefined
+      ? { cacheCreationTokens: usage.cacheCreationTokens }
+      : {}),
+    ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+  };
+}
+
+/**
+ * The Claude account a config dir belongs to: its folder under
+ * `claude-accounts/`, or `default` for the original login (src/claude-accounts).
+ */
+export function claudeAccountOf(configDir: string | undefined): string {
+  const parts = (configDir ?? '').split(/[\\/]+/).filter(Boolean);
+  const i = parts.lastIndexOf('claude-accounts');
+  return i >= 0 && parts[i + 1] ? parts[i + 1] : 'default';
+}
+
 export class LlmQueryLog {
   constructor(
     private dataDir: string,
@@ -54,7 +86,11 @@ export class LlmQueryLog {
   ) {}
 
   /** Append an LLM query entry to the daily JSONL file. */
-  append(entry: LlmQueryEntry): void {
+  append(raw: LlmQueryEntry): void {
+    const entry =
+      raw.backend === 'claude-cli' && !raw.account
+        ? { ...raw, account: claudeAccountOf(process.env.CLAUDE_CONFIG_DIR) }
+        : raw;
     try {
       const date = entry.timestamp.slice(0, 10); // YYYY-MM-DD
       const botDir = join(this.dataDir, entry.botId);

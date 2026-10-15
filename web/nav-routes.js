@@ -71,6 +71,7 @@ export const AREAS = [
       { id: 'stats', label: 'Stats', href: '#/insights/stats' },
       { id: 'behaviour', label: 'Behaviour', href: '#/insights/stats/behaviour' },
       { id: 'curiosity', label: 'Curiosity', href: '#/insights/stats/curiosity' },
+      { id: 'usage', label: 'Usage', href: '#/insights/stats/usage' },
       { id: 'infra', label: 'Infra', href: '#/insights/stats/infra' },
       { id: 'hygiene', label: 'Hygiene', href: '#/insights/stats/hygiene' },
       { id: 'karma', label: 'Karma', href: '#/insights/karma' },
@@ -245,6 +246,7 @@ export const ROUTES = [
     area: 'insights',
     args: none,
   },
+  { pattern: /^#\/insights\/stats\/usage$/, handler: 'statsUsage', area: 'insights', args: none },
   { pattern: /^#\/insights\/stats\/infra$/, handler: 'statsInfra', area: 'insights', args: none },
   {
     pattern: /^#\/insights\/stats\/hygiene$/,

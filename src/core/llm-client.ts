@@ -24,6 +24,12 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** Claude: input served from the prompt cache (billed apart from `promptTokens`). */
+  cacheReadTokens?: number;
+  /** Claude: input written to the prompt cache. */
+  cacheCreationTokens?: number;
+  /** Cost the provider reported for the call (Claude CLI `total_cost_usd`). */
+  costUsd?: number;
   /**
    * Backend that actually served the call. Callers log this rather than the
    * client's nominal backend: a wrapper can serve a claude-cli client's call

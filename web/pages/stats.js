@@ -21,6 +21,7 @@ import {
   formatNumber,
   formatPct,
   formatTokens,
+  formatUsd,
   goalsBoard,
   isStaleContact,
   landingSegments,
@@ -30,6 +31,7 @@ import {
   sparklinePoints,
   toolCallsSub,
   traitDeltas,
+  usageTableHtml,
   windowQuery,
 } from './stats-helpers.js';
 
@@ -877,6 +879,29 @@ function cronStatusPill(status) {
         ? 'badge-mcp'
         : 'badge-disabled';
   return pill(s, cls);
+}
+
+/* ========================= Usage ========================= */
+
+export async function renderStatsUsage(el) {
+  const body = shell(el, 'usage', { withWindow: true, onWindowChange: () => renderStatsUsage(el) });
+  const data = await api(`/api/stats/usage${windowQuery(getWindow())}`);
+  if (!data || data.error) return errorState(body, data, 'Usage');
+  const f = data.fleet;
+  const accounts = Object.entries(f.byAccount || {})
+    .map(([a, r]) => `${escapeHtml(a)}: ${formatNumber(r.calls)} calls · ${formatUsd(r.costUsd)}`)
+    .join(' · ');
+  const note = data.costReportedSince
+    ? `Cost and cache tokens are recorded since ${escapeHtml(data.costReportedSince.slice(0, 16).replace('T', ' '))} UTC; older calls show uncached input and output only.`
+    : 'No call in this window reported a cost yet (recorded from 2026-10-15 on).';
+  body.innerHTML = `
+    <div class="stats-kpis">
+      ${kpi('LLM calls', formatNumber(f.calls), { sub: `${formatNumber(f.failed)} failed` })}
+      ${kpi('Tokens', formatTokens(f.totalTokens), { sub: `${formatTokens(f.cacheReadTokens)} cache read` })}
+      ${kpi('Cost', formatUsd(f.costUsd), { sub: 'as the Claude CLI reports it' })}
+    </div>
+    ${section('By bot', usageTableHtml(data.bots), accounts ? ` <span class="count">${accounts}</span>` : '')}
+    <p class="text-dim text-sm">${note}</p>`;
 }
 
 export async function renderStatsInfra(el) {

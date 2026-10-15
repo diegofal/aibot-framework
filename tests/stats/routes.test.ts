@@ -140,3 +140,20 @@ describe('statsRoutes — curiosity', () => {
     expect(body.bots.map((b: { botId: string }) => b.botId)).toEqual(['b3']);
   });
 });
+
+describe('statsRoutes — usage', () => {
+  it('GET /usage returns every scoped bot with the requested window', async () => {
+    const res = await makeApp().request('/api/stats/usage?window=24h');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.window).toBe('24h');
+    expect(Array.isArray(body.bots)).toBe(true);
+    expect(body.fleet).toHaveProperty('costUsd');
+  });
+
+  it('a tenant only sees its own bots', async () => {
+    const all = await (await makeApp().request('/api/stats/usage')).json();
+    const scoped = await (await makeApp('t2').request('/api/stats/usage')).json();
+    expect(scoped.bots.length).toBeLessThan(all.bots.length);
+  });
+});

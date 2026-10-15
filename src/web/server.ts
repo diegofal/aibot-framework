@@ -10,6 +10,7 @@ import { avatarUrl, findAvatar } from '../bot/agent-avatar';
 import { describeToolCall } from '../bot/inline-approval';
 import { wsChannel, wsToInbound } from '../channel/websocket';
 import type { WsChatData } from '../channel/websocket';
+import type { ClaudeAccountService } from '../claude-accounts/service';
 import type { Config } from '../config';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
@@ -56,6 +57,7 @@ import { baasRoutes } from './routes/baas';
 import { billingRoutes } from './routes/billing';
 import { chatRoutes } from './routes/chat';
 import { chatHistoryRoutes } from './routes/chat-history';
+import { claudeAccountsRoutes } from './routes/claude-accounts';
 import { conversationsRoutes } from './routes/conversations';
 import { cronRoutes } from './routes/cron';
 import { buildCronParseLlmResolver, cronParseRoutes } from './routes/cron-parse';
@@ -105,6 +107,8 @@ export type WebServerDeps = {
   sessionManager: SessionManager;
   skillRegistry: SkillRegistry;
   cronService: CronService;
+  /** Claude accounts (prototype); absent in tests that build the server without it. */
+  claudeAccounts?: ClaudeAccountService;
 };
 
 export function startWebServer(deps: WebServerDeps): void {
@@ -365,6 +369,13 @@ export function startWebServer(deps: WebServerDeps): void {
     '/api/integrations',
     integrationsRoutes({ config, botManager: deps.botManager, logger })
   );
+  if (deps.claudeAccounts) {
+    deps.claudeAccounts.setOnActivate(() => deps.botManager.resetBackendCircuit('claude-cli'));
+    app.route(
+      '/api/claude-accounts',
+      claudeAccountsRoutes({ accounts: deps.claudeAccounts, logger })
+    );
+  }
   app.route('/api/files', filesRoutes({ config, logger }));
 
   // Productions routes (only if enabled)

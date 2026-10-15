@@ -65,6 +65,7 @@ import {
   renderStatsCuriosity,
   renderStatsHygiene,
   renderStatsInfra,
+  renderStatsUsage,
 } from './pages/stats.js';
 import { renderToolDetail, renderTools } from './pages/tools.js';
 import { destroyWork, renderWork } from './pages/work.js';
@@ -220,6 +221,7 @@ const handlers = {
   statsBot: page((id) => renderStatsBot(content, id)),
   statsBehaviour: page(() => renderStatsBehaviour(content)),
   statsCuriosity: page(() => renderStatsCuriosity(content)),
+  statsUsage: page(() => renderStatsUsage(content)),
   statsInfra: page(() => renderStatsInfra(content)),
   statsHygiene: page(() => renderStatsHygiene(content)),
   karma: page(() => renderKarma(content)),

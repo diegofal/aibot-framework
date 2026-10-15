@@ -35,7 +35,14 @@ function pickModelFromUsage(modelUsage: unknown): string | null {
 }
 
 export function parseClaudeUsage(parsed: Record<string, unknown>): TokenUsage | undefined {
-  const usage = parsed.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+  const usage = parsed.usage as
+    | {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      }
+    | undefined;
   if (!usage || (usage.input_tokens == null && usage.output_tokens == null)) return undefined;
   const promptTokens = usage.input_tokens ?? 0;
   const completionTokens = usage.output_tokens ?? 0;
@@ -43,7 +50,19 @@ export function parseClaudeUsage(parsed: Record<string, unknown>): TokenUsage | 
     (typeof parsed.model === 'string' ? parsed.model : null) ??
     pickModelFromUsage(parsed.modelUsage) ??
     'claude';
-  return { model, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  const cacheRead = num(usage.cache_read_input_tokens);
+  const cacheCreation = num(usage.cache_creation_input_tokens);
+  const cost = num(parsed.total_cost_usd);
+  return {
+    model,
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    ...(cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheCreation !== undefined ? { cacheCreationTokens: cacheCreation } : {}),
+    ...(cost !== undefined ? { costUsd: cost } : {}),
+  };
 }
 
 export interface ClaudeGenerateOptions {

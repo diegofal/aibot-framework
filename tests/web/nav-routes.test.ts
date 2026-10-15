@@ -207,6 +207,7 @@ describe('areas and visibility', () => {
       'stats',
       'behaviour',
       'curiosity',
+      'usage',
       'infra',
       'hygiene',
       'karma',

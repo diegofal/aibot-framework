@@ -154,6 +154,18 @@ export class BotManager {
   private inlineApprovalStore: InlineApprovalStore;
   private hookEmitter: HookEmitter;
   private botContext!: BotContext;
+
+  /**
+   * Close the fleet-wide circuit for a backend now (the Claude account was
+   * switched, so a limit on the old one no longer applies). Never throws.
+   */
+  resetBackendCircuit(backend: string): void {
+    try {
+      this.botContext?.circuitBreaker?.recordSuccess(backend);
+    } catch {
+      /* no breaker yet */
+    }
+  }
   private mcpConnected = false;
   private restartAttempts = new Map<string, number[]>();
   private restartTimers = new Map<string, ReturnType<typeof setTimeout>>();

@@ -20,6 +20,7 @@ import { buildCuriosityStats } from '../../stats/curiosity-aggregator';
 import { buildBotDetail, buildFleet } from '../../stats/fleet-aggregator';
 import { buildInfra } from '../../stats/infra-aggregator';
 import type { KarmaScoreSource } from '../../stats/readers/karma';
+import { buildUsage } from '../../stats/usage-aggregator';
 import { parseWindow } from '../../stats/util';
 import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
 
@@ -97,6 +98,18 @@ export function statsRoutes(deps: StatsRouteDeps) {
       );
     } catch (err) {
       deps.logger.warn({ err }, 'Stats: curiosity aggregation failed');
+      return c.json({ error: 'Stats aggregation failed' }, 500);
+    }
+  });
+
+  app.get('/usage', (c) => {
+    const window = parseWindow(c.req.query('window'));
+    const bots = scopeBots(deps.config.bots, getTenantId(c));
+    try {
+      const key = `usage:${window}:${scopeKey(bots.map((b) => b.id))}`;
+      return c.json(ctx.cache.get(key, ctx.cacheTtlMs, () => buildUsage(ctx, bots, window)));
+    } catch (err) {
+      deps.logger.warn({ err }, 'Stats: usage aggregation failed');
       return c.json({ error: 'Stats aggregation failed' }, 500);
     }
   });

@@ -90,6 +90,7 @@ import {
   finishCuriosityCycle,
 } from './curiosity/runner';
 import { runExecutorTurn } from './executor-turn';
+import { usageExtras } from './llm-query-log';
 import type { LlmQueryEntry } from './llm-query-log';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { toolEndToAuditEntry } from './tool-audit-log';
@@ -1928,6 +1929,7 @@ export class AgentLoop {
           backend: plannerLLM.backend,
           promptTokens: strategistResult?.usage?.promptTokens,
           completionTokens: strategistResult?.usage?.completionTokens,
+          ...usageExtras(strategistResult?.usage),
           totalTokens: strategistResult?.usage?.totalTokens,
           durationMs: Date.now() - strategistStartMs,
           success: true,
@@ -2238,6 +2240,7 @@ export class AgentLoop {
           backend: plannerLLM.backend,
           promptTokens: continuousResult.usage?.promptTokens,
           completionTokens: continuousResult.usage?.completionTokens,
+          ...usageExtras(continuousResult.usage),
           totalTokens: continuousResult.usage?.totalTokens,
           durationMs: Date.now() - plannerStartMs,
           success: true,
@@ -2355,6 +2358,7 @@ export class AgentLoop {
           backend: plannerLLM.backend,
           promptTokens: plannerResult.usage?.promptTokens,
           completionTokens: plannerResult.usage?.completionTokens,
+          ...usageExtras(plannerResult.usage),
           totalTokens: plannerResult.usage?.totalTokens,
           durationMs: Date.now() - plannerStartMs,
           success: true,

@@ -389,3 +389,50 @@ export function cycleStrip(points) {
     ),
   }));
 }
+
+/* ========================= Usage ========================= */
+
+export function formatUsd(n) {
+  if (!isNum(n)) return '--';
+  return n >= 10 ? `$${Math.round(n).toLocaleString('en-US')}` : `$${n.toFixed(2)}`;
+}
+
+/**
+ * Usage table for Insights → Usage (`GET /api/stats/usage`): one row per bot,
+ * most expensive first. Tokens include prompt-cache reads and writes (how
+ * Claude bills); the title shows the breakdown. Pure.
+ */
+export function usageTableHtml(bots) {
+  if (!Array.isArray(bots) || bots.length === 0)
+    return '<p class="text-dim">No LLM calls in this window.</p>';
+  const maxDay = Math.max(
+    1,
+    ...bots.flatMap((b) => (b.daily || []).map((d) => d.totalTokens || 0))
+  );
+  const rows = bots
+    .map((b) => {
+      const breakdown = `input ${formatTokens(b.inputTokens)} · cache read ${formatTokens(b.cacheReadTokens)} · cache write ${formatTokens(b.cacheCreationTokens)} · output ${formatTokens(b.outputTokens)}`;
+      const top = Object.entries(b.byCaller || {}).sort(
+        (x, y) =>
+          (y[1].costUsd || 0) - (x[1].costUsd || 0) ||
+          (y[1].totalTokens || 0) - (x[1].totalTokens || 0)
+      )[0];
+      const days = (b.daily || [])
+        .map((d) => {
+          const h = d.totalTokens ? 3 + Math.round((d.totalTokens / maxDay) * 17) : 2;
+          return `<i class="stats-day-bar" style="height:${h}px" title="${escapeHtmlPure(`${d.date}: ${formatNumber(d.calls)} calls · ${formatTokens(d.totalTokens)} tokens · ${formatUsd(d.costUsd)}`)}"></i>`;
+        })
+        .join('');
+      return `<tr>
+        <td>${escapeHtmlPure(b.name || b.botId)}</td>
+        <td class="num">${formatNumber(b.calls)}</td>
+        <td class="num">${b.failed ? formatNumber(b.failed) : '<span class="text-dim">0</span>'}</td>
+        <td class="num" title="${escapeHtmlPure(breakdown)}">${formatTokens(b.totalTokens)}<div class="text-dim text-sm">${escapeHtmlPure(breakdown)}</div></td>
+        <td class="num">${formatUsd(b.costUsd)}</td>
+        <td>${top ? `${escapeHtmlPure(top[0])} <span class="text-dim">${formatUsd(top[1].costUsd)}</span>` : '<span class="text-dim">--</span>'}</td>
+        <td><span class="stats-day-bars">${days}</span></td>
+      </tr>`;
+    })
+    .join('');
+  return `<table class="stats-table"><thead><tr><th>Bot</th><th class="num">Calls</th><th class="num">Failed</th><th class="num">Tokens</th><th class="num">Cost</th><th>Top caller</th><th>By day</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
