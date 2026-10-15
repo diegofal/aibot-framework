@@ -846,3 +846,20 @@ docker exec -w /app aibot-framework-aibot-1 bun /tmp/bf/scripts/usage/backfill-c
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T13-06-51`. Healthy in ~35 s; the image has `ClaudeAccountService.test` and `scripts/usage/backfill-claude-costs.ts`; served `claude-accounts-helpers.js` has the Test button. Test from inside the container: `default` (agilityio) 429 weekly limit, resets 15:00 BA; `test-123` (bairesdev) OK in 5.8 s, $0.047. Backfill dry run: 1,875 sessions, 1,766 matched to 1,652 calls, $195.85 since 2026-09-26, $6.27 unattributed. **Not applied** (writes the data volume): `docker exec -w /app aibot-framework-aibot-1 bun scripts/usage/backfill-claude-costs.ts --apply`.
 
 **Reversible?** Rebuild from `673a9f7`.
+
+### 2026-10-15 — Applied the Claude cost backfill to the live query log
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1`, `/app/data/llm-query-log` (data volume) |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | Insights → Usage showed $0: no entry before 2026-10-15 recorded cost or cache tokens |
+
+```bash
+docker exec -w /app aibot-framework-aibot-1 bun scripts/usage/backfill-claude-costs.ts /app/data --apply
+docker exec -w /app aibot-framework-aibot-1 bun scripts/usage/backfill-claude-costs.ts /app/data   # re-run: 0 left
+```
+
+**Outcome.** 1,880 sessions; 1,771 matched to 1,657 calls ($189.58); 109 unattributed ($6.27) appended to `llm-query-log/_unattributed/`. 76 files rewritten; backup at `/app/data/llm-query-log.bak-backfill-2026-10-15T13-12-49-466Z`. A second run finds 0 sessions to backfill. Usage now: 7d $150.84 (1,883 calls), 30d $190.63; the $5.22 gap to the total is cryptik, econ-student and milei-rocca, no longer in the bot config.
+
+**Reversible?** `rm -rf /app/data/llm-query-log && mv /app/data/llm-query-log.bak-backfill-2026-10-15T13-12-49-466Z /app/data/llm-query-log` inside the container (calls logged after 13:12 UTC would be lost from the log).
