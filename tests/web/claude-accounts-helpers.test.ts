@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { accountsHtml, loginPanelHtml } from '../../web/pages/claude-accounts-helpers.js';
+import {
+  accountsHtml,
+  loginPanelHtml,
+  testResultHtml,
+} from '../../web/pages/claude-accounts-helpers.js';
 
 describe('claude accounts card', () => {
   const accounts = [
@@ -8,15 +12,65 @@ describe('claude accounts card', () => {
     { slug: 'old', label: 'Old', active: false, loggedIn: false },
   ];
 
-  test('the active account has no actions; a logged-in one can be used; the original cannot be removed', () => {
+  test('every account can be tested, renamed and logged in again', () => {
     const html = accountsHtml(accounts);
-    expect(html).toContain('active');
+    for (const slug of ['default', 'work-2', 'old']) {
+      expect(html).toContain(`data-ca-test="${slug}"`);
+      expect(html).toContain(`data-ca-rename="${slug}"`);
+      expect(html).toContain(`data-ca-relogin="${slug}"`);
+    }
+  });
+
+  test('only a logged-in account that is not active can be used', () => {
+    const html = accountsHtml(accounts);
     expect(html).toContain('data-ca-activate="work-2"');
     expect(html).not.toContain('data-ca-activate="default"');
     expect(html).not.toContain('data-ca-activate="old"');
-    expect(html).toContain('not logged in');
+  });
+
+  // Deliberately changed: Remove was hidden on the active account and the
+  // original login, which read as "cannot remove". Now it is always there,
+  // disabled with the reason on the active one.
+  test('remove: on every account, disabled on the active one with the reason', () => {
+    const html = accountsHtml(accounts);
     expect(html).toContain('data-ca-remove="work-2"');
-    expect(html).not.toContain('data-ca-remove="default"');
+    expect(html).toContain('data-ca-remove="old"');
+    expect(html).toMatch(
+      /data-ca-remove="default"[^>]*disabled[^>]*title="Switch to another account first"/
+    );
+  });
+
+  test('renaming shows an input with the current name and save/cancel', () => {
+    const html = accountsHtml(accounts, { editing: 'work-2' });
+    expect(html).toContain('id="ca-rename-input"');
+    expect(html).toContain('value="Work 2"');
+    expect(html).toContain('data-ca-rename-save="work-2"');
+    expect(html).toContain('data-ca-rename-cancel');
+  });
+
+  test('a test result shows under its row', () => {
+    const html = accountsHtml(accounts, {
+      tests: { 'work-2': { ok: true, latencyMs: 2300, reply: 'OK' } },
+    });
+    expect(html).toContain('Connection works');
+  });
+
+  test('testResultHtml: working, at the limit, pending, broken', () => {
+    expect(
+      testResultHtml({ ok: true, latencyMs: 2300, reply: 'OK', model: 'claude-opus-5-5' })
+    ).toContain('Connection works · 2.3 s');
+    const limit = testResultHtml({
+      ok: false,
+      latencyMs: 900,
+      status: 429,
+      error: "You've hit your weekly limit · resets 3pm",
+    });
+    expect(limit).toContain('HTTP 429');
+    expect(limit).toContain('weekly limit');
+    expect(testResultHtml({ pending: true })).toContain('Testing');
+    expect(testResultHtml({ ok: false, latencyMs: 10, error: '<b>x</b>' })).not.toContain(
+      '<b>x</b>'
+    );
   });
 
   test('names and emails are escaped', () => {
@@ -36,5 +90,8 @@ describe('claude accounts card', () => {
     expect(html).toContain('rel="noopener noreferrer"');
     expect(html).toContain('id="ca-code"');
     expect(loginPanelHtml(null)).toBe('');
+    expect(
+      loginPanelHtml({ loginId: 'l', url: 'https://x', slug: 'default', relogin: true })
+    ).toContain('Log in again');
   });
 });

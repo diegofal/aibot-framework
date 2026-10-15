@@ -152,13 +152,114 @@ describe('ClaudeAccountService', () => {
     await expect(s.activate('default')).rejects.toThrow('not logged in');
   });
 
-  test('remove: never the active one or the original login; others go with their folder', async () => {
+  // Deliberately changed: the original login can be removed too once another
+  // account is active (CRUD from the dashboard); only its credentials go, the
+  // folder keeps the CLI transcripts the usage backfill reads.
+  test('remove: never the active one; others go with their folder, the original keeps its folder', async () => {
     const s = service();
     const { loginId } = await s.startLogin('Second');
     await s.submitCode(loginId, 'good');
-    await expect(s.remove('default')).rejects.toThrow();
+    await expect(s.remove('default')).rejects.toThrow('active');
     await s.remove('second');
     expect((await s.list()).map((a) => a.slug)).toEqual(['default']);
     expect(existsSync(join(root, 'claude-accounts', 'second'))).toBe(false);
+
+    const again = await s.startLogin('Third');
+    await s.submitCode(again.loginId, 'good');
+    await s.activate('third');
+    await s.remove('default');
+    expect((await s.list()).map((a) => a.slug)).toEqual(['third']);
+    expect(existsSync(legacy)).toBe(true);
+    expect(existsSync(join(legacy, '.credentials.json'))).toBe(false);
+  });
+
+  test('rename changes the label only', async () => {
+    const s = service();
+    await s.rename('default', 'Diego work');
+    const [a] = await s.list();
+    expect(a).toMatchObject({ slug: 'default', label: 'Diego work' });
+    await expect(s.rename('nope', 'x')).rejects.toThrow('Unknown account');
+    await expect(s.rename('default', '  ')).rejects.toThrow('name');
+  });
+
+  test('log in again to an existing account keeps its slug; a failed retry keeps the old login', async () => {
+    const s = service();
+    const bad = await s.startLogin('', { slug: 'default' });
+    expect(bad.slug).toBe('default');
+    expect((await s.submitCode(bad.loginId, 'bad')).ok).toBe(false);
+    expect(existsSync(join(legacy, '.credentials.json'))).toBe(true);
+    const cancelled = await s.startLogin('', { slug: 'default' });
+    s.cancel(cancelled.loginId);
+    expect(existsSync(join(legacy, '.credentials.json'))).toBe(true);
+    const good = await s.startLogin('', { slug: 'default' });
+    expect((await s.submitCode(good.loginId, 'good')).ok).toBe(true);
+    expect((await s.list()).map((a) => a.slug)).toEqual(['default']);
+    await expect(s.startLogin('', { slug: 'nope' })).rejects.toThrow('Unknown account');
+  });
+});
+
+describe('ClaudeAccountService.test (a real call with the account)', () => {
+  const cliAnswer =
+    (stdout: string, exit = 0): CliSpawn =>
+    (args, env) => {
+      const listeners: Array<(t: string) => void> = [];
+      let done: (n: number) => void = () => {};
+      const exited = new Promise<number>((r) => {
+        done = r;
+      });
+      setTimeout(() => {
+        if (args[1] === 'auth') {
+          for (const l of listeners) l(JSON.stringify({ loggedIn: true }));
+        } else {
+          expect(env.CLAUDE_CONFIG_DIR).toBe(legacy);
+          for (const l of listeners) l(stdout);
+        }
+        done(args[1] === 'auth' ? 0 : exit);
+      }, 1);
+      return {
+        onOutput: (fn) => listeners.push(fn),
+        write() {},
+        end() {},
+        exited,
+        kill: () => done(143),
+      };
+    };
+  const svc = (spawn: CliSpawn) =>
+    new ClaudeAccountService({
+      rootDir: join(root, 'claude-accounts'),
+      legacyDir: legacy,
+      claudePath: 'claude',
+      spawn,
+      env,
+    });
+
+  test('a working account answers, with model and cost', async () => {
+    const out = JSON.stringify({
+      is_error: false,
+      result: 'OK',
+      total_cost_usd: 0.0123,
+      modelUsage: { 'claude-opus-5-5': {} },
+    });
+    const r = await svc(cliAnswer(out)).test('default');
+    expect(r).toMatchObject({ ok: true, reply: 'OK', costUsd: 0.0123 });
+    expect(typeof r.latencyMs).toBe('number');
+  });
+
+  test('an account at its limit says so, with the status and the provider text', async () => {
+    const out = JSON.stringify({
+      is_error: true,
+      api_error_status: 429,
+      result: "You've hit your weekly limit · resets 3pm (America/Argentina/Buenos_Aires)",
+    });
+    const r = await svc(cliAnswer(out, 1)).test('default');
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(429);
+    expect(r.error).toContain('weekly limit');
+  });
+
+  test('unparseable output is a failure with the raw tail', async () => {
+    const r = await svc(cliAnswer('segfault', 139)).test('default');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('segfault');
   });
 });

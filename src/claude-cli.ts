@@ -54,6 +54,7 @@ export function parseClaudeUsage(parsed: Record<string, unknown>): TokenUsage | 
   const cacheRead = num(usage.cache_read_input_tokens);
   const cacheCreation = num(usage.cache_creation_input_tokens);
   const cost = num(parsed.total_cost_usd);
+  const session = typeof parsed.session_id === 'string' ? parsed.session_id : undefined;
   return {
     model,
     promptTokens,
@@ -62,6 +63,7 @@ export function parseClaudeUsage(parsed: Record<string, unknown>): TokenUsage | 
     ...(cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {}),
     ...(cacheCreation !== undefined ? { cacheCreationTokens: cacheCreation } : {}),
     ...(cost !== undefined ? { costUsd: cost } : {}),
+    ...(session ? { sessionId: session } : {}),
   };
 }
 

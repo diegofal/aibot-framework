@@ -80,3 +80,33 @@ describe('summarizeUsage', () => {
     expect(empty.bots[0].daily).toHaveLength(1);
   });
 });
+
+describe('buildUsage: sessions no bot could be tied to', () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require('node:fs');
+  const { join } = require('node:path');
+  const { tmpdir } = require('node:os');
+  const { buildUsage } = require('../../src/stats/usage-aggregator');
+
+  test('admins see a "Not attributed" row; tenants and empty logs do not', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'usage-'));
+    try {
+      mkdirSync(join(dir, '_unattributed'));
+      writeFileSync(
+        join(dir, '_unattributed', '2026-10-15.jsonl'),
+        `${JSON.stringify(e({ botId: '_unattributed', caller: 'unlogged', costUsd: 0.7 }))}\n`
+      );
+      const ctx: any = { now: () => NOW, dirs: { llmQueryLog: dir } };
+      const bots: any = [{ id: 'b1', name: 'B1' }];
+      const admin = buildUsage(ctx, bots, '7d', { includeUnattributed: true });
+      expect(admin.bots.map((b: any) => b.name)).toContain('Not attributed to a bot');
+      expect(admin.fleet.costUsd).toBeCloseTo(0.7, 6);
+      expect(buildUsage(ctx, bots, '7d').bots.map((b: any) => b.botId)).toEqual(['b1']);
+      rmSync(join(dir, '_unattributed'), { recursive: true });
+      expect(
+        buildUsage(ctx, bots, '7d', { includeUnattributed: true }).bots.map((b: any) => b.botId)
+      ).toEqual(['b1']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

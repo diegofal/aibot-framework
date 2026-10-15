@@ -34,6 +34,10 @@ export interface LlmQueryEntry {
   costUsd?: number;
   /** Claude account that served a claude-cli call (stamped by `append`). */
   account?: string;
+  /** Claude CLI sessions of the call (transcripts); several when it was retried. */
+  sessionIds?: string[];
+  /** Cost and cache tokens filled in later from the CLI transcripts (scripts/usage/backfill-claude-costs.ts). */
+  backfilled?: boolean;
   messageCount?: number;
   toolCount?: number;
   durationMs: number;
@@ -57,8 +61,10 @@ export interface LlmQueryEntry {
  */
 /** The cache and cost fields of a call's usage, only those present (for a query-log entry). */
 export function usageExtras(
-  usage: Pick<TokenUsage, 'cacheReadTokens' | 'cacheCreationTokens' | 'costUsd'> | undefined
-): Pick<LlmQueryEntry, 'cacheReadTokens' | 'cacheCreationTokens' | 'costUsd'> {
+  usage:
+    | Pick<TokenUsage, 'cacheReadTokens' | 'cacheCreationTokens' | 'costUsd' | 'sessionId'>
+    | undefined
+): Pick<LlmQueryEntry, 'cacheReadTokens' | 'cacheCreationTokens' | 'costUsd' | 'sessionIds'> {
   if (!usage) return {};
   return {
     ...(usage.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
@@ -66,6 +72,7 @@ export function usageExtras(
       ? { cacheCreationTokens: usage.cacheCreationTokens }
       : {}),
     ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+    ...(usage.sessionId ? { sessionIds: [usage.sessionId] } : {}),
   };
 }
 

@@ -136,22 +136,33 @@ export function summarizeUsage(
   };
 }
 
+/** Claude CLI sessions no bot could be tied to (scripts/usage/backfill-claude-costs.ts). */
+export const UNATTRIBUTED_BOT = '_unattributed';
+
 export function buildUsage(
   ctx: StatsContext,
   bots: BotConfig[],
-  window: StatsWindow
+  window: StatsWindow,
+  opts: { includeUnattributed?: boolean } = {}
 ): UsageResponse {
   const now = ctx.now();
   const since = now - windowToMs(window);
   const entries: Record<string, LlmQueryEntry[]> = {};
   const names: Record<string, string> = {};
-  for (const bot of bots) {
-    names[bot.id] = bot.name ?? bot.id;
+  const ids = bots.map((b) => b.id);
+  for (const bot of bots) names[bot.id] = bot.name ?? bot.id;
+  if (opts.includeUnattributed) {
+    ids.push(UNATTRIBUTED_BOT);
+    names[UNATTRIBUTED_BOT] = 'Not attributed to a bot';
+  }
+  for (const id of ids) {
     try {
-      entries[bot.id] = readLlmEntries(ctx.dirs.llmQueryLog, bot.id, since, now);
+      entries[id] = readLlmEntries(ctx.dirs.llmQueryLog, id, since, now);
     } catch {
-      entries[bot.id] = [];
+      entries[id] = [];
     }
   }
+  if (opts.includeUnattributed && entries[UNATTRIBUTED_BOT].length === 0)
+    delete entries[UNATTRIBUTED_BOT];
   return summarizeUsage(entries, names, window, now);
 }

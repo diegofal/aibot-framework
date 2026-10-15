@@ -22,11 +22,12 @@ export function claudeAccountsRoutes(deps: { accounts: ClaudeAccountService; log
   app.get('/', async (c) => c.json({ accounts: await accounts.list() }));
 
   app.post('/login', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { label?: unknown };
+    const body = (await c.req.json().catch(() => ({}))) as { label?: unknown; slug?: unknown };
     const label = typeof body.label === 'string' ? body.label.trim() : '';
-    if (!label) return c.json({ error: 'A name for the account is required' }, 400);
+    const slug = typeof body.slug === 'string' && body.slug ? body.slug : undefined;
+    if (!label && !slug) return c.json({ error: 'A name for the account is required' }, 400);
     try {
-      return c.json(await accounts.startLogin(label));
+      return c.json(await accounts.startLogin(label, slug ? { slug } : {}));
     } catch (err) {
       logger.warn({ err: fail(err) }, 'Claude accounts: login could not start');
       return c.json({ error: fail(err) }, 502);
@@ -54,6 +55,24 @@ export function claudeAccountsRoutes(deps: { accounts: ClaudeAccountService; log
       return c.json({ ok: true });
     } catch (err) {
       return c.json({ error: fail(err) }, 400);
+    }
+  });
+
+  app.patch('/:slug', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { label?: unknown };
+    try {
+      await accounts.rename(c.req.param('slug'), typeof body.label === 'string' ? body.label : '');
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ error: fail(err) }, 400);
+    }
+  });
+
+  app.post('/:slug/test', async (c) => {
+    try {
+      return c.json(await accounts.test(c.req.param('slug')));
+    } catch (err) {
+      return c.json({ ok: false, error: fail(err) }, 400);
     }
   });
 

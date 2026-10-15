@@ -1,21 +1,24 @@
 /**
  * Claude accounts card (prototype, Integrations page): which Claude login the
- * fleet uses, switch with one click, add another account from here.
- * Login: "Add account" asks the server to start `claude auth login`; the card
- * shows the sign-in link, you sign in, paste the code back.
+ * fleet uses. Add, rename, test, log in again, switch, remove.
+ * Login: the server runs `claude auth login`; the card shows the sign-in
+ * link, you sign in and paste the code back.
  */
 import { accountsHtml, loginPanelHtml } from './claude-accounts-helpers.js';
 import { api, escapeHtml } from './shared.js';
 
 export async function mountClaudeAccounts(card) {
+  let accounts = [];
   let login = null;
+  let editing = null;
+  const tests = {};
   let message = '';
 
-  const render = (accounts) => {
+  const paint = () => {
     card.innerHTML = `
       <div class="form-section-title">Claude accounts</div>
       <p class="text-dim text-sm mb-16">The account every bot uses for Claude. When one hits its limit, switch to another; the bots resume at once.</p>
-      <div id="ca-list">${accountsHtml(accounts)}</div>
+      <div id="ca-list">${accountsHtml(accounts, { editing, tests })}</div>
       ${
         login
           ? loginPanelHtml(login)
@@ -25,38 +28,45 @@ export async function mountClaudeAccounts(card) {
       </div>`
       }
       <div id="ca-msg" class="text-sm" style="margin-top:8px">${escapeHtml(message)}</div>`;
+    card.querySelector('#ca-rename-input')?.focus();
   };
 
   const refresh = async () => {
     const res = await api('/api/claude-accounts');
-    render(res.accounts || []);
+    if (res.error) message = res.error;
+    accounts = res.accounts || accounts;
+    paint();
+  };
+
+  const startLogin = async (body, relogin) => {
+    message = 'Starting the sign-in…';
+    paint();
+    const res = await api('/api/claude-accounts/login', { method: 'POST', body });
+    if (res.error) message = res.error;
+    else {
+      login = { ...res, relogin };
+      message = '';
+    }
+    paint();
   };
 
   card.addEventListener('click', async (e) => {
     const t = e.target;
-    if (!(t instanceof HTMLElement)) return;
+    if (!(t instanceof HTMLElement) || t.hasAttribute('disabled')) return;
     try {
       if (t.id === 'ca-add') {
         const label = card.querySelector('#ca-label')?.value?.trim();
         if (!label) {
           message = 'Give the account a name first.';
-          return refresh();
+          return paint();
         }
-        message = 'Starting the sign-in…';
-        await refresh();
-        const res = await api('/api/claude-accounts/login', { method: 'POST', body: { label } });
-        if (res.error) message = res.error;
-        else {
-          login = res;
-          message = '';
-        }
-        return refresh();
+        return startLogin({ label }, false);
       }
       if (t.id === 'ca-code-send' && login) {
         const code = card.querySelector('#ca-code')?.value?.trim();
         if (!code) return;
         message = 'Checking the code…';
-        await refresh();
+        paint();
         const res = await api(
           `/api/claude-accounts/login/${encodeURIComponent(login.loginId)}/code`,
           {
@@ -64,8 +74,11 @@ export async function mountClaudeAccounts(card) {
             body: { code },
           }
         );
+        const was = login;
         login = null;
-        message = res.ok ? `Added ${res.email || res.slug}.` : `Sign-in failed: ${res.error}`;
+        message = res.ok
+          ? `${was.relogin ? 'Logged in again' : 'Added'}: ${res.email || res.slug}.`
+          : `Sign-in failed: ${res.error}`;
         return refresh();
       }
       if (t.id === 'ca-cancel' && login) {
@@ -74,6 +87,37 @@ export async function mountClaudeAccounts(card) {
         });
         login = null;
         message = '';
+        return paint();
+      }
+      const testSlug = t.getAttribute('data-ca-test');
+      if (testSlug) {
+        tests[testSlug] = { pending: true };
+        paint();
+        tests[testSlug] = await api(`/api/claude-accounts/${encodeURIComponent(testSlug)}/test`, {
+          method: 'POST',
+        });
+        return paint();
+      }
+      const relogin = t.getAttribute('data-ca-relogin');
+      if (relogin) return startLogin({ slug: relogin }, true);
+      const rename = t.getAttribute('data-ca-rename');
+      if (rename) {
+        editing = rename;
+        return paint();
+      }
+      if (t.hasAttribute('data-ca-rename-cancel')) {
+        editing = null;
+        return paint();
+      }
+      const save = t.getAttribute('data-ca-rename-save');
+      if (save) {
+        const label = card.querySelector('#ca-rename-input')?.value ?? '';
+        const res = await api(`/api/claude-accounts/${encodeURIComponent(save)}`, {
+          method: 'PATCH',
+          body: { label },
+        });
+        if (res.ok) editing = null;
+        message = res.ok ? '' : res.error;
         return refresh();
       }
       const activate = t.getAttribute('data-ca-activate');
@@ -86,6 +130,11 @@ export async function mountClaudeAccounts(card) {
       }
       const remove = t.getAttribute('data-ca-remove');
       if (remove) {
+        if (t.dataset.confirm !== '1') {
+          t.dataset.confirm = '1';
+          t.textContent = 'Click again to remove';
+          return;
+        }
         const res = await api(`/api/claude-accounts/${encodeURIComponent(remove)}`, {
           method: 'DELETE',
         });
@@ -94,8 +143,13 @@ export async function mountClaudeAccounts(card) {
       }
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
-      return refresh();
+      paint();
     }
+  });
+
+  card.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target instanceof HTMLElement && e.target.id === 'ca-rename-input')
+      card.querySelector('[data-ca-rename-save]')?.click();
   });
 
   await refresh().catch((err) => {

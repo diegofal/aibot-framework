@@ -30,6 +30,8 @@ export interface TokenUsage {
   cacheCreationTokens?: number;
   /** Cost the provider reported for the call (Claude CLI `total_cost_usd`). */
   costUsd?: number;
+  /** Claude CLI session of the call (its transcript is `projects/-tmp/<sessionId>.jsonl`). */
+  sessionId?: string;
   /**
    * Backend that actually served the call. Callers log this rather than the
    * client's nominal backend: a wrapper can serve a claude-cli client's call

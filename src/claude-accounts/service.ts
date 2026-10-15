@@ -50,6 +50,21 @@ interface PendingLogin {
   proc: CliProcess;
   output: string;
   timer: ReturnType<typeof setTimeout>;
+  /** Logging in again to an account that exists: a failure or cancel never touches its folder. */
+  existing: boolean;
+  /** Its credentials before this login (an existing account is "logged in" either way). */
+  credentialsBefore: string | null;
+}
+
+export interface AccountTestResult {
+  ok: boolean;
+  latencyMs: number;
+  reply?: string;
+  model?: string;
+  costUsd?: number;
+  /** Upstream HTTP status the CLI reported (429 = the account's limit). */
+  status?: number;
+  error?: string;
 }
 
 export interface ClaudeAccountServiceOptions {
@@ -68,6 +83,8 @@ const LOGIN_TTL_MS = 10 * 60_000;
 const URL_WAIT_MS = 20_000;
 const STATUS_TIMEOUT_MS = 15_000;
 const CODE_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = 90_000;
+const TEST_PROMPT = 'Reply with exactly: OK';
 
 /** Bun.spawn with stdin/stdout piped; output listeners get stdout and stderr text. */
 export const bunCliSpawn: CliSpawn = (args, env) => {
@@ -111,6 +128,14 @@ function slugify(label: string): string {
       .replace(/^-+|-+$/g, '')
       .slice(0, 40) || 'account'
   );
+}
+
+function readCredentials(dir: string): string | null {
+  try {
+    return readFileSync(join(dir, '.credentials.json'), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -208,19 +233,29 @@ export class ClaudeAccountService {
     );
   }
 
-  /** Start `claude auth login` for a new account; resolves with the sign-in URL. */
-  async startLogin(label: string): Promise<{ loginId: string; slug: string; url: string }> {
+  /**
+   * Start `claude auth login`; resolves with the sign-in URL. With `slug`, logs
+   * in again to that account (expired session, or another login into it).
+   */
+  async startLogin(
+    label: string,
+    opts: { slug?: string } = {}
+  ): Promise<{ loginId: string; slug: string; url: string }> {
     const r = this.read();
-    const base = slugify(label);
-    let slug = base;
-    for (
-      let i = 2;
-      r.accounts.some((a) => a.slug === slug) ||
-      [...this.pending.values()].some((p) => p.slug === slug);
-      i++
-    )
-      slug = `${base}-${i}`;
-    const dir = resolve(this.opts.rootDir, slug);
+    const existing = opts.slug ? r.accounts.find((a) => a.slug === opts.slug) : undefined;
+    if (opts.slug && !existing) throw new Error(`Unknown account: ${opts.slug}`);
+    let slug = existing?.slug ?? slugify(label);
+    if (!existing) {
+      const base = slug;
+      for (
+        let i = 2;
+        r.accounts.some((a) => a.slug === slug) ||
+        [...this.pending.values()].some((p) => p.slug === slug);
+        i++
+      )
+        slug = `${base}-${i}`;
+    }
+    const dir = existing?.dir ?? resolve(this.opts.rootDir, slug);
     mkdirSync(dir, { recursive: true });
     const proc = this.spawn([this.opts.claudePath, 'auth', 'login', '--claudeai'], {
       ...this.env,
@@ -230,9 +265,11 @@ export class ClaudeAccountService {
     const login: PendingLogin = {
       id,
       slug,
-      label: label.trim() || slug,
+      label: existing?.label ?? (label.trim() || slug),
       dir,
       proc,
+      existing: !!existing,
+      credentialsBefore: readCredentials(dir),
       output: '',
       timer: setTimeout(() => this.cancel(id), LOGIN_TTL_MS),
     };
@@ -275,11 +312,14 @@ export class ClaudeAccountService {
     this.pending.delete(loginId);
     if (exit === -1) login.proc.kill();
     const st = await this.status(login.dir);
-    if (!st.loggedIn) {
-      rmSync(login.dir, { recursive: true, force: true });
+    const renewed = !login.existing || readCredentials(login.dir) !== login.credentialsBefore;
+    if (!st.loggedIn || !renewed) {
+      if (!login.existing) rmSync(login.dir, { recursive: true, force: true });
       const tail = login.output.slice(before).trim() || `claude auth login exited ${exit}`;
       return { ok: false, error: tail.slice(-400) };
     }
+    if (login.existing)
+      return { ok: true, slug: login.slug, ...(st.email ? { email: st.email } : {}) };
     const r = this.read();
     r.accounts.push({
       slug: login.slug,
@@ -301,7 +341,60 @@ export class ClaudeAccountService {
     } catch {
       /* already gone */
     }
-    rmSync(login.dir, { recursive: true, force: true });
+    if (!login.existing) rmSync(login.dir, { recursive: true, force: true });
+  }
+
+  /** Change an account's display name (its slug and folder stay). */
+  async rename(slug: string, label: string): Promise<void> {
+    const name = label.trim();
+    if (!name) throw new Error('A name is required');
+    const r = this.read();
+    const a = r.accounts.find((x) => x.slug === slug);
+    if (!a) throw new Error(`Unknown account: ${slug}`);
+    a.label = name.slice(0, 60);
+    this.write(r);
+  }
+
+  /** One real call with the account (`claude -p`), to see it answers: latency, reply, cost, or why not. */
+  async test(slug: string): Promise<AccountTestResult> {
+    const a = this.read().accounts.find((x) => x.slug === slug);
+    if (!a) throw new Error(`Unknown account: ${slug}`);
+    const started = Date.now();
+    const proc = this.spawn([this.opts.claudePath, '-p', TEST_PROMPT, '--output-format', 'json'], {
+      ...this.env,
+      CLAUDE_CONFIG_DIR: a.dir,
+    });
+    let out = '';
+    proc.onOutput((t) => {
+      out += t;
+    });
+    const exit = await withTimeout(proc.exited, TEST_TIMEOUT_MS, -1);
+    const latencyMs = Date.now() - started;
+    if (exit === -1) {
+      proc.kill();
+      return { ok: false, latencyMs, error: `No answer in ${TEST_TIMEOUT_MS / 1000} s` };
+    }
+    try {
+      const parsed = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) as {
+        is_error?: boolean;
+        result?: string;
+        api_error_status?: number;
+        total_cost_usd?: number;
+        modelUsage?: Record<string, unknown>;
+      };
+      const model = parsed.modelUsage ? Object.keys(parsed.modelUsage)[0] : undefined;
+      const base = {
+        latencyMs,
+        ...(model ? { model } : {}),
+        ...(typeof parsed.total_cost_usd === 'number' ? { costUsd: parsed.total_cost_usd } : {}),
+        ...(typeof parsed.api_error_status === 'number' ? { status: parsed.api_error_status } : {}),
+      };
+      if (parsed.is_error || exit !== 0)
+        return { ok: false, ...base, error: parsed.result || `claude exited ${exit}` };
+      return { ok: true, ...base, reply: (parsed.result ?? '').slice(0, 200) };
+    } catch {
+      return { ok: false, latencyMs, error: (out.trim() || `claude exited ${exit}`).slice(-400) };
+    }
   }
 
   /** Make an account the one every Claude CLI call uses. */
@@ -317,17 +410,23 @@ export class ClaudeAccountService {
     this.opts.onActivate?.(slug);
   }
 
-  /** Forget an account and delete its credentials. Never the active one or the original login. */
+  /**
+   * Forget an account and delete its credentials. Never the active one
+   * (switch first). The original login keeps its folder (CLI transcripts the
+   * usage backfill reads); only its `.credentials.json` goes.
+   */
   async remove(slug: string): Promise<void> {
     const r = this.read();
-    if (slug === r.active) throw new Error('The active account cannot be removed');
+    if (slug === r.active)
+      throw new Error('The active account cannot be removed: switch to another first');
     const a = r.accounts.find((x) => x.slug === slug);
     if (!a) throw new Error(`Unknown account: ${slug}`);
-    if (resolve(a.dir) === resolve(this.opts.legacyDir))
-      throw new Error('The original login cannot be removed');
     r.accounts = r.accounts.filter((x) => x.slug !== slug);
     this.write(r);
-    if (existsSync(a.dir) && resolve(a.dir).startsWith(resolve(this.opts.rootDir)))
+    if (resolve(a.dir) === resolve(this.opts.legacyDir)) {
+      rmSync(join(a.dir, '.credentials.json'), { force: true });
+    } else if (existsSync(a.dir) && resolve(a.dir).startsWith(resolve(this.opts.rootDir))) {
       rmSync(a.dir, { recursive: true, force: true });
+    }
   }
 }

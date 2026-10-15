@@ -22,7 +22,12 @@ import { buildInfra } from '../../stats/infra-aggregator';
 import type { KarmaScoreSource } from '../../stats/readers/karma';
 import { buildUsage } from '../../stats/usage-aggregator';
 import { parseWindow } from '../../stats/util';
-import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import {
+  getTenantId,
+  isAdminOrSingleTenant,
+  isBotAccessible,
+  scopeBots,
+} from '../../tenant/tenant-scoping';
 
 export interface StatsRouteDeps {
   config: Config;
@@ -106,8 +111,13 @@ export function statsRoutes(deps: StatsRouteDeps) {
     const window = parseWindow(c.req.query('window'));
     const bots = scopeBots(deps.config.bots, getTenantId(c));
     try {
-      const key = `usage:${window}:${scopeKey(bots.map((b) => b.id))}`;
-      return c.json(ctx.cache.get(key, ctx.cacheTtlMs, () => buildUsage(ctx, bots, window)));
+      const admin = isAdminOrSingleTenant(getTenantId(c));
+      const key = `usage:${window}:${admin}:${scopeKey(bots.map((b) => b.id))}`;
+      return c.json(
+        ctx.cache.get(key, ctx.cacheTtlMs, () =>
+          buildUsage(ctx, bots, window, { includeUnattributed: admin })
+        )
+      );
     } catch (err) {
       deps.logger.warn({ err }, 'Stats: usage aggregation failed');
       return c.json({ error: 'Stats aggregation failed' }, 500);

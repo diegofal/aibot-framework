@@ -22,6 +22,11 @@ function app(tenantId?: string) {
       calls.push(`activate:${slug}`);
     },
     remove: async (slug: string) => calls.push(`remove:${slug}`),
+    rename: async (slug: string, label: string) => {
+      if (!label.trim()) throw new Error('A name is required');
+      calls.push(`rename:${slug}:${label}`);
+    },
+    test: async (slug: string) => ({ ok: slug === 'default', latencyMs: 5, reply: 'OK' }),
   };
   const root = new Hono();
   root.use('*', async (c, next) => {
@@ -69,6 +74,23 @@ describe('claude accounts routes', () => {
       'activate:second',
       'remove:second',
     ]);
+  });
+
+  test('rename, test, and log in again to an existing account', async () => {
+    const { root, calls } = app();
+    const patch = (body: unknown) => ({ ...post(body), method: 'PATCH' });
+    expect(
+      (await root.request('/api/claude-accounts/default', patch({ label: 'Work' }))).status
+    ).toBe(200);
+    expect((await root.request('/api/claude-accounts/default', patch({ label: ' ' }))).status).toBe(
+      400
+    );
+    const t = await (await root.request('/api/claude-accounts/default/test', post({}))).json();
+    expect(t).toMatchObject({ ok: true, reply: 'OK' });
+    expect(
+      (await root.request('/api/claude-accounts/login', post({ slug: 'default' }))).status
+    ).toBe(200);
+    expect(calls).toEqual(['rename:default:Work', 'login:']);
   });
 
   test('a name and a code are required', async () => {

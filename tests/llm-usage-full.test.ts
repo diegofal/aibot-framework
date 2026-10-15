@@ -14,6 +14,7 @@ import { mergeTokenUsage } from '../src/core/tool-runner';
 
 const cli = {
   model: 'claude-opus-5-5',
+  session_id: 'sess-1',
   total_cost_usd: 0.4123,
   usage: {
     input_tokens: 2,
@@ -33,6 +34,7 @@ describe('full Claude usage', () => {
       cacheReadTokens: 41_000,
       cacheCreationTokens: 6_500,
       costUsd: 0.4123,
+      sessionId: 'sess-1',
     });
   });
 
@@ -53,6 +55,7 @@ describe('full Claude usage', () => {
       cacheReadTokens: 41_000,
       cacheCreationTokens: 6_500,
       costUsd: 0.4123,
+      sessionIds: ['sess-1'],
     });
     expect(usageExtras(undefined)).toEqual({});
   });

@@ -9,27 +9,64 @@ const esc = (v) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-/** One row per account: name, email, state, actions. Pure. */
-export function accountsHtml(accounts) {
+/** The line under a row after "Test": pending, works (latency, model), or why not. Pure. */
+export function testResultHtml(t) {
+  if (!t) return '';
+  if (t.pending) return '<span class="text-dim">Testing the connection…</span>';
+  const secs = typeof t.latencyMs === 'number' ? ` · ${(t.latencyMs / 1000).toFixed(1)} s` : '';
+  if (t.ok) {
+    const model = t.model ? ` · ${esc(t.model)}` : '';
+    return `<span style="color:var(--success, #4ade80)">✓ Connection works${secs}${model}</span>`;
+  }
+  const status = t.status ? `HTTP ${t.status} · ` : '';
+  return `<span style="color:var(--warn)">✗ ${status}${esc(t.error || 'No answer')}${secs}</span>`;
+}
+
+/**
+ * One row per account: name (rename in place), email, state, actions — Test,
+ * Use this account, Log in again, Rename, Remove (disabled on the active one).
+ * `opts.editing` = slug being renamed; `opts.tests` = test result per slug. Pure.
+ */
+export function accountsHtml(accounts, opts = {}) {
   if (!Array.isArray(accounts) || accounts.length === 0)
     return '<p class="text-dim text-sm">No accounts.</p>';
+  const tests = opts.tests || {};
   const rows = accounts
     .map((a) => {
+      const slug = esc(a.slug);
       const state = a.active
         ? '<span class="fb-tag standing">active</span>'
         : a.loggedIn
           ? '<span class="text-dim text-sm">logged in</span>'
           : '<span class="fb-tag notasks">not logged in</span>';
-      const actions = a.active
-        ? ''
-        : `${a.loggedIn ? `<button type="button" class="btn btn-sm btn-primary" data-ca-activate="${esc(a.slug)}">Use this account</button>` : ''}
-           ${a.slug === 'default' ? '' : `<button type="button" class="btn btn-sm" data-ca-remove="${esc(a.slug)}">Remove</button>`}`;
+      const name =
+        opts.editing === a.slug
+          ? `<div class="form-row" style="gap:6px">
+              <input type="text" id="ca-rename-input" value="${esc(a.label || a.slug)}" style="flex:1" maxlength="60">
+              <button type="button" class="btn btn-sm btn-primary" data-ca-rename-save="${slug}">Save</button>
+              <button type="button" class="btn btn-sm" data-ca-rename-cancel>Cancel</button>
+            </div>`
+          : `<strong>${esc(a.label || a.slug)}</strong> <button type="button" class="btn btn-sm" data-ca-rename="${slug}" title="Rename">✎</button><div class="text-dim text-sm">${slug}</div>`;
+      const remove = a.active
+        ? `<button type="button" class="btn btn-sm" data-ca-remove="${slug}" disabled title="Switch to another account first">Remove</button>`
+        : `<button type="button" class="btn btn-sm" data-ca-remove="${slug}">Remove</button>`;
+      const actions = [
+        `<button type="button" class="btn btn-sm" data-ca-test="${slug}">Test</button>`,
+        !a.active && a.loggedIn
+          ? `<button type="button" class="btn btn-sm btn-primary" data-ca-activate="${slug}">Use this account</button>`
+          : '',
+        `<button type="button" class="btn btn-sm" data-ca-relogin="${slug}">Log in again</button>`,
+        remove,
+      ].join(' ');
+      const result = tests[a.slug]
+        ? `<tr><td colspan="4" class="text-sm" style="padding-top:0">${testResultHtml(tests[a.slug])}</td></tr>`
+        : '';
       return `<tr>
-        <td><strong>${esc(a.label || a.slug)}</strong><div class="text-dim text-sm">${esc(a.slug)}</div></td>
+        <td>${name}</td>
         <td>${a.email ? esc(a.email) : '<span class="text-dim">—</span>'}</td>
         <td>${state}</td>
         <td style="text-align:right;white-space:nowrap">${actions}</td>
-      </tr>`;
+      </tr>${result}`;
     })
     .join('');
   return `<table class="data-table" style="width:100%"><thead><tr><th>Account</th><th>Email</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -38,8 +75,11 @@ export function accountsHtml(accounts) {
 /** The pending-login panel: the link to open and the box for the code. Pure. */
 export function loginPanelHtml(login) {
   if (!login) return '';
+  const intro = login.relogin
+    ? `Log in again to <strong>${esc(login.slug)}</strong>: open this link and sign in with that account:`
+    : 'Open this link and sign in with the account you want to add:';
   return `<div class="detail-card" style="margin-top:12px">
-    <div class="text-sm"><strong>1.</strong> Open this link and sign in with the account you want to add:</div>
+    <div class="text-sm"><strong>1.</strong> ${intro}</div>
     <div style="margin:6px 0 10px"><a href="${esc(login.url)}" target="_blank" rel="noopener noreferrer">Sign in to Claude ↗</a></div>
     <div class="text-sm"><strong>2.</strong> Paste the code the page shows:</div>
     <div class="form-row" style="gap:8px;margin-top:6px">
