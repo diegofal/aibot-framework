@@ -811,3 +811,20 @@ docker compose up -d --build
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T11-05-34`. `agentLoop.curiosity = { exploreRatio: 0.15, maxTopicShare: 0.85, noSurpriseStreak: 6 }` in `config.json`; fudi `agentLoop.every: "3h"` in `bots.json`. Healthy in ~35 s; image has `pickAutoDispatch` and `maxChars: 12000`; bots started. The "Ollama daemon is unreachable" boot error predates this (all bots run claude-cli).
 
 **Reversible?** `cp config/config.json.bak-2026-10-15-explore config/config.json` (same for `bots.json`) inside the container and restart; code: rebuild from `6cd8d99`; auto-dispatch alone: `workers.autoDispatch: false`.
+
+### 2026-10-15 — Deploy error detail + Claude accounts prototype + Usage (`274de34`)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude); deployed while the fleet was stopped by the weekly Claude limit |
+| **Why** | The new Integrations card and Insights → Usage were already served (web/ is mounted) but their API routes were not: both showed JSON parse errors |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T12-53-12`. Healthy in ~35 s; `/api/claude-accounts` and `/api/stats/usage` answer JSON (401 without a session). Inside the container `createClaudeAccounts(config).list()` returns `default` (`/app/data/claude`, logged in, diego.falciola@agilityio.com, active). `CLAUDE_CONFIG_DIR=/app/data/claude`. Add-account login not exercised with a real second account yet.
+
+**Reversible?** Rebuild from `8cb8f70`. Accounts added later live in `/app/data/claude-accounts/`; deleting `accounts.json` there falls back to the original login.
