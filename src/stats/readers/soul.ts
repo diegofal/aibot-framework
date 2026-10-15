@@ -80,6 +80,7 @@ function toDetail(
     headline: g.headline ?? null,
     parent: g.parent ?? null,
     kind: g.kind ?? null,
+    dropped: g.dropped ?? null,
   };
 }
 

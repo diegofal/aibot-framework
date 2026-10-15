@@ -8,12 +8,14 @@ import { parseGoals, resolveParentGoalId, serializeGoals } from '../tools/goals'
 import type { WorkerPoolApi } from '../workers/types';
 import { parseDurationMs } from './agent-loop';
 import { buildStrategistPrompt } from './agent-loop-prompts';
+import { resolveTaskRef } from './agent-loop-tasks';
 import { logToMemory } from './agent-loop-utils';
 import { parseLLMJson } from './llm-json-parser';
 import type { BotContext } from './types';
 
 export interface GoalOperation {
-  action: 'add' | 'complete' | 'update' | 'remove';
+  /** `drop`: the goal no longer applies; it moves to Completed with `reason` as `dropped`. */
+  action: 'add' | 'complete' | 'update' | 'remove' | 'drop';
   goal: string;
   priority?: string;
   status?: string;
@@ -48,6 +50,31 @@ export interface StrategistResult {
   trait_reasons?: Record<string, string>;
   /** Title or id of the active goal the deliverable serves (record only). */
   serves_goal?: string;
+  /** Open tasks that no longer apply, removed with their reason (`applyDropTasks`). */
+  drop_tasks?: DropTask[];
+}
+
+/** One task the strategist drops: its id (or exact text) and why it no longer applies. */
+export interface DropTask {
+  task: string;
+  reason: string;
+}
+
+/** At most this many tasks dropped per strategist run. */
+const DROP_TASKS_MAX = 12;
+
+/** `drop_tasks`: entries with a task and a reason; junk is dropped, never an error. */
+export function parseDropTasks(raw: unknown): DropTask[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: DropTask[] = [];
+  for (const item of raw) {
+    if (!isPlainObject(item)) continue;
+    const task = shortText(item.task);
+    const reason = shortText(item.reason);
+    if (task && reason) out.push({ task, reason: reason.slice(0, 200) });
+    if (out.length >= DROP_TASKS_MAX) break;
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
@@ -104,6 +131,7 @@ export function parseStrategistResult(
         parsed.trait_adjustments,
         parsed.trait_reasons
       );
+      const dropTasks = parseDropTasks(parsed.drop_tasks);
 
       return {
         goal_operations: Array.isArray(parsed.goal_operations) ? parsed.goal_operations : [],
@@ -117,6 +145,7 @@ export function parseStrategistResult(
         ...(typeof parsed.serves_goal === 'string' && parsed.serves_goal.trim()
           ? { serves_goal: parsed.serves_goal.trim() }
           : {}),
+        ...(dropTasks ? { drop_tasks: dropTasks } : {}),
       };
     },
     label: 'strategist',
@@ -312,6 +341,11 @@ export async function runStrategist(
       workerPool: ctx.workerPool,
     });
   }
+  if (result.drop_tasks?.length) {
+    applyDropTasks(botId, result.drop_tasks, botLogger, soulContext.soulLoader, {
+      cycleId: options.cycleId,
+    });
+  }
   // The deliverable is the cycle's focus (lastFocus), never a task: writing
   // one per run left every served goal with an open task, so the planner's
   // new_tasks breakdown never applied (M7).
@@ -329,7 +363,7 @@ export async function runStrategist(
 }
 
 /**
- * Apply goal operations (add, complete, update, remove) to the goals file.
+ * Apply goal operations (add, complete, update, remove, drop) to the goals file.
  */
 export function applyGoalOperations(
   botId: string,
@@ -418,6 +452,36 @@ export function applyGoalOperations(
         logger.debug({ goal: found.text }, 'Strategist: updated goal');
         break;
       }
+      case 'drop': {
+        // No longer applies (superseded, impossible, off-purpose): closed, not achieved.
+        // The id first (the goals view shows ids), then the text.
+        const ref = op.goal.trim();
+        const lower = ref.toLowerCase();
+        let idx = active.findIndex((g) => g.id === ref);
+        if (idx === -1) idx = active.findIndex((g) => g.text.toLowerCase().includes(lower));
+        if (idx === -1) {
+          logger.debug({ goal: op.goal }, 'Strategist: goal to drop not found, skipping');
+          break;
+        }
+        // A goal the operator set is theirs to drop: the strategist leaves it.
+        if (active[idx].source?.startsWith('operator')) {
+          logger.info(
+            { botId, goal: active[idx].text, reason: op.reason },
+            'Strategist: will not drop a goal the operator set'
+          );
+          break;
+        }
+        const [goal] = active.splice(idx, 1);
+        const reason = shortText(op.reason) ?? 'No longer applies';
+        reasons[goal.text.trim().toLowerCase()] = reason;
+        if (goal.id) closedIds.push(goal.id);
+        goal.status = 'completed';
+        goal.completed = localDateStr();
+        goal.dropped = reason;
+        completed.push(goal);
+        logger.debug({ goal: goal.text, reason }, 'Strategist: dropped goal');
+        break;
+      }
       case 'remove': {
         const lower = op.goal.toLowerCase();
         const idx = active.findIndex((g) => g.text.toLowerCase().includes(lower));
@@ -488,6 +552,43 @@ export function applyGoalOperations(
     if (closed.stopped.length + closed.released.length > 0)
       logger.info({ botId, ...closed }, 'Closed goals: workers stopped, claims released');
   }
+}
+
+/**
+ * The strategist's `drop_tasks`: remove each named open task (by id, else
+ * exact text) through the task store, the reason on its `task-remove` event.
+ * A task a worker holds follows the store's claim rules (refused). Returns the
+ * ids removed; never throws.
+ */
+export function applyDropTasks(
+  botId: string,
+  drops: DropTask[],
+  logger: Logger,
+  soulLoader: ReturnType<BotContext['getSoulLoader']>,
+  opts: { cycleId?: string } = {}
+): string[] {
+  const store = taskStoreOf(soulLoader);
+  if (!store) return [];
+  const removed: string[] = [];
+  for (const d of drops) {
+    try {
+      const t = resolveTaskRef(d.task, store.list());
+      if (!t) {
+        logger.debug({ botId, task: d.task }, 'Strategist: task to drop not found, skipping');
+        continue;
+      }
+      const r = store.apply([{ op: 'remove', id: t.id, note: d.reason }], {
+        actor: 'agent',
+        ...(opts.cycleId ? { cycleId: opts.cycleId } : {}),
+      });
+      if (r.ok) removed.push(t.id);
+      else logger.debug({ botId, taskId: t.id, reason: r.reason }, 'Strategist: task not dropped');
+    } catch (err) {
+      logger.warn({ err, botId }, 'Strategist: dropping a task failed');
+    }
+  }
+  if (removed.length > 0) logger.info({ botId, removed }, 'Strategist: dropped tasks');
+  return removed;
 }
 
 /** At most 12 non-empty task texts (the store caps open tasks per goal at 12). */

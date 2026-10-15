@@ -3,10 +3,18 @@ import { join } from 'node:path';
 import { type BotConfig, resolveAgentConfig } from '../config';
 import { ClaudeCliLLMClient, type LLMClient, type TokenUsage } from '../core/llm-client';
 import { mergeTokenUsage } from '../core/tool-runner';
+import {
+  STANDING_LOOKBACK_MS,
+  type StandingGoalDue,
+  dueStandingGoals,
+  standingTurnIntervalMs,
+} from '../goals/standing-rotation';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { type DocumentSize, LIVING_DOC_DEFAULTS, listDocuments } from '../productions/living-docs';
+import { loopIntervalMs } from '../stats/goal-activity';
+import { readAgentCycles } from '../stats/readers/agent-cycles';
 import { editGoal, parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import { idleToWhy } from '../why/builders/idle';
@@ -479,6 +487,39 @@ export class AgentLoop {
     } catch (err) {
       this.ctx.logger.warn({ err, botId }, 'Workers block: could not list runs');
       return undefined;
+    }
+  }
+
+  /**
+   * Standing goals due a round, from the cycle log this loop writes (last 14
+   * days). Empty when none is due; never throws: a failure here only drops the
+   * planner block.
+   */
+  private plannerStandingDue(
+    botId: string,
+    botConfig: BotConfig,
+    goalsMd: string,
+    nowMs: number
+  ): StandingGoalDue[] {
+    try {
+      const goals = parseGoals(goalsMd || null).active;
+      if (!goals.some((g) => g.kind === 'standing')) return [];
+      const cycles = readAgentCycles(
+        join(this.ctx.config.paths.data, 'agent-cycles'),
+        botId,
+        nowMs - STANDING_LOOKBACK_MS,
+        nowMs
+      );
+      const turnMs = standingTurnIntervalMs({
+        loopMs: loopIntervalMs(botConfig, this.ctx.config),
+        goals,
+        cycles,
+        nowMs,
+      });
+      return dueStandingGoals({ goals, cycles, nowMs, turnMs });
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId }, 'Standing goals block: could not compute due goals');
+      return [];
     }
   }
 
@@ -2158,6 +2199,8 @@ export class AgentLoop {
         : undefined;
 
     const plannerWorkers = this.plannerWorkersInput(botId);
+    const plannerNowMs = Date.now();
+    const standingDue = this.plannerStandingDue(botId, botConfig, goals, plannerNowMs);
     let plannerTaskFields: PlannerTaskFields = {};
 
     if (isContinuous) {
@@ -2200,6 +2243,8 @@ export class AgentLoop {
         outcomeRecent,
         environmentContext: plannerEnvContext,
         workers: plannerWorkers,
+        standingDue,
+        nowMs: plannerNowMs,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
 
@@ -2319,6 +2364,8 @@ export class AgentLoop {
         outcomeRecent,
         environmentContext: plannerEnvContext,
         workers: plannerWorkers,
+        standingDue,
+        nowMs: plannerNowMs,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
 

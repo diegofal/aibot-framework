@@ -7929,6 +7929,13 @@ a.gd-row-name:hover {
 .fb-gpulse.stalled .fb-gpulse-dot {
   background: var(--danger);
 }
+/* A standing goal waiting for its round: amber, never "stalled". */
+.fb-gpulse.due .fb-gpulse-dot {
+  background: var(--warn);
+}
+.fb-gpulse.due .fb-gpulse-w {
+  color: var(--warn);
+}
 .fb-gpulse.fresh .fb-gpulse-w,
 .fb-act-last.fresh {
   color: var(--ok);
@@ -7973,6 +7980,15 @@ a.gd-row-name:hover {
   border: 1px solid var(--warn-border);
   padding: 0 5px;
   border-radius: 4px;
+}
+/* Done column: a goal dropped as no longer applying, instead of the check. */
+.fb-tag.dropped {
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  padding: 0 5px;
+  border-radius: 4px;
+  margin-right: 6px;
+  font-size: 11px;
 }
 .fb-itasks {
   list-style: none;

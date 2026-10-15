@@ -85,7 +85,7 @@ export type TaskOp =
   | { op: 'move'; id: string; lane: TaskLane; note?: string }
   | { op: 'edit'; id: string; text: string }
   | { op: 'note'; id: string; text: string }
-  | { op: 'remove'; id: string }
+  | { op: 'remove'; id: string; note?: string }
   | { op: 'reorder'; goalId: string; ids: string[] }
   | { op: 'claim'; id: string; runId: string; ttlMs: number }
   | { op: 'renew'; id: string; token: string; ttlMs: number }
@@ -482,10 +482,12 @@ export class TaskStore {
           }
           case 'remove': {
             const t = find(op.id);
+            // A drop's reason ("no longer applies because …") rides on the event.
+            const note = op.note === undefined ? undefined : cleanText(op.note, 'A note', true);
             guardClaim(t);
             const released = releaseForOperator(t);
             tasks.splice(tasks.indexOf(t), 1);
-            row('task-remove', t, { from: t.lane });
+            row('task-remove', t, { from: t.lane, ...(note ? { note } : {}) });
             results.push({
               op: 'remove',
               id: t.id,

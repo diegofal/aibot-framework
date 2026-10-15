@@ -255,6 +255,8 @@ export interface GoalDetail {
   parent: string | null;
   /** `standing`: no end state, so no tasks (`- kind: standing`); null = a project. Additive. */
   kind?: 'standing' | null;
+  /** Why a completed goal was dropped as no longer applying (`- dropped:`); null = not dropped. Additive. */
+  dropped?: string | null;
 }
 
 export interface TraitSnapshot {

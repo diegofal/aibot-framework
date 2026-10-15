@@ -411,7 +411,8 @@ describe('strategist prompt asks for reasons (why-everywhere rows 12 and 13)', (
     }).system;
 
   test('one short reason per goal operation', () => {
-    expect(system()).toMatch(/- reason: string \(one short sentence: why this change\)/);
+    // The line now also says the reason is required for a drop (relevance check).
+    expect(system()).toMatch(/- reason: string \(one short sentence: why this change[;)]/);
   });
 
   test('one short reason per adjusted trait, in trait_reasons', () => {

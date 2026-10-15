@@ -79,6 +79,8 @@ describe('readGoals', () => {
       headline: null,
       parent: null,
       kind: null,
+      // Additive: a goal dropped as no longer applying carries its reason.
+      dropped: null,
     });
     expect(g.detail[4].section).toBe('completed');
   });

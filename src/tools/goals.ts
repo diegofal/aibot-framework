@@ -159,6 +159,12 @@ export interface GoalEntry {
    * tasks; the cycle does one round of it when it serves it. Absent = a project.
    */
   kind?: 'standing';
+  /**
+   * Why the goal was dropped (`- dropped: <reason>`): it stopped applying
+   * (superseded, impossible, off-purpose) instead of getting done. Set on a
+   * goal moved to Completed by `manage_goals drop` or the strategist.
+   */
+  dropped?: string;
 }
 
 /** Status of one subtask: the same four lanes as goals on the board. */
@@ -462,7 +468,10 @@ export function setGoalStatus(
 function writingAs(loader: SoulLoader, opts: { actor: 'agent'; cycleId?: string }): SoulLoader {
   return new Proxy(loader, {
     get(target, prop) {
-      if (prop === 'writeGoals') return (content: string) => target.writeGoals(content, opts);
+      // A write may add its own options (a drop's reason); actor and cycle stay.
+      if (prop === 'writeGoals')
+        return (content: string, more: { reason?: string } = {}) =>
+          target.writeGoals(content, { ...more, ...opts });
       const value = Reflect.get(target, prop, target);
       return typeof value === 'function' ? value.bind(target) : value;
     },
@@ -495,16 +504,28 @@ export function createGoalsTool(
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'add', 'update', 'complete', 'add_task', 'update_task', 'note_task'],
+              enum: [
+                'list',
+                'add',
+                'update',
+                'complete',
+                'drop',
+                'add_task',
+                'update_task',
+                'note_task',
+                'drop_task',
+              ],
               description:
                 'Action to perform. ' +
                 '"list" — no extra params needed. ' +
                 '"add" — requires goal (text), optional priority, notes, parent. ' +
                 '"update" — requires goal (substring match), optional status, priority, notes. ' +
                 '"complete" — requires goal (substring match), optional outcome. ' +
+                '"drop" — the goal no longer applies (superseded, impossible, no longer serves your purpose): requires goal and reason (one sentence). It moves to Completed marked dropped; never complete a goal that was not achieved. ' +
                 '"add_task" — a step you will take toward a goal: requires goal (id or substring) and task (one line, max 200 chars), optional lane. A near-duplicate of an open task returns that task instead. ' +
                 '"update_task" — move a task between todo/in_progress/blocked/done: requires task (its id like t-1a2b3c is enough; or a substring of its text, with goal when it is ambiguous) and lane, optional note. ' +
                 '"note_task" — leave a short note on a task (what you found, why it is blocked): requires task and note. ' +
+                '"drop_task" — the task no longer applies (superseded, impossible, no longer serves its goal): requires task and reason. It is removed; never mark such a task done. ' +
                 'Tasks are listed under each goal in your goals ([ ] to do, [~] in progress, [!] blocked; done ones are counted). Your operator sees and moves them on the board; a task marked "(worker running)" belongs to a worker run, leave it.',
             },
             goal: {
@@ -547,6 +568,11 @@ export function createGoalsTool(
             outcome: {
               type: 'string',
               description: 'Outcome summary (for complete action)',
+            },
+            reason: {
+              type: 'string',
+              description:
+                'REQUIRED for drop/drop_task: one sentence on why it no longer applies (max 200 chars).',
             },
             parent: {
               type: 'string',
@@ -653,6 +679,22 @@ export function createGoalsTool(
             return completeGoal(soulLoader, goal, outcome, closeTasksOf);
           }
 
+          case 'drop': {
+            const goal = resolveGoalParam(args);
+            if (!goal) return { success: false, content: 'Missing required parameter: goal' };
+            const reason = cleanReason(args.reason);
+            if (!reason) return { success: false, content: 'Missing required parameter: reason' };
+            return dropGoal(soulLoader, goal, reason, closeTasksOf);
+          }
+
+          case 'drop_task': {
+            const task = String(args.task ?? args.task_id ?? args.taskId ?? '').trim();
+            if (!task) return { success: false, content: 'Missing required parameter: task' };
+            const reason = cleanReason(args.reason ?? args.note);
+            if (!reason) return { success: false, content: 'Missing required parameter: reason' };
+            return dropTask(soulLoader, String(args.goal ?? '').trim(), task, reason, cycleId);
+          }
+
           case 'add_task': {
             const goal = resolveGoalParam(args);
             if (!goal) return { success: false, content: 'Missing required parameter: goal' };
@@ -682,7 +724,7 @@ export function createGoalsTool(
           default:
             return {
               success: false,
-              content: `Unknown action: ${action}. Use: list, add, update, complete, add_task, update_task, note_task`,
+              content: `Unknown action: ${action}. Use: list, add, update, complete, drop, add_task, update_task, note_task, drop_task`,
             };
         }
       } catch (error) {
@@ -767,6 +809,7 @@ export function parseGoals(content: string | null): {
       else if (key === 'parent') currentGoal.parent = value;
       else if (key === 'kind')
         currentGoal.kind = value.trim() === 'standing' ? 'standing' : undefined;
+      else if (key === 'dropped') currentGoal.dropped = value;
       else if (key === 'task') {
         const task = parseTaskValue(value);
         if (task) currentGoal.tasks = [...(currentGoal.tasks ?? []), task];
@@ -777,6 +820,9 @@ export function parseGoals(content: string | null): {
   pushCurrent();
   return { active, completed };
 }
+
+/** A metadata value on one line (a reason with a newline would break the file). */
+const oneLineValue = (v: string) => v.replace(/\s+/g, ' ').trim();
 
 export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): string {
   const lines: string[] = ['## Active Goals'];
@@ -793,6 +839,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       if (g.source) lines.push(`  - source: ${g.source}`);
       if (g.parent) lines.push(`  - parent: ${g.parent}`);
       if (g.kind) lines.push(`  - kind: ${g.kind}`);
+      if (g.dropped) lines.push(`  - dropped: ${oneLineValue(g.dropped)}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
       if (g.id) lines.push(`  - id: ${g.id}`);
       if (g.started) lines.push(`  - started: ${g.started}`);
@@ -818,6 +865,7 @@ export function serializeGoals(active: GoalEntry[], completed: GoalEntry[]): str
       if (g.source) lines.push(`  - source: ${g.source}`);
       if (g.parent) lines.push(`  - parent: ${g.parent}`);
       if (g.kind) lines.push(`  - kind: ${g.kind}`);
+      if (g.dropped) lines.push(`  - dropped: ${oneLineValue(g.dropped)}`);
       if (g.created) lines.push(`  - created: ${g.created}`);
       if (g.id) lines.push(`  - id: ${g.id}`);
       if (g.started) lines.push(`  - started: ${g.started}`);
@@ -935,6 +983,44 @@ function completeGoal(
   soulLoader.writeGoals(serializeGoals(active, completed));
   onClosed?.(goal.id);
   return { success: true, content: `Goal completed: ${goal.text}` };
+}
+
+/** Longest drop reason kept (the store's note cap). */
+const DROP_REASON_MAX = 200;
+
+/** A one-line drop reason, or '' when none was given. */
+function cleanReason(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return raw.replace(/\s+/g, ' ').trim().slice(0, DROP_REASON_MAX);
+}
+
+/**
+ * The goal no longer applies: to Completed with today's date and the reason
+ * (`- dropped:`), its workers stopped like a completion. The goal event is a
+ * `drop` carrying the reason.
+ */
+function dropGoal(
+  soulLoader: SoulLoader,
+  goalSubstring: string,
+  reason: string,
+  onClosed?: (goalId: string | undefined) => void
+): ToolResult {
+  const { active, completed } = parseGoals(soulLoader.readGoals());
+  const idx = findGoalIndex(active, goalSubstring);
+  if (idx === -1) {
+    return {
+      success: false,
+      content: `No active goal matching "${goalSubstring}".${goalListHint(active)}`,
+    };
+  }
+  const [goal] = active.splice(idx, 1);
+  goal.status = 'completed';
+  goal.completed = localDateStr();
+  goal.dropped = reason;
+  completed.push(goal);
+  soulLoader.writeGoals(serializeGoals(active, completed), { reason });
+  onClosed?.(goal.id);
+  return { success: true, content: `Goal dropped (${reason}): ${goal.text}` };
 }
 
 function badLane(raw: unknown): ToolResult {
@@ -1085,6 +1171,24 @@ function updateTask(
       ? `Task ${task.id} → ${lane}: ${task.text}.${tail}`
       : `Note left on task ${task.id}: ${task.text}.`,
   };
+}
+
+/** The task no longer applies: removed from the store, the reason on its `task-remove` event. */
+function dropTask(
+  soulLoader: SoulLoader,
+  goalRef: string,
+  taskRef: string,
+  reason: string,
+  cycleId?: string
+): ToolResult {
+  const found = resolveTask(soulLoader, taskRef, goalRef);
+  if ('error' in found) return { success: false, content: found.error };
+  const { task } = found;
+  const r = soulLoader
+    .getTaskStore()
+    .apply([{ op: 'remove', id: task.id, note: reason }], { actor: 'agent', cycleId });
+  if (!r.ok) return storeFailure(r);
+  return { success: true, content: `Task ${task.id} dropped (${reason}): ${task.text}.` };
 }
 
 // --- Per-user goal helpers ---

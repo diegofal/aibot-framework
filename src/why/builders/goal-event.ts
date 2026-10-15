@@ -86,6 +86,7 @@ const status = (s: string) => STATUS_TEXT[s] ?? s;
 const OP_TEXT: Record<string, string> = {
   add: 'Goal added',
   complete: 'Completed',
+  drop: 'Dropped (no longer applies)',
   reopen: 'Reopened',
   remove: 'Removed',
   priority: 'Priority changed',

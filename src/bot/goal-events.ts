@@ -34,6 +34,7 @@ export type GoalEventOp =
   | 'headline'
   | 'kind'
   | 'complete'
+  | 'drop'
   | 'reopen'
   | 'remove'
   | TaskEventOp;
@@ -137,6 +138,11 @@ function change(g: GoalEntry, op: GoalEventOp, from?: string, to?: string): Goal
   };
 }
 
+/** A goal moving to Completed: a `drop` (to = the reason) when it was dropped, else a `complete`. */
+function closing(g: GoalEntry, from: string | undefined): GoalChange {
+  return g.dropped ? change(g, 'drop', from, g.dropped) : change(g, 'complete', from, 'completed');
+}
+
 /**
  * What changed between two goal sets, matched by id (title when an id is missing).
  * A completed goal that simply disappears is the 10-item cap, not a removal.
@@ -153,13 +159,11 @@ export function diffGoals(prev: GoalsState, next: GoalsState): GoalChange[] {
     seen.add(key);
     const old = before.get(key);
     if (!old) {
-      out.push(
-        done ? change(g, 'complete', undefined, 'completed') : change(g, 'add', undefined, g.status)
-      );
+      out.push(done ? closing(g, undefined) : change(g, 'add', undefined, g.status));
       return;
     }
     if (norm(old.goal.text) !== norm(g.text)) out.push(change(g, 'title', old.goal.text, g.text));
-    if (!old.done && done) out.push(change(g, 'complete', old.goal.status, 'completed'));
+    if (!old.done && done) out.push(closing(g, old.goal.status));
     else if (old.done && !done) out.push(change(g, 'reopen', 'completed', g.status));
     else if (!done && norm(old.goal.status) !== norm(g.status))
       out.push(change(g, 'status', old.goal.status, g.status));

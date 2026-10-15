@@ -274,23 +274,29 @@ export function goalYardstickMs(home) {
 /**
  * `{ tone, text, week, daily }` for an In progress card, from `home.goals.activity[id]`:
  * fresh under one turn (`goalYardstickMs`) since the last cycle, quiet up to
- * three, stalled after that or when no cycle served it.
+ * three, stalled after that or when no cycle served it. A standing goal
+ * (`opts.standing`) is never stalled: it has no tasks and waits for a round,
+ * so it reads amber "round due" instead.
  */
-export function goalPulse(activity, intervalMs = 86_400_000, nowMs = Date.now()) {
+export function goalPulse(activity, intervalMs = 86_400_000, nowMs = Date.now(), opts = {}) {
   const last = Date.parse(activity?.lastCycleAt ?? '');
   const daily = Array.isArray(activity?.daily) ? activity.daily : new Array(PULSE_DAYS).fill(0);
   const week = Number(activity?.cycles7d) || 0;
-  if (!Number.isFinite(last)) return { tone: 'stalled', text: 'never worked', week: 0, daily };
+  if (!Number.isFinite(last)) {
+    if (opts.standing) return { tone: 'due', text: 'round due · never', week: 0, daily };
+    return { tone: 'stalled', text: 'never worked', week: 0, daily };
+  }
   const ago = relativeTime(activity.lastCycleAt, nowMs);
   const age = nowMs - last;
   const unit = intervalMs > 0 ? intervalMs : 86_400_000;
   if (age < unit) return { tone: 'fresh', text: `worked ${ago}`, week, daily };
   if (age < unit * 3) return { tone: 'quiet', text: `quiet · ${ago}`, week, daily };
+  if (opts.standing) return { tone: 'due', text: `round due · ${ago}`, week, daily };
   return { tone: 'stalled', text: `stalled · ${ago}`, week, daily };
 }
 
-function pulseHtml(activity, intervalMs, nowMs) {
-  const p = goalPulse(activity, intervalMs, nowMs);
+function pulseHtml(activity, intervalMs, nowMs, opts) {
+  const p = goalPulse(activity, intervalMs, nowMs, opts);
   const max = Math.max(1, ...p.daily);
   const bars = p.daily
     .map((n, i) => {
@@ -604,7 +610,11 @@ export function cardHtml(goal, selected, ctx = {}) {
   const { head, tag } = goalHeadline(goal);
   const ref = esc(refValue(goal));
   if (goal?.section === 'completed' || goal?.status === 'completed') {
-    return `<div class="fb-card done" data-goal="${ref}"><div class="fb-h"><span class="fb-check">✓</span>${esc(head)}</div></div>`;
+    // A dropped goal did not get done: it stopped applying (the reason is the tooltip).
+    const mark = goal?.dropped
+      ? `<span class="fb-tag dropped" title="${esc(goal.dropped)}">dropped</span>`
+      : '<span class="fb-check">✓</span>';
+    return `<div class="fb-card done" data-goal="${ref}"><div class="fb-h">${mark}${esc(head)}</div></div>`;
   }
   const pri = PRIORITIES.includes(goal?.priority) ? goal.priority : 'medium';
   const standing = goal?.kind === 'standing';
@@ -615,7 +625,7 @@ export function cardHtml(goal, selected, ctx = {}) {
     <div class="fb-h">${esc(head)}</div>
     <div class="fb-meta">${tag ? `<span class="fb-tag sleep">${esc(tag)}</span>` : ''}${standing ? '<span class="fb-tag standing" title="No end state: the agent does a round of it each time it serves it">standing</span>' : ''}${noTasks ? '<span class="fb-tag notasks" title="Not broken down yet: the agent adds its steps (or marks it standing) the next time it serves it">no tasks yet</span>' : ''}${sourceTag(goal)}${goal?.notes ? '<span class="fb-dim" title="Has notes">✎</span>' : ''}<span class="fb-sp"></span>${mini(goal?.tasks)}</div>
     ${standing ? '' : inlineTasksHtml(goal, ctx)}
-    ${goal?.status === 'in_progress' ? pulseHtml(ctx.activity?.[goal?.id], ctx.intervalMs, ctx.nowMs ?? Date.now()) : ''}${kidsLine(ctx.spawned?.[goal?.id])}
+    ${goal?.status === 'in_progress' ? pulseHtml(ctx.activity?.[goal?.id], ctx.intervalMs, ctx.nowMs ?? Date.now(), { standing }) : ''}${kidsLine(ctx.spawned?.[goal?.id])}
   </div>`;
 }
 

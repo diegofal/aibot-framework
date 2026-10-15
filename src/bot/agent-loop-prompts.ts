@@ -1,4 +1,5 @@
 import { renderGoalsForPrompt } from '../goals/goals-view';
+import { type StandingGoalDue, buildStandingDueSection } from '../goals/standing-rotation';
 import type { StoredTask } from '../goals/task-store';
 /**
  * Prompt templates for the autonomous agent loop.
@@ -75,6 +76,10 @@ export interface PlannerPromptInput {
   environmentContext?: string;
   /** Workers on for the bot: the runs for the Workers block. Absent = workers off (no dispatch). */
   workers?: PlannerWorkersInput;
+  /** Standing goals due a round (`dueStandingGoals`); empty or absent = no block. */
+  standingDue?: StandingGoalDue[];
+  /** Clock for the "last round 3d ago" lines (defaults to now). */
+  nowMs?: number;
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -123,6 +128,10 @@ export interface ContinuousPlannerPromptInput {
   environmentContext?: string;
   /** Workers on for the bot: the runs for the Workers block. Absent = workers off (no dispatch). */
   workers?: PlannerWorkersInput;
+  /** Standing goals due a round (`dueStandingGoals`); empty or absent = no block. */
+  standingDue?: StandingGoalDue[];
+  /** Clock for the "last round 3d ago" lines (defaults to now). */
+  nowMs?: number;
 }
 
 /** The planner answer, with the optional task fields (goal tasks plan, phase 1). */
@@ -345,14 +354,18 @@ export function buildDirectivesSection(directives?: string[]): string {
   return `\n## Operator Directives\n\nYour operator has assigned these standing directives. These are ongoing behavioral instructions (not one-time goals). Factor them into your planning when relevant:\n\n${directives.map((d) => `- ${d}`).join('\n')}\n`;
 }
 
-/** Workers block (when workers are on) plus the Tasks guidance, for both planner modes. */
-function buildPlannerTasksBlock(workers: PlannerWorkersInput | undefined): string {
+/** Workers block (when workers are on), standing goals due a round, then the Tasks guidance, for both planner modes. */
+function buildPlannerTasksBlock(input: {
+  workers?: PlannerWorkersInput;
+  standingDue?: StandingGoalDue[];
+  nowMs?: number;
+}): string {
+  const { workers } = input;
   const tasks = buildTaskOutputSection({ workersEnabled: !!workers });
-  return workers
-    ? `${buildWorkersSection(workers)}
-
-${tasks}`
-    : tasks;
+  const standing = buildStandingDueSection(input.standingDue ?? [], input.nowMs);
+  return [workers ? buildWorkersSection(workers) : '', standing, tasks]
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 export function buildPlannerPrompt(input: PlannerPromptInput): { system: string; prompt: string } {
@@ -432,7 +445,7 @@ Tools you create require human approval before becoming available.
     : ''
 }
 
-${buildPlannerTasksBlock(input.workers)}
+${buildPlannerTasksBlock(input)}
 
 ${buildAlignmentSection(input.curiosityBlock)}
 
@@ -584,7 +597,7 @@ Tools you create require human approval before becoming available.
     : ''
 }
 
-${buildPlannerTasksBlock(input.workers)}
+${buildPlannerTasksBlock(input)}
 
 ${buildAlignmentSection(input.curiosityBlock)}
 
@@ -842,7 +855,7 @@ export interface StrategistPromptInput {
 
 export interface StrategistResult {
   goal_operations: Array<{
-    action: 'add' | 'complete' | 'update' | 'remove';
+    action: 'add' | 'complete' | 'update' | 'remove' | 'drop';
     goal: string;
     priority?: string;
     status?: string;
@@ -974,6 +987,7 @@ Your single_deliverable MUST follow these constraints:
 - Prefer completing existing goals + adding fresh ones over endlessly updating the same goals
 - If the agent is stuck in a loop, break the pattern: suggest a different approach or pivot
 - GOAL TRIAGE: every active goal marked "no tasks yet" must be settled in this answer with one update operation: kind: "standing" when it has no end state (a habit or a recurring duty), or tasks (2-5 verifiable steps) when it has one. Leave goals already standing or with open tasks alone
+- RELEVANCE CHECK: for every active goal and each of its open tasks, ask whether it still serves the agent's purpose (its identity, soul, motivations and purpose goal) and whether it is still achievable. If it was superseded, became impossible or drifted off-purpose, drop it with a one-sentence reason: a goal with a "drop" operation, a task in drop_tasks. Never leave such a goal or task open, and never mark it complete or done: dropped is not achieved. A goal your operator set (source: operator) is not yours to drop: if it looks obsolete, assign a deliverable that asks the operator with ask_human
 
 ## Human Check-In Cadence
 
@@ -988,13 +1002,13 @@ CRITICAL: Respond with ONLY a valid JSON object. No other text, no markdown fenc
 
 JSON Schema:
 - goal_operations: array of objects, each with:
-  - action: "add" | "complete" | "update" | "remove"
+  - action: "add" | "complete" | "update" | "remove" | "drop" (drop: the goal no longer applies — superseded, impossible or off-purpose; it moves to Completed marked dropped, with reason; never use complete for it)
   - goal: string (for add: goal text; for others: substring to match existing goal)
   - priority: string (for add/update: "high" | "medium" | "low") — optional
   - status: string (for update: "pending" | "in_progress" | "blocked") — optional
   - notes: string (optional context)
   - outcome: string (for complete: what was achieved) — optional
-  - reason: string (one short sentence: why this change)
+  - reason: string (one short sentence: why this change; required for drop)
   - parent: string (for add: exact title or id of the existing goal the new one is a concrete step toward, so its progress shows under that goal) — optional
   - tasks: array of strings (for add, or for update of a goal with no tasks yet: the goal's breakdown, 2-5 concrete steps, each one short sentence naming a result someone could check; they become the goal's tasks) — optional
   - kind: "standing" (for update: the goal has no end state — a habit or recurring duty; it gets no tasks) — optional
@@ -1006,6 +1020,7 @@ JSON Schema:
 - next_strategy_in: string (when to run strategist again, e.g. "4h", "8h", "1d")
 - trait_adjustments: object (optional — propose small shifts to mechanical personality traits, max ±0.05 per trait)
 - trait_reasons: object (one short sentence per trait in trait_adjustments: the observation behind it)
+- drop_tasks: array of {"task": "<t-… id>", "reason": "<one sentence>"} (optional — open tasks that no longer apply; they are removed, applied after goal_operations)
 
 ## Trait Adjustments
 If a "Current Trait State" section is present above, you MAY propose trait_adjustments to shift the agent's mechanical parameters. Each trait ranges 0.1-0.9; max ±0.05 per trait per cycle.
