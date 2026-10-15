@@ -792,3 +792,22 @@ docker exec -w /app aibot-framework-aibot-1 bun /tmp/apply-archive.ts --apply
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-13T22-29-00`. Container healthy in ~30 s with `livingDocRefusalFor` and PROGRESS IMPERATIVE in the image. 39 documents archived with `ProductionsService.archiveFile` (moved to `archived/`, changelog `archive` entries, reason "Living documents cleanup 2026-10-13"), 12 kept: the newest document per active goal, except jarvis-factory purpose goal → `06_lights-off-gating-rules-v1.md` and job-seeker roles brief → `11_weekly_roles_brief_2026-10-12.md` (operator swaps). Documents with no goal or a closed goal were archived. Code files untouched. No karma charged (not the Needs You / auto-archive path).
 
 **Reversible?** Files are in each bot's `archived/`; restore one from the Productions page or move it back. Whole state: `restore D:\aibot-backups\aibot-backup-2026-10-13T22-29-00 --force`. Code: rebuild from `d57f6ef`.
+
+### 2026-10-15 — Deploy auto-dispatch + document cap 12,000 (`e97c8a3`); less exploration; fudi every 3 h
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1`; live `config/config.json` and `config/bots.json` (volume) |
+| **Who** | Diego (via Claude), approved by Diego |
+| **Why** | 37 h after living documents: 0 of 41 dispatch offers taken, edits bouncing off the 6,000 cap, 55 % explore cycles on jarvis-factory, fudi idle 38 % at 1 h |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker cp D:/tmp/aibot-scripts/cfg.js aibot-framework-aibot-1:/tmp/cfg.js
+docker exec -w /app aibot-framework-aibot-1 bun /tmp/cfg.js   # backs up both files as .bak-2026-10-15-explore
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T11-05-34`. `agentLoop.curiosity = { exploreRatio: 0.15, maxTopicShare: 0.85, noSurpriseStreak: 6 }` in `config.json`; fudi `agentLoop.every: "3h"` in `bots.json`. Healthy in ~35 s; image has `pickAutoDispatch` and `maxChars: 12000`; bots started. The "Ollama daemon is unreachable" boot error predates this (all bots run claude-cli).
+
+**Reversible?** `cp config/config.json.bak-2026-10-15-explore config/config.json` (same for `bots.json`) inside the container and restart; code: rebuild from `6cd8d99`; auto-dispatch alone: `workers.autoDispatch: false`.
