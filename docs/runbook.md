@@ -899,3 +899,19 @@ docker compose up -d --build
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-15T13-51-14`. Healthy in ~35 s; the image has `src/goals/standing-rotation.ts` and `plannerStandingDue`; bots started; active Claude account `test-123` (applied at boot). In the first ~2.5 min: 15 LLM calls, all successful, all `account: test-123`, cost recorded; worker runs active.
 
 **Reversible?** Rebuild from `163ad36`.
+
+### 2026-10-16 — Rebuilt for goal titles and the Telegram borrow switch
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego in chat |
+| **Why** | Deploy `1f3ffee`: goal titles no longer cut at 72 chars (headline up to 200); headless bots no longer write from @SpicyFinnyBot (`operator.borrowFleetTelegram`, default off) |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** No backup taken (no data touched; code only). Healthy in ~38 s; the image has `src/channel/fleet-telegram.ts` and `GOAL_HEADLINE_MAX = 200`; served `fleet-board-helpers.js` has `HEADLINE_MAX = 140` and `style.css` has `field-sizing: content`. All 7 bots started; `job-seeker` came up headless: Telegram rejects its token (401, `channelState: revoked`), unrelated to this change.
+
+**Reversible?** Rebuild from `adba3ea`.
