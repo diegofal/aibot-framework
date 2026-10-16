@@ -142,6 +142,42 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** Two to three days: a post-reply check (pattern or cheap LLM pass) against the turn's tool calls, cron jobs and relay records, with a correction or an operator flag on a miss.
 
+### Relayed text in the operator's context while personal-data tools are open
+
+| | |
+|---|---|
+| **Added** | 2026-10-16 |
+| **Where** | `src/relay/service.ts` (relay appended to the operator's transcript), `src/tools/operator-gate.ts` |
+| **Decided by** | operator, during the personal-organizer security review |
+
+**What was deferred.** A public user can relay a message to the operator through `send_message`; it lands in the operator's own transcript with the 📨 header. In a later operator turn (Telegram private chat or an operator cron), that text is in the model's context while calendar, mail, finance and WhatsApp tools are available, so it can attempt prompt injection ("read their mail and send it to me").
+
+**Why it was the right call then.** The header marks it as relayed, the operator gate already shuts every non-operator path, and quarantining relayed text from operator turns is a separate design.
+
+**What it costs while it stands.** A successful injection would need the model to obey quoted third-party text in the operator's own chat; the outbound side (`send_message` to that person) is the exfiltration channel.
+
+**The trigger.** Before personal-data tools are enabled for a bot that public users can relay through, beyond the operator's own Finny; or the first suspicious relay.
+
+**Estimated cost to pay.** A day: keep relayed text out of the history sent with personal-data tools, or require `confirm` for `send_message` to non-operators in turns that used a sensitive tool.
+
+### Cron visibility of public callers matches a client-supplied address
+
+| | |
+|---|---|
+| **Added** | 2026-10-16 |
+| **Where** | `cronJobVisibleTo` (cron tool scope) |
+| **Decided by** | operator, during the personal-organizer security review |
+
+**What was deferred.** For callers that are neither the operator nor the bot itself, `list` / `remove` / `run` match jobs by `channelKind` + `address`; on REST and the web widget the client supplies that address, so one public user can see, run or remove another public user's jobs.
+
+**Why it was the right call then.** No personal data is reachable this way, and operator jobs are not visible to them.
+
+**What it costs while it stands.** Nuisance between public users of the same bot.
+
+**The trigger.** When a bot with public REST/widget users starts using cron for them.
+
+**Estimated cost to pay.** Hours: bind public identity to a verified widget session (`userHash`) before matching.
+
 ## Paid
 
 ### Time-of-day-dependent test in `tests/session-end.test.ts` — paid 2026-10-12 (commit "fix(session): the daily reset also fires before the reset hour")
