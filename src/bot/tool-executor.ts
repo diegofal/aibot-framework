@@ -14,7 +14,7 @@ import {
 } from '../productions/paths';
 import { ProductionsService } from '../productions/service';
 import type { RelayParty } from '../relay/types';
-import { type ToolActor, isSensitiveTool } from '../tools/operator-gate';
+import { type ToolActor, isSensitiveTool, redactArgs, redactResult } from '../tools/operator-gate';
 import { PERSONAL_TOOL_NAMES, personalToolsAllowedFor } from '../tools/personal';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
 import type { Tool, ToolDefinition, ToolFailureKind, ToolResult } from '../tools/types';
@@ -414,7 +414,7 @@ export class ToolExecutor extends EventEmitter {
         timestamp: e.timestamp,
         data: {
           toolName: e.toolName,
-          error: e.error.slice(0, 300),
+          ...(e.sensitive ? {} : { error: e.error.slice(0, 300) }),
           phase: e.phase,
           ...eventIds(e),
         },
@@ -1491,6 +1491,20 @@ export class ToolExecutor extends EventEmitter {
     durationMs: number
   ): void {
     if (!this.options.enableLogging) return;
+
+    // A personal-data tool: this log becomes AgentLoopResult.toolCalls
+    // (GET /api/agent-loop lastResults, the curiosity extractor), so it keeps
+    // only arg keys and the result length, like the tool audit.
+    if (this.isSensitive(name)) {
+      this.executionLog.push({
+        name,
+        args: redactArgs(args),
+        success,
+        result: redactResult(result),
+        durationMs,
+      });
+      return;
+    }
 
     // Truncate result for logging (same as AgentLoop did)
     const truncatedResult = result.length > 2000 ? result.slice(0, 2000) : result;

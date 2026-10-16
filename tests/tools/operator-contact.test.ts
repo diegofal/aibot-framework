@@ -151,6 +151,9 @@ describe('cron tool with chatId "operator"', () => {
     schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'America/Buenos_Aires' },
     text: 'Send the digest',
     _botId: 'bot1',
+    // The bot's own run: only it (or the verified operator) may target a chat
+    // other than the conversation's (see "cron tool — who asked" in created-by.test.ts).
+    _actor: 'self',
   };
 
   test('resolves "operator" to the configured chat id in the payload', async () => {

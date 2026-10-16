@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { isSensitiveTool, requireOperator } from '../../src/tools/operator-gate';
+import {
+  callerIdentity,
+  isSensitiveTool,
+  requireOperator,
+  stripInternalArgs,
+} from '../../src/tools/operator-gate';
 
 const NOT_OPERATOR = {
   success: false,
@@ -84,5 +89,31 @@ describe('isSensitiveTool', () => {
     expect(isSensitiveTool(def(true))).toBe(true);
     expect(isSensitiveTool(def(false))).toBe(false);
     expect(isSensitiveTool(def())).toBe(false);
+  });
+});
+
+describe('callerIdentity — the same rule, as a value', () => {
+  test('self, operator (dashboard or verified), other', () => {
+    expect(callerIdentity({ _actor: 'self' })).toEqual({ kind: 'self' });
+    expect(callerIdentity({ _actor: 'operator' })).toEqual({
+      kind: 'operator',
+      channelKind: 'dashboard',
+    });
+    expect(callerIdentity({ _requester: tgOperator })).toEqual({
+      kind: 'operator',
+      channelKind: 'telegram',
+    });
+    expect(
+      callerIdentity({ _requester: { ...tgOperator, channelKind: 'web', address: 'op@x' } })
+    ).toEqual({ kind: 'other', channelKind: 'web', address: 'op@x' });
+    expect(callerIdentity({})).toEqual({ kind: 'other' });
+  });
+});
+
+describe('stripInternalArgs', () => {
+  test('drops every _-prefixed key a client or model sent', () => {
+    expect(stripInternalArgs({ q: 1, _actor: 'self', _requester: {}, _isGroup: false })).toEqual({
+      q: 1,
+    });
   });
 });

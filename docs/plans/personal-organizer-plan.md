@@ -143,6 +143,16 @@ fuera del MCP expose y de collaboration, sin args ni resultado en el tool audit 
 stream. HTTP API: sin redirects y sin `.`/`..` en el path; exports de WhatsApp en 0o600 con barrido
 de retención al boot y diario. Detalle en CLAUDE.md ("Operator gate") y en el CHANGELOG.
 
+Segunda pasada (re-revisión adversarial): un cron `instruction` al chat del operador ya no corre como
+`self` por el chat: lo decide quién creó el job (`createdBy.requestedBy`, `src/cron/trust.ts`), y el
+tool `cron` no deja que alguien que no es el operador ni el bot apunte un job a otro chat. El log de
+ejecución (`AgentLoopResult.toolCalls`, `GET /api/agent-loop`, extractor de curiosity), el journal de
+workers y `tool:error` también redactan las tools `sensitive`; las rutas admin que llaman
+`tool.execute` directo descartan los args `_`. **Supuesto que queda**: en single-tenant los threads
+del dashboard son `operator` y `/api` no tiene auth, así que cualquiera que llegue al puerto es el
+operador (el contenedor escucha en 127.0.0.1). Registrado en `docs/technical-debt.md` con su trigger:
+antes de exponer el dashboard fuera de localhost.
+
 Diseño: módulo `src/personal-accounts/` calcado de `src/claude-accounts/`.
 
 - **Setup único** (operador, una vez): proyecto en Google Cloud con OAuth client tipo *Web

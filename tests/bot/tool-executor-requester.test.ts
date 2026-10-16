@@ -219,9 +219,45 @@ describe('ToolExecutor — sensitive tools never leak args or results', () => {
         publish: (e: { type: string; data: Record<string, unknown> }) => published.push(e),
       },
     } as unknown as BotContext;
-    const ex = new ToolExecutor(ctx, { botId: 'b1', chatId: 7, actor: 'self' });
+    const ex = new ToolExecutor(ctx, {
+      botId: 'b1',
+      chatId: 7,
+      actor: 'self',
+      enableLogging: true,
+    });
     return { ex, published };
   }
+
+  // AgentLoopResult.toolCalls (GET /api/agent-loop lastResults, the curiosity
+  // extractor) is built from this log.
+  it('the execution log keeps arg keys and the result length only', async () => {
+    const { ex } = sensitiveExecutor();
+    await ex.execute('mail_read', { id: 'm-1' });
+    const [entry] = ex.getExecutionLog();
+    expect(entry.name).toBe('mail_read');
+    expect(entry.args).toEqual({ id: '[redacted]' });
+    expect(entry.result).toMatch(/^\[redacted: \d+ chars\]$/);
+    expect(JSON.stringify(entry)).not.toContain('PIN');
+  });
+
+  it('a tool:error of a sensitive tool reaches the feed without its error text', async () => {
+    const { ex, published } = sensitiveExecutor();
+    // The payload the executor emits for a failing sensitive tool.
+    ex.emit('tool:error', {
+      toolName: 'mail_read',
+      args: {},
+      error: 'mailbox Dear Op PIN',
+      phase: 'execution',
+      botId: 'b1',
+      chatId: 7,
+      timestamp: 1,
+      sensitive: true,
+    });
+    const err = published.find((e) => e.type === 'tool:error');
+    expect(err?.data.toolName).toBe('mail_read');
+    expect(err?.data.error).toBeUndefined();
+    expect(JSON.stringify(published)).not.toContain('PIN');
+  });
 
   it('tool:start / tool:end carry sensitive: true', async () => {
     const { ex } = sensitiveExecutor();

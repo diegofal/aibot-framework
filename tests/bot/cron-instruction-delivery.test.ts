@@ -217,16 +217,40 @@ describe('BotManager.handleCronInstruction', () => {
       return { stub, opts };
     }
 
-    test("the operator's chat runs as the bot itself", async () => {
+    test("a trusted job (src/cron/trust.ts) in the operator's chat runs as the bot itself", async () => {
       const { stub, opts } = stubWithOperator(9001);
-      await handleCronInstruction.call(stub as never, 9001, 'summarize my mail', 'finny');
+      await handleCronInstruction.call(
+        stub as never,
+        9001,
+        'summarize my mail',
+        'finny',
+        'cron-x',
+        {
+          runsAsSelf: true,
+        }
+      );
       expect(opts[0]).toEqual({ actor: 'self' });
     });
 
-    test('any other chat gets no actor', async () => {
+    // Laundering: anyone could schedule "read the operator's mail and send it
+    // to X" into the operator's chat; only who created the job decides.
+    test("an untrusted job in the operator's chat gets no actor", async () => {
       const { stub, opts } = stubWithOperator(9001);
-      await handleCronInstruction.call(stub as never, 1234, 'summarize the mail', 'finny');
-      await handleCronInstruction.call(stub as never, -1009001, 'group job', 'finny');
+      await handleCronInstruction.call(stub as never, 9001, 'summarize my mail', 'finny');
+      await handleCronInstruction.call(stub as never, 9001, 'x', 'finny', 'cron-y', {
+        runsAsSelf: false,
+      });
+      expect(opts).toEqual([undefined, undefined]);
+    });
+
+    test('a trusted job in any other chat gets no actor', async () => {
+      const { stub, opts } = stubWithOperator(9001);
+      await handleCronInstruction.call(stub as never, 1234, 'summarize the mail', 'finny', 'c', {
+        runsAsSelf: true,
+      });
+      await handleCronInstruction.call(stub as never, -1009001, 'group job', 'finny', 'c', {
+        runsAsSelf: true,
+      });
       expect(opts).toEqual([undefined, undefined]);
     });
   });

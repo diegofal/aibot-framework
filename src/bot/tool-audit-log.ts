@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger';
+import { redactArgs, redactResult } from '../tools/operator-gate';
 import type { ToolFailureKind } from '../tools/types';
 import type { ToolEndEvent } from './tool-executor';
 
@@ -31,18 +32,6 @@ export interface ToolAuditEntry {
 const AUDIT_RESULT_MAX_CHARS = 500;
 
 /**
- * A personal-data tool's args, reduced to their keys (values `[redacted]`);
- * internal `_` args are dropped.
- */
-function redactedArgs(args: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.keys(args)
-      .filter((k) => !k.startsWith('_'))
-      .map((k) => [k, '[redacted]'])
-  );
-}
-
-/**
  * Map a `tool:end` event to the audit entry persisted for it. A sensitive
  * (personal-data) tool keeps only its arg keys and the result length.
  */
@@ -52,10 +41,10 @@ export function toolEndToAuditEntry(event: ToolEndEvent): ToolAuditEntry {
     botId: event.botId,
     chatId: event.chatId,
     toolName: event.toolName,
-    args: event.sensitive ? redactedArgs(event.args) : event.args,
+    args: event.sensitive ? redactArgs(event.args) : event.args,
     success: event.success,
     result: event.sensitive
-      ? `[redacted: ${event.result.length} chars]`
+      ? redactResult(event.result)
       : event.result.slice(0, AUDIT_RESULT_MAX_CHARS),
     durationMs: event.durationMs,
     retryAttempts: event.retryAttempts,

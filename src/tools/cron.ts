@@ -1,6 +1,7 @@
 import type { OperatorConfig } from '../config';
 import type { CronService } from '../cron';
 import type { CronCreatedBy } from '../cron/types';
+import { callerIdentity, isTrustedCaller } from './operator-gate';
 import { OPERATOR_NOT_CONFIGURED_ERROR, resolveOperatorTarget } from './send-proactive-message';
 import type { Tool, ToolResult } from './types';
 
@@ -163,6 +164,18 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
               return { success: false, content: resolvedChat.error };
             }
             const _chatId = resolvedChat.chatId;
+            // Only the bot itself or the verified operator may point a job at a
+            // chat other than the caller's own: otherwise anyone could schedule
+            // work into the operator's chat (or someone else's).
+            const ownChat = typeof args._chatId === 'number' ? args._chatId : undefined;
+            if (_chatId !== undefined && _chatId !== ownChat && !isTrustedCaller(args)) {
+              return {
+                success: false,
+                content:
+                  'Not allowed: you can only schedule jobs into this conversation. Only the operator can schedule into another chat.',
+                failureKind: 'policy',
+              };
+            }
 
             const schedule = args.schedule as
               | { kind: string; at?: string; everyMs?: number; expr?: string; tz?: string }
@@ -238,6 +251,9 @@ export function agentCreatedBy(botId: string, args: Record<string, unknown>): Cr
     botId,
     ...(cycleId ? { cycleId } : {}),
     ...(goalId ? { goalId } : {}),
+    // Who asked (operator gate's rule): decides if the job may later run as
+    // the bot itself (src/cron/trust.ts).
+    requestedBy: callerIdentity(args),
   };
 }
 

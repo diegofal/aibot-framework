@@ -44,8 +44,26 @@ export type CronJobState = {
  * goal it was in, when it was in one) or the operator on the dashboard. Jobs
  * written before this existed have none.
  */
+/**
+ * Who asked the agent for a job (the cron tool's caller, by the operator
+ * gate's rule — `callerIdentity` in `src/tools/operator-gate.ts`): the bot's
+ * own run, the operator (verified), or anyone else. Decides whether the job
+ * may later run as the bot itself (`src/cron/trust.ts`). Absent on jobs
+ * created before 2026-10-16.
+ */
+export type CronRequester =
+  | { kind: 'self' }
+  | { kind: 'operator'; channelKind: string }
+  | { kind: 'other'; channelKind?: string; address?: string };
+
 export type CronCreatedBy =
-  | { kind: 'agent'; botId: string; cycleId?: string; goalId?: string }
+  | {
+      kind: 'agent';
+      botId: string;
+      cycleId?: string;
+      goalId?: string;
+      requestedBy?: CronRequester;
+    }
   | { kind: 'operator' };
 
 export type CronJob = {

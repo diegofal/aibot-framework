@@ -34,6 +34,24 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 ## Open
 
+### Single-tenant dashboard is the operator, and `/api` has no auth
+
+| | |
+| --- | --- |
+| **Added** | 2026-10-16 |
+| **Where** | `src/web/server.ts` (no auth middleware when multi-tenant is off), `src/web/routes/conversations.ts` (`dashboardActor`), `src/tools/operator-gate.ts` |
+| **Decided by** | agent hardening the personal-data tools (re-review of `feat/organizer-integration`) |
+
+**What was deferred.** In single-tenant mode every `/api/*` route and `/ws/activity` is unauthenticated, and a dashboard thread runs its tools as the operator (`_actor: 'operator'`), so the operator's calendar, mail, WhatsApp exports and operator-only APIs answer it. Anyone who can reach the port is the operator. Pre-existing for `/api` (same as `/api/claude-accounts`, `/api/personal-accounts`); the personal-data tools raise what it exposes.
+
+**Why it was the right call then.** The container binds `127.0.0.1:3000` only; the dashboard is the operator's own surface, and adding auth to single-tenant is a separate change across every route and the web client.
+
+**What it costs while it stands.** Nothing while the port stays on localhost. Exposed (reverse proxy, `0.0.0.0`, tunnel), it hands out the operator's personal data, Claude accounts and every admin action.
+
+**The trigger.** Before exposing the dashboard beyond localhost in single-tenant mode (any proxy, tunnel or non-loopback bind), or before turning on personal accounts on a host that is not the operator's machine.
+
+**Estimated cost to pay.** One to two days: admin credentials (the multi-tenant `AdminCredentialStore` path) required in single-tenant too, a session for the web client and the WebSockets, and `dashboardActor` reading that session instead of the tenant mode.
+
 ### Two calendar paths: API-key Google provider and `/cal` next to personal accounts
 
 | | |

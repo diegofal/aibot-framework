@@ -5,6 +5,7 @@ import type { Config } from '../../config';
 import { buildOllamaHeaders } from '../../core/ollama-http';
 import type { Logger } from '../../logger';
 import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
+import { stripInternalArgs } from '../../tools/operator-gate';
 
 export function integrationsRoutes(deps: {
   config: Config;
@@ -157,7 +158,7 @@ export function integrationsRoutes(deps: {
         return result;
       }
       try {
-        const result = await tool.execute(args, deps.logger);
+        const result = await tool.execute(stripInternalArgs(args), deps.logger);
         toolCalls.push({ name, args, result: result.content, success: result.success });
         return result;
       } catch (err) {
@@ -316,7 +317,7 @@ export function integrationsRoutes(deps: {
         return { success: false, content: `Unknown tool: ${name}` };
       }
       try {
-        return await tool.execute(args, deps.logger);
+        return await tool.execute(stripInternalArgs(args), deps.logger);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return { success: false, content: msg };
