@@ -915,3 +915,21 @@ docker compose up -d --build
 **Outcome.** No backup taken (no data touched; code only). Healthy in ~38 s; the image has `src/channel/fleet-telegram.ts` and `GOAL_HEADLINE_MAX = 200`; served `fleet-board-helpers.js` has `HEADLINE_MAX = 140` and `style.css` has `field-sizing: content`. All 7 bots started; `job-seeker` came up headless: Telegram rejects its token (401, `channelState: revoked`), unrelated to this change.
 
 **Reversible?** Rebuild from `adba3ea`.
+
+### 2026-10-16 — Deploy one speaker per chat (`62e2808`) and drop task `t-c92ad8`
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego (via Claude), approved by Diego in chat |
+| **Why** | Finny answered each operator Telegram message twice (the agent loop re-answered chat lines); plan `docs/plans/personal-organizer-plan.md` P0 |
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun -e "<TaskStore('/app/data/tenants/__admin__/bots/default/soul').apply([{ op: 'remove', id: 't-c92ad8', note: … }], { actor: 'operator' })>"
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-16T13-43-59`. Image has `recordHumanMessage` in `src/bot/agent-scheduler.ts`; `/api/status` 200; AIBot (Finny) started, `job-seeker` headless (401, known). Task `t-c92ad8` ("Cuando Diego conteste, responderle en el mismo día…") removed through `TaskStore` (rev 29, `task-remove` event with the reason); the dashboard DELETE route needs a login, so it was done in-container. Startup also logged "Ollama daemon is unreachable" (not touched by this change).
+
+**Reversible?** Rebuild from `eef7432`; restore the backup to bring the task back.
