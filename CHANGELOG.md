@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (2026-10-16) — Goal titles no longer cut short
+- **Why.** "Every day, come up with a different potential idea that can make me a billionaire eventually" read "…can make me a…" on the card and in the drawer: a goal without a headline gets one derived from its text, capped at 72 chars, and the drawer title showed that cut version.
+- The derived headline is capped at 140 chars (`HEADLINE_MAX`, `web/pages/fleet-board-helpers.js`), so a one-sentence goal shows whole; it still stops at the first clause break. A headline set by hand takes up to 200 chars (`GOAL_HEADLINE_MAX`, drawer `maxlength`; was 100). The drawer title grows with its text (`field-sizing: content`); cards clamp the title at 3 lines (was 2).
+- Tests: `tests/web/fleet-board-helpers.test.ts` (the 72-char case changed on purpose), `tests/web/routes/agent-home.test.ts`.
+
 ### Added (2026-10-15) — Standing goals get a turn; goals and tasks that no longer apply are dropped
 - **Why.** jarvis-factory since 2026-10-13: 15 cycles served the big purpose goal, 8 a blocked goal, 8 were exploration; the standing goal "Keep one clean list…" got 1 cycle and "Learn the operator's routine" got 0, and the board showed both red "stalled". Standing goals never get tasks, so nothing pulled the planner to them. And the agent had no way to say a goal or task no longer applies: obsolete tasks stayed open forever or were marked done falsely.
 - **Standing-goal rotation.** `src/goals/standing-rotation.ts`: `dueStandingGoals` (active standing goals with no completed cycle within one turn — the board's `goalTurnIntervalMs`, floor 24 h — never served first, then the oldest round) and the planner block "## Standing goals due" (both planner modes): do one round of the most overdue one and name it in `serves_goal`, unless an operator goal or a task a worker waits on needs you more. The loop reads the last 14 days of its cycle log; a failure only drops the block. Board: an in-progress standing goal past its turn reads amber "round due · 3d ago" / "round due · never" instead of "stalled".

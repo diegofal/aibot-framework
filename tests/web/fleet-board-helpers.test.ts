@@ -106,10 +106,16 @@ describe('goalHeadline: a short card title from a long brief', () => {
     expect(h('Entregar cada cambio al plan con "Chequeado contra: x" y una nota').head).toBe(
       'Entregar cada cambio al plan con "Chequeado contra: x" y una nota'
     );
-    const long = h(
+    // A one-sentence goal up to 140 chars is shown whole, not cut at 72.
+    expect(
+      h(
+        'Every day, come up with a different potential idea that can make me a billionaire eventually'
+      ).head
+    ).toBe(
       'Every day, come up with a different potential idea that can make me a billionaire eventually'
-    ).head;
-    expect(long.length).toBeLessThanOrEqual(73);
+    );
+    const long = h(`${'word '.repeat(40)}end`).head;
+    expect(long.length).toBeLessThanOrEqual(141);
     expect(long.endsWith('…')).toBe(true);
   });
 });

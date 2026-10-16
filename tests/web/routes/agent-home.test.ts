@@ -944,9 +944,16 @@ describe('goal headline and brief edits (fleet board drawer)', () => {
     expect(all.find((x: { headline: string | null }) => x.headline === 'Research')).toBeTruthy();
   });
 
+  it('accepts a headline up to 200 characters', async () => {
+    const app = makeApp();
+    expect((await patch(app, { goal: 'Research topic', headline: 'x'.repeat(200) })).status).toBe(
+      200
+    );
+  });
+
   it('rejects bad headline and brief values', async () => {
     const app = makeApp();
-    expect((await patch(app, { goal: 'Research topic', headline: 'x'.repeat(101) })).status).toBe(
+    expect((await patch(app, { goal: 'Research topic', headline: 'x'.repeat(201) })).status).toBe(
       400
     );
     expect((await patch(app, { goal: 'Research topic', headline: 'a\nb' })).status).toBe(400);

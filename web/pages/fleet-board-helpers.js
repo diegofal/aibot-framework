@@ -25,7 +25,7 @@ export const BOARD_COLUMNS = [
   { id: 'done', label: 'Done', status: 'done', hint: 'latest' },
 ];
 export const DONE_SHOWN = 8;
-const HEADLINE_MAX = 72;
+const HEADLINE_MAX = 140;
 
 // ── Subtasks (pure; a new array, or the same one when nothing changes) ──
 
@@ -603,7 +603,7 @@ function inlineTasksHtml(goal, ctx) {
 }
 
 /**
- * One goal card: headline (≤ 2 lines), quiet meta, priority as a colored edge,
+ * One goal card: headline (≤ 3 lines), quiet meta, priority as a colored edge,
  * then its open tasks (a standing goal has none, and says so).
  */
 export function cardHtml(goal, selected, ctx = {}) {
@@ -700,7 +700,7 @@ export function drawerHtml(
       .join('');
   return `<div class="fb-d-head">
       <div class="fb-d-who">${esc(agent?.name ?? agent?.id ?? '')} · ${sourceTag(goal) || '<span class="fb-tag">agent</span>'}<button type="button" class="fb-d-close" data-close aria-label="Close">×</button></div>
-      <textarea class="fb-d-title" id="fb-title" rows="2" maxlength="100" aria-label="Title">${esc(head)}</textarea>
+      <textarea class="fb-d-title" id="fb-title" rows="2" maxlength="200" aria-label="Title">${esc(head)}</textarea>
     </div>
     <div class="fb-d-body">
       <div class="fb-field"><div class="fb-lbl">Status</div>
