@@ -1,4 +1,5 @@
 import { mountClaudeAccounts } from './claude-accounts.js';
+import { mountPersonalAccounts } from './personal-accounts.js';
 import { api, escapeHtml } from './shared.js';
 
 export async function renderIntegrations(el) {
@@ -16,6 +17,8 @@ export async function renderIntegrations(el) {
     <div class="page-title">Integrations</div>
 
     <div class="detail-card" id="claude-accounts-card"></div>
+
+    <div class="detail-card" id="personal-accounts-card"></div>
 
     <div class="detail-card" id="ollama-status-card">
       <div class="form-section-title">Ollama Status</div>
@@ -151,6 +154,7 @@ export async function renderIntegrations(el) {
   `;
 
   mountClaudeAccounts(document.getElementById('claude-accounts-card'));
+  mountPersonalAccounts(document.getElementById('personal-accounts-card'));
 
   // Ollama refresh button
   document.getElementById('ollama-refresh-btn').addEventListener('click', async () => {

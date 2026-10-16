@@ -863,6 +863,24 @@ export const WorkersConfigSchema = z
   })
   .default({});
 
+/**
+ * Integrations owned by the operator (docs/plans/personal-organizer-plan.md).
+ * `personalAccounts.bots`: the bots that get the calendar/mail tools over the
+ * operator's Google and Microsoft accounts (src/personal-accounts/). Empty by
+ * default: no bot sees personal data until it is listed here.
+ */
+export const IntegrationsConfigSchema = z
+  .object({
+    personalAccounts: z
+      .object({
+        bots: z.array(z.string()).default([]),
+        /** Base of the OAuth redirect URI (default `http://127.0.0.1:3000`). */
+        redirectBaseUrl: z.string().url().optional(),
+      })
+      .default({}),
+  })
+  .default({});
+
 export const ClaudeCliConfigSchema = z
   .object({
     /**
@@ -1304,6 +1322,7 @@ const ConfigSchema = z.object({
   web: WebConfigSchema.default({}),
   agentLoop: GlobalAgentLoopConfigSchema,
   workers: WorkersConfigSchema,
+  integrations: IntegrationsConfigSchema,
   browserTools: BrowserToolsConfigSchema.default({}),
   dynamicTools: DynamicToolsConfigSchema,
   agentProposals: AgentProposalsConfigSchema,

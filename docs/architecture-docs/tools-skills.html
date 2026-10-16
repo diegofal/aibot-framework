@@ -717,6 +717,78 @@
             </div>
           </div>
 
+          <!-- calendar_agenda -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_agenda</h4>
+            <div class="tool-desc">Agenda across every connected Google and Microsoft calendar, merged and sorted, each row labeled with its account, overlapping events flagged. Free in both modes. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>from</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; YYYY-MM-DD (local) or ISO</span></li>
+                <li><code>to</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; YYYY-MM-DD (local) or ISO; max 62 days</span></li>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-desc">&mdash; slug, label or email; omit or <code>all</code> for every account</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- calendar_free_slots -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_free_slots</h4>
+            <div class="tool-desc">Gaps of at least <code>minMinutes</code> between timed events across all accounts (all-day events do not block). Free in both modes. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>from</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; window start</span></li>
+                <li><code>to</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; window end</span></li>
+                <li><code>minMinutes</code> <span class="param-type">number</span> <span class="param-req">required</span> <span class="param-desc">&mdash; shortest useful gap</span></li>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-desc">&mdash; slug, label or email; omit or <code>all</code> for every account</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- calendar_create_event -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_create_event</h4>
+            <div class="tool-desc">Create an event in one named account (Google Calendar or Outlook). <code>confirm</code> in conversation and agent loop. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; one account, never <code>all</code></span></li>
+                <li><code>title</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; </span></li>
+                <li><code>start</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; ISO date-time</span></li>
+                <li><code>durationMinutes</code> <span class="param-type">number</span> <span class="param-req">required</span> <span class="param-desc">&mdash; 1-1440</span></li>
+                <li><code>attendees</code> <span class="param-type">array</span> <span class="param-desc">&mdash; emails (invited)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- mail_search -->
+          <div class="tool-card">
+            <h4 class="tool-name">mail_search</h4>
+            <div class="tool-desc">Search the operator&rsquo;s mailboxes (Gmail syntax / Graph <code>$search</code>): sender, subject, date, snippet and id, newest first, wrapped as external content. Free in both modes. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>query</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; </span></li>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-desc">&mdash; slug, label or email; omit or <code>all</code> for every account</span></li>
+                <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; per account, default 10, max 25</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- mail_read -->
+          <div class="tool-card">
+            <h4 class="tool-name">mail_read</h4>
+            <div class="tool-desc">Read one message; the body (text/plain, or HTML stripped) is truncated to 8000 chars and passed through <code>wrapExternalContent</code>. Free in both modes. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; one account</span></li>
+                <li><code>id</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; from mail_search</span></li>
+              </ul>
+            </div>
+          </div>
+
           <!-- calendar_list -->
           <div class="tool-card">
             <h4 class="tool-name">calendar_list</h4>

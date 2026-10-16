@@ -131,7 +131,8 @@ src/
 │   ├── create-agent.ts     #   Propose new agents (human-approved)
 │   ├── reddit.ts           #   Reddit API integration
 │   ├── twitter.ts          #   Twitter/X API integration
-│   ├── calendar.ts         #   Google Calendar integration
+│   ├── calendar.ts         #   Calendly / Google Calendar (API key) integration
+│   ├── personal/           #   Calendar + mail over the operator's Google/Microsoft accounts
 │   └── ...                 #   15+ more tools
 ├── skills/                 # 15 bundled skills (plugin system)
 │   ├── reflection/         #   Weekly reflection: evolves methods, keeps the operator-owned Core Drives
@@ -356,7 +357,7 @@ permanent.
 
 ### Tools
 
-41 LLM-callable tools across 11 categories: web (search, fetch, browser), files (read, write, edit), execution, soul/memory management, goals, collaboration, cron, social media (Reddit, Twitter), calendar, core memory, permissions, productions, and MCP. Dynamic tool creation allows bots to build new tools at runtime (with human approval). Per-bot `disabledTools` filtering. Tool categories enable pre-selection by domain. Tool loop detection (4 strategies) prevents LLMs from getting stuck in repetitive patterns.
+46 LLM-callable tools across 12 categories: web (search, fetch, browser), files (read, write, edit), execution, soul/memory management, goals, collaboration, cron, social media (Reddit, Twitter), calendar, mail, core memory, permissions, productions, and MCP. Personal-account tools (`calendar_agenda`, `calendar_free_slots`, `calendar_create_event`, `mail_search`, `mail_read`) merge the operator's Google and Microsoft accounts, exist only for bots in `integrations.personalAccounts.bots` and answer only the operator (setup: `docs/personal-accounts-setup.md`). Dynamic tool creation allows bots to build new tools at runtime (with human approval). Per-bot `disabledTools` filtering. Tool categories enable pre-selection by domain. Tool loop detection (4 strategies) prevents LLMs from getting stuck in repetitive patterns.
 
 ### Bot-to-Bot Collaboration
 
@@ -462,6 +463,7 @@ Configuration lives in `config/config.json`, validated at startup by Zod schemas
 - **`twitter`** — Twitter/X API credentials (apiKey, apiSecret, accessToken, accessSecret)
 - **`reddit`** — Reddit API credentials (clientId, clientSecret, username, password)
 - **`calendar`** — Google Calendar credentials and calendar ID
+- **`integrations`** — `personalAccounts.bots` (bots that get the calendar/mail tools over the operator's accounts) and `redirectBaseUrl` (OAuth redirect base)
 - **`mcp`** — MCP server connections and tool exposure settings
 - **`agentProposals`** — Agent self-creation: enabled, maxAgents, maxProposalsPerBot
 - **`collaboration`** — Bot-to-bot rate limits, visible max turns, session TTL
@@ -521,7 +523,8 @@ Automations      — Cron ("Tell an agent what to do and when" natural-language 
 Insights         — Stats (fleet table, bot detail), Behaviour, Infra, Hygiene (preview/apply, history),
                    Karma (scores, trends, manual adjustment), Activity (events, system logs, LLM queries)
 Settings         — Settings (session, collaboration, skill folders, MCP servers, memory search, backup),
-                   Integrations (Ollama diagnostic chat), BaaS tabs when multi-tenant is on
+                   Integrations (Claude accounts, Personal accounts — Google/Microsoft calendar and
+                   mail —, Ollama diagnostic chat), BaaS tabs when multi-tenant is on
 Old bookmarks (#/inbox, #/stats/bot/x, #/karma, #/productions/x, #/dispatches, #/logs, #/baas/*,
 #/tool-runner, #/insights/loop, #/insights/feedback, …) redirect; an unknown hash shows "Page not found".
 Ctrl+K / Cmd+K  — command palette on every page: agents (→ Home), pages, actions (start / stop / run

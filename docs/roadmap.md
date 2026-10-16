@@ -132,7 +132,9 @@ Documento vivo para trackear features futuras, ideas y estado de proyectos en pr
 
 ## Proyecto 6 — Calendly/Calendarios Integration
 
-**Estado: Implementado — pendiente testing manual con API keys reales**
+**Estado: reemplazado para Google por `docs/plans/personal-organizer-plan.md` (P1a).** Las cuentas personales de Google y Microsoft (OAuth, varias cuentas, calendario + mail) viven en `src/personal-accounts/` con las tools `calendar_agenda`, `calendar_free_slots`, `calendar_create_event`, `mail_search`, `mail_read` (`src/tools/personal/`); setup en `docs/personal-accounts-setup.md`. Lo de abajo es el camino viejo: Calendly queda como está; el provider Google por API key de `src/tools/calendar.ts` y el skill `/cal` siguen hasta que se migren (ver `docs/technical-debt.md`).
+
+**Estado anterior: Implementado — pendiente testing manual con API keys reales**
 
 ### Lo que ya existe
 

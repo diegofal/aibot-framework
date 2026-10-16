@@ -77,6 +77,15 @@ export const DEFAULT_PERMISSIONS: Record<string, ToolPermissionEntry> = {
   create_agent: { agentLoop: 'confirm', conversation: 'confirm' },
   improve: { agentLoop: 'confirm', conversation: 'confirm' },
 
+  // Personal accounts (calendar/mail over the operator's Google and Microsoft
+  // accounts): reads free, writing to a calendar always needs approval. Who may
+  // call them at all is the tool's own operator gate (requireOperator).
+  calendar_agenda: { agentLoop: 'free', conversation: 'free' },
+  calendar_free_slots: { agentLoop: 'free', conversation: 'free' },
+  mail_search: { agentLoop: 'free', conversation: 'free' },
+  mail_read: { agentLoop: 'free', conversation: 'free' },
+  calendar_create_event: { agentLoop: 'confirm', conversation: 'confirm' },
+
   // Production
   archive_file: { agentLoop: 'free', conversation: 'free' },
   signal_completion: { agentLoop: 'free', conversation: 'free' },

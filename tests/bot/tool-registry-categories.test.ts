@@ -50,8 +50,8 @@ function createMockContext(
 // ─── Category Constants ───
 
 describe('Tool category constants', () => {
-  test('TOOL_CATEGORY_NAMES has 11 categories', () => {
-    expect(TOOL_CATEGORY_NAMES).toHaveLength(11);
+  test('TOOL_CATEGORY_NAMES has 12 categories (mail added for the personal-account tools)', () => {
+    expect(TOOL_CATEGORY_NAMES).toHaveLength(12);
   });
 
   test('no tool appears in multiple categories', () => {

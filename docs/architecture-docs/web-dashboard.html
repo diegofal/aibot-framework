@@ -1441,6 +1441,36 @@
               <td>Test chat through Claude CLI with MCP tool bridge (body: <code>{ message, tools? }</code>)</td>
               <td><code>integrations.ts</code></td>
             </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/personal-accounts</code></td>
+              <td>Personal accounts (admin only): accounts without tokens + which providers have an OAuth client (<code>{ accounts, providers }</code>)</td>
+              <td><code>personal-accounts.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-purple">POST</span></td>
+              <td><code>/api/personal-accounts/login</code></td>
+              <td>Start an OAuth login (body <code>{ provider: google|microsoft, label }</code>) &rarr; <code>{ url }</code> with a signed, single-use, 10-min state</td>
+              <td><code>personal-accounts.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-green">GET</span></td>
+              <td><code>/api/personal-accounts/callback/:provider</code></td>
+              <td><strong>Public</strong> (skips tenant auth, <code>src/web/public-api-paths.ts</code>): the provider redirect; only a known unexpired state is accepted, code exchanged server-side, HTML result page</td>
+              <td><code>personal-accounts.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-medium">PATCH</span></td>
+              <td><code>/api/personal-accounts/:slug</code></td>
+              <td>Rename (<code>{ label }</code>)</td>
+              <td><code>personal-accounts.ts</code></td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-red">DELETE</span></td>
+              <td><code>/api/personal-accounts/:slug</code></td>
+              <td>Forget the account and its refresh token</td>
+              <td><code>personal-accounts.ts</code></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -2326,6 +2356,13 @@ compaction                            // Context compaction
              timeout, and available models. Includes a test chat form that proxies
              messages through the same <code>OllamaClient</code> code path the bots
              use, displaying the response and duration.</p>
+          <p><strong>Personal accounts</strong> card (<code>web/pages/personal-accounts.js</code>,
+             renderers in <code>personal-accounts-helpers.js</code>), under Claude accounts: the
+             operator&rsquo;s Google and Microsoft accounts for the calendar and mail tools. Connect
+             Google / Connect Microsoft opens the provider consent page in a new tab (disabled, with
+             the env vars to set, when the provider has no OAuth client); the list shows provider,
+             email, Connected / Needs reconnecting (with Reconnect), rename and remove (second click
+             confirms). The card refreshes when the tab regains focus.</p>
         </div>
 
         <div class="card">

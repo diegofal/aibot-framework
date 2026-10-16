@@ -1954,6 +1954,31 @@ const config = await loadConfig('./config/config.json');
         </table>
       </div>
 
+      <!-- IntegrationsConfigSchema -->
+      <div class="card">
+        <h3><code>IntegrationsConfigSchema</code></h3>
+        <p>Top-level <code>integrations</code>. <code>personalAccounts</code>: the operator&rsquo;s Google and Microsoft accounts (<code>src/personal-accounts/</code>, setup in <code>docs/personal-accounts-setup.md</code>). OAuth client ids and secrets come from the environment (<code>GOOGLE_OAUTH_CLIENT_ID/SECRET</code>, <code>MICROSOFT_OAUTH_CLIENT_ID/SECRET</code>), never from the config; refresh tokens live in <code>&lt;paths.data&gt;/personal-accounts/accounts.json</code>.</p>
+        <table class="methods-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Default</th><th>Validation</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>personalAccounts.bots</code></td>
+              <td>string[]</td>
+              <td><code>[]</code></td>
+              <td>Bot ids that get the calendar/mail tools; nobody by default</td>
+            </tr>
+            <tr>
+              <td><code>personalAccounts.redirectBaseUrl</code></td>
+              <td>string</td>
+              <td><code>http://127.0.0.1:3000</code> (when absent)</td>
+              <td>URL; base of <code>/api/personal-accounts/callback/&lt;provider&gt;</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <!-- DynamicToolsConfigSchema -->
       <div class="card">
         <h3><code>DynamicToolsConfigSchema</code></h3>

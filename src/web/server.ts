@@ -42,6 +42,7 @@ import {
   readAllLogLines,
   readLastLinesRotationAware,
 } from './log-tail';
+import { isPublicApiPath } from './public-api-paths';
 import { agentExportRoutes } from './routes/agent-export';
 import { agentFaceRoutes } from './routes/agent-face';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
@@ -75,6 +76,7 @@ import {
   needsYouSourcesFromBotManager,
 } from './routes/needs-you';
 import { onboardingRoutes } from './routes/onboarding';
+import { personalAccountsRoutes } from './routes/personal-accounts';
 import { proactiveRoutes } from './routes/proactive';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
@@ -150,14 +152,8 @@ export function startWebServer(deps: WebServerDeps): void {
     // Apply tenant auth to regular API routes (skip public, admin, auth, and tenant-specific endpoints)
     app.use('/api/*', async (c, next) => {
       const path = c.req.path;
-      if (
-        path === '/api/status' ||
-        path.startsWith('/api/auth/') ||
-        path.startsWith('/api/admin/') ||
-        path === '/api/tenants' ||
-        path.startsWith('/api/tenant/') ||
-        path.startsWith('/api/onboarding/')
-      ) {
+      // Includes the personal-accounts OAuth callback (protected by its own state).
+      if (isPublicApiPath(path)) {
         return next();
       }
       return tenantAuth(c, next);
@@ -374,6 +370,14 @@ export function startWebServer(deps: WebServerDeps): void {
     app.route(
       '/api/claude-accounts',
       claudeAccountsRoutes({ accounts: deps.claudeAccounts, logger })
+    );
+  }
+  // Personal accounts (calendar/mail): admin only, except the public OAuth callback.
+  const personalAccounts = deps.botManager.getPersonalAccounts?.();
+  if (personalAccounts) {
+    app.route(
+      '/api/personal-accounts',
+      personalAccountsRoutes({ accounts: personalAccounts, logger })
     );
   }
   app.route('/api/files', filesRoutes({ config, logger }));

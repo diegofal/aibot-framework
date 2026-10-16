@@ -34,6 +34,24 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 ## Open
 
+### Two calendar paths: API-key Google provider and `/cal` next to personal accounts
+
+| | |
+| --- | --- |
+| **Added** | 2026-10-16 |
+| **Where** | `src/tools/calendar.ts` (`GoogleCalendarProvider`, tools `calendar_list` / `calendar_availability` / `calendar_schedule`), `src/skills/calendar/` (`/cal`), `src/personal-accounts/` |
+| **Decided by** | agent implementing P1a of `docs/plans/personal-organizer-plan.md`, per the brief ("retire only if trivial") |
+
+**What was deferred.** P1a says the Google provider of `src/tools/calendar.ts` retires and `/cal` calls `calendar_agenda`. Neither was done: the old tools still register when `config.calendar.enabled`, and `/cal` still reads the old provider. The new OAuth tools (`src/tools/personal/`) are the supported Google path.
+
+**Why it was the right call then.** Retiring it touches `CalendarConfigSchema`, the `/cal` skill, the Calendly provider that shares the module, and their tests (`tests/tools/calendar.test.ts`): not trivial, and a separate change from adding the accounts.
+
+**What it costs while it stands.** A bot with both `config.calendar` (google) and the personal-accounts allowlist gets two overlapping calendar toolsets in the same `calendar` category; the planner may pick the API-key one, which cannot read private calendars.
+
+**The trigger.** The first time a live config turns on `integrations.personalAccounts.bots` for a bot that also has `calendar.enabled` with `provider: google`, or when `/cal` is next touched.
+
+**Estimated cost to pay.** Half a day: drop `GoogleCalendarProvider` (keep Calendly), point `/cal` at the personal-accounts service, update the calendar tests and the roadmap entry.
+
 ### Shared anonymous widget session `private:0`
 
 | | |

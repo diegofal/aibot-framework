@@ -88,6 +88,8 @@ export interface BotContext {
   readonly userDirectory?: UserDirectory;
   /** Person-to-person relays (src/relay/): send_message and Telegram reply-to routing. */
   readonly relayService?: RelayService;
+  /** The operator's Google/Microsoft accounts (src/personal-accounts/): calendar and mail tools. */
+  readonly personalAccounts?: import('../personal-accounts/service').PersonalAccountService;
   readonly inlineApprovalStore?: InlineApprovalStore;
   readonly hooks?: import('./hooks').HookEmitter;
   /**

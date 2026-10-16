@@ -14,6 +14,7 @@ import {
 } from '../productions/paths';
 import { ProductionsService } from '../productions/service';
 import type { RelayParty } from '../relay/types';
+import { PERSONAL_TOOL_NAMES, personalToolsAllowedFor } from '../tools/personal';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
 import type { Tool, ToolDefinition, ToolFailureKind, ToolResult } from '../tools/types';
 import { clampToChainContextWindow } from './context-compaction';
@@ -316,6 +317,11 @@ export class ToolExecutor extends EventEmitter {
     } else {
       const botConfig = ctx.config.bots.find((b) => b.id === options.botId);
       this.disabledTools = new Set(botConfig?.disabledTools ?? []);
+      // Safety net for executors built on ctx.tools (agent loop): the
+      // personal-account tools exist only for the allowlisted bots.
+      if (!personalToolsAllowedFor(ctx.config, options.botId)) {
+        for (const n of PERSONAL_TOOL_NAMES) this.disabledTools.add(n);
+      }
     }
 
     // Auto-bridge tool events to activity stream (if available)

@@ -127,6 +127,12 @@ Testing sí (ver Riesgos).
 Objetivo: "¿qué reuniones tengo hoy?" se contesta uniendo todas las cuentas; "¿me llegó el mail de
 X?" también.
 
+**Estado (2026-10-16): implementado en `feat/personal-accounts`.** Diferencias con lo de abajo: las
+tools viven en `src/tools/personal/` y se llaman `mail_search` / `mail_read` (no `gmail_*`: cubren
+Google y Microsoft); `requireOperator` está en `src/tools/operator-gate.ts` (compartido con P1b); la
+allowlist es `integrations.personalAccounts.bots`; el provider Google viejo de `src/tools/calendar.ts`
+y `/cal` no se retiraron (`docs/technical-debt.md`). Setup: `docs/personal-accounts-setup.md`.
+
 Diseño: módulo `src/personal-accounts/` calcado de `src/claude-accounts/`.
 
 - **Setup único** (operador, una vez): proyecto en Google Cloud con OAuth client tipo *Web

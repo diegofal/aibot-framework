@@ -47,6 +47,11 @@ import { createImproveTool } from '../tools/improve';
 import { createMemoryGetTool } from '../tools/memory-get';
 import { createMemorySearchTool } from '../tools/memory-search';
 import { createMoltbookRegisterTool } from '../tools/moltbook';
+import {
+  PERSONAL_TOOL_NAMES,
+  createPersonalTools,
+  personalToolsAllowedFor,
+} from '../tools/personal';
 import { createPhoneCallTool } from '../tools/phone-call';
 import { createProcessTool } from '../tools/process';
 import { createProductionLogTool } from '../tools/production-log';
@@ -79,6 +84,7 @@ export const TOOL_CATEGORY_NAMES = [
   'system',
   'social',
   'calendar',
+  'mail',
   'communication',
   'browser',
   'production',
@@ -120,7 +126,15 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'twitter_read',
     'twitter_post',
   ],
-  calendar: ['calendar_list', 'calendar_availability', 'calendar_schedule'],
+  calendar: [
+    'calendar_list',
+    'calendar_availability',
+    'calendar_schedule',
+    'calendar_agenda',
+    'calendar_free_slots',
+    'calendar_create_event',
+  ],
+  mail: ['mail_search', 'mail_read'],
   communication: [
     'ask_human',
     'ask_permission',
@@ -368,6 +382,18 @@ export class ToolRegistry {
           'Twitter tools initialized (search, read — post disabled: no write credentials)'
         );
       }
+    }
+
+    // Personal accounts: calendar + mail over the operator's Google and
+    // Microsoft accounts. Registered once for the fleet, then excluded per bot
+    // (getExcludedSet) unless the bot is in integrations.personalAccounts.bots.
+    const personalBots = config.integrations?.personalAccounts?.bots ?? [];
+    if (personalBots.length > 0 && this.ctx.personalAccounts) {
+      tools.push(...createPersonalTools(() => this.ctx.personalAccounts));
+      logger.info(
+        { bots: personalBots },
+        'Personal account tools initialized (calendar_agenda, calendar_free_slots, calendar_create_event, mail_search, mail_read)'
+      );
     }
 
     // Calendar tools
@@ -770,6 +796,12 @@ export class ToolRegistry {
           disabled.add(toolName);
         }
       }
+    }
+
+    // Personal-account tools (calendar/mail over the operator's accounts): only
+    // for the bots in integrations.personalAccounts.bots.
+    if (!personalToolsAllowedFor(this.ctx.config, botId)) {
+      for (const name of PERSONAL_TOOL_NAMES) disabled.add(name);
     }
 
     if (!this.dynamicToolRegistry) return disabled;

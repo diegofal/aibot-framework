@@ -41,6 +41,7 @@ import { CuriosityService } from './curiosity/service';
 
 import { ConversationsService } from '../conversations/service';
 import { KarmaService } from '../karma/service';
+import { type PersonalAccountService, createPersonalAccounts } from '../personal-accounts';
 import { ProductionsService } from '../productions/service';
 import type { RelayService } from '../relay/service';
 import { createRelayService } from '../relay/wiring';
@@ -152,6 +153,8 @@ export class BotManager {
   private analyticsService?: AnalyticsService;
   private userDirectory: UserDirectory;
   private relayService: RelayService;
+  /** The operator's Google/Microsoft accounts: shared by the calendar/mail tools and the dashboard routes. */
+  private readonly personalAccounts: PersonalAccountService;
   private inlineApprovalStore: InlineApprovalStore;
   private hookEmitter: HookEmitter;
   private botContext!: BotContext;
@@ -342,6 +345,8 @@ export class BotManager {
       logger,
     });
 
+    this.personalAccounts = createPersonalAccounts(config);
+
     // Initialize inline approval store (persisted to disk for confirm-level tool approvals)
     this.inlineApprovalStore = new InlineApprovalStore(join(dataDir, 'inline-approval'));
 
@@ -390,6 +395,7 @@ export class BotManager {
       tenantFacade: this.tenantFacade,
       userDirectory: this.userDirectory,
       relayService: this.relayService,
+      personalAccounts: this.personalAccounts,
       inlineApprovalStore: this.inlineApprovalStore,
       hooks: this.hookEmitter,
       // One fleet-wide breaker per backend, shared by every runtime (AgentLoop
@@ -1577,6 +1583,11 @@ export class BotManager {
 
   /** Curiosity DNA state for every bot (knowledge map, navigator, dispatches, taste). */
   /** The task worker pool, when `config.workers.enabled`. */
+  /** The operator's personal accounts (calendar and mail), for `/api/personal-accounts`. */
+  getPersonalAccounts(): PersonalAccountService {
+    return this.personalAccounts;
+  }
+
   getWorkerPool(): WorkerPool | undefined {
     return this.workerPool;
   }
