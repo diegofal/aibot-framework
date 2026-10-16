@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { fleetTelegramBorrower } from '../channel/fleet-telegram';
 import { type BotConfig, resolveAgentConfig } from '../config';
 import { ClaudeCliLLMClient, type LLMClient, type TokenUsage } from '../core/llm-client';
 import { mergeTokenUsage } from '../core/tool-runner';
@@ -657,7 +658,7 @@ export class AgentLoop {
       deliver: createOperatorDispatchDeliverer({
         getOperatorChatId: () => this.ctx.config.operator?.telegramChatId,
         getBot: (id) => this.ctx.bots.get(id),
-        getAnyBot: () => this.ctx.bots.values().next().value,
+        getAnyBot: fleetTelegramBorrower(this.ctx.bots, () => this.ctx.config),
         isTenantBot: (id) =>
           !!this.ctx.config.multiTenant?.enabled &&
           !!this.ctx.config.bots.find((b) => b.id === id)?.tenantId,

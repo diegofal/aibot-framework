@@ -2,6 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Bot } from 'grammy';
 import type { AskHumanStore, PendingQuestionInfo } from '../bot/ask-human-store';
+import { NoTelegramRouteError } from '../channel/fleet-telegram';
 import type { OperatorConfig } from '../config';
 import type { ConversationsService } from '../conversations/service';
 import type { Logger } from '../logger';
@@ -67,19 +68,18 @@ export type OperatorNotifier = (msg: OperatorNotification) => Promise<void>;
 
 /**
  * The fleet-wide sender BotManager wires: the asking bot's own Telegram
- * instance when it has one, else any live instance in the fleet (the same
- * resolution cron instructions and `send_proactive_message` use). Throws
- * when there is none at all; `notifyOperatorOfAsk` logs that and moves on.
+ * instance when it has one, else what `getAnyBot` lends (another bot's
+ * instance, only with `operator.borrowFleetTelegram`; see
+ * `src/channel/fleet-telegram.ts`). Throws `NoTelegramRouteError` when there
+ * is none: the question is already in the dashboard inbox.
  */
 export function createFleetOperatorNotifier(
   getBot: (botId: string) => Bot | undefined,
-  getAnyBot: () => Bot | undefined
+  getAnyBot: (botId: string) => Bot | undefined
 ): OperatorNotifier {
   return async ({ chatId, botId, text }) => {
-    const bot = getBot(botId) ?? getAnyBot();
-    if (!bot) {
-      throw new Error('No live Telegram instance in the fleet to reach the operator');
-    }
+    const bot = getBot(botId) ?? getAnyBot(botId);
+    if (!bot) throw new NoTelegramRouteError(botId);
     await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
   };
 }
@@ -379,6 +379,13 @@ async function notifyOperatorOfAsk(
       'ask_human: operator notified of the queued question'
     );
   } catch (err) {
+    if (err instanceof NoTelegramRouteError) {
+      logger.info(
+        { botId: ask.botId, questionId: ask.questionId },
+        'ask_human: no Telegram connection for this bot, the operator sees the question in the inbox'
+      );
+      return;
+    }
     logger.warn(
       { botId: ask.botId, questionId: ask.questionId, chatId: operatorChatId, err },
       'ask_human: failed to notify the operator, question still queued in inbox'

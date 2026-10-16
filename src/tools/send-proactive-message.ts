@@ -9,6 +9,7 @@
  * payload — which worked until it did not, and silently went to the wrong
  * person when it did not.
  */
+import { NoTelegramRouteError } from '../channel/fleet-telegram';
 import type { OperatorConfig } from '../config';
 import type { Logger } from '../logger';
 import type { Tool, ToolResult } from './types';
@@ -132,7 +133,8 @@ export class ProactiveThrottle {
 }
 
 export interface SendProactiveMessageDeps {
-  sendTelegramMessage: (chatId: number, text: string) => Promise<void>;
+  /** Throws `NoTelegramRouteError` when `botId` has no Telegram route (own or borrowed). */
+  sendTelegramMessage: (chatId: number, text: string, botId: string) => Promise<void>;
   appendToSession: (botId: string, userId: string, text: string) => void;
   /** Operator contact from `config.operator`; omitted means "not configured". */
   getOperator?: () => OperatorConfig | undefined;
@@ -209,7 +211,7 @@ export function createSendProactiveMessageTool(deps: SendProactiveMessageDeps): 
           return { success: false, content: OPERATOR_NOT_CONFIGURED_ERROR };
         }
         try {
-          await deps.sendTelegramMessage(operatorTarget.chatId, message);
+          await deps.sendTelegramMessage(operatorTarget.chatId, message, botId);
           throttle.record(botId || 'unknown');
           logger.info(
             { chatId: operatorTarget.chatId, botId, messageLength: message.length },
@@ -220,6 +222,18 @@ export function createSendProactiveMessageTool(deps: SendProactiveMessageDeps): 
             content: `Message sent to the operator (chat ${operatorTarget.chatId})`,
           };
         } catch (err) {
+          if (err instanceof NoTelegramRouteError) {
+            // A headless bot does not borrow another bot's account unless the
+            // operator allows it; the dashboard (Work → Sent to you) is its channel.
+            throttle.record(botId || 'unknown');
+            logger.info({ botId }, 'Proactive message to the operator kept in the dashboard');
+            return {
+              success: true,
+              content:
+                'Not sent by Telegram: this bot has no Telegram connection of its own. ' +
+                'The operator sees the message in the dashboard (Work → Sent to you).',
+            };
+          }
           const errMsg = err instanceof Error ? err.message : String(err);
           logger.error({ err, botId }, 'Failed to send proactive message to the operator');
           return { success: false, content: `Failed to send: ${errMsg}` };
@@ -230,7 +244,7 @@ export function createSendProactiveMessageTool(deps: SendProactiveMessageDeps): 
         // Try Telegram first (numeric chat ID)
         const numericId = Number(chatId);
         if (!Number.isNaN(numericId) && numericId !== 0) {
-          await deps.sendTelegramMessage(numericId, message);
+          await deps.sendTelegramMessage(numericId, message, botId);
           throttle.record(botId || 'unknown');
           logger.info(
             { chatId, botId, messageLength: message.length },

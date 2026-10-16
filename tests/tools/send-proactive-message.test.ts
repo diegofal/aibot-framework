@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { NoTelegramRouteError } from '../../src/channel/fleet-telegram';
 import { createSendProactiveMessageTool } from '../../src/tools/send-proactive-message';
 
 function createMockLogger() {
@@ -51,6 +52,35 @@ describe('send_proactive_message tool', () => {
     expect(appendedBotId).toBe('coach-bot');
     expect(appendedUserId).toBe('widget-user-abc');
     expect(appendedText).toBe('Check your goals!');
+  });
+
+  test('passes the sending bot to the Telegram sender', async () => {
+    const via: string[] = [];
+    const tool = createSendProactiveMessageTool({
+      sendTelegramMessage: async (_chatId, _text, botId) => {
+        via.push(botId);
+      },
+      appendToSession: () => {},
+    });
+    await tool.execute({ chatId: '12345', message: 'Hi', _botId: 'bot1' }, createMockLogger());
+    expect(via).toEqual(['bot1']);
+  });
+
+  test('a bot without a Telegram connection leaves the operator message in the dashboard', async () => {
+    const tool = createSendProactiveMessageTool({
+      getOperator: () => ({ telegramChatId: 42 }),
+      sendTelegramMessage: async (_chatId, _text, botId) => {
+        throw new NoTelegramRouteError(botId);
+      },
+      appendToSession: () => {},
+    });
+    const result = await tool.execute(
+      { chatId: 'operator', message: 'Idea #3', _botId: 'myfirstmillion' },
+      createMockLogger()
+    );
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('Not sent by Telegram');
+    expect(result.content).toContain('Sent to you');
   });
 
   test('rejects missing chatId', async () => {

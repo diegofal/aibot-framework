@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Hono } from 'hono';
 import { AskHumanStore } from '../../src/bot/ask-human-store';
+import { NoTelegramRouteError } from '../../src/channel/fleet-telegram';
 import type { Config, OperatorConfig } from '../../src/config';
 import { ConversationsService } from '../../src/conversations/service';
 import type { Logger } from '../../src/logger';
@@ -615,23 +616,30 @@ describe('createFleetOperatorNotifier', () => {
     } as never;
   }
 
-  test('prefers the asking bot, falls back to any live instance, throws with none', async () => {
+  test('prefers the asking bot, falls back to the lent instance, throws with none', async () => {
     const log: string[] = [];
     const own = bot('own', log);
     const other = bot('other', log);
+    const asked: string[] = [];
     const notify = createFleetOperatorNotifier(
       (botId) => (botId === 'b1' ? own : undefined),
-      () => other
+      (botId) => {
+        asked.push(botId);
+        return other;
+      }
     );
     await notify({ chatId: 7, botId: 'b1', text: 'hi' });
     await notify({ chatId: 7, botId: 'headless', text: 'yo' });
     expect(log).toEqual(['own:7:hi:Markdown', 'other:7:yo:Markdown']);
+    expect(asked).toEqual(['headless']);
 
     const none = createFleetOperatorNotifier(
       () => undefined,
       () => undefined
     );
-    await expect(none({ chatId: 7, botId: 'x', text: 't' })).rejects.toThrow(/no live telegram/i);
+    await expect(none({ chatId: 7, botId: 'x', text: 't' })).rejects.toBeInstanceOf(
+      NoTelegramRouteError
+    );
   });
 });
 

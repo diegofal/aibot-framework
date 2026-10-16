@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed (2026-10-16) — Headless bots stop writing from another bot's Telegram account
+- **Why.** @SpicyFinnyBot (`default`) received everything: 4 of 7 bots have no Telegram token, and their messages to the operator (curiosity dispatches, `ask_human` pings, cron replies, `send_proactive_message`) went out through the first live instance in the fleet, from its account, with nothing saying who wrote them; replying there reached `default`, not the author.
+- **Off by default.** New `operator.borrowFleetTelegram` (default `false`): a bot without its own Telegram connection does not borrow another's. Dispatches land in the dashboard inbox, `ask_human` questions stay in the inbox (logged at info), cron replies go to the bot's web session, and `send_proactive_message` to the operator succeeds with "Not sent by Telegram … Work → Sent to you". `send_proactive_message` also now uses the bot's own instance first (it always took the first in the fleet).
+- **When on**, whatever goes out through a borrowed connection starts with "🤖 <bot name>:" (`src/channel/fleet-telegram.ts`, one place for all four senders). Relays are unchanged: they carry their own header and are the only way to reach a third person.
+- Tests: `tests/channel/fleet-telegram.test.ts`; `tests/bot/cron-instruction-delivery.test.ts` (the borrowed-instance case changed on purpose: now behind the switch, named), `tests/tools/ask-human-protocol.test.ts`, `tests/tools/send-proactive-message.test.ts`, `tests/bot/curiosity/loop-wiring.test.ts`.
+
 ### Fixed (2026-10-16) — Goal titles no longer cut short
 - **Why.** "Every day, come up with a different potential idea that can make me a billionaire eventually" read "…can make me a…" on the card and in the drawer: a goal without a headline gets one derived from its text, capped at 72 chars, and the drawer title showed that cut version.
 - The derived headline is capped at 140 chars (`HEADLINE_MAX`, `web/pages/fleet-board-helpers.js`), so a one-sentence goal shows whole; it still stops at the first clause break. A headline set by hand takes up to 200 chars (`GOAL_HEADLINE_MAX`, drawer `maxlength`; was 100). The drawer title grows with its text (`field-sizing: content`); cards clamp the title at 3 lines (was 2).

@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node
 import { join, resolve as resolvePath } from 'node:path';
 import { Bot, InputFile } from 'grammy';
 import { type AgentInfo, AgentRegistry } from '../agent-registry';
+import { fleetTelegramBorrower } from '../channel/fleet-telegram';
 import { appendWebSessionMessage } from '../channel/outbound';
 import type { InboundMessage } from '../channel/types';
 import { CollaborationSessionManager } from '../collaboration-session';
@@ -554,11 +555,12 @@ export class BotManager {
       // Lets ask_human also notify the operator when operator.notifyOnAsk is on
       // — same accessor cron and send_proactive_message already receive.
       getOperator: () => this.config.operator,
-      // Headless bots have no Telegram instance of their own; any live one in
-      // the fleet delivers the ping (the reply lands in the dashboard anyway).
+      // Headless bots have no Telegram instance of their own: another bot's
+      // delivers the ping only with operator.borrowFleetTelegram (the question
+      // is in the dashboard inbox either way).
       notifyOperator: createFleetOperatorNotifier(
         (botId) => this.bots.get(botId),
-        () => this.bots.values().next().value
+        fleetTelegramBorrower(this.bots, () => this.config)
       ),
     };
     // Inbox asks still `pending` that the store does not hold (pre-persistence
@@ -1169,8 +1171,8 @@ export class BotManager {
    * a valid Telegram token, so requiring an entry there made every instruction
    * cron owned by a headless bot throw before doing any work. Delivery is
    * resolved the way `send_proactive_message` resolves it: the bot's own
-   * Telegram instance, else any live one in the fleet, else the bot's web
-   * session.
+   * Telegram instance, else another bot's when `operator.borrowFleetTelegram`
+   * is on (the reply then starts with "🤖 <bot>:"), else the bot's web session.
    */
   async handleCronInstruction(
     chatId: number,
@@ -1178,7 +1180,7 @@ export class BotManager {
     botId: string,
     messageId?: string
   ): Promise<string> {
-    const bot = this.bots.get(botId) ?? this.bots.values().next().value;
+    const bot = this.bots.get(botId) ?? fleetTelegramBorrower(this.bots, () => this.config)(botId);
     const recorded = this.getChannelState(botId);
 
     const { kind, channel } = buildCronDelivery(chatId, {

@@ -1,4 +1,5 @@
 import { join, resolve } from 'node:path';
+import { NoTelegramRouteError, fleetTelegramBorrower } from '../channel/fleet-telegram';
 import {
   type LoadedExternalSkill,
   discoverProductionSkillPaths,
@@ -435,14 +436,14 @@ export class ToolRegistry {
     tools.push(
       createSendProactiveMessageTool({
         getOperator: () => this.ctx.config.operator,
-        sendTelegramMessage: async (chatId: number, text: string) => {
-          // Find a running bot instance to send through
-          const bot = this.ctx.bots?.values().next().value;
-          if (bot) {
-            await bot.api.sendMessage(chatId, text);
-          } else {
-            throw new Error('No active bot instance available to send Telegram message');
-          }
+        sendTelegramMessage: async (chatId: number, text: string, botId: string) => {
+          // The bot's own instance, else another bot's only when the operator
+          // allows borrowing (src/channel/fleet-telegram.ts).
+          const bot =
+            this.ctx.bots?.get(botId) ??
+            fleetTelegramBorrower(this.ctx.bots, () => this.ctx.config)(botId);
+          if (!bot) throw new NoTelegramRouteError(botId);
+          await bot.api.sendMessage(chatId, text);
         },
         appendToSession: (botId: string, userId: string, text: string) => {
           const sessionKey = this.ctx.sessionManager.serializeKey({
