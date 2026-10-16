@@ -200,3 +200,49 @@ describe('BotManager.handleCronInstruction', () => {
     expect(String(msg.messageId)).toStartWith('cron-');
   });
 });
+
+const deliverCronMessage = BotManager.prototype.deliverCronMessage;
+
+describe('BotManager.deliverCronMessage (message payloads)', () => {
+  test('a headless bot lands in its web session instead of "Bot not found"', async () => {
+    const appended: Array<{ key: string; messages: unknown[] }> = [];
+    const sent: Array<[number, string]> = [];
+    const stub = makeManagerStub({
+      bots: new Map([['other-bot', { api: makeApi(sent) }]]),
+      appended,
+      seen: [],
+    });
+
+    const kind = await deliverCronMessage.call(stub as never, 777, 'the finding', 'milei-rocca');
+
+    expect(kind).toBe('web');
+    expect(sent).toEqual([]);
+    expect(appended).toHaveLength(1);
+    expect(appended[0].messages).toEqual([{ role: 'assistant', content: 'the finding' }]);
+  });
+
+  test('a bot with its own instance sends over Telegram', async () => {
+    const own: Array<[number, string]> = [];
+    const stub = makeManagerStub({
+      bots: new Map([['bot1', { api: makeApi(own) }]]),
+      appended: [],
+      seen: [],
+    });
+
+    expect(await deliverCronMessage.call(stub as never, 42, 'hi', 'bot1')).toBe('telegram');
+    expect(own).toEqual([[42, 'hi']]);
+  });
+
+  test('with borrowFleetTelegram, a headless bot is sent through another instance, named', async () => {
+    const sent: Array<[number, string]> = [];
+    const stub = makeManagerStub({
+      bots: new Map([['other-bot', { api: makeApi(sent) }]]),
+      borrowFleetTelegram: true,
+      appended: [],
+      seen: [],
+    });
+
+    expect(await deliverCronMessage.call(stub as never, 9, 'x', 'milei-rocca')).toBe('telegram');
+    expect(sent).toEqual([[9, '🤖 Milei Rocca:\nx']]);
+  });
+});

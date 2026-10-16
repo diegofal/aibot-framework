@@ -1164,6 +1164,27 @@ export class BotManager {
   }
 
   /**
+   * Deliver a cron `message` payload. Resolved like a cron instruction: the
+   * bot's own Telegram instance, else another bot's with
+   * `operator.borrowFleetTelegram` (named), else the bot's web session — a
+   * headless bot's one-shot reminder used to fail with "Bot not found".
+   */
+  async deliverCronMessage(
+    chatId: number,
+    text: string,
+    botId: string
+  ): Promise<'telegram' | 'web'> {
+    const bot = this.bots.get(botId) ?? fleetTelegramBorrower(this.bots, () => this.config)(botId);
+    const { kind, channel } = buildCronDelivery(chatId, {
+      telegram: bot?.api,
+      appendToSession: (t) =>
+        appendWebSessionMessage(this.sessionManager, botId, String(chatId), t),
+    });
+    await channel.sendText(text);
+    return kind;
+  }
+
+  /**
    * Process a cron instruction through the full conversation pipeline.
    * Creates a synthetic InboundMessage + Channel and delegates to handleChannelMessage.
    *

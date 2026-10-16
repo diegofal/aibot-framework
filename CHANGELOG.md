@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (2026-10-16) — Cron `message` jobs of headless bots no longer fail with "Bot not found"
+- **Why.** Two one-shot reminders of ai-perfectionist (2026-09-26, 2026-10-03) failed with `Bot not found: ai-perfectionist`: a `message` payload went through `BotManager.sendMessage`, which only takes the bot's own Telegram instance, and the bot has none. `instruction` payloads already fell back.
+- `BotManager.deliverCronMessage` (wired in `src/index.ts`): own instance → another bot's with `operator.borrowFleetTelegram` (named "🤖 <bot>:") → the bot's web session, the same resolution as `handleCronInstruction` (`buildCronDelivery`). `sendMessage` is unchanged for its other caller (tenant API).
+- Tests: `tests/bot/cron-instruction-delivery.test.ts`.
+
 ### Changed (2026-10-16) — Headless bots stop writing from another bot's Telegram account
 - **Why.** @SpicyFinnyBot (`default`) received everything: 4 of 7 bots have no Telegram token, and their messages to the operator (curiosity dispatches, `ask_human` pings, cron replies, `send_proactive_message`) went out through the first live instance in the fleet, from its account, with nothing saying who wrote them; replying there reached `default`, not the author.
 - **Off by default.** New `operator.borrowFleetTelegram` (default `false`): a bot without its own Telegram connection does not borrow another's. Dispatches land in the dashboard inbox, `ask_human` questions stay in the inbox (logged at info), cron replies go to the bot's web session, and `send_proactive_message` to the operator succeeds with "Not sent by Telegram … Work → Sent to you". `send_proactive_message` also now uses the bot's own instance first (it always took the first in the fleet).

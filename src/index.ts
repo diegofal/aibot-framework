@@ -180,7 +180,7 @@ async function main() {
       storePath: config.cron.storePath,
       cronEnabled: config.cron.enabled,
       sendMessage: async (chatId: number, text: string, botId: string) => {
-        await botManager.sendMessage(chatId, text, botId);
+        await botManager.deliverCronMessage(chatId, text, botId);
       },
       sendInstruction: async (chatId, text, botId, link) => {
         return await botManager.handleCronInstruction(chatId, text, botId, link?.messageId);
