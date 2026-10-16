@@ -1,5 +1,6 @@
 import { join, resolve } from 'node:path';
 import { NoTelegramRouteError, fleetTelegramBorrower } from '../channel/fleet-telegram';
+import type { HttpApiConfig } from '../config';
 import {
   type LoadedExternalSkill,
   discoverProductionSkillPaths,
@@ -10,6 +11,11 @@ import {
   loadExternalSkillUnified,
 } from '../core/skill-md-adapter/framework-bridge';
 import type { ToolExecuteFn } from '../core/types';
+import {
+  type HttpApiToolDeps,
+  createHttpApiTools,
+  httpApiToolsExcludedForBot,
+} from '../integrations/http-api';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { adaptAllMcpTools } from '../mcp/tool-adapter';
@@ -162,6 +168,8 @@ export class ToolRegistry {
   /** Maps namespaced tool name → originating skill ID */
   private externalToolToSkill: Map<string, string> = new Map();
   private karmaService?: KarmaService;
+  /** Declarative HTTP APIs registered as `api_*` tools (per-bot via `bots`). */
+  private httpApis: HttpApiConfig[] = [];
   private knowledgeMesh?: import('./knowledge-mesh').KnowledgeMesh;
 
   constructor(private ctx: BotContext) {}
@@ -513,6 +521,9 @@ export class ToolRegistry {
       logger.info('create_agent registered');
     }
 
+    // Declarative HTTP API integrations (api_<name>_<endpoint>, per-bot)
+    this.registerHttpApiTools();
+
     // Populate definitions
     this.ctx.toolDefinitions.length = 0;
     this.ctx.toolDefinitions.push(...tools.map((t) => t.definition));
@@ -521,6 +532,32 @@ export class ToolRegistry {
       logger.info(
         { toolCount: tools.length, tools: this.ctx.toolDefinitions.map((d) => d.function.name) },
         'Tools initialized'
+      );
+    }
+  }
+
+  /**
+   * Register one tool per endpoint of `config.integrations.httpApis[]`.
+   * Tools are global in `ctx.tools`; bots not listed in an API's `bots` get its
+   * tools excluded (see `getExcludedSet`). Idempotent.
+   */
+  registerHttpApiTools(deps: HttpApiToolDeps = {}): void {
+    const apis = this.ctx.config.integrations?.httpApis ?? [];
+    const previous = new Set(
+      createHttpApiTools(this.httpApis).map((t) => t.definition.function.name)
+    );
+    if (previous.size > 0) {
+      removeToolsInPlace(this.ctx.tools, (t) => previous.has(t.definition.function.name));
+    }
+    this.httpApis = apis;
+    const tools = createHttpApiTools(apis, deps);
+    this.ctx.tools.push(...tools);
+    this.ctx.toolDefinitions.length = 0;
+    this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
+    if (tools.length > 0) {
+      this.ctx.logger.info(
+        { apis: apis.map((a) => a.name), tools: tools.map((t) => t.definition.function.name) },
+        'HTTP API tools registered'
       );
     }
   }
@@ -771,6 +808,8 @@ export class ToolRegistry {
         }
       }
     }
+
+    for (const name of httpApiToolsExcludedForBot(this.httpApis, botId)) disabled.add(name);
 
     if (!this.dynamicToolRegistry) return disabled;
     const dynamicExcluded = this.dynamicToolRegistry.getExcludedNamesForBot(botId);

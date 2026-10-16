@@ -1104,6 +1104,51 @@ export const McpConfigSchema = z
   })
   .default({});
 
+// ─── Integrations: declarative HTTP APIs ───
+
+const HttpApiParamSchema = z.object({
+  type: z.enum(['string', 'integer', 'number', 'boolean']),
+  description: z.string().optional(),
+  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  required: z.boolean().optional(),
+});
+
+const HttpApiEndpointSchema = z.object({
+  name: z.string().min(1),
+  /** Only GET in this phase; POST comes later behind `confirm`. */
+  method: z.literal('GET'),
+  /** Path under baseUrl; `{x}` placeholders are filled from params. */
+  path: z.string().startsWith('/'),
+  description: z.string().min(1),
+  params: z.record(HttpApiParamSchema).optional(),
+});
+
+export const HttpApiConfigSchema = z.object({
+  name: z.string().min(1),
+  baseUrl: z.string().url(),
+  /** The secret is read from `process.env[env]` at call time; never stored in config. */
+  auth: z
+    .object({
+      type: z.enum(['bearer', 'header']),
+      env: z.string().min(1),
+      header: z.string().min(1).optional(),
+    })
+    .refine((a) => a.type !== 'header' || !!a.header, {
+      message: 'auth.header is required when auth.type is "header"',
+    }),
+  bots: z.array(z.string()).min(1),
+  operatorOnly: z.boolean().default(true),
+  timeoutMs: z.number().int().positive().default(15_000),
+  endpoints: z.array(HttpApiEndpointSchema).min(1),
+});
+
+export const IntegrationsConfigSchema = z.object({
+  httpApis: z.array(HttpApiConfigSchema).default([]),
+});
+
+export type HttpApiConfig = z.infer<typeof HttpApiConfigSchema>;
+export type HttpApiEndpointConfig = z.infer<typeof HttpApiEndpointSchema>;
+
 const SecurityConfigSchema = z
   .object({
     auditOnStartup: z.boolean().default(true),
@@ -1312,6 +1357,7 @@ const ConfigSchema = z.object({
   conversations: ConversationsFeatureConfigSchema,
   karma: KarmaConfigSchema,
   mcp: McpConfigSchema,
+  integrations: IntegrationsConfigSchema.optional(),
   reddit: RedditConfigSchema.optional(),
   twitter: TwitterConfigSchema.optional(),
   calendar: CalendarConfigSchema.optional(),
