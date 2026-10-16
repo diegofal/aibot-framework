@@ -59,7 +59,10 @@ describe('permission matrix', () => {
 
 describe('config', () => {
   test('integrations.personalAccounts.bots defaults to none', () => {
-    expect(IntegrationsConfigSchema.parse({})).toEqual({ personalAccounts: { bots: [] } });
+    expect(IntegrationsConfigSchema.parse({})).toEqual({
+      personalAccounts: { bots: [] },
+      httpApis: [],
+    });
     expect(
       IntegrationsConfigSchema.parse({
         personalAccounts: { bots: ['finny'], redirectBaseUrl: 'https://x.example' },
