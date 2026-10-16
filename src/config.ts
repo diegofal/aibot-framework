@@ -863,24 +863,6 @@ export const WorkersConfigSchema = z
   })
   .default({});
 
-/**
- * Integrations owned by the operator (docs/plans/personal-organizer-plan.md).
- * `personalAccounts.bots`: the bots that get the calendar/mail tools over the
- * operator's Google and Microsoft accounts (src/personal-accounts/). Empty by
- * default: no bot sees personal data until it is listed here.
- */
-export const IntegrationsConfigSchema = z
-  .object({
-    personalAccounts: z
-      .object({
-        bots: z.array(z.string()).default([]),
-        /** Base of the OAuth redirect URI (default `http://127.0.0.1:3000`). */
-        redirectBaseUrl: z.string().url().optional(),
-      })
-      .default({}),
-  })
-  .default({});
-
 export const ClaudeCliConfigSchema = z
   .object({
     /**
@@ -1121,6 +1103,68 @@ export const McpConfigSchema = z
     expose: McpExposedServerSchema,
   })
   .default({});
+
+// ─── Integrations: declarative HTTP APIs ───
+
+const HttpApiParamSchema = z.object({
+  type: z.enum(['string', 'integer', 'number', 'boolean']),
+  description: z.string().optional(),
+  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  required: z.boolean().optional(),
+});
+
+const HttpApiEndpointSchema = z.object({
+  name: z.string().min(1),
+  /** Only GET in this phase; POST comes later behind `confirm`. */
+  method: z.literal('GET'),
+  /** Path under baseUrl; `{x}` placeholders are filled from params. */
+  path: z.string().startsWith('/'),
+  description: z.string().min(1),
+  params: z.record(HttpApiParamSchema).optional(),
+});
+
+export const HttpApiConfigSchema = z.object({
+  name: z.string().min(1),
+  baseUrl: z.string().url(),
+  /** The secret is read from `process.env[env]` at call time; never stored in config. */
+  auth: z
+    .object({
+      type: z.enum(['bearer', 'header']),
+      env: z.string().min(1),
+      header: z.string().min(1).optional(),
+    })
+    .refine((a) => a.type !== 'header' || !!a.header, {
+      message: 'auth.header is required when auth.type is "header"',
+    }),
+  bots: z.array(z.string()).min(1),
+  operatorOnly: z.boolean().default(true),
+  timeoutMs: z.number().int().positive().default(15_000),
+  endpoints: z.array(HttpApiEndpointSchema).min(1),
+});
+
+/**
+ * Integrations owned by the operator (docs/plans/personal-organizer-plan.md).
+ * `personalAccounts.bots`: the bots that get the calendar/mail tools over the
+ * operator's Google and Microsoft accounts (src/personal-accounts/). Empty by
+ * default: no bot sees personal data until it is listed here.
+ * `httpApis`: declarative read-only HTTP APIs exposed as `api_<name>_<endpoint>`
+ * tools (src/integrations/http-api/).
+ */
+export const IntegrationsConfigSchema = z
+  .object({
+    httpApis: z.array(HttpApiConfigSchema).default([]),
+    personalAccounts: z
+      .object({
+        bots: z.array(z.string()).default([]),
+        /** Base of the OAuth redirect URI (default `http://127.0.0.1:3000`). */
+        redirectBaseUrl: z.string().url().optional(),
+      })
+      .default({}),
+  })
+  .default({});
+
+export type HttpApiConfig = z.infer<typeof HttpApiConfigSchema>;
+export type HttpApiEndpointConfig = z.infer<typeof HttpApiEndpointSchema>;
 
 const SecurityConfigSchema = z
   .object({

@@ -1057,6 +1057,49 @@
         <p>Safety limits: max 20 total agents (configurable), max 3 pending proposals per bot, strict ID validation, reserved name protection.</p>
 
         <!-- ============================================================ -->
+        <!--  HTTP API INTEGRATIONS                                         -->
+        <!-- ============================================================ -->
+
+        <h2 id="http-apis">HTTP API Integrations (declarative)</h2>
+
+        <p>Authenticated HTTP APIs declared in <code>config.integrations.httpApis[]</code>, no code per API (<code>src/integrations/http-api/</code>). Each endpoint becomes one tool named <code>api_&lt;name&gt;_&lt;endpoint&gt;</code>, registered by <code>ToolRegistry.registerHttpApiTools</code> and hidden from bots not listed in <code>bots</code>. Only <code>GET</code> in this phase: any other method fails config validation.</p>
+
+        <ul>
+          <li><strong>Parameters:</strong> the JSON schema comes from <code>params</code> via <code>buildParametersSchema</code> (<code>src/tools/parameter-schema.ts</code>, shared with dynamic tools). <code>{x}</code> in the path is filled and URI-encoded; the other declared params go to the query string, with their defaults. Undeclared args are ignored.</li>
+          <li><strong>Secret:</strong> read from <code>process.env[auth.env]</code> at call time and sent only as a header (<code>Authorization: Bearer</code>, or <code>auth.header</code> for <code>type: "header"</code>). Never in args, results, errors or logs; anything the remote echoes back is redacted. Unset variable &rarr; an honest "not configured" error, no request.</li>
+          <li><strong>Responses:</strong> 2xx JSON is pretty-printed and wrapped as external content (the executor truncates as usual). Non-2xx &rarr; <code>success: false</code> with the status and up to 300 chars of the body, never headers (404/410 <code>not-found</code>, 403/429 <code>blocked</code>).</li>
+          <li><strong>Operator gate:</strong> with <code>operatorOnly</code> (default <code>true</code>) the tool calls <code>requireOperator</code> (<code>src/tools/operator-gate.ts</code>) first: a conversation speaker who is not the operator is refused (<code>policy</code>) before any request. With no requester (agent loop, cron, collaboration) the bot acts for itself and the call runs.</li>
+        </ul>
+
+        <p>Example: the operator's finance app (set <code>FINANZAS_AGENT_KEY</code> in the container's environment; the key never goes in the config):</p>
+
+        <pre><code>// config/config.json (example, not shipped)
+"integrations": {
+  "httpApis": [{
+    "name": "finanzas",
+    "baseUrl": "https://finanzas-personales-df.vercel.app",
+    "auth": { "type": "bearer", "env": "FINANZAS_AGENT_KEY" },
+    "bots": ["default"],
+    "operatorOnly": true,          // only the operator (or the bot itself) may call
+    "timeoutMs": 15000,
+    "endpoints": [
+      { "name": "saldos", "method": "GET", "path": "/api/agent/saldos",
+        "description": "Account balances with last-updated time" },
+      { "name": "vencimientos", "method": "GET", "path": "/api/agent/vencimientos",
+        "params": { "dias": { "type": "integer", "default": 7, "description": "Days ahead" } },
+        "description": "Payments due in the next N days" },
+      { "name": "proyeccion", "method": "GET", "path": "/api/agent/proyeccion",
+        "params": { "dias": { "type": "integer", "default": 30, "description": "Days ahead" } },
+        "description": "Projected cash balance over the next N days" },
+      { "name": "conciliacion_pendientes", "method": "GET", "path": "/api/agent/conciliacion/pendientes",
+        "description": "Bank movements still waiting to be reconciled" }
+    ]
+  }]
+}
+// → tools api_finanzas_saldos, api_finanzas_vencimientos,
+//   api_finanzas_proyeccion, api_finanzas_conciliacion_pendientes (bot "default" only)</code></pre>
+
+        <!-- ============================================================ -->
         <!--  MCP SECTION                                                   -->
         <!-- ============================================================ -->
 

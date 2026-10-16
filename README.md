@@ -167,6 +167,7 @@ src/
 │   ├── task-store.ts       #   In-memory task lifecycle
 │   ├── executor.ts         #   Headless LLM message processor
 │   └── tool-adapter.ts     #   A2A skills → framework tools
+├── integrations/http-api/  # Declarative HTTP APIs from config → api_<name>_<endpoint> tools
 ├── mcp/                    # Model Context Protocol (bidirectional)
 │   ├── client.ts           #   Connect to external MCP servers
 │   ├── client-pool.ts      #   Multi-server connection pool
@@ -262,6 +263,10 @@ LLM-based conversation summarization when sessions approach token limits. The `C
 ### MCP Tool Bridge
 
 Claude CLI can call framework tools natively via Model Context Protocol. The bridge server (`src/mcp/tool-bridge-server.ts`) exposes framework tools as MCP tools, so Claude CLI subprocess calls go through the same tool registry, executor, and permission system as regular LLM tool calls.
+
+### HTTP API Integrations
+
+Authenticated HTTP APIs declared in `integrations.httpApis[]` become one tool per endpoint (`api_<name>_<endpoint>`), only for the bots listed in `bots`. The secret is an environment variable read at call time and sent only as a header; it never appears in args, results, errors or logs. `GET` only for now; `operatorOnly` (default) refuses conversation speakers who are not the operator. Details and the finance-app example: `docs/architecture-docs/tools-skills.html`.
 
 ### Activity Stream
 

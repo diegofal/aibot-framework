@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { Logger } from '../logger';
 import type { DynamicToolMeta } from './dynamic-tool-store';
+import { buildParametersSchema } from './parameter-schema';
 import type { Tool, ToolResult } from './types';
 
 const TOOL_TIMEOUT_MS = 30_000;
@@ -11,31 +12,13 @@ const TOOL_TIMEOUT_MS = 30_000;
  * Command tools: interpolate parameters and run via shell.
  */
 export function loadDynamicTool(meta: DynamicToolMeta, source: string, storePath: string): Tool {
-  // Build parameter schema from meta.parameters
-  const properties: Record<string, unknown> = {};
-  const required: string[] = [];
-
-  for (const [name, param] of Object.entries(meta.parameters)) {
-    properties[name] = {
-      type: param.type,
-      description: param.description,
-    };
-    if (param.required) {
-      required.push(name);
-    }
-  }
-
   return {
     definition: {
       type: 'function',
       function: {
         name: meta.name,
         description: meta.description,
-        parameters: {
-          type: 'object',
-          properties,
-          required: required.length > 0 ? required : undefined,
-        },
+        parameters: buildParametersSchema(meta.parameters),
       },
     },
 

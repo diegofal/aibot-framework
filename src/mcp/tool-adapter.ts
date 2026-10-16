@@ -103,6 +103,6 @@ export function parseMcpToolName(
 /**
  * Sanitize a prefix for use in tool names (lowercase, replace non-alphanum with underscore).
  */
-function sanitizePrefix(prefix: string): string {
+export function sanitizePrefix(prefix: string): string {
   return prefix.toLowerCase().replace(/[^a-z0-9]/g, '_');
 }
