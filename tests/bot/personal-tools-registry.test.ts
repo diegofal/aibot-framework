@@ -31,6 +31,22 @@ describe('personal tools in the registry', () => {
     expect(reg.getCollaborationToolsForBot('other').tools).toEqual([]);
   });
 
+  test('every personal tool is flagged sensitive', () => {
+    for (const t of createPersonalTools(() => undefined)) {
+      expect(t.definition.sensitive).toBe(true);
+    }
+  });
+
+  test('collaboration never hands them to another bot, even an allowlisted one', () => {
+    const reg = new ToolRegistry(ctx(['finny']));
+    const names = reg
+      .getCollaborationToolsForBot('finny')
+      .tools.map((t) => t.definition.function.name);
+    for (const n of PERSONAL_TOOL_NAMES) expect(names).not.toContain(n);
+    const defs = reg.getCollaborationToolsForBot('finny').definitions.map((d) => d.function.name);
+    for (const n of PERSONAL_TOOL_NAMES) expect(defs).not.toContain(n);
+  });
+
   test('the executor refuses them for a bot outside the allowlist even if named', async () => {
     const exec = new ToolExecutor(ctx(['finny']), { botId: 'other', chatId: 0 });
     const r = await exec.execute('calendar_agenda', {});

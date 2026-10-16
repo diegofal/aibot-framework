@@ -133,6 +133,16 @@ Google y Microsoft); `requireOperator` está en `src/tools/operator-gate.ts` (co
 allowlist es `integrations.personalAccounts.bots`; el provider Google viejo de `src/tools/calendar.ts`
 y `/cal` no se retiraron (`docs/technical-debt.md`). Setup: `docs/personal-accounts-setup.md`.
 
+**Nota de seguridad (2026-10-16, revisión del branch `feat/organizer-integration`).** La regla de
+abajo ("`_requester` ausente → permitir") fallaba abierta: el MCP expose server, collaboration /
+delegation y los fallbacks del pipeline (MCP, remitente bot, sin `relayService`) llegaban sin
+requester. Ahora `requireOperator` falla cerrado: pasa sólo con `_actor` `self` (agent loop, workers,
+cron al chat del operador) u `operator` (dashboard admin), o con el operador **en Telegram** (en
+web/REST el remitente lo declara el cliente); nunca en grupos. Las tools van marcadas `sensitive`:
+fuera del MCP expose y de collaboration, sin args ni resultado en el tool audit ni en el activity
+stream. HTTP API: sin redirects y sin `.`/`..` en el path; exports de WhatsApp en 0o600 con barrido
+de retención al boot y diario. Detalle en CLAUDE.md ("Operator gate") y en el CHANGELOG.
+
 Diseño: módulo `src/personal-accounts/` calcado de `src/claude-accounts/`.
 
 - **Setup único** (operador, una vez): proyecto en Google Cloud con OAuth client tipo *Web

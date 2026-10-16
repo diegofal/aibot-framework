@@ -34,6 +34,7 @@ import { RateLimiter } from '../tenant/rate-limiter';
 import { SessionStore } from '../tenant/session-store';
 import { TenantConfigStore } from '../tenant/tenant-config-store';
 import { getTenantId, scopeBots } from '../tenant/tenant-scoping';
+import { startWhatsAppExportSweep, whatsappExportStoreFor } from '../whatsapp-export/store';
 import type { CycleReader } from '../why/cycle-index';
 import type { WorkerPoolApi } from '../workers/types';
 import {
@@ -518,6 +519,10 @@ export function startWebServer(deps: WebServerDeps): void {
         ),
     });
   }
+
+  // WhatsApp group exports hold other people's messages: besides the prune on
+  // every ingest and read, sweep every group shortly after boot and then daily.
+  startWhatsAppExportSweep({ store: whatsappExportStoreFor(config.paths.data), logger });
 
   // Conversations routes (use shared ConversationsService from BotManager)
   const conversationsService = deps.botManager.getConversationsService();

@@ -5,8 +5,9 @@
  * convention as `adaptMcpTool`). The secret lives in the environment
  * (`process.env[auth.env]`), is read at call time and only ever travels in the
  * request header: never in args, results, thrown errors or logs. The tool audit
- * stores args raw and the head of the result, so anything the remote echoes
- * back is redacted too.
+ * keeps only arg keys and the result length for operator-only APIs (flagged
+ * `sensitive`), and anything the remote echoes back is redacted anyway.
+ * Redirects are never followed (the header would travel to another host).
  */
 
 import type { HttpApiConfig, HttpApiEndpointConfig } from '../../config';
@@ -64,6 +65,12 @@ export function buildHttpApiUrl(
     inPath.add(name);
     const v = argValue(name);
     if (v === undefined) throw new Error(`Missing required parameter "${name}"`);
+    // "." / ".." survive encodeURIComponent and the URL parser resolves them:
+    // a model could climb out of the declared path.
+    const text = String(v).trim();
+    if (text === '' || text === '.' || text === '..') {
+      throw new Error(`Invalid value for path parameter "${name}"`);
+    }
     return encodeURIComponent(String(v));
   });
 
@@ -117,6 +124,7 @@ function createEndpointTool(
         description: `[API:${api.name}] ${endpoint.description}`,
         parameters: buildParametersSchema(endpoint.params),
       },
+      ...(api.operatorOnly ? { sensitive: true } : {}),
     },
 
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
@@ -152,9 +160,12 @@ function createEndpointTool(
       let res: Response;
       let text: string;
       try {
+        // Never follow a redirect: the auth header would go to whatever host
+        // the Location names. A 3xx is reported as an error below.
         res = await doFetch(url, {
           method: 'GET',
           headers,
+          redirect: 'manual',
           signal: withTimeoutSignal(api.timeoutMs, callerSignal),
         });
         text = redact(await res.text(), secret);
@@ -168,6 +179,15 @@ function createEndpointTool(
           : redact(err instanceof Error ? err.message : String(err), secret);
         logger.warn({ tool: name, error: msg }, 'HTTP API call failed');
         return { success: false, content: `${label} request failed: ${msg}` };
+      }
+
+      if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+        logger.warn({ tool: name, status: res.status }, 'HTTP API answered with a redirect');
+        return {
+          success: false,
+          content: `${label} returned a redirect${res.status ? ` (HTTP ${res.status})` : ''}; redirects are not followed — fix the API's baseUrl or path.`,
+          failureKind: 'error',
+        };
       }
 
       if (!res.ok) {

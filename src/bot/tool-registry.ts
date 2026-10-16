@@ -53,6 +53,7 @@ import { createImproveTool } from '../tools/improve';
 import { createMemoryGetTool } from '../tools/memory-get';
 import { createMemorySearchTool } from '../tools/memory-search';
 import { createMoltbookRegisterTool } from '../tools/moltbook';
+import { type ToolActor, isSensitiveTool } from '../tools/operator-gate';
 import {
   PERSONAL_TOOL_NAMES,
   createPersonalTools,
@@ -919,9 +920,11 @@ export class ToolRegistry {
   getCollaborationToolsForBot(botId: string): { tools: Tool[]; definitions: ToolDefinition[] } {
     const collabExcluded = new Set(['collaborate', 'delegate_to_bot']);
     const excluded = this.getExcludedSet(botId);
+    // Personal-data tools never go to another bot: the collaborating bot acts
+    // for whoever reached the first one (a public user included).
     const tools = this.ctx.tools.filter((t) => {
       const name = t.definition.function.name;
-      return !collabExcluded.has(name) && !excluded.has(name);
+      return !collabExcluded.has(name) && !excluded.has(name) && !isSensitiveTool(t);
     });
     const definitions = tools.map((t) => t.definition);
     return { tools, definitions };
@@ -942,7 +945,8 @@ export class ToolRegistry {
     inlineApprovalStore?: InlineApprovalStore,
     sessionKey?: string,
     memoryViewer?: MemoryViewer,
-    requester?: RelayParty
+    requester?: RelayParty,
+    scope?: { actor?: ToolActor; isGroup?: boolean }
   ): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
     const executor = new ToolExecutor(this.ctx, {
       botId,
@@ -956,6 +960,8 @@ export class ToolRegistry {
       inlineApprovalStore,
       sessionKey,
       requester,
+      ...(scope?.actor ? { actor: scope.actor } : {}),
+      ...(scope?.isGroup !== undefined ? { isGroup: scope.isGroup } : {}),
     });
     // Conversation tool calls go to the same audit as the agent loop's (which
     // builds its own executors and subscribes itself — no double write).

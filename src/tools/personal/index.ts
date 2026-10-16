@@ -376,5 +376,9 @@ export function createPersonalTools(getSource: () => PersonalDataSource | undefi
     },
   };
 
-  return [agenda, free, create, search, read];
+  // Personal data: kept out of MCP expose, collaboration, the audit and the feed.
+  return [agenda, free, create, search, read].map((t) => ({
+    ...t,
+    definition: { ...t.definition, sensitive: true },
+  }));
 }

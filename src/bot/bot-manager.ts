@@ -1227,7 +1227,14 @@ export class BotManager {
     );
 
     const msg = buildCronInboundMessage(chatId, text, kind, { messageId, nowMs: Date.now() });
-    return this.handleChannelMessage(msg, channel, botId);
+    // A job whose reply goes to the operator's own chat is the bot working for
+    // the operator: its personal-data tools run as the bot itself. Any other
+    // chat (a user's, a group) is judged by its sender and fails closed.
+    const operatorChat = this.config.operator?.telegramChatId;
+    const forOperator = operatorChat !== undefined && chatId === operatorChat;
+    return forOperator
+      ? this.handleChannelMessage(msg, channel, botId, { actor: 'self' })
+      : this.handleChannelMessage(msg, channel, botId);
   }
 
   isRunning(botId: string): boolean {
@@ -1688,7 +1695,8 @@ export class BotManager {
   async handleChannelMessage(
     msg: import('../channel/types').InboundMessage,
     channel: import('../channel/types').Channel,
-    botId: string
+    botId: string,
+    opts?: { actor?: import('../tools/operator-gate').ToolActor }
   ): Promise<string> {
     const botConfig = this.config.bots.find((b) => b.id === botId);
     if (!botConfig) throw new Error(`Bot not found: ${botId}`);
@@ -1704,7 +1712,9 @@ export class BotManager {
 
     // Webhook/analytics emission is handled inside ConversationPipeline
     // to cover both Telegram and channel-agnostic paths uniformly.
-    return this.conversationPipeline.handleChannelMessage(msg, channel, botConfig, sessionKey);
+    return opts
+      ? this.conversationPipeline.handleChannelMessage(msg, channel, botConfig, sessionKey, opts)
+      : this.conversationPipeline.handleChannelMessage(msg, channel, botConfig, sessionKey);
   }
 
   // Collaboration delegates

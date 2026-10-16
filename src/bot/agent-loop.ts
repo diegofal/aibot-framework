@@ -2968,6 +2968,7 @@ export class AgentLoop {
           loopDetector: feedbackLoopDetector,
           attribution: this.cycleAttribution.get(botId),
           permissionMode: feedbackPermissionMode,
+          actor: 'self',
           enforceToolPermissions: botOverride?.enforceToolPermissions === true,
           signal: cycleSignal,
         });

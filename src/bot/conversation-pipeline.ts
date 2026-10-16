@@ -9,6 +9,7 @@ import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { unflushedMessageCount } from '../session';
+import type { ToolActor } from '../tools/operator-gate';
 import { generateSpeech } from '../tts';
 import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from './agent-loop-utils';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
@@ -246,6 +247,9 @@ export class ConversationPipeline {
     const relayContext = requester
       ? this.ctx.relayService?.promptSections(config.id, requester) || undefined
       : undefined;
+    // Personal-data tools refuse group chats (operator-gate.ts); a negative
+    // Telegram chat id is a group or channel whatever the type says.
+    const executorScope = { isGroup: isGroup || (typeof chatId === 'number' && chatId < 0) };
 
     const senderName = isGroup ? (ctx.from?.first_name ?? 'Unknown') : undefined;
     botLogger.info(
@@ -503,7 +507,8 @@ export class ConversationPipeline {
                     undefined,
                     undefined,
                     memoryViewer,
-                    requester
+                    requester,
+                    executorScope
                   )
                 : undefined,
               maxToolRounds,
@@ -572,7 +577,8 @@ export class ConversationPipeline {
                       undefined,
                       undefined,
                       memoryViewer,
-                      requester
+                      requester,
+                      executorScope
                     )
                   : undefined,
                 maxToolRounds,
@@ -923,7 +929,8 @@ export class ConversationPipeline {
     msg: InboundMessage,
     channel: Channel,
     config: BotConfig,
-    sessionKey: string
+    sessionKey: string,
+    opts?: { actor?: ToolActor }
   ): Promise<string> {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
@@ -980,6 +987,12 @@ export class ConversationPipeline {
     const relayContext = requester
       ? this.ctx.relayService?.promptSections(config.id, requester) || undefined
       : undefined;
+    // Group chats are refused by personal-data tools; `opts.actor` is set only
+    // by trusted server-side callers (a cron instruction for the operator).
+    const executorScope = {
+      isGroup: isGroup || (Number(msg.chatId) || 0) < 0,
+      ...(opts?.actor ? { actor: opts.actor } : {}),
+    };
 
     // Resolve userId for user isolation
     // Auto-enable user isolation for tenant bots (BaaS multi-tenant)
@@ -1317,7 +1330,8 @@ export class ConversationPipeline {
                       undefined,
                       undefined,
                       memoryViewer,
-                      requester
+                      requester,
+                      executorScope
                     )
                   : undefined,
                 maxToolRounds,
@@ -1370,7 +1384,8 @@ export class ConversationPipeline {
                         undefined,
                         undefined,
                         memoryViewer,
-                        requester
+                        requester,
+                        executorScope
                       )
                     : undefined,
                   maxToolRounds,

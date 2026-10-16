@@ -209,6 +209,9 @@ export async function runExecutorTurn(input: ExecutorTurnInput): Promise<Executo
     tenantRoot: input.tenantRoot,
     attribution: input.attribution,
     permissionMode: 'agent-loop',
+    // The bot's own run (cycle or task worker): the one context, besides the
+    // operator, that personal-data tools answer (operator-gate.ts).
+    actor: 'self',
     enforceToolPermissions: input.enforceToolPermissions === true,
     signal: controller.signal,
     ...(input.workDir ? { workDir: input.workDir } : {}),

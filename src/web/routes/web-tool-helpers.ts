@@ -6,6 +6,7 @@ import type { Config } from '../../config';
 import { resolveMaxToolRounds } from '../../config';
 import type { Logger } from '../../logger';
 import type { ChatMessage } from '../../ollama';
+import type { ToolActor } from '../../tools/operator-gate';
 
 const TOOL_AWARENESS_SUFFIX =
   '\n\nYou have access to tools (web search, file operations, memory, etc.). Use them when needed to provide accurate, up-to-date information.';
@@ -31,6 +32,12 @@ export interface WebGenerateOptions {
   maxToolRounds?: number;
   /** Identifying context for the loop break — merged with botId and default caller. */
   loopContext?: { conversationId?: string; caller?: string };
+  /**
+   * Who the tool calls run for (`ToolActor`). Only a route that knows the
+   * caller is the operator (an admin / single-tenant dashboard thread) sets
+   * `operator`; without it personal-data tools refuse.
+   */
+  actor?: ToolActor;
 }
 
 /**
@@ -116,7 +123,10 @@ export async function webGenerate(opts: WebGenerateOptions): Promise<string> {
     undefined,
     opts.permissionMode,
     opts.inlineApprovalStore,
-    opts.sessionKey
+    opts.sessionKey,
+    undefined,
+    undefined,
+    opts.actor ? { actor: opts.actor } : undefined
   );
   const model = botManager.getActiveModel(botId);
 

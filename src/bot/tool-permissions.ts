@@ -85,6 +85,12 @@ export const DEFAULT_PERMISSIONS: Record<string, ToolPermissionEntry> = {
   mail_search: { agentLoop: 'free', conversation: 'free' },
   mail_read: { agentLoop: 'free', conversation: 'free' },
   calendar_create_event: { agentLoop: 'confirm', conversation: 'confirm' },
+  // WhatsApp group exports the operator sent: read-only; the gate decides who.
+  whatsapp_export_summary: { agentLoop: 'free', conversation: 'free' },
+  // HTTP API tools (`api_<name>_<endpoint>`) have per-config names and this
+  // matrix has no prefix rules: they fall back to `free` (GET-only by schema).
+  // Who may call an `operatorOnly` API is its operator gate; per-bot
+  // `toolPermissions` can still name one to require confirmation.
 
   // Production
   archive_file: { agentLoop: 'free', conversation: 'free' },

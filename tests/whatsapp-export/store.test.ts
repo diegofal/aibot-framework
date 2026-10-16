@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WaMessage } from '../../src/whatsapp-export/parser';
-import { RETENTION_DAYS, WhatsAppExportStore, localTsToMs } from '../../src/whatsapp-export/store';
+import {
+  RETENTION_DAYS,
+  WhatsAppExportStore,
+  localTsToMs,
+  startWhatsAppExportSweep,
+} from '../../src/whatsapp-export/store';
 
 const BOT = 'finny-test';
 const NOW = localTsToMs('2026-10-16T12:00:00');
@@ -128,5 +133,113 @@ describe('WhatsAppExportStore', () => {
       fileName: 'a',
     });
     expect(store.newMessages(BOT, 'g', NOW)[0].text.length).toBeLessThan(2100);
+  });
+  // Mode bits are POSIX-only; on Windows the ACLs decide and stat reports 0o666.
+  test.skipIf(process.platform === 'win32')('group files are written owner-only (0o600)', () => {
+    store.ingest(BOT, 'G', [msg('2026-10-15T09:00:00', 'A', 'hola')], {
+      nowMs: NOW,
+      fileName: 'a',
+    });
+    expect(statSync(join(dir, BOT, 'g.json')).mode & 0o777).toBe(0o600);
+  });
+
+  test('pruneAll drops expired messages of every group of every bot, cursor kept', () => {
+    const t0 = localTsToMs('2026-10-01T12:00:00');
+    store.ingest(BOT, 'G1', [msg('2026-09-30T09:00:00', 'A', 'old')], { nowMs: t0, fileName: 'a' });
+    store.ingest('other-bot', 'G2', [msg('2026-10-01T09:00:00', 'B', 'old too')], {
+      nowMs: t0,
+      fileName: 'b',
+    });
+    store.ingest(BOT, 'G3', [msg('2026-10-15T09:00:00', 'C', 'fresh')], {
+      nowMs: NOW,
+      fileName: 'c',
+    });
+    const later = NOW + 20 * 86_400_000;
+    const r = store.pruneAll(later);
+    expect(r).toEqual({ groups: 3, dropped: 2 });
+    const raw = JSON.parse(readFileSync(join(dir, BOT, 'g1.json'), 'utf-8'));
+    expect(raw.messages).toEqual([]);
+    expect(raw.lastMessageAt).toBe('2026-09-30T09:00:00');
+    expect(JSON.parse(readFileSync(join(dir, BOT, 'g3.json'), 'utf-8')).messages).toHaveLength(1);
+  });
+
+  test('pruneAll on an empty or missing dir is a no-op', () => {
+    expect(new WhatsAppExportStore(join(dir, 'nope')).pruneAll(NOW)).toEqual({
+      groups: 0,
+      dropped: 0,
+    });
+  });
+});
+
+describe('startWhatsAppExportSweep', () => {
+  test('prunes after the start delay and then on every interval; timers are unref-able and stoppable', () => {
+    const scheduled: Array<{ kind: string; fn: () => void; ms: number }> = [];
+    const cleared: unknown[] = [];
+    const timers = {
+      setTimeout: (fn: () => void, ms: number) => {
+        const h = { kind: 'timeout', fn, ms, unref: () => {} };
+        scheduled.push(h);
+        return h;
+      },
+      setInterval: (fn: () => void, ms: number) => {
+        const h = { kind: 'interval', fn, ms, unref: () => {} };
+        scheduled.push(h);
+        return h;
+      },
+      clear: (h: unknown) => cleared.push(h),
+    };
+    const calls: number[] = [];
+    const fakeStore = {
+      pruneAll: (nowMs: number) => {
+        calls.push(nowMs);
+        return { groups: 1, dropped: 0 };
+      },
+    };
+    const quiet = { info() {}, warn() {}, debug() {}, error() {} } as never;
+    const sweep = startWhatsAppExportSweep({
+      store: fakeStore,
+      logger: quiet,
+      timers,
+      now: () => 42,
+      startDelayMs: 5,
+      intervalMs: 1000,
+    });
+    expect(scheduled[0]).toMatchObject({ kind: 'timeout', ms: 5 });
+    scheduled[0].fn();
+    expect(calls).toEqual([42]);
+    expect(scheduled[1]).toMatchObject({ kind: 'interval', ms: 1000 });
+    scheduled[1].fn();
+    expect(calls).toEqual([42, 42]);
+    sweep.stop();
+    expect(cleared).toHaveLength(2);
+  });
+
+  test('a prune that throws is logged, never escapes', () => {
+    let fire: () => void = () => {};
+    const timers = {
+      setTimeout: (fn: () => void) => {
+        fire = fn;
+        return {};
+      },
+      setInterval: () => ({}),
+      clear: () => {},
+    };
+    const warned: unknown[] = [];
+    startWhatsAppExportSweep({
+      store: {
+        pruneAll: () => {
+          throw new Error('disk gone');
+        },
+      },
+      logger: {
+        info() {},
+        warn: (...a: unknown[]) => warned.push(a),
+        debug() {},
+        error() {},
+      } as never,
+      timers,
+    });
+    expect(() => fire()).not.toThrow();
+    expect(warned).toHaveLength(1);
   });
 });

@@ -4,7 +4,9 @@
  *
  * These are other parents' and children's messages. Only a bounded window is
  * kept (`RETENTION_DAYS`, `MAX_STORED_MESSAGES`, `MAX_MESSAGE_CHARS`), pruned
- * on every ingest (all groups of the bot) and every read. The cursor
+ * on every ingest (all groups of the bot), every read, and by a sweep over all
+ * groups shortly after boot and then daily (`startWhatsAppExportSweep`). Files
+ * are written owner-only (0o600). The cursor
  * (`lastMessageAt`) outlives the messages so the next export still starts
  * after it. Nothing here is written to the bot's memory.
  */
@@ -17,6 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import type { Logger } from '../logger';
 import { type WaMessage, groupSlug } from './parser';
 
 export const RETENTION_DAYS = 30;
@@ -93,7 +96,8 @@ export class WhatsAppExportStore {
     mkdirSync(this.botDir(botId), { recursive: true });
     const p = this.path(botId, rec.slug);
     const tmp = `${p}.tmp`;
-    writeFileSync(tmp, JSON.stringify(rec, null, 2));
+    // Other people's messages: owner-only, like the personal-accounts store.
+    writeFileSync(tmp, JSON.stringify(rec, null, 2), { mode: 0o600 });
     renameSync(tmp, p);
   }
 
@@ -113,6 +117,27 @@ export class WhatsAppExportStore {
     const next = { ...rec, messages: kept };
     this.write(botId, next);
     return next;
+  }
+
+  /**
+   * Drops expired messages from every group of every bot (the boot / daily
+   * sweep: a group nobody exports or reads again would otherwise keep them).
+   */
+  pruneAll(nowMs: number): { groups: number; dropped: number } {
+    if (!existsSync(this.dir)) return { groups: 0, dropped: 0 };
+    let groups = 0;
+    let dropped = 0;
+    for (const entry of readdirSync(this.dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const botId = entry.name;
+      for (const slug of this.slugs(botId)) {
+        const rec = this.read(botId, slug);
+        if (!rec) continue;
+        groups++;
+        dropped += rec.messages.length - this.pruned(botId, rec, nowMs).messages.length;
+      }
+    }
+    return { groups, dropped };
   }
 
   /** Records one export of `group`; returns what was new in it. */
@@ -227,4 +252,63 @@ export class WhatsAppExportStore {
 /** The store under `<paths.data>/whatsapp-exports`. */
 export function whatsappExportStoreFor(dataDir: string): WhatsAppExportStore {
   return new WhatsAppExportStore(join(dataDir, 'whatsapp-exports'));
+}
+
+type SweepTimer = { unref?: () => void };
+export interface WhatsAppSweepTimers {
+  setTimeout(fn: () => void, ms: number): SweepTimer;
+  setInterval(fn: () => void, ms: number): SweepTimer;
+  clear(handle: SweepTimer): void;
+}
+
+const realSweepTimers: WhatsAppSweepTimers = {
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clear: (h) => {
+    clearTimeout(h as ReturnType<typeof setTimeout>);
+    clearInterval(h as ReturnType<typeof setInterval>);
+  },
+};
+
+/** First sweep shortly after boot, then daily. */
+export const WHATSAPP_SWEEP_START_DELAY_MS = 60_000;
+export const WHATSAPP_SWEEP_INTERVAL_MS = DAY_MS;
+
+/**
+ * Retention sweep over every stored group: once shortly after boot, then every
+ * `intervalMs`. Timers are unref'd (never keep the process alive); a failing
+ * prune is logged and never escapes.
+ */
+export function startWhatsAppExportSweep(deps: {
+  store: Pick<WhatsAppExportStore, 'pruneAll'>;
+  logger: Pick<Logger, 'info' | 'warn'>;
+  now?: () => number;
+  timers?: WhatsAppSweepTimers;
+  startDelayMs?: number;
+  intervalMs?: number;
+}): { stop: () => void } {
+  const timers = deps.timers ?? realSweepTimers;
+  const now = deps.now ?? Date.now;
+  const handles: SweepTimer[] = [];
+  const tick = () => {
+    try {
+      const r = deps.store.pruneAll(now());
+      if (r.dropped > 0) deps.logger.info(r, 'whatsapp-export: retention sweep');
+    } catch (err) {
+      deps.logger.warn({ err }, 'whatsapp-export: retention sweep failed');
+    }
+  };
+  const first = timers.setTimeout(() => {
+    tick();
+    const every = timers.setInterval(tick, deps.intervalMs ?? WHATSAPP_SWEEP_INTERVAL_MS);
+    every.unref?.();
+    handles.push(every);
+  }, deps.startDelayMs ?? WHATSAPP_SWEEP_START_DELAY_MS);
+  first.unref?.();
+  handles.push(first);
+  return {
+    stop: () => {
+      for (const h of handles) timers.clear(h);
+    },
+  };
 }

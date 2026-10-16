@@ -14,6 +14,7 @@ import {
 } from '../productions/paths';
 import { ProductionsService } from '../productions/service';
 import type { RelayParty } from '../relay/types';
+import { type ToolActor, isSensitiveTool } from '../tools/operator-gate';
 import { PERSONAL_TOOL_NAMES, personalToolsAllowedFor } from '../tools/personal';
 import { tokensToChars, truncateToolResultContent } from '../tools/truncate-tool-result';
 import type { Tool, ToolDefinition, ToolFailureKind, ToolResult } from '../tools/types';
@@ -55,6 +56,8 @@ export interface ToolEventAttribution {
 export interface ToolStartEvent extends ToolEventAttribution {
   toolName: string;
   args: Record<string, unknown>;
+  /** A personal-data tool (`ToolDefinition.sensitive`): consumers must not persist or broadcast args/result. */
+  sensitive?: boolean;
   botId: string;
   chatId: number;
   timestamp: number;
@@ -67,6 +70,8 @@ export interface ToolStartEvent extends ToolEventAttribution {
 export interface ToolEndEvent extends ToolEventAttribution {
   toolName: string;
   args: Record<string, unknown>;
+  /** A personal-data tool: the audit keeps arg keys and the result length only; the feed neither. */
+  sensitive?: boolean;
   success: boolean;
   result: string;
   durationMs: number;
@@ -125,6 +130,7 @@ export function toolTarget(args: Record<string, unknown> | undefined): string | 
 export interface ToolErrorEvent extends ToolEventAttribution {
   toolName: string;
   args: Record<string, unknown>;
+  sensitive?: boolean;
   error: string;
   phase: 'lookup' | 'validation' | 'execution';
   botId: string;
@@ -263,6 +269,15 @@ export interface ToolExecutorOptions {
    * absent (agent loop, collaboration) = the bot itself.
    */
   requester?: RelayParty;
+  /**
+   * Who the call runs for when there is no person to judge (`ToolActor`):
+   * `self` for the bot's own runs (cycle, feedback, workers, an operator cron),
+   * `operator` for the authenticated dashboard. Injected as `_actor`, always
+   * overriding model arguments; read by the operator gate on personal-data tools.
+   */
+  actor?: ToolActor;
+  /** The conversation is a group chat. Injected as `_isGroup` (overrides model args). */
+  isGroup?: boolean;
 }
 
 /**
@@ -345,7 +360,9 @@ export class ToolExecutor extends EventEmitter {
         type: 'tool:start',
         botId: e.botId,
         timestamp: e.timestamp,
-        data: { toolName: e.toolName, args: e.args, ...eventIds(e) },
+        // A personal-data tool's args never reach the feed (replayed, and
+        // unauthenticated in single-tenant).
+        data: { toolName: e.toolName, ...(e.sensitive ? {} : { args: e.args }), ...eventIds(e) },
       })
     );
     this.on('tool:end', (e) => {
@@ -357,7 +374,7 @@ export class ToolExecutor extends EventEmitter {
           toolName: e.toolName,
           success: e.success,
           durationMs: e.durationMs,
-          result: e.result.slice(0, 300),
+          ...(e.sensitive ? {} : { result: e.result.slice(0, 300) }),
           ...eventIds(e),
           // A failure names its cause and what it touched, so the feed can say
           // "wiley.com blocked the bot" instead of "web_fetch failed".
@@ -365,7 +382,7 @@ export class ToolExecutor extends EventEmitter {
             ? {}
             : {
                 ...(e.failureKind ? { failureKind: e.failureKind } : {}),
-                ...(toolTarget(e.args) ? { target: toolTarget(e.args) } : {}),
+                ...(!e.sensitive && toolTarget(e.args) ? { target: toolTarget(e.args) } : {}),
               }),
         },
       });
@@ -477,15 +494,23 @@ export class ToolExecutor extends EventEmitter {
    * Ids stamped on tool events: the cycle's `{ cycleId, goalId }`, or a worker
    * run's `{ runId, taskId, dispatchCycleId, goalId }` (never a `cycleId`).
    */
-  private eventAttribution(): ToolEventAttribution {
+  private eventAttribution(name: string): ToolEventAttribution & { sensitive?: true } {
+    const sensitive = this.isSensitive(name) ? { sensitive: true as const } : {};
     const a = this.options.attribution;
-    if (!a) return {};
+    if (!a) return sensitive;
     return {
+      ...sensitive,
       ...this.attributionFields(),
       ...(a.runId ? { runId: a.runId } : {}),
       ...(a.taskId ? { taskId: a.taskId } : {}),
       ...(a.dispatchCycleId ? { dispatchCycleId: a.dispatchCycleId } : {}),
     };
+  }
+
+  /** A personal-data tool: its args and results stay out of the audit and the feed. */
+  private isSensitive(name: string): boolean {
+    const tool = this.tools.find((t) => t.definition.function.name === name);
+    return tool ? isSensitiveTool(tool) : false;
   }
 
   /** A failed tool result that is really the run's cancellation. */
@@ -619,7 +644,7 @@ export class ToolExecutor extends EventEmitter {
       botId,
       chatId,
       timestamp: Date.now(),
-      ...this.eventAttribution(),
+      ...this.eventAttribution(name),
     });
 
     // Karma per tool error (execution and validation phases) — delta from
@@ -664,7 +689,7 @@ export class ToolExecutor extends EventEmitter {
       botId,
       chatId,
       timestamp: Date.now(),
-      ...this.eventAttribution(),
+      ...this.eventAttribution(name),
       ...(failureKind ? { failureKind } : {}),
     });
     return result;
@@ -685,7 +710,7 @@ export class ToolExecutor extends EventEmitter {
       botId,
       chatId,
       timestamp: startMs,
-      ...this.eventAttribution(),
+      ...this.eventAttribution(name),
     });
 
     // Cancelled run (cycle timeout, Stop): refuse before anything else runs.
@@ -838,7 +863,7 @@ export class ToolExecutor extends EventEmitter {
             botId,
             chatId,
             timestamp: Date.now(),
-            ...this.eventAttribution(),
+            ...this.eventAttribution(name),
           });
           return {
             toolName: name,
@@ -921,6 +946,8 @@ export class ToolExecutor extends EventEmitter {
         ...(this.options.attribution?.taskId ? { _taskId: this.options.attribution.taskId } : {}),
         ...(this.options.signal ? { _signal: this.options.signal } : {}),
         _requester: this.options.requester,
+        _actor: this.options.actor,
+        _isGroup: this.options.isGroup,
       };
 
       // Per-bot workDir: resolve file paths and exec cwd
@@ -1194,7 +1221,7 @@ export class ToolExecutor extends EventEmitter {
             botId,
             chatId,
             timestamp: Date.now(),
-            ...this.eventAttribution(),
+            ...this.eventAttribution(name),
           });
           return result;
         }
@@ -1228,7 +1255,7 @@ export class ToolExecutor extends EventEmitter {
           botId,
           chatId,
           timestamp: Date.now(),
-          ...this.eventAttribution(),
+          ...this.eventAttribution(name),
         });
         if (attempt < maxRetries) {
           this.logger.warn(
@@ -1282,7 +1309,7 @@ export class ToolExecutor extends EventEmitter {
             botId,
             chatId,
             timestamp: Date.now(),
-            ...this.eventAttribution(),
+            ...this.eventAttribution(name),
           });
           await this.delay(this.calculateBackoff(attempt));
           continue;

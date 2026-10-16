@@ -435,6 +435,43 @@ describe('conversations routes', () => {
       expect(botMsgs.length).toBe(1);
     });
 
+    test('the dashboard thread runs its tools as the operator (actor: operator)', async () => {
+      const deps = makeDeps();
+      const created: unknown[][] = [];
+      const bm = deps.botManager as any;
+      bm.getLLMClient = () => ({
+        chat: mock(() => Promise.resolve({ text: 'reply' })),
+        backend: 'ollama',
+      });
+      bm.getActiveModel = () => 'm';
+      bm.getToolRegistry = () => ({
+        getDefinitionsForBot: () => [
+          {
+            type: 'function',
+            function: {
+              name: 'calendar_agenda',
+              description: 'agenda',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        createExecutor: (...a: unknown[]) => {
+          created.push(a);
+          return async () => ({ success: true, content: 'ok' });
+        },
+      });
+      const convo = deps.conversationsService.createConversation('bot1');
+      const app = makeApp(deps);
+      await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'What is on my calendar?' }),
+      });
+      await tick(300);
+      expect(created.length).toBeGreaterThan(0);
+      expect(created[0][9]).toEqual({ actor: 'operator' });
+    });
+
     test('skips RAG prefetch for short messages', async () => {
       const deps = makeDeps();
 

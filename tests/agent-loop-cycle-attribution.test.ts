@@ -372,6 +372,52 @@ describe('agent-loop feedback attribution', () => {
   });
 });
 
+describe('agent-loop feedback executor — actor', () => {
+  test("feedback tool calls run as the bot itself (_actor: 'self')", async () => {
+    const { loop, ctx } = makeLoop(JSON.stringify({ reasoning: 'x', plan: [], priority: 'none' }));
+    const seen: Record<string, unknown>[] = [];
+    const def = {
+      type: 'function' as const,
+      function: {
+        name: 'save_memory',
+        description: 's',
+        parameters: { type: 'object' as const, properties: {} },
+      },
+    };
+    ctx.tools = [
+      {
+        definition: def,
+        execute: async (args: Record<string, unknown>) => {
+          seen.push(args);
+          return { success: true, content: 'ok' };
+        },
+      },
+    ];
+    (loop as any).toolRegistry = {
+      getDefinitionsForBot: () => [def],
+      getDefinitionsByCategories: () => [def],
+    };
+    let served = false;
+    ctx.agentFeedbackStore = {
+      getPending: () => {
+        if (served) return [];
+        served = true;
+        return [
+          { id: 'fb1', botId: 'bot1', content: 'Remember X', createdAt: '', status: 'pending' },
+        ];
+      },
+      markApplied: () => {},
+    };
+    ctx.getLLMClient().chat = mock(async (_m: unknown, o: any) => {
+      if (o?.toolExecutor) await o.toolExecutor('save_memory', { _actor: 'operator' });
+      return { text: 'done' };
+    });
+    await loop.runOne('bot1');
+    expect(seen.length).toBeGreaterThan(0);
+    for (const a of seen) expect(a._actor).toBe('self');
+  });
+});
+
 describe('runningCycle: what a running cycle is doing, for collab events (Why row 17)', () => {
   test('during the executor: the cycle id, its plan and the goal it serves; nothing after', async () => {
     const { loop, ctx } = makeLoop(

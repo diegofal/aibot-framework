@@ -98,9 +98,24 @@ function source(over: Partial<PersonalDataSource> = {}): PersonalDataSource {
   } as PersonalDataSource;
 }
 
+/**
+ * Tools as the executor would call them: a call without a `_requester` runs as
+ * the bot's own autonomous run (`_actor: 'self'`), which is what the agent loop
+ * injects. Calls that name a requester are judged on it alone.
+ */
 function tools(src: PersonalDataSource | undefined): Record<string, Tool> {
   return Object.fromEntries(
-    createPersonalTools(() => src).map((t) => [t.definition.function.name, t])
+    createPersonalTools(() => src).map((t) => [
+      t.definition.function.name,
+      {
+        ...t,
+        execute: (args: Record<string, unknown>, l: never) =>
+          t.execute(
+            '_requester' in args || '_actor' in args ? args : { _actor: 'self', ...args },
+            l
+          ),
+      } as Tool,
+    ])
   );
 }
 
@@ -158,11 +173,32 @@ describe('operator gate', () => {
     expect(src.readMail).not.toHaveBeenCalled();
   });
 
-  test('the operator and the agent loop (no requester) get through', async () => {
+  test("the operator and the bot's own run (_actor: 'self') get through", async () => {
     const all = tools(source());
     const a = { from: '2026-10-16T00:00:00Z', to: '2026-10-17T00:00:00Z' };
     expect((await all.calendar_agenda.execute({ ...a, ...operator }, logger)).success).toBe(true);
     expect((await all.calendar_agenda.execute(a, logger)).success).toBe(true);
+  });
+
+  test('no requester and no actor (MCP expose, collaboration) → refused before any account', async () => {
+    const src = source();
+    const raw = createPersonalTools(() => src).find(
+      (t) => t.definition.function.name === 'calendar_agenda'
+    );
+    const r = await raw?.execute({ from: '2026-10-16', to: '2026-10-17' }, logger);
+    expect(r?.success).toBe(false);
+    expect(r?.failureKind).toBe('policy');
+    expect(src.listEvents).not.toHaveBeenCalled();
+  });
+
+  test('the operator in a group chat → refused', async () => {
+    const src = source();
+    const r = await tools(src).mail_search.execute(
+      { query: 'x', ...operator, _isGroup: true },
+      logger
+    );
+    expect(r.success).toBe(false);
+    expect(src.searchMail).not.toHaveBeenCalled();
   });
 });
 

@@ -114,6 +114,39 @@ function makeLoop(opts: {
   return { loop, ctx, llm };
 }
 
+describe('cycle executor — actor', () => {
+  // The operator gate on personal-data tools fails closed; the bot's own cycle
+  // is the one context that runs them for the operator without a requester.
+  test("the cycle's tool calls run as the bot itself (_actor: 'self'), whatever the model says", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const probe: Tool = {
+      definition: {
+        type: 'function',
+        function: {
+          name: 'probe',
+          description: 'p',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+      execute: async (args) => {
+        seen.push(args);
+        return { success: true, content: 'ok' };
+      },
+    };
+    const { loop } = makeLoop({
+      tools: [probe],
+      chat: async (_m, o) => {
+        await o.toolExecutor('probe', { _actor: 'operator', _isGroup: false });
+        return { text: 'done' };
+      },
+    });
+    await loop.runOne('bot1');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]._actor).toBe('self');
+    expect(seen[0]._isGroup).toBeUndefined();
+  });
+});
+
 describe('cycle executor — permissions', () => {
   test('a tool blocked for the agent loop is refused at execution', async () => {
     const ran: string[] = [];

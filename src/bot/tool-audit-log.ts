@@ -30,16 +30,33 @@ export interface ToolAuditEntry {
 /** Max characters of a tool result kept in the audit log. */
 const AUDIT_RESULT_MAX_CHARS = 500;
 
-/** Map a `tool:end` event to the audit entry persisted for it. */
+/**
+ * A personal-data tool's args, reduced to their keys (values `[redacted]`);
+ * internal `_` args are dropped.
+ */
+function redactedArgs(args: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.keys(args)
+      .filter((k) => !k.startsWith('_'))
+      .map((k) => [k, '[redacted]'])
+  );
+}
+
+/**
+ * Map a `tool:end` event to the audit entry persisted for it. A sensitive
+ * (personal-data) tool keeps only its arg keys and the result length.
+ */
 export function toolEndToAuditEntry(event: ToolEndEvent): ToolAuditEntry {
   return {
     timestamp: new Date(event.timestamp).toISOString(),
     botId: event.botId,
     chatId: event.chatId,
     toolName: event.toolName,
-    args: event.args,
+    args: event.sensitive ? redactedArgs(event.args) : event.args,
     success: event.success,
-    result: event.result.slice(0, AUDIT_RESULT_MAX_CHARS),
+    result: event.sensitive
+      ? `[redacted: ${event.result.length} chars]`
+      : event.result.slice(0, AUDIT_RESULT_MAX_CHARS),
     durationMs: event.durationMs,
     retryAttempts: event.retryAttempts,
     ...(event.failureKind ? { failureKind: event.failureKind } : {}),

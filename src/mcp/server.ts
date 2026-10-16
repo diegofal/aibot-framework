@@ -231,7 +231,11 @@ export class McpServer {
     }
   }
 
-  /** Get tool definitions filtered by expose/hidden config */
+  /**
+   * Get tool definitions filtered by expose/hidden config. Personal-data tools
+   * (`sensitive`) are never exposed, whatever the config says: an MCP client is
+   * not the operator, and calls here bypass the executor.
+   */
   private getFilteredToolDefs(): McpToolDef[] {
     const { config } = this.deps;
     const defs = this.deps.getDefinitions();
@@ -240,6 +244,7 @@ export class McpServer {
     return defs
       .filter((d) => {
         const name = d.function.name;
+        if (d.sensitive === true) return false;
         if (hidden.has(name)) return false;
         if (config.exposedTools?.length) {
           return config.exposedTools.includes(name);

@@ -45,6 +45,7 @@ export function createWhatsAppExportSummaryTool(deps: WhatsAppExportSummaryDeps)
           },
         },
       },
+      sensitive: true,
     },
 
     async execute(args): Promise<ToolResult> {

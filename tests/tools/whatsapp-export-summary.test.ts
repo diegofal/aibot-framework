@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DEFAULT_PERMISSIONS } from '../../src/bot/tool-permissions';
 import { createWhatsAppExportSummaryTool } from '../../src/tools/whatsapp-export-summary';
 import { WhatsAppExportStore, localTsToMs } from '../../src/whatsapp-export/store';
 
@@ -45,6 +46,33 @@ describe('whatsapp_export_summary', () => {
     const r = await tool().execute({ _botId: BOT }, logger);
     expect(r.success).toBe(false);
     expect(r.failureKind).toBe('policy');
+  });
+
+  test("the bot's own run (_actor: 'self') is refused too: it reads only in a conversation", async () => {
+    const r = await tool().execute({ _botId: BOT, _actor: 'self' }, logger);
+    expect(r.success).toBe(false);
+  });
+
+  test('the operator in a group chat is refused', async () => {
+    const r = await tool().execute({ _botId: BOT, _requester: OP, _isGroup: true }, logger);
+    expect(r.success).toBe(false);
+    expect(r.failureKind).toBe('policy');
+  });
+
+  test('the operator on web (address match, spoofable) is refused', async () => {
+    const r = await tool().execute(
+      { _botId: BOT, _requester: { ...OP, channelKind: 'web', address: 'op@example.com' } },
+      logger
+    );
+    expect(r.success).toBe(false);
+  });
+
+  test('flagged sensitive; free in the permission matrix (the gate does the rest)', () => {
+    expect(tool().definition.sensitive).toBe(true);
+    expect(DEFAULT_PERMISSIONS.whatsapp_export_summary).toEqual({
+      agentLoop: 'free',
+      conversation: 'free',
+    });
   });
 
   test('no exports yet', async () => {
