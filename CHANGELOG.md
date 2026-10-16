@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed (2026-10-16) — Automations → Cron redesigned (prototype `docs/prototypes/automations-cron.html`)
+- **Why.** The operator: "this screen looks really ugly". Three full-width selects, a wide table whose job names wrapped over four lines, raw errors in red.
+- **The board** (`web/pages/cron-board-helpers.js`, wired in `renderCron`): the "tell an agent" box as one line; summary chips that are the filter (All · On · Paused · Failed · one per agent, with its color) and a search box; **This week** (7 days, each run on its day and time, from the new `upcoming` field); **Needs attention** (failed jobs, why in words, Run again / Details / Delete); jobs **grouped by agent**, one row each (kind icon, clean title — "Reflection · nightly reflection", not "Self-Reflection: nightly-reflection [bot]" —, first line of what it does, schedule in words with its timezone, next and last run, toggle), paused jobs folded at the end of each group; a **drawer** per job (when, next run, the failure in words, what it does, the server Why, recent runs; Run now, Edit, Open page, Delete with undo). The job page, the edit modal and the run-logs modal are unchanged.
+- **Removed.** Row selection and bulk actions, the sort select, and the "Re-run failed" header button (each failed job has Run again in Needs attention); their helpers (`cronTable`, `jobRow`, `cronToolbar`, `cronBulkBar`, `bulkTargets`, `sortJobs`, `filterJobs`, the cell helpers) and tests went with them.
+- **Server.** `GET /api/cron` (and `/:id`) carry `upcoming`: the job's runs in the next 7 days (`upcomingRunsMs` in `src/cron/schedule.ts`, same croner resolution as the scheduler; none for paused jobs).
+- Tests: `tests/web/cron-board-helpers.test.ts`, `tests/cron/upcoming-runs.test.ts`, `tests/web/routes/cron-why.test.ts`; `tests/web/cron-list-helpers.test.ts` trimmed on purpose (removed helpers). Not checked in a browser (the Chrome extension was not connected).
+
 ### Fixed (2026-10-16) — Cron `message` jobs of headless bots no longer fail with "Bot not found"
 - **Why.** Two one-shot reminders of ai-perfectionist (2026-09-26, 2026-10-03) failed with `Bot not found: ai-perfectionist`: a `message` payload went through `BotManager.sendMessage`, which only takes the bot's own Telegram instance, and the bot has none. `instruction` payloads already fell back.
 - `BotManager.deliverCronMessage` (wired in `src/index.ts`): own instance → another bot's with `operator.borrowFleetTelegram` (named "🤖 <bot>:") → the bot's web session, the same resolution as `handleCronInstruction` (`buildCronDelivery`). `sendMessage` is unchanged for its other caller (tenant API).

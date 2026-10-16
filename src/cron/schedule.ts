@@ -44,3 +44,30 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   const nextMs = next.getTime();
   return Number.isFinite(nextMs) && nextMs >= nowSecondMs ? nextMs : undefined;
 }
+
+/**
+ * Every run of `schedule` in `[fromMs, untilMs)`, oldest first, at most `max`
+ * (the Automations page draws the next 7 days). Never throws: a schedule
+ * croner rejects yields no runs.
+ */
+export function upcomingRunsMs(
+  schedule: CronSchedule,
+  fromMs: number,
+  untilMs: number,
+  max = 50
+): number[] {
+  const out: number[] = [];
+  let cursor = fromMs;
+  try {
+    while (out.length < max) {
+      const next = computeNextRunAtMs(schedule, cursor);
+      if (next === undefined || next >= untilMs || next < cursor) break;
+      out.push(next);
+      if (schedule.kind === 'at') break;
+      cursor = next + 1000;
+    }
+  } catch {
+    return out;
+  }
+  return out;
+}
