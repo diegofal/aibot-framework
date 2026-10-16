@@ -188,7 +188,7 @@ async function main() {
           text,
           botId,
           link?.messageId,
-          link?.runsAsSelf ? { runsAsSelf: true } : undefined
+          link?.runsForOperator ? { runsForOperator: true } : undefined
         );
       },
       resolveSkillHandler: (payload) => {

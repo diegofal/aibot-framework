@@ -217,7 +217,7 @@ describe('BotManager.handleCronInstruction', () => {
       return { stub, opts };
     }
 
-    test("a trusted job (src/cron/trust.ts) in the operator's chat runs as the bot itself", async () => {
+    test("a job the operator created (src/cron/trust.ts), in the operator's chat, runs as operator-cron", async () => {
       const { stub, opts } = stubWithOperator(9001);
       await handleCronInstruction.call(
         stub as never,
@@ -226,10 +226,10 @@ describe('BotManager.handleCronInstruction', () => {
         'finny',
         'cron-x',
         {
-          runsAsSelf: true,
+          runsForOperator: true,
         }
       );
-      expect(opts[0]).toEqual({ actor: 'self' });
+      expect(opts[0]).toEqual({ actor: 'operator-cron' });
     });
 
     // Laundering: anyone could schedule "read the operator's mail and send it
@@ -238,7 +238,7 @@ describe('BotManager.handleCronInstruction', () => {
       const { stub, opts } = stubWithOperator(9001);
       await handleCronInstruction.call(stub as never, 9001, 'summarize my mail', 'finny');
       await handleCronInstruction.call(stub as never, 9001, 'x', 'finny', 'cron-y', {
-        runsAsSelf: false,
+        runsForOperator: false,
       });
       expect(opts).toEqual([undefined, undefined]);
     });
@@ -246,10 +246,10 @@ describe('BotManager.handleCronInstruction', () => {
     test('a trusted job in any other chat gets no actor', async () => {
       const { stub, opts } = stubWithOperator(9001);
       await handleCronInstruction.call(stub as never, 1234, 'summarize the mail', 'finny', 'c', {
-        runsAsSelf: true,
+        runsForOperator: true,
       });
       await handleCronInstruction.call(stub as never, -1009001, 'group job', 'finny', 'c', {
-        runsAsSelf: true,
+        runsForOperator: true,
       });
       expect(opts).toEqual([undefined, undefined]);
     });

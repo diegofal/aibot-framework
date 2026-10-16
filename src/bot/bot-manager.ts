@@ -1211,7 +1211,7 @@ export class BotManager {
     text: string,
     botId: string,
     messageId?: string,
-    trust?: { runsAsSelf?: boolean }
+    trust?: { runsForOperator?: boolean }
   ): Promise<string> {
     const bot = this.bots.get(botId) ?? fleetTelegramBorrower(this.bots, () => this.config)(botId);
     const recorded = this.getChannelState(botId);
@@ -1228,15 +1228,15 @@ export class BotManager {
     );
 
     const msg = buildCronInboundMessage(chatId, text, kind, { messageId, nowMs: Date.now() });
-    // The bot works for the operator only when the job is trusted (created by
-    // the bot's own run or the operator, `src/cron/trust.ts`) AND its reply
-    // goes to the operator's own chat. Anyone can name that chat, so the chat
-    // alone never grants it; any other job is judged by its sender and fails closed.
+    // A job runs for the operator (personal data answers) only when the
+    // operator created it (`src/cron/trust.ts`) AND its reply goes to the
+    // operator's own chat. Anyone can name that chat, so the chat alone never
+    // grants it; any other job is judged by its sender and fails closed.
     const operatorChat = this.config.operator?.telegramChatId;
     const forOperator =
-      trust?.runsAsSelf === true && operatorChat !== undefined && chatId === operatorChat;
+      trust?.runsForOperator === true && operatorChat !== undefined && chatId === operatorChat;
     return forOperator
-      ? this.handleChannelMessage(msg, channel, botId, { actor: 'self' })
+      ? this.handleChannelMessage(msg, channel, botId, { actor: 'operator-cron' })
       : this.handleChannelMessage(msg, channel, botId);
   }
 

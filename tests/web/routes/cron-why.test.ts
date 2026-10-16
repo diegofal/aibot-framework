@@ -111,3 +111,72 @@ describe('cron routes: why', () => {
     expect(byId.j2).toEqual([]);
   });
 });
+
+// Only the instance operator's dashboard stamps `operator` (the trust that
+// lets a job reach personal data, src/cron/trust.ts); a tenant API caller never.
+describe('cron routes: who created a job, under multi-tenant', () => {
+  function tenantApp(jobs: Record<string, unknown>[] = []) {
+    const cronService = {
+      list: mock(async () => jobs),
+      add: mock(async (input: Record<string, unknown>) => ({ id: 'new', ...input })),
+      update: mock(async (id: string, patch: Record<string, unknown>) => ({ id, ...patch })),
+    };
+    const config = {
+      bots: [
+        { id: 'tenant-bot', tenantId: 'acme' },
+        { id: 'other-bot', tenantId: 'globex' },
+      ],
+    } as unknown as Config;
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      c.set('tenant', { tenantId: 'acme' } as never);
+      await next();
+    });
+    app.route('/api/cron', cronRoutes({ cronService: cronService as never, config }));
+    return { app, cronService };
+  }
+
+  test('POST from a tenant stamps the tenant, never the operator', async () => {
+    const { app, cronService } = tenantApp();
+    const res = await app.request('/api/cron', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'x',
+        schedule: { kind: 'cron', expr: '0 9 * * *' },
+        payload: { kind: 'instruction', text: 't', chatId: 1, botId: 'tenant-bot' },
+      }),
+    });
+    expect(res.status).toBe(201);
+    expect(cronService.add.mock.calls[0][0].createdBy).toEqual({
+      kind: 'tenant',
+      tenantId: 'acme',
+    });
+  });
+
+  test("PATCH cannot move a job to another tenant's bot", async () => {
+    const { app, cronService } = tenantApp([
+      { id: 'j1', payload: { kind: 'instruction', text: 't', chatId: 1, botId: 'tenant-bot' } },
+    ]);
+    const res = await app.request('/api/cron/j1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ payload: { kind: 'instruction', botId: 'other-bot' } }),
+    });
+    expect(res.status).toBe(404);
+    expect(cronService.update).not.toHaveBeenCalled();
+  });
+
+  test('PATCH within the tenant still works', async () => {
+    const { app, cronService } = tenantApp([
+      { id: 'j1', payload: { kind: 'instruction', text: 't', chatId: 1, botId: 'tenant-bot' } },
+    ]);
+    const res = await app.request('/api/cron/j1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ payload: { kind: 'instruction', text: 'new' } }),
+    });
+    expect(res.status).toBe(200);
+    expect(cronService.update).toHaveBeenCalledTimes(1);
+  });
+});

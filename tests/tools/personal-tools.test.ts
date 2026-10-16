@@ -99,9 +99,9 @@ function source(over: Partial<PersonalDataSource> = {}): PersonalDataSource {
 }
 
 /**
- * Tools as the executor would call them: a call without a `_requester` runs as
- * the bot's own autonomous run (`_actor: 'self'`), which is what the agent loop
- * injects. Calls that name a requester are judged on it alone.
+ * Tools as the executor would call them from the dashboard: a call without a
+ * `_requester` or `_actor` gets `_actor: 'operator'`. Calls that name either
+ * are judged on them alone.
  */
 function tools(src: PersonalDataSource | undefined): Record<string, Tool> {
   return Object.fromEntries(
@@ -111,7 +111,7 @@ function tools(src: PersonalDataSource | undefined): Record<string, Tool> {
         ...t,
         execute: (args: Record<string, unknown>, l: never) =>
           t.execute(
-            '_requester' in args || '_actor' in args ? args : { _actor: 'self', ...args },
+            '_requester' in args || '_actor' in args ? args : { _actor: 'operator', ...args },
             l
           ),
       } as Tool,
@@ -173,7 +173,17 @@ describe('operator gate', () => {
     expect(src.readMail).not.toHaveBeenCalled();
   });
 
-  test("the operator and the bot's own run (_actor: 'self') get through", async () => {
+  test("the bot's own run (_actor: 'self') is refused before any account", async () => {
+    const src = source();
+    const r = await tools(src).calendar_agenda.execute(
+      { from: '2026-10-16', to: '2026-10-17', _actor: 'self' },
+      logger
+    );
+    expect(r.failureKind).toBe('policy');
+    expect(src.listEvents).not.toHaveBeenCalled();
+  });
+
+  test('the operator and the dashboard (_actor: operator) get through', async () => {
     const all = tools(source());
     const a = { from: '2026-10-16T00:00:00Z', to: '2026-10-17T00:00:00Z' };
     expect((await all.calendar_agenda.execute({ ...a, ...operator }, logger)).success).toBe(true);

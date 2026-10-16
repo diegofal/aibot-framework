@@ -24,8 +24,14 @@ describe('requireOperator — fails closed', () => {
     expect(requireOperator({})).toEqual(NOT_OPERATOR);
   });
 
-  test("the bot's own autonomous run (_actor: 'self') → allowed", () => {
-    expect(requireOperator({ _actor: 'self' })).toBeNull();
+  // Anyone who talks to the bot can plant goals and tasks that a later cycle
+  // or worker runs: the bot's own run is not trusted with personal data.
+  test("the bot's own autonomous run (_actor: 'self') → refused", () => {
+    expect(requireOperator({ _actor: 'self' })).toEqual(NOT_OPERATOR);
+  });
+
+  test("a cron job the operator created, firing in the operator's chat (_actor: 'operator-cron') → allowed", () => {
+    expect(requireOperator({ _actor: 'operator-cron' })).toBeNull();
   });
 
   test("the authenticated dashboard (_actor: 'operator') → allowed", () => {
@@ -107,6 +113,19 @@ describe('callerIdentity — the same rule, as a value', () => {
       callerIdentity({ _requester: { ...tgOperator, channelKind: 'web', address: 'op@x' } })
     ).toEqual({ kind: 'other', channelKind: 'web', address: 'op@x' });
     expect(callerIdentity({})).toEqual({ kind: 'other' });
+  });
+
+  test("an operator-cron run is the bot's run: the jobs it creates are not the operator's", () => {
+    expect(callerIdentity({ _actor: 'operator-cron' })).toEqual({ kind: 'self' });
+  });
+
+  test('a group call is other, even from the operator', () => {
+    expect(callerIdentity({ _requester: tgOperator, _isGroup: true })).toEqual({
+      kind: 'other',
+      channelKind: 'telegram',
+      address: '1',
+    });
+    expect(callerIdentity({ _actor: 'operator', _isGroup: true }).kind).toBe('other');
   });
 });
 

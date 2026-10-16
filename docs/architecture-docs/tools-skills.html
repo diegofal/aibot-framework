@@ -1090,7 +1090,8 @@
         <p><code>calendar_*</code>, <code>mail_*</code>, <code>whatsapp_export_summary</code> and operator-only <code>api_*</code> tools share one rule, <code>requireOperator</code>, which <strong>fails closed</strong>:</p>
         <ul>
           <li>Refused in a group chat (<code>_isGroup</code>), even for the operator.</li>
-          <li>Allowed when the executor injected a trusted <code>_actor</code>: <code>self</code> for the bot's own runs (agent-loop cycle and feedback executors, task workers, a cron instruction whose chat is <code>operator.telegramChatId</code>) or <code>operator</code> for an admin / single-tenant dashboard thread.</li>
+          <li>Allowed when the executor injected <code>_actor: 'operator'</code> (an admin / single-tenant dashboard thread) or <code>_actor: 'operator-cron'</code> (a cron instruction of a job the operator created, from the dashboard or by asking on Telegram, firing in <code>operator.telegramChatId</code>; <code>src/cron/trust.ts</code>).</li>
+          <li>Refused for the bot's own runs (<code>_actor: 'self'</code>: agent-loop cycles, feedback, task workers) and for jobs those runs created: anyone who talks to the bot can plant the goals and tasks they work on. Autonomous turns are not even offered these tools.</li>
           <li>Allowed when <code>_requester</code> is the operator on Telegram (the channel verifies the sender id). On web / REST the sender id is client-supplied and the operator is matched by email, so it does not count; neither does WhatsApp or Discord.</li>
           <li>Everything else is refused: the MCP expose server, collaboration and delegation, any call without requester or actor.</li>
         </ul>

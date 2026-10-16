@@ -3,13 +3,20 @@ import type { Tool, ToolResult } from './types';
 /**
  * Who a tool call runs for when there is no person to judge, injected by the
  * executor as `_actor` (always overwriting what the model sent):
- * - `self`: the bot's own autonomous run — agent-loop cycle and feedback
- *   executors, task workers, and a cron instruction whose reply goes to the
- *   operator's own chat.
- * - `operator`: the authenticated dashboard (an operator thread).
- * Absent everywhere else (conversations, collaboration, MCP expose, …).
+ * - `self`: the bot's own autonomous run (agent-loop cycle and feedback
+ *   executors, task workers). Not trusted with personal data: anyone who
+ *   talks to the bot can plant goals and tasks that such a run then works on.
+ *   Used only to let the bot manage its own cron jobs.
+ * - `operator`: the authenticated dashboard (an admin / single-tenant thread).
+ * - `operator-cron`: a cron instruction of a job the operator created
+ *   (`cronJobRunsForOperator`, `src/cron/trust.ts`), firing in the operator's
+ *   own chat.
+ * Absent everywhere else (conversations, collaboration, MCP expose, ...).
  */
-export type ToolActor = 'self' | 'operator';
+export type ToolActor = 'self' | 'operator' | 'operator-cron';
+
+/** The actors personal-data tools answer. */
+const OPERATOR_ACTORS: ReadonlySet<unknown> = new Set<ToolActor>(['operator', 'operator-cron']);
 
 /**
  * Channels whose sender id the channel itself authenticates *and* where the
@@ -27,10 +34,12 @@ const refuse = (content: string): ToolResult => ({
 });
 
 /**
- * Who is calling, by the gate's rule: the bot's own run (`_actor: 'self'`),
- * the operator (the dashboard, `_actor: 'operator'`, or the operator on a
- * channel that verified the identity), or anyone else (with the channel and
- * address the executor knew, if any). Recorded on cron jobs (`requestedBy`).
+ * Who is calling, recorded on cron jobs (`requestedBy`) and used to scope the
+ * cron tool: the bot's own run (`self`; an `operator-cron` run too, so what it
+ * creates is the bot's, not the operator's), the operator (the dashboard, or
+ * the operator on a channel that verified the identity, in private), or anyone
+ * else (with the channel and address the executor knew). A group call is
+ * always `other`.
  */
 export type CallerIdentity =
   | { kind: 'self' }
@@ -38,22 +47,24 @@ export type CallerIdentity =
   | { kind: 'other'; channelKind?: string; address?: string };
 
 export function callerIdentity(args: Record<string, unknown>): CallerIdentity {
-  if (args._actor === 'self') return { kind: 'self' };
-  if (args._actor === 'operator') return { kind: 'operator', channelKind: 'dashboard' };
   const requester = args._requester as
     | { isOperator?: boolean; channelKind?: string; address?: string }
     | undefined;
-  if (requester?.isOperator === true && OPERATOR_VERIFIED_CHANNELS.has(requester.channelKind)) {
-    return { kind: 'operator', channelKind: String(requester.channelKind) };
-  }
-  return {
+  const other = (): CallerIdentity => ({
     kind: 'other',
     ...(typeof requester?.channelKind === 'string' ? { channelKind: requester.channelKind } : {}),
     ...(typeof requester?.address === 'string' ? { address: requester.address } : {}),
-  };
+  });
+  if (args._isGroup === true) return other();
+  if (args._actor === 'self' || args._actor === 'operator-cron') return { kind: 'self' };
+  if (args._actor === 'operator') return { kind: 'operator', channelKind: 'dashboard' };
+  if (requester?.isOperator === true && OPERATOR_VERIFIED_CHANNELS.has(requester.channelKind)) {
+    return { kind: 'operator', channelKind: String(requester.channelKind) };
+  }
+  return other();
 }
 
-/** The bot itself or the operator: what personal-data tools (and cron targets) require. */
+/** The bot itself or the operator: who may point a cron job at another chat. */
 export function isTrustedCaller(args: Record<string, unknown>): boolean {
   return callerIdentity(args).kind !== 'other';
 }
@@ -62,11 +73,13 @@ export function isTrustedCaller(args: Record<string, unknown>): boolean {
  * Personal-data tools (calendar, mail, WhatsApp exports, operator-only HTTP
  * APIs) answer only the operator. The single rule, failing closed:
  * - never in a group conversation (`_isGroup`), not even for the operator;
- * - allowed for a trusted `_actor` (the bot's own run, the dashboard);
+ * - allowed for `_actor` `operator` (dashboard) or `operator-cron` (a job the
+ *   operator created, in the operator's chat);
  * - allowed for a `_requester` who is the operator on a channel that verified
  *   the identity (Telegram);
- * - refused for everything else, including a call with neither — the MCP
- *   expose server, collaboration and delegation, and any path not listed.
+ * - refused for everything else: the bot's own runs (`self`: cycles, feedback,
+ *   workers), the MCP expose server, collaboration and delegation, any call
+ *   without requester or actor.
  */
 export function requireOperator(args: Record<string, unknown>): ToolResult | null {
   if (args._isGroup === true) {
@@ -74,7 +87,8 @@ export function requireOperator(args: Record<string, unknown>): ToolResult | nul
       'Not available in a group chat: this tool only answers the operator, in private.'
     );
   }
-  if (isTrustedCaller(args)) return null;
+  if (OPERATOR_ACTORS.has(args._actor)) return null;
+  if (callerIdentity(args).kind === 'operator') return null;
   return refuse('Not available for this user: this tool only answers the operator.');
 }
 

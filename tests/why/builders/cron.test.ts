@@ -44,6 +44,14 @@ describe('describeSchedule', () => {
 });
 
 describe('cronJobToWhy', () => {
+  it('a tenant set it up through the API: not "you", not the agent', () => {
+    const w = cronJobToWhy({ job: job({ createdBy: { kind: 'tenant', tenantId: 'acme' } }) });
+    expect(w.what).toBe('A scheduled job set up through the API');
+    expect(w.by).toBeUndefined();
+    expect(w.missing).toBeUndefined();
+    expect(WhySchema.safeParse(w).success).toBe(true);
+  });
+
   it('an agent made it in a work cycle: the cycle, its plan and goal, the schedule', () => {
     const w = cronJobToWhy({
       job: job({ createdBy: { kind: 'agent', botId: 'b1', cycleId: 'c1', goalId: 'g1' } }),

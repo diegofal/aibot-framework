@@ -64,7 +64,9 @@ export type CronCreatedBy =
       goalId?: string;
       requestedBy?: CronRequester;
     }
-  | { kind: 'operator' };
+  | { kind: 'operator' }
+  /** `POST /api/cron` from a tenant (multi-tenant): never trusted with personal data. */
+  | { kind: 'tenant'; tenantId: string };
 
 export type CronJob = {
   id: string;

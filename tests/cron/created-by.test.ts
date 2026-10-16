@@ -231,8 +231,8 @@ describe('cron runs link to the job and the message they sent', () => {
       expect([chatId, text, botId]).toEqual([1, 't', 'b1']);
       expect(link.jobId).toBe(job.id);
       expect(cronJobIdFromMessageId(link.messageId)).toBe(job.id);
-      // No createdBy: never trusted to run as the bot itself.
-      expect('runsAsSelf' in link).toBe(false);
+      // No createdBy: never trusted with the operator's personal data.
+      expect('runsForOperator' in link).toBe(false);
 
       await Bun.sleep(20);
       const rows = await readCronRunLogEntries(resolveCronRunLogPath({ storePath, jobId: job.id }));
@@ -247,7 +247,7 @@ describe('cron runs link to the job and the message they sent', () => {
 });
 
 describe('cron runs carry the trust of their job', () => {
-  it('a job the bot created in its own run fires with runsAsSelf', async () => {
+  async function fire(createdBy: Record<string, unknown>) {
     const sendInstruction = mock(async () => 'reply');
     const state = makeState('/tmp/test-cron-store-trust', { sendInstruction });
     const job = createJob(state, {
@@ -255,10 +255,120 @@ describe('cron runs carry the trust of their job', () => {
       enabled: true,
       schedule: { kind: 'cron', expr: '0 9 * * *' },
       payload,
-      createdBy: { kind: 'agent', botId: 'b1', requestedBy: { kind: 'self' } },
+      createdBy: createdBy as never,
     });
     state.store?.jobs.push(job);
     await executeJob(state, job, { forced: true });
-    expect((sendInstruction.mock.calls[0] as unknown[])[3]).toMatchObject({ runsAsSelf: true });
+    return (sendInstruction.mock.calls[0] as unknown[])[3] as Record<string, unknown>;
+  }
+
+  it('a job the verified operator asked for fires with runsForOperator', async () => {
+    const link = await fire({
+      kind: 'agent',
+      botId: 'b1',
+      requestedBy: { kind: 'operator', channelKind: 'telegram' },
+    });
+    expect(link).toMatchObject({ runsForOperator: true });
+  });
+
+  it("a job from the bot's own run does not", async () => {
+    const link = await fire({ kind: 'agent', botId: 'b1', requestedBy: { kind: 'self' } });
+    expect('runsForOperator' in link).toBe(false);
+  });
+});
+
+// list / remove / run used to reach every job in the fleet for any caller.
+describe('cron tool — list, remove and run are scoped to the caller', () => {
+  const instr = (botId: string) => ({ kind: 'instruction', text: 't', chatId: 1, botId });
+  const jobs = [
+    {
+      id: 'j-self',
+      name: 'mine',
+      payload: instr('b1'),
+      createdBy: { kind: 'agent', botId: 'b1', requestedBy: { kind: 'self' } },
+    },
+    {
+      id: 'j-legacy',
+      name: 'old cycle',
+      payload: instr('b1'),
+      createdBy: { kind: 'agent', botId: 'b1', cycleId: 'c1' },
+    },
+    {
+      id: 'j-ana',
+      name: 'ana',
+      payload: instr('b1'),
+      createdBy: {
+        kind: 'agent',
+        botId: 'b1',
+        requestedBy: { kind: 'other', channelKind: 'web', address: '4242' },
+      },
+    },
+    { id: 'j-op', name: 'operator', payload: instr('b1'), createdBy: { kind: 'operator' } },
+    { id: 'j-b2', name: 'other bot', payload: instr('b2'), createdBy: { kind: 'operator' } },
+  ].map((j) => ({ enabled: true, schedule: { kind: 'cron', expr: '0 9 * * *' }, state: {}, ...j }));
+
+  function scoped() {
+    const svc = {
+      list: mock(async () => jobs),
+      remove: mock(async (id: string) => ({ ok: true, removed: true, id })),
+      run: mock(async () => ({ ok: true, ran: true })),
+    };
+    return { svc, tool: createCronTool(svc as never) };
+  }
+  const ids = (content: string) => (JSON.parse(content) as Array<{ id: string }>).map((j) => j.id);
+  const ana = { displayName: 'Ana', channelKind: 'web', address: '4242', isOperator: false };
+  const tgOperator = {
+    displayName: 'Op',
+    channelKind: 'telegram',
+    address: '9001',
+    isOperator: true,
+  };
+
+  it("the bot's own run sees and manages only the jobs its runs created, on its bot", async () => {
+    const { svc, tool } = scoped();
+    const r = await tool.execute({ action: 'list', _botId: 'b1', _actor: 'self' }, logger);
+    expect(ids(r.content)).toEqual(['j-self', 'j-legacy']);
+    expect(
+      (
+        await tool.execute(
+          { action: 'remove', jobId: 'j-op', _botId: 'b1', _actor: 'self' },
+          logger
+        )
+      ).success
+    ).toBe(false);
+    expect(
+      (
+        await tool.execute(
+          { action: 'remove', jobId: 'j-self', _botId: 'b1', _actor: 'self' },
+          logger
+        )
+      ).success
+    ).toBe(true);
+    expect(svc.remove.mock.calls.map((c) => c[0])).toEqual(['j-self']);
+  });
+
+  it('a user sees and runs only the jobs they asked for', async () => {
+    const { svc, tool } = scoped();
+    const r = await tool.execute({ action: 'list', _botId: 'b1', _requester: ana }, logger);
+    expect(ids(r.content)).toEqual(['j-ana']);
+    const run = await tool.execute(
+      { action: 'run', jobId: 'j-op', _botId: 'b1', _requester: ana },
+      logger
+    );
+    expect(run.success).toBe(false);
+    expect(svc.run).not.toHaveBeenCalled();
+  });
+
+  it('the verified operator (or the dashboard) sees every job of this bot, never another bot', async () => {
+    const { tool } = scoped();
+    for (const who of [{ _requester: tgOperator }, { _actor: 'operator' }]) {
+      const r = await tool.execute({ action: 'list', _botId: 'b1', ...who }, logger);
+      expect(ids(r.content)).toEqual(['j-self', 'j-legacy', 'j-ana', 'j-op']);
+      const other = await tool.execute(
+        { action: 'run', jobId: 'j-b2', _botId: 'b1', ...who },
+        logger
+      );
+      expect(other.success).toBe(false);
+    }
   });
 });

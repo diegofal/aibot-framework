@@ -78,6 +78,7 @@ function jobOutcome(job: CronJob): string {
 /** "Set up by you" / "Set up by the agent" / nothing for old jobs: the run's link back. */
 function creatorText(job: CronJob): string | undefined {
   if (!job.createdBy) return undefined;
+  if (job.createdBy.kind === 'tenant') return 'Set up through the API';
   return job.createdBy.kind === 'operator' ? 'Set up by you' : 'Set up by the agent';
 }
 
@@ -90,9 +91,13 @@ export function cronJobToWhy(input: CronJobWhyInput): Why {
         ? 'A scheduled job you set up'
         : by?.kind === 'agent'
           ? 'A scheduled job the agent set up'
-          : 'A scheduled job',
+          : by?.kind === 'tenant'
+            ? 'A scheduled job set up through the API'
+            : 'A scheduled job',
   };
-  if (by) why.by = by.kind === 'operator' ? 'operator' : 'agent';
+  if (by?.kind === 'operator' || by?.kind === 'agent') {
+    why.by = by.kind === 'operator' ? 'operator' : 'agent';
+  }
   let missing: string | undefined;
   if (by?.kind === 'agent') {
     const { cycle, goal, unlogged } = cycleAttribution(by.botId, by, input.cycle);

@@ -153,6 +153,15 @@ del dashboard son `operator` y `/api` no tiene auth, así que cualquiera que lle
 operador (el contenedor escucha en 127.0.0.1). Registrado en `docs/technical-debt.md` con su trigger:
 antes de exponer el dashboard fuera de localhost.
 
+Tercera pasada (decisión del lead): **ningún run autónomo toca datos personales**. Cualquiera que le
+habla al bot puede plantar goals/tasks (`manage_goals add` / `add_task` son libres en conversación)
+que después corre un ciclo o un worker con `_actor: 'self'`, así que el gate rechaza `self` y
+`runExecutorTurn` ni ofrece las tools `sensitive`. Pasan sólo el operador verificado (Telegram,
+privado), el dashboard (`_actor: 'operator'`) y un cron que **creó el operador** disparando en su chat
+(`_actor: 'operator-cron'`, `cronJobRunsForOperator`). P1c (agenda de la mañana) sigue funcionando
+como un cron que crea el operador (dashboard, o pidiéndolo por Telegram en privado); un job que
+arma el agent loop por su cuenta ya no lee calendario ni mail.
+
 Diseño: módulo `src/personal-accounts/` calcado de `src/claude-accounts/`.
 
 - **Setup único** (operador, una vez): proyecto en Google Cloud con OAuth client tipo *Web
@@ -256,6 +265,9 @@ Un cron `instruction` del operador a `default` (07:30 hora local; se crea desde 
 próximos 7 días, recordatorios de hoy. Un solo mensaje; si no hay nada nuevo, no mandes nada."
 El job existe ya como mecanismo; lo que falta son las tools. Si el bot de finanzas sigue mandando su
 08:30, el operador decide cuál apagar (ver decisiones).
+Para que sus tools de datos personales contesten, el job lo crea el operador (Automations, o
+pidiéndolo por Telegram en privado) y entrega en su chat (`operator.telegramChatId`): corre como
+`_actor: 'operator-cron'` (`src/cron/trust.ts`). Un job que arme el agent loop solo no alcanza.
 
 ### P2 — Después
 

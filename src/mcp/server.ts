@@ -6,6 +6,7 @@
  */
 
 import type { Logger } from '../logger';
+import { stripInternalArgs } from '../tools/operator-gate';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import {
   MCP_PROTOCOL_VERSION,
@@ -208,7 +209,11 @@ export class McpServer {
         }
 
         try {
-          const result = await this.deps.executeTool(params.name, params.arguments ?? {});
+          // Only our executor may set internal `_` args (`_actor`, `_requester`, ...).
+          const result = await this.deps.executeTool(
+            params.name,
+            stripInternalArgs(params.arguments ?? {})
+          );
           return Response.json(
             createJsonRpcResponse(id, {
               content: [{ type: 'text', text: result.content }],

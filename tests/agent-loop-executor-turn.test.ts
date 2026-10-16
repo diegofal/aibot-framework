@@ -147,6 +147,31 @@ describe('cycle executor — actor', () => {
   });
 });
 
+describe('cycle executor — personal data', () => {
+  // Anyone who talks to the bot can plant the goals a cycle works on, so a
+  // cycle (or worker) is never offered, nor allowed to run, a sensitive tool.
+  test('a sensitive tool is not offered and is refused before it runs', async () => {
+    const ran: string[] = [];
+    const mail: Tool = { ...tool('mail_read', ran) };
+    mail.definition = { ...mail.definition, sensitive: true };
+    let offered: string[] = [];
+    let result: any;
+    const { loop } = makeLoop({
+      tools: [mail, tool('web_search', ran)],
+      chat: async (_m, o) => {
+        offered = (o.tools ?? []).map((d: any) => d.function.name);
+        result = await o.toolExecutor('mail_read', {});
+        return { text: 'done' };
+      },
+    });
+    await loop.runOne('bot1');
+    expect(offered).toContain('web_search');
+    expect(offered).not.toContain('mail_read');
+    expect(ran).toEqual([]);
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('cycle executor — permissions', () => {
   test('a tool blocked for the agent loop is refused at execution', async () => {
     const ran: string[] = [];

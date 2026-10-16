@@ -19,8 +19,8 @@ const logger = {
 
 const SECRET = 'sk-test-very-secret-123';
 const ENV = 'TEST_HTTP_API_KEY';
-/** The bot's own run (agent loop / worker / operator cron): what the executor injects. */
-const SELF = { _actor: 'self' } as const;
+/** The dashboard operator: what the executor injects for an admin dashboard thread. */
+const OPERATOR = { _actor: 'operator' } as const;
 
 function finanzas(overrides: Partial<Record<string, unknown>> = {}): HttpApiConfig {
   return HttpApiConfigSchema.parse({
@@ -186,7 +186,7 @@ describe('buildHttpApiUrl', () => {
 describe('execution', () => {
   test('sends the bearer header; the secret never reaches args or result', async () => {
     const f = fakeFetch(200, { saldo: 100, token: SECRET });
-    const args: Record<string, unknown> = { ...SELF };
+    const args: Record<string, unknown> = { ...OPERATOR };
     const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute(args, logger);
     expect(r.success).toBe(true);
     expect(f.calls).toHaveLength(1);
@@ -202,7 +202,7 @@ describe('execution', () => {
   test('header auth sends the configured header', async () => {
     const f = fakeFetch();
     const api = finanzas({ auth: { type: 'header', env: ENV, header: 'X-Api-Key' } });
-    await tool(api, 'api_finanzas_saldos', f.fetch).execute({ ...SELF }, logger);
+    await tool(api, 'api_finanzas_saldos', f.fetch).execute({ ...OPERATOR }, logger);
     expect(headerOf(f.calls[0], 'x-api-key')).toBe(SECRET);
     expect(headerOf(f.calls[0], 'authorization')).toBeNull();
   });
@@ -210,7 +210,10 @@ describe('execution', () => {
   test('missing env var → honest error without calling', async () => {
     delete process.env[ENV];
     const f = fakeFetch();
-    const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute({ ...SELF }, logger);
+    const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute(
+      { ...OPERATOR },
+      logger
+    );
     expect(r.success).toBe(false);
     expect(r.content).toContain(ENV);
     expect(f.calls).toHaveLength(0);
@@ -218,7 +221,10 @@ describe('execution', () => {
 
   test('non-2xx → failure with status and a short body excerpt', async () => {
     const f = fakeFetch(500, `boom ${SECRET} ${'x'.repeat(2000)}`);
-    const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute({ ...SELF }, logger);
+    const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute(
+      { ...OPERATOR },
+      logger
+    );
     expect(r.success).toBe(false);
     expect(r.content).toContain('500');
     expect(r.content).toContain('boom');
@@ -229,12 +235,12 @@ describe('execution', () => {
 
   test('404 → not-found, 403 → blocked', async () => {
     const r404 = await tool(finanzas(), 'api_finanzas_saldos', fakeFetch(404, 'no').fetch).execute(
-      { ...SELF },
+      { ...OPERATOR },
       logger
     );
     expect(r404.failureKind).toBe('not-found');
     const r403 = await tool(finanzas(), 'api_finanzas_saldos', fakeFetch(403, 'no').fetch).execute(
-      { ...SELF },
+      { ...OPERATOR },
       logger
     );
     expect(r403.failureKind).toBe('blocked');
@@ -244,7 +250,7 @@ describe('execution', () => {
     const bad = (async () => {
       throw new Error(`network down Authorization: Bearer ${SECRET}`);
     }) as unknown as typeof fetch;
-    const r = await tool(finanzas(), 'api_finanzas_saldos', bad).execute({ ...SELF }, logger);
+    const r = await tool(finanzas(), 'api_finanzas_saldos', bad).execute({ ...OPERATOR }, logger);
     expect(r.success).toBe(false);
     expect(r.content).not.toContain(SECRET);
     expect(JSON.stringify(logs)).not.toContain(SECRET);
@@ -260,7 +266,7 @@ describe('execution', () => {
       });
     }) as unknown as typeof fetch;
     const r = await tool(finanzas(), 'api_finanzas_saldos', redirecting).execute(
-      { ...SELF },
+      { ...OPERATOR },
       logger
     );
     expect(calls).toHaveLength(1);
@@ -272,7 +278,10 @@ describe('execution', () => {
 
   test('non-JSON body is returned as text', async () => {
     const f = fakeFetch(200, 'plain text');
-    const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute({ ...SELF }, logger);
+    const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute(
+      { ...OPERATOR },
+      logger
+    );
     expect(r.success).toBe(true);
     expect(r.content).toContain('plain text');
   });
@@ -300,11 +309,14 @@ describe('operator gate', () => {
     expect(f.calls).toHaveLength(0);
   });
 
-  test("the bot's own run (_actor: 'self') → calls", async () => {
+  test("the bot's own run (_actor: 'self') → refused without fetch", async () => {
     const f = fakeFetch();
-    const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute({ ...SELF }, logger);
-    expect(r.success).toBe(true);
-    expect(f.calls).toHaveLength(1);
+    const r = await tool(finanzas(), 'api_finanzas_saldos', f.fetch).execute(
+      { _actor: 'self' },
+      logger
+    );
+    expect(r.failureKind).toBe('policy');
+    expect(f.calls).toHaveLength(0);
   });
 
   test('no requester and no actor (MCP expose, collaboration) → refused without fetch', async () => {
