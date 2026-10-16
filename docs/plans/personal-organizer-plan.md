@@ -271,6 +271,8 @@ participante más. No hay API oficial para leer grupos ajenos.
 3. **Exportar el chat a mano** (WhatsApp → Exportar chat → sin archivos → compartir a Finny por
    Telegram): oficial y sin riesgo; Finny parsea el `.txt` y resume desde la última exportación.
    Cero automatización, pero sirve hoy y valida si el resumen es útil antes de invertir en 1.
+   **Implementada (2026-10-16, branch `feat/whatsapp-export-summary`)**: `src/whatsapp-export/` +
+   tool `whatsapp_export_summary`; ver CHANGELOG.
 
 Propuesta: arrancar con 3 (chico: un parser del formato de exportación + un skill de resumen) y, si
 el operador lo usa, pasar a 1 con una línea dedicada. Datos de menores en los grupos: los mensajes

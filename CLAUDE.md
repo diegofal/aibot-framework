@@ -304,6 +304,20 @@ Mensajes de una persona a otra a través de un bot, en los dos sentidos (plan: `
 
 Consumidores: `src/tools/send-message.ts` (reescrito sobre relays: `recipient` (el id viejo de un contacto fusionado resuelve al contacto en que se fusionó) o `replyTo`, `expectsReply`, `channel` (preferencia, no restricción), `register`; el remitente es `_requester`, nunca un argumento; el resultado empieza con `Delivered` / `NOT delivered` / `Delivery FAILED`), `ConversationGate` (paso 0), `ConversationPipeline` (`requester` + `relayContext`), `BotManager.startBot` (seed del operador). Fixes del mismo cambio: `ask_human` en conversación ya no escribe "needs your input" en el chat de un usuario (`mayNotifyAskingChat` en `src/tools/ask-human.ts`: sólo el chat del operador o uno de reporte del agent loop / collaboration, que inyectan `_memoryViewer: null`), y el fallback de pregunta única de `AskHumanStore` sólo resuelve una pregunta cuya notificación llegó a ese chat (`messageId` presente).
 
+### Módulos WhatsApp export (`src/whatsapp-export/`)
+
+Resumen de grupos de WhatsApp por exportación manual (plan: `docs/plans/personal-organizer-plan.md`, P3 opción 3). El operador exporta el grupo (WhatsApp → grupo → Más → Exportar chat → Sin archivos) y manda el `.txt` (o el `.zip` de iOS con `_chat.txt`) a su bot por Telegram. El handler de documentos (`src/bot/media-handlers.ts`, `isOperatorSender`: rol en el directorio o `operator.telegramChatId`; sólo chat privado) desvía el archivo a `intakeWhatsAppExport`; de cualquier otro remitente sigue siendo un documento común.
+
+| Archivo | Responsabilidad |
+|---|---|
+| `parser.ts` | Puro: `parseWhatsAppExport` (Android `16/10/26, 08:22 - Nombre: texto`, iOS `[16/10/26, 08:22:05] Nombre: texto`, 12h/24h con `a. m.`/`PM`, multilínea; descarta sistema, multimedia omitida y borrados, saca la marca de editado; orden D/M o M/D por campo > 12 y si no por el orden del chat, default D/M), timestamps locales sin zona `YYYY-MM-DDTHH:MM:SS`; `isWhatsAppExportFileName` (`.txt` con "WhatsApp" en el nombre, `_chat.txt`, todo `.zip`), `groupNameFromFileName`, `groupSlug`, `looksLikeWhatsAppExport` |
+| `zip.ts` | Lector zip mínimo sin dependencias (stored + deflate, inflado acotado a 20 MB): `extractChatText` (`_chat.txt`, si no el primer `.txt`), `ZipError` |
+| `store.ts` | `WhatsAppExportStore`: `<paths.data>/whatsapp-exports/<botId>/<group-slug>.json` con `lastMessageAt` (cursor), `lastExport` y una ventana acotada de mensajes (`RETENTION_DAYS` = 30, 3000 mensajes, 2000 chars c/u), podada en cada ingest (todos los grupos del bot) y en cada lectura; el cursor sobrevive a la poda. `ingest` marca nuevos los mensajes que no estaban (multiset por ts+autor+texto) y no son anteriores al cursor. `find` por slug, parte del nombre o el último exportado; `newMessages`. Nada va a la memoria del bot |
+| `summary.ts` | `SUMMARY_GUIDE` (qué lleva un resumen para padres), `chunkMessages` (partes de ~12000 chars) |
+| `intake.ts` | `intakeWhatsAppExport`: extrae, parsea, guarda y arma el turno (caption + "N new messages since the previous export" + llamar a `whatsapp_export_summary` + la guía); nunca lleva los mensajes crudos, y el transcript guarda sólo `[WhatsApp export: <grupo> — N new messages]`. Errores legibles como `MediaError` |
+
+Tool `whatsapp_export_summary` (`src/tools/whatsapp-export-summary.ts`, registrado en `ToolRegistry` con `paths.data`): devuelve los mensajes nuevos del último export (`group?`, `part?`) envueltos como contenido externo. Sólo el operador (`requireOperator`, `src/tools/operator-gate.ts`, compartido con los tools de datos personales) y sólo en una conversación (sin `_requester` también se rechaza: el agent loop no lee grupos).
+
 ### Módulos A2A (`src/a2a/`)
 
 | Archivo | Responsabilidad |
