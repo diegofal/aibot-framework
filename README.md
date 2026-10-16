@@ -160,6 +160,8 @@ src/
 │   └── outbound.ts         #   Proactive message delivery factory
 ├── relay/                  # Person-to-person relays through a bot (send_message): delivery
 │                           #   resolver, durable records, return path, policy
+├── whatsapp-export/        # WhatsApp group exports sent as Telegram documents: parser
+│                           #   (Android/iOS, es/en), zip reader, per-group store (30-day retention)
 ├── a2a/                    # Agent-to-Agent Protocol (v0.3.0)
 │   ├── server.ts           #   JSON-RPC handler + directory endpoints
 │   ├── client.ts           #   HTTP client for external agents
@@ -303,6 +305,10 @@ A human message arriving on REST, WebSocket, WhatsApp or Discord emits the `huma
 ### Relays (person-to-person messages)
 
 `send_message` passes a message from the person talking to the bot to another person (the operator or a known contact) and routes the answer back. A relay is a durable record (`<data>/relays/<botId>.jsonl`) with an honest delivery status: `delivered` (Telegram or WhatsApp accepted it, or a live web connection exists), `queued` (stored in a web session, nobody notified) or `failed` — never "sent" when nothing reached a person. Route order is fixed: Telegram (the bot's own instance, then any fleet instance) → WhatsApp → web. The sender is the conversation's speaker, injected by the executor (`_requester`), never a model argument; the recipient sees a system-stamped header ("📨 De Ana (vía Bot)") and, when an answer is expected, a reply footer. A Telegram reply to a relay message is forwarded to the requester verbatim without an LLM turn; free-text answers close the relay with `send_message(replyTo)`; the conversation prompt lists what waits on the speaker and what they asked to pass on. Identical text to the same recipient within 10 minutes is not sent twice. Policy: anyone → operator and operator → anyone; person → person only with `bots[].relay.peerToPeer`. Every human who talks to a bot (Telegram included) is tracked in the contact directory, and the configured operator is one contact seeded from `config.operator` at bot start.
+
+### WhatsApp group summaries (manual export)
+
+The operator exports a WhatsApp group (WhatsApp → group → More → Export chat → Without media) and sends the file — `.txt`, or the iOS `.zip` with `_chat.txt` — to the bot on Telegram, optionally with a caption such as "resumime". The document handler parses it (Android and iOS formats, 12h/24h, Spanish and English), stores only messages newer than the previous export of that group (`<data>/whatsapp-exports/<botId>/<group>.json`, 30-day retention, never in the bot's memory or the session transcript) and asks the model to call `whatsapp_export_summary`, which returns them (in parts when large) for a parent-focused summary: dates, things to bring or do, money, schedule changes, requests to the operator, decisions. Operator only; from anyone else the file is an ordinary document.
 
 ### A2A Protocol
 

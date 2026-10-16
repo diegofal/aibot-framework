@@ -78,6 +78,8 @@ import {
 } from '../tools/twitter';
 import { createWebFetchTool } from '../tools/web-fetch';
 import { createWebSearchTool } from '../tools/web-search';
+import { createWhatsAppExportSummaryTool } from '../tools/whatsapp-export-summary';
+import { whatsappExportStoreFor } from '../whatsapp-export/store';
 import { DynamicToolRegistry } from './dynamic-tool-registry';
 
 // ─── Tool Category System ───
@@ -505,6 +507,13 @@ export class ToolRegistry {
         })
       );
       logger.info('send_message tool initialized');
+    }
+
+    // WhatsApp group exports the operator sends as documents (src/whatsapp-export/)
+    if (config.paths?.data) {
+      tools.push(
+        createWhatsAppExportSummaryTool({ store: whatsappExportStoreFor(config.paths.data) })
+      );
     }
 
     // Productions tools

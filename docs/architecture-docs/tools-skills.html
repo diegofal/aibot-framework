@@ -837,7 +837,7 @@
         <!-- ---- Utility ---- -->
         <div class="category-header">
           <h2 id="cat-utility">Utility</h2>
-          <span class="count">2 tools</span>
+          <span class="count">3 tools</span>
         </div>
 
         <div class="tool-grid cols-2">
@@ -886,6 +886,19 @@
                 <li><code>replyTo</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Relay id (<code>r-xxxxxxxx</code>) this message answers; the recipient is taken from the record, and only the person it was addressed to can answer it</span></li>
                 <li><code>channel</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; telegram | whatsapp | web | auto (default: auto)</span></li>
                 <li><code>register</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Register new contact if not found: { displayName, channelKind, address, username? }</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- whatsapp_export_summary -->
+          <div class="tool-card">
+            <h4 class="tool-name">whatsapp_export_summary</h4>
+            <div class="tool-desc">Reads the new messages of a WhatsApp group export the operator sent as a Telegram document (WhatsApp &rarr; group &rarr; More &rarr; Export chat &rarr; Without media: a <code>.txt</code>, or a <code>.zip</code> with <code>_chat.txt</code> on iOS), so the conversation model writes a parent-group summary: dates and events, things to bring or do, money to pay or collect, schedule changes, requests to the operator, decisions; no chit-chat. Only messages newer than the previous export of the same group (<code>src/whatsapp-export/</code>, <code>&lt;paths.data&gt;/whatsapp-exports/&lt;botId&gt;/&lt;group-slug&gt;.json</code>, 30-day retention, never written to memory). The document handler stores the export and tells the model to call this tool; the raw messages never enter the session transcript. Operator only and only inside a conversation (<code>requireOperator</code> in <code>src/tools/operator-gate.ts</code>, plus a refusal when there is no <code>_requester</code>); output is wrapped as untrusted content and split into parts of ~12,000 characters.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>group</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Group name or part of it; omitted = the most recent export</span></li>
+                <li><code>part</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Part to read, from 1; the result names the next part when there is one</span></li>
               </ul>
             </div>
           </div>

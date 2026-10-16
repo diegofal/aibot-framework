@@ -1,6 +1,8 @@
 import type { Bot, Context } from 'grammy';
 import type { BotConfig } from '../config';
-import { MediaError } from '../media';
+import { MediaError, type MediaResult } from '../media';
+import { intakeWhatsAppExport, isWhatsAppExportDocument } from '../whatsapp-export/intake';
+import { whatsappExportStoreFor } from '../whatsapp-export/store';
 import type { BotContext } from './types';
 
 /**
@@ -47,6 +49,22 @@ export function isAuthorized(
   if (!userId) return false;
   if (!config.allowedUsers || config.allowedUsers.length === 0) return true;
   return config.allowedUsers.includes(userId);
+}
+
+/** The sender is the operator (directory role or `operator.telegramChatId`). */
+export function isOperatorSender(
+  ctx: BotContext,
+  config: BotConfig,
+  telegramCtx: Context
+): boolean {
+  const from = telegramCtx.from;
+  if (!from || from.is_bot) return false;
+  const speaker = ctx.relayService?.speaker(config.id, {
+    channelKind: 'telegram',
+    address: String(from.id),
+    displayName: from.first_name ?? String(from.id),
+  });
+  return speaker?.isOperator ?? from.id === ctx.config.operator?.telegramChatId;
 }
 
 /**
@@ -159,13 +177,27 @@ export function registerMediaHandlers(bot: Bot, config: BotConfig, deps: MediaHa
         caption = ctx.sessionManager.stripBotMention(caption, botUsername, config.mentionPatterns);
       }
 
-      const result = await mediaHandler.processDocument(
-        fileUrl,
-        doc.mime_type,
-        doc.file_name,
-        caption ?? undefined,
-        doc.file_size
-      );
+      // A WhatsApp chat export from the operator, in a private chat: stored
+      // per group and summarized through whatsapp_export_summary.
+      const result: MediaResult =
+        !isGroup &&
+        isWhatsAppExportDocument(doc.file_name) &&
+        isOperatorSender(ctx, config, telegramCtx)
+          ? await intakeWhatsAppExport({
+              botId: config.id,
+              fileName: doc.file_name,
+              caption: caption ?? undefined,
+              buffer: await mediaHandler.downloadFile(fileUrl, doc.file_size),
+              store: whatsappExportStoreFor(ctx.config.paths.data),
+              nowMs: Date.now(),
+            })
+          : await mediaHandler.processDocument(
+              fileUrl,
+              doc.mime_type,
+              doc.file_name,
+              caption ?? undefined,
+              doc.file_size
+            );
       const sessionKey = ctx.sessionManager.deriveKey(config.id, telegramCtx);
       const serializedKey = ctx.sessionManager.serializeKey(sessionKey);
       ctx.messageBuffer?.enqueue({
