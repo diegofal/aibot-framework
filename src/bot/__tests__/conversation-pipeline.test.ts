@@ -1676,7 +1676,7 @@ describe('ConversationPipeline', () => {
       expect(seen).toHaveLength(0);
     });
 
-    it('does NOT emit on the Telegram handleConversation path (already counted by requestImmediateRun)', async () => {
+    it('does NOT emit on the Telegram handleConversation path (already counted by recordHumanMessage)', async () => {
       const seen = collect();
       await pipeline.handleConversation(
         createMockContext(),

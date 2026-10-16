@@ -8,6 +8,7 @@ import {
   isRepetitiveAction,
   isSimilarSummary,
   logToMemory,
+  operatorChatReplies,
   scanFileTree,
 } from '../../src/bot/agent-loop-utils';
 
@@ -167,5 +168,45 @@ describe('logToMemory', () => {
 
     logToMemory(mockCtx, 'bot1', 'test');
     expect(mockCtx.logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('operatorChatReplies', () => {
+  const history = [
+    { role: 'user', content: '[Fri 2026-10-16 08:39] no summaries unless I ask' },
+    { role: 'assistant', content: 'one' },
+    { role: 'assistant', content: '', tool_calls: [{}] },
+    { role: 'tool', content: 'tool output' },
+    { role: 'assistant', content: 'two' },
+    { role: 'assistant', content: 'three' },
+    { role: 'assistant', content: 'four' },
+  ];
+
+  it('returns the last assistant replies of the operator private chat, oldest first', () => {
+    const keys: string[] = [];
+    const sm = {
+      getHistory: (key: string) => {
+        keys.push(key);
+        return history;
+      },
+    };
+    expect(operatorChatReplies(sm as any, 'default', 796164002, 3)).toEqual([
+      'two',
+      'three',
+      'four',
+    ]);
+    expect(keys).toEqual(['bot:default:private:796164002']);
+  });
+
+  it('is empty without an operator chat or when the session read throws', () => {
+    expect(operatorChatReplies({ getHistory: () => history } as any, 'default', undefined)).toEqual(
+      []
+    );
+    const throwing = {
+      getHistory: () => {
+        throw new Error('boom');
+      },
+    };
+    expect(operatorChatReplies(throwing as any, 'default', 1)).toEqual([]);
   });
 });

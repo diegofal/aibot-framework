@@ -199,23 +199,30 @@ export class CuriosityService {
     return nav.direction;
   }
 
-  recordDirective(botId: string, text: string, source: DirectiveSource): void {
+  recordDirective(
+    botId: string,
+    text: string,
+    source: DirectiveSource,
+    status: 'active' | 'context' = 'active'
+  ): void {
     if (!this.resolve(botId)?.enabled) return;
     const store = this.storeFor(botId);
     if (!store) return;
     store.saveNavigator(
-      addDirective(store.loadNavigator(), { text, source, receivedAt: this.now() })
+      addDirective(store.loadNavigator(), { text, source, receivedAt: this.now(), status })
     );
   }
 
   /**
    * A message the operator sent the bot (operator Telegram chat or the
-   * authenticated dashboard thread). Only these steer; public users never do.
+   * authenticated dashboard thread). Public users never reach this. The
+   * conversation answers it, so it is kept as context for the loop, never as
+   * an instruction the loop should answer again.
    */
   recordOperatorMessage(botId: string, text: string): boolean {
     const t = text.trim();
     if (t.length < MIN_DIRECTIVE_CHARS || !this.resolve(botId)?.enabled) return false;
-    this.recordDirective(botId, t, 'message');
+    this.recordDirective(botId, t, 'message', 'context');
     return true;
   }
 }

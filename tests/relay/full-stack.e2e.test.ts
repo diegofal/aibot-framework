@@ -693,3 +693,35 @@ describe('relay full stack: honest failure (scenario 6)', () => {
     expect(h.sessions.getFullHistory(PRIVATE_0)).toHaveLength(0);
   });
 });
+
+describe('one speaker per chat: the operator chat is answered once', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await makeHarness();
+  });
+  afterEach(async () => {
+    await h.cleanup();
+  });
+
+  test('an operator turn gets one reply, wakes no cycle, and is kept as context', async () => {
+    const internals = h.manager as any;
+    internals.config.agentLoop.enabled = true;
+    const woken: unknown[] = [];
+    const counted: string[] = [];
+    internals.agentLoop.requestImmediateRun = (...args: unknown[]) => woken.push(args);
+    internals.agentLoop.recordHumanMessage = (botId: string) => counted.push(botId);
+
+    h.llm.turns.push({ tools: [], reply: 'Dale, sin resúmenes salvo que me los pidas.' });
+    await h.send(OP, 'no necesito resúmenes salvo que yo te los pida');
+
+    expect(h.sentTo(OP_ID)).toHaveLength(1);
+    expect(woken).toHaveLength(0);
+    expect(counted).toEqual([BOT_ID]);
+
+    const nav = internals.curiosityService?.storeFor(BOT_ID)?.loadNavigator();
+    if (nav) {
+      const said = nav.directives.find((d: { text: string }) => d.text.includes('resúmenes'));
+      expect(said?.status).toBe('context');
+    }
+  });
+});

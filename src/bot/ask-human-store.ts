@@ -89,6 +89,8 @@ export interface HandleReplyResult {
   questionId?: string;
   conversationId?: string;
   botId?: string;
+  /** Worker run that asked: its answer goes to the run, not to a loop cycle. */
+  runId?: string;
 }
 
 /**
@@ -473,8 +475,9 @@ export class AskHumanStore {
           this.recordAnswer(entry, text);
           const conversationId = entry.conversationId;
           const botId = entry.botId;
+          const runId = entry.runId;
           this.cleanup(qId);
-          return { matched: true, questionId: qId, conversationId, botId };
+          return { matched: true, questionId: qId, conversationId, botId, runId };
         }
       }
     }
@@ -493,8 +496,9 @@ export class AskHumanStore {
         this.recordAnswer(entry, text);
         const conversationId = entry.conversationId;
         const botId = entry.botId;
+        const runId = entry.runId;
         this.cleanup(qId);
-        return { matched: true, questionId: qId, conversationId, botId };
+        return { matched: true, questionId: qId, conversationId, botId, runId };
       }
     }
 

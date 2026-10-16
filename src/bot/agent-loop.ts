@@ -59,6 +59,7 @@ import {
   isRepetitiveAction,
   isSimilarSummary,
   logToMemory,
+  operatorChatReplies,
   resolveDurableOutputCount,
   scanFileTree,
   sendReport,
@@ -885,6 +886,11 @@ export class AgentLoop {
   /** Interrupt current sleep so the loop re-evaluates immediately */
   wakeUp(): void {
     this.scheduler.wakeUp();
+  }
+
+  /** Record a human chat message for the engagement gate, without waking a cycle */
+  recordHumanMessage(botId: string): void {
+    this.scheduler.recordHumanMessage(botId);
   }
 
   /** Request an immediate agent loop run for a specific bot */
@@ -1714,6 +1720,12 @@ export class AgentLoop {
 
     // Resolve standing directives (custom + presets) for this bot — must be before strategist
     const directives = resolveDirectives(botConfig);
+    // What the conversation already told the operator: the loop must not say it again.
+    const chatReplies = operatorChatReplies(
+      this.ctx.sessionManager,
+      botId,
+      this.ctx.config.operator?.telegramChatId
+    );
 
     // Phase -1: Process pending human feedback
     if (checkTimeout && !checkTimeout('before_feedback')) {
@@ -1931,6 +1943,7 @@ export class AgentLoop {
                 datetime,
                 soulLoader,
                 directives: directives.length > 0 ? directives : undefined,
+                chatReplies,
                 behavioralState,
                 outcomeStats,
                 traitState,
@@ -2239,6 +2252,7 @@ export class AgentLoop {
         toolCategoryList,
         allowedWritePaths,
         directives: directives.length > 0 ? directives : undefined,
+        chatReplies,
         activeUsersSummary: activeUsersSummary || undefined,
         engagementGateNote,
         outcomeRecent,
@@ -2360,6 +2374,7 @@ export class AgentLoop {
         toolCategoryList,
         allowedWritePaths,
         directives: directives.length > 0 ? directives : undefined,
+        chatReplies,
         activeUsersSummary: activeUsersSummary || undefined,
         engagementGateNote,
         outcomeRecent,
@@ -2656,6 +2671,7 @@ export class AgentLoop {
       workDir: agentConfig.workDir,
       fileTree,
       directives: directives.length > 0 ? directives : undefined,
+      chatReplies,
       productionsEnabled,
       documents: productionsEnabled ? this.livingDocuments(botId) : undefined,
     });

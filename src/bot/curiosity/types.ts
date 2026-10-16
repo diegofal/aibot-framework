@@ -165,7 +165,12 @@ export interface Directive {
   receivedAt: string;
   /** Outputs that answered it so far. */
   servedOutputs: number;
-  status: 'active' | 'served';
+  /**
+   * `context`: something the operator said in a chat the conversation already
+   * answered. Background for the loop, never an instruction to act on — the
+   * loop answering it again is what sent the operator duplicate replies.
+   */
+  status: 'active' | 'served' | 'context';
   servedAt?: string;
 }
 

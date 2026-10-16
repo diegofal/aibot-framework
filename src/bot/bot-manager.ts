@@ -402,6 +402,9 @@ export class BotManager {
       recordOperatorMessage: (botId: string, text: string) => {
         this.curiosityService?.recordOperatorMessage(botId, text);
       },
+      // An ask_human answered from Telegram: the loop that asked should resume
+      // now, as it does when the answer comes from the dashboard.
+      wakeAgentLoop: (botId: string) => this.requestImmediateAgentRun(botId, { feedback: false }),
 
       getActiveModel: (botId: string) => this.getActiveModel(botId),
       getLLMClient: (botId: string) => this.getLLMClient(botId),
@@ -643,7 +646,9 @@ export class BotManager {
           sessionText,
           isVoice
         );
-        this.requestImmediateAgentRun(botCfg.id);
+        // The conversation answered it: count it, but never wake a cycle that
+        // would answer the same message again.
+        if (this.config.agentLoop.enabled) this.agentLoop.recordHumanMessage(botCfg.id);
       },
       this.logger
     );

@@ -12,6 +12,14 @@ import { type PermissionMode, buildSensitiveActionProtocol } from './tool-permis
 import type { ToolRegistry } from './tool-registry';
 import type { BotContext } from './types';
 
+/**
+ * A bot asked for a calendar it does not have answered "no MCP server is
+ * configured": correct, but it handed the user the framework's plumbing.
+ */
+const MISSING_CAPABILITY_NOTE = `## When you cannot do something
+
+If you have no tool or connection for what is asked (a calendar, an email account, an app), say so plainly in the person's words, e.g. "todavía no tengo tu calendario conectado", and offer what you can do now. Never name internal mechanisms (MCP servers, tool names, connectors, config files) unless the person is asking how the system works.`;
+
 export interface SystemPromptOptions {
   /** 'conversation' includes all tool blocks; 'collaboration' only memory_search + soul; 'autonomous' for agent loop */
   mode: 'conversation' | 'collaboration' | 'autonomous';
@@ -77,6 +85,7 @@ export class SystemPromptBuilder {
       if (options.speaker) {
         prompt += `\n\n${renderSpeakerSection(options.speaker, { isGroup })}`;
       }
+      prompt += `\n\n${MISSING_CAPABILITY_NOTE}`;
     }
 
     // Tenant customization overlay (identity, knowledge, goals, rules)

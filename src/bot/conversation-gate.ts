@@ -105,6 +105,8 @@ export class ConversationGate {
             'answered'
           );
         }
+        // A worker's question resumes its run (pool.onAnswer), not a cycle.
+        if (!replyResult.runId) this.ctx.wakeAgentLoop?.(replyResult.botId ?? config.id);
         return { allowed: false, reason: 'ask_human_reply' };
       }
     }

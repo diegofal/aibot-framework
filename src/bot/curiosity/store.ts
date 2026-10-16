@@ -96,7 +96,18 @@ export class CuriosityStore {
   }
 
   loadNavigator(): NavigatorState {
-    return this.readJson(CURIOSITY_FILES.navigator, emptyNavigatorState);
+    const nav = this.readJson(CURIOSITY_FILES.navigator, emptyNavigatorState);
+    // Before 2026-10-16 operator chat lines were saved as instructions; read
+    // them as what they are, context the conversation already answered.
+    if (!nav.directives.some((d) => d.source === 'message' && d.status !== 'context')) return nav;
+    return {
+      ...nav,
+      directives: nav.directives.map((d) =>
+        d.source === 'message' && d.status !== 'context'
+          ? { ...d, status: 'context' as const, servedAt: undefined }
+          : d
+      ),
+    };
   }
 
   saveNavigator(state: NavigatorState): void {

@@ -406,7 +406,7 @@
               <tr><th>Piece</th><th>Behaviour</th></tr>
             </thead>
             <tbody>
-              <tr><td>Directive decay</td><td>Sources are operator surfaces only: answered ask_human (<code>Q: … A: …</code>), dashboard agent feedback, messages from the operator's private Telegram chat (<code>config.operator.telegramChatId</code>; <code>ConversationPipeline.handleConversation</code> calls <code>ctx.recordOperatorMessage</code>) and messages the operator types in a dashboard conversation thread (<code>POST /api/conversations/:botId/:id/messages</code> &rarr; <code>BotManager.recordOperatorMessage</code>). <code>CuriosityService.recordOperatorMessage</code> ignores messages under 15 chars and bots with curiosity off. Public users (REST, widget, WhatsApp, Discord) never steer &mdash; there is no <code>human_inbound</code> listener (the event still carries an optional <code>text</code>, unused here). In prompts each directive is clipped to 300 chars and the block stays &le; 2,500 chars. A directive steers until <code>directiveHalfLifeOutputs</code> outputs answered it or <code>directiveHalfLifeDays</code> passed, then it is <em>served</em> (context, not route). A near-identical instruction re-anchors it. Cap 20.</td></tr>
+              <tr><td>Directive decay</td><td>Sources are operator surfaces only: answered ask_human (<code>Q: … A: …</code>), dashboard agent feedback, messages from the operator's private Telegram chat (<code>config.operator.telegramChatId</code>; <code>ConversationPipeline.handleConversation</code> calls <code>ctx.recordOperatorMessage</code>) and messages the operator types in a dashboard conversation thread (<code>POST /api/conversations/:botId/:id/messages</code> &rarr; <code>BotManager.recordOperatorMessage</code>). <code>CuriosityService.recordOperatorMessage</code> ignores messages under 15 chars and bots with curiosity off. Public users (REST, widget, WhatsApp, Discord) never steer &mdash; there is no <code>human_inbound</code> listener (the event still carries an optional <code>text</code>, unused here). In prompts each directive is clipped to 300 chars and the block stays &le; 2,500 chars. A directive steers until <code>directiveHalfLifeOutputs</code> outputs answered it or <code>directiveHalfLifeDays</code> passed, then it is <em>served</em> (context, not route). A near-identical instruction re-anchors it. Cap 20. <span class="badge badge-yellow">2026-10-16</span> Chat messages (Telegram operator chat, dashboard thread) are recorded with status <code>context</code>, not <code>active</code>: the conversation already answered them, so the planner sees them under &ldquo;What the operator said in chat&rdquo; (last 5) and never as something to act on. Context never decays, never re-anchors an instruction, and is evicted before active directives. The planner, strategist and executor prompts carry CONVERSATION IS NOT WORK plus the conversation's last 3 replies to the operator (<code>buildConversationSection</code>, <code>operatorChatReplies</code>).</td></tr>
               <tr><td>Dispatch format</td><td>Hook (one non-obvious claim) &rarr; why it matters to you &rarr; evidence &rarr; what to do &rarr; optional question, prefixed with the bot's emoji and name, hard-capped at <code>dispatch.maxChars</code>. Kinds: <code>insight</code>, <code>proposal</code> (crossing an <code>ask</code> dial, or an identity interest &mdash; approving it adds the <code>interest</code> to the knowledge map), <code>digest</code> (held items, after <code>maxIntervalHours</code> of quiet, at most once per <code>maxIntervalHours</code>). At most one per cycle, chained insight &rarr; interest proposal &rarr; frontier proposal &rarr; digest; each falls through to the next.</td></tr>
               <tr><td>Editor gate</td><td>Separate LLM pass (temperature 0.2, retry 0): <code>score = 0.5·insight + 0.3·novelty + 0.2·backed</code>; <code>backed &lt; 0.5</code> &rArr; drop. <code>findHypeWords</code> (es/en) docks 0.1 per hit. <code>decideDispatch</code>: insights need <code>verdict: send</code> and <code>score &ge; minEditorScore</code>; proposals and digests need 0.5. With the cadence closed an insight is held <strong>without</strong> an editor call (heuristic score 0.5 &minus; 0.1 per hype word); proposals and digests only run with the cadence open.</td></tr>
               <tr><td>Cadence + taste</td><td>👍 / "more" shrink the interval &times;0.75, 👎 grows it &times;1.25, a sent dispatch with no signal after 48 h grows it &times;1.5, clamped to <code>[minIntervalHours, maxIntervalHours]</code>. Repeat clicks of the same signal don't compound; inbox-only dispatches are never counted as ignored. Topic and kind counts and liked/disliked hooks go into the prompts and the frontier ranking.</td></tr>
@@ -1042,9 +1042,8 @@ plannerBackend: 'inherit' | 'ollama' | 'claude-cli'   // default 'inherit'</code
             The event travels on the raw <code>EventEmitter</code>, deliberately outside the typed
             <code>HookEvents</code> map &mdash; <code>src/bot/hooks.ts</code> still declares exactly eight
             lifecycle events. Telegram never calls <code>handleChannelMessage()</code>, so it cannot
-            double-count; <strong>but it does not count at all either</strong>:
-            <code>AgentScheduler.requestImmediateRun()</code> is only reachable through
-            <code>BotManager.requestImmediateAgentRun()</code>, which has no callers outside tests.
+            double-count: the Telegram <code>MessageBuffer</code> callback records the same signal through
+            <code>AgentScheduler.recordHumanMessage()</code>.
           </p>
           <p>
             Answers, feedback and messages are kept as <code>BotSchedule.feedbackEvents</code>
@@ -1398,8 +1397,12 @@ traits: {
         <h3>Immediate Run &amp; Pending Wake</h3>
         <p>
           <code>requestImmediateRun(botId)</code> triggers an agent loop cycle as soon as possible for a specific bot.
-          This is called automatically after every user conversation completes (via the <code>MessageBuffer</code> callback
-          in <code>BotManager</code>), ensuring the bot acts on user requests without waiting for the next scheduled cycle.
+          <span class="badge badge-yellow">2026-10-16</span> A finished Telegram conversation turn no longer calls it:
+          the <code>MessageBuffer</code> callback calls <code>recordHumanMessage(botId)</code> (feedback event, no wake),
+          because the cycle it woke answered the operator's message a second time. What wakes: an <code>ask_human</code>
+          answered on Telegram (<code>ConversationGate</code> &rarr; <code>ctx.wakeAgentLoop</code>, <code>feedback: false</code>),
+          one answered on the dashboard, and a finished worker run. A bot idled by the hard engagement gate therefore
+          re-evaluates at its next scheduled cycle, not right after the operator writes; the feedback event is recorded at once.
         </p>
         <div class="module-section">
           <h4>Behavior</h4>

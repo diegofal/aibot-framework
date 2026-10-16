@@ -180,6 +180,33 @@ describe('ConversationGate', () => {
     expect(result.reason).toBe('unauthorized');
   });
 
+  it('wakes the agent loop when a Telegram reply answers an ask_human question', async () => {
+    const askHumanStore = {
+      hasPending: vi.fn().mockReturnValue(true),
+      handleReply: vi.fn().mockReturnValue({ matched: true, questionId: 'q1', botId: 'bot1' }),
+    };
+    const wakeAgentLoop = vi.fn();
+    const ctx = createMockCtx({ wakeAgentLoop });
+    const gate = new ConversationGate(ctx, createMockGroupActivation(), askHumanStore as any);
+    const result = await gate.evaluate(createMockGrammyCtx(), createMockConfig(), mockLogger);
+    expect(result.reason).toBe('ask_human_reply');
+    expect(wakeAgentLoop).toHaveBeenCalledWith(createMockConfig().id);
+  });
+
+  it('does not wake the loop when the answered question belongs to a worker run', async () => {
+    const askHumanStore = {
+      hasPending: vi.fn().mockReturnValue(true),
+      handleReply: vi
+        .fn()
+        .mockReturnValue({ matched: true, questionId: 'q1', botId: 'bot1', runId: 'r-1' }),
+    };
+    const wakeAgentLoop = vi.fn();
+    const ctx = createMockCtx({ wakeAgentLoop });
+    const gate = new ConversationGate(ctx, createMockGroupActivation(), askHumanStore as any);
+    await gate.evaluate(createMockGrammyCtx(), createMockConfig(), mockLogger);
+    expect(wakeAgentLoop).not.toHaveBeenCalled();
+  });
+
   it('intercepts ask_human replies', async () => {
     const askHumanStore = {
       hasPending: vi.fn().mockReturnValue(true),

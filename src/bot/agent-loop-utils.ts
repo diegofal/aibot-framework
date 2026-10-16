@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import type { SessionManager } from '../session';
 import { sendLongMessage } from './telegram-utils';
 import type { BotContext } from './types';
 
@@ -274,7 +275,7 @@ export function detectUnconsumedOutput(
  * feedback event, which is how non-Telegram humans earn `humanReply` karma.
  *
  * The Telegram message-buffer path deliberately does NOT emit this — it
- * already records the same signal through `requestImmediateRun()`, and
+ * already records the same signal through `recordHumanMessage()`, and
  * emitting here too would double-count it.
  *
  * Carried on the shared `HookEmitter` (it extends EventEmitter, so the
@@ -661,4 +662,27 @@ export function shouldRecordErrorInMemory(
 ): boolean {
   if (!last || last.message !== message) return true;
   return now - last.at >= windowMs;
+}
+
+/**
+ * The conversation's latest replies in the operator's private Telegram chat,
+ * oldest first, for `buildConversationSection`. Tool-call turns and tool
+ * output are skipped. Never throws: a missing session is no replies.
+ */
+export function operatorChatReplies(
+  sessionManager: Pick<SessionManager, 'getHistory'>,
+  botId: string,
+  operatorChatId: number | undefined,
+  count = 3
+): string[] {
+  if (operatorChatId === undefined) return [];
+  try {
+    return sessionManager
+      .getHistory(`bot:${botId}:private:${operatorChatId}`, 40)
+      .filter((m) => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim())
+      .slice(-count)
+      .map((m) => m.content.trim());
+  } catch {
+    return [];
+  }
 }
