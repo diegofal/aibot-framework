@@ -82,10 +82,15 @@ export function weekOfRunsMs(schedule: CronSchedule, fromMs: number, perDay = 50
   const DAY_MS = 24 * 60 * 60 * 1000;
   const out: number[] = [];
   for (let i = 0; i < 7; i++) {
-    // Lookups are strictly after their start: a later day starts 1 ms early so a run
-    // exactly on the day boundary is that day's, not lost between the two.
+    // Cron lookups are strictly after their start: a later day starts 1 ms early so a
+    // run exactly on the day boundary is that day's, not lost between the two. An
+    // interval lookup includes its start, so that overlap can repeat the previous
+    // day's last run: keep only runs after the last one listed.
     const start = fromMs + i * DAY_MS - (i > 0 ? 1 : 0);
-    out.push(...upcomingRunsMs(schedule, start, fromMs + (i + 1) * DAY_MS, perDay));
+    const last = out.at(-1) ?? Number.NEGATIVE_INFINITY;
+    for (const t of upcomingRunsMs(schedule, start, fromMs + (i + 1) * DAY_MS, perDay)) {
+      if (t > last) out.push(t);
+    }
     if (schedule.kind === 'at' && out.length) break;
   }
   return out;

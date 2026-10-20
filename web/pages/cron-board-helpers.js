@@ -89,7 +89,8 @@ export function scheduleWords(schedule) {
       return { text: ms === D ? 'Daily' : `Every ${ms / D} days`, tz: at };
     if (ms >= H) return { text: `Every ${Math.round((ms / H) * 10) / 10}h`, tz: '' };
     if (ms >= 60_000 && ms % 60_000 === 0) return { text: `Every ${ms / 60_000}m`, tz: '' };
-    return { text: `Every ${Math.max(1, Math.round(ms / 1000))}s`, tz: '' };
+    if (ms < 1000) return { text: `Every ${Math.max(1, Math.round(ms))}ms`, tz: '' };
+    return { text: `Every ${Math.round(ms / 100) / 10}s`, tz: '' };
   }
   if (s.kind === 'cron') {
     const text = cronToHuman(String(s.expr ?? '').trim())

@@ -106,6 +106,8 @@ describe('words', () => {
   });
 
   it('scheduleWords: an interval that is not whole minutes is not rounded to one', () => {
+    expect(scheduleWords({ kind: 'every', everyMs: 500 }).text).toBe('Every 500ms');
+    expect(scheduleWords({ kind: 'every', everyMs: 1500 }).text).toBe('Every 1.5s');
     expect(scheduleWords({ kind: 'every', everyMs: 30_000 }).text).toBe('Every 30s');
     expect(scheduleWords({ kind: 'every', everyMs: 90_000 }).text).toBe('Every 90s');
     expect(scheduleWords({ kind: 'every', everyMs: 5 * 60_000 }).text).toBe('Every 5m');
