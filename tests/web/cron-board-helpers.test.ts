@@ -105,6 +105,12 @@ describe('words', () => {
     expect(tzLabel(undefined)).toBe('server time');
   });
 
+  it('scheduleWords: an interval that is not whole minutes is not rounded to one', () => {
+    expect(scheduleWords({ kind: 'every', everyMs: 30_000 }).text).toBe('Every 30s');
+    expect(scheduleWords({ kind: 'every', everyMs: 90_000 }).text).toBe('Every 90s');
+    expect(scheduleWords({ kind: 'every', everyMs: 5 * 60_000 }).text).toBe('Every 5m');
+  });
+
   it('scheduleWords: cron, every and once', () => {
     expect(scheduleWords({ kind: 'cron', expr: '0 9 * * *' })).toEqual({
       text: 'Daily at 09:00',
@@ -252,6 +258,8 @@ describe('rows and groups', () => {
     expect(groupsHtml(ALL, { names, nowMs: NOW, filter: 'paused' })).toContain('data-id="p1"');
     expect(groupsHtml([paused], { names, nowMs: NOW })).toContain('data-id="p1"');
     expect(groupsHtml(ALL, { names, query: 'zzz' })).toContain('No jobs match');
+    // "Show all" clears the search too, not only the filter chip.
+    expect(groupsHtml(ALL, { names, query: 'zzz' })).toContain('data-show-all');
     expect(groupsHtml([], {})).toContain('No cron jobs yet');
   });
 

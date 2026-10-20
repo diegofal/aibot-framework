@@ -60,7 +60,9 @@ export async function renderCron(el) {
   const $ = (id) => document.getElementById(id);
   const opts = () => ({ names, nowMs: Date.now(), ...board, selected: selected?.id ?? null });
 
+  // A save or run that lands after the page was left has nothing to draw.
   const drawBar = () => {
+    if (!root.isConnected) return;
     const focused = document.activeElement?.id === 'cj-q';
     $('cj-bar').innerHTML = chipsHtml(jobs, opts());
     if (focused) {
@@ -70,14 +72,17 @@ export async function renderCron(el) {
     }
   };
   const drawGroups = () => {
+    if (!root.isConnected) return;
     $('cj-groups').innerHTML = groupsHtml(jobs, opts());
   };
   const drawDrawer = () => {
+    if (!root.isConnected) return;
     $('cj-drawer').innerHTML = selected ? drawerHtml(selected, opts()) : '';
     $('cj-drawer').classList.toggle('on', !!selected);
     $('cj-scrim').classList.toggle('on', !!selected);
   };
   const draw = () => {
+    if (!root.isConnected) return;
     drawBar();
     $('cj-week').innerHTML = weekHtml(jobs, opts());
     $('cj-attn').innerHTML = attentionHtml(jobs, opts());
@@ -144,6 +149,14 @@ export async function renderCron(el) {
       }
       showToast(enabled ? 'Turned on' : 'Paused', { tone: 'ok' });
       await reloadAll();
+      return;
+    }
+
+    if (hit('[data-show-all]')) {
+      board.filter = 'all';
+      board.query = '';
+      drawBar();
+      drawGroups();
       return;
     }
 

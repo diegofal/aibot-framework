@@ -2,13 +2,11 @@ import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { CronService } from '../../cron';
 import type { CronRunLogEntry } from '../../cron/run-log';
-import { upcomingRunsMs } from '../../cron/schedule';
+import { weekOfRunsMs } from '../../cron/schedule';
 import type { CronJob, CronJobCreate, CronJobPatch } from '../../cron/types';
 import type { Logger } from '../../logger';
 import { getTenantId, isAdminOrSingleTenant, scopeBots } from '../../tenant/tenant-scoping';
 import { cronJobToWhy, cronRunToWhy } from '../../why/builders/cron';
-
-const WEEK_MS = 7 * 86_400_000;
 import { CycleIndex, type CycleReader } from '../../why/cycle-index';
 
 export function cronRoutes(deps: {
@@ -37,8 +35,7 @@ export function cronRoutes(deps: {
         by?.kind === 'agent' && by.cycleId ? cycles.byId(by.botId, by.cycleId) : undefined;
       const nowMs = Date.now();
       // The next 7 days of runs, for the page's week strip (paused: none).
-      const upcoming =
-        job.enabled === false ? [] : upcomingRunsMs(job.schedule, nowMs, nowMs + WEEK_MS);
+      const upcoming = job.enabled === false ? [] : weekOfRunsMs(job.schedule, nowMs);
       return { ...job, upcoming, why: cronJobToWhy({ job, ...(cycle ? { cycle } : {}) }) };
     });
   };

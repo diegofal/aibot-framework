@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { upcomingRunsMs } from '../../src/cron/schedule';
+import { upcomingRunsMs, weekOfRunsMs } from '../../src/cron/schedule';
 
 const H = 3_600_000;
 const D = 24 * H;
@@ -31,6 +31,39 @@ describe('upcomingRunsMs', () => {
       MON_0000_UTC + 5 * D
     );
     expect(runs).toEqual([MON_0000_UTC + 2 * D, MON_0000_UTC + 4 * D]);
+  });
+
+  test('an interval under a second lists every run, none skipped', () => {
+    const runs = upcomingRunsMs(
+      { kind: 'every', everyMs: 500, anchorMs: MON_0000_UTC },
+      MON_0000_UTC,
+      MON_0000_UTC + 2000
+    );
+    expect(runs).toEqual([500, 1000, 1500].map((ms) => MON_0000_UTC + ms));
+  });
+
+  test('a cron with a seconds field firing every second lists every second', () => {
+    const runs = upcomingRunsMs(
+      { kind: 'cron', expr: '* * * * * *', tz: 'UTC' },
+      MON_0000_UTC,
+      MON_0000_UTC + 4000
+    );
+    expect(runs).toEqual([1000, 2000, 3000].map((ms) => MON_0000_UTC + ms));
+  });
+
+  test('weekOfRunsMs: an hourly job fills every day of the week, not only the first 50 runs', () => {
+    const runs = weekOfRunsMs({ kind: 'cron', expr: '0 * * * *', tz: 'UTC' }, MON_0000_UTC);
+    expect(runs.length).toBe(7 * 24 - 1);
+    expect(runs.at(-1)).toBe(MON_0000_UTC + 7 * D - H);
+  });
+
+  test('weekOfRunsMs caps each day, so a per-second job stays bounded', () => {
+    const runs = weekOfRunsMs(
+      { kind: 'every', everyMs: 1000, anchorMs: MON_0000_UTC },
+      MON_0000_UTC
+    );
+    expect(runs.length).toBeLessThanOrEqual(7 * 50);
+    expect(runs.at(-1)).toBeGreaterThanOrEqual(MON_0000_UTC + 6 * D);
   });
 
   test('a one-shot only when it is still ahead', () => {

@@ -73,6 +73,20 @@ describe('borrowFleetTelegram', () => {
     ]);
     expect(actions).toEqual(['default:typing']);
   });
+
+  it('a message that fits alone but not with the author line sends the author line first', async () => {
+    const log: Sent[] = [];
+    const bots = new Map([['default', fakeBot('default', log)]]);
+    const borrowed = borrowFleetTelegram(bots, 'myfirstmillion', {
+      enabled: true,
+      name: 'MyFirstMillion',
+    });
+    if (!borrowed) throw new Error('expected a borrowed instance');
+    const full = 'x'.repeat(4096);
+    await borrowed.api.sendMessage(42, full);
+    expect(log.map((s) => s.text)).toEqual(['🤖 MyFirstMillion:', full]);
+    expect(log.every((s) => s.text.length <= 4096)).toBe(true);
+  });
 });
 
 describe('NoTelegramRouteError', () => {
