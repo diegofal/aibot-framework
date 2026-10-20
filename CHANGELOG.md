@@ -4,7 +4,8 @@
 
 ### Fixed (2026-10-20) — Pre-PR pass on the Oct 16 fixes
 - **Borrowed Telegram near the limit** (`src/channel/fleet-telegram.ts`): a message that fit on its own but not with the "🤖 <bot>:" line failed to send; the author line now goes alone first and the text untouched after it (its result is the one replies match).
-- **Upcoming runs of sub-second intervals** (`upcomingRunsMs`, `src/cron/schedule.ts`): the cursor stepped a whole second, skipping runs of an `every` under 1000 ms.
+- **Upcoming runs** (`src/cron/schedule.ts`): the cursor stepped a whole second, skipping runs of an `every` under 1000 ms and every other run of a per-second cron; it now steps 1 ms. The week strip (`GET /api/cron` → `upcoming`) used one cap of 50 runs for the whole week, so an hourly job's later days were empty: `weekOfRunsMs` caps each day instead (runs on a day boundary stay that day's).
+- **Interval words** (`scheduleWords`): an interval that is not whole minutes reads in seconds ("Every 30s", "Every 90s"), not rounded to "Every 1m" / "Every 2m".
 - **Cron board** (`web/pages/cron.js`, `cron-board-helpers.js`): "Show all" in the empty state clears the search, not only the filter chip (`data-show-all`); a save or run that lands after leaving the page no longer throws on the missing board.
 - Tests: `tests/channel/fleet-telegram.test.ts`, `tests/cron/upcoming-runs.test.ts`, `tests/web/cron-board-helpers.test.ts` (the page-left guard has none: no DOM in the suite).
 

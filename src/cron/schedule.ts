@@ -64,11 +64,29 @@ export function upcomingRunsMs(
       if (next === undefined || next >= untilMs || next < cursor) break;
       out.push(next);
       if (schedule.kind === 'at') break;
-      // Cron runs on whole seconds; an interval can be shorter than one.
-      cursor = next + (schedule.kind === 'every' ? 1 : 1000);
+      // The next lookup is strictly after `next`: 1 ms on is the following run for
+      // an interval of any length and for a cron with a seconds field alike.
+      cursor = next + 1;
     }
   } catch {
     return out;
+  }
+  return out;
+}
+
+/**
+ * The next 7 days of runs from `fromMs`, capped per day rather than overall: an
+ * hourly job (168 runs) shows on every day, and a per-second one stays bounded.
+ */
+export function weekOfRunsMs(schedule: CronSchedule, fromMs: number, perDay = 50): number[] {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const out: number[] = [];
+  for (let i = 0; i < 7; i++) {
+    // Lookups are strictly after their start: a later day starts 1 ms early so a run
+    // exactly on the day boundary is that day's, not lost between the two.
+    const start = fromMs + i * DAY_MS - (i > 0 ? 1 : 0);
+    out.push(...upcomingRunsMs(schedule, start, fromMs + (i + 1) * DAY_MS, perDay));
+    if (schedule.kind === 'at' && out.length) break;
   }
   return out;
 }
