@@ -64,7 +64,8 @@ export function upcomingRunsMs(
       if (next === undefined || next >= untilMs || next < cursor) break;
       out.push(next);
       if (schedule.kind === 'at') break;
-      cursor = next + 1000;
+      // Cron runs on whole seconds; an interval can be shorter than one.
+      cursor = next + (schedule.kind === 'every' ? 1 : 1000);
     }
   } catch {
     return out;

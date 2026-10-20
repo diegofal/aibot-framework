@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed (2026-10-20) — Pre-PR pass on the Oct 16 fixes
+- **Borrowed Telegram near the limit** (`src/channel/fleet-telegram.ts`): a message that fit on its own but not with the "🤖 <bot>:" line failed to send; the author line now goes alone first and the text untouched after it (its result is the one replies match).
+- **Upcoming runs of sub-second intervals** (`upcomingRunsMs`, `src/cron/schedule.ts`): the cursor stepped a whole second, skipping runs of an `every` under 1000 ms.
+- **Cron board** (`web/pages/cron.js`, `cron-board-helpers.js`): "Show all" in the empty state clears the search, not only the filter chip (`data-show-all`); a save or run that lands after leaving the page no longer throws on the missing board.
+- Tests: `tests/channel/fleet-telegram.test.ts`, `tests/cron/upcoming-runs.test.ts`, `tests/web/cron-board-helpers.test.ts` (the page-left guard has none: no DOM in the suite).
+
 ### Fixed (2026-10-16) — The operator's chat gets one reply per message
 - **Why.** On 2026-10-16 Finny (`default`) answered "can you check my calendar?" twice and, before that, re-sent an "Anotado…" for the previous message and a summary nobody asked for. Every operator Telegram message was recorded as a curiosity directive (`recordOperatorMessage`) **and** woke an agent-loop cycle (`bot-manager.ts`, `MessageBuffer` callback). The planner read the message under "Operator Instructions" as a request, and the executor, which never sees the chat, `send_message`d the operator again (cycles `2d494f55`, `d75ea6b8`, `d03c9e93`, `20d28ed4`). Plan: `docs/plans/personal-organizer-plan.md`, P0.
 - **Chat messages are context.** `CuriosityService.recordOperatorMessage` (Telegram operator chat and dashboard threads) stores them with the new `Directive.status: 'context'`: never active, never decayed, never re-anchoring an instruction, evicted first at the cap, rendered in their own block ("already answered there… never reply to it") with the last 5. `ask_human` and feedback directives still steer.

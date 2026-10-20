@@ -33,6 +33,15 @@ describe('upcomingRunsMs', () => {
     expect(runs).toEqual([MON_0000_UTC + 2 * D, MON_0000_UTC + 4 * D]);
   });
 
+  test('an interval under a second lists every run, none skipped', () => {
+    const runs = upcomingRunsMs(
+      { kind: 'every', everyMs: 500, anchorMs: MON_0000_UTC },
+      MON_0000_UTC,
+      MON_0000_UTC + 2000
+    );
+    expect(runs).toEqual([500, 1000, 1500].map((ms) => MON_0000_UTC + ms));
+  });
+
   test('a one-shot only when it is still ahead', () => {
     const at = new Date(MON_0000_UTC + H).toISOString();
     expect(upcomingRunsMs({ kind: 'at', at }, MON_0000_UTC, MON_0000_UTC + D)).toEqual([

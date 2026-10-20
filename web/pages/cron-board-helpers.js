@@ -326,7 +326,7 @@ export function groupsHtml(
   const list = filterBoard(jobs, { filter, query, names });
   if (!list.length) {
     return (jobs ?? []).length
-      ? '<div class="cj-empty">No jobs match. <button type="button" class="cj-btn sm ghost" data-f="all">Show all</button></div>'
+      ? '<div class="cj-empty">No jobs match. <button type="button" class="cj-btn sm ghost" data-show-all>Show all</button></div>'
       : '<div class="cj-empty">No cron jobs yet. Tell an agent what to do and when in the box above.</div>';
   }
   const nextOf = (j) =>

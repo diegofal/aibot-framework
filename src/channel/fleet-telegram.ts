@@ -15,6 +15,9 @@
  * header and are the only way to reach a third person.
  */
 
+/** Telegram's cap on one message's text. */
+const TELEGRAM_MAX_CHARS = 4096;
+
 type SendMessage = (chatId: number, text: string, extra?: never) => Promise<unknown>;
 type TelegramLike = { api: { sendMessage: SendMessage } & object };
 
@@ -70,12 +73,17 @@ export function borrowFleetTelegram<B extends TelegramLike>(
   const api = new Proxy(lender.api, {
     get(target, prop) {
       if (prop === 'sendMessage') {
-        return (chatId: number, text: string, extra?: { parse_mode?: string }) =>
-          (target.sendMessage as (c: number, t: string, e?: unknown) => Promise<unknown>)(
-            chatId,
-            borrowedText(opts.name, text, extra?.parse_mode),
-            extra
-          );
+        const send = (
+          target.sendMessage as (c: number, t: string, e?: unknown) => Promise<unknown>
+        ).bind(target);
+        return async (chatId: number, text: string, extra?: { parse_mode?: string }) => {
+          const named = borrowedText(opts.name, text, extra?.parse_mode);
+          if (named.length <= TELEGRAM_MAX_CHARS) return send(chatId, named, extra);
+          // The author line would push it past Telegram's limit: send it on its own,
+          // then the text untouched (its result is the one a reply is matched to).
+          await send(chatId, borrowedText(opts.name, '', extra?.parse_mode).trimEnd(), extra);
+          return send(chatId, text, extra);
+        };
       }
       const value = Reflect.get(target, prop, target);
       return typeof value === 'function' ? value.bind(target) : value;

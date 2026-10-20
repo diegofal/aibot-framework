@@ -252,6 +252,8 @@ describe('rows and groups', () => {
     expect(groupsHtml(ALL, { names, nowMs: NOW, filter: 'paused' })).toContain('data-id="p1"');
     expect(groupsHtml([paused], { names, nowMs: NOW })).toContain('data-id="p1"');
     expect(groupsHtml(ALL, { names, query: 'zzz' })).toContain('No jobs match');
+    // "Show all" clears the search too, not only the filter chip.
+    expect(groupsHtml(ALL, { names, query: 'zzz' })).toContain('data-show-all');
     expect(groupsHtml([], {})).toContain('No cron jobs yet');
   });
 
