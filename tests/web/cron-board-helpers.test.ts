@@ -11,6 +11,7 @@ import {
   groupsHtml,
   jobRowHtml,
   jobTitle,
+  restoreJob,
   runDuration,
   scheduleWords,
   tzLabel,
@@ -306,5 +307,20 @@ describe('drawer', () => {
 
   it('a job that never ran says so', () => {
     expect(drawerHtml(brief, { names, nowMs: NOW })).toContain('Has not run yet.');
+  });
+});
+
+describe('restoreJob: undoing a delete', () => {
+  const a = { id: 'a' };
+  const b = { id: 'b' };
+  it('puts the job back where it was', () => {
+    const jobs = [b];
+    restoreJob(jobs, 0, a);
+    expect(jobs.map((j) => j.id)).toEqual(['a', 'b']);
+  });
+  it('never twice: a reload during the undo window already brought it back', () => {
+    const jobs = [a, b];
+    restoreJob(jobs, 0, { id: 'a' });
+    expect(jobs.map((j) => j.id)).toEqual(['a', 'b']);
   });
 });
