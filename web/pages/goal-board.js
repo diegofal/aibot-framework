@@ -18,6 +18,7 @@
  * loads `/api/agents/:id/goals/detail`; History opens the goal detail sheet.
  */
 import { confirmInline, openSheet, showToast } from '../ui/index.js';
+import { captureEdits, restoreEdits } from './drawer-edits.js';
 import {
   addTask,
   drawerHtml,
@@ -180,13 +181,24 @@ export function mountGoalBoard({ root, getHome, getAgent, reload, paint }) {
     if (!goal) return;
     const botId = st.drawer.botId;
     const home = getHome(botId);
+    // A save or the Activity load repaints mid-edit: keep what is being typed on this goal.
+    const key = detailKey(botId, goal);
+    const edits = drawer.dataset.goalKey === key ? captureEdits(drawer, document) : null;
     drawer.innerHTML = drawerHtml(getAgent(botId) ?? { id: botId }, goal, {
       botId,
-      detail: st.details[detailKey(botId, goal)]?.body,
+      detail: st.details[key]?.body,
       spawned: (goal.id && home?.goals?.spawned?.[goal.id]) || [],
       showAll: st.showAllCycles,
       intervalMs: goalYardstickMs(home),
     });
+    drawer.dataset.goalKey = key;
+    restoreEdits(drawer, edits, { reopenNotes: () => openNotesEditor(goal) });
+  }
+
+  function openNotesEditor(goal) {
+    const box = drawer.querySelector('#fb-notes');
+    if (!box) return;
+    box.innerHTML = `<textarea class="fb-edit" id="fb-notesed" maxlength="600">${escapeHtml(goal.notes ?? '')}</textarea><div class="fb-edit-row"><button type="button" class="btn btn-sm btn-primary" id="fb-savenotes">Save notes</button><button type="button" class="btn btn-sm" data-cancel>Cancel</button></div>`;
   }
 
   /** The goal's cycles for the drawer's Activity section; repaints when it lands. */
@@ -422,39 +434,22 @@ export function mountGoalBoard({ root, getHome, getAgent, reload, paint }) {
       openDrawer(botId, kid.dataset.openGoal);
       return;
     }
-    if (t.id === 'fb-morebrief') {
-      drawer.querySelector('#fb-brief')?.classList.remove('clamp');
-      t.remove();
-      return;
-    }
-    if (t.id === 'fb-editbrief') {
-      const box = drawer.querySelector('#fb-brief')?.closest('.fb-brief');
-      if (box) {
-        box.outerHTML = `<textarea class="fb-edit" id="fb-briefed" maxlength="1000">${escapeHtml(goal.text)}</textarea><div class="fb-edit-row"><button type="button" class="btn btn-sm btn-primary" id="fb-savebrief">Save brief</button><button type="button" class="btn btn-sm" data-cancel>Cancel</button></div>`;
-        drawer.querySelector('#fb-morebrief')?.remove();
-        drawer.querySelector('#fb-briefed')?.focus();
-      }
-      return;
-    }
-    if (t.id === 'fb-savebrief') {
-      const brief = drawer.querySelector('#fb-briefed')?.value.trim();
-      if (brief) await goalWrite(botId, 'PATCH', { ...goalRef(goal), brief }, 'Brief saved');
-      return;
-    }
     if (t.id === 'fb-editnotes') {
-      const box = drawer.querySelector('#fb-notes');
-      if (box) {
-        box.innerHTML = `<textarea class="fb-edit" id="fb-notesed" maxlength="600">${escapeHtml(goal.notes ?? '')}</textarea><div class="fb-edit-row"><button type="button" class="btn btn-sm btn-primary" id="fb-savenotes">Save notes</button><button type="button" class="btn btn-sm" data-cancel>Cancel</button></div>`;
-        drawer.querySelector('#fb-notesed')?.focus();
-      }
+      openNotesEditor(goal);
+      drawer.querySelector('#fb-notesed')?.focus();
       return;
     }
     if (t.id === 'fb-savenotes') {
-      const notes = drawer.querySelector('#fb-notesed')?.value ?? '';
+      const ed = drawer.querySelector('#fb-notesed');
+      const notes = ed?.value ?? '';
+      // Being saved, so no longer an edit in progress: the repaint closes the editor.
+      if (ed) ed.defaultValue = notes;
       await goalWrite(botId, 'PATCH', { ...goalRef(goal), notes }, 'Notes saved');
       return;
     }
     if (t.closest('[data-cancel]')) {
+      const ed = drawer.querySelector('#fb-notesed');
+      if (ed) ed.value = ed.defaultValue;
       paintDrawer();
       return;
     }
@@ -502,6 +497,14 @@ export function mountGoalBoard({ root, getHome, getAgent, reload, paint }) {
       const shown = t.defaultValue.replace(/\s+/g, ' ').trim();
       if (v && v !== shown)
         await goalWrite(botId, 'PATCH', { ...goalRef(goal), headline: v }, 'Title saved');
+      return;
+    }
+    if (t.id === 'fb-brief') {
+      const v = t.value.trim();
+      // Emptied: the agent still needs a brief, so it goes back to what it was.
+      if (!v) t.value = t.defaultValue;
+      else if (v !== t.defaultValue.trim())
+        await goalWrite(botId, 'PATCH', { ...goalRef(goal), brief: v }, 'Brief saved');
       return;
     }
     if (t.classList?.contains('fb-tx')) {
@@ -566,6 +569,19 @@ export function mountGoalBoard({ root, getHome, getAgent, reload, paint }) {
     if (e.key === 'Enter' && (t.id === 'fb-title' || t.classList?.contains('fb-tx'))) {
       e.preventDefault();
       t.blur();
+      return;
+    }
+    if (t.id === 'fb-brief') {
+      // Enter writes a newline; Ctrl/Cmd+Enter saves; Escape drops the edit.
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        t.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        t.value = t.defaultValue;
+        t.blur();
+      }
       return;
     }
     if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('[data-open-goal]') && st.drawer) {
