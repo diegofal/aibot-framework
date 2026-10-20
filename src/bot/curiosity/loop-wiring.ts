@@ -13,8 +13,9 @@ interface TelegramLike {
 }
 
 /**
- * Dispatch delivery: the bot's own Telegram instance, else any live one in
- * the fleet (7 of 8 bots are headless), to `operator.telegramChatId`. With no
+ * Dispatch delivery: the bot's own Telegram instance, else what `getAnyBot`
+ * lends (another bot's, only with `operator.borrowFleetTelegram`), to
+ * `operator.telegramChatId`. With no
  * Telegram route at all the dashboard Dispatches inbox IS the channel, so the
  * dispatch counts as delivered. Only a rejected send reports failure.
  */
@@ -23,7 +24,7 @@ export type DispatchDelivery = 'telegram' | 'inbox' | false;
 export function createOperatorDispatchDeliverer(deps: {
   getOperatorChatId: () => number | undefined;
   getBot: (botId: string) => TelegramLike | undefined;
-  getAnyBot: () => TelegramLike | undefined;
+  getAnyBot: (botId: string) => TelegramLike | undefined;
   /** Tenant bots never ping the instance operator; their feed is the inbox. */
   isTenantBot?: (botId: string) => boolean;
   logger: Pick<Logger, 'warn'>;
@@ -32,7 +33,7 @@ export function createOperatorDispatchDeliverer(deps: {
     if (deps.isTenantBot?.(botId)) return 'inbox';
     const chatId = deps.getOperatorChatId();
     if (chatId === undefined) return 'inbox';
-    const bot = deps.getBot(botId) ?? deps.getAnyBot();
+    const bot = deps.getBot(botId) ?? deps.getAnyBot(botId);
     if (!bot) return 'inbox';
     try {
       await bot.api.sendMessage(chatId, text);

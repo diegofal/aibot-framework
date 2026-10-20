@@ -3,6 +3,7 @@ import {
   AVAILABLE_PRESETS,
   PRESET_DIRECTIVE_DEFINITIONS,
   buildContinuousPlannerPrompt,
+  buildConversationSection,
   buildDirectivesSection,
   buildExecutorPrompt,
   buildFeedbackProcessorPrompt,
@@ -417,5 +418,62 @@ describe('strategist prompt asks for reasons (why-everywhere rows 12 and 13)', (
 
   test('one short reason per adjusted trait, in trait_reasons', () => {
     expect(system()).toMatch(/- trait_reasons: object/);
+  });
+});
+
+describe('the conversation is not loop work', () => {
+  const replies = ['Tenés razón, no más resúmenes salvo que los pidas.'];
+  const planner = {
+    identity: 'TestBot',
+    soul: 'A bot',
+    motivations: 'Be helpful',
+    goals: '## Goals\n- Goal 1',
+    recentMemory: 'Did stuff',
+    datetime: '2026-03-08T12:00:00Z',
+    availableTools: ['web_search'],
+    hasCreateTool: false,
+  };
+
+  test('the section states the rule and lists what the conversation already said', () => {
+    const text = buildConversationSection(replies);
+    expect(text).toContain('CONVERSATION IS NOT WORK');
+    expect(text).toContain('Already said in chat');
+    expect(text).toContain('no más resúmenes');
+  });
+
+  test('without replies the rule stands alone', () => {
+    const text = buildConversationSection();
+    expect(text).toContain('CONVERSATION IS NOT WORK');
+    expect(text).not.toContain('Already said in chat');
+  });
+
+  test('replies are clipped', () => {
+    const text = buildConversationSection(['x'.repeat(1000)]);
+    expect(text).not.toContain('x'.repeat(201));
+  });
+
+  test('planner, continuous planner, executor and strategist all carry it', () => {
+    expect(buildPlannerPrompt({ ...planner, chatReplies: replies }).system).toContain(
+      'no más resúmenes'
+    );
+    expect(buildContinuousPlannerPrompt({ ...planner, chatReplies: replies }).system).toContain(
+      'no más resúmenes'
+    );
+    expect(
+      buildExecutorPrompt({
+        plan: ['Step 1'],
+        identity: 'TestBot',
+        soul: 'A bot',
+        motivations: 'Be helpful',
+        goals: '## Goals',
+        datetime: '2026-03-08T12:00:00Z',
+        hasCreateTool: false,
+        workDir: '/tmp/test',
+        chatReplies: replies,
+      })
+    ).toContain('no más resúmenes');
+    expect(buildStrategistPrompt({ ...planner, chatReplies: replies }).system).toContain(
+      'CONVERSATION IS NOT WORK'
+    );
   });
 });

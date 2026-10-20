@@ -66,6 +66,8 @@ export interface PlannerPromptInput {
   allowedWritePaths?: string[];
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** The conversation's latest replies to the operator (`buildConversationSection`). */
+  chatReplies?: string[];
   /** Summary of recently active users for proactive engagement */
   activeUsersSummary?: string;
   /** Engagement gate warning/block text injected by behavioral analysis */
@@ -118,6 +120,8 @@ export interface ContinuousPlannerPromptInput {
   allowedWritePaths?: string[];
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** The conversation's latest replies to the operator (`buildConversationSection`). */
+  chatReplies?: string[];
   /** Summary of recently active users for proactive engagement */
   activeUsersSummary?: string;
   /** Engagement gate warning/block text injected by behavioral analysis */
@@ -166,6 +170,8 @@ export interface ExecutorPromptInput {
   documents?: { maxChars: number; docs: DocumentSize[] };
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** The conversation's latest replies to the operator (`buildConversationSection`). */
+  chatReplies?: string[];
   /** Whether productions are enabled for this bot (controls working directory and production rules sections) */
   productionsEnabled?: boolean;
 }
@@ -349,6 +355,30 @@ export function buildOperatorGoalsSection(source?: GoalsSource): string {
   return `\n## Set by your operator\n\nYour operator added these goals themselves. Work on them before your own goals. If one is ambiguous or you need a decision to move it forward, use ask_human about that goal instead of guessing. When you make progress or finish one, update it with manage_goals and tell the operator what changed.${taskRule}\n\n${list}\n`;
 }
 
+const CHAT_REPLY_PROMPT_CHARS = 200;
+
+/**
+ * The operator's chat is answered by the conversation, not by the loop. The
+ * loop used to read a chat message as a request and message the operator
+ * again, so every chat turn got a second, stale reply.
+ */
+export function buildConversationSection(chatReplies?: string[]): string {
+  const rule = `
+
+## The conversation is not your work
+
+CONVERSATION IS NOT WORK: what the operator says in chat is answered in that chat, by the conversation. Replying to it, acknowledging it, apologizing for it or summarizing it back is never a goal, a task or a plan step. Do not message the operator about something the chat already covered; message them only with new work they have not seen.`;
+  if (!chatReplies || chatReplies.length === 0) return rule;
+  const lines = chatReplies.map((r) => {
+    const t = r.replace(/\s+/g, ' ').trim();
+    return `- ${t.length > CHAT_REPLY_PROMPT_CHARS ? `${t.slice(0, CHAT_REPLY_PROMPT_CHARS)}…` : t}`;
+  });
+  return `${rule}
+
+Already said in chat (the conversation's latest replies to the operator, oldest first):
+${lines.join('\n')}`;
+}
+
 export function buildDirectivesSection(directives?: string[]): string {
   if (!directives?.length) return '';
   return `\n## Operator Directives\n\nYour operator has assigned these standing directives. These are ongoing behavioral instructions (not one-time goals). Factor them into your planning when relevant:\n\n${directives.map((d) => `- ${d}`).join('\n')}\n`;
@@ -393,7 +423,7 @@ ${
   goalsText(input)
     ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildConversationSection(input.chatReplies)}${
   input.curiosityBlock
     ? `
 ${input.curiosityBlock}
@@ -535,7 +565,7 @@ ${
   goalsText(input)
     ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildConversationSection(input.chatReplies)}${
   input.curiosityBlock
     ? `
 ${input.curiosityBlock}
@@ -697,7 +727,7 @@ ${
   goalsText(input)
     ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildConversationSection(input.chatReplies)}
 
 Current date/time: ${input.datetime}
 
@@ -837,6 +867,8 @@ export interface StrategistPromptInput {
   datetime: string;
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** The conversation's latest replies to the operator (`buildConversationSection`). */
+  chatReplies?: string[];
   /** Behavioral state analysis from action diversity computation */
   behavioralState?: string;
   /** Outcome ledger stats for production tracking */
@@ -903,7 +935,7 @@ ${input.motivations}
 
 ## Current Goals
 
-${goalsText(input) || '(no goals set)'}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${
+${goalsText(input) || '(no goals set)'}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildConversationSection(input.chatReplies)}${
   input.curiosityBlock
     ? `
 

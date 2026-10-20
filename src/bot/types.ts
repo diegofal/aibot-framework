@@ -45,6 +45,8 @@ export interface BotContext {
   readonly config: Config;
   /** Curiosity: record a message from the operator as a navigator directive (operator surfaces only). */
   readonly recordOperatorMessage?: (botId: string, text: string) => void;
+  /** Wake the bot's agent loop now without crediting feedback (ask_human answered on Telegram). */
+  readonly wakeAgentLoop?: (botId: string) => void;
   readonly ollamaClient: OllamaClient;
   readonly sessionManager: SessionManager;
   readonly skillRegistry: SkillRegistry;

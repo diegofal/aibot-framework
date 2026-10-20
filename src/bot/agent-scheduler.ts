@@ -271,9 +271,20 @@ export class AgentScheduler {
   }
 
   /**
+   * A human message the conversation already answered (Telegram buffer).
+   * Counts for the engagement gate and karma, but does not wake a cycle: the
+   * loop waking on every chat turn answered the operator a second time.
+   */
+  recordHumanMessage(botId: string): void {
+    if (!this.enabled) return;
+    if (!this.ctx.runningBots.has(botId)) return;
+    this.recordFeedbackEvent(botId, 'human_message');
+  }
+
+  /**
    * Listen for human messages arriving on the channel-agnostic pipeline
    * (REST, web/WebSocket, WhatsApp, Discord). Telegram is not part of this —
-   * its message buffer already records the signal via `requestImmediateRun()`,
+   * its message buffer already records the signal via `recordHumanMessage()`,
    * so listening here as well would double-count it.
    */
   private subscribeHumanInbound(): void {
@@ -301,7 +312,7 @@ export class AgentScheduler {
   /**
    * Record a human feedback signal for the engagement gate. Called when an
    * ask_human answer or dashboard feedback is consumed by a cycle, on every
-   * human inbound Telegram message (via requestImmediateRun) and on every
+   * human inbound Telegram message (via recordHumanMessage) and on every
    * human message from any other channel (via the human_inbound hook).
    */
   recordFeedbackEvent(botId: string, source: FeedbackSource): void {

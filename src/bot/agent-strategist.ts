@@ -279,6 +279,7 @@ export async function runStrategist(
     datetime: string;
     soulLoader: ReturnType<BotContext['getSoulLoader']>;
     directives?: string[];
+    chatReplies?: string[];
     behavioralState?: string;
     outcomeStats?: string;
     traitState?: string;
@@ -316,6 +317,7 @@ export async function runStrategist(
     recentMemory,
     datetime: soulContext.datetime,
     directives: soulContext.directives,
+    chatReplies: soulContext.chatReplies,
     behavioralState: soulContext.behavioralState,
     outcomeStats: soulContext.outcomeStats,
     traitState: soulContext.traitState,

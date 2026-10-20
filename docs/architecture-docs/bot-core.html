@@ -181,7 +181,8 @@
           <span class="badge badge-yellow">2026-10-03</span> <code>handleConversation()</code> (Telegram) calls
           <code>ctx.recordOperatorMessage(botId, text)</code> when the message comes from the operator's
           private chat (<code>config.operator.telegramChatId</code>, never a group), so the operator's own
-          Telegram messages become <a href="#curiosity">curiosity directives</a>.
+          Telegram messages become <a href="#curiosity">curiosity directives</a>. Since 2026-10-16 they are
+          stored as <code>context</code>: the conversation answers them, the loop only reads them as background.
         </p>
         <p>
           <span class="badge badge-yellow">2026-10-11</span> <code>handleConversation()</code> also tracks every human Telegram sender
@@ -1010,7 +1011,8 @@
             <tr><td>wakeUp</td><td>(none)</td><td>Interrupts interruptible sleep for immediate re-evaluation</td></tr>
             <tr><td>computeBotSleepMs</td><td>botId: string</td><td>Derives sleep interval from per-bot or global config</td></tr>
             <tr><td>updateBotSchedule</td><td>botId: string, result: AgentLoopResult</td><td>Updates timestamps, strategist counters, check-in display, <code>skippedReason</code></td></tr>
-            <tr><td>requestImmediateRun</td><td>botId: string</td><td>Runs the bot as soon as possible (wake or pending wake); also records a <code>human_message</code> feedback event</td></tr>
+            <tr><td>requestImmediateRun</td><td>botId: string</td><td>Runs the bot as soon as possible (wake or pending wake); also records a <code>human_message</code> feedback event unless <code>feedback: false</code>. Telegram turns use <code>recordHumanMessage</code> instead; an <code>ask_human</code> answered on Telegram calls it with <code>feedback: false</code></td></tr>
+            <tr><td>recordHumanMessage</td><td>botId: string</td><td>Records a <code>human_message</code> feedback event without waking a cycle (Telegram turns the conversation answered)</td></tr>
             <tr><td>recordFeedbackEvent</td><td>botId: string, source: FeedbackSource</td><td>Appends <code>{ timestamp, source }</code> to <code>schedule.feedbackEvents</code> (7-day retention) for the engagement gate; sources <code>ask_human</code>, <code>agent_feedback</code>, <code>human_message</code></td></tr>
           </tbody>
         </table>
@@ -1515,7 +1517,7 @@
             <tr><td>getProductionsService</td><td>(none)</td><td>Returns ProductionsService for web API</td></tr>
             <tr><td>getKarmaService</td><td>(none)</td><td>Returns KarmaService for web API</td></tr>
             <tr><td>getCuriosityService</td><td>(none)</td><td>Returns the <a href="#curiosity">CuriosityService</a> (knowledge map, navigator, dispatches, taste) for <code>/api/curiosity</code>. Built in the constructor with a soul-dir resolver (live loader, else the <code>startBot</code> resolution) and the global/per-bot <code>agentLoop.curiosity</code> + curiosity trait. Wires <code>ctx.recordOperatorMessage</code> for the Telegram pipeline; there is no <code>human_inbound</code> listener</td></tr>
-            <tr><td>recordOperatorMessage</td><td>botId, text</td><td>Records a message the operator typed (dashboard conversation thread: <code>POST /api/conversations/:botId/:id/messages</code>) as a curiosity directive; returns <code>false</code> for &lt; 15 chars or curiosity off</td></tr>
+            <tr><td>recordOperatorMessage</td><td>botId, text</td><td>Records a message the operator typed (dashboard conversation thread: <code>POST /api/conversations/:botId/:id/messages</code>) as a curiosity directive with status <code>context</code> (already answered in that thread); returns <code>false</code> for &lt; 15 chars or curiosity off</td></tr>
             <tr><td>sendVisibleMessage</td><td>chatId, sourceBotId, targetBotId, message</td><td>Delegates to CollaborationManager</td></tr>
             <tr><td>initiateCollaboration</td><td>sourceBotId, targetBotId, topic, maxTurns?</td><td>Delegates to CollaborationManager</td></tr>
             <tr><td>handleCronInstruction</td><td>botId, chatId, instruction</td><td>Runs a cron <em>instruction</em> job as a synthetic inbound message through the conversation pipeline. No longer requires the bot's own grammy instance &mdash; see below</td></tr>

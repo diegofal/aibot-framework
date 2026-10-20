@@ -100,7 +100,7 @@ export function parseGoalInput(body: unknown): GoalInput | string {
   return { title, notes: rawNotes || undefined, priority };
 }
 
-export const GOAL_HEADLINE_MAX = 100;
+export const GOAL_HEADLINE_MAX = 200;
 /** The full goal text the agent reads; agents already write briefs of ~500 chars. */
 export const GOAL_BRIEF_MAX = 1000;
 

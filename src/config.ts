@@ -1260,6 +1260,12 @@ export const OperatorConfigSchema = z.object({
    */
   proactiveCooldownMinutes: z.number().nonnegative().optional(),
   proactiveDailyCap: z.number().int().nonnegative().optional(),
+  /**
+   * A bot without a Telegram connection of its own may send to the operator
+   * through another bot's (default off: the dashboard is its channel). When
+   * on, those messages start with "🤖 <bot>:" (`src/channel/fleet-telegram.ts`).
+   */
+  borrowFleetTelegram: z.boolean().optional(),
 });
 
 /**

@@ -64,11 +64,16 @@ describe('buildCronDelivery', () => {
 function makeManagerStub(opts: {
   bots: Map<string, unknown>;
   channelKind?: 'telegram' | 'headless';
+  borrowFleetTelegram?: boolean;
   appended: Array<{ key: string; messages: unknown[] }>;
   seen: Array<{ msg: Record<string, unknown>; channelKind: string; botId: string }>;
 }) {
   return {
     bots: opts.bots,
+    config: {
+      operator: { borrowFleetTelegram: opts.borrowFleetTelegram },
+      bots: [{ id: 'milei-rocca', name: 'Milei Rocca' }],
+    },
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
     sessionManager: {
       serializeKey: (k: Record<string, unknown>) => JSON.stringify(k),
@@ -117,13 +122,32 @@ describe('BotManager.handleCronInstruction', () => {
     expect(appended[0].messages).toEqual([{ role: 'assistant', content: 'assistant reply' }]);
   });
 
-  test('a headless bot is delivered through another running bot Telegram instance', async () => {
+  test('a headless bot never borrows another bot Telegram instance by default', async () => {
     const sent: Array<[number, string]> = [];
     const appended: Array<{ key: string; messages: unknown[] }> = [];
     const seen: Array<{ msg: Record<string, unknown>; channelKind: string; botId: string }> = [];
     const stub = makeManagerStub({
       bots: new Map([['other-bot', { api: makeApi(sent) }]]),
       channelKind: 'headless',
+      appended,
+      seen,
+    });
+
+    await handleCronInstruction.call(stub as never, 777, 'radar semanal', 'milei-rocca');
+
+    expect(seen[0].msg.channelKind).toBe('web');
+    expect(sent).toEqual([]);
+    expect(appended).toHaveLength(1);
+  });
+
+  test('with borrowFleetTelegram, a headless bot is delivered through another instance, named', async () => {
+    const sent: Array<[number, string]> = [];
+    const appended: Array<{ key: string; messages: unknown[] }> = [];
+    const seen: Array<{ msg: Record<string, unknown>; channelKind: string; botId: string }> = [];
+    const stub = makeManagerStub({
+      bots: new Map([['other-bot', { api: makeApi(sent) }]]),
+      channelKind: 'headless',
+      borrowFleetTelegram: true,
       appended,
       seen,
     });
@@ -137,7 +161,7 @@ describe('BotManager.handleCronInstruction', () => {
 
     expect(out).toBe('assistant reply');
     expect(seen[0].msg.channelKind).toBe('telegram');
-    expect(sent).toEqual([[777, 'assistant reply']]);
+    expect(sent).toEqual([[777, '🤖 Milei Rocca:\nassistant reply']]);
     expect(appended).toEqual([]);
   });
 
@@ -174,5 +198,51 @@ describe('BotManager.handleCronInstruction', () => {
     expect(msg.chatType).toBe('private');
     expect(msg.sender).toMatchObject({ id: '321', firstName: 'Cron' });
     expect(String(msg.messageId)).toStartWith('cron-');
+  });
+});
+
+const deliverCronMessage = BotManager.prototype.deliverCronMessage;
+
+describe('BotManager.deliverCronMessage (message payloads)', () => {
+  test('a headless bot lands in its web session instead of "Bot not found"', async () => {
+    const appended: Array<{ key: string; messages: unknown[] }> = [];
+    const sent: Array<[number, string]> = [];
+    const stub = makeManagerStub({
+      bots: new Map([['other-bot', { api: makeApi(sent) }]]),
+      appended,
+      seen: [],
+    });
+
+    const kind = await deliverCronMessage.call(stub as never, 777, 'the finding', 'milei-rocca');
+
+    expect(kind).toBe('web');
+    expect(sent).toEqual([]);
+    expect(appended).toHaveLength(1);
+    expect(appended[0].messages).toEqual([{ role: 'assistant', content: 'the finding' }]);
+  });
+
+  test('a bot with its own instance sends over Telegram', async () => {
+    const own: Array<[number, string]> = [];
+    const stub = makeManagerStub({
+      bots: new Map([['bot1', { api: makeApi(own) }]]),
+      appended: [],
+      seen: [],
+    });
+
+    expect(await deliverCronMessage.call(stub as never, 42, 'hi', 'bot1')).toBe('telegram');
+    expect(own).toEqual([[42, 'hi']]);
+  });
+
+  test('with borrowFleetTelegram, a headless bot is sent through another instance, named', async () => {
+    const sent: Array<[number, string]> = [];
+    const stub = makeManagerStub({
+      bots: new Map([['other-bot', { api: makeApi(sent) }]]),
+      borrowFleetTelegram: true,
+      appended: [],
+      seen: [],
+    });
+
+    expect(await deliverCronMessage.call(stub as never, 9, 'x', 'milei-rocca')).toBe('telegram');
+    expect(sent).toEqual([[9, '🤖 Milei Rocca:\nx']]);
   });
 });

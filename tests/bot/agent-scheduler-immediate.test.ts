@@ -280,3 +280,30 @@ describe('AgentScheduler — immediate run', () => {
     });
   });
 });
+
+describe('AgentScheduler — recordHumanMessage', () => {
+  test('records the human message for the engagement gate without moving the next run', () => {
+    const ctx = makeMockCtx();
+    const scheduler = new AgentScheduler(ctx, vi.fn().mockResolvedValue(makeResult()));
+    (scheduler as any).enabled = true;
+    scheduler.syncSchedules();
+    const schedule = scheduler.getSchedule('bot1')!;
+    const futureTime = Date.now() + 300_000;
+    schedule.nextRunAt = futureTime;
+
+    scheduler.recordHumanMessage('bot1');
+
+    expect(schedule.nextRunAt).toBe(futureTime);
+    expect(schedule.feedbackEvents?.map((e) => e.source)).toEqual(['human_message']);
+    expect((scheduler as any).pendingWakeRequests.has('bot1')).toBe(false);
+  });
+
+  test('no-ops for a bot that is not running', () => {
+    const ctx = makeMockCtx({ runningBots: new Set(['bot2']) });
+    const scheduler = new AgentScheduler(ctx, vi.fn().mockResolvedValue(makeResult()));
+    (scheduler as any).enabled = true;
+    scheduler.syncSchedules();
+    scheduler.recordHumanMessage('bot1');
+    expect(scheduler.getSchedule('bot1')?.feedbackEvents ?? []).toHaveLength(0);
+  });
+});

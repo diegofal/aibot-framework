@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Prototype — Automations · Cron</title>
+<!--
+  Static prototype (no server). Data: the 13 live cron jobs as of 2026-10-16,
+  with relative times frozen at NOW below. Tokens copied from web/style.css.
+  Open the file in a browser; everything is clickable.
+-->
+<style>
+  :root {
+    --bg: #0b0d12; --surface: #12151c; --elevated: #181c25; --bg-hover: #1b1f29;
+    --border: #252a35; --border-strong: #323847;
+    --text: #e7e9ef; --text-dim: #8b91a3; --text-faint: #5f6577;
+    --accent: #7c9cff; --accent-bg: rgba(124,156,255,.14);
+    --ok: #34d399; --ok-bg: rgba(52,211,153,.14);
+    --warn: #fbbf24; --warn-bg: rgba(251,191,36,.14);
+    --danger: #f87171; --danger-bg: rgba(248,113,113,.12); --danger-border: rgba(248,113,113,.3);
+    --info: #67e8f9; --info-bg: rgba(103,232,249,.14);
+    --violet: #c4b5fd; --violet-bg: rgba(196,181,253,.14);
+    --muted-bg: rgba(139,145,163,.14);
+    --r: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, sans-serif; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .page { max-width: 1120px; margin: 0 auto; padding: 28px 28px 80px; }
+
+  /* Header */
+  .head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 18px; }
+  .head h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
+  .head p { margin: 4px 0 0; color: var(--text-dim); }
+  .head .sp { flex: 1; }
+  .btn { background: var(--elevated); border: 1px solid var(--border-strong); border-radius: 8px; padding: 7px 13px; }
+  .btn:hover { border-color: var(--text-faint); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+  .btn.sm { padding: 4px 10px; font-size: 13px; }
+  .btn.ghost { background: none; border-color: transparent; color: var(--text-dim); }
+  .btn.ghost:hover { color: var(--text); background: var(--bg-hover); }
+  .btn.danger { color: var(--danger); }
+
+  /* Ask box (the NL creator that exists today) */
+  .ask { display: flex; gap: 10px; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 10px 10px 16px; margin-bottom: 18px; }
+  .ask input { flex: 1; background: none; border: 0; color: var(--text); font: inherit; font-size: 15px; outline: none; }
+  .ask input::placeholder { color: var(--text-faint); }
+  .ask .hint { color: var(--text-faint); font-size: 12px; }
+
+  /* Summary chips = filters */
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; color: var(--text-dim); }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip:hover { border-color: var(--border-strong); }
+  .chip.on { background: var(--accent-bg); border-color: rgba(124,156,255,.45); color: var(--accent); }
+  .chip.on b { color: var(--accent); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+  .search { margin-left: auto; display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 5px 14px; min-width: 230px; }
+  .search input { background: none; border: 0; outline: none; color: var(--text); font: inherit; width: 100%; }
+  .search span { color: var(--text-faint); }
+
+  /* This week */
+  .week { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px 12px; margin-bottom: 18px; }
+  .week-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+  .week-h h2 { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); margin: 0; }
+  .week-h span { color: var(--text-faint); font-size: 12px; }
+  .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+  .day { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 9px; min-height: 86px; }
+  .day.today { border-color: rgba(124,156,255,.45); }
+  .day-n { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; display: flex; justify-content: space-between; }
+  .day.today .day-n { color: var(--accent); font-weight: 600; }
+  .ev { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 6px; border-radius: 6px; margin-bottom: 4px; background: var(--elevated); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  .ev:hover { background: var(--bg-hover); }
+  .ev time { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+  .ev .dot { width: 6px; height: 6px; }
+
+  /* Needs attention */
+  .attn { border: 1px solid var(--danger-border); background: linear-gradient(180deg, rgba(248,113,113,.07), transparent 70%), var(--surface); border-radius: 14px; padding: 14px 16px; margin-bottom: 22px; }
+  .attn-h { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .attn-h h2 { margin: 0; font-size: 15px; }
+  .attn-h .n { background: var(--danger-bg); color: var(--danger); border-radius: 999px; padding: 0 8px; font-size: 12px; font-weight: 600; }
+  .attn-row { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); }
+  .attn-row:first-of-type { border-top: 0; }
+  .attn-t { font-weight: 500; }
+  .attn-why { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+  .attn-why code { background: var(--danger-bg); color: var(--danger); border-radius: 5px; padding: 0 5px; font-size: 12px; }
+  .fixed { display: inline-flex; gap: 5px; align-items: center; color: var(--ok); font-size: 12px; margin-top: 4px; }
+  .attn-act { display: flex; gap: 6px; }
+
+  /* Groups */
+  .group { margin-bottom: 22px; }
+  .g-h { display: flex; align-items: center; gap: 10px; margin: 0 4px 8px; }
+  .av { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; font-size: 12px; color: #0b0d12; flex: none; }
+  .g-h h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .g-h .meta { color: var(--text-faint); font-size: 12px; }
+  .list { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+
+  .job { display: grid; grid-template-columns: 34px minmax(0, 1fr) 190px 150px 44px 30px; gap: 14px; align-items: center; padding: 12px 14px; border-top: 1px solid var(--border); cursor: pointer; transition: background .12s; }
+  .job:first-child { border-top: 0; }
+  .job:hover { background: var(--bg-hover); }
+  .job.sel { background: var(--accent-bg); }
+  .job.off { opacity: .55; }
+  .job.off:hover { opacity: .85; }
+  .kind { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 15px; }
+  .k-skill { background: var(--violet-bg); color: var(--violet); }
+  .k-instruction { background: var(--accent-bg); color: var(--accent); }
+  .k-message { background: var(--info-bg); color: var(--info); }
+  .j-t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .j-t .sub { color: var(--text-faint); font-weight: 400; margin-left: 6px; }
+  .j-d { color: var(--text-dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .when { font-size: 13px; }
+  .when .tz { color: var(--text-faint); font-size: 12px; display: block; }
+  .run { font-size: 13px; }
+  .run .next { color: var(--text); }
+  .run .last { color: var(--text-faint); font-size: 12px; display: flex; gap: 5px; align-items: center; }
+  .run .last.err { color: var(--danger); }
+
+  .tg { position: relative; width: 34px; height: 20px; border-radius: 999px; background: var(--border-strong); border: 0; padding: 0; transition: background .15s; }
+  .tg::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #c9cdd8; transition: transform .15s; }
+  .tg.on { background: var(--accent); }
+  .tg.on::after { transform: translateX(14px); background: #fff; }
+  .kebab { background: none; border: 0; color: var(--text-faint); font-size: 18px; border-radius: 6px; height: 28px; }
+  .kebab:hover { color: var(--text); background: var(--elevated); }
+
+  .fold { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; border-top: 1px solid var(--border); padding: 9px 16px; color: var(--text-faint); font-size: 13px; text-align: left; }
+  .fold:hover { color: var(--text-dim); background: var(--bg-hover); }
+  .fold .car { transition: transform .15s; display: inline-block; }
+  .fold.open .car { transform: rotate(90deg); }
+  .empty { text-align: center; color: var(--text-faint); padding: 40px 0; }
+
+  /* Drawer */
+  .scrim { position: fixed; inset: 0; background: rgba(5,6,9,.55); opacity: 0; pointer-events: none; transition: opacity .2s; }
+  .scrim.on { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 460px; max-width: 100%; background: var(--surface); border-left: 1px solid var(--border); transform: translateX(100%); transition: transform .22s ease; display: flex; flex-direction: column; }
+  .drawer.on { transform: none; }
+  .d-head { padding: 20px 22px 16px; border-bottom: 1px solid var(--border); }
+  .d-who { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13px; margin-bottom: 10px; }
+  .d-who .sp { flex: 1; }
+  .d-title { font-size: 19px; font-weight: 600; line-height: 1.3; margin: 0; }
+  .d-body { padding: 16px 22px 24px; overflow: auto; display: flex; flex-direction: column; gap: 18px; }
+  .lbl { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 6px; }
+  .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .fact { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .fact .v { font-weight: 500; }
+  .fact .s { color: var(--text-faint); font-size: 12px; }
+  .instr { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; white-space: pre-wrap; color: var(--text); font-size: 13.5px; line-height: 1.55; }
+  .runs { display: flex; flex-direction: column; gap: 0; }
+  .r { display: flex; gap: 10px; align-items: center; padding: 7px 0; border-top: 1px solid var(--border); font-size: 13px; }
+  .r:first-child { border-top: 0; }
+  .r .t { color: var(--text-dim); width: 92px; }
+  .r .o { flex: 1; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .why { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px; color: var(--text-dim); }
+  .why b { color: var(--text); font-weight: 500; }
+  .d-foot { margin-top: auto; padding: 14px 22px; border-top: 1px solid var(--border); display: flex; gap: 8px; }
+  .d-foot .sp { flex: 1; }
+  .x { background: none; border: 0; color: var(--text-dim); font-size: 22px; line-height: 1; }
+  .pill { border-radius: 999px; padding: 1px 9px; font-size: 12px; }
+  .p-ok { background: var(--ok-bg); color: var(--ok); }
+  .p-err { background: var(--danger-bg); color: var(--danger); }
+  .p-off { background: var(--muted-bg); color: var(--text-dim); }
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 20px); background: var(--elevated); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 16px; opacity: 0; transition: all .2s; pointer-events: none; }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="head">
+    <div>
+      <h1>Cron</h1>
+      <p>What your agents do on their own, and when.</p>
+    </div>
+    <div class="sp"></div>
+    <button class="btn ghost">Run logs</button>
+  </div>
+
+  <label class="ask">
+    <span style="color:var(--accent)">✦</span>
+    <input placeholder="Every weekday at 8, have job-seeker send me the 3 best new roles…">
+    <span class="hint">Enter to preview</span>
+  </label>
+
+  <div class="bar" id="bar"></div>
+  <section class="week" id="week"></section>
+  <section class="attn" id="attn"></section>
+  <div id="groups"></div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Job"></aside>
+<div class="toast" id="toast"></div>
+
+<script>
+const NOW = 1792145000000; // 2026-10-16 ~07:00 Buenos Aires
+const H = 3600000, D = 24 * H;
+const AGENTS = {
+  'AI Perfectionist': { color: '#c4b5fd' },
+  'job-seeker': { color: '#67e8f9' },
+  'My First Million': { color: '#fbbf24' },
+  'AIBot': { color: '#7c9cff' },
+  'self-improve': { color: '#34d399' },
+};
+const BA = 'America/Argentina/Buenos_Aires';
+const JOBS = [
+  { id: 'ab7b5607', name: 'Intelligence Gatherer: daily-intel-collection [default]', agent: 'AIBot', enabled: false, kind: 'skillJob', text: 'intel-gatherer/daily-intel-collection', schedule: { kind: 'cron', expr: '0 9 * * *' }, state: { last: 1791115200004, status: 'ok', dur: 36457 } },
+  { id: 'c595ee9d', name: 'Self-Reflection: nightly-reflection [default]', agent: 'AIBot', enabled: false, kind: 'skillJob', text: 'reflection/nightly-reflection', schedule: { kind: 'cron', expr: '30 3 * * *' }, state: { last: 1791095400004, status: 'ok', dur: 70735 } },
+  { id: '322177dd', name: 'Self-Reflection: nightly-reflection [job-seeker]', agent: 'job-seeker', enabled: true, kind: 'skillJob', text: 'reflection/nightly-reflection', schedule: { kind: 'cron', expr: '30 3 * * 0', tz: BA }, state: { next: 1792305000000, last: 1791700200008, status: 'ok', dur: 53134 } },
+  { id: '62f529dc', name: 'Self-Reflection: nightly-reflection [myfirstmillion]', agent: 'My First Million', enabled: true, kind: 'skillJob', text: 'reflection/nightly-reflection', schedule: { kind: 'cron', expr: '30 3 * * 0', tz: BA }, state: { next: 1792305000000, last: 1791700253142, status: 'ok', dur: 64714 } },
+  { id: '873bf6a7', name: 'Self-Reflection: nightly-reflection [selfimprove]', agent: 'self-improve', enabled: false, kind: 'skillJob', text: 'reflection/nightly-reflection', schedule: { kind: 'cron', expr: '30 3 * * *' }, state: { last: 1791095691454, status: 'ok', dur: 47122 } },
+  { id: '58b33333', name: 'Job-seeker weekly dormancy heartbeat', agent: 'job-seeker', enabled: false, kind: 'instruction', text: "WEEKLY DORMANCY HEARTBEAT — zero-output standby check.\n\nCheck ONLY for a genuine inbound signal: (a) Diego messaging the keyword 'career' to…", schedule: { kind: 'cron', expr: '0 12 * * 1', tz: 'UTC' }, state: { last: 1790596825069, status: 'ok', dur: 12864 } },
+  { id: '1445b413', name: 'Intelligence Gatherer: daily-intel-collection [ai-perfectionist]', agent: 'AI Perfectionist', enabled: true, kind: 'skillJob', text: 'intel-gatherer/daily-intel-collection', schedule: { kind: 'cron', expr: '0 9 * * *' }, state: { next: 1792152000000, last: 1792065600003, status: 'ok', dur: 19347 } },
+  { id: '96afc27c', name: 'Self-Reflection: nightly-reflection [ai-perfectionist]', agent: 'AI Perfectionist', enabled: true, kind: 'skillJob', text: 'reflection/nightly-reflection', schedule: { kind: 'cron', expr: '30 3 * * 0', tz: BA }, state: { next: 1792305000000, last: 1791700317856, status: 'ok', dur: 77057 } },
+  { id: 'f39a9e34', name: 'Deliver 09 portability seam finding', agent: 'AI Perfectionist', enabled: false, kind: 'message', text: 'Ran a real probe across all 8 bot surfaces in this fleet. The seam: every surface can reach your Telegram chat 796164002, but send_message r…', schedule: { kind: 'at', at: '2026-09-26T23:56:30.000Z' }, state: { last: 1790466990002, status: 'error', err: 'Error: Bot not found: ai-perfectionist', dur: 1 } },
+  { id: '336e3735', name: 'JEV daily use cases delta', agent: 'AI Perfectionist', enabled: false, kind: 'message', text: 'Jev use cases for our daily work. Short version: it is a throughput product, not a trust product, and the pricing page points at the wrong v…', schedule: { kind: 'at', at: '2026-10-03T16:29:30Z' }, state: { last: 1791044970003, status: 'error', err: 'Error: Bot not found: ai-perfectionist', dur: 2 } },
+  { id: 'd97bd1c2', name: 'Weekly AI Engineer / FDE Brief [ai-perfectionist]', agent: 'AI Perfectionist', enabled: true, kind: 'instruction', text: "It's Monday: compile this week's AI Engineer / FDE Brief from what you read in the last 7 days (your knowledge map and memory; fetch fresh p…", schedule: { kind: 'cron', expr: '0 9 * * 1', tz: BA }, state: { next: 1792411200000 } },
+  { id: 'a564ed24', name: 'Weekly roles shortlist [job-seeker]', agent: 'job-seeker', enabled: true, kind: 'instruction', text: "It's Monday: build this week's roles shortlist. Search now for live AI engineer / FDE / applied-AI roles open to someone working from Argent…", schedule: { kind: 'cron', expr: '0 9 * * 1', tz: BA }, state: { next: 1792411200000 } },
+  { id: 'bbf1539a', name: 'Side-income idea, every other Monday [myfirstmillion]', agent: 'My First Million', enabled: true, kind: 'instruction', text: "Time for this fortnight's side-income idea for Diego, an AI engineer in Argentina. Check ideas.md and never re-propose a dropped idea. Give:…", schedule: { kind: 'every', everyMs: 1209600000, anchorMs: 1791201600000 }, state: { next: 1792411200000 } },
+];
+
+const st = { filter: 'all', q: '', sel: null, open: new Set() };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+// ── Words ──
+const KIND = {
+  skillJob: { icon: '◆', cls: 'k-skill', label: 'Skill' },
+  instruction: { icon: '▸', cls: 'k-instruction', label: 'Instruction' },
+  message: { icon: '✉', cls: 'k-message', label: 'Message' },
+};
+function title(j) {
+  const base = j.name.replace(/\s*\[[^\]]+\]\s*$/, '');
+  const m = base.match(/^(Self-Reflection|Intelligence Gatherer):\s*(.*)$/);
+  if (m) return { t: m[1] === 'Self-Reflection' ? 'Reflection' : 'Intel gathering', sub: m[2].replace(/-/g, ' ') };
+  return { t: base, sub: '' };
+}
+const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+function when(j) {
+  const s = j.schedule;
+  const tz = s.tz === BA ? 'Buenos Aires time' : s.tz === 'UTC' ? 'UTC' : 'server time';
+  if (s.kind === 'at') return { text: 'Once', tz: new Date(s.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) };
+  if (s.kind === 'every') return { text: s.everyMs === 14 * D ? 'Every other Monday' : `Every ${Math.round(s.everyMs / D)} days`, tz: '09:00 · Buenos Aires time' };
+  const [mi, hh, , , dw] = s.expr.split(' ');
+  const t = `${hh.padStart(2, '0')}:${mi.padStart(2, '0')}`;
+  return { text: dw === '*' ? `Daily at ${t}` : `${DOW[+dw]}s at ${t}`, tz };
+}
+function rel(ts) {
+  const d = ts - NOW, a = Math.abs(d);
+  const v = a < H ? `${Math.round(a / 60000)}m` : a < 2 * D ? `${Math.round(a / H)}h` : `${Math.round(a / D)}d`;
+  return d >= 0 ? `in ${v}` : `${v} ago`;
+}
+const dur = (ms) => (ms < 1000 ? `${ms}ms` : ms < 60000 ? `${(ms / 1000).toFixed(0)}s` : `${(ms / 60000).toFixed(1)}m`);
+const failed = (j) => j.state.status === 'error';
+function whyFailed(j) {
+  if (/Bot not found/.test(j.state.err || '')) return `${esc(j.agent)} has no Telegram connection of its own, so the message had nowhere to go.`;
+  return esc(j.state.err);
+}
+
+// ── Render ──
+function visible() {
+  const q = st.q.toLowerCase();
+  return JOBS.filter((j) => {
+    if (st.filter === 'on' && !j.enabled) return false;
+    if (st.filter === 'paused' && j.enabled) return false;
+    if (st.filter === 'failed' && !failed(j)) return false;
+    if (st.filter.startsWith('a:') && j.agent !== st.filter.slice(2)) return false;
+    return !q || `${j.name} ${j.text} ${j.agent}`.toLowerCase().includes(q);
+  });
+}
+function renderBar() {
+  const on = JOBS.filter((j) => j.enabled).length;
+  const chip = (id, label, n, dot) =>
+    `<button class="chip${st.filter === id ? ' on' : ''}" data-f="${id}">${dot ? `<span class="dot" style="background:${dot}"></span>` : ''}${label} <b>${n}</b></button>`;
+  const agents = Object.keys(AGENTS).map((a) => chip(`a:${a}`, a, JOBS.filter((j) => j.agent === a).length, AGENTS[a].color)).join('');
+  $('bar').innerHTML = chip('all', 'All', JOBS.length) + chip('on', 'On', on, 'var(--ok)') + chip('paused', 'Paused', JOBS.length - on, 'var(--text-faint)') +
+    (JOBS.some(failed) ? chip('failed', 'Failed', JOBS.filter(failed).length, 'var(--danger)') : '') +
+    `<span style="width:1px;height:20px;background:var(--border);margin:0 4px"></span>${agents}` +
+    `<label class="search"><span>⌕</span><input id="q" placeholder="Search jobs" value="${esc(st.q)}"></label>`;
+}
+function renderWeek() {
+  const start = new Date(NOW); start.setHours(0, 0, 0, 0);
+  const days = Array.from({ length: 7 }, (_, i) => ({ t: start.getTime() + i * D, ev: [] }));
+  for (const j of JOBS) {
+    if (!j.enabled || !j.state.next) continue;
+    const s = j.schedule;
+    const step = s.kind === 'cron' && s.expr.split(' ')[4] === '*' ? D : s.kind === 'every' ? s.everyMs : 7 * D;
+    for (let t = j.state.next; t < start.getTime() + 7 * D; t += step) {
+      const d = days.find((x) => t >= x.t && t < x.t + D);
+      if (d) d.ev.push({ j, t });
+    }
+  }
+  const total = days.reduce((n, d) => n + d.ev.length, 0);
+  $('week').innerHTML = `<div class="week-h"><h2>This week</h2><span>${total} runs scheduled</span></div><div class="days">${days
+    .map((d, i) => {
+      const date = new Date(d.t);
+      const label = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : DOW[date.getDay()].slice(0, 3);
+      return `<div class="day${i === 0 ? ' today' : ''}"><div class="day-n"><span>${label}</span><span>${date.getDate()}</span></div>${d.ev
+        .sort((a, b) => a.t - b.t)
+        .map(({ j, t }) => `<div class="ev" data-open="${j.id}" title="${esc(title(j).t)} · ${esc(j.agent)}"><span class="dot" style="background:${AGENTS[j.agent].color}"></span><time>${new Date(t).toTimeString().slice(0, 5)}</time>${esc(title(j).t)}</div>`)
+        .join('') || '<div style="color:var(--text-faint);font-size:12px">—</div>'}</div>`;
+    })
+    .join('')}</div>`;
+}
+function renderAttn() {
+  const bad = JOBS.filter(failed);
+  $('attn').style.display = bad.length ? '' : 'none';
+  $('attn').innerHTML = `<div class="attn-h"><span style="color:var(--danger)">●</span><h2>Needs attention</h2><span class="n">${bad.length}</span></div>${bad
+    .map((j) => `<div class="attn-row"><div><div class="attn-t">${esc(title(j).t)} <span style="color:var(--text-faint);font-weight:400">· ${esc(j.agent)} · failed ${rel(j.state.last)}</span></div>
+      <div class="attn-why">${whyFailed(j)} <code>${esc(j.state.err.replace(/^Error:\s*/, ''))}</code></div>
+      <div class="fixed">✓ Fixed: headless agents now deliver to their dashboard chat. Run it again to send it.</div></div>
+      <div class="attn-act"><button class="btn sm primary" data-rerun="${j.id}">Run again</button><button class="btn sm ghost" data-open="${j.id}">Details</button><button class="btn sm ghost danger" data-del="${j.id}">Delete</button></div></div>`)
+    .join('')}`;
+}
+function jobRow(j) {
+  const k = KIND[j.kind], t = title(j), w = when(j);
+  const last = j.state.last
+    ? `<span class="last${failed(j) ? ' err' : ''}"><span class="dot" style="background:${failed(j) ? 'var(--danger)' : 'var(--ok)'}"></span>${failed(j) ? 'failed' : 'ran'} ${rel(j.state.last)} · ${dur(j.state.dur)}</span>`
+    : '<span class="last">never ran</span>';
+  const next = !j.enabled ? (j.schedule.kind === 'at' ? 'done' : 'paused') : j.state.next ? `next ${rel(j.state.next)}` : '—';
+  return `<div class="job${j.enabled ? '' : ' off'}${st.sel === j.id ? ' sel' : ''}" data-open="${j.id}">
+    <div class="kind ${k.cls}" title="${k.label}">${k.icon}</div>
+    <div style="min-width:0"><div class="j-t">${esc(t.t)}${t.sub ? `<span class="sub">${esc(t.sub)}</span>` : ''}</div><div class="j-d">${esc(j.text.split('\n')[0])}</div></div>
+    <div class="when">${esc(w.text)}<span class="tz">${esc(w.tz)}</span></div>
+    <div class="run"><div class="next">${next}</div>${last}</div>
+    <button class="tg${j.enabled ? ' on' : ''}" data-tg="${j.id}" aria-label="${j.enabled ? 'Pause' : 'Turn on'}" title="${j.enabled ? 'On — click to pause' : 'Paused — click to turn on'}"></button>
+    <button class="kebab" data-open="${j.id}" aria-label="More">⋯</button>
+  </div>`;
+}
+function renderGroups() {
+  const list = visible();
+  if (!list.length) { $('groups').innerHTML = '<div class="empty">No jobs match. <button class="btn sm ghost" data-f="all">Show all</button></div>'; return; }
+  const by = {};
+  for (const j of list) (by[j.agent] ??= []).push(j);
+  $('groups').innerHTML = Object.keys(AGENTS).filter((a) => by[a]).map((a) => {
+    const js = by[a].sort((x, y) => (x.state.next ?? Infinity) - (y.state.next ?? Infinity));
+    const on = js.filter((j) => j.enabled), off = js.filter((j) => !j.enabled);
+    const showOff = st.open.has(a) || st.filter === 'paused' || st.filter === 'failed' || st.q || !on.length;
+    const next = on.map((j) => j.state.next).filter(Boolean).sort()[0];
+    return `<section class="group"><div class="g-h"><div class="av" style="background:${AGENTS[a].color}">${esc(a[0].toUpperCase())}</div><h3>${esc(a)}</h3>
+      <span class="meta">${on.length} on${off.length ? ` · ${off.length} paused` : ''}${next ? ` · next run ${rel(next)}` : ''}</span></div>
+      <div class="list">${on.map(jobRow).join('')}${off.length && !showOff ? `<button class="fold" data-fold="${esc(a)}"><span class="car">›</span>${off.length} paused</button>` : ''}${showOff ? off.map(jobRow).join('') : ''}</div></section>`;
+  }).join('');
+}
+function renderDrawer() {
+  const j = JOBS.find((x) => x.id === st.sel);
+  $('drawer').classList.toggle('on', !!j); $('scrim').classList.toggle('on', !!j);
+  if (!j) return;
+  const k = KIND[j.kind], t = title(j), w = when(j);
+  const status = failed(j) ? '<span class="pill p-err">Failed</span>' : j.enabled ? '<span class="pill p-ok">On</span>' : '<span class="pill p-off">Paused</span>';
+  const runs = j.state.last
+    ? [{ t: j.state.last, ok: !failed(j) }, ...(j.schedule.kind === 'at' ? [] : [1, 2, 3].map((i) => ({ t: j.state.last - i * (j.schedule.expr?.endsWith('* * *') ? D : 7 * D), ok: true })))]
+    : [];
+  $('drawer').innerHTML = `<div class="d-head"><div class="d-who"><div class="av" style="background:${AGENTS[j.agent].color};width:20px;height:20px;font-size:11px;border-radius:6px">${esc(j.agent[0])}</div>${esc(j.agent)} · <span class="kind ${k.cls}" style="width:auto;height:auto;padding:0 8px;border-radius:999px;font-size:12px">${k.icon} ${k.label}</span><span class="sp"></span>${status}<button class="x" data-close aria-label="Close">×</button></div>
+    <h2 class="d-title">${esc(t.t)}${t.sub ? ` <span style="color:var(--text-faint);font-weight:400">· ${esc(t.sub)}</span>` : ''}</h2></div>
+    <div class="d-body">
+      <div class="facts"><div class="fact"><div class="lbl">When</div><div class="v">${esc(w.text)}</div><div class="s">${esc(w.tz)}</div></div>
+        <div class="fact"><div class="lbl">Next run</div><div class="v">${j.enabled && j.state.next ? rel(j.state.next) : j.schedule.kind === 'at' ? 'Already ran' : 'Paused'}</div><div class="s">${j.state.next ? new Date(j.state.next).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</div></div></div>
+      ${failed(j) ? `<div class="attn" style="margin:0;padding:12px 14px"><div class="attn-t" style="color:var(--danger)">Last run failed ${rel(j.state.last)}</div><div class="attn-why">${whyFailed(j)}</div><div class="fixed">✓ Fixed. Run it again to deliver it to the dashboard chat.</div></div>` : ''}
+      <div><div class="lbl">${j.kind === 'skillJob' ? 'Runs' : j.kind === 'message' ? 'Sends' : 'Tells the agent'}</div><div class="instr">${esc(j.text)}</div></div>
+      <div><div class="lbl">Why this exists</div><div class="why">${j.kind === 'skillJob' ? `Set up by the <b>${esc(t.t.toLowerCase())}</b> skill when it was enabled for ${esc(j.agent)}.` : `Created by <b>${esc(j.agent)}</b> during a cycle. <a href="#" style="color:var(--accent)">Open cycle</a>`}</div></div>
+      <div><div class="lbl">Recent runs</div><div class="runs">${runs.length ? runs.map((r) => `<div class="r"><span class="dot" style="background:${r.ok ? 'var(--ok)' : 'var(--danger)'}"></span><span class="t">${rel(r.t)}</span><span class="o">${r.ok ? 'Done' : esc(j.state.err)}</span></div>`).join('') : '<div style="color:var(--text-faint)">Has not run yet.</div>'}</div></div>
+    </div>
+    <div class="d-foot"><button class="btn primary" data-rerun="${j.id}">Run now</button><button class="btn">Edit</button><span class="sp"></span><button class="btn ghost danger" data-del="${j.id}">Delete</button></div>`;
+}
+function render() { renderBar(); renderWeek(); renderAttn(); renderGroups(); renderDrawer(); }
+function toast(m) { const t = $('toast'); t.textContent = m; t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), 1800); }
+
+document.addEventListener('click', (e) => {
+  const el = (s) => e.target.closest(s);
+  if (el('[data-tg]')) { const j = JOBS.find((x) => x.id === el('[data-tg]').dataset.tg); j.enabled = !j.enabled; toast(j.enabled ? 'Turned on' : 'Paused'); return render(); }
+  if (el('[data-f]')) { const f = el('[data-f]').dataset.f; st.filter = st.filter === f ? 'all' : f; return render(); }
+  if (el('[data-fold]')) { const a = el('[data-fold]').dataset.fold; st.open.has(a) ? st.open.delete(a) : st.open.add(a); return render(); }
+  if (el('[data-rerun]')) { const j = JOBS.find((x) => x.id === el('[data-rerun]').dataset.rerun); j.state = { ...j.state, status: 'ok', err: null, last: NOW, dur: 1200 }; toast('Ran — delivered to the dashboard chat'); return render(); }
+  if (el('[data-del]')) { const i = JOBS.findIndex((x) => x.id === el('[data-del]').dataset.del); JOBS.splice(i, 1); st.sel = null; toast('Deleted'); return render(); }
+  if (el('[data-close]') || e.target === $('scrim')) { st.sel = null; return render(); }
+  if (el('[data-open]')) { st.sel = el('[data-open]').dataset.open; return render(); }
+});
+document.addEventListener('input', (e) => { if (e.target.id === 'q') { st.q = e.target.value; renderGroups(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { st.sel = null; render(); } });
+render();
+</script>
+</body>
+</html>

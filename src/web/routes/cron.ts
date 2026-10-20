@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { CronService } from '../../cron';
 import type { CronRunLogEntry } from '../../cron/run-log';
+import { weekOfRunsMs } from '../../cron/schedule';
 import type { CronJob, CronJobCreate, CronJobPatch } from '../../cron/types';
 import type { Logger } from '../../logger';
 import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
@@ -32,7 +33,10 @@ export function cronRoutes(deps: {
       const by = job.createdBy;
       const cycle =
         by?.kind === 'agent' && by.cycleId ? cycles.byId(by.botId, by.cycleId) : undefined;
-      return { ...job, why: cronJobToWhy({ job, ...(cycle ? { cycle } : {}) }) };
+      const nowMs = Date.now();
+      // The next 7 days of runs, for the page's week strip (paused: none).
+      const upcoming = job.enabled === false ? [] : weekOfRunsMs(job.schedule, nowMs);
+      return { ...job, upcoming, why: cronJobToWhy({ job, ...(cycle ? { cycle } : {}) }) };
     });
   };
 

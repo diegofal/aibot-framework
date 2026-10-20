@@ -96,4 +96,18 @@ describe('cron routes: why', () => {
     const body = await (await app.request('/api/cron')).json();
     expect(body[0].why.what).toBe('A scheduled job the agent set up');
   });
+
+  test('GET / carries the next 7 days of runs for enabled jobs, none for paused ones', async () => {
+    const paused = { ...agentJob, id: 'j2', enabled: false };
+    const { app, cronService } = makeApp();
+    cronService.list.mockImplementation(async () => [agentJob, paused]);
+    const body = (await (await app.request('/api/cron')).json()) as Array<{
+      id: string;
+      upcoming: number[];
+    }>;
+    const byId = Object.fromEntries(body.map((j) => [j.id, j.upcoming]));
+    expect(byId.j1.length).toBe(7);
+    expect(byId.j1.every((t, i, a) => i === 0 || t > a[i - 1])).toBe(true);
+    expect(byId.j2).toEqual([]);
+  });
 });

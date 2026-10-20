@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emptyKnowledgeMap } from '../../../src/bot/curiosity/knowledge-map';
-import { CURIOSITY_FILES, CuriosityStore } from '../../../src/bot/curiosity/store';
+import {
+  CURIOSITY_FILES,
+  CuriosityStore,
+  emptyNavigatorState,
+} from '../../../src/bot/curiosity/store';
 import type { Dispatch } from '../../../src/bot/curiosity/types';
 
 const DIR = join(import.meta.dir, '.tmp-curiosity-store');
@@ -40,6 +44,44 @@ describe('CuriosityStore', () => {
     const taste = store.loadTaste();
     expect(taste.cadence.lastSentAt).toBeNull();
     expect(store.listDispatches()).toEqual([]);
+  });
+
+  it('reads operator chat lines saved as instructions by older versions as context', () => {
+    store.saveNavigator({
+      ...emptyNavigatorState(),
+      directives: [
+        {
+          id: 'a',
+          text: 'old chat line',
+          source: 'message',
+          receivedAt: '2026-10-15T00:00:00.000Z',
+          servedOutputs: 1,
+          status: 'active',
+        },
+        {
+          id: 'b',
+          text: 'old served chat',
+          source: 'message',
+          receivedAt: '2026-10-01T00:00:00.000Z',
+          servedOutputs: 3,
+          status: 'served',
+          servedAt: '2026-10-02T00:00:00.000Z',
+        },
+        {
+          id: 'c',
+          text: 'an answered ask',
+          source: 'ask_human',
+          receivedAt: '2026-10-15T00:00:00.000Z',
+          servedOutputs: 0,
+          status: 'active',
+        },
+      ],
+    });
+    const byId = Object.fromEntries(store.loadNavigator().directives.map((d) => [d.id, d]));
+    expect(byId.a.status).toBe('context');
+    expect(byId.b.status).toBe('context');
+    expect(byId.b.servedAt).toBeUndefined();
+    expect(byId.c.status).toBe('active');
   });
 
   it('round-trips the knowledge map', () => {

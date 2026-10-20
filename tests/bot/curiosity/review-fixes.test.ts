@@ -87,6 +87,18 @@ describe('#1 only the operator steers', () => {
     expect(svc.storeFor('b')!.loadNavigator().directives).toHaveLength(1);
   });
 
+  it('records an operator chat message as context, not as an instruction to act on', () => {
+    svc.recordOperatorMessage('b', 'can you check my calendar for today');
+    const [d] = svc.storeFor('b')!.loadNavigator().directives;
+    expect(d).toMatchObject({ source: 'message', status: 'context' });
+  });
+
+  it('an ask_human or feedback directive still steers', () => {
+    svc.recordDirective('b', 'Go deep on retrieval economics next', 'ask_human');
+    const [d] = svc.storeFor('b')!.loadNavigator().directives;
+    expect(d.status).toBe('active');
+  });
+
   it('does not write state for a bot with curiosity disabled', () => {
     botCfg = { enabled: false };
     expect(svc.recordOperatorMessage('b', 'Go deep on retrieval economics next')).toBe(false);

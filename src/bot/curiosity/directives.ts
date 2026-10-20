@@ -3,6 +3,9 @@
  * served (N outputs answered them, or the half-life in days passed), then
  * they become context. A repeated instruction re-anchors. This is what stops
  * a two-week-old message from being the bot's only compass.
+ *
+ * What the operator says in a chat is recorded as `context`: the conversation
+ * answers it, so the loop only reads it as background (see `Directive.status`).
  */
 import { randomUUID } from 'node:crypto';
 import { textSimilarity } from '../../hygiene/text-utils';
@@ -13,11 +16,22 @@ const SAME_DIRECTIVE = 0.8;
 
 export function addDirective(
   nav: NavigatorState,
-  input: { text: string; source: DirectiveSource; receivedAt: string }
+  input: {
+    text: string;
+    source: DirectiveSource;
+    receivedAt: string;
+    status?: 'active' | 'context';
+  }
 ): NavigatorState {
   const text = input.text.trim().slice(0, 1000);
   if (!text) return nav;
-  const existing = nav.directives.find((d) => textSimilarity(d.text, text) >= SAME_DIRECTIVE);
+  const status = input.status ?? 'active';
+  // Context only matches context: a chat line never re-anchors or demotes an instruction.
+  const existing = nav.directives.find(
+    (d) =>
+      (d.status === 'context') === (status === 'context') &&
+      textSimilarity(d.text, text) >= SAME_DIRECTIVE
+  );
   let directives: Directive[];
   if (existing) {
     directives = nav.directives.map((d) =>
@@ -28,7 +42,7 @@ export function addDirective(
             source: input.source,
             receivedAt: input.receivedAt,
             servedOutputs: 0,
-            status: 'active' as const,
+            status,
             servedAt: undefined,
           }
         : d
@@ -42,15 +56,28 @@ export function addDirective(
         source: input.source,
         receivedAt: input.receivedAt,
         servedOutputs: 0,
-        status: 'active',
+        status,
       },
     ];
   }
+  // Over the cap: oldest chat context first, then served instructions, then the oldest.
   while (directives.length > DIRECTIVES_CAP) {
-    const servedIdx = directives.findIndex((d) => d.status === 'served');
-    directives.splice(servedIdx === -1 ? 0 : servedIdx, 1);
+    const evict = [oldestIndex(directives, 'context'), oldestIndex(directives, 'served'), 0].find(
+      (i) => i !== -1
+    ) as number;
+    directives.splice(evict, 1);
   }
   return { ...nav, directives };
+}
+
+function oldestIndex(directives: Directive[], status: Directive['status']): number {
+  let idx = -1;
+  for (let i = 0; i < directives.length; i++) {
+    const d = directives[i];
+    if (d.status !== status) continue;
+    if (idx === -1 || d.receivedAt < directives[idx].receivedAt) idx = i;
+  }
+  return idx;
 }
 
 /** One more output answered each of these directives. Unknown ids are ignored. */
@@ -93,6 +120,7 @@ export function activeDirectives(nav: NavigatorState): Directive[] {
 
 /** Each directive is clipped in prompts; the whole block stays under the budget. */
 const DIRECTIVE_PROMPT_CHARS = 300;
+const CHAT_CONTEXT_SHOWN = 5;
 
 const clip = (t: string) =>
   t.length > DIRECTIVE_PROMPT_CHARS ? `${t.slice(0, DIRECTIVE_PROMPT_CHARS)}…` : t;
@@ -101,6 +129,10 @@ export function renderDirectivesForPrompt(nav: NavigatorState, maxChars = 2500):
   if (nav.directives.length === 0) return '';
   const active = activeDirectives(nav);
   const served = nav.directives.filter((d) => d.status === 'served').slice(-5);
+  const chat = nav.directives
+    .filter((d) => d.status === 'context')
+    .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt))
+    .slice(-CHAT_CONTEXT_SHOWN);
   const parts: string[] = ['## Operator Instructions'];
   if (active.length > 0) {
     parts.push(
@@ -116,6 +148,13 @@ export function renderDirectivesForPrompt(nav: NavigatorState, maxChars = 2500):
     parts.push(
       `Already served — context only, NOT your route anymore:\n${served
         .map((d) => `- ${clip(d.text)} (served ${d.servedAt?.slice(0, 10) ?? 'earlier'})`)
+        .join('\n')}`
+    );
+  }
+  if (chat.length > 0) {
+    parts.push(
+      `What the operator said in chat — already answered there by the conversation. Background on what they care about; never reply to it, never summarize it back, never message them about it:\n${chat
+        .map((d) => `- ${clip(d.text)} (${d.receivedAt.slice(0, 10)})`)
         .join('\n')}`
     );
   }

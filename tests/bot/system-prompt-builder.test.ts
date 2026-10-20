@@ -52,6 +52,31 @@ function createMockToolRegistry(defs: ToolDefinition[]): ToolRegistry {
 const botConfig = { id: 'testbot', name: 'TestBot', token: 'x', enabled: true, skills: [] } as any;
 
 describe('SystemPromptBuilder', () => {
+  describe('missing capabilities', () => {
+    test('conversation mode says to admit a missing integration without naming internals', () => {
+      const builder = new SystemPromptBuilder(createMockCtx([]), createMockToolRegistry([]));
+      const prompt = builder.build({
+        mode: 'conversation',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+      });
+      expect(prompt).toContain('## When you cannot do something');
+      expect(prompt).toContain('MCP');
+    });
+
+    test('collaboration mode does not carry it', () => {
+      const builder = new SystemPromptBuilder(createMockCtx([]), createMockToolRegistry([]));
+      const prompt = builder.build({
+        mode: 'collaboration',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+      } as any);
+      expect(prompt).not.toContain('## When you cannot do something');
+    });
+  });
+
   describe('create_agent instructions', () => {
     test('includes agent creation section when create_agent tool is present', () => {
       const bots = [

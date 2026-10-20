@@ -960,7 +960,7 @@ export class ConversationPipeline {
     });
 
     // Engagement signal: a human wrote to the bot on a non-Telegram channel.
-    // The Telegram buffer records the same signal via requestImmediateRun(),
+    // The Telegram buffer records the same signal via recordHumanMessage(),
     // so it must not also come through here (it never calls this method).
     this.emitHumanInbound(msg, config.id);
 

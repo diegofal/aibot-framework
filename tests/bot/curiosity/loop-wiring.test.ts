@@ -32,16 +32,21 @@ describe('createOperatorDispatchDeliverer', () => {
     expect(any).toEqual([]);
   });
 
-  it('falls back to any live instance for headless bots', async () => {
+  it('falls back to the instance lent for that bot', async () => {
     const any: Array<[number, string]> = [];
+    const lentFor: string[] = [];
     const deliver = createOperatorDispatchDeliverer({
       getOperatorChatId: () => 42,
       getBot: () => undefined,
-      getAnyBot: () => fakeBot(any),
+      getAnyBot: (botId) => {
+        lentFor.push(botId);
+        return fakeBot(any);
+      },
       logger,
     });
     expect(await deliver('b', 'hi')).toBe('telegram');
     expect(any).toEqual([[42, 'hi']]);
+    expect(lentFor).toEqual(['b']);
   });
 
   it('counts as delivered to the dashboard inbox when there is no Telegram route', async () => {

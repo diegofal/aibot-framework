@@ -161,6 +161,15 @@ describe('AskHumanStore', () => {
     expect(store.consumeAnswersForBot('bot-unknown')).toEqual([]);
   });
 
+  test('handleReply reports the worker run that asked', () => {
+    const { id } = store.ask('bot1', 100, 'Which file?', undefined, Date.now(), { runId: 'r-1' });
+    store.setMessageId(id, 998);
+    expect(store.handleReply('bot1', 100, 'The second', 998)).toMatchObject({
+      matched: true,
+      runId: 'r-1',
+    });
+  });
+
   test('handleReply also stores in answered map', () => {
     const { id } = store.ask('bot1', 100, 'What next?');
     store.setMessageId(id, 999);
