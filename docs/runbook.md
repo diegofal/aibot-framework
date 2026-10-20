@@ -953,3 +953,16 @@ docker compose up -d --build
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-16T22-01-50`. `/api/status` 200; `FINANZAS_AGENT_KEY` present in the container; boot logged "HTTP API tools registered" with `api_finanzas_saldos`, `api_finanzas_vencimientos`, `api_finanzas_proyeccion`, `api_finanzas_conciliacion_pendientes`, and `whatsapp_export_summary`; all bots started. The finance API itself was checked with curl against production (401 without/with a wrong key, 405 on POST, 200 on the four routes with the key). Not yet exercised end to end through Finny on Telegram. Personal accounts stay off: no OAuth clients, `integrations.personalAccounts.bots` empty.
 
 **Reversible?** Restore the config backup in the volume (`config.json.bak-*`) or remove `integrations.httpApis`, and rebuild from `7aa419b`; remove `FINANZAS_AGENT_KEY` from `.env`; on the finance side, `vercel env rm AGENTE_API_SHA256 production …` and redeploy.
+
+### 2026-10-20 — Deploy of PRs #7–#9 (local, `aibot-framework-aibot-1`)
+
+**Why.** `main` at `b372c91` carries the goal-brief editing (#7), the Oct 16 fixes (#8) and the personal organizer with today's review fixes (#9), including the cron/operator security fix: a cron job the operator did not create, aimed at the operator's Telegram chat, no longer reaches calendar/mail.
+
+```bash
+bun scripts/docker/backup.ts backup
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-20T13-09-08`. Container `Up (healthy)`, dashboard 200; the image carries the new code (`findByExport` in `src/whatsapp-export/store.ts`, `requesterLookup` in `src/bot/conversation-pipeline.ts`); bots started (jarvis-factory headless as before). Boot warnings are only the unset Twitter/Reddit env vars, as before. WhatsApp exports stored before this keep their keys (slug + hash only on a real name collision). Not exercised end to end on Telegram.
+
+**Reversible?** `bun scripts/docker/backup.ts restore <that backup> --force` and rebuild from `adba3ea` (the `main` before today's merges).
