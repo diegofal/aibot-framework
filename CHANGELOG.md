@@ -46,6 +46,7 @@
 - **Upcoming runs** (`src/cron/schedule.ts`): the cursor stepped a whole second, skipping runs of an `every` under 1000 ms and every other run of a per-second cron; it now steps 1 ms. The week strip (`GET /api/cron` → `upcoming`) used one cap of 50 runs for the whole week, so an hourly job's later days were empty: `weekOfRunsMs` caps each day instead (runs on a day boundary stay that day's, and none is listed twice).
 - **Interval words** (`scheduleWords`): an interval that is not whole minutes reads in seconds ("Every 30s", "Every 90s"), not rounded to "Every 1m" / "Every 2m"; under a second, in milliseconds.
 - **Cron board** (`web/pages/cron.js`, `cron-board-helpers.js`): "Show all" in the empty state clears the search, not only the filter chip (`data-show-all`); a save or run that lands after leaving the page no longer throws on the missing board.
+- **Review of PR 8:** `tests/web/cron-list-helpers.test.ts` still imported ten helpers the redesign deleted (Bun binds them to `undefined`; a spec ESM loader refuses the module), so `tests/web/imports-resolve.test.ts` now checks every named `web/` import in `tests/web/` against real exports; opening a job on the cron board ignores a slower, earlier request that lands after a newer open or a close.
 - Tests: `tests/channel/fleet-telegram.test.ts`, `tests/cron/upcoming-runs.test.ts`, `tests/web/cron-board-helpers.test.ts` (the page-left guard has none: no DOM in the suite).
 
 ### Fixed (2026-10-16) — The operator's chat gets one reply per message
