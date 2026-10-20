@@ -6,7 +6,8 @@
 - **Why.** Operator: "I wrote all this text and it was cut off in the card… I should be able to click/edit it inline." The card headline derived from a long goal stops at its first clause break with nothing marking it as cut, and the drawer brief was clamped to three lines behind Edit → Save brief.
 - **Card** (`cardHtml`): a derived headline shorter than the brief ends in "…" and carries the full text as tooltip; a headline the operator set is left as is.
 - **Drawer brief** (`drawerHtml`, `goal-board.js`): a textarea that grows with its text (`field-sizing: content`), saved on blur or Ctrl/Cmd+Enter through the same `PATCH { brief }`; Escape reverts, emptying it restores the previous text. The Edit and "Show full brief" buttons are gone.
-- Tests: `tests/web/fleet-board-helpers.test.ts`.
+- **Repaints keep the edit in progress** (`web/pages/drawer-edits.js`, review finding on PR 7): a save or the Activity load redraws the drawer, which wiped whatever was being typed in another field meanwhile (notes opened while the brief was saving). `captureEdits` / `restoreEdits` around `paintDrawer` keep unsaved title, brief, notes and new-subtask text plus the caret, on the same goal only; Save and Cancel leave the notes editor clean so it closes.
+- Tests: `tests/web/fleet-board-helpers.test.ts`, `tests/web/drawer-edits.test.ts`.
 
 ### Added (2026-10-15) — Standing goals get a turn; goals and tasks that no longer apply are dropped
 - **Why.** jarvis-factory since 2026-10-13: 15 cycles served the big purpose goal, 8 a blocked goal, 8 were exploration; the standing goal "Keep one clean list…" got 1 cycle and "Learn the operator's routine" got 0, and the board showed both red "stalled". Standing goals never get tasks, so nothing pulled the planner to them. And the agent had no way to say a goal or task no longer applies: obsolete tasks stayed open forever or were marked done falsely.
