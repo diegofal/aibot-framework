@@ -422,25 +422,6 @@ export function mountGoalBoard({ root, getHome, getAgent, reload, paint }) {
       openDrawer(botId, kid.dataset.openGoal);
       return;
     }
-    if (t.id === 'fb-morebrief') {
-      drawer.querySelector('#fb-brief')?.classList.remove('clamp');
-      t.remove();
-      return;
-    }
-    if (t.id === 'fb-editbrief') {
-      const box = drawer.querySelector('#fb-brief')?.closest('.fb-brief');
-      if (box) {
-        box.outerHTML = `<textarea class="fb-edit" id="fb-briefed" maxlength="1000">${escapeHtml(goal.text)}</textarea><div class="fb-edit-row"><button type="button" class="btn btn-sm btn-primary" id="fb-savebrief">Save brief</button><button type="button" class="btn btn-sm" data-cancel>Cancel</button></div>`;
-        drawer.querySelector('#fb-morebrief')?.remove();
-        drawer.querySelector('#fb-briefed')?.focus();
-      }
-      return;
-    }
-    if (t.id === 'fb-savebrief') {
-      const brief = drawer.querySelector('#fb-briefed')?.value.trim();
-      if (brief) await goalWrite(botId, 'PATCH', { ...goalRef(goal), brief }, 'Brief saved');
-      return;
-    }
     if (t.id === 'fb-editnotes') {
       const box = drawer.querySelector('#fb-notes');
       if (box) {
@@ -502,6 +483,14 @@ export function mountGoalBoard({ root, getHome, getAgent, reload, paint }) {
       const shown = t.defaultValue.replace(/\s+/g, ' ').trim();
       if (v && v !== shown)
         await goalWrite(botId, 'PATCH', { ...goalRef(goal), headline: v }, 'Title saved');
+      return;
+    }
+    if (t.id === 'fb-brief') {
+      const v = t.value.trim();
+      // Emptied: the agent still needs a brief, so it goes back to what it was.
+      if (!v) t.value = t.defaultValue;
+      else if (v !== t.defaultValue.trim())
+        await goalWrite(botId, 'PATCH', { ...goalRef(goal), brief: v }, 'Brief saved');
       return;
     }
     if (t.classList?.contains('fb-tx')) {
@@ -566,6 +555,19 @@ export function mountGoalBoard({ root, getHome, getAgent, reload, paint }) {
     if (e.key === 'Enter' && (t.id === 'fb-title' || t.classList?.contains('fb-tx'))) {
       e.preventDefault();
       t.blur();
+      return;
+    }
+    if (t.id === 'fb-brief') {
+      // Enter writes a newline; Ctrl/Cmd+Enter saves; Escape drops the edit.
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        t.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        t.value = t.defaultValue;
+        t.blur();
+      }
       return;
     }
     if ((e.key === 'Enter' || e.key === ' ') && t.matches?.('[data-open-goal]') && st.drawer) {
