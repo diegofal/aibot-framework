@@ -173,7 +173,10 @@ export function createPersonalTools(getSource: () => PersonalDataSource | undefi
         const byId = new Map(events.map((e) => [e.id, e]));
         const lines = [
           `Agenda ${local(r.from.toISOString())} → ${local(r.to.toISOString())}:`,
-          ...(rows.length ? rows.map((row) => agendaLine(row, byId)) : ['No events.']),
+          // Titles and locations come from invitations anyone can send: external content.
+          rows.length
+            ? wrapExternalContent(rows.map((row) => agendaLine(row, byId)).join('\n'))
+            : 'No events.',
           ...problemLines(problems),
         ];
         return { success: true, content: lines.join('\n') };

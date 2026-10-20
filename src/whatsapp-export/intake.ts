@@ -74,7 +74,7 @@ export async function intakeWhatsAppExport(input: IntakeInput): Promise<MediaRes
     status = r.firstExport
       ? `First export of this group: ${plural(r.newCount, 'new message')} from the last 30 days${range}.`
       : `${plural(r.newCount, 'new message')} since the previous export${range}.`;
-    status += ` The messages are not in this turn: call ${WHATSAPP_SUMMARY_TOOL} with group "${r.group}" (and every part it announces) to read them, then write the summary. ${SUMMARY_GUIDE}`;
+    status += ` The messages are not in this turn: call ${WHATSAPP_SUMMARY_TOOL} with group "${r.group}" and export "${r.exportAt}" (and every part it announces) to read them, then write the summary. ${SUMMARY_GUIDE}`;
   }
 
   const caption = input.caption?.trim();

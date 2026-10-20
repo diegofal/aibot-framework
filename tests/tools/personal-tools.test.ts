@@ -183,6 +183,15 @@ describe('operator gate', () => {
     expect(src.listEvents).not.toHaveBeenCalled();
   });
 
+  test('calendar_agenda wraps event text as external content (titles come from invitations)', async () => {
+    const r = await tools(source()).calendar_agenda.execute(
+      { from: '2026-10-16T00:00:00Z', to: '2026-10-17T00:00:00Z' },
+      logger
+    );
+    expect(r.success).toBe(true);
+    expect(r.content).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT>>>');
+  });
+
   test('the operator and the dashboard (_actor: operator) get through', async () => {
     const all = tools(source());
     const a = { from: '2026-10-16T00:00:00Z', to: '2026-10-17T00:00:00Z' };

@@ -42,6 +42,11 @@ export function createWhatsAppExportSummaryTool(deps: WhatsAppExportSummaryDeps)
               description: 'Group name (or part of it). Omit for the most recent export.',
             },
             part: { type: 'number', description: 'Part to read, starting at 1 (default 1).' },
+            export: {
+              type: 'string',
+              description:
+                'The export id the turn named. Pass it so a newer export of the same group does not replace the one you are summarizing.',
+            },
           },
         },
       },
@@ -56,9 +61,15 @@ export function createWhatsAppExportSummaryTool(deps: WhatsAppExportSummaryDeps)
       }
       const botId = String(args._botId ?? '');
       const query = typeof args.group === 'string' ? args.group : undefined;
+      const exportId =
+        typeof args.export === 'string' && args.export.trim() ? args.export.trim() : undefined;
       const nowMs = now();
 
-      const rec = deps.store.find(botId, query, nowMs);
+      // Bound to the export that started the turn: a newer one of the same group
+      // (or the latest of another group) must not replace what is being read.
+      const rec = exportId
+        ? deps.store.findByExport(botId, exportId, query, nowMs)
+        : deps.store.find(botId, query, nowMs);
       if (!rec) {
         const known = deps.store.list(botId).map((g) => `"${g.group}"`);
         if (known.length === 0) {
@@ -74,7 +85,7 @@ export function createWhatsAppExportSummaryTool(deps: WhatsAppExportSummaryDeps)
         };
       }
 
-      const at = rec.lastExport?.at;
+      const at = exportId ?? rec.lastExport?.at;
       const fresh = at ? rec.messages.filter((m) => m.seenAt === at) : [];
       const header = `WhatsApp group "${rec.group}" — export received ${at ? formatStamp(at) : '?'} UTC.`;
       if (fresh.length === 0) {
@@ -95,7 +106,7 @@ export function createWhatsAppExportSummaryTool(deps: WhatsAppExportSummaryDeps)
       const range = `${formatStamp(fresh[0].ts)} → ${formatStamp(fresh[fresh.length - 1].ts)}`;
       const next =
         part < parts.length
-          ? `\nRead the rest before summarizing: call ${WHATSAPP_SUMMARY_TOOL} again with part: ${part + 1}.`
+          ? `\nRead the rest before summarizing: call ${WHATSAPP_SUMMARY_TOOL} again with group: "${rec.group}", export: "${at}", part: ${part + 1}.`
           : '';
       return {
         success: true,

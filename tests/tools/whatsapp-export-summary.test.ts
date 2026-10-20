@@ -132,6 +132,30 @@ describe('whatsapp_export_summary', () => {
     expect(r.content).toContain('3B Padres');
   });
 
+  test('a turn reads the export that triggered it, even after a newer export of the group', async () => {
+    const first = store.ingest(
+      BOT,
+      'G',
+      [{ ts: '2026-10-16T08:00:00', author: 'A', text: 'from the first' }],
+      {
+        nowMs: NOW - 1000,
+        fileName: 'a',
+      }
+    );
+    store.ingest(
+      BOT,
+      'G',
+      [
+        { ts: '2026-10-16T08:00:00', author: 'A', text: 'from the first' },
+        { ts: '2026-10-16T09:00:00', author: 'B', text: 'from the second' },
+      ],
+      { nowMs: NOW, fileName: 'b' }
+    );
+    const r = await run({ group: 'G', export: first.exportAt });
+    expect(r.content).toContain('from the first');
+    expect(r.content).not.toContain('from the second');
+  });
+
   test('nothing new in the latest export', async () => {
     const m = [{ ts: '2026-10-16T08:00:00', author: 'A', text: 'x' }];
     store.ingest(BOT, 'G', m, { nowMs: NOW - 10, fileName: 'a' });

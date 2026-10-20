@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * Per-bot, per-group record of WhatsApp exports the operator sent:
  * `<dir>/<botId>/<group-slug>.json`.
@@ -58,6 +59,8 @@ export interface IngestResult {
   /** First and last new message timestamps. */
   from?: string;
   to?: string;
+  /** This export's id (its `lastExport.at`): every message it added carries it as `seenAt`. */
+  exportAt: string;
 }
 
 /** A zone-less local timestamp → epoch ms in this process's time zone. */
@@ -140,6 +143,19 @@ export class WhatsAppExportStore {
     return { groups, dropped };
   }
 
+  /**
+   * Where `group` is stored. Its slug when that is free or already holds this
+   * exact group; otherwise (two names one slug apart, "Class 1/A" and "Class 1-A")
+   * the slug plus a hash of the name, so neither reads the other's messages.
+   */
+  private storageSlug(botId: string, group: string): string {
+    const slug = groupSlug(group);
+    const owner = this.read(botId, slug);
+    if (!owner || owner.group === group) return slug;
+    const hash = createHash('sha256').update(group).digest('hex').slice(0, 8);
+    return `${slug.slice(0, 51).replace(/-+$/, '')}-${hash}`;
+  }
+
   /** Records one export of `group`; returns what was new in it. */
   ingest(
     botId: string,
@@ -151,7 +167,7 @@ export class WhatsAppExportStore {
       const r = this.read(botId, s);
       if (r) this.pruned(botId, r, opts.nowMs);
     }
-    const slug = groupSlug(group);
+    const slug = this.storageSlug(botId, group);
     const prev = this.read(botId, slug);
     const cutoff = opts.nowMs - RETENTION_DAYS * DAY_MS;
     const at = new Date(opts.nowMs).toISOString();
@@ -210,6 +226,7 @@ export class WhatsAppExportStore {
       droppedOld,
       ...(cursor ? { previousLastMessageAt: cursor } : {}),
       ...(fresh.length ? { from: fresh[0].ts, to: fresh[fresh.length - 1].ts } : {}),
+      exportAt: at,
     };
   }
 
@@ -223,6 +240,28 @@ export class WhatsAppExportStore {
   }
 
   /**
+   * The group holding export `exportAt` (the messages it added carry it as
+   * `seenAt`), narrowed to `query` when given. Pruned on read.
+   */
+  findByExport(
+    botId: string,
+    exportAt: string,
+    query: string | undefined,
+    nowMs: number
+  ): GroupRecord | undefined {
+    const named = query?.trim() ? this.find(botId, query, nowMs) : undefined;
+    const pool = named
+      ? [named]
+      : this.slugs(botId)
+          .map((s) => this.read(botId, s))
+          .filter((r): r is GroupRecord => !!r)
+          .map((r) => this.pruned(botId, r, nowMs));
+    return pool.find(
+      (r) => r.lastExport?.at === exportAt || r.messages.some((m) => m.seenAt === exportAt)
+    );
+  }
+
+  /**
    * A group by slug or by part of its name (accent- and case-insensitive);
    * the most recently exported one when `query` is empty. Pruned on read.
    */
@@ -232,8 +271,13 @@ export class WhatsAppExportStore {
     if (!query?.trim()) {
       slug = groups[0]?.slug;
     } else {
+      // The exact name first: two names can share a slug ("Class 1/A", "Class 1-A").
+      const exact = query.trim().toLowerCase();
       const q = groupSlug(query);
-      slug = groups.find((g) => g.slug === q)?.slug ?? groups.find((g) => g.slug.includes(q))?.slug;
+      slug =
+        groups.find((g) => g.group.trim().toLowerCase() === exact)?.slug ??
+        groups.find((g) => g.slug === q)?.slug ??
+        groups.find((g) => g.slug.includes(q))?.slug;
     }
     if (!slug) return undefined;
     const rec = this.read(botId, slug);

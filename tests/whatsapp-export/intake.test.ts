@@ -40,6 +40,8 @@ describe('intakeWhatsAppExport', () => {
     expect(r.text).not.toContain('$500');
     expect(r.sessionText).toBe('[WhatsApp export: 3B Padres — 2 new messages] resumime');
     expect(store.newMessages(BOT, '3b-padres', NOW)).toHaveLength(2);
+    // The turn names its export, so a newer one cannot replace what it reads.
+    expect(r.text).toContain(`export "${new Date(NOW).toISOString()}"`);
   });
 
   test('an iOS .zip export with _chat.txt', async () => {

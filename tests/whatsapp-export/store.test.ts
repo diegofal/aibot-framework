@@ -243,3 +243,28 @@ describe('startWhatsAppExportSweep', () => {
     expect(warned).toHaveLength(1);
   });
 });
+
+describe('WhatsAppExportStore: group names that share a slug', () => {
+  let dir: string;
+  let store: WhatsAppExportStore;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'wa-store-'));
+    store = new WhatsAppExportStore(dir);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test('"Class 1/A" and "Class 1-A" keep separate records and never suppress each other', () => {
+    store.ingest(BOT, 'Class 1/A', [msg('2026-10-16T08:00:00', 'A', 'one')], {
+      nowMs: NOW,
+      fileName: 'a',
+    });
+    const r = store.ingest(BOT, 'Class 1-A', [msg('2026-10-15T08:00:00', 'B', 'two')], {
+      nowMs: NOW + 1,
+      fileName: 'b',
+    });
+    expect(r.newCount).toBe(1);
+    expect(store.list(BOT)).toHaveLength(2);
+    expect(store.find(BOT, 'Class 1/A', NOW + 2)?.messages.map((m) => m.text)).toEqual(['one']);
+    expect(store.find(BOT, 'Class 1-A', NOW + 2)?.messages.map((m) => m.text)).toEqual(['two']);
+  });
+});
