@@ -66,6 +66,15 @@ describe('upcomingRunsMs', () => {
     expect(runs.at(-1)).toBeGreaterThanOrEqual(MON_0000_UTC + 6 * D);
   });
 
+  test('weekOfRunsMs never lists a run twice, even one right before a day boundary', () => {
+    const runs = weekOfRunsMs(
+      { kind: 'every', everyMs: D, anchorMs: MON_0000_UTC + D - 1 },
+      MON_0000_UTC
+    );
+    expect(new Set(runs).size).toBe(runs.length);
+    expect(runs[0]).toBe(MON_0000_UTC + D - 1);
+  });
+
   test('a one-shot only when it is still ahead', () => {
     const at = new Date(MON_0000_UTC + H).toISOString();
     expect(upcomingRunsMs({ kind: 'at', at }, MON_0000_UTC, MON_0000_UTC + D)).toEqual([
