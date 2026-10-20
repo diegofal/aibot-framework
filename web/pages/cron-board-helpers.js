@@ -130,6 +130,17 @@ export function failureWords(job, names = {}) {
 }
 
 /** `filter`: all | on | paused | failed | `a:<agentKey>`; `query` matches name, text, agent. */
+/**
+ * Undo of a delete: the job back at index `i` of `jobs` (in place). The delete is
+ * only sent when the undo window ends, so a reload meanwhile already listed the
+ * job again; then it is not added a second time.
+ */
+export function restoreJob(jobs, i, job) {
+  if (!job || jobs.some((j) => j?.id === job.id)) return jobs;
+  jobs.splice(Math.min(i, jobs.length), 0, job);
+  return jobs;
+}
+
 export function filterBoard(jobs, { filter = 'all', query = '', names = {} } = {}) {
   const q = String(query ?? '')
     .trim()

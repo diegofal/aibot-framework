@@ -5,6 +5,7 @@ import {
   chipsHtml,
   drawerHtml,
   groupsHtml,
+  restoreJob,
   weekHtml,
 } from './cron-board-helpers.js';
 import { apiList, cronErrorState, jobWhySection, runWhyCell } from './cron-list-helpers.js';
@@ -218,7 +219,7 @@ export async function renderCron(el) {
       const { undone, result } = await undoable(`Deleted "${job?.name ?? id}"`, {
         commit: () => api(`/api/cron/${encodeURIComponent(id)}`, { method: 'DELETE' }),
         undo: () => {
-          jobs.splice(i, 0, job);
+          restoreJob(jobs, i, job);
           if (root.isConnected) draw();
         },
       }).catch((err) => ({ undone: false, result: { error: err?.message || 'error' } }));
