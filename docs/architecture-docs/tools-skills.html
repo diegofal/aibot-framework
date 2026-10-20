@@ -717,6 +717,78 @@
             </div>
           </div>
 
+          <!-- calendar_agenda -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_agenda</h4>
+            <div class="tool-desc">Agenda across every connected Google and Microsoft calendar, merged and sorted, each row labeled with its account, overlapping events flagged. Free in both modes. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>from</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; YYYY-MM-DD (local) or ISO</span></li>
+                <li><code>to</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; YYYY-MM-DD (local) or ISO; max 62 days</span></li>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-desc">&mdash; slug, label or email; omit or <code>all</code> for every account</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- calendar_free_slots -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_free_slots</h4>
+            <div class="tool-desc">Gaps of at least <code>minMinutes</code> between timed events across all accounts (all-day events do not block). Free in both modes. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>from</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; window start</span></li>
+                <li><code>to</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; window end</span></li>
+                <li><code>minMinutes</code> <span class="param-type">number</span> <span class="param-req">required</span> <span class="param-desc">&mdash; shortest useful gap</span></li>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-desc">&mdash; slug, label or email; omit or <code>all</code> for every account</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- calendar_create_event -->
+          <div class="tool-card">
+            <h4 class="tool-name">calendar_create_event</h4>
+            <div class="tool-desc">Create an event in one named account (Google Calendar or Outlook). <code>confirm</code> in conversation and agent loop. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; one account, never <code>all</code></span></li>
+                <li><code>title</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; </span></li>
+                <li><code>start</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; ISO date-time</span></li>
+                <li><code>durationMinutes</code> <span class="param-type">number</span> <span class="param-req">required</span> <span class="param-desc">&mdash; 1-1440</span></li>
+                <li><code>attendees</code> <span class="param-type">array</span> <span class="param-desc">&mdash; emails (invited)</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- mail_search -->
+          <div class="tool-card">
+            <h4 class="tool-name">mail_search</h4>
+            <div class="tool-desc">Search the operator&rsquo;s mailboxes (Gmail syntax / Graph <code>$search</code>): sender, subject, date, snippet and id, newest first, wrapped as external content. Free in both modes. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>query</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; </span></li>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-desc">&mdash; slug, label or email; omit or <code>all</code> for every account</span></li>
+                <li><code>limit</code> <span class="param-type">number</span> <span class="param-desc">&mdash; per account, default 10, max 25</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- mail_read -->
+          <div class="tool-card">
+            <h4 class="tool-name">mail_read</h4>
+            <div class="tool-desc">Read one message; the body (text/plain, or HTML stripped) is truncated to 8000 chars and passed through <code>wrapExternalContent</code>. Free in both modes. Personal-account tool (<code>src/tools/personal/</code>): only for bots in <code>integrations.personalAccounts.bots</code>; refuses any speaker that is not the operator (<code>requireOperator</code>, <code>src/tools/operator-gate.ts</code>) before calling Google or Microsoft.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>account</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; one account</span></li>
+                <li><code>id</code> <span class="param-type">string</span> <span class="param-req">required</span> <span class="param-desc">&mdash; from mail_search</span></li>
+              </ul>
+            </div>
+          </div>
+
           <!-- calendar_list -->
           <div class="tool-card">
             <h4 class="tool-name">calendar_list</h4>
@@ -765,7 +837,7 @@
         <!-- ---- Utility ---- -->
         <div class="category-header">
           <h2 id="cat-utility">Utility</h2>
-          <span class="count">2 tools</span>
+          <span class="count">3 tools</span>
         </div>
 
         <div class="tool-grid cols-2">
@@ -814,6 +886,19 @@
                 <li><code>replyTo</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Relay id (<code>r-xxxxxxxx</code>) this message answers; the recipient is taken from the record, and only the person it was addressed to can answer it</span></li>
                 <li><code>channel</code> <span class="param-type">enum</span> <span class="param-desc">&mdash; telegram | whatsapp | web | auto (default: auto)</span></li>
                 <li><code>register</code> <span class="param-type">object</span> <span class="param-desc">&mdash; Register new contact if not found: { displayName, channelKind, address, username? }</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- whatsapp_export_summary -->
+          <div class="tool-card">
+            <h4 class="tool-name">whatsapp_export_summary</h4>
+            <div class="tool-desc">Reads the new messages of a WhatsApp group export the operator sent as a Telegram document (WhatsApp &rarr; group &rarr; More &rarr; Export chat &rarr; Without media: a <code>.txt</code>, or a <code>.zip</code> with <code>_chat.txt</code> on iOS), so the conversation model writes a parent-group summary: dates and events, things to bring or do, money to pay or collect, schedule changes, requests to the operator, decisions; no chit-chat. Only messages newer than the previous export of the same group (<code>src/whatsapp-export/</code>, <code>&lt;paths.data&gt;/whatsapp-exports/&lt;botId&gt;/&lt;group-slug&gt;.json</code>, 30-day retention, never written to memory). The document handler stores the export and tells the model to call this tool; the raw messages never enter the session transcript. Operator only, never in a group, and only inside a conversation (<code>requireOperator</code> in <code>src/tools/operator-gate.ts</code>, plus a refusal when there is no <code>_requester</code>); flagged <code>sensitive</code>; group files are written owner-only and swept for retention at boot and daily; output is wrapped as untrusted content and split into parts of ~12,000 characters.</div>
+            <div class="tool-params">
+              <strong>Parameters</strong>
+              <ul>
+                <li><code>group</code> <span class="param-type">string</span> <span class="param-desc">&mdash; Group name or part of it; omitted = the most recent export</span></li>
+                <li><code>part</code> <span class="param-type">number</span> <span class="param-desc">&mdash; Part to read, from 1; the result names the next part when there is one</span></li>
               </ul>
             </div>
           </div>
@@ -983,6 +1068,62 @@
         </ol>
 
         <p>Safety limits: max 20 total agents (configurable), max 3 pending proposals per bot, strict ID validation, reserved name protection.</p>
+
+        <!-- ============================================================ -->
+        <!--  HTTP API INTEGRATIONS                                         -->
+        <!-- ============================================================ -->
+
+        <h2 id="http-apis">HTTP API Integrations (declarative)</h2>
+
+        <p>Authenticated HTTP APIs declared in <code>config.integrations.httpApis[]</code>, no code per API (<code>src/integrations/http-api/</code>). Each endpoint becomes one tool named <code>api_&lt;name&gt;_&lt;endpoint&gt;</code>, registered by <code>ToolRegistry.registerHttpApiTools</code> and hidden from bots not listed in <code>bots</code>. Only <code>GET</code> in this phase: any other method fails config validation.</p>
+
+        <ul>
+          <li><strong>Parameters:</strong> the JSON schema comes from <code>params</code> via <code>buildParametersSchema</code> (<code>src/tools/parameter-schema.ts</code>, shared with dynamic tools). <code>{x}</code> in the path is filled and URI-encoded; the other declared params go to the query string, with their defaults. Undeclared args are ignored.</li>
+          <li><strong>Secret:</strong> read from <code>process.env[auth.env]</code> at call time and sent only as a header (<code>Authorization: Bearer</code>, or <code>auth.header</code> for <code>type: "header"</code>). Never in args, results, errors or logs; anything the remote echoes back is redacted. Unset variable &rarr; an honest "not configured" error, no request.</li>
+          <li><strong>Responses:</strong> 2xx JSON is pretty-printed and wrapped as external content (the executor truncates as usual). Non-2xx &rarr; <code>success: false</code> with the status and up to 300 chars of the body, never headers (404/410 <code>not-found</code>, 403/429 <code>blocked</code>).</li>
+          <li><strong>Operator gate:</strong> with <code>operatorOnly</code> (default <code>true</code>) the tool calls <code>requireOperator</code> (<code>src/tools/operator-gate.ts</code>) first and is flagged <code>sensitive</code>; see "Personal-data tools" below. Refused calls are <code>policy</code> and never reach the network.</li>
+          <li><strong>Redirects:</strong> never followed (<code>redirect: 'manual'</code>); a 3xx is an error, so the auth header only ever goes to <code>baseUrl</code>'s host. A path parameter that is empty, <code>.</code> or <code>..</code> is rejected.</li>
+          <li><strong>Permissions:</strong> the permission matrix has no prefix rules, so <code>api_*</code> tools fall back to <code>free</code>; name one in a bot's <code>toolPermissions</code> to require confirmation.</li>
+        </ul>
+
+        <h4>Personal-data tools: the operator gate</h4>
+        <p><code>calendar_*</code>, <code>mail_*</code>, <code>whatsapp_export_summary</code> and operator-only <code>api_*</code> tools share one rule, <code>requireOperator</code>, which <strong>fails closed</strong>:</p>
+        <ul>
+          <li>Refused in a group chat (<code>_isGroup</code>), even for the operator.</li>
+          <li>Allowed when the executor injected <code>_actor: 'operator'</code> (an admin / single-tenant dashboard thread) or <code>_actor: 'operator-cron'</code> (a cron instruction of a job the operator created, from the dashboard or by asking on Telegram, firing in <code>operator.telegramChatId</code>; <code>src/cron/trust.ts</code>).</li>
+          <li>Refused for the bot's own runs (<code>_actor: 'self'</code>: agent-loop cycles, feedback, task workers) and for jobs those runs created: anyone who talks to the bot can plant the goals and tasks they work on. Autonomous turns are not even offered these tools.</li>
+          <li>Allowed when <code>_requester</code> is the operator on Telegram (the channel verifies the sender id). On web / REST the sender id is client-supplied and the operator is matched by email, so it does not count; neither does WhatsApp or Discord.</li>
+          <li>Everything else is refused: the MCP expose server, collaboration and delegation, any call without requester or actor.</li>
+        </ul>
+        <p><code>_actor</code> and <code>_isGroup</code> are injected by the <code>ToolExecutor</code> and always overwrite what the model sent. These tools are flagged <code>sensitive</code> on their definition: never listed or callable on the MCP expose server (whatever <code>exposedTools</code> says), never handed to another bot in a collaboration, kept in the tool audit as arg keys plus <code>[redacted: N chars]</code>, and published on the activity stream without args or result.</p>
+
+        <p>Example: the operator's finance app (set <code>FINANZAS_AGENT_KEY</code> in the container's environment; the key never goes in the config):</p>
+
+        <pre><code>// config/config.json (example, not shipped)
+"integrations": {
+  "httpApis": [{
+    "name": "finanzas",
+    "baseUrl": "https://finanzas-personales-df.vercel.app",
+    "auth": { "type": "bearer", "env": "FINANZAS_AGENT_KEY" },
+    "bots": ["default"],
+    "operatorOnly": true,          // only the operator (or the bot itself) may call
+    "timeoutMs": 15000,
+    "endpoints": [
+      { "name": "saldos", "method": "GET", "path": "/api/agent/saldos",
+        "description": "Account balances with last-updated time" },
+      { "name": "vencimientos", "method": "GET", "path": "/api/agent/vencimientos",
+        "params": { "dias": { "type": "integer", "default": 7, "description": "Days ahead" } },
+        "description": "Payments due in the next N days" },
+      { "name": "proyeccion", "method": "GET", "path": "/api/agent/proyeccion",
+        "params": { "dias": { "type": "integer", "default": 30, "description": "Days ahead" } },
+        "description": "Projected cash balance over the next N days" },
+      { "name": "conciliacion_pendientes", "method": "GET", "path": "/api/agent/conciliacion/pendientes",
+        "description": "Bank movements still waiting to be reconciled" }
+    ]
+  }]
+}
+// → tools api_finanzas_saldos, api_finanzas_vencimientos,
+//   api_finanzas_proyeccion, api_finanzas_conciliacion_pendientes (bot "default" only)</code></pre>
 
         <!-- ============================================================ -->
         <!--  MCP SECTION                                                   -->

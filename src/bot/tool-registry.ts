@@ -1,5 +1,6 @@
 import { join, resolve } from 'node:path';
 import { NoTelegramRouteError, fleetTelegramBorrower } from '../channel/fleet-telegram';
+import type { HttpApiConfig } from '../config';
 import {
   type LoadedExternalSkill,
   discoverProductionSkillPaths,
@@ -10,6 +11,11 @@ import {
   loadExternalSkillUnified,
 } from '../core/skill-md-adapter/framework-bridge';
 import type { ToolExecuteFn } from '../core/types';
+import {
+  type HttpApiToolDeps,
+  createHttpApiTools,
+  httpApiToolsExcludedForBot,
+} from '../integrations/http-api';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import { adaptAllMcpTools } from '../mcp/tool-adapter';
@@ -47,6 +53,12 @@ import { createImproveTool } from '../tools/improve';
 import { createMemoryGetTool } from '../tools/memory-get';
 import { createMemorySearchTool } from '../tools/memory-search';
 import { createMoltbookRegisterTool } from '../tools/moltbook';
+import { type ToolActor, isSensitiveTool } from '../tools/operator-gate';
+import {
+  PERSONAL_TOOL_NAMES,
+  createPersonalTools,
+  personalToolsAllowedFor,
+} from '../tools/personal';
 import { createPhoneCallTool } from '../tools/phone-call';
 import { createProcessTool } from '../tools/process';
 import { createProductionLogTool } from '../tools/production-log';
@@ -67,6 +79,8 @@ import {
 } from '../tools/twitter';
 import { createWebFetchTool } from '../tools/web-fetch';
 import { createWebSearchTool } from '../tools/web-search';
+import { createWhatsAppExportSummaryTool } from '../tools/whatsapp-export-summary';
+import { whatsappExportStoreFor } from '../whatsapp-export/store';
 import { DynamicToolRegistry } from './dynamic-tool-registry';
 
 // ─── Tool Category System ───
@@ -79,6 +93,7 @@ export const TOOL_CATEGORY_NAMES = [
   'system',
   'social',
   'calendar',
+  'mail',
   'communication',
   'browser',
   'production',
@@ -120,7 +135,15 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'twitter_read',
     'twitter_post',
   ],
-  calendar: ['calendar_list', 'calendar_availability', 'calendar_schedule'],
+  calendar: [
+    'calendar_list',
+    'calendar_availability',
+    'calendar_schedule',
+    'calendar_agenda',
+    'calendar_free_slots',
+    'calendar_create_event',
+  ],
+  mail: ['mail_search', 'mail_read'],
   communication: [
     'ask_human',
     'ask_permission',
@@ -162,6 +185,8 @@ export class ToolRegistry {
   /** Maps namespaced tool name → originating skill ID */
   private externalToolToSkill: Map<string, string> = new Map();
   private karmaService?: KarmaService;
+  /** Declarative HTTP APIs registered as `api_*` tools (per-bot via `bots`). */
+  private httpApis: HttpApiConfig[] = [];
   private knowledgeMesh?: import('./knowledge-mesh').KnowledgeMesh;
 
   constructor(private ctx: BotContext) {}
@@ -370,6 +395,18 @@ export class ToolRegistry {
       }
     }
 
+    // Personal accounts: calendar + mail over the operator's Google and
+    // Microsoft accounts. Registered once for the fleet, then excluded per bot
+    // (getExcludedSet) unless the bot is in integrations.personalAccounts.bots.
+    const personalBots = config.integrations?.personalAccounts?.bots ?? [];
+    if (personalBots.length > 0 && this.ctx.personalAccounts) {
+      tools.push(...createPersonalTools(() => this.ctx.personalAccounts));
+      logger.info(
+        { bots: personalBots },
+        'Personal account tools initialized (calendar_agenda, calendar_free_slots, calendar_create_event, mail_search, mail_read)'
+      );
+    }
+
     // Calendar tools
     if (config.calendar?.enabled) {
       tools.push(
@@ -473,6 +510,13 @@ export class ToolRegistry {
       logger.info('send_message tool initialized');
     }
 
+    // WhatsApp group exports the operator sends as documents (src/whatsapp-export/)
+    if (config.paths?.data) {
+      tools.push(
+        createWhatsAppExportSummaryTool({ store: whatsappExportStoreFor(config.paths.data) })
+      );
+    }
+
     // Productions tools
     if (this.ctx.productionsService) {
       tools.push(createProductionLogTool(this.ctx.productionsService));
@@ -513,6 +557,9 @@ export class ToolRegistry {
       logger.info('create_agent registered');
     }
 
+    // Declarative HTTP API integrations (api_<name>_<endpoint>, per-bot)
+    this.registerHttpApiTools();
+
     // Populate definitions
     this.ctx.toolDefinitions.length = 0;
     this.ctx.toolDefinitions.push(...tools.map((t) => t.definition));
@@ -521,6 +568,32 @@ export class ToolRegistry {
       logger.info(
         { toolCount: tools.length, tools: this.ctx.toolDefinitions.map((d) => d.function.name) },
         'Tools initialized'
+      );
+    }
+  }
+
+  /**
+   * Register one tool per endpoint of `config.integrations.httpApis[]`.
+   * Tools are global in `ctx.tools`; bots not listed in an API's `bots` get its
+   * tools excluded (see `getExcludedSet`). Idempotent.
+   */
+  registerHttpApiTools(deps: HttpApiToolDeps = {}): void {
+    const apis = this.ctx.config.integrations?.httpApis ?? [];
+    const previous = new Set(
+      createHttpApiTools(this.httpApis).map((t) => t.definition.function.name)
+    );
+    if (previous.size > 0) {
+      removeToolsInPlace(this.ctx.tools, (t) => previous.has(t.definition.function.name));
+    }
+    this.httpApis = apis;
+    const tools = createHttpApiTools(apis, deps);
+    this.ctx.tools.push(...tools);
+    this.ctx.toolDefinitions.length = 0;
+    this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
+    if (tools.length > 0) {
+      this.ctx.logger.info(
+        { apis: apis.map((a) => a.name), tools: tools.map((t) => t.definition.function.name) },
+        'HTTP API tools registered'
       );
     }
   }
@@ -772,6 +845,13 @@ export class ToolRegistry {
       }
     }
 
+    // Personal-account tools (calendar/mail over the operator's accounts): only
+    // for the bots in integrations.personalAccounts.bots.
+    if (!personalToolsAllowedFor(this.ctx.config, botId)) {
+      for (const name of PERSONAL_TOOL_NAMES) disabled.add(name);
+    }
+    for (const name of httpApiToolsExcludedForBot(this.httpApis, botId)) disabled.add(name);
+
     if (!this.dynamicToolRegistry) return disabled;
     const dynamicExcluded = this.dynamicToolRegistry.getExcludedNamesForBot(botId);
     if (dynamicExcluded.size === 0) return disabled;
@@ -840,9 +920,11 @@ export class ToolRegistry {
   getCollaborationToolsForBot(botId: string): { tools: Tool[]; definitions: ToolDefinition[] } {
     const collabExcluded = new Set(['collaborate', 'delegate_to_bot']);
     const excluded = this.getExcludedSet(botId);
+    // Personal-data tools never go to another bot: the collaborating bot acts
+    // for whoever reached the first one (a public user included).
     const tools = this.ctx.tools.filter((t) => {
       const name = t.definition.function.name;
-      return !collabExcluded.has(name) && !excluded.has(name);
+      return !collabExcluded.has(name) && !excluded.has(name) && !isSensitiveTool(t);
     });
     const definitions = tools.map((t) => t.definition);
     return { tools, definitions };
@@ -863,7 +945,8 @@ export class ToolRegistry {
     inlineApprovalStore?: InlineApprovalStore,
     sessionKey?: string,
     memoryViewer?: MemoryViewer,
-    requester?: RelayParty
+    requester?: RelayParty,
+    scope?: { actor?: ToolActor; isGroup?: boolean }
   ): (name: string, args: Record<string, unknown>) => Promise<ToolResult> {
     const executor = new ToolExecutor(this.ctx, {
       botId,
@@ -877,6 +960,8 @@ export class ToolRegistry {
       inlineApprovalStore,
       sessionKey,
       requester,
+      ...(scope?.actor ? { actor: scope.actor } : {}),
+      ...(scope?.isGroup !== undefined ? { isGroup: scope.isGroup } : {}),
     });
     // Conversation tool calls go to the same audit as the agent loop's (which
     // builds its own executors and subscribes itself — no double write).

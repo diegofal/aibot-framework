@@ -9,6 +9,7 @@ import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { unflushedMessageCount } from '../session';
+import type { ToolActor } from '../tools/operator-gate';
 import { generateSpeech } from '../tts';
 import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from './agent-loop-utils';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
@@ -57,6 +58,28 @@ export function isHumanInboundMessage(
   if (msg.synthetic === true) return false;
   if (typeof msg.messageId === 'string' && msg.messageId.startsWith('cron-')) return false;
   return typeof msg.text === 'string' && msg.text.trim().length > 0;
+}
+
+/**
+ * Who is speaking in a channel message, as the relay directory looks it up.
+ * MCP callers are agents, not people. A framework-made message (a cron
+ * instruction: `synthetic`, or the `cron-` id) has no speaker: its sender id is
+ * just the target chat, and reading it as a person made an untrusted job aimed
+ * at the operator's chat look like the verified operator. Such a job reaches
+ * operator-only tools only as `actor: 'operator-cron'` (src/cron/trust.ts).
+ */
+export function requesterLookup(
+  msg: InboundMessage & { synthetic?: boolean }
+):
+  | { channelKind: InboundMessage['channelKind']; address: string; displayName: string }
+  | undefined {
+  if (!msg.sender.id || msg.channelKind === 'mcp') return undefined;
+  if (msg.synthetic === true || String(msg.messageId ?? '').startsWith('cron-')) return undefined;
+  return {
+    channelKind: msg.channelKind,
+    address: msg.sender.id,
+    displayName: msg.sender.firstName ?? msg.sender.username ?? msg.sender.id,
+  };
 }
 
 export class ConversationPipeline {
@@ -246,6 +269,9 @@ export class ConversationPipeline {
     const relayContext = requester
       ? this.ctx.relayService?.promptSections(config.id, requester) || undefined
       : undefined;
+    // Personal-data tools refuse group chats (operator-gate.ts); a negative
+    // Telegram chat id is a group or channel whatever the type says.
+    const executorScope = { isGroup: isGroup || (typeof chatId === 'number' && chatId < 0) };
 
     const senderName = isGroup ? (ctx.from?.first_name ?? 'Unknown') : undefined;
     botLogger.info(
@@ -503,7 +529,8 @@ export class ConversationPipeline {
                     undefined,
                     undefined,
                     memoryViewer,
-                    requester
+                    requester,
+                    executorScope
                   )
                 : undefined,
               maxToolRounds,
@@ -572,7 +599,8 @@ export class ConversationPipeline {
                       undefined,
                       undefined,
                       memoryViewer,
-                      requester
+                      requester,
+                      executorScope
                     )
                   : undefined,
                 maxToolRounds,
@@ -923,7 +951,8 @@ export class ConversationPipeline {
     msg: InboundMessage,
     channel: Channel,
     config: BotConfig,
-    sessionKey: string
+    sessionKey: string,
+    opts?: { actor?: ToolActor }
   ): Promise<string> {
     const resolved = resolveAgentConfig(this.ctx.config, config);
     const sessionConfig = this.ctx.config.session;
@@ -969,17 +998,17 @@ export class ConversationPipeline {
 
     // Relay sender for this turn (see handleConversation). MCP callers are
     // agents, not people.
-    const requester =
-      msg.sender.id && msg.channelKind !== 'mcp'
-        ? this.ctx.relayService?.speaker(config.id, {
-            channelKind: msg.channelKind,
-            address: msg.sender.id,
-            displayName: msg.sender.firstName ?? msg.sender.username ?? msg.sender.id,
-          })
-        : undefined;
+    const lookup = requesterLookup(msg);
+    const requester = lookup ? this.ctx.relayService?.speaker(config.id, lookup) : undefined;
     const relayContext = requester
       ? this.ctx.relayService?.promptSections(config.id, requester) || undefined
       : undefined;
+    // Group chats are refused by personal-data tools; `opts.actor` is set only
+    // by trusted server-side callers (a cron instruction for the operator).
+    const executorScope = {
+      isGroup: isGroup || (Number(msg.chatId) || 0) < 0,
+      ...(opts?.actor ? { actor: opts.actor } : {}),
+    };
 
     // Resolve userId for user isolation
     // Auto-enable user isolation for tenant bots (BaaS multi-tenant)
@@ -1317,7 +1346,8 @@ export class ConversationPipeline {
                       undefined,
                       undefined,
                       memoryViewer,
-                      requester
+                      requester,
+                      executorScope
                     )
                   : undefined,
                 maxToolRounds,
@@ -1370,7 +1400,8 @@ export class ConversationPipeline {
                         undefined,
                         undefined,
                         memoryViewer,
-                        requester
+                        requester,
+                        executorScope
                       )
                     : undefined,
                   maxToolRounds,

@@ -3,6 +3,7 @@ import { locked } from './locked';
 import { cronMessageId } from './message-id';
 import { appendCronRunLog, resolveCronRunLogPath } from './run-log';
 import type { CronServiceState } from './service';
+import { cronJobRunsForOperator } from './trust';
 import type { CronJob } from './types';
 
 const MAX_TIMER_DELAY_MS = 60_000;
@@ -179,7 +180,12 @@ async function executeJobCore(state: CronServiceState, job: CronJob): Promise<Co
         job.payload.chatId,
         job.payload.text,
         job.payload.botId,
-        { jobId: job.id, messageId }
+        // Only a job the operator created may reach personal data (src/cron/trust.ts).
+        {
+          jobId: job.id,
+          messageId,
+          ...(cronJobRunsForOperator(job) ? { runsForOperator: true as const } : {}),
+        }
       );
       return { status: 'ok', output: response || 'Instruction processed', messageId };
     } catch (err) {

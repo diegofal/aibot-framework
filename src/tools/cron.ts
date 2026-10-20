@@ -1,6 +1,7 @@
 import type { OperatorConfig } from '../config';
 import type { CronService } from '../cron';
-import type { CronCreatedBy } from '../cron/types';
+import type { CronCreatedBy, CronJob } from '../cron/types';
+import { type CallerIdentity, callerIdentity, isTrustedCaller } from './operator-gate';
 import { OPERATOR_NOT_CONFIGURED_ERROR, resolveOperatorTarget } from './send-proactive-message';
 import type { Tool, ToolResult } from './types';
 
@@ -131,7 +132,10 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
 
           case 'list': {
             const includeDisabled = args.includeDisabled === true;
-            const jobs = await cronService.list({ includeDisabled });
+            const who = callerIdentity(args);
+            const jobs = (await cronService.list({ includeDisabled })).filter((j) =>
+              cronJobVisibleTo(j, _botId, who)
+            );
             const summary = jobs.map((j) => ({
               id: j.id,
               name: j.name,
@@ -163,6 +167,18 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
               return { success: false, content: resolvedChat.error };
             }
             const _chatId = resolvedChat.chatId;
+            // Only the bot itself or the verified operator may point a job at a
+            // chat other than the caller's own: otherwise anyone could schedule
+            // work into the operator's chat (or someone else's).
+            const ownChat = typeof args._chatId === 'number' ? args._chatId : undefined;
+            if (_chatId !== undefined && _chatId !== ownChat && !isTrustedCaller(args)) {
+              return {
+                success: false,
+                content:
+                  'Not allowed: you can only schedule jobs into this conversation. Only the operator can schedule into another chat.',
+                failureKind: 'policy',
+              };
+            }
 
             const schedule = args.schedule as
               | { kind: string; at?: string; everyMs?: number; expr?: string; tz?: string }
@@ -190,6 +206,9 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
             if (!jobId) {
               return { success: false, content: 'jobId is required for remove action' };
             }
+            if (!(await callerMayTouch(cronService, jobId, _botId, args))) {
+              return { success: false, content: `Job ${jobId} not found.` };
+            }
             const result = await cronService.remove(jobId);
             return {
               success: result.ok,
@@ -203,6 +222,9 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
             const jobId = (args.jobId ?? args.id) as string | undefined;
             if (!jobId) {
               return { success: false, content: 'jobId is required for run action' };
+            }
+            if (!(await callerMayTouch(cronService, jobId, _botId, args))) {
+              return { success: false, content: `Job ${jobId} not found.` };
             }
             const result = await cronService.run(jobId, 'force');
             if (result.ran) {
@@ -226,6 +248,46 @@ IMPORTANT: Always use get_datetime first to know the current time before calcula
 }
 
 /**
+ * Which jobs the cron tool shows a caller and lets them remove or run: only
+ * jobs of the calling bot; all of them for the operator (verified, or the
+ * dashboard); for the bot's own run, the jobs its runs created (`requestedBy:
+ * self`, or old jobs created in a cycle); for anyone else, the jobs they asked
+ * for (same channel and address). Before, every caller reached every job of
+ * the fleet.
+ */
+export function cronJobVisibleTo(
+  job: CronJob,
+  botId: string | undefined,
+  who: CallerIdentity
+): boolean {
+  if (!botId || job.payload.botId !== botId) return false;
+  if (who.kind === 'operator') return true;
+  const by = job.createdBy;
+  if (by?.kind !== 'agent' || by.botId !== botId) return false;
+  if (who.kind === 'self') {
+    return by.requestedBy ? by.requestedBy.kind === 'self' : Boolean(by.cycleId);
+  }
+  const asked = by.requestedBy;
+  return (
+    asked?.kind === 'other' &&
+    !!who.address &&
+    asked.address === who.address &&
+    asked.channelKind === who.channelKind
+  );
+}
+
+/** A job id the caller may remove or run (unknown or out of scope: no). */
+async function callerMayTouch(
+  cronService: CronService,
+  jobId: string,
+  botId: string | undefined,
+  args: Record<string, unknown>
+): Promise<boolean> {
+  const job = (await cronService.list({ includeDisabled: true })).find((j) => j.id === jobId);
+  return !!job && cronJobVisibleTo(job, botId, callerIdentity(args));
+}
+
+/**
  * The agent, and the work cycle and goal it was in when it scheduled the job
  * (`_cycleId` / `_goalId`, stamped by the tool executor inside an agent-loop
  * cycle; absent in a chat). Read by the Automations page's "Why this?".
@@ -238,6 +300,9 @@ export function agentCreatedBy(botId: string, args: Record<string, unknown>): Cr
     botId,
     ...(cycleId ? { cycleId } : {}),
     ...(goalId ? { goalId } : {}),
+    // Who asked (operator gate's rule): decides if the job may later run as
+    // the bot itself (src/cron/trust.ts).
+    requestedBy: callerIdentity(args),
   };
 }
 

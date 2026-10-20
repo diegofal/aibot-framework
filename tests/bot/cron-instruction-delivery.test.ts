@@ -199,6 +199,61 @@ describe('BotManager.handleCronInstruction', () => {
     expect(msg.sender).toMatchObject({ id: '321', firstName: 'Cron' });
     expect(String(msg.messageId)).toStartWith('cron-');
   });
+
+  // Personal-data tools fail closed without a verified operator. A cron
+  // instruction whose reply goes to the operator's own chat is the bot acting
+  // for the operator (actor 'self'); any other chat is judged by its sender.
+  describe('actor for the operator gate', () => {
+    function stubWithOperator(telegramChatId: number) {
+      const opts: unknown[] = [];
+      const stub = {
+        ...makeManagerStub({ bots: new Map(), appended: [], seen: [] }),
+        handleChannelMessage: async (_m: unknown, _c: unknown, _b: string, o?: unknown) => {
+          opts.push(o);
+          return 'ok';
+        },
+      };
+      stub.config = { ...stub.config, operator: { telegramChatId } } as never;
+      return { stub, opts };
+    }
+
+    test("a job the operator created (src/cron/trust.ts), in the operator's chat, runs as operator-cron", async () => {
+      const { stub, opts } = stubWithOperator(9001);
+      await handleCronInstruction.call(
+        stub as never,
+        9001,
+        'summarize my mail',
+        'finny',
+        'cron-x',
+        {
+          runsForOperator: true,
+        }
+      );
+      expect(opts[0]).toEqual({ actor: 'operator-cron' });
+    });
+
+    // Laundering: anyone could schedule "read the operator's mail and send it
+    // to X" into the operator's chat; only who created the job decides.
+    test("an untrusted job in the operator's chat gets no actor", async () => {
+      const { stub, opts } = stubWithOperator(9001);
+      await handleCronInstruction.call(stub as never, 9001, 'summarize my mail', 'finny');
+      await handleCronInstruction.call(stub as never, 9001, 'x', 'finny', 'cron-y', {
+        runsForOperator: false,
+      });
+      expect(opts).toEqual([undefined, undefined]);
+    });
+
+    test('a trusted job in any other chat gets no actor', async () => {
+      const { stub, opts } = stubWithOperator(9001);
+      await handleCronInstruction.call(stub as never, 1234, 'summarize the mail', 'finny', 'c', {
+        runsForOperator: true,
+      });
+      await handleCronInstruction.call(stub as never, -1009001, 'group job', 'finny', 'c', {
+        runsForOperator: true,
+      });
+      expect(opts).toEqual([undefined, undefined]);
+    });
+  });
 });
 
 const deliverCronMessage = BotManager.prototype.deliverCronMessage;

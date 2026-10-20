@@ -127,6 +127,41 @@ Testing sí (ver Riesgos).
 Objetivo: "¿qué reuniones tengo hoy?" se contesta uniendo todas las cuentas; "¿me llegó el mail de
 X?" también.
 
+**Estado (2026-10-16): implementado en `feat/personal-accounts`.** Diferencias con lo de abajo: las
+tools viven en `src/tools/personal/` y se llaman `mail_search` / `mail_read` (no `gmail_*`: cubren
+Google y Microsoft); `requireOperator` está en `src/tools/operator-gate.ts` (compartido con P1b); la
+allowlist es `integrations.personalAccounts.bots`; el provider Google viejo de `src/tools/calendar.ts`
+y `/cal` no se retiraron (`docs/technical-debt.md`). Setup: `docs/personal-accounts-setup.md`.
+
+**Nota de seguridad (2026-10-16, revisión del branch `feat/organizer-integration`).** La regla de
+abajo ("`_requester` ausente → permitir") fallaba abierta: el MCP expose server, collaboration /
+delegation y los fallbacks del pipeline (MCP, remitente bot, sin `relayService`) llegaban sin
+requester. Ahora `requireOperator` falla cerrado: pasa sólo con `_actor` `self` (agent loop, workers,
+cron al chat del operador) u `operator` (dashboard admin), o con el operador **en Telegram** (en
+web/REST el remitente lo declara el cliente); nunca en grupos. Las tools van marcadas `sensitive`:
+fuera del MCP expose y de collaboration, sin args ni resultado en el tool audit ni en el activity
+stream. HTTP API: sin redirects y sin `.`/`..` en el path; exports de WhatsApp en 0o600 con barrido
+de retención al boot y diario. Detalle en CLAUDE.md ("Operator gate") y en el CHANGELOG.
+
+Segunda pasada (re-revisión adversarial): un cron `instruction` al chat del operador ya no corre como
+`self` por el chat: lo decide quién creó el job (`createdBy.requestedBy`, `src/cron/trust.ts`), y el
+tool `cron` no deja que alguien que no es el operador ni el bot apunte un job a otro chat. El log de
+ejecución (`AgentLoopResult.toolCalls`, `GET /api/agent-loop`, extractor de curiosity), el journal de
+workers y `tool:error` también redactan las tools `sensitive`; las rutas admin que llaman
+`tool.execute` directo descartan los args `_`. **Supuesto que queda**: en single-tenant los threads
+del dashboard son `operator` y `/api` no tiene auth, así que cualquiera que llegue al puerto es el
+operador (el contenedor escucha en 127.0.0.1). Registrado en `docs/technical-debt.md` con su trigger:
+antes de exponer el dashboard fuera de localhost.
+
+Tercera pasada (decisión del lead): **ningún run autónomo toca datos personales**. Cualquiera que le
+habla al bot puede plantar goals/tasks (`manage_goals add` / `add_task` son libres en conversación)
+que después corre un ciclo o un worker con `_actor: 'self'`, así que el gate rechaza `self` y
+`runExecutorTurn` ni ofrece las tools `sensitive`. Pasan sólo el operador verificado (Telegram,
+privado), el dashboard (`_actor: 'operator'`) y un cron que **creó el operador** disparando en su chat
+(`_actor: 'operator-cron'`, `cronJobRunsForOperator`). P1c (agenda de la mañana) sigue funcionando
+como un cron que crea el operador (dashboard, o pidiéndolo por Telegram en privado); un job que
+arma el agent loop por su cuenta ya no lee calendario ni mail.
+
 Diseño: módulo `src/personal-accounts/` calcado de `src/claude-accounts/`.
 
 - **Setup único** (operador, una vez): proyecto en Google Cloud con OAuth client tipo *Web
@@ -230,6 +265,9 @@ Un cron `instruction` del operador a `default` (07:30 hora local; se crea desde 
 próximos 7 días, recordatorios de hoy. Un solo mensaje; si no hay nada nuevo, no mandes nada."
 El job existe ya como mecanismo; lo que falta son las tools. Si el bot de finanzas sigue mandando su
 08:30, el operador decide cuál apagar (ver decisiones).
+Para que sus tools de datos personales contesten, el job lo crea el operador (Automations, o
+pidiéndolo por Telegram en privado) y entrega en su chat (`operator.telegramChatId`): corre como
+`_actor: 'operator-cron'` (`src/cron/trust.ts`). Un job que arme el agent loop solo no alcanza.
 
 ### P2 — Después
 
@@ -271,6 +309,8 @@ participante más. No hay API oficial para leer grupos ajenos.
 3. **Exportar el chat a mano** (WhatsApp → Exportar chat → sin archivos → compartir a Finny por
    Telegram): oficial y sin riesgo; Finny parsea el `.txt` y resume desde la última exportación.
    Cero automatización, pero sirve hoy y valida si el resumen es útil antes de invertir en 1.
+   **Implementada (2026-10-16, branch `feat/whatsapp-export-summary`)**: `src/whatsapp-export/` +
+   tool `whatsapp_export_summary`; ver CHANGELOG.
 
 Propuesta: arrancar con 3 (chico: un parser del formato de exportación + un skill de resumen) y, si
 el operador lo usa, pasar a 1 con una línea dedicada. Datos de menores en los grupos: los mensajes

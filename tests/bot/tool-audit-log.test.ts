@@ -129,4 +129,19 @@ describe('toolEndToAuditEntry', () => {
     const entry = toolEndToAuditEntry(base);
     expect('failureKind' in entry).toBe(false);
   });
+
+  test('a sensitive tool keeps only the arg keys and the result length', () => {
+    const entry = toolEndToAuditEntry({
+      ...base,
+      toolName: 'mail_read',
+      args: { id: 'm-1', account: 'personal', _botId: 'bot1' },
+      result: 'Dear Op, your PIN is 1234',
+      success: true,
+      sensitive: true,
+    });
+    expect(entry.args).toEqual({ id: '[redacted]', account: '[redacted]' });
+    expect(entry.result).toBe('[redacted: 25 chars]');
+    expect(JSON.stringify(entry)).not.toContain('PIN');
+    expect(JSON.stringify(entry)).not.toContain('m-1');
+  });
 });

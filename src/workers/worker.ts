@@ -595,7 +595,8 @@ export async function runWorker(env: WorkerEnv): Promise<WorkerEnd> {
           if (isReportTool(e.toolName)) return;
           stepWait = stepWait ?? waitFromToolEnd(e, new Date(env.now()).toISOString());
           stepCalls.push({ name: e.toolName, ok: e.success });
-          const target = toolTarget(e.args);
+          // A personal-data tool's args never reach the journal.
+          const target = e.sensitive ? undefined : toolTarget(e.args);
           const failureKind = journalFailureKind(e);
           env.journal({
             kind: 'tool',

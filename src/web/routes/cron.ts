@@ -5,7 +5,7 @@ import type { CronRunLogEntry } from '../../cron/run-log';
 import { weekOfRunsMs } from '../../cron/schedule';
 import type { CronJob, CronJobCreate, CronJobPatch } from '../../cron/types';
 import type { Logger } from '../../logger';
-import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
+import { getTenantId, isAdminOrSingleTenant, scopeBots } from '../../tenant/tenant-scoping';
 import { cronJobToWhy, cronRunToWhy } from '../../why/builders/cron';
 import { CycleIndex, type CycleReader } from '../../why/cycle-index';
 
@@ -102,8 +102,14 @@ export function cronRoutes(deps: {
       return c.json({ error: 'Bot not found' }, 404);
     }
 
-    // The dashboard (and any API caller) is the operator; a body cannot claim an agent made it.
-    const job = await deps.cronService.add({ ...body, createdBy: { kind: 'operator' } });
+    // Only the instance operator's dashboard (admin / single-tenant) stamps
+    // `operator`, the creator `src/cron/trust.ts` trusts with personal data; a
+    // tenant API caller is recorded as the tenant. A body never claims either.
+    const tenantId = getTenantId(c);
+    const createdBy: CronJob['createdBy'] = isAdminOrSingleTenant(tenantId)
+      ? { kind: 'operator' }
+      : { kind: 'tenant', tenantId: tenantId as string };
+    const job = await deps.cronService.add({ ...body, createdBy });
     return c.json(job, 201);
   });
 
@@ -112,6 +118,12 @@ export function cronRoutes(deps: {
     const id = c.req.param('id');
     if (!(await findAccessibleJob(c, id))) return c.json({ error: 'Cron job not found' }, 404);
     const body = await c.req.json<CronJobPatch>();
+    // A patch cannot move the job to a bot outside the caller's tenant.
+    const allowed = allowedBotIds(c);
+    const newBotId = (body.payload as { botId?: unknown } | undefined)?.botId;
+    if (allowed && typeof newBotId === 'string' && !allowed.has(newBotId)) {
+      return c.json({ error: 'Cron job not found' }, 404);
+    }
 
     try {
       const job = await deps.cronService.update(id, body);

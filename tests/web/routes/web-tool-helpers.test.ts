@@ -486,4 +486,45 @@ describe('webGenerate', () => {
       caller: 'web-conversation',
     });
   });
+
+  // The dashboard is the operator's own surface: personal-data tools need an
+  // explicit actor because the gate fails closed without one.
+  test('passes the actor through to the executor scope; none by default', async () => {
+    const created: unknown[][] = [];
+    const bm = {
+      getLLMClient: () => ({
+        chat: mock(() => Promise.resolve({ text: 'r' })),
+        backend: 'ollama',
+      }),
+      getActiveModel: () => 'm',
+      getToolRegistry: () => ({
+        getDefinitionsForBot: () => [
+          {
+            type: 'function',
+            function: {
+              name: 'calendar_agenda',
+              description: 'agenda',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        createExecutor: (...a: unknown[]) => {
+          created.push(a);
+          return mock(async () => ({ success: true, content: 'ok' }));
+        },
+      }),
+    };
+    const base = {
+      prompt: 'p',
+      systemPrompt: 's',
+      botId: 'bot1',
+      botManager: bm as any,
+      config: mockConfig,
+      logger: noopLogger,
+    };
+    await webGenerate({ ...base, actor: 'operator' });
+    await webGenerate(base);
+    expect(created[0][9]).toEqual({ actor: 'operator' });
+    expect(created[1][9]).toBeUndefined();
+  });
 });

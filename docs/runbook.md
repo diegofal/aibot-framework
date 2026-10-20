@@ -933,3 +933,23 @@ MSYS_NO_PATHCONV=1 docker exec -w /app aibot-framework-aibot-1 bun -e "<TaskStor
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-16T13-43-59`. Image has `recordHumanMessage` in `src/bot/agent-scheduler.ts`; `/api/status` 200; AIBot (Finny) started, `job-seeker` headless (401, known). Task `t-c92ad8` ("Cuando Diego conteste, responderle en el mismo día…") removed through `TaskStore` (rev 29, `task-remove` event with the reason); the dashboard DELETE route needs a login, so it was done in-container. Startup also logged "Ollama daemon is unreachable" (not touched by this change).
 
 **Reversible?** Rebuild from `eef7432`; restore the backup to bring the task back.
+
+### 2026-10-16 — Deploy of the personal organizer (`c763b8c`) and the finance API in Finny
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego ran the commands (the permission classifier refused the rebuild to the session) |
+| **Why** | Ship personal accounts (off until configured), HTTP API tools, WhatsApp export summaries and the security hardening; connect Finny to the finance app's read-only API (diegofal/my-finance#73, in production since today) |
+
+```bash
+python -c "…secrets.token_urlsafe(32)…"   # key appended to .env as FINANZAS_AGENT_KEY; only the sha256 printed (it went to Vercel)
+bun scripts/docker/backup.ts backup
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/finny-config/add-finanzas.ts aibot-framework-aibot-1:/tmp/add-finanzas.ts
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 bun /tmp/add-finanzas.ts   # integrations.httpApis = [finanzas]; previous config kept as config.json.bak-<ISO>
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-16T22-01-50`. `/api/status` 200; `FINANZAS_AGENT_KEY` present in the container; boot logged "HTTP API tools registered" with `api_finanzas_saldos`, `api_finanzas_vencimientos`, `api_finanzas_proyeccion`, `api_finanzas_conciliacion_pendientes`, and `whatsapp_export_summary`; all bots started. The finance API itself was checked with curl against production (401 without/with a wrong key, 405 on POST, 200 on the four routes with the key). Not yet exercised end to end through Finny on Telegram. Personal accounts stay off: no OAuth clients, `integrations.personalAccounts.bots` empty.
+
+**Reversible?** Restore the config backup in the volume (`config.json.bak-*`) or remove `integrations.httpApis`, and rebuild from `7aa419b`; remove `FINANZAS_AGENT_KEY` from `.env`; on the finance side, `vercel env rm AGENTE_API_SHA256 production …` and redeploy.

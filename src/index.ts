@@ -183,7 +183,13 @@ async function main() {
         await botManager.deliverCronMessage(chatId, text, botId);
       },
       sendInstruction: async (chatId, text, botId, link) => {
-        return await botManager.handleCronInstruction(chatId, text, botId, link?.messageId);
+        return await botManager.handleCronInstruction(
+          chatId,
+          text,
+          botId,
+          link?.messageId,
+          link?.runsForOperator ? { runsForOperator: true } : undefined
+        );
       },
       resolveSkillHandler: (payload) => {
         const skill = skillRegistry.get(payload.skillId);

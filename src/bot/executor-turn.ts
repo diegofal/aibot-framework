@@ -4,6 +4,7 @@ import type { LLMClient, TokenUsage } from '../core/llm-client';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import { isSensitiveTool } from '../tools/operator-gate';
 import type { Tool, ToolDefinition, ToolResult } from '../tools/types';
 import type { BackendCircuitBreaker } from './agent-retry-engine';
 import { askedQuestionId } from './ask-human-store';
@@ -162,7 +163,9 @@ export function resolveTurnDefinitions(
       'Agent loop: tool pre-selection active'
     );
   }
-  const offered = defs.filter((d) => !denied.has(d.function.name));
+  // Personal-data tools never go to an autonomous turn (cycle, worker): anyone
+  // who talks to the bot can plant the goals it works on (operator-gate.ts).
+  const offered = defs.filter((d) => !denied.has(d.function.name) && d.sensitive !== true);
   for (const t of tools.extra ?? []) {
     if (!denied.has(t.definition.function.name)) offered.push(t.definition);
   }
@@ -196,7 +199,12 @@ export async function runExecutorTurn(input: ExecutorTurnInput): Promise<Executo
   if (input.signal?.aborted) controller.abort(input.signal.reason);
   else input.signal?.addEventListener('abort', onOuterAbort, { once: true });
 
-  const disabled = new Set([...input.tools.disabled, ...(input.tools.denied ?? [])]);
+  const disabled = new Set([
+    ...input.tools.disabled,
+    ...(input.tools.denied ?? []),
+    // Same rule at execution: refused as `disabled` (no karma), never run.
+    ...ctx.tools.filter(isSensitiveTool).map((t) => t.definition.function.name),
+  ]);
   const extra = input.tools.extra ?? [];
   const executor = new ToolExecutor(ctx, {
     memoryViewer: null,
@@ -209,6 +217,9 @@ export async function runExecutorTurn(input: ExecutorTurnInput): Promise<Executo
     tenantRoot: input.tenantRoot,
     attribution: input.attribution,
     permissionMode: 'agent-loop',
+    // The bot's own run (cycle or task worker): the one context, besides the
+    // operator, that personal-data tools answer (operator-gate.ts).
+    actor: 'self',
     enforceToolPermissions: input.enforceToolPermissions === true,
     signal: controller.signal,
     ...(input.workDir ? { workDir: input.workDir } : {}),

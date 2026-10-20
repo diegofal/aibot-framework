@@ -111,6 +111,7 @@ describe('cron tool payloadKind', () => {
         chatId: 796164002,
         _chatId: 0, // agent loop injects 0
         _botId: 'news',
+        _actor: 'self', // and marks its own run (only it may target another chat)
       },
       mockLogger
     );

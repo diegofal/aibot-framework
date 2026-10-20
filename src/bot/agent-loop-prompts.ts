@@ -186,7 +186,9 @@ function buildToolCategorySection(toolCategoryList?: string[]): string {
     files: 'file_read, file_write, file_edit — file operations',
     system: 'exec, process, get_datetime, cron — system commands and scheduling',
     social: 'reddit_*, twitter_* — social media tools',
-    calendar: 'calendar_* — scheduling and availability',
+    calendar:
+      "calendar_* — scheduling and availability; calendar_agenda / calendar_free_slots / calendar_create_event over the operator's own calendars",
+    mail: "mail_search, mail_read — the operator's own mailboxes (read only)",
     communication:
       'ask_human, ask_permission, phone_call, delegate_to_bot, collaborate, create_agent, send_proactive_message — human/bot interaction, proactive messaging, and agent proposals',
     browser: 'browser — web browsing with headless browser',

@@ -6,6 +6,7 @@ import type { Logger } from '../../logger';
 import { parseMcpToolName } from '../../mcp/tool-adapter';
 import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
 import type { DynamicToolStore } from '../../tools/dynamic-tool-store';
+import { stripInternalArgs } from '../../tools/operator-gate';
 
 export function toolsRoutes(deps: {
   store: DynamicToolStore;
@@ -140,7 +141,8 @@ export function toolsRoutes(deps: {
     const start = Date.now();
     try {
       const result = await Promise.race([
-        tool.execute(body.args ?? {}, logger),
+        // Only the executor may set internal `_` args (`_actor`, `_requester`, …).
+        tool.execute(stripInternalArgs(body.args ?? {}), logger),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Tool execution timed out (30s)')), 30_000)
         ),

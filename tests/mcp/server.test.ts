@@ -233,6 +233,97 @@ describe('McpServer', () => {
     expect(body.error.code).toBe(-32601);
   });
 
+  describe('personal-data (sensitive) tools', () => {
+    const withSensitive: ToolDefinition[] = [
+      ...sampleDefinitions,
+      {
+        type: 'function',
+        function: {
+          name: 'mail_read',
+          description: 'Read mail',
+          parameters: { type: 'object', properties: {} },
+        },
+        sensitive: true,
+      },
+    ];
+
+    it('are never listed, even when exposedTools names them', async () => {
+      const p = await startAndGetPort({
+        getDefinitions: () => withSensitive,
+        config: {
+          enabled: true,
+          port: 0,
+          host: '127.0.0.1',
+          hiddenTools: [],
+          exposedTools: ['mail_read', 'get_datetime'],
+          maxCallsPerMinute: 60,
+        },
+      });
+      const resp = await fetch(`http://127.0.0.1:${p}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list' }),
+      });
+      const body = await resp.json();
+      expect(body.result.tools.map((t: any) => t.name)).toEqual(['get_datetime']);
+    });
+
+    it('are refused on tools/call without reaching the tool', async () => {
+      let called = false;
+      const p = await startAndGetPort({
+        getDefinitions: () => withSensitive,
+        executeTool: async () => {
+          called = true;
+          return { success: true, content: 'mail body' };
+        },
+        config: {
+          enabled: true,
+          port: 0,
+          host: '127.0.0.1',
+          hiddenTools: [],
+          maxCallsPerMinute: 60,
+        },
+      });
+      const resp = await fetch(`http://127.0.0.1:${p}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 8,
+          method: 'tools/call',
+          params: { name: 'mail_read', arguments: {} },
+        }),
+      });
+      const body = await resp.json();
+      expect(body.error.message).toContain('not available');
+      expect(called).toBe(false);
+    });
+  });
+
+  it('strips internal _ args a client sends before executing (no forged _actor)', async () => {
+    const seen: Record<string, unknown>[] = [];
+    const p = await startAndGetPort({
+      executeTool: async (name, args) => {
+        seen.push(args);
+        return { success: true, content: `Executed ${name}` };
+      },
+    });
+    await fetch(`http://127.0.0.1:${p}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 9,
+        method: 'tools/call',
+        params: {
+          name: 'web_search',
+          arguments: { query: 'q', _actor: 'operator', _requester: { isOperator: true } },
+        },
+      }),
+    });
+    expect(seen).toEqual([{ query: 'q' }]);
+  });
+
   describe('exposedTools allowlist', () => {
     it('should only expose listed tools', async () => {
       const p = await startAndGetPort({

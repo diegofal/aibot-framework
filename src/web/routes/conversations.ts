@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import { describeToolCall } from '../../bot/inline-approval';
 import type { BotConfig, Config } from '../../config';
@@ -6,7 +6,13 @@ import type { ConversationsService } from '../../conversations/service';
 import type { Logger } from '../../logger';
 import type { ChatMessage } from '../../ollama';
 import type { ProductionsService } from '../../productions/service';
-import { getTenantId, isBotAccessible, scopeBots } from '../../tenant/tenant-scoping';
+import {
+  getTenantId,
+  isAdminOrSingleTenant,
+  isBotAccessible,
+  scopeBots,
+} from '../../tenant/tenant-scoping';
+import type { ToolActor } from '../../tools/operator-gate';
 import type { ApprovalRequest, DocumentRef } from '../../types/thread';
 import { askToWhy } from '../../why/builders/ask';
 import { CycleIndex, type CycleReader } from '../../why/cycle-index';
@@ -96,11 +102,21 @@ export function conversationsRoutes(deps: {
     return overlay;
   }
 
+  /**
+   * The dashboard is the operator's own surface: admin (or single-tenant)
+   * threads run their tools as the operator, so personal-data tools answer.
+   * A tenant's thread does not (the personal accounts are the instance's).
+   */
+  function dashboardActor(c: Context): ToolActor | undefined {
+    return isAdminOrSingleTenant(getTenantId(c)) ? 'operator' : undefined;
+  }
+
   /** Extracted bot reply generation logic — shared by message send and retry. */
   function generateBotReply(
     botId: string,
     id: string,
-    conversation: { type: string; title: string }
+    conversation: { type: string; title: string },
+    actor?: ToolActor
   ) {
     const key = `${botId}:${id}`;
     generationState.set(key, { status: 'generating' });
@@ -177,6 +193,7 @@ export function conversationsRoutes(deps: {
           inlineApprovalStore,
           sessionKey,
           loopContext: { conversationId: id, caller: 'web-conversation' },
+          ...(actor ? { actor } : {}),
         });
 
         // Check if the LLM triggered a confirm-level tool (pending approval)
@@ -496,7 +513,7 @@ export function conversationsRoutes(deps: {
 
     // Clear any previous error state and fire-and-forget bot reply
     generationState.delete(key);
-    generateBotReply(botId, id, conversation);
+    generateBotReply(botId, id, conversation, dashboardActor(c));
 
     return c.json({ message, inboxResolved: inboxResolved || undefined });
   });
@@ -543,7 +560,7 @@ export function conversationsRoutes(deps: {
       return c.json({ error: 'Already generating a response' }, 409);
     }
 
-    generateBotReply(botId, id, conversation);
+    generateBotReply(botId, id, conversation, dashboardActor(c));
     return c.json({ status: 'generating' });
   });
 
@@ -599,7 +616,19 @@ export function conversationsRoutes(deps: {
     if (body.action === 'approve') {
       try {
         const toolRegistry = botManager.getToolRegistry();
-        const executor = toolRegistry.createExecutor(0, botId);
+        const actor = dashboardActor(c);
+        const executor = toolRegistry.createExecutor(
+          0,
+          botId,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          actor ? { actor } : undefined
+        );
         const result = await executor(pending.toolName, pending.args);
         const resultText = result.content ?? JSON.stringify(result);
         conversationsService.addMessage(
@@ -610,7 +639,7 @@ export function conversationsRoutes(deps: {
         );
 
         // Continue the conversation with the tool result so the bot can respond naturally
-        generateBotReply(botId, id, conversation);
+        generateBotReply(botId, id, conversation, dashboardActor(c));
 
         return c.json({ status: 'approved', result: resultText });
       } catch (err) {

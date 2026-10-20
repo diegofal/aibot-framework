@@ -1881,6 +1881,64 @@ describe('ConversationPipeline', () => {
       expect((mockToolRegistry.createExecutor as jest.Mock).mock.calls[0][8]).toBeUndefined();
     });
 
+    it('Telegram private: the executor scope says it is not a group and names no actor', async () => {
+      await pipeline.handleConversation(
+        createMockContext(),
+        createMockBotConfig(),
+        'user:789',
+        'hola'
+      );
+      expect((mockToolRegistry.createExecutor as jest.Mock).mock.calls[0][9]).toEqual({
+        isGroup: false,
+      });
+    });
+
+    const channelMsg = (over: Record<string, unknown> = {}) => ({
+      text: 'hola',
+      chatId: '4242',
+      chatType: 'private' as const,
+      channelKind: 'web',
+      sender: { id: '4242', firstName: 'Dora' },
+      ...over,
+    });
+    const quietChannel = () => ({
+      kind: 'web' as const,
+      sendText: jest.fn().mockResolvedValue(undefined),
+      showTyping: jest.fn().mockResolvedValue(undefined),
+    });
+
+    it('channel messages: a group chat (or a negative chat id) is a group for the executor', async () => {
+      await pipeline.handleChannelMessage(
+        channelMsg({ chatType: 'group' }) as any,
+        quietChannel() as any,
+        createMockBotConfig(),
+        'k'
+      );
+      await pipeline.handleChannelMessage(
+        channelMsg({ chatId: '-100123', channelKind: 'telegram' }) as any,
+        quietChannel() as any,
+        createMockBotConfig(),
+        'k2'
+      );
+      const calls = (mockToolRegistry.createExecutor as jest.Mock).mock.calls;
+      expect(calls[0][9]).toMatchObject({ isGroup: true });
+      expect(calls[1][9]).toMatchObject({ isGroup: true });
+    });
+
+    it("channel messages: the caller's actor (a cron for the operator) reaches the executor", async () => {
+      await pipeline.handleChannelMessage(
+        channelMsg() as any,
+        quietChannel() as any,
+        createMockBotConfig(),
+        'k',
+        { actor: 'self' }
+      );
+      expect((mockToolRegistry.createExecutor as jest.Mock).mock.calls[0][9]).toEqual({
+        isGroup: false,
+        actor: 'self',
+      });
+    });
+
     it('channel messages: the sender on that channel is the requester', async () => {
       const msg = {
         text: 'hola',

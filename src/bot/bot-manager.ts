@@ -41,6 +41,7 @@ import { CuriosityService } from './curiosity/service';
 
 import { ConversationsService } from '../conversations/service';
 import { KarmaService } from '../karma/service';
+import { type PersonalAccountService, createPersonalAccounts } from '../personal-accounts';
 import { ProductionsService } from '../productions/service';
 import type { RelayService } from '../relay/service';
 import { createRelayService } from '../relay/wiring';
@@ -152,6 +153,8 @@ export class BotManager {
   private analyticsService?: AnalyticsService;
   private userDirectory: UserDirectory;
   private relayService: RelayService;
+  /** The operator's Google/Microsoft accounts: shared by the calendar/mail tools and the dashboard routes. */
+  private readonly personalAccounts: PersonalAccountService;
   private inlineApprovalStore: InlineApprovalStore;
   private hookEmitter: HookEmitter;
   private botContext!: BotContext;
@@ -342,6 +345,8 @@ export class BotManager {
       logger,
     });
 
+    this.personalAccounts = createPersonalAccounts(config);
+
     // Initialize inline approval store (persisted to disk for confirm-level tool approvals)
     this.inlineApprovalStore = new InlineApprovalStore(join(dataDir, 'inline-approval'));
 
@@ -390,6 +395,7 @@ export class BotManager {
       tenantFacade: this.tenantFacade,
       userDirectory: this.userDirectory,
       relayService: this.relayService,
+      personalAccounts: this.personalAccounts,
       inlineApprovalStore: this.inlineApprovalStore,
       hooks: this.hookEmitter,
       // One fleet-wide breaker per backend, shared by every runtime (AgentLoop
@@ -1204,7 +1210,8 @@ export class BotManager {
     chatId: number,
     text: string,
     botId: string,
-    messageId?: string
+    messageId?: string,
+    trust?: { runsForOperator?: boolean }
   ): Promise<string> {
     const bot = this.bots.get(botId) ?? fleetTelegramBorrower(this.bots, () => this.config)(botId);
     const recorded = this.getChannelState(botId);
@@ -1221,7 +1228,16 @@ export class BotManager {
     );
 
     const msg = buildCronInboundMessage(chatId, text, kind, { messageId, nowMs: Date.now() });
-    return this.handleChannelMessage(msg, channel, botId);
+    // A job runs for the operator (personal data answers) only when the
+    // operator created it (`src/cron/trust.ts`) AND its reply goes to the
+    // operator's own chat. Anyone can name that chat, so the chat alone never
+    // grants it; any other job is judged by its sender and fails closed.
+    const operatorChat = this.config.operator?.telegramChatId;
+    const forOperator =
+      trust?.runsForOperator === true && operatorChat !== undefined && chatId === operatorChat;
+    return forOperator
+      ? this.handleChannelMessage(msg, channel, botId, { actor: 'operator-cron' })
+      : this.handleChannelMessage(msg, channel, botId);
   }
 
   isRunning(botId: string): boolean {
@@ -1577,6 +1593,11 @@ export class BotManager {
 
   /** Curiosity DNA state for every bot (knowledge map, navigator, dispatches, taste). */
   /** The task worker pool, when `config.workers.enabled`. */
+  /** The operator's personal accounts (calendar and mail), for `/api/personal-accounts`. */
+  getPersonalAccounts(): PersonalAccountService {
+    return this.personalAccounts;
+  }
+
   getWorkerPool(): WorkerPool | undefined {
     return this.workerPool;
   }
@@ -1677,7 +1698,8 @@ export class BotManager {
   async handleChannelMessage(
     msg: import('../channel/types').InboundMessage,
     channel: import('../channel/types').Channel,
-    botId: string
+    botId: string,
+    opts?: { actor?: import('../tools/operator-gate').ToolActor }
   ): Promise<string> {
     const botConfig = this.config.bots.find((b) => b.id === botId);
     if (!botConfig) throw new Error(`Bot not found: ${botId}`);
@@ -1693,7 +1715,9 @@ export class BotManager {
 
     // Webhook/analytics emission is handled inside ConversationPipeline
     // to cover both Telegram and channel-agnostic paths uniformly.
-    return this.conversationPipeline.handleChannelMessage(msg, channel, botConfig, sessionKey);
+    return opts
+      ? this.conversationPipeline.handleChannelMessage(msg, channel, botConfig, sessionKey, opts)
+      : this.conversationPipeline.handleChannelMessage(msg, channel, botConfig, sessionKey);
   }
 
   // Collaboration delegates
@@ -1989,7 +2013,7 @@ export function buildCronInboundMessage(
   text: string,
   channelKind: InboundMessage['channelKind'],
   opts: { messageId?: string; nowMs: number }
-): InboundMessage {
+): InboundMessage & { synthetic: true } {
   return {
     messageId: opts.messageId || `cron-${opts.nowMs}-${Math.random().toString(36).slice(2, 8)}`,
     channelKind,
@@ -1998,6 +2022,7 @@ export function buildCronInboundMessage(
     chatType: 'private',
     sender: { id: String(chatId), firstName: 'Cron' },
     timestamp: opts.nowMs,
+    synthetic: true,
   };
 }
 

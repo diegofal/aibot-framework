@@ -34,6 +34,7 @@ import { RateLimiter } from '../tenant/rate-limiter';
 import { SessionStore } from '../tenant/session-store';
 import { TenantConfigStore } from '../tenant/tenant-config-store';
 import { getTenantId, scopeBots } from '../tenant/tenant-scoping';
+import { startWhatsAppExportSweep, whatsappExportStoreFor } from '../whatsapp-export/store';
 import type { CycleReader } from '../why/cycle-index';
 import type { WorkerPoolApi } from '../workers/types';
 import {
@@ -42,6 +43,7 @@ import {
   readAllLogLines,
   readLastLinesRotationAware,
 } from './log-tail';
+import { isPublicApiPath } from './public-api-paths';
 import { agentExportRoutes } from './routes/agent-export';
 import { agentFaceRoutes } from './routes/agent-face';
 import { agentFeedbackRoutes } from './routes/agent-feedback';
@@ -75,6 +77,7 @@ import {
   needsYouSourcesFromBotManager,
 } from './routes/needs-you';
 import { onboardingRoutes } from './routes/onboarding';
+import { personalAccountsRoutes } from './routes/personal-accounts';
 import { proactiveRoutes } from './routes/proactive';
 import { productionsRoutes } from './routes/productions';
 import { sessionsRoutes } from './routes/sessions';
@@ -150,14 +153,8 @@ export function startWebServer(deps: WebServerDeps): void {
     // Apply tenant auth to regular API routes (skip public, admin, auth, and tenant-specific endpoints)
     app.use('/api/*', async (c, next) => {
       const path = c.req.path;
-      if (
-        path === '/api/status' ||
-        path.startsWith('/api/auth/') ||
-        path.startsWith('/api/admin/') ||
-        path === '/api/tenants' ||
-        path.startsWith('/api/tenant/') ||
-        path.startsWith('/api/onboarding/')
-      ) {
+      // Includes the personal-accounts OAuth callback (protected by its own state).
+      if (isPublicApiPath(path)) {
         return next();
       }
       return tenantAuth(c, next);
@@ -376,6 +373,14 @@ export function startWebServer(deps: WebServerDeps): void {
       claudeAccountsRoutes({ accounts: deps.claudeAccounts, logger })
     );
   }
+  // Personal accounts (calendar/mail): admin only, except the public OAuth callback.
+  const personalAccounts = deps.botManager.getPersonalAccounts?.();
+  if (personalAccounts) {
+    app.route(
+      '/api/personal-accounts',
+      personalAccountsRoutes({ accounts: personalAccounts, logger })
+    );
+  }
   app.route('/api/files', filesRoutes({ config, logger }));
 
   // Productions routes (only if enabled)
@@ -514,6 +519,10 @@ export function startWebServer(deps: WebServerDeps): void {
         ),
     });
   }
+
+  // WhatsApp group exports hold other people's messages: besides the prune on
+  // every ingest and read, sweep every group shortly after boot and then daily.
+  startWhatsAppExportSweep({ store: whatsappExportStoreFor(config.paths.data), logger });
 
   // Conversations routes (use shared ConversationsService from BotManager)
   const conversationsService = deps.botManager.getConversationsService();

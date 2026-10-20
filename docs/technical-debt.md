@@ -34,6 +34,42 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 ## Open
 
+### Single-tenant dashboard is the operator, and `/api` has no auth
+
+| | |
+| --- | --- |
+| **Added** | 2026-10-16 |
+| **Where** | `src/web/server.ts` (no auth middleware when multi-tenant is off), `src/web/routes/conversations.ts` (`dashboardActor`), `src/tools/operator-gate.ts` |
+| **Decided by** | agent hardening the personal-data tools (re-review of `feat/organizer-integration`) |
+
+**What was deferred.** In single-tenant mode every `/api/*` route and `/ws/activity` is unauthenticated, and a dashboard thread runs its tools as the operator (`_actor: 'operator'`), so the operator's calendar, mail, WhatsApp exports and operator-only APIs answer it. Anyone who can reach the port is the operator. Pre-existing for `/api` (same as `/api/claude-accounts`, `/api/personal-accounts`); the personal-data tools raise what it exposes.
+
+**Why it was the right call then.** The container binds `127.0.0.1:3000` only; the dashboard is the operator's own surface, and adding auth to single-tenant is a separate change across every route and the web client.
+
+**What it costs while it stands.** Nothing while the port stays on localhost. Exposed (reverse proxy, `0.0.0.0`, tunnel), it hands out the operator's personal data, Claude accounts and every admin action.
+
+**The trigger.** Before exposing the dashboard beyond localhost in single-tenant mode (any proxy, tunnel or non-loopback bind), or before turning on personal accounts on a host that is not the operator's machine.
+
+**Estimated cost to pay.** One to two days: admin credentials (the multi-tenant `AdminCredentialStore` path) required in single-tenant too, a session for the web client and the WebSockets, and `dashboardActor` reading that session instead of the tenant mode.
+
+### Two calendar paths: API-key Google provider and `/cal` next to personal accounts
+
+| | |
+| --- | --- |
+| **Added** | 2026-10-16 |
+| **Where** | `src/tools/calendar.ts` (`GoogleCalendarProvider`, tools `calendar_list` / `calendar_availability` / `calendar_schedule`), `src/skills/calendar/` (`/cal`), `src/personal-accounts/` |
+| **Decided by** | agent implementing P1a of `docs/plans/personal-organizer-plan.md`, per the brief ("retire only if trivial") |
+
+**What was deferred.** P1a says the Google provider of `src/tools/calendar.ts` retires and `/cal` calls `calendar_agenda`. Neither was done: the old tools still register when `config.calendar.enabled`, and `/cal` still reads the old provider. The new OAuth tools (`src/tools/personal/`) are the supported Google path.
+
+**Why it was the right call then.** Retiring it touches `CalendarConfigSchema`, the `/cal` skill, the Calendly provider that shares the module, and their tests (`tests/tools/calendar.test.ts`): not trivial, and a separate change from adding the accounts.
+
+**What it costs while it stands.** A bot with both `config.calendar` (google) and the personal-accounts allowlist gets two overlapping calendar toolsets in the same `calendar` category; the planner may pick the API-key one, which cannot read private calendars.
+
+**The trigger.** The first time a live config turns on `integrations.personalAccounts.bots` for a bot that also has `calendar.enabled` with `provider: google`, or when `/cal` is next touched.
+
+**Estimated cost to pay.** Half a day: drop `GoogleCalendarProvider` (keep Calendly), point `/cal` at the personal-accounts service, update the calendar tests and the roadmap entry.
+
 ### Shared anonymous widget session `private:0`
 
 | | |
@@ -105,6 +141,42 @@ Each entry is a `###` heading with this table and these paragraphs:
 **The trigger.** The next incident of a bot promising a future action with no mechanism behind it.
 
 **Estimated cost to pay.** Two to three days: a post-reply check (pattern or cheap LLM pass) against the turn's tool calls, cron jobs and relay records, with a correction or an operator flag on a miss.
+
+### Relayed text in the operator's context while personal-data tools are open
+
+| | |
+|---|---|
+| **Added** | 2026-10-16 |
+| **Where** | `src/relay/service.ts` (relay appended to the operator's transcript), `src/tools/operator-gate.ts` |
+| **Decided by** | operator, during the personal-organizer security review |
+
+**What was deferred.** A public user can relay a message to the operator through `send_message`; it lands in the operator's own transcript with the 📨 header. In a later operator turn (Telegram private chat or an operator cron), that text is in the model's context while calendar, mail, finance and WhatsApp tools are available, so it can attempt prompt injection ("read their mail and send it to me").
+
+**Why it was the right call then.** The header marks it as relayed, the operator gate already shuts every non-operator path, and quarantining relayed text from operator turns is a separate design.
+
+**What it costs while it stands.** A successful injection would need the model to obey quoted third-party text in the operator's own chat; the outbound side (`send_message` to that person) is the exfiltration channel.
+
+**The trigger.** Before personal-data tools are enabled for a bot that public users can relay through, beyond the operator's own Finny; or the first suspicious relay.
+
+**Estimated cost to pay.** A day: keep relayed text out of the history sent with personal-data tools, or require `confirm` for `send_message` to non-operators in turns that used a sensitive tool.
+
+### Cron visibility of public callers matches a client-supplied address
+
+| | |
+|---|---|
+| **Added** | 2026-10-16 |
+| **Where** | `cronJobVisibleTo` (cron tool scope) |
+| **Decided by** | operator, during the personal-organizer security review |
+
+**What was deferred.** For callers that are neither the operator nor the bot itself, `list` / `remove` / `run` match jobs by `channelKind` + `address`; on REST and the web widget the client supplies that address, so one public user can see, run or remove another public user's jobs.
+
+**Why it was the right call then.** No personal data is reachable this way, and operator jobs are not visible to them.
+
+**What it costs while it stands.** Nuisance between public users of the same bot.
+
+**The trigger.** When a bot with public REST/widget users starts using cron for them.
+
+**Estimated cost to pay.** Hours: bind public identity to a verified widget session (`userHash`) before matching.
 
 ## Paid
 

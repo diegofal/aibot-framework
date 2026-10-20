@@ -32,12 +32,12 @@ export type CronServiceDeps = {
   storePath: string;
   cronEnabled: boolean;
   sendMessage: (chatId: number, text: string, botId: string) => Promise<void>;
-  /** `link`: the job and the id of the synthetic message the agent receives (`cronMessageId`). */
+  /** `link`: the job, the id of the synthetic message the agent receives (`cronMessageId`), and `runsForOperator` when the operator created the job (`trust.ts`). */
   sendInstruction: (
     chatId: number,
     text: string,
     botId: string,
-    link?: { jobId: string; messageId: string }
+    link?: { jobId: string; messageId: string; runsForOperator?: true }
   ) => Promise<string | undefined>;
   resolveSkillHandler: (
     payload: Extract<CronPayload, { kind: 'skillJob' }>

@@ -131,7 +131,8 @@ src/
 │   ├── create-agent.ts     #   Propose new agents (human-approved)
 │   ├── reddit.ts           #   Reddit API integration
 │   ├── twitter.ts          #   Twitter/X API integration
-│   ├── calendar.ts         #   Google Calendar integration
+│   ├── calendar.ts         #   Calendly / Google Calendar (API key) integration
+│   ├── personal/           #   Calendar + mail over the operator's Google/Microsoft accounts
 │   └── ...                 #   15+ more tools
 ├── skills/                 # 15 bundled skills (plugin system)
 │   ├── reflection/         #   Weekly reflection: evolves methods, keeps the operator-owned Core Drives
@@ -159,6 +160,8 @@ src/
 │   └── outbound.ts         #   Proactive message delivery factory
 ├── relay/                  # Person-to-person relays through a bot (send_message): delivery
 │                           #   resolver, durable records, return path, policy
+├── whatsapp-export/        # WhatsApp group exports sent as Telegram documents: parser
+│                           #   (Android/iOS, es/en), zip reader, per-group store (30-day retention)
 ├── a2a/                    # Agent-to-Agent Protocol (v0.3.0)
 │   ├── server.ts           #   JSON-RPC handler + directory endpoints
 │   ├── client.ts           #   HTTP client for external agents
@@ -166,6 +169,7 @@ src/
 │   ├── task-store.ts       #   In-memory task lifecycle
 │   ├── executor.ts         #   Headless LLM message processor
 │   └── tool-adapter.ts     #   A2A skills → framework tools
+├── integrations/http-api/  # Declarative HTTP APIs from config → api_<name>_<endpoint> tools
 ├── mcp/                    # Model Context Protocol (bidirectional)
 │   ├── client.ts           #   Connect to external MCP servers
 │   ├── client-pool.ts      #   Multi-server connection pool
@@ -262,6 +266,10 @@ LLM-based conversation summarization when sessions approach token limits. The `C
 
 Claude CLI can call framework tools natively via Model Context Protocol. The bridge server (`src/mcp/tool-bridge-server.ts`) exposes framework tools as MCP tools, so Claude CLI subprocess calls go through the same tool registry, executor, and permission system as regular LLM tool calls.
 
+### HTTP API Integrations
+
+Authenticated HTTP APIs declared in `integrations.httpApis[]` become one tool per endpoint (`api_<name>_<endpoint>`), only for the bots listed in `bots`. The secret is an environment variable read at call time and sent only as a header; it never appears in args, results, errors or logs. `GET` only for now; `operatorOnly` (default) refuses conversation speakers who are not the operator. Details and the finance-app example: `docs/architecture-docs/tools-skills.html`.
+
 ### Activity Stream
 
 Real-time event feed with WebSocket streaming at `/ws/activity`. Captures tool calls, agent loop events, collaboration, and system events. Used by the dashboard Activity page for live monitoring.
@@ -297,6 +305,10 @@ A human message arriving on REST, WebSocket, WhatsApp or Discord emits the `huma
 ### Relays (person-to-person messages)
 
 `send_message` passes a message from the person talking to the bot to another person (the operator or a known contact) and routes the answer back. A relay is a durable record (`<data>/relays/<botId>.jsonl`) with an honest delivery status: `delivered` (Telegram or WhatsApp accepted it, or a live web connection exists), `queued` (stored in a web session, nobody notified) or `failed` — never "sent" when nothing reached a person. Route order is fixed: Telegram (the bot's own instance, then any fleet instance) → WhatsApp → web. The sender is the conversation's speaker, injected by the executor (`_requester`), never a model argument; the recipient sees a system-stamped header ("📨 De Ana (vía Bot)") and, when an answer is expected, a reply footer. A Telegram reply to a relay message is forwarded to the requester verbatim without an LLM turn; free-text answers close the relay with `send_message(replyTo)`; the conversation prompt lists what waits on the speaker and what they asked to pass on. Identical text to the same recipient within 10 minutes is not sent twice. Policy: anyone → operator and operator → anyone; person → person only with `bots[].relay.peerToPeer`. Every human who talks to a bot (Telegram included) is tracked in the contact directory, and the configured operator is one contact seeded from `config.operator` at bot start.
+
+### WhatsApp group summaries (manual export)
+
+The operator exports a WhatsApp group (WhatsApp → group → More → Export chat → Without media) and sends the file — `.txt`, or the iOS `.zip` with `_chat.txt` — to the bot on Telegram, optionally with a caption such as "resumime". The document handler parses it (Android and iOS formats, 12h/24h, Spanish and English), stores only messages newer than the previous export of that group (`<data>/whatsapp-exports/<botId>/<group>.json`, 30-day retention, never in the bot's memory or the session transcript) and asks the model to call `whatsapp_export_summary`, which returns them (in parts when large) for a parent-focused summary: dates, things to bring or do, money, schedule changes, requests to the operator, decisions. Operator only; from anyone else the file is an ordinary document.
 
 ### A2A Protocol
 
@@ -356,7 +368,7 @@ permanent.
 
 ### Tools
 
-41 LLM-callable tools across 11 categories: web (search, fetch, browser), files (read, write, edit), execution, soul/memory management, goals, collaboration, cron, social media (Reddit, Twitter), calendar, core memory, permissions, productions, and MCP. Dynamic tool creation allows bots to build new tools at runtime (with human approval). Per-bot `disabledTools` filtering. Tool categories enable pre-selection by domain. Tool loop detection (4 strategies) prevents LLMs from getting stuck in repetitive patterns.
+46 LLM-callable tools across 12 categories: web (search, fetch, browser), files (read, write, edit), execution, soul/memory management, goals, collaboration, cron, social media (Reddit, Twitter), calendar, mail, core memory, permissions, productions, and MCP. Personal-account tools (`calendar_agenda`, `calendar_free_slots`, `calendar_create_event`, `mail_search`, `mail_read`) merge the operator's Google and Microsoft accounts, exist only for bots in `integrations.personalAccounts.bots` and answer only the operator (setup: `docs/personal-accounts-setup.md`). Dynamic tool creation allows bots to build new tools at runtime (with human approval). Per-bot `disabledTools` filtering. Tool categories enable pre-selection by domain. Tool loop detection (4 strategies) prevents LLMs from getting stuck in repetitive patterns.
 
 ### Bot-to-Bot Collaboration
 
@@ -462,6 +474,7 @@ Configuration lives in `config/config.json`, validated at startup by Zod schemas
 - **`twitter`** — Twitter/X API credentials (apiKey, apiSecret, accessToken, accessSecret)
 - **`reddit`** — Reddit API credentials (clientId, clientSecret, username, password)
 - **`calendar`** — Google Calendar credentials and calendar ID
+- **`integrations`** — `personalAccounts.bots` (bots that get the calendar/mail tools over the operator's accounts) and `redirectBaseUrl` (OAuth redirect base)
 - **`mcp`** — MCP server connections and tool exposure settings
 - **`agentProposals`** — Agent self-creation: enabled, maxAgents, maxProposalsPerBot
 - **`collaboration`** — Bot-to-bot rate limits, visible max turns, session TTL
@@ -521,7 +534,8 @@ Automations      — Cron ("Tell an agent what to do and when" natural-language 
 Insights         — Stats (fleet table, bot detail), Behaviour, Infra, Hygiene (preview/apply, history),
                    Karma (scores, trends, manual adjustment), Activity (events, system logs, LLM queries)
 Settings         — Settings (session, collaboration, skill folders, MCP servers, memory search, backup),
-                   Integrations (Ollama diagnostic chat), BaaS tabs when multi-tenant is on
+                   Integrations (Claude accounts, Personal accounts — Google/Microsoft calendar and
+                   mail —, Ollama diagnostic chat), BaaS tabs when multi-tenant is on
 Old bookmarks (#/inbox, #/stats/bot/x, #/karma, #/productions/x, #/dispatches, #/logs, #/baas/*,
 #/tool-runner, #/insights/loop, #/insights/feedback, …) redirect; an unknown hash shows "Page not found".
 Ctrl+K / Cmd+K  — command palette on every page: agents (→ Home), pages, actions (start / stop / run

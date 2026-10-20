@@ -226,6 +226,34 @@ describe('integrations routes - POST /ollama/chat-with-tools', () => {
     expect(Array.isArray(data.toolCalls)).toBe(true);
   });
 
+  test('internal _ args the model sends never reach the tool', async () => {
+    const seen: Record<string, unknown>[] = [];
+    const spy = {
+      ...fakeTool,
+      execute: async (a: Record<string, unknown>) => {
+        seen.push(a);
+        return { success: true, content: 'now' };
+      },
+    };
+    const bm = {
+      getToolRegistry: () => ({ getDefinitions: () => [spy.definition], getTools: () => [spy] }),
+      getOllamaClient: () => ({
+        chat: async (_msgs: any, opts: any) => {
+          await opts.toolExecutor('get_datetime', { tz: 'UTC', _actor: 'self' });
+          return { text: 'ok' };
+        },
+      }),
+    } as any;
+    const app = makeApp(baseConfig, bm);
+    const res = await app.request('http://localhost/api/integrations/ollama/chat-with-tools', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hi' }),
+    });
+    expect(res.status).toBe(200);
+    expect(seen).toEqual([{ tz: 'UTC' }]);
+  });
+
   test('executor handles unknown tool gracefully', async () => {
     // Simulate the LLM calling a tool not in the selected set
     const bm = {

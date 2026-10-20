@@ -10,6 +10,8 @@ import { DynamicToolStore } from '../../../src/tools/dynamic-tool-store';
 import type { Tool, ToolDefinition } from '../../../src/tools/types';
 import { toolsRoutes } from '../../../src/web/routes/tools';
 
+/** Args each echo_test call received (the route must strip `_` keys). */
+const seenArgs: Record<string, unknown>[] = [];
 const noopLogger: Logger = {
   info: () => {},
   warn: () => {},
@@ -48,7 +50,10 @@ const mockEchoTool: Tool = {
       },
     },
   },
-  execute: async (args) => ({ success: true, content: `Echo: ${args.message}` }),
+  execute: async (args) => {
+    seenArgs.push(args);
+    return { success: true, content: `Echo: ${args.message}` };
+  },
 };
 
 const mockFailTool: Tool = {
@@ -287,6 +292,20 @@ describe('tools routes — /all and /execute', () => {
       const data = await res.json();
       expect(data.success).toBe(true);
       expect(data.content).toBe('Echo: hello world');
+    });
+
+    test('internal _ args in the body never reach the tool (no forged _actor)', async () => {
+      const { app } = makeApp();
+      const res = await app.request('http://localhost/api/tools/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'echo_test',
+          args: { message: 'hi', _actor: 'self', _requester: { isOperator: true } },
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(seenArgs.at(-1)).toEqual({ message: 'hi' });
     });
 
     test('returns 404 for unknown tool', async () => {

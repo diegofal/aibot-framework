@@ -140,6 +140,8 @@ function harness(
           chatId: 0,
           timestamp: Date.now(),
           ...(result.failureKind ? { failureKind: result.failureKind } : {}),
+          // The executor marks personal-data tools (ToolDefinition.sensitive).
+          ...(args._sensitive === true ? { sensitive: true } : {}),
         });
         return result;
       };
@@ -374,6 +376,20 @@ describe('runWorker — tool context', () => {
     expect(tools[2].target).toBe('x.io/p');
     expect(classifySideEffect('mcp_github_create_issue')).toBe('external');
     expect(classifySideEffect('core_memory_append')).toBe('write');
+  });
+
+  test('a sensitive tool is journaled without its target', async () => {
+    const h = harness([
+      [{ name: 'mail_read', args: { path: 'inbox/secret.md', _sensitive: true } }, progress()],
+      [{ name: 'task_done', args: { note: 'x' } }],
+    ]);
+    await runWorker(h.env);
+    const tools = h.journal.filter((e) => e.kind === 'tool') as Array<{
+      name: string;
+      target?: string;
+    }>;
+    expect(tools[0].name).toBe('mail_read');
+    expect(tools[0].target).toBeUndefined();
   });
 
   test('the prompt carries goal, task, note, answers and the protocol', () => {

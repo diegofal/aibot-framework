@@ -25,6 +25,13 @@ export interface ToolDefinition {
    */
   outputSchema?: z.ZodType<unknown>;
   /**
+   * Personal data (the operator's calendar, mail, WhatsApp exports, operator-only
+   * HTTP APIs). Hidden from the MCP expose server and collaboration; the tool
+   * audit keeps only arg keys and the result length, and activity events carry
+   * neither args nor result (`isSensitiveTool` in `operator-gate.ts`).
+   */
+  sensitive?: boolean;
+  /**
    * Maximum number of retry attempts for transient execution failures.
    * When a tool throws an exception or returns an error result, the executor
    * will retry up to this many times, including the error feedback in context.
