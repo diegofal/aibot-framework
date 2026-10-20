@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed (2026-10-20) — A goal's full brief is edited in place; cut card headlines say so
+- **Why.** Operator: "I wrote all this text and it was cut off in the card… I should be able to click/edit it inline." The card headline derived from a long goal stops at its first clause break with nothing marking it as cut, and the drawer brief was clamped to three lines behind Edit → Save brief.
+- **Card** (`cardHtml`): a derived headline shorter than the brief ends in "…" and carries the full text as tooltip; a headline the operator set is left as is.
+- **Drawer brief** (`drawerHtml`, `goal-board.js`): a textarea that grows with its text (`field-sizing: content`), saved on blur or Ctrl/Cmd+Enter through the same `PATCH { brief }`; Escape reverts, emptying it restores the previous text. The Edit and "Show full brief" buttons are gone.
+- **Repaints keep the edit in progress** (`web/pages/drawer-edits.js`, review finding on PR 7): a save or the Activity load redraws the drawer, which wiped whatever was being typed in another field meanwhile (notes opened while the brief was saving). `captureEdits` / `restoreEdits` around `paintDrawer` keep unsaved title, brief, notes and new-subtask text plus the caret, on the same goal only; Save and Cancel leave the notes editor clean so it closes.
+- Tests: `tests/web/fleet-board-helpers.test.ts`, `tests/web/drawer-edits.test.ts`.
+
 ### Fixed (2026-10-20) — Pre-PR pass on the Oct 16 fixes
 - **Borrowed Telegram near the limit** (`src/channel/fleet-telegram.ts`): a message that fit on its own but not with the "🤖 <bot>:" line failed to send; the author line now goes alone first and the text untouched after it (its result is the one replies match).
 - **Upcoming runs** (`src/cron/schedule.ts`): the cursor stepped a whole second, skipping runs of an `every` under 1000 ms and every other run of a per-second cron; it now steps 1 ms. The week strip (`GET /api/cron` → `upcoming`) used one cap of 50 runs for the whole week, so an hourly job's later days were empty: `weekOfRunsMs` caps each day instead (runs on a day boundary stay that day's, and none is listed twice).
