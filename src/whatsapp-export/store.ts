@@ -271,11 +271,13 @@ export class WhatsAppExportStore {
     if (!query?.trim()) {
       slug = groups[0]?.slug;
     } else {
-      // The exact name first: two names can share a slug ("Class 1/A", "Class 1-A").
-      const exact = query.trim().toLowerCase();
+      // The exact name first, as stored (case included), then ignoring case: two
+      // names can share a slug ("Class 1/A", "Class 1-A"; "Padres", "padres").
+      const exact = query.trim();
       const q = groupSlug(query);
       slug =
-        groups.find((g) => g.group.trim().toLowerCase() === exact)?.slug ??
+        groups.find((g) => g.group.trim() === exact)?.slug ??
+        groups.find((g) => g.group.trim().toLowerCase() === exact.toLowerCase())?.slug ??
         groups.find((g) => g.slug === q)?.slug ??
         groups.find((g) => g.slug.includes(q))?.slug;
     }

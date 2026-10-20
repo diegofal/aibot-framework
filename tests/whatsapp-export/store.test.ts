@@ -253,6 +253,19 @@ describe('WhatsAppExportStore: group names that share a slug', () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+  test('names that differ only in case are each found as stored', () => {
+    store.ingest(BOT, 'Padres', [msg('2026-10-16T08:00:00', 'A', 'upper')], {
+      nowMs: NOW,
+      fileName: 'a',
+    });
+    store.ingest(BOT, 'padres', [msg('2026-10-16T09:00:00', 'B', 'lower')], {
+      nowMs: NOW + 1,
+      fileName: 'b',
+    });
+    expect(store.find(BOT, 'Padres', NOW + 2)?.messages.map((m) => m.text)).toEqual(['upper']);
+    expect(store.find(BOT, 'padres', NOW + 2)?.messages.map((m) => m.text)).toEqual(['lower']);
+  });
+
   test('"Class 1/A" and "Class 1-A" keep separate records and never suppress each other', () => {
     store.ingest(BOT, 'Class 1/A', [msg('2026-10-16T08:00:00', 'A', 'one')], {
       nowMs: NOW,
