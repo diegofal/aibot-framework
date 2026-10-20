@@ -7877,15 +7877,23 @@ a.gd-row-name:hover {
   border-radius: var(--r-md);
   padding: 11px 13px;
   overflow-wrap: anywhere;
+  /* Edited in place: the whole brief, growing with it, never clipped. */
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  resize: none;
+  field-sizing: content;
+  min-height: 3lh;
+  cursor: text;
 }
-.fb-brief-text.clamp {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.fb-brief:hover {
+  border-color: var(--text-dim);
 }
-.fb-brief + .fb-link {
-  margin-top: 6px;
+.fb-brief:focus {
+  outline: none;
+  border-color: var(--accent);
+  color: var(--text);
 }
 .fb-notes {
   font-size: 13.5px;

@@ -621,8 +621,13 @@ export function cardHtml(goal, selected, ctx = {}) {
   const goalTasks = Array.isArray(goal?.tasks) ? goal.tasks : [];
   const working = goalTasks.some((t) => taskLaneOf(t) !== 'done' && taskWorker(t, ctx.workers));
   const noTasks = !standing && !goalTasks.some((t) => taskLaneOf(t) !== 'done');
+  // A headline cut from a longer brief says so; the whole text is the tooltip.
+  const full = String(goal?.text ?? '').trim();
+  const set = String(goal?.headline ?? '').trim();
+  const cut = !set && !tag && full.length > head.replace(/…$/, '').length + 1;
+  const shown = cut && !head.endsWith('…') ? `${head}…` : head;
   return `<div class="fb-card ${pri}${selected ? ' sel' : ''}${working ? ' working' : ''}" data-goal="${ref}" draggable="true" tabindex="0">
-    <div class="fb-h">${esc(head)}</div>
+    <div class="fb-h"${cut || set ? ` title="${esc(full)}"` : ''}>${esc(shown)}</div>
     <div class="fb-meta">${tag ? `<span class="fb-tag sleep">${esc(tag)}</span>` : ''}${standing ? '<span class="fb-tag standing" title="No end state: the agent does a round of it each time it serves it">standing</span>' : ''}${noTasks ? '<span class="fb-tag notasks" title="Not broken down yet: the agent adds its steps (or marks it standing) the next time it serves it">no tasks yet</span>' : ''}${sourceTag(goal)}${goal?.notes ? '<span class="fb-dim" title="Has notes">✎</span>' : ''}<span class="fb-sp"></span>${mini(goal?.tasks)}</div>
     ${standing ? '' : inlineTasksHtml(goal, ctx)}
     ${goal?.status === 'in_progress' ? pulseHtml(ctx.activity?.[goal?.id], ctx.intervalMs, ctx.nowMs ?? Date.now(), { standing }) : ''}${kidsLine(ctx.spawned?.[goal?.id])}
@@ -731,9 +736,8 @@ export function drawerHtml(
           )
           .join('')}</ul>
         ${done || standing ? '' : '<input class="fb-add" id="fb-addtask" maxlength="200" placeholder="+ Add a subtask, then Enter" aria-label="Add subtask">'}</div>
-      <div class="fb-field"><div class="fb-lbl">Brief<span class="fb-sp"></span><span class="fb-lbl-note">what the agent reads</span><button type="button" class="fb-link" id="fb-editbrief">Edit</button></div>
-        <div class="fb-brief"><div class="fb-brief-text${brief.length > 180 ? ' clamp' : ''}" id="fb-brief">${esc(brief)}</div></div>
-        ${brief.length > 180 ? '<button type="button" class="fb-link" id="fb-morebrief">Show full brief</button>' : ''}</div>
+      <div class="fb-field"><div class="fb-lbl">Brief<span class="fb-sp"></span><span class="fb-lbl-note">what the agent reads · click to edit</span></div>
+        <textarea class="fb-brief" id="fb-brief" maxlength="1000" aria-label="Brief" spellcheck="false">${esc(brief)}</textarea></div>
       <div class="fb-field"><div class="fb-lbl">Notes<span class="fb-sp"></span><button type="button" class="fb-link" id="fb-editnotes">${notes ? 'Edit' : 'Add'}</button></div>
         <div id="fb-notes">${notes ? `<div class="fb-notes">${esc(notes)}</div>` : '<div class="fb-dim">No notes yet.</div>'}</div></div>
       ${spawned.length ? `<div class="fb-field"><div class="fb-lbl">Spawned from this goal<span class="fb-sp"></span><span class="fb-lbl-note">its progress lives here</span></div>${spawnedHtml(spawned)}</div>` : ''}

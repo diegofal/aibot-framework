@@ -259,6 +259,27 @@ describe('markup', () => {
     expect(html).toContain('some notes');
     expect(html).toContain('id="fb-del"');
   });
+
+  it('drawer: the brief is edited in place, whole, with no Edit / Show full detour', () => {
+    const long = `I want you to automate the recruiting process, ${'by scraping sites '.repeat(12)}`;
+    const html = drawerHtml(lane.agent, goal({ text: long }));
+    expect(html).toMatch(/<textarea[^>]*id="fb-brief"/);
+    expect(html).toContain(long.trim());
+    expect(html).not.toContain('fb-editbrief');
+    expect(html).not.toContain('Show full brief');
+  });
+
+  it('card: a headline cut from a longer brief says so and carries the whole text', () => {
+    const text =
+      'I want you to automate the recruiting process, by starting scraping sites automatically';
+    const html = cardHtml(goal({ text }), false);
+    expect(html).toContain('I want you to automate the recruiting process…');
+    expect(html).toContain(`title="${text}"`);
+    // A headline the operator set is the title on purpose: no ellipsis.
+    const set = cardHtml(goal({ text, headline: 'Automate recruiting' }), false);
+    expect(set).toContain('>Automate recruiting<');
+    expect(set).not.toContain('Automate recruiting…');
+  });
 });
 
 describe('toggleTask keeps the lane in step with the checkbox', () => {
