@@ -2013,7 +2013,7 @@ export function buildCronInboundMessage(
   text: string,
   channelKind: InboundMessage['channelKind'],
   opts: { messageId?: string; nowMs: number }
-): InboundMessage {
+): InboundMessage & { synthetic: true } {
   return {
     messageId: opts.messageId || `cron-${opts.nowMs}-${Math.random().toString(36).slice(2, 8)}`,
     channelKind,
@@ -2022,6 +2022,7 @@ export function buildCronInboundMessage(
     chatType: 'private',
     sender: { id: String(chatId), firstName: 'Cron' },
     timestamp: opts.nowMs,
+    synthetic: true,
   };
 }
 

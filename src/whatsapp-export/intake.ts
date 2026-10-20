@@ -12,7 +12,22 @@ import { ZipError, extractChatText } from './zip';
 
 export { isWhatsAppExportFileName as isWhatsAppExportDocument } from './parser';
 
-const FALLBACK_GROUP = 'WhatsApp group';
+/** `group: 3B Padres` / `grupo: 3B Padres` in the caption names an export whose file does not. */
+const CAPTION_GROUP_RE = /^\s*(?:group|grupo)\s*:\s*(.+?)\s*$/im;
+
+const UNNAMED_EXPORT =
+  'This export does not say which group it is (the file is just "_chat.txt"). Send it again with the caption "group: <group name>", or send the .zip exactly as WhatsApp made it (its name carries the group).';
+
+/**
+ * The group an export belongs to: the file name WhatsApp gave it, else a
+ * `group:` caption. Never a shared fallback: two unnamed exports of different
+ * groups used to land in one store, mixing their messages and cursors.
+ */
+export function exportGroupName(fileName?: string, caption?: string): string | undefined {
+  return (
+    groupNameFromFileName(fileName) ?? caption?.match(CAPTION_GROUP_RE)?.[1]?.trim() ?? undefined
+  );
+}
 
 export interface IntakeInput {
   botId: string;
@@ -43,8 +58,9 @@ export async function intakeWhatsAppExport(input: IntakeInput): Promise<MediaRes
       'This does not look like a WhatsApp chat export. In WhatsApp: open the group → ⋮ / group name → More → Export chat → Without media, and send me that file.'
     );
   }
+  const group = exportGroupName(input.fileName, input.caption);
+  if (!group) throw new MediaError(UNNAMED_EXPORT);
   const parsed = parseWhatsAppExport(text);
-  const group = groupNameFromFileName(input.fileName) ?? FALLBACK_GROUP;
   const r = input.store.ingest(input.botId, group, parsed.messages, {
     nowMs: input.nowMs,
     fileName: input.fileName ?? 'export.txt',

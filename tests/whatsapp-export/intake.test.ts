@@ -73,15 +73,45 @@ describe('intakeWhatsAppExport', () => {
     expect(r.text).toContain('No new messages since the previous export');
   });
 
-  test('a file without a group name uses the caption, else a generic name', async () => {
-    const r = await intakeWhatsAppExport({
-      botId: BOT,
-      fileName: '_chat.txt',
-      buffer: Buffer.from(CHAT),
-      store,
-      nowMs: NOW,
-    });
-    expect(r.text).toContain('"WhatsApp group"');
+  // Prepass finding (2026-10-20): every bare `_chat.txt` landed in one generic
+  // group, mixing two groups' messages and moving one cursor for both.
+  test('two bare _chat.txt exports of different groups are never merged', async () => {
+    const other = '16/10/26, 09:00 - Marta: Partido el sábado a las 10';
+    const bare = (buffer: Buffer, caption?: string) =>
+      intakeWhatsAppExport({
+        botId: BOT,
+        fileName: '_chat.txt',
+        caption,
+        buffer,
+        store,
+        nowMs: NOW,
+      });
+
+    // No name anywhere: refused with how to name it, nothing stored.
+    await expect(bare(Buffer.from(CHAT))).rejects.toBeInstanceOf(MediaError);
+    await expect(bare(Buffer.from(CHAT))).rejects.toThrow(/group: /);
+    expect(store.list(BOT)).toHaveLength(0);
+
+    // Named by caption: two groups, two stores.
+    const a = await bare(Buffer.from(CHAT), 'group: 3B Padres');
+    const b = await bare(Buffer.from(other), 'grupo: Fútbol Sub-10');
+    expect(a.text).toContain('"3B Padres"');
+    expect(b.text).toContain('"Fútbol Sub-10"');
+    expect(store.newMessages(BOT, '3b-padres', NOW)).toHaveLength(2);
+    expect(store.newMessages(BOT, 'futbol-sub-10', NOW)).toHaveLength(1);
+  });
+
+  test('an ordinary caption is an instruction, not a group name', async () => {
+    await expect(
+      intakeWhatsAppExport({
+        botId: BOT,
+        fileName: '_chat.txt',
+        caption: 'resumime esto',
+        buffer: Buffer.from(CHAT),
+        store,
+        nowMs: NOW,
+      })
+    ).rejects.toBeInstanceOf(MediaError);
   });
 
   test('text that is not an export is a MediaError the operator can read', async () => {

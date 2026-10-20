@@ -38,12 +38,20 @@ export type PersonalDataSource = Pick<
 const fail = (content: string): ToolResult => ({ success: false, content });
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** `YYYY-MM-DD` is local midnight; anything else goes through Date.parse. */
+/**
+ * `YYYY-MM-DD` is local midnight; anything else goes through Date.parse. A
+ * calendar date that does not exist (2026-02-31) is null, never rolled over.
+ */
 export function parseWhen(value: unknown): Date | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const v = value.trim();
-  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (day) return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]));
+  const day = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
+  if (day) {
+    const [y, m, d] = [Number(day[1]), Number(day[2]) - 1, Number(day[3])];
+    const local = new Date(y, m, d);
+    if (local.getFullYear() !== y || local.getMonth() !== m || local.getDate() !== d) return null;
+    if (day[0] === v) return local;
+  }
   const t = Date.parse(v);
   return Number.isFinite(t) ? new Date(t) : null;
 }

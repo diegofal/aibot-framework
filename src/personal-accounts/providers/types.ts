@@ -12,6 +12,22 @@ export type AccountApi = <T>(
   init?: { method?: string; json?: unknown; headers?: Record<string, string> }
 ) => Promise<T>;
 
+/**
+ * Pages a calendar listing reads at most (250 events each). A provider that
+ * keeps returning a next page past this is cut, not followed forever.
+ */
+export const MAX_EVENT_PAGES = 10;
+
+/**
+ * An all-day event's `YYYY-MM-DD` as local midnight (the process TZ is the
+ * operator's). UTC midnight showed it a day early west of UTC.
+ */
+export function allDayIso(date: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
+  if (!m) return toIso(date);
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toISOString();
+}
+
 type Unlabeled<T> = Omit<T, 'account' | 'accountLabel' | 'provider'>;
 export type RawEvent = Unlabeled<CalendarEvent>;
 export type RawMail = Unlabeled<MailSummary>;

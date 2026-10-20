@@ -126,6 +126,24 @@ describe('looksLikeWhatsAppExport', () => {
     expect(looksLikeWhatsAppExport('Dear diary,\ntoday was fine.\nThe end.')).toBe(false);
     expect(looksLikeWhatsAppExport('')).toBe(false);
   });
+
+  // Prepass finding (2026-10-20): only the first 30 lines were read, so a
+  // first message longer than that hid the second header.
+  test('a first message longer than 30 lines is still an export', () => {
+    const long = Array.from({ length: 40 }, (_, i) => `línea ${i + 1} del reglamento`);
+    const text = [
+      '16/10/26, 08:22 - Laura: Reglamento:',
+      ...long,
+      '16/10/26, 09:00 - Pablo: gracias',
+    ];
+    expect(looksLikeWhatsAppExport(text.join('\n'))).toBe(true);
+  });
+
+  test('prose that only mentions a date line deep down is not an export', () => {
+    const prose = Array.from({ length: 40 }, (_, i) => `Note ${i}`);
+    const text = [...prose, '16/10/26, 08:22 - Laura: hola', '16/10/26, 08:23 - P: x'];
+    expect(looksLikeWhatsAppExport(text.join('\n'))).toBe(false);
+  });
 });
 
 describe('file names', () => {

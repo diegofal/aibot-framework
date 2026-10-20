@@ -5,7 +5,14 @@
  * service persists the new one on every refresh.
  */
 import type { NewEventInput } from '../types';
-import { type AccountApi, type ProviderClient, type RawEvent, toIso } from './types';
+import {
+  type AccountApi,
+  MAX_EVENT_PAGES,
+  type ProviderClient,
+  type RawEvent,
+  allDayIso,
+  toIso,
+} from './types';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0/me';
 const UTC = { Prefer: 'outlook.timezone="UTC"' };
@@ -48,8 +55,12 @@ function toEvent(e: MsEvent): RawEvent {
   return {
     id: e.id,
     title: e.subject || '(no title)',
-    start: toIso(e.start?.dateTime, true),
-    end: toIso(e.end?.dateTime, true),
+    // Graph sends an all-day event as midnight in the requested zone (UTC).
+    start:
+      e.isAllDay && e.start?.dateTime
+        ? allDayIso(e.start.dateTime)
+        : toIso(e.start?.dateTime, true),
+    end: e.isAllDay && e.end?.dateTime ? allDayIso(e.end.dateTime) : toIso(e.end?.dateTime, true),
     allDay: e.isAllDay === true,
     ...(e.location?.displayName ? { location: e.location.displayName } : {}),
     ...(attendees.length ? { attendees } : {}),
@@ -98,8 +109,19 @@ export const microsoftProvider: ProviderClient = {
       $orderby: 'start/dateTime',
       $select: 'id,subject,start,end,isAllDay,isCancelled,location,attendees,webLink',
     });
-    const res = await api<{ value?: MsEvent[] }>(`${GRAPH}/calendarView?${q}`, { headers: UTC });
-    return (res.value ?? []).filter((e) => !e.isCancelled).map(toEvent);
+    // Every page: a busy week does not fit in one (see MAX_EVENT_PAGES).
+    const events: MsEvent[] = [];
+    let url: string | undefined = `${GRAPH}/calendarView?${q}`;
+    for (let page = 0; url && page < MAX_EVENT_PAGES; page++) {
+      const res: { value?: MsEvent[]; '@odata.nextLink'?: string } = await api(url, {
+        headers: UTC,
+      });
+      events.push(...(res.value ?? []));
+      // The token goes with every call: follow Graph's own links only.
+      const next = res['@odata.nextLink'];
+      url = next?.startsWith('https://graph.microsoft.com/') ? next : undefined;
+    }
+    return events.filter((e) => !e.isCancelled).map(toEvent);
   },
 
   async createEvent(api: AccountApi, input: NewEventInput) {

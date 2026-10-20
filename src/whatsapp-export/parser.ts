@@ -145,14 +145,17 @@ export function parseWhatsAppExport(text: string): WaParseResult {
   return { messages, skipped, dateOrder };
 }
 
-/** True when the text reads like an export: most early lines are message headers. */
+/**
+ * True when the text reads like an export: a message header within its first
+ * 30 non-empty lines and a second one anywhere after it (a one-line file needs
+ * only the one). The second may come late: a long first message used to push
+ * it out of a fixed 30-line window.
+ */
 export function looksLikeWhatsAppExport(text: string): boolean {
-  const lines = splitLines(text)
-    .filter((l) => l.trim())
-    .slice(0, 30);
-  if (lines.length === 0) return false;
-  const hits = lines.filter((l) => matchHeader(l)).length;
-  return hits >= Math.min(2, lines.length);
+  const lines = splitLines(text).filter((l) => l.trim());
+  const first = lines.slice(0, 30).findIndex((l) => matchHeader(l));
+  if (first < 0) return false;
+  return lines.length === 1 || lines.slice(first + 1).some((l) => matchHeader(l));
 }
 
 const EXPORT_NAME_RE = /whatsapp|^_chat\.txt$/i;

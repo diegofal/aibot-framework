@@ -4,7 +4,14 @@
  * refresh token.
  */
 import type { NewEventInput } from '../types';
-import { type AccountApi, type ProviderClient, type RawEvent, toIso } from './types';
+import {
+  type AccountApi,
+  MAX_EVENT_PAGES,
+  type ProviderClient,
+  type RawEvent,
+  allDayIso,
+  toIso,
+} from './types';
 
 const CAL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
@@ -46,7 +53,7 @@ interface GMessage {
 
 function eventTime(t: GEventTime | undefined): { iso: string; allDay: boolean } {
   if (t?.dateTime) return { iso: toIso(t.dateTime), allDay: false };
-  if (t?.date) return { iso: toIso(`${t.date}T00:00:00Z`), allDay: true };
+  if (t?.date) return { iso: allDayIso(t.date), allDay: true };
   return { iso: toIso(undefined), allDay: false };
 }
 
@@ -125,8 +132,15 @@ export const googleProvider: ProviderClient = {
       orderBy: 'startTime',
       maxResults: '250',
     });
-    const res = await api<{ items?: GEvent[] }>(`${CAL}?${q}`);
-    return (res.items ?? []).filter((e) => e.status !== 'cancelled').map(toEvent);
+    // Every page: a busy week does not fit in one (see MAX_EVENT_PAGES).
+    const items: GEvent[] = [];
+    for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+      const res = await api<{ items?: GEvent[]; nextPageToken?: string }>(`${CAL}?${q}`);
+      items.push(...(res.items ?? []));
+      if (!res.nextPageToken) break;
+      q.set('pageToken', res.nextPageToken);
+    }
+    return items.filter((e) => e.status !== 'cancelled').map(toEvent);
   },
 
   async createEvent(api: AccountApi, input: NewEventInput) {
