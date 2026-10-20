@@ -96,8 +96,13 @@ export async function renderCron(el) {
     if (selected) await openJob(selected.id);
     draw();
   };
+  // Only the latest open (or a close) decides the selection: an earlier, slower
+  // request that lands later is dropped.
+  let openSeq = 0;
   async function openJob(id) {
+    const seq = ++openSeq;
     const res = await api(`/api/cron/${encodeURIComponent(id)}`);
+    if (seq !== openSeq) return;
     if (!res || res.error) {
       showToast(res?.error || 'Could not open the job', { tone: 'danger' });
       selected = null;
@@ -106,6 +111,7 @@ export async function renderCron(el) {
     selected = res;
   }
   const close = () => {
+    openSeq++;
     selected = null;
     drawDrawer();
     drawGroups();
