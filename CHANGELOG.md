@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed (2026-10-20) — The worker sheet reads like a page
+- **Why.** Operator: "what is a worker, and why the UI looks so ugly?" The sheet put the goal's whole brief, the raw run id and the attempt in one grey subtitle, stretched the step badge into a tall pill, listed every tool path inline after a summary that already repeated the tools, and cut the question at 300 chars with no way to answer it.
+- **Sheet** (`workerSheetBody` in `web/pages/workers-helpers.js`, CSS `.wk-*` in `web/style.css`): a one-line explainer of what a worker is; goal on one clipped line (full text as tooltip) above the task as title; origin, attempt and running time as facts; the run id at the foot in mono.
+- **Budget** as three meters (steps, tool calls, time) that turn amber at 70 % and red at 90 %.
+- **Waiting** callout with the whole question (… when it was cut at 300) and "Answer in Needs You" (`#/needs/inbox`, or `#/needs/permissions` for an approval). How a run ended is a callout too.
+- **Steps** as a numbered timeline: status badge, duration and tool-call count in the head, the report note (not the `kind: note — tools: …` summary), one chip per tool with ×n, the paths it touched in the tooltip, failed tools in red.
+- Tests: `tests/web/workers-helpers.test.ts`.
+
 ### Fixed (2026-10-20) — A goal's full brief is edited in place; cut card headlines say so
 - **Why.** Operator: "I wrote all this text and it was cut off in the card… I should be able to click/edit it inline." The card headline derived from a long goal stops at its first clause break with nothing marking it as cut, and the drawer brief was clamped to three lines behind Edit → Save brief.
 - **Card** (`cardHtml`): a derived headline shorter than the brief ends in "…" and carries the full text as tooltip; a headline the operator set is left as is.

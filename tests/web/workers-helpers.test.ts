@@ -195,12 +195,12 @@ describe('workerSheetBody', () => {
     const html = workerSheetBody(detail, NOW);
     expect(html).toContain('Find 3 companies running at L3+');
     expect(html).toContain('Dark factory research');
-    expect(html).toContain('attempt 1');
+    expect(html).toContain('Attempt 1');
     expect(html).toContain('data-open-cycle="c-9"');
     expect(html).toContain('data-bot-id="b1"');
-    expect(html).toContain('3 / 8 steps');
-    expect(html).toContain('7 / 40 tool calls');
-    expect(html).toContain('web_search ×2');
+    expect(html).toContain('Steps');
+    expect(html).toContain('Tool calls');
+    expect(html).toContain('web_search<b>×2</b>');
     expect(html).toContain('step 1');
     expect(html).toContain('progress');
     expect(html).toContain('running');
@@ -224,7 +224,7 @@ describe('workerSheetBody', () => {
     expect(html).toContain('data-worker-retry="r-7c1e"');
     expect(html).not.toContain('data-worker-stop');
     expect(html).toContain('Needs a login');
-    expect(html).toContain('started by you');
+    expect(html).toContain('Started by you');
     expect(html).not.toContain('data-open-cycle');
   });
 
@@ -242,6 +242,49 @@ describe('workerSheetBody', () => {
     );
     expect(html).toContain('Which?');
     expect(html).toContain('No steps yet');
+    expect(html).toContain('href="#/needs/inbox"');
+    expect(html).toContain('Waiting for your answer');
+  });
+
+  it('an approval wait links to permissions; a question cut at 300 chars says so', () => {
+    const html = workerSheetBody(
+      {
+        run: run({
+          status: 'waiting',
+          wait: { kind: 'approval', id: 'p', question: 'x'.repeat(300), since: 'x' },
+        }),
+        steps: [],
+      },
+      NOW
+    );
+    expect(html).toContain('href="#/needs/permissions"');
+    expect(html).toContain(`${'x'.repeat(300)}…`);
+  });
+
+  it('a step shows its note, not the raw summary, and tool targets only in the tooltip', () => {
+    const html = workerSheetBody(
+      {
+        run: run(),
+        steps: [
+          {
+            n: 1,
+            startedAt: '2026-10-12T09:54:00Z',
+            endedAt: '2026-10-12T09:56:00Z',
+            summary: 'progress: Wrote it — tools: file_read ×2',
+            report: { kind: 'progress', note: 'Wrote it' },
+            toolCalls: [
+              { name: 'file_read', target: 'a.md', ok: true },
+              { name: 'file_read', target: 'b.md', ok: true },
+            ],
+          },
+        ],
+      },
+      NOW
+    );
+    expect(html).toContain('Wrote it');
+    expect(html).not.toContain('— tools:');
+    expect(html).toContain('title="a.md\nb.md"');
+    expect(html).toContain('2 min · 2 tool calls');
   });
 });
 

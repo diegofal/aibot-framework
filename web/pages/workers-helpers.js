@@ -177,77 +177,141 @@ export function workersStrip(runs, { nowMs = Date.now() } = {}) {
   </div>`;
 }
 
-function toolTally(calls) {
-  const counts = new Map();
+/** One chip per tool name (×n), the targets it touched in the tooltip. */
+function toolChips(calls) {
+  const byName = new Map();
   for (const c of Array.isArray(calls) ? calls : []) {
-    const key = c.target ? `${c.name} ${c.target}` : c.name;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    const e = byName.get(c.name) ?? { n: 0, failed: 0, targets: [] };
+    e.n += 1;
+    if (c.ok === false) e.failed += 1;
+    if (c.target && !e.targets.includes(c.target)) e.targets.push(c.target);
+    byName.set(c.name, e);
   }
-  return [...counts].map(([k, n]) => (n > 1 ? `${k} ×${n}` : k)).join(' · ');
+  return [...byName]
+    .map(([name, e]) => {
+      const title = e.targets.length ? ` title="${esc(e.targets.join('\n'))}"` : '';
+      const cls = e.failed ? ' is-failed' : '';
+      return `<span class="wk-tool${cls}"${title}>${esc(name)}${e.n > 1 ? `<b>×${e.n}</b>` : ''}</span>`;
+    })
+    .join('');
 }
 
-function stepRow(s, run) {
+const STEP_KIND = {
+  progress: ['progress', 'accent'],
+  done: ['done', 'ok'],
+  blocked: ['blocked', 'warn'],
+};
+
+function stepRow(s, run, nowMs) {
   const ended = Boolean(s.endedAt);
-  const kind = s.error
+  const [label, tone] = s.error
     ? ['error', 'danger']
     : s.report?.kind
-      ? [s.report.kind, s.report.kind === 'blocked' ? 'warn' : 'ok']
+      ? (STEP_KIND[s.report.kind] ?? [s.report.kind, 'muted'])
       : ended
-        ? ['ended', 'muted']
+        ? ['no report', 'muted']
         : run.active
-          ? ['running', 'accent']
+          ? ['working', 'accent']
           : ['cut short', 'muted'];
-  const text = s.summary || s.report?.note || (ended ? '' : 'Working…');
-  const tools = toolTally(s.toolCalls);
-  return `<div class="wk-step">
-    <span class="wk-step-n">step ${esc(s.n)}</span>
-    <span class="wk-step-body">${esc(text)}${tools ? ` <span class="text-dim">${esc(tools)}</span>` : ''}${s.error ? `<span class="wk-step-error">${esc(s.error)}</span>` : ''}</span>
-    ${badge(kind[0], kind[1])}
+  const live = !ended && run.active && !s.error;
+  const text = s.report?.note || (ended ? s.summary || '' : 'Working…');
+  const start = ms(s.startedAt);
+  const end = ms(s.endedAt) ?? (live ? nowMs : null);
+  const took = start !== null && end !== null ? formatElapsed(end - start) : '';
+  const tools = toolChips(s.toolCalls);
+  const calls = Array.isArray(s.toolCalls) ? s.toolCalls.length : 0;
+  return `<li class="wk-step is-${esc(tone)}${live ? ' is-live' : ''}">
+    <span class="wk-step-dot" aria-hidden="true">${esc(s.n)}</span>
+    <div class="wk-step-card">
+      <div class="wk-step-head">
+        <span class="wk-step-n">step ${esc(s.n)}</span>
+        ${badge(label, tone)}
+        <span class="wk-step-meta">${esc([took, calls ? `${calls} tool call${calls === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · '))}</span>
+      </div>
+      ${text ? `<p class="wk-step-text">${esc(text)}</p>` : ''}
+      ${tools ? `<div class="wk-tools">${tools}</div>` : ''}
+      ${s.error ? `<div class="wk-step-error">${esc(s.error)}</div>` : ''}
+    </div>
+  </li>`;
+}
+
+function meter(label, used, total, fmt = String) {
+  const has = typeof total === 'number' && total > 0;
+  const p = has ? Math.min(100, Math.round(((used ?? 0) / total) * 100)) : 0;
+  const tone = p >= 90 ? ' is-hot' : p >= 70 ? ' is-warm' : '';
+  return `<div class="wk-meter${tone}">
+    <span class="wk-meter-label">${esc(label)}</span>
+    <span class="wk-meter-value">${esc(fmt(used ?? 0))}<span class="wk-meter-of"> / ${esc(has ? fmt(total) : '?')}</span></span>
+    <span class="wk-bar"><i style="width:${p}%"></i></span>
   </div>`;
 }
 
-function usage(run) {
+function budgetMeters(run) {
   const b = run.budget ?? {};
   const u = run.used ?? {};
-  const parts = [
-    `${u.steps ?? 0} / ${b.steps ?? '?'} steps`,
-    `${u.toolCalls ?? 0} / ${b.toolCalls ?? '?'} tool calls`,
-  ];
-  if (b.wallMs) parts.push(`${formatElapsed(u.wallMs ?? 0)} of ${formatElapsed(b.wallMs)}`);
-  return parts.join(' · ');
+  return `<div class="wk-meters" aria-label="Budget used">
+    ${meter('Steps', u.steps, b.steps)}
+    ${meter('Tool calls', u.toolCalls, b.toolCalls)}
+    ${b.wallMs ? meter('Time', u.wallMs, b.wallMs, formatElapsed) : ''}
+  </div>`;
 }
 
-/** The worker sheet: header, budget, journal per step, Stop / Retry. */
+/** Where the operator answers what a waiting run asked. */
+function answerHref(kind) {
+  return kind === 'approval' ? '#/needs/permissions' : '#/needs/inbox';
+}
+
+/** The worker sheet: header, budget, the question it waits on, journal per step, Stop / Retry. */
 export function workerSheetBody(detail, nowMs = Date.now()) {
   const raw = detail?.run ?? {};
   const m = workerModel(raw);
-  const cycle = m.dispatchCycleId
-    ? `<button type="button" class="wk-link" data-open-cycle="${esc(m.dispatchCycleId)}" data-bot-id="${esc(m.botId ?? '')}">dispatched by a cycle</button>`
-    : '<span>started by you</span>';
+  const origin = m.dispatchCycleId
+    ? `<button type="button" class="wk-link" data-open-cycle="${esc(m.dispatchCycleId)}" data-bot-id="${esc(m.botId ?? '')}">Dispatched by a cycle</button>`
+    : '<span>Started by you</span>';
   const actions = m.active
     ? `<button type="button" class="btn btn-sm btn-danger" data-worker-stop="${esc(m.runId)}">Stop</button>`
     : `<button type="button" class="btn btn-sm" data-worker-retry="${esc(m.runId)}">Retry</button>`;
   const steps = Array.isArray(detail?.steps) ? detail.steps : [];
+  const facts = [
+    origin,
+    `<span>Attempt ${esc(m.attempt ?? 1)}</span>`,
+    m.sinceMs !== null
+      ? `<span>${m.active ? 'Running for' : 'Started'} ${esc(elapsedOf(m, nowMs))}${m.active ? '' : ' ago'}</span>`
+      : '',
+  ].filter(Boolean);
   const outcome = raw.outcome?.note
-    ? `<div class="wk-outcome">${badge(raw.outcome.kind ?? m.status, workerStatusTone(m.status))} ${esc(raw.outcome.note)}</div>`
+    ? `<div class="wk-callout is-${esc(workerStatusTone(m.status))}">
+        <div class="wk-callout-head">${badge(raw.outcome.kind ?? m.status, workerStatusTone(m.status))} How it ended</div>
+        <p>${esc(raw.outcome.note)}</p>
+      </div>`
     : '';
+  const waitKind = raw.wait?.kind ?? 'ask';
+  const clipped = typeof m.question === 'string' && m.question.length >= 300;
   const wait =
     m.status === 'waiting' && m.question
-      ? `<div class="wk-wait">${pulse(true)} Waiting on you: ${esc(m.question)}</div>`
+      ? `<div class="wk-callout is-warn">
+          <div class="wk-callout-head">${pulse(true)} ${waitKind === 'approval' ? 'Waiting for your approval' : 'Waiting for your answer'}</div>
+          <p>${esc(m.question)}${clipped ? '…' : ''}</p>
+          <a class="btn btn-sm" href="${answerHref(waitKind)}">${waitKind === 'approval' ? 'Decide in Needs You' : 'Answer in Needs You'} →</a>
+        </div>`
       : '';
+  const done = steps.filter((s) => s.endedAt).length;
   return `<div class="wk-sheet">
+    <p class="wk-sheet-intro">A worker takes one task off a goal and works it in short steps until it is done, blocked, or out of budget.</p>
     <div class="wk-sheet-head">
-      <div>
-        <div class="wk-sheet-title">${esc(m.taskText || m.taskId || 'Task')}</div>
-        <div class="wk-sheet-sub text-dim">${m.goalTitle ? `${esc(m.goalTitle)} · ` : ''}${esc(m.runId)} · attempt ${esc(m.attempt ?? 1)} · ${cycle}${m.sinceMs !== null ? ` · ${esc(elapsedOf(m, nowMs))}` : ''}</div>
+      <div class="wk-sheet-main">
+        ${m.goalTitle ? `<div class="wk-sheet-goal" title="${esc(m.goalTitle)}"><span>Goal</span>${esc(m.goalTitle)}</div>` : ''}
+        <h3 class="wk-sheet-title">${esc(m.taskText || m.taskId || 'Task')}</h3>
+        <div class="wk-sheet-facts">${facts.join('<span class="wk-sep" aria-hidden="true">·</span>')}</div>
       </div>
       <span class="wk-sheet-actions">${badge(m.status, workerStatusTone(m.status), { dot: m.active })}${actions}</span>
     </div>
-    <div class="wk-sheet-usage text-dim">Budget used: ${esc(usage(raw))}</div>
-    <div class="wk-bar"><i style="width:${pct(m)}%"></i></div>
     ${wait}${outcome}
+    ${budgetMeters(raw)}
     ${whyPanel(detail?.why, { nowMs, botId: m.botId ?? undefined })}
-    <div class="wk-steps">${steps.length ? steps.map((s) => stepRow(s, m)).join('') : '<div class="text-dim wk-empty">No steps yet.</div>'}</div>
+    <div class="wk-section-head wk-steps-head">Steps <span class="home-board-count">${done}${m.steps ? ` / ${m.steps}` : ''}</span></div>
+    ${steps.length ? `<ol class="wk-steps">${steps.map((s) => stepRow(s, m, nowMs)).join('')}</ol>` : '<div class="text-dim wk-empty">No steps yet.</div>'}
+    <div class="wk-sheet-id" title="Run id">${esc(m.runId)}</div>
   </div>`;
 }
 
