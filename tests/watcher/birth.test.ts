@@ -630,3 +630,125 @@ describe('birth: bookkeeping lines of the daily logs', () => {
     expect(texts).toEqual(['The supplier in Rosario closes on Mondays']);
   });
 });
+
+describe('linking: an embedder that is down', () => {
+  const refused = () => Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:11434'));
+  function addPending(graph: Graph, n: number) {
+    for (let i = 0; i < n; i++)
+      graph.addNeuron({
+        kind: 'fact',
+        text: `pending fact ${i}`,
+        support: [],
+        createdBy: 'watcher',
+      });
+  }
+
+  test('linkUnembedded stops at the first batch where every embed failed, even with vectors in the graph', async () => {
+    const { d, graph } = await born();
+    const first = graph.list()[0];
+    graph.setEmbedding(first.id, [1, 0, 0]);
+    addPending(graph, 100);
+    let calls = 0;
+    const res = await linkUnembedded({
+      ...d,
+      embed: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 5));
+        throw refused();
+      },
+    });
+    expect(res.embedded).toBe(0);
+    expect(res.failure).toContain('ECONNREFUSED');
+    // concurrency 2: the two embeds in flight, never the rest of the batch nor the next batches
+    expect(calls).toBeLessThanOrEqual(2);
+    expect(res.status).toBe('ok');
+  });
+
+  test('linkUnembedded keeps the first real error when a later batch fails after some embedded', async () => {
+    const { d, graph } = await born();
+    addPending(graph, 80);
+    let calls = 0;
+    const res = await linkUnembedded({
+      ...d,
+      embed: async () => {
+        calls++;
+        if (calls > 40) throw refused();
+        return [1, 0, 0];
+      },
+    });
+    expect(res.embedded).toBeGreaterThan(0);
+    expect(res.failure).toContain('ECONNREFUSED');
+  });
+
+  test('linkMissing with the embedder refusing: the row names the real error and never claims a placement', async () => {
+    const { d, graph, rows } = await born();
+    graph.setEmbedding(graph.list()[0].id, [1, 0, 0]);
+    const before = rows.length;
+    const res = await linkMissing({
+      ...d,
+      embed: async () => {
+        throw refused();
+      },
+    });
+    expect(res?.embedded).toBe(0);
+    expect(res?.relaidOut).toBe(false);
+    const added = rows.slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0].op).toBe('maintain:link');
+    expect(added[0].text).toContain('ECONNREFUSED');
+    expect(added[0].text).not.toContain('returned no vectors');
+    expect(added[0].text).not.toContain('Placing neurons');
+  });
+
+  test('linkMissing probes once with a short timeout: a never-answering embedder costs one call', async () => {
+    const { d, rows } = await born();
+    let calls = 0;
+    const started = Date.now();
+    const res = await linkMissing(
+      {
+        ...d,
+        embed: () => {
+          calls++;
+          return new Promise<number[]>(() => {});
+        },
+      },
+      { probeTimeoutMs: 20 }
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(calls).toBe(1);
+    expect(res?.embedded).toBe(0);
+    expect(res?.failure).toMatch(/did not answer within 20 ms/);
+    expect(rows.at(-1)?.op).toBe('maintain:link');
+    expect(rows.at(-1)?.text).toContain('did not answer within 20 ms');
+  });
+
+  test('linkMissing that embedded says it relaid out', async () => {
+    const { d } = await born();
+    const res = await linkMissing({ ...d, embed: async () => [1, 0, 0] });
+    expect(res?.relaidOut).toBe(true);
+  });
+});
+
+describe('birth: tagged error lines go through the one bookkeeping rule', () => {
+  test('[error] / [agent-loop] / [tool-error] daily lines are skipped', async () => {
+    const { d, graph } = deps();
+    writeFileSync(
+      join(root, 'souls', 'b1', 'memory', '2026-10-03.md'),
+      [
+        '- [08:00] [error] Claude CLI exited with code 1',
+        '- [08:01] [agent-loop] Ran 3 tools',
+        '- [08:02] [tool-error] web_fetch failed on wiley.com',
+        '- [08:03] [ventas] El operador confirmó que el informe trimestral fue enviado al cliente Acme',
+        '',
+      ].join('\n')
+    );
+    await continueBirth(d, beginBirth(d));
+    const texts = graph
+      .list()
+      .filter((n) => n.meta?.source === 'memory/2026-10-03.md')
+      .map((n) => n.text);
+    expect(texts).toEqual([
+      'El operador confirmó que el informe trimestral fue enviado al cliente Acme',
+    ]);
+  });
+});

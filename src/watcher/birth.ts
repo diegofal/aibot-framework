@@ -44,6 +44,7 @@ import {
   narrateHistory,
   narrateLateLink,
   narrateLearned,
+  narrateLinkFailed,
   narrateLinking,
   narrateMetBot,
   narrateMetPerson,
@@ -70,6 +71,8 @@ import {
 
 const DAY_MS = 86_400_000;
 const EMBED_BATCH = 32;
+/** The one embed before a backfill: an embedder that is down shows it within this. */
+export const EMBED_PROBE_TIMEOUT_MS = 5000;
 const RELATED_PER_NEURON = 5;
 const TEXT_MAX = 300;
 
@@ -555,9 +558,16 @@ const DAILY_LINE = /^\s*-\s*\[\d{1,2}:\d{2}\]\s+(.+)$/;
 /** Operational traces a bot's daily log carries next to real facts. */
 const BOOKKEEPING_MARKS: RegExp[] = [
   /\bask_human\s+[0-9a-f]{6,}\b/i,
-  /\benviad[ao]s?\b/i,
+  // "enviado/enviada" only in a bookkeeping shape (a tool name or an id next
+  // to it, or a question/message sent to the operator), never the bare word:
+  // "el informe fue enviado al cliente" is a fact.
+  /\b(?:ask_\w+|send_\w+|[0-9a-f]{6,})\s+enviad[ao]s?\b/i,
+  /\benviad[ao]s?\s*\(?\s*id\s*[:#]?\s*[0-9a-f]{6,}/i,
+  /\b(?:pregunta|mensaje|recordatorio|notificaci[oó]n|aviso)e?s?\s+enviad[ao]s?\s+al\s+operador\b/i,
   /\[agent-loop\]/i,
   /\[error\]/i,
+  // a leading tag that names an error or the agent loop: "[tool-error] …"
+  /^\[[^\]]*(?:agent-loop|error)[^\]]*\]/i,
   /\bcron-[\w-]+/i,
   /\bsend_proactive/i,
   /\btask_progress\b/i,
@@ -567,7 +577,8 @@ const ID_RE = /\b[tg]-[0-9a-f]{6,8}\b/gi;
 
 /**
  * A daily-log line that is bookkeeping, not a fact: an `ask_human <id>` /
- * "enviada" trace, an `[agent-loop]` / `[error]` row, a `cron-…` run, a
+ * "<tool|id> enviada" / "mensaje enviado al operador" trace, an
+ * `[agent-loop]` / `[error]` (or `[…error…]`-tagged) row, a `cron-…` run, a
  * `send_proactive` / `task_progress` call, or a line that is only task/goal
  * ids or only URLs. Birth's memory stage skips these. Pure.
  */
@@ -611,9 +622,8 @@ function stageMemory(ctx: StageCtx): void {
       for (const line of content.split('\n')) {
         const m = DAILY_LINE.exec(line);
         if (!m) continue;
-        const tagged = /^\[([^\]]+)\]\s+(.+)$/.exec(m[1].trim());
-        if (tagged && /agent-loop|error/i.test(tagged[1])) continue;
         if (isBookkeepingLine(m[1])) continue;
+        const tagged = /^\[([^\]]+)\]\s+(.+)$/.exec(m[1].trim());
         facts.push({
           text: (tagged ? tagged[2] : m[1]).trim(),
           source: `memory/${file}`,
@@ -783,9 +793,14 @@ export interface LinkResult {
   embedded: number;
   /** `related` edges this call added. */
   edges: number;
-  /** The first embedding error, when nothing could be embedded. */
+  /**
+   * The first real embedding error of the call (also when some neurons were
+   * embedded before it): a batch where every embed failed ends the call.
+   */
   failure?: string;
   cancelled?: boolean;
+  /** `linkMissing` already recomputed the layout (callers must not relayout again). */
+  relaidOut?: boolean;
 }
 
 /**
@@ -814,32 +829,35 @@ export async function linkUnembedded(
       3
   );
   const pending = graph.list().filter((n) => !n.archivedAt && !graph.getEmbedding(n.id));
-  let embeddedAny = graph.embeddedIds().length > 0;
   for (let i = 0; i < pending.length; i += EMBED_BATCH) {
     if (deps.isCancelled?.()) return { ...result, cancelled: true };
     const batch = pending.slice(i, i + EMBED_BATCH);
     let failure: unknown;
+    let batchEmbedded = 0;
     await mapLimit(batch, concurrency, async (n) => {
       // A cancelled run neither starts another embedding nor stores one that
       // settled after the stop: its writes belong to no live run.
       if (deps.isCancelled?.()) return;
+      // An embedder that failed and has embedded nothing in this batch is down:
+      // do not queue the rest of the batch behind its connect timeout.
+      if (failure && batchEmbedded === 0) return;
       try {
         const vec = await embed(`${n.kind}: ${n.text}`);
         if (deps.isCancelled?.()) return;
         if (Array.isArray(vec) && vec.length > 0) {
           graph.setEmbedding(n.id, vec);
           result.embedded++;
+          batchEmbedded++;
         }
       } catch (err) {
         failure ??= err;
       }
     });
     if (deps.isCancelled?.()) return { ...result, cancelled: true };
-    if (failure && !embeddedAny && graph.embeddedIds().length === 0) {
-      result.failure = failure instanceof Error ? failure.message : String(failure);
-      return done();
-    }
-    embeddedAny = true;
+    if (failure) result.failure ??= failure instanceof Error ? failure.message : String(failure);
+    // Every embed of the batch failed: stop here (whatever vectors the graph
+    // already had); the next maintenance tries again.
+    if (failure && batchEmbedded === 0) return done();
     const edgeIds: string[] = [];
     for (const n of batch) {
       const vec = graph.getEmbedding(n.id);
@@ -870,25 +888,55 @@ export async function linkUnembedded(
  * live neuron already has a vector; otherwise one `maintain:link` row, a
  * relayout when something was embedded, and `birth.json` updated to `ok`.
  */
-export async function linkMissing(deps: BirthDeps): Promise<LinkResult | undefined> {
-  if (!deps.embed) return undefined;
-  if (!deps.graph.list().some((n) => !n.archivedAt && !deps.graph.getEmbedding(n.id))) {
-    return undefined;
+export async function linkMissing(
+  deps: BirthDeps,
+  opts: { probeTimeoutMs?: number } = {}
+): Promise<LinkResult | undefined> {
+  const embed = deps.embed;
+  if (!embed) return undefined;
+  const pending = deps.graph
+    .list()
+    .filter((n) => !n.archivedAt && !deps.graph.getEmbedding(n.id)).length;
+  if (pending === 0) return undefined;
+  // One embed with a short timeout first: an embedder that is down costs one
+  // call, not a connect timeout per neuron.
+  const probeFailure = await probeEmbedder(embed, opts.probeTimeoutMs ?? EMBED_PROBE_TIMEOUT_MS);
+  if (deps.isCancelled?.()) {
+    return { status: 'no-embeddings', embedded: 0, edges: 0, cancelled: true };
   }
-  const res = await linkUnembedded(deps);
+  const res: LinkResult = probeFailure
+    ? {
+        status: deps.graph.embeddedIds().length > 0 ? 'ok' : 'no-embeddings',
+        embedded: 0,
+        edges: 0,
+        failure: probeFailure,
+      }
+    : await linkUnembedded(deps);
   if (res.cancelled) return res;
+  if (res.failure) {
+    deps.logger.warn(
+      { err: res.failure, embedded: res.embedded, pending },
+      'Watcher: embedding the neurons without a vector failed'
+    );
+  }
+  res.relaidOut = res.embedded > 0;
   if (res.embedded > 0) {
     relayout(deps.graph);
     deps.log.say(
       'birth',
       'maintain:link',
-      narrateLateLink({ embedded: res.embedded, edges: res.edges })
+      narrateLateLink({
+        embedded: res.embedded,
+        edges: res.edges,
+        ...(res.failure ? { failure: res.failure } : {}),
+      })
     );
   } else {
+    // Nothing was embedded, so nothing moved: say why, never "placing by kind".
     deps.log.say(
       'birth',
       'maintain:link',
-      narrateNoEmbeddings(res.failure ?? 'the embedder returned no vectors')
+      narrateLinkFailed({ pending, reason: res.failure ?? 'the embedder returned no vectors' })
     );
   }
   const record = readBirthRecord(deps.dir);
@@ -896,6 +944,34 @@ export async function linkMissing(deps: BirthDeps): Promise<LinkResult | undefin
     writeBirthRecord(deps, { ...record, linkStatus: 'ok' });
   }
   return res;
+}
+
+/** Undefined when one embed answered with a vector within `timeoutMs`; otherwise why not. Never throws. */
+async function probeEmbedder(
+  embed: NonNullable<BirthDeps['embed']>,
+  timeoutMs: number
+): Promise<string | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<string>((resolve) => {
+    timer = setTimeout(
+      () => resolve(`the embedder did not answer within ${timeoutMs} ms`),
+      timeoutMs
+    );
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(() => embed('probe'))
+        .then(
+          (vec) =>
+            Array.isArray(vec) && vec.length > 0 ? undefined : 'the embedder returned no vectors',
+          (err: unknown) => (err instanceof Error ? err.message : String(err))
+        ),
+      timeout,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function stageDone(ctx: StageCtx): void {

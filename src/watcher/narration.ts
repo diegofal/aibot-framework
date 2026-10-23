@@ -112,8 +112,20 @@ export function narrateLinking(input: { neurons: number; edges: number }): strin
 }
 
 /** Daily maintenance embedded neurons birth (or a later sense) left without a vector. */
-export function narrateLateLink(input: { embedded: number; edges: number }): string {
-  return `Embedded ${plural(input.embedded, 'neuron', 'neurons')} I had not embedded yet: ${plural(input.edges, 'new related edge', 'new related edges')}.`;
+export function narrateLateLink(input: {
+  embedded: number;
+  edges: number;
+  failure?: string;
+}): string {
+  const base = `Embedded ${plural(input.embedded, 'neuron', 'neurons')} I had not embedded yet: ${plural(input.edges, 'new related edge', 'new related edges')}.`;
+  return input.failure
+    ? `${base} Stopped at an embedding error (${input.failure}); the rest at the next maintenance.`
+    : base;
+}
+
+/** Maintenance embedded nothing: the real reason; nothing was re-placed. */
+export function narrateLinkFailed(input: { pending: number; reason: string }): string {
+  return `Could not embed the ${plural(input.pending, 'neuron', 'neurons')} without a vector (${input.reason}). I will try again at the next maintenance.`;
 }
 
 export function narrateNoEmbeddings(reason: string): string {

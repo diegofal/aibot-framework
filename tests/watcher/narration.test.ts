@@ -9,6 +9,7 @@ import {
   narrateIntrospection,
   narrateLateLink,
   narrateLearned,
+  narrateLinkFailed,
   narrateLinking,
   narrateMetBot,
   narrateMetPerson,
@@ -130,6 +131,16 @@ describe('narration', () => {
     expect(narrateLateLink({ embedded: 120, edges: 1 })).toBe(
       'Embedded 120 neurons I had not embedded yet: 1 new related edge.'
     );
+    expect(narrateLateLink({ embedded: 32, edges: 4, failure: 'ECONNREFUSED' })).toBe(
+      'Embedded 32 neurons I had not embedded yet: 4 new related edges. Stopped at an embedding error (ECONNREFUSED); the rest at the next maintenance.'
+    );
+  });
+  test('narrateLinkFailed names the real reason and claims no placement', () => {
+    const text = narrateLinkFailed({ pending: 300, reason: 'connect ECONNREFUSED' });
+    expect(text).toBe(
+      'Could not embed the 300 neurons without a vector (connect ECONNREFUSED). I will try again at the next maintenance.'
+    );
+    expect(text).not.toContain('Placing');
   });
   test('narrateNoEmbeddings', () => {
     expect(narrateNoEmbeddings('no embedding model configured')).toBe(

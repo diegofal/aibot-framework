@@ -5,6 +5,10 @@ describe('isBookkeepingLine (daily-log lines birth skips)', () => {
   const bookkeeping = [
     'ask_human 264a4318 enviada: el recordatorio ÚNICO del dry run GitHub t-cff5b1 …',
     'Pregunta enviada al operador sobre el presupuesto',
+    'Mensaje enviado al operador: resumen semanal',
+    'send_message enviado a Ana',
+    'Recordatorio enviado (id 9f3a2c1b)',
+    '[tool-error] web_fetch failed on wiley.com',
     '[agent-loop] Ran 3 tools, plan: research suppliers',
     '[ERROR] Claude CLI exited with code 1',
     'cron-8f2a1c-1729700000000-ab12 ran: daily digest',
@@ -25,6 +29,9 @@ describe('isBookkeepingLine (daily-log lines birth skips)', () => {
     'Acme raised prices 12% in October (source https://acme.example/prices)',
     'Goal g-1a2b3c4d is about the newsletter launch',
     'El cliente pidió humanizar el tono del sitio',
+    'El operador confirmó que el informe trimestral fue enviado al cliente Acme',
+    'La factura fue enviada el viernes por correo',
+    'Los presupuestos enviados en septiembre siguen sin respuesta',
   ];
   for (const line of facts) {
     test(`keeps: ${line}`, () => expect(isBookkeepingLine(line)).toBe(false));

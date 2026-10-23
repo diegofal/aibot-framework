@@ -1434,6 +1434,102 @@ describe('Watcher: embedding what birth could not', () => {
     expect(watcher.graph.embeddedIds().length).toBe(watcher.graph.liveCount());
     await watcher.stop();
   });
+
+  test('maintenance that embedded publishes one layout, not two', async () => {
+    let up = false;
+    const { watcher, events } = make({
+      embed: async () => {
+        if (!up) throw new Error('ollama down');
+        return [1, 0, 0];
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    up = true;
+    const layouts = () => events.filter((e) => e.type === 'watcher:layout').length;
+    const before = layouts();
+    await watcher.maintainNow();
+    expect(watcher.state().linkStatus).toBe('ok');
+    expect(layouts()).toBe(before + 1);
+    await watcher.stop();
+  });
+
+  async function until(check: () => boolean, ms = 1000): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (check()) return true;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    return check();
+  }
+
+  async function bornWithoutEmbeddings() {
+    const first = make();
+    await first.watcher.start();
+    await first.watcher.idle();
+    await first.watcher.stop();
+    t += 1000;
+  }
+
+  const fake = { chat: async () => ({ text: '{}' }) } as unknown as LLMClient;
+  const llm = {
+    notice: { client: fake, model: 'claude-haiku-5-5', backend: 'claude-cli' as const },
+    integrate: { client: fake, model: 'claude-opus-5-5', backend: 'claude-cli' as const },
+  };
+  const tiersOn = {
+    notice: { ...WATCHER_DEFAULTS.notice, enabled: true },
+    integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true },
+  };
+
+  test('an embedder that never answers does not hold the start: sense and tier timers come first', async () => {
+    await bornWithoutEmbeddings();
+    let calls = 0;
+    const { watcher } = make(
+      {
+        llm,
+        stopTimeoutMs: 30,
+        embed: () => {
+          calls++;
+          return new Promise<number[]>(() => {});
+        },
+      },
+      tiersOn
+    );
+    await watcher.start();
+    expect(await until(() => watcher.state().phase === 'sense')).toBe(true);
+    expect(watcher.state().timers).toEqual({ notice: true, integrate: true });
+    // the backfill is running (its probe is out), not finished
+    expect(calls).toBe(1);
+    expect(watcher.log.recent(50).some((r) => r.op === 'maintain:link')).toBe(false);
+    await watcher.stop();
+    expect(watcher.state().running).toBe(false);
+  });
+
+  test('a slow-failing embedder at start: sense first, then one probe and one row with the real error', async () => {
+    await bornWithoutEmbeddings();
+    let calls = 0;
+    const { watcher } = make(
+      {
+        llm,
+        embed: async () => {
+          calls++;
+          await new Promise((r) => setTimeout(r, 30));
+          throw new Error('connect ECONNREFUSED 127.0.0.1:11434');
+        },
+      },
+      tiersOn
+    );
+    await watcher.start();
+    expect(await until(() => watcher.state().phase === 'sense')).toBe(true);
+    expect(watcher.state().timers).toEqual({ notice: true, integrate: true });
+    await watcher.idle();
+    expect(calls).toBe(1);
+    const rows = watcher.log.recent(50).filter((r) => r.op === 'maintain:link');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text).toContain('ECONNREFUSED');
+    expect(watcher.state().phase).toBe('sense');
+    await watcher.stop();
+  });
 });
 
 describe('Watcher: last tick follows sensing', () => {

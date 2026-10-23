@@ -30,6 +30,7 @@ import { readAgentCycles } from '../stats/readers/agent-cycles';
 import type { ProactiveThrottle } from '../tools/send-proactive-message';
 import {
   type BirthDeps,
+  type LinkResult,
   beginBirth,
   continueBirth,
   linkMissing,
@@ -185,7 +186,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private stopping = false;
   private phase: WatcherPhase = 'sleep';
   private lastError?: string;
-  private background: Promise<void> = Promise.resolve();
+  private background: Promise<unknown> = Promise.resolve();
+  /** The `linkMissing` run in flight (start backfill or daily maintenance). */
+  private linkRun: Promise<LinkResult | undefined> | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
   private lastSenseStateAt = 0;
@@ -668,12 +671,12 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
           })
         );
         this.setPhase('birth');
-        this.background = this.runBackground(deps, async () => {
-          await runResync(deps);
-          // A graph born `no-embeddings` (or neurons sensed since) gets its
-          // vectors now that an embedder may work, not only at the next daily pass.
-          if (!deps.isCancelled?.()) await linkMissing(deps);
-        });
+        // Resync, then `sense` and the tier timers, and only then the backfill:
+        // a graph born `no-embeddings` (or neurons sensed since) gets its
+        // vectors now that an embedder may work, but an embedder that is down
+        // never holds the phase nor the timers.
+        const resync = this.runBackground(deps, () => runResync(deps).then(() => undefined));
+        this.background = resync.then(() => this.backfill(deps));
       }
       this.sense.attach(this.deps.activityStream, this.deps.hooks);
       this.startTimers();
@@ -778,9 +781,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     }
   }
 
-  /** Resolves when birth or resync (whatever runs in the background) is done. */
+  /** Resolves when birth or resync (and the start backfill after it) is done. */
   idle(): Promise<void> {
-    return this.background;
+    return this.background.then(() => undefined);
   }
 
   readBirth(): BirthRecord | null {
@@ -854,6 +857,27 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
           this.startIntrospectTimer();
         }
       });
+  }
+
+  /**
+   * Embed and link the live neurons without a vector (`linkMissing`), at most
+   * one run at a time. Never throws; a cancelled run does nothing.
+   * Resolves to the result, or undefined when nothing ran.
+   */
+  private backfill(deps: BirthDeps): Promise<LinkResult | undefined> {
+    if (this.linkRun) return this.linkRun;
+    if (!this.running || this.stopping || deps.isCancelled?.()) return Promise.resolve(undefined);
+    const run = linkMissing(deps)
+      .catch((err) => {
+        if (!deps.isCancelled?.())
+          this.logger.warn({ err }, 'Watcher: linking the unembedded failed');
+        return undefined;
+      })
+      .finally(() => {
+        if (this.linkRun === run) this.linkRun = null;
+      });
+    this.linkRun = run;
+    return run;
   }
 
   /**
@@ -1012,10 +1036,12 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   async maintainNow(): Promise<void> {
     try {
       this.graph.archiveInactive(this.cfg().graph.archiveAfterDays * DAY_MS);
+      let linked: LinkResult | undefined;
       if (readBirthRecord(this.dir)?.finishedAt && this.running && !this.stopping) {
-        await linkMissing(this.birthDeps());
+        linked = await this.backfill(this.birthDeps());
       }
-      relayout(this.graph);
+      // linkMissing relays out when it embedded: one layout broadcast, not two.
+      if (!linked?.relaidOut) relayout(this.graph);
     } catch (err) {
       this.logger.warn({ err }, 'Watcher: daily maintenance failed');
     }
