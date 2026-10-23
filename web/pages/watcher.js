@@ -34,6 +34,7 @@ import {
   shouldRedrawTiers,
   stateHtml,
   stateParts,
+  syncStateButton,
   tierPatchFromInput,
   watcherDisabledHtml,
   watcherErrorHtml,
@@ -120,7 +121,7 @@ function drawState({ forceTiers = false } = {}) {
   set('.watcher-counts', parts.counts);
   set('.watcher-notes', parts.notes);
   const button = bar.querySelector('[data-action="watcher-start"], [data-action="watcher-stop"]');
-  if (button && button.outerHTML !== parts.button) button.outerHTML = parts.button;
+  syncStateButton(button, state, { busy: page.busy });
   const tiers = bar.querySelector('.watcher-tiers-host');
   const focused = !!tiers?.contains(document.activeElement);
   if (tiers && shouldRedrawTiers(page.tierView, view, focused, { force: forceTiers })) {

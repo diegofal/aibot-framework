@@ -318,10 +318,10 @@ export function stateParts(state, nowMs = Date.now(), { busy = false } = {}) {
     notes.push(`<div class="watcher-note">${LINK_NOTES[s.linkStatus]}</div>`);
   if (s.lastError) notes.push(`<div class="watcher-note is-error">${esc(s.lastError)}</div>`);
 
-  const action = running ? 'watcher-stop' : 'watcher-start';
-  const button = `<button type="button" class="btn btn-sm${running ? '' : ' btn-primary'}" data-action="${action}"${
-    busy ? ' disabled' : ''
-  }>${running ? 'Stop' : 'Start'}</button>`;
+  const b = stateButtonSpec(s, { busy });
+  const button = `<button type="button" class="${b.className}" data-action="${b.action}"${
+    b.disabled ? ' disabled' : ''
+  }>${b.label}</button>`;
 
   return {
     main: main.join('<span class="watcher-sep">·</span>'),
@@ -333,6 +333,32 @@ export function stateParts(state, nowMs = Date.now(), { busy = false } = {}) {
 }
 
 /** Running dot, phase, age, counts by kind (non-zero only), edges, Start/Stop. */
+/** What the Start/Stop button of the state bar shows. */
+function stateButtonSpec(state, { busy = false } = {}) {
+  const running = !!state?.running;
+  return {
+    action: running ? 'watcher-stop' : 'watcher-start',
+    className: `btn btn-sm${running ? '' : ' btn-primary'}`,
+    label: running ? 'Stop' : 'Start',
+    disabled: !!busy,
+  };
+}
+
+/**
+ * Update the Start/Stop button in place (action, class, label, disabled),
+ * touching only what changed: re-creating it on every `watcher:state`
+ * republish lost its focus (an `outerHTML` compare never matched while busy,
+ * the DOM serialises `disabled=""`).
+ */
+export function syncStateButton(button, state, { busy = false } = {}) {
+  if (!button) return;
+  const b = stateButtonSpec(state, { busy });
+  if (button.getAttribute('data-action') !== b.action) button.setAttribute('data-action', b.action);
+  if (button.className !== b.className) button.className = b.className;
+  if (button.textContent !== b.label) button.textContent = b.label;
+  if (button.disabled !== b.disabled) button.disabled = b.disabled;
+}
+
 export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
   const p = stateParts(state, nowMs, { busy });
   return `<div class="watcher-state"><div class="watcher-state-main">${p.main}</div><div class="watcher-counts">${p.counts}</div><div class="watcher-notes">${p.notes}</div><div class="watcher-state-actions"><span class="watcher-tiers-host">${p.tiers}</span>${p.button}</div></div>`;
