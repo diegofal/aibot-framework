@@ -1505,6 +1505,30 @@ describe('Watcher: embedding what birth could not', () => {
     expect(watcher.state().running).toBe(false);
   });
 
+  test('a start after a stop during the backfill runs its own backfill, never the stale one', async () => {
+    await bornWithoutEmbeddings();
+    let hang = true;
+    let calls = 0;
+    const { watcher } = make({
+      stopTimeoutMs: 30,
+      embed: () => {
+        calls++;
+        return hang ? new Promise<number[]>(() => {}) : Promise.resolve([1, 0, 0]);
+      },
+    });
+    await watcher.start();
+    expect(await until(() => calls === 1)).toBe(true);
+    await watcher.stop();
+    hang = false;
+    await watcher.start();
+    expect(
+      await until(() => watcher.graph.embeddedIds().length === watcher.graph.liveCount(), 4000)
+    ).toBe(true);
+    expect(calls).toBeGreaterThan(1);
+    expect(watcher.log.recent(50).filter((r) => r.op === 'maintain:link')).toHaveLength(1);
+    await watcher.stop();
+  });
+
   test('a slow-failing embedder at start: sense first, then one probe and one row with the real error', async () => {
     await bornWithoutEmbeddings();
     let calls = 0;

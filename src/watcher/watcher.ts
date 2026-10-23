@@ -95,6 +95,11 @@ import {
 } from './types';
 
 const DAY_MS = 86_400_000;
+/**
+ * How long a new run waits for a `linkMissing` a previous `stop()` left in
+ * flight (its writes are already dropped) before starting its own.
+ */
+export const STALE_LINK_WAIT_MS = 1000;
 /** Throttle of the `watcher:state` a sense batch republishes ("last tick"). */
 export const SENSE_STATE_EVERY_MS = 5_000;
 /** How often the notice timer asks whether a pass is due (`Noticer.due`). */
@@ -187,8 +192,15 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private phase: WatcherPhase = 'sleep';
   private lastError?: string;
   private background: Promise<unknown> = Promise.resolve();
-  /** The `linkMissing` run in flight (start backfill or daily maintenance). */
-  private linkRun: Promise<LinkResult | undefined> | null = null;
+  /**
+   * The `linkMissing` run in flight (start backfill or daily maintenance),
+   * keyed to the run that started it: a run cancelled by `stop()` is stale and
+   * is never reused by a later start.
+   */
+  private linkRun: {
+    promise: Promise<LinkResult | undefined>;
+    isCancelled: () => boolean;
+  } | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
   private lastSenseStateAt = 0;
@@ -864,20 +876,39 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
    * one run at a time. Never throws; a cancelled run does nothing.
    * Resolves to the result, or undefined when nothing ran.
    */
-  private backfill(deps: BirthDeps): Promise<LinkResult | undefined> {
-    if (this.linkRun) return this.linkRun;
-    if (!this.running || this.stopping || deps.isCancelled?.()) return Promise.resolve(undefined);
-    const run = linkMissing(deps)
-      .catch((err) => {
-        if (!deps.isCancelled?.())
-          this.logger.warn({ err }, 'Watcher: linking the unembedded failed');
-        return undefined;
-      })
-      .finally(() => {
-        if (this.linkRun === run) this.linkRun = null;
-      });
-    this.linkRun = run;
-    return run;
+  private async backfill(deps: BirthDeps): Promise<LinkResult | undefined> {
+    const current = this.linkRun;
+    if (current && !current.isCancelled()) return current.promise;
+    if (current) {
+      // A run a previous stop() left behind: give it a moment to settle (its
+      // writes are dropped), then start this run's own.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        current.promise,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, STALE_LINK_WAIT_MS);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      if (this.linkRun === current) this.linkRun = null;
+      // Another call of this run may have started it meanwhile.
+      if (this.linkRun && !this.linkRun.isCancelled()) return this.linkRun.promise;
+    }
+    if (!this.running || this.stopping || deps.isCancelled?.()) return undefined;
+    const isCancelled = () => deps.isCancelled?.() ?? false;
+    const entry = {
+      isCancelled,
+      promise: linkMissing(deps)
+        .catch((err) => {
+          if (!isCancelled()) this.logger.warn({ err }, 'Watcher: linking the unembedded failed');
+          return undefined;
+        })
+        .finally(() => {
+          if (this.linkRun === entry) this.linkRun = null;
+        }),
+    };
+    this.linkRun = entry;
+    return entry.promise;
   }
 
   /**
