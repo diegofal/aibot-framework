@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 
@@ -1533,11 +1533,45 @@ export function botsPathFromConfigPath(configPath: string): string {
 }
 
 /**
+ * Write `value` as pretty JSON (trailing newline) atomically: a sibling
+ * `<path>.tmp` renamed over `path`, so a crash never leaves half a file.
+ */
+export function writeJsonFileAtomic(path: string, value: unknown): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+  renameSync(tmp, path);
+}
+
+/**
+ * The one way to rewrite config.json in place: read it raw (its `${VAR}`
+ * references stay as written, never the expanded secrets), hand the object to
+ * `mutate`, then write it atomically (`writeJsonFileAtomic`). Returns what
+ * `mutate` returns. A file that is missing or not a JSON object, or a `mutate`
+ * that throws, throws and leaves the file untouched.
+ *
+ * No `<file>.bak` on purpose: a config with inline secrets would be copied
+ * next to itself on every change; `scripts/docker/backup.ts` backs the
+ * volume up instead.
+ */
+export function patchConfigFile<T>(
+  configPath: string,
+  mutate: (raw: Record<string, unknown>) => T
+): T {
+  const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf-8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('the config file is not a JSON object');
+  }
+  const raw = parsed as Record<string, unknown>;
+  const out = mutate(raw);
+  writeJsonFileAtomic(configPath, raw);
+  return out;
+}
+
+/**
  * Persist bots array to bots.json (sibling of configPath).
  */
 export function persistBots(configPath: string, bots: BotConfig[]): void {
-  const botsPath = botsPathFromConfigPath(configPath);
-  writeFileSync(botsPath, `${JSON.stringify(bots, null, 2)}\n`, 'utf-8');
+  writeJsonFileAtomic(botsPathFromConfigPath(configPath), bots);
 }
 
 /**

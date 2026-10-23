@@ -4,11 +4,10 @@
  * to the live config object and persisted into the config file the process
  * loaded. The file is read raw (its `${VAR}` references stay as written),
  * only the patched fields change, the merged `watcher` block must pass
- * `WatcherConfigSchema`, the previous file is kept as `<file>.bak` and the
- * new one lands atomically (tmp + rename).
+ * `WatcherConfigSchema`, and the file is rewritten through `patchConfigFile`
+ * (atomic, no `.bak`).
  */
-import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { type Config, WatcherConfigSchema } from '../config';
+import { type Config, WatcherConfigSchema, patchConfigFile } from '../config';
 import { WATCHER_DEFAULTS, type WatcherConfig } from './types';
 
 export type WatcherTierName = 'notice' | 'integrate';
@@ -64,40 +63,27 @@ export function persistWatcherConfigPatch(
   configPath: string,
   patch: WatcherConfigPatch
 ): { ok: true } | { ok: false; error: string; status: 400 | 500 } {
-  let raw: Record<string, unknown>;
-  let original: string;
+  let invalid: string | undefined;
   try {
-    original = readFileSync(configPath, 'utf-8');
-    const parsed = JSON.parse(original);
-    if (!isPlainObject(parsed)) throw new Error('the config file is not a JSON object');
-    raw = parsed;
+    patchConfigFile(configPath, (raw) => {
+      const watcher = isPlainObject(raw.watcher) ? { ...raw.watcher } : {};
+      for (const tier of TIERS) {
+        const p = patch[tier];
+        if (!p) continue;
+        watcher[tier] = { ...(isPlainObject(watcher[tier]) ? watcher[tier] : {}), ...p };
+      }
+      const check = WatcherConfigSchema.safeParse(watcher);
+      if (!check.success) {
+        invalid = `The watcher block of the config file would not validate: ${check.error.issues
+          .map((i) => `${i.path.join('.')}: ${i.message}`)
+          .join('; ')}`;
+        throw new Error(invalid);
+      }
+      raw.watcher = watcher;
+    });
   } catch (err) {
-    return { ok: false, status: 500, error: `Could not read ${configPath}: ${message(err)}` };
-  }
-  const watcher = isPlainObject(raw.watcher) ? { ...raw.watcher } : {};
-  for (const tier of TIERS) {
-    const p = patch[tier];
-    if (!p) continue;
-    watcher[tier] = { ...(isPlainObject(watcher[tier]) ? watcher[tier] : {}), ...p };
-  }
-  const check = WatcherConfigSchema.safeParse(watcher);
-  if (!check.success) {
-    return {
-      ok: false,
-      status: 400,
-      error: `The watcher block of the config file would not validate: ${check.error.issues
-        .map((i) => `${i.path.join('.')}: ${i.message}`)
-        .join('; ')}`,
-    };
-  }
-  raw.watcher = watcher;
-  const tmp = `${configPath}.tmp`;
-  try {
-    if (existsSync(configPath)) copyFileSync(configPath, `${configPath}.bak`);
-    writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
-    renameSync(tmp, configPath);
-  } catch (err) {
-    return { ok: false, status: 500, error: `Could not write ${configPath}: ${message(err)}` };
+    if (invalid) return { ok: false, status: 400, error: invalid };
+    return { ok: false, status: 500, error: `Could not update ${configPath}: ${message(err)}` };
   }
   return { ok: true };
 }

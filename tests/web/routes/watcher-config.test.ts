@@ -82,7 +82,7 @@ const postJson = (a: Hono, body: unknown) =>
   });
 
 describe('POST /api/watcher/config', () => {
-  it('updates the live config, persists only the patched fields, keeps a .bak, applies the timers', async () => {
+  it('updates the live config, persists only the patched fields, no .bak (no inline secrets copied), applies the timers', async () => {
     const { config, watcher, configPath } = setup();
     let applied = 0;
     const w = watcher as Watcher;
@@ -109,7 +109,8 @@ describe('POST /api/watcher/config', () => {
     expect(raw.telegram.token).toBe(TOKEN_REF);
     expect(raw.watcher.notice).toEqual({ enabled: true, model: 'claude-haiku-5-5', maxPerDay: 50 });
     expect(raw.watcher.integrate).toEqual({ maxPerDay: 3 });
-    expect(JSON.parse(readFileSync(`${configPath}.bak`, 'utf-8'))).toEqual(RAW);
+    // deliberate: no .bak copy (it duplicated inline secrets in the volume); the backup script covers it
+    expect(existsSync(`${configPath}.bak`)).toBe(false);
     expect(existsSync(`${configPath}.tmp`)).toBe(false);
   });
 
