@@ -91,6 +91,7 @@ import { tenantConfigRoutes } from './routes/tenant-config';
 import { tenantRoutes } from './routes/tenants';
 import { toolsRoutes } from './routes/tools';
 import { ttsRoutes } from './routes/tts';
+import { watcherRoutes } from './routes/watcher';
 import { webhookRoutes } from './routes/webhooks';
 import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
 import { workersRoutes } from './routes/workers';
@@ -98,6 +99,7 @@ import { dashboardNoCache } from './static-cache';
 import {
   type ActivitySocket,
   ActivitySocketHub,
+  WatcherSocketHub,
   type WsAuth,
   planDashboardSocketUpgrade,
 } from './ws-tenant-filter';
@@ -112,6 +114,8 @@ export type WebServerDeps = {
   cronService: CronService;
   /** Claude accounts (prototype); absent in tests that build the server without it. */
   claudeAccounts?: ClaudeAccountService;
+  /** The fleet watcher; present only when `watcher.enabled` (src/watcher/watcher.ts). */
+  watcher?: import('../watcher/watcher').Watcher;
 };
 
 export function startWebServer(deps: WebServerDeps): void {
@@ -232,6 +236,11 @@ export function startWebServer(deps: WebServerDeps): void {
   // Workers API: /api/agents/:id/workers and /api/workers/* (own literal segment,
   // no collision with agentsRoutes' GET /:id).
   app.route('/api', workersRoutes({ config, logger, workerPool, readCycles }));
+  // Fleet watcher: admin / single-tenant only (404 for tenants), { enabled: false } when off.
+  app.route(
+    '/api/watcher',
+    watcherRoutes({ config, logger, watcher: () => deps.watcher, readCycles })
+  );
   app.route(
     '/api/agents',
     agentsRoutes({
@@ -795,6 +804,12 @@ export function startWebServer(deps: WebServerDeps): void {
     (err) => logger.debug({ err }, 'WebSocket activity broadcast send failed, removing client')
   );
   const chatClients = new Set<ServerWebSocket<WsData>>();
+  const watcherHub = new WatcherSocketHub<ServerWebSocket<WsData>>((err) =>
+    logger.debug({ err }, 'WebSocket watcher broadcast send failed, removing client')
+  );
+  deps.watcher?.on('event', (event: import('../watcher/types').WatcherEvent) =>
+    watcherHub.broadcast(event)
+  );
   // pino-roll rotates by writing to numbered siblings (aibot.log.1, .2, …) and,
   // once the first rotation happens, stops touching the bare `logFile` path
   // forever — so tailing/watching that fixed path goes silent after rotation.
@@ -851,7 +866,14 @@ export function startWebServer(deps: WebServerDeps): void {
   Bun.serve<WsData>({
     fetch(req, server) {
       const url = new URL(req.url);
-      if (url.pathname === '/ws/logs' || url.pathname === '/ws/activity') {
+      if (url.pathname === '/ws/watcher' && !deps.watcher) {
+        return new Response('Watcher is off', { status: 404 });
+      }
+      if (
+        url.pathname === '/ws/logs' ||
+        url.pathname === '/ws/activity' ||
+        url.pathname === '/ws/watcher'
+      ) {
         // Authenticate and bind the tenant to the socket (src/web/ws-tenant-filter.ts)
         const plan = planDashboardSocketUpgrade(url, {
           multiTenant: Boolean(config.multiTenant?.enabled),
@@ -938,6 +960,11 @@ export function startWebServer(deps: WebServerDeps): void {
             'WebSocket chat client connected'
           );
           ws.send(JSON.stringify({ type: 'connected', botId: ws.data.botId }));
+        } else if (ws.data?.type === 'watcher') {
+          watcherHub.add(ws);
+          logger.debug({ clientCount: watcherHub.size }, 'WebSocket watcher client connected');
+          const w = deps.watcher;
+          if (w) watcherHub.sendHistory(ws, w.state(), w.log.recent(100));
         } else if (ws.data?.type === 'activity') {
           const client = ws as ServerWebSocket<WsData> & ActivitySocket;
           activityHub.add(client);
@@ -1152,6 +1179,9 @@ export function startWebServer(deps: WebServerDeps): void {
             { clientCount: chatClients.size, botId: ws.data.botId },
             'WebSocket chat client disconnected'
           );
+        } else if (ws.data?.type === 'watcher') {
+          watcherHub.remove(ws);
+          logger.debug({ clientCount: watcherHub.size }, 'WebSocket watcher client disconnected');
         } else if (ws.data?.type === 'activity') {
           activityHub.remove(ws as ServerWebSocket<WsData> & ActivitySocket);
           logger.debug({ clientCount: activityHub.size }, 'WebSocket activity client disconnected');

@@ -1,0 +1,291 @@
+import { describe, expect, test } from 'bun:test';
+import {
+  describeEvent,
+  formatAgo,
+  formatDuration,
+  narrateBorn,
+  narrateGoals,
+  narrateHistory,
+  narrateLearned,
+  narrateLinking,
+  narrateMetBot,
+  narrateMetPerson,
+  narrateNoEmbeddings,
+  narrateNoticed,
+  narrateRemembered,
+  narrateResumeBirth,
+  narrateResync,
+  narrateRewake,
+  narrateSenseSummary,
+  narrateSleep,
+  narrateStageFailed,
+  narrateUnreadable,
+  narrateWake,
+} from '../../src/watcher/narration';
+
+describe('narration', () => {
+  test('narrateWake', () => {
+    expect(narrateWake({ bots: 8, tenants: 1, backends: ['claude-cli', 'ollama'] })).toBe(
+      'Waking up for the first time. Looking around: 8 bots, 1 tenant, Claude CLI and Ollama available.'
+    );
+  });
+  test('narrateWake with no backend', () => {
+    expect(narrateWake({ bots: 1, tenants: 2, backends: [] })).toBe(
+      'Waking up for the first time. Looking around: 1 bot, 2 tenants, no LLM backend configured.'
+    );
+  });
+  test('narrateRewake', () => {
+    expect(
+      narrateRewake({
+        neurons: 1240,
+        lastAwakeMs: Date.parse('2026-10-23T04:00:00Z'),
+        nowMs: Date.parse('2026-10-23T10:00:00Z'),
+      })
+    ).toBe('Waking up. 1,240 neurons, last awake 6 h ago.');
+  });
+  test('narrateRewake without a previous row', () => {
+    expect(narrateRewake({ neurons: 3, nowMs: 0 })).toBe('Waking up. 3 neurons.');
+  });
+  test('narrateResumeBirth', () => {
+    expect(narrateResumeBirth('knowledge')).toBe(
+      'Waking up in the middle of being born. Picking up at birth:knowledge.'
+    );
+  });
+  test('narrateMetBot', () => {
+    expect(
+      narrateMetBot({
+        name: 'jarvis',
+        purpose: "Jarvis, the operator's assistant",
+        channel: 'telegram ok',
+        activeGoals: 3,
+      })
+    ).toBe(`Met jarvis: "Jarvis, the operator's assistant" (telegram ok, 3 active goals).`);
+  });
+  test('narrateMetBot without purpose and one goal', () => {
+    expect(narrateMetBot({ name: 'x', channel: 'dashboard only', activeGoals: 1 })).toBe(
+      'Met x (dashboard only, 1 active goal).'
+    );
+  });
+  test('narrateMetPerson', () => {
+    expect(
+      narrateMetPerson({ name: 'Ana', operator: true, channels: ['telegram', 'email'], bots: 3 })
+    ).toBe('Met Ana (operator, telegram + email), known to 3 bots.');
+  });
+  test('narrateMetPerson, not the operator, one bot', () => {
+    expect(narrateMetPerson({ name: 'Bo', operator: false, channels: ['web'], bots: 1 })).toBe(
+      'Met Bo (web), known to 1 bot.'
+    );
+  });
+  test('narrateGoals', () => {
+    expect(narrateGoals({ bot: 'jarvis', goals: 3, openTasks: 7 })).toBe(
+      'Learned what jarvis is working on: 3 goals, 7 open tasks.'
+    );
+  });
+  test('narrateLearned', () => {
+    expect(
+      narrateLearned({
+        bot: 'jarvis',
+        text: 'Invoices from Acme arrive on the 3rd',
+        kind: 'fact',
+        confidence: 'high',
+      })
+    ).toBe(
+      `Learned from jarvis's knowledge map: "Invoices from Acme arrive on the 3rd" (fact, confidence high).`
+    );
+  });
+  test('narrateLearned without confidence', () => {
+    expect(narrateLearned({ bot: 'j', text: 'Why?', kind: 'question' })).toBe(
+      `Learned from j's knowledge map: "Why?" (question).`
+    );
+  });
+  test('narrateRemembered', () => {
+    expect(narrateRemembered({ bot: 'jarvis', text: 'Ana likes tea' })).toBe(
+      'Remembered from jarvis: "Ana likes tea".'
+    );
+  });
+  test('narrateHistory', () => {
+    expect(narrateHistory({ days: 30, cycles: 212, goalsWorked: 14, goalsNever: 3 })).toBe(
+      'Reviewed 30 days of history: 212 cycles. 14 goals were worked on, 3 never.'
+    );
+  });
+  test('narrateLinking', () => {
+    expect(narrateLinking({ neurons: 1240, edges: 3800 })).toBe(
+      'Linking what I know: 1,240 neurons, 3,800 edges so far.'
+    );
+  });
+  test('narrateNoEmbeddings', () => {
+    expect(narrateNoEmbeddings('no embedding model configured')).toBe(
+      'Could not embed what I know (no embedding model configured). Placing neurons by kind, without related edges.'
+    );
+  });
+  test('narrateBorn', () => {
+    expect(
+      narrateBorn({
+        counts: { entity: 8, person: 12, goal: 31, fact: 640, surprise: 44, topic: 0 },
+        durationMs: 130_000,
+        unreadable: [],
+      })
+    ).toBe(
+      'Born. 735 neurons: 8 bots, 12 people, 31 goals, 640 facts, 44 surprises in 2 min 10 s.'
+    );
+  });
+  test('narrateBorn names what it could not read', () => {
+    expect(
+      narrateBorn({
+        counts: { entity: 1 },
+        durationMs: 400,
+        unreadable: ['b1/KNOWLEDGE.json', 'b2/TASKS.json'],
+      })
+    ).toBe('Born. 1 neuron: 1 bot in 400 ms. Could not read: b1/KNOWLEDGE.json, b2/TASKS.json.');
+  });
+  test('narrateStageFailed', () => {
+    expect(narrateStageFailed('memory', new Error('boom'))).toBe(
+      'Could not finish birth:memory (boom). Moving on.'
+    );
+  });
+  test('narrateUnreadable', () => {
+    expect(narrateUnreadable('b1/KNOWLEDGE.json', 'invalid JSON')).toBe(
+      'Could not read b1/KNOWLEDGE.json (invalid JSON).'
+    );
+  });
+  test('narrateResync', () => {
+    expect(narrateResync({ bots: 1, goals: 2, people: 0 })).toBe(
+      'Caught up on what changed while I slept: 1 new bot, 2 new goals, 0 new people.'
+    );
+  });
+  test('narrateSleep', () => {
+    expect(narrateSleep({ neurons: 1240 })).toBe('Going to sleep. 1,240 neurons.');
+  });
+  test('narrateNoticed', () => {
+    expect(
+      narrateNoticed({
+        what: 'Ana wrote to jarvis about invoices',
+        salience: 0.7,
+        reasons: ['human message'],
+        touched: 2,
+      })
+    ).toBe(
+      'Noticed: Ana wrote to jarvis about invoices. Salience 0.7 (human message, touches 2 neurons).'
+    );
+  });
+  test('narrateNoticed with nothing touched', () => {
+    expect(
+      narrateNoticed({
+        what: 'web_fetch failed in b1',
+        salience: 0.5,
+        reasons: ['error', 'novel'],
+        touched: 0,
+      })
+    ).toBe('Noticed: web_fetch failed in b1. Salience 0.5 (error, novel).');
+  });
+  test('narrateSenseSummary', () => {
+    expect(
+      narrateSenseSummary({
+        events: 14,
+        windowMs: 60_000,
+        top: 'web_fetch failed in b1',
+        topSalience: 0.5,
+      })
+    ).toBe('Sensed 14 events in the last 1 min, top: web_fetch failed in b1 (salience 0.5).');
+  });
+  test('narrateSenseSummary, one event and nothing salient', () => {
+    expect(narrateSenseSummary({ events: 1, windowMs: 60_000 })).toBe(
+      'Sensed 1 event in the last 1 min.'
+    );
+  });
+});
+
+describe('describeEvent', () => {
+  const names = { botName: (id: string) => (id === 'b1' ? 'jarvis' : id) };
+  test('human message names the sender and topic words', () => {
+    expect(
+      describeEvent(
+        { botId: 'b1', channelKind: 'web', chatId: 'c', timestamp: 0, text: 'invoices acme' },
+        { ...names, sender: 'Ana' }
+      )
+    ).toBe('Ana wrote to jarvis about invoices acme');
+  });
+  test('human message without sender or text', () => {
+    expect(
+      describeEvent({ botId: 'b1', channelKind: 'web', chatId: 'c', timestamp: 0 }, names)
+    ).toBe('someone wrote to jarvis');
+  });
+  test('tool error', () => {
+    expect(
+      describeEvent(
+        { type: 'tool:error', botId: 'b1', timestamp: 0, data: { toolName: 'web_fetch' } },
+        names
+      )
+    ).toBe('web_fetch failed in jarvis');
+  });
+  test('llm error', () => {
+    expect(describeEvent({ type: 'llm:error', botId: 'b1', timestamp: 0 }, names)).toBe(
+      'an LLM call failed in jarvis'
+    );
+  });
+  test('message sent', () => {
+    expect(
+      describeEvent(
+        { type: 'tool:end', botId: 'b1', timestamp: 0, data: { toolName: 'send_message' } },
+        names
+      )
+    ).toBe('jarvis sent a message');
+  });
+  test('task changed', () => {
+    expect(
+      describeEvent(
+        {
+          type: 'task:changed',
+          botId: 'b1',
+          timestamp: 0,
+          data: { taskId: 't-1', op: 'task-move', from: 'todo', to: 'done' },
+        },
+        names
+      )
+    ).toBe('jarvis moved task t-1 from todo to done');
+  });
+  test('worker waiting and ended', () => {
+    expect(
+      describeEvent({ type: 'worker:waiting', botId: 'b1', timestamp: 0, data: {} }, names)
+    ).toBe('a worker of jarvis is waiting for an answer');
+    expect(
+      describeEvent(
+        { type: 'worker:ended', botId: 'b1', timestamp: 0, data: { status: 'blocked' } },
+        names
+      )
+    ).toBe('a worker of jarvis ended blocked');
+  });
+  test('karma change', () => {
+    expect(
+      describeEvent({ type: 'karma:change', botId: 'b1', timestamp: 0, data: { delta: -2 } }, names)
+    ).toBe("jarvis's karma moved -2");
+  });
+  test('memory flush and cycle result', () => {
+    expect(describeEvent({ type: 'memory:flush', botId: 'b1', timestamp: 0 }, names)).toBe(
+      'jarvis saved to memory'
+    );
+    expect(describeEvent({ type: 'agent:result', botId: 'b1', timestamp: 0 }, names)).toBe(
+      'jarvis finished a cycle'
+    );
+  });
+  test('anything else', () => {
+    expect(describeEvent({ type: 'llm:start', botId: 'b1', timestamp: 0 }, names)).toBe(
+      'llm:start in jarvis'
+    );
+  });
+});
+
+describe('formatting', () => {
+  test('formatDuration', () => {
+    expect(formatDuration(850)).toBe('850 ms');
+    expect(formatDuration(41_000)).toBe('41 s');
+    expect(formatDuration(130_000)).toBe('2 min 10 s');
+    expect(formatDuration(120_000)).toBe('2 min');
+  });
+  test('formatAgo', () => {
+    expect(formatAgo(20_000)).toBe('less than a minute');
+    expect(formatAgo(12 * 60_000)).toBe('12 min');
+    expect(formatAgo(6 * 3_600_000)).toBe('6 h');
+    expect(formatAgo(3 * 86_400_000)).toBe('3 d');
+  });
+});

@@ -22,6 +22,7 @@ import { productionToWhy } from './production';
 import { soulEventToWhy } from './soul-event';
 import { taskEventToWhy } from './task-event';
 import { traitChangeToWhy } from './trait-change';
+import { neuronToWhy } from './watcher';
 import { workerRunToWhy } from './worker-run';
 
 export const WHY_BUILDERS = {
@@ -46,6 +47,7 @@ export const WHY_BUILDERS = {
   traitChange: traitChangeToWhy,
   taskEvent: taskEventToWhy,
   workerRun: workerRunToWhy,
+  neuron: neuronToWhy,
 } as const;
 
 export type WhyBuilderName = keyof typeof WHY_BUILDERS;

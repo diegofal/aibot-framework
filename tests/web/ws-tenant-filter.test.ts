@@ -3,6 +3,7 @@ import type { ActivityEvent } from '../../src/bot/activity-stream';
 import type { BotConfig } from '../../src/config';
 import {
   ActivitySocketHub,
+  WatcherSocketHub,
   type WsAuth,
   canSeeActivityEvent,
   planDashboardSocketUpgrade,
@@ -237,5 +238,91 @@ describe('ActivitySocketHub', () => {
     h.broadcast(ev('a1'));
     expect(a.sent).toEqual([]);
     expect(h.size).toBe(0);
+  });
+});
+
+describe('/ws/watcher upgrade', () => {
+  const url = (s: string) => new URL(`http://x${s}`);
+  const deps = { ...authDeps, getBots: () => bots };
+
+  test('admin in multi-tenant mode is allowed', () => {
+    expect(planDashboardSocketUpgrade(url('/ws/watcher?token=sess_admin'), deps)).toEqual({
+      kind: 'upgrade',
+      data: { type: 'watcher', auth: ADMIN },
+    });
+  });
+
+  test('a tenant is 403 in multi-tenant mode', () => {
+    expect(planDashboardSocketUpgrade(url('/ws/watcher?token=sess_a'), deps)).toEqual({
+      kind: 'reject',
+      status: 403,
+      body: 'Admin access required',
+    });
+  });
+
+  test('no token in multi-tenant mode is 401', () => {
+    expect(planDashboardSocketUpgrade(url('/ws/watcher'), deps)).toMatchObject({
+      kind: 'reject',
+      status: 401,
+    });
+  });
+
+  test('single-tenant opens without a token', () => {
+    expect(planDashboardSocketUpgrade(url('/ws/watcher'), { ...deps, multiTenant: false })).toEqual(
+      {
+        kind: 'upgrade',
+        data: { type: 'watcher', auth: ADMIN },
+      }
+    );
+  });
+});
+
+describe('WatcherSocketHub', () => {
+  type Sock = { data: { type: 'watcher'; auth: WsAuth }; sent: string[]; send(d: string): void };
+  function sock(fail = false): Sock {
+    const s: Sock = {
+      data: { type: 'watcher', auth: ADMIN },
+      sent: [],
+      send(d: string) {
+        if (fail) throw new Error('closed');
+        s.sent.push(d);
+      },
+    };
+    return s;
+  }
+
+  test('broadcast wraps the event as { type: watcher, event }', () => {
+    const h = new WatcherSocketHub<Sock>();
+    const a = sock();
+    h.add(a);
+    const event = { type: 'watcher:log' as const, ts: 'x', data: { seq: 1 } };
+    h.broadcast(event);
+    expect(JSON.parse(a.sent[0])).toEqual({ type: 'watcher', event });
+  });
+
+  test('a failing socket is dropped', () => {
+    const errors: unknown[] = [];
+    const h = new WatcherSocketHub<Sock>((e) => errors.push(e));
+    h.add(sock(true));
+    h.broadcast({ type: 'watcher:state', ts: 'x', data: {} });
+    expect(h.size).toBe(0);
+    expect(errors).toHaveLength(1);
+  });
+
+  test('remove stops delivery', () => {
+    const h = new WatcherSocketHub<Sock>();
+    const a = sock();
+    h.add(a);
+    h.remove(a);
+    h.broadcast({ type: 'watcher:state', ts: 'x', data: {} });
+    expect(a.sent).toEqual([]);
+  });
+
+  test('sendHistory sends the state and the log tail', () => {
+    const h = new WatcherSocketHub<Sock>();
+    const a = sock();
+    const state = { running: true, phase: 'sense' };
+    h.sendHistory(a, state as never, [{ seq: 2 } as never]);
+    expect(JSON.parse(a.sent[0])).toEqual({ type: 'history', state, log: [{ seq: 2 }] });
   });
 });

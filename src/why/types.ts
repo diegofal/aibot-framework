@@ -24,6 +24,7 @@ export const WHY_ACTORS = [
   'cron',
   'peer',
   'system',
+  'watcher',
 ] as const;
 
 export type WhyActor = (typeof WHY_ACTORS)[number];

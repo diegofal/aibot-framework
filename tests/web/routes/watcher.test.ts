@@ -1,0 +1,208 @@
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Hono } from 'hono';
+import type { Config } from '../../../src/config';
+import { WATCHER_DEFAULTS } from '../../../src/watcher/types';
+import { Watcher } from '../../../src/watcher/watcher';
+import { watcherRoutes } from '../../../src/web/routes/watcher';
+import { WhySchema } from '../../../src/why/types';
+
+const noopLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+  child: () => noopLogger,
+} as never;
+
+let root: string;
+let t: number;
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'watcher-routes-'));
+  t = Date.parse('2026-10-23T10:00:00Z');
+});
+afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+function setup(enabled = true) {
+  const soulDir = join(root, 'souls', 'b1');
+  mkdirSync(soulDir, { recursive: true });
+  writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Jarvis\n');
+  writeFileSync(
+    join(soulDir, 'GOALS.md'),
+    '# Goals\n\n## Active\n\n- [ ] Ship it\n  - id: g-aaaaaaaa\n  - status: in_progress\n  - priority: high\n\n## Completed\n'
+  );
+  const config = {
+    bots: [{ id: 'b1', name: 'b1', soulDir, enabled: true, tenantId: 't1' }],
+    paths: { data: join(root, 'data') },
+    soul: {},
+    operator: {},
+    watcher: { ...WATCHER_DEFAULTS, enabled },
+  } as unknown as Config;
+  const watcher = enabled
+    ? new Watcher({
+        config: () => config,
+        logger: noopLogger,
+        activityStream: new EventEmitter(),
+        hooks: new EventEmitter(),
+        botManager: {
+          getChannelState: () => undefined,
+          getUserDirectory: () => ({ list: () => [], findByChannel: () => undefined }) as never,
+        },
+        now: () => t,
+      })
+    : undefined;
+  return { config, watcher };
+}
+
+function app(config: Config, watcher: Watcher | undefined, tenantId?: string) {
+  const a = new Hono();
+  if (tenantId) {
+    a.use('*', async (c, next) => {
+      c.set('tenant', { tenantId, apiKey: 'k', plan: 'pro' });
+      return next();
+    });
+  }
+  a.route('/api/watcher', watcherRoutes({ config, logger: noopLogger, watcher: () => watcher }));
+  return a;
+}
+
+const post = (a: Hono, path: string) => a.request(path, { method: 'POST' });
+
+describe('watcher routes', () => {
+  it('answers { enabled: false } when the watcher is off', async () => {
+    const { config } = setup(false);
+    const res = await app(config, undefined).request('/api/watcher');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ enabled: false });
+  });
+
+  it('404s the other routes when the watcher is off', async () => {
+    const { config } = setup(false);
+    const a = app(config, undefined);
+    for (const path of [
+      '/api/watcher/graph',
+      '/api/watcher/log',
+      '/api/watcher/birth',
+      '/api/watcher/neurons/n-1',
+    ])
+      expect((await a.request(path)).status).toBe(404);
+    expect((await post(a, '/api/watcher/start')).status).toBe(404);
+  });
+
+  it('a tenant gets 404 on every route', async () => {
+    const { config, watcher } = setup();
+    const a = app(config, watcher, 't1');
+    for (const path of [
+      '/api/watcher',
+      '/api/watcher/graph',
+      '/api/watcher/log',
+      '/api/watcher/birth',
+    ])
+      expect((await a.request(path)).status).toBe(404);
+    expect((await post(a, '/api/watcher/start')).status).toBe(404);
+  });
+
+  it('admin in multi-tenant passes', async () => {
+    const { config, watcher } = setup();
+    const res = await app(config, watcher, '__admin__').request('/api/watcher');
+    expect(res.status).toBe(200);
+  });
+
+  it('GET returns the state with enabled: true; start and stop return it too', async () => {
+    const { config, watcher } = setup();
+    const a = app(config, watcher);
+    const idle = await (await a.request('/api/watcher')).json();
+    expect(idle).toMatchObject({
+      enabled: true,
+      running: false,
+      phase: 'sleep',
+      linkStatus: 'pending',
+    });
+    expect(idle.counts.entity).toBe(0);
+    const started = await (await post(a, '/api/watcher/start')).json();
+    expect(started).toMatchObject({ enabled: true, running: true });
+    await watcher?.idle();
+    const stopped = await (await post(a, '/api/watcher/stop')).json();
+    expect(stopped).toMatchObject({ enabled: true, running: false, phase: 'sleep' });
+    expect(stopped.bornAt).toBe('2026-10-23T10:00:00.000Z');
+  });
+
+  it('graph excludes embeddings and carries linkStatus and rev', async () => {
+    const { config, watcher } = setup();
+    await watcher?.start();
+    await watcher?.idle();
+    const n = watcher?.graph.list()[0];
+    if (n) watcher?.graph.setEmbedding(n.id, [0.123456, 0.654321]);
+    const body = await (await app(config, watcher).request('/api/watcher/graph')).json();
+    expect(body.neurons.length).toBe(2);
+    expect(body.edges.length).toBe(1);
+    expect(body.linkStatus).toBe('no-embeddings');
+    expect(typeof body.rev).toBe('number');
+    const raw = JSON.stringify(body);
+    expect(body.neurons.some((x: object) => 'embedding' in x)).toBe(false);
+    expect(raw).not.toContain('0.123456');
+    await watcher?.stop();
+  });
+
+  it('graph is capped at maxNeurons, most recently active first', async () => {
+    const { config, watcher } = setup();
+    (config.watcher as { graph: { maxNeurons: number } }).graph = {
+      ...WATCHER_DEFAULTS.graph,
+      maxNeurons: 1,
+    };
+    await watcher?.start();
+    await watcher?.idle();
+    const body = await (await app(config, watcher).request('/api/watcher/graph')).json();
+    expect(body.neurons).toHaveLength(1);
+    expect(body.edges).toHaveLength(0);
+    await watcher?.stop();
+  });
+
+  it('log pages newest first, by date and before', async () => {
+    const { config, watcher } = setup();
+    await watcher?.start();
+    await watcher?.idle();
+    const a = app(config, watcher);
+    const all = (await (await a.request('/api/watcher/log')).json()).rows;
+    expect(all.length).toBeGreaterThan(3);
+    expect(all[0].seq).toBeGreaterThan(all[1].seq);
+    const two = (await (await a.request('/api/watcher/log?limit=2')).json()).rows;
+    expect(two.map((r: { seq: number }) => r.seq)).toEqual([all[0].seq, all[1].seq]);
+    const older = (await (await a.request(`/api/watcher/log?limit=2&before=${two[1].seq}`)).json())
+      .rows;
+    expect(older[0].seq).toBe(two[1].seq - 1);
+    const day = (await (await a.request('/api/watcher/log?date=2026-10-23')).json()).rows;
+    expect(day.length).toBe(all.length);
+    expect((await (await a.request('/api/watcher/log?date=2026-10-01')).json()).rows).toEqual([]);
+    expect((await a.request('/api/watcher/log?date=nope')).status).toBe(400);
+    await watcher?.stop();
+  });
+
+  it('neurons/:id returns the neuron, its edges and a valid why', async () => {
+    const { config, watcher } = setup();
+    await watcher?.start();
+    await watcher?.idle();
+    const goal = watcher?.graph.list().find((n) => n.kind === 'goal');
+    const a = app(config, watcher);
+    const body = await (await a.request(`/api/watcher/neurons/${goal?.id}`)).json();
+    expect(body.neuron.id).toBe(goal?.id);
+    expect(body.edges).toHaveLength(1);
+    expect(WhySchema.safeParse(body.why).success).toBe(true);
+    expect((await a.request('/api/watcher/neurons/n-nope')).status).toBe(404);
+    await watcher?.stop();
+  });
+
+  it('birth returns birth.json, or {} before birth', async () => {
+    const { config, watcher } = setup();
+    const a = app(config, watcher);
+    expect(await (await a.request('/api/watcher/birth')).json()).toEqual({});
+    await watcher?.start();
+    await watcher?.idle();
+    const body = await (await a.request('/api/watcher/birth')).json();
+    expect(body.finishedAt).toBe('2026-10-23T10:00:00.000Z');
+    await watcher?.stop();
+  });
+});

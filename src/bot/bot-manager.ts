@@ -1614,6 +1614,16 @@ export class BotManager {
     return this.activityStream;
   }
 
+  /** The shared lifecycle hook emitter (`human_inbound` rides on it); the watcher senses it. */
+  getHooks(): HookEmitter {
+    return this.hookEmitter;
+  }
+
+  /** The fleet contact directory; the watcher reads people from it at birth. */
+  getUserDirectory(): UserDirectory {
+    return this.userDirectory;
+  }
+
   getLlmStats(botId?: string) {
     if (botId) {
       return this.activityStream.llmStats.getStats(botId) ?? null;

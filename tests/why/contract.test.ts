@@ -66,6 +66,23 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
     },
     goal: { id: 'g-1', title: 'Research' },
   },
+  neuron: {
+    neuron: {
+      id: 'n-00000001',
+      kind: 'fact',
+      text: 'Acme ships on Mondays',
+      support: { bots: ['b1'], cycles: ['c1'] },
+      createdBy: 'bot:b1',
+      createdAt: '2026-10-23T10:00:00.000Z',
+      lastActivatedAt: '2026-10-23T10:00:00.000Z',
+      activations: 2,
+      confidence: 'high',
+      meta: { key: 'fact:b1:f1', stage: 'birth:knowledge' },
+    },
+    edges: [],
+    neighbours: [],
+    cycle: { cycleId: 'c1', startedAt: '2026-10-22T08:00:00Z', planSummary: 'P', goalTitle: 'G' },
+  },
   workerRun: {
     run: {
       runId: 'run-1',

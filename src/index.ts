@@ -16,6 +16,7 @@ import { MemoryManager } from './memory/manager';
 import { resolveWorkerPool, shutdownRuntime, startRuntime } from './runtime-lifecycle';
 import { SessionManager } from './session';
 import { migrateSoulRootToPerBot } from './soul';
+import { createFleetWatcher } from './watcher/watcher';
 import { startWebServer } from './web/server';
 import type { WorkerPoolApi } from './workers/types';
 
@@ -355,6 +356,10 @@ async function main() {
     // dispatch the same task twice (plan C16).
     startRuntime({ getWorkerPool, startAgentLoop: () => manager.startAgentLoop(), logger });
 
+    // The fleet watcher (off by default): constructed here, started after the
+    // web server so birth streams to /ws/watcher (docs/plans/watcher-implementation-plan.md).
+    const watcher = createFleetWatcher(config, logger, manager);
+
     // Start web server if enabled
     if (config.web.enabled) {
       startWebServer({
@@ -366,7 +371,17 @@ async function main() {
         skillRegistry,
         cronService,
         claudeAccounts,
+        watcher,
       });
+    }
+
+    // start() returns once the wake row is written; birth runs in the background.
+    if (watcher) {
+      try {
+        await watcher.start();
+      } catch (err) {
+        logger.warn({ err }, 'Watcher failed to start');
+      }
     }
 
     // Handle graceful shutdown. Registered BEFORE auto-start, because bringing
@@ -377,6 +392,14 @@ async function main() {
     const shutdown = async () => {
       shuttingDown = true;
       logger.info('Shutting down...');
+      // The watcher goes first: it compacts its graph and logs that it is going to sleep.
+      if (watcher) {
+        try {
+          await watcher.stop();
+        } catch (err) {
+          logger.warn({ err }, 'Watcher failed to stop cleanly');
+        }
+      }
       // Worker runs are aborted and persisted `interrupted` (bounded to 20 s) before the bots stop.
       await shutdownRuntime({ getWorkerPool, stopAll: () => manager.stopAll(), logger });
       cronService.stop();
