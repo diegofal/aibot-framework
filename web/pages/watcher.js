@@ -31,7 +31,9 @@ import {
   readWatcherMessage,
   reconcileGraph,
   replayQueue,
+  shouldRedrawTiers,
   stateHtml,
+  stateParts,
   tierPatchFromInput,
   watcherDisabledHtml,
   watcherErrorHtml,
@@ -91,9 +93,40 @@ function showOff() {
 
 /* ── Rendering ───────────────────────────────────────────────────── */
 
-function drawState() {
+/**
+ * The state bar. First draw builds it; afterwards counts, phase, notes and the
+ * button are updated in place and the tier controls are rebuilt only when
+ * their values changed and none has the focus (`shouldRedrawTiers`): the ≤ 5 s
+ * `watcher:state` republish never wipes a cap being typed. `forceTiers` puts
+ * the controls back to the last known state (a change the page did not send).
+ */
+function drawState({ forceTiers = false } = {}) {
   const host = $('#watcher-state');
-  if (host) host.innerHTML = stateHtml(page.model.state, Date.now(), { busy: page.busy });
+  if (!host) return;
+  const state = page.model.state;
+  const view = { config: state?.config ?? null, busy: !!page.busy };
+  const bar = host.querySelector('.watcher-state');
+  if (!bar) {
+    host.innerHTML = stateHtml(state, Date.now(), { busy: page.busy });
+    page.tierView = view;
+    return;
+  }
+  const parts = stateParts(state, Date.now(), { busy: page.busy });
+  const set = (sel, html) => {
+    const node = bar.querySelector(sel);
+    if (node && node.innerHTML !== html) node.innerHTML = html;
+  };
+  set('.watcher-state-main', parts.main);
+  set('.watcher-counts', parts.counts);
+  set('.watcher-notes', parts.notes);
+  const button = bar.querySelector('[data-action="watcher-start"], [data-action="watcher-stop"]');
+  if (button && button.outerHTML !== parts.button) button.outerHTML = parts.button;
+  const tiers = bar.querySelector('.watcher-tiers-host');
+  const focused = !!tiers?.contains(document.activeElement);
+  if (tiers && shouldRedrawTiers(page.tierView, view, focused, { force: forceTiers })) {
+    tiers.innerHTML = parts.tiers;
+    page.tierView = view;
+  }
 }
 
 function drawLog() {
@@ -387,9 +420,11 @@ async function setRunning(action) {
 }
 
 async function setTiers(patch) {
-  if (page.busy) return;
+  // A change while another request is out is not sent: put the controls back
+  // to the last known state instead of leaving the unsent value showing.
+  if (page.busy) return drawState({ forceTiers: true });
   page.busy = true;
-  drawState();
+  drawState({ forceTiers: true });
   const res = await api('/api/watcher/config', { method: 'POST', body: patch }).catch((err) => ({
     error: err?.message || 'Request failed',
   }));
@@ -399,7 +434,7 @@ async function setTiers(patch) {
   if (!res || res.error)
     showToast(`Could not change the watcher: ${res?.error || 'no response'}`, { tone: 'danger' });
   else page.model.state = mergeWatcherState(page.model.state, res);
-  drawState();
+  drawState({ forceTiers: true });
 }
 
 function selectRow(li) {
@@ -619,7 +654,7 @@ function wire(el, signal) {
       const patch = tierPatchFromInput(input.dataset.tier, input.dataset.field, value);
       if (!patch) {
         showToast('A daily cap is a whole number, 0 or more.', { tone: 'danger' });
-        return drawState();
+        return drawState({ forceTiers: true });
       }
       return setTiers(patch);
     },

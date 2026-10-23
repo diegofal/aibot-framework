@@ -18,8 +18,8 @@ import {
   SPAWN_PACE,
   autoRotates,
   drainCount,
-  edgeFlashLevel,
   edgeVisible,
+  flashBuffers,
   neuronBrightness,
   neuronColour,
   neuronPosition,
@@ -329,26 +329,15 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
     flashes.push({ from, to, at: performance.now() });
   }
 
+  function writeFlashes(out) {
+    flashes = out.live;
+    flashGeometry.setAttribute('position', new THREE.Float32BufferAttribute(out.position, 3));
+    flashGeometry.setAttribute('color', new THREE.Float32BufferAttribute(out.color, 3));
+  }
+
   function drawFlashes(now) {
     if (!flashes.length) return;
-    flashes = flashes.filter((f) => edgeFlashLevel(now - f.at) > 0);
-    const pos = [];
-    const col = [];
-    for (const f of flashes) {
-      const level = edgeFlashLevel(now - f.at);
-      for (const id of [f.from, f.to]) {
-        const i = slotOf.get(id);
-        if (i === undefined) continue;
-        pos.push(arr.position[i * 3], arr.position[i * 3 + 1], arr.position[i * 3 + 2]);
-        col.push(
-          Math.min(1, arr.aColor[i * 3] * 0.4 + 0.6) * level,
-          Math.min(1, arr.aColor[i * 3 + 1] * 0.4 + 0.6) * level,
-          Math.min(1, arr.aColor[i * 3 + 2] * 0.4 + 0.6) * level
-        );
-      }
-    }
-    flashGeometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    flashGeometry.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    writeFlashes(flashBuffers(flashes, now, slotOf, arr));
   }
 
   function rebuildEdges() {
@@ -625,7 +614,9 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
     /** Empty the ball (before a replay). */
     clear() {
       queue.length = 0;
-      flashes = [];
+      // Zero the flash vertices too: emptying the list alone left the last
+      // bright edge drawn after a replay clear.
+      writeFlashes(flashBuffers([], 0, slotOf, arr));
       moving.clear();
       slotOf.clear();
       idAt.length = 0;

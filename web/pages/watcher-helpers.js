@@ -272,8 +272,13 @@ const LINK_NOTES = {
   pending: 'linking what it knows…',
 };
 
-/** Running dot, phase, age, counts by kind (non-zero only), edges, Start/Stop. */
-export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
+/**
+ * The pieces of the state bar, each its own HTML: `main` (dot, phase, ages),
+ * `counts`, `notes`, `tiers` (the tier controls) and `button` (Start/Stop).
+ * `drawState` updates them in place so a republish never rebuilds the tier
+ * inputs under the operator's cursor.
+ */
+export function stateParts(state, nowMs = Date.now(), { busy = false } = {}) {
   const s = state ?? {};
   const running = !!s.running;
   const main = [
@@ -316,11 +321,40 @@ export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
     busy ? ' disabled' : ''
   }>${running ? 'Stop' : 'Start'}</button>`;
 
-  return `<div class="watcher-state"><div class="watcher-state-main">${main.join(
-    '<span class="watcher-sep">·</span>'
-  )}</div><div class="watcher-counts">${chips.join('')}</div>${notes.join(
-    ''
-  )}<div class="watcher-state-actions">${tierControlsHtml(s.config, { busy })}${button}</div></div>`;
+  return {
+    main: main.join('<span class="watcher-sep">·</span>'),
+    counts: chips.join(''),
+    notes: notes.join(''),
+    tiers: tierControlsHtml(s.config, { busy }),
+    button,
+  };
+}
+
+/** Running dot, phase, age, counts by kind (non-zero only), edges, Start/Stop. */
+export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
+  const p = stateParts(state, nowMs, { busy });
+  return `<div class="watcher-state"><div class="watcher-state-main">${p.main}</div><div class="watcher-counts">${p.counts}</div><div class="watcher-notes">${p.notes}</div><div class="watcher-state-actions"><span class="watcher-tiers-host">${p.tiers}</span>${p.button}</div></div>`;
+}
+
+/** What the tier controls show: the server values per tier and whether they are disabled. */
+function tierKey(view) {
+  const c = view?.config && typeof view.config === 'object' ? view.config : null;
+  const tiers = Object.keys(TIER_LABELS).map((t) =>
+    c?.[t] ? [!!c[t].enabled, Number(c[t].maxPerDay)] : null
+  );
+  return JSON.stringify([tiers, !!view?.busy]);
+}
+
+/**
+ * Rebuild the tier controls? `prev` / `next` are `{ config, busy }` (`prev`
+ * null on the first draw). Only when what they show changed and no control has
+ * the focus (the operator is typing there); `force` when the page must undo a
+ * value it did not send.
+ */
+export function shouldRedrawTiers(prev, next, focused, { force = false } = {}) {
+  if (force) return true;
+  if (focused) return false;
+  return !prev || tierKey(prev) !== tierKey(next);
 }
 
 const TIER_LABELS = { notice: 'Notice', integrate: 'Integrate' };
@@ -726,6 +760,34 @@ export const EDGE_FLASH_MS = 1200;
  * or null. The server activates that bot with its goal or topic; the page
  * brightens this edge between the two.
  */
+/**
+ * The vertices of the bright pulsed edges at `nowMs`: `live` (the flashes
+ * still lit), and flat `position` / `color` arrays (two vertices per flash,
+ * colours scaled by `edgeFlashLevel`). `slotOf` maps neuron id → slot in
+ * `arr.position` / `arr.aColor`. No flashes (a cleared ball) → empty arrays,
+ * which is what the ball writes on `clear()` so no stale bright edge stays. Pure.
+ */
+export function flashBuffers(flashes, nowMs, slotOf, arr) {
+  const live = (flashes ?? []).filter((f) => edgeFlashLevel(nowMs - f.at) > 0);
+  const position = [];
+  const color = [];
+  for (const f of live) {
+    const level = edgeFlashLevel(nowMs - f.at);
+    const i = slotOf.get(f.from);
+    const j = slotOf.get(f.to);
+    if (i === undefined || j === undefined) continue;
+    for (const k of [i, j]) {
+      position.push(arr.position[k * 3], arr.position[k * 3 + 1], arr.position[k * 3 + 2]);
+      color.push(
+        Math.min(1, arr.aColor[k * 3] * 0.4 + 0.6) * level,
+        Math.min(1, arr.aColor[k * 3 + 1] * 0.4 + 0.6) * level,
+        Math.min(1, arr.aColor[k * 3 + 2] * 0.4 + 0.6) * level
+      );
+    }
+  }
+  return { live, position, color };
+}
+
 export function ownerEdgeOf(model, id) {
   if (!model?.edges || !model.neurons || typeof id !== 'string') return null;
   for (const e of model.edges.values()) {

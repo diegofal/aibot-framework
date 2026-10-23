@@ -3,7 +3,9 @@ import {
   applyWatcherEvent,
   createWatcherModel,
   mergeWatcherState,
+  shouldRedrawTiers,
   stateHtml,
+  stateParts,
   tierControlsHtml,
   tierPatchFromInput,
 } from '../../web/pages/watcher-helpers.js';
@@ -75,5 +77,44 @@ describe('mergeWatcherState keeps the tier config a state event does not carry',
     applyWatcherEvent(model, { type: 'watcher:state', data: { phase: 'notice' } });
     expect(model.state.config).toEqual(CONFIG);
     expect(model.state.phase).toBe('notice');
+  });
+});
+
+describe('shouldRedrawTiers (the 5 s state republish never wipes what the operator types)', () => {
+  const view = (config: unknown, busy = false) => ({ config, busy });
+  it('first draw', () => {
+    expect(shouldRedrawTiers(null, view(CONFIG), false)).toBe(true);
+  });
+  it('same server values: no redraw', () => {
+    expect(shouldRedrawTiers(view(CONFIG), view({ ...CONFIG }), false)).toBe(false);
+  });
+  it('a server value changed and nothing is focused: redraw', () => {
+    const next = { ...CONFIG, notice: { enabled: true, maxPerDay: 100 } };
+    expect(shouldRedrawTiers(view(CONFIG), view(next), false)).toBe(true);
+  });
+  it('a control is focused: never redraw, even when a value changed', () => {
+    const next = { ...CONFIG, integrate: { enabled: true, maxPerDay: 24 } };
+    expect(shouldRedrawTiers(view(CONFIG), view(next), true)).toBe(false);
+  });
+  it('busy changed (controls disable/enable): redraw', () => {
+    expect(shouldRedrawTiers(view(CONFIG), view(CONFIG, true), false)).toBe(true);
+  });
+  it('forced (a change the page did not send): redraw even when focused', () => {
+    expect(shouldRedrawTiers(view(CONFIG), view(CONFIG), true, { force: true })).toBe(true);
+  });
+});
+
+describe('stateParts: the pieces drawState updates in place', () => {
+  it('stateHtml is made of them; the tier controls are their own part', () => {
+    const parts = stateParts({ running: true, phase: 'sense', config: CONFIG, edges: 3 }, 0);
+    expect(parts.main).toContain('sense');
+    expect(parts.counts).toContain('3');
+    expect(parts.tiers).toContain('data-tier="notice"');
+    expect(parts.main).not.toContain('data-tier');
+    expect(parts.counts).not.toContain('data-tier');
+    expect(parts.button).toContain('watcher-stop');
+    const html = stateHtml({ running: true, phase: 'sense', config: CONFIG, edges: 3 }, 0);
+    for (const part of [parts.main, parts.counts, parts.tiers, parts.button])
+      expect(html).toContain(part);
   });
 });

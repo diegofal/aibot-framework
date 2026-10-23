@@ -6,6 +6,7 @@ import {
   ballPlanFor,
   createWatcherModel,
   edgeFlashLevel,
+  flashBuffers,
   ownerEdgeOf,
   wheelZooms,
 } from '../../web/pages/watcher-helpers.js';
@@ -112,5 +113,28 @@ describe('wheelZooms', () => {
     expect(wheelZooms({ engaged: false, ctrlKey: true, metaKey: false })).toBe(true);
     expect(wheelZooms({ engaged: false, ctrlKey: false, metaKey: true })).toBe(true);
     expect(wheelZooms(null)).toBe(false);
+  });
+});
+
+describe('flashBuffers (the vertices of the bright pulsed edges)', () => {
+  const slotOf = new Map([
+    ['a', 0],
+    ['b', 1],
+  ]);
+  const arr = { position: [0, 0, 0, 1, 1, 1], aColor: [1, 0, 0, 0, 1, 0] };
+  it('a live flash: two vertices, colours scaled by its level', () => {
+    const out = flashBuffers([{ from: 'a', to: 'b', at: 0 }], 0, slotOf, arr);
+    expect(out.live).toHaveLength(1);
+    expect(out.position).toEqual([0, 0, 0, 1, 1, 1]);
+    expect(out.color).toHaveLength(6);
+  });
+  it('no flashes (a cleared ball) and expired flashes leave nothing to draw', () => {
+    expect(flashBuffers([], 0, slotOf, arr)).toEqual({ live: [], position: [], color: [] });
+    const expired = flashBuffers([{ from: 'a', to: 'b', at: 0 }], 1e9, slotOf, arr);
+    expect(expired.position).toEqual([]);
+  });
+  it('a flash whose neurons left the ball draws nothing', () => {
+    const out = flashBuffers([{ from: 'a', to: 'b', at: 0 }], 0, new Map(), arr);
+    expect(out.position).toEqual([]);
   });
 });

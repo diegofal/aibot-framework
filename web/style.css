@@ -9795,6 +9795,11 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-note.is-error {
   color: #f87171;
 }
+/* wrappers drawState updates in place; they add no box of their own */
+.watcher-notes,
+.watcher-tiers-host {
+  display: contents;
+}
 .watcher-state-actions {
   display: flex;
   gap: var(--s2);
