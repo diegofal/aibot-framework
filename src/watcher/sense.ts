@@ -1,9 +1,11 @@
 /**
  * Tier 0: sense every activity-stream event and every `human_inbound` hook
  * event, score it (`salience.ts`), keep what scores in the working buffer,
- * activate the neurons it touches, and log only what matters: a row when the
- * salience reaches `notice.salienceBar` or a neuron was touched, plus one
- * summary row per `log.senseSummaryEveryMs` window that saw anything.
+ * activate the neurons it touches (and the bot that owns a touched goal or
+ * topic, edge `owned_by`, so the bot lights up with its goal), and log only
+ * what matters: a row when the salience reaches `notice.salienceBar` (a touch
+ * below it activates silently), plus one summary row per
+ * `log.senseSummaryEveryMs` window that saw anything (it counts every event).
  * Privacy: text from anyone but the operator is reduced to topic words here,
  * before anything is stored. Operator messages from the operator surfaces
  * (private Telegram chat, dashboard thread) arrive on `operator_message` and
@@ -73,6 +75,8 @@ export interface SenseDeps {
   onItem?: (item: BufferItem) => void;
   /** Schedules the batch that senses the queue (default `setImmediate`). */
   defer?: (fn: () => void) => void;
+  /** After each batch that sensed anything, with the number of events in it. */
+  onBatch?: (events: number) => void;
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
@@ -160,9 +164,10 @@ export class Sense {
     }
 
     for (const id of score.touched) this.deps.graph.activate(id);
+    for (const id of this.ownersOf(score.touched)) this.deps.graph.activate(id);
 
     const bar = this.deps.config().notice.salienceBar;
-    if (score.salience >= bar || score.touched.length > 0) {
+    if (score.salience >= bar) {
       this.deps.log.say(
         'sense',
         'noticed',
@@ -199,6 +204,28 @@ export class Sense {
     return item;
   }
 
+  /**
+   * The bots (`entity` neurons, edge `owned_by`) that own the touched goal and
+   * topic neurons, each once and never one that was touched itself.
+   */
+  ownersOf(touched: string[]): string[] {
+    const graph = this.deps.graph;
+    const seen = new Set(touched);
+    const out: string[] = [];
+    for (const id of touched) {
+      const n = graph.get(id);
+      if (!n || (n.kind !== 'goal' && n.kind !== 'topic')) continue;
+      for (const e of graph.edgesOf(id)) {
+        if (e.rel !== 'owned_by' || e.from !== id || seen.has(e.to)) continue;
+        const owner = graph.get(e.to);
+        if (!owner || owner.kind !== 'entity' || owner.archivedAt) continue;
+        seen.add(e.to);
+        out.push(e.to);
+      }
+    }
+    return out;
+  }
+
   /** Close the summary window when it has run its length and saw anything. */
   tick(): WatcherLogRow | null {
     if (this.windowStart === null || this.windowCount === 0) return null;
@@ -224,13 +251,21 @@ export class Sense {
   /** Sense every queued event now, in arrival order. Never throws. */
   flush(): void {
     this.scheduled = false;
+    let sensed = 0;
     while (this.queue.length > 0) {
       const batch = this.queue;
       this.queue = [];
       for (const q of batch) {
         if (q.operator) this.safeHandleOperator(q.e);
         else this.safeHandle(q.e);
+        sensed++;
       }
+    }
+    if (sensed === 0) return;
+    try {
+      this.deps.onBatch?.(sensed);
+    } catch (err) {
+      this.deps.logger?.warn({ err }, 'Watcher sense: a batch listener threw');
     }
   }
 

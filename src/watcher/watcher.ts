@@ -94,6 +94,8 @@ import {
 } from './types';
 
 const DAY_MS = 86_400_000;
+/** Throttle of the `watcher:state` a sense batch republishes ("last tick"). */
+export const SENSE_STATE_EVERY_MS = 5_000;
 /** How often the notice timer asks whether a pass is due (`Noticer.due`). */
 export const NOTICE_CHECK_MS = 30_000;
 /** How often the integrate timer asks whether a pass is due (`Integrator.due`). */
@@ -186,6 +188,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private background: Promise<void> = Promise.resolve();
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
+  private lastSenseStateAt = 0;
+  private senseStateTimer: ReturnType<typeof setTimeout> | undefined;
   private noticeRun: Promise<NoticeOutcome | null> | null = null;
   /** The run signal of `noticeRun` / `integrateRun`: a stopped run's pass is never shared. */
   private noticeRunSignal: AbortSignal | null = null;
@@ -238,6 +242,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         if (item.fromOperator) this.lastOperatorAt = lastOperatorMs([item], this.lastOperatorAt);
         this.integrator?.observe(item);
       },
+      onBatch: () => this.senseStateChanged(),
       logger: this.logger,
     });
     this.budget = new DailyBudget({
@@ -689,6 +694,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     }
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
+    this.clearSenseStateTimer();
     this.stopNoticeTimer();
     this.stopIntegrateTimer();
     this.stopIntrospectTimer();
@@ -707,6 +713,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.presence.detach();
       for (const t of this.timers) clearInterval(t);
       this.timers = [];
+      this.clearSenseStateTimer();
       this.stopNoticeTimer();
       this.stopIntegrateTimer();
       this.stopIntrospectTimer();
@@ -1007,6 +1014,34 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       contact = undefined;
     }
     return inboundSender(e, { contact });
+  }
+
+  /**
+   * A sense batch moved `lastTickAt`: republish the state so the header's
+   * "last tick" follows sensing, not only phase changes (notice passes). At
+   * most once per `SENSE_STATE_EVERY_MS`, with a trailing publish.
+   */
+  private senseStateChanged(): void {
+    if (!this.running || this.stopping) return;
+    const since = this.now() - this.lastSenseStateAt;
+    if (since >= SENSE_STATE_EVERY_MS) {
+      this.lastSenseStateAt = this.now();
+      this.publish('watcher:state', this.state());
+      return;
+    }
+    if (this.senseStateTimer) return;
+    this.senseStateTimer = setTimeout(() => {
+      this.senseStateTimer = undefined;
+      if (!this.running || this.stopping) return;
+      this.lastSenseStateAt = this.now();
+      this.publish('watcher:state', this.state());
+    }, SENSE_STATE_EVERY_MS - since);
+    (this.senseStateTimer as { unref?: () => void }).unref?.();
+  }
+
+  private clearSenseStateTimer(): void {
+    if (this.senseStateTimer) clearTimeout(this.senseStateTimer);
+    this.senseStateTimer = undefined;
   }
 
   private setPhase(phase: WatcherPhase): void {

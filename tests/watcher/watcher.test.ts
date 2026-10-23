@@ -11,6 +11,7 @@ import { ProactiveThrottle } from '../../src/tools/send-proactive-message';
 import { graphFiles } from '../../src/watcher/paths';
 import { WATCHER_DEFAULTS, type WatcherEvent } from '../../src/watcher/types';
 import {
+  SENSE_STATE_EVERY_MS,
   Watcher,
   type WatcherDeps,
   createFleetWatcher,
@@ -1431,6 +1432,29 @@ describe('Watcher: embedding what birth could not', () => {
     await watcher.maintainNow();
     expect(watcher.state().linkStatus).toBe('ok');
     expect(watcher.graph.embeddedIds().length).toBe(watcher.graph.liveCount());
+    await watcher.stop();
+  });
+});
+
+describe('Watcher: last tick follows sensing', () => {
+  test('a sense batch republishes the state with lastTickAt (throttled, trailing)', async () => {
+    const { watcher, events, activityStream } = make();
+    await watcher.start();
+    await watcher.idle();
+    t += SENSE_STATE_EVERY_MS + 1;
+    activityStream.emit('activity', { type: 'llm:start', botId: 'b1', timestamp: t });
+    await new Promise((r) => setImmediate(r));
+    const states = () =>
+      events
+        .filter((e) => e.type === 'watcher:state')
+        .map((e) => (e.data as { lastTickAt?: string }).lastTickAt);
+    expect(states().at(-1)).toBe(new Date(t).toISOString());
+    const count = states().length;
+    t += 1000;
+    activityStream.emit('activity', { type: 'llm:end', botId: 'b1', timestamp: t });
+    await new Promise((r) => setImmediate(r));
+    // throttled: no publish yet; the trailing one comes after the window
+    expect(states().length).toBe(count);
     await watcher.stop();
   });
 });
