@@ -17,7 +17,19 @@ export async function mountClaudeAccounts(card) {
   const tests = {};
   let message = '';
 
+  // Typed but unsent input survives a repaint (a background re-test repaints the card).
+  // Each field is kept only for the same rename / login it was typed into.
+  const KEEP = ['ca-label', 'ca-rename-input', 'ca-code'];
+  const owner = (id) =>
+    id === 'ca-rename-input' ? `r:${editing}` : id === 'ca-code' ? `l:${login?.loginId}` : 'add';
+  let painted = {};
   const paint = () => {
+    const kept = {};
+    for (const id of KEEP) {
+      const el = card.querySelector(`#${id}`);
+      if (el instanceof HTMLInputElement && painted[id] === owner(id)) kept[id] = el.value;
+    }
+    const focused = document.activeElement?.id;
     card.innerHTML = `
       <div class="form-section-title">Claude accounts</div>
       <p class="text-dim text-sm mb-16">The account every bot uses for Claude. When one hits its limit, switch to another; the bots resume at once.</p>
@@ -31,7 +43,13 @@ export async function mountClaudeAccounts(card) {
       </div>`
       }
       <div id="ca-msg" class="text-sm" style="margin-top:8px">${escapeHtml(message)}</div>`;
-    card.querySelector('#ca-rename-input')?.focus();
+    painted = Object.fromEntries(KEEP.map((id) => [id, owner(id)]));
+    for (const [id, value] of Object.entries(kept)) {
+      const el = card.querySelector(`#${id}`);
+      if (el instanceof HTMLInputElement) el.value = value;
+    }
+    const refocus = KEEP.includes(focused) ? `#${focused}` : '#ca-rename-input';
+    card.querySelector(refocus)?.focus();
   };
 
   const refresh = async () => {
