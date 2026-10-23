@@ -237,14 +237,14 @@ Each entry is a `###` heading with this table and these paragraphs:
 | | |
 |---|---|
 | **Added** | 2026-10-23 |
-| **Where** | `src/claude-cli.ts` (`NO_TOOLS_LEAN_FLAGS`), `src/bot/claude-cli-preflight.ts` (`LEAN_FLAGS_MIN_VERSION`) |
+| **Where** | `src/claude-cli.ts` (`NO_SETTINGS_FLAGS`, `NO_TOOLS_LEAN_FLAGS`), `src/bot/claude-cli-preflight.ts` (`LEAN_FLAGS_MIN_VERSION`) |
 | **Decided by** | lead, watcher cleanup |
 
-**What was deferred.** Every no-tools call passes `--tools ""` and `--setting-sources ""`. They were measured on CLI 2.1.289 (the version pinned in the Dockerfile); the first version that accepts both is not known, so the preflight only warns below 2.1.289 instead of dropping the flags on an older CLI. Passing empty-string arguments through the Windows `claude.cmd` wrapper was not tried either.
+**What was deferred.** Every call passes `--setting-sources ""` (the MCP path too, since 2026-10-23) and every no-tools call `--tools ""`. They were measured on CLI 2.1.289 and again on 2.1.300 (the version pinned in the Dockerfile); the first version that accepts both is not known, so the preflight only warns below 2.1.289 instead of dropping the flags on an older CLI. Passing empty-string arguments through the Windows `claude.cmd` wrapper was not tried either.
 
 **Why it was the right call then.** The container runs exactly 2.1.289 and the saving is ~17× per call; probing the flags at runtime would add a spawn per boot for a case that does not exist today.
 
-**What it costs while it stands.** On an older CLI, or a Windows host using the npm `.cmd` shim, every planner, strategist, memory and watcher call could fail with `unknown option` (the preflight line says so).
+**What it costs while it stands.** On an older CLI, or a Windows host using the npm `.cmd` shim, every planner, strategist, memory, watcher and (for `--setting-sources`) MCP tools call could fail with `unknown option` (the preflight line says so). Two direct spawns of the CLI outside `src/claude-cli.ts` (`src/bot/soul-quality-reviewer.ts`, `src/tools/improve.ts`) do not pass `--setting-sources ""`, so `settings.json` in `CLAUDE_CONFIG_DIR` still applies to those two only.
 
 **The trigger.** Pinning a different `CLAUDE_CLI_VERSION`, or running the bots on Windows outside the container.
 

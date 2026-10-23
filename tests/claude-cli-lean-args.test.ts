@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  NO_SETTINGS_FLAGS,
   NO_TOOLS_LEAN_FLAGS,
   SKIP_PERMISSIONS_FLAG,
   buildClaudeGenerateArgs,
@@ -46,7 +47,10 @@ describe('buildClaudeGenerateArgs (no-tools path)', () => {
 });
 
 describe('buildClaudeToolsArgs (MCP path)', () => {
-  test('never passes the lean flags: MCP tools must stay reachable', () => {
+  // Deliberate change (2026-10-23): --setting-sources "" now goes on both
+  // paths so CLAUDE_CONFIG_DIR settings apply to no call instead of to tools
+  // calls only; --tools "" stays off here (it would hide the bridge).
+  test('passes --setting-sources "" but never --tools "": MCP tools must stay reachable', () => {
     const { args } = buildClaudeToolsArgs('claude', 'hi', {
       mcpConfigPath: '/tmp/mcp.json',
       allowedTools: ['mcp__aibot-tools__x'],
@@ -55,7 +59,10 @@ describe('buildClaudeToolsArgs (MCP path)', () => {
       systemPrompt: 'sys',
     });
     expect(args).not.toContain('--tools');
-    expect(args).not.toContain('--setting-sources');
+    const s = args.indexOf('--setting-sources');
+    expect(s).toBeGreaterThan(0);
+    expect(args[s + 1]).toBe('');
+    expect(NO_SETTINGS_FLAGS).toEqual(['--setting-sources', '']);
     expect(args[args.indexOf('--mcp-config') + 1]).toBe('/tmp/mcp.json');
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__aibot-tools__x');
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash');

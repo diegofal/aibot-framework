@@ -234,6 +234,8 @@ describe('lean no-tools flags minimum version', () => {
     });
     expect(line).toContain(LEAN_FLAGS_MIN_VERSION);
     expect(line).toMatch(/--tools/);
+    // --setting-sources "" goes on every call (MCP path too), so an old CLI breaks all of them
+    expect(line).toMatch(/--setting-sources "" \(every call\)/);
   });
 
   test('no warning at or above the verified version, nor when the version is unknown', () => {
